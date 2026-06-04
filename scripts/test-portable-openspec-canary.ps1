@@ -181,7 +181,8 @@ else {
 New-Dir $repoParent
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$runId = "portable-formal-gates-canary-$timestamp"
+$uniqueSuffix = ([guid]::NewGuid().ToString('N')).Substring(0, 8)
+$runId = "portable-formal-gates-canary-$timestamp-$PID-$uniqueSuffix"
 $tempRepo = Join-Path $repoParent $runId
 $plainRepo = Join-Path $repoParent "$runId-plain"
 $summaryPath = Join-Path $repoParent ("$runId-summary.json")

@@ -107,6 +107,8 @@ OpenSpec proposal/design/spec/tasks、PRD、SDD、阶段计划、开工判断，
 
 自定义扩展 gate 必须带 `manifestPath`，并在 manifest 的 `stages.<gate-id>` 里定义依赖。例如：`GateWorkflow={"gate":"security-gate","workflowId":"...","changeSnapshot":"...","worktree":"...","manifestPath":"gate-manifest.json"}`。
 
+`GateWorkflow` 是 JSON；Windows 路径必须写成 `C:\\Users\\me\\repo` 或 `C:/Users/me/repo`，不能写裸 `C:\Users\...`。
+
 Manifest 只能定义扩展 gate，不能定义或覆盖 `qa-test-gate`、`complexity-gate`、`architecture-health-gate`、`code-quality-gate`。四个内置 gate 的顺序是固定流程，不允许用 manifest 改写。
 
 Manifest 扩展 gate 会绑定 manifest hash。扩展 gate 的前置 gate 也必须用同一个 `-ManifestPath` 记录，旧记录或没有 `manifestHash` 的记录不能满足扩展 gate admission。给既有流程新增 manifest 后，要按该 manifest 重新记录前置 gate，不能复用旧内置 PASS。

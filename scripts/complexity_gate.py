@@ -88,6 +88,16 @@ def emit(value):
         print(value)
 
 
+def decode_process_output(value):
+    if value is None:
+        return u""
+    if PY2 and isinstance(value, str):
+        return value.decode("utf-8", "replace")
+    if (not PY2) and isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return as_text(value)
+
+
 def normalize_path(path):
     return path.replace("\\", "/")
 
@@ -106,20 +116,25 @@ def worktree_path(worktree, relative_path):
 
 def run_command(command, worktree, allow_failure=False):
     try:
-        return subprocess.check_output(
+        raw = subprocess.check_output(
             command,
             cwd=worktree,
             stderr=subprocess.PIPE,
-            universal_newlines=True,
         )
+        return decode_process_output(raw)
     except subprocess.CalledProcessError as exc:
         if allow_failure:
             return ""
         stderr = getattr(exc, "stderr", None) or getattr(exc, "output", None) or ""
         if stderr:
-            sys.stderr.write(as_text(stderr).encode("utf-8") if PY2 else as_text(stderr))
+            stderr_text = decode_process_output(stderr)
+            sys.stderr.write(stderr_text.encode("utf-8") if PY2 else stderr_text)
         raise SystemExit(exc.returncode)
     except OSError:
+        if allow_failure:
+            return ""
+        raise
+    except UnicodeError:
         if allow_failure:
             return ""
         raise
