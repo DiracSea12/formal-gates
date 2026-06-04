@@ -11,7 +11,9 @@ param(
 
     [switch]$Force,
 
-    [switch]$RunCanary
+    [switch]$RunCanary,
+
+    [switch]$ConfigureHook
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,6 +130,99 @@ function Copy-SkillPackage([string]$SourcePath, [string]$TargetPath, [bool]$Forc
     Write-Host "formal-gates installed: $target"
 }
 
+function Get-ClaudeSettingsPath([string]$Scope, [string]$ProjectPath) {
+    if ($Scope -eq 'Global') {
+        return Join-Path $HOME '.claude/settings.json'
+    }
+    if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+        throw '-ProjectPath is required to configure a project-local hook.'
+    }
+    return Join-Path (Resolve-FullPath $ProjectPath) '.claude/settings.json'
+}
+
+function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
+    # 读取-合并-写回，只新增/更新 formal-gates 自己的 hook；不覆盖其它 hook；幂等；写前备份。
+    $matcher = 'Bash|Agent|Skill'
+    $command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $HookScriptPath
+
+    $settings = $null
+    if (Test-Path -LiteralPath $SettingsPath) {
+        $raw = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            try {
+                $settings = $raw | ConvertFrom-Json
+            }
+            catch {
+                throw "Existing settings.json is not valid JSON; refusing to touch it: $SettingsPath"
+            }
+        }
+        Copy-Item -LiteralPath $SettingsPath -Destination "$SettingsPath.bak" -Force
+        Write-Host "Backed up existing settings to $SettingsPath.bak"
+    }
+    if ($null -eq $settings) { $settings = [pscustomobject]@{} }
+
+    if (-not ($settings.PSObject.Properties.Name -contains 'hooks') -or $null -eq $settings.hooks) {
+        $settings | Add-Member -NotePropertyName 'hooks' -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if (-not ($settings.hooks.PSObject.Properties.Name -contains 'PreToolUse') -or $null -eq $settings.hooks.PreToolUse) {
+        $settings.hooks | Add-Member -NotePropertyName 'PreToolUse' -NotePropertyValue (@()) -Force
+    }
+
+    $preToolUse = @($settings.hooks.PreToolUse)
+    $formalHookFound = $false
+    $formalHookUpdated = $false
+    foreach ($entry in $preToolUse) {
+        foreach ($h in @($entry.hooks)) {
+            if (([string]$h.command) -like "*enforce-gate-sequence.ps1*") {
+                $formalHookFound = $true
+                if ([string]$h.command -ne $command) {
+                    if ($h.PSObject.Properties.Name -contains 'type') {
+                        $h.type = 'command'
+                    }
+                    else {
+                        $h | Add-Member -NotePropertyName 'type' -NotePropertyValue 'command' -Force
+                    }
+                    if ($h.PSObject.Properties.Name -contains 'command') {
+                        $h.command = $command
+                    }
+                    else {
+                        $h | Add-Member -NotePropertyName 'command' -NotePropertyValue $command -Force
+                    }
+                    $formalHookUpdated = $true
+                }
+            }
+        }
+    }
+    if ($formalHookFound) {
+        if ($formalHookUpdated) {
+            $settings | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $SettingsPath -Encoding UTF8
+            Write-Host "formal-gates PreToolUse hook updated in $SettingsPath"
+        }
+        else {
+            Write-Host "formal-gates hook already present in $SettingsPath; left unchanged."
+        }
+        return
+    }
+
+    $newEntry = [pscustomobject]@{
+        matcher = $matcher
+        hooks   = @(
+            [pscustomobject]@{
+                type    = 'command'
+                command = $command
+            }
+        )
+    }
+    $settings.hooks.PreToolUse = @($preToolUse + $newEntry)
+
+    $parent = Split-Path -Parent $SettingsPath
+    if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $settings | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $SettingsPath -Encoding UTF8
+    Write-Host "formal-gates PreToolUse hook added to $SettingsPath"
+}
+
 $source = if ([string]::IsNullOrWhiteSpace($SourcePath)) {
     Get-DefaultSourcePath
 }
@@ -149,6 +244,16 @@ foreach ($target in $targets) {
         & (Get-FormalGatesPowerShellExe) @canaryArgs
         if ($LASTEXITCODE -ne 0) {
             throw "Portable canary failed for $($target.Path)"
+        }
+    }
+
+    if ($ConfigureHook) {
+        if ($target.Host -eq 'Claude') {
+            $settingsPath = Get-ClaudeSettingsPath $Scope $ProjectPath
+            Set-FormalGatesHook $settingsPath $hookPath
+        }
+        else {
+            Write-Host "Skipping -ConfigureHook for $($target.Host): auto hook config supports Claude settings.json only. See references/install-and-hooks.md for Codex."
         }
     }
 }

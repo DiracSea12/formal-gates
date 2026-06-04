@@ -98,6 +98,8 @@ Use `--json` for machine consumption and `--staged` only for staged review.
 The wrapper prefers Python 3 through `python3`, `py -3`, then `python`; if Python 3 is unavailable it accepts Python 2.7 through `python` or `py -2`.
 `--vcs auto` uses git diff in git worktrees, SVN status/diff in SVN worktrees, and returns REVIEW with a manual-evidence warning when neither is detected.
 
+In non-git worktrees (SVN or file-hash) the script cannot scope a `base..head` range; it counts the entire working copy, so every uncommitted file (stale logs, generated files, stray scripts) inflates the totals and the script cannot separate "this change" from junk already sitting in the tree. Cross-check the actual changed files against the originally stated scope (Complexity Contract `Expected diff shape`, task brief, or OpenSpec change), and record in `Script result` which counts are pre-existing working-copy noise versus the real net for this change. If no scope was stated, do not give up on attribution: walk the diff file-by-file and decide which changes belong to the current task before judging. Do not dismiss a FAIL as noise without that subtraction; real overgrowth can hide inside an inflated total.
+
 Exit codes:
 
 - `0` = PASS alarm state.

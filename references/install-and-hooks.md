@@ -20,7 +20,7 @@ formal-gates/
 
 ## 维护源
 
-GitHub checkout 或显式传入的 `-SourcePath` 是主版本。全局 `.claude` 目录和可选 `.codex` 目录只是安装快照，不是维护源。
+GitHub checkout，或用户显式传入的 `-SourcePath` 候选包源目录，才是维护源。全局 `.claude` 目录和可选 `.codex` 目录只是安装快照，不是维护源。
 
 改包时先改主版本、验证、提交/推送，再按需要安装到指定 host。不要因为某个全局同名 skill 存在，就把它当成最新版；A/B 或旧版对比场景下，未被点名的 host 必须保持不动。
 
@@ -41,11 +41,14 @@ GitHub checkout 或显式传入的 `-SourcePath` 是主版本。全局 `.claude`
 # 安装/替换全局 Claude skill
 <ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary
 
+# 安装并写入/更新 Claude settings.json command hook
+<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
+
 # 安装到某个项目本地 Claude skill
 <ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-脚本会复制整个 `formal-gates` 目录，拒绝替换非 `skills\formal-gates` 目标，并清理 `__pycache__`。`-RunCanary` 会在复制后跑 portable canary；如果失败，不要把这次安装当成可用。
+脚本会复制整个 `formal-gates` 目录，拒绝替换非 `skills\formal-gates` 目标，并清理 `__pycache__`。`-RunCanary` 会在复制后跑 portable canary；如果失败，不要把这次安装当成可用。`-ConfigureHook` 只支持 Claude `settings.json`，会先备份为 `.bak`，再合并或更新 formal-gates 自己的 `PreToolUse` command hook，不覆盖其它 hook。
 
 Claude 手工安装目标路径：
 
@@ -157,6 +160,75 @@ GateWorkflow={"gate":"complexity-gate","workflowId":"wf","changeSnapshot":"snap"
 ```
 
 不要写 `"worktree":"C:\Users\me\repo"`；`\U` 不是合法 JSON 转义，hook 会报 `Malformed GateWorkflow JSON`。
+
+## Manifest 扩展 gate
+
+自定义扩展 gate 必须带 `manifestPath`，并在 manifest 的 `stages.<gate-id>` 里定义依赖。例如：`GateWorkflow={"gate":"security-gate","workflowId":"...","changeSnapshot":"...","worktree":"...","manifestPath":"gate-manifest.json"}`。
+
+Manifest 只能定义扩展 gate，不能定义或覆盖 `qa-test-gate`、`complexity-gate`、`architecture-health-gate`、`code-quality-gate`。四个内置 gate 的顺序是固定流程，不允许用 manifest 改写。
+
+Manifest 扩展 gate 会绑定 manifest hash。扩展 gate 的前置 gate 也必须用同一个 `-ManifestPath` 记录，旧记录或没有 `manifestHash` 的记录不能满足扩展 gate admission。给既有流程新增 manifest 后，要按该 manifest 重新记录前置 gate，不能复用旧内置 PASS。
+
+## 正式 gate artifact 必备字段
+
+缺机器元数据时不能记录正式 PASS，最多 advisory review。`singleGateAuthorized=true` 只允许显式单门 advisory，不能记录、复用或推进 release/seal。
+
+所有正式 gate artifact 必须写明：
+
+```text
+Zero-context reviewer: YES
+Independent agent: YES
+Reviewer agent id:
+Context bundle: <bundle-path> sha256=<bundle-sha256>
+No-anchor prompt: YES
+```
+
+`Reviewer agent id` 不能是空值或占位符。`Context bundle` 必须是存在的文件并带 sha256；机器会校验 hash。
+
+implementation 后的复杂度、架构、代码质量正式 PASS 还必须写明：
+
+```text
+Changed files artifact: <path>
+Verification artifact: <path>
+```
+
+`Changed files artifact` 可用 `Raw diff artifact` 代替，`Verification artifact` 可用 `Developer self-test artifact` 代替。路径都必须存在。
+
+`qa-test-gate` 正式 PASS 还必须写明：
+
+```text
+Approved case set:
+QA-owned evidence:
+Case-to-artifact binding:
+```
+
+每个正式 gate 输出都必须带机器可读路线：
+
+```yaml
+gate_route:
+  workflow_id: ""
+  change_snapshot: ""
+  next_action: proceed | rework | blocked | seal
+  rework_owner: none | implementation | tests | architecture | qa-cases | scope
+  rerun_from: none | qa-design | qa-verification | qa-execution | complexity | architecture | code-quality | final-verification
+```
+
+`REVIEW`、`FAIL`、`BLOCKED` 不能路由到 `proceed`。
+
+## 正式记录命令
+
+最小机器检查命令：
+
+```powershell
+<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate <gate-id> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate <gate-id> -Verdict PASS -Artifact <artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+```
+
+`<ps>` 代表当前可用的 PowerShell：Windows PowerShell 5 用 `powershell -NoProfile -ExecutionPolicy Bypass`，PowerShell 7 用 `pwsh -NoProfile`。包内脚本会继续使用当前 PowerShell，不要求必须有 PowerShell 7。
+
+`qa-test-gate` 正式记录必须加 `-Mode formal -Stage Execution`；最终 QA 用 `-Mode formal -Stage FinalExecution`。不要直接照抄泛化命令漏掉 stage。
+
+如果同时安装 Claude 和 Codex，两边 skill 镜像和 hook 不是同一份时，不能声称“同一套 formal-gates 正在生效”。必须写清楚实际运行路径和 hash。
 
 ## Git / SVN / 非 VCS snapshot
 
