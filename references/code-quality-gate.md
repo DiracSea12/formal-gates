@@ -1,8 +1,8 @@
 # Code Quality Gate
 
-Use after architecture PASS in formal flow, or independently for code quality consultation. This gate reviews correctness, maintainability, local coupling, test quality, dead/redundant code, overfitting, encoding, and validation integrity.
+Use after architecture PASS in formal flow, or independently for code quality consultation. Review correctness, maintainability, local coupling, test quality, dead/redundant code, overfitting, encoding, and validation integrity.
 
-Do not use this gate to bless unfinished requirements, oversized scope, or bad architecture.
+Do not bless unfinished requirements, oversized scope, or bad architecture.
 
 ## Applicability
 

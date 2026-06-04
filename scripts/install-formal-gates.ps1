@@ -32,6 +32,7 @@ function Assert-SkillPackage([string]$Path) {
         'hooks',
         'references',
         'scripts',
+        'references/requirements-clarification-gate.md',
         'scripts/gate-state.ps1',
         'scripts/gate-workflow.ps1',
         'scripts/test-portable-openspec-canary.ps1',

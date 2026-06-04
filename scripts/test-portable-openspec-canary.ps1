@@ -236,6 +236,7 @@ sha256: sample
     }
     $requiredPackageFiles = @(
         'SKILL.md',
+        'references/requirements-clarification-gate.md',
         'references/qa-test-gate.md',
         'references/install-and-hooks.md',
         'hooks/enforce-gate-sequence.ps1',

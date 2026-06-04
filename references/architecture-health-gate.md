@@ -1,6 +1,6 @@
 # Architecture Health Gate
 
-Use after complexity PASS in formal flow, or independently for architecture consultation. This gate reviews design shape: boundaries, ownership, public surface, dependencies, state/cache lifecycle, failure semantics, compatibility, and maintainability.
+Use after complexity PASS in formal flow, or independently for architecture consultation. Review boundaries, ownership, public surface, dependencies, state/cache lifecycle, failure semantics, compatibility, and maintainability.
 
 Do not use architecture review to hide scope creep. If complexity is wrong, stop there.
 
@@ -20,7 +20,7 @@ Do not run for pure conversation-only work or ordinary test additions with no ha
 
 For `test-only` work, run only when the harness, environment, fixture ownership, automation entrypoint, or evidence architecture changes. Ordinary behavior-test additions do not need an architecture gate.
 
-For spec/doc/plan work, do not demand implementation evidence. Judge whether the proposed boundary, ownership, lifecycle, and failure semantics can be implemented cleanly.
+For spec/doc/plan work, do not demand implementation evidence. Judge whether the proposed boundary, ownership, lifecycle, and failure semantics are implementable.
 
 ## Formal Entry
 
