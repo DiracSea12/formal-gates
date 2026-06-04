@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Claude', 'Codex', 'Both')]
+    [ValidateSet('Claude', 'Codex', 'Cursor', 'Both')]
     [string]$HostName = 'Claude',
 
     [ValidateSet('Global', 'Project')]
@@ -59,24 +59,18 @@ function Get-InstallTargets([string]$HostName, [string]$Scope, [string]$ProjectP
 
     foreach ($targetHost in $hosts) {
         if ($Scope -eq 'Global') {
-            $base = if ($targetHost -eq 'Claude') {
-                Join-Path $HOME '.claude/skills'
-            }
-            else {
-                Join-Path $HOME '.codex/skills'
-            }
+            if ($targetHost -eq 'Claude') { $base = Join-Path $HOME '.claude/skills' }
+            elseif ($targetHost -eq 'Codex') { $base = Join-Path $HOME '.codex/skills' }
+            else { $base = Join-Path $HOME '.cursor' }
         }
         else {
             if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
                 throw '-ProjectPath is required when -Scope Project is used.'
             }
             $project = Resolve-FullPath $ProjectPath
-            $base = if ($targetHost -eq 'Claude') {
-                Join-Path $project '.claude/skills'
-            }
-            else {
-                Join-Path $project '.codex/skills'
-            }
+            if ($targetHost -eq 'Claude') { $base = Join-Path $project '.claude/skills' }
+            elseif ($targetHost -eq 'Codex') { $base = Join-Path $project '.codex/skills' }
+            else { $base = Join-Path $project '.cursor' }
         }
 
         $targets += [pscustomobject]@{
@@ -94,7 +88,7 @@ function Remove-ExistingTarget([string]$TargetPath) {
     $parent = Split-Path -Parent $resolved
     $parentLeaf = Split-Path -Leaf $parent
 
-    if ($leaf -ne 'formal-gates' -or $parentLeaf -ne 'skills') {
+    if ($leaf -ne 'formal-gates' -or $parentLeaf -notin @('skills', '.cursor')) {
         throw "Refusing to replace unexpected target path: $resolved"
     }
 
@@ -138,6 +132,16 @@ function Get-ClaudeSettingsPath([string]$Scope, [string]$ProjectPath) {
         throw '-ProjectPath is required to configure a project-local hook.'
     }
     return Join-Path (Resolve-FullPath $ProjectPath) '.claude/settings.json'
+}
+
+function Get-CursorHooksPath([string]$Scope, [string]$ProjectPath) {
+    if ($Scope -eq 'Global') {
+        return Join-Path $HOME '.cursor/hooks.json'
+    }
+    if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+        throw '-ProjectPath is required to configure a project-local Cursor hook.'
+    }
+    return Join-Path (Resolve-FullPath $ProjectPath) '.cursor/hooks.json'
 }
 
 function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
@@ -223,6 +227,70 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
     Write-Host "formal-gates PreToolUse hook added to $SettingsPath"
 }
 
+function Set-CursorFormalGatesHook([string]$HooksPath, [string]$HookScriptPath) {
+    $command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $HookScriptPath
+
+    $config = $null
+    if (Test-Path -LiteralPath $HooksPath) {
+        $raw = Get-Content -LiteralPath $HooksPath -Raw -Encoding UTF8
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            try {
+                $config = $raw | ConvertFrom-Json
+            }
+            catch {
+                throw "Existing Cursor hooks.json is not valid JSON; refusing to touch it: $HooksPath"
+            }
+        }
+        Copy-Item -LiteralPath $HooksPath -Destination "$HooksPath.bak" -Force
+        Write-Host "Backed up existing Cursor hooks to $HooksPath.bak"
+    }
+    if ($null -eq $config) { $config = [pscustomobject]@{} }
+
+    if (-not ($config.PSObject.Properties.Name -contains 'version')) {
+        $config | Add-Member -NotePropertyName 'version' -NotePropertyValue 1 -Force
+    }
+    if (-not ($config.PSObject.Properties.Name -contains 'hooks') -or $null -eq $config.hooks) {
+        $config | Add-Member -NotePropertyName 'hooks' -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if (-not ($config.hooks.PSObject.Properties.Name -contains 'preToolUse') -or $null -eq $config.hooks.preToolUse) {
+        $config.hooks | Add-Member -NotePropertyName 'preToolUse' -NotePropertyValue (@()) -Force
+    }
+
+    $preToolUse = @($config.hooks.preToolUse)
+    foreach ($entry in $preToolUse) {
+        if (([string]$entry.command) -like "*enforce-gate-sequence.ps1*") {
+            $entry.command = $command
+            $entry.timeout = 30
+            if ($entry.PSObject.Properties.Name -contains 'failClosed') {
+                $entry.failClosed = $true
+            }
+            else {
+                $entry | Add-Member -NotePropertyName 'failClosed' -NotePropertyValue $true -Force
+            }
+            if ($entry.PSObject.Properties.Name -contains 'matcher') {
+                $entry.PSObject.Properties.Remove('matcher')
+            }
+            $config | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $HooksPath -Encoding UTF8
+            Write-Host "formal-gates Cursor preToolUse hook updated in $HooksPath"
+            return
+        }
+    }
+
+    $newEntry = [pscustomobject]@{
+        command    = $command
+        timeout    = 30
+        failClosed = $true
+    }
+    $config.hooks.preToolUse = @($preToolUse + $newEntry)
+
+    $parent = Split-Path -Parent $HooksPath
+    if (-not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $config | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $HooksPath -Encoding UTF8
+    Write-Host "formal-gates Cursor preToolUse hook added to $HooksPath"
+}
+
 $source = if ([string]::IsNullOrWhiteSpace($SourcePath)) {
     Get-DefaultSourcePath
 }
@@ -252,8 +320,18 @@ foreach ($target in $targets) {
             $settingsPath = Get-ClaudeSettingsPath $Scope $ProjectPath
             Set-FormalGatesHook $settingsPath $hookPath
         }
+        elseif ($target.Host -eq 'Cursor') {
+            $hooksPath = Get-CursorHooksPath $Scope $ProjectPath
+            $hookCommandPath = if ($Scope -eq 'Project') {
+                '.cursor/formal-gates/hooks/enforce-gate-sequence.ps1'
+            }
+            else {
+                $hookPath
+            }
+            Set-CursorFormalGatesHook $hooksPath $hookCommandPath
+        }
         else {
-            Write-Host "Skipping -ConfigureHook for $($target.Host): auto hook config supports Claude settings.json only. See references/install-and-hooks.md for Codex."
+            Write-Host "Skipping -ConfigureHook for $($target.Host): see references/install-and-hooks.md for Codex hook config."
         }
     }
 }

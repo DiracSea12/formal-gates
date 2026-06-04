@@ -15,9 +15,9 @@ description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-
 - 文档/开工审查：OpenSpec、PRD、SDD、设计文档、阶段文档、能不能开工。见下面「OpenSpec/文档开工审查」节，需求澄清细节读 `references/requirements-clarification-gate.md`。
 - 开发后/发布审查：已有实现、准备交付、release、seal、final QA。按下面的四门顺序走。
 - 各门检查细节按需读对应 reference：QA 读 `qa-test-gate.md`，复杂度读 `complexity-gate.md`，架构读 `architecture-health-gate.md`，代码质量读 `code-quality-gate.md`，需求澄清读 `requirements-clarification-gate.md`。
-- 安装、hook、canary、A/B、候选包测试、Claude 主路径或 Codex 可选兼容接入：读 `references/install-and-hooks.md`。
+- 安装、hook、canary、A/B、候选包测试、Claude/Codex/Cursor 接入：读 `references/install-and-hooks.md`。
 
-Claude Code 是主用 host。Codex 只作为可选兼容路径或旧版对比路径；Codex 兼容不能覆盖 Claude-first 的文档、安装和验证口径。
+Claude Code 是主用 host。Codex 只作为可选兼容或旧版对比路径。Cursor 通过 `.cursor/hooks.json` 或全局 `~/.cursor/hooks.json` 自动接 command hook。
 
 ## 不能碰的红线
 

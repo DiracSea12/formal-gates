@@ -60,6 +60,9 @@ function Block-Gate([string]$Message, [string]$Reason) {
         $displayReason = "$Message $Reason"
     }
     [pscustomobject]@{
+        permission = 'deny'
+        user_message = $displayReason
+        agent_message = $displayReason
         decision = 'block'
         reason = $displayReason
         hookSpecificOutput = @{
@@ -88,6 +91,12 @@ function Invoke-GateState([string[]]$Arguments, [string]$WorkingDirectory) {
     }
 }
 
+function Test-IntentTerm([string]$Pattern, [int[]]$ChineseCodePoints) {
+    if ($rawIntentText -match $Pattern) { return $true }
+    $term = -join ($ChineseCodePoints | ForEach-Object { [char]$_ })
+    return $rawIntentText.Contains($term)
+}
+
 function Get-ToolGateIntent {
     if ($toolName -eq 'Skill') {
         $skillName = [string]$inputProperties['skill']
@@ -95,11 +104,11 @@ function Get-ToolGateIntent {
         if ($routerSkillNames -contains $skillName) { return $skillName }
         return $null
     }
-    if ($toolName -eq 'Agent') {
-        if ($rawIntentText -match '(?i)(architecture-health-gate|architecture\s+gate|架构门)') { return 'architecture-health-gate' }
-        if ($rawIntentText -match '(?i)(code-quality-gate|code\s+quality\s+gate|代码质量门)') { return 'code-quality-gate' }
-        if ($rawIntentText -match '(?i)(qa-test-gate|qa\s+gate|测试门)') { return 'qa-test-gate' }
-        if ($rawIntentText -match '(?i)(complexity-gate|complexity\s+gate|复杂度门)') { return 'complexity-gate' }
+    if ($toolName -in @('Agent', 'Task')) {
+        if (Test-IntentTerm '(?i)(architecture-health-gate|architecture\s+gate)' @(0x67B6, 0x6784, 0x95E8)) { return 'architecture-health-gate' }
+        if (Test-IntentTerm '(?i)(code-quality-gate|code\s+quality\s+gate)' @(0x4EE3, 0x7801, 0x8D28, 0x91CF, 0x95E8)) { return 'code-quality-gate' }
+        if (Test-IntentTerm '(?i)(qa-test-gate|qa\s+gate)' @(0x6D4B, 0x8BD5, 0x95E8)) { return 'qa-test-gate' }
+        if (Test-IntentTerm '(?i)(complexity-gate|complexity\s+gate)' @(0x590D, 0x6742, 0x5EA6, 0x95E8)) { return 'complexity-gate' }
     }
     return $null
 }
@@ -181,9 +190,10 @@ function Test-Truthy($Value) {
 
 function Allow-AdvisoryGate([string]$Gate) {
     [pscustomobject]@{
+        permission = 'allow'
         hookSpecificOutput = @{
             hookEventName = 'PreToolUse'
-            additionalContext = "UNSTRUCTURED GATE ENTRY = ADVISORY ONLY for $Gate. 检测到未按照门禁标准顺序运行，将视为你是在单跑门禁，只能用于用户显式要求单跑特定门禁。如果是正式的自动化开发流程，请走标准的四门流程，此次门禁不具备任何自动化开发推进效力。 This is not four-stage sequencing, not release/seal approval, and not permission to output, record, or reuse a workflow PASS. If the user asks for formal four-gate, release, seal, final approval, or recordable PASS, stop inside the skill with GATE_SEQUENCE_ERROR and require structured GateWorkflow metadata plus gate-state admission."
+            additionalContext = "UNSTRUCTURED GATE ENTRY = ADVISORY ONLY for $Gate. This is a standalone gate review only. It is not four-stage sequencing, not release/seal approval, and not permission to output, record, or reuse a workflow PASS. If the user asks for formal four-gate, release, seal, final approval, or recordable PASS, stop inside the skill with GATE_SEQUENCE_ERROR and require structured GateWorkflow metadata plus gate-state admission."
         }
     } | ConvertTo-Json -Depth 5 -Compress
     exit 0
@@ -274,7 +284,7 @@ function Normalize-GateStage([string]$StageValue) {
 }
 
 function Enforce-FormalGatePassArtifact {
-    if ($toolName -ne 'Bash') { return }
+    if ($toolName -notin @('Bash', 'Shell')) { return }
     $command = [string]$inputProperties['command']
     if ([string]::IsNullOrWhiteSpace($command)) { return }
     if (-not (Test-CommandMentionsGateWorkflowScript $command)) { return }
@@ -448,6 +458,7 @@ if ($result.ExitCode -ne 0) {
 }
 
 [pscustomobject]@{
+    permission = 'allow'
     hookSpecificOutput = @{
         hookEventName = 'PreToolUse'
         additionalContext = "Gate sequence admission passed for $gate. $($result.Output)"

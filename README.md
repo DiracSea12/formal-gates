@@ -2,7 +2,7 @@
 
 > AI 代码质量门禁：1 道事前门管方向 + 4 道事后门卡质量。AI 动手前先对齐需求，写完之后派**独立的审查 AI**逐道关卡卡质量，过了才放行。
 
-这是一个 Claude Code skill（也兼容 Codex）。它不替你写代码，而是裁决"AI 要做的方向对不对、写完的代码/文档能不能放行"。
+这是一个 Claude Code skill（也兼容 Codex / Cursor hook）。它不替你写代码，而是裁决"AI 要做的方向对不对、写完的代码/文档能不能放行"。
 
 ## 解决什么问题
 
@@ -65,7 +65,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 ```
 
 `-RunCanary` 会在复制后跑一次可搬运性自检；失败就别把这次安装当可用。
-hook 接入、Codex 兼容、A/B 测试等细节见 `references/install-and-hooks.md`。
+Claude/Codex/Cursor 的 hook 或脚本接入口径见 `references/install-and-hooks.md`。
 
 ## 怎么开始
 
