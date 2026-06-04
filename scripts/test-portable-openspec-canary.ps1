@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'powershell-host.ps1')
 
 function Format-Path([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
@@ -25,27 +26,62 @@ function New-Dir([string]$Path) {
 }
 
 function Run-Git([string]$Repo, [string[]]$Arguments) {
-    $output = & git -C $Repo @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "git $($Arguments -join ' ') failed:`n$((($output | ForEach-Object { [string]$_ }) -join "`n"))"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & git -C $Repo @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
     }
-    return (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $text = (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    if ($exitCode -ne 0) {
+        throw "git $($Arguments -join ' ') failed:`n$text"
+    }
+    return $text
 }
 
 function Run-PowerShellJson([string]$WorkingDirectory, [string[]]$Arguments) {
-    $output = & pwsh -NoProfile @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "pwsh $($Arguments -join ' ') failed:`n$((($output | ForEach-Object { [string]$_ }) -join "`n"))"
+    if ($Arguments.Count -lt 2 -or $Arguments[0] -ne '-File') { throw 'Run-PowerShellJson expects arguments beginning with -File <script>.' }
+    $script = $Arguments[1]
+    $remaining = @()
+    if ($Arguments.Count -gt 2) { $remaining = $Arguments[2..($Arguments.Count - 1)] }
+    $launchArgs = (Get-FormalGatesPowerShellFileArgs $script) + @($remaining)
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & (Get-FormalGatesPowerShellExe) @launchArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "PowerShell $($Arguments -join ' ') failed:`n$((($output | ForEach-Object { [string]$_ }) -join "`n"))"
     }
     $text = (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
     return $text | ConvertFrom-Json
 }
 
 function Run-PowerShellExpect([string]$WorkingDirectory, [string[]]$Arguments, [int]$ExpectedExitCode = 0) {
-    $output = & pwsh -NoProfile @Arguments 2>&1
+    if ($Arguments.Count -lt 2 -or $Arguments[0] -ne '-File') { throw 'Run-PowerShellExpect expects arguments beginning with -File <script>.' }
+    $script = $Arguments[1]
+    $remaining = @()
+    if ($Arguments.Count -gt 2) { $remaining = $Arguments[2..($Arguments.Count - 1)] }
+    $launchArgs = (Get-FormalGatesPowerShellFileArgs $script) + @($remaining)
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & (Get-FormalGatesPowerShellExe) @launchArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     $text = (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
-    if ($LASTEXITCODE -ne $ExpectedExitCode) {
-        throw "pwsh $($Arguments -join ' ') expected exit $ExpectedExitCode but got ${LASTEXITCODE}:`n$text"
+    if ($exitCode -ne $ExpectedExitCode) {
+        throw "PowerShell $($Arguments -join ' ') expected exit $ExpectedExitCode but got ${exitCode}:`n$text"
     }
     return $text
 }
@@ -147,6 +183,7 @@ New-Dir $repoParent
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runId = "portable-formal-gates-canary-$timestamp"
 $tempRepo = Join-Path $repoParent $runId
+$plainRepo = Join-Path $repoParent "$runId-plain"
 $summaryPath = Join-Path $repoParent ("$runId-summary.json")
 
 $summary = [ordered]@{
@@ -240,11 +277,44 @@ sha256: sample
         'references/qa-test-gate.md',
         'references/install-and-hooks.md',
         'hooks/enforce-gate-sequence.ps1',
+        'scripts/powershell-host.ps1',
+        'scripts/run-complexity-gate.ps1',
         'scripts/gate-state.ps1',
         'scripts/gate-workflow.ps1'
     )
     $missingPackageFiles = @($requiredPackageFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $targetSkillPath $_) -PathType Leaf) })
     Add-Check ([ref]$summary) 'copied-package-structure-complete' ($missingPackageFiles.Count -eq 0) ($missingPackageFiles -join ', ')
+
+    $complexityWrapper = Join-Path $targetSkillPath 'scripts/run-complexity-gate.ps1'
+    $complexityWrapperOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $complexityWrapper,
+        '--task-type', 'bugfix',
+        '--max-net', '999',
+        '--max-new-prod-files', '99',
+        '--max-prod-insertions', '999',
+        '--worktree', $tempRepo
+    )
+    Add-Check ([ref]$summary) 'complexity-wrapper-finds-python3' ($complexityWrapperOutput -match 'Complexity Gate: PASS') $complexityWrapperOutput
+
+    New-Dir $plainRepo
+    Set-Utf8File (Join-Path $plainRepo 'plain.txt') 'plain project without git or svn'
+    $plainSnapshot = Run-PowerShellJson $plainRepo @(
+        '-File', $workflowScript,
+        '-Action', 'snapshot',
+        '-Worktree', $plainRepo,
+        '-Vcs', 'auto'
+    )
+    Add-Check ([ref]$summary) 'non-git-file-hash-snapshot-created' ([string]$plainSnapshot.changeSnapshot -match '^files\.') ([string]$plainSnapshot.changeSnapshot)
+    $plainComplexityOutput = Run-PowerShellExpect $plainRepo @(
+        '-File', $complexityWrapper,
+        '--task-type', 'bugfix',
+        '--max-net', '10',
+        '--max-new-prod-files', '1',
+        '--max-prod-insertions', '10',
+        '--worktree', $plainRepo,
+        '--vcs', 'auto'
+    ) 2
+    Add-Check ([ref]$summary) 'non-git-complexity-requires-manual-evidence' ($plainComplexityOutput -match 'no git or svn working copy detected') $plainComplexityOutput
 
     $snapshot = Run-PowerShellJson $tempRepo @(
         '-File', $workflowScript,
@@ -453,6 +523,8 @@ gate_route:
             contextBundle = $bundleRef
         }
     ) | ConvertTo-Json -Depth 8 -Compress
+    $attemptsRel = '.claude/gates/artifacts/final-verification-attempts.json'
+    Set-Utf8File (Join-Path $tempRepo $attemptsRel) $attempts
     $finalVerificationRel = '.claude/gates/artifacts/final-verification.json'
     $finalQaRel = '.claude/gates/artifacts/final-qa-execution.md'
     Run-PowerShellExpect $tempRepo @(
@@ -461,7 +533,7 @@ gate_route:
         '-Worktree', $tempRepo,
         '-WorkflowId', $workflowId,
         '-ChangeSnapshot', $changeSnapshot,
-        '-AttemptsJson', $attempts,
+        '-AttemptsJsonFile', $attemptsRel,
         '-OutputArtifact', $finalVerificationRel,
         '-FinalQaArtifact', $finalQaRel,
         '-RecordFinalQa',
@@ -613,13 +685,15 @@ Decision evidence: incomplete artifact
             contextBundle = $bundleRef
         }
     ) | ConvertTo-Json -Depth 8 -Compress
+    $badAttemptsRel = '.claude/gates/artifacts/bad-final-verification-attempts.json'
+    Set-Utf8File (Join-Path $tempRepo $badAttemptsRel) $badAttempts
     $badAttemptOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
         '-Action', 'record-final-verification',
         '-Worktree', $tempRepo,
         '-WorkflowId', $workflowId,
         '-ChangeSnapshot', $changeSnapshot,
-        '-AttemptsJson', $badAttempts,
+        '-AttemptsJsonFile', $badAttemptsRel,
         '-OutputArtifact', '.claude/gates/artifacts/bad-final-verification.json',
         '-FinalQaArtifact', '.claude/gates/artifacts/bad-final-qa.md',
         '-RecordFinalQa',
@@ -805,6 +879,8 @@ gate_route:
             contextBundle = $bundleRef
         }
     ) | ConvertTo-Json -Depth 8 -Compress
+    $failedAttemptsRel = '.claude/gates/artifacts/final-verification-fail-attempts.json'
+    Set-Utf8File (Join-Path $tempRepo $failedAttemptsRel) $failedAttempts
     $failedFinalQaRel = '.claude/gates/artifacts/final-qa-fail-execution.md'
     $failedFinalOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
@@ -812,7 +888,7 @@ gate_route:
         '-Worktree', $tempRepo,
         '-WorkflowId', 'wf-final-fail-canary',
         '-ChangeSnapshot', 'snap-final-fail-canary',
-        '-AttemptsJson', $failedAttempts,
+        '-AttemptsJsonFile', $failedAttemptsRel,
         '-OutputArtifact', '.claude/gates/artifacts/final-verification-fail.json',
         '-FinalQaArtifact', $failedFinalQaRel,
         '-RecordFinalQa',
@@ -915,6 +991,7 @@ Case-to-artifact binding: conditional case maps to conditional-qa-execution.md
     Set-Utf8File $summaryPath (($summary | ConvertTo-Json -Depth 12))
     if ($summary.status -eq 'PASS' -and -not $KeepTemp.IsPresent) {
         Remove-Item -LiteralPath $tempRepo -Recurse -Force
+        Remove-Item -LiteralPath $plainRepo -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 catch {

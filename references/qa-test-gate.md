@@ -44,7 +44,7 @@ A formal run needs one `workflowId` and one current `changeSnapshot`. Preserve s
 
 If the snapshot changes after a PASS, the old PASS is stale. Do not reuse it. Use structured `GateWorkflow={...}` metadata and the router machine checks; free-text `WorkflowId=... ChangeSnapshot=...` is advisory only.
 
-Development/rework handoffs must also preserve the snapshot's worktree reality. For dirty or uncommitted formal-gate rework, dispatch development subagents to the current worktree named by `GateWorkflow.worktree` unless an isolated worktree has been explicitly prepared from the exact intended base and loaded with the same required snapshot/artifacts. A fresh worktree that silently starts from `origin/master`, `origin/main`, or a default remote ref is not valid formal-gate context. Every development subagent must verify `git rev-parse --short HEAD` against the intended base before editing and must stop on mismatch.
+Development/rework handoffs must also preserve the snapshot's worktree reality. For dirty or uncommitted formal-gate rework, dispatch development subagents to the current worktree named by `GateWorkflow.worktree` unless an isolated worktree has been explicitly prepared from the exact intended base or same file-hash snapshot and loaded with the same required snapshot/artifacts. A fresh git worktree that silently starts from `origin/master`, `origin/main`, or a default remote ref is not valid formal-gate context. Git development subagents must verify `git rev-parse --short HEAD`; SVN or non-git subagents must verify the provided `changeSnapshot` from `gate-workflow.ps1 -Action snapshot -Vcs auto`. Stop on mismatch.
 
 ## Case Requirements
 
@@ -93,17 +93,20 @@ Formal PASS requires:
 For formal Execution PASS:
 
 ```powershell
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate qa-test-gate -Verdict PASS -Mode formal -Stage Execution -Artifact <qa-artifact> -Actor <qa-reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate qa-test-gate -Verdict PASS -Mode formal -Stage Execution -Artifact <qa-artifact> -Actor <qa-reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
 For formal FinalExecution PASS:
 
 ```powershell
 $attempts = '[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-verification-run.json","reviewerAgentId":"qa-final-agent","contextBundle":".claude/bundles/<bundle>.zip sha256=<bundle-sha256>"}]'
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action record-final-verification -Worktree <repo> -WorkflowId <id> -ChangeSnapshot <snapshot> -AttemptsJson $attempts -OutputArtifact .claude/gates/artifacts/final-verification.json -FinalQaArtifact .claude/gates/artifacts/final-qa-execution.md -RecordFinalQa -Actor <qa-reviewer>
+$attemptsFile = '.claude/gates/artifacts/final-verification-attempts.json'
+$attemptsPath = Join-Path '<repo>' $attemptsFile
+$attempts | Set-Content -LiteralPath $attemptsPath -Encoding UTF8
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-final-verification -Worktree <repo> -WorkflowId <id> -ChangeSnapshot <snapshot> -AttemptsJsonFile $attemptsFile -OutputArtifact .claude/gates/artifacts/final-verification.json -FinalQaArtifact .claude/gates/artifacts/final-qa-execution.md -RecordFinalQa -Actor <qa-reviewer>
 ```
 
-`AttemptsJson` entries need `status`, `accepted`, `artifact`, `reviewerAgentId`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. A PASS attempt is accepted only when `status=PASS`, `accepted=true`, the artifact path exists and is non-empty, and any `gate_route` inside it matches the same workflow/snapshot. With `-RecordFinalQa`, the wrapper writes the final verification aggregate and records `qa-test-gate` `Stage=FinalExecution`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+Attempt entries need `status`, `accepted`, `artifact`, `reviewerAgentId`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. Prefer `-AttemptsJsonFile` on PowerShell 5 because raw JSON strings can lose quotes when passed through `powershell.exe -File`. A PASS attempt is accepted only when `status=PASS`, `accepted=true`, the artifact path exists and is non-empty, and any `gate_route` inside it matches the same workflow/snapshot. With `-RecordFinalQa`, the wrapper writes the final verification aggregate and records `qa-test-gate` `Stage=FinalExecution`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
 
 ## Output
 

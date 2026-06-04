@@ -1,5 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
+$formalGatesPowerShellHost = Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/powershell-host.ps1'
+if (Test-Path -LiteralPath $formalGatesPowerShellHost) {
+    . $formalGatesPowerShellHost
+}
+
 $inputJson = [Console]::In.ReadToEnd()
 if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }
 
@@ -65,7 +70,7 @@ function Invoke-GateState([string[]]$Arguments, [string]$WorkingDirectory) {
     $stdoutPath = [System.IO.Path]::GetTempFileName()
     $stderrPath = [System.IO.Path]::GetTempFileName()
     try {
-        $process = Start-Process -FilePath 'pwsh' -ArgumentList $Arguments -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru -Wait -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $process = Start-Process -FilePath (Get-FormalGatesPowerShellExe) -ArgumentList $Arguments -WorkingDirectory $WorkingDirectory -NoNewWindow -PassThru -Wait -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
         $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
         $stderr = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
         return [pscustomobject]@{
@@ -666,8 +671,7 @@ function Add-CommonGateStateArgs {
 
 if ($gate -eq 'qa-test-gate') {
     if ($isFinal -or $isWhiteBox) {
-        $verifyArgs = @(
-            '-NoProfile', '-File', $gateStateScript,
+        $verifyArgs = (Get-FormalGatesPowerShellFileArgs $gateStateScript) + @(
             '-Action', 'verify',
             '-Gate', 'code-quality-gate',
             '-RequireVerdict', 'PASS',
@@ -685,8 +689,7 @@ if ($gate -eq 'qa-test-gate') {
     exit 0
 }
 
-$admissionArgs = @(
-    '-NoProfile', '-File', $gateStateScript,
+$admissionArgs = (Get-FormalGatesPowerShellFileArgs $gateStateScript) + @(
     '-Action', 'verify-admission',
     '-Gate', $gate,
     '-WorkflowId', $workflowId,

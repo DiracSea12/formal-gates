@@ -41,9 +41,9 @@ A/B 或候选包测试时，必须先记录真实来源：
 
 - 主代理不得直接写非平凡代码、脚本、测试、配置或 OpenSpec 实现。必须派零上下文开发子代理。
 - 任何非平凡开发前必须有 OpenSpec 文档或写入既有 OpenSpec 的 slice 文档。
-- 开发子代理必须拿到 bundle/manifest、worktree、base commit、OpenSpec change、任务范围、禁止项、Complexity Contract 和验证要求。
-- 开发子代理第一步必须回报 `git rev-parse --short HEAD`。如果和 handoff 的 base 不一致，停止。
-- dirty 或未提交的正式 snapshot，开发/审查子代理默认使用 `GateWorkflow.worktree` 指向的当前 worktree。只有已从 exact base 准备并灌入同一 snapshot/artifact 的隔离 worktree 才能用；禁止默认从 `origin/main`、`origin/master` 或猜测 remote base 开工。
+- 开发子代理必须拿到 bundle/manifest、worktree、base commit 或非 git snapshot id、OpenSpec change、任务范围、禁止项、Complexity Contract 和验证要求。
+- git 项目的开发子代理第一步必须回报 `git rev-parse --short HEAD`。SVN 或非 git 项目必须回报当前 `changeSnapshot`，通常由 `gate-workflow.ps1 -Action snapshot -Vcs auto` 生成。和 handoff 不一致就停止。
+- dirty 或未提交的正式 snapshot，开发/审查子代理默认使用 `GateWorkflow.worktree` 指向的当前 worktree。只有已从 exact base 或同一 file-hash snapshot 准备并灌入同一 snapshot/artifact 的隔离 worktree 才能用；禁止默认从 `origin/main`、`origin/master` 或猜测 remote base 开工。
 - 正式 PASS/FAIL/REVIEW 结论必须来自独立零上下文子代理，主代理不能自己判通过。
 - OpenSpec proposal/design/spec/tasks/start-readiness 的“可开发/可开工/通过”结论，必须先有独立零上下文 complexity review、architecture-health review、cold-water review。
 - 独立门禁需要外部编排。当前 agent 如果不能再派独立子代理，不能伪造 gate PASS，也不要把整个需求当成失败实现；输出 `Gate Handoff Request`，交给主代理或外部编排者派独立 gate agent。
@@ -158,9 +158,11 @@ gate_route:
 最小机器检查命令：
 
 ```powershell
-pwsh <formal-gates>\scripts\gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate <gate-id> -WorkflowId <id> -ChangeSnapshot <snapshot>
-pwsh <formal-gates>\scripts\gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate <gate-id> -Verdict PASS -Artifact <artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate <gate-id> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate <gate-id> -Verdict PASS -Artifact <artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
+
+`<ps>` 代表当前可用的 PowerShell：Windows PowerShell 5 用 `powershell -NoProfile -ExecutionPolicy Bypass`，PowerShell 7 用 `pwsh -NoProfile`。包内脚本会继续使用当前 PowerShell，不要求必须有 PowerShell 7。
 
 `qa-test-gate` 正式记录必须加 `-Mode formal -Stage Execution`；最终 QA 用 `-Mode formal -Stage FinalExecution`。不要直接照抄泛化命令漏掉 stage。
 
@@ -179,6 +181,7 @@ WorkflowId:
 Change snapshot:
 Worktree:
 Base commit:
+Snapshot id:
 OpenSpec change:
 Required independent gates:
 Artifacts to provide:
@@ -193,7 +196,7 @@ Continue after:
 派子代理时必须给足本地事实：
 
 - bundle/manifest 路径和 SHA；
-- worktree 和 base commit；
+- worktree 和 base commit 或非 git snapshot id；
 - OpenSpec change、任务范围、禁止改文件、禁止扩张项；
 - 相关 spec/design/tasks/case/diff/evidence artifact；
 - 输出模板和必须运行的验证。

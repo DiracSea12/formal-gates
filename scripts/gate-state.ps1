@@ -53,8 +53,8 @@ Common options:
   -Artifact <path>           Required when recording PASS.
 
 Examples:
-  pwsh <formal-gates>/scripts/gate-state.ps1 -Action record -Gate qa-test-gate -Verdict PASS -Mode formal -Stage Execution -Artifact .artifacts/qa.txt -Actor qa -WorkflowId wf-1 -ChangeSnapshot snap-1
-  pwsh <formal-gates>/scripts/gate-state.ps1 -Action verify-admission -Gate complexity-gate -WorkflowId wf-1 -ChangeSnapshot snap-1
+  <ps> -File <formal-gates>/scripts/gate-state.ps1 -Action record -Gate qa-test-gate -Verdict PASS -Mode formal -Stage Execution -Artifact .artifacts/qa.txt -Actor qa -WorkflowId wf-1 -ChangeSnapshot snap-1
+  <ps> -File <formal-gates>/scripts/gate-state.ps1 -Action verify-admission -Gate complexity-gate -WorkflowId wf-1 -ChangeSnapshot snap-1
 '@
 }
 

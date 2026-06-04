@@ -17,8 +17,11 @@ param(
     [string]$BaseRef,
     [string]$HeadRef = 'HEAD',
     [switch]$IncludeWorkingTree,
+    [ValidateSet('auto', 'git', 'svn', 'file-hash')]
+    [string]$Vcs = 'auto',
     [string]$AttemptId,
     [string]$AttemptsJson,
+    [string]$AttemptsJsonFile,
     [string]$OutputArtifact,
     [string]$FinalQaArtifact,
     [switch]$RecordFinalQa,
@@ -26,6 +29,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'powershell-host.ps1')
 
 function Show-Usage {
     @'
@@ -35,9 +39,10 @@ Generic helper around gate-state.ps1. It resolves the worktree/state path, verif
 records state, and writes machine-readable final verification attempt aggregates.
 
 Examples:
-  pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate complexity-gate -WorkflowId wf -ChangeSnapshot snap
-  pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/scope.txt -WorkflowId wf -ChangeSnapshot snap
-  pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <repo> -BaseRef main -HeadRef HEAD
+  <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate complexity-gate -WorkflowId wf -ChangeSnapshot snap
+  <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/scope.txt -WorkflowId wf -ChangeSnapshot snap
+  <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <repo> -BaseRef main -HeadRef HEAD
+  powershell -NoProfile -ExecutionPolicy Bypass -File <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <svn-or-plain-project> -Vcs file-hash
 '@
 }
 
@@ -74,6 +79,22 @@ function Resolve-GateStateScript([string]$Repo) {
     $bundled = Join-Path $PSScriptRoot 'gate-state.ps1'
     if (Test-Path -LiteralPath $bundled) { return $bundled }
     throw "Bundled formal-gates gate-state.ps1 was not found next to gate-workflow.ps1: $bundled"
+}
+
+function Invoke-NativeText([string]$FilePath, [string[]]$Arguments) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Text = (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    }
 }
 
 function Resolve-StatePath([string]$Repo, [string]$Path) {
@@ -447,8 +468,8 @@ function Invoke-GateState([string[]]$Arguments, [string]$Repo) {
     $stdoutPath = [System.IO.Path]::GetTempFileName()
     $stderrPath = [System.IO.Path]::GetTempFileName()
     try {
-        $processArgs = @('-NoProfile', '-File', $gateState) + @($Arguments)
-        $process = Start-Process -FilePath 'pwsh' -ArgumentList $processArgs -WorkingDirectory $Repo -NoNewWindow -PassThru -Wait -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $processArgs = (Get-FormalGatesPowerShellFileArgs $gateState) + @($Arguments)
+        $process = Start-Process -FilePath (Get-FormalGatesPowerShellExe) -ArgumentList $processArgs -WorkingDirectory $Repo -NoNewWindow -PassThru -Wait -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
         $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
         $stderr = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
         $output = (($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
@@ -461,11 +482,11 @@ function Invoke-GateState([string[]]$Arguments, [string]$Repo) {
 }
 
 function Invoke-GitText([string]$Repo, [string[]]$Arguments) {
-    $output = & git -C $Repo @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw (($output | ForEach-Object { [string]$_ }) -join "`n")
+    $result = Invoke-NativeText 'git' (@('-C', $Repo) + @($Arguments))
+    if ($result.ExitCode -ne 0) {
+        throw $result.Text
     }
-    return (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    return $result.Text
 }
 
 function Get-TreeHash([string]$Text) {
@@ -480,12 +501,12 @@ function Get-TreeHash([string]$Text) {
 }
 
 function Get-UntrackedContentDigest([string]$Repo) {
-    $output = & git -C $Repo ls-files --others --exclude-standard 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw (($output | ForEach-Object { [string]$_ }) -join "`n")
+    $result = Invoke-NativeText 'git' @('-C', $Repo, 'ls-files', '--others', '--exclude-standard')
+    if ($result.ExitCode -ne 0) {
+        throw $result.Text
     }
     $entries = @()
-    foreach ($relative in @($output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object)) {
+    foreach ($relative in @($result.Text -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object)) {
         $path = Join-Path $Repo $relative
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
         $entries += "$relative sha256=$(Get-Sha256 $path)"
@@ -493,7 +514,74 @@ function Get-UntrackedContentDigest([string]$Repo) {
     return ($entries -join "`n")
 }
 
-function New-Snapshot($Repo, [string]$Base, [string]$Head, [bool]$IncludeDirty) {
+function Test-GitWorktree([string]$Repo) {
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($null -eq $git) { return $false }
+    $result = Invoke-NativeText 'git' @('-C', $Repo, 'rev-parse', '--is-inside-work-tree')
+    return ($result.ExitCode -eq 0 -and (($result.Text -split '\r?\n' | Select-Object -First 1) -eq 'true'))
+}
+
+function Test-SvnWorktree([string]$Repo) {
+    $current = [System.IO.Path]::GetFullPath($Repo)
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        if (Test-Path -LiteralPath (Join-Path $current '.svn')) { return $true }
+        $parent = Split-Path -Parent $current
+        if ($parent -eq $current) { break }
+        $current = $parent
+    }
+    $svn = Get-Command svn -ErrorAction SilentlyContinue
+    if ($null -eq $svn) { return $false }
+    $result = Invoke-NativeText 'svn' @('info', $Repo)
+    return ($result.ExitCode -eq 0)
+}
+
+function Test-SnapshotExcludedPath([string]$RelativePath) {
+    $normalized = $RelativePath.Replace('\', '/')
+    if ($normalized -match '(^|/)(\.git|\.svn|\.hg|node_modules|__pycache__)(/|$)') { return $true }
+    if ($normalized -match '^(\.claude|\.codex)/gates(/|$)') { return $true }
+    return $false
+}
+
+function Get-FileTreeDigest([string]$Repo) {
+    $root = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\', '/')
+    $entries = @()
+    foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue) {
+        $relative = $file.FullName.Substring($root.Length).TrimStart('\', '/')
+        if (Test-SnapshotExcludedPath $relative) { continue }
+        $entries += "$($relative.Replace('\', '/')) sha256=$(Get-Sha256 $file.FullName)"
+    }
+    return ($entries | Sort-Object) -join "`n"
+}
+
+function New-FileHashSnapshot($Repo, [string]$DetectedVcs) {
+    $digest = Get-FileTreeDigest $Repo
+    $treeHash = Get-TreeHash $digest
+    $prefix = if ($DetectedVcs -eq 'svn') { 'svn-files' } else { 'files' }
+    return [ordered]@{
+        vcs = $DetectedVcs
+        baseRef = $null
+        baseCommit = $null
+        headRef = $null
+        headCommit = $null
+        rangeHash = $treeHash
+        includeWorkingTree = $true
+        workingTreeHash = $treeHash
+        changeSnapshot = "$prefix.$($treeHash.Substring(0, 12))"
+    }
+}
+
+function New-Snapshot($Repo, [string]$Base, [string]$Head, [bool]$IncludeDirty, [string]$RequestedVcs) {
+    $detectedVcs = $RequestedVcs
+    if ($detectedVcs -eq 'auto') {
+        if (Test-GitWorktree $Repo) { $detectedVcs = 'git' }
+        elseif (Test-SvnWorktree $Repo) { $detectedVcs = 'svn' }
+        else { $detectedVcs = 'file-hash' }
+    }
+
+    if ($detectedVcs -ne 'git') {
+        return New-FileHashSnapshot $Repo $detectedVcs
+    }
+
     if ([string]::IsNullOrWhiteSpace($Base)) { throw 'BaseRef is required for snapshot.' }
     if ([string]::IsNullOrWhiteSpace($Head)) { $Head = 'HEAD' }
 
@@ -516,6 +604,7 @@ function New-Snapshot($Repo, [string]$Base, [string]$Head, [bool]$IncludeDirty) 
     }
 
     $snapshot = [ordered]@{
+        vcs = 'git'
         baseRef = $Base
         baseCommit = $baseCommit
         headRef = $Head
@@ -548,7 +637,7 @@ else {
 }
 
 if ($Action -eq 'snapshot') {
-    $snapshot = New-Snapshot $RepoRoot $BaseRef $HeadRef $IncludeWorkingTree.IsPresent
+    $snapshot = New-Snapshot $RepoRoot $BaseRef $HeadRef $IncludeWorkingTree.IsPresent $Vcs
     $snapshot | ConvertTo-Json -Depth 8
     exit 0
 }
@@ -620,8 +709,16 @@ if ($Action -eq 'record-stage') {
 }
 
 if ($Action -eq 'record-final-verification') {
-    if ([string]::IsNullOrWhiteSpace($AttemptsJson)) { throw 'AttemptsJson is required.' }
-    $attempts = @($AttemptsJson | ConvertFrom-Json)
+    if ([string]::IsNullOrWhiteSpace($AttemptsJson) -and [string]::IsNullOrWhiteSpace($AttemptsJsonFile)) { throw 'AttemptsJson or AttemptsJsonFile is required.' }
+    if (-not [string]::IsNullOrWhiteSpace($AttemptsJsonFile)) {
+        $attemptsJsonPath = Resolve-ArtifactPath $RepoRoot $AttemptsJsonFile
+        if (-not (Test-Path -LiteralPath $attemptsJsonPath)) { throw "AttemptsJsonFile not found: $attemptsJsonPath" }
+        $attemptsJsonText = Get-Content -LiteralPath $attemptsJsonPath -Raw -Encoding UTF8
+    }
+    else {
+        $attemptsJsonText = $AttemptsJson
+    }
+    $attempts = @($attemptsJsonText | ConvertFrom-Json)
     if ($attempts.Count -eq 0) { throw 'At least one attempt is required.' }
     $accepted = @($attempts | Where-Object { $_.accepted -eq $true -and [string]$_.status -eq 'PASS' })
     $finalStatus = if ($accepted.Count -gt 0) { 'PASS' } else { 'FAIL' }
@@ -659,7 +756,8 @@ if ($Action -eq 'record-final-verification') {
         }
         $recordArgs = @('-Action', 'record-stage', '-Worktree', $RepoRoot, '-StatePath', $ResolvedStatePath, '-Gate', 'qa-test-gate', '-Verdict', $finalStatus, '-Mode', 'formal', '-Stage', 'FinalExecution', '-Artifact', $FinalQaArtifact, '-Actor', $Actor, '-WorkflowId', $WorkflowId, '-ChangeSnapshot', $ChangeSnapshot)
         if (-not [string]::IsNullOrWhiteSpace($ResolvedManifestPath)) { $recordArgs += @('-ManifestPath', $ResolvedManifestPath) }
-        & pwsh -NoProfile -File $PSCommandPath @recordArgs
+        $selfArgs = (Get-FormalGatesPowerShellFileArgs $PSCommandPath) + @($recordArgs)
+        & (Get-FormalGatesPowerShellExe) @selfArgs
         $recordExitCode = $LASTEXITCODE
         if ($recordExitCode -ne 0) { exit $recordExitCode }
         exit $(if ($finalStatus -eq 'PASS') { 0 } else { 1 })
