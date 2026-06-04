@@ -14,7 +14,7 @@ description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-
 - 需求澄清门：写/改 OpenSpec、PRD、SDD、阶段文档或开工材料前主动触发。读 `references/requirements-clarification-gate.md`。
 - 文档/开工审查：OpenSpec、PRD、SDD、设计文档、阶段文档、能不能开工。读 `references/document-writing-gates.md`。
 - 开发后/发布审查：已有实现、准备交付、release、seal、final QA。按下面的四门顺序走。
-- 安装、hook、canary、Codex/Claude 接入问题：读 `references/install-and-hooks.md`。
+- 安装、hook、canary、Claude 主路径或 Codex 可选兼容接入问题：读 `references/install-and-hooks.md`。
 
 ## 按需加载 reference
 
@@ -24,7 +24,7 @@ description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-
 - 正确性、边界、测试质量、死代码、过拟合、维护性、最终代码审查：读 `references/code-quality-gate.md`。
 - 写文档前正式需求澄清：读 `references/requirements-clarification-gate.md`。
 - OpenSpec/PRD/SDD/阶段文档/开工审查：读 `references/document-writing-gates.md`。
-- 安装、hook、canary、A/B、Claude/Codex 接入：读 `references/install-and-hooks.md`。
+- 安装、hook、canary、A/B、Claude 主路径或 Codex 可选兼容接入：读 `references/install-and-hooks.md`。
 
 ## 候选包和 A/B 测试
 
@@ -35,7 +35,9 @@ A/B 或候选包测试时，必须先记录真实来源：
 
 同名全局 `formal-gates` 不等于候选包。用户给了候选路径，就优先读、复制、验证这个路径；不要默默读取 `%USERPROFILE%\.codex\skills\formal-gates`、`%USERPROFILE%\.claude\skills\formal-gates` 或其它全局原版。
 
-维护时以 GitHub checkout 或用户显式给出的 `Skill source path` 为准。全局 Claude/Codex skill 目录只是安装快照；不要因为其中一份存在就反向当成主版本，保留旧版对比时更不能偷偷覆盖。
+维护时以 GitHub checkout 或用户显式给出的 `Skill source path` 为准。全局 Claude skill 目录和可选 Codex skill 目录都只是安装快照；不要因为其中一份存在就反向当成主版本，保留旧版对比时更不能偷偷覆盖。
+
+Claude Code 是主用 host。Codex 只作为可选兼容路径或旧版对比路径；Codex 兼容不能覆盖 Claude-first 的文档、安装和验证口径。
 
 ## 不能碰的红线
 
@@ -166,7 +168,7 @@ gate_route:
 
 `qa-test-gate` 正式记录必须加 `-Mode formal -Stage Execution`；最终 QA 用 `-Mode formal -Stage FinalExecution`。不要直接照抄泛化命令漏掉 stage。
 
-Claude/Codex skill 镜像和 hook 不是同一份时，不能声称“同一套 formal-gates 正在生效”。必须写清楚实际运行路径和 hash。
+如果同时安装 Claude 和 Codex，两边 skill 镜像和 hook 不是同一份时，不能声称“同一套 formal-gates 正在生效”。必须写清楚实际运行路径和 hash。
 
 ## Gate Handoff Request
 
