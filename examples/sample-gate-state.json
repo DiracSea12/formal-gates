@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "gates": {
+    "qa-test-gate": {
+      "gate": "qa-test-gate",
+      "verdict": "PASS",
+      "mode": "formal",
+      "stage": "Execution",
+      "artifact": ".claude/gates/artifacts/<workflow-id>/qa-execution.md",
+      "actor": "<independent-qa-reviewer-id>",
+      "workflowId": "<workflow-id>",
+      "changeSnapshot": "<snapshot-id>",
+      "updatedAtUtc": "<iso-8601-timestamp>",
+      "manifestHash": "<optional-manifest-hash>",
+      "worktree": "<optional-worktree-path>"
+    }
+  },
+  "history": []
+}
