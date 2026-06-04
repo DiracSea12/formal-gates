@@ -1,6 +1,6 @@
 ---
 name: formal-gates
-description: Use when the user asks to write or modify OpenSpec/PRD/SDD/start-readiness documents, or explicitly asks for 四门流程, formal requirement clarification gate, writing-document gates, formal gate review, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow, gate-state/gate-workflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering document work or formal mode.
+description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-readiness documents, and when the user explicitly asks for 四门流程, formal requirement clarification gate, writing-document gates, formal gate review, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow, gate-state/gate-workflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering document work or formal mode.
 ---
 
 # Formal Gates
@@ -34,6 +34,8 @@ A/B 或候选包测试时，必须先记录真实来源：
 - `Copied skill path`: 实际复制到测试 workspace 的路径。
 
 同名全局 `formal-gates` 不等于候选包。用户给了候选路径，就优先读、复制、验证这个路径；不要默默读取 `%USERPROFILE%\.codex\skills\formal-gates`、`%USERPROFILE%\.claude\skills\formal-gates` 或其它全局原版。
+
+维护时以 GitHub checkout 或用户显式给出的 `Skill source path` 为准。全局 Claude/Codex skill 目录只是安装快照；不要因为其中一份存在就反向当成主版本，保留旧版对比时更不能偷偷覆盖。
 
 ## 不能碰的红线
 

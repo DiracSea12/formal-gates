@@ -1,6 +1,6 @@
 # Requirements Clarification Gate
 
-Use before writing or modifying OpenSpec, PRD, SDD, phase docs, or start-readiness material. Also use when the user explicitly asks for formal requirement clarification.
+Proactively run before writing or modifying OpenSpec, PRD, SDD, phase docs, or start-readiness material. Also use when the user explicitly asks for formal requirement clarification.
 
 Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits, explanations, or casual idea discussion that is not entering document work. If unclear, ask whether the user wants document work or ordinary discussion.
 
