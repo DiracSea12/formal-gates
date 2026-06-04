@@ -1,92 +1,92 @@
 # formal-gates
 
-> AI 代码质量门禁：1 道事前门管方向 + 4 道事后门卡质量。AI 动手前先对齐需求，写完之后派**独立的审查 AI**逐道关卡卡质量，过了才放行。
+> AI Code Quality Gates: 1 pre-work gate for alignment + 4 post-work gates for quality. Before AI starts coding, align on requirements. After completion, independent review AI validates through each checkpoint before release.
 
-这是一个 Claude Code skill（也兼容 Codex / Cursor hook）。它不替你写代码，而是裁决"AI 要做的方向对不对、写完的代码/文档能不能放行"。
+This is a Claude Code skill (also compatible with Codex / Cursor hooks). It doesn't write code for you—instead, it judges "is the AI's direction correct? Can the completed code/documentation be released?"
 
-## 解决什么问题
+## Problems It Solves
 
-AI 写代码有几个通病，这套门禁专门拦：
+AI code generation has common pitfalls that this gate system specifically catches:
 
-- **方向跑偏**——目标、范围、验收没对齐就开干，事后审得再严也是给做错的东西做精装修。
-- **过度设计**——动不动造 Manager / Service / Provider / 各种抽象和"框架"。
-- **假测试**——只断言"字段存在""非空字符串""日志里有某行"，而不是验证真实行为。
-- **悄悄缩需求**——把用户要的范围改小，却不声明。
-- **自我背书**——自己写完自己说"看起来不错"。
+- **Direction drift**—Starting work without aligning on goals, scope, and acceptance criteria means even rigorous post-review is just polishing the wrong solution.
+- **Over-engineering**—Constantly creating Manager / Service / Provider / various abstractions and "frameworks."
+- **Fake tests**—Only asserting "field exists," "non-empty string," "log contains a line" instead of verifying actual behavior.
+- **Silent scope reduction**—Shrinking the user's requested scope without declaration.
+- **Self-endorsement**—Writing code and then saying "looks good" without independent validation.
 
-## 事前门：需求澄清门（动手前唯一的门，最省返工）
+## Pre-work Gate: Requirements Clarification Gate (The only pre-coding gate, most cost-effective)
 
-写 OpenSpec / PRD / SDD 等规范文档前，先对齐**目标、用户价值、范围、非目标、验收标准、架构边界**。任何一项缺失到会让文档"靠猜"，就停在 `DRAFT_BLOCKED`，不许默默填默认值。
+Before writing OpenSpec / PRD / SDD or other specification documents, first align on **goals, user value, scope, non-goals, acceptance criteria, and architecture boundaries**. If any item is missing to the point where the document would rely on "guessing," it stops at `DRAFT_BLOCKED`—no silent default values allowed.
 
-这是**唯一会被 skill 主动触发**的门（写规范文档时自动先走，无需用户开口），也是唯一在 AI 动手**之前**拦的门——方向错了返工成本最高，所以它最重要。
+This is the **only gate actively triggered by the skill** (automatically runs when writing specification documents, without user request), and the only gate that intercepts **before** AI starts coding—since direction errors have the highest rework cost, this gate is most critical.
 
-## 四道事后门（AI 写完后审，按顺序，前一道不过不准进下一道）
+## Four Post-work Gates (Review after AI completion, in sequence—cannot proceed to next gate until previous passes)
 
-1. **qa-test-gate（测试门）**——用例和验收标准是否可信，有没有 QA 自己拥有的真实证据。
-2. **complexity-gate（复杂度门）**——改动有没有做大、过度工程、凭空造系统。
-3. **architecture-health-gate（架构门）**——模块边界、所有权、依赖方向、状态/缓存生命周期有没有烂。
-4. **code-quality-gate（代码质量门）**——正确性、边界、死代码、假测试、过拟合、可维护性。
+1. **qa-test-gate (Test Gate)**—Are test cases and acceptance criteria trustworthy? Does QA have real, owned evidence?
+2. **complexity-gate (Complexity Gate)**—Did the change bloat? Over-engineered? Created unnecessary systems?
+3. **architecture-health-gate (Architecture Gate)**—Are module boundaries, ownership, dependency directions, state/cache lifecycles sound?
+4. **code-quality-gate (Code Quality Gate)**—Correctness, edge cases, dead code, fake tests, overfitting, maintainability.
 
-## 核心机制：防 AI 自我背书
+## Core Mechanism: Preventing AI Self-endorsement
 
-- 通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。
-- 每道门的结论要落成 **artifact**，由 PowerShell 脚本在机器侧**强制校验**：缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论，一律被 hook 拦截。
-- 配好 hook 或使用 `gate-workflow.ps1` 记录时，主 AI 想"自己盖章放行"会被机器层挡住；没接 hook 时仍要显式运行脚本校验。
+- Pass verdicts must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers.
+- Each gate's verdict is recorded as an **artifact**, with **machine-side mandatory validation** via PowerShell scripts: missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are all blocked by hooks.
+- With configured hooks or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it. Without hooks, explicit script validation is still required.
 
-## 什么时候用 / 不用
+## When to Use / Not Use
 
-| ✅ 用 | ❌ 不用 |
+| ✅ Use | ❌ Don't Use |
 |------|--------|
-| 大重构、新系统、整模块开发 | 改 UI 位置、修小 bug |
-| 发版 / 封板前最终验收 | 普通聊天、查代码、措辞调整 |
-| 写规范文档前的需求澄清 | 单文件 typo |
+| Major refactors, new systems, full module development | UI position tweaks, small bug fixes |
+| Final validation before release/seal | Casual chat, code browsing, wording adjustments |
+| Requirements clarification before writing spec docs | Single-file typos |
 
-日常小改它会静默，不干扰。
+For routine small changes, it stays silent and doesn't interfere.
 
-## 环境要求
+## Requirements
 
-- Windows + PowerShell 5 或 7
-- 版本控制：Git / SVN / 无 VCS（文件哈希快照）均可
-- 复杂度脚本需 Python 3.x 或 2.7
+- Windows + PowerShell 5 or 7
+- Version control: Git / SVN / No VCS (file hash snapshots) all supported
+- Complexity scripts require Python 3.x or 2.7
 
-## 安装
+## Installation
 
-用包内脚本复制整个目录（不要只挑 SKILL.md）：
+Use the included scripts to copy the entire directory (don't cherry-pick just SKILL.md):
 
 ```powershell
-# 装到全局 Claude skill
+# Install to global Claude skill
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary
 
-# 装到全局 Claude skill，并写入/更新 command hook
+# Install to global Claude skill and configure/update command hook
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
 
-# 或装到某个项目本地
+# Or install to a specific project locally
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-`-RunCanary` 会在复制后跑一次可搬运性自检；失败就别把这次安装当可用。
-Claude/Codex/Cursor 的 hook 或脚本接入口径见 `references/install-and-hooks.md`。
+`-RunCanary` runs portability self-checks after copying. If it fails, don't treat this installation as usable.
+Hook and script integration for Claude/Codex/Cursor: see `references/install-and-hooks.md`.
 
-## 怎么开始
+## Getting Started
 
-跟 AI 说"跑四门""做 formal gate 审查""封板前过一遍门禁"即可触发。写规范文档时它会主动先走需求澄清门。日常小改不用管。
+Tell the AI "run four gates," "do formal gate review," or "validate before seal" to trigger the process. When writing specification documents, it will automatically run the requirements clarification gate first. For routine small changes, no action needed.
 
-## 包结构
+## Package Structure
 
 ```
 formal-gates/
-  SKILL.md                  # 入口（给 AI 读）：分流、红线、四门顺序、GateWorkflow 最小信息
-  references/               # 按需加载的各门细则
-    requirements-clarification-gate.md   # 需求澄清门
-    qa-test-gate.md                      # 测试门
-    complexity-gate.md                   # 复杂度门（含 Complexity Contract、预算）
-    architecture-health-gate.md          # 架构门
-    code-quality-gate.md                 # 代码质量门
-    install-and-hooks.md                 # 安装/hook/canary/artifact 字段/记录命令
-  scripts/                  # PowerShell + Python 门禁脚本
-  hooks/                    # enforce-gate-sequence.ps1（机器侧顺序与字段强制）
-  agents/                   # host 接入配置
-  examples/                 # GateWorkflow 等样例
+  SKILL.md                  # Entry point (for AI): routing, red lines, four-gate sequence, GateWorkflow essentials
+  references/               # Gate-specific rules, loaded on demand
+    requirements-clarification-gate.md   # Requirements clarification gate
+    qa-test-gate.md                      # Test gate
+    complexity-gate.md                   # Complexity gate (includes Complexity Contract, budgets)
+    architecture-health-gate.md          # Architecture gate
+    code-quality-gate.md                 # Code quality gate
+    install-and-hooks.md                 # Installation/hooks/canary/artifact fields/recording commands
+  scripts/                  # PowerShell + Python gate scripts
+  hooks/                    # enforce-gate-sequence.ps1 (machine-side sequence and field enforcement)
+  agents/                   # Host integration configs
+  examples/                 # GateWorkflow and other samples
 ```
 
-人看这个 README 上手；AI 从 `SKILL.md` 进入。各门具体判据按需读 `references/`。
+Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.
