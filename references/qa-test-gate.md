@@ -1,8 +1,6 @@
 # QA Test Gate
 
-Use for QA test gate, test plan review, acceptance criteria/testability review, release validation, test adequacy review, PR validation, test-only changes, and spec/design/document testability review.
-
-This gate asks whether the deliverable can be trusted by tests. It does not replace developer self-test, and it is not a test framework.
+Use for test plan review, acceptance/testability review, release validation, PR validation, test-only changes, and spec/design/document testability review. It judges whether the deliverable can be trusted by tests; it does not replace developer self-test.
 
 ## Activation
 
@@ -65,7 +63,7 @@ Gap:
 
 Use the shorter `Case ID / Claim / Action / Oracle / Evidence` only for low-risk work where traceability and failure signal are obvious.
 
-Black-box design can use public API/interface contracts, but not private implementation details, diffs, developer explanations, or main-agent expected answers. Design Review must happen before Verification Run; unreviewed cases are not cases, they are decoration.
+Black-box design can use public API/interface contracts, but not private implementation details, diffs, developer explanations, or main-agent expected answers. Design Review must happen before Verification Run; unreviewed cases are advisory only.
 
 ## Evidence Rules
 
@@ -73,7 +71,7 @@ Developer self-test is not QA verification. QA may use similar commands, but the
 
 Mock, bypass, headless, fake provider, or exploratory evidence can support diagnosis, but cannot close user-visible final acceptance when real behavior evidence is required.
 
-If final acceptance needs real runtime behavior and the run is not real, keep it as a gap. Do not perfume a gap into PASS.
+If final acceptance needs real runtime behavior and the run is not real, keep it as a gap. Do not treat a gap as PASS.
 
 Evidence level must match the claim:
 

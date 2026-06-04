@@ -1,6 +1,6 @@
 # Complexity Gate
 
-Use before implementation/worker handoff to set a Complexity Contract, and after QA Execution PASS to review diff shape, budget, new concepts, and overengineering. Do not use it to beautify unfinished requirements.
+Use before implementation/worker handoff to set a Complexity Contract, and after QA Execution PASS to review diff shape, budget, new concepts, and overengineering.
 
 ## Applicability
 
@@ -69,7 +69,7 @@ Before any approval, verify shrink-before-grow:
 4. Drop future completeness shells.
 5. Explain which current requirement or quality bar fails without expansion.
 
-Without that proof, deny the expansion.
+Without that proof, deny expansion.
 
 Budget expansion approval requires independent anti-complexity review. Use this template:
 

@@ -6,34 +6,13 @@ This is a writing workflow, not an implementation approval, release seal, or fin
 
 ## Gate 1: Requirement Clarification
 
-The first gate is user requirement clarification. Do not let the agent guess the user's product goal, acceptance standard, constraint, non-goal, architecture boundary, or intended scope.
+Run `requirements-clarification-gate.md` before drafting. Carry its confirmed answers, open questions, and draft status into this writing workflow.
 
-Before writing:
-
-1. Read the relevant existing project documents and local context first.
-2. Ask the user focused questions about goal, scope, success standard, non-goals, constraints, acceptance, target slice, and open risks.
-3. Ask enough useful questions to avoid wrong direction. Do not spam low-value questions.
-4. If a key answer is missing, the document may only be `draft` / `unsealed`.
-5. If the user explicitly asks to skip clarification, record that skip and list the residual risk.
-6. Put clarified answers into the document or a tracked clarification record. Do not leave them only in chat.
-
-Good questions:
-
-- "Is this document defining the whole phase, or only one implementation slice?"
-- "Does acceptance require visible in-game verification, or is fast/static evidence enough for this document?"
-- "Which behavior is out of scope for this change?"
-
-Bad behavior:
-
-- "I'll write the proposal based on my understanding."
-- "The user did not say the acceptance rule, so I will fill in a reasonable default."
-- "The current implementation is small, so I will shrink the proposal goal to match it."
+Do not let the document guess the user's goal, acceptance standard, non-goal, architecture boundary, evidence requirement, or intended scope. If the clarification gate returns `DRAFT_BLOCKED`, the document may only be draft/unsealed.
 
 ## Gate 2: Architecture Shape Review
 
-Review the document's architecture shape before treating it as ready.
-
-Check:
+Check architecture shape before treating the document as ready:
 
 - Does the document put responsibilities in the right layer?
 - Does it preserve ownership boundaries and dependency direction?
@@ -41,13 +20,11 @@ Check:
 - Does it hide runtime behavior in infrastructure wording?
 - Does it leave the development agent guessing the architecture boundary?
 
-This is document-level architecture review. It should catch wrong direction and unclear ownership, not polish every sentence.
+Catch wrong direction and unclear ownership, not sentence polish.
 
 ## Gate 3: Complexity and Scope Review
 
-Review scope before development readiness.
-
-Rules:
+Review scope before development readiness:
 
 - Proposal/spec is the requirement source of truth.
 - Plans, tasks, Complexity Contracts, handoffs, gate verdicts, and implementation slices may split or constrain delivery, but must not rewrite or shrink the user's original requirement.
@@ -67,8 +44,6 @@ Required action:
 ```
 
 ## Gate 4: Cold-Water Start-Readiness Review
-
-The final writing gate checks whether the document is ready to hand to development.
 
 Review to the standard of "development can proceed without direction errors or blockers." Do not turn this into sentence polishing.
 

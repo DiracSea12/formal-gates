@@ -16,7 +16,7 @@ formal-gates/
   scripts/
 ```
 
-`SKILL.md` 是入口。`scripts/` 和 `hooks/` 必须随包复制，不能依赖旧 loose skills 或全局原版路径兜底。
+`scripts/` 和 `hooks/` 必须随包复制，不能依赖旧 loose skills 或全局原版路径兜底。
 
 ## 安装到 Claude 或 Codex
 
@@ -35,7 +35,7 @@ pwsh <formal-gates>\scripts\install-formal-gates.ps1 -HostName Both -Scope Proje
 
 脚本会复制整个 `formal-gates` 目录，拒绝替换非 `skills\formal-gates` 目标，并清理 `__pycache__`。`-RunCanary` 会在复制后跑 portable canary；如果失败，不要把这次安装当成可用。
 
-手工安装时，把整个 `formal-gates` 目录复制到目标 skill root：
+手工安装的目标路径：
 
 - 全局 Claude：`%USERPROFILE%\.claude\skills\formal-gates`
 - 全局 Codex：`%USERPROFILE%\.codex\skills\formal-gates`
@@ -48,23 +48,7 @@ pwsh <formal-gates>\scripts\install-formal-gates.ps1 -HostName Both -Scope Proje
 
 ## 候选包 A/B 测试安装
 
-测试候选包时，不要直接用全局同名 skill。先从用户给的候选路径复制整个目录到测试 workspace：
-
-```powershell
-$source = "<candidate>\formal-gates"
-$target = "<test-workspace>\.codex\skills\formal-gates"
-New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
-Copy-Item -Recurse -Force $source $target
-```
-
-Claude 测试 workspace 同理：
-
-```powershell
-$source = "<candidate>\formal-gates"
-$target = "<test-workspace>\.claude\skills\formal-gates"
-New-Item -ItemType Directory -Force (Split-Path -Parent $target) | Out-Null
-Copy-Item -Recurse -Force $source $target
-```
+测试候选包时，不要直接用全局同名 skill。先把用户给的候选路径复制到测试 workspace 的 `.claude/.codex/skills/formal-gates`，优先用 `install-formal-gates.ps1`。
 
 每次 A/B 记录都必须写清楚：
 
@@ -73,7 +57,7 @@ Skill source path: <candidate>\formal-gates
 Copied skill path: <test-workspace>\.codex\skills\formal-gates
 ```
 
-如果只看到 `formal-gates` 这个名字，看不出测的是候选包还是全局原版，这份测试证据就是废的。
+如果只看到 `formal-gates` 这个名字，看不出测的是候选包还是全局原版，测试证据无效。
 
 ## Hook 规则
 
@@ -96,7 +80,7 @@ scripts/gate-state.ps1
 - 旧 loose skill 目录
 - 任何全局原版路径
 
-原因很简单：A/B 测试时，如果 hook 偷偷用全局脚本，测出来的是旧包，不是候选包。
+A/B 测试时，hook 偷用全局脚本会把旧包测成候选包。
 
 Claude Code 从 Claude settings 加载 hook。Codex 从 `~/.codex/hooks.json`、`~/.codex/config.toml` 的 `[hooks]`、或项目本地 `.codex` 配置加载 hook。不要为了 hook 加载绕去做 Codex plugin。
 
