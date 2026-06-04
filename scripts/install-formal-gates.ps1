@@ -112,7 +112,10 @@ function Copy-SkillPackage([string]$SourcePath, [string]$TargetPath, [bool]$Forc
     }
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
-    Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    Get-ChildItem -LiteralPath $source -Force |
+        Where-Object { $_.Name -notin @('.git', '.github', '__pycache__') } |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force }
 
     Get-ChildItem -LiteralPath $target -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force

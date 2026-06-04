@@ -1,8 +1,8 @@
 # Requirements Clarification Gate
 
-Use only when the user explicitly asks to enter formal requirement clarification before writing OpenSpec, PRD, SDD, phase docs, or start-readiness material.
+Use before writing or modifying OpenSpec, PRD, SDD, phase docs, or start-readiness material. Also use when the user explicitly asks for formal requirement clarification.
 
-Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits, explanations, or casual idea discussion. If unclear, ask whether the user wants formal clarification or ordinary discussion.
+Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits, explanations, or casual idea discussion that is not entering document work. If unclear, ask whether the user wants document work or ordinary discussion.
 
 ## Pattern
 
@@ -12,10 +12,10 @@ Borrow the useful parts, not the weight: Spec Kit's clarify/checklist before pla
 
 Classify before asking questions:
 - `DISCUSSION_ONLY`: user is exploring an idea. Do not write formal docs or gate verdicts.
-- `CLARIFY_FOR_DOC`: user wants requirements aligned before a document.
+- `CLARIFY_FOR_DOC`: user wants to write/modify a document and requirements need alignment.
 - `READY_TO_DRAFT`: core answers are known; write the document as draft/unsealed if minor gaps remain.
 - `BLOCKED`: missing answers would make scope, acceptance, or architecture guesswork.
-Light tasks stay `DISCUSSION_ONLY` unless the user explicitly says to run formal gates.
+Light tasks stay `DISCUSSION_ONLY` unless they write/modify OpenSpec/PRD/SDD/start-readiness material or the user explicitly says to run formal gates.
 
 ## Questions To Cover
 

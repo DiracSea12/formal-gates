@@ -1,17 +1,17 @@
 ---
 name: formal-gates
-description: Use only when the user explicitly asks for 四门流程, formal requirement clarification gate, writing-document gates, formal OpenSpec/PRD/SDD/start-readiness review, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow, gate-state/gate-workflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion unless the user asks to enter formal mode.
+description: Use when the user asks to write or modify OpenSpec/PRD/SDD/start-readiness documents, or explicitly asks for 四门流程, formal requirement clarification gate, writing-document gates, formal gate review, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow, gate-state/gate-workflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering document work or formal mode.
 ---
 
 # Formal Gates
 
 这是四门流程的入口。它只负责定规则、分流和交接；具体检查细节按需读 reference，别把全部内容一次塞进上下文。
 
-普通聊天、头脑风暴、轻量解释、小改动不要启动这个 skill。需求还在随便聊时也不要启动；只有用户明确要求正式澄清、正式审查、正式开工判断、正式发布/封板结论，或明确提到四门、gate、OpenSpec 审查时才用。
+普通聊天、头脑风暴、轻量解释、小改动不要启动这个 skill。需求还在随便聊时也不要启动。用户要写/改 OpenSpec、PRD、SDD、阶段文档或开工材料时，主动先走需求澄清门；正式审查、开工判断、发布/封板、四门、gate 也触发。
 
 ## 先判定是哪一种流程
 
-- 需求澄清门：用户明确要求写文档前正式澄清/对齐需求。读 `references/requirements-clarification-gate.md`。
+- 需求澄清门：写/改 OpenSpec、PRD、SDD、阶段文档或开工材料前主动触发。读 `references/requirements-clarification-gate.md`。
 - 文档/开工审查：OpenSpec、PRD、SDD、设计文档、阶段文档、能不能开工。读 `references/document-writing-gates.md`。
 - 开发后/发布审查：已有实现、准备交付、release、seal、final QA。按下面的四门顺序走。
 - 安装、hook、canary、Codex/Claude 接入问题：读 `references/install-and-hooks.md`。
