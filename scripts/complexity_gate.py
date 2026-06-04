@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -58,18 +59,42 @@ class FileChange:
     suspicious_name: bool
 
 
-def run_git(args: list[str]) -> str:
+def run_command(command: list[str], worktree: Path, allow_failure: bool = False) -> str:
     try:
-        return subprocess.check_output(["git", *args], text=True, stderr=subprocess.PIPE)
+        return subprocess.check_output(command, cwd=str(worktree), text=True, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as exc:
+        if allow_failure:
+            return ""
         sys.stderr.write(exc.stderr)
         raise SystemExit(exc.returncode)
+    except FileNotFoundError:
+        if allow_failure:
+            return ""
+        raise
 
 
-def parse_numstat(staged: bool) -> list[FileChange]:
+def run_git(args: list[str], worktree: Path, allow_failure: bool = False) -> str:
+    return run_command(["git", *args], worktree, allow_failure=allow_failure)
+
+
+def run_svn(args: list[str], worktree: Path, allow_failure: bool = False) -> str:
+    return run_command(["svn", *args], worktree, allow_failure=allow_failure)
+
+
+def detect_vcs(worktree: Path, requested: str) -> str:
+    if requested != "auto":
+        return requested
+    if run_git(["rev-parse", "--is-inside-work-tree"], worktree, allow_failure=True).strip().lower() == "true":
+        return "git"
+    if run_svn(["info"], worktree, allow_failure=True).strip():
+        return "svn"
+    return "none"
+
+
+def parse_numstat_git(worktree: Path, staged: bool) -> list[FileChange]:
     args = ["diff", "--numstat", "--cached" if staged else None]
-    raw = run_git([a for a in args if a])
-    status_raw = run_git(["status", "--short"])
+    raw = run_git([a for a in args if a], worktree)
+    status_raw = run_git(["status", "--short"], worktree)
     statuses: dict[str, str] = {}
     for line in status_raw.splitlines():
         if not line.strip():
@@ -107,9 +132,62 @@ def parse_numstat(staged: bool) -> list[FileChange]:
     return changes
 
 
-def parse_untracked() -> list[str]:
-    raw = run_git(["ls-files", "--others", "--exclude-standard"])
+def parse_untracked_git(worktree: Path) -> list[str]:
+    raw = run_git(["ls-files", "--others", "--exclude-standard"], worktree)
     return [line.replace("\\", "/") for line in raw.splitlines() if line.strip()]
+
+
+def parse_svn_status(worktree: Path) -> tuple[dict[str, str], list[str]]:
+    raw = run_svn(["status"], worktree)
+    statuses: dict[str, str] = {}
+    untracked: list[str] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        status = line[0]
+        path = line[8:].strip() if len(line) > 8 else line[1:].strip()
+        if not path:
+            continue
+        path = path.replace("\\", "/")
+        if status == "?":
+            untracked.append(path)
+        elif status in {"A", "M", "D", "R", "C", "!", "~"}:
+            statuses[path] = status
+    return statuses, untracked
+
+
+def make_file_change(path: str, insertions: int, deletions: int, status: str) -> FileChange:
+    category = categorize_path(path)
+    suspicious = any(term in Path(path).name for term in SUSPICIOUS_TERMS)
+    return FileChange(path, insertions, deletions, status, category, suspicious)
+
+
+def parse_svn_diff(worktree: Path, statuses: dict[str, str]) -> list[FileChange]:
+    raw = run_svn(["diff"], worktree)
+    counts: dict[str, dict[str, int]] = {}
+    current: str | None = None
+
+    for line in raw.splitlines():
+        if line.startswith("Index: "):
+            current = line[len("Index: "):].strip().replace("\\", "/")
+            counts.setdefault(current, {"insertions": 0, "deletions": 0})
+            continue
+        if not current:
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
+            counts[current]["insertions"] += 1
+        elif line.startswith("-"):
+            counts[current]["deletions"] += 1
+
+    changes: list[FileChange] = []
+    for path, values in counts.items():
+        changes.append(make_file_change(path, values["insertions"], values["deletions"], statuses.get(path, "M")))
+    for path, status in statuses.items():
+        if path not in counts:
+            changes.append(make_file_change(path, 0, 0, status))
+    return changes
 
 
 def categorize_path(path: str) -> str:
@@ -124,7 +202,7 @@ def categorize_path(path: str) -> str:
     return "other"
 
 
-def count_file_lines(path: str) -> int:
+def count_file_lines(path: Path) -> int:
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as handle:
             return sum(1 for _ in handle)
@@ -140,7 +218,10 @@ def main() -> int:
     parser.add_argument("--max-prod-insertions", type=int)
     parser.add_argument("--staged", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--worktree", default=os.getcwd())
+    parser.add_argument("--vcs", choices=("auto", "git", "svn"), default="auto")
     args = parser.parse_args()
+    worktree = Path(args.worktree).resolve()
 
     budget = dict(FALLBACK_DEFAULTS[args.task_type])
     budget_overrides = {
@@ -155,14 +236,27 @@ def main() -> int:
     if args.max_prod_insertions is not None:
         budget["max_prod_insertions"] = args.max_prod_insertions
 
-    changes = parse_numstat(args.staged)
-    untracked = parse_untracked() if not args.staged else []
+    vcs = detect_vcs(worktree, args.vcs)
+    manual_review_reason = ""
+    if vcs == "git":
+        changes = parse_numstat_git(worktree, args.staged)
+        untracked = parse_untracked_git(worktree) if not args.staged else []
+    elif vcs == "svn":
+        statuses, svn_untracked = parse_svn_status(worktree)
+        changes = parse_svn_diff(worktree, statuses)
+        untracked = [] if args.staged else svn_untracked
+        if args.staged:
+            manual_review_reason = "SVN has no staged index; --staged was ignored for SVN complexity review"
+    else:
+        changes = []
+        untracked = []
+        manual_review_reason = "no git or svn working copy detected; provide manual diff evidence for complexity review"
 
     total_insertions = sum(c.insertions for c in changes)
     total_deletions = sum(c.deletions for c in changes)
     net = total_insertions - total_deletions
     untracked_prod_files = [p for p in untracked if categorize_path(p) == "production"]
-    untracked_prod_insertions = sum(count_file_lines(p) for p in untracked_prod_files)
+    untracked_prod_insertions = sum(count_file_lines(worktree / p) for p in untracked_prod_files)
     prod_insertions = sum(c.insertions for c in changes if c.category == "production") + untracked_prod_insertions
     new_prod_files = [
         c.path
@@ -198,11 +292,15 @@ def main() -> int:
         warnings.append("untracked files present: " + ", ".join(untracked[:12]))
     if not any(budget_overrides.values()):
         warnings.append("using fallback default budget; explicit Complexity Contract budget was not passed")
+    if manual_review_reason:
+        review_required.append(manual_review_reason)
 
     status = "FAIL" if hard_failures else ("REVIEW" if review_required else "PASS")
 
     payload = {
         "status": status,
+        "vcs": vcs,
+        "worktree": str(worktree),
         "task_type": args.task_type,
         "budget": budget,
         "budget_source": "explicit-overrides" if any(budget_overrides.values()) else "fallback-defaults",

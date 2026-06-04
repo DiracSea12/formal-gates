@@ -15,6 +15,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'powershell-host.ps1')
 
 function Resolve-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath($Path)
@@ -33,6 +34,8 @@ function Assert-SkillPackage([string]$Path) {
         'references',
         'scripts',
         'references/requirements-clarification-gate.md',
+        'scripts/powershell-host.ps1',
+        'scripts/run-complexity-gate.ps1',
         'scripts/gate-state.ps1',
         'scripts/gate-workflow.ps1',
         'scripts/test-portable-openspec-canary.ps1',
@@ -141,7 +144,8 @@ foreach ($target in $targets) {
 
     if ($RunCanary) {
         $canary = Join-Path $target.Path 'scripts/test-portable-openspec-canary.ps1'
-        & pwsh -NoProfile $canary -SkillPath $target.Path
+        $canaryArgs = (Get-FormalGatesPowerShellFileArgs $canary) + @('-SkillPath', $target.Path)
+        & (Get-FormalGatesPowerShellExe) @canaryArgs
         if ($LASTEXITCODE -ne 0) {
             throw "Portable canary failed for $($target.Path)"
         }

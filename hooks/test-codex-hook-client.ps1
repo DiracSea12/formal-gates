@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/powershell-host.ps1')
 
 function New-Directory([string]$Path) {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
@@ -58,8 +59,8 @@ function Get-ProcessLaunch([string]$Command) {
     $resolved = Get-Command $Command -ErrorAction Stop
     if ($resolved.CommandType -eq 'ExternalScript' -and $resolved.Path.EndsWith('.ps1', [System.StringComparison]::OrdinalIgnoreCase)) {
         return [pscustomobject]@{
-            FilePath = 'pwsh'
-            PrefixArguments = @('-NoProfile', '-File', $resolved.Path)
+            FilePath = Get-FormalGatesPowerShellExe
+            PrefixArguments = Get-FormalGatesPowerShellFileArgs $resolved.Path
         }
     }
     return [pscustomobject]@{
@@ -98,6 +99,9 @@ $summaryPath = Join-Path $artifactRoot "$caseName.summary.json"
 $diagLiteral = ConvertTo-SingleQuotedPowerShellLiteral $diagDir
 $formalHookLiteral = ConvertTo-SingleQuotedPowerShellLiteral $formalHookPath
 $formalHookOutputLiteral = ConvertTo-SingleQuotedPowerShellLiteral $formalHookOutputPath
+$powerShellExeLiteral = ConvertTo-SingleQuotedPowerShellLiteral (Get-FormalGatesPowerShellExe)
+$edition = if ($PSVersionTable.ContainsKey('PSEdition')) { [string]$PSVersionTable.PSEdition } else { 'Desktop' }
+$powerShellPolicyArgs = if ($edition -eq 'Desktop') { "    `$formalArgs += @('-ExecutionPolicy', 'Bypass')`n" } else { '' }
 $hookContent = @"
 `$ErrorActionPreference = 'Stop'
 `$payload = [Console]::In.ReadToEnd()
@@ -116,7 +120,10 @@ Set-Content -LiteralPath `$out -Value `$payload -Encoding UTF8
 if (`$eventName -eq 'PreToolUse') {
     `$formalHook = $formalHookLiteral
     `$formalOutputPath = $formalHookOutputLiteral
-    `$formalOutput = `$payload | pwsh -NoProfile -File `$formalHook 2>&1
+    `$formalPowerShell = $powerShellExeLiteral
+    `$formalArgs = @('-NoProfile')
+$powerShellPolicyArgs    `$formalArgs += @('-File', `$formalHook)
+    `$formalOutput = `$payload | & `$formalPowerShell @formalArgs 2>&1
     `$formalExit = `$LASTEXITCODE
     Add-Content -LiteralPath `$formalOutputPath -Value ("exit=`$formalExit") -Encoding UTF8
     if (`$formalOutput) {
@@ -129,6 +136,9 @@ if (`$eventName -eq 'PreToolUse') {
 Set-Content -LiteralPath $hookPath -Value $hookContent -Encoding UTF8
 
 $hookForToml = $hookPath.Replace('\', '/').Replace('"', '\"')
+$powerShellForToml = (Get-FormalGatesPowerShellExe).Replace('\', '/').Replace('"', '\"')
+$powerShellCommandPrefix = '"' + $powerShellForToml + '" -NoProfile'
+if ($edition -eq 'Desktop') { $powerShellCommandPrefix += ' -ExecutionPolicy Bypass' }
 $profileContent = @"
 [features]
 hooks = true
@@ -136,7 +146,7 @@ hooks = true
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command = 'pwsh -NoProfile -File "$hookForToml"'
+command = '$powerShellCommandPrefix -File "$hookForToml"'
 timeout = 30
 statusMessage = "formal-gates Codex hook canary user prompt"
 
@@ -144,7 +154,7 @@ statusMessage = "formal-gates Codex hook canary user prompt"
 matcher = "*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = 'pwsh -NoProfile -File "$hookForToml"'
+command = '$powerShellCommandPrefix -File "$hookForToml"'
 timeout = 30
 statusMessage = "formal-gates Codex hook canary pre tool"
 
@@ -152,14 +162,14 @@ statusMessage = "formal-gates Codex hook canary pre tool"
 matcher = "*"
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command = 'pwsh -NoProfile -File "$hookForToml"'
+command = '$powerShellCommandPrefix -File "$hookForToml"'
 timeout = 30
 statusMessage = "formal-gates Codex hook canary post tool"
 
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = 'pwsh -NoProfile -File "$hookForToml"'
+command = '$powerShellCommandPrefix -File "$hookForToml"'
 timeout = 30
 statusMessage = "formal-gates Codex hook canary stop"
 "@
@@ -174,7 +184,10 @@ try {
     $gateWorkflowForPrompt = $gateWorkflowPath.Replace('\', '/')
     $caseDirForPrompt = $caseDir.Replace('\', '/')
     $markerForPrompt = $markerPath.Replace('\', '/')
-    $prompt = 'Run exactly this shell command once, then stop: pwsh -NoProfile -File ''' + $gateWorkflowForPrompt + ''' -Action record-stage -Worktree ''' + $caseDirForPrompt + ''' -Gate complexity-gate -Verdict PASS -Mode formal -Artifact .claude/gates/artifacts/missing-hook-canary.md -Actor hook-canary -WorkflowId hook-canary -ChangeSnapshot hook-snapshot; Set-Content -LiteralPath ''' + $markerForPrompt + ''' -Value HIT'
+    $powerShellForPrompt = (Get-FormalGatesPowerShellExe).Replace('\', '/')
+    $prompt = 'Run exactly this shell command once, then stop: "' + $powerShellForPrompt + '" -NoProfile'
+    if ($edition -eq 'Desktop') { $prompt += ' -ExecutionPolicy Bypass' }
+    $prompt += ' -File ''' + $gateWorkflowForPrompt + ''' -Action record-stage -Worktree ''' + $caseDirForPrompt + ''' -Gate complexity-gate -Verdict PASS -Mode formal -Artifact .claude/gates/artifacts/missing-hook-canary.md -Actor hook-canary -WorkflowId hook-canary -ChangeSnapshot hook-snapshot; Set-Content -LiteralPath ''' + $markerForPrompt + ''' -Value HIT'
     Set-Content -LiteralPath $promptPath -Value $prompt -Encoding UTF8
     $arguments = @(
         'exec',
@@ -197,7 +210,10 @@ try {
     $launch = Get-ProcessLaunch $CodexCommand
     $cmdParts = @($launch.PrefixArguments) + $arguments | ForEach-Object { '"' + ([string]$_).Replace('"', '\"') + '"' }
     $cmd = 'Get-Content -LiteralPath "' + $promptPath.Replace('"', '\"') + '" -Raw | & "' + $launch.FilePath.Replace('"', '\"') + '" ' + ($cmdParts -join ' ')
-    $process = Start-Process -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-Command', $cmd) -WorkingDirectory $resolvedWorktree -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $commandArgs = @('-NoProfile')
+    if ($edition -eq 'Desktop') { $commandArgs += @('-ExecutionPolicy', 'Bypass') }
+    $commandArgs += @('-Command', $cmd)
+    $process = Start-Process -FilePath (Get-FormalGatesPowerShellExe) -ArgumentList $commandArgs -WorkingDirectory $resolvedWorktree -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         $timedOut = $true
         try { $process.Kill($true) } catch {}

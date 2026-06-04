@@ -91,10 +91,12 @@ Only `APPROVE` or `APPROVE_SMALLER` changes the active budget. The approval expi
 Run only when there is a diff to review:
 
 ```powershell
-python <formal-gates>/scripts/complexity_gate.py --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n>
+<ps> -File <formal-gates>/scripts/run-complexity-gate.ps1 --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> --worktree <repo> --vcs auto
 ```
 
 Use `--json` for machine consumption and `--staged` only for staged review.
+The wrapper finds Python 3 through `python3`, `py -3`, then `python`; it rejects Python 2 instead of failing with a syntax error.
+`--vcs auto` uses git diff in git worktrees, SVN status/diff in SVN worktrees, and returns REVIEW with a manual-evidence warning when neither is detected.
 
 Exit codes:
 
@@ -131,7 +133,7 @@ Formal complexity review can run only after `qa-test-gate` formal Execution PASS
 Record PASS:
 
 ```powershell
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact <complexity-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact <complexity-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
 Formal PASS artifacts must include the shared zero-context fields plus:

@@ -26,7 +26,7 @@ Formal flow requires machine-verifiable PASS for:
 Verify:
 
 ```powershell
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate code-quality-gate -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate code-quality-gate -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
 Missing state, stale snapshot, missing artifact, or any non-PASS prerequisite is `BLOCKED` or `GATE_SEQUENCE_ERROR`.
@@ -58,7 +58,7 @@ List actual commands, artifacts, and results. No verification evidence means no 
 Record PASS:
 
 ```powershell
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate code-quality-gate -Verdict PASS -Artifact <code-quality-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate code-quality-gate -Verdict PASS -Artifact <code-quality-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
 Formal PASS requires independent zero-context artifact fields from the router skill, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.

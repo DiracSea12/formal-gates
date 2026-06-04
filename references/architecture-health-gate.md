@@ -32,7 +32,7 @@ Formal flow requires machine-verifiable PASS for:
 Verify:
 
 ```powershell
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate architecture-health-gate -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate architecture-health-gate -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
 No gate-state, stale snapshot, missing artifact, non-formal QA, or complexity REVIEW/FAIL/BLOCKED means `BLOCKED` or `GATE_SEQUENCE_ERROR`.
@@ -78,7 +78,7 @@ New abstraction/framework/manager/service needs active Complexity Contract budge
 Record PASS:
 
 ```powershell
-pwsh <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate architecture-health-gate -Verdict PASS -Artifact <architecture-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate architecture-health-gate -Verdict PASS -Artifact <architecture-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
 Formal PASS requires independent zero-context artifact fields from the router skill, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`.
