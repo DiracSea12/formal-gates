@@ -1,0 +1,6 @@
+{
+  "gate": "complexity-gate",
+  "workflowId": "<workflow-id>",
+  "changeSnapshot": "<snapshot-id>",
+  "worktree": "<project>"
+}
