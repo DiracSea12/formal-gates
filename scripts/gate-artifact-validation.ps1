@@ -20,7 +20,7 @@ function Get-FormalGateArtifactFieldValue([string]$Text, [string]$FieldName) {
 function Test-FormalGateMeaningfulArtifactField([string]$Text, [string]$FieldName) {
     $value = Get-FormalGateArtifactFieldValue $Text $FieldName
     if ([string]::IsNullOrWhiteSpace($value)) { return $false }
-    if ($value -match '[<>]') { return $false }
+    if ($value -match '<[^>\r\n]+>') { return $false }
     return $value -notmatch '(?i)^(unavailable|unknown|none|null|n/a|na|todo|tbd|placeholder|sample|example)$'
 }
 
