@@ -5,33 +5,41 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Test-Python3Candidate([string]$Command, [string[]]$PrefixArguments) {
+function Get-PythonVersionCandidate([string]$Command, [string[]]$PrefixArguments) {
     $versionOutput = $null
     try {
-        $versionOutput = & $Command @PrefixArguments -c "import sys; print(sys.version_info[0])" 2>$null
+        $versionOutput = & $Command @PrefixArguments -c "import sys; print('%s.%s' % (sys.version_info[0], sys.version_info[1]))" 2>$null
     }
     catch {
-        return $false
+        return $null
     }
-    return (($versionOutput | Select-Object -First 1) -eq '3')
+    return [string]($versionOutput | Select-Object -First 1)
 }
 
-function Get-Python3Launch {
+function Test-SupportedPythonVersion([string]$Version) {
+    if ([string]::IsNullOrWhiteSpace($Version)) { return $false }
+    if ($Version -match '^3\.') { return $true }
+    return ($Version -eq '2.7')
+}
+
+function Get-PythonLaunch {
     $candidates = @(
         [pscustomobject]@{ Command = 'python3'; PrefixArguments = @() },
         [pscustomobject]@{ Command = 'py'; PrefixArguments = @('-3') },
-        [pscustomobject]@{ Command = 'python'; PrefixArguments = @() }
+        [pscustomobject]@{ Command = 'python'; PrefixArguments = @() },
+        [pscustomobject]@{ Command = 'py'; PrefixArguments = @('-2') }
     )
 
     foreach ($candidate in $candidates) {
         $resolved = Get-Command $candidate.Command -ErrorAction SilentlyContinue
         if ($null -eq $resolved) { continue }
-        if (Test-Python3Candidate $candidate.Command $candidate.PrefixArguments) {
+        $version = Get-PythonVersionCandidate $candidate.Command $candidate.PrefixArguments
+        if (Test-SupportedPythonVersion $version) {
             return $candidate
         }
     }
 
-    throw 'Python 3 was not found. Install python3, py -3, or make python point to Python 3 for formal-gates complexity checks.'
+    throw 'Supported Python was not found. Install Python 3.x or Python 2.7 for formal-gates complexity checks.'
 }
 
 $scriptPath = Join-Path $PSScriptRoot 'complexity_gate.py'
@@ -39,7 +47,7 @@ if (-not (Test-Path -LiteralPath $scriptPath)) {
     throw "complexity_gate.py not found next to run-complexity-gate.ps1: $scriptPath"
 }
 
-$python = Get-Python3Launch
+$python = Get-PythonLaunch
 $pythonArgs = @($python.PrefixArguments) + @($scriptPath) + @($Arguments)
 & $python.Command @pythonArgs
 exit $LASTEXITCODE

@@ -95,7 +95,7 @@ Run only when there is a diff to review:
 ```
 
 Use `--json` for machine consumption and `--staged` only for staged review.
-The wrapper finds Python 3 through `python3`, `py -3`, then `python`; it rejects Python 2 instead of failing with a syntax error.
+The wrapper prefers Python 3 through `python3`, `py -3`, then `python`; if Python 3 is unavailable it accepts Python 2.7 through `python` or `py -2`.
 `--vcs auto` uses git diff in git worktrees, SVN status/diff in SVN worktrees, and returns REVIEW with a manual-evidence warning when neither is detected.
 
 Exit codes:

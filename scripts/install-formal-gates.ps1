@@ -34,6 +34,7 @@ function Assert-SkillPackage([string]$Path) {
         'references',
         'scripts',
         'references/requirements-clarification-gate.md',
+        'scripts/gate-artifact-validation.ps1',
         'scripts/powershell-host.ps1',
         'scripts/run-complexity-gate.ps1',
         'scripts/gate-state.ps1',

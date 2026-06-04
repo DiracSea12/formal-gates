@@ -277,6 +277,7 @@ sha256: sample
         'references/qa-test-gate.md',
         'references/install-and-hooks.md',
         'hooks/enforce-gate-sequence.ps1',
+        'scripts/gate-artifact-validation.ps1',
         'scripts/powershell-host.ps1',
         'scripts/run-complexity-gate.ps1',
         'scripts/gate-state.ps1',
@@ -294,7 +295,7 @@ sha256: sample
         '--max-prod-insertions', '999',
         '--worktree', $tempRepo
     )
-    Add-Check ([ref]$summary) 'complexity-wrapper-finds-python3' ($complexityWrapperOutput -match 'Complexity Gate: PASS') $complexityWrapperOutput
+    Add-Check ([ref]$summary) 'complexity-wrapper-finds-supported-python' ($complexityWrapperOutput -match 'Complexity Gate: PASS') $complexityWrapperOutput
 
     New-Dir $plainRepo
     Set-Utf8File (Join-Path $plainRepo 'plain.txt') 'plain project without git or svn'
