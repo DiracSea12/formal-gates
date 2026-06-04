@@ -18,6 +18,12 @@ formal-gates/
 
 `scripts/` 和 `hooks/` 必须随包复制，不能依赖旧 loose skills 或全局原版路径兜底。
 
+## 维护源
+
+GitHub checkout 或显式传入的 `-SourcePath` 是主版本。全局 `.claude` / `.codex` 目录只是安装快照，不是维护源。
+
+改包时先改主版本、验证、提交/推送，再按需要安装到指定 host。不要因为某个全局同名 skill 存在，就把它当成最新版；A/B 或旧版对比场景下，未被点名的 host 必须保持不动。
+
 ## 安装到 Claude 或 Codex
 
 推荐用包内安装脚本复制整个目录，不要手工挑文件：
