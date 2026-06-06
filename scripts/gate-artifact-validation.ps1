@@ -260,6 +260,76 @@ function Get-FormalGateContextBundleValidationErrors([string]$BasePath, [string]
     return $errors
 }
 
+function Get-FormalGateHashedArtifactValidationErrors([string]$BasePath, [string]$Value, [string]$FieldName) {
+    $errors = @()
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return @("${FieldName}: <path> sha256=<sha256>")
+    }
+    $hasReference = $false
+    foreach ($part in ($Value -split ',')) {
+        $trimmed = $part.Trim().Trim('"', "'")
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        $hasReference = $true
+        $shaMatch = [regex]::Match($trimmed, '(?i)\bsha(?:256)?\s*[:=]\s*([a-f0-9]{64})\b')
+        $pathText = [regex]::Replace($trimmed, '(?i)\s+sha(?:256)?\s*[:=]\s*[a-f0-9]{64}\b', '').Trim()
+        $pathText = [regex]::Replace($pathText, '\s+\(.*$', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($pathText)) {
+            $errors += "${FieldName} path is empty"
+            continue
+        }
+        $path = Resolve-FormalGateArtifactPath $BasePath $pathText
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            $errors += "${FieldName} path does not exist: $pathText"
+            continue
+        }
+        if (-not $shaMatch.Success) {
+            $errors += "${FieldName} sha256 missing: $pathText"
+            continue
+        }
+        $expected = $shaMatch.Groups[1].Value.ToLowerInvariant()
+        $actual = Get-FormalGateSha256 $path
+        if ($actual -ne $expected) {
+            $errors += "${FieldName} sha256 mismatch: $pathText"
+        }
+    }
+    if (-not $hasReference) {
+        $errors += "${FieldName}: <path> sha256=<sha256>"
+    }
+    return $errors
+}
+
+function Get-FormalGateDispatchPromptValidationErrors([string]$BasePath, [string]$Value) {
+    $errors = @(Get-FormalGateHashedArtifactValidationErrors $BasePath $Value 'Dispatch prompt artifact')
+    if ($errors.Count -gt 0) { return $errors }
+
+    $anchoringLabels = @(
+        'Known issues',
+        'Previous findings',
+        'Just fixed',
+        'Expected answer',
+        'Expected PASS/FAIL',
+        'Focus items',
+        'suspicions',
+        'what to verify',
+        ([string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5))),
+        ([string]::new([char[]]@([char]0x521A, [char]0x4FEE, [char]0x4E86)))
+    )
+    foreach ($part in ($Value -split ',')) {
+        $pathText = [regex]::Replace($part.Trim().Trim('"', "'"), '(?i)\s+sha(?:256)?\s*[:=]\s*[a-f0-9]{64}\b', '').Trim()
+        $pathText = [regex]::Replace($pathText, '\s+\(.*$', '').Trim()
+        if ([string]::IsNullOrWhiteSpace($pathText)) { continue }
+        $path = Resolve-FormalGateArtifactPath $BasePath $pathText
+        $promptText = [string](Get-Content -LiteralPath $path -Raw -Encoding UTF8)
+        foreach ($label in $anchoringLabels) {
+            $pattern = '(?im)^[ \t]*(?:>[ \t]*)?(?:[-*+][ \t]*)?(?:#{1,6}[ \t]+)?' + [regex]::Escape($label) + '[ \t]*(?::|$)'
+            if ($promptText -match $pattern) {
+                $errors += "dispatch prompt contamination: forbidden anchoring field present: $label"
+            }
+        }
+    }
+    return $errors
+}
+
 function Get-FormalGateImplementationEvidenceMissing([string]$Text, [string]$GateName, [string]$BasePath) {
     if ($GateName -notin @('complexity-gate', 'architecture-health-gate', 'code-quality-gate')) {
         return @()
@@ -299,6 +369,7 @@ function Get-FormalGatePromptIntegrityErrors([string]$Text, [string]$GateName) {
     $requiredValues = [ordered]@{
         'Review mode' = 'ZERO_CONTEXT_FORMAL'
         'Prompt contamination check' = 'PASS'
+        'Semantic anti-anchor check' = 'PASS'
         'Prompt source' = (Get-FormalGateExpectedPromptSource $GateName)
     }
     foreach ($field in $requiredValues.Keys) {
@@ -726,11 +797,13 @@ function Get-FormalGatePassRequiredFields([string]$GateName) {
     $zeroContextFields = @(
         'Review mode: ZERO_CONTEXT_FORMAL',
         'Prompt contamination check: PASS',
+        'Semantic anti-anchor check: PASS',
         "Prompt source: $(Get-FormalGateExpectedPromptSource $GateName)",
         'Zero-context reviewer: YES',
         'Independent agent: YES',
         'Reviewer agent id:',
         'Context bundle:',
+        'Dispatch prompt artifact:',
         'No-anchor prompt: YES',
         'gate_route:'
     )
@@ -775,6 +848,12 @@ function Test-FormalGateArtifactFields([string]$ArtifactPath, [string[]]$Require
         }
         else {
             $missing += @(Get-FormalGateContextBundleValidationErrors $BasePath (Get-FormalGateArtifactFieldValue $text 'Context bundle'))
+        }
+        if (-not (Test-FormalGateMeaningfulArtifactField $text 'Dispatch prompt artifact')) {
+            $missing += 'Dispatch prompt artifact: <path> sha256=<sha256>'
+        }
+        else {
+            $missing += @(Get-FormalGateDispatchPromptValidationErrors $BasePath (Get-FormalGateArtifactFieldValue $text 'Dispatch prompt artifact'))
         }
     }
     $missing += @(Get-FormalGateRequirementsClarificationMissing $text $GateName $BasePath $ExpectedWorkflowId $ExpectedChangeSnapshot)
