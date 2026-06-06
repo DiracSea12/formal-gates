@@ -2,7 +2,7 @@
 
 > AI Code Quality Gates: 1 pre-work gate for alignment + 4 post-work gates for quality. Before AI starts coding, align on requirements. After completion, independent review AI validates through each checkpoint before release.
 
-This is an Agent Skill package. The core skill documents can be read by any Agent Skill compatible runtime; the bundled installer and hook paths currently declare support for Claude Code, Codex, and Cursor. Any host that claims command hooks actually block bad gate flow must prove it with a live canary on that host.
+This is an Agent Skill package. The core skill documents can be read by any Agent Skill compatible runtime; the bundled installer and hook paths currently declare support for Claude Code, Codex, and Cursor. Any host claiming hooks block bad gate flow must prove it with a live canary on that host.
 
 Chinese README: [README.md](README.md)
 
@@ -20,7 +20,9 @@ AI code generation has common pitfalls that this gate system specifically catche
 
 ## Pre-work Gate: Requirements Clarification Gate (The only pre-coding gate, most cost-effective)
 
-Before writing OpenSpec / PRD / SDD or other specification documents, first align on **goals, user value, scope, non-goals, acceptance criteria, and architecture boundaries**. If any item is missing to the point where the document would rely on "guessing," it stops at `DRAFT_BLOCKED`—no silent default values allowed.
+Before writing OpenSpec / PRD / SDD or other specification documents, first align on **goals, user value, scope, non-goals, acceptance criteria, architecture boundaries, and requirement details**. If any item is missing to the point where the document would rely on "guessing," it stops at `DRAFT_BLOCKED`—no silent default values allowed.
+
+Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, scenario details, non-functional metrics. High-level alignment alone is insufficient—discovering detail misalignment mid-development has even higher rework costs.
 
 This is the **only gate actively triggered by the skill** (automatically runs when writing specification documents, without user request), and the only gate that intercepts **before** AI starts coding—since direction errors have the highest rework cost, this gate is most critical.
 
@@ -74,8 +76,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-`-RunCanary` runs portability self-checks after copying. If it fails, don't treat this installation as usable.
-Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. Do not use a passing canary from one host as proof that another host enforces hooks. Other compatible runtimes can read the core skill documents, but they need their own install path, hook integration, and canary proof. Hook and script integration details live in `references/install-and-hooks.md`.
+`-RunCanary` runs portability self-checks after copying, verifying skill document readability, core rule completeness, and path accessibility. If it fails, don't treat this installation as usable.
+
+Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks. Other compatible runtimes can read the core skill documents, but they need their own install path, hook integration, and canary proof. Hook and script integration details live in `references/install-and-hooks.md`.
 
 ## Getting Started
 
@@ -83,9 +86,9 @@ Tell the AI "run four gates," "do formal gate review," or "validate before seal"
 
 ## Skill Behavior Checks
 
-`examples/skill-behavior-prompts.json` contains read-only prompts for checking whether the skill changes agent behavior in the intended way. They cover requirements clarification before OpenSpec work, blocking direct main-agent implementation, rejecting self-issued PASS, preventing focused evidence from becoming Final QA PASS, avoiding over-triggering on routine chat or tiny edits, and negative cases for unavailable subagents, dirty snapshots, manifest extension gates, and inactive hooks.
+`examples/skill-behavior-prompts.json` contains read-only prompts for checking whether the skill changes agent behavior in the intended way. They cover requirements clarification before OpenSpec work, blocking direct main-agent implementation, rejecting self-issued PASS, preventing focused evidence from becoming Final QA PASS, avoiding over-triggering on routine chat or tiny edits. They also include negative cases for unavailable subagents, dirty snapshots, manifest extension gates, and inactive hooks.
 
-Use these prompts with Darwin-style skill review or a human reviewer. They are behavior checks for the skill itself, not formal release gates and not a replacement for `scripts\test-portable-openspec-canary.ps1`.
+Use these prompts with automated skill review tools or a human reviewer. They are behavior checks for the skill itself, not formal release gates and not a replacement for `scripts\test-portable-openspec-canary.ps1` portability validation.
 
 ## Package Structure
 

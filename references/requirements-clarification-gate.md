@@ -14,7 +14,8 @@ If an OpenSpec already exists, review it against that source. Do not treat OpenS
 
 ## Hard Stop Rules
 
-- Before drafting or changing OpenSpec/PRD/SDD/phase docs, first produce or obtain a requirement brief with goal, scope, non-goals, acceptance, evidence, constraints, and architecture boundary.
+- Before drafting or changing OpenSpec/PRD/SDD/phase docs, first produce or obtain a requirement brief with goal, scope, non-goals, acceptance, evidence, constraints, architecture boundary, and requirement details.
+- Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, detailed user scenarios, non-functional requirement metrics, and other details that affect requirement understanding and acceptance judgment.
 - Before judging existing OpenSpec status, redo scope, seal, task status, or phase dependency, build a detail alignment table against the requirement brief.
 - Do not dispatch complexity, architecture, cold-water, QA, or development agents until the alignment table is user-confirmed.
 - User-accepted risk is not a shortcut. It must be recorded per item as `deferred-by-user` or `out-of-scope-by-user` with explicit approval and still produce a machine-recorded PASS before drafting or gates proceed.
@@ -95,6 +96,7 @@ Before `READY_TO_DRAFT`, scan the confirmed alignment items for conflicts and mi
 - Acceptance must be testable. Use a concrete condition/result form such as `given / when / then` when it helps, but do not force that format for every requirement.
 - Check for conflicts between confirmed requirements, constraints, and evidence. Examples: "real-time" versus "low CPU", "backward compatible" versus "delete old path", or "offline" versus "cloud-only evidence".
 - When relevant, make sure the alignment covers inputs, outputs, error cases, security or performance constraints, external dependencies, and assumptions.
+- **Requirement detail alignment**: When the requirement involves non-trivial scope, check that key requirement details are aligned—specific business rules, boundary conditions, exception cases, data constraints, detailed scenarios. Missing detail alignment on questions that would change requirement understanding, acceptance outcomes, or verification approach must block drafting.
 - Unresolved conflicts or missing essentials stay in `Blocking gaps`; do not hide them as inferred defaults.
 
 ## Stop Rules
@@ -110,6 +112,7 @@ Return `DRAFT_BLOCKED` when any missing answer would make the document guess:
 - compatibility promise
 - task completion status
 - phase dependency
+- requirement details that would change requirement understanding, acceptance outcomes, or verification approach
 
 If the user asks to skip clarification, record `SKIPPED_BY_USER` and list the risk. This does not unlock document writes, gate dispatch, QA, or development. Do not silently fill defaults.
 
