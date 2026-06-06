@@ -23,12 +23,12 @@ Forbidden files:
 Output template:
 ```
 
-Forbidden prompt fields include Known issues, Previous findings, Just fixed, Expected answer, Expected PASS/FAIL, Focus items, suspicions, what to verify, `重点复查`, and `刚修了`.
+Forbidden prompt fields include Known issues, Previous findings, Just fixed, Expected answer, Expected PASS/FAIL, Focus items, suspicions, what to verify, Chinese equivalents of focus/recheck instructions, and "just fixed" wording in any language.
 
-If any forbidden field or equivalent anchoring text appears, stop immediately and output only:
+If any forbidden field or semantic anchoring appears, stop immediately and output only:
 
 ```text
-PROCESS_VIOLATION: 主代理越界污染审查
+PROCESS_VIOLATION: main agent contaminated zero-context review
 Contaminated fields:
 ```
 

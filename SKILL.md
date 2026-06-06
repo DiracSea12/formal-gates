@@ -1,13 +1,24 @@
 ---
 name: formal-gates
-description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-readiness documents, and when the user explicitly asks for 四门流程, formal requirement clarification gate, writing-document gates, formal gate review, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow, gate-state/gate-workflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering document work or formal mode.
+description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-readiness documents, before non-trivial implementation that requires OpenSpec coverage and formal handoff, and when the user explicitly asks for formal gates, four-gate workflow, requirement clarification, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering formal mode.
 ---
 
 # Formal Gates
 
 This is the entry point for the formal-gates process. It handles routing, red lines, and handoff only. Load one detail file on demand; do not read the whole package during normal gate work.
 
-Don't activate this skill for casual chat, brainstorming, lightweight explanations, or small changes. Don't activate when requirements are still in casual discussion. For OpenSpec/PRD/SDD/phase/start-readiness document work, requirements clarification is mandatory before drafting, status judgment, gate dispatch, QA, or development. User-accepted risks must be recorded as `deferred-by-user` or `out-of-scope-by-user` with explicit approval and a recorded PASS; pure `SKIPPED_BY_USER` cannot unlock document writes or downstream gates. Also trigger for formal review, start-readiness judgment, release/seal, four gates, or gate processes.
+## Fast Route
+
+- Ordinary chat, brainstorming, explanations, wording edits, typo fixes, or small low-risk changes: do not activate formal gates.
+- OpenSpec/PRD/SDD/phase/start-readiness document work: proactively run `requirements-clarification-gate` before drafting, status judgment, gate dispatch, QA, or development.
+- Non-trivial implementation or OpenSpec implementation: code/script/test/config/API/schema/persistence/security/multi-file behavior changes need OpenSpec/slice coverage, bundle/snapshot, base commit, Complexity Contract, forbidden items, and verification requirements before development handoff.
+- Post-development gates do not auto-trigger after ordinary work. Run the four-gate sequence only when the user asks for formal gates/release/seal/final validation, or when an already-authorized formal run reaches post-development review.
+- Formal review, start-readiness judgment, release/seal, four gates, or gate processes: follow the matching route below and never accept chat-only PASS.
+- Install, hooks, canary, A/B, or host integration: read `references/install-and-hooks.md` only when that is the task.
+
+## Blacklist
+
+Never use this skill for casual discussion or tiny edits unless the user asks for formal review. Never claim formal PASS from chat, self-review, developer self-test, focused tests, gate-state alone, hook config, installed scripts, or direct script tests. Never let the main agent implement non-trivial work, contaminate zero-context review prompts, reuse PASS after snapshot change, rename fixed gate IDs, treat `requirements-clarification-gate` as a fifth post-development gate, claim host hook enforcement without same-host live canary, or seal without complete final evidence.
 
 ## Load Map
 
@@ -18,17 +29,26 @@ Don't activate this skill for casual chat, brainstorming, lightweight explanatio
 - Formal post-development artifact fields and recording commands: read `references/post-development-artifacts.md` only when preparing or validating machine-recorded artifacts.
 - Install, hooks, canary, A/B, candidate package testing, Claude/Codex/Cursor integration: cold path; read `references/install-and-hooks.md` only for those tasks.
 
-Claude Code, Codex, and Cursor are separate host targets. Do not rank them as primary versus compatibility in public guidance. Any hook enforcement claim must be proven with a live canary on the specific host, and a passing canary on one host does not prove another host.
+Claude Code, Codex, and Cursor are separate host targets. Do not rank them as primary versus compatibility in public guidance. Any hook enforcement claim must be proven with a live canary on the specific host, and a passing canary on one host does not prove another host. Config files, installed scripts, or direct script tests are not hook enforcement proof. For Codex, proof requires a real `codex exec` run that writes a `PreToolUse` payload, blocks a bad formal PASS command, and leaves the canary marker uncreated.
+
+## Checkpoints
+
+Use these visible stops before moving to the next route. They are checkpoints, not new gates.
+
+| Stop | Do not continue until | If missing |
+|---|---|---|
+| `CHECKPOINT / STOP: requirements` | User-confirmed alignment is recorded for formal document work. | Output `DRAFT_BLOCKED` or record `SKIPPED_BY_USER` risk only; do not draft or dispatch gates. |
+| `CHECKPOINT / STOP: development handoff` | OpenSpec coverage, bundle/snapshot, base commit, Complexity Contract, forbidden items, and verification requirements are ready. | Output `Gate Handoff Request`; do not let the main agent implement. |
+| `CHECKPOINT / STOP: independent review` | The matching `agents/<gate>.md` prompt is used without findings, suspicions, expected answers, or focus items. | Output `PROCESS_VIOLATION` and rebuild the dispatch prompt. |
+| `CHECKPOINT / STOP: seal` | Final verification, FinalExecution QA evidence, all required independent gate artifacts, and unchanged snapshot are verified. | Say `focused evidence pending full gate`; do not claim Final QA PASS or seal. |
 
 ## Red Lines
 
-- Main agent must not directly write non-trivial code, scripts, tests, configs, or OpenSpec implementations. Must delegate to zero-context development subagents.
-- Any non-trivial development must have OpenSpec documentation or slice documents written into existing OpenSpec beforehand.
-- Development subagents must receive bundle/manifest, worktree, base commit or non-git snapshot id, OpenSpec change, task scope, forbidden items, Complexity Contract, and verification requirements.
-- For git projects, development subagent's first step must report `git rev-parse --short HEAD`. For SVN or non-git projects must report current `changeSnapshot`, typically generated by `gate-workflow.ps1 -Action snapshot -Vcs auto`. If inconsistent with handoff, stop immediately.
-- For dirty or uncommitted formal snapshots, development/review subagents default to using the current worktree pointed to by `GateWorkflow.worktree`. Only use isolated worktrees that have been prepared from the exact base or same file-hash snapshot and injected with the same snapshot/artifacts. Forbidden to default to `origin/main`, `origin/master`, or guess remote base for starting work.
+- Non-trivial development must have OpenSpec/slice coverage first; the main agent delegates implementation to zero-context development subagents instead of editing directly.
+- Development/review subagents receive the exact bundle/manifest, worktree, base commit or non-git snapshot id, OpenSpec change, task scope, forbidden items, Complexity Contract, and verification requirements. Development return must include Complexity Ledger, changed files, covered requirements, verification artifacts, and budget pressure.
+- Subagents must verify their starting snapshot: git reports `git rev-parse --short HEAD`; SVN or non-git reports the provided `changeSnapshot`. Dirty formal snapshots use the current worktree named by `GateWorkflow.worktree`; do not silently start from `origin/main`, `origin/master`, or a guessed remote base.
 - Formal PASS/FAIL/REVIEW verdicts must come from independent zero-context subagents; main agent cannot self-judge pass.
-- Formal complexity, architecture, code-quality, QA, and cold-water review dispatch must use the matching file under `agents/`. Any self-written formal review prompt, or any prompt containing previous findings, known issues, what was just fixed, suspicions, expected answers, target PASS/FAIL, or focus items, is `PROCESS_VIOLATION`.
+- Formal review dispatch must use the matching file under `agents/`. Any self-written formal review prompt or anchored prompt is `PROCESS_VIOLATION`.
 - Main agent must verify that independent gate artifact opinions are evidence-backed; main agent has veto power, not self-approval power. When hard factual conflicts exist with independent gate conclusions, record evidence and re-dispatch independent gate agent for review—cannot self-override to formal verdict.
 - For OpenSpec proposal/design/spec/tasks/start-readiness "can-develop/can-start/pass" verdicts, must first have independent zero-context complexity review, architecture-health review, and cold-water review.
 - Independent gates require external orchestration. If current agent cannot dispatch independent subagents, cannot forge gate PASS, and should not treat entire requirement as failed implementation. Output `Gate Handoff Request` and hand off to main agent or external orchestrator to dispatch independent gate agent.
@@ -36,14 +56,7 @@ Claude Code, Codex, and Cursor are separate host targets. Do not rank them as pr
 
 ## Four Fixed Gate IDs
 
-These four post-development gate IDs cannot be renamed; scripts, hooks, artifacts, and GateWorkflow must all use them:
-
-- `qa-test-gate`
-- `complexity-gate`
-- `architecture-health-gate`
-- `code-quality-gate`
-
-The skill name can be `formal-gates`, but the four gate IDs recognized by the machine must remain unchanged.
+These four post-development gate IDs cannot be renamed: `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, `code-quality-gate`. Scripts, hooks, artifacts, and GateWorkflow must use them exactly.
 
 Document work also has one built-in pre-document gate id: `requirements-clarification-gate`. It is not a fifth post-development gate. It is recorded only when the user's requirement alignment is complete enough to draft; its PASS evidence is user-confirmed alignment, not independent zero-context review.
 
@@ -117,7 +130,7 @@ Forbidden context:
 Continue after:
 ```
 
-`Required independent gates` must list at least which of QA, complexity, architecture, code quality need review. `Forbidden context` specifies not to inject main agent conclusions, suspicions, previous round findings, or expected answers into subagent. Main agent can only continue next step after receiving independent artifact.
+`Required independent gates` must list which gates need review. `Forbidden context` must exclude main-agent conclusions, suspicions, previous findings, and expected answers. Continue only after receiving the independent artifact.
 
 ## Zero-context Is Not Empty-context
 
@@ -126,10 +139,11 @@ When dispatching subagents, must provide sufficient local facts:
 - bundle/manifest path and SHA;
 - worktree and base commit or non-git snapshot id;
 - OpenSpec change, task scope, forbidden files, forbidden expansion items;
+- Complexity Contract for development handoff, and required Complexity Ledger for development return;
 - Related spec/design/tasks/case/diff/evidence artifacts;
 - Output template and required verifications.
 
-Formal review dispatch must use the matching file under `agents/`: `qa-test-gate.md`, `complexity-gate.md`, `architecture-health-gate.md`, `code-quality-gate.md`, or `cold-water-review.md`. Prompt forbidden to inject main agent conclusions, previous round findings, what was just fixed, expected answers, suspicions, target verdicts, or focus items. If a review agent receives anchored dispatch, it must stop immediately and output `PROCESS_VIOLATION: 主代理越界污染审查`; it must not continue review or output PASS/FAIL/REVIEW.
+Formal review dispatch must use the matching file under `agents/`: `qa-test-gate.md`, `complexity-gate.md`, `architecture-health-gate.md`, `code-quality-gate.md`, or `cold-water-review.md`. If a review agent receives anchored dispatch, it must stop with `PROCESS_VIOLATION: main agent contaminated zero-context review`; it must not continue review or output PASS/FAIL/REVIEW.
 
 ## Output Standards
 

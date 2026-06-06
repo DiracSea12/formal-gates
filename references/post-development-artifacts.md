@@ -6,9 +6,9 @@ Keep the four gate reference files focused on judgment rules. Keep host installa
 
 ## Formal Artifact Rule
 
-缺机器元数据时不能记录正式 PASS，最多 advisory review。`singleGateAuthorized=true` 只允许显式单门 advisory，不能记录、复用或推进 release/seal。
+Without machine metadata, a formal PASS cannot be recorded; the result is at most an advisory review. `singleGateAuthorized=true` is only for explicit single-gate advisory review. It cannot be recorded, reused, or used to advance release/seal.
 
-所有正式 post-development gate artifact 必须写明：
+Every formal post-development gate artifact must include:
 
 ```text
 Review mode: ZERO_CONTEXT_FORMAL
@@ -23,9 +23,9 @@ Dispatch prompt artifact: <dispatch-prompt-path> sha256=<dispatch-prompt-sha256>
 No-anchor prompt: YES
 ```
 
-`Reviewer agent id` 不能是空值或占位符。`Context bundle` 和 `Dispatch prompt artifact` 必须是存在的文件并带 sha256；机器会校验 hash。`Dispatch prompt artifact` 是主代理实际发给审查子代理的派发 prompt 文件，不是审查结果摘要。
+`Reviewer agent id` must not be empty or a placeholder. `Context bundle` and `Dispatch prompt artifact` must point to existing files and include SHA-256 hashes; the machine validator checks those hashes. `Dispatch prompt artifact` is the actual dispatch prompt sent by the main agent to the review subagent, not a review-result summary.
 
-如果 artifact 或 dispatch prompt 文件包含这些明显锚定字段标签，正式 PASS 会被拦截：
+If an artifact or dispatch prompt file contains these obvious anchoring field labels, formal PASS is blocked:
 
 ```text
 Known issues:
@@ -36,26 +36,26 @@ Expected PASS/FAIL:
 Focus items:
 suspicions:
 what to verify:
-重点复查:
-刚修了:
+Chinese-language focus/recheck field labels:
+Chinese-language just-fixed field labels:
 ```
 
-机器只做行首字段标签检查，也会识别 Markdown 列表和引用里的字段标签，例如 `- Focus items:`、`> what to verify:`。不做“语义中立性”分类。说明文字里提到 `Known issues` 或 `Focus items` 不会被拦。审查子代理开工前必须自己审 dispatch prompt 语义：任务目标、验收标准、范围和证据允许；主代理的怀疑、修复说明、期望结论，或 `重点看` / `需要注意` / `please pay attention` 这类指向某个主代理判断的说法，属于锚定。定向复核、advisory review 可以写 focus items 或 what to verify，但不能冒充 formal zero-context PASS，也不能记录为推进四门的正式 PASS。
+The machine check only scans line-leading field labels, including labels in Markdown lists and block quotes such as `- Focus items:` or `> what to verify:`. It does not classify semantic neutrality. Explanatory text that mentions `Known issues` or `Focus items` is not blocked by itself. Before starting, the review subagent must audit the dispatch prompt semantics: neutral task goals, acceptance criteria, scope, and evidence are allowed; main-agent suspicions, fix explanations, expected conclusions, or attention-directing wording such as "please focus on", "needs attention", or "please pay attention" are anchoring. Directed rechecks and advisory reviews may include focus items or what-to-verify text, but they must not pretend to be formal zero-context PASS and must not be recorded as formal gate progression.
 
 ## Implementation Evidence Fields
 
-implementation 后的复杂度、架构、代码质量正式 PASS 还必须写明：
+Formal complexity, architecture, and code-quality PASS after implementation must also include:
 
 ```text
 Changed files artifact: <path>
 Verification artifact: <path>
 ```
 
-`Changed files artifact` 可用 `Raw diff artifact` 代替，`Verification artifact` 可用 `Developer self-test artifact` 代替。路径都必须存在。
+`Changed files artifact` can be replaced by `Raw diff artifact`; `Verification artifact` can be replaced by `Developer self-test artifact`. All paths must exist.
 
 ## QA Evidence Fields
 
-`qa-test-gate` 正式 PASS 还必须写明：
+Formal `qa-test-gate` PASS must also include:
 
 ```text
 Approved case set:
@@ -65,7 +65,7 @@ Case-to-artifact binding:
 
 ## Gate Route
 
-每个正式 gate 输出都必须带机器可读路线：
+Every formal gate output must include this machine-readable route:
 
 ```yaml
 gate_route:
@@ -76,22 +76,22 @@ gate_route:
   rerun_from: none | qa-design | qa-verification | qa-execution | complexity | architecture | code-quality | final-verification
 ```
 
-`REVIEW`、`FAIL`、`BLOCKED` 不能路由到 `proceed`。`FinalExecution` PASS 的 `next_action` 必须是 `seal`；非最终 PASS 的 `next_action` 必须是 `proceed`。
+`REVIEW`, `FAIL`, and `BLOCKED` cannot route to `proceed`. A `FinalExecution` PASS must use `next_action: seal`; non-final PASS must use `next_action: proceed`.
 
 ## Recording Commands
 
-最小机器检查命令：
+Minimum machine-check commands:
 
 ```powershell
 <ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate <gate-id> -WorkflowId <id> -ChangeSnapshot <snapshot>
 <ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate <gate-id> -Verdict PASS -Artifact <artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
-`<ps>` 代表当前可用的 PowerShell：Windows PowerShell 5 用 `powershell -NoProfile -ExecutionPolicy Bypass`，PowerShell 7 用 `pwsh -NoProfile`。包内脚本会继续使用当前 PowerShell，不要求必须有 PowerShell 7。
+`<ps>` means the currently available PowerShell: Windows PowerShell 5 uses `powershell -NoProfile -ExecutionPolicy Bypass`; PowerShell 7 uses `pwsh -NoProfile`. Bundled scripts continue under the current PowerShell. PowerShell 7 is not required.
 
-`qa-test-gate` 正式记录必须加 `-Mode formal -Stage Execution`；最终 QA 用 `-Mode formal -Stage FinalExecution`。不要直接照抄泛化命令漏掉 stage。
+Formal `qa-test-gate` recording must add `-Mode formal -Stage Execution`; final QA uses `-Mode formal -Stage FinalExecution`. Do not copy the generic command and forget the stage.
 
-最终 QA 推荐用包装命令生成聚合 artifact 并记录 `FinalExecution`：
+Prefer the wrapper command for final QA because it generates the aggregate artifact and records `FinalExecution`:
 
 ```powershell
 $attempts = '[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-verification-run.json","reviewerAgentId":"qa-final-agent","contextBundle":".claude/bundles/<bundle>.zip sha256=<bundle-sha256>"}]'

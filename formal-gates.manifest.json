@@ -1,6 +1,6 @@
 {
   "name": "formal-gates",
-  "description": "AI code quality gate skill for Claude Code, Codex, and Cursor. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible AI code quality gate package. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, and Cursor. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Claude Code",
@@ -49,7 +49,8 @@
     {
       "name": "skill-creator quick validator",
       "command_template": "py -3 -X utf8 <skill-creator>\\scripts\\quick_validate.py .",
-      "requires": "An external skill-creator checkout or installed validator path. Replace <skill-creator> before running."
+      "requires": "An external skill-creator checkout or installed validator path. Replace <skill-creator> before running.",
+      "optional_only": true
     }
   ],
   "validation_notes": [
@@ -57,6 +58,7 @@
     "external_validators lists optional validators outside this package and must not be treated as directly executable repo-local commands."
   ],
   "support_caveats": [
+    "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, and Cursor have bundled installer/hook target entries.",
     "Claude Code, Codex, and Cursor are separate host targets.",
     "Hook enforcement claims require live canary evidence on the specific host.",
     "A passing canary on one host does not prove another host. Do not claim Codex plugin distribution from this package."

@@ -1,4 +1,5 @@
 .claude/
+.artifacts/
 contract_review/
 
 # Local gate/review artifacts
