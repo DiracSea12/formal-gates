@@ -132,11 +132,7 @@ Stop when the current contract did not budget:
 
 Formal complexity review can run only after `qa-test-gate` formal Execution PASS for the same workflow and snapshot.
 
-Record PASS:
-
-```powershell
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact <complexity-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
-```
+Record PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate complexity-gate`.
 
 Formal PASS artifacts must include the shared zero-context fields plus:
 
@@ -152,7 +148,7 @@ Changed files artifact:
 Verification artifact:
 ```
 
-`Changed files artifact` 可替换为 `Raw diff artifact`；`Verification artifact` 可替换为 `Developer self-test artifact`。路径必须存在，正式机器记录会校验。
+These fields follow the shared post-development artifact rules: `Changed files artifact` 可替换为 `Raw diff artifact`；`Verification artifact` 可替换为 `Developer self-test artifact`。路径必须存在，正式机器记录会校验。
 
 ## Output
 

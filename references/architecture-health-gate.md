@@ -75,13 +75,9 @@ New abstraction/framework/manager/service needs active Complexity Contract budge
 
 ## Formal PASS
 
-Record PASS:
+Record PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate architecture-health-gate`.
 
-```powershell
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate architecture-health-gate -Verdict PASS -Artifact <architecture-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
-```
-
-Formal PASS requires independent zero-context artifact fields from the router skill, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`.
+Formal PASS requires the shared post-development artifact fields, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`.
 
 ## Output
 

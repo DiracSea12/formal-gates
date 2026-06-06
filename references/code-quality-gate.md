@@ -55,13 +55,9 @@ List actual commands, artifacts, and results. No verification evidence means no 
 
 ## Formal PASS
 
-Record PASS:
+Record PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate code-quality-gate`.
 
-```powershell
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate code-quality-gate -Verdict PASS -Artifact <code-quality-artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
-```
-
-Formal PASS requires independent zero-context artifact fields from the router skill, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
+Formal PASS requires the shared post-development artifact fields, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
 
 ## Output
 
