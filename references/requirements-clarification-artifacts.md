@@ -68,10 +68,11 @@ Dimension coverage:
   DIM-06 Evidence: covered/deferred/NA | RQ-###
   DIM-07 Constraints: covered/deferred/NA | RQ-###
   DIM-08 Architecture boundary: covered/deferred/NA | RQ-###
-  DIM-09 Unknowns: covered/deferred/NA | RQ-###
-  DIM-10 Task status: covered/deferred/NA | RQ-###
-  DIM-11 Phase dependency: covered/deferred/NA | RQ-###
-  DIM-12 Must-not-cut scope: covered/deferred/NA | RQ-###
+  DIM-09 Requirement details: covered/deferred/NA | RQ-###
+  DIM-10 Unknowns: covered/deferred/NA | RQ-###
+  DIM-11 Task status: covered/deferred/NA | RQ-###
+  DIM-12 Phase dependency: covered/deferred/NA | RQ-###
+  DIM-13 Must-not-cut scope: covered/deferred/NA | RQ-###
 Decision record: .claude/gates/artifacts/requirements-user-decision.md
 Covered formal targets: openspec/changes/<change>/
 Downstream permission: READY_TO_DRAFT
