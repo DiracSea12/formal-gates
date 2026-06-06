@@ -6,7 +6,7 @@
 
 # 项目简介
 
-AI 代码质量门禁，专治方向跑偏、过度设计、假测试、悄悄缩需求。1 道事前门在动手前对齐需求，4 道事后门通过独立 AI 审查卡质量——禁止自我背书。支持 Claude Code、Codex 和 Cursor。
+AI 代码质量门禁，专治方向跑偏、过度设计、假测试、悄悄缩需求。1 道事前门在动手前对齐需求，4 道事后门通过独立 AI 审查卡质量，禁止自我背书。Claude Code、Codex、Cursor 都是目标宿主；hook 拦截必须在对应宿主跑通 canary。
 
 ---
 
@@ -87,7 +87,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 # 微博 / Twitter
 
-别让 AI 给自己的代码盖章。formal-gates 通过 5 道质量门强制独立审查——1 道在写代码前，4 道在写完后。支持 Claude Code、Codex 和 Cursor。https://github.com/DiracSea12/formal-gates
+别让 AI 给自己的代码盖章。formal-gates 通过 5 道质量门强制独立审查：1 道在写代码前，4 道在写完后。Claude Code、Codex、Cursor 都是目标宿主；hook 需按宿主跑通 canary。https://github.com/DiracSea12/formal-gates
 
 ---
 
@@ -104,7 +104,7 @@ formal-gates 用独立 AI 审查解决这个问题，通过 5 道质量门：
 
 核心规则：写代码的 AI 不能批准代码。零上下文审查 AI 验证每道门。PowerShell 脚本强制要求证据——不接受占位符批准。
 
-支持 Claude Code、Codex 和 Cursor。开源。
+Claude Code、Codex、Cursor 都是目标宿主；hook 拦截必须在对应宿主跑通 canary。开源。
 
 https://github.com/DiracSea12/formal-gates
 
@@ -134,7 +134,7 @@ https://github.com/DiracSea12/formal-gates
 - 架构：验证边界和所有权
 - 代码质量：抓 bug、边界情况、可维护性问题
 
-支持 Claude Code、Codex 和 Cursor。为生产系统、重构和发版验证而生。
+Claude Code、Codex、Cursor 都是目标宿主；hook 拦截必须在对应宿主跑通 canary。为生产系统、重构和发版验证而生。
 
 https://github.com/DiracSea12/formal-gates
 

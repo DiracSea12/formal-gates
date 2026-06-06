@@ -1,0 +1,64 @@
+{
+  "name": "formal-gates",
+  "description": "AI code quality gate skill for Claude Code, Codex, and Cursor. Hook enforcement must be verified per host with a live canary.",
+  "hosts": [
+    {
+      "name": "Claude Code",
+      "support": "host-target",
+      "caveat": "Install the full package as a Claude skill; command hook support requires configured settings and a live canary on Claude Code."
+    },
+    {
+      "name": "Codex",
+      "support": "host-target",
+      "caveat": "Install the full package as a Codex skill; hook enforcement requires Codex hook/config setup and a live canary on Codex. This package does not claim Codex plugin distribution."
+    },
+    {
+      "name": "Cursor",
+      "support": "host-target",
+      "caveat": "Install Cursor hook support through hooks.json; hook enforcement requires a live canary on Cursor."
+    }
+  ],
+  "package_parts": [
+    "SKILL.md",
+    "references/",
+    "scripts/",
+    "hooks/",
+    "agents/",
+    "examples/",
+    "examples/skill-behavior-prompts.json"
+  ],
+  "examples": [
+    {
+      "path": "examples/skill-behavior-prompts.json",
+      "type": "read-only skill behavior checks",
+      "purpose": "Sample prompts for human or Darwin-style skill review.",
+      "not_a_gate": true
+    }
+  ],
+  "install_commands": [
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary"
+  ],
+  "verification_commands": [
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\test-portable-openspec-canary.ps1 -SkillPath ."
+  ],
+  "external_validators": [
+    {
+      "name": "skill-creator quick validator",
+      "command_template": "py -3 -X utf8 <skill-creator>\\scripts\\quick_validate.py .",
+      "requires": "An external skill-creator checkout or installed validator path. Replace <skill-creator> before running."
+    }
+  ],
+  "validation_notes": [
+    "verification_commands contains only repo-local commands runnable from this package root.",
+    "external_validators lists optional validators outside this package and must not be treated as directly executable repo-local commands."
+  ],
+  "support_caveats": [
+    "Claude Code, Codex, and Cursor are separate host targets.",
+    "Hook enforcement claims require live canary evidence on the specific host.",
+    "A passing canary on one host does not prove another host. Do not claim Codex plugin distribution from this package."
+  ]
+}

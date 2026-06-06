@@ -2,7 +2,9 @@
 
 > AI Code Quality Gates: 1 pre-work gate for alignment + 4 post-work gates for quality. Before AI starts coding, align on requirements. After completion, independent review AI validates through each checkpoint before release.
 
-This is a Claude Code skill (also compatible with Codex / Cursor hooks). It doesn't write code for you—instead, it judges "is the AI's direction correct? Can the completed code/documentation be released?"
+This is an Agent Skill package for Claude Code, Codex, and Cursor. Any host can install the full package, but any claim that command hooks actually block bad gate flow must be proven with a live canary on that host.
+
+It doesn't write code for you—instead, it judges "is the AI's direction correct? Can the completed code/documentation be released?"
 
 ## Problems It Solves
 
@@ -60,16 +62,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 # Install to global Claude skill and configure/update command hook
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
 
-# Or install to a specific project locally
+# Install to global Codex skill
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary
+
+# Install Cursor hook support for a project
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook
+
+# Or install to a specific Claude project locally
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
 `-RunCanary` runs portability self-checks after copying. If it fails, don't treat this installation as usable.
-Hook and script integration for Claude/Codex/Cursor: see `references/install-and-hooks.md`.
+Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. Do not use a passing canary from one host as proof that another host enforces hooks. Hook and script integration details live in `references/install-and-hooks.md`.
 
 ## Getting Started
 
 Tell the AI "run four gates," "do formal gate review," or "validate before seal" to trigger the process. When writing specification documents, it will automatically run the requirements clarification gate first. For routine small changes, no action needed.
+
+## Skill Behavior Checks
+
+`examples/skill-behavior-prompts.json` contains read-only prompts for checking whether the skill changes agent behavior in the intended way. They cover requirements clarification before OpenSpec work, blocking direct main-agent implementation, rejecting self-issued PASS, preventing focused evidence from becoming Final QA PASS, and avoiding over-triggering on routine chat or tiny edits.
+
+Use these prompts with Darwin-style skill review or a human reviewer. They are behavior checks for the skill itself, not formal release gates and not a replacement for `scripts\test-portable-openspec-canary.ps1`.
 
 ## Package Structure
 
@@ -86,7 +100,8 @@ formal-gates/
   scripts/                  # PowerShell + Python gate scripts
   hooks/                    # enforce-gate-sequence.ps1 (machine-side sequence and field enforcement)
   agents/                   # Host integration configs
-  examples/                 # GateWorkflow and other samples
+  examples/                 # GateWorkflow, behavior-check prompts, and other samples
+  formal-gates.manifest.json # Package index, host support caveats, install and verification commands
 ```
 
 Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.

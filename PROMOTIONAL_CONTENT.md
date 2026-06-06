@@ -8,7 +8,7 @@ Stop AI from shipping broken code. 5 quality gates that actually work—with ind
 
 ## Medium Description (for GitHub About section)
 
-AI code quality gates that prevent direction drift, over-engineering, fake tests, and silent scope creep. One pre-work gate aligns requirements before coding starts. Four post-work gates validate quality through independent AI review—no self-endorsement allowed. For Claude Code, Codex, and Cursor.
+AI code quality gates that prevent direction drift, over-engineering, fake tests, and silent scope creep. One pre-work gate aligns requirements before coding starts. Four post-work gates validate quality through independent AI review, with no self-endorsement allowed. Claude Code, Codex, and Cursor are host targets; hook enforcement must be proven per host with a live canary.
 
 ---
 
@@ -92,7 +92,7 @@ For major work, it runs automatically. For small changes, it stays silent.
 
 - **Platform**: Windows + PowerShell 5/7
 - **VCS**: Git, SVN, or file-hash snapshots
-- **Hosts**: Claude Code (primary), Codex, Cursor
+- **Hosts**: Claude Code, Codex, and Cursor; hook enforcement requires per-host live canary
 - **Languages**: Works with any codebase—gates validate behavior, not syntax
 
 ---
@@ -101,7 +101,7 @@ For major work, it runs automatically. For small changes, it stays silent.
 
 ### Twitter/X (280 chars)
 
-Stop AI from rubber-stamping its own code. formal-gates enforces independent review through 5 quality gates—1 before coding starts, 4 after. For Claude Code, Codex & Cursor. No self-endorsement allowed. https://github.com/DiracSea12/formal-gates
+Stop AI from rubber-stamping its own code. formal-gates enforces independent review through 5 quality gates: 1 before coding starts, 4 after. Claude/Codex/Cursor are host targets; hooks need per-host live canary. https://github.com/DiracSea12/formal-gates
 
 ### LinkedIn
 
@@ -116,7 +116,7 @@ formal-gates solves this with independent AI review through 5 quality gates:
 
 The key rule: AI that writes code cannot approve it. Zero-context review AI validates every gate. PowerShell scripts enforce evidence requirements—no placeholder approvals allowed.
 
-Works with Claude Code, Codex, and Cursor. Open source.
+Claude Code, Codex, and Cursor are host targets. Hook enforcement must be proven on the target host with a live canary. Open source.
 
 Perfect for: production systems, refactors, new features, release validation
 Skip for: quick prototypes, UI tweaks, typo fixes
@@ -153,7 +153,7 @@ The core issue: AI reviews its own work. And AI (like humans) is bad at finding 
 - Architecture: Validates boundaries and ownership
 - Code Quality: Catches bugs, edge cases, maintainability issues
 
-Works with Claude Code, Codex, and Cursor. Windows + PowerShell. Git/SVN/no-VCS supported.
+Claude Code, Codex, and Cursor are host targets. Hook enforcement must be proven on the target host with a live canary. Windows + PowerShell. Git/SVN/no-VCS supported.
 
 Built for production systems, refactors, and release validation. Stays silent for small changes.
 
@@ -176,4 +176,3 @@ https://github.com/DiracSea12/formal-gates
 **Value-focused**: Catch direction drift, over-engineering, and fake tests before they reach production.
 
 **Differentiator**: The only AI code review system that blocks self-approval at the machine level.
-

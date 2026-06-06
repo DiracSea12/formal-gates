@@ -1,4 +1,4 @@
-1234568interface:
-  display_name: "Formal Gates / 四门流程"
-  short_description: "四门流程入口：分流 QA、复杂度、架构和代码质量门禁"
-  default_prompt: "使用 $formal-gates。请带上 GateWorkflow 信息；如果当前 agent 不能派独立审查代理，输出 Gate Handoff Request，不要自封 formal PASS。"
+interface:
+  display_name: "Formal Gates"
+  short_description: "Formal gate workflow for Claude Code, Codex, and Cursor with per-host live canary requirements."
+  default_prompt: "Use formal-gates only with GateWorkflow context. If independent review agents are unavailable, output Gate Handoff Request instead of claiming formal PASS."

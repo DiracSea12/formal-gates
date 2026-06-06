@@ -2,7 +2,9 @@
 
 > AI 代码质量门禁：1 道事前门管方向 + 4 道事后门卡质量。AI 动手前先对齐需求，写完之后派**独立的审查 AI**逐道关卡卡质量，过了才放行。
 
-这是一个 Claude Code skill（也兼容 Codex / Cursor hook）。它不替你写代码，而是裁决"AI 要做的方向对不对、写完的代码/文档能不能放行"。
+这是给 Claude Code、Codex、Cursor 使用的 Agent Skill 包。三个宿主都可以安装完整包；但任何一个宿主要声称 command hook 真的会拦截错误门禁流程，都必须在该宿主上跑 live canary（真实启动验证）。
+
+它不替你写代码，而是裁决"AI 要做的方向对不对、写完的代码/文档能不能放行"。
 
 ## 解决什么问题
 
@@ -60,16 +62,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 # 装到全局 Claude skill，并写入/更新 command hook
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
 
-# 或装到某个项目本地
+# 装到全局 Codex skill
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary
+
+# 给某个项目安装 Cursor hook 支持
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook
+
+# 或装到某个 Claude 项目本地
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
 `-RunCanary` 会在复制后跑一次可搬运性自检；失败就别把这次安装当可用。
-Claude/Codex/Cursor 的 hook 或脚本接入口径见 `references/install-and-hooks.md`。
+Claude Code、Codex、Cursor 的 hook/config 接入口不同，所以每个宿主都必须单独安装、单独验证。不能用某一个宿主的 canary 通过，反向证明另一个宿主也会执行 hook。Claude/Codex/Cursor 的 hook 或脚本接入口径见 `references/install-and-hooks.md`。
 
 ## 怎么开始
 
 跟 AI 说"跑四门""做 formal gate 审查""封板前过一遍门禁"即可触发。写规范文档时它会主动先走需求澄清门。日常小改不用管。
+
+## Skill 行为检查
+
+`examples/skill-behavior-prompts.json` 放的是只读测试 prompt，用来检查这个 skill 有没有真的改变 agent 行为。它覆盖：OpenSpec 前先需求澄清、阻止主代理直接做非平凡实现、拒绝自封 PASS、focused evidence 不能冒充 Final QA PASS、普通聊天或极小改动不误触发四门。
+
+这些 prompt 可以给 Darwin 式 skill review 或人工 reviewer 使用。它们只检查 skill 自身行为，不是正式发版门禁，也不能替代 `scripts\test-portable-openspec-canary.ps1`。
 
 ## 包结构
 
@@ -86,7 +100,8 @@ formal-gates/
   scripts/                  # PowerShell + Python 门禁脚本
   hooks/                    # enforce-gate-sequence.ps1（机器侧顺序与字段强制）
   agents/                   # host 接入配置
-  examples/                 # GateWorkflow 等样例
+  examples/                 # GateWorkflow、行为检查 prompt 等样例
+  formal-gates.manifest.json # 包索引、host 支持边界、安装和验证命令
 ```
 
 人看这个 README 上手；AI 从 `SKILL.md` 进入。各门具体判据按需读 `references/`。

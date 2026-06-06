@@ -18,7 +18,7 @@ Don't activate this skill for casual chat, brainstorming, lightweight explanatio
 - Formal post-development artifact fields and recording commands: read `references/post-development-artifacts.md` only when preparing or validating machine-recorded artifacts.
 - Install, hooks, canary, A/B, candidate package testing, Claude/Codex/Cursor integration: cold path; read `references/install-and-hooks.md` only for those tasks.
 
-Claude Code is the primary host. Codex is only for optional compatibility or legacy comparison paths. Cursor automatically connects command hooks via `.cursor/hooks.json` or global `~/.cursor/hooks.json`.
+Claude Code, Codex, and Cursor are separate host targets. Do not rank them as primary versus compatibility in public guidance. Any hook enforcement claim must be proven with a live canary on the specific host, and a passing canary on one host does not prove another host.
 
 ## Red Lines
 
