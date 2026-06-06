@@ -5,18 +5,18 @@ description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-
 
 # Formal Gates
 
-This is the entry point for the four-gate process. It only handles rules, routing, and handoff; specific check details are loaded from references on demand—don't load all content into context at once.
+This is the entry point for the formal-gates process. It handles routing, red lines, and handoff only. Load one detail file on demand; do not read the whole package during normal gate work.
 
 Don't activate this skill for casual chat, brainstorming, lightweight explanations, or small changes. Don't activate when requirements are still in casual discussion. For OpenSpec/PRD/SDD/phase/start-readiness document work, requirements clarification is mandatory before drafting, status judgment, gate dispatch, QA, or development. User-accepted risks must be recorded as `deferred-by-user` or `out-of-scope-by-user` with explicit approval and a recorded PASS; pure `SKIPPED_BY_USER` cannot unlock document writes or downstream gates. Also trigger for formal review, start-readiness judgment, release/seal, four gates, or gate processes.
 
-## First Determine Which Flow
+## Load Map
 
-- Requirements clarification gate: Trigger before formal document work or document/status/seal/redo/dependency judgment. Read `references/requirements-clarification-gate.md`; read `references/requirements-clarification-artifacts.md` only when recording PASS or diagnosing artifact validation.
-- Document/start-readiness review: OpenSpec, PRD, SDD, design docs, phase docs, can-we-start judgment. See "OpenSpec/Document Start-readiness Review" section below, requirements clarification details in `references/requirements-clarification-gate.md`.
-- Post-development/release review: Existing implementation, preparing for delivery, release, seal, final QA. Follow the four-gate sequence below.
-- Gate-specific check details loaded on demand from corresponding references: QA reads `qa-test-gate.md`, complexity reads `complexity-gate.md`, architecture reads `architecture-health-gate.md`, code quality reads `code-quality-gate.md`, requirements clarification reads `requirements-clarification-gate.md`, and requirements clarification machine fields read `requirements-clarification-artifacts.md` only when recording or debugging artifacts.
-- Installation, hooks, canary, A/B, candidate package testing, Claude/Codex/Cursor integration: Read `references/install-and-hooks.md`.
-- Formal post-development artifact fields, `gate_route`, and recording command templates: Read `references/post-development-artifacts.md`.
+- Requirements/document alignment: read `references/requirements-clarification-gate.md`; read `references/requirements-clarification-artifacts.md` only for PASS recording or artifact validation.
+- Document/start-readiness review: use the section below plus `references/requirements-clarification-gate.md`.
+- Post-development/release review: follow the fixed sequence below; read only the active gate reference.
+- Active gate details: `references/qa-test-gate.md`, `references/complexity-gate.md`, `references/architecture-health-gate.md`, or `references/code-quality-gate.md`.
+- Formal post-development artifact fields and recording commands: read `references/post-development-artifacts.md` only when preparing or validating machine-recorded artifacts.
+- Install, hooks, canary, A/B, candidate package testing, Claude/Codex/Cursor integration: cold path; read `references/install-and-hooks.md` only for those tasks.
 
 Claude Code is the primary host. Codex is only for optional compatibility or legacy comparison paths. Cursor automatically connects command hooks via `.cursor/hooks.json` or global `~/.cursor/hooks.json`.
 
@@ -74,55 +74,27 @@ When user has authorized formal run, proceed continuously following the above se
 
 ## OpenSpec/Document Start-readiness Review
 
-When writing/modifying OpenSpec proposal/design/spec/tasks, PRD, SDD, phase plans, or start-readiness materials, follow four steps—first read `references/requirements-clarification-gate.md`:
+For OpenSpec/PRD/SDD/phase/start-readiness work, first read `references/requirements-clarification-gate.md`. Document review uses four checks: requirements clarification, architecture shape, complexity/scope, and cold-water start-readiness. Proposal/spec remains the requirements source; plan/tasks/Contract may decompose delivery but must not narrow user requirements without approval.
 
-1. Requirements clarification: Run requirements clarification gate with confirmed answers, open questions, and draft status. When `DRAFT_BLOCKED`, document can only be draft/unsealed.
-2. Architecture shape: Apply `architecture-health-gate` standards to the document (responsibility layering, ownership, dependency directions, whether unnecessarily introducing public API/cache/manager/service), but don't require implementation evidence—only judge if boundaries are implementable.
-3. Complexity and scope: Apply `complexity-gate` Stop Smells to scope. Proposal/spec is the requirements source; plan/tasks/Contract can decompose or constrain delivery but must not rewrite or narrow user's original requirements. Focused implementations must be marked as `slice`/`partial` and list uncovered items. If unauthorized narrowing is found, output `REQUIREMENTS_SCOPE_MISMATCH` (with original requirements, narrowed areas, locations, and actions to take).
-4. Cold-water start-readiness review: Standard is "can development proceed without directional errors," not sentence-by-sentence essay editing. Problems that would cause development direction, architecture boundary, or acceptance criteria errors must be blocked; wording and minor issues that don't affect starting work should only be recorded as risks, not endlessly rejected.
-
-Formal document work record:
-
-```text
-Document Writing Gates
-Document/change:
-Gate 1 Requirements Clarification: PASS / DRAFT_BLOCKED / SKIPPED_BY_USER
-  User answers captured:
-  Open questions:
-  Draft/seal status:
-  Machine record: required for PASS; blocked when alignment evidence is incomplete
-Gate 2 Architecture Shape: PASS / REVIEW / FAIL
-Gate 3 Complexity and Scope: PASS / REVIEW / FAIL
-Gate 4 Cold-water Start-readiness: PASS / REVIEW / FAIL
-Verdict: DRAFT_ONLY / READY_FOR_ZERO_CONTEXT_REVIEW / BLOCKED
-Required next action:
-```
-
-`READY_FOR_ZERO_CONTEXT_REVIEW` is not development approval. Formal OpenSpec/start-readiness verdict still requires independent zero-context complexity, architecture, and cold-water reviews.
+`READY_FOR_ZERO_CONTEXT_REVIEW` is not development approval. Formal OpenSpec/start-readiness approval still requires independent zero-context complexity, architecture-health, and cold-water reviews. If unauthorized narrowing is found, output `REQUIREMENTS_SCOPE_MISMATCH`.
 
 ## GateWorkflow Minimum Information
 
-Formal processes must have structured `GateWorkflow`, containing at minimum:
+Formal processes need structured `GateWorkflow`. Minimum fields:
 
 - `workflowId`
 - `changeSnapshot`
 - `worktree` or `statePath`
 - Current `gate`
-- Current `stage` for QA gate or manifest-extended gates. Can omit for `complexity-gate`, `architecture-health-gate`, `code-quality-gate` when they have no built-in stages.
+- Current `stage` for QA gate or manifest-extended gates
 
 `GateWorkflow.gate` must be `requirements-clarification-gate`, one of the four fixed post-development gate IDs, or an extended gate defined in manifest. Free-text `WorkflowId=... ChangeSnapshot=...` is only a hint, not a formal record.
 
-Without this information, cannot record formal PASS—at most only advisory review (one-time reference opinion), cannot be treated as four-gate verdict. Explicit single-gate with `singleGateAuthorized=true` is also only advisory, cannot be recorded, reused, or progress release/seal.
+Without minimum workflow information, cannot record formal PASS—only advisory review. Explicit `singleGateAuthorized=true` is also advisory; it cannot be recorded, reused, or used to progress release/seal.
 
 Requirements clarification PASS is machine-recorded with `gate-workflow.ps1 record-stage -Gate requirements-clarification-gate`; it does not require independent reviewer fields. Field templates and validator details live in `references/requirements-clarification-artifacts.md`.
 
-Post-development review PASS must be produced as artifact by independent zero-context subagent and machine-recorded using `gate-workflow.ps1 record-stage`. Artifact mandatory fields are machine-validated; missing metadata, placeholders, missing evidence paths, route mismatch, or prompt contamination blocks formal PASS. Use `references/post-development-artifacts.md` for the complete field template.
-
-- All gates except `requirements-clarification-gate`: `Review mode: ZERO_CONTEXT_FORMAL`, `Prompt contamination check: PASS`, `Prompt source: agents/<gate>.md`, `Zero-context reviewer: YES`, `Independent agent: YES`, `Reviewer agent id:` (non-empty non-placeholder), `Context bundle:` (existing file + sha256), `No-anchor prompt: YES`, `gate_route:` (contains workflow_id/change_snapshot/next_action/rework_owner/rerun_from; REVIEW/FAIL/BLOCKED cannot route to proceed). If artifact contains anchoring fields such as `Known issues:`, `Previous findings:`, `Just fixed:`, `Expected answer:`, `Focus items:`, `重点复查:`, or `刚修了:`, PASS is blocked as prompt contamination.
-- Complexity/architecture/code-quality gates additionally: `Changed files artifact` (or `Raw diff artifact`) + `Verification artifact` (or `Developer self-test artifact`), paths must exist.
-- `qa-test-gate` additionally: `Approved case set` + `QA-owned evidence` + `Case-to-artifact binding`.
-
-Complete field templates for requirements clarification artifacts live in `references/requirements-clarification-artifacts.md`. Complete post-development gate field templates, `gate_route` values, recording/validation commands, and PowerShell prefixes live in `references/post-development-artifacts.md`. Manifest extended gate rules, host hooks, canary, and dual-installation caliber live in `references/install-and-hooks.md`. Don't miss `-Mode formal -Stage Execution` when recording `qa-test-gate` (use `FinalExecution` for final QA).
+Post-development review PASS must come from an independent zero-context artifact and be machine-recorded with `gate-workflow.ps1 record-stage`. Complete post-development field templates, contamination blockers, `gate_route`, PowerShell prefixes, and recording commands live in `references/post-development-artifacts.md`. Manifest extension, host hooks, canary, and dual-installation rules live in `references/install-and-hooks.md`.
 
 ## Gate Handoff Request
 

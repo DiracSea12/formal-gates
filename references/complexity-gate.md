@@ -29,19 +29,11 @@ Expansion evidence required:
 Stop triggers:
 ```
 
-Task type must be one of:
-
-- `delete-or-consolidate`
-- `bugfix`
-- `small-feature`
-- `refactor`
-- `new-system`
-
-Default narrow. Do not quietly upgrade work into `new-system`.
+Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `refactor`, or `new-system`. Default narrow; never quietly upgrade work into `new-system`.
 
 ## Budget Rules
 
-Budgets are dynamic and task-specific. Fallback thresholds in `complexity_gate.py` are alarms, not design truth.
+Budgets are task-specific. Fallback thresholds in `complexity_gate.py` are alarms, not design truth.
 
 If a worker needs to exceed the active dynamic budget, it must stop and submit:
 
@@ -61,17 +53,11 @@ Files affected:
 Risk if denied:
 ```
 
-Before any approval, verify shrink-before-grow:
-
-1. Delete old logic first.
-2. Reuse existing structures first.
-3. Narrow fields, reports, config, and tests first.
-4. Drop future completeness shells.
-5. Explain which current requirement or quality bar fails without expansion.
+Before approval, verify shrink-before-grow: delete old logic, reuse existing structures, narrow fields/reports/config/tests, drop future completeness shells, and explain which current requirement or quality bar fails without expansion.
 
 Without that proof, deny expansion.
 
-Budget expansion approval requires independent anti-complexity review. Use this template:
+Budget expansion requires independent anti-complexity review:
 
 ```text
 Anti-Complexity Review
@@ -84,7 +70,7 @@ Approved budget, if any:
 Expiration: this task only
 ```
 
-Only `APPROVE` or `APPROVE_SMALLER` changes the active budget. The approval expires with the current task and does not become a new default.
+Only `APPROVE` or `APPROVE_SMALLER` changes the active budget, and only for the current task.
 
 ## Diff Script
 
@@ -94,27 +80,17 @@ Run only when there is a diff to review:
 <ps> -File <formal-gates>/scripts/run-complexity-gate.ps1 --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine consumption and `--staged` only for staged review.
-The wrapper prefers Python 3 through `python3`, `py -3`, then `python`; if Python 3 is unavailable it accepts Python 2.7 through `python` or `py -2`.
-`--vcs auto` uses git diff in git worktrees, SVN status/diff in SVN worktrees, and returns REVIEW with a manual-evidence warning when neither is detected.
+Use `--json` for machine output and `--staged` only for staged review. The wrapper chooses an available Python host and uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
 
-In non-git worktrees (SVN or file-hash) the script cannot scope a `base..head` range; it counts the entire working copy, so every uncommitted file (stale logs, generated files, stray scripts) inflates the totals and the script cannot separate "this change" from junk already sitting in the tree. Cross-check the actual changed files against the originally stated scope (Complexity Contract `Expected diff shape`, task brief, or OpenSpec change), and record in `Script result` which counts are pre-existing working-copy noise versus the real net for this change. If no scope was stated, do not give up on attribution: walk the diff file-by-file and decide which changes belong to the current task before judging. Do not dismiss a FAIL as noise without that subtraction; real overgrowth can hide inside an inflated total.
+In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 
-Exit codes:
-
-- `0` = PASS alarm state.
-- `2` = REVIEW alarm state.
-- `1` = FAIL alarm state.
+Exit codes: `0` PASS alarm state, `2` REVIEW alarm state, `1` FAIL alarm state.
 
 Script PASS does not mean design PASS. REVIEW/FAIL in formal flow blocks downstream gates.
 
 ## Impact Surface Review
 
-Review the post-change affected surface, not only diff count:
-
-- Changed production/test/script/spec/doc files.
-- Direct module/owner/public contract/test harness touched by the change.
-- New call chain, config surface, state lifecycle, fixture/runner/evidence flow.
+Review the post-change affected surface, not only diff count: changed production/test/script/spec/doc files, direct module/owner/public contract/test harness touched, new call chain, config surface, state lifecycle, fixture/runner/evidence flow.
 
 Do not borrow this as a license to clean the whole repo. Historical debt is residual risk unless this change worsens it.
 
