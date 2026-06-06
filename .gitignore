@@ -1,0 +1,15 @@
+.claude/
+contract_review/
+
+# Local gate/review artifacts
+gate-artifacts/
+gate-workflow-state/
+review_scratch/
+*.gate-state.json
+*.gate-artifact.json
+*.review.json
+*.review.md
+
+# Python cache from validation scripts
+__pycache__/
+*.py[cod]

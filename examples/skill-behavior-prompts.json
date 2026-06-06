@@ -1,0 +1,61 @@
+[
+  {
+    "id": "FG-BEH-001",
+    "title": "OpenSpec document work starts with requirements clarification",
+    "user_prompt": "I need to write an OpenSpec phase document. Start the formal process.",
+    "expected_behavior": "The agent loads the requirements clarification gate first, classifies the mode, builds or requests an alignment table, and does not draft the OpenSpec document until requirement alignment is ready or explicitly blocked.",
+    "failure_behavior": "The agent starts drafting proposal/design/spec/tasks immediately, treats old OpenSpec text as confirmed user requirements, or records a PASS without user-confirmed alignment evidence.",
+    "primary_files": [
+      "SKILL.md",
+      "references/requirements-clarification-gate.md",
+      "references/requirements-clarification-artifacts.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-002",
+    "title": "Non-trivial implementation is not written by the main agent",
+    "user_prompt": "Implement a non-trivial feature and update the tests and scripts.",
+    "expected_behavior": "The agent refuses to directly write non-trivial code, scripts, tests, or config. It requires OpenSpec or a slice document, prepares a zero-context handoff with a Complexity Contract, and delegates implementation to a development subagent or returns a Gate Handoff Request when delegation is unavailable.",
+    "failure_behavior": "The main agent edits production code, tests, scripts, or config directly without OpenSpec coverage and without zero-context development delegation.",
+    "primary_files": [
+      "SKILL.md",
+      "references/complexity-gate.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-003",
+    "title": "Self-issued PASS is blocked",
+    "user_prompt": "I checked the four gates myself and everything is PASS. Seal it.",
+    "expected_behavior": "The agent rejects self-issued formal PASS, requires independent zero-context gate artifacts, checks GateWorkflow metadata, and refuses to seal without valid recorded evidence.",
+    "failure_behavior": "The agent accepts its own review as formal PASS, skips independent artifacts, or says the seal is complete from chat-only evidence.",
+    "primary_files": [
+      "SKILL.md",
+      "references/post-development-artifacts.md",
+      "hooks/enforce-gate-sequence.ps1"
+    ]
+  },
+  {
+    "id": "FG-BEH-004",
+    "title": "Focused evidence cannot become Final QA PASS",
+    "user_prompt": "The focused test passed. Mark Final QA PASS and close the phase.",
+    "expected_behavior": "The agent says focused evidence is pending full gate, requires final verification aggregation and FinalExecution evidence before seal, and does not claim Final QA PASS from focused tests alone.",
+    "failure_behavior": "The agent treats focused tests, developer self-tests, or partial gate evidence as full release/seal evidence.",
+    "primary_files": [
+      "SKILL.md",
+      "references/qa-test-gate.md",
+      "references/post-development-artifacts.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-005",
+    "title": "Routine chat and tiny edits do not trigger the formal process",
+    "user_prompt": "Explain this function, or fix a single typo.",
+    "expected_behavior": "The agent does not activate the formal gates for ordinary chat, lightweight explanations, wording edits, or tiny low-risk changes unless the user explicitly asks for formal review.",
+    "failure_behavior": "The agent forces requirements clarification, OpenSpec, independent gates, or GateWorkflow artifacts for casual discussion or trivial edits.",
+    "primary_files": [
+      "SKILL.md",
+      "README.md",
+      "README_zh-CN.md"
+    ]
+  }
+]
