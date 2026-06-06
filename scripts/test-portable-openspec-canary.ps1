@@ -138,11 +138,13 @@ function New-FormalArtifact(
         '',
         'Review mode: ZERO_CONTEXT_FORMAL',
         'Prompt contamination check: PASS',
+        'Semantic anti-anchor check: PASS',
         "Prompt source: $(Get-CanaryPromptSource $Title)",
         'Zero-context reviewer: YES',
         'Independent agent: YES',
         "Reviewer agent id: $ReviewerId",
         "Context bundle: $ContextBundle",
+        "Dispatch prompt artifact: $dispatchPromptRef",
         'No-anchor prompt: YES',
         '',
         'gate_route:',
@@ -193,7 +195,9 @@ function Test-AgentTemplateIntegrity([string]$SkillPath) {
                 'Forbidden prompt fields include',
                 $processViolationText,
                 'Do not continue review. Do not output PASS, FAIL, or REVIEW.',
-                'Prompt source: ' + $relative
+                'Semantic anti-anchor check: PASS',
+                'Prompt source: ' + $relative,
+                'Dispatch prompt artifact:'
             )) {
             if ($text -notmatch [regex]::Escape($required)) {
                 $errors += "$relative missing required text: $required"
@@ -356,6 +360,20 @@ sha256: sample
 '@
     $bundleHash = Get-Sha256 $bundlePath
     $bundleRef = ".claude/bundles/canary-bundle.txt sha256=$bundleHash"
+    $dispatchPromptRel = '.claude/gates/artifacts/dispatch-prompt.txt'
+    $dispatchPromptPath = Join-Path $tempRepo $dispatchPromptRel
+    Set-Utf8File $dispatchPromptPath @'
+Worktree: portable canary repo
+Base commit or snapshot: portable canary snapshot
+Context bundle: .claude/bundles/canary-bundle.txt
+Diff or changed-files artifact: .claude/gates/artifacts/changed-files.txt
+User request and acceptance criteria: run portable formal-gates canary
+Forbidden files: none
+Allowed prompt guard note: Forbidden prompt fields include Known issues and Focus items.
+Output template: formal gate artifact
+'@
+    $dispatchPromptHash = Get-Sha256 $dispatchPromptPath
+    $dispatchPromptRef = "$dispatchPromptRel sha256=$dispatchPromptHash"
     $changedFilesRel = '.claude/gates/artifacts/changed-files.txt'
     Set-Utf8File (Join-Path $tempRepo $changedFilesRel) "portable-skill change files`nopenspec/changes/portable-formal-gates-canary/tasks.md"
     $verificationRel = '.claude/gates/artifacts/developer-self-test.txt'
@@ -1512,11 +1530,13 @@ gate_route:
 
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id: hash-qa-agent
 Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
 Approved case set: artifact hash canary cases
 QA-owned evidence: artifact hash canary evidence
@@ -1702,11 +1722,13 @@ gate_route:
 
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id: manual-final-qa-agent
 Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
 Approved case set: manual final QA negative canary
 QA-owned evidence: .claude/gates/artifacts/missing-final-verification-aggregate.json
@@ -1742,6 +1764,7 @@ gate_route:
 
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
 Prompt source: agents/complexity-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
@@ -1811,6 +1834,7 @@ Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id: missing-prompt-fields-agent
 Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
 Script result: PASS
 Diff shape judgment: missing prompt fields negative canary
@@ -1940,11 +1964,13 @@ gate_route:
 
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
 Prompt source: agents/complexity-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id: route-mismatch-agent
 Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
 Script result: PASS
 Diff shape judgment: route mismatch negative canary
@@ -2006,6 +2032,165 @@ gate_route:
     ) 1
     $badBundleHashPassed = $badBundleHashOutput -match 'Context bundle sha256 mismatch'
     Add-Check ([ref]$summary) 'context-bundle-hash-mismatch-blocked' $badBundleHashPassed $badBundleHashOutput
+
+    $missingDispatchArtifactRel = '.claude/gates/artifacts/missing-dispatch-prompt-complexity-pass.md'
+    $missingDispatchArtifactPath = Join-Path $tempRepo $missingDispatchArtifactRel
+    Set-Utf8File $missingDispatchArtifactPath @"
+# Complexity Gate
+
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/complexity-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Reviewer agent id: missing-dispatch-prompt-agent
+Context bundle: $bundleRef
+No-anchor prompt: YES
+Script result: PASS
+Diff shape judgment: missing dispatch prompt negative canary
+Impact surface health: missing dispatch prompt negative canary
+Public/config surface: missing dispatch prompt negative canary
+New concepts: missing dispatch prompt negative canary
+Shrink opportunities: missing dispatch prompt negative canary
+Decision evidence: missing dispatch prompt negative canary
+Changed files artifact: $changedFilesRel
+Verification artifact: $verificationRel
+
+gate_route:
+  workflow_id: $workflowId
+  change_snapshot: $changeSnapshot
+  next_action: proceed
+  rework_owner: none
+  rerun_from: none
+"@
+    $missingDispatchOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'complexity-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Artifact', $missingDispatchArtifactRel,
+        '-Actor', 'negative-missing-dispatch-agent',
+        '-WorkflowId', $workflowId,
+        '-ChangeSnapshot', $changeSnapshot
+    ) 1
+    $missingDispatchPassed = $missingDispatchOutput -match 'Dispatch prompt artifact'
+    Add-Check ([ref]$summary) 'dispatch-prompt-artifact-required-blocked' $missingDispatchPassed $missingDispatchOutput
+    $summary.artifactPaths.missingDispatchPrompt = Format-Path $missingDispatchArtifactPath
+
+    $badDispatchHashArtifactRel = '.claude/gates/artifacts/bad-dispatch-hash-complexity-pass.md'
+    $badDispatchHashArtifactPath = Join-Path $tempRepo $badDispatchHashArtifactRel
+    Set-Utf8File $badDispatchHashArtifactPath @"
+# Complexity Gate
+
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/complexity-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Reviewer agent id: bad-dispatch-hash-agent
+Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRel sha256=0000000000000000000000000000000000000000000000000000000000000000
+No-anchor prompt: YES
+Script result: PASS
+Diff shape judgment: bad dispatch hash negative canary
+Impact surface health: bad dispatch hash negative canary
+Public/config surface: bad dispatch hash negative canary
+New concepts: bad dispatch hash negative canary
+Shrink opportunities: bad dispatch hash negative canary
+Decision evidence: bad dispatch hash negative canary
+Changed files artifact: $changedFilesRel
+Verification artifact: $verificationRel
+
+gate_route:
+  workflow_id: $workflowId
+  change_snapshot: $changeSnapshot
+  next_action: proceed
+  rework_owner: none
+  rerun_from: none
+"@
+    $badDispatchHashOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'complexity-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Artifact', $badDispatchHashArtifactRel,
+        '-Actor', 'negative-dispatch-hash-agent',
+        '-WorkflowId', $workflowId,
+        '-ChangeSnapshot', $changeSnapshot
+    ) 1
+    $badDispatchHashPassed = $badDispatchHashOutput -match 'Dispatch prompt artifact sha256 mismatch'
+    Add-Check ([ref]$summary) 'dispatch-prompt-hash-mismatch-blocked' $badDispatchHashPassed $badDispatchHashOutput
+    $summary.artifactPaths.badDispatchPromptHash = Format-Path $badDispatchHashArtifactPath
+
+    $anchoredDispatchCases = @(
+        [pscustomobject]@{ Name = 'list-focus-items'; Line = '- Focus items: verify the issue the main agent already suspects'; Expected = 'Focus items' },
+        [pscustomobject]@{ Name = 'quote-what-to-verify'; Line = '> what to verify: confirm the main agent suspicion'; Expected = 'what to verify' },
+        [pscustomobject]@{ Name = 'heading-focus-items'; Line = '### Focus items: verify the issue the main agent already suspects'; Expected = 'Focus items' },
+        [pscustomobject]@{ Name = 'quote-chinese-focus'; Line = '> ' + [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) + ': ' + [string]::new([char[]]@([char]0x4E3B, [char]0x4EE3, [char]0x7406, [char]0x6307, [char]0x5B9A, [char]0x7684, [char]0x98CE, [char]0x9669)); Expected = [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) }
+    )
+    foreach ($anchoredCase in $anchoredDispatchCases) {
+        $anchoredDispatchPromptRel = ".claude/gates/artifacts/anchored-dispatch-prompt-$($anchoredCase.Name).txt"
+        $anchoredDispatchPromptPath = Join-Path $tempRepo $anchoredDispatchPromptRel
+        Set-Utf8File $anchoredDispatchPromptPath @"
+Worktree: portable canary repo
+$($anchoredCase.Line)
+Output template: formal gate artifact
+"@
+        $anchoredDispatchPromptHash = Get-Sha256 $anchoredDispatchPromptPath
+        $anchoredDispatchArtifactRel = ".claude/gates/artifacts/anchored-dispatch-prompt-$($anchoredCase.Name)-complexity-pass.md"
+        $anchoredDispatchArtifactPath = Join-Path $tempRepo $anchoredDispatchArtifactRel
+        Set-Utf8File $anchoredDispatchArtifactPath @"
+# Complexity Gate
+
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/complexity-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Reviewer agent id: anchored-dispatch-prompt-$($anchoredCase.Name)-agent
+Context bundle: $bundleRef
+Dispatch prompt artifact: $anchoredDispatchPromptRel sha256=$anchoredDispatchPromptHash
+No-anchor prompt: YES
+Script result: PASS
+Diff shape judgment: anchored dispatch prompt $($anchoredCase.Name) negative canary
+Impact surface health: anchored dispatch prompt $($anchoredCase.Name) negative canary
+Public/config surface: anchored dispatch prompt $($anchoredCase.Name) negative canary
+New concepts: anchored dispatch prompt $($anchoredCase.Name) negative canary
+Shrink opportunities: anchored dispatch prompt $($anchoredCase.Name) negative canary
+Decision evidence: anchored dispatch prompt $($anchoredCase.Name) negative canary
+Changed files artifact: $changedFilesRel
+Verification artifact: $verificationRel
+
+gate_route:
+  workflow_id: $workflowId
+  change_snapshot: $changeSnapshot
+  next_action: proceed
+  rework_owner: none
+  rerun_from: none
+"@
+        $anchoredDispatchOutput = Run-PowerShellExpect $tempRepo @(
+            '-File', $workflowScript,
+            '-Action', 'record-stage',
+            '-Worktree', $tempRepo,
+            '-Gate', 'complexity-gate',
+            '-Verdict', 'PASS',
+            '-Mode', 'formal',
+            '-Artifact', $anchoredDispatchArtifactRel,
+            '-Actor', "negative-anchored-dispatch-$($anchoredCase.Name)-agent",
+            '-WorkflowId', $workflowId,
+            '-ChangeSnapshot', $changeSnapshot
+        ) 1
+        $anchoredDispatchPassed = $anchoredDispatchOutput -match 'dispatch prompt contamination' -and $anchoredDispatchOutput -match [regex]::Escape([string]$anchoredCase.Expected)
+        Add-Check ([ref]$summary) "dispatch-prompt-anchoring-field-$($anchoredCase.Name)-blocked" $anchoredDispatchPassed $anchoredDispatchOutput
+        $summary.artifactPaths["anchoredDispatchPrompt_$($anchoredCase.Name)"] = Format-Path $anchoredDispatchArtifactPath
+    }
 
     $missingImplementationEvidenceRel = '.claude/gates/artifacts/missing-implementation-evidence-complexity-pass.md'
     $missingImplementationEvidencePath = Join-Path $tempRepo $missingImplementationEvidenceRel
@@ -2141,11 +2326,13 @@ gate_route:
 
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id: conditional-qa-agent
 Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
 
 gate_route:
@@ -2242,5 +2429,3 @@ if ($summary.status -ne 'PASS') {
     exit 1
 }
 exit 0
-
-

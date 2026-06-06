@@ -13,6 +13,7 @@ Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id: <independent-reviewer-id>
 Context bundle: <project>/.claude/gates/context/<workflow-id>-bundle.zip sha256=<bundle-sha256>
+Dispatch prompt artifact: <project>/.claude/gates/artifacts/<workflow-id>-dispatch-prompt.md sha256=<dispatch-prompt-sha256>
 No-anchor prompt: YES
 Script result: <complexity_gate.py result or explicit not-applicable reason>
 Diff shape judgment: <focused diff shape judgment>

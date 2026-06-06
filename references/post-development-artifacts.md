@@ -13,27 +13,34 @@ Keep the four gate reference files focused on judgment rules. Keep host installa
 ```text
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
 Prompt source: agents/<gate>.md
 Zero-context reviewer: YES
 Independent agent: YES
 Reviewer agent id:
 Context bundle: <bundle-path> sha256=<bundle-sha256>
+Dispatch prompt artifact: <dispatch-prompt-path> sha256=<dispatch-prompt-sha256>
 No-anchor prompt: YES
 ```
 
-`Reviewer agent id` 不能是空值或占位符。`Context bundle` 必须是存在的文件并带 sha256；机器会校验 hash。
+`Reviewer agent id` 不能是空值或占位符。`Context bundle` 和 `Dispatch prompt artifact` 必须是存在的文件并带 sha256；机器会校验 hash。`Dispatch prompt artifact` 是主代理实际发给审查子代理的派发 prompt 文件，不是审查结果摘要。
 
-如果 artifact 包含这些锚定字段，正式 PASS 会被拦截：
+如果 artifact 或 dispatch prompt 文件包含这些明显锚定字段标签，正式 PASS 会被拦截：
 
 ```text
 Known issues:
 Previous findings:
 Just fixed:
 Expected answer:
+Expected PASS/FAIL:
 Focus items:
+suspicions:
+what to verify:
 重点复查:
 刚修了:
 ```
+
+机器只做行首字段标签检查，也会识别 Markdown 列表和引用里的字段标签，例如 `- Focus items:`、`> what to verify:`。不做“语义中立性”分类。说明文字里提到 `Known issues` 或 `Focus items` 不会被拦。审查子代理开工前必须自己审 dispatch prompt 语义：任务目标、验收标准、范围和证据允许；主代理的怀疑、修复说明、期望结论，或 `重点看` / `需要注意` / `please pay attention` 这类指向某个主代理判断的说法，属于锚定。定向复核、advisory review 可以写 focus items 或 what to verify，但不能冒充 formal zero-context PASS，也不能记录为推进四门的正式 PASS。
 
 ## Implementation Evidence Fields
 

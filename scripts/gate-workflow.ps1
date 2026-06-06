@@ -140,8 +140,21 @@ function Assert-FormalPassArtifact([string]$GateName, [string]$ArtifactPath, [st
 function Write-FinalQaArtifact([string]$Path, [string]$Status, [object[]]$Attempts, [object[]]$AcceptedAttempts) {
     $reviewerIds = @($AcceptedAttempts | ForEach-Object { [string]$_.reviewerAgentId } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
     $contextBundles = @($AcceptedAttempts | ForEach-Object { [string]$_.contextBundle } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    $dispatchPromptArtifacts = @(@(
+        foreach ($attempt in $AcceptedAttempts) {
+            $artifactValue = [string]$attempt.artifact
+            if ([string]::IsNullOrWhiteSpace($artifactValue)) { continue }
+            $artifactPath = Resolve-ArtifactPath $RepoRoot $artifactValue
+            if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) { continue }
+            $attemptText = [string](Get-Content -LiteralPath $artifactPath -Raw -Encoding UTF8)
+            Get-FormalGateArtifactFieldValue $attemptText 'Dispatch prompt artifact'
+        }) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique
+    )
     $reviewerId = if ($reviewerIds.Count -gt 0) { $reviewerIds -join ', ' } else { 'unavailable' }
     $contextBundle = if ($contextBundles.Count -gt 0) { $contextBundles -join ', ' } else { 'unavailable' }
+    $dispatchPromptArtifact = if ($dispatchPromptArtifacts.Count -gt 0) { $dispatchPromptArtifacts -join ', ' } else { 'unavailable' }
     $attemptSummary = @($Attempts | ForEach-Object {
         "- status=$($_.status) accepted=$($_.accepted) artifact=$($_.artifact)"
     })
@@ -156,11 +169,13 @@ function Write-FinalQaArtifact([string]$Path, [string]$Status, [object[]]$Attemp
         ''
         'Review mode: ZERO_CONTEXT_FORMAL'
         'Prompt contamination check: PASS'
+        'Semantic anti-anchor check: PASS'
         'Prompt source: agents/qa-test-gate.md'
         'Zero-context reviewer: YES'
         'Independent agent: YES'
         "Reviewer agent id: $reviewerId"
         "Context bundle: $contextBundle"
+        "Dispatch prompt artifact: $dispatchPromptArtifact"
         'No-anchor prompt: YES'
         ''
         "Workflow id: $WorkflowId"
