@@ -31,11 +31,18 @@ function Assert-SkillPackage([string]$Path) {
     $required = @(
         'SKILL.md',
         'agents',
+        'agents/qa-test-gate.md',
+        'agents/complexity-gate.md',
+        'agents/architecture-health-gate.md',
+        'agents/code-quality-gate.md',
+        'agents/cold-water-review.md',
+        'agents/requirements-clarification-gate.md',
         'examples',
         'hooks',
         'references',
         'scripts',
         'references/requirements-clarification-gate.md',
+        'references/requirements-clarification-artifacts.md',
         'scripts/gate-artifact-validation.ps1',
         'scripts/powershell-host.ps1',
         'scripts/run-complexity-gate.ps1',
@@ -51,6 +58,17 @@ function Assert-SkillPackage([string]$Path) {
             throw "formal-gates package is incomplete; missing $relative under $Path"
         }
     }
+}
+
+function Get-SkillPackageEntries {
+    return @(
+        'SKILL.md',
+        'agents',
+        'examples',
+        'hooks',
+        'references',
+        'scripts'
+    )
 }
 
 function Get-InstallTargets([string]$HostName, [string]$Scope, [string]$ProjectPath) {
@@ -113,9 +131,13 @@ function Copy-SkillPackage([string]$SourcePath, [string]$TargetPath, [bool]$Forc
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     New-Item -ItemType Directory -Force -Path $target | Out-Null
-    Get-ChildItem -LiteralPath $source -Force |
-        Where-Object { $_.Name -notin @('.git', '.github', '__pycache__') } |
-        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force }
+    foreach ($entry in Get-SkillPackageEntries) {
+        $candidate = Join-Path $source $entry
+        if (-not (Test-Path -LiteralPath $candidate)) {
+            throw "formal-gates package is incomplete; missing $entry under $source"
+        }
+        Copy-Item -LiteralPath $candidate -Destination $target -Recurse -Force
+    }
 
     Get-ChildItem -LiteralPath $target -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force
@@ -146,8 +168,6 @@ function Get-CursorHooksPath([string]$Scope, [string]$ProjectPath) {
 
 function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
     # 读取-合并-写回，只新增/更新 formal-gates 自己的 hook；不覆盖其它 hook；幂等；写前备份。
-    $matcher = 'Bash|Agent|Skill'
-    $command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $HookScriptPath
 
     $settings = $null
     if (Test-Path -LiteralPath $SettingsPath) {
@@ -179,7 +199,17 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
         foreach ($h in @($entry.hooks)) {
             if (([string]$h.command) -like "*enforce-gate-sequence.ps1*") {
                 $formalHookFound = $true
-                if ([string]$h.command -ne $command) {
+                if ($entry.PSObject.Properties.Name -contains 'matcher') {
+                    if ([string]$entry.matcher -ne '*') {
+                        $entry.matcher = '*'
+                        $formalHookUpdated = $true
+                    }
+                }
+                else {
+                    $entry | Add-Member -NotePropertyName 'matcher' -NotePropertyValue '*' -Force
+                    $formalHookUpdated = $true
+                }
+                if ([string]$h.command -ne ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"')) {
                     if ($h.PSObject.Properties.Name -contains 'type') {
                         $h.type = 'command'
                     }
@@ -187,10 +217,10 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
                         $h | Add-Member -NotePropertyName 'type' -NotePropertyValue 'command' -Force
                     }
                     if ($h.PSObject.Properties.Name -contains 'command') {
-                        $h.command = $command
+                        $h.command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"'
                     }
                     else {
-                        $h | Add-Member -NotePropertyName 'command' -NotePropertyValue $command -Force
+                        $h | Add-Member -NotePropertyName 'command' -NotePropertyValue ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"') -Force
                     }
                     $formalHookUpdated = $true
                 }
@@ -209,11 +239,11 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
     }
 
     $newEntry = [pscustomobject]@{
-        matcher = $matcher
+        matcher = '*'
         hooks   = @(
             [pscustomobject]@{
                 type    = 'command'
-                command = $command
+                command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"'
             }
         )
     }

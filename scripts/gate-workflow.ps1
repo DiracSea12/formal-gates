@@ -127,7 +127,12 @@ function Assert-FormalPassArtifact([string]$GateName, [string]$ArtifactPath, [st
     if ($requiredFields.Count -eq 0) { return }
     $check = Test-FormalGateArtifactFields $ArtifactPath $requiredFields $Repo $ExpectedWorkflowId $ExpectedChangeSnapshot $GateName $StageValue
     if (-not $check.Ok) {
-        Write-Host "$GateName PASS blocked: artifact lacks required formal independent zero-context review fields: $($check.Missing -join ', ')"
+        if ($GateName -eq 'requirements-clarification-gate') {
+            Write-Host "$GateName PASS blocked: clarification artifact is incomplete: $($check.Missing -join ', ')"
+        }
+        else {
+            Write-Host "$GateName PASS blocked: review artifact is incomplete: $($check.Missing -join ', ')"
+        }
         exit 1
     }
 }
@@ -149,6 +154,9 @@ function Write-FinalQaArtifact([string]$Path, [string]$Status, [object[]]$Attemp
     $content = @(
         '# Final QA Execution'
         ''
+        'Review mode: ZERO_CONTEXT_FORMAL'
+        'Prompt contamination check: PASS'
+        'Prompt source: agents/qa-test-gate.md'
         'Zero-context reviewer: YES'
         'Independent agent: YES'
         "Reviewer agent id: $reviewerId"

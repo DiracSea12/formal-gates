@@ -30,8 +30,10 @@ if ($null -ne $toolInput) {
 }
 $commandText = [string]$inputProperties['command']
 $rawIntentText = (($inputProperties['args'], $inputProperties['prompt'], $inputProperties['description'], $commandText) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ' '
+$script:UnresolvedFormalDocumentWrite = $false
 
 $gateAliases = @{
+    'requirements-clarification-gate' = 'requirements-clarification-gate'
     'qa-test-gate' = 'qa-test-gate'
     'complexity-gate' = 'complexity-gate'
     'architecture-health-gate' = 'architecture-health-gate'
@@ -105,6 +107,8 @@ function Get-ToolGateIntent {
         return $null
     }
     if ($toolName -in @('Agent', 'Task')) {
+        if (Test-IntentTerm '(?i)(requirements-clarification-gate|requirement\s+clarification|requirements\s+clarification|clarification\s+gate)' @(0x6F84, 0x6E05, 0x95E8)) { return 'requirements-clarification-gate' }
+        if (Test-IntentTerm '(?i)(requirements-clarification-gate|requirement\s+alignment|requirements\s+alignment|alignment\s+gate)' @(0x9700, 0x6C42, 0x5BF9, 0x9F50)) { return 'requirements-clarification-gate' }
         if (Test-IntentTerm '(?i)(architecture-health-gate|architecture\s+gate)' @(0x67B6, 0x6784, 0x95E8)) { return 'architecture-health-gate' }
         if (Test-IntentTerm '(?i)(code-quality-gate|code\s+quality\s+gate)' @(0x4EE3, 0x7801, 0x8D28, 0x91CF, 0x95E8)) { return 'code-quality-gate' }
         if (Test-IntentTerm '(?i)(qa-test-gate|qa\s+gate)' @(0x6D4B, 0x8BD5, 0x95E8)) { return 'qa-test-gate' }
@@ -283,6 +287,221 @@ function Normalize-GateStage([string]$StageValue) {
     return ([regex]::Replace($StageValue.Trim(), '[\s_-]+', '')).ToLowerInvariant()
 }
 
+function Test-FormalDocumentPath([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $normalized = $Path.Replace('\', '/').ToLowerInvariant()
+    if ($normalized -notmatch '\.(md|markdown|txt)$') { return $false }
+    if ($normalized -match '\.txt$') {
+        return $normalized -match '(prd|requirements|specs)'
+    }
+    if ($normalized -match '(^|/)openspec/') { return $true }
+    if ($normalized -match '(^|/)(prd|sdd|phase|phases|start-readiness|requirements|specs)/') { return $true }
+    if ($normalized -match '(^|/)docs/(prd|sdd|phase|phases|start-readiness|requirements|specs)/') { return $true }
+    if ($normalized -match '(^|/)[^/]*(prd|sdd|start-readiness)[^/]*\.(md|markdown)$') { return $true }
+    if ($normalized -match '(^|/)phase[0-9a-z._-]*\.(md|markdown)$') { return $true }
+    return $false
+}
+
+function Get-HookStringValues($Value, [int]$Depth = 0) {
+    if ($Depth -gt 6 -or $null -eq $Value) { return @() }
+    if ($Value -is [string]) { return @([string]$Value) }
+    $strings = @()
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        foreach ($item in $Value) {
+            $strings += @(Get-HookStringValues $item ($Depth + 1))
+        }
+        return $strings
+    }
+    if ($Value.PSObject -and $Value.PSObject.Properties) {
+        foreach ($property in $Value.PSObject.Properties) {
+            $strings += @(Get-HookStringValues $property.Value ($Depth + 1))
+        }
+    }
+    return $strings
+}
+
+function Get-HookPathLikeStrings($Value, [int]$Depth = 0) {
+    if ($Depth -gt 5 -or $null -eq $Value) { return @() }
+    $paths = @()
+    if ($Value -is [string]) {
+        if ($Value -match '\.(md|markdown|txt)(["''\s]|$)') { return @([string]$Value) }
+        return @()
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        foreach ($item in $Value) {
+            $paths += @(Get-HookPathLikeStrings $item ($Depth + 1))
+        }
+        return $paths
+    }
+    if ($Value.PSObject -and $Value.PSObject.Properties) {
+        foreach ($property in $Value.PSObject.Properties) {
+            if ($property.Name -match '(?i)(path|file)') {
+                if ($property.Value -is [string]) {
+                    $paths += [string]$property.Value
+                    continue
+                }
+            }
+            $paths += @(Get-HookPathLikeStrings $property.Value ($Depth + 1))
+        }
+    }
+    return $paths
+}
+
+function Get-ApplyPatchTargetPaths([string]$PatchText) {
+    if ([string]::IsNullOrWhiteSpace($PatchText)) { return @() }
+    $paths = @()
+    foreach ($line in ($PatchText -split "`r?`n")) {
+        $match = [regex]::Match($line, '^\*\*\* (Add File|Update File|Delete File|Move to):\s*(.+?)\s*$')
+        if ($match.Success) {
+            $paths += $match.Groups[2].Value.Trim()
+        }
+    }
+    return @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
+function Get-ApplyPatchTargetsFromToolInput {
+    $targets = @()
+    foreach ($text in @(Get-HookStringValues $toolInput)) {
+        if ($text -notmatch '^\s*\*\*\* Begin Patch\b' -and $text -notmatch '(?m)^\*\*\* (Add File|Update File|Delete File|Move to):') { continue }
+        $targets += @(Get-ApplyPatchTargetPaths $text)
+    }
+    return @($targets | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
+}
+
+function ConvertTo-HookCandidatePath([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $path = $Text.Trim()
+    if ($path.StartsWith('(') -and $path.EndsWith(')')) { $path = $path.Substring(1, $path.Length - 2).Trim() }
+    $path = $path.Trim('"', "'").Trim()
+    $path = $path.TrimEnd(',', ';', ')', ']', '}')
+    $path = $path.Replace('\', '/')
+    while ($path.StartsWith('./')) { $path = $path.Substring(2) }
+    return $path
+}
+
+function Get-JoinPathTargets([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+    $targets = @()
+    foreach ($match in [regex]::Matches($Text, '(?i)Join-Path\s+(?<left>"[^"]+"|''[^'']+''|[^\s\)]+)\s+(?<right>"[^"]+"|''[^'']+''|[^\s\)]+)')) {
+        $left = ConvertTo-HookCandidatePath $match.Groups['left'].Value
+        $right = ConvertTo-HookCandidatePath $match.Groups['right'].Value
+        if (-not [string]::IsNullOrWhiteSpace($left) -and -not [string]::IsNullOrWhiteSpace($right)) {
+            $targets += (($left.TrimEnd('/')) + '/' + ($right.TrimStart('/')))
+        }
+    }
+    return $targets
+}
+
+function Get-FormalDocumentPathsFromText([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+    $normalized = (Normalize-HookCommandText $Text).Replace('\', '/')
+    $paths = @()
+    $paths += @(Get-JoinPathTargets $normalized)
+
+    foreach ($match in [regex]::Matches($normalized, '(?i)(?:^|[\s"'',;=\(\[])(?<path>(?:[A-Za-z]:)?(?:\.?/)?(?:[^"'',;\s\|\)\]]+/)+[^"'',;\s\|\)\]]+\.(?:md|markdown|txt))(?=$|[\s"'',;\)\]])')) {
+        $paths += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
+    }
+    foreach ($match in [regex]::Matches($normalized, '(?i)(?:^|[\s"'',;=\(\[])(?<path>[^"'',;\s\|\)\]]*(?:prd|sdd|start-readiness|requirements|specs)[^"'',;\s\|\)\]]*\.(?:md|markdown|txt)|phase[0-9a-z._-]*\.(?:md|markdown))(?=$|[\s"'',;\)\]])')) {
+        $paths += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
+    }
+    return @($paths | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
+}
+
+function Test-CommandWritesFormalDocument([string]$Command) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
+    $normalized = (Normalize-HookCommandText $Command).Replace('\', '/')
+    $writesFile = $normalized -match '(?i)(Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|>>|>\s|tee\b)' -or
+        $normalized -match '(?i)(writeFileSync|writeFile|createWriteStream|\.write_text\s*\(|\.writeText\s*\(|open\s*\([^)]*["''][wa]\b)' -or
+        $normalized -match '(?i)(\[(System\.)?IO\.File\]::|\b(System\.)?IO\.File::)\s*(WriteAllText|AppendAllText|WriteAllLines|AppendAllLines|WriteAllBytes)\s*\(' -or
+        $normalized -match '(?i)\b(WriteAllText|AppendAllText|WriteAllLines|AppendAllLines|WriteAllBytes)\s*\(' -or
+        $normalized -match '(?i)(StreamWriter|FileStream)'
+    if (-not $writesFile) { return $false }
+    if ($normalized -match '(?i)(^|[\s"''])(openspec/[^"'']+\.(md|markdown)|[^"'']*(prd|sdd|start-readiness|requirements|specs)[^"'']*\.(md|markdown|txt)|phase[0-9a-z._-]*\.(md|markdown))') { return $true }
+    if ($normalized -match '(?i)\bopenspec\b' -and $normalized -match '(?i)\.(md|markdown)\b') { return $true }
+    if ($normalized -match '(?i)\b(prd|sdd|start-readiness|requirements|specs)\b' -and $normalized -match '(?i)\.(md|markdown|txt)\b') { return $true }
+    if ($normalized -match '(?i)\bphase[0-9a-z._-]*\b' -and $normalized -match '(?i)\.(md|markdown)\b') { return $true }
+    return $false
+}
+
+function Get-ShellFormalDocumentWriteTargets([string]$Command) {
+    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
+    $normalized = (Normalize-HookCommandText $Command).Replace('\', '/')
+    $targets = @(Get-FormalDocumentPathsFromText $normalized)
+    foreach ($match in [regex]::Matches($normalized, '(?i)\b(?:Set-Content|Add-Content|Out-File|Tee-Object)\b[^\r\n;|]*\s-(?:LiteralPath|FilePath|Path)\s+(?<path>\([^)]+\)|"[^"]+"|''[^'']+''|[^\s;|]+)')) {
+        $targetText = $match.Groups['path'].Value
+        $targets += @(Get-FormalDocumentPathsFromText $targetText)
+        $targets += (ConvertTo-HookCandidatePath $targetText)
+    }
+    foreach ($match in [regex]::Matches($normalized, '(?m)(?:^|[^-])>{1,2}\s*(?<path>"[^"]+"|''[^'']+''|[^\s;&|]+)')) {
+        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
+    }
+    return @($targets | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
+}
+
+function Get-FormalDocumentWriteTargets {
+    if ($toolName -in @('Bash', 'Shell')) {
+        $command = [string]$inputProperties['command']
+        $targets = @(Get-ShellFormalDocumentWriteTargets $command)
+        if ($targets.Count -gt 0) { return $targets }
+        if (Test-CommandWritesFormalDocument $command) {
+            $script:UnresolvedFormalDocumentWrite = $true
+        }
+        return @()
+    }
+    if ($toolName -in @('apply_patch', 'ApplyPatch')) {
+        return @(Get-ApplyPatchTargetsFromToolInput)
+    }
+    if ($toolName -notin @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) { return @() }
+    $paths = @(Get-HookPathLikeStrings $toolInput | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
+    return $paths
+}
+
+function Assert-RequirementsClarificationPassForDocumentWrite {
+    $targets = @(Get-FormalDocumentWriteTargets)
+    if ($script:UnresolvedFormalDocumentWrite) {
+        Block-Gate 'Formal document write blocked before requirements clarification PASS.' 'Shell command appears to write a formal document, but the target path could not be parsed for Covered formal targets verification. Use a direct file path or a supported shell write form.'
+    }
+    if ($targets.Count -eq 0) { return }
+
+    $workflowForDoc = Get-StructuredWorkflow
+    $docWorkflowId = [string](Get-WorkflowField $workflowForDoc @('workflowId', 'WorkflowId', 'workflow_id'))
+    $docSnapshot = [string](Get-WorkflowField $workflowForDoc @('changeSnapshot', 'ChangeSnapshot', 'snapshot'))
+    $docWorktree = [string](Get-WorkflowField $workflowForDoc @('worktree', 'Worktree', 'repo', 'Repo', 'cwd', 'Cwd'))
+    $docStatePath = [string](Get-WorkflowField $workflowForDoc @('statePath', 'StatePath'))
+    if ([string]::IsNullOrWhiteSpace($docWorktree) -and -not [string]::IsNullOrWhiteSpace($docStatePath)) {
+        $docWorktree = Resolve-WorktreeFromStatePath $docStatePath
+    }
+    if ([string]::IsNullOrWhiteSpace($docWorktree)) { $docWorktree = [string]$payload.cwd }
+    if ([string]::IsNullOrWhiteSpace($docWorktree)) { $docWorktree = (Get-Location).Path }
+
+    if ([string]::IsNullOrWhiteSpace($docWorkflowId) -or [string]::IsNullOrWhiteSpace($docSnapshot)) {
+        Block-Gate 'Formal document write blocked before requirements clarification PASS.' 'GateWorkflow.workflowId and GateWorkflow.changeSnapshot are required so stale requirements-clarification PASS entries cannot unlock new document writes.'
+    }
+
+    $localSkillRoot = Split-Path -Parent $PSScriptRoot
+    $localGateStateScript = Join-Path $localSkillRoot 'scripts/gate-state.ps1'
+    if (-not (Test-Path -LiteralPath $localGateStateScript)) {
+        Block-Gate 'Formal document write blocked: requirements clarification gate cannot be checked.' "Missing gate-state.ps1: $(Format-HookPath $localGateStateScript)"
+    }
+
+    $verifyArgs = (Get-FormalGatesPowerShellFileArgs $localGateStateScript) + @(
+        '-Action', 'verify',
+        '-Gate', 'requirements-clarification-gate',
+        '-RequireVerdict', 'PASS',
+        '-RequireArtifactExists'
+    )
+    if (-not [string]::IsNullOrWhiteSpace($docStatePath)) { $verifyArgs += @('-StatePath', $docStatePath) }
+    if (-not [string]::IsNullOrWhiteSpace($docWorkflowId)) { $verifyArgs += @('-RequireWorkflowId', $docWorkflowId) }
+    if (-not [string]::IsNullOrWhiteSpace($docSnapshot)) { $verifyArgs += @('-ChangeSnapshot', $docSnapshot) }
+    if ($targets.Count -gt 0) { $verifyArgs += @('-RequireCoveredTarget') + @($targets) }
+
+    $result = Invoke-GateState $verifyArgs $docWorktree
+    if ($result.ExitCode -ne 0) {
+        $detail = if ([string]::IsNullOrWhiteSpace($result.Output)) { 'requirements-clarification-gate PASS is missing.' } else { $result.Output }
+        Block-Gate "Formal document write blocked before requirements clarification PASS. Targets: $($targets -join ', ')." $detail
+    }
+}
+
 function Enforce-FormalGatePassArtifact {
     if ($toolName -notin @('Bash', 'Shell')) { return }
     $command = [string]$inputProperties['command']
@@ -301,7 +520,7 @@ function Enforce-FormalGatePassArtifact {
 
     $artifactValue = Get-CommandSwitchValue $command 'Artifact'
     if ([string]::IsNullOrWhiteSpace($artifactValue)) {
-        Block-Gate "$gateValue PASS blocked: gate-workflow record-stage must provide an artifact." 'Missing gate artifact for formal independent zero-context review enforcement.'
+        Block-Gate "$gateValue PASS blocked: gate-workflow record-stage must provide an artifact." 'Missing gate artifact for machine validation.'
     }
 
     $worktreeValue = Get-CommandSwitchValue $command 'Worktree'
@@ -314,7 +533,12 @@ function Enforce-FormalGatePassArtifact {
     $reviewCheck = Test-FormalGateArtifactFields $artifactPath $requiredFields $worktreeValue $workflowValue $snapshotValue $gateValue $stageValue
     if (-not $reviewCheck.Ok) {
         $missingText = ($reviewCheck.Missing -join ', ')
-        Block-Gate "$gateValue PASS blocked: artifact lacks required formal independent zero-context review fields: $missingText" 'Formal gate PASS requires an independent zero-context reviewer artifact, not main-thread self-review.'
+        if ($gateValue -eq 'requirements-clarification-gate') {
+            Block-Gate "$gateValue PASS blocked: clarification artifact is incomplete: $missingText" 'Requirements clarification PASS requires user-confirmed alignment evidence, not a chat-only claim.'
+        }
+        else {
+            Block-Gate "$gateValue PASS blocked: review artifact is incomplete: $missingText" 'Formal review PASS requires an independent zero-context reviewer artifact, not main-thread self-review.'
+        }
     }
 }
 
@@ -336,6 +560,8 @@ function Resolve-WorktreeFromStatePath([string]$Path) {
     }
     return $null
 }
+
+Assert-RequirementsClarificationPassForDocumentWrite
 
 $toolGateIntent = Get-ToolGateIntent
 $workflow = Get-StructuredWorkflow
@@ -390,7 +616,7 @@ if ($isStandaloneSingleGateRequest) {
 }
 
 $isQaExecution = $gate -eq 'qa-test-gate' -and $normalizedStage -in @('execution', 'finalexecution')
-$requiresWorkflow = $isManifestGate -or $gate -in @('complexity-gate', 'architecture-health-gate', 'code-quality-gate') -or ($gate -eq 'qa-test-gate' -and ($isWhiteBox -or $isFinal -or $isQaExecution))
+$requiresWorkflow = $isManifestGate -or $gate -in @('requirements-clarification-gate', 'complexity-gate', 'architecture-health-gate', 'code-quality-gate') -or ($gate -eq 'qa-test-gate' -and ($isWhiteBox -or $isFinal -or $isQaExecution))
 if ($requiresWorkflow) {
     if ([string]::IsNullOrWhiteSpace($workflowId)) {
         Block-Gate "Gate sequence blocked: entering $gate requires GateWorkflow.workflowId." "Missing workflowId for $gate."

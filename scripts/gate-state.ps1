@@ -26,6 +26,7 @@ param(
     [string]$RequireStage,
     [string]$RequireWorkflowId,
     [string]$RequireManifestHash,
+    [string[]]$RequireCoveredTarget,
     [switch]$RequireArtifactExists,
     [switch]$Help
 )
@@ -48,7 +49,7 @@ Actions:
 Common options:
   -StatePath <path>          Defaults to .claude/gates/gate-state.json under the current directory.
   -ManifestPath <path>       Optional generic workflow manifest; default built-in order is used when omitted.
-  -Gate <name>               qa-test-gate | complexity-gate | architecture-health-gate | code-quality-gate by default.
+  -Gate <name>               requirements-clarification-gate | qa-test-gate | complexity-gate | architecture-health-gate | code-quality-gate by default.
   -WorkflowId <id>           Required for multi-gate admission checks.
   -ChangeSnapshot <hash>     Optional change snapshot; when supplied, admission verifies it matches recorded PASS entries.
   -Artifact <path>           Required when recording PASS.
@@ -159,12 +160,29 @@ function Assert-ArtifactHashMatches($Entry, [string]$GateName, [string]$Required
     }
 }
 
+function Test-RequirementsClarificationTargetsCovered([string]$GateName, [string]$ArtifactPath) {
+    if ($GateName -ne 'requirements-clarification-gate') { return $true }
+    if ($null -eq $RequireCoveredTarget -or $RequireCoveredTarget.Count -eq 0) { return $true }
+    $text = [string](Get-Content -LiteralPath $ArtifactPath -Raw -Encoding UTF8)
+    foreach ($target in $RequireCoveredTarget) {
+        if (-not (Test-FormalGateCoveredFormalTarget $text (Get-Location).Path $target)) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Assert-FormalPassArtifact([string]$GateName, [string]$ArtifactPath, [string]$ExpectedWorkflowId, [string]$ExpectedChangeSnapshot, [string]$StageValue) {
     $requiredFields = @(Get-FormalGatePassRequiredFields $GateName)
     if ($requiredFields.Count -eq 0) { return }
     $check = Test-FormalGateArtifactFields $ArtifactPath $requiredFields (Get-Location).Path $ExpectedWorkflowId $ExpectedChangeSnapshot $GateName $StageValue
     if (-not $check.Ok) {
-        Write-Host "$GateName PASS blocked: artifact lacks required formal independent zero-context review fields: $($check.Missing -join ', ')"
+        if ($GateName -eq 'requirements-clarification-gate') {
+            Write-Host "$GateName PASS blocked: clarification artifact is incomplete: $($check.Missing -join ', ')"
+        }
+        else {
+            Write-Host "$GateName PASS blocked: review artifact is incomplete: $($check.Missing -join ', ')"
+        }
         exit 1
     }
 }
@@ -213,7 +231,7 @@ function Get-ManifestStage($ManifestObject, [string]$GateName) {
 
 function Assert-ManifestDoesNotOverrideBuiltIns($ManifestObject) {
     if ($null -eq $ManifestObject -or $ManifestObject.PSObject.Properties.Name -notcontains 'stages' -or $null -eq $ManifestObject.stages) { return }
-    $builtIns = @('qa-test-gate', 'complexity-gate', 'architecture-health-gate', 'code-quality-gate')
+    $builtIns = @('requirements-clarification-gate', 'qa-test-gate', 'complexity-gate', 'architecture-health-gate', 'code-quality-gate')
     foreach ($Property in $ManifestObject.stages.PSObject.Properties) {
         if ($builtIns -contains $Property.Name) {
             Write-Host "GATE_STATE_BLOCKED manifestOverridesBuiltInGate=$($Property.Name) state=$(Format-GatePath $StatePath)"
@@ -225,7 +243,7 @@ function Assert-ManifestDoesNotOverrideBuiltIns($ManifestObject) {
 Assert-ManifestDoesNotOverrideBuiltIns $Manifest
 
 function Test-KnownGate([string]$GateName) {
-    $KnownGates = @('qa-test-gate', 'complexity-gate', 'architecture-health-gate', 'code-quality-gate')
+    $KnownGates = @('requirements-clarification-gate', 'qa-test-gate', 'complexity-gate', 'architecture-health-gate', 'code-quality-gate')
     if ($KnownGates -contains $GateName) { return }
     if ($null -ne (Get-ManifestStage $Manifest $GateName)) { return }
     Write-Host "GATE_STATE_BLOCKED gate=$GateName unknownGate state=$(Format-GatePath $StatePath)"
@@ -281,6 +299,7 @@ function Test-GateEntry($State, [string]$GateName, [string]$RequiredFor, [string
                 exit 1
             }
             Assert-ArtifactHashMatches $Entry $GateName $RequiredFor $ArtifactPath
+            if (-not (Test-RequirementsClarificationTargetsCovered $GateName $ArtifactPath)) { continue }
         }
         return
     }
@@ -323,6 +342,10 @@ function Test-GateEntry($State, [string]$GateName, [string]$RequiredFor, [string
             exit 1
         }
         Assert-ArtifactHashMatches $Latest $GateName $RequiredFor $ArtifactPath
+        if (-not (Test-RequirementsClarificationTargetsCovered $GateName $ArtifactPath)) {
+            Write-Host "GATE_STATE_BLOCKED gate=$GateName targetNotCovered=$($RequireCoveredTarget -join ',') requiredFor=$RequiredFor artifact=$($Latest.artifact) state=$(Format-GatePath $StatePath)"
+            exit 1
+        }
     }
 }
 
@@ -346,6 +369,9 @@ function Get-AdmissionRequirements([string]$GateName) {
     }
 
     switch ($GateName) {
+        'requirements-clarification-gate' {
+            return @()
+        }
         'qa-test-gate' {
             return @()
         }
@@ -428,6 +454,17 @@ function Assert-QaPassWorkflow([string]$Workflow, [string]$Snapshot, [string]$Mo
     }
 }
 
+function Assert-RequirementsClarificationPassWorkflow([string]$Workflow, [string]$Snapshot) {
+    if ([string]::IsNullOrWhiteSpace($Workflow)) {
+        Write-Host "GATE_STATE_BLOCKED gate=requirements-clarification-gate passRequiresWorkflowId state=$(Format-GatePath $StatePath)"
+        exit 1
+    }
+    if ([string]::IsNullOrWhiteSpace($Snapshot)) {
+        Write-Host "GATE_STATE_BLOCKED gate=requirements-clarification-gate passRequiresChangeSnapshot state=$(Format-GatePath $StatePath)"
+        exit 1
+    }
+}
+
 if ($Action -eq 'show') {
     $State = Read-GateState $StatePath
     $State | ConvertTo-Json -Depth 12
@@ -458,6 +495,9 @@ if ($Action -eq 'record') {
             exit 1
         }
         Assert-FormalPassArtifact $Gate $ArtifactPath $WorkflowId $ChangeSnapshot $Stage
+        if ($Gate -eq 'requirements-clarification-gate') {
+            Assert-RequirementsClarificationPassWorkflow $WorkflowId $ChangeSnapshot
+        }
         if ($Gate -eq 'qa-test-gate') {
             Assert-QaPassWorkflow $WorkflowId $ChangeSnapshot $Mode $Stage
             if ($Stage -eq 'FinalExecution') {

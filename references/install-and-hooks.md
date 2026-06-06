@@ -135,7 +135,7 @@ Claude Code 是主路径，从 Claude settings 加载 hook。全局示例：
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Agent|Skill",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",

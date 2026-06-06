@@ -235,7 +235,7 @@ $payloads = @(Get-ChildItem -LiteralPath $diagDir -Filter 'hook-*.json' -ErrorAc
 $preToolUsePayloads = @($payloads | Where-Object { $_.Name -like 'hook-PreToolUse-*' })
 $markerExists = Test-Path -LiteralPath $markerPath
 $formalHookOutput = if (Test-Path -LiteralPath $formalHookOutputPath) { Get-Content -LiteralPath $formalHookOutputPath -Raw -ErrorAction SilentlyContinue } else { '' }
-$formalHookBlocked = $formalHookOutput -match 'permissionDecision"\s*:\s*"deny"|decision"\s*:\s*"block"|PASS blocked|GATE_SEQUENCE|Gate sequence blocked|artifact lacks required formal independent zero-context review fields'
+$formalHookBlocked = $formalHookOutput -match 'permissionDecision"\s*:\s*"deny"|decision"\s*:\s*"block"|PASS blocked|GATE_SEQUENCE|Gate sequence blocked|review artifact is incomplete|clarification artifact is incomplete'
 $status = if ($timedOut) {
     'TIMED_OUT'
 }
