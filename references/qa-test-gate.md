@@ -90,23 +90,9 @@ Formal PASS requires:
 - Independent zero-context QA reviewer artifact.
 - Machine-recorded PASS using `gate-workflow.ps1 record-stage`.
 
-For formal Execution PASS:
+Record formal Execution PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate qa-test-gate -Mode formal -Stage Execution`.
 
-```powershell
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate qa-test-gate -Verdict PASS -Mode formal -Stage Execution -Artifact <qa-artifact> -Actor <qa-reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
-```
-
-For formal FinalExecution PASS:
-
-```powershell
-$attempts = '[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-verification-run.json","reviewerAgentId":"qa-final-agent","contextBundle":".claude/bundles/<bundle>.zip sha256=<bundle-sha256>"}]'
-$attemptsFile = '.claude/gates/artifacts/final-verification-attempts.json'
-$attemptsPath = Join-Path '<repo>' $attemptsFile
-$attempts | Set-Content -LiteralPath $attemptsPath -Encoding UTF8
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-final-verification -Worktree <repo> -WorkflowId <id> -ChangeSnapshot <snapshot> -AttemptsJsonFile $attemptsFile -OutputArtifact .claude/gates/artifacts/final-verification.json -FinalQaArtifact .claude/gates/artifacts/final-qa-execution.md -RecordFinalQa -Actor <qa-reviewer>
-```
-
-Attempt entries need `status`, `accepted`, `artifact`, `reviewerAgentId`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. Prefer `-AttemptsJsonFile` on PowerShell 5 because raw JSON strings can lose quotes when passed through `powershell.exe -File`. A PASS attempt is accepted only when `status=PASS`, `accepted=true`, the artifact path exists and is non-empty, and any `gate_route` inside it matches the same workflow/snapshot. With `-RecordFinalQa`, the wrapper writes the final verification aggregate and records `qa-test-gate` `Stage=FinalExecution`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+Record formal FinalExecution PASS with `record-final-verification -RecordFinalQa` as described in `references/post-development-artifacts.md`. Plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
 
 ## Output
 

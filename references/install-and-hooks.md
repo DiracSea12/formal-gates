@@ -216,64 +216,11 @@ Manifest 只能定义扩展 gate，不能定义或覆盖 `qa-test-gate`、`compl
 
 Manifest 扩展 gate 会绑定 manifest hash。扩展 gate 的前置 gate 也必须用同一个 `-ManifestPath` 记录，旧记录或没有 `manifestHash` 的记录不能满足扩展 gate admission。给既有流程新增 manifest 后，要按该 manifest 重新记录前置 gate，不能复用旧内置 PASS。
 
-## 正式 gate artifact 必备字段
+## 正式 gate artifact 和记录命令
 
-缺机器元数据时不能记录正式 PASS，最多 advisory review。`singleGateAuthorized=true` 只允许显式单门 advisory，不能记录、复用或推进 release/seal。
+正式 post-development gate artifact 的字段、`gate_route`、记录命令、PowerShell 前缀、最终 QA 记录包装命令，统一见 `references/post-development-artifacts.md`。
 
-所有正式 gate artifact 必须写明：
-
-```text
-Zero-context reviewer: YES
-Independent agent: YES
-Reviewer agent id:
-Context bundle: <bundle-path> sha256=<bundle-sha256>
-No-anchor prompt: YES
-```
-
-`Reviewer agent id` 不能是空值或占位符。`Context bundle` 必须是存在的文件并带 sha256；机器会校验 hash。
-
-implementation 后的复杂度、架构、代码质量正式 PASS 还必须写明：
-
-```text
-Changed files artifact: <path>
-Verification artifact: <path>
-```
-
-`Changed files artifact` 可用 `Raw diff artifact` 代替，`Verification artifact` 可用 `Developer self-test artifact` 代替。路径都必须存在。
-
-`qa-test-gate` 正式 PASS 还必须写明：
-
-```text
-Approved case set:
-QA-owned evidence:
-Case-to-artifact binding:
-```
-
-每个正式 gate 输出都必须带机器可读路线：
-
-```yaml
-gate_route:
-  workflow_id: ""
-  change_snapshot: ""
-  next_action: proceed | rework | blocked | seal
-  rework_owner: none | implementation | tests | architecture | qa-cases | scope
-  rerun_from: none | qa-design | qa-verification | qa-execution | complexity | architecture | code-quality | final-verification
-```
-
-`REVIEW`、`FAIL`、`BLOCKED` 不能路由到 `proceed`。
-
-## 正式记录命令
-
-最小机器检查命令：
-
-```powershell
-<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate <gate-id> -WorkflowId <id> -ChangeSnapshot <snapshot>
-<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate <gate-id> -Verdict PASS -Artifact <artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
-```
-
-`<ps>` 代表当前可用的 PowerShell：Windows PowerShell 5 用 `powershell -NoProfile -ExecutionPolicy Bypass`，PowerShell 7 用 `pwsh -NoProfile`。包内脚本会继续使用当前 PowerShell，不要求必须有 PowerShell 7。
-
-`qa-test-gate` 正式记录必须加 `-Mode formal -Stage Execution`；最终 QA 用 `-Mode formal -Stage FinalExecution`。不要直接照抄泛化命令漏掉 stage。
+本文件只保留安装、hook、manifest、canary、双宿主路径和运行时校验规则，避免把安装说明写成 artifact 模板仓库。
 
 如果同时安装 Claude 和 Codex，两边 skill 镜像和 hook 不是同一份时，不能声称“同一套 formal-gates 正在生效”。必须写清楚实际运行路径和 hash。
 

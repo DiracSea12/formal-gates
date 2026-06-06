@@ -16,6 +16,7 @@ Don't activate this skill for casual chat, brainstorming, lightweight explanatio
 - Post-development/release review: Existing implementation, preparing for delivery, release, seal, final QA. Follow the four-gate sequence below.
 - Gate-specific check details loaded on demand from corresponding references: QA reads `qa-test-gate.md`, complexity reads `complexity-gate.md`, architecture reads `architecture-health-gate.md`, code quality reads `code-quality-gate.md`, requirements clarification reads `requirements-clarification-gate.md`, and requirements clarification machine fields read `requirements-clarification-artifacts.md` only when recording or debugging artifacts.
 - Installation, hooks, canary, A/B, candidate package testing, Claude/Codex/Cursor integration: Read `references/install-and-hooks.md`.
+- Formal post-development artifact fields, `gate_route`, and recording command templates: Read `references/post-development-artifacts.md`.
 
 Claude Code is the primary host. Codex is only for optional compatibility or legacy comparison paths. Cursor automatically connects command hooks via `.cursor/hooks.json` or global `~/.cursor/hooks.json`.
 
@@ -115,13 +116,13 @@ Without this information, cannot record formal PASS—at most only advisory revi
 
 Requirements clarification PASS is machine-recorded with `gate-workflow.ps1 record-stage -Gate requirements-clarification-gate`; it does not require independent reviewer fields. Field templates and validator details live in `references/requirements-clarification-artifacts.md`.
 
-Post-development review PASS must be produced as artifact by independent zero-context subagent and machine-recorded using `gate-workflow.ps1 record-stage`. Artifact mandatory fields (machine validates; missing or placeholder blocked by hooks):
+Post-development review PASS must be produced as artifact by independent zero-context subagent and machine-recorded using `gate-workflow.ps1 record-stage`. Artifact mandatory fields are machine-validated; missing metadata, placeholders, missing evidence paths, route mismatch, or prompt contamination blocks formal PASS. Use `references/post-development-artifacts.md` for the complete field template.
 
 - All gates except `requirements-clarification-gate`: `Review mode: ZERO_CONTEXT_FORMAL`, `Prompt contamination check: PASS`, `Prompt source: agents/<gate>.md`, `Zero-context reviewer: YES`, `Independent agent: YES`, `Reviewer agent id:` (non-empty non-placeholder), `Context bundle:` (existing file + sha256), `No-anchor prompt: YES`, `gate_route:` (contains workflow_id/change_snapshot/next_action/rework_owner/rerun_from; REVIEW/FAIL/BLOCKED cannot route to proceed). If artifact contains anchoring fields such as `Known issues:`, `Previous findings:`, `Just fixed:`, `Expected answer:`, `Focus items:`, `重点复查:`, or `刚修了:`, PASS is blocked as prompt contamination.
 - Complexity/architecture/code-quality gates additionally: `Changed files artifact` (or `Raw diff artifact`) + `Verification artifact` (or `Developer self-test artifact`), paths must exist.
 - `qa-test-gate` additionally: `Approved case set` + `QA-owned evidence` + `Case-to-artifact binding`.
 
-Complete field templates for requirements clarification artifacts live in `references/requirements-clarification-artifacts.md`. Complete post-development gate field templates, `gate_route` values, recording/validation commands, PowerShell prefixes, manifest extended gate rules, dual-installation caliber: see `references/install-and-hooks.md`. Don't miss `-Mode formal -Stage Execution` when recording `qa-test-gate` (use `FinalExecution` for final QA).
+Complete field templates for requirements clarification artifacts live in `references/requirements-clarification-artifacts.md`. Complete post-development gate field templates, `gate_route` values, recording/validation commands, and PowerShell prefixes live in `references/post-development-artifacts.md`. Manifest extended gate rules, host hooks, canary, and dual-installation caliber live in `references/install-and-hooks.md`. Don't miss `-Mode formal -Stage Execution` when recording `qa-test-gate` (use `FinalExecution` for final QA).
 
 ## Gate Handoff Request
 
