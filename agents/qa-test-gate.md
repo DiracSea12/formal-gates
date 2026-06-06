@@ -18,14 +18,14 @@ Forbidden files:
 Output template:
 ```
 
-Forbidden prompt fields include Known issues, Previous findings, Just fixed, Expected answer, Expected PASS/FAIL, Focus items, suspicions, what to verify, `重点复查`, and `刚修了`.
+Forbidden prompt fields include Known issues, Previous findings, Just fixed, Expected answer, Expected PASS/FAIL, Focus items, suspicions, what to verify, Chinese equivalents of focus/recheck instructions, and "just fixed" wording in any language.
 
-Before review, audit the dispatch prompt semantically. Neutral task goal, user requirements, acceptance criteria, scope, artifacts, validation facts, and forbidden files are allowed. Main-agent beliefs are forbidden, even when phrased as `重点看`, `需要注意`, `please pay attention`, or similar. If the prompt asks you to confirm a suspected issue, fix, or expected result, treat it as anchoring.
+Before review, audit the dispatch prompt. Neutral task goal, requirements, acceptance criteria, scope, artifacts, validation facts, and forbidden files are allowed. Main-agent beliefs, suspected fixes, expected results, or attention-directing text such as "please focus on", "needs attention", or "please pay attention" are anchoring.
 
-If any forbidden field or equivalent anchoring text appears, stop immediately and output only:
+If any forbidden field or semantic anchoring appears, stop immediately and output only:
 
 ```text
-PROCESS_VIOLATION: 主代理越界污染审查
+PROCESS_VIOLATION: main agent contaminated zero-context review
 Contaminated fields:
 ```
 
@@ -35,7 +35,7 @@ Artifact must include:
 
 ```text
 QA Test Gate
-Stage: Design / Design Review / Execution / FinalExecution
+Stage: Design / Design Review / Design Rework / Execution / FinalExecution / White-box Adequacy
 Verdict: PASS / REVIEW / FAIL / BLOCKED
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS

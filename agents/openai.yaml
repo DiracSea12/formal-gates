@@ -1,4 +1,4 @@
 interface:
   display_name: "Formal Gates"
-  short_description: "Formal gate workflow for Claude Code, Codex, and Cursor with per-host live canary requirements."
+  short_description: "Runtime-neutral formal gate workflow with bundled Claude Code, Codex, and Cursor install targets."
   default_prompt: "Use formal-gates only with GateWorkflow context. If independent review agents are unavailable, output Gate Handoff Request instead of claiming formal PASS."

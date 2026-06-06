@@ -55,9 +55,7 @@ List actual commands, artifacts, and results. No verification evidence means no 
 
 ## Formal PASS
 
-Record PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate code-quality-gate`.
-
-Formal PASS requires the shared post-development artifact fields, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
+Record PASS with `references/post-development-artifacts.md`, using `-Gate code-quality-gate`. Shared machine fields and evidence substitutions live there. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
 
 ## Output
 

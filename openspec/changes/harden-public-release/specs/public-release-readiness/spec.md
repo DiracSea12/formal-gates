@@ -8,7 +8,7 @@ The public release package MUST include repository hygiene and package metadata 
 
 The public release package MAY include read-only behavior-check prompt examples under `examples/`, including `examples/skill-behavior-prompts.json`, as samples for human or Darwin-style skill review. These examples MUST be documented as behavior checks for the skill itself and MUST NOT be described or enforced as formal QA, release, seal, or four-gate verdicts.
 
-Public README, promotional, and installation/hook documentation, including `references/install-and-hooks.md`, MUST describe Claude Code, Codex, and Cursor as separate host targets where host support is described. Any hook enforcement claim MUST be tied to hook/config setup and live canary evidence on the specific target host, and MUST NOT claim that a passing canary on one host proves another host. Public examples MUST NOT expose maintainer-local absolute paths such as a specific Windows user profile.
+Public README, promotional, and installation/hook documentation, including `references/install-and-hooks.md`, MUST describe the core skill documents as usable by Agent Skill compatible runtimes and Claude Code, Codex, and Cursor as bundled installer/hook targets where host support is described. Any hook enforcement claim MUST be tied to hook/config setup and live canary evidence on the specific target host, and MUST NOT claim that a passing canary on one host proves another host. Public examples MUST NOT expose maintainer-local absolute paths such as a specific Windows user profile.
 
 #### Scenario: Open-source candidate package has required release hygiene
 
@@ -27,7 +27,7 @@ Public README, promotional, and installation/hook documentation, including `refe
 
 - **GIVEN** the `harden-public-release` change is applied
 - **WHEN** a maintainer inspects README, public promotional documents, and `references/install-and-hooks.md`
-- **THEN** Claude Code, Codex, and Cursor are described as host targets
+- **THEN** core Agent Skill compatibility is described separately from the bundled Claude Code, Codex, and Cursor installer/hook targets
 - **AND** hook enforcement claims require hooks/config and live canary evidence on the specific host
 - **AND** public docs do not claim that one host's canary proves another host or claim full Codex plugin distribution
 - **AND** public examples use portable user-profile placeholders instead of maintainer-local absolute paths

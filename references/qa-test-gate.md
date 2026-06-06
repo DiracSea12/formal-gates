@@ -34,7 +34,7 @@ Authorized formal runs should continue across normal stage transitions. Stop onl
 
 ## Workflow Artifacts
 
-A formal run needs one `workflowId` and one current `changeSnapshot`. Preserve separate artifacts for:
+Preserve separate artifacts for:
 
 - approved QA cases
 - developer self-test
@@ -42,9 +42,7 @@ A formal run needs one `workflowId` and one current `changeSnapshot`. Preserve s
 - final QA verification
 - each formal gate verdict
 
-If the snapshot changes after a PASS, the old PASS is stale. Do not reuse it. Use structured `GateWorkflow={...}` metadata and the router machine checks; free-text `WorkflowId=... ChangeSnapshot=...` is advisory only.
-
-Development/rework handoffs must also preserve the snapshot's worktree reality. For dirty or uncommitted formal-gate rework, dispatch development subagents to the current worktree named by `GateWorkflow.worktree` unless an isolated worktree has been explicitly prepared from the exact intended base or same file-hash snapshot and loaded with the same required snapshot/artifacts. A fresh git worktree that silently starts from `origin/master`, `origin/main`, or a default remote ref is not valid formal-gate context. Git development subagents must verify `git rev-parse --short HEAD`; SVN or non-git subagents must verify the provided `changeSnapshot` from `gate-workflow.ps1 -Action snapshot -Vcs auto`. Stop on mismatch.
+If the snapshot changes after a PASS, the old PASS is stale. Do not reuse it. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
 
 ## Case Requirements
 
@@ -90,9 +88,7 @@ Formal PASS requires:
 - Independent zero-context QA reviewer artifact.
 - Machine-recorded PASS using `gate-workflow.ps1 record-stage`.
 
-Record formal Execution PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate qa-test-gate -Mode formal -Stage Execution`.
-
-Record formal FinalExecution PASS with `record-final-verification -RecordFinalQa` as described in `references/post-development-artifacts.md`. Plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+Record formal Execution PASS with `references/post-development-artifacts.md`, using `-Gate qa-test-gate -Mode formal -Stage Execution`. Record formal FinalExecution PASS with `record-final-verification -RecordFinalQa`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
 
 ## Output
 

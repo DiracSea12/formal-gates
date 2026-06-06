@@ -21,7 +21,7 @@ Make `formal-gates` safe to present as an open-source candidate package without 
 
 - Add public release hygiene files and a compact package manifest/index.
 - Fix OpenAI host metadata so it is valid YAML.
-- Align README, promotional, and public installation/hook documentation with Claude Code, Codex, and Cursor as host targets that each require their own live canary evidence for hook enforcement claims.
+- Align README, promotional, and public installation/hook documentation with runtime-neutral skill wording plus Claude Code, Codex, and Cursor as bundled installer/hook targets that each require their own live canary evidence for hook enforcement claims.
 - Document `examples/skill-behavior-prompts.json` as a read-only skill behavior-check sample that can be packaged publicly but does not define release gates.
 - Add a minimal OpenSpec spec delta covering public release readiness.
 
@@ -39,7 +39,7 @@ Make `formal-gates` safe to present as an open-source candidate package without 
 - The repository has a clear open-source license file.
 - Local gate artifacts and review scratch directories are ignored by git.
 - `agents/openai.yaml` is valid YAML and starts with `interface:`.
-- README files describe Claude Code, Codex, and Cursor as host targets with per-host live canary requirements.
+- README.md and README_EN.md describe core Agent Skill compatibility plus Claude Code, Codex, and Cursor as bundled installer/hook targets with per-host live canary requirements.
 - Public promotional and installation/hook docs do not overstate platform support or expose maintainer-local absolute paths; hook enforcement claims require target-host hook/config plus live canary evidence.
 - A small manifest or index lists package parts, supported hosts, install commands, and verification commands.
 - README, manifest, and OpenSpec agree that `examples/skill-behavior-prompts.json` is a public read-only behavior-check sample, not a formal gate.

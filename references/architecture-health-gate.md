@@ -75,9 +75,7 @@ New abstraction/framework/manager/service needs active Complexity Contract budge
 
 ## Formal PASS
 
-Record PASS with the shared command in `references/post-development-artifacts.md`, using `-Gate architecture-health-gate`.
-
-Formal PASS requires the shared post-development artifact fields, plus an existing `Changed files artifact` or `Raw diff artifact`, and an existing `Verification artifact` or `Developer self-test artifact`.
+Record PASS with `references/post-development-artifacts.md`, using `-Gate architecture-health-gate`. Shared machine fields and evidence substitutions live there; this file only defines the architecture judgment.
 
 ## Output
 

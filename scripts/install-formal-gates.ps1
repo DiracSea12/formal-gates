@@ -173,7 +173,7 @@ function Get-CursorHooksPath([string]$Scope, [string]$ProjectPath) {
 }
 
 function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
-    # 读取-合并-写回，只新增/更新 formal-gates 自己的 hook；不覆盖其它 hook；幂等；写前备份。
+    # Read, merge, and write back only the formal-gates hook; preserve other hooks. Idempotent, with backup before write.
 
     $settings = $null
     if (Test-Path -LiteralPath $SettingsPath) {

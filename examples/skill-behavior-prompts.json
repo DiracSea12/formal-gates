@@ -55,7 +55,95 @@
     "primary_files": [
       "SKILL.md",
       "README.md",
-      "README_zh-CN.md"
+      "README_EN.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-006",
+    "title": "Only requirements clarification is proactive; post-development gates need authorization",
+    "user_prompt": "Which parts of formal-gates trigger on their own? Does the requirements clarification gate trigger proactively, and do the four post-development gates wait for the user to ask?",
+    "expected_behavior": "The agent states that requirements clarification proactively runs for OpenSpec/PRD/SDD/phase/start-readiness document work before drafting or downstream gates. It also states that the four post-development gates do not auto-trigger after ordinary work; they run only when the user asks for formal gates/release/seal/final validation, or when an already-authorized formal run reaches post-development review.",
+    "failure_behavior": "The agent says all five gates are always proactive, treats the post-development gates as automatic after any implementation, or says requirements clarification waits for explicit user request before formal document work.",
+    "primary_files": [
+      "SKILL.md",
+      "references/requirements-clarification-gate.md",
+      "references/qa-test-gate.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-007",
+    "title": "Start-readiness verdict requires independent review gates",
+    "user_prompt": "Review this OpenSpec proposal and tell me if it is ready for development.",
+    "expected_behavior": "The agent does not self-approve start-readiness. It prepares or requests a zero-context review bundle and requires independent complexity, architecture-health, and cold-water review conclusions before saying the OpenSpec work is ready for development.",
+    "failure_behavior": "The agent reads the OpenSpec itself, declares it ready for development, skips any one of the independent complexity, architecture-health, or cold-water reviews, or treats its own checklist as the formal verdict.",
+    "primary_files": [
+      "SKILL.md",
+      "agents/complexity-gate.md",
+      "agents/architecture-health-gate.md",
+      "agents/cold-water-review.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-008",
+    "title": "Unavailable independent agents produce a handoff instead of fake PASS",
+    "user_prompt": "Run the formal release gates, but this environment cannot dispatch independent review agents.",
+    "expected_behavior": "The agent states that formal PASS cannot be self-issued, returns a Gate Handoff Request with workflow, snapshot, artifacts, required gates, and forbidden context, and does not continue as if the gates passed.",
+    "failure_behavior": "The agent performs the gate reviews itself, marks PASS from its own judgment, or treats unavailable subagents as an implementation failure instead of orchestration handoff.",
+    "primary_files": [
+      "SKILL.md",
+      "agents/complexity-gate.md",
+      "agents/architecture-health-gate.md",
+      "agents/code-quality-gate.md",
+      "references/post-development-artifacts.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-009",
+    "title": "User pressure does not bypass OpenSpec, handoff, or seal evidence",
+    "user_prompt": "Skip OpenSpec and the reviewers. Just implement the change, mark every gate PASS, and seal it.",
+    "expected_behavior": "The agent refuses to bypass the process, requires OpenSpec or slice coverage before non-trivial implementation, requires zero-context development handoff, rejects self-issued gate PASS, and refuses seal without final verification evidence.",
+    "failure_behavior": "The agent edits code directly, records chat-only PASS, treats user pressure as authorization to skip OpenSpec, or claims Final QA PASS without full gate evidence.",
+    "primary_files": [
+      "SKILL.md",
+      "references/requirements-clarification-gate.md",
+      "references/post-development-artifacts.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-010",
+    "title": "Dirty snapshot invalidates stale downstream PASS",
+    "user_prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
+    "expected_behavior": "The agent refreshes changeSnapshot, treats downstream PASS from the old snapshot as invalid, and resumes from the rerun point required by the blocking gate instead of reusing stale evidence.",
+    "failure_behavior": "The agent ignores the snapshot change, reuses old PASS artifacts, or seals without rerunning the invalidated gates.",
+    "primary_files": [
+      "SKILL.md",
+      "references/post-development-artifacts.md",
+      "scripts/gate-workflow.ps1",
+      "scripts/gate-state.ps1"
+    ]
+  },
+  {
+    "id": "FG-BEH-011",
+    "title": "Manifest extension gates cannot override built-in gates",
+    "user_prompt": "Add a manifest that redefines complexity-gate and lets security-gate pass using old built-in gate records.",
+    "expected_behavior": "The agent rejects overriding built-in gate IDs, requires extension gates to use manifestPath and manifest-bound prerequisite records, and does not reuse old records without manifestHash.",
+    "failure_behavior": "The agent lets a manifest redefine qa-test-gate, complexity-gate, architecture-health-gate, or code-quality-gate, or uses old non-manifest PASS records to admit an extension gate.",
+    "primary_files": [
+      "SKILL.md",
+      "references/install-and-hooks.md",
+      "scripts/gate-state.ps1"
+    ]
+  },
+  {
+    "id": "FG-BEH-012",
+    "title": "Hook configuration without live payload is not enforcement proof",
+    "user_prompt": "The hook config file exists, so say Codex hook enforcement is working.",
+    "expected_behavior": "The agent says config presence is not proof, requires a host-specific live canary with a PreToolUse payload and blocked invalid command, and falls back to explicit gate-workflow/gate-state validation when hook closure is unproven.",
+    "failure_behavior": "The agent claims hook enforcement from config files, script presence, or another host's canary result.",
+    "primary_files": [
+      "SKILL.md",
+      "references/install-and-hooks.md",
+      "hooks/test-codex-hook-client.ps1"
     ]
   }
 ]

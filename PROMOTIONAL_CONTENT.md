@@ -8,7 +8,7 @@ Stop AI from shipping broken code. 5 quality gates that actually work—with ind
 
 ## Medium Description (for GitHub About section)
 
-AI code quality gates that prevent direction drift, over-engineering, fake tests, and silent scope creep. One pre-work gate aligns requirements before coding starts. Four post-work gates validate quality through independent AI review, with no self-endorsement allowed. Claude Code, Codex, and Cursor are host targets; hook enforcement must be proven per host with a live canary.
+AI code quality gates that prevent direction drift, over-engineering, fake tests, and silent scope creep. One pre-work gate aligns requirements before coding starts. Four post-work gates validate quality through independent AI review, with no self-endorsement allowed. Core skill docs are Agent Skill compatible; bundled installer and hook targets are Claude Code, Codex, and Cursor. Hook enforcement must be proven per host by live canary.
 
 ---
 
@@ -43,7 +43,7 @@ The AI that writes code never judges if it's good. Independent, zero-context rev
 Not style guides. Not formatting. Actual issues: wrong direction, bloated scope, broken architecture, fake tests.
 
 ⚙️ **Machine-Enforced**  
-Hooks validate gate artifacts. Missing evidence? Placeholder verdicts? Reused stale approvals? Blocked automatically.
+PowerShell validators reject bad gate artifacts. Configured and live-tested hooks can block missing evidence, placeholder verdicts, and reused stale approvals at command time.
 
 📋 **One Pre-Work Gate**  
 Requirements Clarification runs before coding starts—the only gate that matters more than all four post-work gates combined.
@@ -86,13 +86,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 Then tell your AI: "run four gates" or "validate before seal"
 
-For major work, it runs automatically. For small changes, it stays silent.
+Requirements clarification runs proactively before formal document work. The four post-work gates run when formal validation, release, or seal review is requested.
 
 ### Technical Details
 
 - **Platform**: Windows + PowerShell 5/7
 - **VCS**: Git, SVN, or file-hash snapshots
-- **Hosts**: Claude Code, Codex, and Cursor; hook enforcement requires per-host live canary
+- **Hosts**: core skill docs are Agent Skill compatible; bundled installer and hook targets are Claude Code, Codex, and Cursor; hook enforcement requires per-host live canary
 - **Languages**: Works with any codebase—gates validate behavior, not syntax
 
 ---
@@ -116,7 +116,7 @@ formal-gates solves this with independent AI review through 5 quality gates:
 
 The key rule: AI that writes code cannot approve it. Zero-context review AI validates every gate. PowerShell scripts enforce evidence requirements—no placeholder approvals allowed.
 
-Claude Code, Codex, and Cursor are host targets. Hook enforcement must be proven on the target host with a live canary. Open source.
+Core skill docs are Agent Skill compatible. Bundled installer and hook targets are Claude Code, Codex, and Cursor. Hook enforcement must be proven on the target host with a live canary. Open source.
 
 Perfect for: production systems, refactors, new features, release validation
 Skip for: quick prototypes, UI tweaks, typo fixes
@@ -153,7 +153,7 @@ The core issue: AI reviews its own work. And AI (like humans) is bad at finding 
 - Architecture: Validates boundaries and ownership
 - Code Quality: Catches bugs, edge cases, maintainability issues
 
-Claude Code, Codex, and Cursor are host targets. Hook enforcement must be proven on the target host with a live canary. Windows + PowerShell. Git/SVN/no-VCS supported.
+Core skill docs are Agent Skill compatible. Bundled installer and hook targets are Claude Code, Codex, and Cursor. Hook enforcement must be proven on the target host with a live canary. Windows + PowerShell. Git/SVN/no-VCS supported.
 
 Built for production systems, refactors, and release validation. Stays silent for small changes.
 

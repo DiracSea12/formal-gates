@@ -174,7 +174,7 @@ function Add-Check([ref]$Summary, [string]$Name, [bool]$Passed, [string]$Detail)
 
 function Test-AgentTemplateIntegrity([string]$SkillPath) {
     $errors = @()
-    $processViolationText = 'PROCESS_VIOLATION: ' + [string]::new([char[]]@([char]0x4E3B, [char]0x4EE3, [char]0x7406, [char]0x8D8A, [char]0x754C, [char]0x6C61, [char]0x67D3, [char]0x5BA1, [char]0x67E5))
+    $processViolationText = 'PROCESS_VIOLATION: main agent contaminated zero-context review'
     $agentFiles = @(
         'agents/qa-test-gate.md',
         'agents/complexity-gate.md',
@@ -329,18 +329,18 @@ try {
     Set-Utf8File (Join-Path $changeRoot 'proposal.md') @'
 # Proposal
 
-验证 common formal-gates skill 在项目级 Windows OpenSpec 仓库中的复制与 formal gate 机器检查。
+Verify that the common formal-gates skill can be copied into a project-local Windows OpenSpec repo and pass formal gate machine checks.
 '@
     Set-Utf8File (Join-Path $changeRoot 'design.md') @'
 # Design
 
-使用最小 OpenSpec change 和 project-local formal-gates copy 运行 gate-workflow canary。
+Run the gate-workflow canary with a minimal OpenSpec change and a project-local formal-gates copy.
 '@
     Set-Utf8File (Join-Path $changeRoot 'tasks.md') @'
 # Tasks
 
-- [x] 创建最小 OpenSpec change
-- [x] 运行 common formal-gates canary
+- [x] Create minimal OpenSpec change
+- [x] Run common formal-gates canary
 '@
     Set-Utf8File $specDir @'
 # Requirement
@@ -389,9 +389,9 @@ Output template: formal gate artifact
     Set-Utf8File (Join-Path $changeRoot 'tasks.md') @'
 # Tasks
 
-- [x] 创建最小 OpenSpec change
-- [x] 运行 common formal-gates canary
-- [x] 记录 formal gate artifacts
+- [x] Create minimal OpenSpec change
+- [x] Run common formal-gates canary
+- [x] Record formal gate artifacts
 '@
     Run-Git $tempRepo @('add', '.') | Out-Null
     Run-Git $tempRepo @('commit', '-m', 'feature') | Out-Null
