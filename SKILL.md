@@ -1,6 +1,6 @@
 ---
 name: formal-gates
-description: Proactively use before writing or modifying OpenSpec/PRD/SDD/start-readiness documents, before non-trivial implementation that requires OpenSpec coverage and formal handoff, and when the user explicitly asks for formal gates, four-gate workflow, requirement clarification, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering formal mode.
+description: Proactively use before writing or modifying requirement documents such as OpenSpec/PRD/SDD/start-readiness documents, before non-trivial implementation that requires requirement-document coverage and formal handoff, and when the user explicitly asks for formal gates, four-gate workflow, requirement clarification, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering formal mode.
 ---
 
 # Formal Gates
@@ -10,8 +10,8 @@ This is the entry point for the formal-gates process. It handles routing, red li
 ## Fast Route
 
 - Ordinary chat, brainstorming, explanations, wording edits, typo fixes, or small low-risk changes: do not activate formal gates.
-- OpenSpec/PRD/SDD/phase/start-readiness document work: proactively run `requirements-clarification-gate` before drafting, status judgment, gate dispatch, QA, or development.
-- Non-trivial implementation or OpenSpec implementation: code/script/test/config/API/schema/persistence/security/multi-file behavior changes need OpenSpec/slice coverage, bundle/snapshot, base commit, Complexity Contract, forbidden items, and verification requirements before development handoff.
+- Requirement-document work, including OpenSpec/PRD/SDD/phase/start-readiness documents: proactively run `requirements-clarification-gate` before drafting, status judgment, gate dispatch, QA, or development.
+- Non-trivial implementation backed by a requirement document: code/script/test/config/API/schema/persistence/security/multi-file behavior changes need requirement-document or slice coverage, bundle/snapshot, base commit, Complexity Contract, forbidden items, and verification requirements before development handoff.
 - Post-development gates do not auto-trigger after ordinary work. Run the four-gate sequence only when the user asks for formal gates/release/seal/final validation, or when an already-authorized formal run reaches post-development review.
 - Formal review, start-readiness judgment, release/seal, four gates, or gate processes: follow the matching route below and never accept chat-only PASS.
 - Install, hooks, canary, A/B, or host integration: read `references/install-and-hooks.md` only when that is the task.
@@ -22,7 +22,7 @@ Never use this skill for casual discussion or tiny edits unless the user asks fo
 
 ## Load Map
 
-- Requirements/document alignment: read `references/requirements-clarification-gate.md`; read `references/requirements-clarification-artifacts.md` only for PASS recording or artifact validation.
+- Requirements/document alignment: read `references/requirements-clarification-gate.md`; read `references/requirement-document-adapters.md` only when mapping OpenSpec, PRD, SDD, issue, design brief, or markdown bundles into common requirement fields; read `references/requirements-clarification-artifacts.md` only for PASS recording or artifact validation.
 - Document/start-readiness review: use the section below plus `references/requirements-clarification-gate.md`.
 - Post-development/release review: follow the fixed sequence below; read only the active gate reference.
 - Active gate details: `references/qa-test-gate.md`, `references/complexity-gate.md`, `references/architecture-health-gate.md`, or `references/code-quality-gate.md`.
@@ -38,19 +38,19 @@ Use these visible stops before moving to the next route. They are checkpoints, n
 | Stop | Do not continue until | If missing |
 |---|---|---|
 | `CHECKPOINT / STOP: requirements` | User-confirmed alignment is recorded for formal document work. | Output `DRAFT_BLOCKED` or record `SKIPPED_BY_USER` risk only; do not draft or dispatch gates. |
-| `CHECKPOINT / STOP: development handoff` | OpenSpec coverage, bundle/snapshot, base commit, Complexity Contract, forbidden items, and verification requirements are ready. | Output `Gate Handoff Request`; do not let the main agent implement. |
+| `CHECKPOINT / STOP: development handoff` | Requirement-document or slice coverage, bundle/snapshot, base commit, Complexity Contract, forbidden items, and verification requirements are ready. | Output `Gate Handoff Request`; do not let the main agent implement. |
 | `CHECKPOINT / STOP: independent review` | The matching `agents/<gate>.md` prompt is used without findings, suspicions, expected answers, or focus items. | Output `PROCESS_VIOLATION` and rebuild the dispatch prompt. |
 | `CHECKPOINT / STOP: seal` | Final verification, FinalExecution QA evidence, all required independent gate artifacts, and unchanged snapshot are verified. | Say `focused evidence pending full gate`; do not claim Final QA PASS or seal. |
 
 ## Red Lines
 
-- Non-trivial development must have OpenSpec/slice coverage first; the main agent delegates implementation to zero-context development subagents instead of editing directly.
-- Development/review subagents receive the exact bundle/manifest, worktree, base commit or non-git snapshot id, OpenSpec change, task scope, forbidden items, Complexity Contract, and verification requirements. Development return must include Complexity Ledger, changed files, covered requirements, verification artifacts, and budget pressure.
+- Non-trivial development must have requirement-document or slice coverage first; the main agent delegates implementation to zero-context development subagents instead of editing directly.
+- Development/review subagents receive the exact bundle/manifest, worktree, base commit or non-git snapshot id, requirement-document target or OpenSpec change, task scope, forbidden items, Complexity Contract, and verification requirements. Development return must include Complexity Ledger, changed files, covered requirements, verification artifacts, and budget pressure.
 - Subagents must verify their starting snapshot: git reports `git rev-parse --short HEAD`; SVN or non-git reports the provided `changeSnapshot`. Dirty formal snapshots use the current worktree named by `GateWorkflow.worktree`; do not silently start from `origin/main`, `origin/master`, or a guessed remote base.
 - Formal PASS/FAIL/REVIEW verdicts must come from independent zero-context subagents; main agent cannot self-judge pass.
 - Formal review dispatch must use the matching file under `agents/`. Any self-written formal review prompt or anchored prompt is `PROCESS_VIOLATION`.
 - Main agent must verify that independent gate artifact opinions are evidence-backed; main agent has veto power, not self-approval power. When hard factual conflicts exist with independent gate conclusions, record evidence and re-dispatch independent gate agent for review—cannot self-override to formal verdict.
-- For OpenSpec proposal/design/spec/tasks/start-readiness "can-develop/can-start/pass" verdicts, must first have independent zero-context complexity review, architecture-health review, and cold-water review.
+- For requirement-document proposal/design/spec/tasks/start-readiness "can-develop/can-start/pass" verdicts, must first have independent zero-context complexity review, architecture-health review, and cold-water review.
 - Independent gates require external orchestration. If current agent cannot dispatch independent subagents, cannot forge gate PASS, and should not treat entire requirement as failed implementation. Output `Gate Handoff Request` and hand off to main agent or external orchestrator to dispatch independent gate agent.
 - If main agent is found directly writing code, skipping independent gates, or self-stamping gate verdicts, immediately stop and output `PROCESS_VIOLATION`.
 
@@ -85,11 +85,11 @@ Any implementation change invalidates downstream PASS from old snapshots. After 
 
 When user has authorized formal run, proceed continuously following the above sequence. Only stop for genuine blockers, gate failures, missing machine metadata, budget expansion, snapshot changes, destructive/shared-state actions without authorization, or unclear requirements.
 
-## OpenSpec/Document Start-readiness Review
+## Requirement Document Start-readiness Review
 
-For OpenSpec/PRD/SDD/phase/start-readiness work, first read `references/requirements-clarification-gate.md`. Document review uses four checks: requirements clarification, architecture shape, complexity/scope, and cold-water start-readiness. Proposal/spec remains the requirements source; plan/tasks/Contract may decompose delivery but must not narrow user requirements without approval.
+For requirement-document work, first read `references/requirements-clarification-gate.md`. Use `references/requirement-document-adapters.md` when a format-specific mapping is needed. Document review uses four checks: requirements clarification, architecture shape, complexity/scope, and cold-water start-readiness. The user-confirmed requirement source remains authoritative; plan/tasks/Contract may decompose delivery but must not narrow user requirements without approval.
 
-`READY_FOR_ZERO_CONTEXT_REVIEW` is not development approval. Formal OpenSpec/start-readiness approval still requires independent zero-context complexity, architecture-health, and cold-water reviews. If unauthorized narrowing is found, output `REQUIREMENTS_SCOPE_MISMATCH`.
+`READY_FOR_ZERO_CONTEXT_REVIEW` is not development approval. Formal requirement-document/start-readiness approval still requires independent zero-context complexity, architecture-health, and cold-water reviews. If unauthorized narrowing is found, output `REQUIREMENTS_SCOPE_MISMATCH`.
 
 ## GateWorkflow Minimum Information
 
@@ -123,7 +123,7 @@ Change snapshot:
 Worktree:
 Base commit:
 Snapshot id:
-OpenSpec change:
+Requirement document target or OpenSpec change:
 Required independent gates:
 Artifacts to provide:
 Forbidden context:
@@ -138,7 +138,7 @@ When dispatching subagents, must provide sufficient local facts:
 
 - bundle/manifest path and SHA;
 - worktree and base commit or non-git snapshot id;
-- OpenSpec change, task scope, forbidden files, forbidden expansion items;
+- Requirement document target or OpenSpec change, task scope, forbidden files, forbidden expansion items;
 - Complexity Contract for development handoff, and required Complexity Ledger for development return;
 - Related spec/design/tasks/case/diff/evidence artifacts;
 - Output template and required verifications.

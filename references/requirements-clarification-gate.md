@@ -1,6 +1,6 @@
 # Requirements Clarification Gate
 
-Run this before writing or modifying OpenSpec, PRD, SDD, phase documents, or start-readiness material. Requirement alignment happens before drafting. Also run it when the user explicitly asks for formal requirement clarification, or when existing OpenSpec status, seal, redo scope, task status, or phase dependency must be checked against the original requirements.
+Run this before writing or modifying requirement documents such as OpenSpec, PRD, SDD, phase documents, issue briefs, design briefs, or start-readiness material. Requirement alignment happens before drafting. Also run it when the user explicitly asks for formal requirement clarification, or when existing document status, seal, redo scope, task status, or phase dependency must be checked against the original requirements.
 
 Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits, explanations, or casual idea discussion that is not entering document work. If intent is unclear, ask whether the user wants formal document work or ordinary discussion.
 
@@ -10,13 +10,13 @@ Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits
 
 Use only the user's requirement brief, explicit user decisions, approved requirement notes, and user-confirmed answers as requirement truth.
 
-If an OpenSpec already exists, review it against that source. Do not treat OpenSpec, tasks, commits, gate artifacts, validation reports, implementation, or prior agent summaries as self-confirming requirements.
+If a requirement document already exists, review it against that source. Do not treat OpenSpec, PRD, SDD, tasks, commits, gate artifacts, validation reports, implementation, or prior agent summaries as self-confirming requirements.
 
 ## Hard Stop Rules
 
-- Before drafting or changing OpenSpec/PRD/SDD/phase docs, first produce or obtain a requirement brief with goal, scope, non-goals, acceptance, evidence, constraints, architecture boundary, and requirement details.
+- Before drafting or changing requirement documents, first produce or obtain a requirement brief with goal, scope, non-goals, acceptance, evidence, constraints, architecture boundary, and requirement details.
 - Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, detailed user scenarios, non-functional requirement metrics, and other details that affect requirement understanding and acceptance judgment.
-- Before judging existing OpenSpec status, redo scope, seal, task status, or phase dependency, build a detail alignment table against the requirement brief.
+- Before judging existing document status, redo scope, seal, task status, or phase dependency, build a detail alignment table against the requirement brief.
 - Do not dispatch complexity, architecture, cold-water, QA, or development agents until the alignment table is user-confirmed.
 - User-accepted risk is not a shortcut. It must be recorded per item as `deferred-by-user` or `out-of-scope-by-user` with explicit approval and still produce a machine-recorded PASS before drafting or gates proceed.
 - Every alignment item and every open question must have a stable `RQ-###` ID. Do not merge, delete, renumber, or compress open questions after showing them to the user unless the user explicitly approves that exact change.
@@ -36,7 +36,7 @@ Classify before asking questions:
 - `READY_TO_DRAFT`: Core answers are known; write the document as draft/unsealed if only minor non-blocking gaps remain.
 - `BLOCKED`: Missing answers would make scope, acceptance, evidence, task status, phase dependency, or architecture boundary guesswork.
 
-Light tasks stay `DISCUSSION_ONLY` unless they write or modify OpenSpec/PRD/SDD/start-readiness material or the user explicitly says to run formal gates.
+Light tasks stay `DISCUSSION_ONLY` unless they write or modify requirement documents or the user explicitly says to run formal gates.
 
 ## Alignment Table
 
@@ -50,7 +50,7 @@ Why it matters:
 Status: confirmed / doc-derived / inferred / open / deferred-by-user / out-of-scope-by-user
 User answer:
 Downstream effect:
-OpenSpec impact:
+Document impact:
 Evidence needed:
 ```
 
@@ -65,6 +65,7 @@ Rules:
 - `out-of-scope-by-user`: preserve the original requirement text and the user's explicit cut decision.
 - `deferred-by-user` and `out-of-scope-by-user` require per-item user approval evidence in the alignment item itself.
 - If a previous alignment artifact exists, compare ID sets before recording PASS. Any missing old ID must appear under `Dropped question IDs` and have explicit user approval in the decision record or in a per-ID user quote field.
+- For current PowerShell PASS artifact compatibility, the machine alignment artifact still accepts the legacy field name `OpenSpec impact:`. Use `Document impact:` in narrative alignment, and map it through `references/requirement-document-adapters.md` when recording format-specific artifacts.
 
 ## Question Quality Standard
 
