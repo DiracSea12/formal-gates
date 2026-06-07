@@ -18,7 +18,7 @@ This is the entry point for the formal-gates process. It handles routing, red li
 
 ## Blacklist
 
-Never use this skill for casual discussion or tiny edits unless the user asks for formal review. Never claim formal PASS from chat, self-review, developer self-test, focused tests, gate-state alone, hook config, installed scripts, or direct script tests. Never let the main agent implement non-trivial work, contaminate zero-context review prompts, reuse PASS after snapshot change, rename fixed gate IDs, treat `requirements-clarification-gate` as a fifth post-development gate, claim host hook enforcement without same-host live canary, or seal without complete final evidence.
+Never use this skill for casual discussion or tiny edits unless the user asks for formal review. Never claim formal PASS from chat, self-review, developer self-test, focused tests, gate-state alone, hook config, installed scripts, or direct script tests. Never let the main agent implement non-trivial work, contaminate zero-context review prompts, reuse PASS after snapshot change, rename fixed gate IDs, treat `requirements-clarification-gate` as a fifth post-development gate, claim host hook enforcement without same-host live canary, seal without complete final evidence, or expand this entrypoint after independent evaluation shows no behavior gain.
 
 ## Load Map
 
