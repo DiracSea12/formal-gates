@@ -2,7 +2,7 @@
 
 > AI 代码质量门禁：1 道事前门管方向 + 4 道事后门卡质量。AI 动手前先对齐需求，写完之后派**独立的审查 AI**逐道关卡卡质量，过了才放行。
 
-这是一个 Agent Skill 包。核心规则文档可被兼容 Agent Skill 的运行环境读取；包内安装脚本和 hook 接入目前明确支持 Claude Code、Codex、Cursor。任何宿主声称 hook 会拦截错误门禁流程，都必须在该宿主上跑 live canary 验证通过。
+这是一个 Agent Skill 包。核心规则文档可被兼容 Agent Skill 的运行环境读取；包内安装脚本和 hook 接入目前明确支持 Claude Code、Codex、Cursor。Gemini、OpenCode、Windsurf 只提供说明级适配口径。任何宿主声称 hook 会拦截错误门禁流程，都必须在该宿主上跑 live canary 验证通过。
 
 English README: [README_EN.md](README_EN.md)
 
@@ -36,7 +36,7 @@ AI 写代码有几个通病，这套门禁专门拦：
 ## 核心机制：防 AI 自我背书
 
 - 通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。
-- 每道门的结论要落成 **artifact**，由 PowerShell 脚本在机器侧**强制校验**：缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论会被校验器拒绝。配置好并实测通过的 hook 可以在命令执行时拦截这些问题。
+- 每道门的结论要落成 **artifact**，由机器侧校验器检查：Go 校验器负责 Windows/macOS/Linux 上的包结构和 artifact 形状；Windows PowerShell 脚本继续负责现有 gate-state、安装、hook、canary 路径。缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论会被校验器拒绝。配置好并实测通过的 hook 可以在命令执行时拦截这些问题。
 - 配好 hook 或使用 `gate-workflow.ps1` 记录时，主 AI 想"自己盖章放行"会被机器层挡住；没接 hook 时仍要显式运行脚本校验。
 
 ## 什么时候用 / 不用
@@ -51,9 +51,28 @@ AI 写代码有几个通病，这套门禁专门拦：
 
 ## 环境要求
 
-- Windows + PowerShell 5 或 7
+- Go 1.22+：用于 Windows/macOS/Linux 上的可搬运包校验和 artifact 校验
+- Windows + PowerShell 5 或 7：用于包内安装、hook、gate-state、canary 脚本
 - 版本控制：Git / SVN / 无 VCS（文件哈希快照）均可
 - 复杂度脚本需 Python 3.x 或 2.7
+
+macOS 和 Linux 的包校验不要求安装 PowerShell。PowerShell 仍是当前 Windows 安装和 hook 脚本的兼容路径。
+
+## 跨平台校验
+
+在包根目录运行 Go 校验器：
+
+```bash
+go run ./cmd/formal-gates-validate package --root .
+```
+
+需要校验单个正式 artifact 时：
+
+```bash
+go run ./cmd/formal-gates-validate artifact --root . --file .claude/gates/artifacts/<artifact>.md --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+```
+
+这个校验器只做确定性的包结构和 artifact 字段检查。它不是工作流引擎、agent 运行时、hook 框架，也不是发版可信证明系统。
 
 ## 安装
 
@@ -76,13 +95,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-`-RunCanary` 会在复制后跑一次可搬运性自检，验证 skill 文档可读性、关键规则完整性和路径可达性；失败就别把这次安装当可用。
+`-RunCanary` 会在复制后跑现有 Windows PowerShell canary，验证 skill 文档可读性、关键规则完整性和路径可达性；失败就别把这次安装当可用。
 
-Claude Code、Codex、Cursor 的 hook/config 接入口不同，所以每个宿主都必须单独安装、单独验证。一个宿主的 canary 通过，不代表另一个宿主也会执行 hook。其它兼容运行环境可以读取核心 skill 文档，但需要自行接入安装路径、hook 机制并跑 canary。Claude/Codex/Cursor 的 hook 或脚本接入口径见 `references/install-and-hooks.md`。
+Claude Code、Codex、Cursor 的 hook/config 接入口不同，所以每个宿主都必须单独安装、单独验证。一个宿主的 canary 通过，不代表另一个宿主也会执行 hook。其它兼容运行环境如果支持读取类似 skill 的 Markdown 规则，可以自行适配核心文档，但安装路径、hook 机制和 canary 证明都要自己补。宿主能力分层见 `references/install-and-hooks.md`。
 
 ## 怎么开始
 
-跟 AI 说"跑四门""做 formal gate 审查""封板前过一遍门禁"即可触发。写规范文档时它会主动先走需求澄清门。日常小改不用管。
+跟 AI 说"跑四门""做 formal gate 审查""封板前过一遍门禁"即可触发。写 OpenSpec、PRD、SDD、issue brief、设计说明等需求文档时，它会主动先走需求澄清门。日常小改不用管。
+
+OpenSpec 只是需求文档 adapter 之一，不是唯一正式路径。OpenSpec 和通用 Markdown 需求包的映射规则见 `references/requirement-document-adapters.md`。
+
+## 第二阶段发版可信证明
+
+第一阶段只交付跨平台校验入口和文档边界，不交付 checksums、artifact attestation、npm provenance、签名或同等发版可信证明。这些属于第二阶段；没做之前，不得把它们说成已交付能力。
 
 ## Skill 行为检查
 
@@ -98,6 +123,7 @@ formal-gates/
   references/               # 按需加载的各门细则
     requirements-clarification-gate.md   # 需求澄清门
     requirements-clarification-artifacts.md # 需求澄清门记录字段
+    requirement-document-adapters.md     # OpenSpec 和通用需求文档 adapter
     qa-test-gate.md                      # 测试门
     complexity-gate.md                   # 复杂度门（含 Complexity Contract、预算）
     architecture-health-gate.md          # 架构门
@@ -105,6 +131,8 @@ formal-gates/
     post-development-artifacts.md        # 四门正式记录字段和命令
     install-and-hooks.md                 # 安装、hook、canary、manifest 和多宿主接入
   scripts/                  # PowerShell + Python 门禁脚本
+  cmd/                      # Go 跨平台校验 CLI
+  internal/                 # Go 校验实现
   hooks/                    # enforce-gate-sequence.ps1（机器侧顺序与字段强制）
   agents/                   # 独立门禁审查 agent 提示词和可选 host 配置
   examples/                 # GateWorkflow、行为检查 prompt 等样例

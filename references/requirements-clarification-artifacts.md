@@ -28,7 +28,7 @@ The validator blocks these failures:
 - `Dimension coverage:` field is missing or empty;
 - `gate_route` is missing, does not match the current workflow/snapshot, or routes somewhere other than proceed.
 
-The hook also blocks writes to OpenSpec/PRD/SDD/start-readiness/phase Markdown files and formal PRD/requirements/specs `.txt` files when the current worktree has no recorded `requirements-clarification-gate` PASS covering that target path. This is the pre-document hard stop; it is separate from the later post-development gates.
+The hook also blocks writes to requirement documents such as OpenSpec/PRD/SDD/start-readiness/phase Markdown files and formal PRD/requirements/specs `.txt` files when the current worktree has no recorded `requirements-clarification-gate` PASS covering that target path. This is the pre-document hard stop; it is separate from the later post-development gates.
 
 ## Recording Command
 
@@ -101,6 +101,8 @@ OpenSpec impact:
 Evidence needed:
 ```
 
+`OpenSpec impact:` is a legacy machine-field name kept for compatibility with the existing PowerShell validator. For generic requirement documents, treat it as the format-specific document impact field and record the covered target precisely. Adapter mapping rules live in `references/requirement-document-adapters.md`.
+
 The alignment artifact must not contain placeholders, open items, inferred items, or doc-derived items when recording PASS. If there was an earlier PASS for the same workflow, `Previous alignment artifact` must point to that latest historical alignment artifact unless this is the first run.
 
 ## Decision Record Required Fields
@@ -119,7 +121,7 @@ Approval scope: requirements-clarification-gate
 
 ## Covered Formal Targets Rules
 
-`Covered formal targets` is a comma-separated list of relative file paths or directory prefixes. Do not use `.`, `/`, `*`, an absolute path, or a broad directory that can cover unrelated documents. For an OpenSpec change, prefer `openspec/changes/<change>/`.
+`Covered formal targets` is a comma-separated list of relative file paths or directory prefixes. Do not use `.`, `/`, `*`, an absolute path, or a broad directory that can cover unrelated documents. For an OpenSpec change, prefer `openspec/changes/<change>/`; for a generic document bundle, name the concrete PRD/SDD/issue/design-brief path or bundle directory.
 
 ## SKIPPED_BY_USER Rules
 

@@ -9,6 +9,8 @@ Candidate package directories must keep this shape:
 ```text
 formal-gates/
   SKILL.md
+  cmd/
+  internal/
   agents/
   examples/
   hooks/
@@ -17,6 +19,22 @@ formal-gates/
 ```
 
 `scripts/` and `hooks/` must be copied with the package. Do not depend on stale loose skills or global original paths.
+
+## Portable Go Validation
+
+The cross-platform package and artifact validator is:
+
+```bash
+go run ./cmd/formal-gates-validate package --root <formal-gates>
+```
+
+To validate one artifact:
+
+```bash
+go run ./cmd/formal-gates-validate artifact --root <repo> --file <artifact> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot>
+```
+
+This Go path is the portable validation entrypoint for Windows, macOS, and Linux. It does not require PowerShell on macOS or Linux. It is not a workflow engine, hook runtime, persistent report system, cache, or release-trust mechanism.
 
 ## Maintained Source
 
@@ -32,6 +50,30 @@ Scripts support Windows PowerShell 5 and PowerShell 7. Examples use `<ps>` as th
 - PowerShell 7: `pwsh -NoProfile`
 
 Bundled scripts continue under the current PowerShell. PowerShell 7 is not required.
+
+PowerShell remains the Windows-compatible install, hook, gate-state, and canary path. Do not document PowerShell as a macOS or Linux prerequisite for portable package validation.
+
+## Host Capability Levels
+
+Use these four capability categories when describing host support:
+
+- readable skill support;
+- install guidance;
+- hook configuration;
+- hook blocking proven by live canary.
+
+Current package scope:
+
+| Host | Readable skill support | Install guidance | Hook configuration | Hook blocking proven by live canary |
+|---|---|---|---|---|
+| Claude Code | supported | bundled installer | bundled command-hook guidance | not claimed without same-host canary |
+| Codex | supported | bundled installer | bundled command-hook guidance | not claimed without same-host canary |
+| Cursor | project-rule or markdown guidance | bundled installer | bundled `hooks.json` guidance | not claimed without same-host canary |
+| Gemini | manual markdown adaptation | not bundled | not bundled | not claimed |
+| OpenCode | manual markdown adaptation | not bundled | not bundled | not claimed |
+| Windsurf | manual markdown adaptation | not bundled | not bundled | not claimed |
+
+This is a compact capability statement, not a broad host-path registry. Do not add per-version path tables unless a specific host integration is implemented and canaried.
 
 ## Install To Claude
 
@@ -251,6 +293,10 @@ Run this script to check that the package can be copied into a temporary project
 ```
 
 It validates package portability, script execution, and basic gate-state recording. It is not final QA for a real project.
+
+## Phase 2 Release Trust
+
+Phase 1 does not ship checksums, artifact attestation, npm provenance, signing, or equivalent release-trust evidence. Those controls are Phase 2 work. Do not claim release provenance, signed artifacts, npm package provenance, or equivalent trust guarantees from the Phase 1 validator or CI matrix.
 
 ## Codex Hook Canary
 

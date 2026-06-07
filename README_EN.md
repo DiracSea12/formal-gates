@@ -2,7 +2,7 @@
 
 > AI Code Quality Gates: 1 pre-work gate for alignment + 4 post-work gates for quality. Before AI starts coding, align on requirements. After completion, independent review AI validates through each checkpoint before release.
 
-This is an Agent Skill package. The core skill documents can be read by any Agent Skill compatible runtime; the bundled installer and hook paths currently declare support for Claude Code, Codex, and Cursor. Any host claiming hooks block bad gate flow must prove it with a live canary on that host.
+This is an Agent Skill package. The core skill documents can be read by any Agent Skill compatible runtime; the bundled installer and hook paths currently declare support for Claude Code, Codex, and Cursor. Gemini, OpenCode, and Windsurf are documented at explanation level only. Any host claiming hooks block bad gate flow must prove it with a live canary on that host.
 
 Chinese README: [README.md](README.md)
 
@@ -36,7 +36,7 @@ This is the **only gate actively triggered by the skill** (automatically runs wh
 ## Core Mechanism: Preventing AI Self-endorsement
 
 - Pass verdicts must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers.
-- Each gate's verdict is recorded as an **artifact**, with **machine-side mandatory validation** via PowerShell scripts: missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected by validators. Configured and live-tested hooks can block them at command time.
+- Each gate's verdict is recorded as an **artifact**, with **machine-side mandatory validation**. The Go validator checks package and artifact shape on Windows, macOS, and Linux; Windows PowerShell scripts remain the existing gate-state, install, hook, and canary path. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected by validators. Configured and live-tested hooks can block them at command time.
 - With configured hooks or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it. Without hooks, explicit script validation is still required.
 
 ## When to Use / Not Use
@@ -51,9 +51,28 @@ For routine small changes, it stays silent and doesn't interfere.
 
 ## Requirements
 
-- Windows + PowerShell 5 or 7
+- Go 1.22+ for portable package and artifact validation on Windows, macOS, and Linux
+- Windows + PowerShell 5 or 7 for bundled install, hook, gate-state, and canary scripts
 - Version control: Git / SVN / No VCS (file hash snapshots) all supported
 - Complexity scripts require Python 3.x or 2.7
+
+macOS and Linux package validation do not require PowerShell. PowerShell remains the Windows-compatible workflow path for the current install and hook scripts.
+
+## Portable Validation
+
+Run the Go validator from the package root:
+
+```bash
+go run ./cmd/formal-gates-validate package --root .
+```
+
+Validate a specific formal artifact when needed:
+
+```bash
+go run ./cmd/formal-gates-validate artifact --root . --file .claude/gates/artifacts/<artifact>.md --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+```
+
+This validator performs deterministic package and artifact checks. It is not a workflow engine, agent runtime, hook framework, or release-trust system.
 
 ## Installation
 
@@ -76,13 +95,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-`-RunCanary` runs portability self-checks after copying, verifying skill document readability, core rule completeness, and path accessibility. If it fails, don't treat this installation as usable.
+`-RunCanary` runs the existing Windows PowerShell canary after copying, verifying skill document readability, core rule completeness, and path accessibility. If it fails, don't treat this installation as usable.
 
-Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks. Other compatible runtimes can read the core skill documents, but they need their own install path, hook integration, and canary proof. Hook and script integration details live in `references/install-and-hooks.md`.
+Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks. Other compatible runtimes can read or adapt the core skill documents if their environment supports it, but they need their own install path, hook integration, and canary proof. Host capability details live in `references/install-and-hooks.md`.
 
 ## Getting Started
 
-Tell the AI "run four gates," "do formal gate review," or "validate before seal" to trigger the process. When writing specification documents, it will automatically run the requirements clarification gate first. For routine small changes, no action needed.
+Tell the AI "run four gates," "do formal gate review," or "validate before seal" to trigger the process. When writing requirement documents such as OpenSpec, PRD, SDD, issue briefs, or design notes, it will automatically run the requirements clarification gate first. For routine small changes, no action needed.
+
+OpenSpec is one requirement-document adapter, not the only supported path. Adapter guidance for OpenSpec and generic markdown requirement bundles lives in `references/requirement-document-adapters.md`.
+
+## Phase 2 Release Trust
+
+Phase 1 adds portable validation and documentation boundaries. It does not deliver checksums, artifact attestation, npm provenance, signing, or equivalent release-trust evidence. Those controls are Phase 2 work and must be implemented before the package makes release-trust claims.
 
 ## Skill Behavior Checks
 
@@ -98,6 +123,7 @@ formal-gates/
   references/               # Gate-specific rules, loaded on demand
     requirements-clarification-gate.md   # Requirements clarification gate
     requirements-clarification-artifacts.md # Requirements clarification recording fields
+    requirement-document-adapters.md     # OpenSpec and generic requirement-document adapters
     qa-test-gate.md                      # Test gate
     complexity-gate.md                   # Complexity gate (includes Complexity Contract, budgets)
     architecture-health-gate.md          # Architecture gate
@@ -105,6 +131,8 @@ formal-gates/
     post-development-artifacts.md        # Formal post-development recording fields and commands
     install-and-hooks.md                 # Installation, hooks, canaries, manifests, and multi-host integration
   scripts/                  # PowerShell + Python gate scripts
+  cmd/                      # Go portable validation CLI
+  internal/                 # Go validation implementation
   hooks/                    # enforce-gate-sequence.ps1 (machine-side sequence and field enforcement)
   agents/                   # Independent gate agent prompts and optional host config
   examples/                 # GateWorkflow, behavior-check prompts, and other samples

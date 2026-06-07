@@ -1,26 +1,79 @@
 {
   "name": "formal-gates",
-  "description": "Agent Skill compatible AI code quality gate package. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, and Cursor. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible AI code quality gate package. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, and Cursor. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Claude Code",
       "support": "host-target",
+      "capabilities": {
+        "readable_skill_support": "supported",
+        "install_guidance": "bundled-installer",
+        "hook_configuration": "bundled-command-hook-guidance",
+        "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
+      },
       "caveat": "Install the full package as a Claude skill; command hook support requires configured settings and a live canary on Claude Code."
     },
     {
       "name": "Codex",
       "support": "host-target",
+      "capabilities": {
+        "readable_skill_support": "supported",
+        "install_guidance": "bundled-installer",
+        "hook_configuration": "bundled-command-hook-guidance",
+        "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
+      },
       "caveat": "Install the full package as a Codex skill; hook enforcement requires Codex hook/config setup and a live canary on Codex. This package does not claim Codex plugin distribution."
     },
     {
       "name": "Cursor",
       "support": "host-target",
+      "capabilities": {
+        "readable_skill_support": "project-rule-or-markdown-guidance",
+        "install_guidance": "bundled-installer",
+        "hook_configuration": "bundled-hooks-json-guidance",
+        "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
+      },
       "caveat": "Install Cursor hook support through hooks.json; hook enforcement requires a live canary on Cursor."
+    },
+    {
+      "name": "Gemini",
+      "support": "explanation-level",
+      "capabilities": {
+        "readable_skill_support": "manual-markdown-adaptation",
+        "install_guidance": "not-bundled",
+        "hook_configuration": "not-bundled",
+        "hook_blocking_live_canary": "not-claimed"
+      },
+      "caveat": "Gemini may use the readable workflow guidance if its environment supports equivalent instruction loading; this package ships no Gemini installer or hook target."
+    },
+    {
+      "name": "OpenCode",
+      "support": "explanation-level",
+      "capabilities": {
+        "readable_skill_support": "manual-markdown-adaptation",
+        "install_guidance": "not-bundled",
+        "hook_configuration": "not-bundled",
+        "hook_blocking_live_canary": "not-claimed"
+      },
+      "caveat": "OpenCode may use the readable workflow guidance if its environment supports equivalent instruction loading; this package ships no OpenCode installer or hook target."
+    },
+    {
+      "name": "Windsurf",
+      "support": "explanation-level",
+      "capabilities": {
+        "readable_skill_support": "manual-markdown-adaptation",
+        "install_guidance": "not-bundled",
+        "hook_configuration": "not-bundled",
+        "hook_blocking_live_canary": "not-claimed"
+      },
+      "caveat": "Windsurf may use the readable workflow guidance if its environment supports equivalent instruction loading; this package ships no Windsurf installer or hook target."
     }
   ],
   "package_parts": [
     "SKILL.md",
     "references/",
+    "cmd/",
+    "internal/",
     "scripts/",
     "hooks/",
     "agents/",
@@ -43,6 +96,7 @@
     "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary"
   ],
   "verification_commands": [
+    "go run ./cmd/formal-gates-validate package --root .",
     "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\test-portable-openspec-canary.ps1 -SkillPath ."
   ],
   "external_validators": [
@@ -54,13 +108,19 @@
     }
   ],
   "validation_notes": [
+    "The Go validation command is the portable package and artifact validation entrypoint for Windows, macOS, and Linux.",
+    "PowerShell commands remain the Windows-compatible install, hook, and canary path; macOS and Linux package validation must not require PowerShell.",
     "verification_commands contains only repo-local commands runnable from this package root.",
     "external_validators lists optional validators outside this package and must not be treated as directly executable repo-local commands."
   ],
   "support_caveats": [
     "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, and Cursor have bundled installer/hook target entries.",
-    "Claude Code, Codex, and Cursor are separate host targets.",
+    "Claude Code, Codex, Cursor, Gemini, OpenCode, and Windsurf are described by readable-skill, install-guidance, hook-configuration, and live-canary-proven blocking capability levels.",
     "Hook enforcement claims require live canary evidence on the specific host.",
     "A passing canary on one host does not prove another host. Do not claim Codex plugin distribution from this package."
+  ],
+  "release_trust": [
+    "Phase 1 does not ship checksums, artifact attestation, npm provenance, signing, or equivalent release-trust evidence.",
+    "Phase 2 must define and implement release-trust evidence before public release claims rely on those controls."
   ]
 }
