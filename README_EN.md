@@ -37,7 +37,7 @@ This is the **only gate actively triggered by the skill** (automatically runs wh
 
 - Pass verdicts must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers.
 - Each gate's verdict is recorded as an **artifact**, with **machine-side mandatory validation**. The Go validator checks package and artifact shape on Windows, macOS, and Linux; Windows PowerShell scripts remain the existing gate-state, install, hook, and canary path. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected by validators. Configured and live-tested hooks can block them at command time.
-- With configured hooks or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it. Without hooks, explicit script validation is still required.
+- With configured and same-host live-tested hooks, or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it. Without hooks, or when hook blocking has not been proven on that host, explicit script validation is still required.
 
 ## When to Use / Not Use
 
@@ -98,6 +98,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 `-RunCanary` runs the existing Windows PowerShell canary after copying, verifying skill document readability, core rule completeness, and path accessibility. If it fails, don't treat this installation as usable.
 
 Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks. Other compatible runtimes can read or adapt the core skill documents if their environment supports it, but they need their own install path, hook integration, and canary proof. Host capability details live in `references/install-and-hooks.md`.
+
+Be especially careful with Codex: this package can install a Codex skill and can write Codex hook configuration, but that does not prove `codex exec` is hard-blocked by hooks. On 2026-06-08, a Windows/npm Codex CLI 0.137.0 live canary showed that an invalid formal PASS command ran through the `command_execution` path, created the marker file, and produced zero hook payloads; a lifecycle diagnostic for `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` also produced zero payloads. OpenAI's Codex hooks documentation also says `PreToolUse` is not a complete enforcement boundary and does not intercept every shell call. For Codex, treat hooks as an auxiliary guardrail only; formal enforcement must explicitly run `gate-workflow.ps1` / `gate-state.ps1` and verify artifacts.
 
 ## Getting Started
 

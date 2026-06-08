@@ -37,7 +37,7 @@ AI 写代码有几个通病，这套门禁专门拦：
 
 - 通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。
 - 每道门的结论要落成 **artifact**，由机器侧校验器检查：Go 校验器负责 Windows/macOS/Linux 上的包结构和 artifact 形状；Windows PowerShell 脚本继续负责现有 gate-state、安装、hook、canary 路径。缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论会被校验器拒绝。配置好并实测通过的 hook 可以在命令执行时拦截这些问题。
-- 配好 hook 或使用 `gate-workflow.ps1` 记录时，主 AI 想"自己盖章放行"会被机器层挡住；没接 hook 时仍要显式运行脚本校验。
+- 配好并在当前宿主实测通过的 hook，或使用 `gate-workflow.ps1` 记录时，主 AI 想"自己盖章放行"会被机器层挡住；没接 hook、或 hook 在该宿主未实测通过时，仍要显式运行脚本校验。
 
 ## 什么时候用 / 不用
 
@@ -98,6 +98,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 `-RunCanary` 会在复制后跑现有 Windows PowerShell canary，验证 skill 文档可读性、关键规则完整性和路径可达性；失败就别把这次安装当可用。
 
 Claude Code、Codex、Cursor 的 hook/config 接入口不同，所以每个宿主都必须单独安装、单独验证。一个宿主的 canary 通过，不代表另一个宿主也会执行 hook。其它兼容运行环境如果支持读取类似 skill 的 Markdown 规则，可以自行适配核心文档，但安装路径、hook 机制和 canary 证明都要自己补。宿主能力分层见 `references/install-and-hooks.md`。
+
+Codex 要特别小心：本包可以安装 Codex skill，也可以写 Codex hook 配置，但这不等于 `codex exec` 会被 hook 硬拦截。2026-06-08 在 Windows/npm Codex CLI 0.137.0 上的 live canary 显示：坏 formal PASS 命令走了 `command_execution` 路径，生成了 marker，且没有产生任何 hook payload；生命周期诊断里的 `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 也没有 payload。OpenAI Codex hooks 文档也说明 `PreToolUse` 不是完整强制边界，不能拦所有 shell 调用。因此 Codex 下不要把 hook 当门禁，只能当辅助 guardrail；正式门禁必须显式跑 `gate-workflow.ps1` / `gate-state.ps1` 并核对 artifact。
 
 ## 怎么开始
 
