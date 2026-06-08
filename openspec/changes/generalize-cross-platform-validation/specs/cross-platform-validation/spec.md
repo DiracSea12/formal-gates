@@ -72,3 +72,31 @@ Phase 1 documentation MUST NOT claim Phase 2 release-trust features as delivered
 - **WHEN** a maintainer inspects the proposal, design, and public documentation
 - **THEN** release-trust work is identified as Phase 2
 - **AND** Phase 1 acceptance does not require or claim delivered release signing, artifact attestation, npm provenance, or equivalent release-trust evidence
+
+### Requirement: Phase 2 hook and runtime proof scope
+
+The package MUST document Phase 2 hook and runtime work as future scope covering a Go-based hook core, cross-platform hook logic tests, installer verification, and separate Claude Code, Codex, and Cursor live canaries.
+
+Phase 1 documentation MUST NOT claim cross-platform hook enforcement, installer behavior, or host runtime interception as delivered.
+
+#### Scenario: Hook and runtime proof is visible but not falsely claimed
+
+- **GIVEN** the Phase 1 change is applied
+- **WHEN** a maintainer inspects the proposal, design, and public documentation
+- **THEN** hook core, installer verification, and host runtime live canaries are identified as Phase 2 work
+- **AND** Phase 1 acceptance does not require or claim delivered cross-platform hook enforcement or host runtime interception
+
+### Requirement: Current document-write gate remains usable on Windows
+
+The existing Windows/Claude formal-document write hook MUST allow a covered OpenSpec document write after requirements clarification PASS when the write target is covered and the matching `GateWorkflow` is provided in the Write tool content.
+
+This compatibility fix MUST stay limited to extracting `GateWorkflow` for formal document writes. It MUST NOT treat arbitrary Write content as general command intent, and it MUST NOT replace the Phase 2 Go hook core.
+
+#### Scenario: Write content carries GateWorkflow for a covered OpenSpec target
+
+- **GIVEN** requirements clarification PASS is recorded for a workflow and covers `openspec/changes/<change>/`
+- **AND** a Write-style tool targets `openspec/changes/<change>/proposal.md`
+- **AND** the tool content contains a matching `GateWorkflow={...}`
+- **WHEN** the current hook validates the document write
+- **THEN** the hook checks the recorded requirements-clarification PASS and covered target
+- **AND** the write is allowed when the recorded PASS matches the workflow, snapshot, and target

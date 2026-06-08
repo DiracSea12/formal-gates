@@ -1356,6 +1356,46 @@ gate_route:
     $docWriteAllowedOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $docWritePayloadAllowed 0
     Add-Check ([ref]$summary) 'formal-document-write-after-clarification-allowed' $true $docWriteAllowedOutput
 
+    $contentOnlyWorkflow = @{
+        gate = 'requirements-clarification-gate'
+        workflowId = $workflowId
+        changeSnapshot = $changeSnapshot
+        worktree = $tempRepo
+    } | ConvertTo-Json -Depth 8 -Compress
+    $contentOnlyDocWritePayload = @{
+        tool_name = 'Write'
+        cwd = $tempRepo
+        tool_input = @{
+            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/proposal.md')
+            content = "# Proposal`nGateWorkflow=$contentOnlyWorkflow`n"
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $contentOnlyDocWriteOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $contentOnlyDocWritePayload 0
+    Add-Check ([ref]$summary) 'formal-document-write-content-only-gateworkflow-allowed' $true $contentOnlyDocWriteOutput
+
+    $ordinaryWorkflowProsePayload = @{
+        tool_name = 'Write'
+        cwd = $tempRepo
+        tool_input = @{
+            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/proposal.md')
+            content = "# Proposal`nWorkflow: draft approval steps`n"
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $ordinaryWorkflowProseOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $ordinaryWorkflowProsePayload 2
+    $ordinaryWorkflowProsePassed = $ordinaryWorkflowProseOutput -match 'workflowId and GateWorkflow.changeSnapshot are required' -and $ordinaryWorkflowProseOutput -notmatch 'Malformed GateWorkflow JSON'
+    Add-Check ([ref]$summary) 'formal-document-write-ordinary-workflow-prose-not-malformed-json' $ordinaryWorkflowProsePassed $ordinaryWorkflowProseOutput
+
+    $nonFormalMalformedWorkflowPayload = @{
+        tool_name = 'Write'
+        cwd = $tempRepo
+        tool_input = @{
+            file_path = (Join-Path $tempRepo 'notes.txt')
+            content = "Workflow={not json`nGateWorkflow={also not json`n"
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $nonFormalMalformedWorkflowOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $nonFormalMalformedWorkflowPayload 0
+    Add-Check ([ref]$summary) 'non-formal-write-malformed-workflow-content-ignored' $true $nonFormalMalformedWorkflowOutput
+
     $applyPatchAllowedPayload = @{
         tool_name = 'apply_patch'
         cwd = $tempRepo

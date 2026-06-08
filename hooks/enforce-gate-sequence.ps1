@@ -176,6 +176,52 @@ function Get-StructuredWorkflow {
     return $null
 }
 
+function Get-WorkflowFromText([string]$Text, [string[]]$Keys = @('GateWorkflow', 'Workflow')) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $hasStructuredKey = $false
+    foreach ($name in $Keys) {
+        if ($Text -match '(?i)(^|[\s,;])' + [regex]::Escape($name) + '\s*[:=]') {
+            $hasStructuredKey = $true
+            break
+        }
+    }
+    $jsonText = Find-JsonObjectAfterKey $Text $Keys
+    if (-not [string]::IsNullOrWhiteSpace($jsonText)) { return Convert-ToWorkflowObject $jsonText }
+    if ($hasStructuredKey) {
+        Block-Gate 'Gate sequence blocked: structured GateWorkflow JSON is malformed.' 'Malformed GateWorkflow JSON.'
+    }
+    return $null
+}
+
+function Get-FormalDocumentWriteWorkflow([object[]]$Targets) {
+    $workflow = Get-StructuredWorkflow
+    if ($null -ne $workflow) { return $workflow }
+    if ($Targets.Count -eq 0) { return $null }
+    if ($toolName -notin @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) { return $null }
+
+    foreach ($fieldName in @('content', 'new_string', 'text')) {
+        if ($inputProperties.ContainsKey($fieldName)) {
+            $workflow = Get-WorkflowFromText ([string]$inputProperties[$fieldName]) @('GateWorkflow')
+            if ($null -ne $workflow) { return $workflow }
+        }
+    }
+
+    if ($inputProperties.ContainsKey('edits') -and $null -ne $inputProperties['edits']) {
+        foreach ($edit in @($inputProperties['edits'])) {
+            if ($null -eq $edit) { continue }
+            foreach ($fieldName in @('new_string', 'content', 'text')) {
+                $property = $edit.PSObject.Properties[$fieldName]
+                if ($null -ne $property) {
+                    $workflow = Get-WorkflowFromText ([string]$property.Value) @('GateWorkflow')
+                    if ($null -ne $workflow) { return $workflow }
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
 function Get-WorkflowField($Workflow, [string[]]$Names) {
     if ($null -eq $Workflow) { return $null }
     foreach ($prop in $Workflow.PSObject.Properties) {
@@ -463,7 +509,7 @@ function Assert-RequirementsClarificationPassForDocumentWrite {
     }
     if ($targets.Count -eq 0) { return }
 
-    $workflowForDoc = Get-StructuredWorkflow
+    $workflowForDoc = Get-FormalDocumentWriteWorkflow $targets
     $docWorkflowId = [string](Get-WorkflowField $workflowForDoc @('workflowId', 'WorkflowId', 'workflow_id'))
     $docSnapshot = [string](Get-WorkflowField $workflowForDoc @('changeSnapshot', 'ChangeSnapshot', 'snapshot'))
     $docWorktree = [string](Get-WorkflowField $workflowForDoc @('worktree', 'Worktree', 'repo', 'Repo', 'cwd', 'Cwd'))
