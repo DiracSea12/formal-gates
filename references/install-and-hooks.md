@@ -34,6 +34,14 @@ To validate one artifact:
 go run ./cmd/formal-gates-validate artifact --root <repo> --file <artifact> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
 
+To make one portable hook decision from a host-provided JSON payload:
+
+```bash
+go run ./cmd/formal-gates-validate hook < payload.json
+```
+
+The `hook` command returns compact JSON with `decision` and `reason`. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
+
 This Go path is the portable validation entrypoint for Windows, macOS, and Linux. It does not require PowerShell on macOS or Linux. It is not a workflow engine, hook runtime, persistent report system, cache, or release-trust mechanism.
 
 ## Maintained Source

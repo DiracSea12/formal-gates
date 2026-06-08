@@ -406,12 +406,16 @@ Output template: formal gate artifact
     $summary.copiedSkillPath = Format-Path $targetSkillPath
 
     $workflowScript = Join-Path $targetSkillPath 'scripts/gate-workflow.ps1'
+    $gateStateScript = Join-Path $targetSkillPath 'scripts/gate-state.ps1'
     $hookScript = Join-Path $targetSkillPath 'hooks/enforce-gate-sequence.ps1'
     if (-not (Test-Path -LiteralPath $workflowScript)) {
         throw "Copied skill is missing gate-workflow.ps1: $workflowScript"
     }
     if (-not (Test-Path -LiteralPath $hookScript)) {
         throw "Copied skill is missing enforce-gate-sequence.ps1: $hookScript"
+    }
+    if (-not (Test-Path -LiteralPath $gateStateScript)) {
+        throw "Copied skill is missing gate-state.ps1: $gateStateScript"
     }
     $requiredPackageFiles = @(
         'SKILL.md',
@@ -646,6 +650,18 @@ gate_route:
     $summary.artifactPaths.requirementsClarification = Format-Path $clarificationPath
     $summary.artifactPaths.requirementsDecision = Format-Path $decisionPath
     Add-Check ([ref]$summary) 'requirements-clarification-pass-recorded' $true $clarificationRel
+
+    $staleSameGateVerifyOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $gateStateScript,
+        '-Action', 'verify',
+        '-Gate', 'requirements-clarification-gate',
+        '-RequireVerdict', 'PASS',
+        '-RequireArtifactExists',
+        '-RequireWorkflowId', 'wf-unrelated-stale',
+        '-ChangeSnapshot', 'snap-unrelated-stale'
+    ) 1
+    $staleSameGateVerifyPassed = $staleSameGateVerifyOutput -match 'missing route gate=requirements-clarification-gate'
+    Add-Check ([ref]$summary) 'gate-state-same-gate-cross-workflow-stale-pass-blocked' $staleSameGateVerifyPassed $staleSameGateVerifyOutput
 
     $staleDocWritePayload = @{
         tool_name = 'Write'
@@ -1356,6 +1372,152 @@ gate_route:
     $docWriteAllowedOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $docWritePayloadAllowed 0
     Add-Check ([ref]$summary) 'formal-document-write-after-clarification-allowed' $true $docWriteAllowedOutput
 
+    $readOnlyShellPayloads = @(
+        [pscustomobject]@{
+            Name = 'rg-gateworkflow-formal-doc'
+            Command = 'rg "GateWorkflow" "openspec/changes/portable-formal-gates-canary/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'rg-write-token-tee-formal-doc'
+            Command = 'rg "tee" "openspec/changes/portable-formal-gates-canary/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'rg-write-token-writefile-formal-doc'
+            Command = 'rg "writeFile" "openspec/changes/portable-formal-gates-canary/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'rg-write-token-streamwriter-formal-doc'
+            Command = 'rg "StreamWriter" "openspec/changes/portable-formal-gates-canary/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'cat-formal-doc'
+            Command = 'cat "openspec/changes/portable-formal-gates-canary/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'rg-piped-to-select-string-formal-doc'
+            Command = 'rg "GateWorkflow" "openspec/changes/portable-formal-gates-canary/proposal.md" | Select-String "GateWorkflow"'
+        },
+        [pscustomobject]@{
+            Name = 'echo-gateworkflow'
+            Command = 'echo "GateWorkflow openspec/changes/x/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'echo-quoted-redirection-text-formal-doc'
+            Command = 'echo "> openspec/changes/x/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'python-string-only-formal-doc'
+            Command = 'python -c "print(''openspec/changes/x/proposal.md'')"'
+        },
+        [pscustomobject]@{
+            Name = 'python-string-only-write-token-formal-doc'
+            Command = 'python -c "print(''writeFileSync openspec/changes/x/proposal.md'')"'
+        },
+        [pscustomobject]@{
+            Name = 'set-content-nonformal-value-mentions-formal-doc'
+            Command = 'Set-Content -LiteralPath "notes.txt" -Value "openspec/changes/x/proposal.md"'
+        },
+        [pscustomobject]@{
+            Name = 'python-copy-formal-source-nonformal-destination'
+            Command = 'python -c "import shutil; shutil.copy(''openspec/changes/x/proposal.md'', ''notes-copy.txt'')"'
+        }
+    )
+    foreach ($readOnlyShell in $readOnlyShellPayloads) {
+        $readOnlyPayload = @{
+            tool_name = 'Shell'
+            cwd = $plainRepo
+            tool_input = @{
+                command = $readOnlyShell.Command
+            }
+        } | ConvertTo-Json -Depth 8 -Compress
+        $readOnlyOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $readOnlyPayload 0
+        Add-Check ([ref]$summary) "formal-document-readonly-shell-not-blocked-$($readOnlyShell.Name)" $true $readOnlyOutput
+    }
+
+    $readPipeToWriterPayload = @{
+        tool_name = 'Shell'
+        cwd = $plainRepo
+        tool_input = @{
+            GateWorkflow = @{
+                gate = 'requirements-clarification-gate'
+                workflowId = 'wf-read-pipe-writer'
+                changeSnapshot = 'snap-read-pipe-writer'
+                worktree = $plainRepo
+            }
+            command = 'rg "anything" "notes.txt" | python -c "import sys; open(''openspec/changes/x/proposal.md'', ''w'', encoding=''utf-8'').write(sys.stdin.read())"'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $readPipeToWriterOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $readPipeToWriterPayload 2
+    $readPipeToWriterPassed = $readPipeToWriterOutput -match 'Formal document write blocked before requirements clarification PASS'
+    Add-Check ([ref]$summary) 'formal-document-read-pipeline-to-writer-blocked' $readPipeToWriterPassed $readPipeToWriterOutput
+
+    $redirectionWritePayload = @{
+        tool_name = 'Shell'
+        cwd = $plainRepo
+        tool_input = @{
+            GateWorkflow = @{
+                gate = 'requirements-clarification-gate'
+                workflowId = 'wf-redirection-write'
+                changeSnapshot = 'snap-redirection-write'
+                worktree = $plainRepo
+            }
+            command = 'echo "# Proposal" > "openspec/changes/x/proposal.md"'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $redirectionWriteOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $redirectionWritePayload 2
+    $redirectionWritePassed = $redirectionWriteOutput -match 'Formal document write blocked before requirements clarification PASS'
+    Add-Check ([ref]$summary) 'formal-document-shell-redirection-write-blocked' $redirectionWritePassed $redirectionWriteOutput
+
+    $structuredContentPathPayload = @{
+        tool_name = 'Edit'
+        cwd = $plainRepo
+        tool_input = @{
+            file_path = (Join-Path $plainRepo 'notes.txt')
+            old_string = 'old'
+            new_string = 'Mention only: openspec/changes/x/proposal.md and GateWorkflow without writing a formal doc.'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $structuredContentPathOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $structuredContentPathPayload 0
+    Add-Check ([ref]$summary) 'formal-document-structured-content-path-not-target' $true $structuredContentPathOutput
+
+    $sharedRequirementsPayload = @{
+        tool_name = 'Write'
+        cwd = $tempRepo
+        tool_input = @{
+            GateWorkflow = @{
+                gate = 'requirements-clarification-gate'
+                workflowId = 'wf-child-doc-write'
+                changeSnapshot = 'snap-child-doc-write'
+                worktree = $tempRepo
+                requirementsWorkflowId = $workflowId
+                requirementsChangeSnapshot = $changeSnapshot
+            }
+            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/specs/cross-platform-validation/spec.md')
+            content = '# Child Spec'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $sharedRequirementsOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $sharedRequirementsPayload 0
+    Add-Check ([ref]$summary) 'formal-document-shared-requirements-route-allowed' $true $sharedRequirementsOutput
+
+    $partialSharedRequirementsPayload = @{
+        tool_name = 'Write'
+        cwd = $tempRepo
+        tool_input = @{
+            GateWorkflow = @{
+                gate = 'requirements-clarification-gate'
+                workflowId = 'wf-child-doc-write-partial'
+                changeSnapshot = 'snap-child-doc-write-partial'
+                worktree = $tempRepo
+                requirementsWorkflowId = $workflowId
+            }
+            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/specs/cross-platform-validation/spec.md')
+            content = '# Child Spec'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $partialSharedRequirementsOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $partialSharedRequirementsPayload 2
+    $partialSharedRequirementsPassed = $partialSharedRequirementsOutput -match 'requirementsWorkflowId and requirementsChangeSnapshot must be provided together'
+    Add-Check ([ref]$summary) 'formal-document-shared-requirements-route-partial-blocked' $partialSharedRequirementsPassed $partialSharedRequirementsOutput
+
     $contentOnlyWorkflow = @{
         gate = 'requirements-clarification-gate'
         workflowId = $workflowId
@@ -1503,6 +1665,23 @@ gate_route:
     $pythonInlinePassed = $pythonInlineOutput -match 'Formal document write blocked before requirements clarification PASS'
     Add-Check ([ref]$summary) 'formal-document-python-inline-write-blocked' $pythonInlinePassed $pythonInlineOutput
 
+    $pythonCopyPayload = @{
+        tool_name = 'Shell'
+        cwd = $plainRepo
+        tool_input = @{
+            GateWorkflow = @{
+                gate = 'requirements-clarification-gate'
+                workflowId = 'wf-python-copy-write'
+                changeSnapshot = 'snap-python-copy-write'
+                worktree = $plainRepo
+            }
+            command = 'python -c "import shutil; shutil.copy(''notes.txt'', ''openspec/changes/x/proposal.md'')"'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $pythonCopyOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $pythonCopyPayload 2
+    $pythonCopyPassed = $pythonCopyOutput -match 'Formal document write blocked before requirements clarification PASS'
+    Add-Check ([ref]$summary) 'formal-document-python-copy-destination-write-blocked' $pythonCopyPassed $pythonCopyOutput
+
     $nodeInlinePayload = @{
         tool_name = 'Shell'
         cwd = $plainRepo
@@ -1560,6 +1739,52 @@ gate_route:
     ) | Out-Null
     $summary.artifactPaths.qaExecution = Format-Path $qaArtifactPath
     Add-Check ([ref]$summary) 'qa-execution-pass-recorded' $true $qaArtifactRel
+
+    $utf8WorkflowId = 'wf-utf8-artifact-canary'
+    $utf8Snapshot = 'snap-utf8-artifact-canary'
+    $utf8ArtifactRel = '.claude/gates/artifacts/utf8-qa-execution.md'
+    $utf8ArtifactPath = Join-Path $tempRepo $utf8ArtifactRel
+    $utf8ChineseLine = [string]::new([char[]]@([char]0x4E2D, [char]0x6587, [char]0x8BC1, [char]0x636E, [char]0xFF1A, [char]0x8FD9, [char]0x884C, [char]0x5728, [char]0x0043, [char]0x0061, [char]0x0073, [char]0x0065, [char]0x002D, [char]0x0074, [char]0x006F, [char]0x002D, [char]0x0061, [char]0x0072, [char]0x0074, [char]0x0069, [char]0x0066, [char]0x0061, [char]0x0063, [char]0x0074, [char]0x0020, [char]0x0062, [char]0x0069, [char]0x006E, [char]0x0064, [char]0x0069, [char]0x006E, [char]0x0067, [char]0x0020, [char]0x524D, [char]0x9762))
+    Set-Utf8File $utf8ArtifactPath @"
+# QA Execution
+
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/qa-test-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Reviewer agent id: utf8-qa-agent
+Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
+No-anchor prompt: YES
+Approved case set: utf8 canary cases
+QA-owned evidence: utf8 canary evidence
+$utf8ChineseLine
+Case-to-artifact binding: utf8 case maps to utf8-qa-execution.md
+
+gate_route:
+  workflow_id: $utf8WorkflowId
+  change_snapshot: $utf8Snapshot
+  next_action: proceed
+  rework_owner: none
+  rerun_from: none
+"@
+    $utf8RecordOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'qa-test-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Stage', 'Execution',
+        '-Artifact', $utf8ArtifactRel,
+        '-Actor', 'utf8-qa-agent',
+        '-WorkflowId', $utf8WorkflowId,
+        '-ChangeSnapshot', $utf8Snapshot
+    ) 0
+    Add-Check ([ref]$summary) 'utf8-chinese-artifact-before-ascii-fields-recorded' $true $utf8RecordOutput
+    $summary.artifactPaths.utf8QaExecution = Format-Path $utf8ArtifactPath
 
     $hashWorkflowId = 'wf-artifact-hash-canary'
     $hashSnapshot = 'snap-artifact-hash-canary'
@@ -2172,7 +2397,12 @@ gate_route:
         [pscustomobject]@{ Name = 'list-focus-items'; Line = '- Focus items: verify the issue the main agent already suspects'; Expected = 'Focus items' },
         [pscustomobject]@{ Name = 'quote-what-to-verify'; Line = '> what to verify: confirm the main agent suspicion'; Expected = 'what to verify' },
         [pscustomobject]@{ Name = 'heading-focus-items'; Line = '### Focus items: verify the issue the main agent already suspects'; Expected = 'Focus items' },
-        [pscustomobject]@{ Name = 'quote-chinese-focus'; Line = '> ' + [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) + ': ' + [string]::new([char[]]@([char]0x4E3B, [char]0x4EE3, [char]0x7406, [char]0x6307, [char]0x5B9A, [char]0x7684, [char]0x98CE, [char]0x9669)); Expected = [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) }
+        [pscustomobject]@{ Name = 'quote-chinese-focus'; Line = '> ' + [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) + ': ' + [string]::new([char[]]@([char]0x4E3B, [char]0x4EE3, [char]0x7406, [char]0x6307, [char]0x5B9A, [char]0x7684, [char]0x98CE, [char]0x9669)); Expected = [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) },
+        [pscustomobject]@{ Name = 'quote-chinese-attention'; Line = '> ' + [string]::new([char[]]@([char]0x5173, [char]0x6CE8, [char]0x70B9)) + ': parser branch'; Expected = [string]::new([char[]]@([char]0x5173, [char]0x6CE8, [char]0x70B9)) },
+        [pscustomobject]@{ Name = 'quote-chinese-known-issues'; Line = '> ' + [string]::new([char[]]@([char]0x5DF2, [char]0x77E5, [char]0x95EE, [char]0x9898)) + ': stale finding'; Expected = [string]::new([char[]]@([char]0x5DF2, [char]0x77E5, [char]0x95EE, [char]0x9898)) },
+        [pscustomobject]@{ Name = 'quote-chinese-expected-answer'; Line = '> ' + [string]::new([char[]]@([char]0x9884, [char]0x671F, [char]0x7B54, [char]0x6848)) + ': PASS'; Expected = [string]::new([char[]]@([char]0x9884, [char]0x671F, [char]0x7B54, [char]0x6848)) },
+        [pscustomobject]@{ Name = 'quote-chinese-previous-findings'; Line = '> ' + [string]::new([char[]]@([char]0x4E0A, [char]0x8F6E, [char]0x53D1, [char]0x73B0)) + ': already fixed'; Expected = [string]::new([char[]]@([char]0x4E0A, [char]0x8F6E, [char]0x53D1, [char]0x73B0)) },
+        [pscustomobject]@{ Name = 'quote-chinese-what-to-verify'; Line = '> ' + [string]::new([char[]]@([char]0x9700, [char]0x8981, [char]0x9A8C, [char]0x8BC1)) + ': prior bug'; Expected = [string]::new([char[]]@([char]0x9700, [char]0x8981, [char]0x9A8C, [char]0x8BC1)) }
     )
     foreach ($anchoredCase in $anchoredDispatchCases) {
         $anchoredDispatchPromptRel = ".claude/gates/artifacts/anchored-dispatch-prompt-$($anchoredCase.Name).txt"

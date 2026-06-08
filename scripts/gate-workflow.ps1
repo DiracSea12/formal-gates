@@ -219,7 +219,7 @@ function Assert-AcceptedFinalVerificationAttempts([object[]]$AcceptedAttempts, [
             Write-Host "GATE_WORKFLOW_BLOCKED finalVerificationAcceptedAttemptArtifactMissing=$(Format-GatePath $attemptPath)"
             exit 1
         }
-        $attemptText = [string](Get-Content -LiteralPath $attemptPath -Raw)
+        $attemptText = [string](Get-Content -LiteralPath $attemptPath -Raw -Encoding UTF8)
         if ([string]::IsNullOrWhiteSpace($attemptText)) {
             Write-Host "GATE_WORKFLOW_BLOCKED finalVerificationAcceptedAttemptArtifactEmpty=$(Format-GatePath $attemptPath)"
             exit 1
