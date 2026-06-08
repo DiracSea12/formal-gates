@@ -13,10 +13,24 @@
 - [x] Run the existing Windows canary and the new cross-platform validation path.
 - [x] Fix current Windows/Claude formal-document Write gating so content-carried `GateWorkflow` can unlock a covered OpenSpec target after requirements clarification PASS.
 
-## Phase 2 Follow-up Tasks
+## Phase 2A Core Cross-platform Follow-up
 
-- [ ] Add a Go-based hook core for cross-platform allow/deny decisions without requiring PowerShell on macOS or Linux.
-- [ ] Add fixture-based hook logic tests for Claude/Codex/Cursor payload shapes on Windows, macOS, and Linux.
-- [ ] Add cross-platform installer or copy-verifier coverage for non-Windows package installation paths.
-- [ ] Add separate live canaries for Claude Code, Codex, and Cursor runtime interception.
-- [ ] Add release-trust evidence: checksums, artifact attestation, package provenance if package distribution is introduced, and signing or equivalent verification guidance.
+- [x] Add a small Go-based hook decision core for cross-platform allow/deny decisions without requiring PowerShell on macOS or Linux.
+- [x] Expose the hook decision core through the existing Go validation command surface instead of adding a new runtime framework.
+- [x] Add fixture-based hook logic tests for representative Claude Code, Codex, and Cursor payload shapes on Windows, macOS, and Linux.
+- [x] Document thin host wiring guidance that copies or invokes the shared hook decision logic without introducing an installer framework.
+- [x] Verify Phase 2A does not introduce a unified agent runtime, host registry, installer verifier, report/cache/state platform, daemon, service, or broad host-path table.
+
+## Phase 2B Claim-scoped Host Proof
+
+- [ ] Run a Claude Code live canary before claiming Claude Code hook blocking works for this package.
+- [ ] Run a Codex live canary before claiming Codex hook blocking works for this package.
+- [ ] Run a Cursor live canary before claiming Cursor hook blocking works for this package.
+- [ ] Keep each live canary result scoped to the specific host and environment that produced it.
+
+## Phase 2C Conditional Release Trust
+
+- [ ] Add checksums for published artifacts if release artifacts are introduced.
+- [ ] Add build provenance or artifact attestation if binary or generated release artifacts are introduced.
+- [ ] Add package provenance if npm or another package-manager distribution is introduced.
+- [ ] Add signing or equivalent verification guidance only when the chosen distribution channel requires it.

@@ -60,31 +60,55 @@ Hook enforcement claims MUST be limited to the specific host where live canary p
 - **THEN** Claude, Codex, Cursor, Gemini, OpenCode, and Windsurf support is described by capability level
 - **AND** unverified hook blocking is not claimed
 
-### Requirement: Phase 2 release-trust scope
+### Requirement: Phase 2A core hook decision scope
 
-The package MUST document Phase 2 release-trust work as future scope covering checksums, artifact attestation, npm provenance if npm packaging is introduced, or equivalent release verification evidence.
+The package MUST document Phase 2A as the core cross-platform follow-up for skill-package-scale hook logic.
 
-Phase 1 documentation MUST NOT claim Phase 2 release-trust features as delivered.
+Phase 2A MUST stay limited to a small Go-based hook decision core, minimal CLI exposure, fixture-based tests for representative Claude Code, Codex, and Cursor payload shapes, and thin host wiring guidance.
 
-#### Scenario: Release trust is visible but not falsely claimed
+Phase 2A MUST NOT introduce a unified agent runtime, generalized hook framework, host registry, installer verifier, report/cache/state platform, daemon, service, or broad host-path table.
 
-- **GIVEN** the Phase 1 change is applied
-- **WHEN** a maintainer inspects the proposal, design, and public documentation
-- **THEN** release-trust work is identified as Phase 2
-- **AND** Phase 1 acceptance does not require or claim delivered release signing, artifact attestation, npm provenance, or equivalent release-trust evidence
+Phase 1 documentation MUST NOT claim Phase 2A hook decision logic as delivered.
 
-### Requirement: Phase 2 hook and runtime proof scope
-
-The package MUST document Phase 2 hook and runtime work as future scope covering a Go-based hook core, cross-platform hook logic tests, installer verification, and separate Claude Code, Codex, and Cursor live canaries.
-
-Phase 1 documentation MUST NOT claim cross-platform hook enforcement, installer behavior, or host runtime interception as delivered.
-
-#### Scenario: Hook and runtime proof is visible but not falsely claimed
+#### Scenario: Phase 2A stays small enough for a skill package
 
 - **GIVEN** the Phase 1 change is applied
 - **WHEN** a maintainer inspects the proposal, design, and public documentation
-- **THEN** hook core, installer verification, and host runtime live canaries are identified as Phase 2 work
-- **AND** Phase 1 acceptance does not require or claim delivered cross-platform hook enforcement or host runtime interception
+- **THEN** Phase 2A is identified as portable hook decision logic plus fixture tests
+- **AND** Phase 2A is not described as a runtime platform, installer framework, or release-trust system
+- **AND** Phase 1 acceptance does not require or claim delivered cross-platform hook decision logic
+
+### Requirement: Phase 2B claim-scoped host runtime proof
+
+The package MUST document Phase 2B live canaries as claim-scoped host proof, not as a default cross-platform runtime platform.
+
+Hook enforcement claims MUST still require a live canary on the specific host being claimed. A passing live canary for one host MUST NOT be used as proof for another host.
+
+Phase 1 and Phase 2A documentation MUST NOT claim host runtime interception, installer behavior, or live command blocking unless the matching host canary evidence exists.
+
+#### Scenario: Host blocking claims require matching host proof
+
+- **GIVEN** the Phase 1 change is applied
+- **WHEN** documentation claims hook blocking for Claude Code, Codex, or Cursor
+- **THEN** the claim is tied to live canary evidence from that same host
+- **AND** unproven hosts remain documented as readable, installable, or configurable only
+
+### Requirement: Phase 2C conditional release-trust scope
+
+The package MUST document Phase 2C release-trust work as conditional on shipping release artifacts, binaries, or package-manager distributions.
+
+If the project remains source-only skill distribution, Phase 2C MUST NOT be treated as required for the core cross-platform skill-package path.
+
+If release artifacts or package-manager distributions are introduced, Phase 2C MUST define the matching evidence for that distribution path, such as checksums, artifact attestation, package provenance, signing, or equivalent verification guidance.
+
+Phase 1 and Phase 2A documentation MUST NOT claim Phase 2C release-trust features as delivered.
+
+#### Scenario: Release trust is conditional rather than default bloat
+
+- **GIVEN** the Phase 1 change is applied
+- **WHEN** a maintainer inspects the proposal, design, and public documentation
+- **THEN** release-trust work is identified as conditional Phase 2C work
+- **AND** source-only skill distribution does not require checksums, attestation, package provenance, signing, or equivalent release-trust evidence for cross-platform completion
 
 ### Requirement: Current document-write gate remains usable on Windows
 

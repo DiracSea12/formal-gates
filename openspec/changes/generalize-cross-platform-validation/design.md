@@ -10,6 +10,8 @@ The change splits `formal-gates` portability into three bounded layers:
 
 OpenSpec becomes one adapter in the requirement-document layer. The core workflow should use generic language such as requirement document, design, tasks, spec, acceptance evidence, and requirement source.
 
+Phase 2 follows the same small-package shape used by mature skill repositories: keep the skill portable through plain files, optional scripts, thin host-specific setup, and targeted tests. Cross-platform support does not require building a unified runtime, installer platform, canary harness, or release-trust framework by default.
+
 ## Go Validation Entrypoint
 
 The portable CLI should provide a small command surface focused on current validation needs:
@@ -51,28 +53,38 @@ Host documentation must use separate capability categories:
 
 Hook blocking can only be claimed for a specific host after live canary proof on that host.
 
-## Phase 2 Release Trust
+## Phase 2A Hook Decision Core
 
-Phase 2 must be documented as follow-up work for release trust:
+Phase 2A is the default cross-platform follow-up. It should add only the smallest portable hook decision surface needed to reuse the same allow/deny rules from host hooks:
 
-- checksums;
+- a Go-based hook decision core that reads one host hook payload from stdin and returns a deterministic allow or deny result;
+- fixture-based tests for representative Claude Code, Codex, and Cursor payload shapes;
+- a minimal CLI exposure, preferably reusing the existing `formal-gates-validate` command tree;
+- no persistent state, host registry, report layer, cache, service, daemon, runtime framework, or installer verifier.
+
+Phase 2A may be considered the core cross-platform skill-package completion point when the public claim is limited to portable package validation plus portable hook decision logic. It still must not be described as live host enforcement proof.
+
+## Phase 2B Host Runtime Proof
+
+Phase 2B is not a default platform build-out. It is a claim-scoped proof step:
+
+- if documentation claims that Claude Code blocks a bad formal gate command, run a Claude Code live canary;
+- if documentation claims that Codex blocks a bad formal gate command, run a Codex live canary;
+- if documentation claims that Cursor blocks a bad formal gate command, run a Cursor live canary;
+- a passing canary for one host proves only that host.
+
+Phase 2B may use direct temporary-home or temporary-project setup checks when needed, but it must stay host-specific and small. It must not become a cross-host installer framework or generalized runtime test platform.
+
+## Phase 2C Conditional Release Trust
+
+Phase 2C is required only if the project starts shipping release artifacts, binaries, or package-manager distributions. Depending on the distribution path, evidence may include:
+
+- checksums for published artifacts;
 - GitHub artifact attestation or equivalent build provenance;
 - npm provenance or equivalent package provenance if an npm package is introduced;
-- signed release or equivalent verification guidance.
+- signed release or equivalent verification guidance when the chosen channel needs it.
 
-Phase 1 must not claim these features as delivered.
-
-## Phase 2 Hook And Runtime Proof
-
-Phase 2 must be documented as follow-up work for cross-platform hook and runtime proof:
-
-- a Go-based hook core that reads host hook payloads from stdin and returns allow or deny results without requiring PowerShell on macOS or Linux;
-- thin host shims or wrappers that only locate and invoke the hook core;
-- installer verification for Claude, Codex, and Cursor configuration writes in temporary homes or project workspaces;
-- fixture-based hook logic tests on Windows, macOS, and Linux;
-- separate live canaries for Claude Code, Codex, and Cursor that prove the host actually sends a hook payload and blocks a bad formal gate command.
-
-Phase 1 must not claim these features as delivered. A passing package validation CI matrix does not prove hook logic, installer behavior, or host runtime interception.
+For source-only skill distribution, Phase 2C remains optional documentation guidance rather than a required implementation slice.
 
 ## Phase 1 Document-Write Gate Bugfix
 
@@ -90,3 +102,4 @@ This bugfix is not the Go hook core and must not grow into the Phase 2 hook/runt
 - Replacing PowerShell with Node would move the runtime dependency rather than remove it.
 - Letting the Go CLI grow into a workflow engine would turn a portability change into a platform project.
 - Reading every Write content body as generic command intent would create false positives; content fallback must be limited to formal document-write `GateWorkflow` extraction.
+- Treating every host canary, installer check, and release-trust item as mandatory Phase 2 work would make the skill heavier than comparable skill packages for no current cross-platform gain.

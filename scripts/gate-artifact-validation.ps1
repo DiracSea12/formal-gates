@@ -312,7 +312,12 @@ function Get-FormalGateDispatchPromptValidationErrors([string]$BasePath, [string
         'suspicions',
         'what to verify',
         ([string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5))),
-        ([string]::new([char[]]@([char]0x521A, [char]0x4FEE, [char]0x4E86)))
+        ([string]::new([char[]]@([char]0x521A, [char]0x4FEE, [char]0x4E86))),
+        ([string]::new([char[]]@([char]0x5173, [char]0x6CE8, [char]0x70B9))),
+        ([string]::new([char[]]@([char]0x5DF2, [char]0x77E5, [char]0x95EE, [char]0x9898))),
+        ([string]::new([char[]]@([char]0x9884, [char]0x671F, [char]0x7B54, [char]0x6848))),
+        ([string]::new([char[]]@([char]0x4E0A, [char]0x8F6E, [char]0x53D1, [char]0x73B0))),
+        ([string]::new([char[]]@([char]0x9700, [char]0x8981, [char]0x9A8C, [char]0x8BC1)))
     )
     foreach ($part in ($Value -split ',')) {
         $pathText = [regex]::Replace($part.Trim().Trim('"', "'"), '(?i)\s+sha(?:256)?\s*[:=]\s*[a-f0-9]{64}\b', '').Trim()
@@ -836,7 +841,7 @@ function Test-FormalGateArtifactFields([string]$ArtifactPath, [string[]]$Require
     if (-not (Test-Path -LiteralPath $ArtifactPath)) {
         return [pscustomobject]@{ Ok = $false; Missing = @("artifact missing: $ArtifactPath") }
     }
-    $text = [string](Get-Content -LiteralPath $ArtifactPath -Raw)
+    $text = [string](Get-Content -LiteralPath $ArtifactPath -Raw -Encoding UTF8)
     $missing = @($RequiredFields | Where-Object { $text -notmatch [regex]::Escape($_) })
     if ($GateName -ne 'requirements-clarification-gate') {
         $missing += @(Get-FormalGatePromptIntegrityErrors $text $GateName)

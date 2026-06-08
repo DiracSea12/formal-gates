@@ -1,6 +1,6 @@
 ---
 name: formal-gates
-description: Proactively use before writing or modifying requirement documents such as OpenSpec/PRD/SDD/start-readiness documents, before non-trivial implementation that requires requirement-document coverage and formal handoff, and when the user explicitly asks for formal gates, four-gate workflow, requirement clarification, release/seal validation, QA gate, complexity gate, architecture-health gate, code-quality gate, GateWorkflow hooks, zero-context gate review, or formal-gates AB testing. Do not use for ordinary chat, brainstorming, light tasks, wording edits, explanations, or casual requirement discussion that is not entering formal mode.
+description: Use when the main orchestrating agent is explicitly asked to run, package, install, test, or diagnose the formal-gates workflow, four-gate sequence, requirement clarification gate, release/seal validation, GateWorkflow hooks, host canaries, or formal-gates A/B testing. Do not use for ordinary code review, zero-context review subagent tasks, reading OpenSpec files, implementation, debugging, brainstorming, wording edits, or casual requirement discussion unless this agent is being asked to orchestrate formal-gates.
 ---
 
 # Formal Gates
@@ -49,6 +49,7 @@ Use these visible stops before moving to the next route. They are checkpoints, n
 - Subagents must verify their starting snapshot: git reports `git rev-parse --short HEAD`; SVN or non-git reports the provided `changeSnapshot`. Dirty formal snapshots use the current worktree named by `GateWorkflow.worktree`; do not silently start from `origin/main`, `origin/master`, or a guessed remote base.
 - Formal PASS/FAIL/REVIEW verdicts must come from independent zero-context subagents; main agent cannot self-judge pass.
 - Formal review dispatch must use the matching file under `agents/`. Any self-written formal review prompt or anchored prompt is `PROCESS_VIOLATION`.
+- Formal review dispatch must explicitly say the reviewer must not load, invoke, or execute any skills, including `formal-gates`. 中文：派审查子代理时必须写明“不要加载、调用或执行任何技能，包括 formal-gates”。
 - Main agent must verify that independent gate artifact opinions are evidence-backed; main agent has veto power, not self-approval power. When hard factual conflicts exist with independent gate conclusions, record evidence and re-dispatch independent gate agent for review—cannot self-override to formal verdict.
 - For requirement-document proposal/design/spec/tasks/start-readiness "can-develop/can-start/pass" verdicts, must first have independent zero-context complexity review, architecture-health review, and cold-water review.
 - Independent gates require external orchestration. If current agent cannot dispatch independent subagents, cannot forge gate PASS, and should not treat entire requirement as failed implementation. Output `Gate Handoff Request` and hand off to main agent or external orchestrator to dispatch independent gate agent.
@@ -144,6 +145,8 @@ When dispatching subagents, must provide sufficient local facts:
 - Output template and required verifications.
 
 Formal review dispatch must use the matching file under `agents/`: `qa-test-gate.md`, `complexity-gate.md`, `architecture-health-gate.md`, `code-quality-gate.md`, or `cold-water-review.md`. If a review agent receives anchored dispatch, it must stop with `PROCESS_VIOLATION: main agent contaminated zero-context review`; it must not continue review or output PASS/FAIL/REVIEW.
+
+Review isolation / 审查隔离: every formal review dispatch prompt must state that the reviewer is an independent reviewer, not the formal-gates orchestrator, and must not load, invoke, or execute any skills. 审查者只读派工材料、bundle 和允许的仓库文件；不能把 formal-gates 流程知识当作审查依据。
 
 ## Output Standards
 
