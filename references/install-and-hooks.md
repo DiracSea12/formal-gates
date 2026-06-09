@@ -4,7 +4,7 @@ This file covers installation, hooks, canaries, manifests, and host integration.
 
 ## Package Structure
 
-Candidate package directories must keep this shape:
+Source candidate package directories must keep this shape:
 
 ```text
 formal-gates/
@@ -18,7 +18,7 @@ formal-gates/
   scripts/
 ```
 
-`scripts/` and `hooks/` must be copied with the package. Do not depend on stale loose skills or global original paths.
+Host skill installs copy the installable subset: `SKILL.md`, `agents/`, `examples/`, `hooks/`, `references/`, and `scripts/`. `cmd/` and `internal/` stay in the source package for validation.
 
 ## Portable Go Validation
 
@@ -85,7 +85,7 @@ This is a compact capability statement, not a broad host-path registry. Do not a
 
 ## Install To Claude
 
-Use the bundled installer to copy the full directory. Do not cherry-pick files:
+Use the bundled installer to copy the installable skill subset. Do not cherry-pick files:
 
 ```powershell
 # Install or replace the global Claude skill
@@ -98,7 +98,7 @@ Use the bundled installer to copy the full directory. Do not cherry-pick files:
 <ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-The installer copies the full `formal-gates` directory, refuses to replace targets outside `skills\formal-gates`, and removes `__pycache__`. `-RunCanary` runs the portable canary after copying; a failed canary means the install is not usable. `-ConfigureHook` writes Claude `settings.json` or Cursor `hooks.json`; it creates a `.bak` backup and only merges or updates formal-gates hooks.
+The installer copies the installable skill subset, refuses to replace targets outside `skills\formal-gates`, and removes `__pycache__`. `-RunCanary` runs the portable canary after copying; a failed canary means the install is not usable. `-ConfigureHook` writes Claude `settings.json` or Cursor `hooks.json`; it creates a `.bak` backup and only merges or updates formal-gates hooks.
 
 Claude manual install targets:
 
@@ -111,7 +111,7 @@ For copy-then-verify runs, copy the candidate into the project-local `.claude/sk
 
 ## Install To Codex
 
-Use the bundled installer to copy the full directory. Do not cherry-pick files:
+Use the bundled installer to copy the installable skill subset. Do not cherry-pick files:
 
 ```powershell
 # Install to the global Codex skill path
@@ -140,7 +140,7 @@ Cursor uses its Hooks surface, not a Claude-style skill loader. The installer ca
 <ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Cursor -Scope Global -Force -RunCanary -ConfigureHook
 ```
 
-The installer copies the package to `.cursor\formal-gates` and writes a `preToolUse` command hook into `.cursor\hooks.json` or `%USERPROFILE%\.cursor\hooks.json`.
+The installer copies the installable skill subset to `.cursor\formal-gates` and writes a `preToolUse` command hook into `.cursor\hooks.json` or `%USERPROFILE%\.cursor\hooks.json`.
 
 ## Candidate Package A/B Testing
 

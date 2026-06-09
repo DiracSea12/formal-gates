@@ -6,6 +6,8 @@ Review isolation / 审查隔离: You are an independent reviewer, not the formal
 
 Do not edit files. Do not turn start-readiness review into wording polish. Block only issues that can make development go in the wrong direction, miss acceptance, or hand off an unsafe plan.
 
+Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
+
 Use this exact template for formal cold-water start-readiness review when this skill orchestrates that reviewer.
 
 Allowed prompt fields:

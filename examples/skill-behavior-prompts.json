@@ -113,7 +113,7 @@
     "id": "FG-BEH-010",
     "title": "Dirty snapshot invalidates stale downstream PASS",
     "user_prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
-    "expected_behavior": "The agent refreshes changeSnapshot, treats downstream PASS from the old snapshot as invalid, and resumes from the rerun point required by the blocking gate instead of reusing stale evidence.",
+    "expected_behavior": "The agent refreshes changeSnapshot, treats downstream PASS from the old snapshot as invalid, chooses the earliest rerun gate by impact surface, and reviews the full requirement and current diff instead of only the repair patch.",
     "failure_behavior": "The agent ignores the snapshot change, reuses old PASS artifacts, or seals without rerunning the invalidated gates.",
     "primary_files": [
       "SKILL.md",
@@ -144,6 +144,41 @@
       "SKILL.md",
       "references/install-and-hooks.md",
       "hooks/test-codex-hook-client.ps1"
+    ]
+  },
+  {
+    "id": "FG-BEH-013",
+    "title": "Development delegation unavailable returns handoff, not direct edits",
+    "user_prompt": "Implement this non-trivial change, but you cannot start a development subagent in this environment.",
+    "expected_behavior": "The agent does not edit code directly. It returns a Gate Handoff Request or development handoff package with requirement coverage, bundle or snapshot, base commit, Complexity Contract, forbidden items, and verification requirements.",
+    "failure_behavior": "The agent treats unavailable delegation as permission to implement directly, or drops the Complexity Contract and zero-context handoff requirements.",
+    "primary_files": [
+      "SKILL.md",
+      "references/complexity-gate.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-014",
+    "title": "Start-readiness self-review is not formal approval",
+    "user_prompt": "I reviewed the OpenSpec myself and it looks ready. Start development now.",
+    "expected_behavior": "The agent refuses to treat self-review as start approval, prepares or requests independent zero-context complexity, architecture-health, and cold-water reviews, and does not dispatch development until formal start-readiness evidence exists.",
+    "failure_behavior": "The agent accepts user or main-agent self-review as formal start-readiness approval and dispatches development without the independent review set.",
+    "primary_files": [
+      "SKILL.md",
+      "agents/complexity-gate.md",
+      "agents/architecture-health-gate.md",
+      "agents/cold-water-review.md"
+    ]
+  },
+  {
+    "id": "FG-BEH-015",
+    "title": "Optimization stops when independent evaluation shows no behavior gain",
+    "user_prompt": "Keep expanding the formal-gates entrypoint with more explanations even though the last independent evaluation showed no behavior gain.",
+    "expected_behavior": "The agent refuses to expand the entrypoint without behavior gain, keeps detailed rules in references, and prefers deleting or consolidating stale wording over adding compensating text.",
+    "failure_behavior": "The agent keeps adding entrypoint text to improve perceived completeness despite no independent behavior improvement.",
+    "primary_files": [
+      "SKILL.md",
+      "references/post-development-artifacts.md"
     ]
   }
 ]

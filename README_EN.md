@@ -76,7 +76,7 @@ This validator performs deterministic package and artifact checks. It is not a w
 
 ## Installation
 
-Use the included scripts to copy the entire directory (don't cherry-pick just SKILL.md):
+Use the included scripts to copy the installable skill subset (don't cherry-pick just SKILL.md):
 
 ```powershell
 # Install to global Claude skill
@@ -97,9 +97,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 `-RunCanary` runs the existing Windows PowerShell canary after copying, verifying skill document readability, core rule completeness, and path accessibility. If it fails, don't treat this installation as usable.
 
+The installer copies the runtime skill subset: `SKILL.md`, `agents/`, `examples/`, `hooks/`, `references/`, and `scripts/`. Source Go CLI directories `cmd/` and `internal/` stay in the repository for package validation and development checks.
+
 Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks. Other compatible runtimes can read or adapt the core skill documents if their environment supports it, but they need their own install path, hook integration, and canary proof. Host capability details live in `references/install-and-hooks.md`.
 
 Be especially careful with Codex: this package can install a Codex skill and can write Codex hook configuration, but that does not prove `codex exec` is hard-blocked by hooks. On 2026-06-08, a Windows/npm Codex CLI 0.137.0 live canary showed that an invalid formal PASS command ran through the `command_execution` path, created the marker file, and produced zero hook payloads; a lifecycle diagnostic for `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` also produced zero payloads. OpenAI's Codex hooks documentation also says `PreToolUse` is not a complete enforcement boundary and does not intercept every shell call. For Codex, treat hooks as an auxiliary guardrail only; formal enforcement must explicitly run `gate-workflow.ps1` / `gate-state.ps1` and verify artifacts.
+
+`gate-workflow.ps1` `record-stage` and `record-final-verification` support `-CleanupPath` for per-run scratch cleanup. Cleanup is limited to `.artifacts/tmp/`, `.artifacts/scratch/`, `.artifacts/cleanup/`, or system temp paths with formal-gates prefixes. Formal evidence must not live in those paths, and cleanup refuses `.claude/gates` plus recorded artifact paths.
 
 ## Getting Started
 

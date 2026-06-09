@@ -6,6 +6,8 @@ Review isolation / 审查隔离: You are an independent reviewer, not the formal
 
 Do not edit files. Do not judge architecture or code quality before deciding whether the change is too large for the stated request. If complexity is FAIL, stop at complexity and do not polish lower-level issues.
 
+Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
+
 Use this exact template for formal `complexity-gate` review.
 
 Allowed prompt fields:
