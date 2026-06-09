@@ -78,6 +78,34 @@ gate_route:
 
 `REVIEW`, `FAIL`, and `BLOCKED` cannot route to `proceed`. A `FinalExecution` PASS must use `next_action: seal`; non-final PASS must use `next_action: proceed`.
 
+## Rework Rerun Scope
+
+When a gate routes to `rework`, the next dispatch or handoff artifact should include:
+
+```text
+Rerun Scope Decision
+Previous blocking gate:
+Previous rerun_from:
+New change snapshot:
+Rework changed files:
+Rework changed requirements:
+Earliest gate to rerun:
+Gates not rerun:
+Reason skipped gates still apply:
+Full-scope review confirmed: YES
+Machine limitation:
+```
+
+Rules:
+
+- Always refresh `change_snapshot` after implementation, test, config, requirement, or gate-artifact changes.
+- Rerun reviewers must review the full current diff and full requirement target, not only the repair patch.
+- Rerun the failed gate and all downstream gates.
+- Rerun earlier gates when the repair changes their judgment surface.
+- Test, case, or oracle changes rerun from QA; scope, public surface, new concept, or budget changes rerun from complexity; ownership, dependency, lifecycle, boundary, or failure-semantics changes rerun from architecture; purely local correctness, edge-case, naming, dead-code, assertion, or encoding repairs can rerun from code-quality.
+- Rerun scope is not a gate verdict and cannot convert an old artifact into a new PASS.
+- Current built-in `gate-state.ps1` requires prerequisite PASS records for the same `change_snapshot`. Until carry-forward support exists, machine seal may still require rerunning earlier prerequisites even when human rerun scope is narrower.
+
 ## Recording Commands
 
 Minimum machine-check commands:
@@ -104,3 +132,12 @@ $attempts | Set-Content -LiteralPath $attemptsPath -Encoding UTF8
 Attempt entries need `status`, `accepted`, `artifact`, `reviewerAgentId`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. Prefer `-AttemptsJsonFile` on PowerShell 5 because raw JSON strings can lose quotes when passed through `powershell.exe -File`.
 
 With `-RecordFinalQa`, the wrapper writes the final verification aggregate and records `qa-test-gate` `Stage=FinalExecution`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+
+## Temporary Cleanup
+
+After a single gate record or final verification succeeds, callers may pass `-CleanupPath <path>` to delete scratch files from that run. Cleanup is intentionally narrow:
+
+- allowed: descendants under `.artifacts/tmp/`, `.artifacts/scratch/`, `.artifacts/cleanup/`, or system temp paths whose leaf starts with `formal-gates-`, `portable-formal-gates-`, or `gate-workflow-`;
+- refused: repo root, `.artifacts` root, `.claude/gates`, and any formal gate evidence path;
+- cleanup scratch paths are disposable; formal evidence paths recorded or referenced by `record-stage` / `record-final-verification` must not live there;
+- command failures keep cleanup paths; `record-final-verification` cleans only on PASS; pass `-KeepTemp` to keep cleanup paths after success.

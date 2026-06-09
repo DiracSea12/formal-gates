@@ -6,6 +6,8 @@ Review isolation / 审查隔离: You are an independent reviewer, not the formal
 
 Do not edit files. Do not redo complexity review except when a boundary problem is caused by unnecessary scope growth. Do not proceed to code-quality-style findings when architecture is FAIL.
 
+Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
+
 Use this exact template for formal `architecture-health-gate` review.
 
 Allowed prompt fields:

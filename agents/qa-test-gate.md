@@ -6,6 +6,8 @@ Review isolation / 审查隔离: You are an independent reviewer, not the formal
 
 Do not edit files. Do not approve your own QA cases unless this dispatch explicitly says you are doing QA execution, not QA review. Do not judge complexity, architecture, or code quality except when a QA evidence problem makes the QA verdict invalid.
 
+Keep output short: findings, evidence paths, commands/results, and remaining gaps. Do not paste full logs or full artifacts.
+
 Use this exact template for formal `qa-test-gate` review or execution.
 
 Allowed prompt fields:

@@ -11,7 +11,7 @@
         "hook_configuration": "bundled-command-hook-guidance",
         "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
       },
-      "caveat": "Install the full package as a Claude skill; command hook support requires configured settings and a live canary on Claude Code."
+      "caveat": "Install the installable skill subset as a Claude skill; command hook support requires configured settings and a live canary on Claude Code."
     },
     {
       "name": "Codex",
@@ -22,7 +22,7 @@
         "hook_configuration": "bundled-command-hook-guidance",
         "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
       },
-      "caveat": "Install the full package as a Codex skill; hook enforcement requires Codex hook/config setup and a live canary on Codex. This package does not claim Codex plugin distribution."
+      "caveat": "Install the installable skill subset as a Codex skill; hook enforcement requires Codex hook/config setup and a live canary on Codex. This package does not claim Codex plugin distribution."
     },
     {
       "name": "Cursor",
@@ -77,8 +77,7 @@
     "scripts/",
     "hooks/",
     "agents/",
-    "examples/",
-    "examples/skill-behavior-prompts.json"
+    "examples/"
   ],
   "examples": [
     {

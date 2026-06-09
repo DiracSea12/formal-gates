@@ -25,6 +25,8 @@ param(
     [string]$OutputArtifact,
     [string]$FinalQaArtifact,
     [switch]$RecordFinalQa,
+    [string[]]$CleanupPath,
+    [switch]$KeepTemp,
     [switch]$Help
 )
 
@@ -41,7 +43,7 @@ records state, and writes machine-readable final verification attempt aggregates
 
 Examples:
   <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate complexity-gate -WorkflowId wf -ChangeSnapshot snap
-  <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/scope.txt -WorkflowId wf -ChangeSnapshot snap
+  <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/scope.txt -WorkflowId wf -ChangeSnapshot snap -CleanupPath .artifacts/tmp/wf-scratch
   <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <repo> -BaseRef main -HeadRef HEAD
   powershell -NoProfile -ExecutionPolicy Bypass -File <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <svn-or-plain-project> -Vcs file-hash
 '@
@@ -108,6 +110,117 @@ function Resolve-StatePath([string]$Repo, [string]$Path) {
 
 function Resolve-ArtifactPath([string]$Repo, [string]$Path) {
     return Resolve-FormalGateArtifactPath $Repo $Path
+}
+
+function Resolve-CleanupPath([string]$Repo, [string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'CleanupPath cannot be empty.' }
+    if ([System.IO.Path]::IsPathRooted($Path)) { return [System.IO.Path]::GetFullPath($Path) }
+    return [System.IO.Path]::GetFullPath((Join-Path $Repo $Path))
+}
+
+function Test-PathIsUnder([string]$Path, [string]$Root) {
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    return $full.StartsWith($rootFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-CleanupPathAllowed([string]$Repo, [string]$Path) {
+    $full = Resolve-CleanupPath $Repo $Path
+    $repoFull = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\', '/')
+    $artifactRoot = Join-Path $repoFull '.artifacts'
+    $artifactScratchRoots = @(
+        (Join-Path $artifactRoot 'tmp'),
+        (Join-Path $artifactRoot 'scratch'),
+        (Join-Path $artifactRoot 'cleanup')
+    )
+    $gateRoot = Join-Path $repoFull '.claude/gates'
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    $leaf = Split-Path -Leaf $full
+
+    if ($full.TrimEnd('\', '/') -eq $repoFull) { throw "CleanupPath refuses to remove repo root: $full" }
+    if ($full.TrimEnd('\', '/') -eq ([System.IO.Path]::GetFullPath($artifactRoot).TrimEnd('\', '/'))) { throw "CleanupPath refuses to remove .artifacts root: $full" }
+    if (Test-PathIsUnder $full $gateRoot) { throw "CleanupPath refuses to remove formal gate evidence: $full" }
+    foreach ($scratchRoot in $artifactScratchRoots) {
+        if (Test-PathIsUnder $full $scratchRoot) { return $full }
+    }
+    if ((Test-PathIsUnder $full $tempRoot) -and ($leaf -match '^(formal-gates|portable-formal-gates|gate-workflow)-')) { return $full }
+    throw "CleanupPath must be under .artifacts/tmp, .artifacts/scratch, .artifacts/cleanup, or a formal-gates temp path: $full"
+}
+
+function Test-CleanupScratchPath([string]$Repo, [string]$FullPath) {
+    if ([string]::IsNullOrWhiteSpace($FullPath)) { return $false }
+    $repoFull = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\', '/')
+    $artifactRoot = Join-Path $repoFull '.artifacts'
+    foreach ($scratchRoot in @((Join-Path $artifactRoot 'tmp'), (Join-Path $artifactRoot 'scratch'), (Join-Path $artifactRoot 'cleanup'))) {
+        if (Test-PathIsUnder $FullPath $scratchRoot) { return $true }
+    }
+    if (Test-PathIsUnder $FullPath $repoFull) { return $false }
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    $tempFull = [System.IO.Path]::GetFullPath($tempRoot).TrimEnd('\', '/')
+    $current = [System.IO.Path]::GetFullPath($FullPath).TrimEnd('\', '/')
+    while ($current.StartsWith($tempFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $leaf = Split-Path -Leaf $current
+        if ($leaf -match '^(formal-gates|portable-formal-gates|gate-workflow)-') { return $true }
+        $parent = Split-Path -Parent $current
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) { break }
+        $current = $parent.TrimEnd('\', '/')
+    }
+    return $false
+}
+
+function Assert-FormalEvidencePathNotCleanupScratch([string]$Repo, [string]$Path, [string]$Label) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    $full = Resolve-ArtifactPath $Repo $Path
+    if (Test-CleanupScratchPath $Repo $full) {
+        throw "$Label cannot be under cleanup scratch: $full"
+    }
+}
+
+function Get-GateWorkflowReferencePaths([string]$Repo, [string]$Value) {
+    $paths = @()
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $paths }
+    foreach ($part in ($Value -split ',')) {
+        $pathText = [regex]::Replace($part.Trim().Trim('"', "'"), '(?i)\s+sha(?:256)?\s*[:=]\s*[a-f0-9]{64}\b', '').Trim()
+        $pathText = [regex]::Replace($pathText, '\s+\(.*$', '').Trim()
+        if (-not [string]::IsNullOrWhiteSpace($pathText) -and $pathText -notmatch '\s') {
+            $paths += (Resolve-ArtifactPath $Repo $pathText)
+        }
+        foreach ($match in [regex]::Matches($pathText, '(?i)([A-Z]:[\\/][^\s,;|)\]>]+|(?:\.{1,2}[\\/])?[.]?artifacts[\\/][^\s,;|)\]>]+|(?:\.{1,2}[\\/])?[.]?claude[\\/]gates[\\/][^\s,;|)\]>]+)')) {
+            $token = [regex]::Replace($match.Groups[1].Value.Trim('"', "'"), '[\.,;:\)\]\}]+$', '')
+            if (-not [string]::IsNullOrWhiteSpace($token)) {
+                $paths += (Resolve-ArtifactPath $Repo $token)
+            }
+        }
+    }
+    return $paths
+}
+
+function Assert-FormalArtifactReferencesNotCleanupScratch([string]$Repo, [string]$ArtifactPath) {
+    if ([string]::IsNullOrWhiteSpace($ArtifactPath) -or -not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) { return }
+    $text = Get-Content -LiteralPath $ArtifactPath -Raw -Encoding UTF8
+    foreach ($field in @('Context bundle', 'Dispatch prompt artifact', 'Raw diff artifact', 'Changed files artifact', 'Developer self-test artifact', 'Verification artifact', 'Alignment table artifact', 'Previous alignment artifact', 'Decision record', 'Approved alignment artifact', 'Approved case set', 'QA-owned evidence', 'Case-to-artifact binding')) {
+        foreach ($path in @(Get-GateWorkflowReferencePaths $Repo (Get-FormalGateArtifactFieldValue $text $field))) {
+            Assert-FormalEvidencePathNotCleanupScratch $Repo $path $field
+        }
+    }
+}
+
+function Remove-GateWorkflowCleanupPaths([string]$Repo, [string[]]$Paths) {
+    if ($KeepTemp.IsPresent -or $null -eq $Paths -or $Paths.Count -eq 0) { return }
+    foreach ($path in $Paths) {
+        $full = Assert-CleanupPathAllowed $Repo $path
+        if (-not (Test-Path -LiteralPath $full)) {
+            Write-Host "GATE_WORKFLOW_CLEANUP skippedMissing=$(Format-GatePath $full)"
+            continue
+        }
+        try {
+            Remove-Item -LiteralPath $full -Recurse -Force
+            Write-Host "GATE_WORKFLOW_CLEANUP removed=$(Format-GatePath $full)"
+        }
+        catch {
+            Write-Host "GATE_WORKFLOW_CLEANUP_WARN path=$(Format-GatePath $full) error=$($_.Exception.Message)"
+        }
+    }
 }
 
 function Get-Sha256([string]$Path) {
@@ -410,6 +523,12 @@ else {
     $ResolvedManifestPath = $null
 }
 
+if (-not $KeepTemp.IsPresent -and $null -ne $CleanupPath -and $CleanupPath.Count -gt 0) {
+    foreach ($path in $CleanupPath) {
+        Assert-CleanupPathAllowed $RepoRoot $path | Out-Null
+    }
+}
+
 if ($Action -eq 'snapshot') {
     $snapshot = New-Snapshot $RepoRoot $BaseRef $HeadRef $IncludeWorkingTree.IsPresent $Vcs
     $snapshot | ConvertTo-Json -Depth 8
@@ -441,6 +560,8 @@ if ($Action -eq 'record-stage') {
         Write-Host "GATE_WORKFLOW_BLOCKED artifactMissing=$(Format-GatePath $artifactPath)"
         exit 1
     }
+    Assert-FormalEvidencePathNotCleanupScratch $RepoRoot $artifactPath 'Artifact'
+    Assert-FormalArtifactReferencesNotCleanupScratch $RepoRoot $artifactPath
     if ($Verdict -eq 'PASS') {
         Assert-FormalPassArtifact $Gate $artifactPath $RepoRoot $WorkflowId $ChangeSnapshot $Stage
     }
@@ -479,6 +600,9 @@ if ($Action -eq 'record-stage') {
     if (-not [string]::IsNullOrWhiteSpace($ManifestHash)) { $verifyArgs += @('-RequireManifestHash', $ManifestHash) }
     if (-not [string]::IsNullOrWhiteSpace($ResolvedManifestPath)) { $verifyArgs += @('-ManifestPath', $ResolvedManifestPath) }
     $verifyCode = Invoke-GateState $verifyArgs $RepoRoot
+    if ($verifyCode -eq 0) {
+        Remove-GateWorkflowCleanupPaths $RepoRoot $CleanupPath
+    }
     exit $verifyCode
 }
 
@@ -496,13 +620,22 @@ if ($Action -eq 'record-final-verification') {
     if ($attempts.Count -eq 0) { throw 'At least one attempt is required.' }
     $accepted = @($attempts | Where-Object { $_.accepted -eq $true -and [string]$_.status -eq 'PASS' })
     $finalStatus = if ($accepted.Count -gt 0) { 'PASS' } else { 'FAIL' }
-    if ($finalStatus -eq 'PASS') {
-        Assert-AcceptedFinalVerificationAttempts $accepted $RepoRoot $WorkflowId $ChangeSnapshot
-    }
     if ([string]::IsNullOrWhiteSpace($OutputArtifact)) {
         $OutputArtifact = Join-Path '.claude/gates/artifacts' ("final-verification-" + $(if ([string]::IsNullOrWhiteSpace($WorkflowId)) { 'workflow' } else { $WorkflowId }) + '.json')
     }
     $outputPath = Resolve-ArtifactPath $RepoRoot $OutputArtifact
+    Assert-FormalEvidencePathNotCleanupScratch $RepoRoot $outputPath 'OutputArtifact'
+    foreach ($attempt in @($attempts)) {
+        Assert-FormalEvidencePathNotCleanupScratch $RepoRoot ([string]$attempt.artifact) 'Attempt artifact'
+        foreach ($path in @(Get-GateWorkflowReferencePaths $RepoRoot ([string]$attempt.contextBundle))) {
+            Assert-FormalEvidencePathNotCleanupScratch $RepoRoot $path 'Attempt contextBundle'
+        }
+        $attemptPath = Resolve-ArtifactPath $RepoRoot ([string]$attempt.artifact)
+        Assert-FormalArtifactReferencesNotCleanupScratch $RepoRoot $attemptPath
+    }
+    if ($finalStatus -eq 'PASS') {
+        Assert-AcceptedFinalVerificationAttempts $accepted $RepoRoot $WorkflowId $ChangeSnapshot
+    }
     $parent = Split-Path -Parent $outputPath
     if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent | Out-Null
@@ -524,7 +657,9 @@ if ($Action -eq 'record-final-verification') {
             $FinalQaArtifact = Join-Path '.claude/gates/artifacts' ("final-qa-execution-" + $(if ([string]::IsNullOrWhiteSpace($WorkflowId)) { 'workflow' } else { $WorkflowId }) + '.md')
         }
         $finalQaPath = Resolve-ArtifactPath $RepoRoot $FinalQaArtifact
+        Assert-FormalEvidencePathNotCleanupScratch $RepoRoot $finalQaPath 'FinalQaArtifact'
         Write-FinalQaArtifact $finalQaPath $finalStatus $attempts $accepted
+        Assert-FormalArtifactReferencesNotCleanupScratch $RepoRoot $finalQaPath
         if ($finalStatus -eq 'PASS') {
             Assert-FormalPassArtifact 'qa-test-gate' $finalQaPath $RepoRoot $WorkflowId $ChangeSnapshot 'FinalExecution'
         }
@@ -534,7 +669,13 @@ if ($Action -eq 'record-final-verification') {
         & (Get-FormalGatesPowerShellExe) @selfArgs
         $recordExitCode = $LASTEXITCODE
         if ($recordExitCode -ne 0) { exit $recordExitCode }
+        if ($finalStatus -eq 'PASS') {
+            Remove-GateWorkflowCleanupPaths $RepoRoot $CleanupPath
+        }
         exit $(if ($finalStatus -eq 'PASS') { 0 } else { 1 })
+    }
+    if ($finalStatus -eq 'PASS') {
+        Remove-GateWorkflowCleanupPaths $RepoRoot $CleanupPath
     }
     exit $(if ($finalStatus -eq 'PASS') { 0 } else { 1 })
 }

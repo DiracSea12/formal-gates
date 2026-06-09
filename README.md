@@ -76,7 +76,7 @@ go run ./cmd/formal-gates-validate artifact --root . --file .claude/gates/artifa
 
 ## 安装
 
-用包内脚本复制整个目录（不要只挑 SKILL.md）：
+用包内脚本复制可安装 skill 子集（不要只挑 SKILL.md）：
 
 ```powershell
 # 装到全局 Claude skill
@@ -97,9 +97,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 `-RunCanary` 会在复制后跑现有 Windows PowerShell canary，验证 skill 文档可读性、关键规则完整性和路径可达性；失败就别把这次安装当可用。
 
+安装脚本复制的是运行时需要的 skill 子集：`SKILL.md`、`agents/`、`examples/`、`hooks/`、`references/`、`scripts/`。源码里的 Go CLI 目录 `cmd/` / `internal/` 留在仓库里，用于包校验和开发验证。
+
 Claude Code、Codex、Cursor 的 hook/config 接入口不同，所以每个宿主都必须单独安装、单独验证。一个宿主的 canary 通过，不代表另一个宿主也会执行 hook。其它兼容运行环境如果支持读取类似 skill 的 Markdown 规则，可以自行适配核心文档，但安装路径、hook 机制和 canary 证明都要自己补。宿主能力分层见 `references/install-and-hooks.md`。
 
 Codex 要特别小心：本包可以安装 Codex skill，也可以写 Codex hook 配置，但这不等于 `codex exec` 会被 hook 硬拦截。2026-06-08 在 Windows/npm Codex CLI 0.137.0 上的 live canary 显示：坏 formal PASS 命令走了 `command_execution` 路径，生成了 marker，且没有产生任何 hook payload；生命周期诊断里的 `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` 也没有 payload。OpenAI Codex hooks 文档也说明 `PreToolUse` 不是完整强制边界，不能拦所有 shell 调用。因此 Codex 下不要把 hook 当门禁，只能当辅助 guardrail；正式门禁必须显式跑 `gate-workflow.ps1` / `gate-state.ps1` 并核对 artifact。
+
+`gate-workflow.ps1` 的 `record-stage` 和 `record-final-verification` 支持 `-CleanupPath` 清理本轮 scratch 目录；只允许清理 `.artifacts/tmp/`、`.artifacts/scratch/`、`.artifacts/cleanup/` 或 formal-gates 前缀的系统临时目录。正式证据不能放进这些目录，清理参数也会拒绝 `.claude/gates` 和正式 artifact 路径。
 
 ## 怎么开始
 

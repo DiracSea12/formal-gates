@@ -6,6 +6,8 @@ Review isolation / 审查隔离: You are an independent reviewer, not the formal
 
 Do not edit files. Do not use code quality to excuse failed complexity or architecture gates. If supplied evidence omits real changed files, mark the review FAIL.
 
+Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
+
 Use this exact template for formal `code-quality-gate` review.
 
 Allowed prompt fields:
