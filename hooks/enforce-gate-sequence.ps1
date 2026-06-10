@@ -145,6 +145,16 @@ function Find-JsonObjectAfterKey([string]$Text, [string[]]$Keys) {
     return $null
 }
 
+function Test-JsonObjectIntentAfterKey([string]$Text, [string[]]$Keys) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    foreach ($key in $Keys) {
+        if ($Text -match '(?i)(^|[\s,;])' + [regex]::Escape($key) + '\s*[:=]\s*\{') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Convert-ToWorkflowObject($Value) {
     if ($null -eq $Value) { return $null }
     if ($Value -is [string]) {
@@ -161,16 +171,9 @@ function Get-StructuredWorkflow {
             return Convert-ToWorkflowObject $inputProperties[$name]
         }
     }
-    $hasStructuredKey = $false
-    foreach ($name in @('GateWorkflow', 'Workflow')) {
-        if ($rawIntentText -match '(?i)(^|[\s,;])' + [regex]::Escape($name) + '\s*[:=]') {
-            $hasStructuredKey = $true
-            break
-        }
-    }
     $jsonText = Find-JsonObjectAfterKey $rawIntentText @('GateWorkflow', 'Workflow')
     if (-not [string]::IsNullOrWhiteSpace($jsonText)) { return Convert-ToWorkflowObject $jsonText }
-    if ($hasStructuredKey) {
+    if (Test-JsonObjectIntentAfterKey $rawIntentText @('GateWorkflow', 'Workflow')) {
         Block-Gate 'Gate sequence blocked: structured GateWorkflow JSON is malformed.' 'Malformed GateWorkflow JSON.'
     }
     return $null
@@ -178,16 +181,10 @@ function Get-StructuredWorkflow {
 
 function Get-WorkflowFromText([string]$Text, [string[]]$Keys = @('GateWorkflow', 'Workflow')) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
-    $hasStructuredKey = $false
-    foreach ($name in $Keys) {
-        if ($Text -match '(?i)(^|[\s,;])' + [regex]::Escape($name) + '\s*[:=]') {
-            $hasStructuredKey = $true
-            break
-        }
-    }
+    $hasStructuredObjectIntent = Test-JsonObjectIntentAfterKey $Text $Keys
     $jsonText = Find-JsonObjectAfterKey $Text $Keys
     if (-not [string]::IsNullOrWhiteSpace($jsonText)) { return Convert-ToWorkflowObject $jsonText }
-    if ($hasStructuredKey) {
+    if ($hasStructuredObjectIntent) {
         Block-Gate 'Gate sequence blocked: structured GateWorkflow JSON is malformed.' 'Malformed GateWorkflow JSON.'
     }
     return $null
@@ -274,12 +271,25 @@ function Split-CommandArguments([string]$Command) {
     return @($tokens)
 }
 
-function Get-CommandSwitchValue([string]$Command, [string]$Name) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return $null }
+function Get-CommandSwitchValues([string]$Command, [string]$Name) {
+    $values = @()
+    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
     $tokens = @(Split-CommandArguments (Normalize-HookCommandText $Command))
-    for ($index = 0; $index -lt ($tokens.Count - 1); ++$index) {
-        if ($tokens[$index] -ieq "-$Name") { return $tokens[$index + 1] }
+    for ($index = 0; $index -lt $tokens.Count; ++$index) {
+        if ($tokens[$index] -ieq "-$Name") {
+            if ($index -lt ($tokens.Count - 1)) { $values += $tokens[$index + 1] }
+            continue
+        }
+        if ($tokens[$index] -match ('(?i)^-' + [regex]::Escape($Name) + ':(.+)$')) {
+            $values += $Matches[1]
+        }
     }
+    return @($values)
+}
+
+function Get-CommandSwitchValue([string]$Command, [string]$Name) {
+    $values = @(Get-CommandSwitchValues $Command $Name)
+    if ($values.Count -gt 0) { return [string]$values[-1] }
     return $null
 }
 
@@ -629,12 +639,12 @@ function Enforce-FormalGatePassArtifact {
     if ([string]::IsNullOrWhiteSpace($command)) { return }
     if (-not (Test-CommandMentionsGateWorkflowScript $command)) { return }
 
-    $actionValue = Get-CommandSwitchValue $command 'Action'
-    if ($actionValue -ne 'record-stage') { return }
+    $actionValues = @(Get-CommandSwitchValues $command 'Action')
+    if ($actionValues -notcontains 'record-stage') { return }
 
     $gateValue = Get-CommandSwitchValue $command 'Gate'
-    $verdictValue = Get-CommandSwitchValue $command 'Verdict'
-    if ($verdictValue -ne 'PASS') { return }
+    $verdictValues = @(Get-CommandSwitchValues $command 'Verdict')
+    if ($verdictValues -notcontains 'PASS') { return }
 
     $requiredFields = @(Get-FormalGatePassRequiredFields $gateValue)
     if ($requiredFields.Count -eq 0) { return }
