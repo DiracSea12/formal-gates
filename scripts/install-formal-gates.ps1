@@ -66,6 +66,16 @@ function Assert-SkillPackage([string]$Path) {
     }
 }
 
+function ConvertTo-QuotedCommandArgument([string]$Value) {
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Get-FormalGatesHookCommand([string]$HookScriptPath) {
+    $powerShellExe = ConvertTo-QuotedCommandArgument (Get-FormalGatesPowerShellExe)
+    $args = @(Get-FormalGatesPowerShellFileArgs $HookScriptPath | ForEach-Object { ConvertTo-QuotedCommandArgument ([string]$_) })
+    return (@($powerShellExe) + @($args)) -join ' '
+}
+
 function Get-SkillPackageEntries {
     return @(
         'SKILL.md',
@@ -215,7 +225,8 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
                     $entry | Add-Member -NotePropertyName 'matcher' -NotePropertyValue '*' -Force
                     $formalHookUpdated = $true
                 }
-                if ([string]$h.command -ne ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"')) {
+                $expectedCommand = Get-FormalGatesHookCommand $HookScriptPath
+                if ([string]$h.command -ne $expectedCommand) {
                     if ($h.PSObject.Properties.Name -contains 'type') {
                         $h.type = 'command'
                     }
@@ -223,10 +234,10 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
                         $h | Add-Member -NotePropertyName 'type' -NotePropertyValue 'command' -Force
                     }
                     if ($h.PSObject.Properties.Name -contains 'command') {
-                        $h.command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"'
+                        $h.command = $expectedCommand
                     }
                     else {
-                        $h | Add-Member -NotePropertyName 'command' -NotePropertyValue ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"') -Force
+                        $h | Add-Member -NotePropertyName 'command' -NotePropertyValue $expectedCommand -Force
                     }
                     $formalHookUpdated = $true
                 }
@@ -249,7 +260,7 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
         hooks   = @(
             [pscustomobject]@{
                 type    = 'command'
-                command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + [string]$HookScriptPath + '"'
+                command = Get-FormalGatesHookCommand $HookScriptPath
             }
         )
     }
@@ -264,7 +275,7 @@ function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
 }
 
 function Set-CursorFormalGatesHook([string]$HooksPath, [string]$HookScriptPath) {
-    $command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $HookScriptPath
+    $command = Get-FormalGatesHookCommand $HookScriptPath
 
     $config = $null
     if (Test-Path -LiteralPath $HooksPath) {

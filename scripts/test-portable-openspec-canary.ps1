@@ -478,6 +478,13 @@ Output template: formal gate artifact
     )
     $claudeMatcherPassed = ($formalClaudeMatchers -contains '*') -and ($formalClaudeCommands.Count -gt 0)
     Add-Check ([ref]$summary) 'claude-install-hook-matcher-covers-document-tools' $claudeMatcherPassed (($formalClaudeMatchers -join ', ') + "`n" + ($formalClaudeCommands -join ', ') + "`n" + $installHookOutput)
+    $claudeHostCommandPassed = ($formalClaudeCommands.Count -gt 0) -and (@($formalClaudeCommands | Where-Object { $_ -notmatch '(?i)^powershell\s' -and $_ -match [regex]::Escape((Get-FormalGatesPowerShellExe)) }).Count -eq $formalClaudeCommands.Count)
+    Add-Check ([ref]$summary) 'claude-install-hook-uses-detected-powershell-host' $claudeHostCommandPassed ($formalClaudeCommands -join "`n")
+    $expectedPowerShellExe = '"' + (Get-FormalGatesPowerShellExe).Replace('"', '\"') + '"'
+    $expectedFirstPowerShellArg = '"' + ([string](Get-FormalGatesPowerShellFileArgs $hookScript)[0]).Replace('"', '\"') + '"'
+    $expectedHookPrefix = '^\s*' + [regex]::Escape($expectedPowerShellExe) + '\s+' + [regex]::Escape($expectedFirstPowerShellArg)
+    $claudeHookSpacingPassed = ($formalClaudeCommands.Count -gt 0) -and (@($formalClaudeCommands | Where-Object { $_ -match $expectedHookPrefix }).Count -eq $formalClaudeCommands.Count)
+    Add-Check ([ref]$summary) 'claude-install-hook-command-separates-host-and-first-arg' $claudeHookSpacingPassed ($formalClaudeCommands -join "`n")
 
     $cursorInstallOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $installScript,
@@ -506,6 +513,10 @@ Output template: formal gate artifact
     )
     $cursorHookPassed = ($formalCursorCommands.Count -gt 0) -and ($formalCursorFailClosed -contains $true)
     Add-Check ([ref]$summary) 'cursor-install-hook-configured' $cursorHookPassed (($formalCursorCommands -join ', ') + "`n" + $cursorInstallOutput)
+    $cursorHostCommandPassed = ($formalCursorCommands.Count -gt 0) -and (@($formalCursorCommands | Where-Object { $_ -notmatch '(?i)^powershell\s' -and $_ -match [regex]::Escape((Get-FormalGatesPowerShellExe)) }).Count -eq $formalCursorCommands.Count)
+    Add-Check ([ref]$summary) 'cursor-install-hook-uses-detected-powershell-host' $cursorHostCommandPassed ($formalCursorCommands -join "`n")
+    $cursorHookSpacingPassed = ($formalCursorCommands.Count -gt 0) -and (@($formalCursorCommands | Where-Object { $_ -match $expectedHookPrefix }).Count -eq $formalCursorCommands.Count)
+    Add-Check ([ref]$summary) 'cursor-install-hook-command-separates-host-and-first-arg' $cursorHookSpacingPassed ($formalCursorCommands -join "`n")
 
     $complexityWrapper = Join-Path $targetSkillPath 'scripts/run-complexity-gate.ps1'
     $complexityWrapperOutput = Run-PowerShellExpect $tempRepo @(
@@ -548,6 +559,41 @@ Output template: formal gate artifact
     )
     $changeSnapshot = [string]$snapshot.changeSnapshot
     $summary.changeSnapshot = $changeSnapshot
+
+    $recordVcsArtifact = Join-Path $tempRepo '.claude/gates/artifacts/record-vcs-auto.md'
+    Set-Utf8File $recordVcsArtifact @"
+Complexity Gate
+Verdict: REVIEW
+Mode: formal
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/complexity-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Reviewer agent id: canary
+Context bundle: canary
+Dispatch prompt artifact: canary
+No-anchor prompt: YES
+"@
+    $recordVcsOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'complexity-gate',
+        '-Verdict', 'REVIEW',
+        '-Mode', 'formal',
+        '-Artifact', '.claude/gates/artifacts/record-vcs-auto.md',
+        '-Actor', 'canary',
+        '-WorkflowId', 'wf-record-vcs-auto',
+        '-BaseRef', $baseCommit,
+        '-Vcs', 'auto',
+        '-IncludeWorkingTree'
+    )
+    $recordVcsState = Get-Content -LiteralPath (Join-Path $tempRepo '.claude/gates/gate-state.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $recordVcsEntry = @($recordVcsState.history | Where-Object { $_.workflowId -eq 'wf-record-vcs-auto' })[-1]
+    $recordVcsPassed = $null -ne $recordVcsEntry -and -not [string]::IsNullOrWhiteSpace([string]$recordVcsEntry.baseCommit) -and [string]$recordVcsEntry.changeSnapshot -notmatch '^files\.'
+    Add-Check ([ref]$summary) 'record-stage-vcs-auto-uses-git-snapshot' $recordVcsPassed (($recordVcsEntry | ConvertTo-Json -Depth 8 -Compress) + "`n" + $recordVcsOutput)
     $summary.artifactPaths.snapshot = Format-Path (Join-Path $repoParent ("$runId-snapshot.json"))
     Set-Utf8File $summary.artifactPaths.snapshot (($snapshot | ConvertTo-Json -Depth 8))
     Add-Check ([ref]$summary) 'snapshot-created' $true $changeSnapshot
@@ -1402,6 +1448,14 @@ gate_route:
             Command = 'echo "GateWorkflow openspec/changes/x/proposal.md"'
         },
         [pscustomobject]@{
+            Name = 'echo-gateworkflow-bare-equals'
+            Command = 'echo GateWorkflow=demo'
+        },
+        [pscustomobject]@{
+            Name = 'ls-comment-gateworkflow-bare-equals'
+            Command = 'ls -la # GateWorkflow=demo'
+        },
+        [pscustomobject]@{
             Name = 'echo-quoted-redirection-text-formal-doc'
             Command = 'echo "> openspec/changes/x/proposal.md"'
         },
@@ -1557,6 +1611,28 @@ gate_route:
     } | ConvertTo-Json -Depth 8 -Compress
     $nonFormalMalformedWorkflowOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $nonFormalMalformedWorkflowPayload 0
     Add-Check ([ref]$summary) 'non-formal-write-malformed-workflow-content-ignored' $true $nonFormalMalformedWorkflowOutput
+
+    $malformedStructuredShellPayload = @{
+        tool_name = 'Shell'
+        cwd = $plainRepo
+        tool_input = @{
+            command = 'echo GateWorkflow={not-json}'
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $malformedStructuredShellOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $malformedStructuredShellPayload 2
+    $malformedStructuredShellPassed = $malformedStructuredShellOutput -match 'Malformed GateWorkflow JSON'
+    Add-Check ([ref]$summary) 'structured-shell-malformed-gateworkflow-json-blocked' $malformedStructuredShellPassed $malformedStructuredShellOutput
+
+    $duplicateVerdictPassPayload = @{
+        tool_name = 'Shell'
+        cwd = $plainRepo
+        tool_input = @{
+            command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$workflowScript`" -Action record-stage -Worktree `"$plainRepo`" -Gate complexity-gate -Verdict REVIEW -Verdict:PASS"
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $duplicateVerdictPassOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $duplicateVerdictPassPayload 2
+    $duplicateVerdictPassPassed = $duplicateVerdictPassOutput -match 'record-stage must provide an artifact'
+    Add-Check ([ref]$summary) 'formal-pass-duplicate-verdict-colon-still-prechecked' $duplicateVerdictPassPassed $duplicateVerdictPassOutput
 
     $applyPatchAllowedPayload = @{
         tool_name = 'apply_patch'

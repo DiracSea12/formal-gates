@@ -41,6 +41,7 @@ Artifact must include:
 QA Test Gate
 Stage: Design / Design Review / Design Rework / Execution / FinalExecution / White-box Adequacy
 Verdict: PASS / REVIEW / FAIL / BLOCKED
+Mode: formal / solo / advisory
 Review mode: ZERO_CONTEXT_FORMAL
 Prompt contamination check: PASS
 Semantic anti-anchor check: PASS

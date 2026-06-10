@@ -568,7 +568,7 @@ if ($Action -eq 'record-stage') {
 
     $snapshot = $null
     if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
-        $snapshot = New-Snapshot $RepoRoot $BaseRef $HeadRef $IncludeWorkingTree.IsPresent
+        $snapshot = New-Snapshot $RepoRoot $BaseRef $HeadRef $IncludeWorkingTree.IsPresent $Vcs
         if ([string]::IsNullOrWhiteSpace($ChangeSnapshot)) { $ChangeSnapshot = $snapshot.changeSnapshot }
         $BaseCommit = $snapshot.baseCommit
         $HeadCommit = $snapshot.headCommit
