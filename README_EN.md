@@ -1,12 +1,22 @@
 # formal-gates
 
-> AI Code Quality Gates: 1 pre-work gate for alignment + 4 post-work gates for quality. Before AI starts coding, align on requirements. After completion, independent review AI validates through each checkpoint before release.
+> Stop AI from writing, reviewing, testing, and then declaring its own PASS.
+
+formal-gates is an evidence gate for AI development workflows. Before AI starts, requirements are aligned. After completion, independent review and machine-checkable artifacts decide whether the work can proceed or release. It does not write code for you; it judges whether the direction is right, the evidence is enough, and the result can be released.
 
 This is an Agent Skill package. The core skill documents can be read by any Agent Skill compatible runtime; the bundled installer and hook paths currently declare support for Claude Code, Codex, and Cursor. Gemini, OpenCode, and Windsurf are documented at explanation level only. Any host claiming hooks block bad gate flow must prove it with a live canary on that host.
 
 Chinese README: [README.md](README.md)
 
-It doesn't write code for you—instead, it judges "is the AI's direction correct? Can the completed code/documentation be released?"
+Current public validation summary: [examples/public-validation-result.md](examples/public-validation-result.md)
+
+| Check | Result |
+|---|---|
+| Skill structure check | PASS, 9 passed, 4 public-packaging WARN, 0 FAIL |
+| Go package validation | PASS |
+| Portable OpenSpec canary | PASS, 117 checks passed, 0 failed |
+
+These results prove the package structure and portable canary are currently healthy. They do not replace a live canary on the target host and do not prove hook enforcement in every runtime.
 
 ## Problems It Solves
 

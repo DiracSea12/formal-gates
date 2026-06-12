@@ -1,12 +1,22 @@
 # formal-gates
 
-> AI 代码质量门禁：1 道事前门管方向 + 4 道事后门卡质量。AI 动手前先对齐需求，写完之后派**独立的审查 AI**逐道关卡卡质量，过了才放行。
+> 防止 AI 自写、自审、自测，最后自己宣布 PASS。
+
+formal-gates 是给 AI 开发流程用的证据门禁：AI 动手前先对齐需求，写完后按顺序留下独立审查和机器可校验的证据。它不替你写代码，而是裁决"方向对不对、证据够不够、能不能放行"。
 
 这是一个 Agent Skill 包。核心规则文档可被兼容 Agent Skill 的运行环境读取；包内安装脚本和 hook 接入目前明确支持 Claude Code、Codex、Cursor。Gemini、OpenCode、Windsurf 只提供说明级适配口径。任何宿主声称 hook 会拦截错误门禁流程，都必须在该宿主上跑 live canary 验证通过。
 
 English README: [README_EN.md](README_EN.md)
 
-它不替你写代码，而是裁决"AI 要做的方向对不对、写完的代码/文档能不能放行"。
+当前公开验证摘要见 [examples/public-validation-result.md](examples/public-validation-result.md)：
+
+| 检查 | 结果 |
+|---|---|
+| Skill 结构检查 | PASS，9 项通过，4 项公开包装 WARN，0 FAIL |
+| Go 包校验 | PASS |
+| Portable OpenSpec canary | PASS，117 项通过，0 FAIL |
+
+这些结果证明包结构和可搬运 canary 当前可用；它们不替代目标宿主上的 live canary，也不证明任意宿主 hook 已经生效。
 
 ## 解决什么问题
 
