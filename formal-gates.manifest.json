@@ -83,7 +83,13 @@
     {
       "path": "examples/skill-behavior-prompts.json",
       "type": "read-only skill behavior checks",
-      "purpose": "Sample prompts for human or Darwin-style skill review.",
+      "purpose": "Sample prompts for human or automated skill behavior review.",
+      "not_a_gate": true
+    },
+    {
+      "path": "examples/public-validation-result.md",
+      "type": "public validation evidence summary",
+      "purpose": "Human-readable summary of skill structure check, package validation, and portable canary results.",
       "not_a_gate": true
     }
   ],
