@@ -8,7 +8,7 @@ formal-gates 是给 AI 开发流程用的证据门禁：AI 动手前先对齐需
 
 English README: [README_EN.md](README_EN.md)
 
-当前公开验证摘要见 [examples/public-validation-result.md](examples/public-validation-result.md)：
+最近验证摘要：
 
 | 检查 | 结果 |
 |---|---|

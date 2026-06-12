@@ -85,12 +85,6 @@
       "type": "read-only skill behavior checks",
       "purpose": "Sample prompts for human or automated skill behavior review.",
       "not_a_gate": true
-    },
-    {
-      "path": "examples/public-validation-result.md",
-      "type": "public validation evidence summary",
-      "purpose": "Human-readable summary of skill structure check, package validation, and portable canary results.",
-      "not_a_gate": true
     }
   ],
   "install_commands": [
@@ -104,19 +98,10 @@
     "go run ./cmd/formal-gates-validate package --root .",
     "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\test-portable-openspec-canary.ps1 -SkillPath ."
   ],
-  "external_validators": [
-    {
-      "name": "skill-creator quick validator",
-      "command_template": "py -3 -X utf8 <skill-creator>\\scripts\\quick_validate.py .",
-      "requires": "An external skill-creator checkout or installed validator path. Replace <skill-creator> before running.",
-      "optional_only": true
-    }
-  ],
   "validation_notes": [
     "The Go validation command is the portable package and artifact validation entrypoint for Windows, macOS, and Linux.",
     "PowerShell commands remain the Windows-compatible install, hook, and canary path; macOS and Linux package validation must not require PowerShell.",
-    "verification_commands contains only repo-local commands runnable from this package root.",
-    "external_validators lists optional validators outside this package and must not be treated as directly executable repo-local commands."
+    "verification_commands contains only repo-local commands runnable from this package root."
   ],
   "support_caveats": [
     "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, and Cursor have bundled installer/hook target entries.",
