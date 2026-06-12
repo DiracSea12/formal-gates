@@ -8,7 +8,7 @@ This is an Agent Skill package. The core skill documents can be read by any Agen
 
 Chinese README: [README.md](README.md)
 
-Current public validation summary: [examples/public-validation-result.md](examples/public-validation-result.md)
+Recent validation summary:
 
 | Check | Result |
 |---|---|
