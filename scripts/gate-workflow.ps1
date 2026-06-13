@@ -517,7 +517,7 @@ if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
         Write-Host "GATE_WORKFLOW_BLOCKED manifestMissing=$(Format-GatePath $ResolvedManifestPath)"
         exit 1
     }
-    $ManifestHash = (Get-FileHash -LiteralPath $ResolvedManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ManifestHash = Get-FormalGateSha256 $ResolvedManifestPath
 }
 else {
     $ResolvedManifestPath = $null

@@ -143,7 +143,12 @@ function Resolve-ArtifactPath([string]$Path) {
     return Resolve-FormalGateArtifactPath (Get-Location).Path $Path
 }
 
-function Get-Sha256([string]$Path) {
+function Get-ManifestHash([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Host "GATE_STATE_BLOCKED manifestMissing=$(Format-GatePath $Path) state=$(Format-GatePath $StatePath)"
+        exit 1
+    }
     return Get-FormalGateSha256 $Path
 }
 
@@ -153,7 +158,7 @@ function Assert-ArtifactHashMatches($Entry, [string]$GateName, [string]$Required
         Write-Host "GATE_STATE_BLOCKED gate=$GateName artifactHashMissing=$($Entry.artifact) requiredFor=$RequiredFor state=$(Format-GatePath $StatePath) $StandaloneSingleGateHint"
         exit 1
     }
-    $actual = Get-Sha256 $ArtifactPath
+    $actual = Get-FormalGateSha256 $ArtifactPath
     if ($actual -ne ([string]$Entry.artifactHash).ToLowerInvariant()) {
         Write-Host "GATE_STATE_BLOCKED gate=$GateName artifactHashMismatch=$($Entry.artifact) requiredFor=$RequiredFor state=$(Format-GatePath $StatePath) $StandaloneSingleGateHint"
         exit 1
@@ -193,7 +198,8 @@ function Get-ManifestHash([string]$Path) {
         Write-Host "GATE_STATE_BLOCKED manifestMissing=$(Format-GatePath $Path) state=$(Format-GatePath $StatePath)"
         exit 1
     }
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $bytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.IO.File]::ReadAllBytes($Path))
+    return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
 }
 
 function Read-GateManifest([string]$Path) {
@@ -511,7 +517,7 @@ if ($Action -eq 'record') {
     $ArtifactHash = $null
     $ResolvedArtifactForHash = Resolve-ArtifactPath $Artifact
     if (-not [string]::IsNullOrWhiteSpace($ResolvedArtifactForHash) -and (Test-Path -LiteralPath $ResolvedArtifactForHash -PathType Leaf)) {
-        $ArtifactHash = Get-Sha256 $ResolvedArtifactForHash
+        $ArtifactHash = Get-FormalGateSha256 $ResolvedArtifactForHash
     }
 
     $Entry = [ordered]@{
