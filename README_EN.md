@@ -2,21 +2,70 @@
 
 > Stop AI from writing, reviewing, testing, and then declaring its own PASS.
 
-formal-gates is an evidence gate for AI development workflows. Before AI starts, requirements are aligned. After completion, independent review and machine-checkable artifacts decide whether the work can proceed or release. It does not write code for you; it judges whether the direction is right, the evidence is enough, and the result can be released.
+**formal-gates** is an evidence gate system for AI development workflows. Before AI starts, requirements are aligned. After completion, independent review and machine-checkable artifacts decide whether the work can proceed or release. It does not write code for you; it judges whether the direction is right, the evidence is enough, and the result can be released.
 
-This is an Agent Skill package. The core skill documents can be read by any Agent Skill compatible runtime; the bundled installer and hook paths currently declare support for Claude Code, Codex, and Cursor. Gemini, OpenCode, and Windsurf are documented at explanation level only. Any host claiming hooks block bad gate flow must prove it with a live canary on that host.
+**Built-in install targets:** Claude Code · Codex · Cursor
 
-Chinese README: [README.md](README.md)
+Per-host integration varies; actual behavior is determined by live canary.
 
-Recent validation summary:
+**Current boundary:** This repository currently supports local install and local validation. It does not implement public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
 
-| Check | Result |
-|---|---|
-| Skill structure check | PASS, 9 passed, 4 public-packaging WARN, 0 FAIL |
-| Go package validation | PASS |
-| Portable OpenSpec canary | PASS, 117 checks passed, 0 failed |
+---
 
-These results prove the package structure and portable canary are currently healthy. They do not replace a live canary on the target host and do not prove hook enforcement in every runtime.
+## Table of Contents
+
+- [One-Line Quick Start](#one-line-quick-start)
+- [What Can I Do](#what-can-i-do)
+- [Problems It Solves](#problems-it-solves)
+- [How the Four Gates Work](#how-the-four-gates-work)
+- [Core Mechanism](#core-mechanism)
+- [Installation](#installation)
+- [Requirements](#requirements)
+- [Portable Validation](#portable-validation)
+- [Package Structure](#package-structure)
+- [Contributing](#contributing)
+- [License](#license)
+- [Changelog](#changelog)
+
+---
+
+## One-Line Quick Start
+
+From the repo root, run the following to try the read-only validation:
+
+```powershell
+# Validate package structure (requires Go 1.22+, go in PATH)
+go run ./cmd/formal-gates-validate package --root .
+
+# Install formal-gates to current Claude Code project (project-local)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath . -Force -RunCanary
+
+# Tell AI: "run four gates" or "validate before seal"
+```
+
+---
+
+## What Can I Do
+
+| What you want to do | Which gate to use |
+|---------------------|-------------------|
+| Before writing OpenSpec / PRD / SDD | **Requirements Clarification Gate** (with skill installed) |
+| After writing code, verify test coverage | **qa-test-gate** |
+| Check if the change is over-engineered | **complexity-gate** |
+| Check module boundaries and dependency direction | **architecture-health-gate** |
+| Check code correctness, dead code, fake tests | **code-quality-gate** |
+| Final validation before release/seal | Run all four gates in sequence |
+
+Tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" and it will follow the installed skill rules. Machine-level enforcement still depends on the target host's hook config and passing live canary.
+
+| Scenario | Gate required? |
+|----------|---------------|
+| Major refactors, new systems, pre-release/seal | Yes |
+| Before writing OpenSpec / PRD / SDD | Yes (with skill installed) |
+| UI tweaks, small bug fixes | No |
+| Casual chat, wording adjustments | No |
+
+---
 
 ## Problems It Solves
 
@@ -28,131 +77,152 @@ AI code generation has common pitfalls that this gate system specifically catche
 - **Silent scope reduction**—Shrinking the user's requested scope without declaration.
 - **Self-endorsement**—Writing code and then saying "looks good" without independent validation.
 
-## Pre-work Gate: Requirements Clarification Gate (The only pre-coding gate, most cost-effective)
+---
+
+## How the Four Gates Work
+
+### Requirements Clarification Gate (only pre-coding gate)
 
 Before writing OpenSpec / PRD / SDD or other specification documents, first align on **goals, user value, scope, non-goals, acceptance criteria, architecture boundaries, and requirement details**. If any item is missing to the point where the document would rely on "guessing," it stops at `DRAFT_BLOCKED`—no silent default values allowed.
 
 Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, scenario details, non-functional metrics. High-level alignment alone is insufficient—discovering detail misalignment mid-development has even higher rework costs.
 
-This is the **only gate actively triggered by the skill** (automatically runs when writing specification documents, without user request), and the only gate that intercepts **before** AI starts coding—since direction errors have the highest rework cost, this gate is most critical.
+This is the **only gate that should run before AI starts coding**—since direction errors have the highest rework cost, this gate is most critical.
 
-## Four Post-work Gates (Review after AI completion, in sequence—cannot proceed to next gate until previous passes)
+### Four Post-work Gates (review after completion, in sequence—cannot proceed to next until previous passes)
 
-1. **qa-test-gate (Test Gate)**—Are test cases and acceptance criteria trustworthy? Does QA have real, owned evidence?
-2. **complexity-gate (Complexity Gate)**—Did the change bloat? Over-engineered? Created unnecessary systems?
-3. **architecture-health-gate (Architecture Gate)**—Are module boundaries, ownership, dependency directions, state/cache lifecycles sound?
-4. **code-quality-gate (Code Quality Gate)**—Correctness, edge cases, dead code, fake tests, overfitting, maintainability.
+1. **qa-test-gate** — Are test cases and acceptance criteria trustworthy? Does QA have real, owned evidence?
+2. **complexity-gate** — Did the change bloat? Over-engineered? Created unnecessary systems?
+3. **architecture-health-gate** — Are module boundaries, ownership, dependency directions, state/cache lifecycles sound?
+4. **code-quality-gate** — Correctness, edge cases, dead code, fake tests, maintainability.
 
-## Core Mechanism: Preventing AI Self-endorsement
+---
+
+## Core Mechanism
 
 - Pass verdicts must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers.
-- Each gate's verdict is recorded as an **artifact**, with **machine-side mandatory validation**. The Go validator checks package and artifact shape on Windows, macOS, and Linux; Windows PowerShell scripts remain the existing gate-state, install, hook, and canary path. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected by validators. Configured and live-tested hooks can block them at command time.
-- With configured and same-host live-tested hooks, or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it. Without hooks, or when hook blocking has not been proven on that host, explicit script validation is still required.
+- Each gate's verdict is recorded as an **artifact**, checked by the Go validator for field completeness. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected.
+- With configured and same-host live-tested hooks, or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it.
 
-## When to Use / Not Use
-
-| ✅ Use | ❌ Don't Use |
-|------|--------|
-| Major refactors, new systems, full module development | UI position tweaks, small bug fixes |
-| Final validation before release/seal | Casual chat, code browsing, wording adjustments |
-| Requirements clarification before writing spec docs | Single-file typos |
-
-For routine small changes, it stays silent and doesn't interfere.
-
-## Requirements
-
-- Go 1.22+ for portable package and artifact validation on Windows, macOS, and Linux
-- Windows + PowerShell 5 or 7 for bundled install, hook, gate-state, and canary scripts
-- Version control: Git / SVN / No VCS (file hash snapshots) all supported
-- Complexity scripts require Python 3.x or 2.7
-
-macOS and Linux package validation do not require PowerShell. PowerShell remains the Windows-compatible workflow path for the current install and hook scripts.
-
-## Portable Validation
-
-Run the Go validator from the package root:
-
-```bash
-go run ./cmd/formal-gates-validate package --root .
-```
-
-Validate a specific formal artifact when needed:
-
-```bash
-go run ./cmd/formal-gates-validate artifact --root . --file .claude/gates/artifacts/<artifact>.md --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-```
-
-This validator performs deterministic package and artifact checks. It is not a workflow engine, agent runtime, hook framework, or release-trust system.
+---
 
 ## Installation
 
-Use the included scripts to copy the installable skill subset (don't cherry-pick just SKILL.md):
+The local install entry point is `scripts\install-formal-gates.ps1`. Do not copy only `SKILL.md`; the installer copies the runtime skill subset.
 
 ```powershell
-# Install to global Claude skill
+# Install to global Claude Code
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary
 
-# Install to global Claude skill and configure/update command hook
+# Install to global Claude Code and configure command hook
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
 
-# Install to global Codex skill
+# Install to global Codex
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary
 
 # Install Cursor hook support for a project
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook
 
-# Or install to a specific Claude project locally
+# Install to a specific Claude Code project locally
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
 ```
 
-`-RunCanary` runs the existing Windows PowerShell canary after copying, verifying skill document readability, core rule completeness, and path accessibility. If it fails, don't treat this installation as usable.
+`-RunCanary` runs the canary after copying, verifying skill document readability and path accessibility. If it fails, don't treat this installation as usable.
 
-The installer copies the runtime skill subset: `SKILL.md`, `agents/`, `examples/`, `hooks/`, `references/`, and `scripts/`. Source Go CLI directories `cmd/` and `internal/` stay in the repository for package validation and development checks.
+Each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks.
 
-Claude Code, Codex, and Cursor have different hook/config surfaces, so each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks. Other compatible runtimes can read or adapt the core skill documents if their environment supports it, but they need their own install path, hook integration, and canary proof. Host capability details live in `references/install-and-hooks.md`.
+### Codex Note
 
-Be especially careful with Codex: this package can install a Codex skill and can write Codex hook configuration, but that does not prove `codex exec` is hard-blocked by hooks. On 2026-06-08, a Windows/npm Codex CLI 0.137.0 live canary showed that an invalid formal PASS command ran through the `command_execution` path, created the marker file, and produced zero hook payloads; a lifecycle diagnostic for `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` also produced zero payloads. OpenAI's Codex hooks documentation also says `PreToolUse` is not a complete enforcement boundary and does not intercept every shell call. For Codex, treat hooks as an auxiliary guardrail only; formal enforcement must explicitly run `gate-workflow.ps1` / `gate-state.ps1` and verify artifacts.
+This package can install a Codex skill, but `-ConfigureHook` on Codex is a no-op that prompts to consult `references/install-and-hooks.md`. Codex hook config must be done manually, and hooks only work as an auxiliary guardrail—not a hard enforcement gate. Formal gates must explicitly run `gate-workflow.ps1` and verify artifacts.
 
-`gate-workflow.ps1` `record-stage` and `record-final-verification` support `-CleanupPath` for per-run scratch cleanup. Cleanup is limited to `.artifacts/tmp/`, `.artifacts/scratch/`, `.artifacts/cleanup/`, or system temp paths with formal-gates prefixes. Formal evidence must not live in those paths, and cleanup refuses `.claude/gates` plus recorded artifact paths.
+---
 
-## Getting Started
+## Requirements
 
-Tell the AI "run four gates," "do formal gate review," or "validate before seal" to trigger the process. When writing requirement documents such as OpenSpec, PRD, SDD, issue briefs, or design notes, it will automatically run the requirements clarification gate first. For routine small changes, no action needed.
+- **Go 1.22+**: portable package and artifact validation
+- **Windows + PowerShell 5 or 7**: install, hook, and canary scripts
+- **Python 3.x or 2.7**: complexity analysis scripts (optional)
 
-OpenSpec is one requirement-document adapter, not the only supported path. Adapter guidance for OpenSpec and generic markdown requirement bundles lives in `references/requirement-document-adapters.md`.
+macOS and Linux need only Go for package and artifact validation. Install, hook, and canary currently require Windows PowerShell.
 
-## Phase 2 Release Trust
+---
 
-Phase 1 adds portable validation and documentation boundaries. It does not deliver checksums, artifact attestation, npm provenance, signing, or equivalent release-trust evidence. Those controls are Phase 2 work and must be implemented before the package makes release-trust claims.
+## Portable Validation
 
-## Skill Behavior Checks
+> **Prerequisite**: Go 1.22+, with `go` in PATH (verify with `go version`).
 
-`examples/skill-behavior-prompts.json` contains read-only prompts for checking whether the skill changes agent behavior in the intended way. They cover requirements clarification before OpenSpec work, blocking direct main-agent implementation, rejecting self-issued PASS, preventing focused evidence from becoming Final QA PASS, avoiding over-triggering on routine chat or tiny edits. They also include negative cases for unavailable subagents, dirty snapshots, manifest extension gates, and inactive hooks.
+A rerunnable local demo is available at [`examples/package-validation-demo.md`](examples/package-validation-demo.md). It runs Go package validation plus the portable OpenSpec canary, then writes local output to `examples/package-validation-demo-output.txt`.
 
-Use these prompts with automated skill review tools or a human reviewer. They are behavior checks for the skill itself, not formal release gates and not a replacement for `scripts\test-portable-openspec-canary.ps1` portability validation.
+> `examples/package-validation-demo-output.txt` is the bundled sample output—running the demo on your machine will overwrite it with your local results.
+
+```bash
+# Validate package structure
+go run ./cmd/formal-gates-validate package --root .
+
+# Validate a specific artifact
+go run ./cmd/formal-gates-validate artifact \
+  --root . \
+  --file .claude/gates/artifacts/<artifact>.md \
+  --gate complexity-gate \
+  --workflow-id <workflow-id> \
+  --change-snapshot <snapshot>
+```
+
+This validator performs deterministic package and artifact field checks only. It is not a workflow engine, agent runtime, or hook framework.
+
+---
 
 ## Package Structure
 
 ```
 formal-gates/
-  SKILL.md                  # Entry point (for AI): routing, red lines, four-gate sequence, GateWorkflow essentials
-  references/               # Gate-specific rules, loaded on demand
-    requirements-clarification-gate.md   # Requirements clarification gate
-    requirements-clarification-artifacts.md # Requirements clarification recording fields
-    requirement-document-adapters.md     # OpenSpec and generic requirement-document adapters
-    qa-test-gate.md                      # Test gate
-    complexity-gate.md                   # Complexity gate (includes Complexity Contract, budgets)
-    architecture-health-gate.md          # Architecture gate
-    code-quality-gate.md                 # Code quality gate
-    post-development-artifacts.md        # Formal post-development recording fields and commands
-    install-and-hooks.md                 # Installation, hooks, canaries, manifests, and multi-host integration
+  SKILL.md                  # Entry point (for AI): routing, red lines, four-gate sequence
+  references/               # Gate-specific rules (loaded on demand)
+    requirements-clarification-gate.md
+    qa-test-gate.md
+    complexity-gate.md
+    architecture-health-gate.md
+    code-quality-gate.md
+    install-and-hooks.md
   scripts/                  # PowerShell + Python gate scripts
   cmd/                      # Go portable validation CLI
   internal/                 # Go validation implementation
-  hooks/                    # enforce-gate-sequence.ps1 (machine-side sequence and field enforcement)
-  agents/                   # Independent gate agent prompts and optional host config
-  examples/                 # GateWorkflow, behavior-check prompts, and other samples
-  formal-gates.manifest.json # Package index, host support caveats, install and verification commands
+  hooks/                    # enforce-gate-sequence.ps1
+  agents/                   # Independent gate review agent prompts
+  examples/                 # GateWorkflow and behavior-check prompt samples
+  formal-gates.manifest.json # Package index and install config
 ```
 
 Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.
+
+> This package currently supports local install and local validation only; it does not provide public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
+
+---
+
+## Contributing
+
+Issues and Pull Requests are welcome. Before submitting, please ensure:
+
+- Non-trivial source / script / test / config changes pass all gate reviews (four gates in sequence)
+- Documentation-only fixes pass relevant checks (format, links, spelling) only
+- New or changed behavior is reflected in the corresponding `references/` gate rule documents
+- Go code passes `go build ./...` and `go test ./...`
+- PowerShell scripts pass validation under `-RunCanary`
+
+How to contribute:
+
+1. Fork the repository, create a feature branch
+2. Validate your changes in your own project or test environment (run `gate-workflow.ps1`)
+3. Submit a Pull Request describing the change rationale and validation results
+
+---
+
+## License
+
+This project is open source under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+---
+
+## Changelog
+
+For full version history and detailed changelog, see [CHANGELOG.md](CHANGELOG.md).

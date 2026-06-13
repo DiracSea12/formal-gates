@@ -8,7 +8,8 @@ function Resolve-FormalGateArtifactPath([string]$BasePath, [string]$MaybeRelativ
 }
 
 function Get-FormalGateSha256([string]$Path) {
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $bytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.IO.File]::ReadAllBytes($Path))
+    return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
 }
 
 function Get-FormalGateArtifactFieldValue([string]$Text, [string]$FieldName) {
