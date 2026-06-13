@@ -1,5 +1,5 @@
 param(
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'package-validation-demo-output.txt')
+    [string]$OutputPath = (Join-Path (Join-Path $PSScriptRoot '..\.artifacts\tmp') 'package-validation-demo-output.txt')
 )
 
 $ErrorActionPreference = 'Stop'
