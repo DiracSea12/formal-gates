@@ -1,6 +1,7 @@
 .claude/
 .artifacts/
 contract_review/
+openspec/
 
 # Local gate/review artifacts
 gate-artifacts/
@@ -14,3 +15,6 @@ review_scratch/
 # Python cache from validation scripts
 __pycache__/
 *.py[cod]
+
+# Package demo output (regenerated locally)
+examples/package-validation-demo-output.txt
