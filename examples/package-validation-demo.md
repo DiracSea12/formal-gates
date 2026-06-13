@@ -21,7 +21,7 @@ It writes the local run output to:
 .artifacts/tmp/package-validation-demo-output.txt
 ```
 
-Use `-OutputPath` to write somewhere else. `examples/package-validation-demo-output.txt` is the bundled sample output and is not overwritten by the default command.
+Use `-OutputPath` to write somewhere else. Demo output is generated locally and is not tracked in the package.
 
 ## What This Proves
 

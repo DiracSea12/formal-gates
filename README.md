@@ -147,9 +147,9 @@ macOS 和 Linux 做包结构和 artifact 校验时只需 Go；安装、hook、ca
 
 > **前置要求**：Go 1.22+，且 `go` 在 PATH 中（运行 `go version` 确认）。
 
-本地可复现 demo 见 [`examples/package-validation-demo.md`](examples/package-validation-demo.md)。它会跑 Go 包校验和 portable OpenSpec canary，并把本机输出写到 `.artifacts/tmp/package-validation-demo-output.txt`。
+本地可复现 demo 见 [`examples/package-validation-demo.md`](examples/package-validation-demo.md)。它会跑 Go 包校验和 portable OpenSpec canary，并把本机输出写到被忽略的 `.artifacts/tmp/package-validation-demo-output.txt`。
 
-> `examples/package-validation-demo-output.txt` 是仓库里的随包样例输出，不代表当前机器的验证结果；默认 demo 命令不会覆盖它。如需写到其他位置，可传 `-OutputPath`。
+> demo 输出是本机生成物，不随包跟踪。如需写到其他位置，可传 `-OutputPath`。
 
 ```bash
 # 校验包结构
