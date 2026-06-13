@@ -151,9 +151,9 @@ macOS and Linux need only Go for package and artifact validation. Install, hook,
 
 > **Prerequisite**: Go 1.22+, with `go` in PATH (verify with `go version`).
 
-A rerunnable local demo is available at [`examples/package-validation-demo.md`](examples/package-validation-demo.md). It runs Go package validation plus the portable OpenSpec canary, then writes local output to `examples/package-validation-demo-output.txt`.
+A rerunnable local demo is available at [`examples/package-validation-demo.md`](examples/package-validation-demo.md). It runs Go package validation plus the portable OpenSpec canary, then writes local output to `.artifacts/tmp/package-validation-demo-output.txt`.
 
-> `examples/package-validation-demo-output.txt` is the bundled sample output—running the demo on your machine will overwrite it with your local results.
+> `examples/package-validation-demo-output.txt` is the bundled sample output, not the current machine's validation result. The default demo command does not overwrite it; pass `-OutputPath` to write somewhere else.
 
 ```bash
 # Validate package structure

@@ -18,8 +18,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-portable-opensp
 It writes the local run output to:
 
 ```text
-examples/package-validation-demo-output.txt
+.artifacts/tmp/package-validation-demo-output.txt
 ```
+
+Use `-OutputPath` to write somewhere else. `examples/package-validation-demo-output.txt` is the bundled sample output and is not overwritten by the default command.
 
 ## What This Proves
 
