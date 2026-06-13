@@ -23,7 +23,6 @@ Per-host integration varies; actual behavior is determined by live canary.
 - [Requirements](#requirements)
 - [Portable Validation](#portable-validation)
 - [Package Structure](#package-structure)
-- [Contributing](#contributing)
 - [License](#license)
 - [Changelog](#changelog)
 
@@ -196,24 +195,6 @@ formal-gates/
 Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.
 
 > This package currently supports local install and local validation only; it does not provide public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
-
----
-
-## Contributing
-
-Issues and Pull Requests are welcome. Before submitting, please ensure:
-
-- Non-trivial source / script / test / config changes pass all gate reviews (four gates in sequence)
-- Documentation-only fixes pass relevant checks (format, links, spelling) only
-- New or changed behavior is reflected in the corresponding `references/` gate rule documents
-- Go code passes `go build ./...` and `go test ./...`
-- PowerShell scripts pass validation under `-RunCanary`
-
-How to contribute:
-
-1. Fork the repository, create a feature branch
-2. Validate your changes in your own project or test environment (run `gate-workflow.ps1`)
-3. Submit a Pull Request describing the change rationale and validation results
 
 ---
 

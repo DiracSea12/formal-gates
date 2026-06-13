@@ -22,7 +22,6 @@
 - [环境要求](#环境要求)
 - [跨平台校验](#跨平台校验)
 - [包结构](#包结构)
-- [贡献指南](#贡献指南)
 - [许可证](#许可证)
 - [更新日志](#更新日志)
 
@@ -193,24 +192,6 @@ formal-gates/
 人看这个 README 上手；AI 从 `SKILL.md` 进入。各门具体判据按需读 `references/`。
 
 > 当前只支持本地安装和本地验证；不提供公开 registry、marketplace、`npx`、签名、provenance、checksum、attestation 或 release-trust 发行证明。
-
----
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request。提交前请确保：
-
-- 非平凡源码 / 脚本 / 测试 / 配置改动，通过所有门禁审查（四门按顺序执行）
-- 文档小修通过相关检查（格式、链接、拼写）即可
-- 新增功能或行为变更已更新对应 `references/` 下的门禁细则
-- Go 代码通过 `go build ./...` 和 `go test ./...`
-- PowerShell 脚本在 `-RunCanary` 下验证通过
-
-贡献方式：
-
-1. Fork 仓库，创建功能分支
-2. 在自己的项目或测试项目中验证改动（跑 `gate-workflow.ps1`）
-3. 提交 Pull Request，说明改动动机和验证结果
 
 ---
 
