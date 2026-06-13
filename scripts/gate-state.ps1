@@ -143,15 +143,6 @@ function Resolve-ArtifactPath([string]$Path) {
     return Resolve-FormalGateArtifactPath (Get-Location).Path $Path
 }
 
-function Get-ManifestHash([string]$Path) {
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
-    if (-not (Test-Path -LiteralPath $Path)) {
-        Write-Host "GATE_STATE_BLOCKED manifestMissing=$(Format-GatePath $Path) state=$(Format-GatePath $StatePath)"
-        exit 1
-    }
-    return Get-FormalGateSha256 $Path
-}
-
 function Assert-ArtifactHashMatches($Entry, [string]$GateName, [string]$RequiredFor, [string]$ArtifactPath) {
     if ($null -eq $Entry -or [string]::IsNullOrWhiteSpace($ArtifactPath)) { return }
     if (-not ($Entry.PSObject.Properties.Name -contains 'artifactHash') -or [string]::IsNullOrWhiteSpace([string]$Entry.artifactHash)) {
@@ -570,4 +561,3 @@ Test-GateEntry $State $Gate $Gate $RequireVerdict $RequireMode $RequireStage $Re
 
 Write-Host "GATE_STATE_PASS gate=$Gate verdict=$($State.gates[$Gate].verdict) workflowId=$($State.gates[$Gate].workflowId) state=$(Format-GatePath $StatePath)"
 exit 0
-
