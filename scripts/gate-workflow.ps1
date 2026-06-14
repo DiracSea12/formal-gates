@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('record-stage', 'verify-admission', 'snapshot', 'record-final-verification', 'help')]
+    [ValidateSet('record-stage', 'verify-admission', 'snapshot', 'record-final-verification', 'cleanup', 'help')]
     [string]$Action = 'help',
 
     [string]$Worktree = (Get-Location).Path,
@@ -27,6 +27,8 @@ param(
     [switch]$RecordFinalQa,
     [string[]]$CleanupPath,
     [switch]$KeepTemp,
+    [switch]$DryRun,
+    [switch]$Force,
     [switch]$Help
 )
 
@@ -36,7 +38,7 @@ $ErrorActionPreference = 'Stop'
 
 function Show-Usage {
     @'
-gate-workflow.ps1 -Action <record-stage|verify-admission|snapshot|record-final-verification> [options]
+gate-workflow.ps1 -Action <record-stage|verify-admission|snapshot|record-final-verification|cleanup|help> [options]
 
 Generic helper around gate-state.ps1. It resolves the worktree/state path, verifies artifacts,
 records state, and writes machine-readable final verification attempt aggregates.
@@ -45,6 +47,7 @@ Examples:
   <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate complexity-gate -WorkflowId wf -ChangeSnapshot snap
   <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/scope.txt -WorkflowId wf -ChangeSnapshot snap -CleanupPath .artifacts/tmp/wf-scratch
   <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <repo> -BaseRef main -HeadRef HEAD
+  <ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action cleanup -Worktree <repo> -DryRun
   powershell -NoProfile -ExecutionPolicy Bypass -File <formal-gates>/scripts/gate-workflow.ps1 -Action snapshot -Worktree <svn-or-plain-project> -Vcs file-hash
 '@
 }
@@ -440,6 +443,111 @@ function Get-FileTreeDigest([string]$Repo) {
     return ($entries | Sort-Object) -join "`n"
 }
 
+function Get-GateCleanupPaths([string]$Repo) {
+    $paths = New-Object System.Collections.Generic.List[string]
+    $gatesDir = Join-Path $Repo '.claude/gates'
+    $bundlesDir = Join-Path $Repo '.claude/bundles'
+    $tmpDir = Join-Path $Repo '.artifacts/tmp'
+    $scratchDir = Join-Path $Repo '.artifacts/scratch'
+    $cleanupDir = Join-Path $Repo '.artifacts/cleanup'
+
+    $dispatchFiles = Get-ChildItem -LiteralPath $gatesDir -Filter 'dispatch-*.txt' -ErrorAction SilentlyContinue
+    foreach ($f in $dispatchFiles) { $paths.Add($f.FullName) }
+    $diffArtifact = Join-Path $gatesDir 'diff-artifact.txt'
+    if (Test-Path -LiteralPath $diffArtifact) { $paths.Add($diffArtifact) }
+    $bundleFiles = Get-ChildItem -LiteralPath $bundlesDir -Filter '*.txt' -ErrorAction SilentlyContinue
+    foreach ($f in $bundleFiles) { $paths.Add($f.FullName) }
+
+    foreach ($dir in @($tmpDir, $scratchDir, $cleanupDir)) {
+        if (Test-Path -LiteralPath $dir -PathType Container) {
+            $files = Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue
+            foreach ($f in $files) { $paths.Add($f.FullName) }
+        }
+    }
+    return $paths
+}
+
+function Test-GateWorkflowActive([string]$Repo) {
+    $stateFile = Join-Path $Repo '.claude/gates/gate-state.json'
+    if (-not (Test-Path -LiteralPath $stateFile)) { return $false }
+    try {
+        $json = Get-Content -LiteralPath $stateFile -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $json) { return $false }
+        $gates = $json.gates
+        if (-not $gates) { return $false }
+        $cutoff = (Get-Date).AddMinutes(-30)
+        foreach ($prop in $gates.PSObject.Properties) {
+            $entry = $prop.Value
+            if ($entry.updatedAtUtc) {
+                $t = [DateTime]::Parse($entry.updatedAtUtc, $null, 'AssumeUniversal')
+                if ($t -gt $cutoff) { return $true }
+            }
+        }
+        return $false
+    }
+    catch { return $false }
+}
+
+function Assert-GateCleanupSafe([string]$Repo, [string[]]$Paths) {
+    $protected = @('.claude/skills', '.claude/darwin-results', '.claude/darwin-runs', '.artifacts/ai')
+    foreach ($path in $Paths) {
+        $relative = [System.IO.Path]::GetFullPath($path).Substring([System.IO.Path]::GetFullPath($Repo).Length).TrimStart('\', '/').Replace('\', '/')
+        foreach ($pattern in $protected) {
+            if ($relative.StartsWith($pattern, [StringComparison]::OrdinalIgnoreCase)) {
+                Write-Host "GATE_CLEANUP_BLOCKED protectedPath=$path pattern=$pattern"
+                exit 1
+            }
+        }
+    }
+}
+
+function Invoke-GateCleanup([string]$Repo, [switch]$DryRun) {
+    $paths = Get-GateCleanupPaths $Repo
+    if ($paths.Count -eq 0) { exit 0 }
+    Assert-GateCleanupSafe $Repo $paths | Out-Null
+    if ($DryRun) {
+        $totalSize = 0
+        foreach ($p in $paths) {
+            if (Test-Path -LiteralPath $p -PathType Leaf) {
+                $totalSize += (Get-Item -LiteralPath $p).Length
+                Write-Host $p
+            }
+        }
+        Write-Host "---"
+        Write-Host "Total size: $totalSize bytes"
+        exit 0
+    }
+    $removed = 0
+    $failed = 0
+    foreach ($path in $paths) {
+        try {
+            if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                $removed++
+            }
+        }
+        catch {
+            $failed++
+            Write-Host "GATE_CLEANUP_WARN path=$path error=$($_.Exception.Message)"
+        }
+    }
+    foreach ($dir in @('.artifacts/tmp', '.artifacts/scratch', '.artifacts/cleanup')) {
+        $fullDir = Join-Path $Repo $dir
+        if (Test-Path -LiteralPath $fullDir -PathType Container) {
+            $remaining = Get-ChildItem -LiteralPath $fullDir -ErrorAction SilentlyContinue
+            if ($remaining.Count -eq 0) {
+                try { Remove-Item -LiteralPath $fullDir -Force -ErrorAction SilentlyContinue } catch { }
+            }
+        }
+    }
+    if ($failed -gt 0) {
+        Write-Host "GATE_CLEANUP_FAILED removed=$removed failed=$failed"
+        exit 1
+    }
+    Write-Host "GATE_CLEANUP_DONE removed=$removed failed=0"
+    exit 0
+}
+
 function New-FileHashSnapshot($Repo, [string]$DetectedVcs) {
     $digest = Get-FileTreeDigest $Repo
     $treeHash = Get-TreeHash $digest
@@ -521,6 +629,15 @@ if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
 }
 else {
     $ResolvedManifestPath = $null
+}
+
+if ($Action -eq 'cleanup') {
+    if (-not $Force.IsPresent -and (Test-GateWorkflowActive $RepoRoot)) {
+        Write-Host "GATE_CLEANUP_BLOCKED activeWorkflow=true gate-state.json has recent verdict. Use -Force to override."
+        exit 1
+    }
+    Invoke-GateCleanup $RepoRoot -DryRun:$DryRun.IsPresent
+    exit 0
 }
 
 if (-not $KeepTemp.IsPresent -and $null -ne $CleanupPath -and $CleanupPath.Count -gt 0) {

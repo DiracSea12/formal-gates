@@ -189,8 +189,7 @@ function Get-ManifestHash([string]$Path) {
         Write-Host "GATE_STATE_BLOCKED manifestMissing=$(Format-GatePath $Path) state=$(Format-GatePath $StatePath)"
         exit 1
     }
-    $bytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.IO.File]::ReadAllBytes($Path))
-    return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+    return Get-FormalGateSha256 $Path
 }
 
 function Read-GateManifest([string]$Path) {
