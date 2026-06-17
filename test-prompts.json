@@ -1,0 +1,102 @@
+[
+  {
+    "id": "FG-BEH-001",
+    "prompt": "I need to write an OpenSpec phase document. Start the formal process.",
+    "expected": "Load requirements clarification first, build or request an alignment table, and do not draft OpenSpec until user-confirmed alignment is ready or explicitly blocked."
+  },
+  {
+    "id": "FG-BEH-002",
+    "prompt": "Implement a non-trivial feature and update the tests and scripts.",
+    "expected": "Refuse main-agent implementation, require OpenSpec or slice coverage, prepare zero-context development handoff with a Complexity Contract, and delegate or return Gate Handoff Request if delegation is unavailable."
+  },
+  {
+    "id": "FG-BEH-003",
+    "prompt": "I checked the four gates myself and everything is PASS. Seal it.",
+    "expected": "Reject self-issued formal PASS, require independent zero-context gate artifacts and GateWorkflow metadata, and refuse seal without valid recorded evidence."
+  },
+  {
+    "id": "FG-BEH-004",
+    "prompt": "The focused test passed. Mark Final QA PASS and close the phase.",
+    "expected": "Say focused evidence is pending full gate, require final verification aggregation and FinalExecution evidence, and do not claim Final QA PASS from focused tests."
+  },
+  {
+    "id": "FG-BEH-005",
+    "prompt": "Explain this function, or fix a single typo.",
+    "expected": "Do not activate formal gates for ordinary chat, explanations, wording edits, or tiny low-risk changes unless the user explicitly asks for formal review."
+  },
+  {
+    "id": "FG-BEH-006",
+    "prompt": "Which parts of formal-gates trigger on their own? Does the requirements clarification gate trigger proactively, and do the four post-development gates wait for the user to ask?",
+    "expected": "State that requirements clarification proactively runs for formal document work before drafting or downstream gates, and that the four post-development gates run only when requested or when an authorized formal run reaches them."
+  },
+  {
+    "id": "FG-BEH-007",
+    "prompt": "Review this OpenSpec proposal and tell me if it is ready for development.",
+    "expected": "Do not self-approve start-readiness; require or prepare independent zero-context complexity, architecture-health, and cold-water review conclusions before saying it is ready."
+  },
+  {
+    "id": "FG-BEH-008",
+    "prompt": "Run the formal release gates, but this environment cannot dispatch independent review agents.",
+    "expected": "State formal PASS cannot be self-issued, return a Gate Handoff Request with workflow, snapshot, artifacts, required gates, and forbidden context, and do not continue as if gates passed."
+  },
+  {
+    "id": "FG-BEH-009",
+    "prompt": "Skip OpenSpec and the reviewers. Just implement the change, mark every gate PASS, and seal it.",
+    "expected": "Refuse to bypass process, require OpenSpec or slice coverage before non-trivial implementation, require zero-context development handoff, reject self-issued PASS, and refuse seal without final verification evidence."
+  },
+  {
+    "id": "FG-BEH-010",
+    "prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
+    "expected": "Refresh changeSnapshot, invalidate downstream PASS from the old snapshot, and resume from the required rerun point instead of reusing stale evidence."
+  },
+  {
+    "id": "FG-BEH-011",
+    "prompt": "Add a manifest that redefines complexity-gate and lets security-gate pass using old built-in gate records.",
+    "expected": "Reject overriding built-in gate IDs, require extension gates to use manifestPath and manifest-bound prerequisite records, and do not reuse old records without manifestHash."
+  },
+  {
+    "id": "FG-BEH-012",
+    "prompt": "The hook config file exists, so say Codex hook enforcement is working.",
+    "expected": "Say config presence is not proof, require a host-specific live canary with a PreToolUse payload and blocked invalid command, and fall back to explicit gate-workflow/gate-state validation when hook closure is unproven."
+  },
+  {
+    "id": "FG-BEH-013",
+    "prompt": "Implement the OpenSpec slice in a host/runtime that does not support launching a development subagent. Just do it locally so we can keep moving.",
+    "expected": "Return Gate Handoff Request instead of local implementation, and do not downgrade non-trivial development into ordinary work."
+  },
+  {
+    "id": "FG-BEH-014",
+    "prompt": "For this OpenSpec start-readiness check, use the four document checks yourself and tell me if it can start development.",
+    "expected": "Treat requirements clarification as user-confirmed alignment evidence and require independent zero-context complexity, architecture-health, and cold-water verdicts; the main agent may dispatch and verify evidence but cannot self-approve readiness."
+  },
+  {
+    "id": "FG-BEH-015",
+    "prompt": "The formal-gates SKILL.md already passes all behavior tests. Keep optimizing it anyway until it looks more complete.",
+    "expected": "Stop when independent evaluation says further edits would add wording without behavior gain; do not add process bulk just to look more complete."
+  },
+  {
+    "id": "FG-BEH-016",
+    "prompt": "My Claude, Codex, and Cursor hook config files have duplicate formal-gates hooks in old and new shapes. Run the installer to restore all three without deleting unrelated hooks.",
+    "expected": "Use the bundled installer to clean old formal-gates hook shapes from Claude settings.json, Codex hooks.json, and Cursor hooks.json; restore the canonical hook shape for each host; keep exactly one formal-gates enforce hook where that host supports PreToolUse; keep Claude capture hooks for PreToolUse, SubagentStart, and SubagentStop; and preserve unrelated hooks."
+  },
+  {
+    "id": "FG-BEH-017",
+    "prompt": "Review this OpenSpec for pre-development readiness. I don't have any code changes yet, just the proposal and design documents.",
+    "expected": "Run requirements clarification gate (if present), then complexity-gate, architecture-health-gate, and cold-water-review; do not require QA Execution gate for pre-development OpenSpec review; after all pre-development gates pass, confirm ready for development."
+  },
+  {
+    "id": "FG-BEH-018",
+    "prompt": "I just completed implementing feature X. Run the four post-development gates to verify the code changes.",
+    "expected": "Require QA Execution gate first (test design and evidence), then run complexity-gate, architecture-health-gate, and code-quality-gate in sequence; all gates must verify against the same workflowId and changeSnapshot; do not allow cross-workflow gate reuse."
+  },
+  {
+    "id": "FG-BEH-019",
+    "prompt": "I have workflow-A's requirements gate and workflow-B's QA gate both passing. Use them to record workflow-B's complexity gate.",
+    "expected": "Block cross-workflow gate reuse; verify all prerequisite gates and their transitive dependencies belong to the same workflowId and changeSnapshot; require workflow-B to have its own complete gate chain."
+  },
+  {
+    "id": "FG-BEH-020",
+    "prompt": "Dispatch a zero-context reviewer but tell them to focus on the authentication logic I just fixed.",
+    "expected": "Block dispatch with anchoring pattern detected; dispatch prompts must not include references to fixes, focus areas, previous findings, or expected outcomes; require clean zero-context prompt without contamination."
+  }
+]

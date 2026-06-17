@@ -1,0 +1,141 @@
+{
+  "prohibitedPatterns": [
+    {
+      "pattern": "(?i)\\b(previous|prior|earlier|last)\\s+(finding|review|result|gate|conclusion|verdict|assessment|analysis)s?\\b",
+      "label": "previous review reference",
+      "description": "References to previous reviews anchor the reviewer toward confirming past conclusions rather than fresh evaluation"
+    },
+    {
+      "pattern": "(?i)\\b(known\\s+issue|already\\s+known|existing\\s+issue)s?\\b",
+      "label": "known issue reference",
+      "description": "References to known issues anchor the reviewer toward validating specific problems rather than conducting independent analysis"
+    },
+    {
+      "pattern": "(?i)\\b(just\\s+fixed|already\\s+fixed|after\\s+fix|post-fix|fixed\\s+in)",
+      "label": "fix reference",
+      "description": "References to fixes anchor the reviewer toward validating changes rather than independently assessing current state"
+    },
+    {
+      "pattern": "(?i)\\b(expected\\s+(answer|result|verdict|outcome)|expect\\s+to\\s+(pass|fail))",
+      "label": "expected outcome",
+      "description": "Expected outcomes anchor the reviewer toward confirming predictions rather than independent judgment"
+    },
+    {
+      "pattern": "(?i)\\b(focus\\s+on|pay\\s+attention\\s+to|look\\s+for|check\\s+whether|check\\s+if|verify\\s+that|verify\\s+whether)",
+      "label": "focus direction",
+      "description": "Directing reviewer focus violates zero-context principle; reviewer must determine what to examine"
+    },
+    {
+      "pattern": "(?i)\\b(suspicion|suspect|might\\s+be\\s+wrong|probably\\s+wrong|concern\\s+about)",
+      "label": "suspicion sharing",
+      "description": "Sharing suspicions anchors the reviewer toward investigating specific areas rather than independent analysis"
+    },
+    {
+      "pattern": "(?i)\\bv\\d+\\b",
+      "label": "version reference",
+      "description": "Version references (v1, v2) anchor the reviewer toward comparative analysis rather than independent review of current state"
+    },
+    {
+      "pattern": "(?i)\\b(P0|P1|P2)\\s+(risk|issue|problem|blocker|finding)s?\\b",
+      "label": "priority label",
+      "description": "Priority labels from previous reviews anchor the reviewer toward validating existing assessments"
+    },
+    {
+      "pattern": "(?i)\\b(after\\s+fix(es|ing)?|updated|revised|rework(ed)?|refined|improved|addressed|resolved)",
+      "label": "revision language",
+      "description": "References to revisions anchor the reviewer toward comparative analysis rather than fresh evaluation"
+    },
+    {
+      "pattern": "(?i)\\b(approved\\s+by|confirmed\\s+by|signed\\s+off|tech\\s+lead|PM\\s+)",
+      "label": "authority reference",
+      "description": "Authority endorsements create psychological pressure toward PASS verdict rather than independent judgment"
+    },
+    {
+      "pattern": "(?i)\\b(deadline|urgent|asap|quickly|this\\s+morning|yesterday|tomorrow)",
+      "label": "timeline pressure",
+      "description": "Timeline pressure creates urgency bias that compromises thorough independent review"
+    },
+    {
+      "pattern": "(?i)\\b(baseline|current(ly)?|existing)\\s+(coverage|metrics?|performance|quality)",
+      "label": "baseline anchoring",
+      "description": "Baseline metrics anchor reviewer to existing levels rather than absolute standards"
+    },
+    {
+      "pattern": "(?i)\\b(no\\s+need\\s+to|skip|exclude|ignore|remains?\\s+unchanged)",
+      "label": "negative space direction",
+      "description": "Negative direction implicitly guides reviewer attention and violates zero-context principle"
+    },
+    {
+      "pattern": "(?i)\\b(must\\s+maintain|backward\\s+compat|cannot\\s+break|required\\s+to\\s+keep)",
+      "label": "constraint framing",
+      "description": "Constraint framing may be used as excuse for accepting lower quality"
+    }
+  ],
+  "prohibitedTerms": [
+    {
+      "term": "重点复查",
+      "label": "focus direction",
+      "description": "指定复查重点违反零上下文原则；审查者必须独立判断检查内容"
+    },
+    {
+      "term": "刚修了",
+      "label": "fix reference",
+      "description": "提及修复锚定审查者验证变更而非独立评估当前状态"
+    },
+    {
+      "term": "关注点",
+      "label": "focus direction",
+      "description": "指定关注点违反零上下文原则"
+    },
+    {
+      "term": "已知问题",
+      "label": "known issue",
+      "description": "提及已知问题锚定审查者验证特定问题而非独立分析"
+    },
+    {
+      "term": "预期答案",
+      "label": "expected outcome",
+      "description": "提及预期结果锚定审查者确认预测而非独立判断"
+    },
+    {
+      "term": "上轮发现",
+      "label": "previous finding",
+      "description": "提及上轮发现锚定审查者确认过去结论而非全新评估"
+    },
+    {
+      "term": "需要验证",
+      "label": "verification direction",
+      "description": "指定验证内容违反零上下文原则"
+    },
+    {
+      "term": "上一次",
+      "label": "previous reference",
+      "description": "提及上一次锚定审查者进行对比分析"
+    },
+    {
+      "term": "之前的",
+      "label": "previous reference",
+      "description": "提及之前的情况锚定审查者进行对比分析"
+    },
+    {
+      "term": "技术负责人",
+      "label": "authority reference",
+      "description": "权威背书产生心理压力导向通过判定"
+    },
+    {
+      "term": "已批准",
+      "label": "approval reference",
+      "description": "批准引用产生压力偏向通过"
+    },
+    {
+      "term": "基线",
+      "label": "baseline anchoring",
+      "description": "基线指标锚定审查者接受现有水平而非绝对标准"
+    },
+    {
+      "term": "不需要",
+      "label": "negative direction",
+      "description": "负向指导隐式引导审查者注意力"
+    }
+  ]
+}

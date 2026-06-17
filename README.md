@@ -77,6 +77,20 @@ AI 写代码有几个通病，这套门禁专门拦：
 
 ## 四道门怎么走
 
+### 两种审查流程
+
+**开发前审查（Pre-development）**：审查 OpenSpec / PRD / 设计文档
+- 流程：requirements-clarification → complexity → architecture → cold-water
+- **不需要 QA 门**（还没有代码和测试）
+- 目标：确认需求清晰、方向正确、架构合理、可以开工
+
+**开发后审查（Post-development）**：审查代码实现
+- 流程：QA → complexity → architecture → code-quality
+- **必须先过 QA 门**（验证测试和证据）
+- 目标：确认实现正确、测试充分、代码质量达标
+
+系统会自动识别：如果 requirements-clarification-gate 的结果是 `READY_TO_DRAFT`（准备写文档），就走开发前流程；否则走开发后流程。
+
 ### 需求澄清门（动手前先走的门）
 
 写 OpenSpec / PRD / SDD 等规范文档前，先对齐**目标、用户价值、范围、非目标、验收标准、架构边界、需求细节**。任何一项缺失到会让文档"靠猜"，就停在 `DRAFT_BLOCKED`，不许默默填默认值。
