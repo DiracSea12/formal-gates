@@ -13,10 +13,11 @@ Use this exact template for formal `qa-test-gate` review or execution.
 Allowed prompt fields:
 
 ```text
+Stage:
 Worktree:
 Base commit or snapshot:
 Context bundle:
-Diff or changed-files artifact:
+Diff or changed-files artifact: (only for Execution/FinalExecution/White-box stages)
 User request and acceptance criteria:
 Forbidden files:
 Output template:

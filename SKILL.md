@@ -55,7 +55,8 @@ The pre-document gate is `requirements-clarification-gate`. It is not a fifth po
 | Flow | Order |
 |---|---|
 | Document/start-readiness review | requirements clarification, architecture shape, complexity/scope, cold-water start-readiness. Independent zero-context complexity, architecture-health, and cold-water conclusions are required before calling a requirement document ready for development. |
-| Post-development release/seal | QA `Design` -> `Design Review` -> `Design Rework` -> initial `Verification Run` -> QA `Execution` -> `complexity-gate` -> `architecture-health-gate` -> `code-quality-gate` -> final `Verification Run` -> QA `FinalExecution` -> optional QA `White-box Adequacy` -> seal. |
+| Pre-development test design | QA `Design` -> `Design Review` -> `Design Rework` -> approved case set. |
+| Post-development release/seal | initial `Verification Run` -> QA `Execution` -> `complexity-gate` -> `architecture-health-gate` -> `code-quality-gate` -> final `Verification Run` -> QA `FinalExecution` -> optional QA `White-box Adequacy` -> seal. |
 | Rerun after implementation change | Refresh `changeSnapshot`; old downstream PASS is invalid; choose earliest rerun gate by impact surface; review full requirement and current diff, not only repair patch. |
 
 If QA evidence is incomplete, do not enter complexity / architecture / code-quality. If complexity does not pass, do not enter architecture. If architecture does not pass, do not enter code-quality. Without QA final release/seal judgment, say `focused evidence pending full gate`.
