@@ -41,6 +41,32 @@ $gateAliases = @{
 }
 $routerSkillNames = @('formal-gates')
 
+# Unified gate dispatch entry check
+# For Agent/Task tools: require explicit formal_gate_dispatch field
+# For Skill tools: check if it's a gate-related skill
+$formalGateDispatch = $null
+if ($toolName -in @('Agent', 'Task')) {
+    $formalGateDispatch = [string]$inputProperties['formal_gate_dispatch']
+    if ([string]::IsNullOrWhiteSpace($formalGateDispatch)) {
+        exit 0  # Not a formal gate dispatch, exit all gate logic
+    }
+}
+elseif ($toolName -eq 'Skill') {
+    $skillName = [string]$inputProperties['skill']
+    if ($gateAliases.ContainsKey($skillName)) {
+        $formalGateDispatch = $gateAliases[$skillName]
+    }
+    elseif ($routerSkillNames -contains $skillName) {
+        $formalGateDispatch = $skillName
+    }
+    else {
+        exit 0  # Not a gate-related skill, exit all gate logic
+    }
+}
+else {
+    exit 0  # Not Agent/Task/Skill, exit all gate logic
+}
+
 function Format-HookPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
     try {
@@ -93,29 +119,6 @@ function Invoke-GateState([string[]]$Arguments, [string]$WorkingDirectory) {
     }
 }
 
-function Test-IntentTerm([string]$Pattern, [int[]]$ChineseCodePoints) {
-    if ($rawIntentText -match $Pattern) { return $true }
-    $term = -join ($ChineseCodePoints | ForEach-Object { [char]$_ })
-    return $rawIntentText.Contains($term)
-}
-
-function Get-ToolGateIntent {
-    if ($toolName -eq 'Skill') {
-        $skillName = [string]$inputProperties['skill']
-        if ($gateAliases.ContainsKey($skillName)) { return $gateAliases[$skillName] }
-        if ($routerSkillNames -contains $skillName) { return $skillName }
-        return $null
-    }
-    if ($toolName -in @('Agent', 'Task')) {
-        if (Test-IntentTerm '(?i)(requirements-clarification-gate|requirement\s+clarification|requirements\s+clarification|clarification\s+gate)' @(0x6F84, 0x6E05, 0x95E8)) { return 'requirements-clarification-gate' }
-        if (Test-IntentTerm '(?i)(requirements-clarification-gate|requirement\s+alignment|requirements\s+alignment|alignment\s+gate)' @(0x9700, 0x6C42, 0x5BF9, 0x9F50)) { return 'requirements-clarification-gate' }
-        if (Test-IntentTerm '(?i)(architecture-health-gate|architecture\s+gate)' @(0x67B6, 0x6784, 0x95E8)) { return 'architecture-health-gate' }
-        if (Test-IntentTerm '(?i)(code-quality-gate|code\s+quality\s+gate)' @(0x4EE3, 0x7801, 0x8D28, 0x91CF, 0x95E8)) { return 'code-quality-gate' }
-        if (Test-IntentTerm '(?i)(qa-test-gate|qa\s+gate)' @(0x6D4B, 0x8BD5, 0x95E8)) { return 'qa-test-gate' }
-        if (Test-IntentTerm '(?i)(complexity-gate|complexity\s+gate)' @(0x590D, 0x6742, 0x5EA6, 0x95E8)) { return 'complexity-gate' }
-    }
-    return $null
-}
 
 function Find-JsonObjectAfterKey([string]$Text, [string[]]$Keys) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
@@ -678,22 +681,8 @@ Enforce-FormalGatePassArtifact
 function Enforce-AgentDispatchPromptValidation {
     if ($toolName -notin @('Agent', 'Task')) { return }
 
-    $subagentType = [string]$inputProperties['subagent_type']
-    $formalReviewerTypes = @('architect-reviewer', 'code-reviewer', 'complexity-gate', 'qa-test-gate', 'architecture-health-gate', 'code-quality-gate')
-
-    $isFormalReviewer = $false
-    foreach ($reviewerType in $formalReviewerTypes) {
-        if ($subagentType -eq $reviewerType) {
-            $isFormalReviewer = $true
-            break
-        }
-    }
-
-    if (-not $isFormalReviewer) {
-        $toolGateIntent = Get-ToolGateIntent
-        if ($null -eq $toolGateIntent) { return }
-        if ($toolGateIntent -in @('formal-gates')) { return }
-    }
+    $validGates = @('requirements-clarification-gate', 'qa-test-gate', 'complexity-gate', 'architecture-health-gate', 'code-quality-gate', 'cold-water-review')
+    if ($formalGateDispatch -notin $validGates) { return }
 
     $dispatchPrompt = [string]$inputProperties['prompt']
     if ([string]::IsNullOrWhiteSpace($dispatchPrompt)) { return }
@@ -762,14 +751,13 @@ function Resolve-WorktreeFromStatePath([string]$Path) {
 
 Assert-RequirementsClarificationPassForDocumentWrite
 
-$toolGateIntent = Get-ToolGateIntent
 $workflow = Get-StructuredWorkflow
 $hasStructuredWorkflow = $null -ne $workflow
 
-if ($null -eq $toolGateIntent -and -not $hasStructuredWorkflow) { exit 0 }
+if ($null -eq $formalGateDispatch -and -not $hasStructuredWorkflow) { exit 0 }
 
 if (-not $hasStructuredWorkflow) {
-    Allow-AdvisoryGate $toolGateIntent
+    Allow-AdvisoryGate $formalGateDispatch
 }
 
 $gate = [string](Get-WorkflowField $workflow @('gate', 'Gate'))
@@ -787,8 +775,8 @@ $isManifestGate = Test-ManifestDefinesGate $gate $manifestPath $manifestBasePath
 if (-not $gateAliases.ContainsKey($gate) -and -not $isManifestGate) {
     Block-Gate "Gate sequence blocked: unknown gate '$gate'." "Unknown structured gate '$gate'."
 }
-if ($toolName -eq 'Skill' -and -not [string]::IsNullOrWhiteSpace($toolGateIntent) -and $toolGateIntent -ne 'formal-gates' -and $toolGateIntent -ne $gate) {
-    Block-Gate "Gate sequence blocked: invoked gate '$toolGateIntent' does not match GateWorkflow.gate '$gate'." 'Structured gate mismatch.'
+if ($toolName -eq 'Skill' -and -not [string]::IsNullOrWhiteSpace($formalGateDispatch) -and $formalGateDispatch -ne 'formal-gates' -and $formalGateDispatch -ne $gate) {
+    Block-Gate "Gate sequence blocked: invoked gate '$formalGateDispatch' does not match GateWorkflow.gate '$gate'." 'Structured gate mismatch.'
 }
 
 $workflowId = [string](Get-WorkflowField $workflow @('workflowId', 'WorkflowId', 'workflow_id'))
