@@ -675,6 +675,74 @@ function Enforce-FormalGatePassArtifact {
 
 Enforce-FormalGatePassArtifact
 
+function Enforce-AgentDispatchPromptValidation {
+    if ($toolName -notin @('Agent', 'Task')) { return }
+
+    $subagentType = [string]$inputProperties['subagent_type']
+    $formalReviewerTypes = @('architect-reviewer', 'code-reviewer', 'complexity-gate', 'qa-test-gate', 'architecture-health-gate', 'code-quality-gate')
+
+    $isFormalReviewer = $false
+    foreach ($reviewerType in $formalReviewerTypes) {
+        if ($subagentType -eq $reviewerType) {
+            $isFormalReviewer = $true
+            break
+        }
+    }
+
+    if (-not $isFormalReviewer) {
+        $toolGateIntent = Get-ToolGateIntent
+        if ($null -eq $toolGateIntent) { return }
+        if ($toolGateIntent -in @('formal-gates')) { return }
+    }
+
+    $dispatchPrompt = [string]$inputProperties['prompt']
+    if ([string]::IsNullOrWhiteSpace($dispatchPrompt)) { return }
+
+    # Call shared validation script
+    $validatorScript = Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts/validate-dispatch-prompt.ps1'
+    if (-not (Test-Path -LiteralPath $validatorScript)) {
+        Block-Gate "Gate dispatch validation failed: validator script not found at $validatorScript" "Missing validator script"
+    }
+
+    $configPath = Join-Path $PSScriptRoot 'pollution-patterns.json'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        Block-Gate "Gate dispatch validation failed: pollution patterns config not found at $configPath" "Missing config"
+    }
+
+    try {
+        $ps = Get-FormalGatesPowerShellExe
+        $result = & $ps -NoProfile -File $validatorScript -PromptText $dispatchPrompt -ConfigPath $configPath 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        Block-Gate "Gate dispatch validation failed: validator script error: $_" "Validator error"
+    }
+
+    if ($exitCode -ne 0) {
+        $resultText = $result | Out-String
+        if ($resultText -match '^\s*[\[{]') {
+            try {
+                $violations = $resultText | ConvertFrom-Json
+                $first = if ($violations -is [array]) { $violations[0] } else { $violations }
+                if ($null -ne $first) {
+                    $matched = $first.Matched
+                    $label = $first.Label
+                    $description = $first.Description
+                    Block-Gate "Gate dispatch blocked: prompt contains prohibited anchoring $($first.Type) '$matched' ($label). $description. Zero-context formal review prompts must not include references to previous reviews, fixes, expected outcomes, focus direction, or any context that anchors the reviewer's judgment." "Anchoring detected: $matched"
+                }
+            }
+            catch {
+                Block-Gate "Gate dispatch blocked: prompt validation failed with JSON parse error. Raw output: $resultText" "Validation JSON parse failed"
+            }
+        }
+        else {
+            Block-Gate "Gate dispatch blocked: prompt validation failed. $resultText" "Validation failed"
+        }
+    }
+}
+
+Enforce-AgentDispatchPromptValidation
+
 function Resolve-WorktreeFromStatePath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
     try {

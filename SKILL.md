@@ -21,9 +21,9 @@ Thin router only. Load one referenced detail file when the active route needs it
 
 Never claim formal PASS from chat, self-review, developer self-test, focused tests, gate-state alone, hook config, installed scripts, or direct script tests.
 
-Never let the main agent implement non-trivial work, contaminate zero-context prompts, reuse PASS after snapshot change, rename fixed gate IDs, treat `requirements-clarification-gate` as a fifth post-development gate, claim host hook enforcement without same-host live canary, seal without complete final evidence, or expand this entrypoint when details belong in `references/`.
+Never let the main agent implement non-trivial work, contaminate zero-context prompts with anchoring patterns (previous findings, fixes, focus areas, expected outcomes), reuse PASS after snapshot change, rename fixed gate IDs, treat `requirements-clarification-gate` as a fifth post-development gate, claim host hook enforcement without same-host live canary, seal without complete final evidence, allow cross-workflow gate reuse, or expand this entrypoint when details belong in `references/`.
 
-If direct implementation, skipped independent gates, or self-stamped gate verdicts are discovered, stop with `PROCESS_VIOLATION`.
+If direct implementation, skipped independent gates, self-stamped gate verdicts, or contaminated dispatch prompts are discovered, stop with `PROCESS_VIOLATION`.
 
 ## Load Map
 
@@ -54,11 +54,13 @@ The pre-document gate is `requirements-clarification-gate`. It is not a fifth po
 
 | Flow | Order |
 |---|---|
-| Document/start-readiness review | requirements clarification, architecture shape, complexity/scope, cold-water start-readiness. Independent zero-context complexity, architecture-health, and cold-water conclusions are required before calling a requirement document ready for development. |
-| Post-development release/seal | QA `Design` -> `Design Review` -> `Design Rework` -> initial `Verification Run` -> QA `Execution` -> `complexity-gate` -> `architecture-health-gate` -> `code-quality-gate` -> final `Verification Run` -> QA `FinalExecution` -> optional QA `White-box Adequacy` -> seal. |
+| Pre-development OpenSpec review | requirements clarification → complexity → architecture-health → cold-water. QA gate is NOT required. System detects pre-development when requirements artifact contains `Downstream permission: READY_TO_DRAFT`. |
+| Post-development code review | QA `Design` -> `Design Review` -> `Design Rework` -> initial `Verification Run` -> QA `Execution` -> `complexity-gate` -> `architecture-health-gate` -> `code-quality-gate` -> final `Verification Run` -> QA `FinalExecution` -> optional QA `White-box Adequacy` -> seal. QA gate IS required before complexity. |
 | Rerun after implementation change | Refresh `changeSnapshot`; old downstream PASS is invalid; choose earliest rerun gate by impact surface; review full requirement and current diff, not only repair patch. |
 
-If QA evidence is incomplete, do not enter complexity / architecture / code-quality. If complexity does not pass, do not enter architecture. If architecture does not pass, do not enter code-quality. Without QA final release/seal judgment, say `focused evidence pending full gate`.
+Pre-development and post-development workflows are isolated. All prerequisite gates and their transitive dependencies must belong to the same workflowId and changeSnapshot. Cross-workflow gate reuse is blocked.
+
+If QA evidence is incomplete, do not enter complexity / architecture / code-quality in post-development flow. If complexity does not pass, do not enter architecture. If architecture does not pass, do not enter code-quality. Without QA final release/seal judgment, say `focused evidence pending full gate`.
 
 ## Zero-context Handoff
 

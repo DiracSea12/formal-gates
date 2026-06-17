@@ -364,6 +364,20 @@ function Get-AdmissionRequirements([string]$GateName) {
         return @()
     }
 
+    # Check if this is a pre-development OpenSpec review workflow
+    $IsPreDevelopment = $false
+    $ReqGateEntry = $State.gates['requirements-clarification-gate']
+    if ($null -ne $ReqGateEntry -and $ReqGateEntry.verdict -eq 'PASS') {
+        # Check if requirements gate artifact indicates pre-development
+        $ReqArtifactPath = Resolve-ArtifactPath $ReqGateEntry.artifact
+        if (-not [string]::IsNullOrWhiteSpace($ReqArtifactPath) -and (Test-Path -LiteralPath $ReqArtifactPath)) {
+            $ReqContent = Get-Content -LiteralPath $ReqArtifactPath -Raw -ErrorAction SilentlyContinue
+            if ($ReqContent -match 'Downstream permission:\s*READY_TO_DRAFT' -or $ReqContent -match 'reviewType:\s*pre-development') {
+                $IsPreDevelopment = $true
+            }
+        }
+    }
+
     switch ($GateName) {
         'requirements-clarification-gate' {
             return @()
@@ -372,17 +386,37 @@ function Get-AdmissionRequirements([string]$GateName) {
             return @()
         }
         'complexity-gate' {
+            # Pre-development OpenSpec review: no QA gate required
+            if ($IsPreDevelopment) {
+                return @()
+            }
+            # Post-development review: QA gate required
             return @(
                 @{ gate = 'qa-test-gate'; verdict = 'PASS'; mode = 'formal'; stage = 'Execution'; artifact = $true }
             )
         }
         'architecture-health-gate' {
+            # Pre-development OpenSpec review: only complexity gate required
+            if ($IsPreDevelopment) {
+                return @(
+                    @{ gate = 'complexity-gate'; verdict = 'PASS'; mode = $null; stage = $null; artifact = $true }
+                )
+            }
+            # Post-development review: QA and complexity gates required
             return @(
                 @{ gate = 'qa-test-gate'; verdict = 'PASS'; mode = 'formal'; stage = 'Execution'; artifact = $true },
                 @{ gate = 'complexity-gate'; verdict = 'PASS'; mode = $null; stage = $null; artifact = $true }
             )
         }
         'code-quality-gate' {
+            # Pre-development OpenSpec review: complexity and architecture gates required
+            if ($IsPreDevelopment) {
+                return @(
+                    @{ gate = 'complexity-gate'; verdict = 'PASS'; mode = $null; stage = $null; artifact = $true },
+                    @{ gate = 'architecture-health-gate'; verdict = 'PASS'; mode = $null; stage = $null; artifact = $true }
+                )
+            }
+            # Post-development review: all gates required
             return @(
                 @{ gate = 'qa-test-gate'; verdict = 'PASS'; mode = 'formal'; stage = 'Execution'; artifact = $true },
                 @{ gate = 'complexity-gate'; verdict = 'PASS'; mode = $null; stage = $null; artifact = $true },
@@ -409,6 +443,48 @@ function Assert-RecordAdmission($State, [string]$GateName, [string]$Workflow, [s
         exit 1
     }
 
+    # Verify all prerequisites and their transitive prerequisites belong to the same workflow
+    $VerifiedGates = @{}
+    $ToVerify = @($Requirements | ForEach-Object { $_.gate })
+
+    while ($ToVerify.Count -gt 0) {
+        $CurrentGate = $ToVerify[0]
+        $ToVerify = $ToVerify[1..($ToVerify.Count - 1)]
+
+        if ($VerifiedGates.ContainsKey($CurrentGate)) { continue }
+        $VerifiedGates[$CurrentGate] = $true
+
+        # Check this gate belongs to current workflow
+        $GateEntries = @()
+        $History = @($State.history)
+        for ($Index = $History.Count - 1; $Index -ge 0; --$Index) {
+            $HistoryEntry = $History[$Index]
+            if ($HistoryEntry.PSObject.Properties.Name -contains 'gate' -and $HistoryEntry.gate -eq $CurrentGate) {
+                $GateEntries += $HistoryEntry
+            }
+        }
+        $CurrentEntry = $State.gates[$CurrentGate]
+        if ($GateEntries.Count -eq 0 -and $null -ne $CurrentEntry) { $GateEntries += $CurrentEntry }
+
+        $MatchingEntry = $GateEntries | Where-Object {
+            $_.workflowId -eq $Workflow -and $_.changeSnapshot -eq $Snapshot
+        } | Select-Object -First 1
+
+        if ($null -eq $MatchingEntry) {
+            Write-Host "GATE_STATE_BLOCKED gate=$GateName prerequisite=$CurrentGate workflowMismatch requiredWorkflow=$Workflow requiredSnapshot=$Snapshot state=$(Format-GatePath $StatePath) hint='Prerequisite gate must belong to the same workflow. Cross-workflow gate reuse is not allowed.'"
+            exit 1
+        }
+
+        # Add this gate's prerequisites to verification queue
+        $GateRequirements = @(Get-AdmissionRequirements $CurrentGate)
+        foreach ($Req in $GateRequirements) {
+            if (-not $VerifiedGates.ContainsKey($Req.gate)) {
+                $ToVerify += $Req.gate
+            }
+        }
+    }
+
+    # Now verify each direct prerequisite with full validation
     foreach ($Requirement in $Requirements) {
         Test-GateEntry $State $Requirement.gate $GateName $Requirement.verdict $Requirement.mode $Requirement.stage $Workflow $Snapshot $Requirement.artifact $RequireManifestHash
     }

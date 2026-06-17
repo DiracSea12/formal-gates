@@ -1,5 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
+$formalGatesPowerShellHost = Join-Path $PSScriptRoot 'powershell-host.ps1'
+if (Test-Path -LiteralPath $formalGatesPowerShellHost) {
+    . $formalGatesPowerShellHost
+}
+
 function Resolve-FormalGateArtifactPath([string]$BasePath, [string]$MaybeRelativePath) {
     if ([string]::IsNullOrWhiteSpace($MaybeRelativePath)) { return $null }
     if ([System.IO.Path]::IsPathRooted($MaybeRelativePath)) { return $MaybeRelativePath }
@@ -303,33 +308,59 @@ function Get-FormalGateDispatchPromptValidationErrors([string]$BasePath, [string
     $errors = @(Get-FormalGateHashedArtifactValidationErrors $BasePath $Value 'Dispatch prompt artifact')
     if ($errors.Count -gt 0) { return $errors }
 
-    $anchoringLabels = @(
-        'Known issues',
-        'Previous findings',
-        'Just fixed',
-        'Expected answer',
-        'Expected PASS/FAIL',
-        'Focus items',
-        'suspicions',
-        'what to verify',
-        ([string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5))),
-        ([string]::new([char[]]@([char]0x521A, [char]0x4FEE, [char]0x4E86))),
-        ([string]::new([char[]]@([char]0x5173, [char]0x6CE8, [char]0x70B9))),
-        ([string]::new([char[]]@([char]0x5DF2, [char]0x77E5, [char]0x95EE, [char]0x9898))),
-        ([string]::new([char[]]@([char]0x9884, [char]0x671F, [char]0x7B54, [char]0x6848))),
-        ([string]::new([char[]]@([char]0x4E0A, [char]0x8F6E, [char]0x53D1, [char]0x73B0))),
-        ([string]::new([char[]]@([char]0x9700, [char]0x8981, [char]0x9A8C, [char]0x8BC1)))
-    )
+    $validatorScript = Join-Path $BasePath 'scripts/validate-dispatch-prompt.ps1'
+    if (-not (Test-Path -LiteralPath $validatorScript)) {
+        return @("Dispatch prompt validator script not found: $validatorScript")
+    }
+
+    $configPath = Join-Path $BasePath 'hooks/pollution-patterns.json'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return @("Pollution patterns config not found: $configPath")
+    }
+
     foreach ($part in ($Value -split ',')) {
         $pathText = [regex]::Replace($part.Trim().Trim('"', "'"), '(?i)\s+sha(?:256)?\s*[:=]\s*[a-f0-9]{64}\b', '').Trim()
         $pathText = [regex]::Replace($pathText, '\s+\(.*$', '').Trim()
         if ([string]::IsNullOrWhiteSpace($pathText)) { continue }
         $path = Resolve-FormalGateArtifactPath $BasePath $pathText
+
+        if (-not (Test-Path -LiteralPath $path)) {
+            $errors += "Dispatch prompt artifact not found: $path"
+            continue
+        }
+
         $promptText = [string](Get-Content -LiteralPath $path -Raw -Encoding UTF8)
-        foreach ($label in $anchoringLabels) {
-            $pattern = '(?im)^[ \t]*(?:>[ \t]*)?(?:[-*+][ \t]*)?(?:#{1,6}[ \t]+)?' + [regex]::Escape($label) + '[ \t]*(?::|$)'
-            if ($promptText -match $pattern) {
-                $errors += "dispatch prompt contamination: forbidden anchoring field present: $label"
+
+        try {
+            $ps = Get-FormalGatesPowerShellExe
+            $result = & $ps -NoProfile -File $validatorScript -PromptText $promptText -ConfigPath $configPath 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+        catch {
+            $errors += "Dispatch prompt validation error: $_"
+            continue
+        }
+
+        if ($exitCode -ne 0) {
+            $resultText = $result | Out-String
+            if ($resultText -match '^\s*[\[{]') {
+                try {
+                    $violations = $resultText | ConvertFrom-Json
+                    if ($violations -is [array]) {
+                        foreach ($v in $violations) {
+                            $errors += "dispatch prompt contamination: $($v.Label) - matched '$($v.Matched)'"
+                        }
+                    }
+                    else {
+                        $errors += "dispatch prompt validation failed: $resultText"
+                    }
+                }
+                catch {
+                    $errors += "dispatch prompt validation failed with JSON parse error: $resultText"
+                }
+            }
+            else {
+                $errors += "dispatch prompt validation failed: $resultText"
             }
         }
     }
