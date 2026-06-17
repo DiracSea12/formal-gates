@@ -66,7 +66,7 @@ If QA evidence is incomplete, do not enter complexity / architecture / code-qual
 
 Zero-context is not empty context. Dispatch must include bundle or manifest path and SHA, worktree, base commit or snapshot id, requirement target, exact scope, forbidden files/items/context, Complexity Contract or Ledger when applicable, related artifacts, output template, and required verification.
 
-Prompts must not include main-agent conclusions, suspicions, previous findings, expected answers, target verdicts, or focus items. Formal review dispatch uses the matching file under `agents/` and must tell the reviewer not to load or execute skills including `formal-gates`.
+Prompts must not include main-agent conclusions, suspicions, previous findings, expected answers, target verdicts, or focus items. Contaminated prompts are automatically detected and blocked. Formal review dispatch uses the matching file under `agents/` and must tell the reviewer not to load or execute skills including `formal-gates`.
 
 ## GateWorkflow Minimum
 
