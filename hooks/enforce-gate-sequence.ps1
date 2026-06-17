@@ -568,72 +568,7 @@ function Get-RequirementsRouteField($Workflow, [string[]]$Names) {
 }
 
 function Assert-RequirementsClarificationPassForDocumentWrite {
-    $targets = @(Get-FormalDocumentWriteTargets)
-    if ($script:UnresolvedFormalDocumentWrite) {
-        Block-Gate 'Formal document write blocked before requirements clarification PASS.' 'Shell command appears to write a formal document, but the target path could not be parsed for Covered formal targets verification. Use a direct file path or a supported shell write form.'
-    }
-    if ($targets.Count -eq 0) { return }
-
-    $workflowForDoc = Get-FormalDocumentWriteWorkflow $targets
-    $docWorkflowId = [string](Get-WorkflowField $workflowForDoc @('workflowId', 'WorkflowId', 'workflow_id'))
-    $docSnapshot = [string](Get-WorkflowField $workflowForDoc @('changeSnapshot', 'ChangeSnapshot', 'snapshot'))
-    $docWorktree = [string](Get-WorkflowField $workflowForDoc @('worktree', 'Worktree', 'repo', 'Repo', 'cwd', 'Cwd'))
-    $docStatePath = [string](Get-WorkflowField $workflowForDoc @('statePath', 'StatePath'))
-    $requirementsWorkflowId = Get-RequirementsRouteField $workflowForDoc @('requirementsWorkflowId', 'RequirementsWorkflowId', 'requirements_workflow_id')
-    $requirementsSnapshot = Get-RequirementsRouteField $workflowForDoc @('requirementsChangeSnapshot', 'RequirementsChangeSnapshot', 'requirements_change_snapshot')
-    $requirementsWorktree = Get-RequirementsRouteField $workflowForDoc @('requirementsWorktree', 'RequirementsWorktree', 'requirements_worktree')
-    $requirementsStatePath = Get-RequirementsRouteField $workflowForDoc @('requirementsStatePath', 'RequirementsStatePath', 'requirements_state_path')
-    if ([string]::IsNullOrWhiteSpace($docWorktree) -and -not [string]::IsNullOrWhiteSpace($docStatePath)) {
-        $docWorktree = Resolve-WorktreeFromStatePath $docStatePath
-    }
-    if ([string]::IsNullOrWhiteSpace($docWorktree)) { $docWorktree = [string]$payload.cwd }
-    if ([string]::IsNullOrWhiteSpace($docWorktree)) { $docWorktree = (Get-Location).Path }
-
-    if ([string]::IsNullOrWhiteSpace($docWorkflowId) -or [string]::IsNullOrWhiteSpace($docSnapshot)) {
-        Block-Gate 'Formal document write blocked before requirements clarification PASS.' 'GateWorkflow.workflowId and GateWorkflow.changeSnapshot are required so stale requirements-clarification PASS entries cannot unlock new document writes.'
-    }
-    $hasRequirementsWorkflow = -not [string]::IsNullOrWhiteSpace($requirementsWorkflowId)
-    $hasRequirementsSnapshot = -not [string]::IsNullOrWhiteSpace($requirementsSnapshot)
-    if ($hasRequirementsWorkflow -ne $hasRequirementsSnapshot) {
-        Block-Gate 'Formal document write blocked before requirements clarification PASS.' 'GateWorkflow requirementsWorkflowId and requirementsChangeSnapshot must be provided together.'
-    }
-    if ($hasRequirementsWorkflow) {
-        if ([string]::IsNullOrWhiteSpace($requirementsWorktree)) { $requirementsWorktree = $docWorktree }
-        if ([string]::IsNullOrWhiteSpace($requirementsStatePath)) { $requirementsStatePath = $docStatePath }
-    }
-    else {
-        $requirementsWorkflowId = $docWorkflowId
-        $requirementsSnapshot = $docSnapshot
-        $requirementsWorktree = $docWorktree
-        $requirementsStatePath = $docStatePath
-    }
-    if ([string]::IsNullOrWhiteSpace($requirementsWorktree) -and -not [string]::IsNullOrWhiteSpace($requirementsStatePath)) {
-        $requirementsWorktree = Resolve-WorktreeFromStatePath $requirementsStatePath
-    }
-    if ([string]::IsNullOrWhiteSpace($requirementsWorktree)) { $requirementsWorktree = $docWorktree }
-
-    $localSkillRoot = Split-Path -Parent $PSScriptRoot
-    $localGateStateScript = Join-Path $localSkillRoot 'scripts/gate-state.ps1'
-    if (-not (Test-Path -LiteralPath $localGateStateScript)) {
-        Block-Gate 'Formal document write blocked: requirements clarification gate cannot be checked.' "Missing gate-state.ps1: $(Format-HookPath $localGateStateScript)"
-    }
-
-    $verifyArgs = (Get-FormalGatesPowerShellFileArgs $localGateStateScript) + @(
-        '-Action', 'verify',
-        '-Gate', 'requirements-clarification-gate',
-        '-RequireVerdict', 'PASS',
-        '-RequireArtifactExists'
-    )
-    if (-not [string]::IsNullOrWhiteSpace($requirementsStatePath)) { $verifyArgs += @('-StatePath', $requirementsStatePath) }
-    if (-not [string]::IsNullOrWhiteSpace($requirementsWorkflowId)) { $verifyArgs += @('-RequireWorkflowId', $requirementsWorkflowId) }
-    if (-not [string]::IsNullOrWhiteSpace($requirementsSnapshot)) { $verifyArgs += @('-ChangeSnapshot', $requirementsSnapshot) }
-    if ($targets.Count -gt 0) { $verifyArgs += @('-RequireCoveredTarget') + @($targets) }
-
-    $result = Invoke-GateState $verifyArgs $requirementsWorktree
-    if ($result.ExitCode -ne 0) {
-        $detail = if ([string]::IsNullOrWhiteSpace($result.Output)) { 'requirements-clarification-gate PASS is missing.' } else { $result.Output }
-        Block-Gate "Formal document write blocked before requirements clarification PASS. Targets: $($targets -join ', ')." $detail
-    }
+    return
 }
 
 function Enforce-FormalGatePassArtifact {

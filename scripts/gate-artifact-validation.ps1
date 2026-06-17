@@ -331,6 +331,11 @@ function Get-FormalGateDispatchPromptValidationErrors([string]$BasePath, [string
 
         $promptText = [string](Get-Content -LiteralPath $path -Raw -Encoding UTF8)
 
+        if ($promptText -notmatch '(?m)^\s*formal_gate_dispatch\s*:') {
+            $errors += "Dispatch prompt artifact missing required field formal_gate_dispatch: $path"
+            continue
+        }
+
         try {
             $ps = Get-FormalGatesPowerShellExe
             $result = & $ps -NoProfile -File $validatorScript -PromptText $promptText -ConfigPath $configPath 2>&1

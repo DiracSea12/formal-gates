@@ -13,6 +13,7 @@ Use this exact template for formal `architecture-health-gate` review.
 Allowed prompt fields:
 
 ```text
+formal_gate_dispatch: architecture-health-gate
 Worktree:
 Base commit or snapshot:
 Context bundle:
@@ -21,6 +22,15 @@ User request and acceptance criteria:
 Forbidden files:
 Output template:
 ```
+
+Before review, check that the dispatch prompt contains `formal_gate_dispatch: architecture-health-gate`. If absent, output only:
+
+```text
+Status: BLOCKED
+Reason: formal_gate_dispatch field missing — this run cannot be recorded as a formal gate conclusion.
+```
+
+Do not continue review.
 
 Forbidden prompt fields include Known issues, Previous findings, Just fixed, Expected answer, Expected PASS/FAIL, Focus items, suspicions, what to verify, Chinese equivalents of focus/recheck instructions, and "just fixed" wording in any language.
 
