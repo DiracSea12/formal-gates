@@ -10,14 +10,26 @@ if (-not (Test-Path -LiteralPath $formalGatesArtifactValidation)) {
 }
 . $formalGatesArtifactValidation
 
+function Allow-Hook([string]$Reason) {
+    [pscustomobject]@{
+        permission = 'allow'
+        hookSpecificOutput = @{
+            hookEventName = 'PreToolUse'
+            permissionDecision = 'allow'
+            permissionDecisionReason = $Reason
+        }
+    } | ConvertTo-Json -Depth 5 -Compress
+    exit 0
+}
+
 $inputJson = [Console]::In.ReadToEnd()
-if ([string]::IsNullOrWhiteSpace($inputJson)) { exit 0 }
+if ([string]::IsNullOrWhiteSpace($inputJson)) { Allow-Hook 'No hook payload provided.' }
 
 try {
     $payload = $inputJson | ConvertFrom-Json
 }
 catch {
-    exit 0
+    Allow-Hook 'Hook payload is not JSON.'
 }
 
 $toolName = [string]$payload.tool_name
@@ -48,7 +60,7 @@ $formalGateDispatch = $null
 if ($toolName -in @('Agent', 'Task')) {
     $formalGateDispatch = [string]$inputProperties['formal_gate_dispatch']
     if ([string]::IsNullOrWhiteSpace($formalGateDispatch)) {
-        exit 0  # Not a formal gate dispatch, exit all gate logic
+        Allow-Hook 'Not a formal gate dispatch.'
     }
 }
 elseif ($toolName -eq 'Skill') {
@@ -60,11 +72,11 @@ elseif ($toolName -eq 'Skill') {
         $formalGateDispatch = $skillName
     }
     else {
-        exit 0  # Not a gate-related skill, exit all gate logic
+        Allow-Hook 'Not a formal gate skill.'
     }
 }
 else {
-    exit 0  # Not Agent/Task/Skill, exit all gate logic
+    # Shell/write tools may still need command prechecks below.
 }
 
 function Format-HookPath([string]$Path) {
@@ -182,46 +194,6 @@ function Get-StructuredWorkflow {
     return $null
 }
 
-function Get-WorkflowFromText([string]$Text, [string[]]$Keys = @('GateWorkflow', 'Workflow')) {
-    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
-    $hasStructuredObjectIntent = Test-JsonObjectIntentAfterKey $Text $Keys
-    $jsonText = Find-JsonObjectAfterKey $Text $Keys
-    if (-not [string]::IsNullOrWhiteSpace($jsonText)) { return Convert-ToWorkflowObject $jsonText }
-    if ($hasStructuredObjectIntent) {
-        Block-Gate 'Gate sequence blocked: structured GateWorkflow JSON is malformed.' 'Malformed GateWorkflow JSON.'
-    }
-    return $null
-}
-
-function Get-FormalDocumentWriteWorkflow([object[]]$Targets) {
-    $workflow = Get-StructuredWorkflow
-    if ($null -ne $workflow) { return $workflow }
-    if ($Targets.Count -eq 0) { return $null }
-    if ($toolName -notin @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) { return $null }
-
-    foreach ($fieldName in @('content', 'new_string', 'text')) {
-        if ($inputProperties.ContainsKey($fieldName)) {
-            $workflow = Get-WorkflowFromText ([string]$inputProperties[$fieldName]) @('GateWorkflow')
-            if ($null -ne $workflow) { return $workflow }
-        }
-    }
-
-    if ($inputProperties.ContainsKey('edits') -and $null -ne $inputProperties['edits']) {
-        foreach ($edit in @($inputProperties['edits'])) {
-            if ($null -eq $edit) { continue }
-            foreach ($fieldName in @('new_string', 'content', 'text')) {
-                $property = $edit.PSObject.Properties[$fieldName]
-                if ($null -ne $property) {
-                    $workflow = Get-WorkflowFromText ([string]$property.Value) @('GateWorkflow')
-                    if ($null -ne $workflow) { return $workflow }
-                }
-            }
-        }
-    }
-
-    return $null
-}
-
 function Get-WorkflowField($Workflow, [string[]]$Names) {
     if ($null -eq $Workflow) { return $null }
     foreach ($prop in $Workflow.PSObject.Properties) {
@@ -309,7 +281,7 @@ function Normalize-HookCommandText([string]$Command) {
 
 function Test-CommandMentionsGateWorkflowScript([string]$Command) {
     if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
-    return (Normalize-HookCommandText $Command) -match '(?i)(^|[\\/"])gate-workflow\.ps1(["\s]|$)'
+    return (Normalize-HookCommandText $Command) -match '(?i)(^|[\\/''"])gate-workflow\.ps1([''"\s]|$)'
 }
 
 function Resolve-HookRelativePath([string]$BasePath, [string]$MaybeRelativePath) {
@@ -346,228 +318,9 @@ function Normalize-GateStage([string]$StageValue) {
     return ([regex]::Replace($StageValue.Trim(), '[\s_-]+', '')).ToLowerInvariant()
 }
 
-function Test-FormalDocumentPath([string]$Path) {
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    $normalized = $Path.Replace('\', '/').ToLowerInvariant()
-    if ($normalized -notmatch '\.(md|markdown|txt)$') { return $false }
-    if ($normalized -match '\.txt$') {
-        return $normalized -match '(prd|requirements|specs)'
-    }
-    if ($normalized -match '(^|/)openspec/') { return $true }
-    if ($normalized -match '(^|/)(prd|sdd|phase|phases|start-readiness|requirements|specs)/') { return $true }
-    if ($normalized -match '(^|/)docs/(prd|sdd|phase|phases|start-readiness|requirements|specs)/') { return $true }
-    if ($normalized -match '(^|/)[^/]*(prd|sdd|start-readiness)[^/]*\.(md|markdown)$') { return $true }
-    if ($normalized -match '(^|/)phase[0-9a-z._-]*\.(md|markdown)$') { return $true }
-    return $false
-}
-
-function Get-HookStringValues($Value, [int]$Depth = 0) {
-    if ($Depth -gt 6 -or $null -eq $Value) { return @() }
-    if ($Value -is [string]) { return @([string]$Value) }
-    $strings = @()
-    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
-        foreach ($item in $Value) {
-            $strings += @(Get-HookStringValues $item ($Depth + 1))
-        }
-        return $strings
-    }
-    if ($Value.PSObject -and $Value.PSObject.Properties) {
-        foreach ($property in $Value.PSObject.Properties) {
-            $strings += @(Get-HookStringValues $property.Value ($Depth + 1))
-        }
-    }
-    return $strings
-}
-
-function Get-HookExplicitPathLikeStrings($Value, [int]$Depth = 0) {
-    if ($Depth -gt 6 -or $null -eq $Value) { return @() }
-    $paths = @()
-    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
-        foreach ($item in $Value) {
-            $paths += @(Get-HookExplicitPathLikeStrings $item ($Depth + 1))
-        }
-        return $paths
-    }
-    if ($Value.PSObject -and $Value.PSObject.Properties) {
-        foreach ($property in $Value.PSObject.Properties) {
-            if ($property.Name -match '(?i)^(file_path|filepath|notebook_path|notebookpath|path|file|target_path|targetPath|target)$' -and $property.Value -is [string]) {
-                $paths += [string]$property.Value
-                continue
-            }
-            $paths += @(Get-HookExplicitPathLikeStrings $property.Value ($Depth + 1))
-        }
-    }
-    return $paths
-}
-
-function Get-ApplyPatchTargetPaths([string]$PatchText) {
-    if ([string]::IsNullOrWhiteSpace($PatchText)) { return @() }
-    $paths = @()
-    foreach ($line in ($PatchText -split "`r?`n")) {
-        $match = [regex]::Match($line, '^\*\*\* (Add File|Update File|Delete File|Move to):\s*(.+?)\s*$')
-        if ($match.Success) {
-            $paths += $match.Groups[2].Value.Trim()
-        }
-    }
-    return @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-}
-
-function Get-ApplyPatchTargetsFromToolInput {
-    $targets = @()
-    foreach ($text in @(Get-HookStringValues $toolInput)) {
-        if ($text -notmatch '^\s*\*\*\* Begin Patch\b' -and $text -notmatch '(?m)^\*\*\* (Add File|Update File|Delete File|Move to):') { continue }
-        $targets += @(Get-ApplyPatchTargetPaths $text)
-    }
-    return @($targets | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
-}
-
-function ConvertTo-HookCandidatePath([string]$Text) {
-    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
-    $path = $Text.Trim()
-    if ($path.StartsWith('(') -and $path.EndsWith(')')) { $path = $path.Substring(1, $path.Length - 2).Trim() }
-    $path = $path.Trim('"', "'").Trim()
-    $path = $path.TrimEnd(',', ';', ')', ']', '}')
-    $path = $path.Replace('\', '/')
-    while ($path.StartsWith('./')) { $path = $path.Substring(2) }
-    return $path
-}
-
-function Get-JoinPathTargets([string]$Text) {
-    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
-    $targets = @()
-    foreach ($match in [regex]::Matches($Text, '(?i)Join-Path\s+(?<left>"[^"]+"|''[^'']+''|[^\s\)]+)\s+(?<right>"[^"]+"|''[^'']+''|[^\s\)]+)')) {
-        $left = ConvertTo-HookCandidatePath $match.Groups['left'].Value
-        $right = ConvertTo-HookCandidatePath $match.Groups['right'].Value
-        if (-not [string]::IsNullOrWhiteSpace($left) -and -not [string]::IsNullOrWhiteSpace($right)) {
-            $targets += (($left.TrimEnd('/')) + '/' + ($right.TrimStart('/')))
-        }
-    }
-    return $targets
-}
-
-function Get-FormalDocumentPathsFromText([string]$Text) {
-    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
-    $normalized = (Normalize-HookCommandText $Text).Replace('\', '/')
-    $paths = @()
-    $paths += @(Get-JoinPathTargets $normalized)
-
-    foreach ($match in [regex]::Matches($normalized, '(?i)(?:^|[\s"'',;=\(\[])(?<path>(?:[A-Za-z]:)?(?:\.?/)?(?:[^"'',;\s\|\)\]]+/)+[^"'',;\s\|\)\]]+\.(?:md|markdown|txt))(?=$|[\s"'',;\)\]])')) {
-        $paths += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)(?:^|[\s"'',;=\(\[])(?<path>[^"'',;\s\|\)\]]*(?:prd|sdd|start-readiness|requirements|specs)[^"'',;\s\|\)\]]*\.(?:md|markdown|txt)|phase[0-9a-z._-]*\.(?:md|markdown))(?=$|[\s"'',;\)\]])')) {
-        $paths += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    return @($paths | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
-}
-
-function Get-RedirectionTargetCandidates([string]$Command) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
-    $targets = @()
-    $inSingle = $false
-    $inDouble = $false
-    $length = $Command.Length
-    for ($i = 0; $i -lt $length; $i++) {
-        $ch = $Command[$i]
-        if ($ch -eq "'" -and -not $inDouble) { $inSingle = -not $inSingle; continue }
-        if ($ch -eq '"' -and -not $inSingle) { $inDouble = -not $inDouble; continue }
-        if ($inSingle -or $inDouble -or $ch -ne '>') { continue }
-        if ($i -gt 0 -and $Command[$i - 1] -eq '-') { continue }
-        if (($i + 1) -lt $length -and $Command[$i + 1] -eq '>') { $i++ }
-        $j = $i + 1
-        while ($j -lt $length -and [char]::IsWhiteSpace($Command[$j])) { $j++ }
-        if ($j -ge $length) { continue }
-        $quote = [char]0
-        if ($Command[$j] -eq "'" -or $Command[$j] -eq '"') {
-            $quote = $Command[$j]
-            $j++
-        }
-        $start = $j
-        while ($j -lt $length) {
-            if ($quote -ne [char]0) {
-                if ($Command[$j] -eq $quote) { break }
-            }
-            elseif ([char]::IsWhiteSpace($Command[$j]) -or $Command[$j] -in @(';', '&', '|')) {
-                break
-            }
-            $j++
-        }
-        if ($j -gt $start) {
-            $targets += $Command.Substring($start, $j - $start)
-        }
-        $i = $j
-    }
-    return @($targets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-}
-
-function Get-ShellWriteTargetCandidates([string]$Command) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
-    $normalized = (Normalize-HookCommandText $Command).Replace('\', '/')
-    $targets = @()
-    foreach ($match in [regex]::Matches($normalized, '(?i)\b(?:Set-Content|Add-Content|Out-File|Tee-Object)\b[^\r\n;|]*\s-(?:LiteralPath|FilePath|Path)\s+(?<path>\([^)]+\)|"[^"]+"|''[^'']+''|[^\s;|]+)')) {
-        $targetText = $match.Groups['path'].Value
-        $targets += @(Get-FormalDocumentPathsFromText $targetText)
-        $targets += (ConvertTo-HookCandidatePath $targetText)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)\b(?:Copy-Item|Move-Item)\b[^\r\n;|]*\s-Destination\s+(?<path>\([^)]+\)|"[^"]+"|''[^'']+''|[^\s;|]+)')) {
-        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)\b(?:Copy-Item|Move-Item)\b\s+(?:"[^"]+"|''[^'']+''|[^\s;|]+)\s+(?<path>"[^"]+"|''[^'']+''|[^\s;|]+)')) {
-        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)shutil\.copy(?:file|2)?\s*\(\s*["''][^"'']+["'']\s*,\s*(?<path>["''][^"'']+["''])')) {
-        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)\b(?:writeFileSync|writeFile|createWriteStream)\s*\(\s*(?<path>"[^"]+"|''[^'']+'')')) {
-        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)\bPath\s*\(\s*(?<path>"[^"]+"|''[^'']+'')\s*\)\s*\.\s*(?:write_text|write_bytes)\s*\(')) {
-        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)\bopen\s*\(\s*(?<path>"[^"]+"|''[^'']+'')\s*,\s*["''][^"'']*[wa]')) {
-        $targets += (ConvertTo-HookCandidatePath $match.Groups['path'].Value)
-    }
-    foreach ($match in [regex]::Matches($normalized, '(?i)(?:\[(?:System\.)?IO\.File\]::|\b(?:System\.)?IO\.File::|\b)(?:WriteAllText|AppendAllText|WriteAllLines|AppendAllLines|WriteAllBytes)\s*\(\s*(?<path>\([^)]+\)|"[^"]+"|''[^'']+''|[^\s,;|]+)')) {
-        $targetText = $match.Groups['path'].Value
-        $targets += @(Get-FormalDocumentPathsFromText $targetText)
-        $targets += (ConvertTo-HookCandidatePath $targetText)
-    }
-    foreach ($target in @(Get-RedirectionTargetCandidates $normalized)) {
-        $targets += (ConvertTo-HookCandidatePath $target)
-    }
-    return @($targets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-}
-
-function Get-ShellFormalDocumentWriteTargets([string]$Command) {
-    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
-    $normalized = (Normalize-HookCommandText $Command).Replace('\', '/')
-    $targets = @(Get-ShellWriteTargetCandidates $normalized)
-    return @($targets | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
-}
-
-function Get-FormalDocumentWriteTargets {
-    if ($toolName -in @('Bash', 'Shell')) {
-        $command = [string]$inputProperties['command']
-        $targets = @(Get-ShellFormalDocumentWriteTargets $command)
-        if ($targets.Count -gt 0) { return $targets }
-        return @()
-    }
-    if ($toolName -in @('apply_patch', 'ApplyPatch')) {
-        return @(Get-ApplyPatchTargetsFromToolInput)
-    }
-    if ($toolName -notin @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) { return @() }
-    $paths = @(Get-HookExplicitPathLikeStrings $toolInput | Where-Object { Test-FormalDocumentPath $_ } | Select-Object -Unique)
-    return $paths
-}
-
-function Get-RequirementsRouteField($Workflow, [string[]]$Names) {
-    foreach ($name in $Names) {
-        $value = Get-WorkflowField $Workflow @($name)
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) { return [string]$value }
-    }
-    return $null
-}
-
 function Assert-RequirementsClarificationPassForDocumentWrite {
+    # Intentionally no-op by design. Do not add automatic document-write blocking here
+    # unless the user has been asked and explicitly permits changing that design.
     return
 }
 
@@ -689,7 +442,7 @@ Assert-RequirementsClarificationPassForDocumentWrite
 $workflow = Get-StructuredWorkflow
 $hasStructuredWorkflow = $null -ne $workflow
 
-if ($null -eq $formalGateDispatch -and -not $hasStructuredWorkflow) { exit 0 }
+if ($null -eq $formalGateDispatch -and -not $hasStructuredWorkflow) { Allow-Hook 'No structured formal gate workflow found.' }
 
 if (-not $hasStructuredWorkflow) {
     Allow-AdvisoryGate $formalGateDispatch
@@ -729,8 +482,11 @@ if ($isStandaloneSingleGateRequest) {
         Block-Gate 'Gate sequence blocked: standalone single-gate mode cannot carry WorkflowId or ChangeSnapshot.' "Standalone $gate tried to use workflow/snapshot fields."
     }
     [pscustomobject]@{
+        permission = 'allow'
         hookSpecificOutput = @{
             hookEventName = 'PreToolUse'
+            permissionDecision = 'allow'
+            permissionDecisionReason = 'Standalone single-gate mode allowed.'
             additionalContext = 'USER-AUTHORIZED STANDALONE SINGLE-GATE MODE ONLY. This is advisory only, not four-stage sequencing, not release/seal approval, and not permission to enter downstream gates. Do not record or reuse this result as a workflow PASS.'
         }
     } | ConvertTo-Json -Depth 5 -Compress
@@ -789,7 +545,7 @@ if ($gate -eq 'qa-test-gate') {
             Block-Gate "Gate sequence blocked before final QA/seal. $detail" $detail
         }
     }
-    exit 0
+    Allow-Hook 'QA gate sequence precheck passed.'
 }
 
 $admissionArgs = (Get-FormalGatesPowerShellFileArgs $gateStateScript) + @(

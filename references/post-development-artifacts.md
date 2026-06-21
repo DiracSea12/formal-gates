@@ -8,6 +8,8 @@ Keep the four gate reference files focused on judgment rules. Keep host installa
 
 Without machine metadata, a formal PASS cannot be recorded; the result is at most an advisory review. `singleGateAuthorized=true` is only for explicit single-gate advisory review. It cannot be recorded, reused, or used to advance release/seal.
 
+Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria by calling them optimization, hardening, gap-filling, cleanup, or overengineering prevention. Ask the user first and get explicit permission.
+
 Every formal post-development gate artifact must include:
 
 ```text
@@ -17,13 +19,20 @@ Semantic anti-anchor check: PASS
 Prompt source: agents/<gate>.md
 Zero-context reviewer: YES
 Independent agent: YES
-Reviewer agent id:
 Context bundle: <bundle-path> sha256=<bundle-sha256>
 Dispatch prompt artifact: <dispatch-prompt-path> sha256=<dispatch-prompt-sha256>
 No-anchor prompt: YES
 ```
 
-`Reviewer agent id` must not be empty or a placeholder. `Context bundle` and `Dispatch prompt artifact` must point to existing files and include SHA-256 hashes; the machine validator checks those hashes. `Dispatch prompt artifact` is the actual dispatch prompt sent by the main agent to the review subagent, not a review-result summary.
+Optional strong proof field:
+
+```text
+Reviewer proof receipt: <receipt-path> sha256=<receipt-sha256>
+```
+
+`Reviewer proof receipt` is a strict hash-bound lifecycle receipt for the artifact when it is present. It supports a host-observed subagent lifecycle claim only when the events were captured by the configured host lifecycle hooks and the same host has live-canary support for those events. Missing receipt means the artifact is not receipt-backed proof that a real subagent ran; it must not be self-stamped as receipt-backed zero-context proof, but missing receipt alone must not block every ordinary gate-state record. If the field is present, it must point to a finalized lifecycle receipt and include its SHA-256 hash; validators check it strictly. Old self-reported reviewer id fields do not count as proof.
+
+`Context bundle` and `Dispatch prompt artifact` must point to existing files and include SHA-256 hashes; the machine validator checks those hashes. `Dispatch prompt artifact` is the actual dispatch prompt sent by the main agent to the review subagent, not a review-result summary.
 
 If an artifact or dispatch prompt file contains these obvious anchoring field labels, formal PASS is blocked:
 
@@ -119,19 +128,20 @@ Minimum machine-check commands:
 
 Formal `qa-test-gate` recording must add `-Mode formal -Stage Execution`; final QA uses `-Mode formal -Stage FinalExecution`. Do not copy the generic command and forget the stage.
 
-Prefer the wrapper command for final QA because it generates the aggregate artifact and records `FinalExecution`:
+For final QA, first write the aggregate artifact, then record a supplied `FinalQaArtifact`. If the final QA artifact claims receipt-backed zero-context proof by including `Reviewer proof receipt`, the receipt must be valid; otherwise `FinalExecution` may still be recorded through the ordinary artifact checks without claiming receipt-backed proof:
 
 ```powershell
-$attempts = '[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-verification-run.json","reviewerAgentId":"qa-final-agent","contextBundle":".claude/bundles/<bundle>.zip sha256=<bundle-sha256>"}]'
+$attempts = '[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-verification-run.json","contextBundle":".claude/bundles/<bundle>.zip sha256=<bundle-sha256>"}]'
 $attemptsFile = '.claude/gates/artifacts/final-verification-attempts.json'
 $attemptsPath = Join-Path '<repo>' $attemptsFile
 $attempts | Set-Content -LiteralPath $attemptsPath -Encoding UTF8
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-final-verification -Worktree <repo> -WorkflowId <id> -ChangeSnapshot <snapshot> -AttemptsJsonFile $attemptsFile -OutputArtifact .claude/gates/artifacts/final-verification.json -FinalQaArtifact .claude/gates/artifacts/final-qa-execution.md -RecordFinalQa -Actor <qa-reviewer>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-final-verification -Worktree <repo> -WorkflowId <id> -ChangeSnapshot <snapshot> -AttemptsJsonFile $attemptsFile -OutputArtifact .claude/gates/artifacts/final-verification.json -Actor <qa-reviewer>
+<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate qa-test-gate -Verdict PASS -Mode formal -Stage FinalExecution -Artifact .claude/gates/artifacts/final-qa-execution.md -Actor <qa-reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
 ```
 
-Attempt entries need `status`, `accepted`, `artifact`, `reviewerAgentId`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. Prefer `-AttemptsJsonFile` on PowerShell 5 because raw JSON strings can lose quotes when passed through `powershell.exe -File`.
+Attempt entries need `status`, `accepted`, `artifact`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. Prefer `-AttemptsJsonFile` on PowerShell 5 because raw JSON strings can lose quotes when passed through `powershell.exe -File`.
 
-With `-RecordFinalQa`, the wrapper writes the final verification aggregate and records `qa-test-gate` `Stage=FinalExecution`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+`-RecordFinalQa` records a supplied, pre-existing `FinalQaArtifact`. It must not synthesize, overwrite, or repair a PASS-shaped FinalExecution report. A supplied artifact with a `Reviewer proof receipt` must have a valid receipt; an artifact without that field must not be described as receipt-backed subagent proof.
 
 ## Temporary Cleanup
 

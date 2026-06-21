@@ -1,12 +1,12 @@
 # Architecture Health Gate
 
-Use after complexity PASS in formal flow, or independently for architecture consultation. Review boundaries, ownership, public surface, dependencies, state/cache lifecycle, failure semantics, compatibility, and maintainability.
+Use after complexity PASS in a user-authorized four-gate/release/seal flow, or when the user asks for architecture consultation. Review boundaries, ownership, public surface, dependencies, state/cache lifecycle, failure semantics, compatibility, performance shape, and maintainability.
 
 Do not use architecture review to hide scope creep. If complexity is wrong, stop there.
 
 ## Applicability
 
-Run for:
+Run when an authorized formal flow reaches this gate, or when the user asks for formal architecture review or architecture consultation and the work includes:
 
 - Public header/interface/API, config surface, serialized contract changes.
 - Module dependency, include/import direction, runtime/editor/server/client/test boundary changes.
@@ -49,6 +49,7 @@ Review facts in the live diff/spec/doc/plan, not author intent.
 - State/cache lifecycle: global/process state needs reset boundaries and tests.
 - Failure semantics: exact, fallback, warning, error, ambiguous, and unsupported must not be blended into mush.
 - Compatibility: old paths/fields/behaviors cannot be retained without explicit user approval.
+- Performance shape: changed data flow, caching, lifecycle, polling, I/O, or cross-boundary calls must not add obvious avoidable hot-path cost.
 - Post-change module health: affected files/modules must not become god files or catch-all helpers.
 
 ## Decoupling Judgment
@@ -94,6 +95,7 @@ State/cache lifecycle risks:
 Dependency direction risks:
 Failure-semantics risks:
 Compatibility retained:
+Performance risks:
 Decoupling judgment:
 Simpler architecture available:
 Must-fix before code-quality review:

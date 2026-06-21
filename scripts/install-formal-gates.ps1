@@ -50,12 +50,20 @@ function Assert-SkillPackage([string]$Path) {
         'references/code-quality-gate.md',
         'references/install-and-hooks.md',
         'scripts/gate-artifact-validation.ps1',
+        'scripts/gate-proof-receipt.ps1',
         'scripts/powershell-host.ps1',
         'scripts/run-complexity-gate.ps1',
+        'scripts/validate-dispatch-prompt.ps1',
         'scripts/gate-state.ps1',
         'scripts/gate-workflow.ps1',
         'scripts/test-portable-openspec-canary.ps1',
-        'hooks/enforce-gate-sequence.ps1'
+        'hooks/enforce-gate-sequence.ps1',
+        'hooks/capture-subagent-receipt.ps1',
+        'hooks/test-subagent-receipt-canary-common.ps1',
+        'hooks/test-claude-subagent-receipt-canary.ps1',
+        'hooks/test-codex-subagent-receipt-canary.ps1',
+        'hooks/test-cursor-subagent-receipt-canary.ps1',
+        'hooks/pollution-patterns.json'
     )
 
     foreach ($relative in $required) {
@@ -70,10 +78,102 @@ function ConvertTo-QuotedCommandArgument([string]$Value) {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
+function ConvertTo-HookScriptArgument([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '""' }
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
 function Get-FormalGatesHookCommand([string]$HookScriptPath) {
     $powerShellExe = ConvertTo-QuotedCommandArgument (Get-FormalGatesPowerShellExe)
     $args = @(Get-FormalGatesPowerShellFileArgs $HookScriptPath | ForEach-Object { ConvertTo-QuotedCommandArgument ([string]$_) })
     return (@($powerShellExe) + @($args)) -join ' '
+}
+
+function Get-FormalGatesReceiptHookCommand(
+    [string]$HookScriptPath,
+    [string]$Provider,
+    [string]$EventName
+) {
+    $base = Get-FormalGatesHookCommand $HookScriptPath
+    return "$base -ReceiptProvider $(ConvertTo-HookScriptArgument $Provider) -ReceiptEventName $(ConvertTo-HookScriptArgument $EventName)"
+}
+
+function Test-FormalGatesHookCommand([string]$Command) {
+    return ([string]$Command) -like '*formal-gates*' -or
+        ([string]$Command) -like '*enforce-gate-sequence.ps1*' -or
+        ([string]$Command) -like '*capture-subagent-receipt.ps1*'
+}
+
+function Test-FormalGatesHookObject($Hook) {
+    if ($null -eq $Hook) { return $false }
+    $text = @(
+        [string]$Hook.command
+        foreach ($arg in @($Hook.args)) { [string]$arg }
+    ) -join ' '
+    return Test-FormalGatesHookCommand $text
+}
+
+function Write-FormalGatesJsonFile([string]$Path, [object]$Value) {
+    $json = $Value | ConvertTo-Json -Depth 12
+    [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Read-FormalGatesJsonFile([string]$Path, [string]$InvalidJsonMessage, [string]$BackupName) {
+    $value = $null
+    if (Test-Path -LiteralPath $Path) {
+        $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            try {
+                $value = $raw | ConvertFrom-Json
+            }
+            catch {
+                throw "${InvalidJsonMessage}: $Path"
+            }
+        }
+        Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force
+        Write-Host "Backed up existing $BackupName to $Path.bak"
+    }
+    if ($null -eq $value) { $value = [pscustomobject]@{} }
+    return $value
+}
+
+function Ensure-FormalGatesObjectProperty([object]$Object, [string]$Name, [object]$DefaultValue) {
+    if (-not ($Object.PSObject.Properties.Name -contains $Name) -or $null -eq $Object.$Name) {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $DefaultValue -Force
+    }
+}
+
+function New-ClaudeHookEntry([string]$Matcher, [string]$Command) {
+    return [pscustomobject]@{
+        matcher = $Matcher
+        hooks   = @(
+            [pscustomobject]@{
+                type    = 'command'
+                command = $Command
+            }
+        )
+    }
+}
+
+function New-CodexHookEntry([string]$Matcher, [string]$Command) {
+    return [pscustomobject]@{
+        matcher = $Matcher
+        hooks   = @(
+            [pscustomobject]@{
+                type    = 'command'
+                command = $Command
+                timeout = 30
+            }
+        )
+    }
+}
+
+function New-CursorHookEntry([string]$Command) {
+    return [pscustomobject]@{
+        command    = $Command
+        timeout    = 30
+        failClosed = $true
+    }
 }
 
 function Get-SkillPackageEntries {
@@ -182,160 +282,151 @@ function Get-CursorHooksPath([string]$Scope, [string]$ProjectPath) {
     return Join-Path (Resolve-FullPath $ProjectPath) '.cursor/hooks.json'
 }
 
-function Set-FormalGatesHook([string]$SettingsPath, [string]$HookScriptPath) {
-    # Read, merge, and write back only the formal-gates hook; preserve other hooks. Idempotent, with backup before write.
+function Remove-FormalGatesHookEntries(
+    [object[]]$Entries,
+    [ValidateSet('nested', 'flat')]
+    [string]$HookShape
+) {
+    $kept = @()
+    foreach ($entry in @($Entries)) {
+        if ($null -eq $entry) { continue }
 
-    $settings = $null
-    if (Test-Path -LiteralPath $SettingsPath) {
-        $raw = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8
-        if (-not [string]::IsNullOrWhiteSpace($raw)) {
-            try {
-                $settings = $raw | ConvertFrom-Json
-            }
-            catch {
-                throw "Existing settings.json is not valid JSON; refusing to touch it: $SettingsPath"
-            }
-        }
-        Copy-Item -LiteralPath $SettingsPath -Destination "$SettingsPath.bak" -Force
-        Write-Host "Backed up existing settings to $SettingsPath.bak"
-    }
-    if ($null -eq $settings) { $settings = [pscustomobject]@{} }
-
-    if (-not ($settings.PSObject.Properties.Name -contains 'hooks') -or $null -eq $settings.hooks) {
-        $settings | Add-Member -NotePropertyName 'hooks' -NotePropertyValue ([pscustomobject]@{}) -Force
-    }
-    if (-not ($settings.hooks.PSObject.Properties.Name -contains 'PreToolUse') -or $null -eq $settings.hooks.PreToolUse) {
-        $settings.hooks | Add-Member -NotePropertyName 'PreToolUse' -NotePropertyValue (@()) -Force
-    }
-
-    $preToolUse = @($settings.hooks.PreToolUse)
-    $formalHookFound = $false
-    $formalHookUpdated = $false
-    foreach ($entry in $preToolUse) {
-        foreach ($h in @($entry.hooks)) {
-            if (([string]$h.command) -like "*enforce-gate-sequence.ps1*") {
-                $formalHookFound = $true
-                if ($entry.PSObject.Properties.Name -contains 'matcher') {
-                    if ([string]$entry.matcher -ne '*') {
-                        $entry.matcher = '*'
-                        $formalHookUpdated = $true
-                    }
+        if ($HookShape -eq 'nested' -and $entry.PSObject.Properties.Name -contains 'hooks') {
+            $remainingHooks = @(
+                foreach ($hook in @($entry.hooks)) {
+                    if (-not (Test-FormalGatesHookObject $hook)) { $hook }
                 }
-                else {
-                    $entry | Add-Member -NotePropertyName 'matcher' -NotePropertyValue '*' -Force
-                    $formalHookUpdated = $true
-                }
-                $expectedCommand = Get-FormalGatesHookCommand $HookScriptPath
-                if ([string]$h.command -ne $expectedCommand) {
-                    if ($h.PSObject.Properties.Name -contains 'type') {
-                        $h.type = 'command'
-                    }
-                    else {
-                        $h | Add-Member -NotePropertyName 'type' -NotePropertyValue 'command' -Force
-                    }
-                    if ($h.PSObject.Properties.Name -contains 'command') {
-                        $h.command = $expectedCommand
-                    }
-                    else {
-                        $h | Add-Member -NotePropertyName 'command' -NotePropertyValue $expectedCommand -Force
-                    }
-                    $formalHookUpdated = $true
-                }
+            )
+            if ($remainingHooks.Count -gt 0) {
+                $entry.hooks = $remainingHooks
+                $kept += $entry
             }
+            continue
         }
-    }
-    if ($formalHookFound) {
-        if ($formalHookUpdated) {
-            $settings | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $SettingsPath -Encoding UTF8
-            Write-Host "formal-gates PreToolUse hook updated in $SettingsPath"
-        }
-        else {
-            Write-Host "formal-gates hook already present in $SettingsPath; left unchanged."
-        }
-        return
-    }
 
-    $newEntry = [pscustomobject]@{
-        matcher = '*'
-        hooks   = @(
-            [pscustomobject]@{
-                type    = 'command'
-                command = Get-FormalGatesHookCommand $HookScriptPath
-            }
-        )
+        if (-not (Test-FormalGatesHookObject $entry)) {
+            $kept += $entry
+        }
     }
-    $settings.hooks.PreToolUse = @($preToolUse + $newEntry)
-
-    $parent = Split-Path -Parent $SettingsPath
-    if (-not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
-    }
-    $settings | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $SettingsPath -Encoding UTF8
-    Write-Host "formal-gates PreToolUse hook added to $SettingsPath"
+    return @($kept)
 }
 
-function Set-CursorFormalGatesHook([string]$HooksPath, [string]$HookScriptPath) {
-    $command = Get-FormalGatesHookCommand $HookScriptPath
+function Set-FormalGatesHookEvents(
+    [object]$Config,
+    [System.Collections.Specialized.OrderedDictionary]$DesiredHooks,
+    [ValidateSet('nested', 'flat')]
+    [string]$HookShape
+) {
+    Ensure-FormalGatesObjectProperty $Config 'hooks' ([pscustomobject]@{})
 
-    $config = $null
-    if (Test-Path -LiteralPath $HooksPath) {
-        $raw = Get-Content -LiteralPath $HooksPath -Raw -Encoding UTF8
-        if (-not [string]::IsNullOrWhiteSpace($raw)) {
-            try {
-                $config = $raw | ConvertFrom-Json
-            }
-            catch {
-                throw "Existing Cursor hooks.json is not valid JSON; refusing to touch it: $HooksPath"
-            }
-        }
-        Copy-Item -LiteralPath $HooksPath -Destination "$HooksPath.bak" -Force
-        Write-Host "Backed up existing Cursor hooks to $HooksPath.bak"
-    }
-    if ($null -eq $config) { $config = [pscustomobject]@{} }
-
-    if (-not ($config.PSObject.Properties.Name -contains 'version')) {
-        $config | Add-Member -NotePropertyName 'version' -NotePropertyValue 1 -Force
-    }
-    if (-not ($config.PSObject.Properties.Name -contains 'hooks') -or $null -eq $config.hooks) {
-        $config | Add-Member -NotePropertyName 'hooks' -NotePropertyValue ([pscustomobject]@{}) -Force
-    }
-    if (-not ($config.hooks.PSObject.Properties.Name -contains 'preToolUse') -or $null -eq $config.hooks.preToolUse) {
-        $config.hooks | Add-Member -NotePropertyName 'preToolUse' -NotePropertyValue (@()) -Force
+    foreach ($eventName in $DesiredHooks.Keys) {
+        Ensure-FormalGatesObjectProperty $Config.hooks $eventName (@())
+        $existing = @(Remove-FormalGatesHookEntries @($Config.hooks.($eventName)) $HookShape)
+        $Config.hooks.($eventName) = @($existing + @($DesiredHooks[$eventName]))
     }
 
-    $preToolUse = @($config.hooks.preToolUse)
-    foreach ($entry in $preToolUse) {
-        if (([string]$entry.command) -like "*enforce-gate-sequence.ps1*") {
-            $entry.command = $command
-            $entry.timeout = 30
-            if ($entry.PSObject.Properties.Name -contains 'failClosed') {
-                $entry.failClosed = $true
-            }
-            else {
-                $entry | Add-Member -NotePropertyName 'failClosed' -NotePropertyValue $true -Force
-            }
-            if ($entry.PSObject.Properties.Name -contains 'matcher') {
-                $entry.PSObject.Properties.Remove('matcher')
-            }
-            $config | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $HooksPath -Encoding UTF8
-            Write-Host "formal-gates Cursor preToolUse hook updated in $HooksPath"
-            return
+    foreach ($property in @($Config.hooks.PSObject.Properties)) {
+        if ($DesiredHooks.Keys -contains $property.Name) { continue }
+        $value = $property.Value
+        if ($value -is [System.Array]) {
+            $Config.hooks.($property.Name) = Remove-FormalGatesHookEntries @($value) $HookShape
         }
     }
+}
 
-    $newEntry = [pscustomobject]@{
-        command    = $command
-        timeout    = 30
-        failClosed = $true
+function Set-FormalGatesHookFile(
+    [string]$Path,
+    [string]$InvalidJsonMessage,
+    [string]$BackupName,
+    [System.Collections.Specialized.OrderedDictionary]$DesiredHooks,
+    [ValidateSet('nested', 'flat')]
+    [string]$HookShape,
+    [bool]$EnsureVersion,
+    [string]$WrittenMessage,
+    [string]$LifecycleMessage
+) {
+    $config = Read-FormalGatesJsonFile $Path $InvalidJsonMessage $BackupName
+    if ($EnsureVersion) {
+        Ensure-FormalGatesObjectProperty $config 'version' 1
     }
-    $config.hooks.preToolUse = @($preToolUse + $newEntry)
+    Set-FormalGatesHookEvents $config $DesiredHooks $HookShape
 
-    $parent = Split-Path -Parent $HooksPath
+    $parent = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
-    $config | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $HooksPath -Encoding UTF8
-    Write-Host "formal-gates Cursor preToolUse hook added to $HooksPath"
+    Write-FormalGatesJsonFile $Path $config
+    Write-Host $WrittenMessage
+    Write-Host $LifecycleMessage
+}
+
+function Set-FormalGatesHook([string]$SettingsPath, [string]$GateHookScriptPath, [string]$ReceiptHookScriptPath) {
+    $desired = [ordered]@{
+        PreToolUse    = New-ClaudeHookEntry '*' (Get-FormalGatesHookCommand $GateHookScriptPath)
+        SubagentStart = New-ClaudeHookEntry '*' (Get-FormalGatesReceiptHookCommand $ReceiptHookScriptPath 'claude-code' 'SubagentStart')
+        SubagentStop  = New-ClaudeHookEntry '*' (Get-FormalGatesReceiptHookCommand $ReceiptHookScriptPath 'claude-code' 'SubagentStop')
+    }
+    Set-FormalGatesHookFile `
+        -Path $SettingsPath `
+        -InvalidJsonMessage 'Existing settings.json is not valid JSON; refusing to touch it' `
+        -BackupName 'settings' `
+        -DesiredHooks $desired `
+        -HookShape 'nested' `
+        -EnsureVersion $false `
+        -WrittenMessage "formal-gates Claude lifecycle hooks written to $SettingsPath" `
+        -LifecycleMessage 'formal-gates Claude receipt capture lifecycle hooks enabled: SubagentStart, SubagentStop'
+}
+
+function Get-CodexHooksPath([string]$Scope, [string]$ProjectPath) {
+    if ($Scope -eq 'Global') {
+        return Join-Path $HOME '.codex/hooks.json'
+    }
+    if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+        throw '-ProjectPath is required to configure a project-local Codex hook.'
+    }
+    return Join-Path (Resolve-FullPath $ProjectPath) '.codex/hooks.json'
+}
+
+function Set-CodexFormalGatesHook([string]$HooksPath, [string]$GateHookScriptPath, [string]$ReceiptHookScriptPath) {
+    $gateCommand = Get-FormalGatesHookCommand $GateHookScriptPath
+    $startCommand = Get-FormalGatesReceiptHookCommand $ReceiptHookScriptPath 'codex' 'SubagentStart'
+    $stopCommand = Get-FormalGatesReceiptHookCommand $ReceiptHookScriptPath 'codex' 'SubagentStop'
+
+    $desired = [ordered]@{
+        PreToolUse    = New-CodexHookEntry '*' $gateCommand
+        SubagentStart = New-CodexHookEntry '*' $startCommand
+        SubagentStop  = New-CodexHookEntry '*' $stopCommand
+    }
+    Set-FormalGatesHookFile `
+        -Path $HooksPath `
+        -InvalidJsonMessage 'Existing Codex hooks.json is not valid JSON; refusing to touch it' `
+        -BackupName 'Codex hooks' `
+        -DesiredHooks $desired `
+        -HookShape 'nested' `
+        -EnsureVersion $true `
+        -WrittenMessage "formal-gates Codex lifecycle hooks written to $HooksPath" `
+        -LifecycleMessage 'formal-gates Codex receipt capture lifecycle hooks enabled: SubagentStart, SubagentStop'
+}
+
+function Set-CursorFormalGatesHook([string]$HooksPath, [string]$GateHookScriptPath, [string]$ReceiptHookScriptPath) {
+    $gateCommand = Get-FormalGatesHookCommand $GateHookScriptPath
+    $startCommand = Get-FormalGatesReceiptHookCommand $ReceiptHookScriptPath 'cursor' 'SubagentStart'
+    $stopCommand = Get-FormalGatesReceiptHookCommand $ReceiptHookScriptPath 'cursor' 'SubagentStop'
+
+    $desired = [ordered]@{
+        preToolUse    = New-CursorHookEntry $gateCommand
+        subagentStart = New-CursorHookEntry $startCommand
+        subagentStop  = New-CursorHookEntry $stopCommand
+    }
+    Set-FormalGatesHookFile `
+        -Path $HooksPath `
+        -InvalidJsonMessage 'Existing Cursor hooks.json is not valid JSON; refusing to touch it' `
+        -BackupName 'Cursor hooks' `
+        -DesiredHooks $desired `
+        -HookShape 'flat' `
+        -EnsureVersion $true `
+        -WrittenMessage "formal-gates Cursor lifecycle hooks written to $HooksPath" `
+        -LifecycleMessage 'formal-gates Cursor receipt capture lifecycle hooks enabled: subagentStart, subagentStop'
 }
 
 $source = if ([string]::IsNullOrWhiteSpace($SourcePath)) {
@@ -351,6 +442,7 @@ $targets = Get-InstallTargets $HostName $Scope $ProjectPath
 foreach ($target in $targets) {
     Copy-SkillPackage $source $target.Path ([bool]$Force)
     $hookPath = Join-Path $target.Path 'hooks/enforce-gate-sequence.ps1'
+    $receiptHookPath = Join-Path $target.Path 'hooks/capture-subagent-receipt.ps1'
     Write-Host "$($target.Host) hook path: $hookPath"
 
     if ($RunCanary) {
@@ -365,20 +457,27 @@ foreach ($target in $targets) {
     if ($ConfigureHook) {
         if ($target.Host -eq 'Claude') {
             $settingsPath = Get-ClaudeSettingsPath $Scope $ProjectPath
-            Set-FormalGatesHook $settingsPath $hookPath
+            Set-FormalGatesHook $settingsPath $hookPath $receiptHookPath
+        }
+        elseif ($target.Host -eq 'Codex') {
+            $hooksPath = Get-CodexHooksPath $Scope $ProjectPath
+            Set-CodexFormalGatesHook $hooksPath $hookPath $receiptHookPath
         }
         elseif ($target.Host -eq 'Cursor') {
             $hooksPath = Get-CursorHooksPath $Scope $ProjectPath
-            $hookCommandPath = if ($Scope -eq 'Project') {
+            $gateHookCommandPath = if ($Scope -eq 'Project') {
                 '.cursor/formal-gates/hooks/enforce-gate-sequence.ps1'
             }
             else {
                 $hookPath
             }
-            Set-CursorFormalGatesHook $hooksPath $hookCommandPath
-        }
-        else {
-            Write-Host "Skipping -ConfigureHook for $($target.Host): see references/install-and-hooks.md for Codex hook config."
+            $receiptHookCommandPath = if ($Scope -eq 'Project') {
+                '.cursor/formal-gates/hooks/capture-subagent-receipt.ps1'
+            }
+            else {
+                $receiptHookPath
+            }
+            Set-CursorFormalGatesHook $hooksPath $gateHookCommandPath $receiptHookCommandPath
         }
     }
 }

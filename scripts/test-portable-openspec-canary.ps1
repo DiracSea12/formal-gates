@@ -47,7 +47,7 @@ function Run-PowerShellJson([string]$WorkingDirectory, [string[]]$Arguments) {
     $script = $Arguments[1]
     $remaining = @()
     if ($Arguments.Count -gt 2) { $remaining = $Arguments[2..($Arguments.Count - 1)] }
-    $launchArgs = (Get-FormalGatesPowerShellFileArgs $script) + @($remaining)
+    $launchArgs = (Get-FormalGatesPowerShellFileArgs $script) + $remaining
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -69,7 +69,7 @@ function Run-PowerShellExpect([string]$WorkingDirectory, [string[]]$Arguments, [
     $script = $Arguments[1]
     $remaining = @()
     if ($Arguments.Count -gt 2) { $remaining = $Arguments[2..($Arguments.Count - 1)] }
-    $launchArgs = (Get-FormalGatesPowerShellFileArgs $script) + @($remaining)
+    $launchArgs = (Get-FormalGatesPowerShellFileArgs $script) + $remaining
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -84,6 +84,49 @@ function Run-PowerShellExpect([string]$WorkingDirectory, [string[]]$Arguments, [
         throw "PowerShell $($Arguments -join ' ') expected exit $ExpectedExitCode but got ${exitCode}:`n$text"
     }
     return $text
+}
+
+function Invoke-ExpectedUnsupportedReceiptCanary(
+    [string]$WorkingDirectory,
+    [string]$ScriptPath,
+    [string]$HostName,
+    [string]$OutputDir
+) {
+    $output = Run-PowerShellExpect $WorkingDirectory @(
+        '-File', $ScriptPath,
+        '-Mode', 'preflight',
+        '-SkillPath', (Split-Path -Parent (Split-Path -Parent $ScriptPath)),
+        '-Worktree', $WorkingDirectory,
+        '-OutputDir', $OutputDir
+    ) 2
+    try {
+        $json = $output | ConvertFrom-Json
+    }
+    catch {
+        return [pscustomobject]@{
+            Passed = $false
+            Detail = "preflight did not output JSON for ${HostName}: $output"
+            DiagnosticArtifact = $null
+        }
+    }
+
+    $requiredLifecycleEvents = @($json.requiredLifecycleEvents)
+    $rawPayloadArtifacts = @($json.rawPayloadArtifacts)
+    $usableCorrelationFields = @($json.usableCorrelationFields)
+    $missing = @($json.missing)
+    $passed = ([string]$json.status -eq 'UNSUPPORTED_HOST_RECEIPT') -and
+        ([string]$json.host -eq $HostName) -and
+        ([string]$json.mode -eq 'preflight') -and
+        (-not [string]::IsNullOrWhiteSpace([string]$json.diagnosticArtifact)) -and
+        ($missing.Count -gt 0) -and
+        ($requiredLifecycleEvents.Count -ge 2) -and
+        ($null -ne $rawPayloadArtifacts) -and
+        ($null -ne $usableCorrelationFields)
+    return [pscustomobject]@{
+        Passed = $passed
+        Detail = ($json | ConvertTo-Json -Depth 8 -Compress)
+        DiagnosticArtifact = [string]$json.diagnosticArtifact
+    }
 }
 
 function Run-PowerShellStdinExpect([string]$WorkingDirectory, [string]$Script, [string]$InputText, [int]$ExpectedExitCode = 0) {
@@ -107,12 +150,175 @@ function Run-PowerShellStdinExpect([string]$WorkingDirectory, [string]$Script, [
     return $text
 }
 
+function Invoke-HookCommandWithStdin([string]$WorkingDirectory, [string]$Command, [string]$InputText, [int]$ExpectedExitCode = 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $previousLocation = (Get-Location).Path
+    $ErrorActionPreference = 'Continue'
+    try {
+        Set-Location -LiteralPath $WorkingDirectory
+        $output = $InputText | & cmd.exe /d /c $Command 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        Set-Location -LiteralPath $previousLocation
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $text = (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    if ($exitCode -ne $ExpectedExitCode) {
+        throw "Hook command expected exit $ExpectedExitCode but got ${exitCode}:`n$Command`n$text"
+    }
+    return $text
+}
+
+function Get-NestedHookCommands([object]$HooksRoot, [string]$EventName, [string]$CommandPattern) {
+    return @(
+        foreach ($entry in @($HooksRoot.$EventName)) {
+            foreach ($hook in @($entry.hooks)) {
+                if (([string]$hook.command) -like $CommandPattern) {
+                    [string]$hook.command
+                }
+            }
+        }
+    )
+}
+
+function Get-NestedHookMatchers([object]$HooksRoot, [string]$EventName, [string]$CommandPattern) {
+    return @(
+        foreach ($entry in @($HooksRoot.$EventName)) {
+            foreach ($hook in @($entry.hooks)) {
+                if (([string]$hook.command) -like $CommandPattern) {
+                    [string]$entry.matcher
+                }
+            }
+        }
+    )
+}
+
+function Get-FlatHookCommands([object]$HooksRoot, [string]$EventName, [string]$CommandPattern) {
+    return @(
+        foreach ($entry in @($HooksRoot.$EventName)) {
+            if (([string]$entry.command) -like $CommandPattern) {
+                [string]$entry.command
+            }
+        }
+    )
+}
+
+function Get-FlatHookPropertyValues([object]$HooksRoot, [string]$EventName, [string]$CommandPattern, [string]$PropertyName) {
+    return @(
+        foreach ($entry in @($HooksRoot.$EventName)) {
+            if (([string]$entry.command) -like $CommandPattern) {
+                $entry.$PropertyName
+            }
+        }
+    )
+}
+
+function Test-HookCommandsUseDetectedPowerShell([string[]]$Commands) {
+    return ($Commands.Count -gt 0) -and (@($Commands | Where-Object {
+        $_ -notmatch '(?i)^powershell\s' -and $_ -match [regex]::Escape((Get-FormalGatesPowerShellExe))
+    }).Count -eq $Commands.Count)
+}
+
+function Test-HookCommandsMatchPrefix([string[]]$Commands, [string]$ExpectedHookPrefix) {
+    return ($Commands.Count -gt 0) -and (@($Commands | Where-Object { $_ -match $ExpectedHookPrefix }).Count -eq $Commands.Count)
+}
+
 function Set-Utf8File([string]$Path, [string]$Content) {
     $parent = Split-Path -Parent $Path
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
         New-Dir $parent
     }
     [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Get-PortableRelativePath([string]$BasePath, [string]$Path) {
+    $baseFull = [System.IO.Path]::GetFullPath($BasePath).Replace('\', '/').TrimEnd('/')
+    $pathFull = [System.IO.Path]::GetFullPath($Path).Replace('\', '/')
+    if ($pathFull.StartsWith($baseFull + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $pathFull.Substring($baseFull.Length + 1)
+    }
+    return $pathFull
+}
+
+function Get-ReviewerProofReceiptErrors(
+    [string]$Repo,
+    [string]$ArtifactRel,
+    [string]$Workflow,
+    [string]$GateName,
+    [string]$StageValue,
+    [string]$ValidationScript
+) {
+    . $ValidationScript
+    $artifactPath = Join-Path $Repo $ArtifactRel
+    $artifactText = Get-Content -LiteralPath $artifactPath -Raw -Encoding UTF8
+    return @(Get-FormalGateReviewerProofReceiptValidationErrors $Repo $artifactPath $artifactText $Workflow $GateName $StageValue)
+}
+
+function Invoke-InstalledReceiptHookFlow(
+    [string]$Repo,
+    [string]$ReceiptScript,
+    [string]$ValidationScript,
+    [string]$ArtifactRel,
+    [string]$Provider,
+    [string]$Workflow,
+    [string]$GateName,
+    [string]$StageValue,
+    [string]$SubagentId,
+    [string]$StartCommand,
+    [string]$StopCommand
+) {
+    $registerArgs = @(
+        '-File', $ReceiptScript,
+        '-ReceiptAction', 'register-dispatch',
+        '-ReceiptWorktree', $Repo,
+        '-ReceiptProvider', $Provider,
+        '-ReceiptWorkflowId', $Workflow,
+        '-ReceiptGate', $GateName,
+        '-ReceiptReviewArtifact', $ArtifactRel
+    )
+    if (-not [string]::IsNullOrWhiteSpace($StageValue)) { $registerArgs += @('-ReceiptStage', $StageValue) }
+    $dispatchRegistration = Run-PowerShellExpect $Repo $registerArgs | ConvertFrom-Json
+
+    $startPayload = @{
+        cwd = $Repo
+        workflowId = $Workflow
+        gate = $GateName
+        stage = $StageValue
+        reviewArtifact = $ArtifactRel
+        subagentId = $SubagentId
+        dispatchId = [string]$dispatchRegistration.dispatchId
+        dispatchRegistrationArtifact = [string]$dispatchRegistration.dispatchRegistrationArtifact
+        status = 'started'
+    } | ConvertTo-Json -Depth 8 -Compress
+    Invoke-HookCommandWithStdin $Repo $StartCommand $startPayload | Out-Null
+
+    $stopPayload = @{
+        cwd = $Repo
+        workflowId = $Workflow
+        gate = $GateName
+        stage = $StageValue
+        reviewArtifact = $ArtifactRel
+        subagentId = $SubagentId
+        dispatchId = [string]$dispatchRegistration.dispatchId
+        dispatchRegistrationArtifact = [string]$dispatchRegistration.dispatchRegistrationArtifact
+        status = 'completed'
+    } | ConvertTo-Json -Depth 8 -Compress
+    Invoke-HookCommandWithStdin $Repo $StopCommand $stopPayload | Out-Null
+
+    $finalizeArgs = @(
+        '-File', $ReceiptScript,
+        '-ReceiptAction', 'finalize',
+        '-ReceiptWorktree', $Repo,
+        '-ReceiptProvider', $Provider,
+        '-ReceiptWorkflowId', $Workflow,
+        '-ReceiptGate', $GateName,
+        '-ReceiptReviewArtifact', $ArtifactRel
+    )
+    if (-not [string]::IsNullOrWhiteSpace($StageValue)) { $finalizeArgs += @('-ReceiptStage', $StageValue) }
+    Run-PowerShellExpect $Repo $finalizeArgs | Out-Null
+
+    return Get-ReviewerProofReceiptErrors $Repo $ArtifactRel $Workflow $GateName $StageValue $ValidationScript
 }
 
 function Get-Sha256([string]$Path) {
@@ -127,13 +333,102 @@ function Get-CanaryPromptSource([string]$Title) {
     return 'agents/complexity-gate.md'
 }
 
+function Get-CanaryGate([string]$Title) {
+    if ($Title -match '(?i)\bQA\b') { return 'qa-test-gate' }
+    if ($Title -match '(?i)Architecture') { return 'architecture-health-gate' }
+    if ($Title -match '(?i)Code Quality') { return 'code-quality-gate' }
+    return 'complexity-gate'
+}
+
+function Get-CanaryStage([string]$Title) {
+    if ($Title -match '(?i)\bQA\b') { return 'Execution' }
+    return ''
+}
+
+function Add-ReviewerProofReceipt(
+    [string]$Repo,
+    [string]$ReceiptScript,
+    [string]$ArtifactRel,
+    [string]$Provider,
+    [string]$Workflow,
+    [string]$Snapshot,
+    [string]$GateName,
+    [string]$StageValue,
+    [string]$SubagentId
+) {
+    if ($GateName -eq 'qa-test-gate' -and [string]::IsNullOrWhiteSpace($StageValue)) {
+        $StageValue = 'Execution'
+    }
+    $registerArgs = @(
+        '-File', $ReceiptScript,
+        '-ReceiptAction', 'register-dispatch',
+        '-ReceiptWorktree', $Repo,
+        '-ReceiptProvider', $Provider,
+        '-ReceiptWorkflowId', $Workflow,
+        '-ReceiptGate', $GateName,
+        '-ReceiptReviewArtifact', $ArtifactRel
+    )
+    if (-not [string]::IsNullOrWhiteSpace($StageValue)) { $registerArgs += @('-ReceiptStage', $StageValue) }
+    $dispatchRegistration = Run-PowerShellExpect $Repo $registerArgs | ConvertFrom-Json
+
+    $startArgs = @(
+        '-File', $ReceiptScript,
+        '-ReceiptAction', 'capture-hook',
+        '-ReceiptWorktree', $Repo,
+        '-ReceiptProvider', $Provider,
+        '-ReceiptWorkflowId', $Workflow,
+        '-ReceiptGate', $GateName,
+        '-ReceiptEventName', 'SubagentStart',
+        '-ReceiptSubagentId', $SubagentId,
+        '-ReceiptStatus', 'started',
+        '-ReceiptDispatchId', $dispatchRegistration.dispatchId,
+        '-ReceiptDispatchRegistrationArtifact', $dispatchRegistration.dispatchRegistrationArtifact
+    )
+    if (-not [string]::IsNullOrWhiteSpace($StageValue)) { $startArgs += @('-ReceiptStage', $StageValue) }
+    Run-PowerShellExpect $Repo $startArgs | Out-Null
+
+    $stopArgs = @(
+        '-File', $ReceiptScript,
+        '-ReceiptAction', 'capture-hook',
+        '-ReceiptWorktree', $Repo,
+        '-ReceiptProvider', $Provider,
+        '-ReceiptWorkflowId', $Workflow,
+        '-ReceiptGate', $GateName,
+        '-ReceiptEventName', 'SubagentStop',
+        '-ReceiptSubagentId', $SubagentId,
+        '-ReceiptStatus', 'completed',
+        '-ReceiptDispatchId', $dispatchRegistration.dispatchId,
+        '-ReceiptDispatchRegistrationArtifact', $dispatchRegistration.dispatchRegistrationArtifact
+    )
+    if (-not [string]::IsNullOrWhiteSpace($StageValue)) { $stopArgs += @('-ReceiptStage', $StageValue) }
+    Run-PowerShellExpect $Repo $stopArgs | Out-Null
+
+    $finalizeArgs = @(
+        '-File', $ReceiptScript,
+        '-ReceiptAction', 'finalize',
+        '-ReceiptWorktree', $Repo,
+        '-ReceiptProvider', $Provider,
+        '-ReceiptWorkflowId', $Workflow,
+        '-ReceiptGate', $GateName,
+        '-ReceiptReviewArtifact', $ArtifactRel
+    )
+    if (-not [string]::IsNullOrWhiteSpace($StageValue)) { $finalizeArgs += @('-ReceiptStage', $StageValue) }
+    Run-PowerShellExpect $Repo $finalizeArgs | Out-Null
+}
+
 function New-FormalArtifact(
     [string]$Path,
     [string]$Title,
     [string]$ReviewerId,
     [string]$ContextBundle,
-    [string[]]$ExtraLines
+    [string[]]$ExtraLines,
+    [string]$ArtifactWorkflowId = $workflowId,
+    [string]$ArtifactChangeSnapshot = $changeSnapshot,
+    [string]$ArtifactStage = $null,
+    [switch]$SkipReceipt
 ) {
+    if ($null -eq $ArtifactStage) { $ArtifactStage = Get-CanaryStage $Title }
+    $nextAction = if ((Get-CanaryGate $Title) -eq 'qa-test-gate' -and $ArtifactStage -eq 'FinalExecution') { 'seal' } else { 'proceed' }
     $lines = @(
         "# $Title",
         '',
@@ -143,20 +438,23 @@ function New-FormalArtifact(
         "Prompt source: $(Get-CanaryPromptSource $Title)",
         'Zero-context reviewer: YES',
         'Independent agent: YES',
-        "Reviewer agent id: $ReviewerId",
         "Context bundle: $ContextBundle",
         "Dispatch prompt artifact: $dispatchPromptRef",
         'No-anchor prompt: YES',
         '',
         'gate_route:',
-        "  workflow_id: $workflowId",
-        "  change_snapshot: $changeSnapshot",
-        '  next_action: proceed',
+        "  workflow_id: $ArtifactWorkflowId",
+        "  change_snapshot: $ArtifactChangeSnapshot",
+        "  next_action: $nextAction",
         '  rework_owner: none',
         '  rerun_from: none',
         ''
     ) + $ExtraLines
     Set-Utf8File $Path ($lines -join "`n")
+    if (-not $SkipReceipt.IsPresent) {
+        $artifactRel = Get-PortableRelativePath $tempRepo $Path
+        Add-ReviewerProofReceipt $tempRepo $receiptScript $artifactRel 'codex' $ArtifactWorkflowId $ArtifactChangeSnapshot (Get-CanaryGate $Title) $ArtifactStage $ReviewerId
+    }
 }
 
 function Add-Check([ref]$Summary, [string]$Name, [bool]$Passed, [string]$Detail) {
@@ -365,12 +663,12 @@ sha256: sample
     $dispatchPromptPath = Join-Path $tempRepo $dispatchPromptRel
     Set-Utf8File $dispatchPromptPath @'
 Worktree: portable canary repo
+formal_gate_dispatch: qa-test-gate
 Base commit or snapshot: portable canary snapshot
 Context bundle: .claude/bundles/canary-bundle.txt
 Diff or changed-files artifact: .claude/gates/artifacts/changed-files.txt
 User request and acceptance criteria: run portable formal-gates canary
 Forbidden files: none
-Allowed prompt guard note: Forbidden prompt fields include Known issues and Focus items.
 Output template: formal gate artifact
 '@
     $dispatchPromptHash = Get-Sha256 $dispatchPromptPath
@@ -409,6 +707,8 @@ Output template: formal gate artifact
     $workflowScript = Join-Path $targetSkillPath 'scripts/gate-workflow.ps1'
     $gateStateScript = Join-Path $targetSkillPath 'scripts/gate-state.ps1'
     $hookScript = Join-Path $targetSkillPath 'hooks/enforce-gate-sequence.ps1'
+    $receiptScript = Join-Path $targetSkillPath 'scripts/gate-proof-receipt.ps1'
+    $artifactValidationScript = Join-Path $targetSkillPath 'scripts/gate-artifact-validation.ps1'
     if (-not (Test-Path -LiteralPath $workflowScript)) {
         throw "Copied skill is missing gate-workflow.ps1: $workflowScript"
     }
@@ -417,6 +717,12 @@ Output template: formal gate artifact
     }
     if (-not (Test-Path -LiteralPath $gateStateScript)) {
         throw "Copied skill is missing gate-state.ps1: $gateStateScript"
+    }
+    if (-not (Test-Path -LiteralPath $receiptScript)) {
+        throw "Copied skill is missing gate-proof-receipt.ps1: $receiptScript"
+    }
+    if (-not (Test-Path -LiteralPath $artifactValidationScript)) {
+        throw "Copied skill is missing gate-artifact-validation.ps1: $artifactValidationScript"
     }
     $requiredPackageFiles = @(
         'SKILL.md',
@@ -436,14 +742,37 @@ Output template: formal gate artifact
         'references/code-quality-gate.md',
         'references/install-and-hooks.md',
         'hooks/enforce-gate-sequence.ps1',
+        'hooks/capture-subagent-receipt.ps1',
+        'hooks/test-subagent-receipt-canary-common.ps1',
+        'hooks/test-claude-subagent-receipt-canary.ps1',
+        'hooks/test-codex-subagent-receipt-canary.ps1',
+        'hooks/test-cursor-subagent-receipt-canary.ps1',
+        'hooks/pollution-patterns.json',
         'scripts/gate-artifact-validation.ps1',
         'scripts/powershell-host.ps1',
         'scripts/run-complexity-gate.ps1',
+        'scripts/validate-dispatch-prompt.ps1',
+        'scripts/gate-proof-receipt.ps1',
         'scripts/gate-state.ps1',
         'scripts/gate-workflow.ps1'
     )
     $missingPackageFiles = @($requiredPackageFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $targetSkillPath $_) -PathType Leaf) })
     Add-Check ([ref]$summary) 'copied-package-structure-complete' ($missingPackageFiles.Count -eq 0) ($missingPackageFiles -join ', ')
+
+    $hostCanaryOutputDir = Join-Path $tempRepo '.claude/gates/proofs/host-receipt-canaries'
+    $hostReceiptCanaries = @(
+        [pscustomobject]@{ Host = 'Claude Code'; Script = 'hooks/test-claude-subagent-receipt-canary.ps1' },
+        [pscustomobject]@{ Host = 'Codex'; Script = 'hooks/test-codex-subagent-receipt-canary.ps1' },
+        [pscustomobject]@{ Host = 'Cursor'; Script = 'hooks/test-cursor-subagent-receipt-canary.ps1' }
+    )
+    foreach ($hostCanary in $hostReceiptCanaries) {
+        $canaryScript = Join-Path $targetSkillPath $hostCanary.Script
+        $result = Invoke-ExpectedUnsupportedReceiptCanary $tempRepo $canaryScript $hostCanary.Host $hostCanaryOutputDir
+        Add-Check ([ref]$summary) "host-receipt-$($hostCanary.Host.ToLowerInvariant().Replace(' ', '-'))-preflight-diagnostic" $result.Passed $result.Detail
+        if (-not [string]::IsNullOrWhiteSpace($result.DiagnosticArtifact)) {
+            $summary.artifactPaths["hostReceipt$($hostCanary.Host.Replace(' ', ''))"] = Format-Path $result.DiagnosticArtifact
+        }
+    }
 
     $agentTemplateErrors = @(Test-AgentTemplateIntegrity $targetSkillPath)
     Add-Check ([ref]$summary) 'agent-template-integrity-enforced' ($agentTemplateErrors.Count -eq 0) ($agentTemplateErrors -join "`n")
@@ -459,33 +788,36 @@ Output template: formal gate artifact
     )
     $claudeSettingsPath = Join-Path $tempRepo '.claude/settings.json'
     $claudeSettings = Get-Content -LiteralPath $claudeSettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $formalClaudeMatchers = @(
-        foreach ($entry in @($claudeSettings.hooks.PreToolUse)) {
-            foreach ($hook in @($entry.hooks)) {
-                if (([string]$hook.command) -like '*enforce-gate-sequence.ps1*') {
-                    [string]$entry.matcher
-                }
-            }
-        }
-    )
-    $formalClaudeCommands = @(
-        foreach ($entry in @($claudeSettings.hooks.PreToolUse)) {
-            foreach ($hook in @($entry.hooks)) {
-                if (([string]$hook.command) -like '*enforce-gate-sequence.ps1*') {
-                    [string]$hook.command
-                }
-            }
-        }
-    )
+    $formalClaudeMatchers = @(Get-NestedHookMatchers $claudeSettings.hooks 'PreToolUse' '*enforce-gate-sequence.ps1*')
+    $formalClaudeCommands = @(Get-NestedHookCommands $claudeSettings.hooks 'PreToolUse' '*enforce-gate-sequence.ps1*')
     $claudeMatcherPassed = ($formalClaudeMatchers -contains '*') -and ($formalClaudeCommands.Count -gt 0)
     Add-Check ([ref]$summary) 'claude-install-hook-matcher-covers-document-tools' $claudeMatcherPassed (($formalClaudeMatchers -join ', ') + "`n" + ($formalClaudeCommands -join ', ') + "`n" + $installHookOutput)
-    $claudeHostCommandPassed = ($formalClaudeCommands.Count -gt 0) -and (@($formalClaudeCommands | Where-Object { $_ -notmatch '(?i)^powershell\s' -and $_ -match [regex]::Escape((Get-FormalGatesPowerShellExe)) }).Count -eq $formalClaudeCommands.Count)
+    Add-Check ([ref]$summary) 'claude-install-hook-deduplicates-formal-gates-pretooluse' ($formalClaudeCommands.Count -eq 1) ($formalClaudeCommands -join "`n")
+    Add-Check ([ref]$summary) 'claude-install-output-names-receipt-lifecycle-hooks' ($installHookOutput -match 'receipt capture lifecycle hooks enabled: SubagentStart, SubagentStop') $installHookOutput
+    $claudeHostCommandPassed = Test-HookCommandsUseDetectedPowerShell $formalClaudeCommands
     Add-Check ([ref]$summary) 'claude-install-hook-uses-detected-powershell-host' $claudeHostCommandPassed ($formalClaudeCommands -join "`n")
     $expectedPowerShellExe = '"' + (Get-FormalGatesPowerShellExe).Replace('"', '\"') + '"'
     $expectedFirstPowerShellArg = '"' + ([string](Get-FormalGatesPowerShellFileArgs $hookScript)[0]).Replace('"', '\"') + '"'
     $expectedHookPrefix = '^\s*' + [regex]::Escape($expectedPowerShellExe) + '\s+' + [regex]::Escape($expectedFirstPowerShellArg)
-    $claudeHookSpacingPassed = ($formalClaudeCommands.Count -gt 0) -and (@($formalClaudeCommands | Where-Object { $_ -match $expectedHookPrefix }).Count -eq $formalClaudeCommands.Count)
+    $claudeHookSpacingPassed = Test-HookCommandsMatchPrefix $formalClaudeCommands $expectedHookPrefix
     Add-Check ([ref]$summary) 'claude-install-hook-command-separates-host-and-first-arg' $claudeHookSpacingPassed ($formalClaudeCommands -join "`n")
+
+    $codexInstallOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $installScript,
+        '-HostName', 'Codex',
+        '-Scope', 'Project',
+        '-ProjectPath', $tempRepo,
+        '-SourcePath', $targetSkillPath,
+        '-Force',
+        '-ConfigureHook'
+    )
+    $codexHooksPath = Join-Path $tempRepo '.codex/hooks.json'
+    $codexHooks = Get-Content -LiteralPath $codexHooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $formalCodexStartCommands = @(Get-NestedHookCommands $codexHooks.hooks 'SubagentStart' '*capture-subagent-receipt.ps1*')
+    $formalCodexStopCommands = @(Get-NestedHookCommands $codexHooks.hooks 'SubagentStop' '*capture-subagent-receipt.ps1*')
+    $codexLifecyclePassed = ($formalCodexStartCommands.Count -gt 0) -and ($formalCodexStopCommands.Count -gt 0)
+    Add-Check ([ref]$summary) 'codex-install-receipt-lifecycle-hooks-configured' $codexLifecyclePassed (($formalCodexStartCommands + $formalCodexStopCommands) -join "`n")
+    Add-Check ([ref]$summary) 'codex-install-output-names-receipt-lifecycle-hooks' ($codexInstallOutput -match 'receipt capture lifecycle hooks enabled: SubagentStart, SubagentStop') $codexInstallOutput
 
     $cursorInstallOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $installScript,
@@ -498,26 +830,85 @@ Output template: formal gate artifact
     )
     $cursorHooksPath = Join-Path $tempRepo '.cursor/hooks.json'
     $cursorHooks = Get-Content -LiteralPath $cursorHooksPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $formalCursorCommands = @(
-        foreach ($entry in @($cursorHooks.hooks.preToolUse)) {
-            if (([string]$entry.command) -like '*enforce-gate-sequence.ps1*') {
-                [string]$entry.command
-            }
-        }
-    )
-    $formalCursorFailClosed = @(
-        foreach ($entry in @($cursorHooks.hooks.preToolUse)) {
-            if (([string]$entry.command) -like '*enforce-gate-sequence.ps1*') {
-                [bool]$entry.failClosed
-            }
-        }
-    )
+    $formalCursorCommands = @(Get-FlatHookCommands $cursorHooks.hooks 'preToolUse' '*enforce-gate-sequence.ps1*')
+    $formalCursorFailClosed = @(Get-FlatHookPropertyValues $cursorHooks.hooks 'preToolUse' '*enforce-gate-sequence.ps1*' 'failClosed' | ForEach-Object { [bool]$_ })
     $cursorHookPassed = ($formalCursorCommands.Count -gt 0) -and ($formalCursorFailClosed -contains $true)
     Add-Check ([ref]$summary) 'cursor-install-hook-configured' $cursorHookPassed (($formalCursorCommands -join ', ') + "`n" + $cursorInstallOutput)
-    $cursorHostCommandPassed = ($formalCursorCommands.Count -gt 0) -and (@($formalCursorCommands | Where-Object { $_ -notmatch '(?i)^powershell\s' -and $_ -match [regex]::Escape((Get-FormalGatesPowerShellExe)) }).Count -eq $formalCursorCommands.Count)
+    $formalCursorStartCommands = @(Get-FlatHookCommands $cursorHooks.hooks 'subagentStart' '*capture-subagent-receipt.ps1*')
+    $formalCursorStopCommands = @(Get-FlatHookCommands $cursorHooks.hooks 'subagentStop' '*capture-subagent-receipt.ps1*')
+    $cursorLifecyclePassed = ($formalCursorStartCommands.Count -gt 0) -and ($formalCursorStopCommands.Count -gt 0)
+    Add-Check ([ref]$summary) 'cursor-install-receipt-lifecycle-hooks-configured' $cursorLifecyclePassed (($formalCursorStartCommands + $formalCursorStopCommands) -join "`n")
+    Add-Check ([ref]$summary) 'cursor-install-output-names-receipt-lifecycle-hooks' ($cursorInstallOutput -match 'receipt capture lifecycle hooks enabled: subagentStart, subagentStop') $cursorInstallOutput
+    $cursorHostCommandPassed = Test-HookCommandsUseDetectedPowerShell $formalCursorCommands
     Add-Check ([ref]$summary) 'cursor-install-hook-uses-detected-powershell-host' $cursorHostCommandPassed ($formalCursorCommands -join "`n")
-    $cursorHookSpacingPassed = ($formalCursorCommands.Count -gt 0) -and (@($formalCursorCommands | Where-Object { $_ -match $expectedHookPrefix }).Count -eq $formalCursorCommands.Count)
+    $cursorHookSpacingPassed = Test-HookCommandsMatchPrefix $formalCursorCommands $expectedHookPrefix
     Add-Check ([ref]$summary) 'cursor-install-hook-command-separates-host-and-first-arg' $cursorHookSpacingPassed ($formalCursorCommands -join "`n")
+
+    $installedReceiptRel = '.claude/gates/artifacts/installed-hook-receipt.md'
+    $installedReceiptPath = Join-Path $tempRepo $installedReceiptRel
+    Set-Utf8File $installedReceiptPath @"
+# Installed Hook Receipt
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/qa-test-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
+No-anchor prompt: YES
+
+QA-owned evidence: installed hook command shape can capture start/stop payloads
+Case-to-artifact binding: installed hook receipt case maps to this artifact
+
+gate_route:
+  workflow_id: wf-installed-hook-receipt
+  change_snapshot: $changeSnapshot
+  next_action: proceed
+  rework_owner: none
+  rerun_from: none
+"@
+
+    $codexInstalledReceiptErrors = if ($formalCodexStartCommands.Count -gt 0 -and $formalCodexStopCommands.Count -gt 0) {
+        Invoke-InstalledReceiptHookFlow $tempRepo $receiptScript $artifactValidationScript $installedReceiptRel 'codex' 'wf-installed-hook-receipt' 'qa-test-gate' 'Execution' 'installed-hook-agent' $formalCodexStartCommands[0] $formalCodexStopCommands[0]
+    }
+    else {
+        @('missing Codex installed receipt hook commands')
+    }
+    Add-Check ([ref]$summary) 'codex-installed-receipt-hook-command-finalizes-receipt' ($codexInstalledReceiptErrors.Count -eq 0) ($codexInstalledReceiptErrors -join "`n")
+
+    $cursorInstalledReceiptRel = '.claude/gates/artifacts/cursor-installed-hook-receipt.md'
+    $cursorInstalledReceiptPath = Join-Path $tempRepo $cursorInstalledReceiptRel
+    Set-Utf8File $cursorInstalledReceiptPath @"
+# Cursor Installed Hook Receipt
+Review mode: ZERO_CONTEXT_FORMAL
+Prompt contamination check: PASS
+Semantic anti-anchor check: PASS
+Prompt source: agents/qa-test-gate.md
+Zero-context reviewer: YES
+Independent agent: YES
+Context bundle: $bundleRef
+Dispatch prompt artifact: $dispatchPromptRef
+No-anchor prompt: YES
+
+QA-owned evidence: Cursor installed hook command shape can capture start/stop payloads
+Case-to-artifact binding: installed hook receipt case maps to this artifact
+
+gate_route:
+  workflow_id: wf-cursor-installed-hook-receipt
+  change_snapshot: $changeSnapshot
+  next_action: proceed
+  rework_owner: none
+  rerun_from: none
+"@
+
+    $cursorInstalledReceiptErrors = if ($formalCursorStartCommands.Count -gt 0 -and $formalCursorStopCommands.Count -gt 0) {
+        Invoke-InstalledReceiptHookFlow $tempRepo $receiptScript $artifactValidationScript $cursorInstalledReceiptRel 'cursor' 'wf-cursor-installed-hook-receipt' 'qa-test-gate' 'Execution' 'cursor-installed-hook-agent' $formalCursorStartCommands[0] $formalCursorStopCommands[0]
+    }
+    else {
+        @('missing Cursor installed receipt hook commands')
+    }
+    Add-Check ([ref]$summary) 'cursor-installed-receipt-hook-command-finalizes-receipt' ($cursorInstalledReceiptErrors.Count -eq 0) ($cursorInstalledReceiptErrors -join "`n")
 
     $complexityWrapper = Join-Path $targetSkillPath 'scripts/run-complexity-gate.ps1'
     $complexityWrapperOutput = Run-PowerShellExpect $tempRepo @(
@@ -536,6 +927,7 @@ Output template: formal gate artifact
         '-File', $workflowScript,
         '-Action', 'snapshot',
         '-Worktree', $plainRepo,
+        '-BaseRef', 'manual-baseline',
         '-Vcs', 'auto'
     )
     Add-Check ([ref]$summary) 'non-git-file-hash-snapshot-created' ([string]$plainSnapshot.changeSnapshot -match '^files\.') ([string]$plainSnapshot.changeSnapshot)
@@ -613,16 +1005,6 @@ User answer: Keep the check scoped to formal-gates package behavior.
 Downstream effect: OpenSpec docs may be drafted for this canary.
 OpenSpec impact: proposal/design/tasks/spec describe the portable canary only.
 Evidence needed: gate-workflow record-stage succeeds with matching workflow and snapshot.
-
-ID: RQ-002
-Requirement or question: Formal document edits must not proceed before requirement alignment is recorded.
-Source: user-confirmed canary brief
-Why it matters: This proves the pre-document gate is not chat-only.
-Status: confirmed
-User answer: Block formal document writes until clarification PASS exists.
-Downstream effect: hook must deny OpenSpec markdown writes without clarification PASS.
-OpenSpec impact: formal document edits depend on requirements-clarification-gate PASS.
-Evidence needed: hook negative test blocks a simulated OpenSpec proposal write.
 '@
     $decisionRel = '.claude/gates/artifacts/requirements-user-decision.md'
     $decisionPath = Join-Path $tempRepo $decisionRel
@@ -645,11 +1027,11 @@ Dimension coverage:
   DIM-03 Scope: covered | RQ-001
   DIM-04 Non-goals: NA | RQ-001
   DIM-05 Acceptance: covered | RQ-001
-  DIM-06 Evidence: covered | RQ-001,RQ-002
-  DIM-07 Constraints: covered | RQ-002
+  DIM-06 Evidence: covered | RQ-001
+  DIM-07 Constraints: NA | RQ-001
   DIM-08 Architecture boundary: NA | RQ-001
   DIM-09 Unknowns: NA | RQ-001
-  DIM-10 Task status: covered | RQ-002
+  DIM-10 Task status: covered | RQ-001
   DIM-11 Phase dependency: NA | RQ-001
   DIM-12 Must-not-cut scope: NA | RQ-001
 '@
@@ -660,7 +1042,7 @@ Dimension coverage:
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: FIRST_RUN
 Open question IDs: none
 Dropped question IDs: none
@@ -710,25 +1092,13 @@ gate_route:
     $staleSameGateVerifyPassed = $staleSameGateVerifyOutput -match 'missing route gate=requirements-clarification-gate'
     Add-Check ([ref]$summary) 'gate-state-same-gate-cross-workflow-stale-pass-blocked' $staleSameGateVerifyPassed $staleSameGateVerifyOutput
 
-    $staleDocWritePayload = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            file_path = (Join-Path $tempRepo 'openspec/changes/stale/proposal.md')
-            content = '# Stale'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $staleDocWriteOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $staleDocWritePayload 2
-    $staleDocWritePassed = $staleDocWriteOutput -match 'workflowId and GateWorkflow.changeSnapshot are required'
-    Add-Check ([ref]$summary) 'formal-document-write-stale-pass-without-workflow-blocked' $staleDocWritePassed $staleDocWriteOutput
-
     $fakeConfirmationRel = '.claude/gates/artifacts/bad-requirements-clarification-inline-decision.md'
     Set-Utf8File (Join-Path $tempRepo $fakeConfirmationRel) @"
 # Requirements Clarification Gate
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
 Dropped question IDs: none
@@ -780,7 +1150,7 @@ Approval scope: requirements-clarification-gate
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
 Dropped question IDs: none
@@ -832,7 +1202,7 @@ Approval scope: requirements-clarification-gate
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
 Dropped question IDs: none
@@ -884,7 +1254,7 @@ Approval scope: requirements-clarification-gate
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
 Dropped question IDs: none
@@ -926,7 +1296,7 @@ gate_route:
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: FIRST_RUN
 Open question IDs: none
 Dropped question IDs: none
@@ -1090,7 +1460,7 @@ gate_route:
 
 Decision record type: USER_CONFIRMATION
 User confirmation: YES
-User original: "Approve current RQ-001, but do not approve dropping any old IDs."
+User original: "Approve current RQ-001, but do not approve dropping any removed IDs."
 Approved alignment IDs: RQ-001
 Approval scope: requirements-clarification-gate
 '@
@@ -1103,7 +1473,7 @@ Alignment table artifact: $fakePreviousAlignmentRel
 Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
-Dropped question IDs: RQ-002
+Dropped question IDs: RQ-999
 Dropped question approval: YES
 User confirmation: YES
 Open blockers: none
@@ -1159,7 +1529,7 @@ Alignment table artifact: $deferredAlignmentRel
 Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
-Dropped question IDs: RQ-002
+Dropped question IDs: RQ-999
 Dropped question approval: YES
 User confirmation: YES
 Open blockers: none
@@ -1198,9 +1568,9 @@ gate_route:
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: $alignmentRel
-Open question IDs: RQ-002
+Open question IDs: RQ-999
 Dropped question IDs: none
 Dropped question approval: NOT_APPLICABLE: none dropped
 User confirmation: YES
@@ -1295,7 +1665,7 @@ gate_route:
 
 Requirement source: user-confirmed portable canary brief
 Alignment table artifact: $alignmentRel
-Total alignment items: 2
+Total alignment items: 1
 Previous alignment artifact: $alignmentRel
 Open question IDs: none
 Dropped question IDs: none
@@ -1331,277 +1701,6 @@ gate_route:
         Add-Check ([ref]$summary) "requirements-clarification-$($badCoveredTargetCase.Name)-blocked" $badCoveredTargetPassed $badCoveredTargetOutput
     }
 
-    $docWritePayloadBlocked = @{
-        tool_name = 'Write'
-        cwd = $plainRepo
-        tool_input = @{
-            file_path = (Join-Path $plainRepo 'openspec/changes/blocked/proposal.md')
-            content = '# Proposal'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $docWriteBlockedOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $docWritePayloadBlocked 2
-    $docWriteBlockedPassed = $docWriteBlockedOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-write-before-clarification-blocked' $docWriteBlockedPassed $docWriteBlockedOutput
-
-    $applyPatchBlockedPayload = @{
-        tool_name = 'apply_patch'
-        cwd = $plainRepo
-        tool_input = @{
-            command = @'
-*** Begin Patch
-*** Add File: openspec/changes/x/proposal.md
-+# Proposal
-*** End Patch
-'@
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $applyPatchBlockedOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $applyPatchBlockedPayload 2
-    $applyPatchBlockedPassed = $applyPatchBlockedOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-apply-patch-before-clarification-blocked' $applyPatchBlockedPassed $applyPatchBlockedOutput
-
-    $applyPatchPatchFieldBlockedPayload = @{
-        tool_name = 'apply_patch'
-        cwd = $plainRepo
-        tool_input = @{
-            patch = @'
-*** Begin Patch
-*** Add File: docs/requirements/new-requirement.md
-+# Requirement
-*** End Patch
-'@
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $applyPatchPatchFieldBlockedOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $applyPatchPatchFieldBlockedPayload 2
-    $applyPatchPatchFieldBlockedPassed = $applyPatchPatchFieldBlockedOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-apply-patch-patch-field-blocked' $applyPatchPatchFieldBlockedPassed $applyPatchPatchFieldBlockedOutput
-
-    $directoryDocPaths = @(
-        'docs/prd/index.md',
-        'docs/sdd/design.md',
-        'docs/phases/31.md',
-        'docs/start-readiness/index.md',
-        'docs/requirements/index.md',
-        'docs/specs/index.md',
-        'docs/requirements/product-requirements.txt',
-        'feature-specs.txt',
-        'PRD.txt',
-        'requirements/index.md',
-        'specs/index.md'
-    )
-    foreach ($directoryDocPath in $directoryDocPaths) {
-        $directoryDocWritePayload = @{
-            tool_name = 'Write'
-            cwd = $plainRepo
-            tool_input = @{
-                file_path = (Join-Path $plainRepo $directoryDocPath)
-                content = '# Formal Document'
-            }
-        } | ConvertTo-Json -Depth 8 -Compress
-        $directoryDocWriteOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $directoryDocWritePayload 2
-        $directoryDocWritePassed = $directoryDocWriteOutput -match 'Formal document write blocked before requirements clarification PASS'
-        Add-Check ([ref]$summary) "formal-document-write-directory-path-blocked-$($directoryDocPath.Replace('/', '-').Replace('.', '-'))" $directoryDocWritePassed $directoryDocWriteOutput
-    }
-
-    $docWritePayloadAllowed = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = $workflowId
-                changeSnapshot = $changeSnapshot
-                worktree = $tempRepo
-            }
-            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/proposal.md')
-            content = '# Proposal'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $docWriteAllowedOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $docWritePayloadAllowed 0
-    Add-Check ([ref]$summary) 'formal-document-write-after-clarification-allowed' $true $docWriteAllowedOutput
-
-    $readOnlyShellPayloads = @(
-        [pscustomobject]@{
-            Name = 'rg-gateworkflow-formal-doc'
-            Command = 'rg "GateWorkflow" "openspec/changes/portable-formal-gates-canary/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'rg-write-token-tee-formal-doc'
-            Command = 'rg "tee" "openspec/changes/portable-formal-gates-canary/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'rg-write-token-writefile-formal-doc'
-            Command = 'rg "writeFile" "openspec/changes/portable-formal-gates-canary/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'rg-write-token-streamwriter-formal-doc'
-            Command = 'rg "StreamWriter" "openspec/changes/portable-formal-gates-canary/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'cat-formal-doc'
-            Command = 'cat "openspec/changes/portable-formal-gates-canary/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'rg-piped-to-select-string-formal-doc'
-            Command = 'rg "GateWorkflow" "openspec/changes/portable-formal-gates-canary/proposal.md" | Select-String "GateWorkflow"'
-        },
-        [pscustomobject]@{
-            Name = 'echo-gateworkflow'
-            Command = 'echo "GateWorkflow openspec/changes/x/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'echo-gateworkflow-bare-equals'
-            Command = 'echo GateWorkflow=demo'
-        },
-        [pscustomobject]@{
-            Name = 'ls-comment-gateworkflow-bare-equals'
-            Command = 'ls -la # GateWorkflow=demo'
-        },
-        [pscustomobject]@{
-            Name = 'echo-quoted-redirection-text-formal-doc'
-            Command = 'echo "> openspec/changes/x/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'python-string-only-formal-doc'
-            Command = 'python -c "print(''openspec/changes/x/proposal.md'')"'
-        },
-        [pscustomobject]@{
-            Name = 'python-string-only-write-token-formal-doc'
-            Command = 'python -c "print(''writeFileSync openspec/changes/x/proposal.md'')"'
-        },
-        [pscustomobject]@{
-            Name = 'set-content-nonformal-value-mentions-formal-doc'
-            Command = 'Set-Content -LiteralPath "notes.txt" -Value "openspec/changes/x/proposal.md"'
-        },
-        [pscustomobject]@{
-            Name = 'python-copy-formal-source-nonformal-destination'
-            Command = 'python -c "import shutil; shutil.copy(''openspec/changes/x/proposal.md'', ''notes-copy.txt'')"'
-        }
-    )
-    foreach ($readOnlyShell in $readOnlyShellPayloads) {
-        $readOnlyPayload = @{
-            tool_name = 'Shell'
-            cwd = $plainRepo
-            tool_input = @{
-                command = $readOnlyShell.Command
-            }
-        } | ConvertTo-Json -Depth 8 -Compress
-        $readOnlyOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $readOnlyPayload 0
-        Add-Check ([ref]$summary) "formal-document-readonly-shell-not-blocked-$($readOnlyShell.Name)" $true $readOnlyOutput
-    }
-
-    $readPipeToWriterPayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-read-pipe-writer'
-                changeSnapshot = 'snap-read-pipe-writer'
-                worktree = $plainRepo
-            }
-            command = 'rg "anything" "notes.txt" | python -c "import sys; open(''openspec/changes/x/proposal.md'', ''w'', encoding=''utf-8'').write(sys.stdin.read())"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $readPipeToWriterOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $readPipeToWriterPayload 2
-    $readPipeToWriterPassed = $readPipeToWriterOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-read-pipeline-to-writer-blocked' $readPipeToWriterPassed $readPipeToWriterOutput
-
-    $redirectionWritePayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-redirection-write'
-                changeSnapshot = 'snap-redirection-write'
-                worktree = $plainRepo
-            }
-            command = 'echo "# Proposal" > "openspec/changes/x/proposal.md"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $redirectionWriteOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $redirectionWritePayload 2
-    $redirectionWritePassed = $redirectionWriteOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-shell-redirection-write-blocked' $redirectionWritePassed $redirectionWriteOutput
-
-    $structuredContentPathPayload = @{
-        tool_name = 'Edit'
-        cwd = $plainRepo
-        tool_input = @{
-            file_path = (Join-Path $plainRepo 'notes.txt')
-            old_string = 'old'
-            new_string = 'Mention only: openspec/changes/x/proposal.md and GateWorkflow without writing a formal doc.'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $structuredContentPathOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $structuredContentPathPayload 0
-    Add-Check ([ref]$summary) 'formal-document-structured-content-path-not-target' $true $structuredContentPathOutput
-
-    $sharedRequirementsPayload = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-child-doc-write'
-                changeSnapshot = 'snap-child-doc-write'
-                worktree = $tempRepo
-                requirementsWorkflowId = $workflowId
-                requirementsChangeSnapshot = $changeSnapshot
-            }
-            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/specs/cross-platform-validation/spec.md')
-            content = '# Child Spec'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $sharedRequirementsOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $sharedRequirementsPayload 0
-    Add-Check ([ref]$summary) 'formal-document-shared-requirements-route-allowed' $true $sharedRequirementsOutput
-
-    $partialSharedRequirementsPayload = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-child-doc-write-partial'
-                changeSnapshot = 'snap-child-doc-write-partial'
-                worktree = $tempRepo
-                requirementsWorkflowId = $workflowId
-            }
-            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/specs/cross-platform-validation/spec.md')
-            content = '# Child Spec'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $partialSharedRequirementsOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $partialSharedRequirementsPayload 2
-    $partialSharedRequirementsPassed = $partialSharedRequirementsOutput -match 'requirementsWorkflowId and requirementsChangeSnapshot must be provided together'
-    Add-Check ([ref]$summary) 'formal-document-shared-requirements-route-partial-blocked' $partialSharedRequirementsPassed $partialSharedRequirementsOutput
-
-    $contentOnlyWorkflow = @{
-        gate = 'requirements-clarification-gate'
-        workflowId = $workflowId
-        changeSnapshot = $changeSnapshot
-        worktree = $tempRepo
-    } | ConvertTo-Json -Depth 8 -Compress
-    $contentOnlyDocWritePayload = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/proposal.md')
-            content = "# Proposal`nGateWorkflow=$contentOnlyWorkflow`n"
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $contentOnlyDocWriteOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $contentOnlyDocWritePayload 0
-    Add-Check ([ref]$summary) 'formal-document-write-content-only-gateworkflow-allowed' $true $contentOnlyDocWriteOutput
-
-    $ordinaryWorkflowProsePayload = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            file_path = (Join-Path $tempRepo 'openspec/changes/portable-formal-gates-canary/proposal.md')
-            content = "# Proposal`nWorkflow: draft approval steps`n"
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $ordinaryWorkflowProseOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $ordinaryWorkflowProsePayload 2
-    $ordinaryWorkflowProsePassed = $ordinaryWorkflowProseOutput -match 'workflowId and GateWorkflow.changeSnapshot are required' -and $ordinaryWorkflowProseOutput -notmatch 'Malformed GateWorkflow JSON'
-    Add-Check ([ref]$summary) 'formal-document-write-ordinary-workflow-prose-not-malformed-json' $ordinaryWorkflowProsePassed $ordinaryWorkflowProseOutput
-
     $nonFormalMalformedWorkflowPayload = @{
         tool_name = 'Write'
         cwd = $tempRepo
@@ -1635,164 +1734,6 @@ gate_route:
     $duplicateVerdictPassPassed = $duplicateVerdictPassOutput -match 'record-stage must provide an artifact'
     Add-Check ([ref]$summary) 'formal-pass-duplicate-verdict-colon-still-prechecked' $duplicateVerdictPassPassed $duplicateVerdictPassOutput
 
-    $applyPatchAllowedPayload = @{
-        tool_name = 'apply_patch'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = $workflowId
-                changeSnapshot = $changeSnapshot
-                worktree = $tempRepo
-            }
-            command = @'
-*** Begin Patch
-*** Update File: openspec/changes/portable-formal-gates-canary/proposal.md
-@@
-+# Proposal
-*** End Patch
-'@
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $applyPatchAllowedOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $applyPatchAllowedPayload 0
-    Add-Check ([ref]$summary) 'formal-document-apply-patch-covered-target-allowed' $true $applyPatchAllowedOutput
-
-    $uncoveredDocWritePayload = @{
-        tool_name = 'Write'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = $workflowId
-                changeSnapshot = $changeSnapshot
-                worktree = $tempRepo
-            }
-            file_path = (Join-Path $tempRepo 'docs/prd/unrelated-new-prd.md')
-            content = '# Unrelated PRD'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $uncoveredDocWriteOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $uncoveredDocWritePayload 2
-    $uncoveredDocWritePassed = $uncoveredDocWriteOutput -match 'targetNotCovered'
-    Add-Check ([ref]$summary) 'formal-document-write-uncovered-target-blocked' $uncoveredDocWritePassed $uncoveredDocWriteOutput
-
-    $uncoveredShellWritePayload = @{
-        tool_name = 'Shell'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = $workflowId
-                changeSnapshot = $changeSnapshot
-                worktree = $tempRepo
-            }
-            command = 'Set-Content -LiteralPath "docs/requirements/uncovered.md" -Value "# Requirement"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $uncoveredShellWriteOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $uncoveredShellWritePayload 2
-    $uncoveredShellWritePassed = $uncoveredShellWriteOutput -match 'targetNotCovered'
-    Add-Check ([ref]$summary) 'formal-document-shell-uncovered-target-blocked' $uncoveredShellWritePassed $uncoveredShellWriteOutput
-
-    $coveredShellWritePayload = @{
-        tool_name = 'Shell'
-        cwd = $tempRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = $workflowId
-                changeSnapshot = $changeSnapshot
-                worktree = $tempRepo
-            }
-            command = 'Set-Content -LiteralPath "openspec/changes/portable-formal-gates-canary/proposal.md" -Value "# Proposal"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $coveredShellWriteOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $coveredShellWritePayload 0
-    Add-Check ([ref]$summary) 'formal-document-shell-covered-target-allowed' $true $coveredShellWriteOutput
-
-    $joinPathShellPayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-join-path-write'
-                changeSnapshot = 'snap-join-path-write'
-                worktree = $plainRepo
-            }
-            command = 'Set-Content -LiteralPath (Join-Path "openspec" "changes/x/proposal.md") -Value "# Proposal"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $joinPathShellOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $joinPathShellPayload 2
-    $joinPathShellPassed = $joinPathShellOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-shell-join-path-write-blocked' $joinPathShellPassed $joinPathShellOutput
-
-    $pythonInlinePayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-python-inline-write'
-                changeSnapshot = 'snap-python-inline-write'
-                worktree = $plainRepo
-            }
-            command = 'python -c "from pathlib import Path; Path(''openspec/changes/x/proposal.md'').write_text(''# Proposal'')"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $pythonInlineOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $pythonInlinePayload 2
-    $pythonInlinePassed = $pythonInlineOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-python-inline-write-blocked' $pythonInlinePassed $pythonInlineOutput
-
-    $pythonCopyPayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-python-copy-write'
-                changeSnapshot = 'snap-python-copy-write'
-                worktree = $plainRepo
-            }
-            command = 'python -c "import shutil; shutil.copy(''notes.txt'', ''openspec/changes/x/proposal.md'')"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $pythonCopyOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $pythonCopyPayload 2
-    $pythonCopyPassed = $pythonCopyOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-python-copy-destination-write-blocked' $pythonCopyPassed $pythonCopyOutput
-
-    $nodeInlinePayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-node-inline-write'
-                changeSnapshot = 'snap-node-inline-write'
-                worktree = $plainRepo
-            }
-            command = 'node -e "require(''fs'').writeFileSync(''openspec/changes/x/proposal.md'', ''# Proposal'')"'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $nodeInlineOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $nodeInlinePayload 2
-    $nodeInlinePassed = $nodeInlineOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-node-inline-write-blocked' $nodeInlinePassed $nodeInlineOutput
-
-    $dotNetInlinePayload = @{
-        tool_name = 'Shell'
-        cwd = $plainRepo
-        tool_input = @{
-            GateWorkflow = @{
-                gate = 'requirements-clarification-gate'
-                workflowId = 'wf-dotnet-inline-write'
-                changeSnapshot = 'snap-dotnet-inline-write'
-                worktree = $plainRepo
-            }
-            command = '[System.IO.File]::WriteAllText((Join-Path "openspec" "changes/x/proposal.md"), "# Proposal")'
-        }
-    } | ConvertTo-Json -Depth 8 -Compress
-    $dotNetInlineOutput = Run-PowerShellStdinExpect $plainRepo $hookScript $dotNetInlinePayload 2
-    $dotNetInlinePassed = $dotNetInlineOutput -match 'Formal document write blocked before requirements clarification PASS'
-    Add-Check ([ref]$summary) 'formal-document-dotnet-writealltext-blocked' $dotNetInlinePassed $dotNetInlineOutput
-
     $qaArtifactRel = '.claude/gates/artifacts/qa-execution.md'
     $qaArtifactPath = Join-Path $tempRepo $qaArtifactRel
     New-FormalArtifact $qaArtifactPath 'QA Execution' 'qa-canary-agent' $bundleRef @(
@@ -1817,6 +1758,57 @@ gate_route:
     $summary.artifactPaths.qaExecution = Format-Path $qaArtifactPath
     Add-Check ([ref]$summary) 'qa-execution-pass-recorded' $true $qaArtifactRel
 
+    $ordinaryNoReceiptWorkflowId = 'wf-ordinary-no-receipt-canary'
+    $ordinaryNoReceiptRel = '.claude/gates/artifacts/ordinary-no-receipt-qa-pass.md'
+    $ordinaryNoReceiptPath = Join-Path $tempRepo $ordinaryNoReceiptRel
+    New-FormalArtifact $ordinaryNoReceiptPath 'QA Execution' 'ordinary-no-receipt-agent' $bundleRef @(
+        'Reviewer agent id: legacy-metadata-agent',
+        'Approved case set: ordinary no-receipt canary cases',
+        'QA-owned evidence: ordinary no-receipt canary evidence',
+        'Case-to-artifact binding: ordinary no-receipt case maps to ordinary-no-receipt-qa-pass.md'
+    ) $ordinaryNoReceiptWorkflowId $changeSnapshot 'Execution' -SkipReceipt
+    $ordinaryNoReceiptOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'qa-test-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Stage', 'Execution',
+        '-Artifact', $ordinaryNoReceiptRel,
+        '-Actor', 'ordinary-no-receipt-agent',
+        '-WorkflowId', $ordinaryNoReceiptWorkflowId,
+        '-ChangeSnapshot', $changeSnapshot
+    ) 0
+    Add-Check ([ref]$summary) 'ordinary-pass-without-receipt-recorded' ($ordinaryNoReceiptOutput -match 'GATE_STATE_RECORDED') $ordinaryNoReceiptOutput
+    $summary.artifactPaths.ordinaryNoReceipt = Format-Path $ordinaryNoReceiptPath
+
+    $badReceiptWorkflowId = 'wf-bad-receipt-canary'
+    $badReceiptRel = '.claude/gates/artifacts/bad-receipt-qa-pass.md'
+    $badReceiptPath = Join-Path $tempRepo $badReceiptRel
+    New-FormalArtifact $badReceiptPath 'QA Execution' 'bad-receipt-agent' $bundleRef @(
+        'Reviewer proof receipt: .claude/gates/proofs/missing-receipt.json sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'Approved case set: bad receipt negative canary cases',
+        'QA-owned evidence: bad receipt negative canary evidence',
+        'Case-to-artifact binding: bad receipt case maps to bad-receipt-qa-pass.md'
+    ) $badReceiptWorkflowId $changeSnapshot 'Execution' -SkipReceipt
+    $badReceiptOutput = Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'qa-test-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Stage', 'Execution',
+        '-Artifact', $badReceiptRel,
+        '-Actor', 'bad-receipt-agent',
+        '-WorkflowId', $badReceiptWorkflowId,
+        '-ChangeSnapshot', $changeSnapshot
+    ) 1
+    $badReceiptPassed = $badReceiptOutput -match 'Reviewer proof receipt'
+    Add-Check ([ref]$summary) 'bad-receipt-when-present-blocked' $badReceiptPassed $badReceiptOutput
+    $summary.artifactPaths.badReceipt = Format-Path $badReceiptPath
+
     $utf8WorkflowId = 'wf-utf8-artifact-canary'
     $utf8Snapshot = 'snap-utf8-artifact-canary'
     $utf8ArtifactRel = '.claude/gates/artifacts/utf8-qa-execution.md'
@@ -1831,7 +1823,6 @@ Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
-Reviewer agent id: utf8-qa-agent
 Context bundle: $bundleRef
 Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
@@ -1847,6 +1838,7 @@ gate_route:
   rework_owner: none
   rerun_from: none
 "@
+    Add-ReviewerProofReceipt $tempRepo $receiptScript $utf8ArtifactRel 'codex' $utf8WorkflowId $utf8Snapshot 'qa-test-gate' 'Execution' 'utf8-qa-agent'
     $utf8RecordOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
         '-Action', 'record-stage',
@@ -1876,7 +1868,6 @@ Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
-Reviewer agent id: hash-qa-agent
 Context bundle: $bundleRef
 Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
@@ -1891,6 +1882,7 @@ gate_route:
   rework_owner: none
   rerun_from: none
 "@
+    Add-ReviewerProofReceipt $tempRepo $receiptScript $hashArtifactRel 'codex' $hashWorkflowId $hashSnapshot 'qa-test-gate' 'Execution' 'hash-qa-agent'
     Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
         '-Action', 'record-stage',
@@ -1904,17 +1896,22 @@ gate_route:
         '-WorkflowId', $hashWorkflowId,
         '-ChangeSnapshot', $hashSnapshot
     ) | Out-Null
-    Set-Utf8File $hashArtifactPath 'tampered after PASS record'
+    Add-Content -LiteralPath $hashArtifactPath -Encoding UTF8 -Value 'Decision evidence: tampered after receipt binding'
     $hashAdmissionOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
-        '-Action', 'verify-admission',
+        '-Action', 'record-stage',
         '-Worktree', $tempRepo,
-        '-Gate', 'complexity-gate',
+        '-Gate', 'qa-test-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Stage', 'Execution',
+        '-Artifact', $hashArtifactRel,
+        '-Actor', 'hash-qa-agent',
         '-WorkflowId', $hashWorkflowId,
         '-ChangeSnapshot', $hashSnapshot
     ) 1
-    $hashAdmissionPassed = $hashAdmissionOutput -match 'artifactHashMismatch'
-    Add-Check ([ref]$summary) 'artifact-hash-mismatch-blocked' $hashAdmissionPassed $hashAdmissionOutput
+    $hashAdmissionPassed = $hashAdmissionOutput -match 'Reviewer proof receipt|canonical|receipt'
+    Add-Check ([ref]$summary) 'receipt-bound-artifact-modification-blocked' $hashAdmissionPassed $hashAdmissionOutput
 
     $complexityAdmission = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
@@ -2054,8 +2051,12 @@ gate_route:
         '-Actor', 'qa-final-canary-agent'
     ) | Out-Null
     $summary.artifactPaths.finalVerification = Format-Path (Join-Path $tempRepo $finalVerificationRel)
-    $summary.artifactPaths.finalQa = Format-Path (Join-Path $tempRepo $finalQaRel)
+    $finalQaPath = Join-Path $tempRepo $finalQaRel
+    $summary.artifactPaths.finalQa = Format-Path $finalQaPath
     Add-Check ([ref]$summary) 'final-verification-recorded' $true $finalVerificationRel
+    $generatedFinalQaText = Get-Content -LiteralPath $finalQaPath -Raw -Encoding UTF8
+    $generatedFinalQaPassed = $generatedFinalQaText -match 'next_action: seal' -and $generatedFinalQaText -notmatch 'Reviewer proof receipt:'
+    Add-Check ([ref]$summary) 'record-final-qa-without-own-receipt-recorded' $generatedFinalQaPassed $generatedFinalQaText
 
     $manualFinalQaRel = '.claude/gates/artifacts/manual-final-qa-without-aggregate.md'
     $manualFinalQaPath = Join-Path $tempRepo $manualFinalQaRel
@@ -2068,7 +2069,6 @@ Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
-Reviewer agent id: manual-final-qa-agent
 Context bundle: $bundleRef
 Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
@@ -2136,6 +2136,31 @@ Decision evidence: incomplete artifact
     $negativePassed = $negativeOutput -match 'PASS blocked|review artifact is incomplete|Reviewer agent id'
     Add-Check ([ref]$summary) 'invalid-pass-artifact-blocked' $negativePassed $negativeOutput
     $summary.artifactPaths.invalidComplexity = Format-Path $invalidArtifactPath
+
+    $invalidArtifactHookPayload = @{
+        tool_name = 'Shell'
+        cwd = $tempRepo
+        tool_input = @{
+            command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$workflowScript`" -Action record-stage -Worktree `"$tempRepo`" -Gate complexity-gate -Verdict PASS -Mode formal -Artifact `"$invalidArtifactRel`" -Actor negative-canary-agent -WorkflowId wf-negative -ChangeSnapshot snap-negative"
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $invalidArtifactHookOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $invalidArtifactHookPayload 2
+    $invalidArtifactHookPassed = $invalidArtifactHookOutput -match 'PASS blocked|review artifact is incomplete|Reviewer agent id'
+    Add-Check ([ref]$summary) 'hook-blocks-invalid-pass-artifact-before-command' $invalidArtifactHookPassed $invalidArtifactHookOutput
+
+    $singleQuotedWorkflowPath = $workflowScript.Replace('\', '/')
+    $singleQuotedWorktree = $tempRepo.Replace('\', '/')
+    $singleQuotedArtifact = $invalidArtifactRel.Replace('\', '/')
+    $invalidArtifactSingleQuotedHookPayload = @{
+        tool_name = 'Bash'
+        cwd = $tempRepo
+        tool_input = @{
+            command = "powershell -NoProfile -ExecutionPolicy Bypass -File '$singleQuotedWorkflowPath' -Action record-stage -Worktree '$singleQuotedWorktree' -Gate complexity-gate -Verdict PASS -Mode formal -Artifact '$singleQuotedArtifact' -Actor negative-canary-agent -WorkflowId wf-negative -ChangeSnapshot snap-negative"
+        }
+    } | ConvertTo-Json -Depth 8 -Compress
+    $invalidArtifactSingleQuotedHookOutput = Run-PowerShellStdinExpect $tempRepo $hookScript $invalidArtifactSingleQuotedHookPayload 2
+    $invalidArtifactSingleQuotedHookPassed = $invalidArtifactSingleQuotedHookOutput -match 'PASS blocked|review artifact is incomplete|Reviewer agent id'
+    Add-Check ([ref]$summary) 'hook-blocks-single-quoted-gate-workflow-path' $invalidArtifactSingleQuotedHookPassed $invalidArtifactSingleQuotedHookOutput
 
     $contaminatedArtifactRel = '.claude/gates/artifacts/contaminated-complexity-pass.md'
     $contaminatedArtifactPath = Join-Path $tempRepo $contaminatedArtifactRel
@@ -2220,7 +2245,7 @@ gate_route:
         '-Artifact', $qaArtifactRel,
         '-Actor', 'negative-qa-agent'
     ) 1
-    $qaWithoutWorkflowPassed = $qaWithoutWorkflowOutput -match 'qaPassRequiresWorkflowId'
+    $qaWithoutWorkflowPassed = $qaWithoutWorkflowOutput -match 'qaPassRequiresWorkflowId|Reviewer proof receipt stage must match stage'
     Add-Check ([ref]$summary) 'qa-pass-without-workflow-blocked' $qaWithoutWorkflowPassed $qaWithoutWorkflowOutput
 
     $qaMissingEvidenceRel = '.claude/gates/artifacts/qa-missing-evidence-fields.md'
@@ -2247,6 +2272,7 @@ gate_route:
     $placeholderArtifactRel = '.claude/gates/artifacts/placeholder-reviewer-complexity-pass.md'
     $placeholderArtifactPath = Join-Path $tempRepo $placeholderArtifactRel
     New-FormalArtifact $placeholderArtifactPath 'Placeholder Reviewer Complexity Gate' '<independent-reviewer-id>' $bundleRef @(
+        'Reviewer agent id: <independent-reviewer-id>',
         'Script result: PASS',
         'Diff shape judgment: placeholder reviewer negative canary',
         'Impact surface health: placeholder reviewer negative canary',
@@ -2256,7 +2282,7 @@ gate_route:
         'Decision evidence: placeholder reviewer negative canary',
         "Changed files artifact: $changedFilesRel",
         "Verification artifact: $verificationRel"
-    )
+    ) -SkipReceipt
     $placeholderOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
         '-Action', 'record-stage',
@@ -2471,9 +2497,9 @@ gate_route:
     $summary.artifactPaths.badDispatchPromptHash = Format-Path $badDispatchHashArtifactPath
 
     $anchoredDispatchCases = @(
-        [pscustomobject]@{ Name = 'list-focus-items'; Line = '- Focus items: verify the issue the main agent already suspects'; Expected = 'Focus items' },
-        [pscustomobject]@{ Name = 'quote-what-to-verify'; Line = '> what to verify: confirm the main agent suspicion'; Expected = 'what to verify' },
-        [pscustomobject]@{ Name = 'heading-focus-items'; Line = '### Focus items: verify the issue the main agent already suspects'; Expected = 'Focus items' },
+        [pscustomobject]@{ Name = 'list-focus-items'; Line = '- Focus items: verify the issue the main agent already suspects'; Expected = 'suspect' },
+        [pscustomobject]@{ Name = 'quote-what-to-verify'; Line = '> what to verify: confirm the main agent suspicion'; Expected = 'suspicion' },
+        [pscustomobject]@{ Name = 'heading-focus-items'; Line = '### Focus items: verify the issue the main agent already suspects'; Expected = 'suspect' },
         [pscustomobject]@{ Name = 'quote-chinese-focus'; Line = '> ' + [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) + ': ' + [string]::new([char[]]@([char]0x4E3B, [char]0x4EE3, [char]0x7406, [char]0x6307, [char]0x5B9A, [char]0x7684, [char]0x98CE, [char]0x9669)); Expected = [string]::new([char[]]@([char]0x91CD, [char]0x70B9, [char]0x590D, [char]0x67E5)) },
         [pscustomobject]@{ Name = 'quote-chinese-attention'; Line = '> ' + [string]::new([char[]]@([char]0x5173, [char]0x6CE8, [char]0x70B9)) + ': parser branch'; Expected = [string]::new([char[]]@([char]0x5173, [char]0x6CE8, [char]0x70B9)) },
         [pscustomobject]@{ Name = 'quote-chinese-known-issues'; Line = '> ' + [string]::new([char[]]@([char]0x5DF2, [char]0x77E5, [char]0x95EE, [char]0x9898)) + ': stale finding'; Expected = [string]::new([char[]]@([char]0x5DF2, [char]0x77E5, [char]0x95EE, [char]0x9898)) },
@@ -2486,6 +2512,7 @@ gate_route:
         $anchoredDispatchPromptPath = Join-Path $tempRepo $anchoredDispatchPromptRel
         Set-Utf8File $anchoredDispatchPromptPath @"
 Worktree: portable canary repo
+formal_gate_dispatch: complexity-gate
 $($anchoredCase.Line)
 Output template: formal gate artifact
 "@
@@ -2501,7 +2528,6 @@ Semantic anti-anchor check: PASS
 Prompt source: agents/complexity-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
-Reviewer agent id: anchored-dispatch-prompt-$($anchoredCase.Name)-agent
 Context bundle: $bundleRef
 Dispatch prompt artifact: $anchoredDispatchPromptRel sha256=$anchoredDispatchPromptHash
 No-anchor prompt: YES
@@ -2522,6 +2548,7 @@ gate_route:
   rework_owner: none
   rerun_from: none
 "@
+        Add-ReviewerProofReceipt $tempRepo $receiptScript $anchoredDispatchArtifactRel 'codex' $workflowId $changeSnapshot 'complexity-gate' '' "anchored-dispatch-prompt-$($anchoredCase.Name)-agent"
         $anchoredDispatchOutput = Run-PowerShellExpect $tempRepo @(
             '-File', $workflowScript,
             '-Action', 'record-stage',
@@ -2534,7 +2561,7 @@ gate_route:
             '-WorkflowId', $workflowId,
             '-ChangeSnapshot', $changeSnapshot
         ) 1
-        $anchoredDispatchPassed = $anchoredDispatchOutput -match 'dispatch prompt contamination' -and $anchoredDispatchOutput -match [regex]::Escape([string]$anchoredCase.Expected)
+        $anchoredDispatchPassed = $anchoredDispatchOutput -match 'dispatch prompt (contamination|validation failed)' -and $anchoredDispatchOutput -match [regex]::Escape([string]$anchoredCase.Expected)
         Add-Check ([ref]$summary) "dispatch-prompt-anchoring-field-$($anchoredCase.Name)-blocked" $anchoredDispatchPassed $anchoredDispatchOutput
         $summary.artifactPaths["anchoredDispatchPrompt_$($anchoredCase.Name)"] = Format-Path $anchoredDispatchArtifactPath
     }
@@ -2677,7 +2704,6 @@ Semantic anti-anchor check: PASS
 Prompt source: agents/qa-test-gate.md
 Zero-context reviewer: YES
 Independent agent: YES
-Reviewer agent id: conditional-qa-agent
 Context bundle: $bundleRef
 Dispatch prompt artifact: $dispatchPromptRef
 No-anchor prompt: YES
@@ -2694,6 +2720,7 @@ Approved case set: conditional canary approved cases
 QA-owned evidence: conditional canary evidence
 Case-to-artifact binding: conditional case maps to conditional-qa-execution.md
 "@
+    Add-ReviewerProofReceipt $tempRepo $receiptScript $conditionalArtifactRel 'codex' $conditionalWorkflowId $conditionalSnapshot 'qa-test-gate' 'Execution' 'conditional-qa-agent'
     Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
         '-Action', 'record-stage',
@@ -2704,6 +2731,31 @@ Case-to-artifact binding: conditional case maps to conditional-qa-execution.md
         '-Stage', 'Execution',
         '-Artifact', $conditionalArtifactRel,
         '-Actor', 'conditional-pass-agent',
+        '-WorkflowId', $conditionalWorkflowId,
+        '-ChangeSnapshot', $conditionalSnapshot
+    ) | Out-Null
+    $conditionalComplexityRel = '.claude/gates/artifacts/conditional-complexity-pass.md'
+    $conditionalComplexityPath = Join-Path $tempRepo $conditionalComplexityRel
+    New-FormalArtifact $conditionalComplexityPath 'Conditional Complexity Gate' 'conditional-complexity-agent' $bundleRef @(
+        'Script result: PASS',
+        'Diff shape judgment: conditional pass negative canary',
+        'Impact surface health: conditional pass negative canary',
+        'Public/config surface: conditional pass negative canary',
+        'New concepts: conditional pass negative canary',
+        'Shrink opportunities: conditional pass negative canary',
+        'Decision evidence: conditional pass negative canary',
+        "Changed files artifact: $changedFilesRel",
+        "Verification artifact: $verificationRel"
+    ) $conditionalWorkflowId $conditionalSnapshot
+    Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'complexity-gate',
+        '-Verdict', 'PASS',
+        '-Mode', 'formal',
+        '-Artifact', $conditionalComplexityRel,
+        '-Actor', 'conditional-complexity-agent',
         '-WorkflowId', $conditionalWorkflowId,
         '-ChangeSnapshot', $conditionalSnapshot
     ) | Out-Null
@@ -2720,11 +2772,29 @@ Case-to-artifact binding: conditional case maps to conditional-qa-execution.md
         '-WorkflowId', $conditionalWorkflowId,
         '-ChangeSnapshot', $conditionalSnapshot
     ) | Out-Null
+    $conditionalRequirementsReviewRel = '.claude/gates/artifacts/conditional-requirements-review.md'
+    Set-Utf8File (Join-Path $tempRepo $conditionalRequirementsReviewRel) @"
+# Requirements Clarification Gate
+
+Review status: REVIEW
+Reason: conditional pass negative canary switches this workflow to post-development gate admission.
+"@
+    Run-PowerShellExpect $tempRepo @(
+        '-File', $workflowScript,
+        '-Action', 'record-stage',
+        '-Worktree', $tempRepo,
+        '-Gate', 'requirements-clarification-gate',
+        '-Verdict', 'REVIEW',
+        '-Artifact', $conditionalRequirementsReviewRel,
+        '-Actor', 'conditional-post-development-agent',
+        '-WorkflowId', $conditionalWorkflowId,
+        '-ChangeSnapshot', $conditionalSnapshot
+    ) | Out-Null
     $conditionalAdmissionOutput = Run-PowerShellExpect $tempRepo @(
         '-File', $workflowScript,
         '-Action', 'verify-admission',
         '-Worktree', $tempRepo,
-        '-Gate', 'complexity-gate',
+        '-Gate', 'architecture-health-gate',
         '-WorkflowId', $conditionalWorkflowId,
         '-ChangeSnapshot', $conditionalSnapshot
     ) 1

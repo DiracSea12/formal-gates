@@ -4,14 +4,14 @@ Use for test plan review, acceptance/testability review, release validation, PR 
 
 ## Activation
 
-Run when any are true:
+Run when the user asks for formal four-gate review, release/seal validation, QA gate, test plan review, acceptance evidence review, or test adequacy review, and any are true:
 
 - Public API, CLI, config schema, serialized contract, persistence, migration, security, permission, privacy, safety, external dependency behavior, or user-visible acceptance changes.
 - Release/PR validation, P0/P1 bugfix, or 3+ file behavior change.
 - Test harness, fixture, runner, evidence flow, or validation architecture changes.
 - The user or reviewer asks for QA gate, test plan review, acceptance evidence review, or test adequacy review.
 
-Skip for pure formatting, comments, typo fixes, conversation-only analysis, or a single-file low-risk bugfix with targeted existing coverage and no new acceptance claim.
+Do not run only because a public API, behavior, or document changed. Skip for pure formatting, comments, typo fixes, conversation-only analysis, or a single-file low-risk bugfix with targeted existing coverage and no new acceptance claim.
 
 ## Modes
 

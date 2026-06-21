@@ -449,7 +449,12 @@ function Assert-RecordAdmission($State, [string]$GateName, [string]$Workflow, [s
 
     while ($ToVerify.Count -gt 0) {
         $CurrentGate = $ToVerify[0]
-        $ToVerify = $ToVerify[1..($ToVerify.Count - 1)]
+        if ($ToVerify.Count -eq 1) {
+            $ToVerify = @()
+        }
+        else {
+            $ToVerify = @($ToVerify[1..($ToVerify.Count - 1)])
+        }
 
         if ($VerifiedGates.ContainsKey($CurrentGate)) { continue }
         $VerifiedGates[$CurrentGate] = $true

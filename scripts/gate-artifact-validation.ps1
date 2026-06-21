@@ -5,6 +5,11 @@ if (Test-Path -LiteralPath $formalGatesPowerShellHost) {
     . $formalGatesPowerShellHost
 }
 
+$formalGatesProofReceipt = Join-Path $PSScriptRoot 'gate-proof-receipt.ps1'
+if (Test-Path -LiteralPath $formalGatesProofReceipt) {
+    . $formalGatesProofReceipt
+}
+
 function Resolve-FormalGateArtifactPath([string]$BasePath, [string]$MaybeRelativePath) {
     if ([string]::IsNullOrWhiteSpace($MaybeRelativePath)) { return $null }
     if ([System.IO.Path]::IsPathRooted($MaybeRelativePath)) { return $MaybeRelativePath }
@@ -28,6 +33,20 @@ function Test-FormalGateMeaningfulArtifactField([string]$Text, [string]$FieldNam
     if ([string]::IsNullOrWhiteSpace($value)) { return $false }
     if ($value -match '<[^>\r\n]+>') { return $false }
     return $value -notmatch '(?i)^(unavailable|unknown|none|null|n/a|na|todo|tbd|placeholder|sample|example)$'
+}
+
+function Get-FormalGateLegacyReviewerProofErrors([string]$Text) {
+    $errors = @()
+    $reviewerAgentId = Get-FormalGateArtifactFieldValue $Text 'Reviewer agent id'
+    if (-not [string]::IsNullOrWhiteSpace($reviewerAgentId) -and $reviewerAgentId -match '<[^>\r\n]+>') {
+        $errors += 'Reviewer agent id placeholder is not proof; use Reviewer proof receipt only when receipt-backed proof is claimed'
+    }
+    foreach ($field in @('Reviewer proof', 'Self-reported reviewer proof', 'Reviewer proof artifact')) {
+        if (Test-FormalGateMeaningfulArtifactField $Text $field) {
+            $errors += "$field is a legacy self-reported proof field; use Reviewer proof receipt only when receipt-backed proof is claimed"
+        }
+    }
+    return $errors
 }
 
 function Get-FormalGateArtifactReferencePath([string]$BasePath, [string]$Value) {
@@ -308,12 +327,12 @@ function Get-FormalGateDispatchPromptValidationErrors([string]$BasePath, [string
     $errors = @(Get-FormalGateHashedArtifactValidationErrors $BasePath $Value 'Dispatch prompt artifact')
     if ($errors.Count -gt 0) { return $errors }
 
-    $validatorScript = Join-Path $BasePath 'scripts/validate-dispatch-prompt.ps1'
+    $validatorScript = Join-Path $PSScriptRoot 'validate-dispatch-prompt.ps1'
     if (-not (Test-Path -LiteralPath $validatorScript)) {
         return @("Dispatch prompt validator script not found: $validatorScript")
     }
 
-    $configPath = Join-Path $BasePath 'hooks/pollution-patterns.json'
+    $configPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'hooks/pollution-patterns.json'
     if (-not (Test-Path -LiteralPath $configPath)) {
         return @("Pollution patterns config not found: $configPath")
     }
@@ -843,7 +862,6 @@ function Get-FormalGatePassRequiredFields([string]$GateName) {
         "Prompt source: $(Get-FormalGateExpectedPromptSource $GateName)",
         'Zero-context reviewer: YES',
         'Independent agent: YES',
-        'Reviewer agent id:',
         'Context bundle:',
         'Dispatch prompt artifact:',
         'No-anchor prompt: YES',
@@ -882,8 +900,9 @@ function Test-FormalGateArtifactFields([string]$ArtifactPath, [string[]]$Require
     $missing = @($RequiredFields | Where-Object { $text -notmatch [regex]::Escape($_) })
     if ($GateName -ne 'requirements-clarification-gate') {
         $missing += @(Get-FormalGatePromptIntegrityErrors $text $GateName)
-        if (-not (Test-FormalGateMeaningfulArtifactField $text 'Reviewer agent id')) {
-            $missing += 'Reviewer agent id: <non-empty independent agent id>'
+        $missing += @(Get-FormalGateLegacyReviewerProofErrors $text)
+        if ((Test-FormalGateMeaningfulArtifactField $text 'Reviewer proof receipt') -and (Get-Command Get-FormalGateReviewerProofReceiptValidationErrors -ErrorAction SilentlyContinue)) {
+            $missing += @(Get-FormalGateReviewerProofReceiptValidationErrors $BasePath $ArtifactPath $text $ExpectedWorkflowId $GateName $StageValue)
         }
         if (-not (Test-FormalGateMeaningfulArtifactField $text 'Context bundle')) {
             $missing += 'Context bundle: <non-empty bundle path>'

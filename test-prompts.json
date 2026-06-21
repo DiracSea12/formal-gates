@@ -6,8 +6,8 @@
   },
   {
     "id": "FG-BEH-002",
-    "prompt": "Implement a non-trivial feature and update the tests and scripts.",
-    "expected": "Refuse main-agent implementation, require OpenSpec or slice coverage, prepare zero-context development handoff with a Complexity Contract, and delegate or return Gate Handoff Request if delegation is unavailable."
+    "prompt": "Using formal-gates, implement a non-trivial feature and update the tests and scripts.",
+    "expected": "Inside the user-authorized formal workflow, refuse main-agent implementation, require OpenSpec or slice coverage, prepare zero-context development handoff with a Complexity Contract, and delegate or return Gate Handoff Request if delegation is unavailable."
   },
   {
     "id": "FG-BEH-003",
@@ -27,7 +27,7 @@
   {
     "id": "FG-BEH-006",
     "prompt": "Which parts of formal-gates trigger on their own? Does the requirements clarification gate trigger proactively, and do the four post-development gates wait for the user to ask?",
-    "expected": "State that requirements clarification proactively runs for formal document work before drafting or downstream gates, and that the four post-development gates run only when requested or when an authorized formal run reaches them."
+    "expected": "State that requirements clarification, pre-development review, and the four post-development gates are user-authorized flows. They run when the user asks for formal gates, requirement alignment, readiness review, release/seal/final validation, or when a project has explicitly opted into hook-enforced document gating."
   },
   {
     "id": "FG-BEH-007",
@@ -61,8 +61,8 @@
   },
   {
     "id": "FG-BEH-013",
-    "prompt": "Implement the OpenSpec slice in a host/runtime that does not support launching a development subagent. Just do it locally so we can keep moving.",
-    "expected": "Return Gate Handoff Request instead of local implementation, and do not downgrade non-trivial development into ordinary work."
+    "prompt": "Using formal-gates, implement the OpenSpec slice in a host/runtime that does not support launching a development subagent. Just do it locally so we can keep moving.",
+    "expected": "Inside the user-authorized formal workflow, return Gate Handoff Request instead of local implementation, and do not downgrade formal non-trivial development into ordinary work."
   },
   {
     "id": "FG-BEH-014",

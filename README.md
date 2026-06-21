@@ -37,7 +37,7 @@ go run ./cmd/formal-gates-validate package --root .
 
 安装到当前 Claude Code 项目：`scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath . -Force -RunCanary`
 
-告诉 AI："跑四门" 或 "封板前过一遍门禁"
+需要门禁时，告诉 AI："跑四门" 或 "封板前过一遍门禁"
 
 ---
 
@@ -45,19 +45,20 @@ go run ./cmd/formal-gates-validate package --root .
 
 | 你想做的事 | 走哪道门 |
 |-----------|---------|
-| 写 OpenSpec / PRD / SDD 之前 | **需求澄清门** |
+| 想在写 OpenSpec / PRD / SDD 之前先对齐需求 | **需求澄清门** |
 | 写完代码，想验证测试用例够不够 | **qa-test-gate** |
 | 担心改动做了太多、过度工程 | **complexity-gate** |
 | 想检查模块边界和依赖方向 | **architecture-health-gate** |
 | 想检查代码正确性、死代码、假测试 | **code-quality-gate** |
 | 发版 / 封板前最终验收 | 跑完整四门 |
 
-跟 AI 说"**跑四门**"、"**做 formal gate 审查**"或"**封板前过一遍门禁**"后，AI 会按 formal-gates 规则走门禁流程。机器层强制拦截仍要看目标宿主的 hook 配置和 live canary 是否通过。
+只有跟 AI 说"**跑四门**"、"**做 formal gate 审查**"或"**封板前过一遍门禁**"后，AI 才按 formal-gates 规则走门禁流程。机器层强制拦截仍要看目标宿主的 hook 配置和 live canary 是否通过。
 
 | 场景 | 是否触发门禁 |
 |------|------------|
-| 大重构、新系统、封板前验收 | 是 |
-| 写 OpenSpec / PRD / SDD 前 | 是，先走需求澄清门 |
+| 大重构、新系统 | 否，除非用户要求跑门禁 |
+| 封板前验收 | 是，但也要用户明确要求封板或跑四门 |
+| 写 OpenSpec / PRD / SDD 前 | 否；需求澄清门是可选的开发前审查 |
 | 改 UI 位置、修小 bug | 否 |
 | 普通聊天、措辞调整 | 否 |
 
@@ -79,32 +80,32 @@ AI 写代码有几个通病，这套门禁专门拦：
 
 ### 两种审查流程
 
-**开发前审查（Pre-development）**：审查 OpenSpec / PRD / 设计文档
+**开发前审查（Pre-development）**：可选地审查 OpenSpec / PRD / 设计文档
 - 流程：requirements-clarification → complexity → architecture → cold-water
 - **不需要 QA 门**（还没有代码和测试）
-- 目标：确认需求清晰、方向正确、架构合理、可以开工
+- 目标：在用户要求时，确认需求清晰、方向正确、架构合理、可以开工
 
-**开发后审查（Post-development）**：审查代码实现
+**开发后审查（Post-development）**：用户要求后，审查代码实现
 - 流程：QA → complexity → architecture → code-quality
 - **必须先过 QA 门**（验证测试和证据）
 - 目标：确认实现正确、测试充分、代码质量达标
 
-系统会自动识别：如果 requirements-clarification-gate 的结果是 `READY_TO_DRAFT`（准备写文档），就走开发前流程；否则走开发后流程。
+如果用户已经主动开启 formal-gates，系统会按当前 artifact 判断走开发前流程还是开发后流程。没有用户要求时，不自动进入门禁。
 
 ### 需求澄清门（动手前先走的门）
 
-写 OpenSpec / PRD / SDD 等规范文档前，先对齐**目标、用户价值、范围、非目标、验收标准、架构边界、需求细节**。任何一项缺失到会让文档"靠猜"，就停在 `DRAFT_BLOCKED`，不许默默填默认值。
+如果用户要求正式需求澄清，先对齐**目标、用户价值、范围、非目标、验收标准、架构边界、需求细节**。任何一项缺失到会让文档"靠猜"，就停在 `DRAFT_BLOCKED`，不许默默填默认值。
 
 需求细节包括：具体业务规则、边界条件、异常情况、数据约束、场景细节、非功能指标。只对齐高层目标不够——开发到一半才发现细节理解不一致，返工成本更高。
 
-这是**唯一应在 AI 动手之前**执行的门——方向错了返工成本最高，所以它最重要。
+这是最适合在 AI 动手之前执行的门——方向错了返工成本最高。但它仍是用户可选项，不是默认强制流程。
 
-### 四道事后门（写完后审，按顺序，前一道不过不准进下一道）
+### 四道事后门（用户要求后才跑，按顺序，前一道不过不准进下一道）
 
 1. **qa-test-gate** —— 用例和验收标准是否可信，有没有真实证据。
-2. **complexity-gate** —— 改动有没有做大、过度工程、凭空造系统。
-3. **architecture-health-gate** —— 模块边界、所有权、依赖方向、状态/缓存生命周期有没有烂。
-4. **code-quality-gate** —— 正确性、边界、死代码、假测试、可维护性。
+2. **complexity-gate** —— 改动有没有做大、是否是完成目标所需的最小实现、有没有过度工程或凭空造系统。
+3. **architecture-health-gate** —— 模块边界、所有权、依赖方向、状态/缓存生命周期、性能形态有没有烂。
+4. **code-quality-gate** —— 正确性、边界、性能、死代码、假测试、可维护性。
 
 ---
 
@@ -145,7 +146,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 ### Codex 注意
 
-本包可以安装 Codex skill，但 `-ConfigureHook` 对 Codex 是跳过并提示看参考文档。Codex hook 配置需手动查阅 `references/install-and-hooks.md`，且 hook 只能当辅助 guardrail，不能当硬门禁。正式门禁必须显式跑 `gate-workflow.ps1` 并核对 artifact。
+本包可以安装 Codex skill；加上 `-ConfigureHook` 时，安装脚本会写入 Codex `hooks.json`。Codex hook 只能当辅助 guardrail，不能当硬门禁。正式门禁必须显式跑 `gate-workflow.ps1` 并核对 artifact；Codex hook 是否真的闭环拦截，仍要用同宿主 live canary 证明。
 
 ---
 

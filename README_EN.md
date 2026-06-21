@@ -48,19 +48,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 | What you want to do | Which gate to use |
 |---------------------|-------------------|
-| Before writing OpenSpec / PRD / SDD | **Requirements Clarification Gate** (with skill installed) |
+| Align requirements before writing OpenSpec / PRD / SDD | **Requirements Clarification Gate** (optional) |
 | After writing code, verify test coverage | **qa-test-gate** |
 | Check if the change is over-engineered | **complexity-gate** |
 | Check module boundaries and dependency direction | **architecture-health-gate** |
 | Check code correctness, dead code, fake tests | **code-quality-gate** |
 | Final validation before release/seal | Run all four gates in sequence |
 
-Tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" and it will follow the installed skill rules. Machine-level enforcement still depends on the target host's hook config and passing live canary.
+Only after you tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" will it follow the installed skill rules. Machine-level enforcement still depends on the target host's hook config and passing live canary.
 
 | Scenario | Gate required? |
 |----------|---------------|
-| Major refactors, new systems, pre-release/seal | Yes |
-| Before writing OpenSpec / PRD / SDD | Yes (with skill installed) |
+| Major refactors, new systems | No, unless the user asks for gate review |
+| Pre-release/seal validation | Yes, when the user asks to seal or run four gates |
+| Before writing OpenSpec / PRD / SDD | No; requirements clarification is optional pre-development review |
 | UI tweaks, small bug fixes | No |
 | Casual chat, wording adjustments | No |
 
@@ -80,20 +81,20 @@ AI code generation has common pitfalls that this gate system specifically catche
 
 ## How the Four Gates Work
 
-### Requirements Clarification Gate (only pre-coding gate)
+### Requirements Clarification Gate (optional pre-coding gate)
 
-Before writing OpenSpec / PRD / SDD or other specification documents, first align on **goals, user value, scope, non-goals, acceptance criteria, architecture boundaries, and requirement details**. If any item is missing to the point where the document would rely on "guessing," it stops at `DRAFT_BLOCKED`—no silent default values allowed.
+When the user asks for formal requirements clarification, first align on **goals, user value, scope, non-goals, acceptance criteria, architecture boundaries, and requirement details**. If any item is missing to the point where the document would rely on "guessing," it stops at `DRAFT_BLOCKED`—no silent default values allowed.
 
 Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, scenario details, non-functional metrics. High-level alignment alone is insufficient—discovering detail misalignment mid-development has even higher rework costs.
 
-This is the **only gate that should run before AI starts coding**—since direction errors have the highest rework cost, this gate is most critical.
+This is the best gate to run before AI starts coding, because direction errors have the highest rework cost. It is still optional and user-authorized, not automatic.
 
-### Four Post-work Gates (review after completion, in sequence—cannot proceed to next until previous passes)
+### Four Post-work Gates (run only when the user asks, in sequence)
 
 1. **qa-test-gate** — Are test cases and acceptance criteria trustworthy? Does QA have real, owned evidence?
-2. **complexity-gate** — Did the change bloat? Over-engineered? Created unnecessary systems?
-3. **architecture-health-gate** — Are module boundaries, ownership, dependency directions, state/cache lifecycles sound?
-4. **code-quality-gate** — Correctness, edge cases, dead code, fake tests, maintainability.
+2. **complexity-gate** — Did the change bloat? Is it the minimum sufficient implementation? Over-engineered? Created unnecessary systems?
+3. **architecture-health-gate** — Are module boundaries, ownership, dependency directions, state/cache lifecycles, and performance shape sound?
+4. **code-quality-gate** — Correctness, edge cases, performance, dead code, fake tests, maintainability.
 
 ---
 
@@ -132,7 +133,7 @@ Each host must be installed and verified on its own. A passing canary on one hos
 
 ### Codex Note
 
-This package can install a Codex skill, but `-ConfigureHook` on Codex is a no-op that prompts to consult `references/install-and-hooks.md`. Codex hook config must be done manually, and hooks only work as an auxiliary guardrail—not a hard enforcement gate. Formal gates must explicitly run `gate-workflow.ps1` and verify artifacts.
+This package can install a Codex skill; with `-ConfigureHook`, the installer writes Codex `hooks.json`. Codex hooks are only an auxiliary guardrail, not a hard enforcement gate. Formal gates must explicitly run `gate-workflow.ps1` and verify artifacts; closed-loop Codex hook blocking still requires a same-host live canary.
 
 ---
 

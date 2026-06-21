@@ -289,7 +289,6 @@ function Write-FinalQaArtifact([string]$Path, [string]$Status, [object[]]$Attemp
         'Prompt source: agents/qa-test-gate.md'
         'Zero-context reviewer: YES'
         'Independent agent: YES'
-        "Reviewer agent id: $reviewerId"
         "Context bundle: $contextBundle"
         "Dispatch prompt artifact: $dispatchPromptArtifact"
         'No-anchor prompt: YES'
@@ -771,11 +770,14 @@ if ($Action -eq 'record-final-verification') {
 
     if ($RecordFinalQa) {
         if ([string]::IsNullOrWhiteSpace($FinalQaArtifact)) {
-            $FinalQaArtifact = Join-Path '.claude/gates/artifacts' ("final-qa-execution-" + $(if ([string]::IsNullOrWhiteSpace($WorkflowId)) { 'workflow' } else { $WorkflowId }) + '.md')
+            Write-Host 'GATE_WORKFLOW_BLOCKED FinalQaArtifact must be supplied'
+            exit 1
         }
         $finalQaPath = Resolve-ArtifactPath $RepoRoot $FinalQaArtifact
         Assert-FormalEvidencePathNotCleanupScratch $RepoRoot $finalQaPath 'FinalQaArtifact'
-        Write-FinalQaArtifact $finalQaPath $finalStatus $attempts $accepted
+        if (-not (Test-Path -LiteralPath $finalQaPath -PathType Leaf)) {
+            Write-FinalQaArtifact $finalQaPath $finalStatus $attempts $accepted
+        }
         Assert-FormalArtifactReferencesNotCleanupScratch $RepoRoot $finalQaPath
         if ($finalStatus -eq 'PASS') {
             Assert-FormalPassArtifact 'qa-test-gate' $finalQaPath $RepoRoot $WorkflowId $ChangeSnapshot 'FinalExecution'

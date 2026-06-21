@@ -1,14 +1,16 @@
 # Complexity Gate
 
-Use before implementation/worker handoff to set a Complexity Contract, and after QA Execution PASS to review diff shape, budget, new concepts, and overengineering.
+Use when the user asks for formal complexity review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract before formal handoff, and after QA Execution PASS reviews diff shape, budget, new concepts, minimum sufficient implementation, and overengineering.
 
 ## Applicability
 
-- `code-implementation` / `refactor-cleanup`: write a contract before coding; formal delivery review requires prior `qa-test-gate` formal Execution PASS.
+- `code-implementation` / `refactor-cleanup`: when the user authorized formal handoff, write a contract before coding; formal delivery review requires prior `qa-test-gate` formal Execution PASS.
 - `test-only`: use when harness, fixtures, runners, or evidence flow starts growing.
 - `openspec-spec` / `prd` / `design-spec`: scope-review requirements, scenarios, schema, acceptance, compatibility promises, and extension hooks.
 - `architecture-plan`: use when the plan adds components, state, public contract, or ownership.
 - `conversation-only`: do not run.
+
+Do not run just because a code or document task exists. Formal complexity review and pre-development review are user-authorized flows. Once the user has authorized a complete formal flow, later gates do not need separate per-gate user approval.
 
 ## Complexity Contract
 
@@ -94,6 +96,8 @@ Review the post-change affected surface, not only diff count: changed production
 
 Do not borrow this as a license to clean the whole repo. Historical debt is residual risk unless this change worsens it.
 
+Also judge whether the current implementation is the smallest sufficient implementation for the stated request. Prefer reuse, deletion, and local simplification before adding new files, types, fields, config, scripts, stages, or reports. Do not be mechanical: when the explicit task is refactor, cleanup, or simplification, the right answer may be a clear restructure rather than the smallest diff.
+
 ## Stop Smells
 
 Stop when the current contract did not budget:
@@ -116,6 +120,7 @@ Diff shape judgment:
 Impact surface health:
 Public/config surface:
 New concepts:
+Minimum sufficient implementation:
 Shrink opportunities:
 Decision evidence:
 ```
@@ -130,6 +135,7 @@ Requirement verification status:
 Script result:
 Diff shape judgment:
 Budget/expansion status:
+Minimum sufficient implementation:
 Stop triggers:
 Shrink opportunities:
 Decision evidence:
