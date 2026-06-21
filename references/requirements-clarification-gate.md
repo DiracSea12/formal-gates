@@ -1,8 +1,8 @@
 # Requirements Clarification Gate
 
-Run this before writing or modifying requirement documents such as OpenSpec, PRD, SDD, phase documents, issue briefs, design briefs, or start-readiness material. Requirement alignment happens before drafting. Also run it when the user explicitly asks for formal requirement clarification, or when existing document status, seal, redo scope, task status, or phase dependency must be checked against the original requirements.
+Run this when the user asks for formal requirement clarification, pre-development review, start-readiness review, seal/status review against requirements, or a project has explicitly opted into pre-document gate enforcement. Requirement alignment happens before formal drafting inside that chosen flow.
 
-Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits, explanations, or casual idea discussion that is not entering document work. If intent is unclear, ask whether the user wants formal document work or ordinary discussion.
+Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits, explanations, casual idea discussion, or normal document work where the user did not ask for formal gates. If intent is unclear, ask whether the user wants formal document work or ordinary discussion.
 
 `requirements-clarification-gate` is a built-in pre-document gate. It is not one of the four post-development review gates. Its PASS evidence is user-confirmed requirement alignment, not an independent zero-context reviewer verdict.
 
@@ -14,14 +14,14 @@ If a requirement document already exists, review it against that source. Do not 
 
 ## Hard Stop Rules
 
-- Before drafting or changing requirement documents, first produce or obtain a requirement brief with goal, scope, non-goals, acceptance, evidence, constraints, architecture boundary, and requirement details.
+- Before formal drafting or formal review of requirement documents, first produce or obtain a requirement brief with goal, scope, non-goals, acceptance, evidence, constraints, architecture boundary, and requirement details.
 - Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, detailed user scenarios, non-functional requirement metrics, and other details that affect requirement understanding and acceptance judgment.
-- Before judging existing document status, redo scope, seal, task status, or phase dependency, build a detail alignment table against the requirement brief.
-- Do not dispatch complexity, architecture, cold-water, QA, or development agents until the alignment table is user-confirmed.
-- User-accepted risk is not a shortcut. It must be recorded per item as `deferred-by-user` or `out-of-scope-by-user` with explicit approval and still produce a machine-recorded PASS before drafting or gates proceed.
+- Before formal judgment of existing document status, redo scope, seal, task status, or phase dependency, build a detail alignment table against the requirement brief.
+- Inside a formal flow, do not dispatch complexity, architecture, cold-water, QA, or development agents until the alignment table is user-confirmed.
+- User-accepted risk is not a shortcut inside a formal flow. It must be recorded per item as `deferred-by-user` or `out-of-scope-by-user` with explicit approval and still produce a machine-recorded PASS before formal drafting or gates proceed.
 - Every alignment item and every open question must have a stable `RQ-###` ID. Do not merge, delete, renumber, or compress open questions after showing them to the user unless the user explicitly approves that exact change.
 - Do not replace many open questions with a smaller summary list. Summaries may be added only after the full numbered list. If the list is long, split it into batches, but keep all IDs alive until answered, deferred, or explicitly cut by the user.
-- Chat-only answers are not enough. Record each accepted answer in the alignment table before any downstream document or gate uses it.
+- Chat-only answers are not enough for formal PASS. Record each accepted answer in the alignment table before any downstream formal document or gate uses it.
 - `confirmed` means user-confirmed or approved requirement-note-confirmed. Agent summaries are `doc-derived` or `inferred`, not confirmed.
 - If an inferred or doc-derived item can change scope, acceptance, task status, architecture boundary, evidence, or phase dependency, it blocks drafting and gates until confirmed or explicitly deferred by the user.
 - Task checkboxes are not proof. A checked task must trace to current evidence. If evidence was reverted, invalidated, or never confirmed, mark the task as `needs re-proof` or leave it unchecked.
@@ -36,11 +36,11 @@ Classify before asking questions:
 - `READY_TO_DRAFT`: Core answers are known; write the document as draft/unsealed if only minor non-blocking gaps remain.
 - `BLOCKED`: Missing answers would make scope, acceptance, evidence, task status, phase dependency, or architecture boundary guesswork.
 
-Light tasks stay `DISCUSSION_ONLY` unless they write or modify requirement documents or the user explicitly says to run formal gates.
+Light tasks stay `DISCUSSION_ONLY` unless the user explicitly says to run formal gates or the project has explicitly opted into pre-document gate enforcement.
 
 ## Alignment Table
 
-Before any draft, review, gate, QA, or development handoff, produce an alignment table with these fields:
+Before any formal draft, review, gate, QA, or development handoff, produce an alignment table with these fields:
 
 ```text
 ID:

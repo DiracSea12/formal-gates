@@ -1,12 +1,12 @@
 # Code Quality Gate
 
-Use after architecture PASS in formal flow, or independently for code quality consultation. Review correctness, maintainability, local coupling, test quality, dead/redundant code, overfitting, encoding, and validation integrity.
+Use after architecture PASS in a user-authorized four-gate/release/seal flow, or when the user asks for code quality consultation. Review correctness, maintainability, local coupling, performance, test quality, dead/redundant code, overfitting, encoding, and validation integrity.
 
 Do not bless unfinished requirements, oversized scope, or bad architecture.
 
 ## Applicability
 
-Run for:
+Run when an authorized formal flow reaches this gate, or when the user asks for formal code-quality review or code quality consultation and the work includes:
 
 - Non-trivial implementation or refactor-cleanup before delivery.
 - Test-only changes, to review assertion quality, fixture quality, and overfitting.
@@ -41,6 +41,7 @@ Review live diff, affected files/modules, and actual verification evidence.
 - Error handling: do not swallow errors or blur warning/error/fallback.
 - Maintainability: names are clear, functions focused, comments match behavior, no clever unreadable code.
 - Local coupling: keep reasonable local coupling, simplify in place when enough, extract only when it removes real duplication/ripple/testing pain. If coupling is already degrading maintainability, split it.
+- Performance: no obvious avoidable hot-path work, repeated I/O, unbounded scans, lifecycle leaks, excessive allocation, or needless recomputation for the changed behavior.
 - Deletion hygiene: no dead include/function/test/config/doc/orphan.
 - Test quality: tests verify behavior, not field existence, non-empty strings, log text, or source layout.
 - Overfitting: no case-name, node-id, filename, path, threshold, or fixture-specific branch without explicit current requirement.
@@ -69,6 +70,7 @@ Previous gate status:
 Correctness blockers:
 Maintainability blockers:
 Local coupling judgment:
+Performance risks:
 Test quality blockers:
 Dead/redundant code:
 Overfitting checks:

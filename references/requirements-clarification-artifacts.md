@@ -28,7 +28,7 @@ The validator blocks these failures:
 - `Dimension coverage:` field is missing or empty;
 - `gate_route` is missing, does not match the current workflow/snapshot, or routes somewhere other than proceed.
 
-The hook also blocks writes to requirement documents such as OpenSpec/PRD/SDD/start-readiness/phase Markdown files and formal PRD/requirements/specs `.txt` files when the current worktree has no recorded `requirements-clarification-gate` PASS covering that target path. This is the pre-document hard stop; it is separate from the later post-development gates.
+When a project explicitly enables document-write hook enforcement, the hook blocks writes to requirement documents such as OpenSpec/PRD/SDD/start-readiness/phase Markdown files and formal PRD/requirements/specs `.txt` files when the current worktree has no recorded `requirements-clarification-gate` PASS covering that target path. This opt-in pre-document hard stop is separate from the later post-development gates.
 
 ## Recording Command
 

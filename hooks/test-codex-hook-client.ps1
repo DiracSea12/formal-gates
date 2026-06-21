@@ -58,6 +58,16 @@ function ConvertTo-SingleQuotedPowerShellLiteral([string]$Value) {
 function Get-ProcessLaunch([string]$Command) {
     $resolved = Get-Command $Command -ErrorAction Stop
     if ($resolved.CommandType -eq 'ExternalScript' -and $resolved.Path.EndsWith('.ps1', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $scriptDir = Split-Path -Parent $resolved.Path
+        $codexJs = Join-Path $scriptDir 'node_modules/@openai/codex/bin/codex.js'
+        if (Test-Path -LiteralPath $codexJs -PathType Leaf) {
+            $nodeCommand = Get-Command 'node.exe' -ErrorAction SilentlyContinue
+            if ($null -eq $nodeCommand) { $nodeCommand = Get-Command 'node' -ErrorAction Stop }
+            return [pscustomobject]@{
+                FilePath = $nodeCommand.Source
+                PrefixArguments = @($codexJs)
+            }
+        }
         return [pscustomobject]@{
             FilePath = Get-FormalGatesPowerShellExe
             PrefixArguments = Get-FormalGatesPowerShellFileArgs $resolved.Path
@@ -185,7 +195,7 @@ try {
     $caseDirForPrompt = $caseDir.Replace('\', '/')
     $markerForPrompt = $markerPath.Replace('\', '/')
     $powerShellForPrompt = (Get-FormalGatesPowerShellExe).Replace('\', '/')
-    $prompt = 'Run exactly this shell command once, then stop: "' + $powerShellForPrompt + '" -NoProfile'
+    $prompt = 'Run exactly this shell command once, then stop: & ''' + $powerShellForPrompt + ''' -NoProfile'
     if ($edition -eq 'Desktop') { $prompt += ' -ExecutionPolicy Bypass' }
     $prompt += ' -File ''' + $gateWorkflowForPrompt + ''' -Action record-stage -Worktree ''' + $caseDirForPrompt + ''' -Gate complexity-gate -Verdict PASS -Mode formal -Artifact .claude/gates/artifacts/missing-hook-canary.md -Actor hook-canary -WorkflowId hook-canary -ChangeSnapshot hook-snapshot; Set-Content -LiteralPath ''' + $markerForPrompt + ''' -Value HIT'
     Set-Content -LiteralPath $promptPath -Value $prompt -Encoding UTF8
@@ -208,12 +218,8 @@ try {
     )
 
     $launch = Get-ProcessLaunch $CodexCommand
-    $cmdParts = @($launch.PrefixArguments) + $arguments | ForEach-Object { '"' + ([string]$_).Replace('"', '\"') + '"' }
-    $cmd = 'Get-Content -LiteralPath "' + $promptPath.Replace('"', '\"') + '" -Raw | & "' + $launch.FilePath.Replace('"', '\"') + '" ' + ($cmdParts -join ' ')
-    $commandArgs = @('-NoProfile')
-    if ($edition -eq 'Desktop') { $commandArgs += @('-ExecutionPolicy', 'Bypass') }
-    $commandArgs += @('-Command', $cmd)
-    $process = Start-Process -FilePath (Get-FormalGatesPowerShellExe) -ArgumentList $commandArgs -WorkingDirectory $resolvedWorktree -NoNewWindow -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $commandArgs = @($launch.PrefixArguments) + $arguments
+    $process = Start-Process -FilePath $launch.FilePath -ArgumentList $commandArgs -WorkingDirectory $resolvedWorktree -NoNewWindow -PassThru -RedirectStandardInput $promptPath -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
         $timedOut = $true
         try { $process.Kill($true) } catch {}

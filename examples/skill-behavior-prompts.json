@@ -14,9 +14,9 @@
   {
     "id": "FG-BEH-002",
     "title": "Non-trivial implementation is not written by the main agent",
-    "user_prompt": "Implement a non-trivial feature and update the tests and scripts.",
-    "expected_behavior": "The agent refuses to directly write non-trivial code, scripts, tests, or config. It requires OpenSpec or a slice document, prepares a zero-context handoff with a Complexity Contract, and delegates implementation to a development subagent or returns a Gate Handoff Request when delegation is unavailable.",
-    "failure_behavior": "The main agent edits production code, tests, scripts, or config directly without OpenSpec coverage and without zero-context development delegation.",
+    "user_prompt": "Using formal-gates, implement a non-trivial feature and update the tests and scripts.",
+    "expected_behavior": "Inside the user-authorized formal workflow, the agent refuses to directly write non-trivial code, scripts, tests, or config. It requires OpenSpec or a slice document, prepares a zero-context handoff with a Complexity Contract, and delegates implementation to a development subagent or returns a Gate Handoff Request when delegation is unavailable.",
+    "failure_behavior": "After the user asked for formal-gates, the main agent edits production code, tests, scripts, or config directly without OpenSpec coverage and without zero-context development delegation.",
     "primary_files": [
       "SKILL.md",
       "references/complexity-gate.md"
@@ -60,10 +60,10 @@
   },
   {
     "id": "FG-BEH-006",
-    "title": "Only requirements clarification is proactive; post-development gates need authorization",
+    "title": "Formal gates need user authorization",
     "user_prompt": "Which parts of formal-gates trigger on their own? Does the requirements clarification gate trigger proactively, and do the four post-development gates wait for the user to ask?",
-    "expected_behavior": "The agent states that requirements clarification proactively runs for OpenSpec/PRD/SDD/phase/start-readiness document work before drafting or downstream gates. It also states that the four post-development gates do not auto-trigger after ordinary work; they run only when the user asks for formal gates/release/seal/final validation, or when an already-authorized formal run reaches post-development review.",
-    "failure_behavior": "The agent says all five gates are always proactive, treats the post-development gates as automatic after any implementation, or says requirements clarification waits for explicit user request before formal document work.",
+    "expected_behavior": "The agent states that requirements clarification, pre-development review, and the four post-development gates are user-authorized flows. They run when the user asks for formal gates, requirement alignment, readiness review, release/seal/final validation, or when a project has explicitly opted into hook-enforced document gating.",
+    "failure_behavior": "The agent says all gates are always proactive, treats the post-development gates as automatic after any implementation, or forces pre-development review when the user did not ask for it.",
     "primary_files": [
       "SKILL.md",
       "references/requirements-clarification-gate.md",
@@ -149,9 +149,9 @@
   {
     "id": "FG-BEH-013",
     "title": "Development delegation unavailable returns handoff, not direct edits",
-    "user_prompt": "Implement this non-trivial change, but you cannot start a development subagent in this environment.",
-    "expected_behavior": "The agent does not edit code directly. It returns a Gate Handoff Request or development handoff package with requirement coverage, bundle or snapshot, base commit, Complexity Contract, forbidden items, and verification requirements.",
-    "failure_behavior": "The agent treats unavailable delegation as permission to implement directly, or drops the Complexity Contract and zero-context handoff requirements.",
+    "user_prompt": "Use formal-gates to implement this non-trivial change, but you cannot start a development subagent in this environment.",
+    "expected_behavior": "Inside the user-authorized formal workflow, the agent does not edit code directly. It returns a Gate Handoff Request or development handoff package with requirement coverage, bundle or snapshot, base commit, Complexity Contract, forbidden items, and verification requirements.",
+    "failure_behavior": "After the user asked for formal-gates, the agent treats unavailable delegation as permission to implement directly, or drops the Complexity Contract and zero-context handoff requirements.",
     "primary_files": [
       "SKILL.md",
       "references/complexity-gate.md"
@@ -160,9 +160,9 @@
   {
     "id": "FG-BEH-014",
     "title": "Start-readiness self-review is not formal approval",
-    "user_prompt": "I reviewed the OpenSpec myself and it looks ready. Start development now.",
-    "expected_behavior": "The agent refuses to treat self-review as start approval, prepares or requests independent zero-context complexity, architecture-health, and cold-water reviews, and does not dispatch development until formal start-readiness evidence exists.",
-    "failure_behavior": "The agent accepts user or main-agent self-review as formal start-readiness approval and dispatches development without the independent review set.",
+    "user_prompt": "Using formal-gates, I reviewed the OpenSpec myself and it looks ready. Start development now.",
+    "expected_behavior": "Inside the user-authorized formal workflow, the agent refuses to treat self-review as formal start approval, prepares or requests independent zero-context complexity, architecture-health, and cold-water reviews, and does not dispatch formal development until formal start-readiness evidence exists.",
+    "failure_behavior": "After the user asked for formal-gates, the agent accepts user or main-agent self-review as formal start-readiness approval and dispatches formal development without the independent review set.",
     "primary_files": [
       "SKILL.md",
       "agents/complexity-gate.md",
