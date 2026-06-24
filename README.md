@@ -104,7 +104,7 @@ AI 写代码有几个通病，这套门禁专门拦：
 ## 核心机制
 
 - 通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。
-- **Dispatch prompt 污染检测**——系统自动检测并阻止包含"上一轮发现""刚修了""重点复查""预期答案"等锚定模式的派发 prompt，保证审查者独立判断。检测规则包括 14 个英文 regex 模式和 13 个中文术语，配置在 `hooks/pollution-patterns.json`。
+- **Dispatch prompt 污染检测**——系统自动检测并阻止包含"上一轮发现""刚修了""重点复查""预期答案"等锚定模式的派发 prompt，保证审查者独立判断。检测规则在 `hooks/pollution-patterns.json` 内按英文 regex 组和中文术语组配置。
 - **跨 workflow 隔离**——每个 workflow 的门禁链必须完整，不能复用其他 workflow 的门禁结果。系统会递归验证所有前置门和传递依赖是否属于同一个 workflowId 和 changeSnapshot；扩展门还必须绑定同一个 manifest 路径和哈希。
 - 每道门的结论落成 **artifact**，由 Go 校验器检查字段完整性。缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论会被拒绝。
 - 配好并在当前宿主实测通过的 hook 可以拦截违规命令；使用 `gate-workflow.ps1` 记录时，机器层会校验证据并拒绝不合格的门禁记录。

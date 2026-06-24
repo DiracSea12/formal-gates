@@ -31,10 +31,35 @@ catch {
 
 $violations = @()
 
+$patternChecks = @()
+if ($config.english -and $config.english.patternGroups) {
+    foreach ($group in $config.english.patternGroups) {
+        foreach ($pattern in @($group.patterns)) {
+            $patternChecks += [pscustomobject]@{
+                Pattern = $pattern
+                Label = $group.label
+                Description = $group.description
+            }
+        }
+    }
+}
+$termChecks = @()
+if ($config.chinese -and $config.chinese.termGroups) {
+    foreach ($group in $config.chinese.termGroups) {
+        foreach ($term in @($group.terms)) {
+            $termChecks += [pscustomobject]@{
+                Term = $term
+                Label = $group.label
+                Description = $group.description
+            }
+        }
+    }
+}
 # Check prohibited patterns (regex)
-foreach ($check in $config.prohibitedPatterns) {
-    if ($PromptText -match $check.pattern) {
-        $matched = [regex]::Match($PromptText, $check.pattern).Value
+foreach ($check in $patternChecks) {
+    $pattern = $check.Pattern
+    if ($PromptText -match $pattern) {
+        $matched = [regex]::Match($PromptText, $pattern).Value
         $violations += [pscustomobject]@{
             Type = 'pattern'
             Matched = $matched
@@ -45,11 +70,12 @@ foreach ($check in $config.prohibitedPatterns) {
 }
 
 # Check prohibited terms (exact match)
-foreach ($check in $config.prohibitedTerms) {
-    if ($PromptText.Contains($check.term)) {
+foreach ($check in $termChecks) {
+    $term = $check.Term
+    if ($PromptText.Contains($term)) {
         $violations += [pscustomobject]@{
             Type = 'term'
-            Matched = $check.term
+            Matched = $term
             Label = $check.label
             Description = $check.description
         }
