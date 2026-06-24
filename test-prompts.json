@@ -77,7 +77,7 @@
   {
     "id": "FG-BEH-016",
     "prompt": "My Claude, Codex, and Cursor hook config files have duplicate formal-gates hooks in old and new shapes. Run the installer to restore all three without deleting unrelated hooks.",
-    "expected": "Use the bundled installer to clean old formal-gates hook shapes from Claude settings.json, Codex hooks.json, and Cursor hooks.json; restore the canonical hook shape for each host; keep exactly one formal-gates enforce hook where that host supports PreToolUse; keep Claude capture hooks for PreToolUse, SubagentStart, and SubagentStop; and preserve unrelated hooks."
+    "expected": "Classify this as an install/hooks task and read references/install-and-hooks.md for the bundled installer and host-specific hook shapes. Do not infer Claude, Codex, or Cursor hook cleanup details from the root entrypoint alone, and preserve unrelated hooks according to that reference."
   },
   {
     "id": "FG-BEH-017",
