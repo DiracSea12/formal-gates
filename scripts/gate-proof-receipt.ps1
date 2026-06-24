@@ -65,7 +65,7 @@ function New-FormalGateReceiptDirectory([string]$Path) {
 
 function Get-FormalGateReviewArtifactCanonicalText([string]$Text) {
     $normalized = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
-    $lines = @($normalized -split "`n", -1)
+    $lines = @($normalized.Split([string[]]@("`n"), [System.StringSplitOptions]::None))
     $kept = @()
     foreach ($line in $lines) {
         if ($line -match '(?i)^[ \t]*Reviewer proof receipt[ \t]*:') { continue }
@@ -79,6 +79,31 @@ function Get-FormalGateReviewArtifactCanonicalSha256([string]$Text) {
     $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($canonical)
     $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
     return [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+}
+
+function Add-FormalGateReceiptLine([string]$Text, [string]$ReceiptRef) {
+    $lines = @($Text.Replace("`r`n", "`n").Replace("`r", "`n").Split([string[]]@("`n"), [System.StringSplitOptions]::None))
+    $updated = New-Object System.Collections.Generic.List[string]
+    $replaced = $false
+    foreach ($line in $lines) {
+        if ($line -match '(?i)^[ \t]*Reviewer proof receipt[ \t]*:') {
+            if (-not $replaced) {
+                $updated.Add($ReceiptRef)
+                $replaced = $true
+            }
+            continue
+        }
+        $updated.Add($line)
+    }
+    if (-not $replaced) {
+        $insert = [Math]::Min(7, $updated.Count)
+        $withReceipt = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt $insert; $i++) { $withReceipt.Add($updated[$i]) }
+        $withReceipt.Add($ReceiptRef)
+        for ($i = $insert; $i -lt $updated.Count; $i++) { $withReceipt.Add($updated[$i]) }
+        $updated = $withReceipt
+    }
+    return ($updated.ToArray() -join "`n")
 }
 
 function Get-FormalGateProofReceiptValueParts([string]$Value) {
@@ -407,21 +432,7 @@ function Complete-FormalGateProofReceipt {
     Write-FormalGateReceiptJson $receiptPath $receipt
     $receiptRel = ConvertTo-FormalGateReceiptRelativePath $repo $receiptPath
     $receiptRef = "Reviewer proof receipt: $receiptRel sha256=$(Get-FormalGateReceiptSha256 $receiptPath)"
-    $lines = @($artifactText.Replace("`r`n", "`n").Replace("`r", "`n") -split "`n", -1)
-    $updated = @()
-    $replaced = $false
-    foreach ($line in $lines) {
-        if ($line -match '(?i)^[ \t]*Reviewer proof receipt[ \t]*:') {
-            if (-not $replaced) { $updated += $receiptRef; $replaced = $true }
-            continue
-        }
-        $updated += $line
-    }
-    if (-not $replaced) {
-        $insert = [Math]::Min(7, $updated.Count)
-        $updated = @($updated[0..($insert - 1)] + $receiptRef + $updated[$insert..($updated.Count - 1)])
-    }
-    [System.IO.File]::WriteAllText($reviewPath, ($updated -join "`n"), [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($reviewPath, (Add-FormalGateReceiptLine $artifactText $receiptRef), [System.Text.UTF8Encoding]::new($false))
     Write-Output (@{ reviewerProofReceipt = "$receiptRel sha256=$(Get-FormalGateReceiptSha256 $receiptPath)" } | ConvertTo-Json -Compress)
 }
 

@@ -55,7 +55,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 | Check code correctness, dead code, fake tests | **code-quality-gate** |
 | Final validation before release/seal | Run all four gates in sequence |
 
-Only after you tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" will it follow the installed skill rules. Machine-level enforcement still depends on the target host's hook config and passing live canary.
+Only after you tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" will it follow the installed skill rules. Whether the machine layer can block commands depends on the target host's hook config and a same-host live canary.
 
 | Scenario | Gate required? |
 |----------|---------------|
@@ -102,7 +102,8 @@ This is the best gate to run before AI starts coding, because direction errors h
 
 - Pass verdicts must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers.
 - Each gate's verdict is recorded as an **artifact**, checked by the Go validator for field completeness. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected.
-- With configured and same-host live-tested hooks, or using `gate-workflow.ps1` for recording, the main AI cannot "self-stamp approval"—the machine layer blocks it.
+- Cross-workflow isolation is enforced: prerequisite gates must belong to the same `workflowId` and `changeSnapshot`; extension gates also bind prerequisites to the same manifest path and hash.
+- Configured and same-host live-tested hooks can block invalid commands; when using `gate-workflow.ps1` for records, the machine layer validates evidence and rejects invalid gate records.
 
 ---
 
@@ -133,7 +134,9 @@ Each host must be installed and verified on its own. A passing canary on one hos
 
 ### Codex Note
 
-This package can install a Codex skill; with `-ConfigureHook`, the installer writes Codex `hooks.json`. Codex hooks are only an auxiliary guardrail, not a hard enforcement gate. Formal gates must explicitly run `gate-workflow.ps1` and verify artifacts; closed-loop Codex hook blocking still requires a same-host live canary.
+This package can install a Codex skill; with `-ConfigureHook`, the installer writes Codex `hooks.json`. Codex hook files must keep only the top-level `hooks` object; do not add extra top-level fields such as `version` or `description`.
+
+Codex hooks are only an auxiliary guardrail, not a hard enforcement gate. In the current local Windows + Codex CLI 0.142.0 test, `PreToolUse` appeared active/trusted in `/hooks`, but `codex exec` and script-launched Codex command execution still used `command_execution` and did not prove closed-loop command blocking. Formal gates must explicitly run `gate-workflow.ps1` and verify artifacts; mark Codex hook blocking as proven only after a same-host live canary observes a `PreToolUse` payload and blocks the invalid command.
 
 ---
 

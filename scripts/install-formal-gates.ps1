@@ -403,7 +403,7 @@ function Set-CodexFormalGatesHook([string]$HooksPath, [string]$GateHookScriptPat
         -BackupName 'Codex hooks' `
         -DesiredHooks $desired `
         -HookShape 'nested' `
-        -EnsureVersion $true `
+        -EnsureVersion $false `
         -WrittenMessage "formal-gates Codex lifecycle hooks written to $HooksPath" `
         -LifecycleMessage 'formal-gates Codex receipt capture lifecycle hooks enabled: SubagentStart, SubagentStop'
 }
