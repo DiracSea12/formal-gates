@@ -29,15 +29,7 @@
 
 ## 一句话体验
 
-在仓库根目录下，复制以下命令体验只读校验（需要 Go 1.22+，且 go 在 PATH 中）：
-
-```powershell
-go run ./cmd/formal-gates-validate package --root .
-```
-
-安装到当前 Claude Code 项目：`scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath . -Force -RunCanary`
-
-需要门禁时，告诉 AI："跑四门" 或 "封板前过一遍门禁"
+防止 AI 自写、自审、自测代码，最后自己宣布 PASS。
 
 ---
 

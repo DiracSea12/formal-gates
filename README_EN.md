@@ -30,17 +30,7 @@ Per-host integration varies; actual behavior is determined by live canary.
 
 ## One-Line Quick Start
 
-From the repo root, run the following to try the read-only validation:
-
-```powershell
-# Validate package structure (requires Go 1.22+, go in PATH)
-go run ./cmd/formal-gates-validate package --root .
-
-# Install formal-gates to current Claude Code project (project-local)
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath . -Force -RunCanary
-
-# Tell AI: "run four gates" or "validate before seal"
-```
+Stop AI from writing, reviewing, testing, and then declaring its own PASS.
 
 ---
 
