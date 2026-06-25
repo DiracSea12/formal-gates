@@ -1,6 +1,6 @@
 # Complexity Gate
 
-Use when the user asks for formal complexity review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract before formal handoff, and after QA Execution PASS reviews diff shape, budget, new concepts, minimum sufficient implementation, and overengineering.
+Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract before an authorized formal handoff, and after QA Execution PASS reviews diff shape, budget, new concepts, minimum sufficient implementation, and overengineering.
 
 ## Applicability
 
@@ -10,7 +10,7 @@ Use when the user asks for formal complexity review, formal development handoff,
 - `architecture-plan`: use when the plan adds components, state, public contract, or ownership.
 - `conversation-only`: do not run.
 
-Do not run just because a code or document task exists. Formal complexity review and pre-development review are user-authorized flows. Once the user has authorized a complete formal flow, later gates do not need separate per-gate user approval.
+Do not run just because a code task, document task, OpenSpec, or implementation intent exists. Formal complexity review and start-readiness review are user-authorized or project-required flows. Once the user has authorized a complete formal flow, later gates do not need separate per-gate user approval.
 
 ## Complexity Contract
 

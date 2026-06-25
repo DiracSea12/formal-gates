@@ -11,7 +11,7 @@ Run when the user asks for formal four-gate review, release/seal validation, QA 
 - Test harness, fixture, runner, evidence flow, or validation architecture changes.
 - The user or reviewer asks for QA gate, test plan review, acceptance evidence review, or test adequacy review.
 
-Do not run only because a public API, behavior, or document changed. Skip for pure formatting, comments, typo fixes, conversation-only analysis, or a single-file low-risk bugfix with targeted existing coverage and no new acceptance claim.
+Do not run only because a public API, behavior, OpenSpec, or document changed. Pre-implementation QA case design is mandatory only for a user-authorized `four-gate`, `release`, or `seal` flow. Skip for pure formatting, comments, typo fixes, conversation-only analysis, user-requested informal/vibe coding, or a single-file low-risk bugfix with targeted existing coverage and no new formal acceptance claim.
 
 ## Modes
 
