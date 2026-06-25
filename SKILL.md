@@ -17,13 +17,21 @@ Thin router only. Load one referenced detail file when the active route needs it
 | User explicitly asks for formal review, four gates, final validation, release, or seal | Follow the fixed post-development sequence; never accept chat-only PASS. |
 | Install, hooks, canary, A/B, candidate package testing, or host integration | Read `references/install-and-hooks.md` only for that task. |
 
+## Formal Flow Router
+
+Before any formal handoff or gate dispatch, classify the work as `none`, `four-gate`, `release`, `seal`, or `start-readiness-only`.
+
+- `none`: ordinary small edits, explanations, research, informal/vibe coding, and mere OpenSpec or development intent.
+- `start-readiness-only`: explicit user request or project requirement; no QA case design unless four-gate/release/seal is also claimed.
+- `four-gate`/`release`/`seal`: QA black-box case design is required before implementation handoff.
+
 ## Blacklist
 
 Never claim formal PASS from chat, self-review, developer self-test, focused tests, gate-state alone, hook config, installed scripts, or direct script tests.
 
 Never invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria by calling them optimization, hardening, gap-filling, cleanup, or overengineering prevention. If independent evaluation shows no behavior gain, stop instead of expanding the entrypoint.
 
-Never start the four post-development gates or pre-development readiness review unless the user explicitly asks for formal gates, formal review, readiness review, release, seal, or equivalent wording.
+Never start the four post-development gates, QA case design, or pre-development readiness review unless the Formal Flow Router requires it.
 
 Never let the main agent implement non-trivial work inside a user-authorized formal development handoff, contaminate zero-context prompts, reuse PASS after snapshot change, rename fixed gate IDs, treat `requirements-clarification-gate` as a fifth post-development gate, claim host hook enforcement without same-host live canary, seal without complete final evidence, or expand this entrypoint when details belong in `references/`.
 
@@ -56,16 +64,16 @@ The pre-document gate is `requirements-clarification-gate`. It is not a fifth po
 
 ## Authorized Formal Flow Order
 
-Use these orders only after the user has explicitly asked for the matching formal gate flow. Ordinary implementation or document work does not enter these flows by default. A project-level hook-enforced document gate counts only when that project has explicitly opted in and the same host has live canary proof.
+Use these orders only after the router activates the matching formal flow. Project hook-enforced document gates count only with explicit opt-in and same-host live canary proof.
 
 | Flow | Order |
 |---|---|
 | Optional document/start-readiness review | requirements clarification with user-confirmed alignment evidence -> `complexity-gate` -> `architecture-health-gate` -> cold-water start-readiness. Independent zero-context complexity, architecture-health, and cold-water conclusions are required before calling a formal readiness review passed. |
-| Pre-development test design | QA `Design` -> `Design Review` -> `Design Rework` -> approved case set. |
+| Pre-development test design | For `four-gate`, `release`, or `seal`: QA `Design` -> `Design Review` -> `Design Rework` -> approved case set before implementation handoff. |
 | Post-development release/seal | initial `Verification Run` -> QA `Execution` -> `complexity-gate` -> `architecture-health-gate` -> `code-quality-gate` -> final `Verification Run` -> QA `FinalExecution` -> optional QA `White-box Adequacy` -> seal. Every prerequisite must belong to the same `workflowId` and `changeSnapshot`. |
 | Rerun after implementation change | Refresh `changeSnapshot`; old downstream PASS is invalid; choose earliest rerun gate by impact surface; review full requirement and current diff, not only repair patch. |
 
-If QA evidence is incomplete, do not enter complexity / architecture / code-quality. If complexity does not pass, do not enter architecture. If architecture does not pass, do not enter code-quality. Without QA final release/seal judgment, say `focused evidence pending full gate`.
+Do not enter complexity / architecture / code-quality until QA evidence is complete and preceding gates pass. Without QA final release/seal judgment, say `focused evidence pending full gate`.
 
 ## Zero-context Handoff
 
@@ -122,7 +130,11 @@ Artifacts to provide:
 Bundle or manifest path:
 Verification requirements:
 Forbidden context:
+Formal flow mode:
+Trigger source:
+QA case design artifact:
+Approved QA case set:
 Continue after:
 ```
 
-Formal development handoff is optional and user-authorized. When used, it must first collect worktree, base commit or snapshot id, `changeSnapshot`, existing bundle or manifest path plus hash, OpenSpec or slice coverage, Complexity Contract, forbidden items, and verification requirements. If a development subagent is unavailable, output this `Gate Handoff Request` instead of implementing locally. Mark only genuinely missing facts as `BLOCKING_MISSING:<field> - how to obtain`.
+Formal development handoff is optional and user-authorized. When used, collect the template fields above, OpenSpec or slice coverage, and the Complexity Contract. For `four-gate`, `release`, or `seal`, include approved QA case references before implementation starts. If no development subagent is available, output this `Gate Handoff Request` instead of implementing locally. Mark only genuinely missing facts as `BLOCKING_MISSING:<field> - how to obtain`.
