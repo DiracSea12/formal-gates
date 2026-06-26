@@ -127,6 +127,21 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			ChangeSnapshot: "snap",
 		})
 		addResult("workflow-final-verification", finalResult)
+		if err := writeCanaryGateArtifact(worktree, "qa-test-gate", "FinalExecution", "wf", "snap"); err != nil {
+			addCheck("final-qa-record-fixture", false, err.Error())
+		} else {
+			_, finalQAResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+				Worktree:        worktree,
+				AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json"}]`,
+				OutputArtifact:  ".claude/gates/artifacts/final-verification-record-final-qa.json",
+				FinalQAArtifact: "qa-test-gate.md",
+				RecordFinalQA:   true,
+				Actor:           "native-canary",
+				WorkflowID:      "wf",
+				ChangeSnapshot:  "snap",
+			})
+			addResult("workflow-final-execution-record", finalQAResult)
+		}
 	}
 
 	receiptWorktree := filepath.Join(tempRoot, "receipt-worktree")

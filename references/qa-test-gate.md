@@ -88,7 +88,7 @@ Formal PASS requires:
 - Independent zero-context QA reviewer artifact.
 - Machine-recorded PASS using `formal-gates workflow record-stage`.
 
-Record formal Execution PASS with `references/post-development-artifacts.md`, using `-Gate qa-test-gate -Mode formal -Stage Execution`. Record formal FinalExecution PASS with `record-final-verification -RecordFinalQa`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+Record formal Execution PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate qa-test-gate --mode formal --stage Execution`. Record formal FinalExecution PASS with `formal-gates workflow final-verification --record-final-qa --final-qa-artifact <artifact>`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
 
 ## Output
 

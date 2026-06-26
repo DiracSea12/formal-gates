@@ -130,7 +130,7 @@ bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --a
 
 The native workflow commands cover snapshot, record-stage, verify-admission, show, final verification aggregation, FinalExecution recording from a supplied artifact, and dry-run-first cleanup. The native receipt commands cover dispatch registration, start/stop lifecycle event capture into `.claude/gates/proofs/events`, receipt finalization, standalone receipt validation, and diagnostic preflight. Same-host hook canaries are separate host evidence and do not replace these explicit native records.
 
-Formal `qa-test-gate` recording must add `-Mode formal -Stage Execution`; final QA uses `-Mode formal -Stage FinalExecution`. Do not copy the generic command and forget the stage.
+Formal `qa-test-gate` recording must add `--mode formal --stage Execution`; final QA uses `--record-final-qa --final-qa-artifact <artifact>` to record `--stage FinalExecution` through the native workflow command. Do not copy the generic command and forget the stage.
 
 For final QA, first write the attempts JSON file, then record a supplied `FinalQaArtifact`. If the final QA artifact claims receipt-backed zero-context proof by including `Reviewer proof receipt`, the receipt must be valid; otherwise `FinalExecution` may still be recorded through the ordinary artifact checks without claiming receipt-backed proof:
 
@@ -144,11 +144,11 @@ Attempt entries need `status`, `accepted`, `artifact`, and `contextBundle`. `con
 
 ## Temporary Cleanup
 
-After a single gate record or final verification succeeds, callers may pass `-CleanupPath <path>` to delete scratch files from that run. Cleanup is intentionally narrow:
+After a single gate record or final verification succeeds, callers may run `formal-gates workflow cleanup --path <path> --execute` to delete scratch files from that run. Cleanup is intentionally narrow:
 
 - allowed: descendants under `.artifacts/tmp/`, `.artifacts/scratch/`, `.artifacts/cleanup/`, or system temp paths whose leaf starts with `formal-gates-`, `portable-formal-gates-`, or `gate-workflow-`;
 - refused: repo root, `.artifacts` root, `.claude/gates`, and any formal gate evidence path;
-- cleanup scratch paths are disposable; formal evidence paths recorded or referenced by `record-stage` / `record-final-verification` must not live there;
-- command failures keep cleanup paths; `record-final-verification` cleans only on PASS; pass `-KeepTemp` to keep cleanup paths after success.
+- cleanup scratch paths are disposable; formal evidence paths recorded or referenced by `record-stage` / `workflow final-verification` must not live there;
+- command failures keep cleanup paths; callers should run `workflow cleanup --execute` only after the command whose scratch path they want to remove has passed.
 
 The native `workflow cleanup` foundation is narrower than the legacy wrapper: it only lists or removes descendants under worktree-local `.artifacts/tmp/`, `.artifacts/scratch/`, and `.artifacts/cleanup/`. It defaults to dry-run; deletion requires `--execute`.

@@ -112,7 +112,7 @@ Stop when the current contract did not budget:
 
 Formal complexity review can run only after `qa-test-gate` formal Execution PASS for the same workflow and snapshot.
 
-Record PASS with `references/post-development-artifacts.md`, using `-Gate complexity-gate`. Formal PASS artifacts must include the shared zero-context fields plus these complexity-specific fields:
+Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate complexity-gate`. Formal PASS artifacts must include the shared zero-context fields plus these complexity-specific fields:
 
 ```text
 Script result:

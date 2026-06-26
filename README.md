@@ -211,12 +211,13 @@ bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
 bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer> --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow cleanup --worktree <repo> --dry-run
 ```
 
 Windows 下命令名是 `bin/formal-gates.exe`。源码 checkout 做开发测试时，可临时用 `go run ./cmd/formal-gates`；安装后的 hook 和校验路径必须使用 `bin/formal-gates(.exe)`。
 
-这个 native CLI 已有包结构、artifact 字段、dispatch prompt、native install、基础 gate state 检查，以及 workflow snapshot / record-stage / verify-admission / final-verification / cleanup 的 Go 基础能力。FinalExecution 记录、receipt-sensitive 完整工作流、canary 和部分 wrapper 仍未完全迁到 Go；不要把当前 native CLI 当成完整工作流引擎、agent 运行时或发版可信证明系统。
+这个 native CLI 已有包结构校验、artifact 字段校验、dispatch prompt 污染校验、native install、hook decide、基础 gate state 检查、workflow snapshot / record-stage / verify-admission / final-verification / cleanup、从已有 artifact 记录 FinalExecution、receipt 注册 / 捕获 / finalize / validate / preflight、portable canary 和 Codex hook canary。它仍不是完整工作流引擎、agent 运行时、持久报告系统、缓存系统或发版可信证明系统；receipt-sensitive 端到端编排、宿主 hook 闭环证明和 release-trust 链路仍需单独证据。
 
 ---
 
