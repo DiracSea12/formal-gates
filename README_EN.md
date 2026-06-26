@@ -198,12 +198,13 @@ bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
 bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer> --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow cleanup --worktree <repo> --dry-run
 ```
 
 On Windows, use `bin/formal-gates.exe`. For development tests from a source checkout, `go run ./cmd/formal-gates` is acceptable. Installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
-This native CLI now has deterministic package, artifact, dispatch prompt, native install, basic gate state checks, and Go foundations for workflow snapshot / record-stage / verify-admission / final-verification / cleanup. FinalExecution recording, receipt-sensitive full workflow, canary, and some wrapper paths are not fully replaced yet; do not treat the current native CLI as a complete workflow engine, agent runtime, or release-trust system.
+This native CLI now has deterministic package validation, artifact field validation, dispatch prompt pollution checks, native install, hook decide, basic gate state checks, workflow snapshot / record-stage / verify-admission / final-verification / cleanup, FinalExecution recording from a supplied artifact, receipt register / capture / finalize / validate / preflight, portable canary, and Codex hook canary. It is still not a complete workflow engine, agent runtime, persistent report system, cache system, or release-trust system; receipt-sensitive end-to-end orchestration, same-host hook closure proof, and the release-trust chain still require separate evidence.
 
 ---
 

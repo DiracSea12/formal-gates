@@ -76,7 +76,7 @@ New abstraction/framework/manager/service needs active Complexity Contract budge
 
 ## Formal PASS
 
-Record PASS with `references/post-development-artifacts.md`, using `-Gate architecture-health-gate`. Shared machine fields and evidence substitutions live there; this file only defines the architecture judgment.
+Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate architecture-health-gate`. Shared machine fields and evidence substitutions live there; this file only defines the architecture judgment.
 
 ## Output
 

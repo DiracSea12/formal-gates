@@ -80,7 +80,7 @@ bin/formal-gates receipt preflight --host codex --worktree <repo>
 
 Use `bin/formal-gates.exe` on Windows. Source checkout development tests may use `go run ./cmd/formal-gates`, but installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
-The `hook` command returns compact JSON with `decision`, `reason`, and host-compatible allow/deny fields. It blocks missing-artifact PASS recording for both legacy wrapper commands and native `formal-gates ... record...` commands. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
+The `hook` command returns compact JSON with `decision`, `reason`, and host-compatible allow/deny fields. It rejects legacy PowerShell formal-gates commands and blocks missing-artifact PASS recording for native `formal-gates ... record...` commands. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
 
 To install the runtime subset without PowerShell:
 
@@ -277,7 +277,7 @@ Formal gates require structured `GateWorkflow`. Minimum fields:
 - `gate`
 - `stage` for the QA gate or manifest extension gates; built-in complexity/architecture/code-quality gates can omit `stage`.
 
-`formal-gates gate record`, `formal-gates gate verify-admission`, and `formal-gates gate show` provide the native gate-state foundation for `.claude/gates/gate-state.json`. `formal-gates workflow snapshot`, `formal-gates workflow record-stage`, `formal-gates workflow verify-admission`, `formal-gates workflow final-verification`, `formal-gates workflow cleanup`, and `formal-gates workflow show` provide the current native workflow wrapper foundation. `formal-gates install` copies the verifiable installable package subset and can write native host hook config. `formal-gates receipt register`, `receipt capture`, `receipt finalize`, `receipt validate`, and `receipt preflight` provide the current native receipt foundation. Installed `SubagentStart` and `SubagentStop` hooks call `formal-gates receipt capture` directly.
+`formal-gates gate record`, `formal-gates gate verify-admission`, and `formal-gates gate show` provide the native gate-state foundation for `.claude/gates/gate-state.json`. `formal-gates workflow snapshot`, `formal-gates workflow record-stage`, `formal-gates workflow verify-admission`, `formal-gates workflow final-verification`, `formal-gates workflow cleanup`, and `formal-gates workflow show` provide the current native workflow foundation. `formal-gates install` copies the verifiable installable package subset and can write native host hook config. `formal-gates receipt register`, `receipt capture`, `receipt finalize`, `receipt validate`, and `receipt preflight` provide the current native receipt foundation. Installed `SubagentStart` and `SubagentStop` hooks call `formal-gates receipt capture` directly.
 
 `GateWorkflow` is JSON. Escape Windows backslashes as double backslashes, or use forward slashes:
 

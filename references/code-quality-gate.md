@@ -56,7 +56,7 @@ List actual commands, artifacts, and results. No verification evidence means no 
 
 ## Formal PASS
 
-Record PASS with `references/post-development-artifacts.md`, using `-Gate code-quality-gate`. Shared machine fields and evidence substitutions live there. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
+Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate code-quality-gate`. Shared machine fields and evidence substitutions live there. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
 
 ## Output
 
