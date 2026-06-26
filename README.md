@@ -111,6 +111,35 @@ AI 写代码有几个通病，这套门禁专门拦：
 
 ---
 
+## 可见证据
+
+第一次验证这个包时，先看两类结果：
+
+```bash
+# 本地结构、prompt、hook decide、workflow、receipt、install 自检
+bin/formal-gates canary portable --root . --format json
+
+# 只在验证 Codex 宿主拦截能力时运行；失败不代表 native 校验失败
+bin/formal-gates canary codex-hook --worktree .
+```
+
+`portable canary` 是项目自身可控能力的主要证明。`codex-hook` 只证明当前 Codex 客户端是否真的调用 hook；它不通过时，仍然必须用显式的 `formal-gates workflow` / `formal-gates gate` 命令校验证据，不能宣称 Codex hook blocking proven。
+
+---
+
+## 发行信任边界
+
+当前包适合本地安装、本地校验和候选包验证；还不是带公开信任链的发行物。不要把本仓库当前状态描述成已经具备：
+
+- 公开 registry 或 marketplace 分发；
+- `npx` 一键远程安装；
+- 二进制签名、checksum、provenance 或 attestation；
+- 可由第三方独立验证的 release-trust 链路。
+
+对外发布前，至少要补齐 release artifact、校验和、签名或来源证明，并把 `portable canary` 结果作为 release 证据保存。
+
+---
+
 ## 安装
 
 优先使用 native CLI 安装。不要只复制 `SKILL.md`；安装命令会复制运行时需要的 skill 子集。
@@ -213,6 +242,7 @@ formal-gates/
 ```
 
 人看这个 README 上手；AI 从 `SKILL.md` 进入。各门具体判据按需读 `references/`。
+`examples/sample-*.json` 和 `examples/sample-*.md` 只作结构参考；正式记录必须由 `formal-gates gate` / `formal-gates workflow` 命令生成，不能直接复制样例文件。
 
 > 当前只支持本地安装和本地验证；不提供公开 registry、marketplace、`npx`、签名、provenance、checksum、attestation 或 release-trust 发行证明。
 
