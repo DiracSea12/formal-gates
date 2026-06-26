@@ -1,6 +1,8 @@
 # Sample Complexity Gate Artifact
 
-Sample-only: this file is not a formal PASS artifact. Replace every placeholder with project-specific evidence, and ensure the context bundle path exists on disk before recording gate state.
+Sample-only: this file is not a formal PASS artifact.
+
+Do not record this file directly with `formal-gates gate record` or `formal-gates workflow record-stage`. First replace every `<...>` placeholder with project-specific evidence, point every artifact path at a real file, and ensure the context bundle exists on disk. Validators are expected to reject placeholder-filled copies.
 
 Gate: complexity-gate
 Verdict: PASS

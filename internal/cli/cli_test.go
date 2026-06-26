@@ -73,6 +73,49 @@ func TestRunPromptValidateJSON(t *testing.T) {
 	}
 }
 
+func TestRunHelpCommandsExitZero(t *testing.T) {
+	cases := [][]string{
+		{"--help"},
+		{"package", "--help"},
+		{"artifact", "--help"},
+		{"install", "--help"},
+		{"prompt", "--help"},
+		{"hook", "--help"},
+		{"hook", "decide", "--help"},
+		{"canary", "portable", "--help"},
+		{"canary", "codex-hook", "--help"},
+		{"canary", "codex-hook-probe", "--help"},
+		{"workflow", "snapshot", "--help"},
+		{"workflow", "record-stage", "--help"},
+		{"workflow", "verify-admission", "--help"},
+		{"workflow", "final-verification", "--help"},
+		{"workflow", "cleanup", "--help"},
+		{"workflow", "show", "--help"},
+		{"gate", "record", "--help"},
+		{"gate", "verify-admission", "--help"},
+		{"gate", "show", "--help"},
+		{"receipt", "register", "--help"},
+		{"receipt", "capture", "--help"},
+		{"receipt", "finalize", "--help"},
+		{"receipt", "validate", "--help"},
+		{"receipt", "preflight", "--help"},
+		{"complexity", "check", "--help"},
+	}
+
+	for _, args := range cases {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr})
+			if code != 0 {
+				t.Fatalf("expected help to exit 0, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Usage") {
+				t.Fatalf("expected usage text on stdout, got %q", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunGateRecordShowAndVerifyAdmission(t *testing.T) {
 	dir := t.TempDir()
 	writeCLIArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")

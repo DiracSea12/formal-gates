@@ -98,6 +98,35 @@ This is the best gate to run before AI starts coding, because direction errors h
 
 ---
 
+## Visible Evidence
+
+For a first verification pass, check two result types:
+
+```bash
+# Local package, prompt, hook decide, workflow, receipt, and install self-check
+bin/formal-gates canary portable --root . --format json
+
+# Run only when validating Codex host interception; failure does not mean native validation failed
+bin/formal-gates canary codex-hook --worktree .
+```
+
+`portable canary` is the main proof for capabilities controlled by this package. `codex-hook` only proves whether the current Codex client actually invokes hooks. If it fails, keep using explicit `formal-gates workflow` / `formal-gates gate` evidence validation and do not claim Codex hook blocking proven.
+
+---
+
+## Release Trust Boundary
+
+The current package is suitable for local installs, local validation, and candidate package checks; it is not yet a public trust-chain release. Do not describe the current repository state as having:
+
+- public registry or marketplace distribution;
+- `npx` remote one-command installation;
+- binary signatures, checksums, provenance, or attestations;
+- a third-party-verifiable release-trust chain.
+
+Before public release, add release artifacts, checksums, signatures or provenance, and save `portable canary` output as release evidence.
+
+---
+
 ## Installation
 
 Prefer the native CLI for installs. Do not copy only `SKILL.md`; the installer copies the runtime skill subset.
@@ -200,6 +229,7 @@ formal-gates/
 ```
 
 Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.
+`examples/sample-*.json` and `examples/sample-*.md` are structural references only. Formal records must be generated through `formal-gates gate` / `formal-gates workflow`; do not copy sample files directly as state or artifacts.
 
 > This package currently supports local install and local validation only; it does not provide public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,8 +50,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("package", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		root := fs.String("root", ".", "formal-gates package root")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		return printValidationResult(streams.Stdout, "package", validate.Package(*root))
 	case "artifact":
@@ -63,8 +64,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		workflowID := fs.String("workflow-id", "", "expected workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "expected change snapshot")
 		stage := fs.String("stage", "", "expected QA stage, when relevant")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		return printValidationResult(streams.Stdout, "artifact", validate.Artifact(validate.ArtifactOptions{
 			Root:           *root,
@@ -75,7 +76,15 @@ func run(program string, args []string, streams IO) (int, error) {
 			Stage:          *stage,
 		}))
 	case "hook":
+		if hasHelpArg(args) {
+			printHookUsage(streams.Stdout)
+			return 0, nil
+		}
 		args = dropOptionalVerb(args, "decide")
+		if hasHelpArg(args) {
+			printHookUsage(streams.Stdout)
+			return 0, nil
+		}
 		if len(args) != 0 {
 			return 1, fmt.Errorf("hook decide does not accept positional arguments")
 		}
@@ -102,8 +111,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		stdin := fs.Bool("stdin", false, "read dispatch prompt text from stdin")
 		patterns := fs.String("patterns", "", "pollution patterns JSON path; defaults to hooks/pollution-patterns.json under --root")
 		format := fs.String("format", "text", "output format: text or json")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *format != "text" && *format != "json" {
 			return 1, fmt.Errorf("unsupported --format %q (want text or json)", *format)
@@ -141,8 +150,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		project := fs.String("project", "", "project path for project installs, or receipt worktree for global hook config")
 		force := fs.Bool("force", false, "replace an existing formal-gates target")
 		configureHooks := fs.Bool("configure-hooks", false, "write native host hook configuration")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if fs.NArg() != 0 {
 			return 1, fmt.Errorf("install does not accept positional arguments")
@@ -203,8 +212,8 @@ func runComplexity(args []string, streams IO) (int, error) {
 		maxProdInsertions := fs.String("max-prod-insertions", "", "maximum production insertions")
 		staged := fs.Bool("staged", false, "review staged git diff only")
 		jsonOutput := fs.Bool("json", false, "emit JSON")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if strings.TrimSpace(*taskType) == "" {
 			return 1, fmt.Errorf("--task-type is required")
@@ -262,8 +271,8 @@ func runCanary(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		root := fs.String("root", ".", "formal-gates package root")
 		format := fs.String("format", "text", "output format: text or json")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *format != "text" && *format != "json" {
 			return 1, fmt.Errorf("unsupported --format %q (want text or json)", *format)
@@ -298,8 +307,8 @@ func runCanary(args []string, streams IO) (int, error) {
 		keepTemp := fs.Bool("keep-temp", false, "keep successful canary artifacts")
 		binary := fs.String("binary", "", "formal-gates binary to install as the temporary hook; defaults to the current executable")
 		format := fs.String("format", "json", "output format: text or json")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *format != "text" && *format != "json" {
 			return 1, fmt.Errorf("unsupported --format %q (want text or json)", *format)
@@ -333,8 +342,8 @@ func runCanary(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		payloadDir := fs.String("payload-dir", "", "directory where hook payloads are written")
 		formalHookOutput := fs.String("formal-hook-output", "", "optional file to append formal hook decision output")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if fs.NArg() != 0 {
 			return 1, fmt.Errorf("canary codex-hook-probe does not accept positional arguments")
@@ -382,8 +391,8 @@ func runReceipt(args []string, streams IO) (int, error) {
 		gate := fs.String("gate", "", "gate id")
 		stage := fs.String("stage", "", "gate stage")
 		workflowID := fs.String("workflow-id", "", "workflow id")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		registration, result := validate.ReceiptRegisterDispatch(validate.ReceiptRegisterOptions{
 			Worktree:   *worktree,
@@ -403,8 +412,8 @@ func runReceipt(args []string, streams IO) (int, error) {
 		worktree := fs.String("worktree", ".", "repository root")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		event := fs.String("event", "", "host lifecycle event name")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if fs.NArg() != 0 {
 			return 1, fmt.Errorf("receipt capture does not accept positional arguments")
@@ -432,8 +441,8 @@ func runReceipt(args []string, streams IO) (int, error) {
 		gate := fs.String("gate", "", "gate id")
 		stage := fs.String("stage", "", "gate stage")
 		workflowID := fs.String("workflow-id", "", "workflow id")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		receipt, result := validate.ReceiptFinalize(validate.ReceiptFinalizeOptions{
 			Worktree:   *worktree,
@@ -457,8 +466,8 @@ func runReceipt(args []string, streams IO) (int, error) {
 		stage := fs.String("stage", "", "gate stage")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		result := validate.ReceiptValidate(validate.ReceiptValidateOptions{
 			Worktree:       *worktree,
@@ -475,8 +484,8 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		host := fs.String("host", "", "host name: claude-code, codex, or cursor")
 		worktree := fs.String("worktree", ".", "repository root")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		report, result := validate.ReceiptPreflight(validate.ReceiptPreflightOptions{
 			Host:     *host,
@@ -508,8 +517,8 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		baseRef := fs.String("base-ref", "", "base ref for git snapshots")
 		headRef := fs.String("head-ref", "HEAD", "head ref for git snapshots")
 		includeWorkingTree := fs.Bool("include-working-tree", false, "include dirty git working tree content")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		snapshot, result := validate.WorkflowSnapshot(validate.WorkflowSnapshotOptions{
 			Worktree:           *worktree,
@@ -541,8 +550,8 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
 		reason := fs.String("reason", "", "recording reason")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *verdict == "" {
 			return 1, fmt.Errorf("--verdict is required")
@@ -573,8 +582,8 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		gate := fs.String("gate", "", "gate id")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		result := validate.WorkflowVerifyAdmission(validate.WorkflowVerifyAdmissionOptions{
 			Worktree:       *worktree,
@@ -601,8 +610,8 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		actor := fs.String("actor", "gate-workflow", "recording actor when --record-final-qa is used")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		artifact, result := validate.WorkflowFinalVerification(validate.WorkflowFinalVerificationOptions{
 			Worktree:        *worktree,
@@ -632,8 +641,8 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		execute := fs.Bool("execute", false, "delete allowed cleanup paths")
 		var paths stringListFlag
 		fs.Var(&paths, "path", "cleanup path; may be repeated")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *dryRun && *execute {
 			return 1, fmt.Errorf("use only one of --dry-run or --execute")
@@ -685,8 +694,8 @@ func runGate(args []string, streams IO) (int, error) {
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
 		reason := fs.String("reason", "", "recording reason")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *verdict == "" {
 			return 1, fmt.Errorf("--verdict is required")
@@ -717,8 +726,8 @@ func runGate(args []string, streams IO) (int, error) {
 		gate := fs.String("gate", "", "gate id")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		result := validate.GateVerifyAdmission(validate.GateAdmissionOptions{
 			Worktree:       *worktree,
@@ -738,8 +747,8 @@ func runGate(args []string, streams IO) (int, error) {
 		worktree := fs.String("worktree", ".", "repository root")
 		statePath := fs.String("state", "", "gate state JSON path; defaults to .claude/gates/gate-state.json under --worktree")
 		format := fs.String("format", "json", "output format: json or text")
-		if err := fs.Parse(args); err != nil {
-			return 1, err
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
 		}
 		if *format != "json" && *format != "text" {
 			return 1, fmt.Errorf("unsupported --format %q (want json or text)", *format)
@@ -853,6 +862,42 @@ func readHookDecision(input io.Reader) (validate.HookDecision, error) {
 		return validate.HookDecision{}, fmt.Errorf("hook payload is required on stdin")
 	}
 	return validate.Hook(payload)
+}
+
+func hasHelpArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string, helpOutput io.Writer) (int, error, bool) {
+	if hasHelpArg(args) {
+		fs.SetOutput(helpOutput)
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0, nil, true
+		}
+		return 1, err, true
+	}
+	return 0, nil, false
+}
+
+func printHookUsage(stdout io.Writer) {
+	fmt.Fprint(stdout, `formal-gates hook decide
+
+Usage:
+  formal-gates hook decide < payload.json
+
+Reads one host hook JSON payload from stdin and prints a compact allow/deny JSON decision.
+Exit codes:
+  0  allow
+  1  invalid payload or CLI usage error
+  2  deny
+`)
 }
 
 func printUsage(stdout io.Writer, program string) {
