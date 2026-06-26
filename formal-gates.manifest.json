@@ -71,10 +71,15 @@
   ],
   "package_parts": [
     "SKILL.md",
+    "README.md",
+    "README_EN.md",
+    "formal-gates.manifest.json",
+    "go.mod",
+    ".github/workflows/portable-validation.yml",
+    "bin/",
     "references/",
     "cmd/",
     "internal/",
-    "scripts/",
     "hooks/",
     "agents/",
     "examples/"
@@ -88,19 +93,25 @@
     }
   ],
   "install_commands": [
-    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary",
-    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook",
-    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary",
-    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook",
-    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary"
+    "bin\\formal-gates.exe install --source . --host claude --scope global --force",
+    "bin/formal-gates install --source . --host claude --scope global --force",
+    "bin/formal-gates install --source . --host codex --scope project --project <project> --force --configure-hooks",
+    "bin/formal-gates install --source . --host cursor --scope project --project <project> --force --configure-hooks"
   ],
   "verification_commands": [
-    "go run ./cmd/formal-gates-validate package --root .",
-    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\test-portable-openspec-canary.ps1 -SkillPath ."
+    "bin\\formal-gates.exe package validate --root .",
+    "bin\\formal-gates.exe canary portable --root .",
+    "bin/formal-gates package validate --root .",
+    "bin/formal-gates canary portable --root ."
   ],
   "validation_notes": [
-    "The Go validation command is the portable package and artifact validation entrypoint for Windows, macOS, and Linux.",
-    "PowerShell commands remain the Windows-compatible install, hook, and canary path; macOS and Linux package validation must not require PowerShell.",
+    "The built formal-gates native binary is the installed package and artifact validation entrypoint for Windows, macOS, and Linux.",
+    "The native canary command validates package shape, prompt pollution checks, hook decisions, workflow state, receipt flow, and install shape without PowerShell.",
+    "Native workflow foundation commands exist for file-hash/git snapshot, record-stage, verify-admission, final-verification aggregation, FinalExecution recording from a supplied artifact, dry-run-first cleanup, and show, backed by the Go gate-state implementation and .claude/gates/gate-state.json.",
+    "Native receipt foundation commands exist for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, and diagnostic preflight; missing lifecycle correlation remains unsupported or unproven, not PASS.",
+    "Native install copies the verifiable installable package subset without PS1/Python script runtime files and can write native hook configuration for Claude Code, Codex, and Cursor.",
+    "Source checkout development tests may use go run ./cmd/formal-gates, but installed hook and validation paths must use bin/formal-gates(.exe).",
+    "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root."
   ],
   "support_caveats": [

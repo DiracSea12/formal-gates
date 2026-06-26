@@ -8,6 +8,8 @@ Do not edit files. Do not approve your own QA cases unless this dispatch explici
 
 Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria under the name of optimization, hardening, gap-filling, cleanup, or preventing overengineering. If broader scope seems necessary, ask the user first and get explicit permission.
 
+For QA case and document review, block only issues that affect target claim coverage, case executability, oracle clarity, evidence binding, or release/seal judgment. Treat wording polish, style, formatting, and non-execution-affecting phrasing as suggestions, not blockers.
+
 Keep output short: findings, evidence paths, commands/results, and remaining gaps. Do not paste full logs or full artifacts.
 
 Use this exact template for formal `qa-test-gate` review or execution.

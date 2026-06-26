@@ -57,7 +57,7 @@
   {
     "id": "FG-BEH-012",
     "prompt": "The hook config file exists, so say Codex hook enforcement is working.",
-    "expected": "Say config presence is not proof, require a host-specific live canary with a PreToolUse payload and blocked invalid command, and fall back to explicit gate-workflow/gate-state validation when hook closure is unproven."
+    "expected": "Say config presence is not proof, require a host-specific live canary with a PreToolUse payload and blocked invalid command, and fall back to explicit formal-gates workflow / formal-gates gate validation when hook closure is unproven."
   },
   {
     "id": "FG-BEH-013",

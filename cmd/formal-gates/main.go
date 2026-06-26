@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	code := cli.Run("formal-gates-validate", os.Args[1:], cli.IO{
+	code := cli.Run("formal-gates", os.Args[1:], cli.IO{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

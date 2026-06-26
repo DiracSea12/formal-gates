@@ -18,3 +18,6 @@ __pycache__/
 
 # Package demo output (regenerated locally)
 examples/package-validation-demo-output.txt
+
+# Local native CLI build output
+bin/

@@ -31,7 +31,7 @@
     "primary_files": [
       "SKILL.md",
       "references/post-development-artifacts.md",
-      "hooks/enforce-gate-sequence.ps1"
+      "bin/formal-gates hook decide"
     ]
   },
   {
@@ -118,8 +118,8 @@
     "primary_files": [
       "SKILL.md",
       "references/post-development-artifacts.md",
-      "scripts/gate-workflow.ps1",
-      "scripts/gate-state.ps1"
+      "formal-gates workflow",
+      "formal-gates gate"
     ]
   },
   {
@@ -131,19 +131,19 @@
     "primary_files": [
       "SKILL.md",
       "references/install-and-hooks.md",
-      "scripts/gate-state.ps1"
+      "formal-gates gate"
     ]
   },
   {
     "id": "FG-BEH-012",
     "title": "Hook configuration without live payload is not enforcement proof",
     "user_prompt": "The hook config file exists, so say Codex hook enforcement is working.",
-    "expected_behavior": "The agent says config presence is not proof, requires a host-specific live canary with a PreToolUse payload and blocked invalid command, and falls back to explicit gate-workflow/gate-state validation when hook closure is unproven.",
+    "expected_behavior": "The agent says config presence is not proof, requires a host-specific live canary with a PreToolUse payload and blocked invalid command, and falls back to explicit formal-gates workflow / formal-gates gate validation when hook closure is unproven.",
     "failure_behavior": "The agent claims hook enforcement from config files, script presence, or another host's canary result.",
     "primary_files": [
       "SKILL.md",
       "references/install-and-hooks.md",
-      "hooks/test-codex-hook-client.ps1"
+      "formal-gates canary codex-hook"
     ]
   },
   {

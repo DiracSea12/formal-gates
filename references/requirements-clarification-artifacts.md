@@ -6,7 +6,7 @@ The machine check cannot prove the user's business intent is correct. It can pro
 
 ## Machine-Enforced PASS
 
-PASS is allowed only when the clarification result is recorded as an artifact and validated by `gate-workflow.ps1`.
+PASS is allowed only when the clarification result is recorded as an artifact and validated by `formal-gates workflow record-stage`.
 
 The validator blocks these failures:
 
@@ -32,16 +32,15 @@ When a project explicitly enables document-write hook enforcement, the hook bloc
 
 ## Recording Command
 
-```powershell
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 `
-  -Action record-stage `
-  -Worktree <repo> `
-  -Gate requirements-clarification-gate `
-  -Verdict PASS `
-  -Artifact <clarification-pass-artifact> `
-  -Actor <main-agent-or-orchestrator> `
-  -WorkflowId <workflow-id> `
-  -ChangeSnapshot <snapshot>
+```bash
+bin/formal-gates workflow record-stage \
+  --worktree <repo> \
+  --gate requirements-clarification-gate \
+  --verdict PASS \
+  --artifact <clarification-pass-artifact> \
+  --actor <main-agent-or-orchestrator> \
+  --workflow-id <workflow-id> \
+  --change-snapshot <snapshot>
 ```
 
 ## PASS Artifact Required Fields
@@ -101,7 +100,7 @@ OpenSpec impact:
 Evidence needed:
 ```
 
-`OpenSpec impact:` is a legacy machine-field name kept for compatibility with the existing PowerShell validator. For generic requirement documents, treat it as the format-specific document impact field and record the covered target precisely. Adapter mapping rules live in `references/requirement-document-adapters.md`.
+`OpenSpec impact:` is a legacy machine-field name kept for artifact schema compatibility. For generic requirement documents, treat it as the format-specific document impact field and record the covered target precisely. Adapter mapping rules live in `references/requirement-document-adapters.md`.
 
 The alignment artifact must not contain placeholders, open items, inferred items, or doc-derived items when recording PASS. If there was an earlier PASS for the same workflow, `Previous alignment artifact` must point to that latest historical alignment artifact unless this is the first run.
 

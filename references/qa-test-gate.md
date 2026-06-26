@@ -22,7 +22,7 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 ## Stages
 
 - `Design`: read only requirements, specs, public contracts, user flows, or bug reports. Produce cases and oracles. Do not inspect implementation diff to invent cases.
-- `Design Review`: before verification, review candidate cases as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. If rework is needed, route to `Design Rework`; do not stop and wait for the user unless the claim itself is unclear.
+- `Design Review`: before verification, review candidate cases as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to `Design Rework`; do not stop and wait for the user unless the claim itself is unclear.
 - `Design Rework`: edit cases and oracle only. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
 - `Execution`: bind approved cases to commands, artifacts, manual observation, review records, or acceptance procedures. QA-owned verification evidence is mandatory. `REVIEW` / `FAIL` / `BLOCKED` routes to implementation, test evidence, or case rework; it does not enter downstream gates.
 - `FinalExecution`: after downstream gates and final verification, bind final QA evidence to the unchanged snapshot before release/seal. Do not reuse the earlier `Execution` artifact as final QA.
@@ -86,7 +86,7 @@ Formal PASS requires:
 - QA-owned verification evidence.
 - Binding from cases to artifacts/procedures/results.
 - Independent zero-context QA reviewer artifact.
-- Machine-recorded PASS using `gate-workflow.ps1 record-stage`.
+- Machine-recorded PASS using `formal-gates workflow record-stage`.
 
 Record formal Execution PASS with `references/post-development-artifacts.md`, using `-Gate qa-test-gate -Mode formal -Stage Execution`. Record formal FinalExecution PASS with `record-final-verification -RecordFinalQa`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
 

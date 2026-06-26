@@ -113,35 +113,34 @@ Rules:
 - Rerun earlier gates when the repair changes their judgment surface.
 - Test, case, or oracle changes rerun from QA; scope, public surface, new concept, or budget changes rerun from complexity; ownership, dependency, lifecycle, boundary, or failure-semantics changes rerun from architecture; purely local correctness, edge-case, naming, dead-code, assertion, or encoding repairs can rerun from code-quality.
 - Rerun scope is not a gate verdict and cannot convert an old artifact into a new PASS.
-- Current built-in `gate-state.ps1` requires prerequisite PASS records for the same `change_snapshot`. Until carry-forward support exists, machine seal may still require rerunning earlier prerequisites even when human rerun scope is narrower.
+- Current built-in gate-state logic requires prerequisite PASS records for the same `change_snapshot`. Until carry-forward support exists, machine seal may still require rerunning earlier prerequisites even when human rerun scope is narrower.
 
 ## Recording Commands
 
 Minimum machine-check commands:
 
-```powershell
-<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate <gate-id> -WorkflowId <id> -ChangeSnapshot <snapshot>
-<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate <gate-id> -Verdict PASS -Artifact <artifact> -Actor <reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+```bash
+bin/formal-gates workflow verify-admission --worktree <repo> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot>
+bin/formal-gates workflow record-stage --worktree <repo> --gate <gate-id> --verdict PASS --artifact <artifact> --actor <reviewer> --workflow-id <id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer> --workflow-id <id> --change-snapshot <snapshot>
+bin/formal-gates workflow cleanup --worktree <repo> --dry-run
+bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --artifact <artifact> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> --stage <stage>
 ```
 
-`<ps>` means the currently available PowerShell: Windows PowerShell 5 uses `powershell -NoProfile -ExecutionPolicy Bypass`; PowerShell 7 uses `pwsh -NoProfile`. Bundled scripts continue under the current PowerShell. PowerShell 7 is not required.
+The native workflow commands cover snapshot, record-stage, verify-admission, show, final verification aggregation, FinalExecution recording from a supplied artifact, and dry-run-first cleanup. The native receipt commands cover dispatch registration, start/stop lifecycle event capture into `.claude/gates/proofs/events`, receipt finalization, standalone receipt validation, and diagnostic preflight. Same-host hook canaries are separate host evidence and do not replace these explicit native records.
 
 Formal `qa-test-gate` recording must add `-Mode formal -Stage Execution`; final QA uses `-Mode formal -Stage FinalExecution`. Do not copy the generic command and forget the stage.
 
-For final QA, first write the aggregate artifact, then record a supplied `FinalQaArtifact`. If the final QA artifact claims receipt-backed zero-context proof by including `Reviewer proof receipt`, the receipt must be valid; otherwise `FinalExecution` may still be recorded through the ordinary artifact checks without claiming receipt-backed proof:
+For final QA, first write the attempts JSON file, then record a supplied `FinalQaArtifact`. If the final QA artifact claims receipt-backed zero-context proof by including `Reviewer proof receipt`, the receipt must be valid; otherwise `FinalExecution` may still be recorded through the ordinary artifact checks without claiming receipt-backed proof:
 
-```powershell
-$attempts = '[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-verification-run.json","contextBundle":".claude/bundles/<bundle>.zip sha256=<bundle-sha256>"}]'
-$attemptsFile = '.claude/gates/artifacts/final-verification-attempts.json'
-$attemptsPath = Join-Path '<repo>' $attemptsFile
-$attempts | Set-Content -LiteralPath $attemptsPath -Encoding UTF8
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-final-verification -Worktree <repo> -WorkflowId <id> -ChangeSnapshot <snapshot> -AttemptsJsonFile $attemptsFile -OutputArtifact .claude/gates/artifacts/final-verification.json -Actor <qa-reviewer>
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action record-stage -Worktree <repo> -Gate qa-test-gate -Verdict PASS -Mode formal -Stage FinalExecution -Artifact .claude/gates/artifacts/final-qa-execution.md -Actor <qa-reviewer> -WorkflowId <id> -ChangeSnapshot <snapshot>
+```bash
+bin/formal-gates workflow final-verification --worktree <repo> --workflow-id <id> --change-snapshot <snapshot> --attempts-file .claude/gates/artifacts/final-verification-attempts.json --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer>
 ```
 
-Attempt entries need `status`, `accepted`, `artifact`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`. Prefer `-AttemptsJsonFile` on PowerShell 5 because raw JSON strings can lose quotes when passed through `powershell.exe -File`.
+Attempt entries need `status`, `accepted`, `artifact`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`.
 
-`-RecordFinalQa` records a supplied, pre-existing `FinalQaArtifact`. It must not synthesize, overwrite, or repair a PASS-shaped FinalExecution report. A supplied artifact with a `Reviewer proof receipt` must have a valid receipt; an artifact without that field must not be described as receipt-backed subagent proof.
+`--record-final-qa` records a supplied, pre-existing `--final-qa-artifact`. It must not synthesize, overwrite, or repair a PASS-shaped FinalExecution report. A supplied artifact with a `Reviewer proof receipt` must have a valid receipt; an artifact without that field must not be described as receipt-backed subagent proof.
 
 ## Temporary Cleanup
 
@@ -151,3 +150,5 @@ After a single gate record or final verification succeeds, callers may pass `-Cl
 - refused: repo root, `.artifacts` root, `.claude/gates`, and any formal gate evidence path;
 - cleanup scratch paths are disposable; formal evidence paths recorded or referenced by `record-stage` / `record-final-verification` must not live there;
 - command failures keep cleanup paths; `record-final-verification` cleans only on PASS; pass `-KeepTemp` to keep cleanup paths after success.
+
+The native `workflow cleanup` foundation is narrower than the legacy wrapper: it only lists or removes descendants under worktree-local `.artifacts/tmp/`, `.artifacts/scratch/`, and `.artifacts/cleanup/`. It defaults to dry-run; deletion requires `--execute`.
