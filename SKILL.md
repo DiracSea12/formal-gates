@@ -5,7 +5,7 @@ description: Use when asked to run, package, install, test, or diagnose the form
 
 # Formal Gates
 
-Thin router only. Load one referenced detail file when the active route needs it; do not read the whole package by default.
+Thin router only. Classify the flow first, then load one referenced detail file for the first missing evidence; do not read the whole package by default.
 
 ## Fast Route
 
@@ -25,6 +25,8 @@ Before any formal handoff or gate dispatch, classify the work as `none`, `four-g
 - `start-readiness-only`: explicit user request or project requirement; no QA case design unless four-gate/release/seal is also claimed.
 - `four-gate`/`release`/`seal`: QA black-box case design is required before implementation handoff.
 
+First run rule: classify once, read the matching Load Map entry, collect the required evidence or block on the missing artifact, and record a gate only after evidence exists.
+
 ## Blacklist
 
 Never claim formal PASS from chat, self-review, developer self-test, focused tests, gate-state alone, hook config, installed scripts, or direct script tests.
@@ -39,17 +41,17 @@ If a formal workflow is represented as passed after direct implementation, skipp
 
 ## Load Map
 
-| Need | Read |
-|---|---|
-| Requirements/document alignment | `references/requirements-clarification-gate.md` |
-| Mapping OpenSpec, PRD, SDD, issue, design brief, or markdown bundles | `references/requirement-document-adapters.md` |
-| Requirements PASS recording or artifact validation | `references/requirements-clarification-artifacts.md` |
-| QA case design, execution, final execution, or white-box adequacy | `references/qa-test-gate.md` |
-| Scope, budget, over-engineering, or Complexity Contract | `references/complexity-gate.md` |
-| Module boundaries, ownership, dependencies, lifecycle, failure semantics | `references/architecture-health-gate.md` |
-| Correctness, maintainability, tests, dead code, overfitting, residual risk | `references/code-quality-gate.md` |
-| Post-development artifact fields and recording commands | `references/post-development-artifacts.md` |
-| Install, hooks, canaries, manifests, host support | `references/install-and-hooks.md` |
+| Need | Read | First action |
+|---|---|---|
+| Requirements/document alignment | `references/requirements-clarification-gate.md` | Build or request user-confirmed alignment evidence before drafting or approving readiness. |
+| Mapping OpenSpec, PRD, SDD, issue, design brief, or markdown bundles | `references/requirement-document-adapters.md` | Map source documents to formal requirement fields before gate review. |
+| Requirements PASS recording or artifact validation | `references/requirements-clarification-artifacts.md` | Validate the alignment artifact and decision record before recording PASS. |
+| QA case design, execution, final execution, or white-box adequacy | `references/qa-test-gate.md` | Start with QA Design for pre-handoff formal flows, or QA Execution evidence for post-development review. |
+| Scope, budget, over-engineering, or Complexity Contract | `references/complexity-gate.md` | Check QA or readiness prerequisites before dispatching complexity review. |
+| Module boundaries, ownership, dependencies, lifecycle, failure semantics | `references/architecture-health-gate.md` | Run only after the required previous gate for the active flow has passed. |
+| Correctness, maintainability, tests, dead code, overfitting, residual risk | `references/code-quality-gate.md` | Run only after QA, complexity, and architecture evidence are complete for the same snapshot. |
+| Post-development artifact fields and recording commands | `references/post-development-artifacts.md` | Use the artifact templates and native commands when recording or verifying workflow state. |
+| Install, hooks, canaries, manifests, host support | `references/install-and-hooks.md` | Run native install, preflight, or same-host canary checks; config alone is not proof. |
 
 ## Fixed Gate IDs
 
