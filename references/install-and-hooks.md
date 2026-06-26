@@ -9,57 +9,100 @@ Source candidate package directories must keep this shape:
 ```text
 formal-gates/
   SKILL.md
+  go.mod
   cmd/
   internal/
   agents/
   examples/
   hooks/
   references/
-  scripts/
 ```
 
-Host skill installs copy the installable subset: `SKILL.md`, `agents/`, `examples/`, `hooks/`, `references/`, and `scripts/`. `cmd/` and `internal/` stay in the source package for validation.
+Native host skill installs copy the verifiable installable package subset: `SKILL.md`, `README.md`, `README_EN.md`, `formal-gates.manifest.json`, `go.mod`, `.github/workflows/portable-validation.yml`, `bin/`, `cmd/`, `internal/`, `agents/`, `examples/`, `references/`, and `hooks/pollution-patterns.json`. They do not copy PS1, Python, shell, JavaScript, batch, or command-script runtime files. Dispatch prompt pollution validation is implemented by the Go CLI and reads `hooks/pollution-patterns.json`.
+
+Installed packages must include `bin/formal-gates.exe` on Windows and `bin/formal-gates` on Linux/macOS. Source checkouts may use `go run ./cmd/formal-gates` for development tests, but installed hook and validation paths must call the packaged binary.
 
 ## Portable Go Validation
 
-The cross-platform package and artifact validator is:
+The installed cross-platform package and artifact validator is the built native binary:
 
 ```bash
-go run ./cmd/formal-gates-validate package --root <formal-gates>
+bin/formal-gates package validate --root <formal-gates>
 ```
 
 To validate one artifact:
 
 ```bash
-go run ./cmd/formal-gates-validate artifact --root <repo> --file <artifact> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates artifact validate --root <repo> --file <artifact> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot>
+```
+
+To validate one dispatch prompt against `hooks/pollution-patterns.json`:
+
+```bash
+bin/formal-gates prompt validate --root <formal-gates> --file <prompt.md>
+```
+
+To use the native gate-state foundation from a source checkout or installed binary:
+
+```bash
+bin/formal-gates gate record --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates gate verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates gate show --worktree <repo> --format json
+```
+
+To use the native workflow foundation:
+
+```bash
+bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
+bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow cleanup --worktree <repo> --dry-run
+bin/formal-gates workflow show --worktree <repo> --format json
 ```
 
 To make one portable hook decision from a host-provided JSON payload:
 
 ```bash
-go run ./cmd/formal-gates-validate hook < payload.json
+bin/formal-gates hook decide < payload.json
 ```
 
-The `hook` command returns compact JSON with `decision` and `reason`. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
+To use the native receipt proof foundation:
 
-This Go path is the portable validation entrypoint for Windows, macOS, and Linux. It does not require PowerShell on macOS or Linux. It is not a workflow engine, hook runtime, persistent report system, cache, or release-trust mechanism.
+```bash
+bin/formal-gates receipt register --provider codex --worktree <repo> --artifact <review.md> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
+bin/formal-gates receipt capture --provider codex --event SubagentStart --worktree <repo> < start-payload.json
+bin/formal-gates receipt capture --provider codex --event SubagentStop --worktree <repo> < stop-payload.json
+bin/formal-gates receipt finalize --provider codex --worktree <repo> --artifact <review.md> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
+bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --artifact <review.md> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
+bin/formal-gates receipt preflight --host codex --worktree <repo>
+```
+
+Use `bin/formal-gates.exe` on Windows. Source checkout development tests may use `go run ./cmd/formal-gates`, but installed hook and validation paths must use `bin/formal-gates(.exe)`.
+
+The `hook` command returns compact JSON with `decision`, `reason`, and host-compatible allow/deny fields. It blocks missing-artifact PASS recording for both legacy wrapper commands and native `formal-gates ... record...` commands. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
+
+To install the runtime subset without PowerShell:
+
+```bash
+bin/formal-gates install --source <formal-gates> --host claude --scope global --force
+bin/formal-gates install --source <formal-gates> --host codex --scope project --project <project> --force --configure-hooks
+bin/formal-gates install --source <formal-gates> --host cursor --scope project --project <project> --force --configure-hooks
+```
+
+The native installer requires `bin/formal-gates(.exe)` under `--source`; build it first with `go build -o bin/formal-gates ./cmd/formal-gates` or the Windows `.exe` equivalent. `--configure-hooks` writes native hook commands: `hook decide` for PreToolUse/preToolUse and `receipt capture` for subagent lifecycle events. It preserves non-formal-gates hook entries and replaces only formal-gates hook commands.
+
+This Go path is the portable validation entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, admission checks for the fixed post-development order, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, final verification aggregation, FinalExecution recording from a supplied artifact, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
 
 ## Maintained Source
 
-The maintained source is the GitHub checkout, or the candidate package source directory explicitly passed through `-SourcePath`. Global `.claude` and optional `.codex` directories are installation snapshots, not the maintained source.
+The maintained source is the GitHub checkout, or the candidate package source directory explicitly passed through `--source`. Global `.claude` and optional `.codex` directories are installation snapshots, not the maintained source.
 
 When changing the package, edit the maintained source first, verify it, then commit and push if needed before installing it into a target host. Do not treat a global same-name skill as current just because it exists. In A/B or old-version comparison runs, leave unnamed hosts untouched.
 
-## PowerShell Entry
+## Source Host Canaries
 
-Scripts support Windows PowerShell 5 and PowerShell 7. Examples use `<ps>` as the launch prefix:
-
-- PowerShell 5: `powershell -NoProfile -ExecutionPolicy Bypass`
-- PowerShell 7: `pwsh -NoProfile`
-
-Bundled scripts continue under the current PowerShell. PowerShell 7 is not required.
-
-PowerShell remains the Windows-compatible install, hook, gate-state, and canary path. Do not document PowerShell as a macOS or Linux prerequisite for portable package validation.
+Core package validation, workflow recording, hook decisions, install, receipt checks, prompt checks, complexity checks, and the Codex hook live canary use the native binary. `formal-gates receipt preflight` reads Claude/Codex/Cursor hook JSON and reports missing lifecycle proof, but it is diagnostic only. Hook blocking is claimed only after a same-host live canary captures a real payload and blocks an invalid command.
 
 ## Host Capability Levels
 
@@ -85,40 +128,32 @@ This is a compact capability statement, not a broad host-path registry. Do not a
 
 ## Install To Claude
 
-Use the bundled installer to copy the installable skill subset. Do not cherry-pick files:
+Use the native installer to copy the installable skill subset. Do not cherry-pick files:
 
-```powershell
-# Install or replace the global Claude skill
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary
-
-# Install and create/update the Claude settings.json command hook
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
-
-# Install to a project-local Claude skill path
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
+```bash
+bin/formal-gates install --source <formal-gates> --host claude --scope global --force
+bin/formal-gates install --source <formal-gates> --host claude --scope global --force --configure-hooks
+bin/formal-gates install --source <formal-gates> --host claude --scope project --project <project> --force
 ```
 
-The installer copies the installable skill subset, refuses to replace targets outside `skills\formal-gates`, and removes `__pycache__`. `-RunCanary` runs the portable canary after copying; a failed canary means the install is not usable. `-ConfigureHook` writes Claude `settings.json` or Cursor `hooks.json`; it creates a `.bak` backup and only merges or updates formal-gates hooks.
+The installer copies the installable skill subset, refuses to replace targets outside `skills\formal-gates`, and removes script-runtime files from the installed target. Native `--configure-hooks` writes native commands and only merges or updates formal-gates hooks.
 
 Claude manual install targets:
 
 - Global Claude: `%USERPROFILE%\.claude\skills\formal-gates`
 - Project-local Claude: `<project>\.claude\skills\formal-gates`
 
-Do not copy only `SKILL.md`. Without `scripts/gate-state.ps1` or `hooks/enforce-gate-sequence.ps1`, formal workflows lose machine checks.
+Do not copy only `SKILL.md`. A native install also needs the packaged binary, Go command sources used by package validation, references, agents, examples, and `hooks/pollution-patterns.json`.
 
 For copy-then-verify runs, copy the candidate into the project-local `.claude/skills/formal-gates` first. Do not accidentally test a global stale package.
 
 ## Install To Codex
 
-Use the bundled installer to copy the installable skill subset. Do not cherry-pick files:
+Use the native installer to copy the installable skill subset. Do not cherry-pick files:
 
-```powershell
-# Install to the global Codex skill path
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary
-
-# Install to both Claude and Codex project-local skill paths
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Both -Scope Project -ProjectPath <project> -Force -RunCanary
+```bash
+bin/formal-gates install --source <formal-gates> --host codex --scope global --force
+bin/formal-gates install --source <formal-gates> --host both --scope project --project <project> --force
 ```
 
 Codex manual install targets:
@@ -132,19 +167,16 @@ When Claude and Codex are both installed, the two mirrors must be byte-identical
 
 Cursor uses its Hooks surface, not a Claude-style skill loader. The installer can write hook config:
 
-```powershell
-# Project-level Cursor hook
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook
-
-# Global Cursor hook
-<ps> -File <formal-gates>\scripts\install-formal-gates.ps1 -HostName Cursor -Scope Global -Force -RunCanary -ConfigureHook
+```bash
+bin/formal-gates install --source <formal-gates> --host cursor --scope project --project <project> --force --configure-hooks
+bin/formal-gates install --source <formal-gates> --host cursor --scope global --force --configure-hooks
 ```
 
 The installer copies the installable skill subset to `.cursor\formal-gates` and writes a `preToolUse` command hook into `.cursor\hooks.json` or `%USERPROFILE%\.cursor\hooks.json`.
 
 ## Candidate Package A/B Testing
 
-Do not test a candidate package by using a global same-name skill. First copy the user-provided candidate path to the test workspace's `.claude/skills/formal-gates`, preferably through `install-formal-gates.ps1`. Only copy to `.codex/skills/formal-gates` when explicitly testing Codex compatibility.
+Do not test a candidate package by using a global same-name skill. First copy the user-provided candidate path to the test workspace's `.claude/skills/formal-gates`, preferably through `formal-gates install`. Only copy to `.codex/skills/formal-gates` when explicitly testing Codex compatibility.
 
 Each A/B record must state:
 
@@ -157,26 +189,22 @@ If evidence only says `formal-gates`, it is impossible to tell whether the candi
 
 ## Hook Rules
 
-The hook entry point is:
+The native hook entry point is the installed binary:
 
 ```text
-hooks/enforce-gate-sequence.ps1
+bin/formal-gates hook decide
 ```
 
-Candidate hooks must resolve only the same package's:
-
-```text
-scripts/gate-state.ps1
-```
+Candidate hooks must resolve only the same package's native binary and `hooks/pollution-patterns.json` config. They must not fall back to a global original package.
 
 Do not fall back to:
 
-- `%USERPROFILE%\.codex\skills\formal-gates\scripts\gate-state.ps1`
-- `%USERPROFILE%\.claude\skills\formal-gates\scripts\gate-state.ps1`
+- `%USERPROFILE%\.codex\skills\formal-gates\bin\formal-gates.exe` from another package copy
+- `%USERPROFILE%\.claude\skills\formal-gates\bin\formal-gates.exe` from another package copy
 - old loose skill directories
 - any global original path
 
-In A/B testing, a hook that silently uses the global script tests the old package while pretending to test the candidate.
+In A/B testing, a hook that silently uses the global binary tests the old package while pretending to test the candidate.
 
 Claude Code loads hooks from Claude settings. Global example:
 
@@ -189,7 +217,7 @@ Claude Code loads hooks from Claude settings. Global example:
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $env:USERPROFILE '.claude\\skills\\formal-gates\\hooks\\enforce-gate-sequence.ps1')\""
+            "command": "\"%USERPROFILE%\\.claude\\skills\\formal-gates\\bin\\formal-gates.exe\" hook decide"
           }
         ]
       }
@@ -198,7 +226,7 @@ Claude Code loads hooks from Claude settings. Global example:
 }
 ```
 
-For project-local installs, change the `command` path to `<project>\\.claude\\skills\\formal-gates\\hooks\\enforce-gate-sequence.ps1`. Whether a client or hosted gateway actually executes command hooks must be proven with a live canary on the target machine. Inspecting settings files is not proof.
+For project-local installs, change the `command` path to `<project>\\.claude\\skills\\formal-gates\\bin\\formal-gates.exe hook decide` on Windows, or the matching `bin/formal-gates hook decide` path on Linux/macOS. Whether a client or hosted gateway actually executes command hooks must be proven with a live canary on the target machine. Inspecting settings files is not proof.
 
 Codex may load hooks from `~/.codex/hooks.json`, `[hooks]` in `~/.codex/config.toml`, or project-local `.codex` config. Do not route through Codex plugin packaging just to load hooks.
 
@@ -212,11 +240,11 @@ hooks = true
 matcher = "*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path $env:USERPROFILE '.codex\\skills\\formal-gates\\hooks\\enforce-gate-sequence.ps1')\""
+command = "\"%USERPROFILE%\\.codex\\skills\\formal-gates\\bin\\formal-gates.exe\" hook decide"
 timeout = 30
 ```
 
-On Windows, let PowerShell expand `$env:USERPROFILE` inside the Codex `command` string. Do not rely on the outer host to expand `%USERPROFILE%`.
+On Windows, use the absolute installed binary path when the host does not expand `%USERPROFILE%`.
 
 Unmanaged Codex command hooks must be reviewed and trusted through `/hooks` before ordinary interactive use. `--dangerously-bypass-hook-trust` is only for automated canaries after the hook source has been reviewed; do not use it as a daily bypass.
 
@@ -228,7 +256,7 @@ Cursor loads hooks from `~/.cursor/hooks.json` or project `.cursor/hooks.json`. 
   "hooks": {
     "preToolUse": [
       {
-        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \".cursor/formal-gates/hooks/enforce-gate-sequence.ps1\"",
+        "command": "\".cursor/formal-gates/bin/formal-gates.exe\" hook decide",
         "timeout": 30,
         "failClosed": true
       }
@@ -237,7 +265,7 @@ Cursor loads hooks from `~/.cursor/hooks.json` or project `.cursor/hooks.json`. 
 }
 ```
 
-The Cursor hook script reads JSON from stdin and blocks by returning `permission: "deny"` on stdout or exit code 2. The example leaves `matcher` out so the script can filter only formal-gates commands internally and avoid Cursor-version matcher-shape drift. Inspecting `hooks.json` still is not a live canary.
+The Cursor hook command reads JSON from stdin and blocks by returning `permission: "deny"` on stdout or exit code 2. The example leaves `matcher` out so the command can filter only formal-gates commands internally and avoid Cursor-version matcher-shape drift. Inspecting `hooks.json` still is not a live canary.
 
 ## GateWorkflow And Gate State
 
@@ -249,7 +277,7 @@ Formal gates require structured `GateWorkflow`. Minimum fields:
 - `gate`
 - `stage` for the QA gate or manifest extension gates; built-in complexity/architecture/code-quality gates can omit `stage`.
 
-`scripts/gate-state.ps1` records and validates gate state. `scripts/gate-workflow.ps1` is the common wrapper and calls the same-directory `gate-state.ps1`.
+`formal-gates gate record`, `formal-gates gate verify-admission`, and `formal-gates gate show` provide the native gate-state foundation for `.claude/gates/gate-state.json`. `formal-gates workflow snapshot`, `formal-gates workflow record-stage`, `formal-gates workflow verify-admission`, `formal-gates workflow final-verification`, `formal-gates workflow cleanup`, and `formal-gates workflow show` provide the current native workflow wrapper foundation. `formal-gates install` copies the verifiable installable package subset and can write native host hook config. `formal-gates receipt register`, `receipt capture`, `receipt finalize`, `receipt validate`, and `receipt preflight` provide the current native receipt foundation. Installed `SubagentStart` and `SubagentStop` hooks call `formal-gates receipt capture` directly.
 
 `GateWorkflow` is JSON. Escape Windows backslashes as double backslashes, or use forward slashes:
 
@@ -270,7 +298,7 @@ Manifest extension gates bind to the manifest hash. Their prerequisite gates mus
 
 ## Formal Gate Artifacts And Recording Commands
 
-Formal post-development gate artifact fields, `gate_route`, recording commands, PowerShell prefixes, and final-QA wrapper commands live in `references/post-development-artifacts.md`.
+Formal post-development gate artifact fields, `gate_route`, recording commands, and final-QA native commands live in `references/post-development-artifacts.md`.
 
 This file keeps only installation, hooks, manifests, canaries, multi-host paths, and runtime validation rules. Do not turn install documentation into an artifact-template repository.
 
@@ -280,27 +308,27 @@ If Claude and Codex are both installed but their skill mirrors or hooks are not 
 
 Git projects can use a commit range snapshot:
 
-```powershell
-<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action snapshot -Worktree <repo> -BaseRef <base> -HeadRef HEAD -IncludeWorkingTree
+```bash
+bin/formal-gates workflow snapshot --worktree <repo> --vcs git --base-ref <base> --head-ref HEAD --include-working-tree
 ```
 
 SVN or non-git projects can use the file-tree hash fallback without `BaseRef`:
 
-```powershell
-<ps> -File <formal-gates>\scripts\gate-workflow.ps1 -Action snapshot -Worktree <project> -Vcs auto
+```bash
+bin/formal-gates workflow snapshot --worktree <project> --vcs file-hash
 ```
 
 This excludes `.git`, `.svn`, `.hg`, `node_modules`, `__pycache__`, and local gate state, then produces `svn-files.<hash>` or `files.<hash>`. The hash binds artifacts to a file snapshot, but it does not replace human confirmation of SVN branch/version provenance.
 
 ## Portable Canary
 
-Run this script to check that the package can be copied into a temporary project and execute the basic gate flow:
+The native portable canary is:
 
-```powershell
-<ps> -File <formal-gates>\scripts\test-portable-openspec-canary.ps1 -SkillPath <formal-gates>
+```bash
+bin/formal-gates canary portable --root <formal-gates>
 ```
 
-It validates package portability, script execution, and basic gate-state recording. It is not final QA for a real project.
+Use `bin/formal-gates.exe` on Windows. The canary validates package shape, dispatch-prompt pollution checks, native hook decisions, workflow state, receipt flow, and native install shape without PowerShell. It is not final QA for a real project and does not prove same-host hook interception.
 
 ## Phase 2 Release Trust
 
@@ -310,28 +338,23 @@ Phase 1 does not ship checksums, artifact attestation, npm provenance, signing, 
 
 Run this only when validating Codex compatibility:
 
-```powershell
-<ps> -File <formal-gates>\hooks\test-codex-hook-client.ps1 -Worktree <repo> -KeepTemp
+```bash
+bin/formal-gates canary codex-hook --worktree <repo> --keep-temp
 ```
 
-The PASS condition is strict: real `codex exec` must write at least one `PreToolUse` hook payload, the bundled `hooks/enforce-gate-sequence.ps1` must block a formal PASS command that lacks an artifact, and the canary marker file must not be created. `FAIL` or `TIMED_OUT` means this Codex client/version does not have closed-loop hook interception, or the formal-gates hook is not wired correctly.
+Use `bin/formal-gates.exe` on Windows. If `codex` resolves to a PowerShell wrapper, pass a script-free Codex executable path with `--codex-command <codex.exe-or-codex.cmd>`.
 
-Do not use script-direct tests, Claude hook success, or a target command failing inside `codex exec` as proof of Codex hook closure. The Codex hook is an optional guardrail; formal non-interactive workflows still rely on `gate-workflow.ps1` / `gate-state.ps1` admission and artifact recording.
+The PASS condition is strict: real `codex exec` must write at least one `PreToolUse` hook payload, the native hook must block a formal PASS command that lacks an artifact, and the canary marker file must not be created. `FAIL` or `TIMED_OUT` means this Codex client/version does not have closed-loop hook interception, or the formal-gates hook is not wired correctly.
+
+Do not use direct hook-decision tests, Claude hook success, or a target command failing inside `codex exec` as proof of Codex hook closure. The Codex hook is an optional guardrail; formal non-interactive workflows still rely on native `formal-gates workflow` / `formal-gates gate` admission and artifact recording.
 
 ## Quick Structure Validation
 
 After candidate package changes, run:
 
-```powershell
-$validator = "<path-to-skill-creator>\scripts\quick_validate.py"
-if (-not (Test-Path $validator)) { throw "skill-creator quick_validate.py not found; pass the local validator path." }
-py -3 -X utf8 $validator <formal-gates>
+```bash
+bin/formal-gates package validate --root <formal-gates>
+bin/formal-gates canary portable --root <formal-gates>
 ```
 
-Then read the skill entrypoint with PowerShell:
-
-```powershell
-Get-Content -Encoding UTF8 <formal-gates>\SKILL.md
-```
-
-If encoding is corrupted, BOM handling is wrong, or frontmatter lacks `name` / `description`, fix package structure before discussing gate quality.
+If frontmatter, required files, native binary, CI, manifest, examples, hook config, workflow, receipt, complexity, or install-shape checks fail, fix package structure before discussing gate quality.

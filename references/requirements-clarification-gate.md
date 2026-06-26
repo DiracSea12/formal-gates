@@ -65,7 +65,7 @@ Rules:
 - `out-of-scope-by-user`: preserve the original requirement text and the user's explicit cut decision.
 - `deferred-by-user` and `out-of-scope-by-user` require per-item user approval evidence in the alignment item itself.
 - If a previous alignment artifact exists, compare ID sets before recording PASS. Any missing old ID must appear under `Dropped question IDs` and have explicit user approval in the decision record or in a per-ID user quote field.
-- For current PowerShell PASS artifact compatibility, the machine alignment artifact still accepts the legacy field name `OpenSpec impact:`. Use `Document impact:` in narrative alignment, and map it through `references/requirement-document-adapters.md` when recording format-specific artifacts.
+- For current PASS artifact schema compatibility, the machine alignment artifact still accepts the legacy field name `OpenSpec impact:`. Use `Document impact:` in narrative alignment, and map it through `references/requirement-document-adapters.md` when recording format-specific artifacts.
 
 ## Question Quality Standard
 
@@ -138,6 +138,6 @@ Next action:
 
 ## Machine Recording
 
-PASS must be recorded through `gate-workflow.ps1` and validated by `gate-artifact-validation.ps1`; a chat-only claim is not enough.
+PASS must be recorded through `formal-gates workflow record-stage` and validated by the native artifact checks; a chat-only claim is not enough.
 
 For PASS artifact fields, decision record fields, validator blockers, recording commands, and covered-target rules, read `references/requirements-clarification-artifacts.md` only when recording PASS or diagnosing artifact validation.

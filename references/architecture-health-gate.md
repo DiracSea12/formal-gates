@@ -31,8 +31,8 @@ Formal flow requires machine-verifiable PASS for:
 
 Verify:
 
-```powershell
-<ps> -File <formal-gates>/scripts/gate-workflow.ps1 -Action verify-admission -Worktree <repo> -Gate architecture-health-gate -WorkflowId <id> -ChangeSnapshot <snapshot>
+```bash
+bin/formal-gates workflow verify-admission --worktree <repo> --gate architecture-health-gate --workflow-id <id> --change-snapshot <snapshot>
 ```
 
 No gate-state, stale snapshot, missing artifact, non-formal QA, or complexity REVIEW/FAIL/BLOCKED means `BLOCKED` or `GATE_SEQUENCE_ERROR`.

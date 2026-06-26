@@ -4,30 +4,25 @@ This demo is a local, rerunnable smoke test for the public package shape.
 
 Run it from the repository root:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File examples\package-validation-demo.ps1
+```bash
+go build -o bin/formal-gates ./cmd/formal-gates
+bin/formal-gates canary portable --root .
 ```
 
-The script runs existing validation commands only:
+On Windows, use the `.exe` binary name:
 
-```powershell
-go run ./cmd/formal-gates-validate package --root .
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-portable-openspec-canary.ps1 -SkillPath .
+```cmd
+go build -o bin\formal-gates.exe ./cmd/formal-gates
+bin\formal-gates.exe canary portable --root .
 ```
 
-It writes the local run output to:
-
-```text
-.artifacts/tmp/package-validation-demo-output.txt
-```
-
-Use `-OutputPath` to write somewhere else. Demo output is generated locally and is not tracked in the package.
+The native canary runs package validation, dispatch-prompt checks, hook decision checks, workflow state checks, receipt checks, and install-shape checks without PowerShell.
 
 ## What This Proves
 
 - The package structure validates with the Go package validator on this machine.
-- The portable OpenSpec canary passes against this checkout on this machine.
-- The README-visible demo command is reproducible without editing core scripts.
+- The portable native canary passes against this checkout on this machine.
+- The README-visible demo command is reproducible without script runtime helpers.
 
 ## What This Does Not Prove
 

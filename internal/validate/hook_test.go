@@ -8,65 +8,47 @@ func TestHookDenyGateWorkflowPassWithoutArtifact(t *testing.T) {
 		payload string
 	}{
 		{
-			name: "claude missing artifact switch",
-			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -WorkflowId wf -ChangeSnapshot snap"
-				}
-			}`,
-		},
-		{
-			name: "codex missing artifact switch",
-			payload: `{
-				"tool_name": "shell_command",
-				"arguments": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate architecture-health-gate -Verdict PASS"
-				}
-			}`,
-		},
-		{
-			name: "cursor missing artifact switch",
+			name: "native workflow missing artifact",
 			payload: `{
 				"tool_name": "Shell",
 				"input": {
-					"command": "powershell -File .cursor/formal-gates/scripts/gate-workflow.ps1 -Action record-stage -Gate code-quality-gate -Verdict PASS"
+					"command": "\"C:\\tools\\formal-gates\\bin\\formal-gates.exe\" workflow record-stage --gate complexity-gate --verdict PASS --workflow-id wf --change-snapshot snap"
 				}
 			}`,
 		},
 		{
-			name: "artifact switch without value",
-			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -Artifact -Actor dev"
-				}
-			}`,
-		},
-		{
-			name: "colon action and verdict missing artifact",
-			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action:record-stage -Gate:complexity-gate -Verdict:PASS"
-				}
-			}`,
-		},
-		{
-			name: "space action and colon verdict missing artifact",
+			name: "native gate record missing artifact",
 			payload: `{
 				"tool_name": "shell_command",
 				"arguments": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict:PASS"
+					"command": "bin/formal-gates gate record --gate architecture-health-gate --verdict PASS --workflow-id wf --change-snapshot snap"
 				}
 			}`,
 		},
 		{
-			name: "colon action and space verdict missing artifact",
+			name: "go run native workflow missing artifact",
+			payload: `{
+				"tool_name": "Bash",
+				"tool_input": {
+					"command": "go run ./cmd/formal-gates workflow record-stage --gate code-quality-gate --verdict PASS --workflow-id wf --change-snapshot snap"
+				}
+			}`,
+		},
+		{
+			name: "duplicate verdict cannot hide pass",
+			payload: `{
+				"tool_name": "Bash",
+				"tool_input": {
+					"command": "formal-gates workflow record-stage --gate complexity-gate --verdict REVIEW --verdict PASS --workflow-id wf --change-snapshot snap"
+				}
+			}`,
+		},
+		{
+			name: "equals verdict and empty artifact",
 			payload: `{
 				"tool_name": "Shell",
 				"input": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action:record-stage -Gate complexity-gate -Verdict PASS"
+					"command": "formal-gates workflow record-stage --gate=complexity-gate --verdict=PASS --artifact= --workflow-id=wf --change-snapshot=snap"
 				}
 			}`,
 		},
@@ -81,6 +63,68 @@ func TestHookDenyGateWorkflowPassWithoutArtifact(t *testing.T) {
 			if decision.Decision != "deny" {
 				t.Fatalf("expected deny, got %#v", decision)
 			}
+			if decision.Permission != "deny" || decision.PermissionDecision != "deny" {
+				t.Fatalf("expected deny-compatible host fields, got %#v", decision)
+			}
+		})
+	}
+}
+
+func TestHookRejectsLegacyPowerShellCommands(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "legacy workflow with artifact",
+			payload: `{
+				"tool_name": "Bash",
+				"tool_input": {
+					"command": "powershell -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/complexity.md"
+				}
+			}`,
+		},
+		{
+			name: "legacy workflow review",
+			payload: `{
+				"tool_name": "shell_command",
+				"arguments": {
+					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict REVIEW"
+				}
+			}`,
+		},
+		{
+			name: "legacy gate-state",
+			payload: `{
+				"tool_name": "shell_command",
+				"params": {
+					"cmd": "pwsh -File ./scripts/gate-state.ps1 -Action assert-next -Gate complexity-gate"
+				}
+			}`,
+		},
+		{
+			name: "legacy receipt hook",
+			payload: `{
+				"tool_name": "Shell",
+				"input": {
+					"command": "pwsh -File ./hooks/capture-subagent-receipt.ps1"
+				}
+			}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := Hook([]byte(tc.payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Decision != "deny" {
+				t.Fatalf("expected deny, got %#v", decision)
+			}
+			if decision.Reason == "" || decision.PermissionDecision != "deny" {
+				t.Fatalf("expected legacy deny reason and host fields, got %#v", decision)
+			}
 		})
 	}
 }
@@ -91,29 +135,11 @@ func TestHookAllowsRepresentativePayloads(t *testing.T) {
 		payload string
 	}{
 		{
-			name: "claude command with artifact",
+			name: "native workflow command with artifact",
 			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "powershell -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/complexity.md"
-				}
-			}`,
-		},
-		{
-			name: "codex non-pass command",
-			payload: `{
-				"tool_name": "shell_command",
-				"arguments": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict REVIEW"
-				}
-			}`,
-		},
-		{
-			name: "codex gate-state command",
-			payload: `{
-				"tool_name": "shell_command",
-				"params": {
-					"cmd": "pwsh -File ./scripts/gate-state.ps1 -Action assert-next -Gate complexity-gate"
+				"tool_name": "Shell",
+				"input": {
+					"command": "formal-gates workflow record-stage --gate complexity-gate --verdict PASS --artifact=.claude/gates/artifacts/complexity.md --workflow-id wf --change-snapshot snap"
 				}
 			}`,
 		},
@@ -122,7 +148,7 @@ func TestHookAllowsRepresentativePayloads(t *testing.T) {
 			payload: `{
 				"tool_name": "Shell",
 				"input": {
-					"command": "go run ./cmd/formal-gates-validate package --root ."
+					"command": "go run ./cmd/formal-gates package validate --root ."
 				}
 			}`,
 		},
@@ -140,6 +166,9 @@ func TestHookAllowsRepresentativePayloads(t *testing.T) {
 			}
 			if decision.Decision != "allow" {
 				t.Fatalf("expected allow, got %#v", decision)
+			}
+			if decision.Permission != "allow" || decision.PermissionDecision != "allow" {
+				t.Fatalf("expected allow-compatible host fields, got %#v", decision)
 			}
 		})
 	}

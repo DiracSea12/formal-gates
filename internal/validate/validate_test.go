@@ -9,6 +9,24 @@ import (
 	"testing"
 )
 
+func repoRootForCanaryTest(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = next
+	}
+}
+
 func TestArtifactRequirementsClarification(t *testing.T) {
 	dir := t.TempDir()
 	artifact := filepath.Join(dir, "requirements.md")
@@ -101,6 +119,29 @@ func TestArtifactAllowsLegacyReviewerAgentIDWhenNotUsedAsProof(t *testing.T) {
 	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
 	if !result.OK() {
 		t.Fatalf("expected legacy reviewer id metadata without proof claim to pass, got %#v", result.Failures)
+	}
+}
+
+func TestArtifactAcceptsCRLFGateRoute(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle.md")
+	prompt := filepath.Join(dir, "prompt.md")
+	mustWrite(t, bundle, "bundle")
+	mustWrite(t, prompt, "formal_gate_dispatch: true\n")
+	artifact := filepath.Join(dir, "complexity.md")
+	text := complexityArtifactText(
+		"wf",
+		"snap",
+		"bundle.md sha256="+sha256FileForTest(t, bundle),
+		"prompt.md sha256="+sha256FileForTest(t, prompt),
+		"",
+	)
+	text = strings.ReplaceAll(text, "\n", "\r\n")
+	mustWrite(t, artifact, text)
+
+	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	if !result.OK() {
+		t.Fatalf("expected CRLF artifact to pass, got %#v", result.Failures)
 	}
 }
 

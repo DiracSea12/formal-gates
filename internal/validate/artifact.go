@@ -179,7 +179,7 @@ func validateLegacyReviewerProof(text, file string, result *Result) {
 }
 
 func fieldValue(text, field string) string {
-	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*(.*?)[ \t]*$`)
+	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*([^\r\n]*)[ \t\r]*$`)
 	match := pattern.FindStringSubmatch(text)
 	if len(match) < 2 {
 		return ""
@@ -188,7 +188,7 @@ func fieldValue(text, field string) string {
 }
 
 func routeValue(text, field string) string {
-	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*"?([^"\r\n]+)"?[ \t]*$`)
+	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*"?([^"\r\n]+)"?[ \t\r]*$`)
 	match := pattern.FindStringSubmatch(text)
 	if len(match) < 2 {
 		return ""

@@ -35,7 +35,7 @@ Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `re
 
 ## Budget Rules
 
-Budgets are task-specific. Fallback thresholds in `complexity_gate.py` are alarms, not design truth.
+Budgets are task-specific. Fallback thresholds in `formal-gates complexity check` are alarms, not design truth.
 
 If a worker needs to exceed the active dynamic budget, it must stop and submit:
 
@@ -78,11 +78,11 @@ Only `APPROVE` or `APPROVE_SMALLER` changes the active budget, and only for the 
 
 Run only when there is a diff to review:
 
-```powershell
-<ps> -File <formal-gates>/scripts/run-complexity-gate.ps1 --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> --worktree <repo> --vcs auto
+```bash
+bin/formal-gates complexity check --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine output and `--staged` only for staged review. The wrapper chooses an available Python host and uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
+Use `--json` for machine output and `--staged` only for staged review. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
 
 In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 

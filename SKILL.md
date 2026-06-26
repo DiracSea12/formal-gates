@@ -98,7 +98,7 @@ Formal records need structured `GateWorkflow` with:
 
 Claude Code, Codex, and Cursor are separate host targets. Do not rank them as primary versus compatibility in public guidance.
 
-Config is not proof; require same-host live canary with `PreToolUse` payload and blocked invalid command. If hook closure is unproven, fall back to `gate-workflow.ps1` / `gate-state.ps1` validation. For Codex, proof requires a real `codex exec` run that writes a `PreToolUse` payload, blocks a bad formal PASS command, and leaves the canary marker uncreated.
+Config is not proof; require same-host live canary with `PreToolUse` payload and blocked invalid command. If hook closure is unproven, fall back to explicit `formal-gates workflow` / `formal-gates gate` validation. For Codex, proof requires a real `codex exec` run that writes a `PreToolUse` payload, blocks a bad formal PASS command, and leaves the canary marker uncreated.
 
 ## Output Standards
 

@@ -104,35 +104,32 @@ AI 写代码有几个通病，这套门禁专门拦：
 ## 核心机制
 
 - 通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。
-- **Dispatch prompt 污染检测**——系统自动检测并阻止包含"上一轮发现""刚修了""重点复查""预期答案"等锚定模式的派发 prompt，保证审查者独立判断。检测规则在 `hooks/pollution-patterns.json` 内按英文 regex 组和中文术语组配置。
+- **Dispatch prompt 污染检测**——系统自动检测并阻止包含"上一轮发现""刚修了""重点复查""预期答案"等锚定模式的派发 prompt，保证审查者独立判断。检测规则在 `hooks/pollution-patterns.json` 内按英文 regex 组和中文术语组配置，由 `formal-gates prompt validate` 执行。
 - **跨 workflow 隔离**——每个 workflow 的门禁链必须完整，不能复用其他 workflow 的门禁结果。系统会递归验证所有前置门和传递依赖是否属于同一个 workflowId 和 changeSnapshot；扩展门还必须绑定同一个 manifest 路径和哈希。
 - 每道门的结论落成 **artifact**，由 Go 校验器检查字段完整性。缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论会被拒绝。
-- 配好并在当前宿主实测通过的 hook 可以拦截违规命令；使用 `gate-workflow.ps1` 记录时，机器层会校验证据并拒绝不合格的门禁记录。
+- 配好并在当前宿主实测通过的 hook 可以拦截违规命令；使用 `formal-gates workflow` / `formal-gates gate` 记录时，机器层会校验证据并拒绝不合格的门禁记录。
 
 ---
 
 ## 安装
 
-本地安装入口在 `scripts\install-formal-gates.ps1`。不要只复制 `SKILL.md`；安装脚本会复制运行时需要的 skill 子集。
+优先使用 native CLI 安装。不要只复制 `SKILL.md`；安装命令会复制运行时需要的 skill 子集。
 
-```powershell
+```bash
 # 装到全局 Claude Code
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary
+bin/formal-gates install --source . --host claude --scope global --force
 
-# 装到全局 Claude Code，并写入 command hook
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Global -Force -RunCanary -ConfigureHook
+# 装到全局 Claude Code，并写入 native command hook
+bin/formal-gates install --source . --host claude --scope global --force --configure-hooks
 
-# 装到全局 Codex
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Codex -Scope Global -Force -RunCanary
+# 装到某个项目的 Codex，并写入 native hook
+bin/formal-gates install --source . --host codex --scope project --project <project> --force --configure-hooks
 
 # 给某个项目安装 Cursor hook 支持
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Cursor -Scope Project -ProjectPath <project> -Force -RunCanary -ConfigureHook
-
-# 装到某个 Claude Code 项目本地
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates.ps1 -HostName Claude -Scope Project -ProjectPath <project> -Force -RunCanary
+bin/formal-gates install --source . --host cursor --scope project --project <project> --force --configure-hooks
 ```
 
-`-RunCanary` 会在复制后跑 canary，验证 skill 文档可读性和路径可达性；失败就别把这次安装当可用。
+Windows 下命令名是 `bin/formal-gates.exe`。安装后可用 `bin/formal-gates(.exe) canary portable --root <formal-gates>` 做原生自检。
 
 每个宿主必须单独安装、单独验证。一个宿主的 canary 通过，不代表另一个宿主也会执行 hook。
 
@@ -140,17 +137,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-formal-gates
 
 本包可以安装 Codex skill；加上 `-ConfigureHook` 时，安装脚本会写入 Codex `hooks.json`。Codex 的 hook 文件顶层必须只保留 `hooks`，不要写 `version`、`description` 等额外字段。
 
-Codex hook 只能当辅助 guardrail，不能当硬门禁。当前本机 Windows + Codex CLI 0.142.0 实测中，`PreToolUse` 在 `/hooks` 里显示为 active/trusted，但 `codex exec` 和脚本启动的 Codex 命令执行仍走 `command_execution`，没有证明能闭环拦截命令。正式门禁必须显式跑 `gate-workflow.ps1` 并核对 artifact；只有同宿主 live canary 看到 `PreToolUse` payload 且非法命令被阻止，才能声明 Codex hook blocking proven。
+Codex hook 只能当辅助 guardrail，不能当硬门禁。当前本机 Windows + Codex CLI 0.142.0 实测中，`PreToolUse` 在 `/hooks` 里显示为 active/trusted，但 `codex exec` 和脚本启动的 Codex 命令执行仍走 `command_execution`，没有证明能闭环拦截命令。正式门禁必须显式跑 `formal-gates workflow` / `formal-gates gate` 并核对 artifact；只有同宿主 live canary 看到 `PreToolUse` payload 且非法命令被阻止，才能声明 Codex hook blocking proven。
 
 ---
 
 ## 环境要求
 
-- **Go 1.22+**：跨平台包校验和 artifact 校验
-- **Windows + PowerShell 5 或 7**：安装、hook、canary 脚本
-- **Python 3.x 或 2.7**：复杂度分析脚本（可选）
-
-macOS 和 Linux 做包结构和 artifact 校验时只需 Go；安装、hook、canary 当前仍是 Windows PowerShell 路径。
+- **用户运行时**：只需要对应平台的 `formal-gates` 二进制和宿主应用；核心命令不要求 PowerShell、Bash、Python、Node 或 Git Bash。
+- **开发 / CI**：需要 Go 1.22+ 来构建、测试和打包原生二进制。
 
 ---
 
@@ -158,24 +152,42 @@ macOS 和 Linux 做包结构和 artifact 校验时只需 Go；安装、hook、ca
 
 > **前置要求**：Go 1.22+，且 `go` 在 PATH 中（运行 `go version` 确认）。
 
-本地可复现 demo 见 [`examples/package-validation-demo.md`](examples/package-validation-demo.md)。它会跑 Go 包校验和 portable OpenSpec canary，并把本机输出写到被忽略的 `.artifacts/tmp/package-validation-demo-output.txt`。
-
-> demo 输出是本机生成物，不随包跟踪。如需写到其他位置，可传 `-OutputPath`。
+本地可复现 demo 见 [`examples/package-validation-demo.md`](examples/package-validation-demo.md)。它先构建 `bin/formal-gates(.exe)`，再用这个二进制跑包校验和原生 portable canary。
 
 ```bash
 # 校验包结构
-go run ./cmd/formal-gates-validate package --root .
+bin/formal-gates package validate --root .
+
+# 跑原生 portable canary
+bin/formal-gates canary portable --root .
 
 # 校验单个 artifact
-go run ./cmd/formal-gates-validate artifact \
+bin/formal-gates artifact validate \
   --root . \
   --file .claude/gates/artifacts/<artifact>.md \
   --gate complexity-gate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
+
+# 校验 dispatch prompt 污染
+bin/formal-gates prompt validate --root . --file <prompt.md>
+
+# 基础 gate state 记录和准入检查
+bin/formal-gates gate record --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates gate verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates gate show --worktree <repo> --format json
+
+# workflow 基础封装：snapshot、record-stage、verify-admission、final-verification、cleanup
+bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
+bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow cleanup --worktree <repo> --dry-run
 ```
 
-这个校验器只做确定性的包结构和 artifact 字段检查。它不是工作流引擎、agent 运行时或发版可信证明系统。
+Windows 下命令名是 `bin/formal-gates.exe`。源码 checkout 做开发测试时，可临时用 `go run ./cmd/formal-gates`；安装后的 hook 和校验路径必须使用 `bin/formal-gates(.exe)`。
+
+这个 native CLI 已有包结构、artifact 字段、dispatch prompt、native install、基础 gate state 检查，以及 workflow snapshot / record-stage / verify-admission / final-verification / cleanup 的 Go 基础能力。FinalExecution 记录、receipt-sensitive 完整工作流、canary 和部分 wrapper 仍未完全迁到 Go；不要把当前 native CLI 当成完整工作流引擎、agent 运行时或发版可信证明系统。
 
 ---
 
@@ -191,10 +203,10 @@ formal-gates/
     architecture-health-gate.md
     code-quality-gate.md
     install-and-hooks.md
-  scripts/                  # PowerShell + Python 门禁脚本
-  cmd/                      # Go 跨平台校验 CLI
-  internal/                 # Go 校验实现
-  hooks/                    # enforce-gate-sequence.ps1
+  bin/                      # 本地构建出的 native CLI，不提交到 git
+  cmd/                      # Go native CLI 源码
+  internal/                 # Go 核心实现
+  hooks/                    # dispatch prompt 污染检测规则
   agents/                   # 独立门禁审查 agent 提示词
   examples/                 # GateWorkflow、行为检查 prompt 样例
   formal-gates.manifest.json # 包索引和安装配置
