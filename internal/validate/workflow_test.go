@@ -289,3 +289,78 @@ func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 		t.Fatal("execute did not remove scratch file")
 	}
 }
+
+func TestWorkflowCompactArchivesRunDirThenLeavesSingleFile(t *testing.T) {
+	dir := t.TempDir()
+	runDir := ".claude/gates/runs/wf"
+	runAbs := filepath.Join(dir, filepath.FromSlash(runDir))
+	qaArtifact := filepath.Join(runAbs, "qa-test-gate.md")
+	mustWrite(t, qaArtifact, gateArtifactText("qa-test-gate", "Execution", "wf", "snap"))
+
+	record := WorkflowRecordStage(WorkflowRecordStageOptions{
+		Worktree:       dir,
+		RunDir:         runDir,
+		Gate:           "qa-test-gate",
+		Verdict:        "PASS",
+		Mode:           "formal",
+		Stage:          "Execution",
+		Artifact:       runDir + "/qa-test-gate.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !record.OK() {
+		t.Fatalf("expected record-stage to pass, got %#v", record.Failures)
+	}
+	mustWrite(t, filepath.Join(runAbs, "notes", "scratch.txt"), "temporary note\n")
+
+	dryRun, result := WorkflowCompact(WorkflowCompactOptions{
+		Worktree:       dir,
+		RunDir:         runDir,
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !result.OK() {
+		t.Fatalf("expected compact dry-run to pass, got %#v", result.Failures)
+	}
+	if !dryRun.DryRun || len(dryRun.Files) != 3 || len(dryRun.Cleanup) != 3 {
+		t.Fatalf("unexpected dry-run archive: %#v", dryRun)
+	}
+	if !isFile(qaArtifact) {
+		t.Fatal("dry-run removed source artifact")
+	}
+	archivedLeftover := filepath.Join(dir, ".claude", "gates", "runs", "old", "leftover.txt")
+	mustWrite(t, filepath.Join(dir, ".claude", "gates", "runs", "old", "formal-gates-workflow-archive.json"), "{}\n")
+	mustWrite(t, archivedLeftover, "stale\n")
+	activeLeftover := filepath.Join(dir, ".claude", "gates", "runs", "active", "leftover.txt")
+	mustWrite(t, activeLeftover, "active\n")
+
+	archive, result := WorkflowCompact(WorkflowCompactOptions{
+		Worktree:       dir,
+		RunDir:         runDir,
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+		Execute:        true,
+	})
+	if !result.OK() {
+		t.Fatalf("expected compact execute to pass, got %#v", result.Failures)
+	}
+	if archive.DryRun {
+		t.Fatalf("expected execute archive, got %#v", archive)
+	}
+	archivePath := filepath.Join(runAbs, "formal-gates-workflow-archive.json")
+	if !isFile(archivePath) {
+		t.Fatal("expected archive file to remain")
+	}
+	if isFile(qaArtifact) || isFile(filepath.Join(runAbs, "notes", "scratch.txt")) {
+		t.Fatal("expected source run files removed")
+	}
+	if len(archive.OtherRunCleanup) != 1 || archive.OtherRunCleanup[0].Status != "removed" {
+		t.Fatalf("expected one other archived cleanup, got %#v", archive.OtherRunCleanup)
+	}
+	if exists(archivedLeftover) {
+		t.Fatal("expected archived run leftover removed")
+	}
+	if !isFile(activeLeftover) {
+		t.Fatal("active unarchived run was removed")
+	}
+}

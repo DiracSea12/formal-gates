@@ -386,6 +386,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("receipt register", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		artifact := fs.String("artifact", "", "review artifact path")
 		gate := fs.String("gate", "", "gate id")
@@ -396,6 +397,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		}
 		registration, result := validate.ReceiptRegisterDispatch(validate.ReceiptRegisterOptions{
 			Worktree:   *worktree,
+			RunDir:     *runDir,
 			Provider:   *provider,
 			Artifact:   *artifact,
 			Gate:       *gate,
@@ -410,6 +412,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("receipt capture", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		event := fs.String("event", "", "host lifecycle event name")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -424,6 +427,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		}
 		eventRecord, result := validate.ReceiptCapture(validate.ReceiptCaptureOptions{
 			Worktree: *worktree,
+			RunDir:   *runDir,
 			Provider: *provider,
 			Event:    *event,
 			Payload:  payload,
@@ -436,6 +440,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("receipt finalize", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		artifact := fs.String("artifact", "", "review artifact path")
 		gate := fs.String("gate", "", "gate id")
@@ -446,6 +451,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		}
 		receipt, result := validate.ReceiptFinalize(validate.ReceiptFinalizeOptions{
 			Worktree:   *worktree,
+			RunDir:     *runDir,
 			Provider:   *provider,
 			Artifact:   *artifact,
 			Gate:       *gate,
@@ -541,6 +547,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
 		state := fs.String("state", "", "gate state JSON path; defaults to .claude/gates/gate-state.json under --worktree")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		gate := fs.String("gate", "", "gate id")
 		verdict := fs.String("verdict", "", "gate verdict")
 		mode := fs.String("mode", "", "gate mode")
@@ -568,6 +575,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 			WorkflowID:     *workflowID,
 			ChangeSnapshot: *changeSnapshot,
 			Reason:         *reason,
+			RunDir:         *runDir,
 		})
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "workflow record-stage", result)
@@ -579,6 +587,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
 		state := fs.String("state", "", "gate state JSON path; defaults to .claude/gates/gate-state.json under --worktree")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		gate := fs.String("gate", "", "gate id")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
@@ -591,6 +600,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 			Gate:           *gate,
 			WorkflowID:     *workflowID,
 			ChangeSnapshot: *changeSnapshot,
+			RunDir:         *runDir,
 		})
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "workflow admission", result)
@@ -601,6 +611,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("workflow final-verification", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		attemptsFile := fs.String("attempts-file", "", "JSON file containing final verification attempts")
 		attemptsJSON := fs.String("attempts-json", "", "JSON string containing final verification attempts")
 		output := fs.String("output", "", "output aggregate artifact path")
@@ -616,6 +627,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		artifact, result := validate.WorkflowFinalVerification(validate.WorkflowFinalVerificationOptions{
 			Worktree:        *worktree,
 			StatePath:       *state,
+			RunDir:          *runDir,
 			AttemptsFile:    *attemptsFile,
 			AttemptsJSON:    *attemptsJSON,
 			OutputArtifact:  *output,
@@ -632,6 +644,40 @@ func runWorkflow(args []string, streams IO) (int, error) {
 			return 1, fmt.Errorf("formal-gates workflow final-verification failed with %d issue(s)", len(result.Failures))
 		}
 		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_FINAL_VERIFICATION status=%s accepted=%d attempts=%d\n", artifact.Status, len(artifact.AcceptedAttempts), len(artifact.Attempts))
+		return 0, nil
+	case "compact":
+		fs := flag.NewFlagSet("workflow compact", flag.ContinueOnError)
+		fs.SetOutput(streams.Stderr)
+		worktree := fs.String("worktree", ".", "repository root")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		workflowID := fs.String("workflow-id", "", "workflow id")
+		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
+		dryRun := fs.Bool("dry-run", false, "write archive and list cleanup without deleting source files")
+		execute := fs.Bool("execute", false, "write verified archive and delete source files")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if *dryRun && *execute {
+			return 1, fmt.Errorf("use only one of --dry-run or --execute")
+		}
+		archive, result := validate.WorkflowCompact(validate.WorkflowCompactOptions{
+			Worktree:       *worktree,
+			RunDir:         *runDir,
+			WorkflowID:     *workflowID,
+			ChangeSnapshot: *changeSnapshot,
+			Execute:        *execute,
+		})
+		if !result.OK() {
+			for _, failure := range result.Failures {
+				fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_COMPACT_BLOCKED %s: %s\n", failure.Path, failure.Message)
+			}
+			return 1, fmt.Errorf("formal-gates workflow compact failed with %d issue(s)", len(result.Failures))
+		}
+		encoded, err := json.MarshalIndent(archive, "", "  ")
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintln(streams.Stdout, string(encoded))
 		return 0, nil
 	case "cleanup":
 		fs := flag.NewFlagSet("workflow cleanup", flag.ContinueOnError)
@@ -915,10 +961,11 @@ Usage:
   %s workflow record-stage --worktree <repo> --gate <gate-id> --verdict <verdict> [--artifact <artifact>] --workflow-id <id> --change-snapshot <snapshot>
   %s workflow verify-admission --worktree <repo> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot>
   %s workflow final-verification --worktree <repo> (--attempts-file <json> | --attempts-json <json>) --output <artifact> --workflow-id <id> --change-snapshot <snapshot> [--record-final-qa --final-qa-artifact <artifact>]
+  %s workflow compact --worktree <repo> --run-dir .claude/gates/runs/<id> --workflow-id <id> [--change-snapshot <snapshot>] [--dry-run | --execute]
   %s workflow cleanup --worktree <repo> [--path <scratch-path>] [--dry-run | --execute]
-  %s receipt register --provider <provider> --worktree <repo> --artifact <review.md> --gate <gate-id> --workflow-id <id> [--stage <stage>]
-  %s receipt capture --provider <provider> --event <event> --worktree <repo> < payload.json
-  %s receipt finalize --provider <provider> --worktree <repo> --artifact <review.md> --gate <gate-id> --workflow-id <id> [--stage <stage>]
+  %s receipt register --provider <provider> --worktree <repo> [--run-dir <dir>] --artifact <review.md> --gate <gate-id> --workflow-id <id> [--stage <stage>]
+  %s receipt capture --provider <provider> --event <event> --worktree <repo> [--run-dir <dir>] < payload.json
+  %s receipt finalize --provider <provider> --worktree <repo> [--run-dir <dir>] --artifact <review.md> --gate <gate-id> --workflow-id <id> [--stage <stage>]
   %s receipt validate --worktree <repo> --receipt <receipt.json> --artifact <review.md> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>]
   %s receipt preflight --host <host> --worktree <repo>
   %s hook decide       < payload.json
@@ -927,5 +974,5 @@ Usage:
   %s complexity check  --task-type <type> --worktree <repo> [--max-net <n>] [--max-new-prod-files <n>] [--max-prod-insertions <n>] [--staged] [--json]
 
 The native CLI performs deterministic package, artifact, dispatch prompt, install, hook decision, basic gate-state checks, native workflow checks, receipt checks, complexity diff checks, the portable native canary, and the Codex hook live canary.
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }
