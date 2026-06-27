@@ -3,6 +3,7 @@ package validate
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -33,12 +34,34 @@ type WorkflowSnapshotRecord struct {
 	ChangeSnapshot     string `json:"changeSnapshot"`
 }
 
-type WorkflowRecordStageOptions = GateRecordOptions
-type WorkflowVerifyAdmissionOptions = GateAdmissionOptions
+type WorkflowRecordStageOptions struct {
+	Worktree       string
+	StatePath      string
+	Gate           string
+	Verdict        string
+	Mode           string
+	Stage          string
+	Artifact       string
+	Actor          string
+	WorkflowID     string
+	ChangeSnapshot string
+	Reason         string
+	RunDir         string
+}
+
+type WorkflowVerifyAdmissionOptions struct {
+	Worktree       string
+	StatePath      string
+	Gate           string
+	WorkflowID     string
+	ChangeSnapshot string
+	RunDir         string
+}
 
 type WorkflowFinalVerificationOptions struct {
 	Worktree        string
 	StatePath       string
+	RunDir          string
 	AttemptsJSON    string
 	AttemptsFile    string
 	OutputArtifact  string
@@ -66,6 +89,14 @@ type WorkflowCleanupOptions struct {
 	Execute  bool
 }
 
+type WorkflowCompactOptions struct {
+	Worktree       string
+	RunDir         string
+	WorkflowID     string
+	ChangeSnapshot string
+	Execute        bool
+}
+
 type WorkflowCleanupRecord struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
@@ -76,6 +107,22 @@ type WorkflowCleanupReport struct {
 	Worktree      string                  `json:"worktree"`
 	DryRun        bool                    `json:"dryRun"`
 	Paths         []WorkflowCleanupRecord `json:"paths"`
+}
+
+type WorkflowCompactArchive struct {
+	SchemaVersion   int                     `json:"schemaVersion"`
+	WorkflowID      string                  `json:"workflowId"`
+	ChangeSnapshot  string                  `json:"changeSnapshot,omitempty"`
+	RunDir          string                  `json:"runDir"`
+	Files           []WorkflowCompactFile   `json:"files"`
+	Cleanup         []WorkflowCleanupRecord `json:"cleanup"`
+	OtherRunCleanup []WorkflowCleanupRecord `json:"otherRunCleanup,omitempty"`
+	DryRun          bool                    `json:"dryRun"`
+}
+
+type WorkflowCompactFile struct {
+	Path          string `json:"path"`
+	ContentBase64 string `json:"contentBase64,omitempty"`
 }
 
 func WorkflowSnapshot(options WorkflowSnapshotOptions) (WorkflowSnapshotRecord, Result) {
@@ -124,11 +171,56 @@ func WorkflowSnapshotJSON(snapshot WorkflowSnapshotRecord) ([]byte, error) {
 }
 
 func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
-	return GateRecord(GateRecordOptions(options))
+	worktree := cleanRoot(options.Worktree)
+	var result Result
+	runDir := ""
+	if strings.TrimSpace(options.RunDir) != "" {
+		var err error
+		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+		if err != nil {
+			result.add("run-dir", err.Error())
+			return result
+		}
+		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "artifact", options.Artifact, false); err != nil {
+			result.add("artifact", err.Error())
+			return result
+		}
+	}
+	record := GateRecordOptions{
+		Worktree:       worktree,
+		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
+		Gate:           options.Gate,
+		Verdict:        options.Verdict,
+		Mode:           options.Mode,
+		Stage:          options.Stage,
+		Artifact:       options.Artifact,
+		Actor:          options.Actor,
+		WorkflowID:     options.WorkflowID,
+		ChangeSnapshot: options.ChangeSnapshot,
+		Reason:         options.Reason,
+	}
+	return GateRecord(record)
 }
 
 func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
-	return GateVerifyAdmission(GateAdmissionOptions(options))
+	worktree := cleanRoot(options.Worktree)
+	var result Result
+	runDir := ""
+	if strings.TrimSpace(options.RunDir) != "" {
+		var err error
+		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+		if err != nil {
+			result.add("run-dir", err.Error())
+			return result
+		}
+	}
+	return GateVerifyAdmission(GateAdmissionOptions{
+		Worktree:       worktree,
+		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
+		Gate:           options.Gate,
+		WorkflowID:     options.WorkflowID,
+		ChangeSnapshot: options.ChangeSnapshot,
+	})
 }
 
 func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (WorkflowFinalVerificationArtifact, Result) {
@@ -137,6 +229,27 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 	if !isDir(worktree) {
 		result.add("worktree", "worktree does not exist: "+worktree)
 		return WorkflowFinalVerificationArtifact{}, result
+	}
+	runDir := ""
+	if strings.TrimSpace(options.RunDir) != "" {
+		var err error
+		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+		if err != nil {
+			result.add("run-dir", err.Error())
+			return WorkflowFinalVerificationArtifact{}, result
+		}
+		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "attempts-file", options.AttemptsFile, false); err != nil {
+			result.add("attempts-file", err.Error())
+		}
+		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "output", options.OutputArtifact, true); err != nil {
+			result.add("output", err.Error())
+		}
+		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "final-qa-artifact", options.FinalQAArtifact, false); err != nil {
+			result.add("final-qa-artifact", err.Error())
+		}
+		if !result.OK() {
+			return WorkflowFinalVerificationArtifact{}, result
+		}
 	}
 	attemptText := strings.TrimSpace(options.AttemptsJSON)
 	if strings.TrimSpace(options.AttemptsFile) != "" {
@@ -176,6 +289,12 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt is missing artifact")
 				continue
 			}
+			if runDir != "" {
+				if err := requireWorkflowPathUnderRunDir(worktree, runDir, fmt.Sprintf("attempts[%d].artifact", i), artifact, false); err != nil {
+					result.add(fmt.Sprintf("attempts[%d].artifact", i), err.Error())
+					continue
+				}
+			}
 			artifactPath := resolvePath(worktree, artifact)
 			if cleanupScratchPath(worktree, artifactPath) {
 				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt artifact cannot be under cleanup scratch: "+slash(artifactPath))
@@ -204,11 +323,15 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 	}
 	output := strings.TrimSpace(options.OutputArtifact)
 	if output == "" {
-		suffix := strings.TrimSpace(options.WorkflowID)
-		if suffix == "" {
-			suffix = "workflow"
+		if runDir != "" {
+			output = relativePath(worktree, filepath.Join(runDir, "final-verification.json"))
+		} else {
+			suffix := strings.TrimSpace(options.WorkflowID)
+			if suffix == "" {
+				suffix = "workflow"
+			}
+			output = filepath.ToSlash(filepath.Join(".claude", "gates", "artifacts", "final-verification-"+suffix+".json"))
 		}
-		output = filepath.ToSlash(filepath.Join(".claude", "gates", "artifacts", "final-verification-"+suffix+".json"))
 	}
 	outputPath := resolvePath(worktree, output)
 	if cleanupScratchPath(worktree, outputPath) {
@@ -219,13 +342,13 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 		result.add("output", err.Error())
 	}
 	if options.RecordFinalQA {
-		recordResult := recordFinalQA(worktree, artifact.Status, options)
+		recordResult := recordFinalQA(worktree, runDir, artifact.Status, options)
 		result.Failures = append(result.Failures, recordResult.Failures...)
 	}
 	return artifact, result
 }
 
-func recordFinalQA(worktree, status string, options WorkflowFinalVerificationOptions) Result {
+func recordFinalQA(worktree, runDir, status string, options WorkflowFinalVerificationOptions) Result {
 	var result Result
 	finalQA := strings.TrimSpace(options.FinalQAArtifact)
 	if finalQA == "" {
@@ -247,7 +370,7 @@ func recordFinalQA(worktree, status string, options WorkflowFinalVerificationOpt
 	}
 	record := GateRecord(GateRecordOptions{
 		Worktree:       worktree,
-		StatePath:      options.StatePath,
+		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
 		Gate:           "qa-test-gate",
 		Verdict:        status,
 		Mode:           "formal",
@@ -303,6 +426,315 @@ func WorkflowCleanup(options WorkflowCleanupOptions) (WorkflowCleanupReport, Res
 		report.Paths = append(report.Paths, record)
 	}
 	return report, result
+}
+
+func WorkflowCompact(options WorkflowCompactOptions) (WorkflowCompactArchive, Result) {
+	worktree := cleanRoot(options.Worktree)
+	var result Result
+	if !isDir(worktree) {
+		result.add("worktree", "worktree does not exist: "+worktree)
+		return WorkflowCompactArchive{}, result
+	}
+	workflowID := strings.TrimSpace(options.WorkflowID)
+	if workflowID == "" {
+		result.add("workflow-id", "--workflow-id is required")
+		return WorkflowCompactArchive{}, result
+	}
+	runDir, err := resolveWorkflowRunDir(worktree, workflowID, options.RunDir)
+	if err != nil {
+		result.add("run-dir", err.Error())
+		return WorkflowCompactArchive{}, result
+	}
+	if !isDir(runDir) {
+		result.add("run-dir", "run directory does not exist: "+slash(runDir))
+		return WorkflowCompactArchive{}, result
+	}
+	output := filepath.Join(runDir, "formal-gates-workflow-archive.json")
+
+	paths, err := workflowRunFiles(runDir, output)
+	if err != nil {
+		result.add("compact", err.Error())
+		return WorkflowCompactArchive{}, result
+	}
+	files := make([]WorkflowCompactFile, 0, len(paths))
+	cleanup := make([]WorkflowCleanupRecord, 0, len(paths))
+	for _, path := range paths {
+		if samePath(path, output) {
+			continue
+		}
+		file := WorkflowCompactFile{Path: relativePath(worktree, path)}
+		files = append(files, file)
+		cleanup = append(cleanup, WorkflowCleanupRecord{Path: file.Path, Status: "would-remove"})
+	}
+	otherCleanup, err := orphanedArchivedRunFiles(worktree, runDir)
+	if err != nil {
+		result.add("runs", err.Error())
+		return WorkflowCompactArchive{}, result
+	}
+	if !result.OK() {
+		return WorkflowCompactArchive{}, result
+	}
+	archive := WorkflowCompactArchive{
+		SchemaVersion:   1,
+		WorkflowID:      workflowID,
+		ChangeSnapshot:  strings.TrimSpace(options.ChangeSnapshot),
+		RunDir:          relativePath(worktree, runDir),
+		Files:           files,
+		Cleanup:         cleanup,
+		OtherRunCleanup: otherCleanup,
+		DryRun:          !options.Execute,
+	}
+	if !options.Execute {
+		return archive, result
+	}
+	if err := writeWorkflowCompactArchive(worktree, output, archive); err != nil {
+		result.add("output", err.Error())
+		return archive, result
+	}
+	if err := verifyWorkflowCompactArchive(output, len(archive.Files)); err != nil {
+		result.add("output", "archive verification failed: "+err.Error())
+		return archive, result
+	}
+	removeWorkflowFiles(worktree, archive.Cleanup, &result)
+	removeWorkflowFiles(worktree, archive.OtherRunCleanup, &result)
+	archive.DryRun = false
+	if err := removeEmptyDirsUnder(runDir); err != nil {
+		result.add("run-dir", "cannot remove empty run directories: "+err.Error())
+	}
+	runsRoot := filepath.Join(absPath(worktree), ".claude", "gates", "runs")
+	if isDir(runsRoot) {
+		if err := removeEmptyDirsUnder(runsRoot); err != nil {
+			result.add("runs", "cannot remove empty archived run directories: "+err.Error())
+		}
+	}
+	return archive, result
+}
+
+func workflowStatePath(worktree, statePath, runDir string) string {
+	if strings.TrimSpace(statePath) != "" {
+		return resolveStatePath(worktree, statePath)
+	}
+	if strings.TrimSpace(runDir) != "" {
+		return filepath.Join(runDir, "gate-state.json")
+	}
+	return resolveStatePath(worktree, "")
+}
+
+func resolveWorkflowRunDir(worktree, workflowID, value string) (string, error) {
+	worktreeAbs := absPath(worktree)
+	runDir := strings.TrimSpace(value)
+	if runDir == "" {
+		if strings.TrimSpace(workflowID) == "" {
+			return "", fmt.Errorf("--workflow-id is required when using a default workflow run directory")
+		}
+		runDir = filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID))
+	}
+	full := absPath(resolvePath(worktreeAbs, runDir))
+	runsRoot := filepath.Join(worktreeAbs, ".claude", "gates", "runs")
+	if samePath(full, runsRoot) || !pathUnder(full, runsRoot) {
+		return "", fmt.Errorf("run directory must be under .claude/gates/runs: %s", slash(full))
+	}
+	return full, nil
+}
+
+func requireWorkflowPathUnderRunDir(worktree, runDir, label, value string, allowEmpty bool) error {
+	if strings.TrimSpace(value) == "" {
+		if allowEmpty {
+			return nil
+		}
+		return nil
+	}
+	return requireAbsPathUnderRunDir(runDir, label, resolvePath(worktree, value))
+}
+
+func requireAbsPathUnderRunDir(runDir, label, path string) error {
+	full := absPath(path)
+	if samePath(full, runDir) || !pathUnder(full, runDir) {
+		return fmt.Errorf("%s must be under --run-dir: %s", label, slash(full))
+	}
+	return nil
+}
+
+func workflowRunFiles(runDir, output string) ([]string, error) {
+	paths := map[string]bool{}
+	err := filepath.WalkDir(runDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeType != 0 {
+			return nil
+		}
+		full := absPath(path)
+		if !samePath(full, output) {
+			paths[full] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(paths))
+	for path := range paths {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func removeWorkflowFiles(worktree string, records []WorkflowCleanupRecord, result *Result) {
+	for i, record := range records {
+		path := resolvePath(worktree, record.Path)
+		if !isFile(path) {
+			records[i].Status = "missing"
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			records[i].Status = "remove-failed"
+			result.add(record.Path, "cleanup remove failed: "+err.Error())
+			continue
+		}
+		records[i].Status = "removed"
+	}
+}
+
+func writeWorkflowCompactArchive(worktree, path string, archive WorkflowCompactArchive) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	out := archive
+	out.Files = append([]WorkflowCompactFile(nil), archive.Files...)
+	for _, item := range archive.Files {
+		data, err := os.ReadFile(resolvePath(worktree, item.Path))
+		if err != nil {
+			return err
+		}
+		for i := range out.Files {
+			if out.Files[i].Path == item.Path {
+				out.Files[i].ContentBase64 = base64.StdEncoding.EncodeToString(data)
+				break
+			}
+		}
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func verifyWorkflowCompactArchive(path string, expectedFiles int) error {
+	var archive WorkflowCompactArchive
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &archive); err != nil {
+		return err
+	}
+	if len(archive.Files) != expectedFiles {
+		return fmt.Errorf("expected %d archived files, got %d", expectedFiles, len(archive.Files))
+	}
+	for _, file := range archive.Files {
+		if _, err := base64.StdEncoding.DecodeString(file.ContentBase64); err != nil {
+			return fmt.Errorf("invalid content for %s: %w", file.Path, err)
+		}
+	}
+	return nil
+}
+
+func removeEmptyDirsUnder(root string) error {
+	var dirs []string
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && !samePath(path, root) {
+			dirs = append(dirs, path)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return len(dirs[i]) > len(dirs[j])
+	})
+	for _, dir := range dirs {
+		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+			if entries, readErr := os.ReadDir(dir); readErr == nil && len(entries) > 0 {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func orphanedArchivedRunFiles(worktree, currentRunDir string) ([]WorkflowCleanupRecord, error) {
+	worktreeAbs := absPath(worktree)
+	runsRoot := filepath.Join(worktreeAbs, ".claude", "gates", "runs")
+	if !isDir(runsRoot) {
+		return nil, nil
+	}
+	var records []WorkflowCleanupRecord
+	err := filepath.WalkDir(runsRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() || samePath(path, runsRoot) {
+			return nil
+		}
+		if samePath(path, currentRunDir) || pathUnder(path, currentRunDir) {
+			return filepath.SkipDir
+		}
+		archive := workflowArchiveInDir(path)
+		if archive == "" {
+			return nil
+		}
+		return filepath.WalkDir(path, func(candidate string, candidateEntry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if candidateEntry.IsDir() {
+				return nil
+			}
+			if candidateEntry.Type()&os.ModeType != 0 {
+				return nil
+			}
+			if samePath(candidate, archive) {
+				return nil
+			}
+			records = append(records, WorkflowCleanupRecord{
+				Path:   relativePath(worktreeAbs, candidate),
+				Status: "would-remove",
+			})
+			return nil
+		})
+	})
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Path < records[j].Path
+	})
+	return records, err
+}
+
+func workflowArchiveInDir(dir string) string {
+	for _, name := range []string{"formal-gates-workflow-archive.zip", "formal-gates-workflow-archive.json"} {
+		path := filepath.Join(dir, name)
+		if isFile(path) {
+			return path
+		}
+	}
+	return ""
 }
 
 func fileHashSnapshot(worktree, detectedVCS string) (WorkflowSnapshotRecord, error) {

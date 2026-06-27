@@ -332,6 +332,58 @@ func TestRunWorkflowCleanupDryRunAndExecute(t *testing.T) {
 	}
 }
 
+func TestRunWorkflowCompactExecuteRemovesRunGarbage(t *testing.T) {
+	dir := t.TempDir()
+	runDir := ".claude/gates/runs/wf"
+	runAbs := filepath.Join(dir, filepath.FromSlash(runDir))
+	artifact := filepath.Join(runAbs, "qa-test-gate.md")
+	mustWriteCLI(t, artifact, cliGateArtifactText("qa-test-gate", "Execution", "wf", "snap"))
+	garbage := filepath.Join(runAbs, "tmp", "garbage.txt")
+	mustWriteCLI(t, garbage, "garbage\n")
+
+	var stdout bytes.Buffer
+	code := Run("formal-gates", []string{
+		"workflow", "record-stage",
+		"--worktree", dir,
+		"--run-dir", runDir,
+		"--gate", "qa-test-gate",
+		"--verdict", "PASS",
+		"--mode", "formal",
+		"--stage", "Execution",
+		"--artifact", runDir + "/qa-test-gate.md",
+		"--workflow-id", "wf",
+		"--change-snapshot", "snap",
+	}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("expected record-stage to pass, code=%d stdout=%q", code, stdout.String())
+	}
+
+	stdout.Reset()
+	code = Run("formal-gates", []string{
+		"workflow", "compact",
+		"--worktree", dir,
+		"--run-dir", runDir,
+		"--workflow-id", "wf",
+		"--change-snapshot", "snap",
+		"--execute",
+	}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("expected compact execute to pass, code=%d stdout=%q", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"dryRun": false`) || !strings.Contains(stdout.String(), `"status": "removed"`) {
+		t.Fatalf("unexpected compact stdout: %q", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(runAbs, "formal-gates-workflow-archive.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(artifact); !os.IsNotExist(err) {
+		t.Fatalf("expected source artifact removed, err=%v", err)
+	}
+	if _, err := os.Stat(garbage); !os.IsNotExist(err) {
+		t.Fatalf("expected run garbage removed, err=%v", err)
+	}
+}
+
 func TestRunReceiptCaptureAndPreflight(t *testing.T) {
 	dir := t.TempDir()
 	payload := `{"workflowId":"wf","gate":"complexity-gate","subagentId":"subagent-1","dispatchId":"dispatch-1"}`
@@ -445,6 +497,12 @@ func mustWriteCLI(t *testing.T, path, text string) {
 
 func writeCLIArtifact(t *testing.T, dir, gate, stage, workflowID, snapshot string) {
 	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, gate+".md"), []byte(cliGateArtifactText(gate, stage, workflowID, snapshot)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 	lines := []string{
 		"Review mode: ZERO_CONTEXT_FORMAL",
 		"Prompt contamination check: PASS",
@@ -471,7 +529,5 @@ func writeCLIArtifact(t *testing.T, dir, gate, stage, workflowID, snapshot strin
 		"  rework_owner: none",
 		"  rerun_from: none",
 	)
-	if err := os.WriteFile(filepath.Join(dir, gate+".md"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	return strings.Join(lines, "\n") + "\n"
 }

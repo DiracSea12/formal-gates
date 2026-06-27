@@ -114,7 +114,6 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			ChangeSnapshot: "snap",
 		}))
 	}
-
 	attemptPath := filepath.Join(worktree, ".claude", "gates", "artifacts", "attempt.json")
 	if err := writeCanaryFile(attemptPath, `{"ok":true}`+"\n"); err != nil {
 		addCheck("final-verification-fixture", false, err.Error())
