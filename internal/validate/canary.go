@@ -63,13 +63,13 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	if err != nil {
 		addCheck("hook-denies-native-pass-without-artifact", false, err.Error())
 	} else {
-		addCheck("hook-denies-native-pass-without-artifact", denied.Decision == "deny", denied.Reason)
+		addCheck("hook-denies-native-pass-without-artifact", denied.PermissionDecision == "deny", denied.Reason)
 	}
 	allowed, err := Hook([]byte(`{"command":"formal-gates workflow record-stage --gate qa-test-gate --verdict PASS --artifact qa.md --workflow-id wf --change-snapshot snap"}`))
 	if err != nil {
 		addCheck("hook-allows-native-pass-with-artifact", false, err.Error())
 	} else {
-		addCheck("hook-allows-native-pass-with-artifact", allowed.Decision == "allow", allowed.Reason)
+		addCheck("hook-allows-native-pass-with-artifact", allowed.PermissionDecision == "allow", allowed.Reason)
 	}
 
 	tempRoot, err := os.MkdirTemp("", "formal-gates-native-canary-")

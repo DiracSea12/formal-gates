@@ -36,7 +36,7 @@ func TestCodexHookProbeRecordsAndDeniesInvalidPass(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected hook probe to pass, got %#v", result.Failures)
 	}
-	if probe.ExitCode != 2 || probe.Decision == nil || probe.Decision.Decision != "deny" {
+	if probe.ExitCode != 2 || probe.Decision == nil || probe.Decision.PermissionDecision != "deny" {
 		t.Fatalf("expected denied hook decision, got %#v", probe)
 	}
 	if _, err := os.Stat(filepath.FromSlash(probe.PayloadPath)); err != nil {
@@ -46,7 +46,7 @@ func TestCodexHookProbeRecordsAndDeniesInvalidPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(text), "exit=2") || !strings.Contains(string(text), `"decision":"deny"`) {
+	if !strings.Contains(string(text), "exit=2") || !strings.Contains(string(text), `"permissionDecision":"deny"`) {
 		t.Fatalf("unexpected hook output: %q", text)
 	}
 }

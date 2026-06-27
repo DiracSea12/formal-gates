@@ -97,7 +97,7 @@ func run(program string, args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		fmt.Fprintln(streams.Stdout, string(encoded))
-		if decision.Decision == "deny" {
+		if decision.PermissionDecision == "deny" {
 			return 2, nil
 		}
 		return 0, nil

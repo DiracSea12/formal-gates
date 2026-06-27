@@ -36,6 +36,22 @@ func TestPackageRejectsScriptsDirectory(t *testing.T) {
 	}
 }
 
+func TestPackageRequiresShowcaseAsset(t *testing.T) {
+	root := copyPackageFixture(t)
+	asset := filepath.Join(root, "assets", "showcase", "no-evidence-no-pass.svg")
+	if err := os.Remove(asset); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to require showcase asset")
+	}
+	if !resultHasPath(result, "assets/showcase/no-evidence-no-pass.svg") {
+		t.Fatalf("expected showcase asset failure, got %#v", result.Failures)
+	}
+}
+
 func copyPackageFixture(t *testing.T) string {
 	t.Helper()
 	source := repoRootValidateTest(t)

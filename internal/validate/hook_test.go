@@ -60,8 +60,8 @@ func TestHookDenyGateWorkflowPassWithoutArtifact(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if decision.Decision != "deny" {
-				t.Fatalf("expected deny, got %#v", decision)
+			if decision.Decision != "block" {
+				t.Fatalf("expected block, got %#v", decision)
 			}
 			if decision.Permission != "deny" || decision.PermissionDecision != "deny" {
 				t.Fatalf("expected deny-compatible host fields, got %#v", decision)
@@ -119,8 +119,8 @@ func TestHookRejectsLegacyPowerShellCommands(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if decision.Decision != "deny" {
-				t.Fatalf("expected deny, got %#v", decision)
+			if decision.Decision != "block" {
+				t.Fatalf("expected block, got %#v", decision)
 			}
 			if decision.Reason == "" || decision.PermissionDecision != "deny" {
 				t.Fatalf("expected legacy deny reason and host fields, got %#v", decision)
@@ -164,8 +164,8 @@ func TestHookAllowsRepresentativePayloads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if decision.Decision != "allow" {
-				t.Fatalf("expected allow, got %#v", decision)
+			if decision.Decision != "approve" {
+				t.Fatalf("expected approve, got %#v", decision)
 			}
 			if decision.Permission != "allow" || decision.PermissionDecision != "allow" {
 				t.Fatalf("expected allow-compatible host fields, got %#v", decision)
@@ -178,5 +178,19 @@ func TestHookAllowsMalformedNonCommandFailureIsNotHidden(t *testing.T) {
 	_, err := Hook([]byte(`{`))
 	if err == nil {
 		t.Fatal("expected invalid JSON to fail")
+	}
+}
+
+func TestHookAcceptsUTF8BOMPayload(t *testing.T) {
+	payload := append([]byte{0xef, 0xbb, 0xbf}, []byte(`{
+		"command": "formal-gates workflow record-stage --gate complexity-gate --verdict PASS --workflow-id wf --change-snapshot snap"
+	}`)...)
+
+	decision, err := Hook(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != "block" || decision.PermissionDecision != "deny" {
+		t.Fatalf("expected denied hook decision, got %#v", decision)
 	}
 }

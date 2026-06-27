@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -15,7 +16,7 @@ type HookDecision struct {
 
 func Hook(payload []byte) (HookDecision, error) {
 	var decoded any
-	if err := json.Unmarshal(payload, &decoded); err != nil {
+	if err := json.Unmarshal(trimJSONBOM(payload), &decoded); err != nil {
 		return HookDecision{}, err
 	}
 
@@ -25,7 +26,7 @@ func Hook(payload []byte) (HookDecision, error) {
 	}
 	if mentionsLegacyFormalGatesCommand(command) {
 		return HookDecision{
-			Decision:                 "deny",
+			Decision:                 "block",
 			Reason:                   "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
 			Permission:               "deny",
 			PermissionDecision:       "deny",
@@ -34,7 +35,7 @@ func Hook(payload []byte) (HookDecision, error) {
 	}
 	if deniesFormalGatePassWithoutArtifact(command) {
 		return HookDecision{
-			Decision:                 "deny",
+			Decision:                 "block",
 			Reason:                   "formal gate PASS recording requires an artifact",
 			Permission:               "deny",
 			PermissionDecision:       "deny",
@@ -44,9 +45,13 @@ func Hook(payload []byte) (HookDecision, error) {
 	return allowHook("command allowed"), nil
 }
 
+func trimJSONBOM(payload []byte) []byte {
+	return bytes.TrimPrefix(payload, []byte{0xef, 0xbb, 0xbf})
+}
+
 func allowHook(reason string) HookDecision {
 	return HookDecision{
-		Decision:                 "allow",
+		Decision:                 "approve",
 		Reason:                   reason,
 		Permission:               "allow",
 		PermissionDecision:       "allow",

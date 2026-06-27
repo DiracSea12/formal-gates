@@ -15,6 +15,7 @@ Per-host integration varies; actual behavior is determined by live canary.
 ## Table of Contents
 
 - [One-Line Quick Start](#one-line-quick-start)
+- [What Does It Block?](#what-does-it-block)
 - [What Can I Do](#what-can-i-do)
 - [Problems It Solves](#problems-it-solves)
 - [How the Four Gates Work](#how-the-four-gates-work)
@@ -31,6 +32,37 @@ Per-host integration varies; actual behavior is determined by live canary.
 ## One-Line Quick Start
 
 Stop AI from writing, reviewing, testing, and then declaring its own PASS.
+
+## What Does It Block?
+
+The common AI failure is simple: the AI writes the code, says it tested it, and then declares its own work as "PASS."
+
+**formal-gates keeps one rule: no evidence, no PASS record.**
+
+![No evidence, no PASS](assets/showcase/no-evidence-no-pass.svg)
+
+### What Do These Words Mean?
+
+- **PASS**: a gate verdict that allows work to move forward.
+- **Evidence**: a real test, review, or verification result.
+- **Artifact**: the file that stores that evidence, such as a QA report, code-quality review, or final verification record.
+- **Gate**: one review step, such as QA, complexity, architecture health, or code quality.
+
+In plain terms, formal-gates does not trust "I tested it." The AI has to write evidence into a file, and the command layer checks whether that file can support a PASS.
+
+### Why Is That Useful?
+
+It turns "the AI thinks it is done" into three checkable questions:
+
+1. Is there an evidence file?
+2. Are the evidence fields complete?
+3. Does it match the current workflow and snapshot?
+
+If evidence is missing, incomplete, or reused from an old snapshot, the PASS record is rejected.
+
+To reproduce the smallest case, run this demo: [Minimal Self-PASS Block Demo](examples/minimal-self-pass-block-demo.en.md).
+
+> Note: a hook decision that allows a command to continue does not mean formal PASS has been recorded. The artifact still has to exist and pass formal-gates artifact validation.
 
 ---
 
@@ -111,6 +143,14 @@ bin/formal-gates canary codex-hook --worktree .
 ```
 
 `portable canary` is the main proof for capabilities controlled by this package. `codex-hook` only proves whether the current Codex client actually invokes hooks. If it fails, keep using explicit `formal-gates workflow` / `formal-gates gate` evidence validation and do not claim Codex hook blocking proven.
+
+Same-host live canary evidence currently proves this much:
+
+| Host | Proven result | Still not claimed |
+|------|---------------|-------------------|
+| Claude Code 2.1.193 | Project-local hooks block PASS recording without an artifact; commands with an artifact clear the hook decision. | This does not prove the Windows global hook path, and it does not prove Codex. |
+| Cursor headless 2026.06.26-7079533 | Project-local hooks block PASS recording without an artifact; a command with a real QA artifact can record gate-state successfully. | This does not prove every Cursor version or a public release-trust chain. |
+| Codex CLI 0.142.0 | Native local validation works; Codex hook closed-loop interception is still not proven. | Do not claim Codex hook blocking proven. |
 
 ---
 
