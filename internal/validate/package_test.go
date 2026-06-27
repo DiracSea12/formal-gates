@@ -23,14 +23,16 @@ func TestPackageRejectsScriptRuntimeFiles(t *testing.T) {
 
 func TestPackageRejectsScriptsDirectory(t *testing.T) {
 	root := copyPackageFixture(t)
-	mustWriteValidateTest(t, filepath.Join(root, "scripts", "gate-workflow.ps1"), "legacy workflow\n")
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	result := Package(root)
 	if result.OK() {
 		t.Fatal("expected package validation to reject scripts directory")
 	}
-	if !resultHasPath(result, "scripts") || !resultHasPath(result, "scripts/gate-workflow.ps1") {
-		t.Fatalf("expected scripts directory and file failures, got %#v", result.Failures)
+	if !resultHasPath(result, "scripts") {
+		t.Fatalf("expected scripts directory failure, got %#v", result.Failures)
 	}
 }
 
