@@ -80,7 +80,7 @@ bin/formal-gates receipt preflight --host codex --worktree <repo>
 
 Use `bin/formal-gates.exe` on Windows. Source checkout development tests may use `go run ./cmd/formal-gates`, but installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
-The `hook` command returns compact JSON with `decision`, `reason`, and host-compatible allow/deny fields. It rejects legacy PowerShell formal-gates commands and blocks missing-artifact PASS recording for native `formal-gates ... record...` commands. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
+The `hook` command returns compact JSON with `decision`, `reason`, and host-compatible allow/deny fields. Top-level `decision` uses `block` / `approve` for Claude Code and Cursor compatibility; `permission` and `permissionDecision` remain `deny` / `allow` for hosts or checks that use those fields. It rejects legacy PowerShell formal-gates commands and blocks missing-artifact PASS recording for native `formal-gates ... record...` commands. It only decides whether a command-like payload should be allowed or denied; it does not prove that any host actually invokes hooks.
 
 To install the runtime subset without PowerShell:
 
@@ -117,9 +117,9 @@ Current package scope:
 
 | Host | Readable skill support | Install guidance | Hook configuration | Hook blocking proven by live canary |
 |---|---|---|---|---|
-| Claude Code | supported | bundled installer | bundled command-hook guidance | not claimed without same-host canary |
-| Codex | supported | bundled installer | bundled command-hook guidance | not claimed without same-host canary |
-| Cursor | project-rule or markdown guidance | bundled installer | bundled `hooks.json` guidance | not claimed without same-host canary |
+| Claude Code | supported | bundled installer | bundled command-hook guidance | project-local proven on Claude Code 2.1.193; global Windows path still has known UX risk |
+| Codex | supported | bundled installer | bundled command-hook guidance | not proven on Codex CLI 0.142.0 |
+| Cursor | project-rule or markdown guidance | bundled installer | bundled `hooks.json` guidance | project-local proven on Cursor headless 2026.06.26-7079533 |
 | Gemini | manual markdown adaptation | not bundled | not bundled | not claimed |
 | OpenCode | manual markdown adaptation | not bundled | not bundled | not claimed |
 | Windsurf | manual markdown adaptation | not bundled | not bundled | not claimed |

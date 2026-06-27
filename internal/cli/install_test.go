@@ -31,6 +31,7 @@ func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "bin", installTestBinaryName())); err != nil {
 		t.Fatalf("expected native binary copied: %v", err)
 	}
+	assertFileContains(t, filepath.Join(target, "assets", "showcase", "no-evidence-no-pass.svg"), "No evidence")
 	assertFileContains(t, filepath.Join(target, "hooks", "pollution-patterns.json"), "exact_terms")
 	assertNoScriptRuntimeFiles(t, target)
 	for _, unexpected := range []string{
@@ -203,13 +204,14 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	if err := os.Chmod(filepath.Join(source, "bin", installTestBinaryName()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{"cmd", "internal", "agents", "examples", "hooks", "references", "scripts"} {
+	for _, dir := range []string{"cmd", "internal", "agents", "examples", "hooks", "references", "assets", "assets/showcase", "scripts"} {
 		if err := os.MkdirAll(filepath.Join(source, dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		mustWriteCLI(t, filepath.Join(source, dir, ".keep"), "keep\n")
 	}
 	mustWriteCLI(t, filepath.Join(source, "hooks", "pollution-patterns.json"), `{"regex_groups":[],"exact_terms":[]}`+"\n")
+	mustWriteCLI(t, filepath.Join(source, "assets", "showcase", "no-evidence-no-pass.svg"), "<svg>No evidence</svg>\n")
 	mustWriteCLI(t, filepath.Join(source, "hooks", "enforce-gate-sequence.ps1"), "legacy hook\n")
 	mustWriteCLI(t, filepath.Join(source, "hooks", "capture-subagent-receipt.ps1"), "legacy receipt hook\n")
 	mustWriteCLI(t, filepath.Join(source, "scripts", "gate-workflow.ps1"), "legacy workflow\n")

@@ -15,6 +15,7 @@
 ## 目录
 
 - [我能做什么](#我能做什么)
+- [它到底拦什么？](#它到底拦什么)
 - [解决什么问题](#解决什么问题)
 - [四道门怎么走](#四道门怎么走)
 - [核心机制](#核心机制)
@@ -30,6 +31,37 @@
 ## 一句话体验
 
 防止 AI 自写、自审、自测代码，最后自己宣布 PASS。
+
+## 它到底拦什么？
+
+AI 最容易犯的一个错：代码是它写的，测试是它说跑了，最后还是它自己宣布“PASS”。
+
+**formal-gates 做的事很简单：没有证据，就不能记录 PASS。**
+
+![No evidence, no PASS](assets/showcase/no-evidence-no-pass.svg)
+
+### 这里的几个词是什么意思？
+
+- **PASS**：某一道门允许继续往下走的结论。
+- **Evidence**：真实测试、审查或验证留下的证据。
+- **Artifact**：保存这份证据的文件，比如 QA 报告、代码质量审查报告、最终验证记录。
+- **Gate**：一道审查门，比如 QA、复杂度、架构健康、代码质量。
+
+换句话说，formal-gates 不相信一句“我测过了”。它要求 AI 把证据写成文件，再由命令校验这个文件能不能支撑 PASS。
+
+### 为什么这有用？
+
+因为它把“AI 自己觉得可以了”改成了三件可检查的事：
+
+1. 有没有证据文件？
+2. 证据文件字段是否完整？
+3. 当前 workflow 和 snapshot 是否匹配？
+
+如果缺证据、证据不完整、或者拿旧结论冒充新结论，PASS 记录会被拒绝。
+
+想看最小例子，可以跑这个 demo：[最小 Self-PASS 阻断 Demo](examples/minimal-self-pass-block-demo.md)。
+
+> 注意：hook decision 允许命令继续，不等于正式 PASS 已经成立。artifact 仍然必须真实存在，并通过 formal-gates 的 artifact 校验。
 
 ---
 
@@ -124,6 +156,14 @@ bin/formal-gates canary codex-hook --worktree .
 ```
 
 `portable canary` 是项目自身可控能力的主要证明。`codex-hook` 只证明当前 Codex 客户端是否真的调用 hook；它不通过时，仍然必须用显式的 `formal-gates workflow` / `formal-gates gate` 命令校验证据，不能宣称 Codex hook blocking proven。
+
+同宿主 live canary 目前证明到这里：
+
+| 宿主 | 已实测到的结果 | 还不能宣称 |
+|------|----------------|------------|
+| Claude Code 2.1.193 | 项目本地 hook 会拦截缺 artifact 的 PASS 记录命令；带 artifact 的命令会通过 hook decision。 | 不代表全局安装路径在 Windows 上已经无问题，也不代表 Codex。 |
+| Cursor headless 2026.06.26-7079533 | 项目本地 hook 会拦截缺 artifact 的 PASS 记录命令；带真实 QA artifact 的记录命令可以成功写入 gate-state。 | 不代表所有 Cursor 版本，也不代表公开发行链路已经具备。 |
+| Codex CLI 0.142.0 | 本地 native 校验可用；Codex hook 闭环拦截还没有被证明。 | 不能宣称 Codex hook blocking proven。 |
 
 ---
 

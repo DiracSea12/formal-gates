@@ -43,6 +43,7 @@ var requiredFiles = []string{
 	"references/code-quality-gate.md",
 	"references/post-development-artifacts.md",
 	"hooks/pollution-patterns.json",
+	"assets/showcase/no-evidence-no-pass.svg",
 	"examples/skill-behavior-prompts.json",
 	"examples/sample-complexity-gate-artifact.md",
 }
@@ -52,6 +53,7 @@ var requiredDirs = []string{
 	"examples",
 	"hooks",
 	"bin",
+	"assets",
 	"cmd",
 	"internal",
 	"references",
@@ -169,7 +171,7 @@ func validateManifest(root string, result *Result) {
 	if doc.Name != "formal-gates" {
 		result.add("formal-gates.manifest.json", "manifest name must be formal-gates")
 	}
-	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "hooks/", "agents/", "examples/"} {
+	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "assets/", "references/", "cmd/", "internal/", "hooks/", "agents/", "examples/"} {
 		if !contains(doc.Parts, part) {
 			result.add("formal-gates.manifest.json", "package_parts missing "+part)
 		}

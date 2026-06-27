@@ -34,7 +34,7 @@ $payload | .\bin\formal-gates.exe hook decide
 预期结果：
 
 ```json
-{"decision":"deny","reason":"formal gate PASS recording requires an artifact","permission":"deny","permissionDecision":"deny","permissionDecisionReason":"formal gate PASS recording requires an artifact"}
+{"decision":"block","reason":"formal gate PASS recording requires an artifact","permission":"deny","permissionDecision":"deny","permissionDecisionReason":"formal gate PASS recording requires an artifact"}
 ```
 
 进程退出码是 `2`，表示拒绝。
@@ -49,7 +49,7 @@ $payload | .\bin\formal-gates.exe hook decide
 预期结果：
 
 ```json
-{"decision":"allow","reason":"command allowed","permission":"allow","permissionDecision":"allow","permissionDecisionReason":"command allowed"}
+{"decision":"approve","reason":"command allowed","permission":"allow","permissionDecision":"allow","permissionDecisionReason":"command allowed"}
 ```
 
 进程退出码是 `0`，表示允许。这只证明命令通过了 hook decision；artifact 仍然必须真实存在并通过校验，才能形成正式记录。
@@ -73,7 +73,7 @@ $caseBinding = "$demoWorktree/case-binding.txt"
 Set-Content -Path $bundle -Encoding UTF8 -Value "Minimal demo context bundle."
 Set-Content -Path $dispatch -Encoding UTF8 -Value "Neutral QA execution dispatch prompt for minimal demo."
 Set-Content -Path $cases -Encoding UTF8 -Value "CASE-1: native hook decide denies PASS without artifact."
-Set-Content -Path $qaEvidence -Encoding UTF8 -Value "Observed deny decision for PASS without artifact and allow decision with artifact argument."
+Set-Content -Path $qaEvidence -Encoding UTF8 -Value "Observed block decision for PASS without artifact and approve/allow decision with artifact argument."
 Set-Content -Path $caseBinding -Encoding UTF8 -Value "CASE-1 -> qa-evidence.txt"
 
 $bundleHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundle).Hash.ToLower()

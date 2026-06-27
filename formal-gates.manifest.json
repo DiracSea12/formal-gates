@@ -77,6 +77,7 @@
     "go.mod",
     ".github/workflows/portable-validation.yml",
     "bin/",
+    "assets/",
     "references/",
     "cmd/",
     "internal/",

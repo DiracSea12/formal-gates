@@ -41,6 +41,7 @@ var installRuntimeEntries = []string{
 	"go.mod",
 	".github/workflows/portable-validation.yml",
 	"bin",
+	"assets",
 	"cmd",
 	"internal",
 	"agents",

@@ -49,7 +49,7 @@ func TestRunHookDecideDeniesPassWithoutArtifact(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("expected deny exit code 2, got %d stdout=%q", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"decision":"deny"`) {
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
 		t.Fatalf("expected deny JSON, got %q", stdout.String())
 	}
 }
@@ -444,7 +444,7 @@ func TestRunCanaryCodexHookProbe(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("expected denied hook probe exit code 2, got %d stdout=%q", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"decision":"deny"`) {
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
 		t.Fatalf("unexpected hook probe stdout: %q", stdout.String())
 	}
 }

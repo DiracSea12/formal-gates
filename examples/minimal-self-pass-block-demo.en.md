@@ -34,7 +34,7 @@ $payload | .\bin\formal-gates.exe hook decide
 Expected:
 
 ```json
-{"decision":"deny","reason":"formal gate PASS recording requires an artifact","permission":"deny","permissionDecision":"deny","permissionDecisionReason":"formal gate PASS recording requires an artifact"}
+{"decision":"block","reason":"formal gate PASS recording requires an artifact","permission":"deny","permissionDecision":"deny","permissionDecisionReason":"formal gate PASS recording requires an artifact"}
 ```
 
 The process exits with code `2`, which means deny.
@@ -49,7 +49,7 @@ $payload | .\bin\formal-gates.exe hook decide
 Expected:
 
 ```json
-{"decision":"allow","reason":"command allowed","permission":"allow","permissionDecision":"allow","permissionDecisionReason":"command allowed"}
+{"decision":"approve","reason":"command allowed","permission":"allow","permissionDecision":"allow","permissionDecisionReason":"command allowed"}
 ```
 
 The process exits with code `0`, which means allow. This only proves the command clears the hook decision. The artifact still has to exist and pass validation before a formal record can be made.
@@ -73,7 +73,7 @@ $caseBinding = "$demoWorktree/case-binding.txt"
 Set-Content -Path $bundle -Encoding UTF8 -Value "Minimal demo context bundle."
 Set-Content -Path $dispatch -Encoding UTF8 -Value "Neutral QA execution dispatch prompt for minimal demo."
 Set-Content -Path $cases -Encoding UTF8 -Value "CASE-1: native hook decide denies PASS without artifact."
-Set-Content -Path $qaEvidence -Encoding UTF8 -Value "Observed deny decision for PASS without artifact and allow decision with artifact argument."
+Set-Content -Path $qaEvidence -Encoding UTF8 -Value "Observed block decision for PASS without artifact and approve/allow decision with artifact argument."
 Set-Content -Path $caseBinding -Encoding UTF8 -Value "CASE-1 -> qa-evidence.txt"
 
 $bundleHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundle).Hash.ToLower()

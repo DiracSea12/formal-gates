@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="560" viewBox="0 0 1180 560" role="img" aria-labelledby="title desc">
+  <title id="title">No evidence, no PASS</title>
+  <desc id="desc">A side-by-side comparison showing formal-gates denying a PASS without evidence and allowing a PASS command with a QA report.</desc>
+  <rect width="1180" height="560" fill="#f7f4ee"/>
+  <text x="590" y="62" text-anchor="middle" font-family="Arial, sans-serif" font-size="42" font-weight="700" fill="#1f2933">No evidence, no PASS.</text>
+  <text x="590" y="102" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#52606d">formal-gates blocks self-stamped approvals before they enter the workflow.</text>
+
+  <rect x="70" y="145" width="500" height="320" rx="14" fill="#fff" stroke="#d64545" stroke-width="3"/>
+  <rect x="70" y="145" width="500" height="64" rx="14" fill="#d64545"/>
+  <text x="105" y="186" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#fff">Denied</text>
+  <text x="105" y="260" font-family="Consolas, monospace" font-size="22" fill="#1f2933">AI: record PASS</text>
+  <text x="105" y="316" font-family="Consolas, monospace" font-size="22" fill="#1f2933">formal-gates: DENIED</text>
+  <text x="105" y="372" font-family="Consolas, monospace" font-size="22" fill="#7b1e1e">Reason: no evidence attached</text>
+  <text x="105" y="425" font-family="Arial, sans-serif" font-size="18" fill="#52606d">A verdict without a report does not move forward.</text>
+
+  <rect x="610" y="145" width="500" height="320" rx="14" fill="#fff" stroke="#26825f" stroke-width="3"/>
+  <rect x="610" y="145" width="500" height="64" rx="14" fill="#26825f"/>
+  <text x="645" y="186" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#fff">Allowed to continue</text>
+  <text x="645" y="260" font-family="Consolas, monospace" font-size="22" fill="#1f2933">AI: record PASS with QA report</text>
+  <text x="645" y="316" font-family="Consolas, monospace" font-size="22" fill="#1f2933">formal-gates: ALLOWED</text>
+  <text x="645" y="372" font-family="Consolas, monospace" font-size="22" fill="#13533f">Next gate: complexity-gate</text>
+  <text x="645" y="425" font-family="Arial, sans-serif" font-size="18" fill="#52606d">The evidence file still has to pass validation.</text>
+
+  <text x="590" y="520" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#52606d">PASS is a recorded gate verdict. Evidence is the report. Artifact is the file that stores it.</text>
+</svg>

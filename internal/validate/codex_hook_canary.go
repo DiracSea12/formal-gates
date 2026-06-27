@@ -223,14 +223,14 @@ func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result
 	probe.Decision = &decision
 	if options.FormalHookOutput != "" {
 		lines := []string{"exit=0"}
-		if decision.Decision == "deny" {
+		if decision.PermissionDecision == "deny" {
 			lines[0] = "exit=2"
 		}
 		encoded, _ := json.Marshal(decision)
 		lines = append(lines, string(encoded))
 		appendText(options.FormalHookOutput, strings.Join(lines, "\n")+"\n")
 	}
-	if decision.Decision == "deny" {
+	if decision.PermissionDecision == "deny" {
 		probe.ExitCode = 2
 	}
 	return probe, result
