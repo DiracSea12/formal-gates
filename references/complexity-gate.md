@@ -37,6 +37,10 @@ Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `re
 
 Budgets are task-specific. Fallback thresholds in `formal-gates complexity check` are alarms, not design truth.
 
+Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids deletion/reuse, or is not the minimum sufficient implementation for the request.
+
+Development-time budget control is mandatory inside a formal development handoff or equivalent project process. The handoff must give the worker the active Complexity Contract, the exact budget numbers passed to `formal-gates complexity check`, stop triggers, and the budget expansion path. The worker must check the live diff against that contract before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop: either shrink the diff back inside budget or obtain independent Anti-Complexity Review approval before continuing. Waiting until the post-development complexity gate to explain the excess is a process failure.
+
 If a worker needs to exceed the active dynamic budget, it must stop and submit:
 
 ```text
@@ -119,6 +123,7 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 ```text
 Script result:
 Diff shape judgment:
+Budget/expansion status:
 Impact surface health:
 Public/config surface:
 New concepts:
@@ -126,6 +131,14 @@ Minimum sufficient implementation:
 Shrink opportunities:
 Decision evidence:
 ```
+
+If `Budget/expansion status` says an expansion was approved, the artifact must also include:
+
+```text
+Budget expansion approval: <path> sha256=<sha256>
+```
+
+That approval artifact must contain the independent Anti-Complexity Review result. A bare CLI override such as a larger `--max-net` is not approval.
 
 ## Output
 

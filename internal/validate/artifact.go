@@ -104,9 +104,11 @@ func requiredArtifactFields(gate string) []string {
 		fields = append(fields,
 			"Script result",
 			"Diff shape judgment",
+			"Budget/expansion status",
 			"Impact surface health",
 			"Public/config surface",
 			"New concepts",
+			"Minimum sufficient implementation",
 			"Shrink opportunities",
 			"Decision evidence",
 		)
@@ -163,6 +165,38 @@ func validateRoute(options ArtifactOptions, text string, result *Result) {
 		if meaningful(fieldValue(text, "Reviewer proof receipt")) {
 			validateReceipt(options, text, result)
 		}
+	}
+	if options.Gate == "complexity-gate" {
+		validateComplexityBudgetEvidence(options, text, result)
+	}
+}
+
+func validateComplexityBudgetEvidence(options ArtifactOptions, text string, result *Result) {
+	status := fieldValue(text, "Budget/expansion status")
+	if !meaningful(status) {
+		result.add(options.File, "field has no meaningful value: Budget/expansion status")
+		return
+	}
+	normalized := strings.ToLower(status)
+	expansionApproved := strings.Contains(normalized, "approve") ||
+		strings.Contains(normalized, "approved") ||
+		strings.Contains(normalized, "approve_smaller")
+	if !expansionApproved {
+		return
+	}
+	value := fieldValue(text, "Budget expansion approval")
+	pathText, expectedHash, ok := parseHashedReference(value)
+	if !ok {
+		result.add(options.File, "Budget expansion approval must be <path> sha256=<sha256> when expansion is approved")
+		return
+	}
+	path := resolvePath(options.Root, pathText)
+	if !isFile(path) {
+		result.add(options.File, "Budget expansion approval path does not exist: "+pathText)
+		return
+	}
+	if actual := sha256File(path); actual != expectedHash {
+		result.add(options.File, "Budget expansion approval sha256 mismatch: "+pathText)
 	}
 }
 

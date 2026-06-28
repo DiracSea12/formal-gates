@@ -46,6 +46,8 @@ If a formal workflow is represented as passed after direct implementation, skipp
 | Requirements/document alignment | `references/requirements-clarification-gate.md` | Build or request user-confirmed alignment evidence before drafting or approving readiness. |
 | Mapping OpenSpec, PRD, SDD, issue, design brief, or markdown bundles | `references/requirement-document-adapters.md` | Map source documents to formal requirement fields before gate review. |
 | Requirements PASS recording or artifact validation | `references/requirements-clarification-artifacts.md` | Validate the alignment artifact and decision record before recording PASS. |
+| Formal implementation worker dispatch | `agents/development-worker.md` | Validate handoff first; development-time complexity budget checks trigger automatically during formal implementation. |
+| Budget expansion request during development | `agents/anti-complexity-review.md` | Run independent anti-complexity review before any larger budget is used. |
 | QA case design, execution, final execution, or white-box adequacy | `references/qa-test-gate.md` | Start with QA Design for pre-handoff formal flows, or QA Execution evidence for post-development review. |
 | Scope, budget, over-engineering, or Complexity Contract | `references/complexity-gate.md` | Check QA or readiness prerequisites before dispatching complexity review. |
 | Module boundaries, ownership, dependencies, lifecycle, failure semantics | `references/architecture-health-gate.md` | Run only after the required previous gate for the active flow has passed. |
@@ -72,6 +74,7 @@ Use these orders only after the router activates the matching formal flow. Proje
 |---|---|
 | Optional document/start-readiness review | requirements clarification with user-confirmed alignment evidence -> `complexity-gate` -> `architecture-health-gate` -> cold-water start-readiness. Independent zero-context complexity, architecture-health, and cold-water conclusions are required before calling a formal readiness review passed. |
 | Pre-development test design | For `four-gate`, `release`, or `seal`: QA `Design` -> `Design Review` -> `Design Rework` -> approved case set before implementation handoff. |
+| Formal development handoff | Validate handoff -> dispatch `agents/development-worker.md`; development-time complexity budget checks are automatic inside the handoff and do not need a separate user request. Budget expansion routes to `agents/anti-complexity-review.md` before work continues. |
 | Post-development release/seal | initial `Verification Run` -> QA `Execution` -> `complexity-gate` -> `architecture-health-gate` -> `code-quality-gate` -> final `Verification Run` -> QA `FinalExecution` -> optional QA `White-box Adequacy` -> seal. Every prerequisite must belong to the same `workflowId` and `changeSnapshot`. |
 | Rerun after implementation change | Refresh `changeSnapshot`; old downstream PASS is invalid; choose earliest rerun gate by impact surface; review full requirement and current diff, not only repair patch. |
 
@@ -131,6 +134,10 @@ Required independent gates:
 Artifacts to provide:
 Bundle or manifest path:
 Verification requirements:
+Development-time complexity budget:
+Complexity check command:
+Budget stop triggers:
+Budget expansion approval path:
 Forbidden context:
 Formal flow mode:
 Trigger source:
@@ -139,4 +146,4 @@ Approved QA case set:
 Continue after:
 ```
 
-Formal development handoff is optional and user-authorized. When used, collect the template fields above, OpenSpec or slice coverage, and the Complexity Contract. For `four-gate`, `release`, or `seal`, include approved QA case references before implementation starts. If no development subagent is available, output this `Gate Handoff Request` instead of implementing locally. Mark only genuinely missing facts as `BLOCKING_MISSING:<field> - how to obtain`.
+Formal development handoff is optional and user-authorized. When used, collect the template fields above, OpenSpec or slice coverage, and the Complexity Contract. The development-time complexity budget is active during implementation: the worker must run or update the supplied complexity check before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop, shrink, or obtain independent Anti-Complexity Review approval before continuing. For `four-gate`, `release`, or `seal`, include approved QA case references before implementation starts. If no development subagent is available, output this `Gate Handoff Request` instead of implementing locally. Mark only genuinely missing facts as `BLOCKING_MISSING:<field> - how to obtain`.
