@@ -6,7 +6,7 @@
 
 **Built-in install targets:** Claude Code · Codex · Cursor
 
-Per-host integration varies; actual behavior is determined by live canary.
+Automatic blocking varies by tool. When a tool cannot block commands automatically, use the explicit validation commands.
 
 **Current boundary:** This repository currently supports local install and local validation. It does not implement public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
 
@@ -62,7 +62,7 @@ If evidence is missing, incomplete, or reused from an old snapshot, the PASS rec
 
 To reproduce the smallest case, run this demo: [Minimal Self-PASS Block Demo](examples/minimal-self-pass-block-demo.en.md).
 
-> Note: a hook decision that allows a command to continue does not mean formal PASS has been recorded. The artifact still has to exist and pass formal-gates artifact validation.
+> Note: allowing a command to continue does not mean formal PASS has been recorded. The artifact still has to exist and pass formal-gates validation.
 
 ---
 
@@ -77,7 +77,7 @@ To reproduce the smallest case, run this demo: [Minimal Self-PASS Block Demo](ex
 | Check code correctness, dead code, fake tests | **code-quality-gate** |
 | Final validation before release/seal | Run all four gates in sequence |
 
-Only after you tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" will it follow the installed skill rules. Whether the machine layer can block commands depends on the target host's hook config and a same-host live canary.
+Only after you tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" will it follow the installed skill rules. Whether invalid commands are blocked automatically depends on the tool you use; if automatic blocking is unavailable, run the validation commands explicitly.
 
 | Scenario | Gate required? |
 |----------|---------------|
@@ -126,7 +126,7 @@ This is the best gate to run before AI starts coding, because direction errors h
 - Dispatch prompt pollution checks block anchoring patterns such as previous findings, just-fixed wording, focus direction, and expected answers. Rules live in `hooks/pollution-patterns.json`; `formal-gates prompt validate` is the core implementation.
 - Each gate's verdict is recorded as an **artifact**, checked by the Go validator for field completeness. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected.
 - Cross-workflow isolation is enforced: prerequisite gates must belong to the same `workflowId` and `changeSnapshot`; extension gates also bind prerequisites to the same manifest path and hash.
-- Configured and same-host live-tested hooks can block invalid commands; when using `formal-gates workflow` / `formal-gates gate` for records, the machine layer validates evidence and rejects invalid gate records.
+- Configured and tested hooks can block invalid commands; when using `formal-gates workflow` / `formal-gates gate`, the command layer validates evidence and rejects invalid records.
 
 ---
 
@@ -138,32 +138,38 @@ For a first verification pass, check two result types:
 # Local package, prompt, hook decide, workflow, receipt, and install self-check
 bin/formal-gates canary portable --root . --format json
 
+# Automatically checked behavior cases; expect all 15 to PASS
+bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
+
 # Run only when validating Codex host interception; failure does not mean native validation failed
 bin/formal-gates canary codex-hook --worktree .
 ```
 
 `portable canary` is the main proof for capabilities controlled by this package. `codex-hook` only proves whether the current Codex client actually invokes hooks. If it fails, keep using explicit `formal-gates workflow` / `formal-gates gate` evidence validation and do not claim Codex hook blocking proven.
 
-Same-host live canary evidence currently proves this much:
+`examples/skill-behavior-prompts.json` and `examples/skill-behavior-answers.json` are the 15 automatically checked behavior cases used by package validation and the portable canary. Root `test-prompts.json` is the broader manual/model evaluation prompt set with 20 scenarios, not the fixed package self-check fixture.
 
-| Host | Proven result | Still not claimed |
-|------|---------------|-------------------|
-| Claude Code 2.1.193 | Project-local hooks block PASS recording without an artifact; commands with an artifact clear the hook decision. | This does not prove the Windows global hook path, and it does not prove Codex. |
-| Cursor headless 2026.06.26-7079533 | Project-local hooks block PASS recording without an artifact; a command with a real QA artifact can record gate-state successfully. | This does not prove every Cursor version or a public release-trust chain. |
-| Codex CLI 0.142.0 | Native local validation works; Codex hook closed-loop interception is still not proven. | Do not claim Codex hook blocking proven. |
+Current support can be described this way:
+
+| Tool | How to use it |
+|------|---------------|
+| Claude Code / Cursor | Project-local installs have been verified to block "record PASS without evidence." |
+| Codex | Install the rules and run explicit formal-gates validation commands; do not promise automatic command blocking yet. |
+
+Detailed host evidence and version boundaries live in [`references/install-and-hooks.md`](references/install-and-hooks.md).
 
 ---
 
 ## Release Trust Boundary
 
-The current package is suitable for local installs, local validation, and candidate package checks; it is not yet a public trust-chain release. Do not describe the current repository state as having:
+The current package is suitable for local installs, local validation, and candidate package checks. When a GitHub Release is published, CI uploads per-platform binaries, `portable canary` output, and SHA256 checksums. Do not describe the current repository state as having:
 
 - public registry or marketplace distribution;
 - `npx` remote one-command installation;
-- binary signatures, checksums, provenance, or attestations;
+- binary signatures, provenance, or attestations;
 - a third-party-verifiable release-trust chain.
 
-Before public release, add release artifacts, checksums, signatures or provenance, and save `portable canary` output as release evidence.
+Before public release, add signatures or provenance. Release binaries, checksums, and `portable canary` output make the build result easier to verify, but they do not replace signing.
 
 ---
 
@@ -191,9 +197,7 @@ Each host must be installed and verified on its own. A passing canary on one hos
 
 ### Codex Note
 
-This package can install a Codex skill; with `-ConfigureHook`, the installer writes Codex `hooks.json`. Codex hook files must keep only the top-level `hooks` object; do not add extra top-level fields such as `version` or `description`.
-
-Codex hooks are only an auxiliary guardrail, not a hard enforcement gate. In the current local Windows + Codex CLI 0.142.0 test, `PreToolUse` appeared active/trusted in `/hooks`, but `codex exec` and script-launched Codex command execution still used `command_execution` and did not prove closed-loop command blocking. Formal gates must explicitly run `formal-gates workflow` / `formal-gates gate` and verify artifacts; mark Codex hook blocking as proven only after a same-host live canary observes a `PreToolUse` payload and blocks the invalid command.
+Codex users should not rely only on automatic blocking. After installation, explicitly run `formal-gates workflow` / `formal-gates gate` to record and validate PASS evidence.
 
 ---
 
@@ -244,7 +248,7 @@ bin/formal-gates workflow cleanup --worktree <repo> --dry-run
 
 On Windows, use `bin/formal-gates.exe`. For development tests from a source checkout, `go run ./cmd/formal-gates` is acceptable. Installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
-This native CLI now has deterministic package validation, artifact field validation, dispatch prompt pollution checks, native install, hook decide, basic gate state checks, workflow snapshot / record-stage / verify-admission / final-verification / cleanup, FinalExecution recording from a supplied artifact, receipt register / capture / finalize / validate / preflight, portable canary, and Codex hook canary. It is still not a complete workflow engine, agent runtime, persistent report system, cache system, or release-trust system; receipt-sensitive end-to-end orchestration, same-host hook closure proof, and the release-trust chain still require separate evidence.
+This native CLI now has package validation, artifact field checks, prompt pollution checks, install support, command-blocking decisions, gate-state checks, workflow recording and cleanup, receipt recording, portable canary, Codex canary, and a behavior-case evaluation entrypoint. It is still not a complete workflow engine, agent runtime, persistent report system, cache system, or release-trust system.
 
 ---
 

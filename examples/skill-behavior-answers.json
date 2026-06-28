@@ -1,0 +1,62 @@
+[
+  {
+    "id": "FG-BEH-001",
+    "answer": "Start with requirements clarification and create or request the alignment table before any document work continues."
+  },
+  {
+    "id": "FG-BEH-002",
+    "answer": "Use a zero-context development handoff for the formal workflow instead of local implementation by the main agent."
+  },
+  {
+    "id": "FG-BEH-003",
+    "answer": "A self-issued gate result is not enough; formal seal requires independent gate artifacts."
+  },
+  {
+    "id": "FG-BEH-004",
+    "answer": "Focused evidence is not enough for closure; require FinalExecution evidence before release or seal."
+  },
+  {
+    "id": "FG-BEH-005",
+    "answer": "Routine chat or a tiny edit does not activate formal gates unless the user explicitly asks for formal review."
+  },
+  {
+    "id": "FG-BEH-006",
+    "answer": "Formal gates are user-authorized flows and post-development gates wait for an explicit formal request or project opt-in."
+  },
+  {
+    "id": "FG-BEH-007",
+    "answer": "A readiness verdict needs independent zero-context reviews before the work can be called ready."
+  },
+  {
+    "id": "FG-BEH-008",
+    "answer": "Formal PASS cannot be self-issued; return a Gate Handoff Request when independent reviewers are unavailable."
+  },
+  {
+    "id": "FG-BEH-009",
+    "answer": "The agent refuses to bypass the process and requires final verification before release or seal."
+  },
+  {
+    "id": "FG-BEH-010",
+    "answer": "Refresh changeSnapshot after file changes and treat downstream evidence from the old snapshot as invalid."
+  },
+  {
+    "id": "FG-BEH-011",
+    "answer": "The agent rejects overriding built-in gate IDs and requires manifestHash for extension gate evidence."
+  },
+  {
+    "id": "FG-BEH-012",
+    "answer": "Config presence is not proof; use a live canary or explicit formal-gates workflow validation."
+  },
+  {
+    "id": "FG-BEH-013",
+    "answer": "If delegation is unavailable, return a Gate Handoff Request; the main agent does not edit inside the formal handoff."
+  },
+  {
+    "id": "FG-BEH-014",
+    "answer": "Self-review is not enough; independent readiness reviews are required before formal development can start."
+  },
+  {
+    "id": "FG-BEH-015",
+    "answer": "Stop when there is no behavior gain; put detailed procedures in references instead of expanding the entrypoint."
+  }
+]

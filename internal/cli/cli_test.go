@@ -85,6 +85,7 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 		{"canary", "portable", "--help"},
 		{"canary", "codex-hook", "--help"},
 		{"canary", "codex-hook-probe", "--help"},
+		{"behavior", "evaluate", "--help"},
 		{"workflow", "snapshot", "--help"},
 		{"workflow", "record-stage", "--help"},
 		{"workflow", "verify-admission", "--help"},
@@ -113,6 +114,59 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 				t.Fatalf("expected usage text on stdout, got %q", stdout.String())
 			}
 		})
+	}
+}
+
+func TestRunBehaviorEvaluatePendingAndFailingAnswers(t *testing.T) {
+	root := t.TempDir()
+	mustWriteCLI(t, filepath.Join(root, "cases.json"), `[
+		{"id":"FG-BEH-001","must_include":["artifact"],"must_avoid":["self-approved"]},
+		{"id":"FG-BEH-002","must_include":["independent"],"must_avoid":[]}
+	]`)
+	mustWriteCLI(t, filepath.Join(root, "answers.json"), `[{"id":"FG-BEH-001","answer":"self-approved"}]`)
+	mustWriteCLI(t, filepath.Join(root, "answers-missing.json"), `[{"id":"FG-BEH-001","answer":"artifact"}]`)
+	var stdout, stderr bytes.Buffer
+
+	code := Run("formal-gates", []string{
+		"behavior", "evaluate",
+		"--root", root,
+		"--cases", "cases.json",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("expected pending behavior report to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"pending": 2`) {
+		t.Fatalf("unexpected pending report: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{
+		"behavior", "evaluate",
+		"--root", root,
+		"--cases", "cases.json",
+		"--answers", "answers.json",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected failing behavior answer to fail")
+	}
+	if !strings.Contains(stdout.String(), `"fail": 2`) || !strings.Contains(stderr.String(), "behavior evaluate failed") {
+		t.Fatalf("unexpected failing behavior output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{
+		"behavior", "evaluate",
+		"--root", root,
+		"--cases", "cases.json",
+		"--answers", "answers-missing.json",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 {
+		t.Fatal("expected missing behavior answer to fail")
+	}
+	if !strings.Contains(stdout.String(), `"fail": 1`) || !strings.Contains(stdout.String(), `"pending": 0`) {
+		t.Fatalf("unexpected missing-answer behavior output stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 

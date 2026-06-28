@@ -3,6 +3,12 @@ name: Portable Validation
 on:
   push:
   pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   go-validation:
@@ -45,9 +51,91 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         run: |
-          bin\formal-gates.exe canary portable --root .
+          bin\formal-gates.exe canary portable --root . --format json > portable-canary.json
+      - name: Validate behavior answer fixture (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          bin\formal-gates.exe behavior evaluate --root . --cases examples\skill-behavior-prompts.json --answers examples\skill-behavior-answers.json
       - name: Run native portable canary (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          bin/formal-gates canary portable --root .
+          bin/formal-gates canary portable --root . --format json > portable-canary.json
+      - name: Validate behavior answer fixture (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
+      - name: Prepare release evidence names (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item bin/formal-gates.exe formal-gates-windows-amd64.exe
+          Copy-Item portable-canary.json portable-canary-windows-amd64.json
+      - name: Prepare release evidence names (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cp bin/formal-gates formal-gates-macos-amd64
+          cp portable-canary.json portable-canary-macos-amd64.json
+      - name: Prepare release evidence names (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cp bin/formal-gates formal-gates-linux-amd64
+          cp portable-canary.json portable-canary-linux-amd64.json
+      - name: Write release checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-FileHash -Algorithm SHA256 formal-gates-windows-amd64.exe | ForEach-Object { "$($_.Hash.ToLower())  formal-gates-windows-amd64.exe" } > SHA256SUMS-windows-amd64.txt
+          Get-FileHash -Algorithm SHA256 portable-canary-windows-amd64.json | ForEach-Object { "$($_.Hash.ToLower())  portable-canary-windows-amd64.json" } >> SHA256SUMS-windows-amd64.txt
+      - name: Write release checksums (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          shasum -a 256 formal-gates-macos-amd64 portable-canary-macos-amd64.json > SHA256SUMS-macos-amd64.txt
+      - name: Write release checksums (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          shasum -a 256 formal-gates-linux-amd64 portable-canary-linux-amd64.json > SHA256SUMS-linux-amd64.txt
+      - name: Write CI checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item SHA256SUMS-windows-amd64.txt SHA256SUMS
+      - name: Write CI checksums (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cp SHA256SUMS-*-amd64.txt SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formal-gates-${{ runner.os }}
+          path: |
+            formal-gates-*
+            portable-canary-*.json
+            SHA256SUMS*.txt
+      - name: Upload release evidence (Windows)
+        if: github.event_name == 'release' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload $env:GITHUB_REF_NAME formal-gates-windows-amd64.exe portable-canary-windows-amd64.json SHA256SUMS-windows-amd64.txt --clobber
+      - name: Upload release evidence (macOS)
+        if: github.event_name == 'release' && runner.os == 'macOS'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" formal-gates-macos-amd64 portable-canary-macos-amd64.json SHA256SUMS-macos-amd64.txt --clobber
+      - name: Upload release evidence (Linux)
+        if: github.event_name == 'release' && runner.os == 'Linux'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" formal-gates-linux-amd64 portable-canary-linux-amd64.json SHA256SUMS-linux-amd64.txt --clobber

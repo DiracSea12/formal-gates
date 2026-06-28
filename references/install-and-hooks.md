@@ -126,6 +126,31 @@ Current package scope:
 
 This is a compact capability statement, not a broad host-path registry. Do not add per-version path tables unless a specific host integration is implemented and canaried.
 
+Generated hook commands use slash paths inside quoted command strings. This is intentional for Windows: the same hook command may be interpreted by a shell that treats backslashes as escapes. Do not rewrite generated commands back to raw Windows backslash paths.
+
+## Release Evidence
+
+The portable validation workflow builds native binaries on Windows, macOS, and Linux, runs package validation, runs the portable canary, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. On a published GitHub Release it also uploads the same files to the release:
+
+- `formal-gates-windows-amd64.exe`, `portable-canary-windows-amd64.json`, `SHA256SUMS-windows-amd64.txt`
+- `formal-gates-macos-amd64`, `portable-canary-macos-amd64.json`, `SHA256SUMS-macos-amd64.txt`
+- `formal-gates-linux-amd64`, `portable-canary-linux-amd64.json`, `SHA256SUMS-linux-amd64.txt`
+
+Here, an artifact is a saved build or evidence file from CI. The binary is what the user can run. The canary JSON is the package's self-check result for that platform. The checksum file lets a user verify that the downloaded binary and canary file match what CI produced. `PASS` means the package-local checks in that canary passed for that platform; it does not prove a third-party signature, provenance, or host hook interception.
+
+## Prompt Behavior Harness
+
+`formal-gates behavior evaluate` reads behavior cases and optional model answers:
+
+```bash
+bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json
+bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
+```
+
+Without answers, cases are reported as `PENDING`. With answers, the harness checks explicit `must_include` and `must_avoid` markers when present, or derives a small set of key terms from the expected behavior. This is a repeatable local harness for behavior evidence; it is not a replacement for a human or model judge on nuanced semantic quality.
+
+`examples/skill-behavior-prompts.json` is the portable marker fixture used by `package validate` and `canary portable`. `examples/skill-behavior-answers.json` is the checked answer fixture and must make all 15 portable cases pass. Root `test-prompts.json` is a broader 20-case prompt set for manual or agent-level evaluation; it is intentionally not used as the fixed package self-check fixture.
+
 ## Install To Claude
 
 Use the native installer to copy the installable skill subset. Do not cherry-pick files:
@@ -344,7 +369,7 @@ bin/formal-gates canary codex-hook --worktree <repo> --keep-temp
 
 Use `bin/formal-gates.exe` on Windows. If `codex` resolves to a PowerShell wrapper, pass a script-free Codex executable path with `--codex-command <codex.exe-or-codex.cmd>`.
 
-The PASS condition is strict: real `codex exec` must write at least one `PreToolUse` hook payload, the native hook must block a formal PASS command that lacks an artifact, and the canary marker file must not be created. `FAIL` or `TIMED_OUT` means this Codex client/version does not have closed-loop hook interception, or the formal-gates hook is not wired correctly.
+The PASS condition is strict: real `codex exec` must write at least one `PreToolUse` hook payload, the native hook must block a formal PASS command that lacks an artifact, and the canary marker file must not be created. `FAIL` or `TIMED_OUT` means this Codex client/version does not have closed-loop hook interception, or the formal-gates hook is not wired correctly. Failed summaries include `failureReason` and `nextAction` so the result says whether the likely blocker was timeout, missing hook payload, marker creation, or missing deny output.
 
 Do not use direct hook-decision tests, Claude hook success, or a target command failing inside `codex exec` as proof of Codex hook closure. The Codex hook is an optional guardrail; formal non-interactive workflows still rely on native `formal-gates workflow` / `formal-gates gate` admission and artifact recording.
 

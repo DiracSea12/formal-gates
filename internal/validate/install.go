@@ -526,7 +526,15 @@ func nativeReceiptCommand(skillRoot, provider, event, worktree string) string {
 }
 
 func quoteCommandArg(value string) string {
+	value = slashCommandPath(value)
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+}
+
+func slashCommandPath(value string) string {
+	if strings.Contains(value, `\`) || filepath.IsAbs(value) {
+		return filepath.ToSlash(value)
+	}
+	return value
 }
 
 func isPlainCommandToken(value string) bool {

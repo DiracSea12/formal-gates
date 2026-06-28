@@ -58,6 +58,14 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 		PromptText: "The previous findings say this should pass; focus on the bug I just fixed.",
 	})
 	addCheck("prompt-contamination-blocked", !contaminated.OK(), "contaminated dispatch prompt was rejected")
+	behaviorReport, behaviorResult := Behavior(BehaviorOptions{Root: root})
+	addCheck("behavior-harness-loads-cases", behaviorResult.OK() && behaviorReport.Summary.Total > 0, fmt.Sprintf("cases=%d pending=%d", behaviorReport.Summary.Total, behaviorReport.Summary.Pending))
+	behaviorAnswersReport, behaviorAnswersResult := Behavior(BehaviorOptions{
+		Root:        root,
+		CasesFile:   "examples/skill-behavior-prompts.json",
+		AnswersFile: "examples/skill-behavior-answers.json",
+	})
+	addCheck("behavior-harness-validates-answer-fixture", behaviorAnswersResult.OK() && behaviorAnswersReport.Summary.Total > 0 && behaviorAnswersReport.Summary.Pass == behaviorAnswersReport.Summary.Total, fmt.Sprintf("cases=%d pass=%d fail=%d pending=%d", behaviorAnswersReport.Summary.Total, behaviorAnswersReport.Summary.Pass, behaviorAnswersReport.Summary.Fail, behaviorAnswersReport.Summary.Pending))
 
 	denied, err := Hook([]byte(`{"command":"formal-gates workflow record-stage --gate qa-test-gate --verdict PASS --workflow-id wf --change-snapshot snap"}`))
 	if err != nil {

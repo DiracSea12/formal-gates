@@ -102,6 +102,11 @@ func TestRunInstallConfigureHooksUsesNativeBinaryCommands(t *testing.T) {
 					t.Fatalf("expected hook event %s in %s", event, raw)
 				}
 			}
+			for _, command := range hookCommands(hooks) {
+				if strings.Contains(command, `\`) {
+					t.Fatalf("hook command should use slash paths for shell compatibility: %s", command)
+				}
+			}
 		})
 	}
 }
@@ -290,6 +295,24 @@ func readHooksMap(t *testing.T, path string) map[string]any {
 		t.Fatalf("expected hooks object in %s", readFile(t, path))
 	}
 	return hooks
+}
+
+func hookCommands(value any) []string {
+	var commands []string
+	switch typed := value.(type) {
+	case map[string]any:
+		if command, ok := typed["command"].(string); ok {
+			commands = append(commands, command)
+		}
+		for _, nested := range typed {
+			commands = append(commands, hookCommands(nested)...)
+		}
+	case []any:
+		for _, item := range typed {
+			commands = append(commands, hookCommands(item)...)
+		}
+	}
+	return commands
 }
 
 func assertFileContains(t *testing.T, path, expected string) {

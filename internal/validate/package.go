@@ -22,6 +22,7 @@ var requiredFiles = []string{
 	"internal/validate/dispatch_prompt.go",
 	"internal/validate/gate_state.go",
 	"internal/validate/install.go",
+	"internal/validate/behavior.go",
 	"internal/validate/receipt.go",
 	"internal/validate/workflow.go",
 	"internal/validate/canary.go",
@@ -45,6 +46,7 @@ var requiredFiles = []string{
 	"hooks/pollution-patterns.json",
 	"assets/showcase/no-evidence-no-pass.svg",
 	"examples/skill-behavior-prompts.json",
+	"examples/skill-behavior-answers.json",
 	"examples/sample-complexity-gate-artifact.md",
 }
 
@@ -143,7 +145,28 @@ func validateCI(root string, result *Result) {
 		result.add(".github/workflows/portable-validation.yml", fmt.Sprintf("cannot read CI workflow: %v", err))
 		return
 	}
-	for _, required := range []string{"windows-latest", "macos-latest", "ubuntu-latest", "go test ./...", "go build -o", "package validate --root .", "canary portable --root ."} {
+	for _, required := range []string{
+		"windows-latest",
+		"macos-latest",
+		"ubuntu-latest",
+		"go test ./...",
+		"go build -o",
+		"package validate --root .",
+		"canary portable --root .",
+		"behavior evaluate --root .",
+		"examples/skill-behavior-answers.json",
+		"portable-canary.json",
+		"portable-canary-windows-amd64.json",
+		"portable-canary-macos-amd64.json",
+		"portable-canary-linux-amd64.json",
+		"SHA256SUMS",
+		"SHA256SUMS-windows-amd64.txt",
+		"SHA256SUMS-macos-amd64.txt",
+		"SHA256SUMS-linux-amd64.txt",
+		"actions/upload-artifact",
+		"gh release upload",
+		"release:",
+	} {
 		if !strings.Contains(text, required) {
 			result.add(".github/workflows/portable-validation.yml", "missing required CI validation text: "+required)
 		}
@@ -259,7 +282,32 @@ func validateExamples(root string, result *Result) {
 		var decoded any
 		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
 			result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("invalid JSON: %v", err))
+		} else if cases, ok := decoded.([]any); ok {
+			for i, raw := range cases {
+				item, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, ok := item["must_include"].([]any); !ok {
+					result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("case %d missing must_include markers", i))
+				}
+				if _, ok := item["must_avoid"].([]any); !ok {
+					result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("case %d missing must_avoid markers", i))
+				}
+			}
 		}
+	}
+	behaviorReport, behaviorResult := Behavior(BehaviorOptions{
+		Root:        root,
+		CasesFile:   "examples/skill-behavior-prompts.json",
+		AnswersFile: "examples/skill-behavior-answers.json",
+	})
+	if !behaviorResult.OK() {
+		for _, failure := range behaviorResult.Failures {
+			result.add("examples/skill-behavior-answers.json", failure.Path+": "+failure.Message)
+		}
+	} else if behaviorReport.Summary.Total == 0 || behaviorReport.Summary.Pass != behaviorReport.Summary.Total {
+		result.add("examples/skill-behavior-answers.json", fmt.Sprintf("behavior answers must pass every case; total=%d pass=%d pending=%d fail=%d", behaviorReport.Summary.Total, behaviorReport.Summary.Pass, behaviorReport.Summary.Pending, behaviorReport.Summary.Fail))
 	}
 
 	samplePath := filepath.Join(root, "examples", "sample-complexity-gate-artifact.md")
