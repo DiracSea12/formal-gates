@@ -80,6 +80,23 @@ func run(program string, args []string, streams IO) (int, error) {
 			ChangeSnapshot: *changeSnapshot,
 			Stage:          *stage,
 		}))
+	case "handoff":
+		args = dropOptionalVerb(args, "validate")
+		fs := flag.NewFlagSet("handoff", flag.ContinueOnError)
+		fs.SetOutput(streams.Stderr)
+		root := fs.String("root", ".", "repository root for relative handoff references")
+		file := fs.String("file", "", "handoff artifact file to validate")
+		workflowID := fs.String("workflow-id", "", "expected workflow id")
+		changeSnapshot := fs.String("change-snapshot", "", "expected change snapshot")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		return printValidationResult(streams.Stdout, "handoff", validate.Handoff(validate.HandoffOptions{
+			Root:           *root,
+			File:           *file,
+			WorkflowID:     *workflowID,
+			ChangeSnapshot: *changeSnapshot,
+		}))
 	case "hook":
 		if hasHelpArg(args) {
 			printHookUsage(streams.Stdout)
@@ -995,6 +1012,7 @@ func printUsage(stdout io.Writer, program string) {
 Usage:
   %s package validate  --root <formal-gates>
   %s artifact validate --root <repo> --file <artifact> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot>
+  %s handoff validate  --root <repo> --file <handoff> --workflow-id <id> --change-snapshot <snapshot>
   %s prompt validate   --root <formal-gates> (--text <text> | --file <file> | --stdin) [--patterns <json>] [--format text|json]
   %s install           --source <formal-gates-dir> --host claude|codex|cursor|both --scope global|project [--project <path>] [--force] [--configure-hooks]
   %s gate record       --worktree <repo> --gate <gate-id> --verdict <verdict> [--artifact <artifact>] --workflow-id <id> --change-snapshot <snapshot>
@@ -1018,5 +1036,5 @@ Usage:
   %s complexity check  --task-type <type> --worktree <repo> [--max-net <n>] [--max-new-prod-files <n>] [--max-prod-insertions <n>] [--staged] [--json]
 
 The native CLI performs deterministic package, artifact, dispatch prompt, install, hook decision, basic gate-state checks, native workflow checks, receipt checks, complexity diff checks, the portable native canary, and the Codex hook live canary.
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }

@@ -224,9 +224,11 @@ func gateArtifactText(gate, stage, workflowID, snapshot string) string {
 		lines = append(lines,
 			"Script result: PASS",
 			"Diff shape judgment: focused",
+			"Budget/expansion status: within contract; no expansion requested",
 			"Impact surface health: bounded",
 			"Public/config surface: none",
 			"New concepts: none",
+			"Minimum sufficient implementation: yes",
 			"Shrink opportunities: none",
 			"Decision evidence: diff",
 		)

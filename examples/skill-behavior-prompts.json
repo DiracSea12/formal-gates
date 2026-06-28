@@ -285,5 +285,25 @@
     "must_avoid": [
       "keeps adding entrypoint text"
     ]
+  },
+  {
+    "id": "FG-BEH-016",
+    "title": "Development-time complexity budget checks are automatic in formal handoff",
+    "user_prompt": "Using formal-gates, dispatch the approved slice to a development subagent. I did not separately ask for complexity budget checks during coding.",
+    "expected_behavior": "Inside the formal development handoff, the agent validates the handoff, supplies the active development-time complexity budget and complexity check command, tells the development worker to run the check during implementation, and routes any budget expansion to independent anti-complexity review before work continues.",
+    "failure_behavior": "The agent treats development-time budget checking as optional because the user did not explicitly ask for it, or waits until the post-development complexity gate to notice budget excess.",
+    "primary_files": [
+      "SKILL.md",
+      "agents/development-worker.md",
+      "agents/anti-complexity-review.md",
+      "references/complexity-gate.md"
+    ],
+    "must_include": [
+      "development-time complexity budget",
+      "anti-complexity"
+    ],
+    "must_avoid": [
+      "optional because the user did not explicitly ask"
+    ]
   }
 ]

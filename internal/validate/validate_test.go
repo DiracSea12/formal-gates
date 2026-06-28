@@ -122,6 +122,62 @@ func TestArtifactAllowsLegacyReviewerAgentIDWhenNotUsedAsProof(t *testing.T) {
 	}
 }
 
+func TestComplexityArtifactRequiresBudgetStatus(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle.md")
+	prompt := filepath.Join(dir, "prompt.md")
+	mustWrite(t, bundle, "bundle")
+	mustWrite(t, prompt, "formal_gate_dispatch: true\n")
+	artifact := filepath.Join(dir, "complexity.md")
+	text := complexityArtifactText(
+		"wf",
+		"snap",
+		"bundle.md sha256="+sha256FileForTest(t, bundle),
+		"prompt.md sha256="+sha256FileForTest(t, prompt),
+		"",
+	)
+	text = strings.Replace(text, "Budget/expansion status: within contract; no expansion requested\n", "", 1)
+	mustWrite(t, artifact, text)
+
+	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	if result.OK() {
+		t.Fatal("expected missing budget status to fail")
+	}
+}
+
+func TestComplexityArtifactRequiresApprovalEvidenceForApprovedExpansion(t *testing.T) {
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "bundle.md")
+	prompt := filepath.Join(dir, "prompt.md")
+	mustWrite(t, bundle, "bundle")
+	mustWrite(t, prompt, "formal_gate_dispatch: true\n")
+	artifact := filepath.Join(dir, "complexity.md")
+	text := complexityArtifactText(
+		"wf",
+		"snap",
+		"bundle.md sha256="+sha256FileForTest(t, bundle),
+		"prompt.md sha256="+sha256FileForTest(t, prompt),
+		"",
+	)
+	text = strings.Replace(text, "Budget/expansion status: within contract; no expansion requested\n", "Budget/expansion status: APPROVE expansion to max-net 800\n", 1)
+	mustWrite(t, artifact, text)
+
+	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	if result.OK() {
+		t.Fatal("expected approved expansion without evidence to fail")
+	}
+
+	approval := filepath.Join(dir, "approval.md")
+	mustWrite(t, approval, "Anti-Complexity Review\nVerdict: APPROVE_SMALLER\n")
+	text += "Budget expansion approval: approval.md sha256=" + sha256FileForTest(t, approval) + "\n"
+	mustWrite(t, artifact, text)
+
+	result = Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	if !result.OK() {
+		t.Fatalf("expected approved expansion with hashed evidence to pass, got %#v", result.Failures)
+	}
+}
+
 func TestArtifactAcceptsCRLFGateRoute(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "bundle.md")
@@ -441,9 +497,11 @@ func complexityArtifactText(workflowID, snapshot, bundleRef, dispatchRef, receip
 		"No-anchor prompt: YES",
 		"Script result: PASS",
 		"Diff shape judgment: focused",
+		"Budget/expansion status: within contract; no expansion requested",
 		"Impact surface health: bounded",
 		"Public/config surface: none",
 		"New concepts: none",
+		"Minimum sufficient implementation: yes",
 		"Shrink opportunities: none",
 		"Decision evidence: diff",
 		"gate_route:",

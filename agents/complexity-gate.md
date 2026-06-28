@@ -67,6 +67,7 @@ Dispatch prompt artifact:
 No-anchor prompt: YES
 Script result:
 Diff shape judgment:
+Budget/expansion status:
 Impact surface health:
 Public/config surface:
 New concepts:
@@ -77,5 +78,7 @@ Changed files artifact:
 Verification artifact:
 gate_route:
 ```
+
+If budget expansion is approved, include `Budget expansion approval: <path> sha256=<sha256>` and cite the independent Anti-Complexity Review artifact. Do not treat a larger CLI budget argument as approval. Staying within the budget is only an alarm result; still judge minimum sufficient implementation, unnecessary concepts, and public/config growth.
 
 Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.

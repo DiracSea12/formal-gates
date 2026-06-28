@@ -58,5 +58,9 @@
   {
     "id": "FG-BEH-015",
     "answer": "Stop when there is no behavior gain; put detailed procedures in references instead of expanding the entrypoint."
+  },
+  {
+    "id": "FG-BEH-016",
+    "answer": "In formal handoff, development-time complexity budget checks are automatic; expansion requires independent anti-complexity review before work continues."
   }
 ]

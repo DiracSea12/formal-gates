@@ -78,6 +78,7 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 		{"--help"},
 		{"package", "--help"},
 		{"artifact", "--help"},
+		{"handoff", "--help"},
 		{"install", "--help"},
 		{"prompt", "--help"},
 		{"hook", "--help"},
@@ -114,6 +115,43 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 				t.Fatalf("expected usage text on stdout, got %q", stdout.String())
 			}
 		})
+	}
+}
+
+func TestRunHandoffValidateRequiresDevelopmentBudget(t *testing.T) {
+	dir := t.TempDir()
+	handoff := filepath.Join(dir, "handoff.md")
+	mustWriteCLI(t, handoff, `Gate Handoff Request
+WorkflowId: wf
+Change snapshot: snap
+Worktree: repo
+Requirement document target or OpenSpec change: openspec/changes/example
+Verification requirements: go test ./...
+Forbidden context: no prior findings
+`)
+	var stdout bytes.Buffer
+	code := Run("formal-gates", []string{
+		"handoff", "validate",
+		"--root", dir,
+		"--file", "handoff.md",
+		"--workflow-id", "wf",
+		"--change-snapshot", "snap",
+	}, IO{Stdout: &stdout})
+	if code == 0 {
+		t.Fatalf("expected handoff without complexity budget to fail, stdout=%q", stdout.String())
+	}
+
+	mustWriteCLI(t, handoff, validHandoffText())
+	stdout.Reset()
+	code = Run("formal-gates", []string{
+		"handoff", "validate",
+		"--root", dir,
+		"--file", "handoff.md",
+		"--workflow-id", "wf",
+		"--change-snapshot", "snap",
+	}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("expected valid handoff to pass, code=%d stdout=%q", code, stdout.String())
 	}
 }
 
@@ -591,6 +629,19 @@ func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 			"Case-to-artifact binding: bound",
 		)
 	}
+	if gate == "complexity-gate" {
+		lines = append(lines,
+			"Script result: PASS",
+			"Diff shape judgment: focused",
+			"Budget/expansion status: within contract; no expansion requested",
+			"Impact surface health: bounded",
+			"Public/config surface: none",
+			"New concepts: none",
+			"Minimum sufficient implementation: yes",
+			"Shrink opportunities: none",
+			"Decision evidence: diff",
+		)
+	}
 	lines = append(lines,
 		"gate_route:",
 		"  workflow_id: "+workflowID,
@@ -600,4 +651,32 @@ func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 		"  rerun_from: none",
 	)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func validHandoffText() string {
+	return `Gate Handoff Request
+Reason: formal development handoff
+Skill source path: SKILL.md
+Copied skill path: .claude/skills/formal-gates/SKILL.md
+WorkflowId: wf
+Change snapshot: snap
+Worktree: repo
+Base commit: abc123
+Snapshot id: snap
+Requirement document target or OpenSpec change: openspec/changes/example
+Required independent gates: qa-test-gate, complexity-gate, architecture-health-gate, code-quality-gate
+Artifacts to provide: implementation evidence
+Bundle or manifest path: bundle.md sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Verification requirements: go test ./...
+Development-time complexity budget: max-net 250, max-new-prod-files 0, max-prod-insertions 300
+Complexity check command: bin/formal-gates complexity check --task-type bugfix --max-net 250 --max-new-prod-files 0 --max-prod-insertions 300 --worktree repo --vcs auto
+Budget stop triggers: stop if any complexity check exits non-zero or new subsystem names appear
+Budget expansion approval path: .claude/gates/artifacts/anti-complexity-approval.md, required before continuing if exceeded
+Forbidden context: no prior findings
+Formal flow mode: four-gate
+Trigger source: user
+QA case design artifact: qa-design.md
+Approved QA case set: approved-cases.md
+Continue after: handoff validation PASS
+`
 }

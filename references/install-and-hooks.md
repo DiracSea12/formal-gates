@@ -36,6 +36,12 @@ To validate one artifact:
 bin/formal-gates artifact validate --root <repo> --file <artifact> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
 
+Before a formal development handoff starts, validate that the handoff contains an active development-time complexity budget and the exact complexity check command the worker must run:
+
+```bash
+bin/formal-gates handoff validate --root <repo> --file <handoff-artifact> --workflow-id <workflow-id> --change-snapshot <snapshot>
+```
+
 To validate one dispatch prompt against `hooks/pollution-patterns.json`:
 
 ```bash

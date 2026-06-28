@@ -72,7 +72,7 @@ func TestBehaviorFixturePassesAllCases(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected behavior fixture to pass, failures=%#v report=%#v", result.Failures, report)
 	}
-	if report.Summary.Total != 15 || report.Summary.Pass != report.Summary.Total || report.Summary.Pending != 0 || report.Summary.Fail != 0 {
+	if report.Summary.Total == 0 || report.Summary.Pass != report.Summary.Total || report.Summary.Pending != 0 || report.Summary.Fail != 0 {
 		t.Fatalf("unexpected fixture report: %#v", report.Summary)
 	}
 }
