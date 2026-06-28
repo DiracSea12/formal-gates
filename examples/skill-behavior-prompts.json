@@ -9,6 +9,13 @@
       "SKILL.md",
       "references/requirements-clarification-gate.md",
       "references/requirements-clarification-artifacts.md"
+    ],
+    "must_include": [
+      "requirements clarification",
+      "alignment table"
+    ],
+    "must_avoid": [
+      "drafting proposal immediately"
     ]
   },
   {
@@ -20,6 +27,13 @@
     "primary_files": [
       "SKILL.md",
       "references/complexity-gate.md"
+    ],
+    "must_include": [
+      "zero-context",
+      "handoff"
+    ],
+    "must_avoid": [
+      "directly write"
     ]
   },
   {
@@ -32,6 +46,13 @@
       "SKILL.md",
       "references/post-development-artifacts.md",
       "bin/formal-gates hook decide"
+    ],
+    "must_include": [
+      "self-issued",
+      "artifacts"
+    ],
+    "must_avoid": [
+      "seal is complete"
     ]
   },
   {
@@ -44,6 +65,13 @@
       "SKILL.md",
       "references/qa-test-gate.md",
       "references/post-development-artifacts.md"
+    ],
+    "must_include": [
+      "focused evidence",
+      "FinalExecution"
+    ],
+    "must_avoid": [
+      "Final QA PASS"
     ]
   },
   {
@@ -56,6 +84,13 @@
       "SKILL.md",
       "README.md",
       "README_EN.md"
+    ],
+    "must_include": [
+      "does not activate",
+      "unless"
+    ],
+    "must_avoid": [
+      "forces requirements"
     ]
   },
   {
@@ -68,6 +103,13 @@
       "SKILL.md",
       "references/requirements-clarification-gate.md",
       "references/qa-test-gate.md"
+    ],
+    "must_include": [
+      "user-authorized",
+      "wait"
+    ],
+    "must_avoid": [
+      "always proactive"
     ]
   },
   {
@@ -81,6 +123,13 @@
       "agents/complexity-gate.md",
       "agents/architecture-health-gate.md",
       "agents/cold-water-review.md"
+    ],
+    "must_include": [
+      "independent",
+      "zero-context"
+    ],
+    "must_avoid": [
+      "self-approve"
     ]
   },
   {
@@ -95,6 +144,13 @@
       "agents/architecture-health-gate.md",
       "agents/code-quality-gate.md",
       "references/post-development-artifacts.md"
+    ],
+    "must_include": [
+      "Gate Handoff Request",
+      "cannot be self-issued"
+    ],
+    "must_avoid": [
+      "marks PASS"
     ]
   },
   {
@@ -107,6 +163,13 @@
       "SKILL.md",
       "references/requirements-clarification-gate.md",
       "references/post-development-artifacts.md"
+    ],
+    "must_include": [
+      "refuses",
+      "final verification"
+    ],
+    "must_avoid": [
+      "records chat-only PASS"
     ]
   },
   {
@@ -120,6 +183,13 @@
       "references/post-development-artifacts.md",
       "formal-gates workflow",
       "formal-gates gate"
+    ],
+    "must_include": [
+      "changeSnapshot",
+      "invalid"
+    ],
+    "must_avoid": [
+      "reuses old PASS"
     ]
   },
   {
@@ -132,6 +202,13 @@
       "SKILL.md",
       "references/install-and-hooks.md",
       "formal-gates gate"
+    ],
+    "must_include": [
+      "rejects overriding",
+      "manifestHash"
+    ],
+    "must_avoid": [
+      "redefine qa-test-gate"
     ]
   },
   {
@@ -144,6 +221,13 @@
       "SKILL.md",
       "references/install-and-hooks.md",
       "formal-gates canary codex-hook"
+    ],
+    "must_include": [
+      "config presence is not proof",
+      "explicit formal-gates"
+    ],
+    "must_avoid": [
+      "claims hook enforcement"
     ]
   },
   {
@@ -155,6 +239,13 @@
     "primary_files": [
       "SKILL.md",
       "references/complexity-gate.md"
+    ],
+    "must_include": [
+      "Gate Handoff Request",
+      "does not edit"
+    ],
+    "must_avoid": [
+      "permission to implement directly"
     ]
   },
   {
@@ -168,6 +259,13 @@
       "agents/complexity-gate.md",
       "agents/architecture-health-gate.md",
       "agents/cold-water-review.md"
+    ],
+    "must_include": [
+      "self-review",
+      "independent"
+    ],
+    "must_avoid": [
+      "formal start-readiness approval"
     ]
   },
   {
@@ -179,6 +277,13 @@
     "primary_files": [
       "SKILL.md",
       "references/post-development-artifacts.md"
+    ],
+    "must_include": [
+      "behavior gain",
+      "references"
+    ],
+    "must_avoid": [
+      "keeps adding entrypoint text"
     ]
   }
 ]

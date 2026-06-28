@@ -43,6 +43,8 @@ type CodexHookCanarySummary struct {
 	FormalHookOutput       string `json:"formalHookOutput"`
 	Summary                string `json:"summary"`
 	ExpectedPassCondition  string `json:"expectedPassCondition"`
+	FailureReason          string `json:"failureReason,omitempty"`
+	NextAction             string `json:"nextAction,omitempty"`
 }
 
 type CodexHookProbeOptions struct {
@@ -176,6 +178,10 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 	} else if summary.PreToolUsePayloadCount > 0 && !summary.MarkerExists && formalHookBlocked {
 		summary.Status = "PASS"
 	}
+	if summary.Status != "PASS" {
+		summary.FailureReason = codexHookCanaryFailureReason(summary, formalHookBlocked)
+		summary.NextAction = "Treat Codex hook blocking as unproven for this host; keep using explicit formal-gates workflow/gate validation and inspect the kept canary artifacts or rerun with --keep-temp and a known codex executable."
+	}
 
 	if !options.KeepTemp && summary.Status == "PASS" {
 		_ = os.RemoveAll(caseDir)
@@ -239,8 +245,28 @@ func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result
 func finishCodexHookCanary(path string, summary CodexHookCanarySummary, result *Result) {
 	_ = writeJSON(path, summary)
 	if summary.Status != "PASS" {
-		result.add("codex-hook-canary", "Codex hook canary status="+summary.Status)
+		detail := "Codex hook canary status=" + summary.Status
+		if strings.TrimSpace(summary.FailureReason) != "" {
+			detail += ": " + summary.FailureReason
+		}
+		result.add("codex-hook-canary", detail)
 	}
+}
+
+func codexHookCanaryFailureReason(summary CodexHookCanarySummary, formalHookBlocked bool) string {
+	if summary.TimedOut {
+		return fmt.Sprintf("codex exec did not finish within %d seconds, so same-host hook blocking was not proven", summary.TimeoutSeconds)
+	}
+	if summary.PreToolUsePayloadCount == 0 {
+		return "no PreToolUse hook payload was captured from the Codex host"
+	}
+	if summary.MarkerExists {
+		return "the invalid command created the marker file, so the host did not block execution"
+	}
+	if !formalHookBlocked {
+		return "the native formal-gates hook output did not show a deny decision for the invalid PASS command"
+	}
+	return "the canary did not satisfy every required proof condition"
 }
 
 func resolveCanaryBinary(path string) (string, error) {

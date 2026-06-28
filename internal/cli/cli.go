@@ -184,12 +184,50 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runCanary(args, streams)
 	case "complexity":
 		return runComplexity(args, streams)
+	case "behavior":
+		return runBehavior(args, streams)
 	case "help", "-h", "--help":
 		printUsage(streams.Stdout, program)
 		return 0, nil
 	default:
 		printUsage(streams.Stdout, program)
 		return 1, fmt.Errorf("unknown command: %s", command)
+	}
+}
+
+func runBehavior(args []string, streams IO) (int, error) {
+	if len(args) == 0 {
+		printUsage(streams.Stdout, "formal-gates")
+		return 1, fmt.Errorf("behavior subcommand is required")
+	}
+	subcommand := args[0]
+	args = args[1:]
+	switch subcommand {
+	case "evaluate":
+		fs := flag.NewFlagSet("behavior evaluate", flag.ContinueOnError)
+		fs.SetOutput(streams.Stderr)
+		root := fs.String("root", ".", "repository or package root")
+		cases := fs.String("cases", "examples/skill-behavior-prompts.json", "behavior case JSON file")
+		answers := fs.String("answers", "", "behavior answer JSON file")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		report, result := validate.Behavior(validate.BehaviorOptions{
+			Root:        *root,
+			CasesFile:   *cases,
+			AnswersFile: *answers,
+		})
+		encoded, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintln(streams.Stdout, string(encoded))
+		if !result.OK() {
+			return 1, fmt.Errorf("formal-gates behavior evaluate failed with %d issue(s)", len(result.Failures))
+		}
+		return 0, nil
+	default:
+		return 1, fmt.Errorf("unknown behavior subcommand: %s", subcommand)
 	}
 }
 
@@ -971,8 +1009,9 @@ Usage:
   %s hook decide       < payload.json
   %s canary portable   --root <formal-gates> [--format text|json]
   %s canary codex-hook --worktree <repo> [--codex-command <codex>] [--keep-temp]
+  %s behavior evaluate --root <formal-gates> [--cases <cases.json>] [--answers <answers.json>]
   %s complexity check  --task-type <type> --worktree <repo> [--max-net <n>] [--max-new-prod-files <n>] [--max-prod-insertions <n>] [--staged] [--json]
 
 The native CLI performs deterministic package, artifact, dispatch prompt, install, hook decision, basic gate-state checks, native workflow checks, receipt checks, complexity diff checks, the portable native canary, and the Codex hook live canary.
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }
