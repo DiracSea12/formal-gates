@@ -38,6 +38,11 @@ func Run(program string, args []string, streams IO) int {
 }
 
 func run(program string, args []string, streams IO) (int, error) {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		printUsage(streams.Stdout, program)
+		return 0, nil
+	}
+
 	command := "package"
 	if len(args) > 0 && args[0] != "-h" && args[0] != "--help" && args[0][0] != '-' {
 		command = args[0]

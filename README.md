@@ -8,7 +8,7 @@
 
 不同工具的自动拦截能力不同；不能自动拦时，仍然可以用显式命令校验证据。
 
-**当前边界：** 这个仓库目前支持本地安装和本地验证。它还没有实现公开 registry、marketplace、`npx`、签名、provenance、checksum、attestation，或 release-trust 发行链路。
+**当前边界：** 这个仓库目前支持本地安装和本地验证。CI 已配置为在 GitHub Release 发布时上传二进制、`portable canary` 结果和 SHA256 校验和；它还没有实现公开 registry、marketplace、`npx`、签名、provenance、attestation，或第三方可验证的 release-trust 发行链路。
 
 ---
 
@@ -154,11 +154,11 @@ bin/formal-gates canary portable --root . --format json
 # 可自动判定的行为用例，期望 15 个全部 PASS
 bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
 
-# 只在验证 Codex 宿主拦截能力时运行；失败不代表 native 校验失败
+# 只在验证 Codex 宿主自动拦截能力时运行；失败不代表 native 校验失败
 bin/formal-gates canary codex-hook --worktree .
 ```
 
-`portable canary` 是项目自身可控能力的主要证明。`codex-hook` 只证明当前 Codex 客户端是否真的调用 hook；它不通过时，仍然必须用显式的 `formal-gates workflow` / `formal-gates gate` 命令校验证据，不能宣称 Codex hook blocking proven。
+`portable canary` 是项目自身可控能力的主要证明。`codex-hook` 只证明当前 Codex 客户端是否真的调用 hook 并阻断违规命令；它不通过时，说明这个宿主的自动拦截没有闭环。此时仍然必须用显式的 `formal-gates workflow` / `formal-gates gate` 命令校验证据，不能宣称 Codex hook blocking proven。
 
 `examples/skill-behavior-prompts.json` 和 `examples/skill-behavior-answers.json` 是可自动检查的 15 个行为用例，会被 package 校验和 portable canary 使用。根目录的 `test-prompts.json` 是更宽的人工/模型评测提示集，覆盖 20 个场景，不作为 package 自检的固定夹具。
 
@@ -167,7 +167,7 @@ bin/formal-gates canary codex-hook --worktree .
 | 工具 | 能怎么用 |
 |------|----------|
 | Claude Code / Cursor | 项目本地安装后，已经验证过可以拦住“没有证据就记录 PASS”的命令。 |
-| Codex | 可以安装规则，也可以显式运行 formal-gates 校验证据；当前不要承诺它一定能自动拦截命令。 |
+| Codex | 可以安装规则，也可以显式运行 formal-gates 校验证据；只有 `codex-hook` live canary 通过后，才可以说当前 Codex 宿主自动拦截已证明。 |
 
 详细宿主证据和版本边界见 [`references/install-and-hooks.md`](references/install-and-hooks.md)。
 
@@ -175,14 +175,14 @@ bin/formal-gates canary codex-hook --worktree .
 
 ## 发行信任边界
 
-当前包适合本地安装、本地校验和候选包验证。发布 GitHub Release 时，CI 会上传三个平台的二进制、`portable canary` 结果和 SHA256 校验和。不要把本仓库当前状态描述成已经具备：
+当前包适合本地安装、本地校验和候选包验证。CI 已配置为在 GitHub Release 发布时上传三个平台的二进制、`portable canary` 结果和 SHA256 校验和。校验和只能证明下载文件和 CI 产物一致；不要把本仓库当前状态描述成已经具备：
 
 - 公开 registry 或 marketplace 分发；
 - `npx` 一键远程安装；
 - 二进制签名、provenance 或 attestation；
 - 可由第三方独立验证的 release-trust 链路。
 
-对外发布前，至少还要补齐签名或来源证明；发布页上的二进制、校验和和 `portable canary` 结果只能说明这次构建产物能被复核，不能替代签名。
+对外发布前，至少还要补齐签名或来源证明；发布页上的二进制、校验和和 `portable canary` 结果在真实发布工作流跑通后，只能说明这次构建产物能被复核，不能替代签名或 provenance。
 
 ---
 
@@ -210,7 +210,7 @@ Windows 下命令名是 `bin/formal-gates.exe`。安装后可用 `bin/formal-gat
 
 ### Codex 注意
 
-Codex 用户不要只靠自动拦截。安装后仍应显式运行 `formal-gates workflow` / `formal-gates gate`，用证据文件记录和校验 PASS。
+Codex 用户不要只靠自动拦截。除非 `formal-gates canary codex-hook --worktree <repo>` 在同一台机器、同一个 Codex 客户端上通过，否则安装后仍应显式运行 `formal-gates workflow` / `formal-gates gate`，用证据文件记录和校验 PASS。
 
 ---
 
@@ -289,7 +289,7 @@ formal-gates/
 人看这个 README 上手；AI 从 `SKILL.md` 进入。各门具体判据按需读 `references/`。
 `examples/sample-*.json` 和 `examples/sample-*.md` 只作结构参考；正式记录必须由 `formal-gates gate` / `formal-gates workflow` 命令生成，不能直接复制样例文件。
 
-> 当前只支持本地安装和本地验证；不提供公开 registry、marketplace、`npx`、签名、provenance、checksum、attestation 或 release-trust 发行证明。
+> 当前支持本地安装、本地验证，并配置了 release 校验和上传；不提供公开 registry、marketplace、`npx`、签名、provenance、attestation 或完整 release-trust 发行证明。
 
 ---
 

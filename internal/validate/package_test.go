@@ -52,6 +52,85 @@ func TestPackageRequiresShowcaseAsset(t *testing.T) {
 	}
 }
 
+func TestPackageRejectsWorkflowLevelWritePermission(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "permissions:\n  contents: read", "permissions:\n  # comment should not hide write access\n  contents: write")
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject workflow-level write permission")
+	}
+	requireWorkflowFailure(t, result)
+}
+
+func TestPackageRejectsNonReleaseJobWritePermission(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "go-validation:\n    name:", "go-validation:\n    permissions:\n      contents: write\n    name:")
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject non-release contents write permission")
+	}
+	requireWorkflowFailure(t, result)
+}
+
+func TestPackageRejectsReleaseJobMissingWritePermission(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "release-evidence:\n    name:", "release-evidence:\n    permissions:\n      contents: read\n    name:")
+	mutateWorkflow(t, root, "    permissions:\n      contents: write\n", "")
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject release job without write permission")
+	}
+	requireWorkflowFailure(t, result)
+}
+
+func TestPackageRejectsReleaseJobWriteAllPermission(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "    permissions:\n      contents: write", "    permissions: write-all")
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject release job write-all permission")
+	}
+	requireWorkflowFailure(t, result)
+}
+
+func TestPackageRejectsReleaseJobExtraWritePermission(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "    permissions:\n      contents: write", "    permissions:\n      contents: write\n      issues: write")
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject release job extra write permission")
+	}
+	requireWorkflowFailure(t, result)
+}
+
+func TestPackageRejectsReleaseJobWithoutReleaseCondition(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "    if: github.event_name == 'release'\n", "")
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject release job without release condition")
+	}
+	requireWorkflowFailure(t, result)
+}
+
+func TestPackageAcceptsPermissionIndentAndCommentVariations(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "permissions:\n  contents: read", "permissions:\n  # top-level workflow token stays read-only\n  contents: read")
+	mutateWorkflow(t, root, "    permissions:\n      contents: write", "    permissions:\n      # release upload is the only write-scoped job\n      contents: write")
+
+	var result Result
+	validateCI(root, &result)
+	if !result.OK() {
+		t.Fatalf("expected package validation to accept semantic permission layout, got %#v", result.Failures)
+	}
+}
+
 func copyPackageFixture(t *testing.T) string {
 	t.Helper()
 	source := repoRootValidateTest(t)
@@ -64,12 +143,31 @@ func copyPackageFixture(t *testing.T) string {
 	for _, rel := range requiredFiles {
 		copyValidateTestFile(t, source, target, rel)
 	}
-	copyValidateTestFile(t, source, target, "formal-gates.manifest.json")
 	copyValidateTestFile(t, source, target, "test-prompts.json")
-	copyValidateTestFile(t, source, target, "README.md")
-	copyValidateTestFile(t, source, target, "README_EN.md")
-	copyValidateTestFile(t, source, target, ".github/workflows/portable-validation.yml")
 	return target
+}
+
+func mutateWorkflow(t *testing.T, root, old, new string) {
+	t.Helper()
+	workflow := filepath.Join(root, ".github", "workflows", "portable-validation.yml")
+	text, err := os.ReadFile(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(text), old, new, 1)
+	if updated == string(text) {
+		t.Fatalf("workflow fixture did not contain %q", old)
+	}
+	if err := os.WriteFile(workflow, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requireWorkflowFailure(t *testing.T, result Result) {
+	t.Helper()
+	if !resultHasPath(result, ".github/workflows/portable-validation.yml") {
+		t.Fatalf("expected workflow failure, got %#v", result.Failures)
+	}
 }
 
 func copyValidateTestFile(t *testing.T, sourceRoot, targetRoot, rel string) {
