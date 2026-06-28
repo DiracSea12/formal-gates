@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   go-validation:
@@ -118,22 +118,38 @@ jobs:
             formal-gates-*
             portable-canary-*.json
             SHA256SUMS*.txt
+
+  release-evidence:
+    name: Upload release evidence
+    if: github.event_name == 'release'
+    needs: go-validation
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: formal-gates-${{ runner.os }}
       - name: Upload release evidence (Windows)
-        if: github.event_name == 'release' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload $env:GITHUB_REF_NAME formal-gates-windows-amd64.exe portable-canary-windows-amd64.json SHA256SUMS-windows-amd64.txt --clobber
       - name: Upload release evidence (macOS)
-        if: github.event_name == 'release' && runner.os == 'macOS'
+        if: runner.os == 'macOS'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$GITHUB_REF_NAME" formal-gates-macos-amd64 portable-canary-macos-amd64.json SHA256SUMS-macos-amd64.txt --clobber
       - name: Upload release evidence (Linux)
-        if: github.event_name == 'release' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

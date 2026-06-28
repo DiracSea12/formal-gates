@@ -98,6 +98,8 @@ Do not borrow this as a license to clean the whole repo. Historical debt is resi
 
 Also judge whether the current implementation is the smallest sufficient implementation for the stated request. Prefer reuse, deletion, and local simplification before adding new files, types, fields, config, scripts, stages, or reports. Do not be mechanical: when the explicit task is refactor, cleanup, or simplification, the right answer may be a clear restructure rather than the smallest diff.
 
+Within the current task scope, complexity review must also look for redundant, stale, unused, unnecessarily complex, over-designed, or shrinkable logic, wording, tests, documents, scripts, and code.
+
 ## Stop Smells
 
 Stop when the current contract did not budget:

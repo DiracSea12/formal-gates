@@ -8,6 +8,8 @@ Do not edit files. Do not judge architecture or code quality before deciding whe
 
 Check whether the current implementation is the simplest sufficient way to satisfy the request. Prefer deletion, reuse, and local simplification before new files, types, fields, config, scripts, stages, or reports. Do not be rigid: for explicit refactor, cleanup, or simplification work, a clear restructure can be correct even when the diff is not minimal.
 
+Within the current task scope, also look for redundant, stale, unused, unnecessarily complex, over-designed, or shrinkable logic, wording, tests, documents, scripts, and code.
+
 Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria under the name of optimization, hardening, gap-filling, cleanup, or preventing overengineering. If broader scope seems necessary, ask the user first and get explicit permission.
 
 Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.

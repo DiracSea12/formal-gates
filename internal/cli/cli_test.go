@@ -117,6 +117,22 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 	}
 }
 
+func TestTopLevelHelpShowsAllCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code := Run("formal-gates", []string{"--help"}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code != 0 {
+		t.Fatalf("expected top-level help to exit 0, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "formal-gates workflow snapshot") || !strings.Contains(stdout.String(), "formal-gates behavior evaluate") {
+		t.Fatalf("expected global usage, got %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "Usage of package:") {
+		t.Fatalf("top-level help must not show package-only help: %q", stdout.String())
+	}
+}
+
 func TestRunBehaviorEvaluatePendingAndFailingAnswers(t *testing.T) {
 	root := t.TempDir()
 	mustWriteCLI(t, filepath.Join(root, "cases.json"), `[

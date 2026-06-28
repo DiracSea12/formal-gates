@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var requiredFiles = []string{
@@ -145,6 +147,16 @@ func validateCI(root string, result *Result) {
 		result.add(".github/workflows/portable-validation.yml", fmt.Sprintf("cannot read CI workflow: %v", err))
 		return
 	}
+	validateCIText(text, result)
+	workflow, err := parseCIWorkflow(text)
+	if err != nil {
+		result.add(".github/workflows/portable-validation.yml", fmt.Sprintf("cannot parse CI workflow permissions: %v", err))
+		return
+	}
+	validateCIStructure(workflow, result)
+}
+
+func validateCIText(text string, result *Result) {
 	for _, required := range []string{
 		"windows-latest",
 		"macos-latest",
@@ -164,8 +176,8 @@ func validateCI(root string, result *Result) {
 		"SHA256SUMS-macos-amd64.txt",
 		"SHA256SUMS-linux-amd64.txt",
 		"actions/upload-artifact",
+		"actions/download-artifact",
 		"gh release upload",
-		"release:",
 	} {
 		if !strings.Contains(text, required) {
 			result.add(".github/workflows/portable-validation.yml", "missing required CI validation text: "+required)
@@ -177,6 +189,162 @@ func validateCI(root string, result *Result) {
 	if !strings.Contains(text, "bin") || !strings.Contains(text, "formal-gates.exe") || !strings.Contains(text, "formal-gates") {
 		result.add(".github/workflows/portable-validation.yml", "CI must validate with bin/formal-gates(.exe)")
 	}
+}
+
+func validateCIStructure(workflow ciWorkflow, result *Result) {
+	if !workflow.Events["release"] {
+		result.add(".github/workflows/portable-validation.yml", "workflow must run on GitHub Release events")
+	}
+	if !hasExactContentsPermission(workflow.Permissions, "read") {
+		result.add(".github/workflows/portable-validation.yml", "workflow-level contents permission must be read-only")
+	}
+	for name, job := range workflow.Jobs {
+		if name != "release-evidence" && grantsContentsWrite(job.Permissions) {
+			result.add(".github/workflows/portable-validation.yml", "only the release evidence job may request contents: write")
+		}
+	}
+	releaseJob, ok := workflow.Jobs["release-evidence"]
+	if !ok {
+		result.add(".github/workflows/portable-validation.yml", "release evidence job is missing")
+		return
+	}
+	if !hasExactContentsPermission(releaseJob.Permissions, "write") {
+		result.add(".github/workflows/portable-validation.yml", "release evidence job must carry its own contents: write permission")
+	}
+	if !contains(releaseJob.Needs, "go-validation") {
+		result.add(".github/workflows/portable-validation.yml", "release evidence job must depend on go-validation")
+	}
+	if !isReleaseEventCondition(releaseJob.Condition) {
+		result.add(".github/workflows/portable-validation.yml", "release evidence job must be limited to the release event")
+	}
+}
+
+type ciWorkflow struct {
+	Permissions map[string]string
+	Jobs        map[string]ciJob
+	Events      map[string]bool
+}
+
+type ciJob struct {
+	Permissions map[string]string
+	Needs       []string
+	Condition   string
+}
+
+func parseCIWorkflow(text string) (ciWorkflow, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(text), &root); err != nil {
+		return ciWorkflow{}, err
+	}
+	if len(root.Content) == 0 {
+		return ciWorkflow{}, fmt.Errorf("empty workflow")
+	}
+	doc := root.Content[0]
+	workflow := ciWorkflow{Jobs: map[string]ciJob{}, Events: map[string]bool{}}
+	if node := yamlMappingValue(doc, "on"); node != nil {
+		workflow.Events = parseEventsNode(node)
+	}
+	if node := yamlMappingValue(doc, "permissions"); node != nil {
+		workflow.Permissions = parsePermissionsNode(node)
+	}
+	jobs := yamlMappingValue(doc, "jobs")
+	if jobs == nil {
+		return workflow, nil
+	}
+	for i := 0; i+1 < len(jobs.Content); i += 2 {
+		name := jobs.Content[i].Value
+		jobNode := jobs.Content[i+1]
+		if jobNode.Kind != yaml.MappingNode {
+			continue
+		}
+		workflow.Jobs[name] = parseJobNode(jobNode)
+	}
+	return workflow, nil
+}
+
+func parseEventsNode(node *yaml.Node) map[string]bool {
+	events := map[string]bool{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		events[node.Value] = true
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			events[item.Value] = true
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			events[node.Content[i].Value] = true
+		}
+	}
+	return events
+}
+
+func parseJobNode(node *yaml.Node) ciJob {
+	job := ciJob{}
+	if permissions := yamlMappingValue(node, "permissions"); permissions != nil {
+		job.Permissions = parsePermissionsNode(permissions)
+	}
+	if needs := yamlMappingValue(node, "needs"); needs != nil {
+		job.Needs = parseNeedsNode(needs)
+	}
+	if condition := yamlMappingValue(node, "if"); condition != nil {
+		job.Condition = strings.TrimSpace(condition.Value)
+	}
+	return job
+}
+
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func parsePermissionsNode(node *yaml.Node) map[string]string {
+	permissions := map[string]string{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		permissions["*"] = strings.ToLower(node.Value)
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := strings.ToLower(node.Content[i].Value)
+			value := strings.ToLower(node.Content[i+1].Value)
+			permissions[key] = value
+		}
+	}
+	return permissions
+}
+
+func parseNeedsNode(node *yaml.Node) []string {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return []string{node.Value}
+	case yaml.SequenceNode:
+		needs := make([]string, 0, len(node.Content))
+		for _, item := range node.Content {
+			needs = append(needs, item.Value)
+		}
+		return needs
+	}
+	return nil
+}
+
+func hasExactContentsPermission(permissions map[string]string, expected string) bool {
+	return len(permissions) == 1 && permissions["contents"] == expected
+}
+
+func grantsContentsWrite(permissions map[string]string) bool {
+	return permissions["contents"] == "write" || permissions["*"] == "write-all"
+}
+
+func isReleaseEventCondition(condition string) bool {
+	normalized := strings.ReplaceAll(condition, " ", "")
+	return normalized == "github.event_name=='release'" || normalized == "${{github.event_name=='release'}}"
 }
 
 func validateManifest(root string, result *Result) {

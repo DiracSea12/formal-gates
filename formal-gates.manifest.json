@@ -122,7 +122,8 @@
     "A passing canary on one host does not prove another host. Do not claim Codex plugin distribution from this package."
   ],
   "release_trust": [
-    "Phase 1 does not ship checksums, artifact attestation, npm provenance, signing, or equivalent release-trust evidence.",
-    "Phase 2 must define and implement release-trust evidence before public release claims rely on those controls."
+    "Phase 1 CI is configured to produce CI artifacts and platform-specific SHA256 checksum files, and to upload them when a GitHub Release is published.",
+    "Phase 1 does not ship artifact attestation, npm provenance, signing, or equivalent third-party release-trust evidence.",
+    "Phase 2 must define and implement signing, provenance, or equivalent release-trust evidence before public release claims rely on those controls."
   ]
 }

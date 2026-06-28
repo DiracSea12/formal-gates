@@ -130,13 +130,13 @@ Generated hook commands use slash paths inside quoted command strings. This is i
 
 ## Release Evidence
 
-The portable validation workflow builds native binaries on Windows, macOS, and Linux, runs package validation, runs the portable canary, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. On a published GitHub Release it also uploads the same files to the release:
+The portable validation workflow builds native binaries on Windows, macOS, and Linux, runs package validation, runs the portable canary, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. It is configured to upload the same files to a GitHub Release when a release is published:
 
 - `formal-gates-windows-amd64.exe`, `portable-canary-windows-amd64.json`, `SHA256SUMS-windows-amd64.txt`
 - `formal-gates-macos-amd64`, `portable-canary-macos-amd64.json`, `SHA256SUMS-macos-amd64.txt`
 - `formal-gates-linux-amd64`, `portable-canary-linux-amd64.json`, `SHA256SUMS-linux-amd64.txt`
 
-Here, an artifact is a saved build or evidence file from CI. The binary is what the user can run. The canary JSON is the package's self-check result for that platform. The checksum file lets a user verify that the downloaded binary and canary file match what CI produced. `PASS` means the package-local checks in that canary passed for that platform; it does not prove a third-party signature, provenance, or host hook interception.
+Here, an artifact is a saved build or evidence file from CI. The binary is what the user can run. The canary JSON is the package's self-check result for that platform. The checksum file lets a user verify that the downloaded binary and canary file match what CI produced. `PASS` means the package-local checks in that canary passed for that platform; it does not prove a third-party signature, provenance, attestation, or host hook interception.
 
 ## Prompt Behavior Harness
 
@@ -357,7 +357,7 @@ Use `bin/formal-gates.exe` on Windows. The canary validates package shape, dispa
 
 ## Phase 2 Release Trust
 
-Phase 1 does not ship checksums, artifact attestation, npm provenance, signing, or equivalent release-trust evidence. Those controls are Phase 2 work. Do not claim release provenance, signed artifacts, npm package provenance, or equivalent trust guarantees from the Phase 1 validator or CI matrix.
+Phase 1 ships CI artifacts and platform-specific SHA256 checksum files. It is configured to upload release evidence when a GitHub Release is published, but that still does not provide artifact attestation, npm provenance, signing, or equivalent third-party release-trust evidence. Those controls are Phase 2 work. Do not claim release provenance, signed artifacts, npm package provenance, or equivalent trust guarantees from the Phase 1 validator or CI matrix.
 
 ## Codex Hook Canary
 
@@ -369,7 +369,7 @@ bin/formal-gates canary codex-hook --worktree <repo> --keep-temp
 
 Use `bin/formal-gates.exe` on Windows. If `codex` resolves to a PowerShell wrapper, pass a script-free Codex executable path with `--codex-command <codex.exe-or-codex.cmd>`.
 
-The PASS condition is strict: real `codex exec` must write at least one `PreToolUse` hook payload, the native hook must block a formal PASS command that lacks an artifact, and the canary marker file must not be created. `FAIL` or `TIMED_OUT` means this Codex client/version does not have closed-loop hook interception, or the formal-gates hook is not wired correctly. Failed summaries include `failureReason` and `nextAction` so the result says whether the likely blocker was timeout, missing hook payload, marker creation, or missing deny output.
+The PASS condition is strict: real `codex exec` must write at least one `PreToolUse` hook payload, the native hook must block a formal PASS command that lacks an artifact, and the canary marker file must not be created. `FAIL` or `TIMED_OUT` means this Codex client/version does not have closed-loop hook interception, or the formal-gates hook is not wired correctly. Treat that as a host auto-blocking failure, not a package-local validation failure. Failed summaries include `failureReason` and `nextAction` so the result says whether the likely blocker was timeout, missing hook payload, marker creation, or missing deny output.
 
 Do not use direct hook-decision tests, Claude hook success, or a target command failing inside `codex exec` as proof of Codex hook closure. The Codex hook is an optional guardrail; formal non-interactive workflows still rely on native `formal-gates workflow` / `formal-gates gate` admission and artifact recording.
 

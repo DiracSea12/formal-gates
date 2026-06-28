@@ -8,7 +8,7 @@
 
 Automatic blocking varies by tool. When a tool cannot block commands automatically, use the explicit validation commands.
 
-**Current boundary:** This repository currently supports local install and local validation. It does not implement public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
+**Current boundary:** This repository currently supports local install and local validation. CI is configured to upload binaries, `portable canary` output, and SHA256 checksums when a GitHub Release is published. It does not implement public registry, marketplace, `npx`, signing, provenance, attestation, or third-party-verifiable release-trust distribution.
 
 ---
 
@@ -141,11 +141,11 @@ bin/formal-gates canary portable --root . --format json
 # Automatically checked behavior cases; expect all 15 to PASS
 bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
 
-# Run only when validating Codex host interception; failure does not mean native validation failed
+# Run only when validating Codex host auto-interception; failure does not mean native validation failed
 bin/formal-gates canary codex-hook --worktree .
 ```
 
-`portable canary` is the main proof for capabilities controlled by this package. `codex-hook` only proves whether the current Codex client actually invokes hooks. If it fails, keep using explicit `formal-gates workflow` / `formal-gates gate` evidence validation and do not claim Codex hook blocking proven.
+`portable canary` is the main proof for capabilities controlled by this package. `codex-hook` only proves whether the current Codex client actually invokes hooks and blocks invalid commands. If it fails, the host's automatic interception is not closed-loop; keep using explicit `formal-gates workflow` / `formal-gates gate` evidence validation and do not claim Codex hook blocking proven.
 
 `examples/skill-behavior-prompts.json` and `examples/skill-behavior-answers.json` are the 15 automatically checked behavior cases used by package validation and the portable canary. Root `test-prompts.json` is the broader manual/model evaluation prompt set with 20 scenarios, not the fixed package self-check fixture.
 
@@ -154,7 +154,7 @@ Current support can be described this way:
 | Tool | How to use it |
 |------|---------------|
 | Claude Code / Cursor | Project-local installs have been verified to block "record PASS without evidence." |
-| Codex | Install the rules and run explicit formal-gates validation commands; do not promise automatic command blocking yet. |
+| Codex | Install the rules and run explicit formal-gates validation commands; claim automatic command blocking only after the `codex-hook` live canary passes on that host. |
 
 Detailed host evidence and version boundaries live in [`references/install-and-hooks.md`](references/install-and-hooks.md).
 
@@ -162,14 +162,14 @@ Detailed host evidence and version boundaries live in [`references/install-and-h
 
 ## Release Trust Boundary
 
-The current package is suitable for local installs, local validation, and candidate package checks. When a GitHub Release is published, CI uploads per-platform binaries, `portable canary` output, and SHA256 checksums. Do not describe the current repository state as having:
+The current package is suitable for local installs, local validation, and candidate package checks. CI is configured to upload per-platform binaries, `portable canary` output, and SHA256 checksums when a GitHub Release is published. Checksums only prove downloaded files match CI artifacts; do not describe the current repository state as having:
 
 - public registry or marketplace distribution;
 - `npx` remote one-command installation;
 - binary signatures, provenance, or attestations;
 - a third-party-verifiable release-trust chain.
 
-Before public release, add signatures or provenance. Release binaries, checksums, and `portable canary` output make the build result easier to verify, but they do not replace signing.
+Before public release, add signatures or provenance. After a real release workflow succeeds, release binaries, checksums, and `portable canary` output make the build result easier to verify, but they do not replace signing or provenance.
 
 ---
 
@@ -197,7 +197,7 @@ Each host must be installed and verified on its own. A passing canary on one hos
 
 ### Codex Note
 
-Codex users should not rely only on automatic blocking. After installation, explicitly run `formal-gates workflow` / `formal-gates gate` to record and validate PASS evidence.
+Codex users should not rely only on automatic blocking. Unless `formal-gates canary codex-hook --worktree <repo>` passes on the same machine and Codex client, explicitly run `formal-gates workflow` / `formal-gates gate` to record and validate PASS evidence after installation.
 
 ---
 
@@ -276,7 +276,7 @@ formal-gates/
 Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.
 `examples/sample-*.json` and `examples/sample-*.md` are structural references only. Formal records must be generated through `formal-gates gate` / `formal-gates workflow`; do not copy sample files directly as state or artifacts.
 
-> This package currently supports local install and local validation only; it does not provide public registry, marketplace, `npx`, signing, provenance, checksum, attestation, or release-trust distribution.
+> This package currently supports local install, local validation, and configured release checksum uploads; it does not provide public registry, marketplace, `npx`, signing, provenance, attestation, or complete release-trust distribution.
 
 ---
 
