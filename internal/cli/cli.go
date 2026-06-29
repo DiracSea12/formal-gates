@@ -649,6 +649,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		state := fs.String("state", "", "gate state JSON path; defaults to .claude/gates/gate-state.json under --worktree")
 		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
 		gate := fs.String("gate", "", "gate id")
+		mode := fs.String("mode", "", "gate mode")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -658,6 +659,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 			Worktree:       *worktree,
 			StatePath:      *state,
 			Gate:           *gate,
+			Mode:           *mode,
 			WorkflowID:     *workflowID,
 			ChangeSnapshot: *changeSnapshot,
 			RunDir:         *runDir,
@@ -830,6 +832,7 @@ func runGate(args []string, streams IO) (int, error) {
 		worktree := fs.String("worktree", ".", "repository root")
 		state := fs.String("state", "", "gate state JSON path; defaults to .claude/gates/gate-state.json under --worktree")
 		gate := fs.String("gate", "", "gate id")
+		mode := fs.String("mode", "", "gate mode")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -839,6 +842,7 @@ func runGate(args []string, streams IO) (int, error) {
 			Worktree:       *worktree,
 			StatePath:      *state,
 			Gate:           *gate,
+			Mode:           *mode,
 			WorkflowID:     *workflowID,
 			ChangeSnapshot: *changeSnapshot,
 		})
