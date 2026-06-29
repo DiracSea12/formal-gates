@@ -35,11 +35,15 @@ Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `re
 
 ## Budget Rules
 
-Budgets are task-specific. Fallback thresholds in `formal-gates complexity check` are alarms, not design truth.
+Budgets are task-specific. `formal-gates complexity check` has no built-in numeric default budget: if no numeric budget is passed, it only reports diff statistics and non-budget review signals. The main agent must set the development-time budget from the actual requirement, planned slice, expected diff shape, reused/deleted code, allowed production files, and test/documentation needs before formal development starts. Explicit numeric budget thresholds are alarms, not design truth.
 
 Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids deletion/reuse, or is not the minimum sufficient implementation for the request.
 
-Development-time budget control is mandatory inside a formal development handoff or equivalent project process. The handoff must give the worker the active Complexity Contract, the exact budget numbers passed to `formal-gates complexity check`, stop triggers, and the budget expansion path. The worker must check the live diff against that contract before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop: either shrink the diff back inside budget or obtain independent Anti-Complexity Review approval before continuing. Waiting until the post-development complexity gate to explain the excess is a process failure.
+Line budgets must not be gamed by reducing readability. If code is compressed to fit the budget, such as unrelated statements packed onto one line, unclear short names, merged responsibilities, hidden branching, or removed useful comments/error handling, treat it as complexity budget evasion and fail or review even when numeric counts are within budget.
+
+Development-time budget control is mandatory inside a formal development handoff or equivalent project process. The handoff must give the worker the active Complexity Contract, the exact budget numbers passed to `formal-gates complexity check`, stop triggers, and the budget expansion path. At minimum, the handoff budget must state numeric `max-net`, `max-new-prod-files`, and `max-prod-insertions` values, and those values must match the supplied check command. Allowed-file or forbidden-file scope is necessary, but it is not a substitute for numeric budget thresholds. The worker must check the live diff against that contract before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop: either shrink the diff back inside budget or obtain independent Anti-Complexity Review approval before continuing. Waiting until the post-development complexity gate to explain the excess is a process failure.
+
+Do not derive a formal development budget from tool defaults. If the main agent cannot justify the numbers from the current requirement and planned work, the handoff is not ready.
 
 If a worker needs to exceed the active dynamic budget, it must stop and submit:
 
@@ -86,7 +90,7 @@ Run only when there is a diff to review:
 bin/formal-gates complexity check --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine output and `--staged` only for staged review. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
+Use `--json` for machine output and `--staged` only for staged review. Formal handoff and development-time checks must pass all three numeric budget flags together. Running without them is allowed only for informal diff statistics or non-budget complexity review evidence. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
 
 In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 

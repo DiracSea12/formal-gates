@@ -27,6 +27,8 @@ Status: BLOCKED
 Reason: anti_complexity_dispatch field missing - this cannot approve budget expansion.
 ```
 
+Before judging the request, verify `Current budget` and `Proposed new budget` include numeric thresholds for `max-net`, `max-new-prod-files`, and `max-prod-insertions`. Qualitative scope boundaries alone cannot approve or deny expansion because they do not define what was exceeded. If either budget lacks those numbers, use `DENY` and require a corrected request.
+
 ## Review Standard
 
 Approve only when all are true:

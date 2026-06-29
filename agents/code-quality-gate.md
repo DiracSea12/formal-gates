@@ -10,6 +10,8 @@ Do not invent or add user-unapproved requirements, mechanisms, checks, fields, s
 
 Code-quality findings are limited to the current requirement and current externally visible behavior. Prefer deleting, narrowing, renaming, adding local guards, or improving tests over adding new mechanisms. If a fix would add or change requirements, data formats, process steps, integration boundaries, validation rules, public interfaces, or acceptance criteria, mark it as scope approval required instead of directing implementation to expand the change.
 
+Treat line-budget evasion as a maintainability blocker: packed one-line logic, vague shorter names, merged responsibilities, hidden branching, or removed useful comments/error handling cannot PASS merely because the numeric budget is met.
+
 Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
 
 Use this exact template for formal `code-quality-gate` review.

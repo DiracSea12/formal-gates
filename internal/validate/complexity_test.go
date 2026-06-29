@@ -12,10 +12,19 @@ func TestComplexityGitPassReviewAndFail(t *testing.T) {
 	dir := initComplexityGitRepo(t)
 	mustWrite(t, filepath.Join(dir, "feature.go"), strings.Repeat("package main\n", 20))
 
+	report, result := Complexity(ComplexityOptions{Worktree: dir, VCS: "git", TaskType: "small-feature"})
+	if !result.OK() || report.Budget != nil || report.BudgetSource != "none" || len(report.Warnings) == 0 {
+		t.Fatalf("expected statistics-only report without budget, got report=%#v result=%#v", report, result.Failures)
+	}
+	partialMaxNet := 10
+	if _, result = Complexity(ComplexityOptions{Worktree: dir, VCS: "git", TaskType: "small-feature", MaxNet: &partialMaxNet}); result.OK() {
+		t.Fatal("expected partial budget to fail")
+	}
+
 	maxNet := 100
 	maxFiles := 2
 	maxProd := 100
-	report, result := Complexity(ComplexityOptions{
+	report, result = Complexity(ComplexityOptions{
 		Worktree:          dir,
 		VCS:               "git",
 		TaskType:          "small-feature",
@@ -99,7 +108,7 @@ func runGitForComplexityTest(t *testing.T, dir string, args ...string) {
 func TestComplexityTextIncludesLargestFiles(t *testing.T) {
 	report := ComplexityReport{
 		Status:       "PASS",
-		BudgetSource: "explicit-overrides",
+		BudgetSource: "explicit",
 		Summary:      ComplexitySummary{Insertions: 1, ChangedFiles: 1},
 		LargestFiles: []ComplexityFileChange{{Path: "a.go", Insertions: 1, Category: "production"}},
 	}

@@ -32,6 +32,8 @@ If it fails, do not implement.
 
 The supplied complexity budget is active during implementation. It triggers automatically inside formal development handoff; no separate user request is needed.
 
+The budget must include numeric thresholds for `max-net`, `max-new-prod-files`, and `max-prod-insertions`, and those numbers must match the supplied `formal-gates complexity check` command. Scope boundaries such as allowed files, forbidden files, or "no runtime changes" are required constraints, but they are not a numeric budget. If only qualitative scope is supplied, stop before implementation.
+
 Run or update the supplied `formal-gates complexity check` command before continuing after meaningful diff growth and before returning implementation. Meaningful growth includes new production files, public/config surface, new subsystem-like names, new runner/evidence/report layers, large test harness changes, or any stop trigger in the handoff.
 
 If the check exceeds budget or a stop trigger fires:
@@ -41,6 +43,8 @@ If the check exceeds budget or a stop trigger fires:
 - do not continue implementation on a larger budget until an independent Anti-Complexity Review returns `APPROVE` or `APPROVE_SMALLER`.
 
 Staying within budget does not prove the design is acceptable. Still prefer the smallest sufficient implementation and avoid unnecessary concepts.
+
+Do not satisfy the line budget by making the code worse. Formatting compression, packing unrelated statements onto one line, vague shorter names, merged functions with mixed responsibilities, hidden control flow, or dropped comments/error handling are budget evasion. If readable implementation cannot fit the budget, stop and request anti-complexity review instead of squeezing the code.
 
 ## Output
 
