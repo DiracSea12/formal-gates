@@ -136,9 +136,10 @@ Generated hook commands use slash paths inside quoted command strings. This is i
 
 ## Release Evidence
 
-The portable validation workflow builds native binaries on Windows, macOS, and Linux, runs package validation, runs the portable canary, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. It is configured to upload the same files to a GitHub Release when a release is published:
+The portable validation workflow builds native binaries on Windows, macOS arm64, macOS amd64, and Linux, runs package validation, runs the portable canary, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. It is configured to upload the same files to a GitHub Release when a release is published:
 
 - `formal-gates-windows-amd64.exe`, `portable-canary-windows-amd64.json`, `SHA256SUMS-windows-amd64.txt`
+- `formal-gates-macos-arm64`, `portable-canary-macos-arm64.json`, `SHA256SUMS-macos-arm64.txt`
 - `formal-gates-macos-amd64`, `portable-canary-macos-amd64.json`, `SHA256SUMS-macos-amd64.txt`
 - `formal-gates-linux-amd64`, `portable-canary-linux-amd64.json`, `SHA256SUMS-linux-amd64.txt`
 
