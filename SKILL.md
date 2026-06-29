@@ -86,6 +86,8 @@ Do not enter complexity / architecture / code-quality until QA evidence is compl
 
 Zero-context is not empty context. Dispatch must include bundle or manifest path and SHA, worktree, base commit or snapshot id, requirement target, exact scope, forbidden files/items/context, Complexity Contract or Ledger when applicable, related artifacts, output template, and required verification.
 
+Read limits are progressive disclosure, not a hard whitelist. The dispatch should name the initial reading scope and hard forbidden anchoring sources. Reviewers may read additional task-relevant repo files when needed to complete the assigned review, but they must control output, explain why the scope expanded, and list the files and commands actually used. Only reading forbidden anchoring sources or doing broad unrelated exploration is a process problem.
+
 Prompts must not include main-agent conclusions, suspicions, previous findings, expected answers, target verdicts, or focus items. Formal review dispatch uses the matching file under `agents/` and must keep the reviewer separate from gate orchestration: the reviewer may follow host-required skill instructions, but must not run gate orchestration, record PASS, or let a skill replace the supplied evidence.
 
 ## GateWorkflow Minimum
