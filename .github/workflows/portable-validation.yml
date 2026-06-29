@@ -10,14 +10,32 @@ on:
 permissions:
   contents: read
 
+# Release assets:
+# - formal-gates-windows-amd64.exe, portable-canary-windows-amd64.json, SHA256SUMS-windows-amd64.txt
+# - formal-gates-macos-arm64, portable-canary-macos-arm64.json, SHA256SUMS-macos-arm64.txt
+# - formal-gates-macos-amd64, portable-canary-macos-amd64.json, SHA256SUMS-macos-amd64.txt
+# - formal-gates-linux-amd64, portable-canary-linux-amd64.json, SHA256SUMS-linux-amd64.txt
+
 jobs:
   go-validation:
-    name: Go validation (${{ matrix.os }})
+    name: Go validation (${{ matrix.suffix }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            suffix: windows-amd64
+            binary: formal-gates-windows-amd64.exe
+          - os: macos-15
+            suffix: macos-arm64
+            binary: formal-gates-macos-arm64
+          - os: macos-15-intel
+            suffix: macos-amd64
+            binary: formal-gates-macos-amd64
+          - os: ubuntu-latest
+            suffix: linux-amd64
+            binary: formal-gates-linux-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -71,56 +89,45 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item bin/formal-gates.exe formal-gates-windows-amd64.exe
-          Copy-Item portable-canary.json portable-canary-windows-amd64.json
-      - name: Prepare release evidence names (macOS)
-        if: runner.os == 'macOS'
+          Copy-Item bin/formal-gates.exe ${{ matrix.binary }}
+          Copy-Item portable-canary.json portable-canary-${{ matrix.suffix }}.json
+      - name: Prepare release evidence names (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          cp bin/formal-gates formal-gates-macos-amd64
-          cp portable-canary.json portable-canary-macos-amd64.json
-      - name: Prepare release evidence names (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          cp bin/formal-gates formal-gates-linux-amd64
-          cp portable-canary.json portable-canary-linux-amd64.json
+          cp bin/formal-gates "${{ matrix.binary }}"
+          cp portable-canary.json "portable-canary-${{ matrix.suffix }}.json"
       - name: Write release checksums (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Get-FileHash -Algorithm SHA256 formal-gates-windows-amd64.exe | ForEach-Object { "$($_.Hash.ToLower())  formal-gates-windows-amd64.exe" } > SHA256SUMS-windows-amd64.txt
-          Get-FileHash -Algorithm SHA256 portable-canary-windows-amd64.json | ForEach-Object { "$($_.Hash.ToLower())  portable-canary-windows-amd64.json" } >> SHA256SUMS-windows-amd64.txt
-      - name: Write release checksums (macOS)
-        if: runner.os == 'macOS'
+          Get-FileHash -Algorithm SHA256 ${{ matrix.binary }} | ForEach-Object { "$($_.Hash.ToLower())  ${{ matrix.binary }}" } > SHA256SUMS-${{ matrix.suffix }}.txt
+          Get-FileHash -Algorithm SHA256 portable-canary-${{ matrix.suffix }}.json | ForEach-Object { "$($_.Hash.ToLower())  portable-canary-${{ matrix.suffix }}.json" } >> SHA256SUMS-${{ matrix.suffix }}.txt
+      - name: Write release checksums (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          shasum -a 256 formal-gates-macos-amd64 portable-canary-macos-amd64.json > SHA256SUMS-macos-amd64.txt
-      - name: Write release checksums (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          shasum -a 256 formal-gates-linux-amd64 portable-canary-linux-amd64.json > SHA256SUMS-linux-amd64.txt
+          shasum -a 256 "${{ matrix.binary }}" "portable-canary-${{ matrix.suffix }}.json" > "SHA256SUMS-${{ matrix.suffix }}.txt"
       - name: Write CI checksums (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item SHA256SUMS-windows-amd64.txt SHA256SUMS
+          Copy-Item SHA256SUMS-${{ matrix.suffix }}.txt SHA256SUMS
       - name: Write CI checksums (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          cp SHA256SUMS-*-amd64.txt SHA256SUMS
+          cp "SHA256SUMS-${{ matrix.suffix }}.txt" SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: formal-gates-${{ runner.os }}
+          name: formal-gates-${{ matrix.suffix }}
           path: |
             formal-gates-*
             portable-canary-*.json
             SHA256SUMS*.txt
 
   release-evidence:
-    name: Upload release evidence
+    name: Upload release evidence (${{ matrix.suffix }})
     if: github.event_name == 'release'
     needs: go-validation
     runs-on: ${{ matrix.os }}
@@ -129,29 +136,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            suffix: windows-amd64
+            binary: formal-gates-windows-amd64.exe
+          - os: macos-15
+            suffix: macos-arm64
+            binary: formal-gates-macos-arm64
+          - os: macos-15-intel
+            suffix: macos-amd64
+            binary: formal-gates-macos-amd64
+          - os: ubuntu-latest
+            suffix: linux-amd64
+            binary: formal-gates-linux-amd64
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: formal-gates-${{ runner.os }}
+          name: formal-gates-${{ matrix.suffix }}
       - name: Upload release evidence (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload $env:GITHUB_REF_NAME formal-gates-windows-amd64.exe portable-canary-windows-amd64.json SHA256SUMS-windows-amd64.txt --clobber --repo $env:GITHUB_REPOSITORY
-      - name: Upload release evidence (macOS)
-        if: runner.os == 'macOS'
+          gh release upload $env:GITHUB_REF_NAME ${{ matrix.binary }} portable-canary-${{ matrix.suffix }}.json SHA256SUMS-${{ matrix.suffix }}.txt --clobber --repo $env:GITHUB_REPOSITORY
+      - name: Upload release evidence (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" formal-gates-macos-amd64 portable-canary-macos-amd64.json SHA256SUMS-macos-amd64.txt --clobber --repo "$GITHUB_REPOSITORY"
-      - name: Upload release evidence (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "$GITHUB_REF_NAME" formal-gates-linux-amd64 portable-canary-linux-amd64.json SHA256SUMS-linux-amd64.txt --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" "${{ matrix.binary }}" "portable-canary-${{ matrix.suffix }}.json" "SHA256SUMS-${{ matrix.suffix }}.txt" --clobber --repo "$GITHUB_REPOSITORY"

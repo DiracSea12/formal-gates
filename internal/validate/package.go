@@ -162,7 +162,8 @@ func validateCI(root string, result *Result) {
 func validateCIText(text string, result *Result) {
 	for _, required := range []string{
 		"windows-latest",
-		"macos-latest",
+		"macos-15",
+		"macos-15-intel",
 		"ubuntu-latest",
 		"go test ./...",
 		"go build -o",
@@ -172,10 +173,12 @@ func validateCIText(text string, result *Result) {
 		"examples/skill-behavior-answers.json",
 		"portable-canary.json",
 		"portable-canary-windows-amd64.json",
+		"portable-canary-macos-arm64.json",
 		"portable-canary-macos-amd64.json",
 		"portable-canary-linux-amd64.json",
 		"SHA256SUMS",
 		"SHA256SUMS-windows-amd64.txt",
+		"SHA256SUMS-macos-arm64.txt",
 		"SHA256SUMS-macos-amd64.txt",
 		"SHA256SUMS-linux-amd64.txt",
 		"actions/upload-artifact",
