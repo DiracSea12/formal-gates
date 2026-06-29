@@ -140,18 +140,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload $env:GITHUB_REF_NAME formal-gates-windows-amd64.exe portable-canary-windows-amd64.json SHA256SUMS-windows-amd64.txt --clobber
+          gh release upload $env:GITHUB_REF_NAME formal-gates-windows-amd64.exe portable-canary-windows-amd64.json SHA256SUMS-windows-amd64.txt --clobber --repo $env:GITHUB_REPOSITORY
       - name: Upload release evidence (macOS)
         if: runner.os == 'macOS'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" formal-gates-macos-amd64 portable-canary-macos-amd64.json SHA256SUMS-macos-amd64.txt --clobber
+          gh release upload "$GITHUB_REF_NAME" formal-gates-macos-amd64 portable-canary-macos-amd64.json SHA256SUMS-macos-amd64.txt --clobber --repo "$GITHUB_REPOSITORY"
       - name: Upload release evidence (Linux)
         if: runner.os == 'Linux'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" formal-gates-linux-amd64 portable-canary-linux-amd64.json SHA256SUMS-linux-amd64.txt --clobber
+          gh release upload "$GITHUB_REF_NAME" formal-gates-linux-amd64 portable-canary-linux-amd64.json SHA256SUMS-linux-amd64.txt --clobber --repo "$GITHUB_REPOSITORY"
