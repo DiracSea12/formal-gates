@@ -28,6 +28,7 @@ type GateAdmissionOptions struct {
 	Worktree       string
 	StatePath      string
 	Gate           string
+	Mode           string
 	WorkflowID     string
 	ChangeSnapshot string
 }
@@ -136,7 +137,7 @@ func GateVerifyAdmission(options GateAdmissionOptions) Result {
 		result.add("gate", "unknown post-development gate: "+options.Gate)
 		return result
 	}
-	requirements := admissionRequirements(options.Gate)
+	requirements := admissionRequirementsFor(options.Gate, options.Mode)
 	if len(requirements) > 0 {
 		if strings.TrimSpace(options.WorkflowID) == "" {
 			result.add("workflow-id", "--workflow-id is required for admission checks")
@@ -267,6 +268,27 @@ func admissionRequirements(gate string) []admissionRequirement {
 	}
 }
 
+func startReadinessAdmissionRequirements(gate string) []admissionRequirement {
+	switch gate {
+	case "complexity-gate":
+		return []admissionRequirement{{gate: "requirements-clarification-gate", artifact: true}}
+	case "architecture-health-gate":
+		return []admissionRequirement{
+			{gate: "requirements-clarification-gate", artifact: true},
+			{gate: "complexity-gate", mode: "start-readiness", artifact: true},
+		}
+	default:
+		return admissionRequirements(gate)
+	}
+}
+
+func admissionRequirementsFor(gate, mode string) []admissionRequirement {
+	if mode == "start-readiness" {
+		return startReadinessAdmissionRequirements(gate)
+	}
+	return admissionRequirements(gate)
+}
+
 func recordAdmissionRequirements(options GateRecordOptions) []admissionRequirement {
 	if options.Gate == "qa-test-gate" && options.Stage == "FinalExecution" {
 		return []admissionRequirement{
@@ -276,7 +298,7 @@ func recordAdmissionRequirements(options GateRecordOptions) []admissionRequireme
 			{gate: "code-quality-gate", artifact: true},
 		}
 	}
-	return admissionRequirements(options.Gate)
+	return admissionRequirementsFor(options.Gate, options.Mode)
 }
 
 func verifyRequirement(worktree, statePath string, state GateState, requirement admissionRequirement, requiredFor, workflowID, changeSnapshot string) error {

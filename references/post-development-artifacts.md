@@ -1,6 +1,6 @@
 # Post-development Gate Artifacts
 
-This file is the cold-path schema reference for formal post-development gate artifacts. Use it when recording `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, or `code-quality-gate` PASS.
+This file is the cold-path schema reference for formal gate artifacts. Use it when recording `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, or `code-quality-gate` PASS. Start-readiness records for complexity and architecture use the same shared fields with `--mode start-readiness`; they do not imply post-development release/seal progress.
 
 Keep the four gate reference files focused on judgment rules. Keep host installation, hooks, and canaries in `references/install-and-hooks.md`.
 

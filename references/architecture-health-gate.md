@@ -24,7 +24,7 @@ For spec/doc/plan work, do not demand implementation evidence. Judge whether the
 
 ## Formal Entry
 
-Formal flow requires machine-verifiable PASS for:
+Post-development formal flow requires machine-verifiable PASS for:
 
 - `qa-test-gate` formal Stage=`Execution`
 - `complexity-gate`
@@ -36,6 +36,8 @@ bin/formal-gates workflow verify-admission --worktree <repo> --gate architecture
 ```
 
 No gate-state, stale snapshot, missing artifact, non-formal QA, or complexity REVIEW/FAIL/BLOCKED means `BLOCKED` or `GATE_SEQUENCE_ERROR`.
+
+Start-readiness architecture review requires same-workflow, same-snapshot `requirements-clarification-gate` PASS and `complexity-gate` PASS recorded with `--mode start-readiness`. Verify and record start-readiness architecture with `--mode start-readiness`; do not require QA Execution before code exists.
 
 ## Required Review
 

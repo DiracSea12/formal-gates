@@ -53,6 +53,7 @@ type WorkflowVerifyAdmissionOptions struct {
 	Worktree       string
 	StatePath      string
 	Gate           string
+	Mode           string
 	WorkflowID     string
 	ChangeSnapshot string
 	RunDir         string
@@ -218,6 +219,7 @@ func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
 		Worktree:       worktree,
 		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
 		Gate:           options.Gate,
+		Mode:           options.Mode,
 		WorkflowID:     options.WorkflowID,
 		ChangeSnapshot: options.ChangeSnapshot,
 	})

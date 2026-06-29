@@ -127,6 +127,103 @@ func TestGateVerifyAdmissionAllowsSameWorkflowSnapshotPrerequisite(t *testing.T)
 	}
 }
 
+func TestGateRecordAllowsStartReadinessComplexityAfterRequirements(t *testing.T) {
+	dir := t.TempDir()
+	writeRequirementsArtifact(t, dir, "wf", "snap")
+	recordRequirements := GateRecord(GateRecordOptions{
+		Worktree:       dir,
+		Gate:           "requirements-clarification-gate",
+		Verdict:        "PASS",
+		Artifact:       "requirements.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !recordRequirements.OK() {
+		t.Fatalf("expected requirements record to pass, got %#v", recordRequirements.Failures)
+	}
+	writeGateArtifact(t, dir, "complexity-gate", "", "wf", "snap")
+
+	recordComplexity := GateRecord(GateRecordOptions{
+		Worktree:       dir,
+		Gate:           "complexity-gate",
+		Verdict:        "PASS",
+		Mode:           "start-readiness",
+		Artifact:       "complexity-gate.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !recordComplexity.OK() {
+		t.Fatalf("expected start-readiness complexity record to pass, got %#v", recordComplexity.Failures)
+	}
+
+	admission := GateVerifyAdmission(GateAdmissionOptions{
+		Worktree:       dir,
+		Gate:           "architecture-health-gate",
+		Mode:           "start-readiness",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !admission.OK() {
+		t.Fatalf("expected start-readiness architecture admission to pass, got %#v", admission.Failures)
+	}
+}
+
+func TestGateRecordBlocksStartReadinessArchitectureAfterFormalComplexity(t *testing.T) {
+	dir := t.TempDir()
+	writeRequirementsArtifact(t, dir, "wf", "snap")
+	recordRequirements := GateRecord(GateRecordOptions{
+		Worktree:       dir,
+		Gate:           "requirements-clarification-gate",
+		Verdict:        "PASS",
+		Artifact:       "requirements.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !recordRequirements.OK() {
+		t.Fatalf("expected requirements record to pass, got %#v", recordRequirements.Failures)
+	}
+	writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
+	recordQA := GateRecord(GateRecordOptions{
+		Worktree:       dir,
+		Gate:           "qa-test-gate",
+		Verdict:        "PASS",
+		Mode:           "formal",
+		Stage:          "Execution",
+		Artifact:       "qa-test-gate.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !recordQA.OK() {
+		t.Fatalf("expected QA record to pass, got %#v", recordQA.Failures)
+	}
+	writeGateArtifact(t, dir, "complexity-gate", "", "wf", "snap")
+	recordComplexity := GateRecord(GateRecordOptions{
+		Worktree:       dir,
+		Gate:           "complexity-gate",
+		Verdict:        "PASS",
+		Artifact:       "complexity-gate.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !recordComplexity.OK() {
+		t.Fatalf("expected formal complexity record to pass, got %#v", recordComplexity.Failures)
+	}
+
+	admission := GateVerifyAdmission(GateAdmissionOptions{
+		Worktree:       dir,
+		Gate:           "architecture-health-gate",
+		Mode:           "start-readiness",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if admission.OK() {
+		t.Fatal("expected start-readiness architecture to require start-readiness complexity")
+	}
+	if !strings.Contains(admission.Failures[0].Message, "requiredMode=start-readiness") {
+		t.Fatalf("unexpected failure: %#v", admission.Failures)
+	}
+}
+
 func TestGateRecordRejectsWorkflowSnapshotMismatch(t *testing.T) {
 	dir := t.TempDir()
 	writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf-a", "snap")
@@ -191,6 +288,26 @@ func TestGateVerifyAdmissionBlocksArtifactHashMismatch(t *testing.T) {
 	if !strings.Contains(result.Failures[0].Message, "artifactHashMismatch") {
 		t.Fatalf("unexpected failure: %#v", result.Failures)
 	}
+}
+
+func writeRequirementsArtifact(t *testing.T, dir, workflowID, snapshot string) {
+	t.Helper()
+	mustWrite(t, filepath.Join(dir, "requirements.md"), `Requirement source: user brief
+Alignment table artifact: .claude/gates/artifacts/alignment.md
+Total alignment items: 1
+Open question IDs: none
+User confirmation: YES
+Dimension coverage:
+  DIM-01 Goal: covered | RQ-001
+Decision record: .claude/gates/artifacts/requirements-user-decision.md
+Covered formal targets: openspec/changes/example/
+Downstream permission: READY_TO_DRAFT
+
+gate_route:
+  workflow_id: `+workflowID+`
+  change_snapshot: `+snapshot+`
+  next_action: proceed
+`)
 }
 
 func writeGateArtifact(t *testing.T, dir, gate, stage, workflowID, snapshot string) {
