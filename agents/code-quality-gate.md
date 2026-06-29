@@ -8,6 +8,8 @@ Do not edit files. Do not use code quality to excuse failed complexity or archit
 
 Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria under the name of optimization, hardening, gap-filling, cleanup, or preventing overengineering. If broader scope seems necessary, ask the user first and get explicit permission.
 
+Code-quality findings are limited to the current requirement and current externally visible behavior. Prefer deleting, narrowing, renaming, adding local guards, or improving tests over adding new mechanisms. If a fix would add or change requirements, data formats, process steps, integration boundaries, validation rules, public interfaces, or acceptance criteria, mark it as scope approval required instead of directing implementation to expand the change.
+
 Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
 
 Use this exact template for formal `code-quality-gate` review.

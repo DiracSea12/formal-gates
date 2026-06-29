@@ -66,13 +66,13 @@ func Artifact(options ArtifactOptions) Result {
 		return result
 	}
 
-	required := requiredArtifactFields(options.Gate)
+	required := requiredArtifactFields(options.Gate, options.Stage)
 	for _, field := range required {
 		if !strings.Contains(text, field) {
 			result.add(options.File, "missing required field text: "+field)
 		}
 	}
-	for _, field := range fieldsThatNeedValues(options.Gate) {
+	for _, field := range fieldsThatNeedValues(options.Gate, options.Stage) {
 		value := fieldValue(text, field)
 		if !meaningful(value) {
 			result.add(options.File, "field has no meaningful value: "+field)
@@ -82,7 +82,7 @@ func Artifact(options ArtifactOptions) Result {
 	return result
 }
 
-func requiredArtifactFields(gate string) []string {
+func requiredArtifactFields(gate, stage string) []string {
 	if gate == "requirements-clarification-gate" {
 		return []string{
 			"Requirement source:",
@@ -94,6 +94,16 @@ func requiredArtifactFields(gate string) []string {
 			"Decision record:",
 			"Covered formal targets:",
 			"Downstream permission:",
+			"gate_route:",
+		}
+	}
+	if gate == "qa-test-gate" && stage == "FinalExecution" {
+		return []string{
+			"FinalExecution mode: MECHANICAL_CLOSEOUT",
+			"Mechanical closeout: YES",
+			"Final verification artifact:",
+			"Existing gate records:",
+			"Release judgment:",
 			"gate_route:",
 		}
 	}
@@ -119,9 +129,12 @@ func requiredArtifactFields(gate string) []string {
 	return fields
 }
 
-func fieldsThatNeedValues(gate string) []string {
+func fieldsThatNeedValues(gate, stage string) []string {
 	if gate == "requirements-clarification-gate" {
 		return []string{"Requirement source", "Alignment table artifact", "Total alignment items", "Decision record", "Covered formal targets"}
+	}
+	if gate == "qa-test-gate" && stage == "FinalExecution" {
+		return []string{"Final verification artifact", "Existing gate records", "Release judgment"}
 	}
 	return []string{"Context bundle", "Dispatch prompt artifact"}
 }
@@ -168,6 +181,67 @@ func validateRoute(options ArtifactOptions, text string, result *Result) {
 	}
 	if options.Gate == "complexity-gate" {
 		validateComplexityBudgetEvidence(options, text, result)
+	}
+	if options.Gate == "qa-test-gate" && options.Stage == "FinalExecution" {
+		validateFinalExecutionArtifact(options, text, result)
+	}
+}
+
+func validateFinalExecutionArtifact(options ArtifactOptions, text string, result *Result) {
+	if !strings.EqualFold(strings.TrimSpace(fieldValue(text, "FinalExecution mode")), "MECHANICAL_CLOSEOUT") {
+		result.add(options.File, "FinalExecution mode must be MECHANICAL_CLOSEOUT")
+	}
+	if !strings.EqualFold(strings.TrimSpace(fieldValue(text, "Mechanical closeout")), "YES") {
+		result.add(options.File, "Mechanical closeout must be YES")
+	}
+	for _, forbidden := range []string{
+		"Review mode: ZERO_CONTEXT_FORMAL",
+		"Zero-context reviewer: YES",
+		"Independent agent: YES",
+		"Reviewer proof receipt:",
+	} {
+		if strings.Contains(text, forbidden) {
+			result.add(options.File, "FinalExecution must not include: "+forbidden)
+		}
+	}
+	if routeValue(text, "next_action") != "seal" {
+		result.add(options.File, "FinalExecution gate_route next_action must be seal")
+	}
+	validateFinalVerificationArtifactRef(options, text, result)
+}
+
+func validateFinalVerificationArtifactRef(options ArtifactOptions, text string, result *Result) {
+	value := fieldValue(text, "Final verification artifact")
+	pathText := strings.TrimSpace(value)
+	if pathText == "" {
+		return
+	}
+	path := resolvePath(options.Root, pathText)
+	if !isFile(path) {
+		result.add(options.File, "Final verification artifact does not exist: "+pathText)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		result.add(options.File, "cannot read Final verification artifact: "+err.Error())
+		return
+	}
+	var artifact WorkflowFinalVerificationArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		result.add(options.File, "Final verification artifact must be JSON: "+err.Error())
+		return
+	}
+	if options.WorkflowID != "" && artifact.WorkflowID != options.WorkflowID {
+		result.add(options.File, "Final verification artifact workflowId must match --workflow-id")
+	}
+	if options.ChangeSnapshot != "" && artifact.ChangeSnapshot != options.ChangeSnapshot {
+		result.add(options.File, "Final verification artifact changeSnapshot must match --change-snapshot")
+	}
+	if artifact.Status != "PASS" {
+		result.add(options.File, "Final verification artifact status must be PASS")
+	}
+	if len(artifact.AcceptedAttempts) == 0 {
+		result.add(options.File, "Final verification artifact must include accepted attempts")
 	}
 }
 

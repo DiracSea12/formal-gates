@@ -121,6 +121,21 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			WorkflowID:     "wf",
 			ChangeSnapshot: "snap",
 		}))
+		for _, gate := range []string{"complexity-gate", "architecture-health-gate", "code-quality-gate"} {
+			if err := writeCanaryGateArtifact(worktree, gate, "", "wf", "snap"); err != nil {
+				addCheck("workflow-"+gate+"-fixture", false, err.Error())
+				continue
+			}
+			addResult("workflow-record-"+gate, WorkflowRecordStage(WorkflowRecordStageOptions{
+				Worktree:       worktree,
+				Gate:           gate,
+				Verdict:        "PASS",
+				Artifact:       gate + ".md",
+				Actor:          "native-canary",
+				WorkflowID:     "wf",
+				ChangeSnapshot: "snap",
+			}))
+		}
 	}
 	attemptPath := filepath.Join(worktree, ".claude", "gates", "artifacts", "attempt.json")
 	if err := writeCanaryFile(attemptPath, `{"ok":true}`+"\n"); err != nil {
@@ -134,16 +149,16 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			ChangeSnapshot: "snap",
 		})
 		addResult("workflow-final-verification", finalResult)
-		if err := writeCanaryGateArtifact(worktree, "qa-test-gate", "FinalExecution", "wf", "snap"); err != nil {
+		if err := writeCanaryFile(filepath.Join(worktree, "final-execution.md"), canaryFinalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification-record-final-qa.json")); err != nil {
 			addCheck("final-qa-record-fixture", false, err.Error())
 		} else {
 			_, finalQAResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 				Worktree:        worktree,
 				AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json"}]`,
 				OutputArtifact:  ".claude/gates/artifacts/final-verification-record-final-qa.json",
-				FinalQAArtifact: "qa-test-gate.md",
+				FinalQAArtifact: "final-execution.md",
 				RecordFinalQA:   true,
-				Actor:           "native-canary",
+				Actor:           "gate-workflow",
 				WorkflowID:      "wf",
 				ChangeSnapshot:  "snap",
 			})
@@ -348,6 +363,23 @@ func canaryGateArtifactText(gate, stage, workflowID, snapshot string) string {
 	)
 	if stage == "FinalExecution" {
 		lines[len(lines)-3] = "  next_action: seal"
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func canaryFinalExecutionArtifactText(workflowID, snapshot, finalVerification string) string {
+	lines := []string{
+		"FinalExecution mode: MECHANICAL_CLOSEOUT",
+		"Mechanical closeout: YES",
+		"Final verification artifact: " + finalVerification,
+		"Existing gate records: qa-test-gate Execution, complexity-gate, architecture-health-gate, code-quality-gate",
+		"Release judgment: YES",
+		"gate_route:",
+		"  workflow_id: " + workflowID,
+		"  change_snapshot: " + snapshot,
+		"  next_action: seal",
+		"  rework_owner: none",
+		"  rerun_from: none",
 	}
 	return strings.Join(lines, "\n") + "\n"
 }
