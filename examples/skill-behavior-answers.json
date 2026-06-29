@@ -61,6 +61,6 @@
   },
   {
     "id": "FG-BEH-016",
-    "answer": "In formal handoff, development-time complexity budget checks are automatic; expansion requires independent anti-complexity review before work continues."
+    "answer": "In formal handoff, development-time complexity budget checks are automatic; the main agent must derive numeric max-net, max-new-prod-files, and max-prod-insertions values from the approved slice and expected diff shape, pass matching values to the check command, and require independent anti-complexity review before any expansion."
   }
 ]

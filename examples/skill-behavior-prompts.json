@@ -290,8 +290,8 @@
     "id": "FG-BEH-016",
     "title": "Development-time complexity budget checks are automatic in formal handoff",
     "user_prompt": "Using formal-gates, dispatch the approved slice to a development subagent. I did not separately ask for complexity budget checks during coding.",
-    "expected_behavior": "Inside the formal development handoff, the agent validates the handoff, supplies the active development-time complexity budget and complexity check command, tells the development worker to run the check during implementation, and routes any budget expansion to independent anti-complexity review before work continues.",
-    "failure_behavior": "The agent treats development-time budget checking as optional because the user did not explicitly ask for it, or waits until the post-development complexity gate to notice budget excess.",
+    "expected_behavior": "Inside the formal development handoff, the agent validates the handoff, derives numeric max-net, max-new-prod-files, and max-prod-insertions budgets from the approved slice and expected diff shape, supplies matching values in the complexity check command, tells the development worker to run the check during implementation, and routes any budget expansion to independent anti-complexity review before work continues.",
+    "failure_behavior": "The agent treats development-time budget checking as optional because the user did not explicitly ask for it, accepts qualitative scope or tool default numbers as the budget, or waits until the post-development complexity gate to notice budget excess.",
     "primary_files": [
       "SKILL.md",
       "agents/development-worker.md",
@@ -300,10 +300,13 @@
     ],
     "must_include": [
       "development-time complexity budget",
+      "max-net",
       "anti-complexity"
     ],
     "must_avoid": [
-      "optional because the user did not explicitly ask"
+      "optional because the user did not explicitly ask",
+      "qualitative scope",
+      "tool default"
     ]
   }
 ]

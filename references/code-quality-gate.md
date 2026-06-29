@@ -39,7 +39,7 @@ Review live diff, affected files/modules, and actual verification evidence.
 - Boundary cases: empty input, missing resources, invalid data, duplicates, concurrency/lifecycle as relevant.
 - Platform/runtime safety: null checks, resource loading, ownership, threading/async/global state, include/import, module ownership.
 - Error handling: do not swallow errors or blur warning/error/fallback.
-- Maintainability: names are clear, functions focused, comments match behavior, no clever unreadable code.
+- Maintainability: names are clear, functions focused, comments match behavior, no clever unreadable code. Code compressed to satisfy a line budget, including one-line packed logic, vague shorter names, merged responsibilities, hidden branching, or removed useful comments/error handling, is a code-quality failure.
 - Local coupling: keep reasonable local coupling, simplify in place when enough, extract only when it removes real duplication/ripple/testing pain. If coupling is already degrading maintainability, split it.
 - Performance: no obvious avoidable hot-path work, repeated I/O, unbounded scans, lifecycle leaks, excessive allocation, or needless recomputation for the changed behavior.
 - Deletion hygiene: no dead include/function/test/config/doc/orphan.

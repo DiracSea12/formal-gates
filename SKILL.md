@@ -149,3 +149,5 @@ Continue after:
 ```
 
 Formal development handoff is optional and user-authorized. When used, collect the template fields above, OpenSpec or slice coverage, and the Complexity Contract. The development-time complexity budget is active during implementation: the worker must run or update the supplied complexity check before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop, shrink, or obtain independent Anti-Complexity Review approval before continuing. For `four-gate`, `release`, or `seal`, include approved QA case references before implementation starts. If no development subagent is available, output this `Gate Handoff Request` instead of implementing locally. Mark only genuinely missing facts as `BLOCKING_MISSING:<field> - how to obtain`.
+
+`Development-time complexity budget` must include numeric `max-net`, `max-new-prod-files`, and `max-prod-insertions` values matching the `Complexity check command`. Qualitative scope boundaries are useful constraints but do not count as the numeric budget.

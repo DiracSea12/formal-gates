@@ -27,7 +27,7 @@ type ComplexityReport struct {
 	VCS             string                   `json:"vcs"`
 	Worktree        string                   `json:"worktree"`
 	TaskType        string                   `json:"task_type"`
-	Budget          ComplexityBudget         `json:"budget"`
+	Budget          *ComplexityBudget        `json:"budget,omitempty"`
 	BudgetSource    string                   `json:"budget_source"`
 	BudgetOverrides ComplexityBudgetOverride `json:"budget_overrides"`
 	Summary         ComplexitySummary        `json:"summary"`
@@ -70,12 +70,12 @@ type ComplexityFileChange struct {
 	SuspiciousName bool   `json:"suspicious_name"`
 }
 
-var complexityDefaultBudgets = map[string]ComplexityBudget{
-	"delete-or-consolidate": {MaxNet: -1, MaxNewProdFiles: 0, MaxProdInsertions: 300},
-	"bugfix":                {MaxNet: 250, MaxNewProdFiles: 0, MaxProdInsertions: 300},
-	"small-feature":         {MaxNet: 600, MaxNewProdFiles: 2, MaxProdInsertions: 700},
-	"refactor":              {MaxNet: 200, MaxNewProdFiles: 2, MaxProdInsertions: 700},
-	"new-system":            {MaxNet: 5000, MaxNewProdFiles: 20, MaxProdInsertions: 5000},
+var complexityTaskTypes = map[string]bool{
+	"delete-or-consolidate": true,
+	"bugfix":                true,
+	"small-feature":         true,
+	"refactor":              true,
+	"new-system":            true,
 }
 
 var productionExts = map[string]bool{
@@ -113,8 +113,7 @@ func Complexity(options ComplexityOptions) (ComplexityReport, Result) {
 	worktreeAbs = filepath.Clean(worktreeAbs)
 	var result Result
 
-	budget, ok := complexityDefaultBudgets[options.TaskType]
-	if !ok {
+	if !complexityTaskTypes[options.TaskType] {
 		result.add("task-type", "unsupported task type: "+options.TaskType)
 		return ComplexityReport{}, result
 	}
@@ -123,14 +122,17 @@ func Complexity(options ComplexityOptions) (ComplexityReport, Result) {
 		MaxNewProdFiles:   options.MaxNewProdFiles != nil,
 		MaxProdInsertions: options.MaxProdInsertions != nil,
 	}
-	if options.MaxNet != nil {
-		budget.MaxNet = *options.MaxNet
-	}
-	if options.MaxNewProdFiles != nil {
-		budget.MaxNewProdFiles = *options.MaxNewProdFiles
-	}
-	if options.MaxProdInsertions != nil {
-		budget.MaxProdInsertions = *options.MaxProdInsertions
+	var budget *ComplexityBudget
+	if overrides.MaxNet || overrides.MaxNewProdFiles || overrides.MaxProdInsertions {
+		if !overrides.MaxNet || !overrides.MaxNewProdFiles || !overrides.MaxProdInsertions {
+			result.add("budget", "--max-net, --max-new-prod-files, and --max-prod-insertions must be passed together")
+			return ComplexityReport{}, result
+		}
+		budget = &ComplexityBudget{
+			MaxNet:            *options.MaxNet,
+			MaxNewProdFiles:   *options.MaxNewProdFiles,
+			MaxProdInsertions: *options.MaxProdInsertions,
+		}
 	}
 
 	vcs, detectResult := detectComplexityVCS(worktreeAbs, options.VCS)
@@ -395,7 +397,7 @@ func runTextCommand(worktree, name string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-func buildComplexityReport(worktree, vcs, taskType string, budget ComplexityBudget, overrides ComplexityBudgetOverride, changes []ComplexityFileChange, untracked []string, manualReviewReason string) ComplexityReport {
+func buildComplexityReport(worktree, vcs, taskType string, budget *ComplexityBudget, overrides ComplexityBudgetOverride, changes []ComplexityFileChange, untracked []string, manualReviewReason string) ComplexityReport {
 	totalInsertions := 0
 	totalDeletions := 0
 	prodInsertions := 0
@@ -432,14 +434,16 @@ func buildComplexityReport(worktree, vcs, taskType string, budget ComplexityBudg
 	var failures []string
 	var reviewRequired []string
 	var warnings []string
-	if len(changes) > 0 && net > budget.MaxNet {
-		failures = append(failures, fmt.Sprintf("net diff %d exceeds budget %d for %s", net, budget.MaxNet, taskType))
-	}
-	if prodInsertions > budget.MaxProdInsertions {
-		reviewRequired = append(reviewRequired, fmt.Sprintf("production insertions %d exceed budget %d", prodInsertions, budget.MaxProdInsertions))
-	}
-	if len(newProdFiles) > budget.MaxNewProdFiles {
-		failures = append(failures, fmt.Sprintf("new production files %d exceed budget %d: %s", len(newProdFiles), budget.MaxNewProdFiles, strings.Join(firstN(newProdFiles, 8), ", ")))
+	if budget != nil {
+		if len(changes) > 0 && net > budget.MaxNet {
+			failures = append(failures, fmt.Sprintf("net diff %d exceeds budget %d for %s", net, budget.MaxNet, taskType))
+		}
+		if prodInsertions > budget.MaxProdInsertions {
+			reviewRequired = append(reviewRequired, fmt.Sprintf("production insertions %d exceed budget %d", prodInsertions, budget.MaxProdInsertions))
+		}
+		if len(newProdFiles) > budget.MaxNewProdFiles {
+			failures = append(failures, fmt.Sprintf("new production files %d exceed budget %d: %s", len(newProdFiles), budget.MaxNewProdFiles, strings.Join(firstN(newProdFiles, 8), ", ")))
+		}
 	}
 	if len(suspicious) > 0 && taskType != "new-system" {
 		reviewRequired = append(reviewRequired, "suspicious subsystem-like new names: "+strings.Join(firstN(suspicious, 12), ", "))
@@ -447,8 +451,8 @@ func buildComplexityReport(worktree, vcs, taskType string, budget ComplexityBudg
 	if len(untracked) > 0 {
 		warnings = append(warnings, "untracked files present: "+strings.Join(firstN(untracked, 12), ", "))
 	}
-	if !overrides.MaxNet && !overrides.MaxNewProdFiles && !overrides.MaxProdInsertions {
-		warnings = append(warnings, "using fallback default budget; explicit Complexity Contract budget was not passed")
+	if budget == nil {
+		warnings = append(warnings, "no numeric budget supplied; report is diff statistics only")
 	}
 	if manualReviewReason != "" {
 		reviewRequired = append(reviewRequired, manualReviewReason)
@@ -471,9 +475,9 @@ func buildComplexityReport(worktree, vcs, taskType string, budget ComplexityBudg
 	if len(largest) > 10 {
 		largest = largest[:10]
 	}
-	source := "fallback-defaults"
-	if overrides.MaxNet || overrides.MaxNewProdFiles || overrides.MaxProdInsertions {
-		source = "explicit-overrides"
+	source := "none"
+	if budget != nil {
+		source = "explicit"
 	}
 	return ComplexityReport{
 		Status:          status,

@@ -1033,8 +1033,8 @@ Usage:
   %s canary portable   --root <formal-gates> [--format text|json]
   %s canary codex-hook --worktree <repo> [--codex-command <codex>] [--keep-temp]
   %s behavior evaluate --root <formal-gates> [--cases <cases.json>] [--answers <answers.json>]
-  %s complexity check  --task-type <type> --worktree <repo> [--max-net <n>] [--max-new-prod-files <n>] [--max-prod-insertions <n>] [--staged] [--json]
+  %s complexity check  --task-type <type> --worktree <repo> [--max-net <n> --max-new-prod-files <n> --max-prod-insertions <n>] [--staged] [--json]
 
-The native CLI performs deterministic package, artifact, dispatch prompt, install, hook decision, basic gate-state checks, native workflow checks, receipt checks, complexity diff checks, the portable native canary, and the Codex hook live canary.
+The native CLI performs deterministic package, artifact, dispatch prompt, install, hook decision, basic gate-state checks, native workflow checks, receipt checks, complexity diff checks, the portable native canary, and the Codex hook live canary. Complexity budgets have no built-in numeric defaults; pass all three budget flags for budget enforcement, or omit all three for statistics-only output.
 `, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }

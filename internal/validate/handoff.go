@@ -3,6 +3,8 @@ package validate
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -73,11 +75,46 @@ func Handoff(options HandoffOptions) Result {
 		if !strings.Contains(command, "complexity check") {
 			result.add(options.File, "Complexity check command must run formal-gates complexity check")
 		}
-		for _, flag := range []string{"--max-net", "--max-new-prod-files", "--max-prod-insertions"} {
-			if !strings.Contains(command, flag) {
-				result.add(options.File, "Complexity check command missing "+flag)
-			}
+	}
+	budget := fieldValue(text, "Development-time complexity budget")
+	for _, name := range []string{"max-net", "max-new-prod-files", "max-prod-insertions"} {
+		budgetValue, budgetOK := handoffBudgetValue(budget, name)
+		commandValue, commandOK := handoffCommandBudgetValue(command, name)
+		if !budgetOK {
+			result.add(options.File, "Development-time complexity budget missing numeric "+name)
+		}
+		if meaningful(command) && !commandOK {
+			result.add(options.File, "Complexity check command missing numeric --"+name)
+		}
+		if budgetOK && commandOK && budgetValue != commandValue {
+			result.add(options.File, fmt.Sprintf("Development-time complexity budget %s=%d does not match Complexity check command --%s=%d", name, budgetValue, name, commandValue))
 		}
 	}
 	return result
+}
+
+func handoffBudgetValue(text, name string) (int, bool) {
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(name) + `[ \t]*(?:[:=]|[ \t])[ \t]*(-?\d+)(?:[^0-9]|$)`),
+		regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])--` + regexp.QuoteMeta(name) + `[ \t]*(?:=|[ \t])[ \t]*(-?\d+)(?:[^0-9]|$)`),
+	}
+	for _, pattern := range patterns {
+		if match := pattern.FindStringSubmatch(text); len(match) == 2 {
+			value, err := strconv.Atoi(match[1])
+			if err == nil {
+				return value, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func handoffCommandBudgetValue(text, name string) (int, bool) {
+	pattern := regexp.MustCompile(`(?i)(?:^|[ \t])--` + regexp.QuoteMeta(name) + `[ \t]*(?:=|[ \t])[ \t]*(-?\d+)(?:[ \t]|$)`)
+	match := pattern.FindStringSubmatch(text)
+	if len(match) != 2 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(match[1])
+	return value, err == nil
 }
