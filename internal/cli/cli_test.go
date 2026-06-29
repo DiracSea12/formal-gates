@@ -354,7 +354,9 @@ func TestRunWorkflowFinalVerification(t *testing.T) {
 func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLI(t, filepath.Join(dir, ".claude", "gates", "artifacts", "attempt.json"), `{"ok":true}`+"\n")
-	writeCLIArtifact(t, dir, "qa-test-gate", "FinalExecution", "wf", "snap")
+	recordCLIFourGatePrerequisites(t, dir, "wf", "snap")
+	mustWriteCLI(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-verification.json"), cliFinalVerificationJSON("wf", "snap"))
+	mustWriteCLI(t, filepath.Join(dir, "final-execution.md"), cliFinalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification.json"))
 	var stdout bytes.Buffer
 
 	code := Run("formal-gates", []string{
@@ -363,8 +365,8 @@ func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 		"--attempts-json", `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json"}]`,
 		"--output", ".claude/gates/artifacts/final-verification.json",
 		"--record-final-qa",
-		"--final-qa-artifact", "qa-test-gate.md",
-		"--actor", "qa-reviewer",
+		"--final-qa-artifact", "final-execution.md",
+		"--actor", "gate-workflow",
 		"--workflow-id", "wf",
 		"--change-snapshot", "snap",
 	}, IO{Stdout: &stdout})
@@ -376,7 +378,7 @@ func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 		t.Fatalf("expected gate state to show, got %#v", result.Failures)
 	}
 	entry := state.Gates["qa-test-gate"]
-	if entry.Stage != "FinalExecution" || entry.Actor != "qa-reviewer" {
+	if entry.Stage != "FinalExecution" || entry.Actor != "gate-workflow" {
 		t.Fatalf("unexpected final QA entry: %#v", entry)
 	}
 }
@@ -650,6 +652,57 @@ func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 		"  rework_owner: none",
 		"  rerun_from: none",
 	)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func recordCLIFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string) {
+	t.Helper()
+	for _, item := range []struct {
+		gate  string
+		stage string
+		mode  string
+	}{
+		{gate: "qa-test-gate", stage: "Execution", mode: "formal"},
+		{gate: "complexity-gate"},
+		{gate: "architecture-health-gate"},
+		{gate: "code-quality-gate"},
+	} {
+		writeCLIArtifact(t, dir, item.gate, item.stage, workflowID, snapshot)
+		result := validate.GateRecord(validate.GateRecordOptions{
+			Worktree:       dir,
+			Gate:           item.gate,
+			Verdict:        "PASS",
+			Mode:           item.mode,
+			Stage:          item.stage,
+			Artifact:       item.gate + ".md",
+			Actor:          item.gate,
+			WorkflowID:     workflowID,
+			ChangeSnapshot: snapshot,
+		})
+		if !result.OK() {
+			t.Fatalf("expected prerequisite %s to record, got %#v", item.gate, result.Failures)
+		}
+	}
+}
+
+func cliFinalVerificationJSON(workflowID, snapshot string) string {
+	return `{"schemaVersion":1,"workflowId":"` + workflowID + `","changeSnapshot":"` + snapshot + `","status":"PASS","attempts":[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"acceptedAttempts":[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}` + "\n"
+}
+
+func cliFinalExecutionArtifactText(workflowID, snapshot, finalVerification string) string {
+	lines := []string{
+		"FinalExecution mode: MECHANICAL_CLOSEOUT",
+		"Mechanical closeout: YES",
+		"Final verification artifact: " + finalVerification,
+		"Existing gate records: qa-test-gate Execution, complexity-gate, architecture-health-gate, code-quality-gate",
+		"Release judgment: YES",
+		"gate_route:",
+		"  workflow_id: " + workflowID,
+		"  change_snapshot: " + snapshot,
+		"  next_action: seal",
+		"  rework_owner: none",
+		"  rerun_from: none",
+	}
 	return strings.Join(lines, "\n") + "\n"
 }
 

@@ -12,7 +12,7 @@ For QA case and document review, block only issues that affect target claim cove
 
 Keep output short: findings, evidence paths, commands/results, and remaining gaps. Do not paste full logs or full artifacts.
 
-Use this exact template for formal `qa-test-gate` review or execution.
+Use the independent-review template for `Design`, `Design Review`, `Design Rework`, `Execution`, and `White-box Adequacy`. Do not use it for post-four-gate mechanical `FinalExecution`.
 
 Allowed prompt fields:
 
@@ -50,11 +50,11 @@ Contaminated fields:
 
 Do not continue review. Do not output PASS, FAIL, or REVIEW.
 
-Artifact must include:
+Independent review artifact must include:
 
 ```text
 QA Test Gate
-Stage: Design / Design Review / Design Rework / Execution / FinalExecution / White-box Adequacy
+Stage: Design / Design Review / Design Rework / Execution / White-box Adequacy
 Verdict: PASS / REVIEW / FAIL / BLOCKED
 Mode: formal / solo / advisory
 Review mode: ZERO_CONTEXT_FORMAL
@@ -73,3 +73,14 @@ gate_route:
 ```
 
 Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.
+
+Post-four-gate `FinalExecution` mechanical closeout must use this separate artifact shape and must not claim independent review:
+
+```text
+FinalExecution mode: MECHANICAL_CLOSEOUT
+Mechanical closeout: YES
+Final verification artifact:
+Existing gate records:
+Release judgment:
+gate_route:
+```

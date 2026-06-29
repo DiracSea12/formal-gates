@@ -158,15 +158,17 @@ func TestWorkflowFinalVerificationAcceptedAttempt(t *testing.T) {
 func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-run.json"), `{"ok":true}`+"\n")
-	writeGateArtifact(t, dir, "qa-test-gate", "FinalExecution", "wf", "snap")
+	recordFourGatePrerequisites(t, dir, "wf", "snap")
+	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-verification.json"), finalVerificationJSON("wf", "snap"))
+	mustWrite(t, filepath.Join(dir, "final-execution.md"), finalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification.json"))
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:        dir,
 		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-run.json"}]`,
 		OutputArtifact:  ".claude/gates/artifacts/final-verification.json",
-		FinalQAArtifact: "qa-test-gate.md",
+		FinalQAArtifact: "final-execution.md",
 		RecordFinalQA:   true,
-		Actor:           "qa-reviewer",
+		Actor:           "gate-workflow",
 		WorkflowID:      "wf",
 		ChangeSnapshot:  "snap",
 	})
@@ -181,8 +183,29 @@ func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 		t.Fatalf("expected gate state to show, got %#v", show.Failures)
 	}
 	entry := state.Gates["qa-test-gate"]
-	if entry.Stage != "FinalExecution" || entry.Actor != "qa-reviewer" || entry.Artifact != "qa-test-gate.md" {
+	if entry.Stage != "FinalExecution" || entry.Actor != "gate-workflow" || entry.Artifact != "final-execution.md" {
 		t.Fatalf("unexpected final QA gate entry: %#v", entry)
+	}
+}
+
+func TestWorkflowFinalVerificationRecordFinalQARequiresFourGatePrerequisites(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-run.json"), `{"ok":true}`+"\n")
+	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-verification.json"), finalVerificationJSON("wf", "snap"))
+	mustWrite(t, filepath.Join(dir, "final-execution.md"), finalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification.json"))
+
+	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree:        dir,
+		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-run.json"}]`,
+		OutputArtifact:  ".claude/gates/artifacts/final-verification.json",
+		FinalQAArtifact: "final-execution.md",
+		RecordFinalQA:   true,
+		Actor:           "gate-workflow",
+		WorkflowID:      "wf",
+		ChangeSnapshot:  "snap",
+	})
+	if result.OK() {
+		t.Fatal("expected FinalExecution record to require four gate prerequisites")
 	}
 }
 
@@ -363,4 +386,55 @@ func TestWorkflowCompactArchivesRunDirThenLeavesSingleFile(t *testing.T) {
 	if !isFile(activeLeftover) {
 		t.Fatal("active unarchived run was removed")
 	}
+}
+
+func recordFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string) {
+	t.Helper()
+	for _, item := range []struct {
+		gate  string
+		stage string
+		mode  string
+	}{
+		{gate: "qa-test-gate", stage: "Execution", mode: "formal"},
+		{gate: "complexity-gate"},
+		{gate: "architecture-health-gate"},
+		{gate: "code-quality-gate"},
+	} {
+		writeGateArtifact(t, dir, item.gate, item.stage, workflowID, snapshot)
+		result := WorkflowRecordStage(WorkflowRecordStageOptions{
+			Worktree:       dir,
+			Gate:           item.gate,
+			Verdict:        "PASS",
+			Mode:           item.mode,
+			Stage:          item.stage,
+			Artifact:       item.gate + ".md",
+			Actor:          item.gate,
+			WorkflowID:     workflowID,
+			ChangeSnapshot: snapshot,
+		})
+		if !result.OK() {
+			t.Fatalf("expected prerequisite %s to record, got %#v", item.gate, result.Failures)
+		}
+	}
+}
+
+func finalVerificationJSON(workflowID, snapshot string) string {
+	return `{"schemaVersion":1,"workflowId":"` + workflowID + `","changeSnapshot":"` + snapshot + `","status":"PASS","attempts":[{"status":"PASS","accepted":true,"artifact":"evidence.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"acceptedAttempts":[{"status":"PASS","accepted":true,"artifact":"evidence.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}` + "\n"
+}
+
+func finalExecutionArtifactText(workflowID, snapshot, finalVerification string) string {
+	lines := []string{
+		"FinalExecution mode: MECHANICAL_CLOSEOUT",
+		"Mechanical closeout: YES",
+		"Final verification artifact: " + finalVerification,
+		"Existing gate records: qa-test-gate Execution, complexity-gate, architecture-health-gate, code-quality-gate",
+		"Release judgment: YES",
+		"gate_route:",
+		"  workflow_id: " + workflowID,
+		"  change_snapshot: " + snapshot,
+		"  next_action: seal",
+		"  rework_owner: none",
+		"  rerun_from: none",
+	}
+	return strings.Join(lines, "\n") + "\n"
 }

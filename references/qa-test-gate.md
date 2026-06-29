@@ -25,7 +25,7 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 - `Design Review`: before verification, review candidate cases as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to `Design Rework`; do not stop and wait for the user unless the claim itself is unclear.
 - `Design Rework`: edit cases and oracle only. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
 - `Execution`: bind approved cases to commands, artifacts, manual observation, review records, or acceptance procedures. QA-owned verification evidence is mandatory. `REVIEW` / `FAIL` / `BLOCKED` routes to implementation, test evidence, or case rework; it does not enter downstream gates.
-- `FinalExecution`: after downstream gates and final verification, bind final QA evidence to the unchanged snapshot before release/seal. Do not reuse the earlier `Execution` artifact as final QA.
+- `FinalExecution`: after downstream gates and final verification, bind final release/seal evidence to the unchanged snapshot before release/seal. When the four post-development gates already recorded PASS for the same workflow and unchanged snapshot, the main agent may record this as a mechanical closeout: check the existing PASS records, final verification artifact, and route to seal. Do not add QA judgment, replace missing gates, reuse stale snapshots, or claim independent review.
 - `White-box Adequacy`: after the deliverable shape and code-quality result are stable, review internal risk coverage when needed.
 
 Authorized formal runs should continue across normal stage transitions. Stop only for true blockers: unapproved cases, missing QA-owned evidence, failed verification, stale workflow/snapshot, scope change, destructive/shared-state action not authorized, or unclear requirement.
@@ -85,7 +85,7 @@ Formal PASS requires:
 - Approved case set.
 - QA-owned verification evidence.
 - Binding from cases to artifacts/procedures/results.
-- Independent zero-context QA reviewer artifact.
+- Independent zero-context QA reviewer artifact for `Execution`. `FinalExecution` may instead be a main-agent mechanical closeout when all four post-development gates already have same-workflow, same-snapshot PASS records and final verification evidence exists.
 - Machine-recorded PASS using `formal-gates workflow record-stage`.
 
 Record formal Execution PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate qa-test-gate --mode formal --stage Execution`. Record formal FinalExecution PASS with `formal-gates workflow final-verification --record-final-qa --final-qa-artifact <artifact>`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.

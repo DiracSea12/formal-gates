@@ -97,7 +97,7 @@ func GateRecord(options GateRecordOptions) Result {
 			result.add("gate-state", err.Error())
 			return result
 		}
-		for _, requirement := range admissionRequirements(options.Gate) {
+		for _, requirement := range recordAdmissionRequirements(options) {
 			if err := verifyRequirement(worktree, statePath, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot); err != nil {
 				result.add("gate-state", err.Error())
 				return result
@@ -265,6 +265,18 @@ func admissionRequirements(gate string) []admissionRequirement {
 	default:
 		return nil
 	}
+}
+
+func recordAdmissionRequirements(options GateRecordOptions) []admissionRequirement {
+	if options.Gate == "qa-test-gate" && options.Stage == "FinalExecution" {
+		return []admissionRequirement{
+			{gate: "qa-test-gate", mode: "formal", stage: "Execution", artifact: true},
+			{gate: "complexity-gate", artifact: true},
+			{gate: "architecture-health-gate", artifact: true},
+			{gate: "code-quality-gate", artifact: true},
+		}
+	}
+	return admissionRequirements(options.Gate)
 }
 
 func verifyRequirement(worktree, statePath string, state GateState, requirement admissionRequirement, requiredFor, workflowID, changeSnapshot string) error {

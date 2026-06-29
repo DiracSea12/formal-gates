@@ -10,7 +10,7 @@ Without machine metadata, a formal PASS cannot be recorded; the result is at mos
 
 Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria by calling them optimization, hardening, gap-filling, cleanup, or overengineering prevention. Ask the user first and get explicit permission.
 
-Every formal post-development gate artifact must include:
+Every formal post-development gate artifact must include the fields below, except post-four-gate mechanical `FinalExecution`, which uses the separate closeout shape after this block.
 
 ```text
 Review mode: ZERO_CONTEXT_FORMAL
@@ -132,15 +132,15 @@ The native workflow commands cover snapshot, record-stage, verify-admission, sho
 
 Formal `qa-test-gate` recording must add `--mode formal --stage Execution`; final QA uses `--record-final-qa --final-qa-artifact <artifact>` to record `--stage FinalExecution` through the native workflow command. Do not copy the generic command and forget the stage.
 
-For final QA, first write the attempts JSON file, then record a supplied `FinalQaArtifact`. If the final QA artifact claims receipt-backed zero-context proof by including `Reviewer proof receipt`, the receipt must be valid; otherwise `FinalExecution` may still be recorded through the ordinary artifact checks without claiming receipt-backed proof:
+For final QA, first write the attempts JSON file, then record a supplied `FinalQaArtifact`. After the four post-development gates have same-workflow, same-snapshot PASS records, this artifact is a main-agent mechanical closeout that only checks existing records and final verification evidence. It must not claim independent review, add QA judgment, replace missing gates, or reuse a stale snapshot. The machine validator rejects mechanical `FinalExecution` artifacts that include `Review mode: ZERO_CONTEXT_FORMAL`, `Zero-context reviewer: YES`, `Independent agent: YES`, or `Reviewer proof receipt:`.
 
 ```bash
-bin/formal-gates workflow final-verification --worktree <repo> --workflow-id <id> --change-snapshot <snapshot> --attempts-file .claude/gates/artifacts/final-verification-attempts.json --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer>
+bin/formal-gates workflow final-verification --worktree <repo> --workflow-id <id> --change-snapshot <snapshot> --attempts-file .claude/gates/artifacts/final-verification-attempts.json --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor gate-workflow
 ```
 
 Attempt entries need `status`, `accepted`, `artifact`, and `contextBundle`. `contextBundle` must include `sha256=<bundle-sha256>`.
 
-`--record-final-qa` records a supplied, pre-existing `--final-qa-artifact`. It must not synthesize, overwrite, or repair a PASS-shaped FinalExecution report. A supplied artifact with a `Reviewer proof receipt` must have a valid receipt; an artifact without that field must not be described as receipt-backed subagent proof.
+`--record-final-qa` records a supplied, pre-existing `--final-qa-artifact`. It must not synthesize, overwrite, or repair a PASS-shaped FinalExecution report.
 
 ## Temporary Cleanup
 

@@ -8,6 +8,8 @@ Do not edit files. Do not turn start-readiness review into wording polish. Block
 
 Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria under the name of optimization, hardening, gap-filling, cleanup, or preventing overengineering. If broader scope seems necessary, ask the user first and get explicit permission.
 
+Review findings must stay tied to the stated request and existing project rules. If the only plausible repair would require new or changed requirements, externally visible behavior, data formats, process steps, integration boundaries, validation rules, or acceptance criteria, mark it as a scope issue and require user approval; do not treat it as an automatic blocker to be fixed in the current change.
+
 Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
 
 Use this exact template for formal cold-water start-readiness review when this skill orchestrates that reviewer.
