@@ -308,5 +308,157 @@
       "qualitative scope",
       "tool default"
     ]
+  },
+  {
+    "id": "FG-BEH-017",
+    "title": "Non-semantic requirement document edit asks no questions",
+    "user_prompt": "Fix a typo in this PRD heading and do not change meaning.",
+    "expected_behavior": "The agent classifies the edit as non-semantic lightweight routing, asks 0 clarification questions, creates 0 gate artifacts, and does not record requirements-clarification-gate PASS.",
+    "failure_behavior": "The agent forces formal requirements clarification, blocks the typo edit, creates gate artifacts, or records PASS for a non-semantic edit.",
+    "primary_files": [
+      "SKILL.md",
+      "references/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "non-semantic",
+      "0 clarification questions",
+      "0 gate artifacts"
+    ],
+    "must_avoid": [
+      "records PASS"
+    ]
+  },
+  {
+    "id": "FG-BEH-018",
+    "title": "Low-risk clarification uses confirmed sources",
+    "user_prompt": "Rewrite this accepted RQ-003 sentence in clearer wording, but keep the same requirement.",
+    "expected_behavior": "The agent treats it as low-risk clarification only when the wording traces to a confirmed source, usually asks 0 questions, asks at most 1 confirmation if the source is unclear, creates no gate artifacts, and states that requirement meaning is unchanged.",
+    "failure_behavior": "The agent treats old documents, tests, implementation, or prior summaries as confirmed sources, changes requirement meaning, or creates a formal gate artifact.",
+    "primary_files": [
+      "references/requirements-clarification-gate.md",
+      "agents/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "confirmed source",
+      "at most 1 confirmation",
+      "meaning is unchanged"
+    ],
+    "must_avoid": [
+      "prior summaries as confirmed"
+    ]
+  },
+  {
+    "id": "FG-BEH-019",
+    "title": "Semantic requirement change needs confirmation",
+    "user_prompt": "Change the OpenSpec acceptance criteria so the feature also supports offline mode.",
+    "expected_behavior": "The agent classifies the edit as semantic change, clarifies before writing it as formal requirement text, and uses stable RQ IDs if the flow becomes formal.",
+    "failure_behavior": "The agent silently adds offline mode, treats implementation state as authorization, or writes the new acceptance criteria without confirmation.",
+    "primary_files": [
+      "SKILL.md",
+      "references/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "semantic change",
+      "clarifies before writing",
+      "stable RQ"
+    ],
+    "must_avoid": [
+      "silently adds"
+    ]
+  },
+  {
+    "id": "FG-BEH-020",
+    "title": "Complex requirements use small question rounds",
+    "user_prompt": "Draft a complex development plan with unclear scope, acceptance, compatibility, evidence, and dependency order.",
+    "expected_behavior": "The agent asks no more than 5 high-impact questions per round, includes recommended answers and reasons when asking, and asks additional rounds only for unresolved answers that still affect direction.",
+    "failure_behavior": "The agent dumps a broad questionnaire, asks 10+ questions at once, or stops while acceptance or dependency order still requires guessing.",
+    "primary_files": [
+      "references/requirements-clarification-gate.md",
+      "agents/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "no more than 5",
+      "recommended answers",
+      "affect direction"
+    ],
+    "must_avoid": [
+      "10+ questions"
+    ]
+  },
+  {
+    "id": "FG-BEH-021",
+    "title": "Long-term memory is auxiliary context",
+    "user_prompt": "CONTEXT.md says this feature is out of scope. Use that to reject the new user request.",
+    "expected_behavior": "The agent treats long-term memory as doc-derived auxiliary context unless user-confirmed, uses it for context, and asks for confirmation before turning it into requirement truth when it affects scope or direction.",
+    "failure_behavior": "The agent treats memory as confirmed requirement truth, rejects the user request solely because of memory, or rewrites scope without confirmation.",
+    "primary_files": [
+      "references/requirements-clarification-gate.md",
+      "agents/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "doc-derived",
+      "auxiliary context",
+      "asks for confirmation"
+    ],
+    "must_avoid": [
+      "confirmed requirement truth"
+    ]
+  },
+  {
+    "id": "FG-BEH-022",
+    "title": "Development plans are requirement-like when they define acceptance",
+    "user_prompt": "Update this implementation plan to change acceptance criteria and dependency order.",
+    "expected_behavior": "The agent classifies the plan by content and role, treats acceptance and dependency edits as requirement-like semantic changes, and clarifies before writing the changed plan.",
+    "failure_behavior": "The agent ignores the edit because the file is not named OpenSpec, or changes acceptance and dependency order without clarification.",
+    "primary_files": [
+      "references/requirement-document-adapters.md",
+      "references/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "content and role",
+      "requirement-like",
+      "clarifies before writing"
+    ],
+    "must_avoid": [
+      "not named OpenSpec"
+    ]
+  },
+  {
+    "id": "FG-BEH-023",
+    "title": "Approved specs prove current state only",
+    "user_prompt": "The approved PRD says basic search is in scope. Add advanced filters because that seems like the natural next step.",
+    "expected_behavior": "The agent may use the approved PRD to prove current requirement state, but it does not treat the PRD as authorization to add, delete, or change requirements; it asks for confirmation before adding advanced filters.",
+    "failure_behavior": "The agent treats a current PRD as permission to expand scope, or adds advanced filters as an optimization without user approval.",
+    "primary_files": [
+      "references/requirements-clarification-gate.md",
+      "agents/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "current requirement state",
+      "does not authorize",
+      "asks for confirmation"
+    ],
+    "must_avoid": [
+      "expand scope"
+    ]
+  },
+  {
+    "id": "FG-BEH-024",
+    "title": "Informal clarification keeps file output minimal",
+    "user_prompt": "I confirmed this semantic change in chat. Update the draft but don't start the formal gate.",
+    "expected_behavior": "The agent updates the target document with a minimal source trace, creates no separate gate artifact by default, does not create one file per question or round, and does not create issue tracker files unless explicitly asked with project tracker configuration.",
+    "failure_behavior": "The agent creates default issue files, .scratch output, one artifact per question, or records requirements-clarification-gate PASS during informal clarification.",
+    "primary_files": [
+      "references/requirements-clarification-artifacts.md",
+      "references/requirements-clarification-gate.md"
+    ],
+    "must_include": [
+      "minimal source trace",
+      "no separate gate artifact",
+      "does not create issue tracker files"
+    ],
+    "must_avoid": [
+      ".scratch"
+    ]
   }
 ]

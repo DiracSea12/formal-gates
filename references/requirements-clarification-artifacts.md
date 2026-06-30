@@ -4,6 +4,10 @@ This is the cold-path machine reference for `requirements-clarification-gate`. R
 
 The machine check cannot prove the user's business intent is correct. It can prove the agent did not claim PASS without the required user-confirmed alignment evidence.
 
+Lightweight semantic routing and informal clarification are not machine PASS flows. They must not create PASS records, gate artifacts, reviewer dispatch artifacts, or gate state. Non-semantic edits and low-risk clarifications can leave no artifact at all.
+
+If a semantic clarification is confirmed outside formal PASS recording, leave a minimal source trace in the target document instead of creating a separate artifact by default. Use a small inline record such as an `RQ-###` ID, confirmation date, `Clarifications` section, or change note. For broad scope or acceptance changes, trace the requirement ID to the affected document or module and the observable acceptance or evidence entrypoint.
+
 ## Machine-Enforced PASS
 
 PASS is allowed only when the clarification result is recorded as an artifact and validated by `formal-gates workflow record-stage`.
@@ -29,6 +33,8 @@ The validator blocks these failures:
 - `gate_route` is missing, does not match the current workflow/snapshot, or routes somewhere other than proceed.
 
 When a project explicitly enables document-write hook enforcement, the hook blocks writes to requirement documents such as OpenSpec/PRD/SDD/start-readiness/phase Markdown files and formal PRD/requirements/specs `.txt` files when the current worktree has no recorded `requirements-clarification-gate` PASS covering that target path. This opt-in pre-document hard stop is separate from the later post-development gates.
+
+Do not add automatic GitHub issue, GitLab issue, local `.scratch`, one-file-per-question, or one-file-per-round output as part of requirements clarification. Issue tracker output is allowed only when the user explicitly asks and the project has tracker configuration.
 
 ## Recording Command
 

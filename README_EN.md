@@ -83,7 +83,7 @@ Only after you tell the AI "**run four gates**", "**do formal gate review**", or
 |----------|---------------|
 | Major refactors, new systems | No, unless the user asks for gate review |
 | Pre-release/seal validation | Yes, when the user asks to seal or run four gates |
-| Before writing OpenSpec / PRD / SDD | No; requirements clarification is optional pre-development review |
+| Before writing OpenSpec / PRD / SDD | No formal gate by default; first do lightweight routing. Non-semantic edits ask no questions and create no artifacts. Semantic changes need clarification before formal requirement text. |
 | UI tweaks, small bug fixes | No |
 | Casual chat, wording adjustments | No |
 
@@ -110,6 +110,8 @@ When the user asks for formal requirements clarification, first align on **goals
 Requirement details include: specific business rules, boundary conditions, exception cases, data constraints, scenario details, non-functional metrics. High-level alignment alone is insufficient—discovering detail misalignment mid-development has even higher rework costs.
 
 This is the best gate to run before AI starts coding, because direction errors have the highest rework cost. It is still optional and user-authorized, not automatic.
+
+For requirement-like document edits, formal-gates uses lightweight semantic routing before editing. This covers OpenSpec, PRD, SDD, phase docs, development plans, technical plans, implementation plans, handoff docs, and roadmap or milestone sections when they define scope or acceptance. The routing check is not a formal gate: typo or formatting edits proceed with 0 questions and 0 artifacts; low-risk clarification uses confirmed sources; semantic changes need confirmation before the document states them as requirements.
 
 ### Four Post-work Gates (run only when the user asks, in sequence)
 
@@ -138,7 +140,7 @@ For a first verification pass, check two result types:
 # Local package, prompt, hook decide, workflow, receipt, and install self-check
 bin/formal-gates canary portable --root . --format json
 
-# Automatically checked behavior cases; expect all 15 to PASS
+# Automatically checked behavior cases; expect all 24 to PASS
 bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
 
 # Run only when validating Codex host auto-interception; failure does not mean native validation failed
@@ -147,7 +149,7 @@ bin/formal-gates canary codex-hook --worktree .
 
 `portable canary` is the main proof for capabilities controlled by this package. `codex-hook` only proves whether the current Codex client actually invokes hooks and blocks invalid commands. If it fails, the host's automatic interception is not closed-loop; keep using explicit `formal-gates workflow` / `formal-gates gate` evidence validation and do not claim Codex hook blocking proven.
 
-`examples/skill-behavior-prompts.json` and `examples/skill-behavior-answers.json` are the 15 automatically checked behavior cases used by package validation and the portable canary. Root `test-prompts.json` is the broader manual/model evaluation prompt set with 20 scenarios, not the fixed package self-check fixture.
+`examples/skill-behavior-prompts.json` and `examples/skill-behavior-answers.json` are the 24 automatically checked behavior cases used by package validation and the portable canary. Root `test-prompts.json` is the broader manual/model evaluation prompt set with 20 scenarios, not the fixed package self-check fixture.
 
 Current support can be described this way:
 

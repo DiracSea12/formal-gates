@@ -6,11 +6,39 @@ Do not trigger this for ordinary chat, brainstorming, small tasks, wording edits
 
 `requirements-clarification-gate` is a built-in pre-document gate. It is not one of the four post-development review gates. Its PASS evidence is user-confirmed requirement alignment, not an independent zero-context reviewer verdict.
 
+## Lightweight Document Routing
+
+Before editing OpenSpec, PRD, SDD, phase docs, requirements, specs, requirement proposals, development plans, technical plans, implementation plans, handoff documents, or roadmap/milestone sections with concrete scope and acceptance, do a lightweight semantic routing check.
+
+Classify by document role and content, not filename alone. A requirement-like edit is any edit that defines or changes product goal, user value, scope, non-scope, acceptance criteria, architecture boundary, compatibility promise, evidence standard, phase status, development order, dependency, business rule, edge case, data constraint, or requirement detail.
+
+Lightweight routing is not `requirements-clarification-gate`. It must not create PASS records, gate artifacts, reviewer dispatch artifacts, or machine gate state.
+
+Edit classes:
+
+- `NON_SEMANTIC`: typo, formatting, link update, heading numbering, or wording cleanup that does not change meaning. Ask 0 questions, create 0 gate artifacts, and edit directly.
+- `LOW_RISK_CLARIFICATION`: clearer wording that restates confirmed requirements without adding or removing meaning. Usually ask 0 questions; ask at most 1 confirmation question if the source is unclear. Create 0 gate artifacts.
+- `SEMANTIC_CHANGE`: an edit that changes or may change requirement meaning. Clarify before writing the change as formal requirement text. If the flow becomes formal, record confirmed answers as `RQ-###` alignment.
+- `BLOCKED`: missing answers would force guessing about goal, scope, acceptance, architecture boundary, compatibility, evidence, phase status, dependency order, or requirement details. Return `DRAFT_BLOCKED` unless the user asked for exploration/spike work with assumptions clearly marked as pending.
+
+Exploration, spike, and brainstorming drafts may continue without confirmed formal requirements only when assumptions are visibly marked as pending confirmation and are not written as acceptance standards.
+
 ## Source Of Truth
 
-Use only the user's requirement brief, explicit user decisions, approved requirement notes, and user-confirmed answers as requirement truth.
+Use only the user's requirement brief, explicit user decisions, approved requirement notes, confirmed `RQ-###` items, and user-confirmed answers as requirement truth.
 
-If a requirement document already exists, review it against that source. Do not treat OpenSpec, PRD, SDD, tasks, commits, gate artifacts, validation reports, implementation, or prior agent summaries as self-confirming requirements.
+Source hierarchy:
+
+1. current explicit user decisions;
+2. approved requirement notes or confirmed `RQ-###` items;
+3. current approved and not-deprecated source-of-truth specs or PRDs;
+4. ordinary old documents, implementation, tests, validation output, gate artifacts, and agent summaries.
+
+Current approved and not-deprecated source-of-truth specs or PRDs may prove current requirement state. They do not authorize adding, deleting, or changing requirements.
+
+If a requirement document already exists, review it against that source. Do not treat old OpenSpec, PRD, SDD, tasks, commits, gate artifacts, validation reports, implementation, tests, or prior agent summaries as self-confirming requirements.
+
+Long-term memory such as `CONTEXT.md`, ADRs, or `.out-of-scope` files is auxiliary context. Treat it as `doc-derived` unless the user explicitly confirms it. If memory affects scope, acceptance, architecture boundary, compatibility, or development direction, ask for confirmation before turning it into requirement truth.
 
 ## Hard Stop Rules
 
@@ -88,7 +116,33 @@ Weak questions do not count toward coverage unless they affect acceptance, const
 - "Would you like detailed logging?"
 - "Do you prefer approach A or B?"
 
-Ask 1-5 high-quality questions per round. Do not ask 10+ questions at once unless they are tightly coupled. After the user answers, synthesize and ask follow-ups if needed.
+Question budget is risk-based:
+
+- Non-semantic edit: 0 questions.
+- Low-risk clarification with confirmed source: 0 questions; at most 1 confirmation if the source is unclear.
+- Ordinary semantic change: usually 1-3 high-impact questions.
+- Complex requirement or development plan: up to 5 questions per round.
+- Additional rounds are allowed only when unresolved answers still affect goal, scope, acceptance, architecture boundary, compatibility, evidence, phase state, or dependency order.
+
+Each question should include a stable `RQ-###` ID when it may enter formal alignment, the question, a recommended answer, why the answer matters, and concrete choices when useful.
+
+Default to one question at a time. Closely related questions may be asked in a batch of 2-5. Do not dump a broad questionnaire.
+
+Stop asking when critical ambiguity is resolved, remaining questions are low impact, the user stops or defers them, or the flow must return `DRAFT_BLOCKED`.
+
+Ask 1-5 high-quality questions per round in formal clarification. Do not ask 10+ questions at once unless they are tightly coupled. After the user answers, synthesize and ask follow-ups only when needed.
+
+## File Budget
+
+Lightweight routing and informal clarification must not create gate artifacts.
+
+Do not create one file per question, one file per clarification round, default issue tracker files, or `.scratch` output by default.
+
+Formal requirements PASS may create only the required alignment artifact, user decision record, and normal gate state.
+
+After a semantic clarification is confirmed outside formal PASS recording, leave a minimal source trace in the target document instead of creating a separate gate artifact by default. Examples: an `RQ-###` ID, confirmation date, `Clarifications` section, or change note.
+
+For requirements that affect acceptance or broad scope, keep lightweight traceability from requirement ID to affected document or module to observable acceptance condition or evidence entrypoint.
 
 ## Completeness And Conflict Scan
 

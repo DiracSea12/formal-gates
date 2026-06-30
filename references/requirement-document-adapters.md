@@ -2,6 +2,8 @@
 
 This reference maps local requirement-document formats into the formal-gates workflow. Keep core gate language generic; use this file only when a specific document format needs routing.
 
+Classify documents by content and role, not by filename alone. A Markdown file is not requirement work just because it is Markdown; it becomes requirement-like when it defines or changes goal, user value, scope, non-scope, acceptance, architecture boundary, compatibility promise, evidence standard, phase status, development order, dependency, business rules, edge cases, data constraints, or requirement details.
+
 ## Common Requirement Fields
 
 Every supported format must provide or map to:
@@ -31,13 +33,16 @@ When machine artifacts still require the compatibility field `OpenSpec impact:`,
 
 ## Generic Markdown Adapter
 
-Use this adapter for PRD, SDD, issue, design brief, phase note, or a markdown requirement bundle.
+Use this adapter for PRD, SDD, issue, design brief, phase note, development plan, technical plan, implementation plan, handoff document, roadmap or milestone section with concrete scope and acceptance, or a markdown requirement bundle.
 
 Map generic documents this way:
 
 - PRD or issue: goal, user value, scope, acceptance, business rules.
 - SDD or design brief: architecture boundary, ownership, constraints, failure semantics.
 - phase note or task list: task status and phase dependencies.
+- development, technical, or implementation plan: scope boundaries, development order, dependency assumptions, acceptance, and verification expectations.
+- handoff document: covered requirement IDs, forbidden expansion, verification requirements, and ownership boundaries.
+- roadmap or milestone section: planned scope, acceptance, sequencing, and non-goals when stated concretely.
 - linked evidence files: validation standard and required artifacts.
 
 If the bundle lacks a field that can change direction, ask a clarification question before drafting or dispatching development. Do not infer missing acceptance, compatibility, or evidence requirements from implementation or prior gate artifacts.

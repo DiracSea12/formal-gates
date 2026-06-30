@@ -62,5 +62,37 @@
   {
     "id": "FG-BEH-016",
     "answer": "In formal handoff, development-time complexity budget checks are automatic; the main agent must derive numeric max-net, max-new-prod-files, and max-prod-insertions values from the approved slice and expected diff shape, pass matching values to the check command, and require independent anti-complexity review before any expansion."
+  },
+  {
+    "id": "FG-BEH-017",
+    "answer": "A non-semantic requirement document edit asks 0 clarification questions, creates 0 gate artifacts, and does not record PASS."
+  },
+  {
+    "id": "FG-BEH-018",
+    "answer": "Low-risk clarification must trace to a confirmed source, asks at most 1 confirmation when unclear, and states the meaning is unchanged."
+  },
+  {
+    "id": "FG-BEH-019",
+    "answer": "A semantic change clarifies before writing formal text and uses stable RQ IDs if it enters formal alignment."
+  },
+  {
+    "id": "FG-BEH-020",
+    "answer": "Complex requirements ask no more than 5 high-impact questions per round, include recommended answers, and continue only for unresolved answers that affect direction."
+  },
+  {
+    "id": "FG-BEH-021",
+    "answer": "Long-term memory is doc-derived auxiliary context; the agent asks for confirmation before it becomes requirement truth."
+  },
+  {
+    "id": "FG-BEH-022",
+    "answer": "Classify plans by content and role; acceptance or dependency edits are requirement-like, and the agent clarifies before writing."
+  },
+  {
+    "id": "FG-BEH-023",
+    "answer": "Approved specs prove current requirement state; the spec does not authorize scope changes, and the agent asks for confirmation before adding new scope."
+  },
+  {
+    "id": "FG-BEH-024",
+    "answer": "Informal clarification leaves a minimal source trace, creates no separate gate artifact, and does not create issue tracker files by default."
   }
 ]

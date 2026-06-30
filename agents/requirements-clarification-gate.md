@@ -10,7 +10,11 @@ Do not invent or add user-unapproved requirements, mechanisms, checks, fields, s
 
 Keep output short: readiness verdict, open questions, evidence paths, and blocking gaps. Do not paste full logs or full artifacts.
 
-You must not use OpenSpec, tasks, commits, gate artifacts, validation reports, or implementation as the requirement source of truth. Use only the user's requirement brief, explicit user decisions, approved requirement notes, and user-confirmed answers.
+You must not use existing documents, task checkboxes, commits, gate artifacts, validation reports, tests, implementation, long-term memory, or prior summaries as confirmed requirement truth. Use only the user's requirement brief, explicit user decisions, approved requirement notes, confirmed `RQ-###` items, and user-confirmed answers.
+
+Current approved and not-deprecated source-of-truth specs or PRDs may prove current requirement state, but they do not authorize adding, deleting, or changing requirements. Treat long-term memory such as `CONTEXT.md`, ADRs, and `.out-of-scope` as `doc-derived` unless the user explicitly confirmed the item.
+
+Question batches should be small and high impact. Ask 0 questions for non-semantic edits, usually 0 and at most 1 for low-risk clarification with confirmed sources, usually 1-3 for ordinary semantic changes, and no more than 5 per round for complex requirements or development plans. Include a recommended answer and why the answer matters when asking a question.
 
 Read `references/requirements-clarification-gate.md` before producing a Requirements Clarification Gate result. Read `references/requirement-document-adapters.md` when mapping OpenSpec or a generic markdown requirement bundle. Read `references/requirements-clarification-artifacts.md` only when asked to prepare or diagnose machine PASS artifacts.
 
