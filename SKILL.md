@@ -12,6 +12,7 @@ Thin router only. Classify the flow first, then load one referenced detail file 
 | Request | Route |
 |---|---|
 | Chat, brainstorming, explanation, typo, wording, or tiny low-risk change | Do not activate formal gates. |
+| Editing OpenSpec, PRD, SDD, phase docs, development plans, handoff docs, or other requirement-like documents | First do lightweight semantic routing. Non-semantic edits ask no questions and create no artifacts. Semantic changes need clarification before formal requirement text is written. |
 | User explicitly asks for requirements alignment, pre-development review, or start-readiness review | Use the document/start-readiness route below; build or request an alignment table or equivalent artifact before drafting, and do not approve readiness before user-confirmed alignment evidence exists. |
 | User explicitly asks for formal development handoff | Require OpenSpec or slice coverage, Complexity Contract or Ledger, and development handoff evidence; main agent does not implement directly inside that formal workflow. |
 | User explicitly asks for formal review, four gates, final validation, release, or seal | Follow the fixed post-development sequence; never accept chat-only PASS. |
@@ -24,6 +25,8 @@ Before any formal handoff or gate dispatch, classify the work as `none`, `four-g
 - `none`: ordinary small edits, explanations, research, informal/vibe coding, and mere OpenSpec or development intent.
 - `start-readiness-only`: explicit user request or project requirement; no QA case design unless four-gate/release/seal is also claimed.
 - `four-gate`/`release`/`seal`: QA black-box case design is required before implementation handoff.
+
+Lightweight semantic routing for requirement-like document edits is not a formal flow by itself. It does not record PASS, create gate artifacts, dispatch reviewers, or require start-readiness review. Use it to decide whether the requested edit is non-semantic, low-risk clarification, semantic change, or blocked; read `references/requirements-clarification-gate.md` when the edit can change requirement meaning.
 
 First run rule: classify once, read the matching Load Map entry, collect the required evidence or block on the missing artifact, and record a gate only after evidence exists.
 

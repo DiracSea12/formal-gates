@@ -156,7 +156,7 @@ bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prom
 
 Without answers, cases are reported as `PENDING`. With answers, the harness checks explicit `must_include` and `must_avoid` markers when present, or derives a small set of key terms from the expected behavior. This is a repeatable local harness for behavior evidence; it is not a replacement for a human or model judge on nuanced semantic quality.
 
-`examples/skill-behavior-prompts.json` is the portable marker fixture used by `package validate` and `canary portable`. `examples/skill-behavior-answers.json` is the checked answer fixture and must make all 15 portable cases pass. Root `test-prompts.json` is a broader 20-case prompt set for manual or agent-level evaluation; it is intentionally not used as the fixed package self-check fixture.
+`examples/skill-behavior-prompts.json` is the portable marker fixture used by `package validate` and `canary portable`. `examples/skill-behavior-answers.json` is the checked answer fixture and must make all 24 portable cases pass. Root `test-prompts.json` is a broader 20-case prompt set for manual or agent-level evaluation; it is intentionally not used as the fixed package self-check fixture.
 
 ## Install To Claude
 
