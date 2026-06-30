@@ -48,6 +48,11 @@ The common AI failure is simple: the AI writes the code, says it tested it, and 
 - **Artifact**: the file that stores that evidence, such as a QA report, code-quality review, or final verification record.
 - **Gate**: one review step, such as QA, complexity, architecture health, or code quality.
 
+### Terminology Split
+
+- **Four gates**: `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, `code-quality-gate`
+- **hook**: host interception capability, not the four gates
+
 In plain terms, formal-gates does not trust "I tested it." The AI has to write evidence into a file, and the command layer checks whether that file can support a PASS.
 
 ### Why Is That Useful?
@@ -151,6 +156,8 @@ bin/formal-gates canary codex-hook --worktree .
 
 `examples/skill-behavior-prompts.json` and `examples/skill-behavior-answers.json` are the 24 automatically checked behavior cases used by package validation and the portable canary. Root `test-prompts.json` is the broader manual/model evaluation prompt set with 20 scenarios, not the fixed package self-check fixture.
 
+The full maintenance local self-check chain lives in [`references/local-validation.md`](references/local-validation.md).
+
 Current support can be described this way:
 
 | Tool | How to use it |
@@ -193,7 +200,7 @@ bin/formal-gates install --source . --host codex --scope project --project <proj
 bin/formal-gates install --source . --host cursor --scope project --project <project> --force --configure-hooks
 ```
 
-On Windows, use `bin/formal-gates.exe`. After installation, run `bin/formal-gates(.exe) canary portable --root <formal-gates>` for a native self-check.
+On Windows, use `bin/formal-gates.exe`. Maintenance local self-check commands live in [`references/local-validation.md`](references/local-validation.md).
 
 Each host must be installed and verified on its own. A passing canary on one host does not mean another host enforces hooks.
 
@@ -214,15 +221,9 @@ Codex users should not rely only on automatic blocking. Unless `formal-gates can
 
 > **Prerequisite**: Go 1.22+, with `go` in PATH (verify with `go version`).
 
-A rerunnable local demo is available at [`examples/package-validation-demo.md`](examples/package-validation-demo.md). It builds `bin/formal-gates(.exe)`, then runs package validation and the native portable canary through that binary.
+Maintenance local self-check commands live in [`references/local-validation.md`](references/local-validation.md). This section keeps the other cross-platform validation commands.
 
 ```bash
-# Validate package structure
-bin/formal-gates package validate --root .
-
-# Run native portable canary
-bin/formal-gates canary portable --root .
-
 # Validate a specific artifact
 bin/formal-gates artifact validate \
   --root . \

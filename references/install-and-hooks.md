@@ -22,50 +22,9 @@ Native host skill installs copy the verifiable installable package subset: `SKIL
 
 Installed packages must include `bin/formal-gates.exe` on Windows and `bin/formal-gates` on Linux/macOS. Source checkouts may use `go run ./cmd/formal-gates` for development tests, but installed hook and validation paths must call the packaged binary.
 
-## Portable Go Validation
+## Native Hook and Receipt Paths
 
-The installed cross-platform package and artifact validator is the built native binary:
-
-```bash
-bin/formal-gates package validate --root <formal-gates>
-```
-
-To validate one artifact:
-
-```bash
-bin/formal-gates artifact validate --root <repo> --file <artifact> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot>
-```
-
-Before a formal development handoff starts, validate that the handoff contains an active development-time complexity budget and the exact complexity check command the worker must run:
-
-```bash
-bin/formal-gates handoff validate --root <repo> --file <handoff-artifact> --workflow-id <workflow-id> --change-snapshot <snapshot>
-```
-
-To validate one dispatch prompt against `hooks/pollution-patterns.json`:
-
-```bash
-bin/formal-gates prompt validate --root <formal-gates> --file <prompt.md>
-```
-
-To use the native gate-state foundation from a source checkout or installed binary:
-
-```bash
-bin/formal-gates gate record --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates gate verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates gate show --worktree <repo> --format json
-```
-
-To use the native workflow foundation:
-
-```bash
-bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
-bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow cleanup --worktree <repo> --dry-run
-bin/formal-gates workflow show --worktree <repo> --format json
-```
+Maintenance local self-check commands live in [`local-validation.md`](local-validation.md).
 
 To make one portable hook decision from a host-provided JSON payload:
 
@@ -98,7 +57,7 @@ bin/formal-gates install --source <formal-gates> --host cursor --scope project -
 
 The native installer requires `bin/formal-gates(.exe)` under `--source`; build it first with `go build -o bin/formal-gates ./cmd/formal-gates` or the Windows `.exe` equivalent. `--configure-hooks` writes native hook commands: `hook decide` for PreToolUse/preToolUse and `receipt capture` for subagent lifecycle events. It preserves non-formal-gates hook entries and replaces only formal-gates hook commands.
 
-This Go path is the portable validation entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, admission checks for the fixed post-development order, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, final verification aggregation, FinalExecution recording from a supplied artifact, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
+This Go path is the portable CLI entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, admission checks for the fixed post-development order, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, final verification aggregation, FinalExecution recording from a supplied artifact, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
 
 ## Maintained Source
 
@@ -108,7 +67,7 @@ When changing the package, edit the maintained source first, verify it, then com
 
 ## Source Host Canaries
 
-Core package validation, workflow recording, hook decisions, install, receipt checks, prompt checks, complexity checks, and the Codex hook live canary use the native binary. `formal-gates receipt preflight` reads Claude/Codex/Cursor hook JSON and reports missing lifecycle proof, but it is diagnostic only. Hook blocking is claimed only after a same-host live canary captures a real payload and blocks an invalid command.
+Core package checks, workflow recording, hook decisions, install, receipt checks, prompt checks, complexity checks, and the Codex hook live canary use the native binary. `formal-gates receipt preflight` reads Claude/Codex/Cursor hook JSON and reports missing lifecycle proof, but it is diagnostic only. Hook blocking is claimed only after a same-host live canary captures a real payload and blocks an invalid command.
 
 ## Host Capability Levels
 
@@ -136,7 +95,7 @@ Generated hook commands use slash paths inside quoted command strings. This is i
 
 ## Release Evidence
 
-The portable validation workflow builds native binaries on Windows, macOS arm64, macOS amd64, and Linux, runs package validation, runs the portable canary, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. It is configured to upload the same files to a GitHub Release when a release is published:
+The portable validation workflow builds native binaries on Windows, macOS arm64, macOS amd64, and Linux, writes platform-specific `portable-canary-*.json`, writes matching `SHA256SUMS-*.txt`, and uploads those files as CI artifacts. It is configured to upload the same files to a GitHub Release when a release is published:
 
 - `formal-gates-windows-amd64.exe`, `portable-canary-windows-amd64.json`, `SHA256SUMS-windows-amd64.txt`
 - `formal-gates-macos-arm64`, `portable-canary-macos-arm64.json`, `SHA256SUMS-macos-arm64.txt`
@@ -145,7 +104,9 @@ The portable validation workflow builds native binaries on Windows, macOS arm64,
 
 Here, an artifact is a saved build or evidence file from CI. The binary is what the user can run. The canary JSON is the package's self-check result for that platform. The checksum file lets a user verify that the downloaded binary and canary file match what CI produced. `PASS` means the package-local checks in that canary passed for that platform; it does not prove a third-party signature, provenance, attestation, or host hook interception.
 
-## Prompt Behavior Harness
+## Maintenance Self-Checks
+
+The repository-local self-check chain lives in [`local-validation.md`](local-validation.md). Keep this install-and-hooks file focused on package shape, install flows, host hooks, and release evidence.
 
 `formal-gates behavior evaluate` reads behavior cases and optional model answers:
 
@@ -175,9 +136,25 @@ Claude manual install targets:
 - Global Claude: `%USERPROFILE%\.claude\skills\formal-gates`
 - Project-local Claude: `<project>\.claude\skills\formal-gates`
 
-Do not copy only `SKILL.md`. A native install also needs the packaged binary, Go command sources used by package validation, references, agents, examples, and `hooks/pollution-patterns.json`.
+Do not copy only `SKILL.md`. A native install also needs the packaged binary, Go command sources used by the CLI, references, agents, examples, and `hooks/pollution-patterns.json`.
 
 For copy-then-verify runs, copy the candidate into the project-local `.claude/skills/formal-gates` first. Do not accidentally test a global stale package.
+
+### Cross-platform bootstrap
+
+Use the double-click bootstrap entry points when you want a single entry point that downloads the release source snapshot and the matching native binary, verifies checksums, assembles a local package copy, and optionally runs host configuration:
+
+```bash
+open install.command
+```
+
+```powershell
+install.bat
+```
+
+Bootstrap entry points are platform shims. They do not replace `formal-gates install`; they prepare a local package copy and then hand off to the same CLI installer.
+
+The bootstrap scripts only request release assets that this repository publishes: macOS arm64, macOS amd64, Windows amd64, and Linux amd64. Other OS/architecture combinations stop before download instead of guessing an unpublished asset name.
 
 ## Install To Codex
 
@@ -195,6 +172,14 @@ Codex manual install targets:
 
 When Claude and Codex are both installed, the two mirrors must be byte-identical or the run record must state their version/hash difference. Never use one host's install or canary result as proof for another host.
 
+### Codex on macOS
+
+Use the native `cursor-agent`/`claude` style paths for macOS and do not follow Windows examples that use `%USERPROFILE%` or `.exe` filenames. For example, a project-local macOS hook command should point at the installed native binary under the project tree:
+
+```bash
+"<project>/.codex/skills/formal-gates/bin/formal-gates" hook decide
+```
+
 ## Cursor Hook Integration
 
 Cursor uses its Hooks surface, not a Claude-style skill loader. The installer can write hook config:
@@ -205,6 +190,16 @@ bin/formal-gates install --source <formal-gates> --host cursor --scope global --
 ```
 
 The installer copies the installable skill subset to `.cursor\formal-gates` and writes a `preToolUse` command hook into `.cursor\hooks.json` or `%USERPROFILE%\.cursor\hooks.json`.
+
+### Cursor on macOS
+
+Use the native installed binary path under the project directory:
+
+```bash
+"<project>/.cursor/formal-gates/bin/formal-gates" hook decide
+```
+
+The hook payload remains JSON over stdin; the command must return `permission: "deny"` or exit code `2` when it blocks a PASS without artifact.
 
 ## Candidate Package A/B Testing
 
@@ -354,13 +349,7 @@ This excludes `.git`, `.svn`, `.hg`, `node_modules`, `__pycache__`, and local ga
 
 ## Portable Canary
 
-The native portable canary is:
-
-```bash
-bin/formal-gates canary portable --root <formal-gates>
-```
-
-Use `bin/formal-gates.exe` on Windows. The canary validates package shape, dispatch-prompt pollution checks, native hook decisions, workflow state, receipt flow, and native install shape without PowerShell. It is not final QA for a real project and does not prove same-host hook interception.
+Keep maintainer self-check commands in [`local-validation.md`](local-validation.md). Keep this file focused on install, hooks, host integration, and release evidence.
 
 ## Phase 2 Release Trust
 
@@ -380,13 +369,6 @@ The PASS condition is strict: real `codex exec` must write at least one `PreTool
 
 Do not use direct hook-decision tests, Claude hook success, or a target command failing inside `codex exec` as proof of Codex hook closure. The Codex hook is an optional guardrail; formal non-interactive workflows still rely on native `formal-gates workflow` / `formal-gates gate` admission and artifact recording.
 
-## Quick Structure Validation
+## Quick Structure Check
 
-After candidate package changes, run:
-
-```bash
-bin/formal-gates package validate --root <formal-gates>
-bin/formal-gates canary portable --root <formal-gates>
-```
-
-If frontmatter, required files, native binary, CI, manifest, examples, hook config, workflow, receipt, complexity, or install-shape checks fail, fix package structure before discussing gate quality.
+See [`local-validation.md`](local-validation.md) for package validation and portable-canary checks.
