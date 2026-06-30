@@ -413,7 +413,7 @@ func canaryComplexitySpecificFields() []string {
 	return []string{
 		"Script result: PASS",
 		"Diff shape judgment: focused",
-		"Budget/expansion status: within contract; no expansion requested",
+		"Budget/expansion status: development-time budget history reviewed; no expansion approval used",
 		"Impact surface health: bounded",
 		"Public/config surface: none",
 		"New concepts: none",

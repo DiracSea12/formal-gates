@@ -59,6 +59,20 @@ type WorkflowVerifyAdmissionOptions struct {
 	RunDir         string
 }
 
+type WorkflowRecordTransitionOptions struct {
+	Worktree         string
+	StatePath        string
+	RunDir           string
+	WorkflowID       string
+	FromSnapshot     string
+	ToSnapshot       string
+	RerunFromGate    string
+	FlowMode         string
+	WorkflowMode     string
+	DecisionArtifact string
+	Reason           string
+}
+
 type WorkflowFinalVerificationOptions struct {
 	Worktree        string
 	StatePath       string
@@ -190,6 +204,7 @@ func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
 	record := GateRecordOptions{
 		Worktree:       worktree,
 		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
+		RunDir:         runDir,
 		Gate:           options.Gate,
 		Verdict:        options.Verdict,
 		Mode:           options.Mode,
@@ -201,6 +216,37 @@ func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
 		Reason:         options.Reason,
 	}
 	return GateRecord(record)
+}
+
+func WorkflowRecordTransition(options WorkflowRecordTransitionOptions) Result {
+	worktree := cleanRoot(options.Worktree)
+	var result Result
+	runDir := ""
+	if strings.TrimSpace(options.RunDir) != "" {
+		var err error
+		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+		if err != nil {
+			result.add("run-dir", err.Error())
+			return result
+		}
+		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "decision-artifact", options.DecisionArtifact, false); err != nil {
+			result.add("decision-artifact", err.Error())
+			return result
+		}
+	}
+	return GateRecordTransition(GateRecordTransitionOptions{
+		Worktree:         worktree,
+		StatePath:        workflowStatePath(worktree, options.StatePath, runDir),
+		RunDir:           runDir,
+		WorkflowID:       options.WorkflowID,
+		FromSnapshot:     options.FromSnapshot,
+		ToSnapshot:       options.ToSnapshot,
+		RerunFromGate:    options.RerunFromGate,
+		FlowMode:         options.FlowMode,
+		WorkflowMode:     options.WorkflowMode,
+		DecisionArtifact: options.DecisionArtifact,
+		Reason:           options.Reason,
+	})
 }
 
 func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
@@ -218,6 +264,7 @@ func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
 	return GateVerifyAdmission(GateAdmissionOptions{
 		Worktree:       worktree,
 		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
+		RunDir:         runDir,
 		Gate:           options.Gate,
 		Mode:           options.Mode,
 		WorkflowID:     options.WorkflowID,
@@ -373,6 +420,7 @@ func recordFinalQA(worktree, runDir, status string, options WorkflowFinalVerific
 	record := GateRecord(GateRecordOptions{
 		Worktree:       worktree,
 		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
+		RunDir:         runDir,
 		Gate:           "qa-test-gate",
 		Verdict:        status,
 		Mode:           "formal",

@@ -93,6 +93,13 @@ When a gate routes to `rework`, the next dispatch or handoff artifact should inc
 
 ```text
 Rerun Scope Decision
+Workflow ID:
+From snapshot:
+To snapshot:
+Rerun from gate:
+Flow mode: post-development
+Workflow mode: four-gate | release | seal
+Transition reason:
 Previous blocking gate:
 Previous rerun_from:
 New change snapshot:
@@ -112,8 +119,11 @@ Rules:
 - Rerun the failed gate and all downstream gates.
 - Rerun earlier gates when the repair changes their judgment surface.
 - Test, case, or oracle changes rerun from QA; scope, public surface, new concept, or budget changes rerun from complexity; ownership, dependency, lifecycle, boundary, or failure-semantics changes rerun from architecture; purely local correctness, edge-case, naming, dead-code, assertion, or encoding repairs can rerun from code-quality.
-- Rerun scope is not a gate verdict and cannot convert an old artifact into a new PASS.
-- Current built-in gate-state logic requires prerequisite PASS records for the same `change_snapshot`. Until carry-forward support exists, machine seal may still require rerunning earlier prerequisites even when human rerun scope is narrower.
+- Rerun scope is not a gate verdict and cannot convert an old artifact into a new PASS. A recorded transition is admission proof only.
+- For post-development `four-gate`, `release`, or `seal` flows, a machine-readable transition can admit prerequisites strictly earlier than `Rerun from gate` when the source snapshot has real same-workflow PASS records with verifiable artifacts. `Rerun from gate` itself and downstream gates must record real PASS on the new snapshot.
+- `start-readiness-only` cannot use rerun transitions. Requirements clarification, `FinalExecution`, and extension gates cannot be used as `Rerun from gate`.
+- Transition decision artifacts must keep the machine fields above in sync with the recorded transition and must include `Full-scope review confirmed: YES` plus a meaningful `Reason skipped gates still apply:`.
+- Admission diagnostics distinguish `current-pass-missing`, `current-pass-not-real`, `transition-missing`, `transition-conflict`, `transition-invalid`, `transition-not-applicable`, `source-pass-missing`, `source-pass-not-real`, `current-pass-artifact-invalid`, `source-pass-artifact-invalid`, `transition-artifact-missing`, `transition-artifact-out-of-bounds`, and `transition-artifact-hash-mismatch`.
 
 ## Recording Commands
 
@@ -122,13 +132,14 @@ Minimum machine-check commands:
 ```bash
 bin/formal-gates workflow verify-admission --worktree <repo> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot>
 bin/formal-gates workflow record-stage --worktree <repo> --gate <gate-id> --verdict PASS --artifact <artifact> --actor <reviewer> --workflow-id <id> --change-snapshot <snapshot>
+bin/formal-gates workflow record-transition --worktree <repo> --workflow-id <id> --from-snapshot <old-snapshot> --to-snapshot <new-snapshot> --rerun-from-gate <gate-id> --workflow-mode four-gate|release|seal --decision-artifact <artifact> --reason <reason>
 bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <id> --change-snapshot <snapshot>
 bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer> --workflow-id <id> --change-snapshot <snapshot>
 bin/formal-gates workflow cleanup --worktree <repo> --dry-run
 bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --artifact <artifact> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> --stage <stage>
 ```
 
-The native workflow commands cover snapshot, record-stage, verify-admission, show, final verification aggregation, FinalExecution recording from a supplied artifact, and dry-run-first cleanup. The native receipt commands cover dispatch registration, start/stop lifecycle event capture into `.claude/gates/proofs/events`, receipt finalization, standalone receipt validation, and diagnostic preflight. Same-host hook canaries are separate host evidence and do not replace these explicit native records.
+The native workflow commands cover snapshot, record-stage, record-transition, verify-admission, show, final verification aggregation, FinalExecution recording from a supplied artifact, and dry-run-first cleanup. The native receipt commands cover dispatch registration, start/stop lifecycle event capture into `.claude/gates/proofs/events`, receipt finalization, standalone receipt validation, and diagnostic preflight. Same-host hook canaries are separate host evidence and do not replace these explicit native records.
 
 Formal `qa-test-gate` recording must add `--mode formal --stage Execution`; final QA uses `--record-final-qa --final-qa-artifact <artifact>` to record `--stage FinalExecution` through the native workflow command. Do not copy the generic command and forget the stage.
 
