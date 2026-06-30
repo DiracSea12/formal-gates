@@ -1,6 +1,6 @@
 # Complexity Gate
 
-Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract before an authorized formal handoff, and after QA Execution PASS reviews diff shape, budget, new concepts, minimum sufficient implementation, and overengineering.
+Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract before an authorized formal handoff, and after QA Execution PASS reviews diff shape, new concepts, minimum sufficient implementation, and overengineering.
 
 ## Applicability
 
@@ -35,9 +35,9 @@ Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `re
 
 ## Budget Rules
 
-Budgets are task-specific. `formal-gates complexity check` has no built-in numeric default budget: if no numeric budget is passed, it only reports diff statistics and non-budget review signals. The main agent must set the development-time budget from the actual requirement, planned slice, expected diff shape, reused/deleted code, allowed production files, and test/documentation needs before formal development starts. Explicit numeric budget thresholds are alarms, not design truth.
+Budgets are task-specific. `formal-gates complexity check` has no built-in numeric default budget: if no numeric budget is passed, it only reports diff statistics and non-budget review signals. The main agent must set the development-time budget from the actual requirement, planned slice, expected diff shape, reused/deleted code, allowed production files, and test/documentation needs before formal development starts. Explicit numeric budget thresholds are development-time alarms, not design truth or post-development gate criteria.
 
-Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids deletion/reuse, or is not the minimum sufficient implementation for the request.
+Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids deletion/reuse, or is not the minimum sufficient implementation for the request. Post-development `complexity-gate` artifacts must not use line/file threshold compliance as the basis for PASS.
 
 Line budgets must not be gamed by reducing readability. If code is compressed to fit the budget, such as unrelated statements packed onto one line, unclear short names, merged responsibilities, hidden branching, or removed useful comments/error handling, treat it as complexity budget evasion and fail or review even when numeric counts are within budget.
 
@@ -87,14 +87,14 @@ Only `APPROVE` or `APPROVE_SMALLER` changes the active budget, and only for the 
 Run only when there is a diff to review:
 
 ```bash
-bin/formal-gates complexity check --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> --worktree <repo> --vcs auto
+bin/formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine output and `--staged` only for staged review. Formal handoff and development-time checks must pass all three numeric budget flags together. Running without them is allowed only for informal diff statistics or non-budget complexity review evidence. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
+Use `--json` for machine output and `--staged` only for staged review. Post-development formal complexity review should use the checker as statistics evidence without numeric threshold flags. Formal handoff and development-time checks must pass all three numeric budget flags together. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
 
 In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 
-Exit codes: `0` PASS alarm state, `2` REVIEW alarm state, `1` FAIL alarm state.
+Exit codes: `0` PASS alarm state or stats-only success, `2` REVIEW alarm state, `1` FAIL alarm state.
 
 Script PASS does not mean design PASS. REVIEW/FAIL in formal flow blocks downstream gates.
 
@@ -145,6 +145,8 @@ Budget expansion approval: <path> sha256=<sha256>
 ```
 
 That approval artifact must contain the independent Anti-Complexity Review result. A bare CLI override such as a larger `--max-net` is not approval.
+
+`Budget/expansion status` in post-development review records development-time budget history and whether any independent expansion approval was used. It must not say or imply that the diff passed because it was under `max-net`, `max-new-prod-files`, `max-prod-insertions`, or another numeric line/file threshold.
 
 ## Output
 

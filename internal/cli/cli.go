@@ -642,6 +642,42 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		}
 		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_RECORDED gate=%s verdict=%s workflowId=%s changeSnapshot=%s\n", *gate, *verdict, *workflowID, *changeSnapshot)
 		return 0, nil
+	case "record-transition":
+		fs := flag.NewFlagSet("workflow record-transition", flag.ContinueOnError)
+		fs.SetOutput(streams.Stderr)
+		worktree := fs.String("worktree", ".", "repository root")
+		state := fs.String("state", "", "gate state JSON path; defaults to .claude/gates/gate-state.json under --worktree")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		workflowID := fs.String("workflow-id", "", "workflow id")
+		fromSnapshot := fs.String("from-snapshot", "", "source change snapshot")
+		toSnapshot := fs.String("to-snapshot", "", "target change snapshot")
+		rerunFromGate := fs.String("rerun-from-gate", "", "earliest post-development gate to rerun")
+		flowMode := fs.String("flow-mode", "post-development", "formal flow mode")
+		workflowMode := fs.String("workflow-mode", "", "workflow mode: four-gate, release, or seal")
+		decisionArtifact := fs.String("decision-artifact", "", "rerun scope decision artifact")
+		reason := fs.String("reason", "", "transition reason")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		result := validate.WorkflowRecordTransition(validate.WorkflowRecordTransitionOptions{
+			Worktree:         *worktree,
+			StatePath:        *state,
+			RunDir:           *runDir,
+			WorkflowID:       *workflowID,
+			FromSnapshot:     *fromSnapshot,
+			ToSnapshot:       *toSnapshot,
+			RerunFromGate:    *rerunFromGate,
+			FlowMode:         *flowMode,
+			WorkflowMode:     *workflowMode,
+			DecisionArtifact: *decisionArtifact,
+			Reason:           *reason,
+		})
+		if !result.OK() {
+			return printValidationResult(streams.Stdout, "workflow record-transition", result)
+		}
+		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_TRANSITION_RECORDED workflowId=%s fromSnapshot=%s toSnapshot=%s rerunFromGate=%s workflowMode=%s\n",
+			*workflowID, *fromSnapshot, *toSnapshot, *rerunFromGate, *workflowMode)
+		return 0, nil
 	case "verify-admission":
 		fs := flag.NewFlagSet("workflow verify-admission", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
@@ -1024,6 +1060,7 @@ Usage:
   %s gate show         --worktree <repo> [--format json|text]
   %s workflow snapshot --worktree <repo> --vcs file-hash|git|auto [--base-ref <ref>] [--head-ref <ref>] [--include-working-tree]
   %s workflow record-stage --worktree <repo> --gate <gate-id> --verdict <verdict> [--artifact <artifact>] --workflow-id <id> --change-snapshot <snapshot>
+  %s workflow record-transition --worktree <repo> --workflow-id <id> --from-snapshot <old> --to-snapshot <new> --rerun-from-gate <gate-id> --workflow-mode four-gate|release|seal --decision-artifact <artifact> --reason <reason>
   %s workflow verify-admission --worktree <repo> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot>
   %s workflow final-verification --worktree <repo> (--attempts-file <json> | --attempts-json <json>) --output <artifact> --workflow-id <id> --change-snapshot <snapshot> [--record-final-qa --final-qa-artifact <artifact>]
   %s workflow compact --worktree <repo> --run-dir .claude/gates/runs/<id> --workflow-id <id> [--change-snapshot <snapshot>] [--dry-run | --execute]
@@ -1040,5 +1077,5 @@ Usage:
   %s complexity check  --task-type <type> --worktree <repo> [--max-net <n> --max-new-prod-files <n> --max-prod-insertions <n>] [--staged] [--json]
 
 The native CLI performs deterministic package, artifact, dispatch prompt, install, hook decision, basic gate-state checks, native workflow checks, receipt checks, complexity diff checks, the portable native canary, and the Codex hook live canary. Complexity budgets have no built-in numeric defaults; pass all three budget flags for budget enforcement, or omit all three for statistics-only output.
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }

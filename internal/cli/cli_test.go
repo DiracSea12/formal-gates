@@ -89,6 +89,7 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 		{"behavior", "evaluate", "--help"},
 		{"workflow", "snapshot", "--help"},
 		{"workflow", "record-stage", "--help"},
+		{"workflow", "record-transition", "--help"},
 		{"workflow", "verify-admission", "--help"},
 		{"workflow", "final-verification", "--help"},
 		{"workflow", "cleanup", "--help"},
@@ -319,6 +320,59 @@ func TestRunWorkflowSnapshotRecordStageAndAdmission(t *testing.T) {
 	}, IO{Stdout: &stdout})
 	if code != 0 {
 		t.Fatalf("expected workflow admission to pass, code=%d stdout=%q", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "GATE_WORKFLOW_ADMISSION_PASS gate=complexity-gate") {
+		t.Fatalf("unexpected admission stdout: %q", stdout.String())
+	}
+}
+
+func TestRunWorkflowRecordTransitionAndAdmission(t *testing.T) {
+	dir := t.TempDir()
+	writeCLIArtifact(t, dir, "qa-test-gate", "Execution", "wf", "old")
+	recordQA := validate.GateRecord(validate.GateRecordOptions{
+		Worktree:       dir,
+		Gate:           "qa-test-gate",
+		Verdict:        "PASS",
+		Mode:           "formal",
+		Stage:          "Execution",
+		Artifact:       "qa-test-gate.md",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "old",
+	})
+	if !recordQA.OK() {
+		t.Fatalf("expected QA source record to pass, got %#v", recordQA.Failures)
+	}
+	mustWriteCLI(t, filepath.Join(dir, "transition.md"), cliTransitionDecisionText("wf", "old", "new", "complexity-gate", "release", "local repair"))
+	var stdout bytes.Buffer
+
+	code := Run("formal-gates", []string{
+		"workflow", "record-transition",
+		"--worktree", dir,
+		"--workflow-id", "wf",
+		"--from-snapshot", "old",
+		"--to-snapshot", "new",
+		"--rerun-from-gate", "complexity-gate",
+		"--workflow-mode", "release",
+		"--decision-artifact", "transition.md",
+		"--reason", "local repair",
+	}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("expected record-transition to pass, code=%d stdout=%q", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "GATE_WORKFLOW_TRANSITION_RECORDED workflowId=wf") {
+		t.Fatalf("unexpected transition stdout: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	code = Run("formal-gates", []string{
+		"workflow", "verify-admission",
+		"--worktree", dir,
+		"--gate", "complexity-gate",
+		"--workflow-id", "wf",
+		"--change-snapshot", "new",
+	}, IO{Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("expected transition-backed admission to pass, code=%d stdout=%q", code, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "GATE_WORKFLOW_ADMISSION_PASS gate=complexity-gate") {
 		t.Fatalf("unexpected admission stdout: %q", stdout.String())
@@ -635,7 +689,7 @@ func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 		lines = append(lines,
 			"Script result: PASS",
 			"Diff shape judgment: focused",
-			"Budget/expansion status: within contract; no expansion requested",
+			"Budget/expansion status: development-time budget history reviewed; no expansion approval used",
 			"Impact surface health: bounded",
 			"Public/config surface: none",
 			"New concepts: none",
@@ -653,6 +707,23 @@ func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 		"  rerun_from: none",
 	)
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func cliTransitionDecisionText(workflowID, fromSnapshot, toSnapshot, rerunFromGate, workflowMode, reason string) string {
+	return strings.Join([]string{
+		"Rerun Scope Decision",
+		"Workflow ID: " + workflowID,
+		"From snapshot: " + fromSnapshot,
+		"To snapshot: " + toSnapshot,
+		"New change snapshot: " + toSnapshot,
+		"Rerun from gate: " + rerunFromGate,
+		"Earliest gate to rerun: " + rerunFromGate,
+		"Flow mode: post-development",
+		"Workflow mode: " + workflowMode,
+		"Transition reason: " + reason,
+		"Reason skipped gates still apply: current repair does not alter skipped gate judgment surfaces",
+		"Full-scope review confirmed: YES",
+	}, "\n") + "\n"
 }
 
 func recordCLIFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string) {

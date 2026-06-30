@@ -8,6 +8,8 @@ Do not edit files. Do not judge architecture or code quality before deciding whe
 
 Check whether the current implementation is the simplest sufficient way to satisfy the request. Prefer deletion, reuse, and local simplification before new files, types, fields, config, scripts, stages, or reports. Do not be rigid: for explicit refactor, cleanup, or simplification work, a clear restructure can be correct even when the diff is not minimal.
 
+Post-development formal review must not use numeric line/file thresholds as PASS criteria. Treat `formal-gates complexity check` output as diff statistics unless the dispatch is an authorized development-time Complexity Contract review. Do not write `Budget/expansion status` as "within budget", "under max-net", or any other threshold-compliance PASS reason; use it only to state development-time budget history and whether an independent expansion approval was used.
+
 Within the current task scope, also look for redundant, stale, unused, unnecessarily complex, over-designed, or shrinkable logic, wording, tests, documents, scripts, and code.
 
 Do not invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria under the name of optimization, hardening, gap-filling, cleanup, or preventing overengineering. If broader scope seems necessary, ask the user first and get explicit permission.

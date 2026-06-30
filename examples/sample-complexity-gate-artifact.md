@@ -19,7 +19,7 @@ Dispatch prompt artifact: <project>/.claude/gates/artifacts/<workflow-id>-dispat
 No-anchor prompt: YES
 Script result: <formal-gates complexity check result or explicit not-applicable reason>
 Diff shape judgment: <focused diff shape judgment>
-Budget/expansion status: <within contract, no expansion requested OR approved expansion with artifact>
+Budget/expansion status: <development-time budget history and whether independent expansion approval was used>
 Budget expansion approval: <only when expansion was approved: artifact path sha256=<approval-sha256>>
 Impact surface health: <public/runtime/config impact assessment>
 Public/config surface: <none or exact public/config changes>

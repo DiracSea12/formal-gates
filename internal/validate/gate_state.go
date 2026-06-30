@@ -13,6 +13,7 @@ import (
 type GateRecordOptions struct {
 	Worktree       string
 	StatePath      string
+	RunDir         string
 	Gate           string
 	Verdict        string
 	Mode           string
@@ -27,6 +28,7 @@ type GateRecordOptions struct {
 type GateAdmissionOptions struct {
 	Worktree       string
 	StatePath      string
+	RunDir         string
 	Gate           string
 	Mode           string
 	WorkflowID     string
@@ -42,6 +44,7 @@ type GateState struct {
 	SchemaVersion int                       `json:"schemaVersion"`
 	Gates         map[string]GateStateEntry `json:"gates"`
 	History       []GateStateEntry          `json:"history"`
+	Transitions   []GateTransition          `json:"transitions,omitempty"`
 }
 
 type GateStateEntry struct {
@@ -99,7 +102,7 @@ func GateRecord(options GateRecordOptions) Result {
 			return result
 		}
 		for _, requirement := range recordAdmissionRequirements(options) {
-			if err := verifyRequirement(worktree, statePath, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot); err != nil {
+			if err := verifyRequirement(worktree, statePath, options.RunDir, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot, options.Mode); err != nil {
 				result.add("gate-state", err.Error())
 				return result
 			}
@@ -155,7 +158,7 @@ func GateVerifyAdmission(options GateAdmissionOptions) Result {
 		return result
 	}
 	for _, requirement := range requirements {
-		if err := verifyRequirement(worktree, statePath, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot); err != nil {
+		if err := verifyRequirement(worktree, statePath, options.RunDir, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot, options.Mode); err != nil {
 			result.add("gate-state", err.Error())
 			return result
 		}
@@ -186,7 +189,7 @@ func GateStateText(state GateState) string {
 	}
 	sort.Strings(keys)
 	var b strings.Builder
-	fmt.Fprintf(&b, "schemaVersion=%d history=%d\n", state.SchemaVersion, len(state.History))
+	fmt.Fprintf(&b, "schemaVersion=%d history=%d transitions=%d\n", state.SchemaVersion, len(state.History), len(state.Transitions))
 	for _, gate := range keys {
 		entry := state.Gates[gate]
 		fmt.Fprintf(&b, "gate=%s verdict=%s workflowId=%s changeSnapshot=%s mode=%s stage=%s artifact=%s\n",
@@ -301,53 +304,16 @@ func recordAdmissionRequirements(options GateRecordOptions) []admissionRequireme
 	return admissionRequirementsFor(options.Gate, options.Mode)
 }
 
-func verifyRequirement(worktree, statePath string, state GateState, requirement admissionRequirement, requiredFor, workflowID, changeSnapshot string) error {
-	entries := entriesForGateNewestFirst(state, requirement.gate)
-	if len(entries) == 0 {
-		return fmt.Errorf("missing prerequisite gate=%s requiredFor=%s state=%s", requirement.gate, requiredFor, slash(statePath))
-	}
-	var latestRoute *GateStateEntry
-	for i := range entries {
-		entry := entries[i]
-		if entry.WorkflowID == workflowID && entry.ChangeSnapshot == changeSnapshot {
-			if latestRoute == nil {
-				copy := entry
-				latestRoute = &copy
-			}
-			if entry.Verdict != "PASS" {
-				return fmt.Errorf("gate=%s verdict=%s required=PASS requiredFor=%s state=%s", requirement.gate, entry.Verdict, requiredFor, slash(statePath))
-			}
-			if requirement.mode != "" && entry.Mode != requirement.mode {
-				continue
-			}
-			if requirement.stage != "" && entry.Stage != requirement.stage {
-				continue
-			}
-			if requirement.artifact {
-				if err := verifyEntryArtifact(worktree, statePath, entry, requiredFor); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-	if latestRoute == nil {
-		return fmt.Errorf("missing route gate=%s requiredFor=%s workflowId=%s changeSnapshot=%s state=%s", requirement.gate, requiredFor, workflowID, changeSnapshot, slash(statePath))
-	}
-	if requirement.mode != "" && latestRoute.Mode != requirement.mode {
-		return fmt.Errorf("gate=%s mode=%s requiredMode=%s requiredFor=%s state=%s", requirement.gate, latestRoute.Mode, requirement.mode, requiredFor, slash(statePath))
-	}
-	if requirement.stage != "" && latestRoute.Stage != requirement.stage {
-		return fmt.Errorf("gate=%s stage=%s requiredStage=%s requiredFor=%s state=%s", requirement.gate, latestRoute.Stage, requirement.stage, requiredFor, slash(statePath))
-	}
-	return fmt.Errorf("gate=%s prerequisite did not satisfy admission for %s", requirement.gate, requiredFor)
-}
-
-func verifyEntryArtifact(worktree, statePath string, entry GateStateEntry, requiredFor string) error {
+func verifyEntryArtifact(worktree, statePath, runDir string, entry GateStateEntry, requiredFor string) error {
 	if strings.TrimSpace(entry.Artifact) == "" {
 		return fmt.Errorf("gate=%s artifactMissing requiredFor=%s state=%s", entry.Gate, requiredFor, slash(statePath))
 	}
 	artifactPath := resolvePath(worktree, entry.Artifact)
+	if strings.TrimSpace(runDir) != "" {
+		if err := requireAbsPathUnderRunDir(runDir, "artifact", artifactPath); err != nil {
+			return fmt.Errorf("gate=%s artifactOutOfBounds=%s requiredFor=%s state=%s", entry.Gate, entry.Artifact, requiredFor, slash(statePath))
+		}
+	}
 	if !isFile(artifactPath) {
 		return fmt.Errorf("gate=%s artifactMissing=%s requiredFor=%s state=%s", entry.Gate, entry.Artifact, requiredFor, slash(statePath))
 	}

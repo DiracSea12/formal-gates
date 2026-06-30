@@ -252,6 +252,9 @@ func validateComplexityBudgetEvidence(options ArtifactOptions, text string, resu
 		return
 	}
 	normalized := strings.ToLower(status)
+	if thresholdComplianceClaim(normalized) {
+		result.add(options.File, "Budget/expansion status must not use line/file threshold compliance as post-development PASS evidence")
+	}
 	expansionApproved := strings.Contains(normalized, "approve") ||
 		strings.Contains(normalized, "approved") ||
 		strings.Contains(normalized, "approve_smaller")
@@ -272,6 +275,12 @@ func validateComplexityBudgetEvidence(options ArtifactOptions, text string, resu
 	if actual := sha256File(path); actual != expectedHash {
 		result.add(options.File, "Budget expansion approval sha256 mismatch: "+pathText)
 	}
+}
+
+func thresholdComplianceClaim(value string) bool {
+	thresholdTerm := regexp.MustCompile(`\b(max[-_ ]?net|max[-_ ]?new[-_ ]?prod[-_ ]?files|max[-_ ]?prod[-_ ]?insertions|line|lines|loc|file|files|insertion|insertions|threshold|budget)\b`)
+	passTerm := regexp.MustCompile(`\b(within|under|below|pass|passed|ok|green|compliant|inside|<=)\b`)
+	return thresholdTerm.MatchString(value) && passTerm.MatchString(value)
 }
 
 func validateLegacyReviewerProof(text, file string, result *Result) {
