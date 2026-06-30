@@ -131,6 +131,57 @@ func TestPackageAcceptsPermissionIndentAndCommentVariations(t *testing.T) {
 	}
 }
 
+func TestPackageAllowsMacOSRunnerLabelChanges(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateWorkflow(t, root, "macos-latest", "macos-custom-arm64")
+	mutateWorkflow(t, root, "macos-26-intel", "macos-custom-intel")
+
+	result := Package(root)
+	if !result.OK() {
+		t.Fatalf("expected package validation to allow renamed macOS runners, got %#v", result.Failures)
+	}
+}
+
+func TestPackageRejectsBootstrapDarwinSuffix(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateFile(t, root, "install.command", `Darwin) os="macos" ;;`, `Darwin) os="darwin" ;;`)
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject darwin bootstrap suffix")
+	}
+	if !resultHasPath(result, "install.command") {
+		t.Fatalf("expected install.command failure, got %#v", result.Failures)
+	}
+}
+
+func TestPackageRejectsBootstrapUnpublishedArmSuffixes(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateFile(t, root, "install.command", "macos-arm64|macos-amd64|linux-amd64", "macos-arm64|macos-amd64|linux-amd64|linux-arm64")
+	mutateFile(t, root, "install.ps1", `$suffix -ne "windows-amd64"`, `$suffix -ne "windows-arm64"`)
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject unpublished bootstrap suffixes")
+	}
+	if !resultHasPath(result, "install.command") || !resultHasPath(result, "install.ps1") {
+		t.Fatalf("expected bootstrap script failures, got %#v", result.Failures)
+	}
+}
+
+func TestPackageRejectsBootstrapCanaryChecksumOmitted(t *testing.T) {
+	root := copyPackageFixture(t)
+	mutateFile(t, root, "install.ps1", `foreach ($file in @($asset, $canary))`, `foreach ($file in @($asset))`)
+
+	result := Package(root)
+	if result.OK() {
+		t.Fatal("expected package validation to reject missing canary checksum validation")
+	}
+	if !resultHasPath(result, "install.ps1") {
+		t.Fatalf("expected install.ps1 failure, got %#v", result.Failures)
+	}
+}
+
 func copyPackageFixture(t *testing.T) string {
 	t.Helper()
 	source := repoRootValidateTest(t)
@@ -143,22 +194,31 @@ func copyPackageFixture(t *testing.T) string {
 	for _, rel := range requiredFiles {
 		copyValidateTestFile(t, source, target, rel)
 	}
+	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
+		copyValidateTestFile(t, source, target, rel)
+	}
+	mustWriteValidateTest(t, filepath.Join(target, "bin", nativeBinaryName()), "#!/usr/bin/env sh\nexit 0\n")
 	copyValidateTestFile(t, source, target, "test-prompts.json")
 	return target
 }
 
 func mutateWorkflow(t *testing.T, root, old, new string) {
 	t.Helper()
-	workflow := filepath.Join(root, ".github", "workflows", "portable-validation.yml")
-	text, err := os.ReadFile(workflow)
+	mutateFile(t, root, ".github/workflows/portable-validation.yml", old, new)
+}
+
+func mutateFile(t *testing.T, root, rel, old, new string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	text, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	updated := strings.Replace(string(text), old, new, 1)
 	if updated == string(text) {
-		t.Fatalf("workflow fixture did not contain %q", old)
+		t.Fatalf("%s fixture did not contain %q", rel, old)
 	}
-	if err := os.WriteFile(workflow, []byte(updated), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

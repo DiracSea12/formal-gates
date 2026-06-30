@@ -113,6 +113,7 @@ func Package(root string) Result {
 	validateSkillFrontmatter(root, &result)
 	validateNativeBinary(root, &result)
 	validateCI(root, &result)
+	validateBootstrapScripts(root, &result)
 	validateManifest(root, &result)
 	validateExamples(root, &result)
 	validateNoCoreScriptRuntime(root, &result)
@@ -162,8 +163,8 @@ func validateCI(root string, result *Result) {
 func validateCIText(text string, result *Result) {
 	for _, required := range []string{
 		"windows-latest",
-		"macos-15",
-		"macos-15-intel",
+		"macos-arm64",
+		"macos-amd64",
 		"ubuntu-latest",
 		"go test ./...",
 		"go build -o",
@@ -187,6 +188,20 @@ func validateCIText(text string, result *Result) {
 	} {
 		if !strings.Contains(text, required) {
 			result.add(".github/workflows/portable-validation.yml", "missing required CI validation text: "+required)
+		}
+	}
+	for _, required := range []string{
+		"suffix: macos-arm64",
+		"suffix: macos-amd64",
+		"binary: formal-gates-macos-arm64",
+		"binary: formal-gates-macos-amd64",
+		"portable-canary-macos-arm64.json",
+		"portable-canary-macos-amd64.json",
+		"SHA256SUMS-macos-arm64.txt",
+		"SHA256SUMS-macos-amd64.txt",
+	} {
+		if !strings.Contains(text, required) {
+			result.add(".github/workflows/portable-validation.yml", "missing required macOS matrix text: "+required)
 		}
 	}
 	if strings.Contains(text, "go run ./cmd/formal-gates package validate --root .") {
@@ -222,6 +237,55 @@ func validateCIStructure(workflow ciWorkflow, result *Result) {
 	}
 	if !isReleaseEventCondition(releaseJob.Condition) {
 		result.add(".github/workflows/portable-validation.yml", "release evidence job must be limited to the release event")
+	}
+}
+
+func validateBootstrapScripts(root string, result *Result) {
+	bashPath := filepath.Join(root, "install.command")
+	bash, err := readText(bashPath)
+	if err != nil {
+		result.add("install.command", fmt.Sprintf("cannot read bootstrap script: %v", err))
+	} else {
+		for _, required := range []string{
+			`Darwin) os="macos" ;;`,
+			"macos-arm64|macos-amd64|linux-amd64",
+			`binary="formal-gates-${suffix}"`,
+			`canary="portable-canary-${suffix}.json"`,
+			`checksums="SHA256SUMS-${suffix}.txt"`,
+		} {
+			if !strings.Contains(bash, required) {
+				result.add("install.command", "bootstrap script is not bound to release asset contract: "+required)
+			}
+		}
+		for _, forbidden := range []string{`os="darwin"`, "linux-arm64", "windows-arm64"} {
+			if strings.Contains(bash, forbidden) {
+				result.add("install.command", "bootstrap script references unpublished release suffix: "+forbidden)
+			}
+		}
+	}
+
+	powershellPath := filepath.Join(root, "install.ps1")
+	powershell, err := readText(powershellPath)
+	if err != nil {
+		result.add("install.ps1", fmt.Sprintf("cannot read bootstrap script: %v", err))
+	} else {
+		for _, required := range []string{
+			`$suffix -ne "windows-amd64"`,
+			`$asset = "formal-gates-$suffix.exe"`,
+			`$canary = "portable-canary-$suffix.json"`,
+			`$checksums = "SHA256SUMS-$suffix.txt"`,
+			`foreach ($file in @($asset, $canary))`,
+			`throw "checksum validation failed: $file"`,
+		} {
+			if !strings.Contains(powershell, required) {
+				result.add("install.ps1", "bootstrap script is not bound to release asset contract: "+required)
+			}
+		}
+		for _, forbidden := range []string{"windows-arm64", "linux-arm64", "darwin"} {
+			if strings.Contains(strings.ToLower(powershell), forbidden) {
+				result.add("install.ps1", "bootstrap script references unpublished release suffix: "+forbidden)
+			}
+		}
 	}
 }
 

@@ -15,7 +15,7 @@ Thin router only. Classify the flow first, then load one referenced detail file 
 | Editing OpenSpec, PRD, SDD, phase docs, development plans, handoff docs, or other requirement-like documents | First do lightweight semantic routing. Non-semantic edits ask no questions and create no artifacts. Semantic changes need clarification before formal requirement text is written. |
 | User explicitly asks for requirements alignment, pre-development review, or start-readiness review | Use the document/start-readiness route below; build or request an alignment table or equivalent artifact before drafting, and do not approve readiness before user-confirmed alignment evidence exists. |
 | User explicitly asks for formal development handoff | Require OpenSpec or slice coverage, Complexity Contract or Ledger, and development handoff evidence; main agent does not implement directly inside that formal workflow. |
-| User explicitly asks for formal review, four gates, final validation, release, or seal | Follow the fixed post-development sequence; never accept chat-only PASS. |
+| User explicitly asks for formal review, the four gates, final validation, release, or seal | Follow the fixed post-development sequence; never accept chat-only PASS. The four gates are `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, and `code-quality-gate`. |
 | Install, hooks, canary, A/B, candidate package testing, or host integration | Read `references/install-and-hooks.md` only for that task. |
 
 ## Formal Flow Router
@@ -69,7 +69,7 @@ Post-development gate IDs cannot be renamed:
 - `architecture-health-gate`
 - `code-quality-gate`
 
-The pre-document gate is `requirements-clarification-gate`. It is not a fifth post-development gate.
+The pre-document gate is `requirements-clarification-gate`. It is not a fifth post-development gate and does not belong to the four gates.
 
 ## Authorized Formal Flow Order
 

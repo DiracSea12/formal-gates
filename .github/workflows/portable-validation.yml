@@ -27,10 +27,10 @@ jobs:
           - os: windows-latest
             suffix: windows-amd64
             binary: formal-gates-windows-amd64.exe
-          - os: macos-15
+          - os: macos-latest
             suffix: macos-arm64
             binary: formal-gates-macos-arm64
-          - os: macos-15-intel
+          - os: macos-26-intel
             suffix: macos-amd64
             binary: formal-gates-macos-amd64
           - os: ubuntu-latest
@@ -140,10 +140,10 @@ jobs:
           - os: windows-latest
             suffix: windows-amd64
             binary: formal-gates-windows-amd64.exe
-          - os: macos-15
+          - os: macos-latest
             suffix: macos-arm64
             binary: formal-gates-macos-arm64
-          - os: macos-15-intel
+          - os: macos-26-intel
             suffix: macos-amd64
             binary: formal-gates-macos-amd64
           - os: ubuntu-latest
