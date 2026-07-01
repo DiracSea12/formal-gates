@@ -1,7 +1,8 @@
 param(
   [string]$Version = $env:FORMAL_GATES_VERSION,
   [ValidateSet("claude","codex","cursor","both")]
-  [string]$Host = "claude",
+  [Alias("Host")]
+  [string]$TargetHost = "claude",
   [ValidateSet("global","project")]
   [string]$Scope = "global",
   [string]$Project = "",
@@ -69,7 +70,7 @@ try {
   Write-Host "Binary symlink: $formalBinary"
   if ($ConfigureHooks) {
     if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-    $args = @("install", "--source", $installRoot, "--host", $Host, "--scope", $Scope)
+    $args = @("install", "--source", $installRoot, "--host", $TargetHost, "--scope", $Scope)
     if ($Project) { $args += @("--project", $Project) }
     if ($Force) { $args += "--force" }
     $args += "--configure-hooks"
