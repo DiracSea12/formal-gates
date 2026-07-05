@@ -32,6 +32,8 @@ If it fails, do not implement.
 
 The supplied complexity budget is active during implementation. It triggers automatically inside formal development handoff; no separate user request is needed.
 
+This budget is not the post-development `complexity-gate` threshold. It is a worker stop condition during implementation only.
+
 The budget must include numeric thresholds for `max-net`, `max-new-prod-files`, and `max-prod-insertions`, and those numbers must match the supplied `formal-gates complexity check` command. Scope boundaries such as allowed files, forbidden files, or "no runtime changes" are required constraints, but they are not a numeric budget. If only qualitative scope is supplied, stop before implementation.
 
 Run or update the supplied `formal-gates complexity check` command before continuing after meaningful diff growth and before returning implementation. Meaningful growth includes new production files, public/config surface, new subsystem-like names, new runner/evidence/report layers, large test harness changes, or any stop trigger in the handoff.

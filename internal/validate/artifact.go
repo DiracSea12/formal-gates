@@ -114,7 +114,6 @@ func requiredArtifactFields(gate, stage string) []string {
 		fields = append(fields,
 			"Script result",
 			"Diff shape judgment",
-			"Budget/expansion status",
 			"Impact surface health",
 			"Public/config surface",
 			"New concepts",
@@ -180,7 +179,7 @@ func validateRoute(options ArtifactOptions, text string, result *Result) {
 		}
 	}
 	if options.Gate == "complexity-gate" {
-		validateComplexityBudgetEvidence(options, text, result)
+		rejectComplexityBudgetFields(options, text, result)
 	}
 	if options.Gate == "qa-test-gate" && options.Stage == "FinalExecution" {
 		validateFinalExecutionArtifact(options, text, result)
@@ -245,42 +244,38 @@ func validateFinalVerificationArtifactRef(options ArtifactOptions, text string, 
 	}
 }
 
-func validateComplexityBudgetEvidence(options ArtifactOptions, text string, result *Result) {
-	status := fieldValue(text, "Budget/expansion status")
-	if !meaningful(status) {
-		result.add(options.File, "field has no meaningful value: Budget/expansion status")
-		return
+func rejectComplexityBudgetFields(options ArtifactOptions, text string, result *Result) {
+	if containsComplexityBudgetFlag(fieldSection(text, "Script result", complexityFieldNames)) {
+		result.add(options.File, "post-development complexity Script result must not include development-time budget flags")
 	}
-	normalized := strings.ToLower(status)
-	if thresholdComplianceClaim(normalized) {
-		result.add(options.File, "Budget/expansion status must not use line/file threshold compliance as post-development PASS evidence")
-	}
-	expansionApproved := strings.Contains(normalized, "approve") ||
-		strings.Contains(normalized, "approved") ||
-		strings.Contains(normalized, "approve_smaller")
-	if !expansionApproved {
-		return
-	}
-	value := fieldValue(text, "Budget expansion approval")
-	pathText, expectedHash, ok := parseHashedReference(value)
-	if !ok {
-		result.add(options.File, "Budget expansion approval must be <path> sha256=<sha256> when expansion is approved")
-		return
-	}
-	path := resolvePath(options.Root, pathText)
-	if !isFile(path) {
-		result.add(options.File, "Budget expansion approval path does not exist: "+pathText)
-		return
-	}
-	if actual := sha256File(path); actual != expectedHash {
-		result.add(options.File, "Budget expansion approval sha256 mismatch: "+pathText)
+	for _, field := range []string{
+		"Development-time budget history",
+		"Budget/expansion status",
+		"Budget status",
+		"Budget expansion approval",
+	} {
+		if hasFieldLabel(text, field) {
+			result.add(options.File, "post-development complexity artifact must not include development-time budget field: "+field)
+		}
 	}
 }
 
-func thresholdComplianceClaim(value string) bool {
-	thresholdTerm := regexp.MustCompile(`\b(max[-_ ]?net|max[-_ ]?new[-_ ]?prod[-_ ]?files|max[-_ ]?prod[-_ ]?insertions|line|lines|loc|file|files|insertion|insertions|threshold|budget)\b`)
-	passTerm := regexp.MustCompile(`\b(within|under|below|pass|passed|ok|green|compliant|inside|<=)\b`)
-	return thresholdTerm.MatchString(value) && passTerm.MatchString(value)
+func containsComplexityBudgetFlag(value string) bool {
+	budgetTerm := `(max[-_ ]?net|max[-_ ]?new[-_ ]?prod[-_ ]?files|max[-_ ]?prod[-_ ]?insertions)`
+	budgetMention := regexp.MustCompile(`(?i)(^|[^[:alnum:]])` + budgetTerm + `([^[:alnum:]]|$)`)
+	explicitBudgetOutput := regexp.MustCompile(`(?i)\bbudget_source\b[ \t":=]+explicit\b`)
+	return budgetMention.MatchString(value) || explicitBudgetOutput.MatchString(value)
+}
+
+var complexityFieldNames = []string{
+	"Diff shape judgment",
+	"Impact surface health",
+	"Public/config surface",
+	"New concepts",
+	"Minimum sufficient implementation",
+	"Shrink opportunities",
+	"Decision evidence",
+	"gate_route",
 }
 
 func validateLegacyReviewerProof(text, file string, result *Result) {
@@ -302,6 +297,41 @@ func fieldValue(text, field string) string {
 		return ""
 	}
 	return strings.TrimSpace(match[1])
+}
+
+func hasFieldLabel(text, field string) bool {
+	return regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:`).MatchString(text)
+}
+
+func fieldSection(text, field string, stopFields []string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	start := regexp.MustCompile(`^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*(.*)$`)
+	stop := regexp.MustCompile(`^[ \t]*(?:` + strings.Join(regexpQuoteAll(stopFields), "|") + `)[ \t]*:`)
+	for i, line := range lines {
+		match := start.FindStringSubmatch(line)
+		if len(match) < 2 {
+			continue
+		}
+		out := []string{match[1]}
+		for _, next := range lines[i+1:] {
+			if stop.MatchString(next) {
+				break
+			}
+			out = append(out, next)
+		}
+		return strings.TrimSpace(strings.Join(out, "\n"))
+	}
+	return ""
+}
+
+func regexpQuoteAll(values []string) []string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, regexp.QuoteMeta(value))
+	}
+	return quoted
 }
 
 func routeValue(text, field string) string {

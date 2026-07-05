@@ -122,30 +122,112 @@ func TestArtifactAllowsLegacyReviewerAgentIDWhenNotUsedAsProof(t *testing.T) {
 	}
 }
 
-func TestComplexityArtifactRequiresBudgetStatus(t *testing.T) {
-	dir := t.TempDir()
-	bundle := filepath.Join(dir, "bundle.md")
-	prompt := filepath.Join(dir, "prompt.md")
-	mustWrite(t, bundle, "bundle")
-	mustWrite(t, prompt, "formal_gate_dispatch: true\n")
-	artifact := filepath.Join(dir, "complexity.md")
-	text := complexityArtifactText(
-		"wf",
-		"snap",
-		"bundle.md sha256="+sha256FileForTest(t, bundle),
-		"prompt.md sha256="+sha256FileForTest(t, prompt),
-		"",
-	)
-	text = strings.Replace(text, "Budget/expansion status: development-time budget history reviewed; no expansion approval used\n", "", 1)
-	mustWrite(t, artifact, text)
+func TestComplexityArtifactRejectsDevelopmentTimeBudgetFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		line    string
+		message string
+	}{
+		{
+			name:    "development time budget history",
+			line:    "Development-time budget history: not applicable; no development-time budget supplied\n",
+			message: "must not include development-time budget field: Development-time budget history",
+		},
+		{
+			name:    "legacy budget expansion status",
+			line:    "Budget/expansion status : PASS - within explicit budget max-net 380\n",
+			message: "must not include development-time budget field: Budget/expansion status",
+		},
+		{
+			name:    "budget expansion approval",
+			line:    "Budget expansion approval: approval.md sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+			message: "must not include development-time budget field: Budget expansion approval",
+		},
+	}
 
-	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
-	if result.OK() {
-		t.Fatal("expected missing budget status to fail")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bundle := filepath.Join(dir, "bundle.md")
+			prompt := filepath.Join(dir, "prompt.md")
+			mustWrite(t, bundle, "bundle")
+			mustWrite(t, prompt, "formal_gate_dispatch: true\n")
+			artifact := filepath.Join(dir, "complexity.md")
+			text := complexityArtifactText(
+				"wf",
+				"snap",
+				"bundle.md sha256="+sha256FileForTest(t, bundle),
+				"prompt.md sha256="+sha256FileForTest(t, prompt),
+				"",
+			)
+			text += tc.line
+			mustWrite(t, artifact, text)
+
+			result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+			if result.OK() || !hasFailureContaining(result, tc.message) {
+				t.Fatalf("expected development-time budget field to fail, got %#v", result.Failures)
+			}
+		})
 	}
 }
 
-func TestComplexityArtifactRejectsThresholdComplianceAsPassEvidence(t *testing.T) {
+func TestComplexityArtifactRejectsBudgetedScriptResults(t *testing.T) {
+	cases := []struct {
+		name         string
+		scriptResult string
+	}{
+		{
+			name:         "budgeted command",
+			scriptResult: "Script result: formal-gates complexity check --task-type refactor --worktree repo --max-net 380 --json\n",
+		},
+		{
+			name:         "multiline budgeted command",
+			scriptResult: "Script result:\n  formal-gates complexity check --task-type refactor --worktree repo --max-new-prod-files 1 --json\n",
+		},
+		{
+			name:         "fenced budgeted command",
+			scriptResult: "Script result:\n```text\nformal-gates complexity check --task-type refactor --worktree repo --max-net 380 --json\n```\n",
+		},
+		{
+			name:         "budget compliance claim",
+			scriptResult: "Script result: max-net 380 passed\n",
+		},
+		{
+			name: "explicit budget script output",
+			scriptResult: "Script result:\n" +
+				"  Complexity Gate: PASS\n" +
+				"  insertions=1 deletions=0 net=1 prod_insertions=1 changed_files=1 untracked=0\n" +
+				"  budget_source=explicit\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bundle := filepath.Join(dir, "bundle.md")
+			prompt := filepath.Join(dir, "prompt.md")
+			mustWrite(t, bundle, "bundle")
+			mustWrite(t, prompt, "formal_gate_dispatch: true\n")
+			artifact := filepath.Join(dir, "complexity.md")
+			text := complexityArtifactText(
+				"wf",
+				"snap",
+				"bundle.md sha256="+sha256FileForTest(t, bundle),
+				"prompt.md sha256="+sha256FileForTest(t, prompt),
+				"",
+			)
+			text = strings.Replace(text, "Script result: PASS\n", tc.scriptResult, 1)
+			mustWrite(t, artifact, text)
+
+			result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+			if result.OK() || !hasFailureContaining(result, "Script result must not include development-time budget flags") {
+				t.Fatalf("expected budgeted Script result to fail, got %#v", result.Failures)
+			}
+		})
+	}
+}
+
+func TestComplexityArtifactAllowsBudgetTermsOutsideScriptResult(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "bundle.md")
 	prompt := filepath.Join(dir, "prompt.md")
@@ -160,48 +242,15 @@ func TestComplexityArtifactRejectsThresholdComplianceAsPassEvidence(t *testing.T
 		"",
 	)
 	text = strings.Replace(text,
-		"Budget/expansion status: development-time budget history reviewed; no expansion approval used\n",
-		"Budget/expansion status: PASS - within explicit budget max-net 380\n",
+		"Decision evidence: diff\n",
+		"Decision evidence: verified the statistics command omitted --max-net and other budget flags\n",
 		1,
 	)
 	mustWrite(t, artifact, text)
 
 	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
-	if result.OK() {
-		t.Fatal("expected threshold-compliance budget status to fail")
-	}
-}
-
-func TestComplexityArtifactRequiresApprovalEvidenceForApprovedExpansion(t *testing.T) {
-	dir := t.TempDir()
-	bundle := filepath.Join(dir, "bundle.md")
-	prompt := filepath.Join(dir, "prompt.md")
-	mustWrite(t, bundle, "bundle")
-	mustWrite(t, prompt, "formal_gate_dispatch: true\n")
-	artifact := filepath.Join(dir, "complexity.md")
-	text := complexityArtifactText(
-		"wf",
-		"snap",
-		"bundle.md sha256="+sha256FileForTest(t, bundle),
-		"prompt.md sha256="+sha256FileForTest(t, prompt),
-		"",
-	)
-	text = strings.Replace(text, "Budget/expansion status: development-time budget history reviewed; no expansion approval used\n", "Budget/expansion status: APPROVE expansion to max-net 800\n", 1)
-	mustWrite(t, artifact, text)
-
-	result := Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
-	if result.OK() {
-		t.Fatal("expected approved expansion without evidence to fail")
-	}
-
-	approval := filepath.Join(dir, "approval.md")
-	mustWrite(t, approval, "Anti-Complexity Review\nVerdict: APPROVE_SMALLER\n")
-	text += "Budget expansion approval: approval.md sha256=" + sha256FileForTest(t, approval) + "\n"
-	mustWrite(t, artifact, text)
-
-	result = Artifact(ArtifactOptions{Root: dir, File: "complexity.md", Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
 	if !result.OK() {
-		t.Fatalf("expected approved expansion with hashed evidence to pass, got %#v", result.Failures)
+		t.Fatalf("expected budget terms outside Script result to pass, got %#v", result.Failures)
 	}
 }
 
@@ -524,7 +573,6 @@ func complexityArtifactText(workflowID, snapshot, bundleRef, dispatchRef, receip
 		"No-anchor prompt: YES",
 		"Script result: PASS",
 		"Diff shape judgment: focused",
-		"Budget/expansion status: development-time budget history reviewed; no expansion approval used",
 		"Impact surface health: bounded",
 		"Public/config surface: none",
 		"New concepts: none",
@@ -539,6 +587,15 @@ func complexityArtifactText(workflowID, snapshot, bundleRef, dispatchRef, receip
 		"  rerun_from: none",
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func hasFailureContaining(result Result, text string) bool {
+	for _, failure := range result.Failures {
+		if strings.Contains(failure.Message, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func mustWrite(t *testing.T, path, text string) {

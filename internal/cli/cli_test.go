@@ -689,7 +689,6 @@ func cliGateArtifactText(gate, stage, workflowID, snapshot string) string {
 		lines = append(lines,
 			"Script result: PASS",
 			"Diff shape judgment: focused",
-			"Budget/expansion status: development-time budget history reviewed; no expansion approval used",
 			"Impact surface health: bounded",
 			"Public/config surface: none",
 			"New concepts: none",

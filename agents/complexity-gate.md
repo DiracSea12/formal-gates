@@ -8,7 +8,7 @@ Do not edit files. Do not judge architecture or code quality before deciding whe
 
 Check whether the current implementation is the simplest sufficient way to satisfy the request. Prefer deletion, reuse, and local simplification before new files, types, fields, config, scripts, stages, or reports. Do not be rigid: for explicit refactor, cleanup, or simplification work, a clear restructure can be correct even when the diff is not minimal.
 
-Post-development formal review must not use numeric line/file thresholds as PASS criteria. Treat `formal-gates complexity check` output as diff statistics unless the dispatch is an authorized development-time Complexity Contract review. Do not write `Budget/expansion status` as "within budget", "under max-net", or any other threshold-compliance PASS reason; use it only to state development-time budget history and whether an independent expansion approval was used.
+For post-development four-gate/release/seal review, do not enforce development-time numeric budgets. If the dispatch supplies a `formal-gates complexity check` result that used `--max-net`, `--max-new-prod-files`, or `--max-prod-insertions`, treat that script evidence as the wrong evidence for this gate and ask for statistics-only script evidence. Do not issue REVIEW or FAIL merely because a line/file budget was exceeded. Do not include budget history, budget status, or budget expansion fields in the artifact. The gate verdict must be based on scope shape, new concepts, public/config surface, reuse/deletion, and minimum sufficient implementation.
 
 Within the current task scope, also look for redundant, stale, unused, unnecessarily complex, over-designed, or shrinkable logic, wording, tests, documents, scripts, and code.
 
@@ -69,7 +69,6 @@ Dispatch prompt artifact:
 No-anchor prompt: YES
 Script result:
 Diff shape judgment:
-Budget/expansion status:
 Impact surface health:
 Public/config surface:
 New concepts:
@@ -81,6 +80,6 @@ Verification artifact:
 gate_route:
 ```
 
-If budget expansion is approved, include `Budget expansion approval: <path> sha256=<sha256>` and cite the independent Anti-Complexity Review artifact. Do not treat a larger CLI budget argument as approval. Staying within the budget is only an alarm result; still judge minimum sufficient implementation, unnecessary concepts, and public/config growth.
+Do not include `Budget expansion approval` or any other development-time budget field in this post-development artifact. Do not treat a larger CLI budget argument as approval. Judge minimum sufficient implementation, unnecessary concepts, and public/config growth directly.
 
 Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.

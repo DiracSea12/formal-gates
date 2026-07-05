@@ -1,6 +1,6 @@
 # Complexity Gate
 
-Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract before an authorized formal handoff, and after QA Execution PASS reviews diff shape, new concepts, minimum sufficient implementation, and overengineering.
+Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract and development-time budget before an authorized formal handoff. After QA Execution PASS, it reviews diff shape, new concepts, public/config surface, minimum sufficient implementation, reuse/deletion, and overengineering; it does not enforce development-time numeric budgets as the post-development gate threshold.
 
 ## Applicability
 
@@ -33,15 +33,15 @@ Stop triggers:
 
 Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `refactor`, or `new-system`. Default narrow; never quietly upgrade work into `new-system`.
 
-## Budget Rules
+## Development-Time Budget Rules
 
-Budgets are task-specific. `formal-gates complexity check` has no built-in numeric default budget: if no numeric budget is passed, it only reports diff statistics and non-budget review signals. The main agent must set the development-time budget from the actual requirement, planned slice, expected diff shape, reused/deleted code, allowed production files, and test/documentation needs before formal development starts. Explicit numeric budget thresholds are development-time alarms, not design truth or post-development gate criteria.
+Development-time budgets are task-specific implementation controls. They exist before and during formal development handoff only. `formal-gates complexity check` has no built-in numeric default budget: if no numeric budget is passed, it only reports diff statistics and non-budget review signals. The main agent must set the development-time budget from the actual requirement, planned slice, expected diff shape, reused/deleted code, allowed production files, and test/documentation needs before formal development starts. Explicit numeric budget thresholds are development-time alarms, not design truth or post-development gate criteria.
 
 Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids deletion/reuse, or is not the minimum sufficient implementation for the request. Post-development `complexity-gate` artifacts must not use line/file threshold compliance as the basis for PASS.
 
 Line budgets must not be gamed by reducing readability. If code is compressed to fit the budget, such as unrelated statements packed onto one line, unclear short names, merged responsibilities, hidden branching, or removed useful comments/error handling, treat it as complexity budget evasion and fail or review even when numeric counts are within budget.
 
-Development-time budget control is mandatory inside a formal development handoff or equivalent project process. The handoff must give the worker the active Complexity Contract, the exact budget numbers passed to `formal-gates complexity check`, stop triggers, and the budget expansion path. At minimum, the handoff budget must state numeric `max-net`, `max-new-prod-files`, and `max-prod-insertions` values, and those values must match the supplied check command. Allowed-file or forbidden-file scope is necessary, but it is not a substitute for numeric budget thresholds. The worker must check the live diff against that contract before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop: either shrink the diff back inside budget or obtain independent Anti-Complexity Review approval before continuing. Waiting until the post-development complexity gate to explain the excess is a process failure.
+Development-time budget control is mandatory inside a formal development handoff or equivalent project process. The handoff must give the worker the active Complexity Contract, the exact budget numbers passed to `formal-gates complexity check`, stop triggers, and the budget expansion path. At minimum, the handoff budget must state numeric `max-net`, `max-new-prod-files`, and `max-prod-insertions` values, and those values must match the supplied check command. Allowed-file or forbidden-file scope is necessary, but it is not a substitute for numeric budget thresholds. The worker must check the live diff against that contract before continuing after meaningful growth and before returning implementation. If the active budget is exceeded, the worker must stop: either shrink the diff back inside budget or obtain independent Anti-Complexity Review approval before continuing. Waiting until the post-development complexity gate to explain the excess is a development-process failure.
 
 Do not derive a formal development budget from tool defaults. If the main agent cannot justify the numbers from the current requirement and planned work, the handoff is not ready.
 
@@ -82,6 +82,21 @@ Expiration: this task only
 
 Only `APPROVE` or `APPROVE_SMALLER` changes the active budget, and only for the current task.
 
+## Post-Development Gate Boundary
+
+The post-development `complexity-gate` is separate from development-time budget control.
+
+For a post-development four-gate/release/seal complexity review:
+
+- do not create a new numeric budget;
+- do not pass `--max-net`, `--max-new-prod-files`, or `--max-prod-insertions` for the formal gate script evidence;
+- do not turn a line/file count threshold into the gate's PASS/REVIEW/FAIL criterion;
+- do not request or approve budget expansion as part of this gate;
+- do not include development-time budget history, budget status, or budget expansion fields in the post-development gate artifact;
+- do use statistics-only diff output, changed-files artifacts, QA evidence, and the requirement scope to judge whether the implementation is the simplest sufficient solution.
+
+Development-time budget data belongs only to the formal development handoff, worker result, and anti-complexity approval path. It must disappear from the post-development complexity artifact. An unapproved development-time budget overrun is a development handoff/process problem, not a post-development gate field. The post-development verdict must be based on scope size, unnecessary concepts, public/config surface growth, failure to reuse/delete, overengineering, and whether the implementation is minimum sufficient for the request.
+
 ## Diff Script
 
 Run only when there is a diff to review:
@@ -90,11 +105,11 @@ Run only when there is a diff to review:
 bin/formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine output and `--staged` only for staged review. Post-development formal complexity review should use the checker as statistics evidence without numeric threshold flags. Formal handoff and development-time checks must pass all three numeric budget flags together. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
+Use `--json` for machine output and `--staged` only for staged review. Post-development complexity gate evidence must omit all three numeric budget flags and use the command as statistics plus non-budget review signals. Formal handoff and development-time checks must pass all three numeric budget flags together. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
 
 In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 
-Exit codes: `0` PASS alarm state or stats-only success, `2` REVIEW alarm state, `1` FAIL alarm state.
+Exit codes: `0` PASS alarm state or stats-only success, `2` REVIEW alarm state, `1` FAIL alarm state. In post-development gate use, a numeric-budget REVIEW/FAIL result means the wrong command was used; rerun statistics-only instead of recording that result.
 
 Script PASS does not mean design PASS. REVIEW/FAIL in formal flow blocks downstream gates.
 
@@ -129,7 +144,6 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 ```text
 Script result:
 Diff shape judgment:
-Budget/expansion status:
 Impact surface health:
 Public/config surface:
 New concepts:
@@ -138,15 +152,7 @@ Shrink opportunities:
 Decision evidence:
 ```
 
-If `Budget/expansion status` says an expansion was approved, the artifact must also include:
-
-```text
-Budget expansion approval: <path> sha256=<sha256>
-```
-
-That approval artifact must contain the independent Anti-Complexity Review result. A bare CLI override such as a larger `--max-net` is not approval.
-
-`Budget/expansion status` in post-development review records development-time budget history and whether any independent expansion approval was used. It must not say or imply that the diff passed because it was under `max-net`, `max-new-prod-files`, `max-prod-insertions`, or another numeric line/file threshold.
+Post-development complexity artifacts must not include `Development-time budget history`, `Budget/expansion status`, `Budget status`, or `Budget expansion approval`. If any of these fields appear, reject the artifact and regenerate it without development-time budget material.
 
 ## Output
 
@@ -157,7 +163,6 @@ Proceed to architecture: YES / NO
 Requirement verification status:
 Script result:
 Diff shape judgment:
-Budget/expansion status:
 Minimum sufficient implementation:
 Stop triggers:
 Shrink opportunities:
@@ -172,7 +177,6 @@ Complexity Ledger
 New concepts:
 Deleted concepts:
 Net complexity:
-Budget status:
 Impact surface health:
 Stop triggers hit:
 Things deliberately not built:
