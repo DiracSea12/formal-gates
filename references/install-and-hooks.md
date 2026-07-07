@@ -20,6 +20,8 @@ formal-gates/
 
 Native host skill installs copy the verifiable installable package subset: `SKILL.md`, `README.md`, `README_EN.md`, `formal-gates.manifest.json`, `go.mod`, `.github/workflows/portable-validation.yml`, `bin/`, `cmd/`, `internal/`, `agents/`, `examples/`, `references/`, and `hooks/pollution-patterns.json`. They do not copy PS1, Python, shell, JavaScript, batch, or command-script runtime files. Dispatch prompt pollution validation is implemented by the Go CLI and reads `hooks/pollution-patterns.json`.
 
+Package validation must accept both maintained source packages and installed runtime packages. Maintained source packages with bootstrap scripts must carry the complete checked bootstrap set; installed runtime packages omit all bootstrap scripts and remain valid when the script-free runtime subset is otherwise complete.
+
 Installed packages must include `bin/formal-gates.exe` on Windows and `bin/formal-gates` on Linux/macOS. Source checkouts may use `go run ./cmd/formal-gates` for development tests, but installed hook and validation paths must call the packaged binary.
 
 ## Native Hook and Receipt Paths

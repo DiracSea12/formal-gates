@@ -242,6 +242,32 @@ func validateCIStructure(workflow ciWorkflow, result *Result) {
 
 func validateBootstrapScripts(root string, result *Result) {
 	bashPath := filepath.Join(root, "install.command")
+	powershellPath := filepath.Join(root, "install.ps1")
+	batchPath := filepath.Join(root, "install.bat")
+	if !isFile(bashPath) && !isFile(powershellPath) && !isFile(batchPath) {
+		return
+	}
+
+	if !isFile(batchPath) {
+		result.add("install.bat", "bootstrap script set is incomplete")
+	} else {
+		batch, err := readText(batchPath)
+		if err != nil {
+			result.add("install.bat", fmt.Sprintf("cannot read bootstrap script: %v", err))
+		} else {
+			for _, required := range []string{
+				"powershell",
+				"-File",
+				`%~dp0install.ps1`,
+				"exit /b %ERRORLEVEL%",
+			} {
+				if !strings.Contains(batch, required) {
+					result.add("install.bat", "bootstrap script is not bound to PowerShell bootstrap entrypoint: "+required)
+				}
+			}
+		}
+	}
+
 	bash, err := readText(bashPath)
 	if err != nil {
 		result.add("install.command", fmt.Sprintf("cannot read bootstrap script: %v", err))
@@ -264,7 +290,6 @@ func validateBootstrapScripts(root string, result *Result) {
 		}
 	}
 
-	powershellPath := filepath.Join(root, "install.ps1")
 	powershell, err := readText(powershellPath)
 	if err != nil {
 		result.add("install.ps1", fmt.Sprintf("cannot read bootstrap script: %v", err))

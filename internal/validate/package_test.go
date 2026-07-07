@@ -182,6 +182,39 @@ func TestPackageRejectsBootstrapCanaryChecksumOmitted(t *testing.T) {
 	}
 }
 
+func TestPackageAllowsInstalledRuntimeWithoutBootstrapScripts(t *testing.T) {
+	root := copyPackageFixture(t)
+	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
+		if err := os.Remove(filepath.Join(root, rel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := Package(root)
+	if !result.OK() {
+		t.Fatalf("expected installed runtime package validation to pass without bootstrap scripts, got %#v", result.Failures)
+	}
+}
+
+func TestPackageRejectsPartialBootstrapScripts(t *testing.T) {
+	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
+		t.Run(rel, func(t *testing.T) {
+			root := copyPackageFixture(t)
+			if err := os.Remove(filepath.Join(root, rel)); err != nil {
+				t.Fatal(err)
+			}
+
+			result := Package(root)
+			if result.OK() {
+				t.Fatal("expected package validation to reject incomplete bootstrap script set")
+			}
+			if !resultHasPath(result, rel) {
+				t.Fatalf("expected %s failure, got %#v", rel, result.Failures)
+			}
+		})
+	}
+}
+
 func copyPackageFixture(t *testing.T) string {
 	t.Helper()
 	source := repoRootValidateTest(t)
