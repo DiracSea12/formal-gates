@@ -7,7 +7,7 @@ their document; no checkbox-specific normalization is allowed.
 ## Phase 0. Review Convergence
 
 - [x] 0.1 Tighten the existing central and reviewer instructions so only concrete current-change requirement, behavior, or mandatory-rule defects can block; advisory-only results PASS and duplicate root causes count once.
-- [x] 0.2 Make the main agent filter reviewer output before creating repair work or clarification items, limit one delivery attempt to three automatic review-repair cycles, then stop automation and return deduplicated evidence-backed blockers for a user decision.
+- [x] 0.2 Make the main agent filter reviewer output before creating repair work or clarification items, limit one delivery attempt to three completed automatic review-repair cycles, count only a complete formal result plus its processed repairs and required re-verification as one cycle, then stop automation and return deduplicated evidence-backed blockers for a user decision.
 - [x] 0.3 Repurpose an existing behavior case, validate the package, and obtain one independent read-only review of this Phase 0 diff before user review. Add no product code, schema, command, role, state, or file.
 
 At the end of each implementation phase, fix that phase's deliverable snapshot,

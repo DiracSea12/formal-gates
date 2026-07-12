@@ -24,8 +24,12 @@ semantic judgments that static code cannot make.
 - A finding blocks only when it shows a concrete current-change violation of a
   confirmed requirement, observable behavior, or existing mandatory rule.
   Advisory-only reviews PASS; the main agent filters duplicates and preferences,
-  and stops automatic review-repair after three cycles. Any remaining evidenced
-  blockers then require a user decision before another round or delivery action.
+  and stops automatic review-repair after three completed cycles. A cycle starts
+  only with a complete formal result and counts only after that result, its
+  accepted repairs, and required re-verification have been processed as one
+  unit. Developer self-check fixes, failed dispatches, interrupted runs, and
+  incomplete results do not count. Any remaining evidenced blockers then require
+  a user decision before another round or delivery action.
 
 ## Ownership And Call Direction
 

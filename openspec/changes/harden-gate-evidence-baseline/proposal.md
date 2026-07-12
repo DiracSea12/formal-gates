@@ -11,7 +11,7 @@ to rerun after a small repair. `alignment.md` is the requirement source.
 
 ## What Changes
 
-- Make formal reviews converge before product development: only concrete current-change defects can block, advisory-only reviews PASS, the main agent filters and deduplicates findings, and automatic review-repair stops after three cycles.
+- Make formal reviews converge before product development: only concrete current-change defects can block, advisory-only reviews PASS, the main agent filters and deduplicates findings, and automatic review-repair stops after three completed cycles.
 - Complete the requirements-clarification PASS checks already started in the
   local diff and prove `policy show` from the same typed Go rules that validators
   execute.
