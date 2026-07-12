@@ -36,7 +36,9 @@ Never claim formal PASS from chat, self-review, developer self-test, focused tes
 
 Never invent or add user-unapproved requirements, mechanisms, checks, fields, stages, hooks, or review criteria by calling them optimization, hardening, gap-filling, cleanup, or overengineering prevention. If independent evaluation shows no behavior gain, stop instead of expanding the entrypoint.
 
-Reviewer findings do not automatically become requirements. Before fixing a finding, the main agent must decide whether the fix stays inside the user's stated scope and existing rules. If the smallest fix would add or change requirements, externally visible behavior, data formats, process steps, integration boundaries, validation rules, or acceptance criteria, stop and ask for explicit user approval instead of implementing the expansion.
+A reviewer finding may affect a verdict only when it is caused by the current change and concretely evidenced to violate a confirmed requirement, observable behavior, the reviewing gate's existing responsibilities, or a mandatory rule. Wording, naming, formatting, equivalent-design preferences, purely hypothetical risks, and unrequested hardening are advisory; if only advisory comments remain, the reviewer must PASS. Fix an in-scope defect directly; if the smallest fix would change approved scope, return it for a user decision instead of repairing automatically.
+
+Reviewer findings do not automatically become requirements or repair tasks. The main agent must discard unsupported and advisory findings, merge duplicates, and separate in-scope repairs from findings that need a user decision; the same root cause restated is one finding. Run at most three automatic review-repair cycles for one delivery attempt. After that, stop automatic review and repair, present only deduplicated evidence-backed blockers with attempted fixes and the reason they remain unresolved, and let the user decide whether to change scope or requirements, defer or accept the risk, authorize another round, or stop delivery.
 
 Never start the four post-development gates, QA case design, or pre-development readiness review unless the Formal Flow Router requires it.
 
@@ -87,7 +89,7 @@ Do not enter complexity / architecture / code-quality until QA evidence is compl
 
 ## Zero-context Handoff
 
-Zero-context is not empty context. Dispatch must include bundle or manifest path and SHA, worktree, base commit or snapshot id, requirement target, exact scope, forbidden files/items/context, Complexity Contract or Ledger when applicable, related artifacts, output template, and required verification.
+Zero-context is not empty context. Dispatch must include bundle or manifest path and SHA, worktree, base commit or snapshot id, requirement target, exact scope, current approved requirement documents that incorporate every relevant confirmed user decision, forbidden files/items/context, Complexity Contract or Ledger when applicable, related artifacts, output template, and required verification. A reviewer must treat confirmed decisions as constraints rather than reopen them from preference; if a relevant decision is missing, return BLOCKED instead of a complete verdict.
 
 Read limits are progressive disclosure, not a hard whitelist. The dispatch should name the initial reading scope and hard forbidden anchoring sources. Reviewers may read additional task-relevant repo files when needed to complete the assigned review, but they must control output, explain why the scope expanded, and list the files and commands actually used. Only reading forbidden anchoring sources or doing broad unrelated exploration is a process problem.
 

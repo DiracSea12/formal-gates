@@ -50,6 +50,8 @@ Long-term memory such as `CONTEXT.md`, ADRs, or `.out-of-scope` files is auxilia
 - Every alignment item and every open question must have a stable `RQ-###` ID. Do not merge, delete, renumber, or compress open questions after showing them to the user unless the user explicitly approves that exact change.
 - Do not replace many open questions with a smaller summary list. Summaries may be added only after the full numbered list. If the list is long, split it into batches, but keep all IDs alive until answered, deferred, or explicitly cut by the user.
 - Chat-only answers are not enough for formal PASS. Record each accepted answer in the alignment table before any downstream formal document or gate uses it.
+- After the user confirms, defers, or marks one `RQ-###` item out of scope, update that item in the existing alignment record before asking the next question. Do not wait until the whole clarification round ends or reconstruct several decisions from chat afterward.
+- Reviewer findings are not automatically clarification items. The main agent first removes factual questions answerable from the repo, implementation details already determined by confirmed requirements, unsupported claims, wording/naming/formatting preferences, equivalent-design preferences, hypothetical hardening, and duplicate descriptions of the same root cause. Create a stable `RQ-###` item only when the remaining finding requires a user decision about scope, acceptance, architecture boundary, public behavior, or another requirement. Explain the problem, impact, minimum fix, scope effect, and recommended choice, then persist the user's decision before changing affected requirements or code.
 - `confirmed` means user-confirmed or approved requirement-note-confirmed. Agent summaries are `doc-derived` or `inferred`, not confirmed.
 - If an inferred or doc-derived item can change scope, acceptance, task status, architecture boundary, evidence, or phase dependency, it blocks drafting and gates until confirmed or explicitly deferred by the user.
 - Task checkboxes are not proof. A checked task must trace to current evidence. If evidence was reverted, invalidated, or never confirmed, mark the task as `needs re-proof` or leave it unchecked.
@@ -92,6 +94,7 @@ Rules:
 - `deferred-by-user`: include the risk accepted by the user and the later step that must revisit it.
 - `out-of-scope-by-user`: preserve the original requirement text and the user's explicit cut decision.
 - `deferred-by-user` and `out-of-scope-by-user` require per-item user approval evidence in the alignment item itself.
+- Persist each resolved item immediately in the existing alignment artifact before continuing to the next question. Incremental persistence updates one shared record; it does not create one file per item.
 - If a previous alignment artifact exists, compare ID sets before recording PASS. Any missing old ID must appear under `Dropped question IDs` and have explicit user approval in the decision record or in a per-ID user quote field.
 - For current PASS artifact schema compatibility, the machine alignment artifact still accepts the legacy field name `OpenSpec impact:`. Use `Document impact:` in narrative alignment, and map it through `references/requirement-document-adapters.md` when recording format-specific artifacts.
 
@@ -130,13 +133,26 @@ Default to one question at a time. Closely related questions may be asked in a b
 
 Stop asking when critical ambiguity is resolved, remaining questions are low impact, the user stops or defers them, or the flow must return `DRAFT_BLOCKED`.
 
-Ask 1-5 high-quality questions per round in formal clarification. Do not ask 10+ questions at once unless they are tightly coupled. After the user answers, synthesize and ask follow-ups only when needed.
+Ask 1-5 high-quality questions per round in formal clarification. Do not ask 10+ questions at once unless they are tightly coupled. After the user answers, persist the resolved item, then synthesize and ask follow-ups only when needed.
+
+## Reusable Clarification Primitive
+
+For requirement-like document work, use this primitive before drafting formal requirement text when an unresolved decision can change scope, acceptance, evidence, architecture boundary, compatibility, phase dependency, or requirement details:
+
+1. Check repo facts first: existing specs, code, config, and validation outputs that can answer factual questions without changing user intent.
+2. Ask one high-impact question at a time by default. Include a recommended answer and explain why the answer changes build, validation, or success criteria.
+3. After each answer is confirmed, deferred, or marked out of scope, update that stable `RQ-###` item in the existing alignment record before asking the next question.
+4. Preserve stable `RQ-###` IDs across follow-up rounds. New questions get new IDs; prior IDs are not renumbered.
+5. Track confirmed, open, deferred-by-user, and out-of-scope-by-user states explicitly. Dropped or deferred items keep their original ID and user decision.
+6. Do not execute the document write, formal gate dispatch, or implementation handoff until confirmation is sufficient for the selected mode.
+7. When confirmed alignment already covers the work, reuse it during spec synthesis instead of repeating the interview. Return to clarification only for newly discovered blocking ambiguity.
+8. When a reviewer reports a problem, the main agent applies the finding filter above. Only a genuine unresolved user decision returns to this clarification loop; the main agent handles verified in-scope defects directly and does not silently promote preferences or broader scope into requirements.
 
 ## File Budget
 
 Lightweight routing and informal clarification must not create gate artifacts.
 
-Do not create one file per question, one file per clarification round, default issue tracker files, or `.scratch` output by default.
+Do not create one file per question, one file per clarification round, default issue tracker files, or `.scratch` output by default. Immediate per-item persistence updates the existing alignment record in place.
 
 Formal requirements PASS may create only the required alignment artifact, user decision record, and normal gate state.
 

@@ -57,7 +57,7 @@
   },
   {
     "id": "FG-BEH-015",
-    "answer": "Stop when there is no behavior gain; put detailed procedures in references instead of expanding the entrypoint."
+    "answer": "The naming preference is advisory. The reproduced failed-write behavior is a concrete regression and blocks until fixed. Count repeated descriptions of that root cause once; after the regression is fixed, advisory comments alone cannot prevent PASS."
   },
   {
     "id": "FG-BEH-016",

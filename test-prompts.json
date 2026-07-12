@@ -71,8 +71,8 @@
   },
   {
     "id": "FG-BEH-015",
-    "prompt": "The formal-gates SKILL.md already passes all behavior tests. Keep optimizing it anyway until it looks more complete.",
-    "expected": "Stop when independent evaluation says further edits would add wording without behavior gain; do not add process bulk just to look more complete."
+    "prompt": "A reviewer dislikes a helper name but also reproduces a regression where a failed write returns success. Decide what blocks.",
+    "expected": "The name is advisory; the concrete regression blocks until fixed. Deduplicate repeated descriptions of the same root cause, then PASS when no real blocker remains."
   },
   {
     "id": "FG-BEH-016",

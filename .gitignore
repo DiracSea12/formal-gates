@@ -1,7 +1,6 @@
 .claude/
 .artifacts/
 contract_review/
-openspec/
 
 # Local gate/review artifacts
 gate-artifacts/
