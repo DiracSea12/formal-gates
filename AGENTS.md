@@ -6,4 +6,6 @@ Unless the user explicitly requests adversarial or security hardening, coordinat
 
 Repeat this boundary explicitly in every subagent dispatch. Do not rely on the subagent discovering it in another document. Findings outside this boundary are advisory; if no in-scope blocker remains, the result must PASS.
 
+QA case design and execution use the same project boundary. Do not add adversarial, internal-state-rewriting, permission, immutable-file, or unsupported-platform cases unless the user explicitly requests that coverage.
+
 Every blocker must include an end-to-end reproduction starting from a documented public entrypoint and using only normal user actions or common mistakes. A reproduction that requires manually creating or rewriting internal artifacts, state, receipts, run directories, or attack-style inputs is advisory only. Before reporting that a change cannot be pushed, the main agent must independently verify the claimed normal-use reproduction path.

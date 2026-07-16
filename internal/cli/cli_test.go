@@ -537,6 +537,54 @@ func TestRunWorkflowSnapshotRecordStageAndAdmission(t *testing.T) {
 	}
 }
 
+func TestRunWorkflowNonPassReviewerResultIsNotReportedAsRecorded(t *testing.T) {
+	dir := t.TempDir()
+	artifact := writeCLIArtifact(t, dir, "complexity-gate", "", "wf", "snap")
+	artifactPath := filepath.Join(dir, filepath.FromSlash(artifact))
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope validate.FormalGateEvidence
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var payload validate.ReviewerPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.Checks[0].Status = "REVIEW"
+	payload.Checks[0].Message = "review result is not a PASS"
+	envelope.Verdict = "REVIEW"
+	envelope.Payload, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCLIJSON(t, artifactPath, envelope)
+
+	var stdout bytes.Buffer
+	code := Run("formal-gates", []string{
+		"workflow", "record-stage",
+		"--worktree", dir,
+		"--gate", "complexity-gate",
+		"--verdict", "REVIEW",
+		"--mode", "formal",
+		"--artifact", artifact,
+		"--workflow-id", "wf",
+		"--change-snapshot", "snap",
+	}, IO{Stdout: &stdout})
+	if code != 0 || !strings.Contains(stdout.String(), "GATE_WORKFLOW_NOT_RECORDED gate=complexity-gate verdict=REVIEW") {
+		t.Fatalf("non-PASS result was not reported accurately, code=%d stdout=%q", code, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "GATE_WORKFLOW_RECORDED") {
+		t.Fatalf("non-PASS result claimed to be recorded: %q", stdout.String())
+	}
+	statePath := filepath.Join(dir, ".claude", "gates", "runs", "wf", "gate-state.json")
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("non-PASS result changed authoritative state: %v", err)
+	}
+}
+
 func TestRunWorkflowRequirementsRejectsIncompatibleModesWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
 	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))

@@ -6,6 +6,8 @@ Do not implement code. Do not run post-development gates. The supplied Complexit
 
 A concern may affect the decision only when the proposed expansion causes a concrete current-scope violation or the request lacks evidence required by the review standard below. Wording, naming, formatting, equivalent implementation preferences, hypothetical future risk, and unrequested hardening are advisory. Do not deny or enlarge a request for advisory comments alone.
 
+Do not stop at the first blocking concern. Complete every safe in-scope review-standard check and report all current blockers in one result; stop early only for missing or contaminated required context, unsafe continuation, or an impossible remaining check.
+
 Allowed prompt fields:
 
 ```text

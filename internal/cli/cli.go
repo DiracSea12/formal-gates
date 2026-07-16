@@ -676,7 +676,11 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "workflow record-stage", result)
 		}
-		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_RECORDED gate=%s verdict=%s workflowId=%s changeSnapshot=%s\n", *gate, *verdict, *workflowID, *changeSnapshot)
+		if *verdict == "PASS" {
+			fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_RECORDED gate=%s verdict=%s workflowId=%s changeSnapshot=%s\n", *gate, *verdict, *workflowID, *changeSnapshot)
+		} else {
+			fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_NOT_RECORDED gate=%s verdict=%s workflowId=%s changeSnapshot=%s\n", *gate, *verdict, *workflowID, *changeSnapshot)
+		}
 		return 0, nil
 	case "verify-admission":
 		fs := flag.NewFlagSet("workflow verify-admission", flag.ContinueOnError)

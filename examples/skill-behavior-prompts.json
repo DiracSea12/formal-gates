@@ -270,20 +270,21 @@
   },
   {
     "id": "FG-BEH-015",
-    "title": "Separate advisory comments from real blockers",
-    "user_prompt": "A reviewer gives two comments: it prefers a different helper name, and it reproduces a current-change regression where the API reports success after a failed write. Decide what blocks the review.",
-    "expected_behavior": "The agent treats the naming preference as advisory but blocks on the concrete regression until it is fixed, deduplicates repeated descriptions by root cause, and requires PASS once no real blocker remains.",
-    "failure_behavior": "The agent either blocks on the naming preference or dismisses the reproduced behavior regression as advisory.",
+    "title": "Complete the review and separate advisory comments from blockers",
+    "user_prompt": "A reviewer finds early that a helper name could be better and that a failed write reports success. Later safe checklist items could expose more issues. Decide how the review proceeds.",
+    "expected_behavior": "The agent continues every safe in-scope check, reports all current concrete regressions in one result, treats the naming preference as advisory, deduplicates repeated root causes, and requires PASS once no real blocker remains.",
+    "failure_behavior": "The agent stops after the first blocker, blocks on the naming preference, or dismisses a reproduced behavior regression as advisory.",
     "primary_files": [
       "SKILL.md",
       "references/requirements-clarification-gate.md"
     ],
     "must_include": [
       "advisory",
-      "concrete regression"
+      "concrete regression",
+      "all current"
     ],
     "must_avoid": [
-      "blocks on the naming preference"
+      "stop after the first"
     ]
   },
   {

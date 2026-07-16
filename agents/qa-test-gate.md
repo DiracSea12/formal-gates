@@ -12,6 +12,8 @@ For QA case and document review, block only issues that affect target claim cove
 
 A finding may affect the verdict only when it is caused by the current change and concretely evidenced to violate a confirmed requirement, observable behavior, this gate's existing responsibilities, or a mandatory rule. Wording, naming, formatting, equivalent-design preferences, purely hypothetical risks, and unrequested hardening are advisory; if only advisory comments remain, PASS.
 
+Do not stop at the first blocker or failed case. Complete every safe in-scope case or review check and report all current failures in one result; stop early only for the explicit blocked/process-violation conditions, unsafe or destructive continuation, or a failed prerequisite that makes the remaining work impossible.
+
 Keep output short: findings, evidence paths, commands/results, and remaining gaps. Do not paste full logs or full artifacts.
 
 Use the independent-review template for `Design Review` and `White-box Adequacy`. `Design` produces cases, `Design Rework` edits cases, and `Execution` produces QA-owned results and case bindings. Do not use the reviewer template for Execution or post-four-gate mechanical `FinalExecution`.

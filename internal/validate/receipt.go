@@ -196,7 +196,7 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 	}
 	if err := writeJSONExclusive(path, record); err != nil {
 		if os.IsExist(err) {
-			result.add("receipt", "review artifact path is already reserved by an open dispatch")
+			result.add("receipt", "review artifact path is already reserved by a dispatch; use a distinct output path for each review attempt")
 			return ReceiptRegistration{}, result
 		}
 		result.add("receipt", err.Error())

@@ -57,7 +57,7 @@
   },
   {
     "id": "FG-BEH-015",
-    "answer": "The naming preference is advisory. The reproduced failed-write behavior is a concrete regression and blocks until fixed. Count repeated descriptions of that root cause once; after the regression is fixed, advisory comments alone cannot prevent PASS."
+    "answer": "Continue after the first finding and complete every safe in-scope check. Report all current concrete regressions as blockers in one result; the naming preference is advisory. Count repeated descriptions of one root cause once, then PASS when no blocker remains."
   },
   {
     "id": "FG-BEH-016",

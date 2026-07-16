@@ -22,7 +22,7 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 ## Stages
 
 - `Design`: read only requirements, specs, public contracts, user flows, or bug reports. Produce cases and oracles. Do not inspect implementation diff to invent cases.
-- `Design Review`: before verification, review candidate cases as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to `Design Rework`; do not stop and wait for the user unless the claim itself is unclear.
+- `Design Review`: before verification, review every candidate case as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to `Design Rework`; do not stop at the first rejected case or wait for the user unless the claim itself is unclear.
 - `Design Rework`: edit cases and oracle only. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
 - `Execution`: an independent QA executor runs approved cases and binds them to commands, artifacts, manual observation, or acceptance procedures. QA-owned results and complete case binding are mandatory. Failed or incomplete evidence routes to implementation, test evidence, or case rework; it does not enter downstream gates. The main agent and CLI check the evidence mechanically and do not dispatch another QA reviewer.
 - `FinalExecution`: after downstream gates and final verification, bind final release/seal evidence to the unchanged snapshot before release/seal. When the four post-development gates already recorded PASS for the same workflow and unchanged snapshot, the main agent may record this as a mechanical closeout: check the existing PASS records, final verification artifact, and route to seal. Do not add QA judgment, replace missing gates, reuse stale snapshots, or claim independent review.
@@ -64,6 +64,8 @@ Use the shorter `Case ID / Claim / Action / Oracle / Evidence` only for low-risk
 The machine identifier comes only from the documented `Case ID:` field. Markdown headings are descriptive, unrelated headings are ignored, and every approved case ID must be present and unique.
 
 Black-box design can use public API/interface contracts, but not private implementation details, diffs, developer explanations, or main-agent expected answers. Design Review must happen before Verification Run; unreviewed cases are advisory only.
+
+During Execution, continue after a failure through every remaining approved case that is safe and still meaningful, then return all failures together.
 
 ## Evidence Rules
 

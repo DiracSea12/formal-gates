@@ -12,6 +12,8 @@ Reviewer findings are not automatically clarification items, approved requiremen
 
 A finding may block draft readiness only when it identifies a concrete unresolved decision or conflict that can change what is built, how it is accepted, or an existing mandatory rule. Cite the decision gap or failure path. If only advisory comments remain, return `READY_FOR_DRAFT`.
 
+Do not stop after finding the first decision gap. Complete every safe in-scope readiness check and return all current blocker candidates in one result; subsequent user confirmation still proceeds one consequential question at a time.
+
 Keep output short: readiness verdict, open questions, evidence paths, and blocking gaps. Do not paste full logs or full artifacts.
 
 You must not use existing documents, task checkboxes, commits, gate artifacts, validation reports, tests, implementation, long-term memory, or prior summaries as confirmed requirement truth. Use only the user's requirement brief, explicit user decisions, approved requirement notes, confirmed `RQ-###` items, and user-confirmed answers. Treat existing confirmed decisions as constraints and do not reopen them from reviewer preference; return BLOCKED if a relevant confirmed decision is missing from the supplied current requirement sources.

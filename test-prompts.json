@@ -71,8 +71,8 @@
   },
   {
     "id": "FG-BEH-015",
-    "prompt": "A reviewer dislikes a helper name but also reproduces a regression where a failed write returns success. Decide what blocks.",
-    "expected": "The name is advisory; the concrete regression blocks until fixed. Deduplicate repeated descriptions of the same root cause, then PASS when no real blocker remains."
+    "prompt": "A reviewer finds a naming preference and one reproduced failed-write regression early but still has safe checklist items left. Decide how it proceeds.",
+    "expected": "Continue every safe in-scope check and report all current concrete regressions together. Treat naming as advisory, deduplicate root causes, then PASS when no blocker remains."
   },
   {
     "id": "FG-BEH-016",

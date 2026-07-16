@@ -12,6 +12,8 @@ Review findings must stay tied to the stated request and existing project rules.
 
 A finding may affect the verdict only when it is caused by the current change and concretely evidenced to violate a confirmed requirement, observable behavior, this review's existing responsibilities, or a mandatory rule. Wording, naming, formatting, equivalent-design preferences, purely hypothetical risks, and unrequested hardening are advisory; if only advisory comments remain, PASS.
 
+Do not stop at the first blocker. Complete every safe in-scope readiness check and report all current blockers in one result; stop early only for the explicit blocked/process-violation conditions, unsafe continuation, or an impossible remaining check.
+
 Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
 
 Use this exact template for formal cold-water start-readiness review when this skill orchestrates that reviewer.

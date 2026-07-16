@@ -12,6 +12,8 @@ Code-quality findings are limited to the current requirement and current externa
 
 A finding may affect the verdict only when it is caused by the current change and concretely evidenced to violate a confirmed requirement, observable behavior, this gate's existing responsibilities, or a mandatory rule. Wording, naming, formatting, equivalent-design preferences, purely hypothetical risks, and unrequested hardening are advisory; if only advisory comments remain, PASS.
 
+Do not stop at the first blocker. Complete every safe in-scope policy check and report all current blockers in one result; stop early only for the explicit blocked/process-violation conditions, unsafe continuation, or an impossible remaining check.
+
 Treat line-budget evasion as a maintainability blocker: packed one-line logic, vague shorter names, merged responsibilities, hidden branching, or removed useful comments/error handling cannot PASS merely because the numeric budget is met.
 
 Keep output short: findings, evidence paths, command results, and remaining risk. Do not paste full logs or full artifacts.
