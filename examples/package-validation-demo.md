@@ -16,7 +16,7 @@ go build -o bin\formal-gates.exe ./cmd/formal-gates
 bin\formal-gates.exe canary portable --root .
 ```
 
-The native canary runs package validation, dispatch-prompt checks, hook decision checks, workflow state checks, FinalExecution recording from a supplied artifact, receipt checks, and install-shape checks without PowerShell.
+The native canary runs package validation, dispatch-prompt checks, hook decision checks, workflow state checks, CLI-generated mechanical FinalExecution closeout, receipt checks, and install-shape checks without PowerShell. Its receipt check registers an absent reviewer output for the target snapshot before writing and finalizing the completed JSON.
 
 ## What This Proves
 

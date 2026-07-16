@@ -138,15 +138,18 @@ AI 写代码有几个通病，这套门禁专门拦：
 3. **architecture-health-gate** —— 模块边界、所有权、依赖方向、状态/缓存生命周期、性能形态有没有烂。
 4. **code-quality-gate** —— 正确性、边界、性能、死代码、假测试、可维护性。
 
+QA 分两件事：测试用例设计由独立子代理审；开发后的测试由独立于开发者的 QA 执行者运行。主代理和 CLI 只机械核对执行证据、hash、snapshot 和 case binding，不再加第二个 QA reviewer。
+
 ---
 
 ## 核心机制
 
-- 通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。
+- 需要质量判断的通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。QA Execution 是例外：它依赖独立 QA 执行证据，由主代理和 CLI 机械核对，不做 reviewer 的 reviewer。
 - **Dispatch prompt 污染检测**——系统自动检测并阻止包含"上一轮发现""刚修了""重点复查""预期答案"等锚定模式的派发 prompt，保证审查者独立判断。检测规则在 `hooks/pollution-patterns.json` 内按英文 regex 组和中文术语组配置，由 `formal-gates prompt validate` 执行。
 - **跨 workflow 隔离**——每个 workflow 的门禁链必须完整，不能复用其他 workflow 的门禁结果。系统会递归验证所有前置门和传递依赖是否属于同一个 workflowId 和 changeSnapshot；扩展门还必须绑定同一个 manifest 路径和哈希。
-- 每道门的结论落成 **artifact**，由 Go 校验器检查字段完整性。缺字段、占位符（`<...>`/`todo`/`tbd`）、复用过期快照的旧结论会被拒绝。
+- 每个已启用 gate 的结论都是封闭的 schema-version-2 JSON **artifact**，由 Go 校验器检查。Markdown 只能解释，不能补充机器真值；缺字段、未知字段、非法证据或过期结论都会被拒绝。
 - 配好并在当前宿主实测通过的 hook 可以拦截违规命令；使用 `formal-gates workflow` / `formal-gates gate` 记录时，机器层会校验证据并拒绝不合格的门禁记录。
+- 当前内置策略可以只读导出，方便维护者确认机器执行的规则：`bin/formal-gates policy show --format json`。
 
 ---
 
@@ -157,6 +160,9 @@ AI 写代码有几个通病，这套门禁专门拦：
 ```bash
 # 本地结构、prompt、hook decide、workflow、receipt、install 自检
 bin/formal-gates canary portable --root . --format json
+
+# 只读查看当前 Go 校验器内置策略，不会授权或记录 PASS
+bin/formal-gates policy show --format json
 
 # 可自动判定的行为用例，期望 24 个全部 PASS
 bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
@@ -237,30 +243,26 @@ Codex 用户不要只靠自动拦截。除非 `formal-gates canary codex-hook --
 维护者本地自检链路见 [`references/local-validation.md`](references/local-validation.md)。本节只保留其余跨平台验证命令。
 
 ```bash
-# 校验单个 artifact
+# 校验 run-local reviewer JSON artifact
 bin/formal-gates artifact validate \
   --root . \
-  --file .claude/gates/artifacts/<artifact>.md \
+  --file .claude/gates/runs/RUN_ID/complexity-review.json \
   --gate complexity-gate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
 
 # 校验 dispatch prompt 污染
-bin/formal-gates prompt validate --root . --file <prompt.md>
+bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/complexity-dispatch.txt
 
-# 基础 gate state 记录和准入检查
-bin/formal-gates gate record --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates gate verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates gate show --worktree <repo> --format json
-
-# workflow 基础封装：snapshot、record-stage、verify-admission、final-verification、cleanup
+# workflow 基础封装：snapshot、run-local state、final-verification、FinalExecution
 bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
-bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow cleanup --worktree <repo> --dry-run
+bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow verify-admission --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate architecture-health-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
+
+`final-verification-attempts.json` 中每个 accepted PASS attempt 都必须包含其 artifact 当前字节的 lowercase SHA-256 `artifactHash`。
 
 Windows 下命令名是 `bin/formal-gates.exe`。源码 checkout 做开发测试时，可临时用 `go run ./cmd/formal-gates`；安装后的 hook 和校验路径必须使用 `bin/formal-gates(.exe)`。
 
@@ -291,8 +293,6 @@ formal-gates/
 
 人看这个 README 上手；AI 从 `SKILL.md` 进入。各门具体判据按需读 `references/`。
 `examples/sample-*.json` 和 `examples/sample-*.md` 只作结构参考；正式记录必须由 `formal-gates gate` / `formal-gates workflow` 命令生成，不能直接复制样例文件。
-
-> 当前支持本地安装、本地验证，并配置了 release 校验和上传；不提供公开 registry、marketplace、`npx`、签名、provenance、attestation 或完整 release-trust 发行证明。
 
 ---
 

@@ -96,7 +96,7 @@ Rules:
 - `deferred-by-user` and `out-of-scope-by-user` require per-item user approval evidence in the alignment item itself.
 - Persist each resolved item immediately in the existing alignment artifact before continuing to the next question. Incremental persistence updates one shared record; it does not create one file per item.
 - If a previous alignment artifact exists, compare ID sets before recording PASS. Any missing old ID must appear under `Dropped question IDs` and have explicit user approval in the decision record or in a per-ID user quote field.
-- For current PASS artifact schema compatibility, the machine alignment artifact still accepts the legacy field name `OpenSpec impact:`. Use `Document impact:` in narrative alignment, and map it through `references/requirement-document-adapters.md` when recording format-specific artifacts.
+- Use `Document impact:` in narrative alignment. Formal PASS relies on structured per-item evidence and has no legacy Markdown-field compatibility path.
 
 ## Question Quality Standard
 

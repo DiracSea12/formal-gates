@@ -37,13 +37,15 @@ bin/formal-gates hook decide < payload.json
 To use the native receipt proof foundation:
 
 ```bash
-bin/formal-gates receipt register --provider codex --worktree <repo> --artifact <review.md> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
+bin/formal-gates receipt register --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --context-bundle <bundle.json> --artifact .claude/gates/runs/<run-id>/<review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
 bin/formal-gates receipt capture --provider codex --event SubagentStart --worktree <repo> < start-payload.json
 bin/formal-gates receipt capture --provider codex --event SubagentStop --worktree <repo> < stop-payload.json
-bin/formal-gates receipt finalize --provider codex --worktree <repo> --artifact <review.md> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
-bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --artifact <review.md> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
+bin/formal-gates receipt finalize --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --artifact .claude/gates/runs/<run-id>/<review.json> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
+bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --artifact <review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
 bin/formal-gates receipt preflight --host codex --worktree <repo>
 ```
+
+Register a meaningful target snapshot and an absent run-local reviewer output before dispatch. The registration reserves that path; installed capture hooks derive the same active run from the exact dispatch correlation and reject a conflicting explicit run selection. After lifecycle start the reviewer writes the JSON output, lifecycle stop is captured, and finalization validates the completed output binding and exact bytes. Existing output and duplicate open reservations are rejected.
 
 Use `bin/formal-gates.exe` on Windows. Source checkout development tests may use `go run ./cmd/formal-gates`, but installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
@@ -59,7 +61,7 @@ bin/formal-gates install --source <formal-gates> --host cursor --scope project -
 
 The native installer requires `bin/formal-gates(.exe)` under `--source`; build it first with `go build -o bin/formal-gates ./cmd/formal-gates` or the Windows `.exe` equivalent. `--configure-hooks` writes native hook commands: `hook decide` for PreToolUse/preToolUse and `receipt capture` for subagent lifecycle events. It preserves non-formal-gates hook entries and replaces only formal-gates hook commands.
 
-This Go path is the portable CLI entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, admission checks for the fixed post-development order, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, final verification aggregation, FinalExecution recording from a supplied artifact, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
+This Go path is the portable CLI entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, admission checks for the fixed post-development order, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, final verification aggregation, CLI-generated mechanical FinalExecution closeout, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
 
 ## Maintained Source
 
@@ -327,7 +329,7 @@ Manifest extension gates bind to the manifest hash. Their prerequisite gates mus
 
 ## Formal Gate Artifacts And Recording Commands
 
-Formal post-development gate artifact fields, `gate_route`, recording commands, and final-QA native commands live in `references/post-development-artifacts.md`.
+Formal schema-version-2 reviewer and QA Execution payloads, recording commands, receipt/closure handling, and mechanical FinalExecution live in `references/post-development-artifacts.md`.
 
 This file keeps only installation, hooks, manifests, canaries, multi-host paths, and runtime validation rules. Do not turn install documentation into an artifact-template repository.
 

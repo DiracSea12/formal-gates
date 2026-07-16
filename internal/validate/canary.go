@@ -51,7 +51,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	addResult("package-validate", Package(root))
 	addResult("prompt-clean", DispatchPrompt(DispatchPromptOptions{
 		Root:       root,
-		PromptText: "Review this package from the supplied files and report only evidence-backed findings.",
+		PromptText: "Review this package using the current schema-version-2 contract and policy complexity.post-development.v2, and report only evidence-backed findings.",
 	}))
 	contaminated := DispatchPrompt(DispatchPromptOptions{
 		Root:       root,
@@ -101,6 +101,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	secondSnapshot, secondSnapshotResult := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: worktree, VCS: "file-hash"})
 	addCheck("workflow-file-hash-stable", secondSnapshotResult.OK() && firstSnapshot.ChangeSnapshot == secondSnapshot.ChangeSnapshot, "file-hash snapshots are stable across repeated runs")
 
+	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
 	if err := writeCanaryGateArtifact(worktree, "qa-test-gate", "Execution", "wf", "snap"); err != nil {
 		addCheck("workflow-record-fixture", false, err.Error())
 	} else {
@@ -110,7 +111,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			Verdict:        "PASS",
 			Mode:           "formal",
 			Stage:          "Execution",
-			Artifact:       "qa-test-gate.md",
+			Artifact:       filepath.ToSlash(filepath.Join(runRel, "qa-test-gate.md")),
 			Actor:          "native-canary",
 			WorkflowID:     "wf",
 			ChangeSnapshot: "snap",
@@ -130,60 +131,71 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 				Worktree:       worktree,
 				Gate:           gate,
 				Verdict:        "PASS",
-				Artifact:       gate + ".md",
+				Artifact:       filepath.ToSlash(filepath.Join(runRel, gate+".md")),
 				Actor:          "native-canary",
 				WorkflowID:     "wf",
 				ChangeSnapshot: "snap",
 			}))
 		}
 	}
-	attemptPath := filepath.Join(worktree, ".claude", "gates", "artifacts", "attempt.json")
+	attemptRel := filepath.ToSlash(filepath.Join(runRel, "attempt.json"))
+	attemptPath := filepath.Join(worktree, filepath.FromSlash(attemptRel))
 	if err := writeCanaryFile(attemptPath, `{"ok":true}`+"\n"); err != nil {
 		addCheck("final-verification-fixture", false, err.Error())
 	} else {
+		attemptsJSON := `[{"status":"PASS","accepted":true,"artifact":"` + attemptRel + `","artifactHash":"` + sha256File(attemptPath) + `"}]`
 		_, finalResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 			Worktree:       worktree,
-			AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json"}]`,
-			OutputArtifact: ".claude/gates/artifacts/final-verification.json",
+			RunDir:         runRel,
+			AttemptsJSON:   attemptsJSON,
+			OutputArtifact: filepath.ToSlash(filepath.Join(runRel, "final-verification.json")),
 			WorkflowID:     "wf",
 			ChangeSnapshot: "snap",
 		})
 		addResult("workflow-final-verification", finalResult)
-		if err := writeCanaryFile(filepath.Join(worktree, "final-execution.md"), canaryFinalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification-record-final-qa.json")); err != nil {
-			addCheck("final-qa-record-fixture", false, err.Error())
-		} else {
-			_, finalQAResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-				Worktree:        worktree,
-				AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/attempt.json"}]`,
-				OutputArtifact:  ".claude/gates/artifacts/final-verification-record-final-qa.json",
-				FinalQAArtifact: "final-execution.md",
-				RecordFinalQA:   true,
-				Actor:           "gate-workflow",
-				WorkflowID:      "wf",
-				ChangeSnapshot:  "snap",
-			})
-			addResult("workflow-final-execution-record", finalQAResult)
-		}
+		_, finalQAResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+			Worktree:        worktree,
+			RunDir:          runRel,
+			AttemptsJSON:    attemptsJSON,
+			OutputArtifact:  filepath.ToSlash(filepath.Join(runRel, "final-verification-record-final-qa.json")),
+			FinalQAArtifact: filepath.ToSlash(filepath.Join(runRel, "final-execution.md")),
+			RecordFinalQA:   true,
+			Actor:           "gate-workflow",
+			WorkflowID:      "wf",
+			ChangeSnapshot:  "snap",
+		})
+		addResult("workflow-final-execution-record", finalQAResult)
 	}
 
 	receiptWorktree := filepath.Join(tempRoot, "receipt-worktree")
-	if err := os.MkdirAll(receiptWorktree, 0o700); err != nil {
+	receiptArtifact := filepath.ToSlash(filepath.Join(runRel, "complexity.json"))
+	if err := os.MkdirAll(filepath.Dir(resolvePath(receiptWorktree, receiptArtifact)), 0o700); err != nil {
 		addCheck("receipt-worktree", false, err.Error())
-	} else if err := writeCanaryComplexityArtifact(receiptWorktree, "wf", "snap"); err != nil {
-		addCheck("receipt-fixture", false, err.Error())
 	} else {
+		receiptInput := filepath.Join(receiptWorktree, filepath.FromSlash(runRel), "receipt-context.txt")
+		receiptBundle := "receipt-context-bundle.json"
+		if err := writeCanaryFile(receiptInput, "context\n"); err != nil {
+			addCheck("receipt-context-bundle", false, err.Error())
+		} else if err := writeCanaryJSON(filepath.Join(filepath.Dir(receiptInput), receiptBundle), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{{Path: "receipt-context.txt", SHA256: sha256File(receiptInput)}}}); err != nil {
+			addCheck("receipt-context-bundle", false, err.Error())
+		}
 		registration, registerResult := ReceiptRegisterDispatch(ReceiptRegisterOptions{
-			Worktree:   receiptWorktree,
-			Provider:   "codex",
-			WorkflowID: "wf",
-			Gate:       "complexity-gate",
-			Artifact:   "complexity.md",
+			Worktree:       receiptWorktree,
+			Provider:       "codex",
+			WorkflowID:     "wf",
+			ChangeSnapshot: "snap",
+			Gate:           "complexity-gate",
+			Artifact:       receiptArtifact,
+			ContextBundle:  receiptBundle,
 		})
 		addResult("receipt-register", registerResult)
 		if registerResult.OK() {
 			payload := fmt.Sprintf(`{"workflowId":"wf","gate":"complexity-gate","subagentId":"subagent-1","dispatchId":%q,"dispatchRegistrationArtifact":%q}`, registration.DispatchID, registration.DispatchRegistrationArtifact)
 			_, startResult := ReceiptCapture(ReceiptCaptureOptions{Worktree: receiptWorktree, Provider: "codex", Event: "SubagentStart", Payload: []byte(payload)})
 			addResult("receipt-capture-start", startResult)
+			if err := writeCanaryComplexityArtifact(receiptWorktree, "wf", "snap"); err != nil {
+				addCheck("receipt-fixture", false, err.Error())
+			}
 			_, stopResult := ReceiptCapture(ReceiptCaptureOptions{Worktree: receiptWorktree, Provider: "codex", Event: "SubagentStop", Payload: []byte(payload)})
 			addResult("receipt-capture-stop", stopResult)
 			receipt, finalizeResult := ReceiptFinalize(ReceiptFinalizeOptions{
@@ -191,14 +203,14 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 				Provider:   "codex",
 				WorkflowID: "wf",
 				Gate:       "complexity-gate",
-				Artifact:   "complexity.md",
+				Artifact:   receiptArtifact,
 			})
 			addResult("receipt-finalize", finalizeResult)
 			if finalizeResult.OK() {
 				addResult("receipt-validate", ReceiptValidate(ReceiptValidateOptions{
 					Worktree:       receiptWorktree,
 					Receipt:        receipt.ReceiptArtifact,
-					Artifact:       "complexity.md",
+					Artifact:       receiptArtifact,
 					Gate:           "complexity-gate",
 					WorkflowID:     "wf",
 					ChangeSnapshot: "snap",
@@ -310,116 +322,95 @@ func resultSummary(result Result) string {
 }
 
 func writeCanaryGateArtifact(root, gate, stage, workflowID, snapshot string) error {
-	return writeCanaryFile(filepath.Join(root, gate+".md"), canaryGateArtifactText(gate, stage, workflowID, snapshot))
+	runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	prefix := strings.TrimSuffix(gate, "-gate")
+	for name, text := range map[string]string{prefix + "-input.txt": "input", prefix + "-dispatch.txt": "dispatch", prefix + "-changed.txt": "changed", prefix + "-verification.txt": "verified"} {
+		if err := writeCanaryFile(filepath.Join(runDir, name), text); err != nil {
+			return err
+		}
+	}
+	ref := func(name string) EvidenceRef {
+		return EvidenceRef{Path: name, SHA256: sha256File(filepath.Join(runDir, name))}
+	}
+	if gate == "qa-test-gate" {
+		if err := writeCanaryFile(filepath.Join(runDir, "approved-cases.md"), "# Cases\n\nStatus: APPROVED_FOR_EXECUTION\n\n## Login flow\n\nCase ID: P1-001\n\n## Execution notes\n"); err != nil {
+			return err
+		}
+		approved := ref("approved-cases.md")
+		if err := writeCanaryJSON(filepath.Join(runDir, "qa-results.json"), map[string]any{
+			"owner": "QA", "workflowId": workflowID, "changeSnapshot": snapshot, "stage": "Execution", "status": "COMPLETE", "overallOutcome": "PASS",
+			"executions":  []any{map[string]any{"id": "E-001", "outcome": "PASS", "procedure": "Run the approved case", "result": "The case passed"}},
+			"caseResults": []any{map[string]any{"caseId": "P1-001", "status": "PASS", "procedures": []string{"E-001"}, "oracle": "The approved behavior is observed"}},
+		}); err != nil {
+			return err
+		}
+		results := ref("qa-results.json")
+		if err := writeCanaryJSON(filepath.Join(runDir, "qa-case-binding.json"), map[string]any{
+			"workflowId": workflowID, "changeSnapshot": snapshot, "approvedCaseSet": approved, "qaOwnedResults": results, "complete": true,
+			"bindings": []any{map[string]any{"caseId": "P1-001", "resultPointer": "/caseResults/0", "status": "PASS", "executionRefs": []string{"E-001"}, "procedures": []string{"E-001"}, "oracle": "The approved behavior is observed"}},
+		}); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(QAExecutionPayload{ApprovedCaseSet: approved, QAOwnedResults: results, CaseResultBinding: ref("qa-case-binding.json"), ChangedFiles: ref(prefix + "-changed.txt"), Verification: ref(prefix + "-verification.txt")})
+		return writeCanaryJSON(filepath.Join(runDir, gate+".md"), FormalGateEvidence{SchemaVersion: 2, ArtifactRole: "QA_EXECUTION", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Verdict: "PASS", Payload: payload})
+	}
+	bundleName := prefix + "-bundle.json"
+	if err := writeCanaryJSON(filepath.Join(runDir, bundleName), ContextBundle{BundleVersion: 1, WorkflowID: workflowID, ChangeSnapshot: snapshot, Inputs: []EvidenceRef{ref(prefix + "-input.txt")}}); err != nil {
+		return err
+	}
+	policyID := map[string]string{"qa-test-gate": "qa.execution.v2", "complexity-gate": "complexity.post-development.v2", "architecture-health-gate": "architecture.post-development.v2", "code-quality-gate": "code-quality.post-development.v2"}[gate]
+	policy, ok := policyByID(policyID)
+	if !ok {
+		return fmt.Errorf("missing canary policy %s", policyID)
+	}
+	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
+	statsName := prefix + "-statistics.json"
+	if err := writeCanaryJSON(filepath.Join(runDir, statsName), ComplexityReport{Status: "PASS", VCS: "none", Worktree: root, TaskType: "refactor", BudgetSource: "none", BudgetOverrides: ComplexityBudgetOverride{}, Summary: ComplexitySummary{}, Failures: []string{}, ReviewRequired: []string{}, Warnings: []string{}, LargestFiles: []ComplexityFileChange{}}); err != nil {
+		return err
+	}
+	for _, id := range policy.RequiredCheckIDs {
+		check := ReviewCheck{ID: id, Status: "PASS", Message: "checked", EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
+		if id == "complexity.statistics" {
+			check.EvidenceRefs = []EvidenceRef{ref(statsName)}
+		}
+		checks = append(checks, check)
+	}
+	changed, verification := ref(prefix+"-changed.txt"), ref(prefix+"-verification.txt")
+	payload := ReviewerPayload{Dispatch: ref(prefix + "-dispatch.txt"), ContextBundle: ref(bundleName), ReviewPolicyID: policy.ID, Checks: checks, ChangedFiles: &changed, Verification: &verification}
+	payloadData, _ := json.Marshal(payload)
+	artifact := relativePath(root, filepath.Join(runDir, gate+".md"))
+	registration, rr := ReceiptRegisterDispatch(ReceiptRegisterOptions{Worktree: root, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: bundleName})
+	if !rr.OK() {
+		return fmt.Errorf("%s", resultSummary(rr))
+	}
+	raw, _ := json.Marshal(map[string]any{"workflowId": workflowID, "changeSnapshot": snapshot, "gate": gate, "stage": stage, "subagentId": prefix + "-agent", "dispatchId": registration.DispatchID, "dispatchRegistrationArtifact": registration.DispatchRegistrationArtifact})
+	if _, r := ReceiptCapture(ReceiptCaptureOptions{Worktree: root, Provider: "codex", Event: "SubagentStart", Payload: raw}); !r.OK() {
+		return fmt.Errorf("%s", resultSummary(r))
+	}
+	if err := writeCanaryJSON(filepath.Join(runDir, gate+".md"), FormalGateEvidence{SchemaVersion: 2, ArtifactRole: policy.ArtifactRole, WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Verdict: "PASS", Payload: payloadData}); err != nil {
+		return err
+	}
+	if _, r := ReceiptCapture(ReceiptCaptureOptions{Worktree: root, Provider: "codex", Event: "SubagentStop", Payload: raw}); !r.OK() {
+		return fmt.Errorf("%s", resultSummary(r))
+	}
+	if _, r := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: root, Provider: "codex", WorkflowID: workflowID, Gate: gate, Stage: stage, Artifact: artifact}); !r.OK() {
+		return fmt.Errorf("%s", resultSummary(r))
+	}
+	return nil
 }
 
 func writeCanaryComplexityArtifact(root, workflowID, snapshot string) error {
-	bundle := filepath.Join(root, "bundle.md")
-	prompt := filepath.Join(root, "prompt.md")
-	if err := writeCanaryFile(bundle, "bundle\n"); err != nil {
+	runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	payload, _ := json.Marshal(ReviewerPayload{Checks: []ReviewCheck{}})
+	return writeCanaryJSON(filepath.Join(runDir, "complexity.json"), FormalGateEvidence{SchemaVersion: 2, ArtifactRole: "COMPLEXITY_REVIEW", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: "complexity-gate", Stage: "", Verdict: "PASS", Payload: payload})
+}
+
+func writeCanaryJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
 		return err
 	}
-	if err := writeCanaryFile(prompt, "formal_gate_dispatch: true\n"); err != nil {
-		return err
-	}
-	return writeCanaryFile(filepath.Join(root, "complexity.md"), canaryComplexityArtifactText(
-		workflowID,
-		snapshot,
-		"bundle.md sha256="+sha256File(bundle),
-		"prompt.md sha256="+sha256File(prompt),
-		"",
-	))
-}
-
-func canaryGateArtifactText(gate, stage, workflowID, snapshot string) string {
-	lines := []string{
-		"Review mode: ZERO_CONTEXT_FORMAL",
-		"Prompt contamination check: PASS",
-		"Semantic anti-anchor check: PASS",
-		"Prompt source: " + expectedPromptSource(gate),
-		"Zero-context reviewer: YES",
-		"Independent agent: YES",
-		"Context bundle: bundle.md sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"Dispatch prompt artifact: prompt.md sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"No-anchor prompt: YES",
-	}
-	if gate == "qa-test-gate" {
-		lines = append(lines,
-			"Approved case set: cases.md",
-			"QA-owned evidence: qa-evidence.md",
-			"Case-to-artifact binding: bound",
-		)
-	}
-	if gate == "complexity-gate" {
-		lines = append(lines, canaryComplexitySpecificFields()...)
-	}
-	lines = append(lines,
-		"gate_route:",
-		"  workflow_id: "+workflowID,
-		"  change_snapshot: "+snapshot,
-		"  next_action: proceed",
-		"  rework_owner: none",
-		"  rerun_from: none",
-	)
-	if stage == "FinalExecution" {
-		lines[len(lines)-3] = "  next_action: seal"
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func canaryFinalExecutionArtifactText(workflowID, snapshot, finalVerification string) string {
-	lines := []string{
-		"FinalExecution mode: MECHANICAL_CLOSEOUT",
-		"Mechanical closeout: YES",
-		"Final verification artifact: " + finalVerification,
-		"Existing gate records: qa-test-gate Execution, complexity-gate, architecture-health-gate, code-quality-gate",
-		"Release judgment: YES",
-		"gate_route:",
-		"  workflow_id: " + workflowID,
-		"  change_snapshot: " + snapshot,
-		"  next_action: seal",
-		"  rework_owner: none",
-		"  rerun_from: none",
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func canaryComplexityArtifactText(workflowID, snapshot, bundleRef, dispatchRef, receiptRef string) string {
-	lines := []string{
-		"Review mode: ZERO_CONTEXT_FORMAL",
-		"Prompt contamination check: PASS",
-		"Semantic anti-anchor check: PASS",
-		"Prompt source: agents/complexity-gate.md",
-		"Zero-context reviewer: YES",
-		"Independent agent: YES",
-		"Reviewer proof receipt: " + receiptRef,
-		"Context bundle: " + bundleRef,
-		"Dispatch prompt artifact: " + dispatchRef,
-		"No-anchor prompt: YES",
-	}
-	lines = append(lines, canaryComplexitySpecificFields()...)
-	lines = append(lines,
-		"gate_route:",
-		"  workflow_id: "+workflowID,
-		"  change_snapshot: "+snapshot,
-		"  next_action: proceed",
-		"  rework_owner: none",
-		"  rerun_from: none",
-	)
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func canaryComplexitySpecificFields() []string {
-	return []string{
-		"Script result: PASS",
-		"Diff shape judgment: focused",
-		"Impact surface health: bounded",
-		"Public/config surface: none",
-		"New concepts: none",
-		"Minimum sufficient implementation: yes",
-		"Shrink opportunities: none",
-		"Decision evidence: diff",
-	}
+	return writeCanaryFile(path, string(data)+"\n")
 }
 
 func writeCanaryFile(path, text string) error {

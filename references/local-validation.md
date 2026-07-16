@@ -9,6 +9,7 @@ It is separate from install-and-hooks guidance and from the AI skill entrypoint.
 go test ./...
 bin/formal-gates package validate --root .
 bin/formal-gates canary portable --root . --format json
+bin/formal-gates policy show --format json
 bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
 ```
 
@@ -17,6 +18,7 @@ bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prom
 - `go test ./...` verifies the Go unit tests for the repository.
 - `package validate` checks package shape and required files.
 - `canary portable` checks the portable package evidence for the current platform.
+- `policy show` exports the current Go-enforced policy without authorizing PASS.
 - `behavior evaluate` checks the behavior answer fixture against the portable cases.
 
 ## Companion Material

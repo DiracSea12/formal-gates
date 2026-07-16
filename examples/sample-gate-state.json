@@ -1,18 +1,20 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "gates": {
     "qa-test-gate": {
       "gate": "qa-test-gate",
       "verdict": "PASS",
-      "mode": "formal",
+      "mode": "post-development",
       "stage": "Execution",
-      "artifact": ".claude/gates/artifacts/<workflow-id>/qa-execution.md",
-      "actor": "<independent-qa-reviewer-id>",
-      "workflowId": "<workflow-id>",
-      "changeSnapshot": "<snapshot-id>",
-      "updatedAtUtc": "<iso-8601-timestamp>",
-      "manifestHash": "<optional-manifest-hash>",
-      "worktree": "<optional-worktree-path>"
+      "artifact": ".claude/gates/runs/workflow-id/closures/qa-test-gate-hash.json",
+      "artifactHash": "<lowercase-sha256>",
+      "actor": "gate-workflow",
+      "reason": "",
+      "workflowId": "workflow-id",
+      "changeSnapshot": "snapshot-id",
+      "worktree": "<absolute-worktree>",
+      "statePath": "<absolute-state-path>",
+      "updatedAtUtc": "<iso-8601-timestamp>"
     }
   },
   "history": []

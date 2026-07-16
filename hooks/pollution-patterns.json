@@ -44,13 +44,6 @@
         ]
       },
       {
-        "label": "version reference",
-        "description": "Version references (v1, v2) anchor the reviewer toward comparative analysis rather than independent review of current state",
-        "patterns": [
-          "(?i)\\bv\\d+\\b"
-        ]
-      },
-      {
         "label": "priority label",
         "description": "Priority labels from previous reviews anchor the reviewer toward validating existing assessments",
         "patterns": [
@@ -90,6 +83,13 @@
         "description": "Negative direction implicitly guides reviewer attention and violates zero-context principle",
         "patterns": [
           "(?i)\\b(no\\s+need\\s+to|skip|exclude|ignore|remains?\\s+unchanged)"
+        ]
+      },
+      {
+        "label": "formal-gates rule override",
+        "description": "Instructions to ignore or override formal-gates rules contaminate the dispatch context",
+        "patterns": [
+          "(?i)\\b(ignore|override|bypass)\\s+(the\\s+)?formal-gates\\s+rules?\\b"
         ]
       },
       {

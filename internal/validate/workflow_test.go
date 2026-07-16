@@ -55,9 +55,59 @@ func TestWorkflowFileHashSnapshotIgnoresGateAndTempDirs(t *testing.T) {
 	}
 }
 
+func TestWorkflowGitSnapshotIgnoresGeneratedGateEvidenceWithoutIgnoreRules(t *testing.T) {
+	dir := initComplexityGitRepo(t)
+
+	before, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "git", BaseRef: "HEAD", IncludeWorkingTree: true})
+	if !result.OK() {
+		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
+	}
+	mustWrite(t, filepath.Join(dir, ".claude", "gates", "runs", "wf", "generated.json"), `{"generated":true}`+"\n")
+
+	after, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "git", BaseRef: "HEAD", IncludeWorkingTree: true})
+	if !result.OK() {
+		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
+	}
+	if before != after {
+		t.Fatalf("generated gate evidence changed snapshot: before=%#v after=%#v", before, after)
+	}
+}
+
 func TestWorkflowRecordStageCallsGateState(t *testing.T) {
 	dir := t.TempDir()
-	writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
+	artifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
+
+	result := WorkflowRecordStage(WorkflowRecordStageOptions{
+		Worktree:       dir,
+		Gate:           "qa-test-gate",
+		Verdict:        "PASS",
+		Mode:           "formal",
+		Stage:          "Execution",
+		Artifact:       artifact,
+		Actor:          "qa",
+		WorkflowID:     "wf",
+		ChangeSnapshot: "snap",
+	})
+	if !result.OK() {
+		t.Fatalf("expected workflow record-stage to pass, got %#v", result.Failures)
+	}
+	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "gate-state.json"))})
+	if !show.OK() {
+		t.Fatalf("expected show to pass, got %#v", show.Failures)
+	}
+	if state.Gates["qa-test-gate"].Actor != "qa" {
+		t.Fatalf("expected gate-state entry from workflow record-stage, got %#v", state.Gates["qa-test-gate"])
+	}
+	if isFile(filepath.Join(dir, ".claude", "gates", "gate-state.json")) {
+		t.Fatal("omitted --run-dir wrote repository-level gate state")
+	}
+}
+
+func TestWorkflowRecordStageWithoutRunDirRejectsArtifactOutsideDefaultRun(t *testing.T) {
+	dir := t.TempDir()
+	envelope, payload := qaExecutionPolicyFixture(t, dir, "wf", "snap")
+	writeEnvelopeTest(t, filepath.Join(dir, "qa-test-gate.md"), envelope, payload)
 
 	result := WorkflowRecordStage(WorkflowRecordStageOptions{
 		Worktree:       dir,
@@ -66,19 +116,14 @@ func TestWorkflowRecordStageCallsGateState(t *testing.T) {
 		Mode:           "formal",
 		Stage:          "Execution",
 		Artifact:       "qa-test-gate.md",
-		Actor:          "qa",
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 	})
-	if !result.OK() {
-		t.Fatalf("expected workflow record-stage to pass, got %#v", result.Failures)
+	if result.OK() || !strings.Contains(resultSummary(result), "artifact must be under --run-dir") {
+		t.Fatalf("repository-level artifact was accepted: %#v", result.Failures)
 	}
-	state, show := GateShow(GateShowOptions{Worktree: dir})
-	if !show.OK() {
-		t.Fatalf("expected show to pass, got %#v", show.Failures)
-	}
-	if state.Gates["qa-test-gate"].Actor != "qa" {
-		t.Fatalf("expected gate-state entry from workflow record-stage, got %#v", state.Gates["qa-test-gate"])
+	if isFile(filepath.Join(dir, ".claude", "gates", "gate-state.json")) || isFile(filepath.Join(dir, ".claude", "gates", "runs", "wf", "gate-state.json")) {
+		t.Fatal("rejected repository-level artifact changed gate state")
 	}
 }
 
@@ -94,14 +139,14 @@ func TestWorkflowVerifyAdmissionPositiveAndNegative(t *testing.T) {
 		t.Fatal("expected missing QA prerequisite to block")
 	}
 
-	writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
+	artifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
 	record := WorkflowRecordStage(WorkflowRecordStageOptions{
 		Worktree:       dir,
 		Gate:           "qa-test-gate",
 		Verdict:        "PASS",
 		Mode:           "formal",
 		Stage:          "Execution",
-		Artifact:       "qa-test-gate.md",
+		Artifact:       artifact,
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 	})
@@ -122,9 +167,10 @@ func TestWorkflowVerifyAdmissionPositiveAndNegative(t *testing.T) {
 
 func TestWorkflowFinalVerificationAcceptedAttempt(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-run.json"), `{"ok":true}`+"\n")
-	attempts := `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-run.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`
-	output := ".claude/gates/artifacts/final-verification.json"
+	finalRunRel, finalRun := workflowRunTestPath(t, dir, "wf", "final-run.json")
+	mustWrite(t, finalRun, `{"ok":true}`+"\n")
+	attempts := `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`
+	output, outputPath := workflowRunTestPath(t, dir, "wf", "final-verification.json")
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:       dir,
@@ -140,7 +186,7 @@ func TestWorkflowFinalVerificationAcceptedAttempt(t *testing.T) {
 		t.Fatalf("unexpected aggregate: %#v", artifact)
 	}
 	var written WorkflowFinalVerificationArtifact
-	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(output)))
+	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,18 +201,54 @@ func TestWorkflowFinalVerificationAcceptedAttempt(t *testing.T) {
 	}
 }
 
+func TestWorkflowFinalVerificationWithoutRunDirRejectsRepositoryPaths(t *testing.T) {
+	dir := t.TempDir()
+	runAttempt, runAttemptPath := workflowRunTestPath(t, dir, "wf", "attempt.json")
+	runOutput, _ := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+	mustWrite(t, runAttemptPath, `{"ok":true}`+"\n")
+	rootAttempt := filepath.Join(dir, "attempt.json")
+	mustWrite(t, rootAttempt, `{"ok":true}`+"\n")
+	rootAttemptsFile := filepath.Join(dir, "attempts.json")
+	mustWrite(t, rootAttemptsFile, `[]`)
+
+	validAttempts := `[{"status":"PASS","accepted":true,"artifact":"` + runAttempt + `","artifactHash":"` + sha256FileForTest(t, runAttemptPath) + `"}]`
+	rootAttempts := `[{"status":"PASS","accepted":true,"artifact":"attempt.json","artifactHash":"` + sha256FileForTest(t, rootAttempt) + `"}]`
+	for _, test := range []struct {
+		name    string
+		options WorkflowFinalVerificationOptions
+		want    string
+	}{
+		{name: "attempt artifact", options: WorkflowFinalVerificationOptions{AttemptsJSON: rootAttempts, OutputArtifact: runOutput}, want: "attempts[0].artifact"},
+		{name: "attempts file", options: WorkflowFinalVerificationOptions{AttemptsFile: "attempts.json", OutputArtifact: runOutput}, want: "attempts-file"},
+		{name: "output", options: WorkflowFinalVerificationOptions{AttemptsJSON: validAttempts, OutputArtifact: "final-verification.json"}, want: "output"},
+		{name: "final QA artifact", options: WorkflowFinalVerificationOptions{AttemptsJSON: validAttempts, OutputArtifact: runOutput, FinalQAArtifact: "final-execution.json", RecordFinalQA: true}, want: "final-qa-artifact"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.options.Worktree = dir
+			test.options.WorkflowID = "wf"
+			test.options.ChangeSnapshot = "snap"
+			_, result := WorkflowFinalVerification(test.options)
+			if result.OK() || !strings.Contains(resultSummary(result), test.want) {
+				t.Fatalf("repository path was accepted: %#v", result.Failures)
+			}
+		})
+	}
+}
+
 func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-run.json"), `{"ok":true}`+"\n")
+	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	finalRunRel := filepath.ToSlash(filepath.Join(runRel, "final-run.json"))
+	finalRun := filepath.Join(dir, filepath.FromSlash(finalRunRel))
+	mustWrite(t, finalRun, `{"ok":true}`+"\n")
 	recordFourGatePrerequisites(t, dir, "wf", "snap")
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-verification.json"), finalVerificationJSON("wf", "snap"))
-	mustWrite(t, filepath.Join(dir, "final-execution.md"), finalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification.json"))
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:        dir,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-run.json"}]`,
-		OutputArtifact:  ".claude/gates/artifacts/final-verification.json",
-		FinalQAArtifact: "final-execution.md",
+		RunDir:          runRel,
+		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
+		OutputArtifact:  filepath.ToSlash(filepath.Join(runRel, "final-verification.json")),
+		FinalQAArtifact: filepath.ToSlash(filepath.Join(runRel, "final-execution.md")),
 		RecordFinalQA:   true,
 		Actor:           "gate-workflow",
 		WorkflowID:      "wf",
@@ -178,27 +260,167 @@ func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	if artifact.Status != "PASS" {
 		t.Fatalf("expected PASS aggregate, got %#v", artifact)
 	}
-	state, show := GateShow(GateShowOptions{Worktree: dir})
+	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "gate-state.json"))})
 	if !show.OK() {
 		t.Fatalf("expected gate state to show, got %#v", show.Failures)
 	}
 	entry := state.Gates["qa-test-gate"]
-	if entry.Stage != "FinalExecution" || entry.Actor != "gate-workflow" || entry.Artifact != "final-execution.md" {
+	if entry.Stage != "FinalExecution" || entry.Actor != "gate-workflow" || entry.Artifact != filepath.ToSlash(filepath.Join(runRel, "final-execution.md")) {
 		t.Fatalf("unexpected final QA gate entry: %#v", entry)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(runRel), "final-execution.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope FormalGateEvidence
+	if err := strictContractJSON(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var payload FinalExecutionPayload
+	if err := strictContractJSON(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := fixedPolicy("FINAL_EXECUTION", envelope.Gate, envelope.Stage)
+	if !ok || len(payload.GateMatrix) != len(policy.Prerequisites) {
+		t.Fatalf("FinalExecution did not consume its typed policy: policy=%#v payload=%#v", policy, payload)
+	}
+	for i, prerequisite := range policy.Prerequisites {
+		if payload.GateMatrix[i].Gate != prerequisite.Gate {
+			t.Fatalf("FinalExecution prerequisite %d drifted: policy=%#v row=%#v", i, prerequisite, payload.GateMatrix[i])
+		}
+	}
+}
+
+func TestWorkflowFinalVerificationWriteFailureDoesNotRecordFinalExecution(t *testing.T) {
+	dir := t.TempDir()
+	finalRunRel, finalRun := workflowRunTestPath(t, dir, "wf", "final-run.json")
+	mustWrite(t, finalRun, `{"ok":true}`+"\n")
+	finalExecutionRel, finalExecution := workflowRunTestPath(t, dir, "wf", "final-execution.json")
+	output, outputPath := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+	if err := os.Mkdir(outputPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(outputPath, "sentinel"), "preserved\n")
+	mustWrite(t, finalExecution, "previous FinalExecution\n")
+
+	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree:        dir,
+		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
+		OutputArtifact:  output,
+		FinalQAArtifact: finalExecutionRel,
+		RecordFinalQA:   true,
+		WorkflowID:      "wf",
+		ChangeSnapshot:  "snap",
+	})
+	if result.OK() || len(result.Failures) == 0 || result.Failures[0].Path != "output" {
+		t.Fatalf("expected write failure, got %#v", result.Failures)
+	}
+	if data, err := os.ReadFile(finalExecution); err != nil || string(data) != "previous FinalExecution\n" {
+		t.Fatalf("write failure changed FinalExecution: data=%q err=%v", data, err)
+	}
+}
+
+func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
+	for _, previousExists := range []bool{true, false} {
+		name := "removes newly created artifact"
+		if previousExists {
+			name = "restores previous artifact"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+			finalRunRel := filepath.ToSlash(filepath.Join(runRel, "final-run.json"))
+			finalRun := filepath.Join(dir, filepath.FromSlash(finalRunRel))
+			mustWrite(t, finalRun, `{"ok":true}`+"\n")
+			recordFourGatePrerequisites(t, dir, "wf", "snap")
+			finalVerification := filepath.ToSlash(filepath.Join(runRel, "final-verification.json"))
+			_, verificationResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+				Worktree:       dir,
+				RunDir:         runRel,
+				AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
+				OutputArtifact: finalVerification,
+				WorkflowID:     "wf",
+				ChangeSnapshot: "snap",
+			})
+			if !verificationResult.OK() {
+				t.Fatal(verificationResult.Failures)
+			}
+			finalExecutionRel := filepath.ToSlash(filepath.Join(runRel, "final-execution.json"))
+			finalExecution := filepath.Join(dir, filepath.FromSlash(finalExecutionRel))
+			if previousExists {
+				mustWrite(t, finalExecution, "previous FinalExecution\n")
+			}
+			recordCalled := false
+			runDir, _ := resolveWorkflowRunDir(dir, "wf", runRel)
+			result := recordFinalQAWith(dir, runDir, finalVerification, "PASS", WorkflowFinalVerificationOptions{
+				FinalQAArtifact: finalExecutionRel,
+				WorkflowID:      "wf",
+				ChangeSnapshot:  "snap",
+			}, func(GateRecordOptions) Result {
+				recordCalled = true
+				data, err := os.ReadFile(finalExecution)
+				if err != nil || strings.Contains(string(data), "previous FinalExecution") {
+					t.Fatalf("state recording did not observe generated FinalExecution: data=%q err=%v", data, err)
+				}
+				var failed Result
+				failed.add("gate-state", "forced state recording failure")
+				return failed
+			})
+			if result.OK() || !recordCalled || !strings.Contains(resultSummary(result), "forced state recording failure") {
+				t.Fatalf("expected state recording failure, got called=%v failures=%#v", recordCalled, result.Failures)
+			}
+			data, err := os.ReadFile(finalExecution)
+			if previousExists {
+				if err != nil || string(data) != "previous FinalExecution\n" {
+					t.Fatalf("previous FinalExecution was not restored: data=%q err=%v", data, err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("new FinalExecution was not removed: data=%q err=%v", data, err)
+			}
+		})
+	}
+}
+
+func TestWriteFileAtomicCreatesReplacesAndPreservesFailedDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := writeFileAtomic(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "second\n" {
+		t.Fatalf("atomic replacement was incomplete: data=%q err=%v", data, err)
+	}
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(blocked, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("preserved\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(blocked, []byte("replacement\n"), 0o600); err == nil {
+		t.Fatal("expected replacement of a non-empty directory to fail")
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "preserved\n" {
+		t.Fatalf("failed replacement changed prior destination state: data=%q err=%v", data, err)
 	}
 }
 
 func TestWorkflowFinalVerificationRecordFinalQARequiresFourGatePrerequisites(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-run.json"), `{"ok":true}`+"\n")
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-verification.json"), finalVerificationJSON("wf", "snap"))
-	mustWrite(t, filepath.Join(dir, "final-execution.md"), finalExecutionArtifactText("wf", "snap", ".claude/gates/artifacts/final-verification.json"))
+	finalRunRel, finalRun := workflowRunTestPath(t, dir, "wf", "final-run.json")
+	output, _ := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+	finalQA, _ := workflowRunTestPath(t, dir, "wf", "final-execution.md")
+	mustWrite(t, finalRun, `{"ok":true}`+"\n")
 
 	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:        dir,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-run.json"}]`,
-		OutputArtifact:  ".claude/gates/artifacts/final-verification.json",
-		FinalQAArtifact: "final-execution.md",
+		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
+		OutputArtifact:  output,
+		FinalQAArtifact: finalQA,
 		RecordFinalQA:   true,
 		Actor:           "gate-workflow",
 		WorkflowID:      "wf",
@@ -209,15 +431,18 @@ func TestWorkflowFinalVerificationRecordFinalQARequiresFourGatePrerequisites(t *
 	}
 }
 
-func TestWorkflowFinalVerificationRecordFinalQARequiresExistingArtifact(t *testing.T) {
+func TestWorkflowFinalVerificationRecordFinalQARequiresGateClosures(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "final-run.json"), `{"ok":true}`+"\n")
+	finalRunRel, finalRun := workflowRunTestPath(t, dir, "wf", "final-run.json")
+	output, _ := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+	finalQA, _ := workflowRunTestPath(t, dir, "wf", "final-qa-execution.md")
+	mustWrite(t, finalRun, `{"ok":true}`+"\n")
 
 	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:        dir,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/final-run.json"}]`,
-		OutputArtifact:  ".claude/gates/artifacts/final-verification.json",
-		FinalQAArtifact: ".claude/gates/artifacts/final-qa-execution.md",
+		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
+		OutputArtifact:  output,
+		FinalQAArtifact: finalQA,
 		RecordFinalQA:   true,
 		WorkflowID:      "wf",
 		ChangeSnapshot:  "snap",
@@ -225,18 +450,19 @@ func TestWorkflowFinalVerificationRecordFinalQARequiresExistingArtifact(t *testi
 	if result.OK() {
 		t.Fatal("expected missing final QA artifact to fail")
 	}
-	if !strings.Contains(result.Failures[len(result.Failures)-1].Message, "does not exist") {
+	if !strings.Contains(result.Failures[0].Message, "missing current-snapshot PASS closure") {
 		t.Fatalf("unexpected failure: %#v", result.Failures)
 	}
 }
 
 func TestWorkflowFinalVerificationMissingAcceptedArtifactFails(t *testing.T) {
 	dir := t.TempDir()
-	output := ".claude/gates/artifacts/final-verification.json"
+	missing, _ := workflowRunTestPath(t, dir, "wf", "missing.json")
+	output, outputPath := workflowRunTestPath(t, dir, "wf", "final-verification.json")
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:       dir,
-		AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":".claude/gates/artifacts/missing.json"}]`,
+		AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":"` + missing + `"}]`,
 		OutputArtifact: output,
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
@@ -250,19 +476,21 @@ func TestWorkflowFinalVerificationMissingAcceptedArtifactFails(t *testing.T) {
 	if !strings.Contains(result.Failures[0].Message, "does not exist") {
 		t.Fatalf("expected missing artifact failure, got %#v", result.Failures)
 	}
-	if !isFile(filepath.Join(dir, filepath.FromSlash(output))) {
+	if !isFile(outputPath) {
 		t.Fatal("expected deterministic failure artifact to be written")
 	}
 }
 
 func TestWorkflowFinalVerificationNoAcceptedFails(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "run.json"), `{"ok":false}`+"\n")
+	run, runPath := workflowRunTestPath(t, dir, "wf", "run.json")
+	output, _ := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+	mustWrite(t, runPath, `{"ok":false}`+"\n")
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree:       dir,
-		AttemptsJSON:   `[{"status":"FAIL","accepted":false,"artifact":".claude/gates/artifacts/run.json"}]`,
-		OutputArtifact: ".claude/gates/artifacts/final-verification.json",
+		AttemptsJSON:   `[{"status":"FAIL","accepted":false,"artifact":"` + run + `"}]`,
+		OutputArtifact: output,
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 	})
@@ -317,23 +545,11 @@ func TestWorkflowCompactArchivesRunDirThenLeavesSingleFile(t *testing.T) {
 	dir := t.TempDir()
 	runDir := ".claude/gates/runs/wf"
 	runAbs := filepath.Join(dir, filepath.FromSlash(runDir))
-	qaArtifact := filepath.Join(runAbs, "qa-test-gate.md")
-	mustWrite(t, qaArtifact, gateArtifactText("qa-test-gate", "Execution", "wf", "snap"))
-
-	record := WorkflowRecordStage(WorkflowRecordStageOptions{
-		Worktree:       dir,
-		RunDir:         runDir,
-		Gate:           "qa-test-gate",
-		Verdict:        "PASS",
-		Mode:           "formal",
-		Stage:          "Execution",
-		Artifact:       runDir + "/qa-test-gate.md",
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-	})
-	if !record.OK() {
-		t.Fatalf("expected record-stage to pass, got %#v", record.Failures)
+	qaArtifact := filepath.Join(runAbs, "qa.json")
+	if err := writeGateState(filepath.Join(runAbs, "gate-state.json"), newGateState()); err != nil {
+		t.Fatal(err)
 	}
+	mustWrite(t, qaArtifact, "{}\n")
 	mustWrite(t, filepath.Join(runAbs, "notes", "scratch.txt"), "temporary note\n")
 
 	dryRun, result := WorkflowCompact(WorkflowCompactOptions{
@@ -400,14 +616,14 @@ func recordFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string)
 		{gate: "architecture-health-gate"},
 		{gate: "code-quality-gate"},
 	} {
-		writeGateArtifact(t, dir, item.gate, item.stage, workflowID, snapshot)
+		artifact := writeGateArtifact(t, dir, item.gate, item.stage, workflowID, snapshot)
 		result := WorkflowRecordStage(WorkflowRecordStageOptions{
 			Worktree:       dir,
 			Gate:           item.gate,
 			Verdict:        "PASS",
 			Mode:           item.mode,
 			Stage:          item.stage,
-			Artifact:       item.gate + ".md",
+			Artifact:       artifact,
 			Actor:          item.gate,
 			WorkflowID:     workflowID,
 			ChangeSnapshot: snapshot,
@@ -418,23 +634,12 @@ func recordFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string)
 	}
 }
 
-func finalVerificationJSON(workflowID, snapshot string) string {
-	return `{"schemaVersion":1,"workflowId":"` + workflowID + `","changeSnapshot":"` + snapshot + `","status":"PASS","attempts":[{"status":"PASS","accepted":true,"artifact":"evidence.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"acceptedAttempts":[{"status":"PASS","accepted":true,"artifact":"evidence.json","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}` + "\n"
-}
-
-func finalExecutionArtifactText(workflowID, snapshot, finalVerification string) string {
-	lines := []string{
-		"FinalExecution mode: MECHANICAL_CLOSEOUT",
-		"Mechanical closeout: YES",
-		"Final verification artifact: " + finalVerification,
-		"Existing gate records: qa-test-gate Execution, complexity-gate, architecture-health-gate, code-quality-gate",
-		"Release judgment: YES",
-		"gate_route:",
-		"  workflow_id: " + workflowID,
-		"  change_snapshot: " + snapshot,
-		"  next_action: seal",
-		"  rework_owner: none",
-		"  rerun_from: none",
+func workflowRunTestPath(t *testing.T, worktree, workflowID, name string) (string, string) {
+	t.Helper()
+	rel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, name))
+	path := filepath.Join(worktree, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	return strings.Join(lines, "\n") + "\n"
+	return rel, path
 }

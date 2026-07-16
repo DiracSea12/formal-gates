@@ -274,10 +274,10 @@ Requirement or question: Reviewer receipt 应追求抵御本地控制者的不�
 Source: 针对 `files.ca7f5e44bd40` 的零对话上下文 architecture 开发前审查提出。
 Why it matters: 本地可写 receipt 不能自证可信；但生产 trust root、认证通道和 provider 支持会显著扩大集成范围。
 Status: confirmed
-User answer: 不新增 verifier、provider 框架或外部认证系统。复用现有 receipt 链校验 dispatch、子代理开始/结束、子代理 ID、artifact hash、workflow、gate、stage 和 snapshot 的一致性；所有能运行 CLI 的环境都可以正式 PASS。有 host hook 时可额外证明生命周期事件由宿主自动捕获；无 hook 时仍可用，但不得声称能抵御拥有本地文件和 CLI 写权限的恶意操作者。
+User answer: 不新增 verifier、provider 框架或外部认证系统。复用现有 receipt 链校验 dispatch、子代理开始/结束、子代理 ID、artifact hash、workflow、gate、stage 和 snapshot 的一致性；所有能运行 CLI 的环境都可以正式 PASS。有 host hook 时可额外证明生命周期事件由宿主自动捕获；无 hook 时仍可用，但不得声称能抵御拥有本地文件和 CLI 写权限的恶意操作者。本项目只保证按文档正常使用和常见误操作下的正确性；除非用户明确要求安全加固，不负责防御成套证据篡改、恶意本地修改、手工改写内部状态或必须先违反正常流程才能构造的输入，这类场景不得阻断 PASS 或触发开发。
 Downstream effect: 删除注入式 `AttestationVerifier`、`UNSUPPORTED_HOST_RECEIPT`、生产 trust root、一次性 nonce 和不支持 host 只能 advisory 的设计；直接收紧现有 receipt 校验和诚实的能力声明。
 Document impact: reviewer receipt/isolation spec、proposal、design、structured JSON spec 和 Phase 2 receipt/host-capability tasks。
-Evidence needed: 所有 CLI 的现有 receipt 正向流程，以及 lifecycle、ID、hash、workflow/gate/stage/snapshot 不匹配的负向用例；hook 能力只在 live canary 成功时声称。
+Evidence needed: 所有 CLI 的现有 receipt 正向流程，以及正常使用中可能出现的 lifecycle、ID、hash、workflow/gate/stage/snapshot 不匹配；hook 能力只在 live canary 成功时声称。成套恶意篡改和手工改写内部状态不属于验收范围。
 
 ## RQ-028 - 模块与依赖方向
 
@@ -428,8 +428,8 @@ Requirement or question: 既然 JSON 要拒绝所有未知字段，开发前文�
 Source: 第二轮新鲜零对话上下文 complexity 开发前审查于 2026-07-11 对当前批准 bundle 提出。
 Why it matters: 当前文档只完整列出 envelope 和部分高层字段，却要求所有层级 `unknown field` 都拒绝。`finding`、`location`、stage-specific QA payload 和 requirements/Arbiter/FinalExecution 的完整内部形状仍留给开发者决定，无法提前写全正反向测试，也会隐藏实现范围。
 Status: confirmed
-User answer: 以现有 Markdown 的机器字段为迁移基线，统一换成一个 JSON envelope，不重新发明一套业务字段。四门 reviewer 共用同一个 reviewer payload；现在各门不同的判断字段映射成稳定的 `checks[]` ID，而不是继续保留各门专用的顶层判断字段。Requirements 和 mechanical FinalExecution 也使用同一个 envelope，但只保留各自确实需要的专用 payload，不把非 reviewer 数据硬塞进 `checks[]` 或万能属性袋。按照 RQ-047 更新后的编号，Phase 1 迁移当时已经存在并实际启用的 requirements、QA Execution、complexity、architecture、code-quality 和 mechanical FinalExecution；以后实现 Design Review、White-box Adequacy、Carry-Forward Arbiter 等角色或 stage 时，在各自 phase 同时定义其 JSON 内容、领域校验、policy 和正反向测试，不提前增加占位字段或禁用角色。文档用现有 Markdown 字段到 JSON 字段或 check ID 的明确映射闭合本阶段合同；Go typed struct 是唯一执行来源，不新增独立 JSON Schema、代码生成框架或第二套 schema 来源。
-Downstream effect: design 和 `structured-json-evidence` spec 必须给出新的 Phase 1 现有字段封闭映射、类型、必填/省略规则、枚举和 stage 约束；四门共用一个 reviewer 结构，差异由 policy-owned check catalog 表达。Phase 2 及以后只在业务功能实际启用的 phase 扩展对应 role/stage，不得让 Phase 1 预实现未来角色，也不得让后续 phase 反过来破坏 Phase 1 已交付角色的统一 envelope。
+User answer: 以现有 Markdown 的机器字段为迁移基线，统一换成一个 JSON envelope，不重新发明一套业务字段。Complexity、architecture 和 code-quality 三个判断型 reviewer 共用同一个 reviewer payload；不同判断字段映射成稳定的 `checks[]` ID。Requirements、QA Execution 和 mechanical FinalExecution 也使用同一个 envelope，但各自只保留确实需要的专用 payload，不把非 reviewer 数据硬塞进 `checks[]` 或万能属性袋。QA Execution 的最终分工由 RQ-059 明确为独立 QA 执行者产出结果与 binding、主代理和 CLI 机械核对。按照 RQ-047 更新后的编号，Phase 1 迁移当时已经存在并实际启用的 requirements、QA Execution、complexity、architecture、code-quality 和 mechanical FinalExecution；以后实现 Design Review、White-box Adequacy、Carry-Forward Arbiter 等角色或 stage 时，在各自 phase 同时定义其 JSON 内容、领域校验、policy 和正反向测试，不提前增加占位字段或禁用角色。文档用现有 Markdown 字段到 JSON 字段或 check ID 的明确映射闭合本阶段合同；Go typed struct 是唯一执行来源，不新增独立 JSON Schema、代码生成框架或第二套 schema 来源。
+Downstream effect: design 和 `structured-json-evidence` spec 必须给出新的 Phase 1 现有字段封闭映射、类型、必填/省略规则、枚举和 stage 约束；三个判断型 reviewer 共用一个结构，QA Execution 使用独立的五引用机械 payload。Phase 2 及以后只在业务功能实际启用的 phase 扩展对应 role/stage，不得让 Phase 1 预实现未来角色，也不得让后续 phase 反过来破坏 Phase 1 已交付角色的统一 envelope。
 Document impact: design wire contract、structured JSON spec、各 domain spec 的 payload 所有权和新的 Phase 1/2 tasks。
 Evidence needed: 每个嵌套对象和 role/stage 都能从文档直接写出合法 fixture、缺字段、未知字段、错类型和错 stage fixture；实现不需要自行发明字段，同时不存在第二份 schema 来源。
 
@@ -439,7 +439,7 @@ Requirement or question: JSON 基础阶段是否应提前定义 Design Review、
 Source: 第二轮新鲜零对话上下文 complexity 开发前审查的第三条 finding，并由用户在确认 RQ-043 时特别要求“对应的 phase 不要漏”。
 Why it matters: 如果 JSON 基础阶段声称完成封闭 QA schema，却包含下一阶段才能验证的字段，要么暗中提前实现后续范围，要么交付一套没有完整语义的占位格式。
 Status: confirmed
-User answer: 不提前定义。按照 RQ-047 更新后的编号，Phase 1 只把当前已启用的 QA Execution 及其 `Approved case set`、`QA-owned evidence`、`Case-to-artifact binding` 迁入统一 reviewer payload。Design Review、增强后的 approved-case admission 和可选 White-box Adequacy 都在 Phase 2 各自与 JSON 内容、policy、validator 和正反向测试同时完成；Phase 1 不注册 disabled stage，也不保留占位字段。
+User answer: 不提前定义。按照 RQ-047 更新后的编号和 RQ-059 的最终分工，Phase 1 只把当前已启用的 QA Execution 及其 approved case set、QA-owned results、case-result binding、changed files 和 verification 迁入专用机械 payload。Design Review 和可选 White-box Adequacy 都在 Phase 2 各自与 JSON 内容、policy、validator 和正反向测试同时完成；Phase 1 不注册 disabled stage，也不保留占位字段。
 Downstream effect: Phase 1 QA 合同可以独立实现和验收；Phase 2 增加真实业务能力时再扩展对应 stage，统一 envelope 不变。
 Document impact: design 的 role/stage 表、structured JSON spec、QA design/admission spec 和新的 Phase 1/2 tasks。
 Evidence needed: Phase 1 对未来 QA stage/字段明确拒绝；Phase 2 每个新增 QA 能力的结构、policy、validator 和测试位于同一任务。
@@ -571,7 +571,7 @@ Requirement or question: Receipt、封存证据包、状态文件和最终验证
 Source: 新鲜零对话上下文 Phase 1 architecture 开发前审查的第四条 finding 所提公共面问题，用户于 2026-07-12 确认。
 Why it matters: 将 CLI 自己生成和读取的运行文件全部公开化，会增加大量字段表、兼容压力和无必要的外部承诺；但 reviewer、requirements 和公开 CLI 输出仍需要明确合同。
 Status: confirmed
-User answer: 只把真正的外部输入和公开输出当作公开合同。Reviewer、requirements、context bundle 和 FinalExecution 的字段必须完整闭合；`policy show --format json` 作为公开命令输出，也必须固定格式和 rule/check ID。Receipt、每门封存证据包、状态文件和最终验证记录是只由 CLI 生成和读取的 run-local 内部文件；文档规定它们的必要保证和所有权，Go typed struct 和行为测试决定内部字段，不将每个字段变成外部兼容承诺。旧 workflow 在格式切换后直接重启。
+User answer: 只把真正的外部输入和公开输出当作公开合同。Reviewer、requirements、QA Execution、context bundle 和 FinalExecution 的字段必须完整闭合；`policy show --format json` 作为公开命令输出，也必须固定格式和 rule/check ID。Receipt、每门封存证据包、状态文件和最终验证记录是只由 CLI 生成和读取的 run-local 内部文件；文档规定它们的必要保证和所有权，Go typed struct 和行为测试决定内部字段，不将每个字段变成外部兼容承诺。旧 workflow 在格式切换后直接重启。
 Downstream effect: 公共面仅保留用户或 reviewer 需要生产/消费的结构；CLI 内部运行文件仍由类型化代码和测试约束，但不为了形式上的严谨扩张公开 schema 或兼容层。
 Document impact: design 的 public/internal 所有权、structured JSON 的合同范围、closure/state/final verification 的内部文件声明，以及 policy 公开输出合同。
 Evidence needed: 公开输入/输出有封闭字段和正反测试；内部文件无用户手写入口、无兼容承诺且仍满足不可变证据、原子状态和静态复验等行为保证；旧 workflow 被拒绝并重启。
@@ -583,20 +583,31 @@ Source: 用户于 2026-07-12 在 Phase 1 开发前对齐中确认。
 Why it matters: 这些字段重复表达 `artifactRole` 和 `verdict` 已能确定的当前动作，并提前发布了 Phase 2 才有意义的返工归属和重跑边界，增加公共合同、校验和测试成本。
 Status: confirmed
 User answer: 删除整个 `route` 对象，不保留 `nextAction`、`reworkOwner` 或 `rerunFrom`，也不改名迁移。CLI 根据 `artifactRole + verdict` 推导 Phase 1 行为；非 PASS 结果不写正式 PASS 状态。具体返工说明放在 findings 和人类报告中。重跑边界等到 Phase 2 真正实现 Carry Arbiter 和 transition 时再定义。
-Downstream effect: Phase 1 envelope 只保留顶层 `verdict`；旧 `gate_route` 动作、归属和重跑字段在 JSON 切换时直接删除。任何输入中的 `route` 都按未知字段拒绝。Requirements 和普通 reviewer 只有合法 PASS 才能记录正式 PASS，FinalExecution 只有合法 PASS 才能进入机械收尾；按照后续 RQ-058，只有 reviewer artifact 可以用其他 verdict 保留结果和问题说明。
+Downstream effect: Phase 1 envelope 只保留顶层 `verdict`；旧 `gate_route` 动作、归属和重跑字段在 JSON 切换时直接删除。任何输入中的 `route` 都按未知字段拒绝。Requirements、QA Execution 和 FinalExecution 只有合法 PASS 才能进入各自操作路径；只有真正的 reviewer artifact 可以用其他 verdict 保留结果和问题说明。
 Document impact: design、structured JSON spec、requirements PASS spec、evidence closure spec 和 Phase 1 tasks。
 Evidence needed: 合法 Phase 1 fixture 不含 `route`；含 `route` 或三个旧字段的 fixture 被未知字段校验拒绝；各 `artifactRole + verdict` 的准入行为测试证明非 PASS 不写正式 PASS 状态；Phase 1 不实现或猜测重跑边界。
 
-## RQ-058 - 两种通过证明只允许 PASS
+## RQ-058 - 三种操作型通过证明只允许 PASS
 
-Requirement or question: `REQUIREMENTS_PASS` 和 `FINAL_EXECUTION` 是否需要支持 `REVIEW`、`FAIL` 或 `BLOCKED`？
+Requirement or question: `REQUIREMENTS_PASS`、`QA_EXECUTION` 和 `FINAL_EXECUTION` 是否需要支持 `REVIEW`、`FAIL` 或 `BLOCKED`？
 Source: 新鲜零对话上下文 Phase 1 complexity 开发前审查的第一条 finding，用户于 2026-07-12 确认。
-Why it matters: 这两种文件本来只在需求确认完成或最终收尾成功时生成。若允许非 PASS，开发者还必须猜测 `coverageScan`、`downstreamPermission` 和 `releaseJudgment` 等成功专用字段在失败时填什么。
+Why it matters: 这三种文件只在需求确认完成、QA 执行证据完整通过或最终收尾成功时生成。若允许非 PASS，开发者还必须为没有审查判断的操作型 payload 发明失败字段和路由。
 Status: confirmed
-User answer: 不支持。`REQUIREMENTS_PASS` 和 `FINAL_EXECUTION` 只接受顶层 `PASS`。需求没有确认完时继续澄清，不生成 `REQUIREMENTS_PASS`；最终条件没有满足时 CLI 报错，不生成 `FINAL_EXECUTION`。QA、complexity、architecture 和 code-quality reviewer 仍可输出 `REVIEW`、`FAIL` 或 `BLOCKED`。不新增字段、失败枚举或状态。
-Downstream effect: 两个操作型 role 的严格校验在 payload 解析前拒绝非 PASS；其现有成功字段不需要扩展失败取值。Reviewer 的非 PASS 仍可携带 checks、findings 和人类说明，但不能写正式 PASS 状态。
+User answer: 不支持。`REQUIREMENTS_PASS`、`QA_EXECUTION` 和 `FINAL_EXECUTION` 只接受顶层 `PASS`。需求没有确认完时继续澄清，不生成 `REQUIREMENTS_PASS`；QA 结果不完整或有失败时不生成可记录的 `QA_EXECUTION`；最终条件没有满足时 CLI 报错，不生成 `FINAL_EXECUTION`。Complexity、architecture 和 code-quality reviewer 仍可输出 `REVIEW`、`FAIL` 或 `BLOCKED`。不新增字段、失败枚举或状态。
+Downstream effect: 三个操作型 role 的严格校验在 payload 解析前拒绝非 PASS；其成功字段不扩展失败取值。Reviewer 的非 PASS 仍可携带 checks、findings 和人类说明，但不能写正式 PASS 状态。
 Document impact: design 的 role/verdict 规则、structured JSON spec 和 Phase 1 role-dispatch tests。
-Evidence needed: 两个操作型 role 的非 PASS fixture 全部拒绝且不生成文件、不改状态；四个 reviewer role 的合法非 PASS fixture仍可作为审查结果通过结构和领域校验，但不能记录 PASS。
+Evidence needed: 三个操作型 role 的非 PASS fixture 全部拒绝且不生成文件、不改状态；三个当前 reviewer role 的合法非 PASS fixture仍可作为审查结果通过结构和领域校验，但不能记录 PASS。
+
+## RQ-059 - QA 执行证据由主代理机械核对
+
+Requirement or question: 开发后的 QA Execution 已由独立 QA 执行者产出批准用例、QA 自有结果和 case binding 后，是否还需要另派一个零上下文 QA reviewer 审查执行证据？
+Source: 用户于 2026-07-15 明确确认：“审测试用例必须要子代理没问题，审执行证据属于流程的问题，流程问题都是主代理调度”。
+Why it matters: 如果 QA Execution 只为防止执行者自封 PASS，再增加一个 reviewer 会重复检查主代理和 CLI 已能机械验证的 case、hash、snapshot 和 binding，增加 token、时间、receipt 和失败面；同时把流程调度错误地包装成第二次质量审查。
+Status: confirmed
+User answer: 测试用例的设计审查必须继续由独立子代理完成。开发后的 QA 执行仍由独立于开发者的 QA 执行者运行并产出 QA 自有证据，但执行证据的完整性、hash、snapshot、case binding、准入和正式记录属于流程问题，由主代理调用 CLI 机械核对和调度，不再派第二个 QA reviewer，也不要求 QA Execution reviewer receipt。主代理不得借此重写用例、增加 QA 判断或把开发者自测冒充 QA 自有执行。
+Downstream effect: 将 Phase 1 `qa.execution.v2` 从 receipt-bound `QA_REVIEW` 改为主代理调度的机械 `QA_EXECUTION`，直接绑定 approved case set、QA-owned results、case-to-result binding、changed files 和 verification。删除 QA Execution 的 reviewer dispatch、review checks 和 receipt 要求；complexity、architecture、code-quality reviewer 以及测试用例 Design Review 的独立子代理和 receipt 规则保持不变。
+Document impact: QA gate agent/reference、post-development artifacts、structured JSON、policy baseline、QA design admission、reviewer receipt/isolation、design、tasks、examples、canary 和 CLI/validator tests。
+Evidence needed: 独立 QA 执行证据和完整 binding 通过时，主代理可用机械 `QA_EXECUTION` artifact 记录 PASS；缺 case、失败结果、错误 hash、旧 snapshot、错误 binding 或开发者自测替代 QA 证据时拒绝且不改状态；QA Execution 不要求 reviewer dispatch/receipt；测试用例 Design Review 和其余三门 reviewer 仍要求独立子代理证据。
 
 ## 完成决策
 
@@ -606,4 +617,4 @@ Dropped question IDs: RQ-008, RQ-013, RQ-024, RQ-031, RQ-034
 Dropped question approval: YES
 Dropped question reason: RQ-008、RQ-013、RQ-024 和 RQ-034 因用户删除全部 OpenSpec 专用机制而删除；RQ-031 只是在已确认的 reviewer receipt 校验之外继续区分不实施的机制，没有新增决策价值。用户于 2026-07-11 明确要求不再保留已决定不做的方案正文，以避免对后续 reviewer 和开发代理造成语义污染。
 Blocking gaps: Phase 0 没有待用户决定的问题。
-Downstream permission: Phase 0 只进入用户审查和独立提交准备；它不授权 Phase 1 开发。Phase 1 仍须按自己的当前 snapshot 完成开发前准备和实现交接。
+Downstream permission: Phase 0 已由用户封板。用户于 2026-07-12 明确授权对当前 snapshot 运行 Phase 1 开发前检查；该授权不等于实现交接，只有当前 snapshot 的 complexity、architecture-health 和 cold-water 开发前审查全部通过后，才可准备 Phase 1 实现交接。

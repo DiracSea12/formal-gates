@@ -59,20 +59,6 @@ type WorkflowVerifyAdmissionOptions struct {
 	RunDir         string
 }
 
-type WorkflowRecordTransitionOptions struct {
-	Worktree         string
-	StatePath        string
-	RunDir           string
-	WorkflowID       string
-	FromSnapshot     string
-	ToSnapshot       string
-	RerunFromGate    string
-	FlowMode         string
-	WorkflowMode     string
-	DecisionArtifact string
-	Reason           string
-}
-
 type WorkflowFinalVerificationOptions struct {
 	Worktree        string
 	StatePath       string
@@ -188,18 +174,15 @@ func WorkflowSnapshotJSON(snapshot WorkflowSnapshotRecord) ([]byte, error) {
 func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
 	worktree := cleanRoot(options.Worktree)
 	var result Result
-	runDir := ""
-	if strings.TrimSpace(options.RunDir) != "" {
-		var err error
-		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
-		if err != nil {
-			result.add("run-dir", err.Error())
-			return result
-		}
-		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "artifact", options.Artifact, false); err != nil {
-			result.add("artifact", err.Error())
-			return result
-		}
+	runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+	if err != nil {
+		result.add("run-dir", err.Error())
+		return result
+	}
+	addWorkflowPathFailure(&result, worktree, runDir, "artifact", options.Artifact, false)
+	addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
+	if !result.OK() {
+		return result
 	}
 	record := GateRecordOptions{
 		Worktree:       worktree,
@@ -218,48 +201,17 @@ func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
 	return GateRecord(record)
 }
 
-func WorkflowRecordTransition(options WorkflowRecordTransitionOptions) Result {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	runDir := ""
-	if strings.TrimSpace(options.RunDir) != "" {
-		var err error
-		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
-		if err != nil {
-			result.add("run-dir", err.Error())
-			return result
-		}
-		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "decision-artifact", options.DecisionArtifact, false); err != nil {
-			result.add("decision-artifact", err.Error())
-			return result
-		}
-	}
-	return GateRecordTransition(GateRecordTransitionOptions{
-		Worktree:         worktree,
-		StatePath:        workflowStatePath(worktree, options.StatePath, runDir),
-		RunDir:           runDir,
-		WorkflowID:       options.WorkflowID,
-		FromSnapshot:     options.FromSnapshot,
-		ToSnapshot:       options.ToSnapshot,
-		RerunFromGate:    options.RerunFromGate,
-		FlowMode:         options.FlowMode,
-		WorkflowMode:     options.WorkflowMode,
-		DecisionArtifact: options.DecisionArtifact,
-		Reason:           options.Reason,
-	})
-}
-
 func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
 	worktree := cleanRoot(options.Worktree)
 	var result Result
-	runDir := ""
-	if strings.TrimSpace(options.RunDir) != "" {
-		var err error
-		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
-		if err != nil {
-			result.add("run-dir", err.Error())
-			return result
-		}
+	runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+	if err != nil {
+		result.add("run-dir", err.Error())
+		return result
+	}
+	addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
+	if !result.OK() {
+		return result
 	}
 	return GateVerifyAdmission(GateAdmissionOptions{
 		Worktree:       worktree,
@@ -280,22 +232,17 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 		return WorkflowFinalVerificationArtifact{}, result
 	}
 	runDir := ""
-	if strings.TrimSpace(options.RunDir) != "" {
+	if strings.TrimSpace(options.RunDir) != "" || strings.TrimSpace(options.WorkflowID) != "" {
 		var err error
 		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
 		if err != nil {
 			result.add("run-dir", err.Error())
 			return WorkflowFinalVerificationArtifact{}, result
 		}
-		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "attempts-file", options.AttemptsFile, false); err != nil {
-			result.add("attempts-file", err.Error())
-		}
-		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "output", options.OutputArtifact, true); err != nil {
-			result.add("output", err.Error())
-		}
-		if err := requireWorkflowPathUnderRunDir(worktree, runDir, "final-qa-artifact", options.FinalQAArtifact, false); err != nil {
-			result.add("final-qa-artifact", err.Error())
-		}
+		addWorkflowPathFailure(&result, worktree, runDir, "attempts-file", options.AttemptsFile, false)
+		addWorkflowPathFailure(&result, worktree, runDir, "output", options.OutputArtifact, true)
+		addWorkflowPathFailure(&result, worktree, runDir, "final-qa-artifact", options.FinalQAArtifact, false)
+		addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
 		if !result.OK() {
 			return WorkflowFinalVerificationArtifact{}, result
 		}
@@ -332,7 +279,6 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 	accepted := make([]WorkflowFinalVerificationAttempt, 0, len(attempts))
 	for i, attempt := range attempts {
 		if attemptAccepted(attempt) {
-			accepted = append(accepted, attempt)
 			artifact := strings.TrimSpace(attemptString(attempt, "artifact"))
 			if artifact == "" {
 				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt is missing artifact")
@@ -351,7 +297,19 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 			}
 			if !isFile(artifactPath) {
 				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt artifact does not exist: "+slash(artifactPath))
+				continue
 			}
+			artifactHash, ok := attempt["artifactHash"].(string)
+			artifactHash = strings.TrimSpace(artifactHash)
+			if !ok || !isSHA256(artifactHash) {
+				result.add(fmt.Sprintf("attempts[%d].artifactHash", i), "accepted attempt requires a valid SHA-256 artifactHash")
+				continue
+			}
+			if actual := sha256File(artifactPath); actual != artifactHash {
+				result.add(fmt.Sprintf("attempts[%d].artifactHash", i), "accepted attempt artifactHash does not match artifact bytes")
+				continue
+			}
+			accepted = append(accepted, attempt)
 		}
 	}
 	if len(accepted) == 0 {
@@ -363,7 +321,7 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 		status = "FAIL"
 	}
 	artifact := WorkflowFinalVerificationArtifact{
-		SchemaVersion:    1,
+		SchemaVersion:    2,
 		WorkflowID:       options.WorkflowID,
 		ChangeSnapshot:   options.ChangeSnapshot,
 		Status:           status,
@@ -389,15 +347,20 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 	}
 	if err := writeFinalVerificationArtifact(outputPath, artifact); err != nil {
 		result.add("output", err.Error())
+		return artifact, result
 	}
 	if options.RecordFinalQA {
-		recordResult := recordFinalQA(worktree, runDir, artifact.Status, options)
+		recordResult := recordFinalQA(worktree, runDir, output, artifact.Status, options)
 		result.Failures = append(result.Failures, recordResult.Failures...)
 	}
 	return artifact, result
 }
 
-func recordFinalQA(worktree, runDir, status string, options WorkflowFinalVerificationOptions) Result {
+func recordFinalQA(worktree, runDir, finalVerification, status string, options WorkflowFinalVerificationOptions) Result {
+	return recordFinalQAWith(worktree, runDir, finalVerification, status, options, gateRecord)
+}
+
+func recordFinalQAWith(worktree, runDir, finalVerification, status string, options WorkflowFinalVerificationOptions, record func(GateRecordOptions) Result) Result {
 	var result Result
 	finalQA := strings.TrimSpace(options.FinalQAArtifact)
 	if finalQA == "" {
@@ -409,28 +372,90 @@ func recordFinalQA(worktree, runDir, status string, options WorkflowFinalVerific
 		result.add("final-qa-artifact", "final QA artifact cannot be under cleanup scratch: "+slash(finalQAPath))
 		return result
 	}
-	if !isFile(finalQAPath) {
-		result.add("final-qa-artifact", "final QA artifact does not exist: "+finalQA)
+	statePath := workflowStatePath(worktree, options.StatePath, runDir)
+	state, err := loadGateState(statePath)
+	if err != nil {
+		result.add("gate-state", err.Error())
+		return result
+	}
+	policy, _ := fixedPolicy("FINAL_EXECUTION", "qa-test-gate", "FinalExecution")
+	matrix := make([]FinalGateRow, 0, len(policy.Prerequisites))
+	for _, prerequisite := range policy.Prerequisites {
+		entries := entriesForGateNewestFirst(state, prerequisite.Gate)
+		var selected *GateStateEntry
+		for i := range entries {
+			entry := entries[i]
+			if entry.Verdict == "PASS" && entry.WorkflowID == options.WorkflowID && entry.ChangeSnapshot == options.ChangeSnapshot && entry.Mode == prerequisite.Flow && normalizeStage(entry.Stage) == normalizeStage(prerequisite.Stage) {
+				selected = &entry
+				break
+			}
+		}
+		if selected == nil {
+			result.add("gate-state", "missing current-snapshot PASS closure for "+prerequisite.Gate)
+			continue
+		}
+		logical, err := logicalPathInRun(runDir, resolvePath(worktree, selected.Artifact))
+		if err != nil {
+			result.add("gate-state", err.Error())
+			continue
+		}
+		matrix = append(matrix, FinalGateRow{Gate: prerequisite.Gate, GateEvidence: EvidenceRef{Path: logical, SHA256: selected.ArtifactHash}})
+	}
+	finalLogical, err := logicalPathInRun(runDir, resolvePath(worktree, finalVerification))
+	if err != nil {
+		result.add("final-verification", err.Error())
+	}
+	if !result.OK() {
+		return result
+	}
+	payload, _ := json.Marshal(FinalExecutionPayload{Mode: "MECHANICAL_CLOSEOUT", GateMatrix: matrix, FinalVerification: EvidenceRef{Path: finalLogical, SHA256: sha256File(resolvePath(worktree, finalVerification))}, ReleaseJudgment: "SEAL"})
+	envelope := FormalGateEvidence{SchemaVersion: 2, ArtifactRole: policy.ArtifactRole, WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot, Gate: policy.Gate, Stage: policy.Stage, Verdict: status, Payload: payload}
+	data, err := json.MarshalIndent(envelope, "", "  ")
+	if err != nil {
+		result.add("final-qa-artifact", err.Error())
+		return result
+	}
+	decodeArtifact(ArtifactOptions{Root: worktree, File: finalQA, Gate: policy.Gate, Stage: policy.Stage, WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot, Flow: policy.Flow, RunDir: runDir}, data, &result)
+	if !result.OK() {
+		return result
+	}
+	previous, err := os.ReadFile(finalQAPath)
+	previousExists := err == nil
+	if !previousExists && !os.IsNotExist(err) {
+		result.add("final-qa-artifact", err.Error())
+		return result
+	}
+	if err := writeFileAtomic(finalQAPath, append(data, '\n'), 0o600); err != nil {
+		result.add("final-qa-artifact", err.Error())
 		return result
 	}
 	actor := strings.TrimSpace(options.Actor)
 	if actor == "" {
 		actor = "gate-workflow"
 	}
-	record := GateRecord(GateRecordOptions{
+	recordResult := record(GateRecordOptions{
 		Worktree:       worktree,
-		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
+		StatePath:      statePath,
 		RunDir:         runDir,
-		Gate:           "qa-test-gate",
+		Gate:           policy.Gate,
 		Verdict:        status,
 		Mode:           "formal",
-		Stage:          "FinalExecution",
+		Stage:          policy.Stage,
 		Artifact:       finalQA,
 		Actor:          actor,
 		WorkflowID:     options.WorkflowID,
 		ChangeSnapshot: options.ChangeSnapshot,
 	})
-	return record
+	if !recordResult.OK() {
+		if previousExists {
+			if err := writeFileAtomic(finalQAPath, previous, 0o600); err != nil {
+				recordResult.add("final-qa-artifact", "cannot restore previous FinalExecution: "+err.Error())
+			}
+		} else if err := os.Remove(finalQAPath); err != nil && !os.IsNotExist(err) {
+			recordResult.add("final-qa-artifact", "cannot remove failed FinalExecution: "+err.Error())
+		}
+	}
+	return recordResult
 }
 
 func WorkflowCleanup(options WorkflowCleanupOptions) (WorkflowCleanupReport, Result) {
@@ -597,6 +622,12 @@ func requireWorkflowPathUnderRunDir(worktree, runDir, label, value string, allow
 	return requireAbsPathUnderRunDir(runDir, label, resolvePath(worktree, value))
 }
 
+func addWorkflowPathFailure(result *Result, worktree, runDir, label, value string, allowEmpty bool) {
+	if err := requireWorkflowPathUnderRunDir(worktree, runDir, label, value, allowEmpty); err != nil {
+		result.add(label, err.Error())
+	}
+}
+
 func requireAbsPathUnderRunDir(runDir, label, path string) error {
 	full := absPath(path)
 	if samePath(full, runDir) || !pathUnder(full, runDir) {
@@ -672,15 +703,7 @@ func writeWorkflowCompactArchive(worktree, path string, archive WorkflowCompactA
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }
 
 func verifyWorkflowCompactArchive(path string, expectedFiles int) error {
@@ -823,14 +846,14 @@ func gitSnapshot(worktree string, options WorkflowSnapshotOptions) (WorkflowSnap
 	if err != nil {
 		return WorkflowSnapshotRecord{}, fmt.Errorf("git rev-parse head failed: %w", err)
 	}
-	status, err := gitText(worktree, "status", "--short")
+	status, err := gitText(worktree, "status", "--short", "--", ".", ":(exclude).claude/gates/**")
 	if err != nil {
 		return WorkflowSnapshotRecord{}, fmt.Errorf("git status failed: %w", err)
 	}
 	if strings.TrimSpace(status) != "" && !options.IncludeWorkingTree {
 		return WorkflowSnapshotRecord{}, fmt.Errorf("git worktree is dirty; pass --include-working-tree to include it")
 	}
-	rangeDiff, err := gitText(worktree, "diff", "--binary", baseCommit+".."+headCommit)
+	rangeDiff, err := gitText(worktree, "diff", "--binary", baseCommit+".."+headCommit, "--", ".", ":(exclude).claude/gates/**")
 	if err != nil {
 		return WorkflowSnapshotRecord{}, fmt.Errorf("git diff range failed: %w", err)
 	}
@@ -846,15 +869,15 @@ func gitSnapshot(worktree string, options WorkflowSnapshotOptions) (WorkflowSnap
 		ChangeSnapshot:     baseCommit[:12] + ".." + headCommit[:12] + "+" + rangeHash[:12],
 	}
 	if options.IncludeWorkingTree {
-		workingDiff, err := gitText(worktree, "diff", "--binary")
+		workingDiff, err := gitText(worktree, "diff", "--binary", "--", ".", ":(exclude).claude/gates/**")
 		if err != nil {
 			return WorkflowSnapshotRecord{}, fmt.Errorf("git diff working tree failed: %w", err)
 		}
-		cachedDiff, err := gitText(worktree, "diff", "--binary", "--cached")
+		cachedDiff, err := gitText(worktree, "diff", "--binary", "--cached", "--", ".", ":(exclude).claude/gates/**")
 		if err != nil {
 			return WorkflowSnapshotRecord{}, fmt.Errorf("git diff cached failed: %w", err)
 		}
-		untracked, err := gitText(worktree, "ls-files", "--others", "--exclude-standard")
+		untracked, err := gitText(worktree, "ls-files", "--others", "--exclude-standard", "--", ".", ":(exclude).claude/gates/**")
 		if err != nil {
 			return WorkflowSnapshotRecord{}, fmt.Errorf("git ls-files untracked failed: %w", err)
 		}
@@ -951,14 +974,11 @@ func attemptString(attempt WorkflowFinalVerificationAttempt, key string) string 
 }
 
 func writeFinalVerificationArtifact(path string, artifact WorkflowFinalVerificationArtifact) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }
 
 func allowedCleanupPath(worktree, value string) (string, error) {
@@ -1033,8 +1053,14 @@ func cleanupScratchPath(worktree, path string) bool {
 }
 
 func samePath(a, b string) bool {
-	a = filepath.Clean(a)
-	b = filepath.Clean(b)
+	a = absPath(a)
+	b = absPath(b)
+	if resolved, err := filepath.EvalSymlinks(a); err == nil {
+		a = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(b); err == nil {
+		b = resolved
+	}
 	if os.PathSeparator == '\\' {
 		return strings.EqualFold(a, b)
 	}

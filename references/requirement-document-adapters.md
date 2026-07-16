@@ -29,7 +29,7 @@ Map OpenSpec files this way:
 - `specs/**/spec.md`: requirements, scenarios, and acceptance oracles.
 - change directory path: concrete covered target for requirements-clarification artifacts.
 
-When machine artifacts still require the compatibility field `OpenSpec impact:`, use it for OpenSpec changes. For non-OpenSpec formats, write the equivalent document impact in the alignment item and keep the covered target precise.
+For every requirement format, write the generic `Document impact:` field and keep the covered target precise.
 
 ## Generic Markdown Adapter
 

@@ -125,15 +125,18 @@ For requirement-like document edits, formal-gates uses lightweight semantic rout
 3. **architecture-health-gate** — Are module boundaries, ownership, dependency directions, state/cache lifecycles, and performance shape sound?
 4. **code-quality-gate** — Correctness, edge cases, performance, dead code, fake tests, maintainability.
 
+QA has two separate responsibilities: an independent subagent reviews test-case design, and a QA executor independent from the developer runs the post-development cases. The main agent and CLI only check execution evidence, hashes, snapshot, and case binding; they do not add a second QA reviewer.
+
 ---
 
 ## Core Mechanism
 
-- Pass verdicts must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers.
+- Pass verdicts that require quality judgment must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers. QA Execution is the exception: it uses independent QA-owned execution evidence and main-agent/CLI mechanical validation, not a reviewer of the reviewer.
 - Dispatch prompt pollution checks block anchoring patterns such as previous findings, just-fixed wording, focus direction, and expected answers. Rules live in `hooks/pollution-patterns.json`; `formal-gates prompt validate` is the core implementation.
-- Each gate's verdict is recorded as an **artifact**, checked by the Go validator for field completeness. Missing fields, placeholders (`<...>`/`todo`/`tbd`), or reused stale conclusions are rejected.
+- Each enabled gate verdict is a closed schema-version-2 JSON **artifact** checked by the Go validator. Markdown may explain a result but cannot supply machine truth; missing fields, unknown fields, invalid evidence, or stale conclusions are rejected.
 - Cross-workflow isolation is enforced: prerequisite gates must belong to the same `workflowId` and `changeSnapshot`; extension gates also bind prerequisites to the same manifest path and hash.
 - Configured and tested hooks can block invalid commands; when using `formal-gates workflow` / `formal-gates gate`, the command layer validates evidence and rejects invalid records.
+- Maintainers can inspect the built-in machine policy without authorizing any PASS: `bin/formal-gates policy show --format json`.
 
 ---
 
@@ -144,6 +147,9 @@ For a first verification pass, check two result types:
 ```bash
 # Local package, prompt, hook decide, workflow, receipt, and install self-check
 bin/formal-gates canary portable --root . --format json
+
+# Read-only report of the Go validator's built-in policy
+bin/formal-gates policy show --format json
 
 # Automatically checked behavior cases; expect all 24 to PASS
 bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
@@ -224,30 +230,26 @@ Codex users should not rely only on automatic blocking. Unless `formal-gates can
 Maintenance local self-check commands live in [`references/local-validation.md`](references/local-validation.md). This section keeps the other cross-platform validation commands.
 
 ```bash
-# Validate a specific artifact
+# Validate a run-local reviewer JSON artifact
 bin/formal-gates artifact validate \
   --root . \
-  --file .claude/gates/artifacts/<artifact>.md \
+  --file .claude/gates/runs/RUN_ID/complexity-review.json \
   --gate complexity-gate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
 
 # Validate dispatch prompt pollution
-bin/formal-gates prompt validate --root . --file <prompt.md>
+bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/complexity-dispatch.txt
 
-# Basic gate state recording and admission checks
-bin/formal-gates gate record --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates gate verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates gate show --worktree <repo> --format json
-
-# Workflow foundation: snapshot, record-stage, verify-admission, final-verification, cleanup
+# Workflow foundation: snapshot, run-local state, final-verification, FinalExecution
 bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
-bin/formal-gates workflow record-stage --worktree <repo> --gate qa-test-gate --verdict PASS --mode formal --stage Execution --artifact <artifact.md> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow verify-admission --worktree <repo> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --attempts-file <attempts.json> --output .claude/gates/artifacts/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/artifacts/final-qa-execution.md --actor <qa-reviewer> --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow cleanup --worktree <repo> --dry-run
+bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow verify-admission --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate architecture-health-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
+
+Every accepted PASS attempt in `final-verification-attempts.json` must include the lowercase SHA-256 `artifactHash` of its artifact's current bytes.
 
 On Windows, use `bin/formal-gates.exe`. For development tests from a source checkout, `go run ./cmd/formal-gates` is acceptable. Installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
@@ -278,8 +280,6 @@ formal-gates/
 
 Humans read this README to get started; AI enters through `SKILL.md`. Gate-specific criteria are loaded from `references/` as needed.
 `examples/sample-*.json` and `examples/sample-*.md` are structural references only. Formal records must be generated through `formal-gates gate` / `formal-gates workflow`; do not copy sample files directly as state or artifacts.
-
-> This package currently supports local install, local validation, and configured release checksum uploads; it does not provide public registry, marketplace, `npx`, signing, provenance, attestation, or complete release-trust distribution.
 
 ---
 

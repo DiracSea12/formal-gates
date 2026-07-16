@@ -49,31 +49,6 @@ Contaminated fields:
 
 Do not continue review. Do not output PASS, FAIL, or REVIEW.
 
-Artifact must include:
+Write the closed schema-version-2 JSON envelope directly with role `ARCHITECTURE_REVIEW`, gate `architecture-health-gate`, and the matching start-readiness or post-development policy ID. Use only the shared reviewer payload. Include the two prompt checks and every `architecture.*` check exported by `policy show` exactly once, with typed evidence and findings.
 
-```text
-Architecture Health Gate
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Review mode: ZERO_CONTEXT_FORMAL
-Prompt contamination check: PASS
-Semantic anti-anchor check: PASS
-Prompt source: agents/architecture-health-gate.md
-Zero-context reviewer: YES
-Independent agent: YES
-Context bundle:
-Dispatch prompt artifact:
-No-anchor prompt: YES
-Boundary violations:
-Ownership leaks:
-Public surface growth:
-State/cache lifecycle risks:
-Dependency direction risks:
-Failure-semantics risks:
-Performance risks:
-Decoupling judgment:
-Changed files artifact:
-Verification artifact:
-gate_route:
-```
-
-Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.
+Post-development payloads include `changedFiles` and `verification`; start-readiness omits them. No architecture check permits `NOT_APPLICABLE`. Do not add gate-specific top-level judgment, identity, receipt, route, or future-role fields. The external receipt binds the exact completed reviewer JSON bytes.

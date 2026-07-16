@@ -17,16 +17,16 @@ to rerun after a small repair. `alignment.md` is the requirement source.
   execute.
 - Replace Markdown machine truth with strict typed JSON read and validated by
   the existing Go CLI. Old workflows restart; there is no compatibility path.
-- Represent four-gate judgments as stable policy-owned `checks[]` results plus
-  only the evidence references that are genuinely gate-specific.
-- Bind each requirements and reviewer gate PASS to its own run-local recursive
+- Represent independent reviewer judgments as stable policy-owned `checks[]`
+  results, while QA Execution uses a small mechanical payload over QA-owned evidence.
+- Bind each requirements and post-development gate PASS to its own run-local recursive
   evidence closure, keep that identity separate from the deliverable
   `changeSnapshot`, and keep mechanical FinalExecution out of a fifth closure.
-- Reuse the existing reviewer receipt chain and reject mismatched lifecycle,
+- Reuse the existing reviewer receipt chain for actual reviewer judgments and reject mismatched lifecycle,
   reviewer, output, workflow, gate, stage, or snapshot data. Host auto-capture
   is claimed only after a same-host live canary.
 - Put anchoring process history under the existing per-run `restricted/` path.
-  Four-gate reviewers retain broad access to current task material outside that
+  Formal reviewers retain broad access to current task material outside that
   path, while Carry-Forward Arbiter reviews may read the full repair chain.
 - Allow final composition to mix explicit `FRESH_PASS` and independently
   accepted `CARRIED_PASS` rows. Arbitration happens before a fresh downstream
@@ -75,8 +75,8 @@ the partial schema-v1 path.
    requirements, QA Execution, complexity, architecture, code-quality, and
    mechanical FinalExecution in the same phase.
 2. **Formal review chain:** add restricted-path enforcement and apply the
-   existing receipt chain to Design Review, optional White-box Adequacy, stronger
-   QA admission, and carry-forward arbitration, with each feature's JSON,
+   existing receipt chain to Design Review, optional White-box Adequacy,
+   and carry-forward arbitration, with each feature's JSON,
    policy, validator, and tests delivered together on the shared envelope.
 3. **Operational verification:** re-run the Phase 1 stale-vocabulary scan as a
    regression audit, complete broad verification, and obtain fresh review before

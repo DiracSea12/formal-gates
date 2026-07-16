@@ -431,8 +431,8 @@ func buildComplexityReport(worktree, vcs, taskType string, budget *ComplexityBud
 	prodInsertions += untrackedProdInsertions
 	newProdFiles = append(newProdFiles, untrackedProdFiles...)
 	net := totalInsertions - totalDeletions
-	var failures []string
-	var reviewRequired []string
+	failures := []string{}
+	reviewRequired := []string{}
 	var warnings []string
 	if budget != nil {
 		if len(changes) > 0 && net > budget.MaxNet {

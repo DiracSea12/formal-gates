@@ -15,7 +15,7 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 
 ## Modes
 
-- `formal`: Case Designer, QA Reviewer, and Feature Developer are different agent/thread/person. Only formal mode can PASS.
+- `formal`: Design Review is independent from the case designer, and QA Execution is independent from the feature developer. Only formal mode can PASS.
 - `solo`: Same agent self-stages the work. Maximum verdict is `CONDITIONAL_PASS`.
 - `advisory`: Missing independence or evidence. Maximum verdict is `REVIEW`.
 
@@ -24,7 +24,7 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 - `Design`: read only requirements, specs, public contracts, user flows, or bug reports. Produce cases and oracles. Do not inspect implementation diff to invent cases.
 - `Design Review`: before verification, review candidate cases as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to `Design Rework`; do not stop and wait for the user unless the claim itself is unclear.
 - `Design Rework`: edit cases and oracle only. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
-- `Execution`: bind approved cases to commands, artifacts, manual observation, review records, or acceptance procedures. QA-owned verification evidence is mandatory. `REVIEW` / `FAIL` / `BLOCKED` routes to implementation, test evidence, or case rework; it does not enter downstream gates.
+- `Execution`: an independent QA executor runs approved cases and binds them to commands, artifacts, manual observation, or acceptance procedures. QA-owned results and complete case binding are mandatory. Failed or incomplete evidence routes to implementation, test evidence, or case rework; it does not enter downstream gates. The main agent and CLI check the evidence mechanically and do not dispatch another QA reviewer.
 - `FinalExecution`: after downstream gates and final verification, bind final release/seal evidence to the unchanged snapshot before release/seal. When the four post-development gates already recorded PASS for the same workflow and unchanged snapshot, the main agent may record this as a mechanical closeout: check the existing PASS records, final verification artifact, and route to seal. Do not add QA judgment, replace missing gates, reuse stale snapshots, or claim independent review.
 - `White-box Adequacy`: after the deliverable shape and code-quality result are stable, review internal risk coverage when needed.
 
@@ -61,6 +61,8 @@ Gap:
 
 Use the shorter `Case ID / Claim / Action / Oracle / Evidence` only for low-risk work where traceability and failure signal are obvious.
 
+The machine identifier comes only from the documented `Case ID:` field. Markdown headings are descriptive, unrelated headings are ignored, and every approved case ID must be present and unique.
+
 Black-box design can use public API/interface contracts, but not private implementation details, diffs, developer explanations, or main-agent expected answers. Design Review must happen before Verification Run; unreviewed cases are advisory only.
 
 ## Evidence Rules
@@ -85,28 +87,12 @@ Formal PASS requires:
 - Approved case set.
 - QA-owned verification evidence.
 - Binding from cases to artifacts/procedures/results.
-- Independent zero-context QA reviewer artifact for `Execution`. `FinalExecution` may instead be a main-agent mechanical closeout when all four post-development gates already have same-workflow, same-snapshot PASS records and final verification evidence exists.
+- QA Execution performed independently from the feature developer.
+- Main-agent and CLI validation of exact hashes, workflow, snapshot, case coverage, PASS results, and case-result binding; no Execution reviewer receipt is required.
 - Machine-recorded PASS using `formal-gates workflow record-stage`.
 
-Record formal Execution PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate qa-test-gate --mode formal --stage Execution`. Record formal FinalExecution PASS with `formal-gates workflow final-verification --record-final-qa --final-qa-artifact <artifact>`; plain `record-stage FinalExecution` is only a manual fallback when an equivalent aggregate already exists.
+Record formal Execution PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate qa-test-gate --mode formal --stage Execution`. Generate FinalExecution with `formal-gates workflow final-verification --record-final-qa --final-qa-artifact <output>` after all four current-snapshot closures exist.
 
 ## Output
 
-```text
-QA Test Gate
-Verdict: PASS / CONDITIONAL_PASS / REVIEW / FAIL / BLOCKED
-Mode: formal / solo / advisory
-Stage: Design / Design Review / Design Rework / Execution / FinalExecution / White-box Adequacy
-Work type:
-Findings:
-Case review summary:
-Evidence:
-Approved case set:
-QA-owned evidence:
-Case-to-artifact binding:
-Required rework:
-Release judgment:
-gate_route:
-```
-
-`PASS` is formal only. `CONDITIONAL_PASS`, `REVIEW`, `FAIL`, and `BLOCKED` are hard blockers in formal seal/release flow.
+The QA executor writes QA-owned results and case-result binding, not the gate artifact. The main agent writes direct schema-version-2 `QA_EXECUTION` JSON using policy `qa.execution.v2`. Its payload contains exactly `approvedCaseSet`, `qaOwnedResults`, `caseResultBinding`, `changedFiles`, and `verification` evidence references. `QA_EXECUTION` accepts only PASS and has no reviewer dispatch, context bundle, checks, findings, or receipt. Design remains a case document; Design Review and White-box Adequacy are not Phase 1 machine roles.

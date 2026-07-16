@@ -1,36 +1,31 @@
-# Sample Complexity Gate Artifact
+# Complexity Review JSON
 
-Sample-only: this file is not a formal PASS artifact.
+Sample-only: this abbreviated document is not a formal PASS artifact.
 
-Do not record this file directly with `formal-gates gate record` or `formal-gates workflow record-stage`. First replace every `<...>` placeholder with project-specific evidence, point every artifact path at a real file, and ensure the context bundle exists on disk. Validators are expected to reject placeholder-filled copies.
+The reviewer writes a schema-version-2 JSON file directly. Replace every evidence path and hash with a run-local verified value and include all checks exported for the selected policy.
 
-Gate: complexity-gate
-Verdict: PASS
-Mode: formal
-Workflow id: <workflow-id>
-Change snapshot: <snapshot-id>
-OpenSpec change: <change-name>
-Worktree: <project>
-Zero-context reviewer: YES
-Independent agent: YES
-Reviewer agent id: <independent-reviewer-id>
-Context bundle: <project>/.claude/gates/context/<workflow-id>-bundle.zip sha256=<bundle-sha256>
-Dispatch prompt artifact: <project>/.claude/gates/artifacts/<workflow-id>-dispatch-prompt.md sha256=<dispatch-prompt-sha256>
-No-anchor prompt: YES
-Script result: <formal-gates complexity check result or explicit not-applicable reason>
-Diff shape judgment: <focused diff shape judgment>
-Impact surface health: <public/runtime/config impact assessment>
-Public/config surface: <none or exact public/config changes>
-New concepts: <none or exact concepts introduced>
-Minimum sufficient implementation: <why this is the smallest sufficient implementation, or remaining concern>
-Shrink opportunities: <none or exact simplification candidates>
-Decision evidence: <artifact paths and commands reviewed>
-Changed files artifact: <project>/.claude/gates/artifacts/<workflow-id>-changed-files.txt
-Verification artifact: <project>/.claude/gates/artifacts/<workflow-id>-developer-self-test.txt
+```json
+{
+  "schemaVersion": 2,
+  "artifactRole": "COMPLEXITY_REVIEW",
+  "workflowId": "workflow-id",
+  "changeSnapshot": "snapshot-id",
+  "gate": "complexity-gate",
+  "stage": "",
+  "verdict": "PASS",
+  "payload": {
+    "dispatch": {"path": "dispatch.txt", "sha256": "<lowercase-sha256>"},
+    "contextBundle": {"path": "context-bundle.json", "sha256": "<lowercase-sha256>"},
+    "reviewPolicyId": "complexity.post-development.v2",
+    "checks": [
+      {"id": "review.prompt-fields", "status": "PASS", "message": "checked", "evidenceRefs": [], "findings": []},
+      {"id": "review.prompt-semantics", "status": "PASS", "message": "checked", "evidenceRefs": [], "findings": []},
+      {"id": "complexity.statistics", "status": "PASS", "message": "fresh statistics", "evidenceRefs": [{"path": "statistics.json", "sha256": "<lowercase-sha256>"}], "findings": []}
+    ],
+    "changedFiles": {"path": "changed-files.txt", "sha256": "<lowercase-sha256>"},
+    "verification": {"path": "verification.txt", "sha256": "<lowercase-sha256>"}
+  }
+}
+```
 
-gate_route:
-  workflow_id: "<workflow-id>"
-  change_snapshot: "<snapshot-id>"
-  next_action: proceed
-  rework_owner: none
-  rerun_from: none
+The abbreviated check list illustrates placement only. A recordable artifact contains every required `complexity.*` check exactly once.

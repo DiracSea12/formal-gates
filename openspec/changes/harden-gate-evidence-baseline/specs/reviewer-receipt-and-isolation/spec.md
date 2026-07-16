@@ -13,7 +13,7 @@ role's policy, validator, and tests.
 
 ### Requirement: Formal reviewer results are receipt-bound
 
-Every formal four-gate reviewer and Carry-Forward Arbiter result SHALL reuse the
+Every formal reviewer result and Carry-Forward Arbiter result SHALL reuse the
 existing dispatch-registration, subagent start/stop, subagent-ID,
 artifact-hash, and receipt-validation chain. Validation SHALL bind workflow,
 gate, stage, target snapshot, exact dispatch, host-captured subagent identity,
@@ -26,6 +26,12 @@ distinct review-artifact path, exact output hash, workflow, gate, stage, and
 snapshot. Two open dispatches SHALL NOT reserve the same review-artifact path;
 registration or finalization SHALL reject the ambiguity rather than select or
 combine a result.
+
+Mechanical QA Execution is not a reviewer result: it binds independent
+QA-owned execution evidence and SHALL NOT require reviewer dispatch or a
+reviewer receipt. Design Review, optional White-box Adequacy, complexity,
+architecture, code quality, and Carry-Forward Arbiter remain reviewer results
+when their stages are enabled.
 
 The ordinary CLI receipt path proves consistency among local records. It SHALL
 remain capable of formal PASS and SHALL NOT claim resistance to an operator who

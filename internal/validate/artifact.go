@@ -3,7 +3,6 @@ package validate
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +17,8 @@ type ArtifactOptions struct {
 	WorkflowID     string
 	ChangeSnapshot string
 	Stage          string
+	Flow           string
+	RunDir         string
 }
 
 var knownGates = map[string]bool{
@@ -28,18 +29,6 @@ var knownGates = map[string]bool{
 	"code-quality-gate":               true,
 }
 
-var postDevelopmentCommon = []string{
-	"Review mode: ZERO_CONTEXT_FORMAL",
-	"Prompt contamination check: PASS",
-	"Semantic anti-anchor check: PASS",
-	"Zero-context reviewer: YES",
-	"Independent agent: YES",
-	"Context bundle:",
-	"Dispatch prompt artifact:",
-	"No-anchor prompt: YES",
-	"gate_route:",
-}
-
 func Artifact(options ArtifactOptions) Result {
 	root := cleanRoot(options.Root)
 	var result Result
@@ -47,539 +36,110 @@ func Artifact(options ArtifactOptions) Result {
 		result.add("artifact", "--file is required")
 		return result
 	}
-	if strings.TrimSpace(options.Gate) == "" {
-		result.add("artifact", "--gate is required")
-		return result
-	}
 	if !knownGates[options.Gate] {
 		result.add("artifact", "unknown built-in gate: "+options.Gate)
 		return result
 	}
-
-	path := options.File
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, filepath.FromSlash(path))
+	path := resolvePath(root, options.File)
+	runDir := artifactRunDir(options, options.WorkflowID)
+	if options.RunDir == "" && samePath(runDir, root) {
+		result.add("artifact", "artifact must be under .claude/gates/runs")
+		return result
 	}
-	text, err := readText(path)
+	options.RunDir = runDir
+	data, err := os.ReadFile(path)
 	if err != nil {
 		result.add(options.File, fmt.Sprintf("cannot read artifact: %v", err))
 		return result
 	}
-
-	required := requiredArtifactFields(options.Gate, options.Stage)
-	for _, field := range required {
-		if !strings.Contains(text, field) {
-			result.add(options.File, "missing required field text: "+field)
-		}
-	}
-	for _, field := range fieldsThatNeedValues(options.Gate, options.Stage) {
-		value := fieldValue(text, field)
-		if !meaningful(value) {
-			result.add(options.File, "field has no meaningful value: "+field)
-		}
-	}
-	validateRoute(options, text, &result)
+	decodeArtifact(options, data, &result)
 	return result
 }
 
-func requiredArtifactFields(gate, stage string) []string {
-	if gate == "requirements-clarification-gate" {
-		return []string{
-			"Requirement source:",
-			"Alignment table artifact:",
-			"Total alignment items:",
-			"Open question IDs:",
-			"User confirmation:",
-			"Dimension coverage:",
-			"Decision record:",
-			"Covered formal targets:",
-			"Downstream permission:",
-			"gate_route:",
-		}
-	}
-	if gate == "qa-test-gate" && stage == "FinalExecution" {
-		return []string{
-			"FinalExecution mode: MECHANICAL_CLOSEOUT",
-			"Mechanical closeout: YES",
-			"Final verification artifact:",
-			"Existing gate records:",
-			"Release judgment:",
-			"gate_route:",
-		}
-	}
-
-	fields := append([]string{}, postDevelopmentCommon...)
-	fields = append(fields, "Prompt source: "+expectedPromptSource(gate))
-	if gate == "complexity-gate" {
-		fields = append(fields,
-			"Script result",
-			"Diff shape judgment",
-			"Impact surface health",
-			"Public/config surface",
-			"New concepts",
-			"Minimum sufficient implementation",
-			"Shrink opportunities",
-			"Decision evidence",
-		)
-	}
-	if gate == "qa-test-gate" {
-		fields = append(fields, "Approved case set:", "QA-owned evidence:", "Case-to-artifact binding:")
-	}
-	return fields
-}
-
-func fieldsThatNeedValues(gate, stage string) []string {
-	if gate == "requirements-clarification-gate" {
-		return []string{"Requirement source", "Alignment table artifact", "Total alignment items", "Decision record", "Covered formal targets"}
-	}
-	if gate == "qa-test-gate" && stage == "FinalExecution" {
-		return []string{"Final verification artifact", "Existing gate records", "Release judgment"}
-	}
-	return []string{"Context bundle", "Dispatch prompt artifact"}
-}
-
-func expectedPromptSource(gate string) string {
-	switch gate {
-	case "qa-test-gate":
-		return "agents/qa-test-gate.md"
-	case "complexity-gate":
-		return "agents/complexity-gate.md"
-	case "architecture-health-gate":
-		return "agents/architecture-health-gate.md"
-	case "code-quality-gate":
-		return "agents/code-quality-gate.md"
-	default:
-		return "agents/" + gate + ".md"
-	}
-}
-
-func validateRoute(options ArtifactOptions, text string, result *Result) {
-	if options.WorkflowID != "" && routeValue(text, "workflow_id") != options.WorkflowID {
-		result.add(options.File, "gate_route workflow_id does not match --workflow-id")
-	}
-	if options.ChangeSnapshot != "" && routeValue(text, "change_snapshot") != options.ChangeSnapshot {
-		result.add(options.File, "gate_route change_snapshot does not match --change-snapshot")
-	}
-	next := routeValue(text, "next_action")
-	if next == "" {
-		result.add(options.File, "gate_route next_action is missing")
-	}
-	if options.Gate == "requirements-clarification-gate" {
-		if strings.ToLower(strings.TrimSpace(fieldValue(text, "Open question IDs"))) != "none" {
-			result.add(options.File, "Open question IDs must be none for PASS")
-		}
-		if !strings.EqualFold(strings.TrimSpace(fieldValue(text, "User confirmation")), "YES") {
-			result.add(options.File, "User confirmation must be YES for PASS")
-		}
-	}
-	if options.Gate != "requirements-clarification-gate" {
-		validateLegacyReviewerProof(text, options.File, result)
-		if meaningful(fieldValue(text, "Reviewer proof receipt")) {
-			validateReceipt(options, text, result)
-		}
-	}
-	if options.Gate == "complexity-gate" {
-		rejectComplexityBudgetFields(options, text, result)
-	}
-	if options.Gate == "qa-test-gate" && options.Stage == "FinalExecution" {
-		validateFinalExecutionArtifact(options, text, result)
-	}
-}
-
-func validateFinalExecutionArtifact(options ArtifactOptions, text string, result *Result) {
-	if !strings.EqualFold(strings.TrimSpace(fieldValue(text, "FinalExecution mode")), "MECHANICAL_CLOSEOUT") {
-		result.add(options.File, "FinalExecution mode must be MECHANICAL_CLOSEOUT")
-	}
-	if !strings.EqualFold(strings.TrimSpace(fieldValue(text, "Mechanical closeout")), "YES") {
-		result.add(options.File, "Mechanical closeout must be YES")
-	}
-	for _, forbidden := range []string{
-		"Review mode: ZERO_CONTEXT_FORMAL",
-		"Zero-context reviewer: YES",
-		"Independent agent: YES",
-		"Reviewer proof receipt:",
-	} {
-		if strings.Contains(text, forbidden) {
-			result.add(options.File, "FinalExecution must not include: "+forbidden)
-		}
-	}
-	if routeValue(text, "next_action") != "seal" {
-		result.add(options.File, "FinalExecution gate_route next_action must be seal")
-	}
-	validateFinalVerificationArtifactRef(options, text, result)
-}
-
-func validateFinalVerificationArtifactRef(options ArtifactOptions, text string, result *Result) {
-	value := fieldValue(text, "Final verification artifact")
-	pathText := strings.TrimSpace(value)
-	if pathText == "" {
-		return
-	}
-	path := resolvePath(options.Root, pathText)
-	if !isFile(path) {
-		result.add(options.File, "Final verification artifact does not exist: "+pathText)
-		return
-	}
-	data, err := os.ReadFile(path)
+func validateReceipt(options ArtifactOptions, runDir string, ref EvidenceRef, result *Result) {
+	receiptPath, err := safeEvidencePath(runDir, ref.Path)
 	if err != nil {
-		result.add(options.File, "cannot read Final verification artifact: "+err.Error())
+		result.add(options.File, err.Error())
 		return
 	}
-	var artifact WorkflowFinalVerificationArtifact
-	if err := json.Unmarshal(data, &artifact); err != nil {
-		result.add(options.File, "Final verification artifact must be JSON: "+err.Error())
-		return
-	}
-	if options.WorkflowID != "" && artifact.WorkflowID != options.WorkflowID {
-		result.add(options.File, "Final verification artifact workflowId must match --workflow-id")
-	}
-	if options.ChangeSnapshot != "" && artifact.ChangeSnapshot != options.ChangeSnapshot {
-		result.add(options.File, "Final verification artifact changeSnapshot must match --change-snapshot")
-	}
-	if artifact.Status != "PASS" {
-		result.add(options.File, "Final verification artifact status must be PASS")
-	}
-	if len(artifact.AcceptedAttempts) == 0 {
-		result.add(options.File, "Final verification artifact must include accepted attempts")
-	}
-}
-
-func rejectComplexityBudgetFields(options ArtifactOptions, text string, result *Result) {
-	if containsComplexityBudgetFlag(fieldSection(text, "Script result", complexityFieldNames)) {
-		result.add(options.File, "post-development complexity Script result must not include development-time budget flags")
-	}
-	for _, field := range []string{
-		"Development-time budget history",
-		"Budget/expansion status",
-		"Budget status",
-		"Budget expansion approval",
-	} {
-		if hasFieldLabel(text, field) {
-			result.add(options.File, "post-development complexity artifact must not include development-time budget field: "+field)
-		}
-	}
-}
-
-func containsComplexityBudgetFlag(value string) bool {
-	budgetTerm := `(max[-_ ]?net|max[-_ ]?new[-_ ]?prod[-_ ]?files|max[-_ ]?prod[-_ ]?insertions)`
-	budgetMention := regexp.MustCompile(`(?i)(^|[^[:alnum:]])` + budgetTerm + `([^[:alnum:]]|$)`)
-	explicitBudgetOutput := regexp.MustCompile(`(?i)\bbudget_source\b[ \t":=]+explicit\b`)
-	return budgetMention.MatchString(value) || explicitBudgetOutput.MatchString(value)
-}
-
-var complexityFieldNames = []string{
-	"Diff shape judgment",
-	"Impact surface health",
-	"Public/config surface",
-	"New concepts",
-	"Minimum sufficient implementation",
-	"Shrink opportunities",
-	"Decision evidence",
-	"gate_route",
-}
-
-func validateLegacyReviewerProof(text, file string, result *Result) {
-	reviewerAgentID := fieldValue(text, "Reviewer agent id")
-	if strings.TrimSpace(reviewerAgentID) != "" && regexp.MustCompile(`<[^>\r\n]+>`).MatchString(reviewerAgentID) {
-		result.add(file, "Reviewer agent id placeholder is not proof; use Reviewer proof receipt only when receipt-backed proof is claimed")
-	}
-	for _, field := range []string{"Reviewer proof", "Self-reported reviewer proof", "Reviewer proof artifact"} {
-		if meaningful(fieldValue(text, field)) {
-			result.add(file, field+" is a legacy self-reported proof field; use Reviewer proof receipt only when receipt-backed proof is claimed")
-		}
-	}
-}
-
-func fieldValue(text, field string) string {
-	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*([^\r\n]*)[ \t\r]*$`)
-	match := pattern.FindStringSubmatch(text)
-	if len(match) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(match[1])
-}
-
-func hasFieldLabel(text, field string) bool {
-	return regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:`).MatchString(text)
-}
-
-func fieldSection(text, field string, stopFields []string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	start := regexp.MustCompile(`^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*(.*)$`)
-	stop := regexp.MustCompile(`^[ \t]*(?:` + strings.Join(regexpQuoteAll(stopFields), "|") + `)[ \t]*:`)
-	for i, line := range lines {
-		match := start.FindStringSubmatch(line)
-		if len(match) < 2 {
-			continue
-		}
-		out := []string{match[1]}
-		for _, next := range lines[i+1:] {
-			if stop.MatchString(next) {
-				break
-			}
-			out = append(out, next)
-		}
-		return strings.TrimSpace(strings.Join(out, "\n"))
-	}
-	return ""
-}
-
-func regexpQuoteAll(values []string) []string {
-	quoted := make([]string, 0, len(values))
-	for _, value := range values {
-		quoted = append(quoted, regexp.QuoteMeta(value))
-	}
-	return quoted
-}
-
-func routeValue(text, field string) string {
-	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*"?([^"\r\n]+)"?[ \t\r]*$`)
-	match := pattern.FindStringSubmatch(text)
-	if len(match) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(match[1])
-}
-
-type reviewerProofReceipt struct {
-	ProofVersion                  int      `json:"proofVersion"`
-	Provider                      string   `json:"provider"`
-	WorkflowID                    string   `json:"workflowId"`
-	Gate                          string   `json:"gate"`
-	Stage                         string   `json:"stage"`
-	DispatchID                    string   `json:"dispatchId"`
-	DispatchRegistrationArtifact  string   `json:"dispatchRegistrationArtifact"`
-	DispatchRegistrationSha256    string   `json:"dispatchRegistrationSha256"`
-	NormalizedEvents              []string `json:"normalizedEvents"`
-	StartEventArtifact            string   `json:"startEventArtifact"`
-	StartEventSha256              string   `json:"startEventSha256"`
-	StopEventArtifact             string   `json:"stopEventArtifact"`
-	StopEventSha256               string   `json:"stopEventSha256"`
-	ReviewArtifact                string   `json:"reviewArtifact"`
-	ReviewArtifactCanonicalSha256 string   `json:"reviewArtifactCanonicalSha256"`
-}
-
-type lifecycleEvent struct {
-	WorkflowID       string `json:"workflowId"`
-	Gate             string `json:"gate"`
-	Stage            string `json:"stage"`
-	NormalizedEvent  string `json:"normalizedEvent"`
-	SubagentID       string `json:"subagentId"`
-	Kind             string `json:"kind"`
-	Event            string `json:"event"`
-	FormalWorkflowID string `json:"formalWorkflowId"`
-	GateID           string `json:"gateId"`
-	DispatchID       string `json:"dispatchId"`
-	DispatchArtifact string `json:"dispatchRegistrationArtifact"`
-}
-
-type dispatchRegistration struct {
-	ProofVersion    int    `json:"proofVersion"`
-	DispatchID      string `json:"dispatchId"`
-	Provider        string `json:"provider"`
-	WorkflowID      string `json:"workflowId"`
-	Gate            string `json:"gate"`
-	Stage           string `json:"stage"`
-	ReviewArtifact  string `json:"reviewArtifact"`
-	ReceiptArtifact string `json:"receiptArtifact"`
-}
-
-func validateReceipt(options ArtifactOptions, text string, result *Result) {
-	value := fieldValue(text, "Reviewer proof receipt")
-	receiptPathText, expectedHash, ok := parseHashedReference(value)
-	if !ok {
-		result.add(options.File, "Reviewer proof receipt: <path> sha256=<sha256>")
-		return
-	}
-	receiptPath := resolvePath(options.Root, receiptPathText)
-	if !isFile(receiptPath) {
-		result.add(options.File, "Reviewer proof receipt path does not exist: "+receiptPathText)
-		return
-	}
-	if actual := sha256File(receiptPath); actual != expectedHash {
-		result.add(options.File, "Reviewer proof receipt sha256 mismatch: "+receiptPathText)
+	if sha256File(receiptPath) != ref.SHA256 {
+		result.add(options.File, "receipt hash mismatch")
 		return
 	}
 	data, err := os.ReadFile(receiptPath)
 	if err != nil {
-		result.add(options.File, "cannot read Reviewer proof receipt: "+err.Error())
+		result.add(options.File, err.Error())
 		return
 	}
 	var receipt reviewerProofReceipt
-	if err := json.Unmarshal(data, &receipt); err != nil {
-		result.add(options.File, "Reviewer proof receipt is not valid JSON")
+	if err := strictContractJSON(data, &receipt); err != nil {
+		result.add(options.File, "reviewer receipt is invalid JSON")
 		return
 	}
-	if receipt.ProofVersion != 1 {
-		result.add(options.File, "Reviewer proof receipt proofVersion must be 1")
+	if receipt.ProofVersion != 1 || !knownReceiptProvider(receipt.Provider) || receipt.WorkflowID != options.WorkflowID || receipt.ChangeSnapshot != options.ChangeSnapshot || receipt.Gate != options.Gate || normalizeStage(receipt.Stage) != normalizeStage(options.Stage) {
+		result.add(options.File, "reviewer receipt binding does not match artifact request")
 	}
-	if !knownReceiptProvider(receipt.Provider) {
-		result.add(options.File, "Reviewer proof receipt provider is unsupported")
-	}
-	if options.WorkflowID != "" && receipt.WorkflowID != options.WorkflowID {
-		result.add(options.File, "Reviewer proof receipt workflowId must match --workflow-id")
-	}
-	if receipt.Gate != options.Gate {
-		result.add(options.File, "Reviewer proof receipt gate must match --gate")
-	}
-	if normalizeStage(receipt.Stage) != normalizeStage(options.Stage) {
-		result.add(options.File, "Reviewer proof receipt stage must match --stage")
-	}
-	if !contains(receipt.NormalizedEvents, "subagent_start") || !contains(receipt.NormalizedEvents, "subagent_stop") {
-		result.add(options.File, "Reviewer proof receipt must include subagent_start and subagent_stop")
+	if len(receipt.NormalizedEvents) != 2 || receipt.NormalizedEvents[0] != "subagent_start" || receipt.NormalizedEvents[1] != "subagent_stop" {
+		result.add(options.File, "reviewer receipt must include start and stop events")
 	}
 	reviewPath := resolvePath(options.Root, options.File)
-	receiptReviewPath := resolvePath(options.Root, receipt.ReviewArtifact)
-	if filepath.Clean(receiptReviewPath) != filepath.Clean(reviewPath) {
-		result.add(options.File, "Reviewer proof receipt reviewArtifact must match artifact path")
-	}
-	if receipt.ReviewArtifactCanonicalSha256 != canonicalReviewArtifactHash(text) {
-		result.add(options.File, "Reviewer proof receipt reviewArtifactCanonicalSha256 mismatch")
+	if !samePath(resolvePath(options.Root, receipt.ReviewArtifact), reviewPath) || receipt.ReviewArtifactSha256 != sha256File(reviewPath) {
+		result.add(options.File, "reviewer receipt does not bind the exact review artifact bytes")
 	}
 	validateReceiptDispatch(options, receipt, receiptPath, result)
 	start := validateReceiptEvent(options, receipt, receipt.StartEventArtifact, receipt.StartEventSha256, "subagent_start", result)
 	stop := validateReceiptEvent(options, receipt, receipt.StopEventArtifact, receipt.StopEventSha256, "subagent_stop", result)
-	if start.SubagentID != "" && stop.SubagentID != "" && start.SubagentID != stop.SubagentID {
-		result.add(options.File, "Reviewer proof receipt start/stop subagentId mismatch")
+	if start.SubagentID == "" || receipt.SubagentID != start.SubagentID || start.SubagentID != stop.SubagentID {
+		result.add(options.File, "reviewer receipt start and stop subagent IDs do not match")
 	}
 }
 
 func validateReceiptDispatch(options ArtifactOptions, receipt reviewerProofReceipt, receiptPath string, result *Result) {
-	if strings.TrimSpace(receipt.DispatchRegistrationArtifact) == "" || !isSHA256(receipt.DispatchRegistrationSha256) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration path/hash is missing")
-		return
-	}
 	path := resolvePath(options.Root, receipt.DispatchRegistrationArtifact)
-	if !isFile(path) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration path does not exist: "+receipt.DispatchRegistrationArtifact)
-		return
-	}
-	if actual := sha256File(path); actual != strings.ToLower(receipt.DispatchRegistrationSha256) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration sha256 mismatch: "+receipt.DispatchRegistrationArtifact)
+	if !isSHA256(receipt.DispatchRegistrationSha256) || sha256File(path) != receipt.DispatchRegistrationSha256 {
+		result.add(options.File, "dispatch registration path or hash is invalid")
 		return
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		result.add(options.File, "cannot read Reviewer proof receipt dispatch registration: "+err.Error())
+		result.add(options.File, err.Error())
 		return
 	}
 	var dispatch dispatchRegistration
-	if err := json.Unmarshal(data, &dispatch); err != nil {
-		result.add(options.File, "Reviewer proof receipt dispatch registration is not valid JSON")
+	if err := strictContractJSON(data, &dispatch); err != nil {
+		result.add(options.File, "dispatch registration is invalid JSON")
 		return
 	}
-	if dispatch.ProofVersion != 1 {
-		result.add(options.File, "Reviewer proof receipt dispatch registration proofVersion must be 1")
-	}
-	if dispatch.DispatchID != receipt.DispatchID {
-		result.add(options.File, "Reviewer proof receipt dispatch registration dispatchId must match receipt")
-	}
-	if !knownReceiptProvider(dispatch.Provider) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration provider is unsupported")
-	}
-	if dispatch.Provider != receipt.Provider {
-		result.add(options.File, "Reviewer proof receipt dispatch registration provider must match receipt")
-	}
-	if dispatch.WorkflowID != receipt.WorkflowID {
-		result.add(options.File, "Reviewer proof receipt dispatch registration workflowId must match receipt")
-	}
-	if dispatch.Gate != receipt.Gate {
-		result.add(options.File, "Reviewer proof receipt dispatch registration gate must match receipt")
-	}
-	if normalizeStage(dispatch.Stage) != normalizeStage(receipt.Stage) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration stage must match receipt")
-	}
-	if filepath.Clean(resolvePath(options.Root, dispatch.ReviewArtifact)) != filepath.Clean(resolvePath(options.Root, receipt.ReviewArtifact)) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration reviewArtifact must match receipt")
-	}
-	if strings.TrimSpace(dispatch.ReceiptArtifact) == "" {
-		result.add(options.File, "Reviewer proof receipt dispatch registration receiptArtifact must be finalized")
-	} else if filepath.Clean(resolvePath(options.Root, dispatch.ReceiptArtifact)) != filepath.Clean(receiptPath) {
-		result.add(options.File, "Reviewer proof receipt dispatch registration receiptArtifact must match receipt")
+	if dispatch.ProofVersion != 1 || dispatch.Status != "finalized" || dispatch.DispatchID != receipt.DispatchID || dispatch.Provider != receipt.Provider || dispatch.WorkflowID != receipt.WorkflowID || dispatch.ChangeSnapshot != receipt.ChangeSnapshot || dispatch.Gate != receipt.Gate || normalizeStage(dispatch.Stage) != normalizeStage(receipt.Stage) || !samePath(resolvePath(options.Root, dispatch.ReviewArtifact), resolvePath(options.Root, receipt.ReviewArtifact)) || !samePath(resolvePath(options.Root, dispatch.ReceiptArtifact), receiptPath) {
+		result.add(options.File, "finalized dispatch registration does not match receipt")
 	}
 }
 
-func validateReceiptEvent(options ArtifactOptions, receipt reviewerProofReceipt, pathText, expectedHash, expectedEvent string, result *Result) lifecycleEvent {
-	var event lifecycleEvent
-	if strings.TrimSpace(pathText) == "" || !isSHA256(expectedHash) {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event path/hash is missing")
-		return event
-	}
+func validateReceiptEvent(options ArtifactOptions, receipt reviewerProofReceipt, pathText, expectedHash, expectedEvent string, result *Result) receiptEventRecord {
+	var event receiptEventRecord
 	path := resolvePath(options.Root, pathText)
-	if !isFile(path) {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event path does not exist: "+pathText)
-		return event
-	}
-	if actual := sha256File(path); actual != strings.ToLower(expectedHash) {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event sha256 mismatch: "+pathText)
+	if !isSHA256(expectedHash) || sha256File(path) != expectedHash {
+		result.add(options.File, expectedEvent+" event path or hash is invalid")
 		return event
 	}
 	data, err := os.ReadFile(path)
-	if err != nil {
-		result.add(options.File, "cannot read Reviewer proof receipt "+expectedEvent+" event: "+err.Error())
+	if err != nil || strictContractJSON(data, &event) != nil {
+		result.add(options.File, expectedEvent+" event is invalid")
 		return event
 	}
-	if err := json.Unmarshal(data, &event); err != nil {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event is not valid JSON")
-		return event
-	}
-	if event.WorkflowID == "" {
-		event.WorkflowID = event.FormalWorkflowID
-	}
-	if event.Gate == "" {
-		event.Gate = event.GateID
-	}
-	if event.NormalizedEvent == "" {
-		event.NormalizedEvent = event.Kind
-	}
-	if event.NormalizedEvent == "" {
-		event.NormalizedEvent = event.Event
-	}
-	if options.WorkflowID != "" && event.WorkflowID != options.WorkflowID {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event workflowId must match --workflow-id")
-	}
-	if event.Gate != options.Gate {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event gate must match --gate")
-	}
-	if normalizeStage(event.Stage) != normalizeStage(options.Stage) {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event stage must match --stage")
-	}
-	if event.NormalizedEvent != expectedEvent {
-		result.add(options.File, "Reviewer proof receipt event kind must be "+expectedEvent)
-	}
-	if strings.TrimSpace(receipt.DispatchID) != "" && event.DispatchID != receipt.DispatchID {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event dispatchId must match dispatch registration")
-	}
-	if strings.TrimSpace(receipt.DispatchID) == "" && strings.TrimSpace(event.DispatchID) != "" {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event dispatchId must match dispatch registration")
-	}
-	if strings.TrimSpace(receipt.DispatchRegistrationArtifact) != "" {
-		receiptDispatchPath := filepath.Clean(resolvePath(options.Root, receipt.DispatchRegistrationArtifact))
-		if strings.TrimSpace(event.DispatchArtifact) == "" {
-			result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event dispatchRegistrationArtifact must match receipt")
-		} else if filepath.Clean(resolvePath(options.Root, event.DispatchArtifact)) != receiptDispatchPath {
-			result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event dispatchRegistrationArtifact must match receipt")
-		}
-	} else if strings.TrimSpace(event.DispatchArtifact) != "" {
-		result.add(options.File, "Reviewer proof receipt "+expectedEvent+" event dispatchRegistrationArtifact must match receipt")
+	if event.Provider != receipt.Provider || event.WorkflowID != options.WorkflowID || event.ChangeSnapshot != options.ChangeSnapshot || event.Gate != options.Gate || normalizeStage(event.Stage) != normalizeStage(options.Stage) || event.NormalizedEvent != expectedEvent || event.DispatchID != receipt.DispatchID || !samePath(resolvePath(options.Root, event.DispatchRegistrationArtifact), resolvePath(options.Root, receipt.DispatchRegistrationArtifact)) {
+		result.add(options.File, expectedEvent+" event binding does not match receipt")
 	}
 	return event
 }
 
-func parseHashedReference(value string) (string, string, bool) {
-	value = strings.Trim(strings.TrimSpace(value), `"'`)
-	match := regexp.MustCompile(`(?i)\bsha(?:256)?\s*[:=]\s*([a-f0-9]{64})\b`).FindStringSubmatch(value)
+func fieldValue(text, field string) string {
+	pattern := regexp.MustCompile(`(?im)^[ \t]*` + regexp.QuoteMeta(field) + `[ \t]*:[ \t]*(.*)$`)
+	match := pattern.FindStringSubmatch(text)
 	if len(match) < 2 {
-		return "", "", false
+		return ""
 	}
-	pathText := regexp.MustCompile(`(?i)\s+sha(?:256)?\s*[:=]\s*[a-f0-9]{64}\b`).ReplaceAllString(value, "")
-	pathText = strings.TrimSpace(regexp.MustCompile(`\s+\(.*$`).ReplaceAllString(pathText, ""))
-	if pathText == "" {
-		return "", "", false
-	}
-	return pathText, strings.ToLower(match[1]), true
+	return strings.TrimSpace(match[1])
 }
 
 func resolvePath(root, value string) string {
@@ -599,52 +159,23 @@ func sha256File(path string) string {
 }
 
 func sha256FileForTest(t interface{ Fatal(args ...any) }, path string) string {
-	value := sha256File(path)
-	if value == "" {
+	hash := sha256File(path)
+	if hash == "" {
 		t.Fatal("failed to hash file: " + path)
 	}
-	return value
-}
-
-func canonicalReviewArtifactHash(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	out := make([]string, 0, len(lines))
-	receiptLine := regexp.MustCompile(`(?i)^[ \t]*Reviewer proof receipt[ \t]*:`)
-	for _, line := range lines {
-		if receiptLine.MatchString(line) {
-			continue
-		}
-		out = append(out, strings.TrimRight(line, " \t"))
-	}
-	sum := sha256.Sum256([]byte(strings.Join(out, "\n")))
-	return hex.EncodeToString(sum[:])
+	return hash
 }
 
 func knownReceiptProvider(provider string) bool {
-	switch provider {
-	case "codex", "claude-code", "cursor":
-		return true
-	default:
-		return false
-	}
+	return provider == "codex" || provider == "claude-code" || provider == "cursor"
 }
-
-func normalizeStage(stage string) string {
-	return strings.TrimSpace(stage)
-}
-
+func normalizeStage(stage string) string { return strings.TrimSpace(stage) }
 func isSHA256(value string) bool {
-	return regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(strings.ToLower(strings.TrimSpace(value)))
+	return regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(strings.TrimSpace(value))
 }
-
 func meaningful(value string) bool {
 	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	if regexp.MustCompile(`<[^>\r\n]+>`).MatchString(value) {
+	if value == "" || regexp.MustCompile(`<[^>\r\n]+>`).MatchString(value) {
 		return false
 	}
 	switch strings.ToLower(value) {

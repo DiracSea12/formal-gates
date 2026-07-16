@@ -55,7 +55,7 @@ sorted by `id` and contain exactly these Phase 1 policy IDs:
 | Policy ID | Artifact role | Gate / stage | Flow |
 |---|---|---|---|
 | `requirements.pass.v2` | `REQUIREMENTS_PASS` | `requirements-clarification-gate` / `""` | `requirements` |
-| `qa.execution.v2` | `QA_REVIEW` | `qa-test-gate` / `Execution` | `post-development` |
+| `qa.execution.v2` | `QA_EXECUTION` | `qa-test-gate` / `Execution` | `post-development` |
 | `complexity.start-readiness.v2` | `COMPLEXITY_REVIEW` | `complexity-gate` / `""` | `start-readiness` |
 | `complexity.post-development.v2` | `COMPLEXITY_REVIEW` | `complexity-gate` / `""` | `post-development` |
 | `architecture.start-readiness.v2` | `ARCHITECTURE_REVIEW` | `architecture-health-gate` / `""` | `start-readiness` |
@@ -71,7 +71,7 @@ exactly `gate`, `stage`, and `flow`.
 
 Artifact validation and authoritative recording SHALL select the same policy
 object. For reviewer artifacts, `reviewPolicyId` SHALL identify that object;
-requirements and FinalExecution SHALL use their fixed role policy. The selected
+requirements, QA Execution, and FinalExecution SHALL use their fixed role policy. The selected
 policy's `artifactRole`, `gate`, and `stage` SHALL match the envelope, and its
 `flow` SHALL match the existing recording request and persisted state: mode
 `start-readiness` maps to flow `start-readiness`, formal reviewer recording maps
@@ -93,10 +93,10 @@ check IDs declared by `structured-json-evidence`. Only
 `NOT_APPLICABLE`; every other allowed list is empty.
 
 `receiptRequired` SHALL be true only for reviewer policies.
-`changedFilesRequired` and `verificationRequired` SHALL be true only for
-post-development reviewer policies. `mechanical` SHALL be true only for
-`final-execution.v2`. Requirements and FinalExecution SHALL have empty check-ID
-arrays. The output SHALL NOT contain free-form rule descriptions, maps, future
+`changedFilesRequired` and `verificationRequired` SHALL be true for QA
+Execution and post-development reviewer policies. `mechanical` SHALL be true
+only for `qa.execution.v2` and `final-execution.v2`. Requirements, QA
+Execution, and FinalExecution SHALL have empty check-ID arrays. The output SHALL NOT contain free-form rule descriptions, maps, future
 role placeholders, or a properties bag.
 
 #### Scenario: Current policy is exported

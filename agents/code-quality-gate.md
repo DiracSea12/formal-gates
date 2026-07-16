@@ -53,32 +53,6 @@ Contaminated fields:
 
 Do not continue review. Do not output PASS, FAIL, or REVIEW.
 
-Artifact must include:
+Write the closed schema-version-2 JSON envelope directly with role `CODE_QUALITY_REVIEW`, gate `code-quality-gate`, and policy `code-quality.post-development.v2`. Use only the shared reviewer payload with `dispatch`, `contextBundle`, `reviewPolicyId`, `checks`, `changedFiles`, and `verification`.
 
-```text
-Code Quality Gate
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Review mode: ZERO_CONTEXT_FORMAL
-Prompt contamination check: PASS
-Semantic anti-anchor check: PASS
-Prompt source: agents/code-quality-gate.md
-Zero-context reviewer: YES
-Independent agent: YES
-Context bundle:
-Dispatch prompt artifact:
-No-anchor prompt: YES
-Correctness blockers:
-Maintainability blockers:
-Performance risks:
-Test quality blockers:
-Dead/redundant code:
-Overfitting checks:
-Validation/encoding checks:
-Required verification:
-Residual risk:
-Changed files artifact:
-Verification artifact:
-gate_route:
-```
-
-Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.
+Include the two prompt checks and every `code-quality.*` check exported by `policy show` exactly once, with typed evidence and findings. No check permits `NOT_APPLICABLE`. Do not add gate-specific top-level judgment, identity, receipt, route, or future-role fields. The external receipt binds the exact completed reviewer JSON bytes.

@@ -1,0 +1,9 @@
+# Project Agent Rules
+
+This is a personal project. Guarantee normal documented use and common operator mistakes only.
+
+Unless the user explicitly requests adversarial or security hardening, coordinated evidence tampering, malicious local edits, manual rewriting of internal state, permission or immutable-file fault injection, attack-style inputs, and contrived scenarios that require violating the documented workflow are out of scope. They cannot block PASS or trigger implementation work. Keep the normal contract and existing integrity checks; do not add defenses or compatibility paths for abnormal modification.
+
+Repeat this boundary explicitly in every subagent dispatch. Do not rely on the subagent discovering it in another document. Findings outside this boundary are advisory; if no in-scope blocker remains, the result must PASS.
+
+Every blocker must include an end-to-end reproduction starting from a documented public entrypoint and using only normal user actions or common mistakes. A reproduction that requires manually creating or rewriting internal artifacts, state, receipts, run directories, or attack-style inputs is advisory only. Before reporting that a change cannot be pushed, the main agent must independently verify the claimed normal-use reproduction path.

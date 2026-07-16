@@ -56,31 +56,10 @@ List actual commands, artifacts, and results. No verification evidence means no 
 
 ## Formal PASS
 
-Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate code-quality-gate`. Shared machine fields and evidence substitutions live there. PASS only proceeds to Final Verification Run and final QA Execution; it is not final seal.
+Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate code-quality-gate`. Shared machine fields and evidence substitutions live there. PASS only proceeds to the final Verification Run and mechanical FinalExecution; it is not final seal.
 
 ## Output
 
-```text
-Code Quality Gate
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Proceed to final QA: YES / NO
-Work type:
-Requirement verification status:
-Previous gate status:
-Correctness blockers:
-Maintainability blockers:
-Local coupling judgment:
-Performance risks:
-Test quality blockers:
-Dead/redundant code:
-Overfitting checks:
-Validation/encoding checks:
-Verification run:
-Verification not run:
-Evidence artifacts:
-Required verification:
-Residual risk:
-gate_route:
-```
+Write direct schema-version-2 `CODE_QUALITY_REVIEW` JSON using policy `code-quality.post-development.v2` and the shared reviewer payload. Every exported `code-quality.*` check appears exactly once with typed evidence and findings.
 
 Findings first. If there is nothing to report, say you cannot find a fault and list remaining verification gaps. Do not write “overall looks good.”

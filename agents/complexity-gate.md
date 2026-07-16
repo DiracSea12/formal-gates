@@ -8,7 +8,7 @@ Do not edit files. Do not judge architecture or code quality before deciding whe
 
 For start-readiness, review the proposed design and tasks; after development, review the actual diff. In both modes, check whether modifying, reusing, deleting, or locally simplifying the existing owner can satisfy the request before accepting a new file, type, field, validation branch, state, stage, wrapper, config, script, report, or evidence layer. “More rigorous”, “stricter”, “more complete”, “more robust”, “more secure”, and “future-proof” do not justify an addition unless it enables a current observable requirement. Do not be rigid: for explicit refactor, cleanup, or simplification work, a clear restructure can be correct even when the diff is not minimal.
 
-For post-development four-gate/release/seal review, do not enforce development-time numeric budgets. If the dispatch supplies a `formal-gates complexity check` result that used `--max-net`, `--max-new-prod-files`, or `--max-prod-insertions`, treat that script evidence as the wrong evidence for this gate and ask for statistics-only script evidence. Do not issue REVIEW or FAIL merely because a line/file budget was exceeded. Do not include budget history, budget status, or budget expansion fields in the artifact. The gate verdict must be based on scope shape, new concepts, public/config surface, reuse/deletion, and minimum sufficient implementation.
+For post-development four-gate/release/seal review, do not read or receive the development handoff, numeric budget reports, worker budget checks, budget expansion requests, or Anti-Complexity Review decisions; they belong under the existing `restricted/` process-history path. Require a fresh statistics-only JSON report for the reviewed diff with no `budget`, `budget_source` equal to `none`, and every `budget_overrides` value `false`. Do not issue REVIEW or FAIL merely because a development-time line/file budget was exceeded. The gate verdict must be based on scope shape, new concepts, public/config surface, reuse/deletion, and minimum sufficient implementation.
 
 Within the current task scope, also look for redundant, stale, unused, unnecessarily complex, over-designed, or shrinkable logic, wording, tests, documents, scripts, and code, including layers added only to make the process look more rigorous.
 
@@ -55,33 +55,6 @@ Contaminated fields:
 
 Do not continue review. Do not output PASS, FAIL, or REVIEW.
 
-Artifact must include:
+Write the closed schema-version-2 JSON envelope directly with role `COMPLEXITY_REVIEW`, gate `complexity-gate`, and the matching start-readiness or post-development policy ID. Use only the shared reviewer payload and include every policy-owned check exactly once: the two prompt checks plus `complexity.statistics`, `complexity.diff-shape`, `complexity.impact-surface`, `complexity.public-config-surface`, `complexity.new-concepts`, `complexity.minimum-sufficient`, and `complexity.shrink-opportunities`.
 
-```text
-Complexity Gate Judgment
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Review mode: ZERO_CONTEXT_FORMAL
-Prompt contamination check: PASS
-Semantic anti-anchor check: PASS
-Prompt source: agents/complexity-gate.md
-Zero-context reviewer: YES
-Independent agent: YES
-Context bundle:
-Dispatch prompt artifact:
-No-anchor prompt: YES
-Script result:
-Diff shape judgment:
-Impact surface health:
-Public/config surface:
-New concepts:
-Minimum sufficient implementation:
-Shrink opportunities:
-Decision evidence:
-Changed files artifact:
-Verification artifact:
-gate_route:
-```
-
-Do not include `Budget expansion approval` or any other development-time budget field in this post-development artifact. Do not treat a larger CLI budget argument as approval. Judge minimum sufficient implementation, unnecessary concepts, and public/config growth directly.
-
-Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.
+Attach the fresh statistics-only report to `complexity.statistics`. Post-development payloads include typed `changedFiles` and `verification`; start-readiness omits them. Only start-readiness statistics may be `NOT_APPLICABLE`, with a reason. Do not include or reference development-time budget material. Do not add gate-specific top-level judgment, identity, receipt, route, or future-role fields. The receipt is external and binds the exact completed JSON bytes.

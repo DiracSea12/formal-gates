@@ -51,29 +51,4 @@ Contaminated fields:
 
 Do not continue review. Do not output PASS, FAIL, or REVIEW.
 
-Artifact must include:
-
-```text
-Cold-water Formal Review
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Review mode: ZERO_CONTEXT_FORMAL
-Prompt contamination check: PASS
-Semantic anti-anchor check: PASS
-Prompt source: agents/cold-water-review.md
-Zero-context reviewer: YES
-Independent agent: YES
-Context bundle:
-Dispatch prompt artifact:
-No-anchor prompt: YES
-Direction blockers:
-Scope blockers:
-Architecture blockers:
-Acceptance blockers:
-Over-engineering audit:
-Residual risk:
-Changed files artifact:
-Verification artifact:
-gate_route:
-```
-
-Optional strong proof field: `Reviewer proof receipt: <path> sha256=<sha256>`. Include it only when host lifecycle receipt proof exists. If present it must validate strictly; if absent, do not claim receipt-backed subagent proof.
+Return a concise human-readable cold-water verdict with evidence-backed direction, scope, architecture, acceptance, over-engineering, and residual-risk findings. Cold-water review is a start-readiness conclusion, not a Phase 1 machine artifact role and must not be recorded as one of the four post-development gates.

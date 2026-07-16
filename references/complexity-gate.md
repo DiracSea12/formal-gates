@@ -1,6 +1,6 @@
 # Complexity Gate
 
-Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract and development-time budget before an authorized formal handoff. After QA Execution PASS, it reviews diff shape, new concepts, public/config surface, minimum sufficient implementation, reuse/deletion, and overengineering; it does not enforce development-time numeric budgets as the post-development gate threshold.
+Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract and development-time budget before an authorized formal handoff. Before, during, and after development, it checks whether the work modifies and simplifies existing structures before adding new ones, especially when additions are justified only as making the system more rigorous, complete, robust, or secure. After QA Execution PASS, it reviews diff shape, new concepts, public/config surface, minimum sufficient implementation, reuse/deletion, and overengineering; it does not enforce development-time numeric budgets as the post-development gate threshold.
 
 ## Applicability
 
@@ -26,7 +26,7 @@ Public API/config budget:
 New subsystem budget:
 Allowed new concepts:
 Forbidden concepts:
-Existing structures to reuse first:
+Existing structures to modify or reuse first:
 Expansion evidence required:
 Stop triggers:
 ```
@@ -37,7 +37,7 @@ Task type must be one of `delete-or-consolidate`, `bugfix`, `small-feature`, `re
 
 Development-time budgets are task-specific implementation controls. They exist before and during formal development handoff only. `formal-gates complexity check` has no built-in numeric default budget: if no numeric budget is passed, it only reports diff statistics and non-budget review signals. The main agent must set the development-time budget from the actual requirement, planned slice, expected diff shape, reused/deleted code, allowed production files, and test/documentation needs before formal development starts. Explicit numeric budget thresholds are development-time alarms, not design truth or post-development gate criteria.
 
-Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids deletion/reuse, or is not the minimum sufficient implementation for the request. Post-development `complexity-gate` artifacts must not use line/file threshold compliance as the basis for PASS.
+Budget compliance is not complexity approval. A diff can stay within line/file budgets and still FAIL or REVIEW because it adds unnecessary concepts, expands public/config surface, avoids modifying, deleting, or reusing existing structures, or is not the minimum sufficient implementation for the request. Calling additions more rigorous, complete, robust, secure, or future-proof is not evidence that the current requirement needs them. Post-development `complexity-gate` artifacts must not use line/file threshold compliance as the basis for PASS.
 
 Line budgets must not be gamed by reducing readability. If code is compressed to fit the budget, such as unrelated statements packed onto one line, unclear short names, merged responsibilities, hidden branching, or removed useful comments/error handling, treat it as complexity budget evasion and fail or review even when numeric counts are within budget.
 
@@ -63,7 +63,7 @@ Files affected:
 Risk if denied:
 ```
 
-Before approval, verify shrink-before-grow: delete old logic, reuse existing structures, narrow fields/reports/config/tests, drop future completeness shells, and explain which current requirement or quality bar fails without expansion.
+Before approval, verify shrink-before-grow: modify the existing owner, delete old logic, reuse existing structures, narrow fields/reports/config/tests, drop future completeness shells, and explain which observable current requirement fails without expansion.
 
 Without that proof, deny expansion.
 
@@ -92,10 +92,10 @@ For a post-development four-gate/release/seal complexity review:
 - do not pass `--max-net`, `--max-new-prod-files`, or `--max-prod-insertions` for the formal gate script evidence;
 - do not turn a line/file count threshold into the gate's PASS/REVIEW/FAIL criterion;
 - do not request or approve budget expansion as part of this gate;
-- do not include development-time budget history, budget status, or budget expansion fields in the post-development gate artifact;
+- do not provide or reference the development handoff, numeric budget reports, worker budget checks, budget expansion requests, or Anti-Complexity Review decisions in the reviewer prompt, context bundle, evidence, or gate artifact;
 - do use statistics-only diff output, changed-files artifacts, QA evidence, and the requirement scope to judge whether the implementation is the simplest sufficient solution.
 
-Development-time budget data belongs only to the formal development handoff, worker result, and anti-complexity approval path. It must disappear from the post-development complexity artifact. An unapproved development-time budget overrun is a development handoff/process problem, not a post-development gate field. The post-development verdict must be based on scope size, unnecessary concepts, public/config surface growth, failure to reuse/delete, overengineering, and whether the implementation is minimum sufficient for the request.
+Development-time budget data belongs only to the formal development handoff, worker result, and anti-complexity approval path. Those materials stay under the existing `restricted/` process-history path and are forbidden to the post-development complexity reviewer. An unapproved development-time budget overrun is a development handoff/process problem, not a post-development gate input. The post-development verdict must be based on scope size, unnecessary concepts, public/config surface growth, failure to modify/reuse/delete, rigor-by-addition, overengineering, and whether the implementation is minimum sufficient for the request.
 
 ## Diff Script
 
@@ -105,7 +105,7 @@ Run only when there is a diff to review:
 bin/formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine output and `--staged` only for staged review. Post-development complexity gate evidence must omit all three numeric budget flags and use the command as statistics plus non-budget review signals. Formal handoff and development-time checks must pass all three numeric budget flags together. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
+Use `--json` for machine output and `--staged` only for staged review. Post-development complexity gate evidence must be a fresh report for the reviewed diff, omit all three numeric budget flags, omit `budget`, set `budget_source` to `none`, and leave every `budget_overrides` value `false`. Formal handoff and development-time checks must pass all three numeric budget flags together. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
 
 In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 
@@ -119,7 +119,7 @@ Review the post-change affected surface, not only diff count: changed production
 
 Do not borrow this as a license to clean the whole repo. Historical debt is residual risk unless this change worsens it.
 
-Also judge whether the current implementation is the smallest sufficient implementation for the stated request. Prefer reuse, deletion, and local simplification before adding new files, types, fields, config, scripts, stages, or reports. Do not be mechanical: when the explicit task is refactor, cleanup, or simplification, the right answer may be a clear restructure rather than the smallest diff.
+For start-readiness, judge the proposed design and tasks; after development, judge the actual diff. In both modes, require each new file, type, field, validation branch, state, stage, wrapper, config, script, report, or evidence layer to enable a current observable requirement that modifying the existing owner cannot satisfy. Prefer modification, reuse, deletion, and local simplification. Do not be mechanical: when the explicit task is refactor, cleanup, or simplification, the right answer may be a clear restructure rather than the smallest diff.
 
 Within the current task scope, complexity review must also look for redundant, stale, unused, unnecessarily complex, over-designed, or shrinkable logic, wording, tests, documents, scripts, and code.
 
@@ -131,7 +131,7 @@ Stop when the current contract did not budget:
 - New global mutable state, process cache, config, report layer, state machine, or generic framework.
 - Delete/consolidate/bugfix work with obvious net growth.
 - Tests that assert fields, non-empty strings, or log text instead of behavior.
-- “future-proof”, “extensible”, “later”, “generic”, “framework”, “platform”, or “complete” without current demand evidence.
+- “rigorous”, “strict”, “robust”, “secure”, “future-proof”, “extensible”, “later”, “generic”, “framework”, “platform”, or “complete” without a current observable behavior that requires the addition.
 
 ## Formal PASS
 
@@ -139,46 +139,10 @@ Post-development formal complexity review can run only after `qa-test-gate` form
 
 Start-readiness complexity review runs after `requirements-clarification-gate` PASS for the same workflow and snapshot. Record and verify start-readiness reviews with `--mode start-readiness`; do not invent QA Execution evidence before code exists.
 
-Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate complexity-gate`. For start-readiness, include `--mode start-readiness`. Formal PASS artifacts must include the shared zero-context fields plus these complexity-specific fields:
+Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate complexity-gate`. For start-readiness, include `--mode start-readiness`. Write direct schema-version-2 `COMPLEXITY_REVIEW` JSON using the matching typed policy. Put each judgment in its exported `complexity.*` check and attach the fresh statistics report to `complexity.statistics`.
 
-```text
-Script result:
-Diff shape judgment:
-Impact surface health:
-Public/config surface:
-New concepts:
-Minimum sufficient implementation:
-Shrink opportunities:
-Decision evidence:
-```
-
-Post-development complexity artifacts must not include `Development-time budget history`, `Budget/expansion status`, `Budget status`, or `Budget expansion approval`. If any of these fields appear, reject the artifact and regenerate it without development-time budget material.
+Post-development validation rejects a statistics report containing `budget`, a `budget_source` other than `none`, or any true override. Phase 2 adds restricted-path enforcement; Phase 1 does not claim that later behavior.
 
 ## Output
 
-```text
-Complexity Gate Judgment
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Proceed to architecture: YES / NO
-Requirement verification status:
-Script result:
-Diff shape judgment:
-Minimum sufficient implementation:
-Stop triggers:
-Shrink opportunities:
-Decision evidence:
-gate_route:
-```
-
-Also include:
-
-```text
-Complexity Ledger
-New concepts:
-Deleted concepts:
-Net complexity:
-Impact surface health:
-Stop triggers hit:
-Things deliberately not built:
-Still shrinkable:
-```
+Use the shared reviewer payload only. Human prose may summarize the judgment, but only the envelope verdict and complete check catalog determine admission.

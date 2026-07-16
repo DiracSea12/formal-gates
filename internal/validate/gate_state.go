@@ -44,7 +44,6 @@ type GateState struct {
 	SchemaVersion int                       `json:"schemaVersion"`
 	Gates         map[string]GateStateEntry `json:"gates"`
 	History       []GateStateEntry          `json:"history"`
-	Transitions   []GateTransition          `json:"transitions,omitempty"`
 }
 
 type GateStateEntry struct {
@@ -71,14 +70,23 @@ var gateVerdicts = map[string]bool{
 	"BLOCKED":          true,
 }
 
-type admissionRequirement struct {
-	gate     string
-	mode     string
-	stage    string
-	artifact bool
+var postDevelopmentGateOrder = []string{
+	"qa-test-gate",
+	"complexity-gate",
+	"architecture-health-gate",
+	"code-quality-gate",
 }
 
 func GateRecord(options GateRecordOptions) Result {
+	if policy, ok := recordingPolicy(options.Gate, options.Stage, options.Mode); ok && policy.ArtifactRole == "FINAL_EXECUTION" {
+		var result Result
+		result.add("qa-test-gate", "FinalExecution can only be recorded by workflow final-verification --record-final-qa")
+		return result
+	}
+	return gateRecord(options)
+}
+
+func gateRecord(options GateRecordOptions) Result {
 	worktree := cleanRoot(options.Worktree)
 	statePath := resolveStatePath(worktree, options.StatePath)
 	var result Result
@@ -90,32 +98,72 @@ func GateRecord(options GateRecordOptions) Result {
 		return result
 	}
 
+	policy, _ := recordingPolicy(options.Gate, options.Stage, options.Mode)
+	flow := policy.Flow
+	artifactPath := resolvePath(worktree, options.Artifact)
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		result.add("artifact", err.Error())
+		return result
+	}
+	artifactOptions := ArtifactOptions{Root: worktree, File: options.Artifact, Gate: options.Gate, WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot, Stage: options.Stage, Flow: flow, RunDir: options.RunDir}
+	decoded := decodeArtifact(artifactOptions, data, &result)
+	if !result.OK() || decoded.Envelope.Verdict != options.Verdict {
+		if result.OK() {
+			result.add("artifact", "artifact verdict must match --verdict")
+		}
+		return result
+	}
+	if options.Verdict != "PASS" {
+		return result
+	}
 	state, err := loadGateState(statePath)
 	if err != nil {
 		result.add(slash(statePath), err.Error())
 		return result
 	}
-
-	if options.Verdict == "PASS" {
-		if err := validatePassArtifact(worktree, options); err != nil {
-			result.add("gate-state", err.Error())
+	if decoded.Requirements != nil {
+		if err := verifyRequirementsContinuity(worktree, statePath, options.RunDir, state, decoded); err != nil {
+			result.add("requirements-clarification-gate", err.Error())
 			return result
 		}
-		for _, requirement := range recordAdmissionRequirements(options) {
-			if err := verifyRequirement(worktree, statePath, options.RunDir, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot, options.Mode); err != nil {
+	}
+	if options.Verdict == "PASS" {
+		for _, requirement := range decoded.Policy.Prerequisites {
+			if err := verifyRequirement(worktree, statePath, options.RunDir, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot); err != nil {
 				result.add("gate-state", err.Error())
 				return result
 			}
 		}
 	}
 
+	storedArtifact := options.Artifact
+	storedHash := hashArtifactIfPresent(worktree, options.Artifact)
+	if decoded.Envelope.ArtifactRole != "FINAL_EXECUTION" {
+		var receipt *EvidenceRef
+		if decoded.Policy.ReceiptRequired {
+			ref, err := matchingReceiptRef(artifactOptions, decoded)
+			if err != nil {
+				result.add("receipt", err.Error())
+				return result
+			}
+			receipt = &ref
+		}
+		closure, err := buildClosure(artifactOptions, decoded, receipt)
+		if err != nil {
+			result.add("closure", err.Error())
+			return result
+		}
+		closurePath := filepath.Join(decoded.RunDir, filepath.FromSlash(closure.Path))
+		storedArtifact, storedHash = relativePath(worktree, closurePath), closure.SHA256
+	}
 	entry := GateStateEntry{
 		Gate:           options.Gate,
 		Verdict:        options.Verdict,
-		Mode:           options.Mode,
+		Mode:           flow,
 		Stage:          options.Stage,
-		Artifact:       options.Artifact,
-		ArtifactHash:   hashArtifactIfPresent(worktree, options.Artifact),
+		Artifact:       storedArtifact,
+		ArtifactHash:   storedHash,
 		Actor:          options.Actor,
 		Reason:         options.Reason,
 		WorkflowID:     options.WorkflowID,
@@ -140,7 +188,13 @@ func GateVerifyAdmission(options GateAdmissionOptions) Result {
 		result.add("gate", "unknown post-development gate: "+options.Gate)
 		return result
 	}
-	requirements := admissionRequirementsFor(options.Gate, options.Mode)
+	flow, flowOK := admissionFlow(strings.TrimSpace(options.Mode))
+	policy, ok := admissionPolicy(options.Gate, flow)
+	if !flowOK || !ok {
+		result.add("gate", fmt.Sprintf("unsupported admission policy gate=%s flow=%s", options.Gate, flow))
+		return result
+	}
+	requirements := policy.Prerequisites
 	if len(requirements) > 0 {
 		if strings.TrimSpace(options.WorkflowID) == "" {
 			result.add("workflow-id", "--workflow-id is required for admission checks")
@@ -158,7 +212,7 @@ func GateVerifyAdmission(options GateAdmissionOptions) Result {
 		return result
 	}
 	for _, requirement := range requirements {
-		if err := verifyRequirement(worktree, statePath, options.RunDir, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot, options.Mode); err != nil {
+		if err := verifyRequirement(worktree, statePath, options.RunDir, state, requirement, options.Gate, options.WorkflowID, options.ChangeSnapshot); err != nil {
 			result.add("gate-state", err.Error())
 			return result
 		}
@@ -175,10 +229,6 @@ func GateShow(options GateShowOptions) (GateState, Result) {
 		result.add(slash(statePath), err.Error())
 		return GateState{}, result
 	}
-	if err := writeGateState(statePath, state); err != nil {
-		result.add(slash(statePath), err.Error())
-		return GateState{}, result
-	}
 	return state, result
 }
 
@@ -189,13 +239,95 @@ func GateStateText(state GateState) string {
 	}
 	sort.Strings(keys)
 	var b strings.Builder
-	fmt.Fprintf(&b, "schemaVersion=%d history=%d transitions=%d\n", state.SchemaVersion, len(state.History), len(state.Transitions))
+	fmt.Fprintf(&b, "schemaVersion=%d history=%d\n", state.SchemaVersion, len(state.History))
 	for _, gate := range keys {
 		entry := state.Gates[gate]
 		fmt.Fprintf(&b, "gate=%s verdict=%s workflowId=%s changeSnapshot=%s mode=%s stage=%s artifact=%s\n",
 			entry.Gate, entry.Verdict, entry.WorkflowID, entry.ChangeSnapshot, entry.Mode, entry.Stage, entry.Artifact)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func verifyRequirement(worktree, statePath, runDir string, state GateState, requirement PolicyPrereq, requiredFor, workflowID, changeSnapshot string) error {
+	entries := entriesForGateNewestFirst(state, requirement.Gate)
+	if len(entries) == 0 {
+		return fmt.Errorf("current-pass-missing: missing prerequisite gate=%s requiredFor=%s state=%s", requirement.Gate, requiredFor, slash(statePath))
+	}
+	for i := range entries {
+		entry := entries[i]
+		if entry.WorkflowID == workflowID && entry.ChangeSnapshot == changeSnapshot {
+			if entry.Verdict != "PASS" {
+				return fmt.Errorf("current-pass-not-real: gate=%s verdict=%s required=PASS requiredFor=%s state=%s", requirement.Gate, entry.Verdict, requiredFor, slash(statePath))
+			}
+			if requirement.Flow != "" && entry.Mode != requirement.Flow {
+				return fmt.Errorf("current-pass-missing: gate=%s mode=%s requiredMode=%s requiredFor=%s state=%s", requirement.Gate, entry.Mode, requirement.Flow, requiredFor, slash(statePath))
+			}
+			if normalizeStage(entry.Stage) != normalizeStage(requirement.Stage) {
+				return fmt.Errorf("current-pass-missing: gate=%s stage=%s requiredStage=%s requiredFor=%s state=%s", requirement.Gate, entry.Stage, requirement.Stage, requiredFor, slash(statePath))
+			}
+			if err := verifyEntryArtifact(worktree, statePath, runDir, entry, requiredFor); err != nil {
+				return fmt.Errorf("current-pass-artifact-invalid: %s", err.Error())
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("current-pass-missing: missing route gate=%s requiredFor=%s workflowId=%s changeSnapshot=%s state=%s", requirement.Gate, requiredFor, workflowID, changeSnapshot, slash(statePath))
+}
+
+func verifyRequirementsContinuity(worktree, statePath, runDir string, state GateState, current decodedArtifact) error {
+	var prior *GateStateEntry
+	for _, entry := range entriesForGateNewestFirst(state, "requirements-clarification-gate") {
+		if entry.WorkflowID == current.Envelope.WorkflowID && entry.Verdict == "PASS" && entry.Mode == "requirements" {
+			copy := entry
+			prior = &copy
+			break
+		}
+	}
+	if prior == nil {
+		if current.Requirements.PreviousAlignment != nil {
+			return fmt.Errorf("previousAlignment must be omitted before the first recorded requirements PASS")
+		}
+		return nil
+	}
+	if current.Requirements.PreviousAlignment == nil {
+		return fmt.Errorf("previousAlignment must reference the actual prior requirements PASS alignment")
+	}
+	if err := verifyEntryArtifact(worktree, statePath, runDir, *prior, "requirements continuity"); err != nil {
+		return fmt.Errorf("prior requirements PASS is invalid: %w", err)
+	}
+	closurePath := resolvePath(worktree, prior.Artifact)
+	closureData, err := os.ReadFile(closurePath)
+	if err != nil {
+		return err
+	}
+	var closure EvidenceClosure
+	if err := strictJSON(closureData, &closure); err != nil {
+		return fmt.Errorf("prior requirements closure is invalid: %w", err)
+	}
+	closureRunDir := runDir
+	if closureRunDir == "" {
+		closureRunDir = filepath.Dir(filepath.Dir(closurePath))
+	}
+	rootPath, err := safeEvidencePath(closureRunDir, closure.RootArtifact)
+	if err != nil {
+		return fmt.Errorf("prior requirements root is invalid: %w", err)
+	}
+	rootData, err := os.ReadFile(rootPath)
+	if err != nil {
+		return err
+	}
+	var envelope FormalGateEvidence
+	if err := strictContractJSON(rootData, &envelope); err != nil || envelope.ArtifactRole != "REQUIREMENTS_PASS" || envelope.Gate != "requirements-clarification-gate" || envelope.WorkflowID != prior.WorkflowID || envelope.ChangeSnapshot != prior.ChangeSnapshot || envelope.Verdict != "PASS" {
+		return fmt.Errorf("prior requirements root does not match its recorded PASS")
+	}
+	var payload RequirementsPayload
+	if err := strictContractJSON(envelope.Payload, &payload); err != nil {
+		return fmt.Errorf("prior requirements payload is invalid: %w", err)
+	}
+	if *current.Requirements.PreviousAlignment != payload.Alignment {
+		return fmt.Errorf("previousAlignment must equal the actual prior requirements PASS alignment reference")
+	}
+	return nil
 }
 
 func GateStateJSON(state GateState) ([]byte, error) {
@@ -209,99 +341,22 @@ func validateGateRecordOptions(worktree string, options GateRecordOptions, resul
 	if !gateVerdicts[options.Verdict] {
 		return fmt.Errorf("unknown verdict: %s", options.Verdict)
 	}
-	if options.Verdict != "PASS" {
-		return nil
-	}
 	if strings.TrimSpace(options.WorkflowID) == "" {
-		result.add("workflow-id", "--workflow-id is required when recording PASS")
+		result.add("workflow-id", "--workflow-id is required")
 	}
 	if strings.TrimSpace(options.ChangeSnapshot) == "" {
-		result.add("change-snapshot", "--change-snapshot is required when recording PASS")
+		result.add("change-snapshot", "--change-snapshot is required")
 	}
 	if strings.TrimSpace(options.Artifact) == "" {
-		result.add("artifact", "--artifact is required when recording PASS")
+		result.add("artifact", "--artifact is required")
 	}
-	if options.Gate == "qa-test-gate" && (options.Mode != "formal" || (options.Stage != "Execution" && options.Stage != "FinalExecution")) {
-		result.add("qa-test-gate", "PASS requires --mode formal and --stage Execution or FinalExecution")
+	if _, ok := recordingPolicy(options.Gate, options.Stage, options.Mode); !ok {
+		result.add(options.Gate, recordingPolicyMismatchMessage(options.Gate, options.Stage))
 	}
 	if strings.TrimSpace(options.Artifact) != "" && !isFile(resolvePath(worktree, options.Artifact)) {
 		result.add("artifact", "artifact does not exist: "+options.Artifact)
 	}
 	return nil
-}
-
-func validatePassArtifact(worktree string, options GateRecordOptions) error {
-	artifactResult := Artifact(ArtifactOptions{
-		Root:           worktree,
-		File:           options.Artifact,
-		Gate:           options.Gate,
-		WorkflowID:     options.WorkflowID,
-		ChangeSnapshot: options.ChangeSnapshot,
-		Stage:          options.Stage,
-	})
-	if artifactResult.OK() {
-		return nil
-	}
-	messages := make([]string, 0, len(artifactResult.Failures))
-	for _, failure := range artifactResult.Failures {
-		messages = append(messages, failure.Path+": "+failure.Message)
-	}
-	return fmt.Errorf("PASS artifact validation failed: %s", strings.Join(messages, "; "))
-}
-
-func admissionRequirements(gate string) []admissionRequirement {
-	switch gate {
-	case "qa-test-gate":
-		return nil
-	case "complexity-gate":
-		return []admissionRequirement{{gate: "qa-test-gate", mode: "formal", stage: "Execution", artifact: true}}
-	case "architecture-health-gate":
-		return []admissionRequirement{
-			{gate: "qa-test-gate", mode: "formal", stage: "Execution", artifact: true},
-			{gate: "complexity-gate", artifact: true},
-		}
-	case "code-quality-gate":
-		return []admissionRequirement{
-			{gate: "qa-test-gate", mode: "formal", stage: "Execution", artifact: true},
-			{gate: "complexity-gate", artifact: true},
-			{gate: "architecture-health-gate", artifact: true},
-		}
-	default:
-		return nil
-	}
-}
-
-func startReadinessAdmissionRequirements(gate string) []admissionRequirement {
-	switch gate {
-	case "complexity-gate":
-		return []admissionRequirement{{gate: "requirements-clarification-gate", artifact: true}}
-	case "architecture-health-gate":
-		return []admissionRequirement{
-			{gate: "requirements-clarification-gate", artifact: true},
-			{gate: "complexity-gate", mode: "start-readiness", artifact: true},
-		}
-	default:
-		return admissionRequirements(gate)
-	}
-}
-
-func admissionRequirementsFor(gate, mode string) []admissionRequirement {
-	if mode == "start-readiness" {
-		return startReadinessAdmissionRequirements(gate)
-	}
-	return admissionRequirements(gate)
-}
-
-func recordAdmissionRequirements(options GateRecordOptions) []admissionRequirement {
-	if options.Gate == "qa-test-gate" && options.Stage == "FinalExecution" {
-		return []admissionRequirement{
-			{gate: "qa-test-gate", mode: "formal", stage: "Execution", artifact: true},
-			{gate: "complexity-gate", artifact: true},
-			{gate: "architecture-health-gate", artifact: true},
-			{gate: "code-quality-gate", artifact: true},
-		}
-	}
-	return admissionRequirementsFor(options.Gate, options.Mode)
 }
 
 func verifyEntryArtifact(worktree, statePath, runDir string, entry GateStateEntry, requiredFor string) error {
@@ -322,6 +377,20 @@ func verifyEntryArtifact(worktree, statePath, runDir string, entry GateStateEntr
 	}
 	if actual := sha256File(artifactPath); actual != strings.ToLower(entry.ArtifactHash) {
 		return fmt.Errorf("gate=%s artifactHashMismatch=%s requiredFor=%s state=%s", entry.Gate, entry.Artifact, requiredFor, slash(statePath))
+	}
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return err
+	}
+	var closure EvidenceClosure
+	if err := strictJSON(data, &closure); err == nil && closure.SchemaVersion == 2 {
+		closureRunDir := runDir
+		if closureRunDir == "" {
+			closureRunDir = filepath.Dir(filepath.Dir(artifactPath))
+		}
+		if err := verifyClosure(ArtifactOptions{Root: worktree}, closureRunDir, closure); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -363,8 +432,8 @@ func loadGateState(path string) (GateState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return state, fmt.Errorf("state JSON is invalid: %w", err)
 	}
-	if state.SchemaVersion == 0 {
-		state.SchemaVersion = 1
+	if state.SchemaVersion != 2 {
+		return state, fmt.Errorf("old gate state schema is not compatible; start a new workflow")
 	}
 	if state.Gates == nil {
 		state.Gates = map[string]GateStateEntry{}
@@ -376,9 +445,7 @@ func loadGateState(path string) (GateState, error) {
 }
 
 func writeGateState(path string, state GateState) error {
-	if state.SchemaVersion == 0 {
-		state.SchemaVersion = 1
-	}
+	state.SchemaVersion = 2
 	if state.Gates == nil {
 		state.Gates = map[string]GateStateEntry{}
 	}
@@ -392,12 +459,12 @@ func writeGateState(path string, state GateState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }
 
 func newGateState() GateState {
 	return GateState{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Gates:         map[string]GateStateEntry{},
 		History:       []GateStateEntry{},
 	}

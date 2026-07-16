@@ -67,3 +67,34 @@ func TestDispatchPromptWithViolationsReportsMissingPatternsFile(t *testing.T) {
 		t.Fatalf("expected no violations on config failure, got %d", len(violations))
 	}
 }
+
+func TestDispatchPromptAllowsCurrentContractVersionsAndBlocksAnchoring(t *testing.T) {
+	root := repoRootForCanaryTest(t)
+	result, violations := DispatchPromptWithViolations(DispatchPromptOptions{
+		Root:       root,
+		PromptText: "Use the current schema-version-2 contract and policy qa.execution.v2 for this independent review.",
+	})
+	if !result.OK() || len(violations) != 0 {
+		t.Fatalf("expected current contract versions to pass, failures=%#v violations=%#v", result.Failures, violations)
+	}
+
+	for _, test := range []struct {
+		prompt string
+		label  string
+	}{
+		{prompt: "The prior review used qa.execution.v1; compare it with qa.execution.v2.", label: "previous review reference"},
+		{prompt: "This was just fixed in qa.execution.v2; assess the revised result.", label: "fix reference"},
+	} {
+		result, violations := DispatchPromptWithViolations(DispatchPromptOptions{Root: root, PromptText: test.prompt})
+		if result.OK() {
+			t.Fatalf("expected anchoring prompt to fail: %q", test.prompt)
+		}
+		found := false
+		for _, violation := range violations {
+			found = found || violation.Label == test.label
+		}
+		if !found {
+			t.Fatalf("expected %q violation for %q, got %#v", test.label, test.prompt, violations)
+		}
+	}
+}

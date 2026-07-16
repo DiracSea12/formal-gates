@@ -82,26 +82,4 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 
 ## Output
 
-```text
-Architecture Health Gate
-Verdict: PASS / REVIEW / FAIL / BLOCKED
-Proceed to code-quality: YES / NO
-Work type:
-Requirement verification status:
-Previous gate status:
-Post-change module health:
-Boundary violations:
-Ownership leaks:
-Public surface growth:
-State/cache lifecycle risks:
-Dependency direction risks:
-Failure-semantics risks:
-Compatibility retained:
-Performance risks:
-Decoupling judgment:
-Simpler architecture available:
-Must-fix before code-quality review:
-gate_route:
-```
-
-`REVIEW`, `FAIL`, and `BLOCKED` cannot proceed to code-quality in formal flow.
+Write direct schema-version-2 `ARCHITECTURE_REVIEW` JSON with the matching typed policy and shared reviewer payload. Every exported `architecture.*` check appears exactly once. `REVIEW`, `FAIL`, and `BLOCKED` cannot proceed to code quality or write formal PASS state.

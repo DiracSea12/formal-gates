@@ -12,7 +12,7 @@ tests in the same task. The envelope remains common.
 
 ### Requirement: Public and internal JSON ownership stays narrow
 
-Public reviewer, requirements, context-bundle, FinalExecution, and `policy show --format json` structures SHALL have closed machine contracts.
+Public reviewer, requirements, QA Execution, context-bundle, FinalExecution, and `policy show --format json` structures SHALL have closed machine contracts.
 
 Their owning specifications define closed fields. Receipt files, closure manifests,
 gate state, and final-verification records SHALL be run-local CLI implementation
@@ -35,15 +35,15 @@ Every Phase 1 formal artifact SHALL use schema version `2` and contain exactly
 `schemaVersion`, `artifactRole`, `workflowId`, `changeSnapshot`, `gate`,
 `stage`, `verdict`, and `payload`. Object key order SHALL NOT affect
 admission. Every envelope field is required. Reviewer-role `verdict` SHALL be
-`PASS`, `REVIEW`, `FAIL`, or `BLOCKED`. `REQUIREMENTS_PASS` and
-`FINAL_EXECUTION` SHALL accept only `PASS`.
+`PASS`, `REVIEW`, `FAIL`, or `BLOCKED`. `REQUIREMENTS_PASS`, `QA_EXECUTION`,
+and `FINAL_EXECUTION` SHALL accept only `PASS`.
 
 The Phase 1 role combinations SHALL be exactly:
 
 | `artifactRole` | `gate` | `stage` | payload |
 |---|---|---|---|
 | `REQUIREMENTS_PASS` | `requirements-clarification-gate` | `""` | requirements |
-| `QA_REVIEW` | `qa-test-gate` | `Execution` | reviewer |
+| `QA_EXECUTION` | `qa-test-gate` | `Execution` | QA execution |
 | `COMPLEXITY_REVIEW` | `complexity-gate` | `""` | reviewer |
 | `ARCHITECTURE_REVIEW` | `architecture-health-gate` | `""` | reviewer |
 | `CODE_QUALITY_REVIEW` | `code-quality-gate` | `""` | reviewer |
@@ -60,7 +60,9 @@ routing field. Rerun-boundary behavior is outside Phase 1 and SHALL be defined
 only with Phase 2 Carry arbitration and transitions.
 
 The semantic owner SHALL write its own typed JSON; in particular, a reviewer
-SHALL write its review judgment. The existing Go CLI SHALL be the only
+SHALL write its review judgment and the QA executor SHALL write QA-owned
+results and bindings. The orchestrating main agent SHALL write only the small
+`QA_EXECUTION` envelope that references those completed inputs. The existing Go CLI SHALL be the only
 authoritative decoder, validator, and state-recording entrypoint and SHALL NOT
 generate or rewrite reviewer judgments. Typed Go structs and the standard
 library SHALL define output bytes for deterministic mechanical artifacts owned
@@ -69,8 +71,8 @@ output. The decoder SHALL reject invalid UTF-8, duplicate keys, unknown fields
 at every level, wrong types, trailing JSON values, old schema, and
 role/gate/stage conflicts before domain validation. Required arrays SHALL be
 present even when empty; `null` SHALL be rejected; and optional fields SHALL be
-omitted rather than emitted as `null`. A semantic owner's artifact receipt SHALL
-hash the exact submitted bytes without canonicalizing key order. Markdown MAY
+omitted rather than emitted as `null`. A reviewer artifact receipt SHALL hash
+the exact submitted bytes without canonicalizing key order. Markdown MAY
 explain a result but MUST NOT satisfy, complete, or override a machine field.
 Reviewer output SHALL NOT require a separate artifact-generation command,
 intermediate schema, or conversion layer.
@@ -108,8 +110,8 @@ intermediate schema, or conversion layer.
 
 #### Scenario: Operational pass role uses a non-PASS verdict
 
-- **WHEN** `REQUIREMENTS_PASS` or `FINAL_EXECUTION` has verdict `REVIEW`,
-  `FAIL`, or `BLOCKED`
+- **WHEN** `REQUIREMENTS_PASS`, `QA_EXECUTION`, or `FINAL_EXECUTION` has
+  verdict `REVIEW`, `FAIL`, or `BLOCKED`
 - **THEN** role validation rejects the artifact without producing a pass
   artifact or changing state.
 
@@ -132,9 +134,9 @@ objects.
   `EvidenceRef`
 - **THEN** the decoder does not treat the text as proof or a closure edge.
 
-### Requirement: Four-gate reviews use one reviewer payload
+### Requirement: Reviewer gates use one reviewer payload
 
-QA Execution, complexity, architecture, and code quality SHALL use the same
+Complexity, architecture, and code quality SHALL use the same
 reviewer payload containing exactly:
 
 | Field | Type | Rule |
@@ -224,11 +226,10 @@ The Phase 1 cutover SHALL map existing Markdown machine fields as follows:
 deleted as self-certification fields and SHALL NOT receive replacement JSON
 booleans.
 
-The gate-specific fields SHALL map to these policy-owned check IDs:
+The reviewer gate-specific fields SHALL map to these policy-owned check IDs:
 
 | Gate | Check IDs |
 |---|---|
-| QA Execution | `qa.approved-case-set`, `qa.owned-results`, `qa.case-result-binding` |
 | Complexity | `complexity.statistics`, `complexity.diff-shape`, `complexity.impact-surface`, `complexity.public-config-surface`, `complexity.new-concepts`, `complexity.minimum-sufficient`, `complexity.shrink-opportunities` |
 | Architecture | `architecture.boundaries`, `architecture.ownership`, `architecture.public-surface`, `architecture.state-lifecycle`, `architecture.dependencies`, `architecture.failure-semantics`, `architecture.performance`, `architecture.decoupling` |
 | Code quality | `code-quality.correctness`, `code-quality.maintainability`, `code-quality.performance`, `code-quality.test-quality`, `code-quality.dead-code`, `code-quality.overfitting`, `code-quality.validation-encoding`, `code-quality.verification`, `code-quality.residual-risk` |
@@ -259,6 +260,38 @@ budget material referenced outside the statistics report, is enabled by the
 Phase 2 reviewer-isolation task rather than this Phase 1 contract.
 
 ### Requirement: Phase 1 operational payloads retain only current data
+
+The Phase 1 `QA_EXECUTION` payload SHALL contain exactly:
+
+| Field | Type | Rule |
+|---|---|---|
+| `approvedCaseSet` | `EvidenceRef` | required; approved case document with unique case IDs |
+| `qaOwnedResults` | `EvidenceRef` | required; QA-owned, complete, PASS, and bound to the envelope workflow and snapshot |
+| `caseResultBinding` | `EvidenceRef` | required; binds every approved case to the exact QA result and PASS procedures |
+| `changedFiles` | `EvidenceRef` | required |
+| `verification` | `EvidenceRef` | required |
+
+The CLI SHALL verify all five paths and hashes. QA results SHALL exactly cover
+the approved case IDs; every referenced execution and case result SHALL PASS;
+and the binding SHALL reference the exact approved-case and QA-results hashes,
+exactly cover the same IDs, point to the matching result, and bind its oracle
+and execution references. Missing cases, extra cases, failed results, stale
+workflow or snapshot, wrong hashes, or mismatched bindings SHALL reject PASS
+without state mutation. `QA_EXECUTION` SHALL NOT contain reviewer dispatch,
+context-bundle, policy-check, finding, or receipt fields.
+
+#### Scenario: QA Execution evidence is complete
+
+- **WHEN** approved cases, QA-owned PASS results, complete result bindings,
+  changed files, and verification all match the envelope workflow and snapshot
+- **THEN** the main agent may submit `QA_EXECUTION` for deterministic CLI
+  validation and recording without dispatching a second QA reviewer.
+
+#### Scenario: QA Execution tries to self-review
+
+- **WHEN** a `QA_EXECUTION` payload supplies reviewer checks, findings,
+  dispatch, context bundle, or receipt data
+- **THEN** strict role validation rejects the payload.
 
 The Phase 1 requirements payload SHALL contain exactly:
 
@@ -304,7 +337,7 @@ The Phase 1 FinalExecution payload SHALL contain exactly `mode`, `gateMatrix`,
 one row for each fixed post-development gate. Each Phase 1 row SHALL contain
 exactly `gate` and `gateEvidence`; `gateEvidence` SHALL be an `EvidenceRef` to
 that gate's immutable closure. The CLI SHALL re-verify that closure's top-level
-gate, PASS verdict, workflow, envelope snapshot, role-required receipt, and all
+gate, PASS verdict, workflow, envelope snapshot, any role-required receipt, and all
 transitive evidence. It SHALL NOT reference the mutable gate-state file or
 create a separate gate-record artifact. FinalExecution SHALL NOT own another
 closure: its `gateEvidence` and `finalVerification` references are revalidation
@@ -319,7 +352,7 @@ evidence.
 
 #### Scenario: Operational role impersonates reviewer
 
-- **WHEN** requirements or FinalExecution supplies reviewer fields
+- **WHEN** requirements, QA Execution, or FinalExecution supplies reviewer fields
 - **THEN** strict role validation rejects the payload.
 
 #### Scenario: Phase 1 FinalExecution contains carry fields

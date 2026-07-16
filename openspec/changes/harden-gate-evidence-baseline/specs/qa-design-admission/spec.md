@@ -1,12 +1,13 @@
 ## Delivery Applicability
 
-Phase 1 only migrates the currently enabled QA Execution artifact and its
-existing approved-case-set, QA-owned-evidence, and case-binding fields to the
-shared reviewer payload. It does not register Design Review, White-box
+Phase 1 migrates the currently enabled QA Execution artifact to a small
+mechanical payload that directly references the approved case set, QA-owned
+results, case binding, changed files, and verification. The main agent and CLI
+check those inputs without a second QA reviewer or receipt. It does not register Design Review, White-box
 Adequacy, or stronger approved-chain admission.
 
-Phase 2 delivers Design Review and the stronger QA Execution admission
-together. Each newly enabled stage includes its JSON content, policy, domain
+Phase 2 delivers Design Review and its pre-development approved-chain admission.
+Each newly enabled stage includes its JSON content, policy, domain
 validator, and positive and negative tests in that phase. Optional White-box
 Adequacy follows the same rule. Design Rework remains an editing action, not a
 machine role or stage.
@@ -90,7 +91,8 @@ field labels alone SHALL NOT satisfy admission.
 
 - **WHEN** approved cases, independent review, QA-owned results, and all
   case-to-result bindings validate
-- **THEN** QA Execution may proceed to its reviewer checks.
+- **THEN** QA Execution may be mechanically validated and recorded without a
+  second reviewer.
 
 ### Requirement: Optional and mechanical QA stages do not add gates
 

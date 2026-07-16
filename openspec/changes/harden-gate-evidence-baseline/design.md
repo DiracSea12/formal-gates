@@ -44,8 +44,8 @@ Calls remain one-way:
 5. Requirements, closure/path, receipt/isolation, QA admission, and carry
    validators return results; they do not call CLI code or write state.
 
-Serialized ownership is intentionally narrow. Reviewer, requirements,
-context-bundle, FinalExecution, and `policy show --format json` shapes are public
+Serialized ownership is intentionally narrow. Reviewer, requirements, QA
+Execution, context-bundle, FinalExecution, and `policy show --format json` shapes are public
 machine contracts and are closed in the owning specifications. Receipt files,
 closure manifests, gate state, and final-verification records are run-local CLI
 implementation artifacts: users do not author them, only the CLI reads or
@@ -90,8 +90,8 @@ exists when that phase is about to start.
 
 ### 2. Strict JSON Is The Only Machine Truth
 
-Phase 1 uses one closed version-2 JSON envelope for requirements PASS, the four
-reviewers, and mechanical FinalExecution. The structured-evidence capability
+Phase 1 uses one closed version-2 JSON envelope for requirements PASS, QA
+Execution, the three independent post-development reviewers, and mechanical FinalExecution. The structured-evidence capability
 owns the exact fields, role combinations, payloads, and rejection scenarios;
 this design does not duplicate that public contract.
 
@@ -105,19 +105,24 @@ Markdown may explain a result but cannot satisfy, complete, or override machine
 evidence. Phase 1 has no route object or reviewer self-certification, accepts no
 legacy format, and restarts old workflows instead of adding compatibility.
 
-### 3. Four-Gate Judgment Uses Stable Checks
+### 3. Reviewer Judgment Uses Stable Checks
 
-All four gates use one reviewer payload and stable checks from the typed policy
-catalog. The main agent creates the single typed context bundle before dispatch;
+Complexity, architecture, and code quality use one reviewer payload and stable
+checks from the typed policy catalog. The main agent creates the single typed context bundle before dispatch;
 the reviewer references that unchanged bundle, while the CLI verifies its files
 and hashes. Gate-specific evidence attaches to the relevant check instead of
 creating another top-level schema.
 
 The CLI validates the complete required check set and recomputes the aggregate
 verdict. Reviewer messages remain explanatory text rather than machine rules.
-The matching external receipt binds the completed reviewer output, and the gate
+The matching external receipt binds each completed reviewer output, and the gate
 closure contains both; reviewer JSON does not self-report identity or receipt
 proof.
+
+QA Execution is different: the QA executor owns the approved-case results and
+binding, while the main agent submits only their five typed references. The CLI
+checks case coverage, PASS results, hashes, workflow, snapshot, and binding and
+records the gate without reviewer checks or a reviewer receipt.
 
 Requirements PASS and FinalExecution keep dedicated typed payloads because they
 carry operational data rather than reviewer judgment. Their exact fields, the
@@ -168,11 +173,12 @@ lowercase SHA-256. Validation rejects missing files, hash mismatch, absolute
 paths, URI paths, traversal, backslashes, symlink escape, cross-run references,
 conflicting aliases, and cycles.
 
-Each requirements PASS and reviewer gate PASS owns one deterministic closure
+Each requirements PASS and post-development gate PASS owns one deterministic closure
 manifest containing its top-level artifact, its matching receipt when the role
 requires one, and every transitive input. Reviewer output never refers back to
-the receipt or closure. After that output is hashed, the receipt binds its exact
-hash; the manifest then includes both files and their dependencies. Entries and
+the receipt or closure. For reviewer gates, the receipt binds the exact output
+hash and the manifest includes both files and their dependencies. QA Execution
+has no receipt; its closure directly includes the five referenced inputs. Entries and
 references are sorted by normalized path, and typed Go structs and fixed
 encoding produce the bytes locked by golden tests. Gate state binds those PASS
 records only to the closure manifest path and hash.
@@ -199,12 +205,13 @@ checkbox normalization, FinalExecution binding, or admission rule.
 
 ### 8. Reviewer Identity Reuses Existing Receipts
 
-Formal four-gate reviews and Carry-Forward Arbiter results use the current
+Formal reviewer and Carry-Forward Arbiter results use the current
 dispatch registration, subagent start/stop, subagent ID, artifact hash, and
 receipt chain. Validation binds workflow, gate, stage, target snapshot,
 dispatch, host-captured subagent identity, lifecycle, and exact output. Missing
 or mismatched receipt data blocks PASS; actor labels and provider names are not
-substitutes.
+substitutes. Mechanical QA Execution is excluded because it contains no second
+review judgment.
 
 The reviewer payload does not self-report a session ID. Parallel reviews are
 distinguished by the system-generated dispatch ID, host-captured subagent ID,
@@ -288,7 +295,8 @@ must produce current-snapshot verification. Developers may add cases but cannot
 remove or weaken approved cases.
 
 QA Execution requires the approved chain, QA-owned results, and complete
-case-to-result binding. FinalExecution is a mechanical closeout over existing
+case-to-result binding. The main agent and CLI mechanically validate and record
+those inputs without another QA reviewer. FinalExecution is a mechanical closeout over existing
 gate evidence and final verification, not another QA judgment. White-box
 Adequacy, when actually required, reuses the QA reviewer payload and checks; it
 does not add a gate or framework.
@@ -310,8 +318,8 @@ Phase 1 activates only:
 
 - `REQUIREMENTS_PASS`: alignment, user decision, continuity, coverage, precise
   targets, and PASS eligibility.
-- `QA_REVIEW` at `Execution`: the common reviewer payload; existing case-set,
-  QA-owned-result, and case-binding inputs are attached to policy checks.
+- `QA_EXECUTION` at `Execution`: a mechanical payload with approved case set,
+  QA-owned results, case-result binding, changed files, and verification.
 - `COMPLEXITY_REVIEW`: common reviewer payload plus fresh statistics-only
   evidence on its statistics check.
 - `ARCHITECTURE_REVIEW` and `CODE_QUALITY_REVIEW`: common reviewer payload and

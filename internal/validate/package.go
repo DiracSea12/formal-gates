@@ -23,6 +23,8 @@ var requiredFiles = []string{
 	"internal/cli/cli.go",
 	"internal/validate/dispatch_prompt.go",
 	"internal/validate/gate_state.go",
+	"internal/validate/policy.go",
+	"internal/validate/evidence.go",
 	"internal/validate/install.go",
 	"internal/validate/behavior.go",
 	"internal/validate/receipt.go",
