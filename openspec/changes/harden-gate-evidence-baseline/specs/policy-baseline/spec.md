@@ -63,6 +63,14 @@ sorted by `id` and contain exactly these Phase 1 policy IDs:
 | `code-quality.post-development.v2` | `CODE_QUALITY_REVIEW` | `code-quality-gate` / `""` | `post-development` |
 | `final-execution.v2` | `FINAL_EXECUTION` | `qa-test-gate` / `FinalExecution` | `finalization` |
 
+Phase 2 adds exactly these policies without changing the fixed post-development
+gate order:
+
+| Policy ID | Artifact role | Gate / stage | Flow |
+|---|---|---|---|
+| `qa.design-review.v2` | `QA_REVIEW` | `qa-test-gate` / `Design Review` | `pre-development` |
+| `carry.arbiter.v2` | `CARRY_ARBITER` | `qa-test-gate` / `Carry` | `carry` |
+
 Each `ArtifactPolicy` SHALL contain exactly `id`, `artifactRole`, `gate`,
 `stage`, `flow`, `prerequisites`, `requiredCheckIds`,
 `allowedNotApplicableCheckIds`, `receiptRequired`, `changedFilesRequired`,
@@ -81,22 +89,32 @@ prerequisite by gate, stage, and flow. Standalone artifact validation without a
 recording flow SHALL NOT authorize PASS or state mutation. No public artifact
 field or new CLI flag is added for this check.
 
-Requirements and QA Execution have no gate prerequisite. Start-readiness
+After Phase 2, mode `pre-development` maps to the Design Review flow and
+`workflow record-transition` selects the Carry policy directly. Design Review
+requires requirements PASS. Carry validates source closures through its domain
+payload instead of declaring current-target gate prerequisites in the policy.
+
+Requirements and Phase 1 QA Execution have no gate prerequisite. Phase 2
+Design Review requires requirements PASS on its pre-development snapshot.
+Phase 2 QA Execution validates its `designReview` closure by same workflow and
+exact case-set hash in the QA domain validator; Design Review is not a
+current-snapshot gate-state prerequisite. Start-readiness
 complexity requires requirements PASS; start-readiness architecture requires
 requirements PASS and start-readiness complexity. Post-development complexity
 requires QA Execution; post-development architecture requires QA Execution and
 complexity; code quality requires QA Execution, complexity, and architecture;
-FinalExecution requires all four fixed gate results. Every reviewer policy
-requires `review.prompt-fields`, `review.prompt-semantics`, and the gate-specific
-check IDs declared by `structured-json-evidence`. Only
+FinalExecution requires all four fixed gate results. Every shared-payload
+reviewer policy requires `review.prompt-fields`, `review.prompt-semantics`, and
+its gate-specific check IDs. Only
 `complexity.start-readiness.v2` allows `complexity.statistics` to be
 `NOT_APPLICABLE`; every other allowed list is empty.
 
-`receiptRequired` SHALL be true only for reviewer policies.
+`receiptRequired` SHALL be true only for reviewer and Carry Arbiter policies.
 `changedFilesRequired` and `verificationRequired` SHALL be true for QA
 Execution and post-development reviewer policies. `mechanical` SHALL be true
 only for `qa.execution.v2` and `final-execution.v2`. Requirements, QA
-Execution, and FinalExecution SHALL have empty check-ID arrays. The output SHALL NOT contain free-form rule descriptions, maps, future
+Execution, Carry Arbiter, and FinalExecution SHALL have empty check-ID arrays.
+The output SHALL NOT contain free-form rule descriptions, maps, future
 role placeholders, or a properties bag.
 
 #### Scenario: Current policy is exported

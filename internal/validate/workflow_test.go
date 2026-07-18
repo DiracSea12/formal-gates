@@ -92,7 +92,7 @@ func TestWorkflowRecordStageCallsGateState(t *testing.T) {
 		t.Fatalf("expected workflow record-stage to pass, got %#v", result.Failures)
 	}
 	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
-	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "gate-state.json"))})
+	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))})
 	if !show.OK() {
 		t.Fatalf("expected show to pass, got %#v", show.Failures)
 	}
@@ -119,11 +119,22 @@ func TestWorkflowRecordStageWithoutRunDirRejectsArtifactOutsideDefaultRun(t *tes
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 	})
-	if result.OK() || !strings.Contains(resultSummary(result), "artifact must be under --run-dir") {
+	if result.OK() || !strings.Contains(resultSummary(result), "artifact must be under the active run restricted directory") {
 		t.Fatalf("repository-level artifact was accepted: %#v", result.Failures)
 	}
 	if isFile(filepath.Join(dir, ".claude", "gates", "gate-state.json")) || isFile(filepath.Join(dir, ".claude", "gates", "runs", "wf", "gate-state.json")) {
 		t.Fatal("rejected repository-level artifact changed gate state")
+	}
+}
+
+func TestArtifactRejectsActiveRunRootFile(t *testing.T) {
+	dir := t.TempDir()
+	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
+	path := filepath.Join(runDir, "review.json")
+	mustWrite(t, path, "{}\n")
+	result := Artifact(ArtifactOptions{Root: dir, RunDir: runDir, File: relativePath(dir, path), Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	if result.OK() || !strings.Contains(resultSummary(result), "active run restricted directory") {
+		t.Fatalf("active-run root artifact was accepted: %#v", result.Failures)
 	}
 }
 
@@ -238,7 +249,7 @@ func TestWorkflowFinalVerificationWithoutRunDirRejectsRepositoryPaths(t *testing
 func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	dir := t.TempDir()
 	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
-	finalRunRel := filepath.ToSlash(filepath.Join(runRel, "final-run.json"))
+	finalRunRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-run.json"))
 	finalRun := filepath.Join(dir, filepath.FromSlash(finalRunRel))
 	mustWrite(t, finalRun, `{"ok":true}`+"\n")
 	recordFourGatePrerequisites(t, dir, "wf", "snap")
@@ -247,8 +258,8 @@ func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 		Worktree:        dir,
 		RunDir:          runRel,
 		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
-		OutputArtifact:  filepath.ToSlash(filepath.Join(runRel, "final-verification.json")),
-		FinalQAArtifact: filepath.ToSlash(filepath.Join(runRel, "final-execution.md")),
+		OutputArtifact:  filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json")),
+		FinalQAArtifact: filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.md")),
 		RecordFinalQA:   true,
 		Actor:           "gate-workflow",
 		WorkflowID:      "wf",
@@ -260,15 +271,15 @@ func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	if artifact.Status != "PASS" {
 		t.Fatalf("expected PASS aggregate, got %#v", artifact)
 	}
-	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "gate-state.json"))})
+	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))})
 	if !show.OK() {
 		t.Fatalf("expected gate state to show, got %#v", show.Failures)
 	}
 	entry := state.Gates["qa-test-gate"]
-	if entry.Stage != "FinalExecution" || entry.Actor != "gate-workflow" || entry.Artifact != filepath.ToSlash(filepath.Join(runRel, "final-execution.md")) {
+	if entry.Stage != "FinalExecution" || entry.Actor != "gate-workflow" || entry.Artifact != filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.md")) {
 		t.Fatalf("unexpected final QA gate entry: %#v", entry)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(runRel), "final-execution.md"))
+	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(runRel), "restricted", "final-execution.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,9 +296,93 @@ func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 		t.Fatalf("FinalExecution did not consume its typed policy: policy=%#v payload=%#v", policy, payload)
 	}
 	for i, prerequisite := range policy.Prerequisites {
-		if payload.GateMatrix[i].Gate != prerequisite.Gate {
+		row := payload.GateMatrix[i]
+		if row.Gate != prerequisite.Gate || row.ResultKind != "FRESH_PASS" || row.SourceSnapshot != "snap" || row.TargetSnapshot != "snap" || row.CarryDecision != nil {
 			t.Fatalf("FinalExecution prerequisite %d drifted: policy=%#v row=%#v", i, prerequisite, payload.GateMatrix[i])
 		}
+	}
+}
+
+func TestWorkflowFinalVerificationBuildsMixedCarryMatrix(t *testing.T) {
+	dir := t.TempDir()
+	fixture := newCarryTestFixture(t, dir, "wf", "source", "target", postDevelopmentGateOrder[:1])
+	finalizeCarryTestArtifact(t, dir, fixture)
+	if result := WorkflowRecordTransition(WorkflowRecordTransitionOptions{Worktree: dir, RunDir: fixture.RunDir, Artifact: fixture.Artifact, WorkflowID: "wf", ChangeSnapshot: "target"}); !result.OK() {
+		t.Fatalf("accepted Carry transition failed: %#v", result.Failures)
+	}
+	for _, gate := range postDevelopmentGateOrder[1:] {
+		artifact := writeGateArtifact(t, dir, gate, "", "wf", "target")
+		if result := WorkflowRecordStage(WorkflowRecordStageOptions{Worktree: dir, Gate: gate, Verdict: "PASS", Artifact: artifact, WorkflowID: "wf", ChangeSnapshot: "target"}); !result.OK() {
+			t.Fatalf("fresh %s record failed: %#v", gate, result.Failures)
+		}
+	}
+	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	attemptRel, attemptPath := workflowRunTestPath(t, dir, "wf", "final-run.json")
+	mustWrite(t, attemptPath, "{}\n")
+	finalRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.json"))
+	closuresBefore, _ := filepath.Glob(filepath.Join(fixture.RunDir, "closures", "*.json"))
+	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree: dir, RunDir: runRel, WorkflowID: "wf", ChangeSnapshot: "target", RecordFinalQA: true,
+		AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":"` + attemptRel + `","artifactHash":"` + sha256FileForTest(t, attemptPath) + `"}]`,
+		OutputArtifact: filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json")), FinalQAArtifact: finalRel,
+	})
+	if !result.OK() {
+		t.Fatalf("mixed FinalExecution failed: %#v", result.Failures)
+	}
+	data, err := os.ReadFile(resolvePath(dir, finalRel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope FormalGateEvidence
+	if err := strictContractJSON(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var payload FinalExecutionPayload
+	if err := strictContractJSON(envelope.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	carried := payload.GateMatrix[0]
+	if carried.ResultKind != "CARRIED_PASS" || carried.SourceSnapshot != "source" || carried.TargetSnapshot != "target" || carried.CarryDecision == nil {
+		t.Fatalf("unexpected carried row: %#v", carried)
+	}
+	for _, row := range payload.GateMatrix[1:] {
+		if row.ResultKind != "FRESH_PASS" || row.SourceSnapshot != "target" || row.TargetSnapshot != "target" || row.CarryDecision != nil {
+			t.Fatalf("unexpected fresh row: %#v", row)
+		}
+	}
+	closuresAfter, _ := filepath.Glob(filepath.Join(fixture.RunDir, "closures", "*.json"))
+	state, _ := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))})
+	if len(closuresAfter) != len(closuresBefore) || len(state.Transitions) != 1 {
+		t.Fatalf("FinalExecution added a closure or another Carry review: closures=%d/%d transitions=%d", len(closuresBefore), len(closuresAfter), len(state.Transitions))
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*FinalGateRow)
+	}{
+		{name: "source evidence", mutate: func(row *FinalGateRow) { row.GateEvidence = payload.GateMatrix[1].GateEvidence }},
+		{name: "Carry closure", mutate: func(row *FinalGateRow) { row.CarryDecision.SHA256 = strings.Repeat("a", 64) }},
+		{name: "target", mutate: func(row *FinalGateRow) { row.TargetSnapshot = "other" }},
+		{name: "result kind", mutate: func(row *FinalGateRow) { row.ResultKind = "FRESH_PASS" }},
+	} {
+		t.Run("rejects mismatched "+test.name, func(t *testing.T) {
+			var mutated FormalGateEvidence
+			if err := strictContractJSON(data, &mutated); err != nil {
+				t.Fatal(err)
+			}
+			var rows FinalExecutionPayload
+			if err := strictContractJSON(mutated.Payload, &rows); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&rows.GateMatrix[0])
+			mutated.Payload, _ = json.Marshal(rows)
+			path := filepath.Join(fixture.RunDir, "invalid-final.json")
+			writeJSONTest(t, path, mutated)
+			invalid := Artifact(ArtifactOptions{Root: dir, RunDir: fixture.RunDir, File: relativePath(dir, path), Gate: "qa-test-gate", Stage: "FinalExecution", Flow: "finalization", WorkflowID: "wf", ChangeSnapshot: "target"})
+			if invalid.OK() {
+				t.Fatal("mismatched carried row was accepted")
+			}
+		})
 	}
 }
 
@@ -329,11 +424,11 @@ func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
-			finalRunRel := filepath.ToSlash(filepath.Join(runRel, "final-run.json"))
+			finalRunRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-run.json"))
 			finalRun := filepath.Join(dir, filepath.FromSlash(finalRunRel))
 			mustWrite(t, finalRun, `{"ok":true}`+"\n")
 			recordFourGatePrerequisites(t, dir, "wf", "snap")
-			finalVerification := filepath.ToSlash(filepath.Join(runRel, "final-verification.json"))
+			finalVerification := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json"))
 			_, verificationResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 				Worktree:       dir,
 				RunDir:         runRel,
@@ -345,7 +440,7 @@ func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
 			if !verificationResult.OK() {
 				t.Fatal(verificationResult.Failures)
 			}
-			finalExecutionRel := filepath.ToSlash(filepath.Join(runRel, "final-execution.json"))
+			finalExecutionRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.json"))
 			finalExecution := filepath.Join(dir, filepath.FromSlash(finalExecutionRel))
 			if previousExists {
 				mustWrite(t, finalExecution, "previous FinalExecution\n")
@@ -586,7 +681,7 @@ func TestWorkflowCompactArchivesRunDirThenLeavesSingleFile(t *testing.T) {
 	if archive.DryRun {
 		t.Fatalf("expected execute archive, got %#v", archive)
 	}
-	archivePath := filepath.Join(runAbs, "formal-gates-workflow-archive.json")
+	archivePath := filepath.Join(runAbs, "restricted", "formal-gates-workflow-archive.json")
 	if !isFile(archivePath) {
 		t.Fatal("expected archive file to remain")
 	}
@@ -636,7 +731,7 @@ func recordFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string)
 
 func workflowRunTestPath(t *testing.T, worktree, workflowID, name string) (string, string) {
 	t.Helper()
-	rel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, name))
+	rel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", name))
 	path := filepath.Join(worktree, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)

@@ -37,15 +37,15 @@ bin/formal-gates hook decide < payload.json
 To use the native receipt proof foundation:
 
 ```bash
-bin/formal-gates receipt register --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --context-bundle <bundle.json> --artifact .claude/gates/runs/<run-id>/<review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
+bin/formal-gates receipt register --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --context-bundle restricted/<bundle.json> --prompt restricted/<exact-send.txt> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
 bin/formal-gates receipt capture --provider codex --event SubagentStart --worktree <repo> < start-payload.json
 bin/formal-gates receipt capture --provider codex --event SubagentStop --worktree <repo> < stop-payload.json
-bin/formal-gates receipt finalize --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --artifact .claude/gates/runs/<run-id>/<review.json> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
-bin/formal-gates receipt validate --worktree <repo> --receipt <receipt.json> --artifact <review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
+bin/formal-gates receipt finalize --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
+bin/formal-gates receipt validate --worktree <repo> --receipt .claude/gates/runs/<run-id>/restricted/proofs/<receipt.json> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
 bin/formal-gates receipt preflight --host codex --worktree <repo>
 ```
 
-Register a meaningful target snapshot and an absent run-local reviewer output before dispatch. The registration reserves that path; installed capture hooks derive the same active run from the exact dispatch correlation and reject a conflicting explicit run selection. After lifecycle start the reviewer writes the JSON output, lifecycle stop is captured, and finalization validates the completed output binding and exact bytes. Existing output and duplicate open reservations are rejected.
+Generate the exact reviewer message with `prompt prepare`, then run the one full pre-dispatch check at `receipt register`. Registration validates every seven-field and routing value, the machine-generated static PASS binding, exact context-bundle path/hash and policy-specific input placement before it reserves capacity. Send the registered bytes unchanged. The reviewer confirms the static PASS binding without reading bound files. After lifecycle stop, finalization validates the completed reviewer JSON before writing a receipt or locking the registration; invalid output remains unfinalized. Only explicit user approval permits `--user-authorized-extra-review` beyond three completed reviews. QA Design omits `--prompt` because it is not a review judgment.
 
 Use `bin/formal-gates.exe` on Windows. Source checkout development tests may use `go run ./cmd/formal-gates`, but installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
@@ -308,7 +308,7 @@ Formal gates require structured `GateWorkflow`. Minimum fields:
 - `gate`
 - `stage` for the QA gate or manifest extension gates; built-in complexity/architecture/code-quality gates can omit `stage`.
 
-`formal-gates gate record`, `formal-gates gate verify-admission`, and `formal-gates gate show` provide the native gate-state foundation for `.claude/gates/gate-state.json`. `formal-gates workflow snapshot`, `formal-gates workflow record-stage`, `formal-gates workflow verify-admission`, `formal-gates workflow final-verification`, `formal-gates workflow cleanup`, and `formal-gates workflow show` provide the current native workflow foundation. `formal-gates install` copies the verifiable installable package subset and can write native host hook config. `formal-gates receipt register`, `receipt capture`, `receipt finalize`, `receipt validate`, and `receipt preflight` provide the current native receipt foundation. Installed `SubagentStart` and `SubagentStop` hooks call `formal-gates receipt capture` directly.
+`formal-gates gate record` and `formal-gates gate verify-admission` use the active workflow's `restricted/gate-state.json`; `formal-gates gate show` requires that path through `--state` and has no repository-global fallback. `formal-gates workflow snapshot`, `formal-gates workflow record-stage`, `formal-gates workflow verify-admission`, `formal-gates workflow final-verification`, `formal-gates workflow cleanup`, and `formal-gates workflow show` provide the current native workflow foundation. `formal-gates install` copies the verifiable installable package subset and can write native host hook config. `formal-gates receipt register`, `receipt capture`, `receipt finalize`, `receipt validate`, and `receipt preflight` provide the current native receipt foundation. Installed `SubagentStart` and `SubagentStop` hooks call `formal-gates receipt capture` directly.
 
 `GateWorkflow` is JSON. Escape Windows backslashes as double backslashes, or use forward slashes:
 

@@ -124,8 +124,55 @@ func run(program string, args []string, streams IO) (int, error) {
 		}
 		return 0, nil
 	case "prompt":
-		args = dropOptionalVerb(args, "validate")
-		fs := flag.NewFlagSet("prompt", flag.ContinueOnError)
+		verb := "validate"
+		if len(args) > 0 && args[0] != "-h" && args[0] != "--help" && !strings.HasPrefix(args[0], "-") {
+			verb = args[0]
+			args = args[1:]
+		}
+		if verb == "prepare" {
+			fs := flag.NewFlagSet("prompt prepare", flag.ContinueOnError)
+			fs.SetOutput(streams.Stderr)
+			root := fs.String("root", ".", "repository or package root")
+			dispatch := fs.String("dispatch", "", "generation-only seven-field prompt template")
+			output := fs.String("output", "", "file that will contain the exact reviewer message")
+			patterns := fs.String("patterns", "", "pollution patterns JSON path; defaults to hooks/pollution-patterns.json under --root")
+			var bindings stringListFlag
+			fs.Var(&bindings, "binding", "routing binding name=path; repeat for each machine-only input")
+			if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+				return code, err
+			}
+			if strings.TrimSpace(*dispatch) == "" || strings.TrimSpace(*output) == "" {
+				return 1, errors.New("prompt prepare requires --dispatch and --output")
+			}
+			parsedBindings := make([]validate.DispatchPromptBinding, 0, len(bindings))
+			for _, raw := range bindings {
+				name, path, ok := strings.Cut(raw, "=")
+				if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(path) == "" {
+					return 1, fmt.Errorf("invalid --binding %q (want name=path)", raw)
+				}
+				parsedBindings = append(parsedBindings, validate.DispatchPromptBinding{Name: name, Path: path})
+			}
+			prepared, result := validate.PrepareDispatchPrompt(validate.PrepareDispatchPromptOptions{
+				Root:         *root,
+				DispatchFile: *dispatch,
+				OutputFile:   *output,
+				ConfigPath:   *patterns,
+				Bindings:     parsedBindings,
+			})
+			if !result.OK() {
+				return printValidationResult(streams.Stdout, "prompt prepare", result)
+			}
+			encoded, err := json.Marshal(prepared)
+			if err != nil {
+				return 1, err
+			}
+			fmt.Fprintln(streams.Stdout, string(encoded))
+			return 0, nil
+		}
+		if verb != "validate" {
+			return 1, fmt.Errorf("unsupported prompt command %q (want validate or prepare)", verb)
+		}
+		fs := flag.NewFlagSet("prompt validate", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		root := fs.String("root", ".", "repository or package root")
 		text := fs.String("text", "", "dispatch prompt text")
@@ -147,6 +194,7 @@ func run(program string, args []string, streams IO) (int, error) {
 			Root:       *root,
 			PromptText: promptText,
 			ConfigPath: *patterns,
+			FinalSend:  true,
 		})
 		if *format == "json" {
 			if !result.OK() && len(violations) == 0 {
@@ -482,23 +530,27 @@ func runReceipt(args []string, streams IO) (int, error) {
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		artifact := fs.String("artifact", "", "review artifact path")
 		contextBundle := fs.String("context-bundle", "", "validated context bundle path")
+		prompt := fs.String("prompt", "", "exact final-send reviewer prompt; required for review judgments")
 		gate := fs.String("gate", "", "gate id")
 		stage := fs.String("stage", "", "gate stage")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "target change snapshot")
+		userAuthorizedExtraReview := fs.Bool("user-authorized-extra-review", false, "allow a review beyond the standard three only after explicit user approval")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
 		registration, result := validate.ReceiptRegisterDispatch(validate.ReceiptRegisterOptions{
-			Worktree:       *worktree,
-			RunDir:         *runDir,
-			Provider:       *provider,
-			Artifact:       *artifact,
-			ContextBundle:  *contextBundle,
-			Gate:           *gate,
-			Stage:          *stage,
-			WorkflowID:     *workflowID,
-			ChangeSnapshot: *changeSnapshot,
+			Worktree:                  *worktree,
+			RunDir:                    *runDir,
+			Provider:                  *provider,
+			Artifact:                  *artifact,
+			ContextBundle:             *contextBundle,
+			Prompt:                    *prompt,
+			Gate:                      *gate,
+			Stage:                     *stage,
+			WorkflowID:                *workflowID,
+			ChangeSnapshot:            *changeSnapshot,
+			UserAuthorizedExtraReview: *userAuthorizedExtraReview,
 		})
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "receipt register", result)
@@ -681,6 +733,27 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		} else {
 			fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_NOT_RECORDED gate=%s verdict=%s workflowId=%s changeSnapshot=%s\n", *gate, *verdict, *workflowID, *changeSnapshot)
 		}
+		return 0, nil
+	case "record-transition":
+		fs := flag.NewFlagSet("workflow record-transition", flag.ContinueOnError)
+		fs.SetOutput(streams.Stderr)
+		worktree := fs.String("worktree", ".", "repository root")
+		state := fs.String("state", "", "gate state JSON path; defaults to gate-state.json in the active workflow run")
+		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		artifact := fs.String("artifact", "", "receipt-bound Carry Arbiter JSON artifact")
+		workflowID := fs.String("workflow-id", "", "workflow id")
+		changeSnapshot := fs.String("change-snapshot", "", "target change snapshot")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		result := validate.WorkflowRecordTransition(validate.WorkflowRecordTransitionOptions{
+			Worktree: *worktree, StatePath: *state, RunDir: *runDir, Artifact: *artifact,
+			WorkflowID: *workflowID, ChangeSnapshot: *changeSnapshot,
+		})
+		if !result.OK() {
+			return printValidationResult(streams.Stdout, "workflow record-transition", result)
+		}
+		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_TRANSITION_RECORDED workflowId=%s changeSnapshot=%s\n", *workflowID, *changeSnapshot)
 		return 0, nil
 	case "verify-admission":
 		fs := flag.NewFlagSet("workflow verify-admission", flag.ContinueOnError)
@@ -895,13 +968,16 @@ func runGate(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("gate show", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
-		statePath := fs.String("state", "", "read-only gate state JSON path; defaults to repository-level .claude/gates/gate-state.json")
+		statePath := fs.String("state", "", "read-only active workflow gate state JSON path (required)")
 		format := fs.String("format", "json", "output format: json or text")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
 		if *format != "json" && *format != "text" {
 			return 1, fmt.Errorf("unsupported --format %q (want json or text)", *format)
+		}
+		if strings.TrimSpace(*statePath) == "" {
+			return 1, fmt.Errorf("--state is required; use the workflow's restricted/gate-state.json")
 		}
 		state, result := validate.GateShow(validate.GateShowOptions{Worktree: *worktree, StatePath: *statePath})
 		if !result.OK() {
@@ -1055,20 +1131,22 @@ func printUsage(stdout io.Writer, program string) {
 
 Usage:
   %s package validate  --root <formal-gates>
-  %s artifact validate --root <repo> --file <artifact> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot>
+  %s artifact validate --root <repo> --file <artifact> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>]
   %s handoff validate  --root <repo> --file <handoff> --workflow-id <id> --change-snapshot <snapshot>
   %s prompt validate   --root <formal-gates> (--text <text> | --file <file> | --stdin) [--patterns <json>] [--format text|json]
+  %s prompt prepare    --root <repo> --dispatch <canonical.txt> --output <exact-send.txt> [--binding <name=path> ...] [--patterns <json>]
   %s install           --source <formal-gates-dir> --host claude|codex|cursor|both --scope global|project [--project <path>] [--force] [--configure-hooks]
   %s gate record       --worktree <repo> --gate <gate-id> --verdict <verdict> --artifact <artifact> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--stage <stage>] [--state <active-run-json>] [--actor <actor>] [--reason <text>]
   %s gate verify-admission --worktree <repo> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--state <active-run-json>]
-  %s gate show         --worktree <repo> [--state <read-only-json>] [--format json|text]
+  %s gate show         --worktree <repo> --state <active-run-json> [--format json|text]
   %s workflow snapshot --worktree <repo> --vcs file-hash|git|auto [--base-ref <ref>] [--head-ref <ref>] [--include-working-tree]
   %s workflow record-stage --worktree <repo> [--run-dir <dir>] --gate <gate-id> --verdict <verdict> --artifact <artifact> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--stage <stage>] [--state <active-run-json>] [--actor <actor>] [--reason <text>]
+  %s workflow record-transition --worktree <repo> [--run-dir <dir>] --artifact <carry-arbiter.json> --workflow-id <id> --change-snapshot <target> [--state <active-run-json>]
   %s workflow verify-admission --worktree <repo> [--run-dir <dir>] --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--state <active-run-json>]
   %s workflow final-verification --worktree <repo> [--run-dir <dir>] (--attempts-file <json> | --attempts-json <json>) --output <artifact> --workflow-id <id> --change-snapshot <snapshot> [--state <active-run-json>] [--record-final-qa --final-qa-artifact <artifact> --actor <actor>]
   %s workflow compact --worktree <repo> --run-dir .claude/gates/runs/<id> --workflow-id <id> [--change-snapshot <snapshot>] [--dry-run | --execute]
   %s workflow cleanup --worktree <repo> [--path <scratch-path>] [--dry-run | --execute]
-  %s receipt register --provider <provider> --worktree <repo> [--run-dir <dir>] --context-bundle <bundle.json> --artifact <review.json> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>]
+	  %s receipt register --provider <provider> --worktree <repo> [--run-dir <dir>] --context-bundle <bundle.json> [--prompt <exact-send.txt>] --artifact <review.json> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>] [--user-authorized-extra-review]
   %s receipt capture --provider <provider> --event <event> --worktree <repo> [--run-dir <dir>] < payload.json
   %s receipt finalize --provider <provider> --worktree <repo> [--run-dir <dir>] --artifact <review.json> --gate <gate-id> --workflow-id <id> [--stage <stage>]
   %s receipt validate --worktree <repo> --receipt <receipt.json> --artifact <review.json> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>]
@@ -1080,5 +1158,5 @@ Usage:
   %s policy show       --format json
   %s complexity check  --task-type <type> --worktree <repo> [--max-net <n> --max-new-prod-files <n> --max-prod-insertions <n>] [--staged] [--json]
 
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }

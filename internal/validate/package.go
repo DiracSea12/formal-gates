@@ -41,6 +41,7 @@ var requiredFiles = []string{
 	"agents/architecture-health-gate.md",
 	"agents/code-quality-gate.md",
 	"agents/cold-water-review.md",
+	"agents/carry-forward-arbiter.md",
 	"references/requirements-clarification-gate.md",
 	"references/requirements-clarification-artifacts.md",
 	"references/requirement-document-adapters.md",

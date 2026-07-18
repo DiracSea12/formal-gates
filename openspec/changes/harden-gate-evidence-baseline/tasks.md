@@ -7,7 +7,7 @@ their document; no checkbox-specific normalization is allowed.
 ## Phase 0. Review Convergence
 
 - [x] 0.1 Tighten the existing central and reviewer instructions so only concrete current-change requirement, behavior, or mandatory-rule defects can block; advisory-only results PASS and duplicate root causes count once.
-- [x] 0.2 Make the main agent filter reviewer output before creating repair work or clarification items, limit one delivery attempt to three completed automatic review-repair cycles, count only a complete formal result plus its processed repairs and required re-verification as one cycle, then stop automation and return deduplicated evidence-backed blockers for a user decision.
+- [x] 0.2 Make the main agent filter reviewer output before creating repair work or clarification items, limit each gate in one delivery attempt to three completed automatic review-repair cycles, count only a complete formal result plus its processed repairs and required re-verification as one cycle, then stop that gate's automation and return deduplicated evidence-backed blockers for a user decision.
 - [x] 0.3 Repurpose an existing behavior case, validate the package, and obtain one independent read-only review of this Phase 0 diff before user review. Add no product code, schema, command, role, state, or file.
 
 At the end of each implementation phase, fix that phase's deliverable snapshot,
@@ -48,11 +48,25 @@ completed Phase 1 snapshot and pass a separate start-readiness review. Its
 current lack of implementation-ready detail does not authorize guessing and
 does not block Phase 1.
 
-- [ ] 2.1 Enforce `restricted/` layout and direct/transitive reference rejection for four-gate inputs, including development-time complexity budget material; preserve broad current-repository exploration outside that path and honest host capability claims.
-- [ ] 2.2 Require reviewer context to include all relevant current confirmed decisions while excluding prior verdicts, findings, repair narratives, target conclusions, and directed focus.
-- [ ] 2.3 Add Design Review to the shared envelope and complete its JSON content, policy checks, domain validator, receipt/case-hash binding, and positive/negative tests in this task; make case changes require another review.
-- [ ] 2.4 If White-box Adequacy is actually needed, add its shared-envelope content, policy checks, validator, receipt, and positive/negative tests together; do not alter the Phase 1 mechanical QA Execution path merely to add another reviewer.
-- [ ] 2.5 Add Carry-Forward Arbiter JSON content, policy, validator, receipt/transition-chain checks, and positive/negative tests together; extend the Phase 1 FinalExecution rows with per-gate `FRESH_PASS`/`CARRIED_PASS`, source/target snapshots, and carry-decision evidence in this task, and define the earliest-rerun decision, unchanged-snapshot reuse, and changed-snapshot invalidation here rather than in Phase 1.
+- [ ] 2.1 Put every review-related workflow file under `restricted/` without exception, including current dispatch/bundle/output, QA results, receipts, lifecycle events, closures, state, reports, logs, statistics, verification, repair and Carry material; reject any outside-restricted review artifact and preserve honest host capability claims.
+- [ ] 2.2 Limit every independent reviewer to the confirmed current requirement, its current role, and the current diff or proposed change. Keep worktree/base/output details operational only; remove reviewer-visible workflow artifacts, copied requirements or rules, prior-gate results, verification summaries, repair history and other added context. Main-agent/CLI prerequisite and evidence handling stays outside reviewer context. Generate the exact seven-field final message, then use receipt registration as the single full pre-dispatch static check for every field, route, output contract, bundle binding and policy-specific input placement. Add the machine-generated static PASS binding that the reviewer must check without reading bound files. Send those bytes unchanged. Before receipt finalization, validate the completed reviewer JSON with dispatch-owned fields applied in memory and leave invalid output unfinalized. Do not impose prompt binding on non-judgment QA Design. Reject a fourth finalized review for the same workflow, gate, and stage unless the user explicitly authorizes another round.
+- [ ] 2.3 Add `qa.design-review.v2` and `QA_REVIEW` at `qa-test-gate / Design Review` with the documented eight shared-payload checks, requirements prerequisite, Design-stage lifecycle receipt, independent reviewer receipt, exact case-hash binding, and positive/negative tests. Extend development handoff and the mechanical QA Execution payload with the accepted Design Review closure; normal implementation may move from the review snapshot to a later QA snapshot under the same workflow and exact case-set hash, while any case, oracle or Case ID change invalidates the review. Do not add a Design Rework role, copied approved-case artifact, White-box stage, or second QA Execution reviewer.
+- [ ] 2.4 Add `carry.arbiter.v2` and the closed Carry payload, typed transition chain, per-gate decisions, receipt and Arbiter closure, and restore `workflow record-transition` using those typed inputs rather than Markdown fields. Extend admission and FinalExecution with the documented `FRESH_PASS`/`CARRIED_PASS` matrix rules, source/target snapshots, source gate closure and accepted Carry closure; add positive/negative tests for complete multi-hop chains, earliest rerun derivation, unchanged-target reuse, changed-target invalidation and conflicting transitions without adding a fifth gate PASS.
+
+## Phase 2.5. Review Scheduling Evaluation
+
+Phase 2.5 starts only after Phase 2 is complete. In Phase 2, QA
+Design/Design Review/Design Rework and isolated candidate development run from
+the same frozen requirements without sharing QA drafts, findings, or
+implementation context; formal acceptance still waits for an approved case
+set. The natural Phase 2 run doubles as the project sample, so do not repeat
+development or gates merely to simulate another schedule. This phase adds no
+product metrics, policy mode, role, field, state type, scheduler, or agent
+runtime before the user chooses an option.
+
+- [ ] 2.5.1 Summarize the natural Phase 2 run from existing run-local restricted material. Separate pre-development QA Design/Design Review/Design Rework from post-development QA Execution, and report available elapsed time, completed review-repair cycles, deduplicated blockers, snapshot changes, reruns, and host-reported token data without making unavailable metrics mandatory.
+- [ ] 2.5.2 Evaluate the observed overlap between QA Design/Design Review/Design Rework and candidate development against the counterfactual serial wait. Separately compare post-development serial gates, QA-then-three-parallel, and one-four-gate-wave scheduling. Identify later blockers that evidence shows were already present before an earlier repair, distinguish actual observations from counterfactual estimates, and present both scheduling decisions to the user.
+- [ ] 2.5.3 After the user confirms the future schedules, replace this evaluation-only contract with exact prerequisites, orchestration instructions, tests, and minimum implementation scope, then pass a separate start-readiness review before development. Reuse existing roles, envelopes, receipts, and state; do not add automatic selection or another review layer.
 
 ## Phase 3. Operational Convergence
 

@@ -109,8 +109,9 @@ func buildClosure(options ArtifactOptions, artifact decodedArtifact, receipt *Ev
 		return EvidenceRef{}, err
 	}
 	name := strings.ReplaceAll(artifact.Envelope.Gate+"-"+artifact.Envelope.Stage, "/", "-")
+	name = strings.ReplaceAll(name, " ", "-")
 	name = strings.Trim(name, "-") + "-" + sha256Bytes(data) + ".json"
-	path := filepath.Join(artifact.RunDir, "closures", name)
+	path := filepath.Join(artifact.RunDir, "restricted", "closures", name)
 	if err := writeFileAtomic(path, append(data, '\n'), 0o600); err != nil {
 		return EvidenceRef{}, err
 	}
@@ -139,8 +140,18 @@ func receiptClosureDependencies(options ArtifactOptions, runDir string, ref Evid
 		{Path: receipt.StartEventArtifact, SHA256: receipt.StartEventSha256},
 		{Path: receipt.StopEventArtifact, SHA256: receipt.StopEventSha256},
 	}
+	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) {
+		var result Result
+		if !validateFinalSendPrompt(options.Root, runDir, receipt.PromptArtifact, receipt.PromptSha256, receipt.Gate, receipt.Stage, &result, ref.Path) {
+			return nil, fmt.Errorf("closure final-send prompt validation failed: %s", result.Failures[0].Message)
+		}
+		values = append(values, EvidenceRef{Path: receipt.PromptArtifact, SHA256: receipt.PromptSha256})
+	}
 	dependencies := make([]EvidenceRef, 0, len(values))
 	for _, value := range values {
+		if activeWorkflowRun(options.Root, runDir) && !restrictedRepoPath(options.Root, runDir, value.Path) {
+			return nil, fmt.Errorf("closure receipt dependency is outside the active run restricted directory: %s", value.Path)
+		}
 		resolved := resolvePath(options.Root, value.Path)
 		logical, err := logicalPathInRun(runDir, resolved)
 		if err != nil || logical == ref.Path || !isSHA256(value.SHA256) || sha256File(resolved) != value.SHA256 {
@@ -157,9 +168,14 @@ func verifyClosure(options ArtifactOptions, runDir string, closure EvidenceClosu
 	}
 	entries := map[string]ClosureEntry{}
 	resolvedPaths := map[string]string{}
+	reviewerClosure := strings.HasSuffix(closure.RootRole, "_REVIEW")
+	receiptRequired := reviewerClosure || closure.RootRole == "CARRY_ARBITER"
 	for _, entry := range closure.Entries {
 		if _, exists := entries[entry.Path]; exists {
 			return fmt.Errorf("closure contains duplicate path: %s", entry.Path)
+		}
+		if activeWorkflowRun(options.Root, runDir) && !restrictedEvidencePath(options.Root, runDir, entry.Path) {
+			return fmt.Errorf("closure entry is outside the active run restricted directory: %s", entry.Path)
 		}
 		path, err := safeEvidencePath(runDir, entry.Path)
 		if err != nil {
@@ -185,8 +201,8 @@ func verifyClosure(options ArtifactOptions, runDir string, closure EvidenceClosu
 			return fmt.Errorf("closure receipt is missing")
 		}
 	}
-	if strings.HasSuffix(closure.RootRole, "_REVIEW") && closure.Receipt == "" {
-		return fmt.Errorf("reviewer closure is missing its receipt")
+	if receiptRequired && closure.Receipt == "" {
+		return fmt.Errorf("receipt-bound closure is missing its receipt")
 	}
 	state := map[string]int{}
 	var walk func(string) error

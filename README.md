@@ -145,7 +145,8 @@ QA 分两件事：测试用例设计由独立子代理审；开发后的测试�
 ## 核心机制
 
 - 需要质量判断的通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。QA Execution 是例外：它依赖独立 QA 执行证据，由主代理和 CLI 机械核对，不做 reviewer 的 reviewer。
-- **Dispatch prompt 污染检测**——系统自动检测并阻止包含"上一轮发现""刚修了""重点复查""预期答案"等锚定模式的派发 prompt，保证审查者独立判断。检测规则在 `hooks/pollution-patterns.json` 内按英文 regex 组和中文术语组配置，由 `formal-gates prompt validate` 执行。
+- **发送前全量静态检查**——`prompt prepare` 先生成未盖章的七字段 prompt；`receipt register` 是发送前唯一一次全量静态检查，校验七字段、角色、worktree、snapshot、gate/stage 输出合同、输出路径、context bundle 的结构/路径/hash、各门材料放置和污染。只有全部通过后，`receipt register` 才由程序写入 `static-validation=PASS` 并绑定最终字节；reviewer 必须核对该绑定但不得读取绑定文件。任何检查失败都不能派发。reviewer 返回后，finalize 先校验完整 JSON，通过后才锁定 receipt；无效输出保持未完成。QA Design 不是 review judgment，不强制 prompt 绑定。
+- **每门最多三轮**——`receipt register` 在派发前统计同一 workflow、gate 和 stage 的已完成 reviewer receipt；达到三次后默认拒绝。只有用户明确批准额外一轮时才能使用 `--user-authorized-extra-review`，主代理不能自行放行。
 - **跨 workflow 隔离**——每个 workflow 的门禁链必须完整，不能复用其他 workflow 的门禁结果。系统会递归验证所有前置门和传递依赖是否属于同一个 workflowId 和 changeSnapshot；扩展门还必须绑定同一个 manifest 路径和哈希。
 - 每个已启用 gate 的结论都是封闭的 schema-version-2 JSON **artifact**，由 Go 校验器检查。Markdown 只能解释，不能补充机器真值；缺字段、未知字段、非法证据或过期结论都会被拒绝。
 - 配好并在当前宿主实测通过的 hook 可以拦截违规命令；使用 `formal-gates workflow` / `formal-gates gate` 记录时，机器层会校验证据并拒绝不合格的门禁记录。
@@ -246,20 +247,29 @@ Codex 用户不要只靠自动拦截。除非 `formal-gates canary codex-hook --
 # 校验 run-local reviewer JSON artifact
 bin/formal-gates artifact validate \
   --root . \
-  --file .claude/gates/runs/RUN_ID/complexity-review.json \
+  --file .claude/gates/runs/RUN_ID/restricted/complexity-review.json \
   --gate complexity-gate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
 
-# 校验 dispatch prompt 污染
-bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/complexity-dispatch.txt
+# 从七字段 generation-only 模板和机器绑定生成、校验最终发送全文
+bin/formal-gates prompt prepare --root . \
+  --dispatch .claude/gates/runs/RUN_ID/restricted/complexity/dispatch.txt \
+  --output .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt \
+  --binding contextBundle=.claude/gates/runs/RUN_ID/restricted/complexity/context-bundle.json
+
+# 单独复核最终发送文件；通过后必须原样发送
+bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt
+
+# 派发前由 receipt 绑定最终发送 prompt；reviewer JSON 不再引用它
+bin/formal-gates receipt register --provider codex --worktree . --run-dir .claude/gates/runs/RUN_ID --context-bundle restricted/complexity/context-bundle.json --prompt restricted/complexity/prompt.txt --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
 
 # workflow 基础封装：snapshot、run-local state、final-verification、FinalExecution
 bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
-bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow verify-admission --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate architecture-health-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/restricted/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
 
 `final-verification-attempts.json` 中每个 accepted PASS attempt 都必须包含其 artifact 当前字节的 lowercase SHA-256 `artifactHash`。

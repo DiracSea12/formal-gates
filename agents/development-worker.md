@@ -20,7 +20,13 @@ Complexity check command:
 Budget stop triggers:
 Budget expansion approval path:
 Forbidden context:
+Formal flow mode:
+QA case design artifact:
+Approved QA case set:
+Accepted Design Review closure:
 ```
+
+For a `four-gate`, `release`, or `seal` handoff, the two case fields must contain the same `path=<run-relative-path> sha256=<hash>` evidence reference. `Accepted Design Review closure` must contain another evidence reference in that form. The CLI revalidates the Design-stage receipt, independent Design Review receipt, exact case bytes, workflow, and pre-development snapshot before implementation starts. Do not accept a copied approved-case artifact.
 
 Run or request:
 

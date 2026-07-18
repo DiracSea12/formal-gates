@@ -11,7 +11,7 @@ to rerun after a small repair. `alignment.md` is the requirement source.
 
 ## What Changes
 
-- Make formal reviews converge before product development: only concrete current-change defects can block, advisory-only reviews PASS, the main agent filters and deduplicates findings, and automatic review-repair stops after three completed cycles.
+- Make formal reviews converge before product development: only concrete current-change defects can block, advisory-only reviews PASS, the main agent filters and deduplicates findings, and each gate's automatic review-repair stops after three completed cycles.
 - Complete the requirements-clarification PASS checks already started in the
   local diff and prove `policy show` from the same typed Go rules that validators
   execute.
@@ -19,15 +19,21 @@ to rerun after a small repair. `alignment.md` is the requirement source.
   the existing Go CLI. Old workflows restart; there is no compatibility path.
 - Represent independent reviewer judgments as stable policy-owned `checks[]`
   results, while QA Execution uses a small mechanical payload over QA-owned evidence.
+- Use the completed Phase 2 workflow as a real project sample before changing
+  review scheduling. Evaluate concurrent QA case design and candidate
+  development separately from the post-development choice among serial,
+  post-QA parallel, and all-four-in-one-wave execution, without duplicate
+  experimental runs.
 - Bind each requirements and post-development gate PASS to its own run-local recursive
   evidence closure, keep that identity separate from the deliverable
   `changeSnapshot`, and keep mechanical FinalExecution out of a fifth closure.
 - Reuse the existing reviewer receipt chain for actual reviewer judgments and reject mismatched lifecycle,
   reviewer, output, workflow, gate, stage, or snapshot data. Host auto-capture
   is claimed only after a same-host live canary.
-- Put anchoring process history under the existing per-run `restricted/` path.
-  Formal reviewers retain broad access to current task material outside that
-  path, while Carry-Forward Arbiter reviews may read the full repair chain.
+- Put every review-related workflow file under the existing per-run
+  `restricted/` path. Formal reviewers, including Carry-Forward Arbiter, read
+  only the current requirement and current diff or proposed change; the CLI
+  validates process history and transition chains outside reviewer context.
 - Allow final composition to mix explicit `FRESH_PASS` and independently
   accepted `CARRIED_PASS` rows. Arbitration happens before a fresh downstream
   gate relies on carried prerequisites.
@@ -75,16 +81,22 @@ the partial schema-v1 path.
    requirements, QA Execution, complexity, architecture, code-quality, and
    mechanical FinalExecution in the same phase.
 2. **Formal review chain:** add restricted-path enforcement and apply the
-   existing receipt chain to Design Review, optional White-box Adequacy,
-   and carry-forward arbitration, with each feature's JSON,
+   existing receipt chain to Design Review and carry-forward arbitration,
+   with each feature's JSON,
    policy, validator, and tests delivered together on the shared envelope.
+2.5. **Review scheduling evaluation:** summarize the natural Phase 2 QA and
+   gate run, measure the approved pre-development overlap, present the actual
+   cost and repair implications of the three post-development scheduling
+   options, and obtain a user decision before specifying or implementing any
+   policy change. Add no metrics subsystem or duplicate run for the comparison.
 3. **Operational verification:** re-run the Phase 1 stale-vocabulary scan as a
    regression audit, complete broad verification, and obtain fresh review before
    delivery.
 
 Each phase has its own implementation snapshot and review. Later phases do not
-silently enter Phase 1, and Phase 1 has no separately deliverable Markdown or
-schema-v1 intermediate state.
+silently enter an earlier phase, and Phase 1 has no separately deliverable
+Markdown or schema-v1 intermediate state. Until Phase 2 implements Carry, any
+deliverable change still invalidates earlier-snapshot PASS results.
 
 ## Impact
 

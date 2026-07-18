@@ -37,7 +37,7 @@
   },
   {
     "id": "FG-BEH-010",
-    "answer": "Refresh changeSnapshot after file changes and treat downstream evidence from the old snapshot as invalid."
+    "answer": "Refresh changeSnapshot after file changes. Do not directly reuse old PASS; require a fresh target-bound Carry Arbiter decision before dependent gates or sealing, and rerun from the earliest required gate when carry is not accepted."
   },
   {
     "id": "FG-BEH-011",

@@ -118,6 +118,13 @@ Editing a tracked document or its checkboxes SHALL follow the ordinary
 deliverable snapshot rule; the system MUST NOT add general checkbox snapshot
 normalization.
 
+Phase 2 Design Review is a pre-development approval, not a post-development
+gate PASS. Its immutable closure MAY be referenced by later-snapshot QA
+Execution only for the same workflow and exact reviewed case-set hash. Changing
+a case, oracle, or Case ID invalidates that approval and requires another Design
+Review. This expected development boundary does not use Carry and does not make
+other cross-snapshot PASS reusable.
+
 #### Scenario: Deliverable edit changes snapshot
 
 - **WHEN** deliverable source, test, configuration, requirement, or project
@@ -125,6 +132,14 @@ normalization.
 - **THEN** Phase 1 requires a new snapshot, invalidates every old PASS, and
   requires fresh gate execution; carry/rerun evaluation becomes available only
   after Phase 2 implements Carry arbitration.
+
+#### Scenario: Development follows an approved Design Review
+
+- **WHEN** implementation changes the deliverable snapshot but the reviewed
+  case set remains byte-identical
+- **THEN** Phase 2 may admit that Design Review closure only through the
+  same-workflow, exact-case-hash QA rule; fixed gate PASS results remain subject
+  to ordinary fresh-or-carried admission.
 
 #### Scenario: Evidence edit invalidates on same snapshot
 

@@ -145,4 +145,4 @@ Post-development validation rejects a statistics report containing `budget`, a `
 
 ## Output
 
-Use the shared reviewer payload only. Human prose may summarize the judgment, but only the envelope verdict and complete check catalog determine admission.
+Use the shared reviewer payload only. It has no dispatch or prompt field; the external receipt binds and revalidates the exact final-send prompt. Human prose may summarize the judgment, but only the envelope verdict and complete check catalog determine admission.

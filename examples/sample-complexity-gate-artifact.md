@@ -14,7 +14,6 @@ The reviewer writes a schema-version-2 JSON file directly. Replace every evidenc
   "stage": "",
   "verdict": "PASS",
   "payload": {
-    "dispatch": {"path": "dispatch.txt", "sha256": "<lowercase-sha256>"},
     "contextBundle": {"path": "context-bundle.json", "sha256": "<lowercase-sha256>"},
     "reviewPolicyId": "complexity.post-development.v2",
     "checks": [
@@ -28,4 +27,4 @@ The reviewer writes a schema-version-2 JSON file directly. Replace every evidenc
 }
 ```
 
-The abbreviated check list illustrates placement only. A recordable artifact contains every required `complexity.*` check exactly once.
+The abbreviated check list illustrates placement only. A recordable artifact contains every required `complexity.*` check exactly once. The exact final-send prompt is not reviewer payload evidence; `receipt register --prompt` binds it externally and the receipt/closure validation chain revalidates its bytes.

@@ -44,6 +44,14 @@ type GateState struct {
 	SchemaVersion int                       `json:"schemaVersion"`
 	Gates         map[string]GateStateEntry `json:"gates"`
 	History       []GateStateEntry          `json:"history"`
+	Transitions   []CarryTransitionRecord   `json:"transitions"`
+}
+
+type CarryTransitionRecord struct {
+	WorkflowID         string `json:"workflowId"`
+	ChangeSnapshot     string `json:"changeSnapshot"`
+	ArbiterClosure     string `json:"arbiterClosure"`
+	ArbiterClosureHash string `json:"arbiterClosureHash"`
 }
 
 type GateStateEntry struct {
@@ -88,7 +96,16 @@ func GateRecord(options GateRecordOptions) Result {
 
 func gateRecord(options GateRecordOptions) Result {
 	worktree := cleanRoot(options.Worktree)
+	if strings.TrimSpace(options.RunDir) == "" {
+		inferred := artifactRunDir(ArtifactOptions{Root: worktree, File: options.Artifact}, options.WorkflowID)
+		if activeWorkflowRun(worktree, inferred) {
+			options.RunDir = inferred
+		}
+	}
 	statePath := resolveStatePath(worktree, options.StatePath)
+	if strings.TrimSpace(options.StatePath) == "" && strings.TrimSpace(options.RunDir) != "" {
+		statePath = filepath.Join(options.RunDir, "restricted", "gate-state.json")
+	}
 	var result Result
 	if err := validateGateRecordOptions(worktree, options, &result); err != nil {
 		result.add("gate-state", err.Error())
@@ -147,6 +164,10 @@ func gateRecord(options GateRecordOptions) Result {
 				result.add("receipt", err.Error())
 				return result
 			}
+			if err := validateDesignReviewIndependence(artifactOptions, decoded, ref); err != nil {
+				result.add("receipt", err.Error())
+				return result
+			}
 			receipt = &ref
 		}
 		closure, err := buildClosure(artifactOptions, decoded, receipt)
@@ -180,9 +201,92 @@ func gateRecord(options GateRecordOptions) Result {
 	return result
 }
 
+func GateRecordTransition(options WorkflowRecordTransitionOptions) Result {
+	worktree := cleanRoot(options.Worktree)
+	statePath := resolveStatePath(worktree, options.StatePath)
+	if strings.TrimSpace(options.StatePath) == "" && strings.TrimSpace(options.RunDir) != "" {
+		statePath = filepath.Join(options.RunDir, "restricted", "gate-state.json")
+	}
+	var result Result
+	for name, value := range map[string]string{"workflow-id": options.WorkflowID, "change-snapshot": options.ChangeSnapshot, "artifact": options.Artifact} {
+		if strings.TrimSpace(value) == "" {
+			result.add(name, "--"+name+" is required")
+		}
+	}
+	if !result.OK() {
+		return result
+	}
+	artifactPath := resolvePath(worktree, options.Artifact)
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		result.add("artifact", err.Error())
+		return result
+	}
+	artifactOptions := ArtifactOptions{
+		Root: worktree, RunDir: options.RunDir, File: options.Artifact,
+		Gate: "qa-test-gate", Stage: "Carry", Flow: "carry",
+		WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot,
+	}
+	decoded := decodeArtifact(artifactOptions, data, &result)
+	if !result.OK() {
+		return result
+	}
+	if decoded.Envelope.Verdict != "PASS" {
+		if decoded.EarliestRerun != "" {
+			result.add("artifact", "Carry Arbiter did not accept carry; earliestRerunGate="+decoded.EarliestRerun)
+		} else {
+			result.add("artifact", "workflow record-transition accepts only a PASS Carry Arbiter artifact")
+		}
+		return result
+	}
+	receipt, err := matchingReceiptRef(artifactOptions, decoded)
+	if err != nil {
+		result.add("receipt", err.Error())
+		return result
+	}
+	closure, err := buildClosure(artifactOptions, decoded, &receipt)
+	if err != nil {
+		result.add("closure", err.Error())
+		return result
+	}
+	closurePath := filepath.Join(decoded.RunDir, filepath.FromSlash(closure.Path))
+	storedPath := relativePath(worktree, closurePath)
+	state, err := loadGateState(statePath)
+	if err != nil {
+		result.add(slash(statePath), err.Error())
+		return result
+	}
+	for _, existing := range state.Transitions {
+		if existing.WorkflowID != options.WorkflowID || existing.ChangeSnapshot != options.ChangeSnapshot {
+			continue
+		}
+		if existing.ArbiterClosure != storedPath || existing.ArbiterClosureHash != closure.SHA256 {
+			result.add("transition", "conflicting Carry transition already exists for workflow and target snapshot")
+		}
+		return result
+	}
+	state.Transitions = append(state.Transitions, CarryTransitionRecord{
+		WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot,
+		ArbiterClosure: storedPath, ArbiterClosureHash: closure.SHA256,
+	})
+	if err := writeGateState(statePath, state); err != nil {
+		result.add(slash(statePath), err.Error())
+	}
+	return result
+}
+
 func GateVerifyAdmission(options GateAdmissionOptions) Result {
 	worktree := cleanRoot(options.Worktree)
 	statePath := resolveStatePath(worktree, options.StatePath)
+	if strings.TrimSpace(options.StatePath) == "" && strings.TrimSpace(options.WorkflowID) != "" {
+		if runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir); err == nil {
+			candidate := filepath.Join(runDir, "restricted", "gate-state.json")
+			if isFile(candidate) {
+				options.RunDir = runDir
+				statePath = candidate
+			}
+		}
+	}
 	var result Result
 	if !knownGates[options.Gate] || options.Gate == "requirements-clarification-gate" {
 		result.add("gate", "unknown post-development gate: "+options.Gate)
@@ -250,9 +354,6 @@ func GateStateText(state GateState) string {
 
 func verifyRequirement(worktree, statePath, runDir string, state GateState, requirement PolicyPrereq, requiredFor, workflowID, changeSnapshot string) error {
 	entries := entriesForGateNewestFirst(state, requirement.Gate)
-	if len(entries) == 0 {
-		return fmt.Errorf("current-pass-missing: missing prerequisite gate=%s requiredFor=%s state=%s", requirement.Gate, requiredFor, slash(statePath))
-	}
 	for i := range entries {
 		entry := entries[i]
 		if entry.WorkflowID == workflowID && entry.ChangeSnapshot == changeSnapshot {
@@ -271,7 +372,34 @@ func verifyRequirement(worktree, statePath, runDir string, state GateState, requ
 			return nil
 		}
 	}
+	if requirement.Flow == "post-development" {
+		if _, _, err := acceptedCarryForGate(worktree, runDir, state, workflowID, changeSnapshot, requirement.Gate); err == nil {
+			return nil
+		}
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("current-pass-missing: missing prerequisite gate=%s requiredFor=%s state=%s", requirement.Gate, requiredFor, slash(statePath))
+	}
 	return fmt.Errorf("current-pass-missing: missing route gate=%s requiredFor=%s workflowId=%s changeSnapshot=%s state=%s", requirement.Gate, requiredFor, workflowID, changeSnapshot, slash(statePath))
+}
+
+func acceptedCarryForGate(worktree, runDir string, state GateState, workflowID, targetSnapshot, gate string) (CarryDecision, EvidenceRef, error) {
+	for i := len(state.Transitions) - 1; i >= 0; i-- {
+		transition := state.Transitions[i]
+		if transition.WorkflowID != workflowID || transition.ChangeSnapshot != targetSnapshot {
+			continue
+		}
+		closurePath := resolvePath(worktree, transition.ArbiterClosure)
+		logical, err := logicalPathInRun(runDir, closurePath)
+		if err != nil {
+			return CarryDecision{}, EvidenceRef{}, err
+		}
+		ref := EvidenceRef{Path: logical, SHA256: transition.ArbiterClosureHash}
+		options := ArtifactOptions{Root: worktree, RunDir: runDir, File: transition.ArbiterClosure, Gate: "qa-test-gate", Stage: "Carry", Flow: "carry", WorkflowID: workflowID, ChangeSnapshot: targetSnapshot}
+		decision, err := validateAcceptedCarryDecision(options, ref, gate)
+		return decision, ref, err
+	}
+	return CarryDecision{}, EvidenceRef{}, fmt.Errorf("accepted Carry transition is missing for workflow=%s targetSnapshot=%s", workflowID, targetSnapshot)
 }
 
 func verifyRequirementsContinuity(worktree, statePath, runDir string, state GateState, current decodedArtifact) error {
@@ -452,6 +580,9 @@ func writeGateState(path string, state GateState) error {
 	if state.History == nil {
 		state.History = []GateStateEntry{}
 	}
+	if state.Transitions == nil {
+		state.Transitions = []CarryTransitionRecord{}
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -467,6 +598,7 @@ func newGateState() GateState {
 		SchemaVersion: 2,
 		Gates:         map[string]GateStateEntry{},
 		History:       []GateStateEntry{},
+		Transitions:   []CarryTransitionRecord{},
 	}
 }
 

@@ -132,7 +132,8 @@ QA has two separate responsibilities: an independent subagent reviews test-case 
 ## Core Mechanism
 
 - Pass verdicts that require quality judgment must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers. QA Execution is the exception: it uses independent QA-owned execution evidence and main-agent/CLI mechanical validation, not a reviewer of the reviewer.
-- Dispatch prompt pollution checks block anchoring patterns such as previous findings, just-fixed wording, focus direction, and expected answers. Rules live in `hooks/pollution-patterns.json`; `formal-gates prompt validate` is the core implementation.
+- `prompt prepare` generates an unsealed seven-field reviewer message. `receipt register` is the single full pre-dispatch static check for all fields, routes, output contract, context-bundle bindings, policy-specific input placement, and pollution. Only after every check passes does registration write `static-validation=PASS` and bind the final bytes. The reviewer must confirm that binding without reading bound files. Finalization validates completed reviewer JSON before locking the receipt. QA Design does not require this binding.
+- `receipt register` blocks a fourth finalized review for the same workflow, gate, and stage. `--user-authorized-extra-review` is permitted only after explicit user approval; the main agent cannot authorize itself.
 - Each enabled gate verdict is a closed schema-version-2 JSON **artifact** checked by the Go validator. Markdown may explain a result but cannot supply machine truth; missing fields, unknown fields, invalid evidence, or stale conclusions are rejected.
 - Cross-workflow isolation is enforced: prerequisite gates must belong to the same `workflowId` and `changeSnapshot`; extension gates also bind prerequisites to the same manifest path and hash.
 - Configured and tested hooks can block invalid commands; when using `formal-gates workflow` / `formal-gates gate`, the command layer validates evidence and rejects invalid records.
@@ -233,20 +234,29 @@ Maintenance local self-check commands live in [`references/local-validation.md`]
 # Validate a run-local reviewer JSON artifact
 bin/formal-gates artifact validate \
   --root . \
-  --file .claude/gates/runs/RUN_ID/complexity-review.json \
+  --file .claude/gates/runs/RUN_ID/restricted/complexity-review.json \
   --gate complexity-gate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
 
-# Validate dispatch prompt pollution
-bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/complexity-dispatch.txt
+# Generate and validate the exact reviewer message
+bin/formal-gates prompt prepare --root . \
+  --dispatch .claude/gates/runs/RUN_ID/restricted/complexity/dispatch.txt \
+  --output .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt \
+  --binding contextBundle=.claude/gates/runs/RUN_ID/restricted/complexity/context-bundle.json
+
+# Revalidate the exact-send file; send it verbatim after PASS
+bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt
+
+# Bind the exact-send prompt in the receipt before dispatch; reviewer JSON does not reference it
+bin/formal-gates receipt register --provider codex --worktree . --run-dir .claude/gates/runs/RUN_ID --context-bundle restricted/complexity/context-bundle.json --prompt restricted/complexity/prompt.txt --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
 
 # Workflow foundation: snapshot, run-local state, final-verification, FinalExecution
 bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
-bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow verify-admission --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate architecture-health-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/restricted/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
 
 Every accepted PASS attempt in `final-verification-attempts.json` must include the lowercase SHA-256 `artifactHash` of its artifact's current bytes.

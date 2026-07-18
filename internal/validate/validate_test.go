@@ -30,10 +30,11 @@ func TestEvidencePathRulesArePlatformNeutral(t *testing.T) {
 
 func TestReviewerNonPassDoesNotWriteFormalState(t *testing.T) {
 	dir := t.TempDir()
-	for name, value := range map[string]string{"dispatch.txt": "dispatch", "input.txt": "input", "changed.txt": "changed", "verification.txt": "verified"} {
-		mustWrite(t, filepath.Join(dir, name), value)
+	restricted := filepath.Join(dir, "restricted")
+	for name, value := range map[string]string{"input.txt": "input", "changed.txt": "changed", "verification.txt": "verified"} {
+		mustWrite(t, filepath.Join(restricted, name), value)
 	}
-	writeJSONTest(t, filepath.Join(dir, "bundle.json"), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{testRef(t, dir, "input.txt")}})
+	writeJSONTest(t, filepath.Join(restricted, "bundle.json"), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{testRef(t, dir, "restricted/input.txt")}})
 	policy, _ := policyByID("code-quality.post-development.v2")
 	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
 	for i, id := range policy.RequiredCheckIDs {
@@ -41,9 +42,9 @@ func TestReviewerNonPassDoesNotWriteFormalState(t *testing.T) {
 		if i == 0 {
 			status = "FAIL"
 		}
-		checks = append(checks, ReviewCheck{ID: id, Status: status, Message: "checked", EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}})
+		checks = append(checks, ReviewCheck{ID: id, Status: status, Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}})
 	}
-	payload := ReviewerPayload{Dispatch: testRef(t, dir, "dispatch.txt"), ContextBundle: testRef(t, dir, "bundle.json"), ReviewPolicyID: policy.ID, Checks: checks, ChangedFiles: ptrRef(testRef(t, dir, "changed.txt")), Verification: ptrRef(testRef(t, dir, "verification.txt"))}
+	payload := ReviewerPayload{ContextBundle: testRef(t, dir, "restricted/bundle.json"), ReviewPolicyID: policy.ID, Checks: checks, ChangedFiles: ptrRef(testRef(t, dir, "restricted/changed.txt")), Verification: ptrRef(testRef(t, dir, "restricted/verification.txt"))}
 	writeEnvelopeTest(t, filepath.Join(dir, "review.json"), FormalGateEvidence{SchemaVersion: 2, ArtifactRole: policy.ArtifactRole, WorkflowID: "wf", ChangeSnapshot: "snap", Gate: policy.Gate, Stage: policy.Stage, Verdict: "FAIL"}, payload)
 	result := GateRecord(GateRecordOptions{Worktree: dir, Gate: policy.Gate, Verdict: "FAIL", Artifact: "review.json", WorkflowID: "wf", ChangeSnapshot: "snap"})
 	if !result.OK() {

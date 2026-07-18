@@ -34,6 +34,11 @@ type PolicyPrereq struct {
 
 var commonReviewChecks = []string{"review.prompt-fields", "review.prompt-semantics"}
 
+var qaDesignReviewChecks = []string{
+	"qa.design.requirement-coverage", "qa.design.executability", "qa.design.oracles",
+	"qa.design.evidence-binding", "qa.design.independence", "qa.design.case-set-binding",
+}
+
 var gateCheckIDs = map[string][]string{
 	"complexity-gate": {
 		"complexity.statistics", "complexity.diff-shape", "complexity.impact-surface",
@@ -62,6 +67,18 @@ func Policy() BuiltInPolicy {
 			Gate: "requirements-clarification-gate", Stage: "", Flow: "requirements",
 			Prerequisites: []PolicyPrereq{}, RequiredCheckIDs: []string{},
 			AllowedNotApplicableCheckIDs: []string{},
+		},
+		{
+			ID: "qa.design-review.v2", ArtifactRole: "QA_REVIEW", Gate: "qa-test-gate",
+			Stage: "Design Review", Flow: "pre-development",
+			Prerequisites:                []PolicyPrereq{{Gate: "requirements-clarification-gate", Stage: "", Flow: "requirements"}},
+			RequiredCheckIDs:             append(append([]string{}, commonReviewChecks...), qaDesignReviewChecks...),
+			AllowedNotApplicableCheckIDs: []string{}, ReceiptRequired: true,
+		},
+		{
+			ID: "carry.arbiter.v2", ArtifactRole: "CARRY_ARBITER", Gate: "qa-test-gate",
+			Stage: "Carry", Flow: "carry", Prerequisites: []PolicyPrereq{},
+			RequiredCheckIDs: []string{}, AllowedNotApplicableCheckIDs: []string{}, ReceiptRequired: true,
 		},
 		{
 			ID: "qa.execution.v2", ArtifactRole: "QA_EXECUTION", Gate: "qa-test-gate",
@@ -164,6 +181,8 @@ func admissionFlow(mode string) (string, bool) {
 		return "post-development", true
 	case "start-readiness":
 		return "start-readiness", true
+	case "pre-development":
+		return "pre-development", true
 	default:
 		return "", false
 	}
@@ -208,6 +227,8 @@ func recordModeMatchesPolicy(policy ArtifactPolicy, mode string) bool {
 		return mode == "start-readiness"
 	case "post-development":
 		return mode == "formal" || (mode == "" && policy.Stage == "")
+	case "pre-development":
+		return mode == "pre-development"
 	case "finalization":
 		return mode == "formal" && policy.Mechanical
 	default:

@@ -174,10 +174,10 @@
   },
   {
     "id": "FG-BEH-010",
-    "title": "Dirty snapshot invalidates stale downstream PASS",
+    "title": "Dirty snapshot requires fresh Carry arbitration",
     "user_prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
-    "expected_behavior": "The agent refreshes changeSnapshot, treats downstream PASS from the old snapshot as invalid, chooses the earliest rerun gate by impact surface, and reviews the full requirement and current diff instead of only the repair patch.",
-    "failure_behavior": "The agent ignores the snapshot change, reuses old PASS artifacts, or seals without rerunning the invalidated gates.",
+    "expected_behavior": "The agent refreshes changeSnapshot, refuses direct reuse of old PASS, proposes any eligible carried prefix without approving it, obtains a fresh target-bound Carry Arbiter decision before downstream reliance, and reruns from the earliest required gate when carry is not accepted while reviewing the full requirement and current diff.",
+    "failure_behavior": "The agent ignores the snapshot change, directly reuses old PASS, self-approves carry or a rerun boundary, starts a dependent gate before accepted arbitration, or seals with stale evidence.",
     "primary_files": [
       "SKILL.md",
       "references/post-development-artifacts.md",
@@ -186,7 +186,7 @@
     ],
     "must_include": [
       "changeSnapshot",
-      "invalid"
+      "Carry"
     ],
     "must_avoid": [
       "reuses old PASS"

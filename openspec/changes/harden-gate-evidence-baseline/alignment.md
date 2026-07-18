@@ -1,7 +1,7 @@
 # 需求对齐
 
-日期：2026-07-12
-状态：RQ-039 至 RQ-041、RQ-043 至 RQ-044、RQ-046 至 RQ-058 已确认；RQ-042 已被 RQ-047 取代并撤回，RQ-045 已被 RQ-049 取代并撤回；RQ-008、RQ-013、RQ-024、RQ-031、RQ-034 已按用户决定删除；RQ-015 和重复提出的 RQ-022 已撤回
+日期：2026-07-17
+状态：本文件只保留已确认且当前有效的条目；撤回、取代和决定不做的方案不保留正文。
 
 本文档保存了对本地 diff、开发计划以及曾报告 PASS 的四门证据进行严格审查后达成的决策。它是本次 OpenSpec 变更的需求来源。
 
@@ -9,7 +9,7 @@
 
 用户已确认先完成审查收敛，再开发机器证据功能。只有当前变更造成，并有证据证明其违反已确认需求、可观察行为、现有门的职责或强制规则的问题，才能影响结论。范围内的真实缺陷直接返修；最小修法会改变已批准范围时交给用户决定，不得自动扩张。措辞、命名、格式、等价方案偏好、纯假设风险和未要求的加固只是建议；只剩建议必须 PASS。
 
-Reviewer 的 finding 不直接变成需求或返修任务。主代理先去掉无证据、重复、偏好型和超范围意见；同一根因换一种说法仍算一个问题。只有确实会改变范围、验收、架构边界、公开行为或其他用户决定的问题才进入需求澄清。一次交付最多自动完成三轮 review-repair。只有独立 reviewer 返回完整正式结果后才开始一轮；主代理处理完该结果、完成已接受的范围内返修并做完必要复验后，才记为一轮。一次正式结果及其返修、复验合计一轮，不能拆开重复计数。开发自检修改、派发失败、执行中断以及没有完整正式结果的尝试都不计轮次。完成三轮后停止自动审查和返修，只提交合并后的真实 blocker、证据、已尝试修法和仍未解决的原因；由用户决定修改范围或需求、延期或接受风险、明确批准再开一轮，或者停止交付。本阶段只修改现有规则、agent、reference、行为用例和阶段说明，不新增产品代码、字段、命令、角色、状态机或文件。
+Reviewer 的 finding 不直接变成需求或返修任务。主代理先去掉无证据、重复、偏好型和超范围意见；同一根因换一种说法仍算一个问题。只有确实会改变范围、验收、架构边界、公开行为或其他用户决定的问题才进入需求澄清。一次交付中，每道门最多自动完成三轮 review-repair，各门单独计数。只有独立 reviewer 返回完整正式结果后才开始一轮；主代理处理完该结果、完成已接受的范围内返修并做完必要复验后，才记为一轮。一次正式结果及其返修、复验合计一轮，不能拆开重复计数。开发自检修改、派发失败、执行中断以及没有完整正式结果的尝试都不计轮次。某道门完成三轮后，停止该门的自动审查和返修，只提交合并后的真实 blocker、证据、已尝试修法和仍未解决的原因；由用户决定修改范围或需求、延期或接受风险、明确批准该门再开一轮，或者停止交付。本阶段只修改现有规则、agent、reference、行为用例和阶段说明，不新增产品代码、字段、命令、角色、状态机或文件。
 
 ## RQ-001 - 最终门禁组成
 
@@ -28,7 +28,7 @@ Requirement or question: 修复后由谁判断此前的 PASS 是否仍然有效�
 Source: 用户于 2026-07-10 确认的对齐结果。
 Why it matters: 主代理选择了修复内容，不能再批准自己的重跑范围。
 Status: confirmed
-User answer: 主代理可以提议重跑边界，但最终定稿时，任何继承的 PASS 都必须由新的零对话上下文 Carry-Forward Arbiter 裁决。复杂返修链必须完整展开供其审查。
+User answer: 主代理可以提议重跑边界，但任何继承的 PASS 都必须由新的零对话上下文 Carry-Forward Arbiter 裁决。复杂返修链由 CLI 在 reviewer 上下文之外完整校验；Arbiter 只审从源 snapshot 到目标 snapshot 的累计 diff 是否影响拟继承 gate。
 Downstream effect: 不能仅凭主代理的 transition 记录推进继承。
 Document impact: 继承与最终定稿规范。
 Evidence needed: Arbiter 产物、匹配的 receipt、完整展开的 transition 链和逐门决策。
@@ -39,7 +39,7 @@ Requirement or question: 如何证明正式 reviewer 或 Arbiter 确实独立运
 Source: 用户于 2026-07-10 确认的对齐结果。
 Why it matters: 主代理自报的 reviewer ID 或非空 dispatch ID 不能证明独立 reviewer 实际运行并产出对应结果。
 Status: confirmed
-User answer: 正式四门 reviewer 和 Carry-Forward Arbiter 必须复用现有 receipt 链，绑定 dispatch registration、subagent start/stop、subagent ID、输出哈希、workflow、gate、stage 和 snapshot；自报身份不能支持 PASS。按照后续 RQ-027，普通 CLI receipt 只证明这些记录相互一致，不声称能抵御控制本地文件和 CLI 的操作者。Host hook 只有通过 same-host live canary 后，才能额外声称生命周期由宿主自动捕获。
+User answer: 正式四门 reviewer 和 Carry-Forward Arbiter 必须复用现有 receipt 链，绑定 dispatch registration、subagent start/stop、subagent ID、输出哈希、workflow、gate、stage 和 snapshot；自报身份不能支持 PASS。普通 CLI receipt 只证明这些记录相互一致，不声称能抵御控制本地文件和 CLI 的操作者。Host hook 只有通过 same-host live canary 后，才能额外声称生命周期由宿主自动捕获。
 Downstream effect: 缺少或不匹配的 receipt 会阻断正式 PASS；不新增 trust root、provider、verifier 或不可伪造认证系统，也不限制普通 CLI 的正式 PASS。
 Document impact: Reviewer 证明与隔离规范。
 Evidence needed: receipt 正向用例，以及 dispatch、生命周期、reviewer ID、输出、workflow、gate、stage 或 snapshot 不匹配的拒绝用例；host 自动捕获声明需要 live canary。
@@ -105,10 +105,10 @@ Requirement or question: 如何隔离敏感流程文本文件，同时不向 gat
 Source: 用户于 2026-07-10 确认的对齐结果。
 Why it matters: 之前的重跑 bundle 写出了修复过的 blocker，给 reviewer 造成偏置；而严格的文件白名单会降低审查完整性。
 Status: confirmed
-User answer: 将敏感流程文本放在固定路径 `.claude/gates/runs/<workflow-id>/restricted/` 下，包括此前的 verdict 和 finding、repair note、rerun 或 transition decision、carry 和 Arbiter 输入输出、主代理总结、聊天记录，以及旧 dispatch 或 context bundle。四门 reviewer 可以查看全局黑名单 `.claude/gates/runs/*/restricted/**` 以外、与任务相关的所有当前仓库材料，但不得直接读取或通过传递引用读取任何黑名单路径。当前原始证据和其他中性材料仍放在 `restricted/` 之外。RQ-010 只管理落盘文本，不决定如何验证直接编写的 dispatch prompt 文本。
-Downstream effect: 四门 reviewer 的边界是跨所有 workflow run 的固定路径黑名单，而不是仓库白名单。直接或传递读取任一 `restricted/` 目录都会使审查失效，并要求更换 reviewer。
+User answer: 所有审查相关落盘材料一律放在固定黑名单路径 `.claude/gates/runs/<workflow-id>/restricted/` 下，没有例外。包括当前和旧的 dispatch 副本、context bundle 或 manifest、reviewer 输出、QA 结果、receipt、生命周期事件、closure、状态、报告、日志、统计、验证记录、返修记录、Carry/Arbiter 材料和主代理总结。给独立 reviewer 的实质内容只能是三类：已确认的当前需求、reviewer 当前角色、当前 diff 或开发前拟议变更。worktree、基准版本、输出位置和输出格式只能用于执行和返回结果，不得夹带结论、证据摘要或审查方向。Reviewer 直接读取当前仓库中的需求和变更文件并自行运行所需检查；主代理和 CLI 在 reviewer 上下文之外核对前置门、状态、receipt 和其他机器证据。不得复制需求、项目规则或仓库文档到 run 目录供 reviewer 阅读，不得把前门 PASS、测试汇总、旧结论、返修链或任何 workflow-run 产物交给 reviewer。若现有实现要求在 `restricted/` 外保存审查材料，流程必须停止并修正实现，不能临时放宽。
+Downstream effect: `SKILL.md` 是随插件分发的唯一权威规则；不能依赖目标项目不会携带的 `AGENTS.md` 或 `CLAUDE.md`。四门及其他独立 reviewer 不得读取任何 `.claude/gates/runs/**` 产物，只能向分配的 `restricted/` 输出位置写结果。当前要求 reviewer 消费 bundle、前门 closure、验证汇总或其他 run-local 文件的 schema、policy、agent、reference、CLI 和测试口径必须同步删除或改为 reviewer 外部的机械处理。
 Document impact: Reviewer 证明与隔离规范。
-Evidence needed: 确定性的布局检查、递归引用拒绝、禁读路径访问测试，以及 RQ-016 已确认的 receipt 一致性和 host 能力声明。
+Evidence needed: 所有审查落盘路径的 `restricted/` 正反测试；只含当前需求、角色和 diff 的派发正例；包含任一 workflow-run 产物、前门结果、验证摘要、复制规则或其他附加材料的拒绝用例；以及 reviewer 不读取机器证据而主代理/CLI 仍能完成前置校验和记录的流程用例。
 
 ## RQ-011 - 类型化 Arbiter verdict
 
@@ -140,6 +140,7 @@ Evidence needed: Snapshot 纳入/排除测试和证据篡改测试。
 - 开发者可以增加 case，但不能删除或弱化已批准的 case。
 - 如果缺少已批准的 case set、Design Review、QA 自有的执行证据和 case 到 evidence 的绑定，QA Execution 不能记录 PASS。
 - 正式 gate prompt 不得包含此前的 finding、repair explanation、target conclusion 或 directed focus。验证覆盖 reviewer 可见的全部输入，不能只检查顶层 dispatch prompt。
+- 发给 reviewer 的最终全文必须由现有 CLI 从 generation-only 模板生成；`prompt prepare` 只生成未盖章的七字段消息，`receipt register` 是发送前唯一一次全量静态检查，必须校验角色、七字段、worktree、snapshot、gate/stage 输出合同、输出路径、context bundle 结构/路径/hash、各门允许的材料放置、`PENDING` 和污染。只有全部通过后，`receipt register` 才由程序写入 `static-validation=PASS` 并绑定最终字节；reviewer 必须在自身 prompt-field 检查中确认该绑定，但不得读取绑定文件。发送后不能手工追加。reviewer 返回后，finalize 先在内存中补齐机器字段并校验完整 reviewer JSON，通过后才能写 receipt 和锁定 dispatch；失败保留原始输出和未完成登记。现有 receipt registration 同时强制同一 workflow、gate、stage 最多三次已完成 review，第四次只有用户明确批准才能派发。
 
 上面的 prompt 规则与 RQ-010 相互独立。RQ-010 的路径隔离决策没有批准改变直接 dispatch prompt 的验证方式。
 
@@ -156,7 +157,7 @@ Evidence needed: 经过证明的盲态 case design 时间顺序，随后是正�
 
 ## 已撤回的 ID
 
-`RQ-015` 经用户批准撤回，因为它与 RQ-010 重复。其 ID 继续保留，不得再次使用。已批准的当前需求仍可在固定 `restricted/` 路径之外读取。
+`RQ-015` 经用户批准撤回，因为它与 RQ-010 重复。其 ID 继续保留，不得再次使用。Reviewer 直接读取当前仓库中的已批准需求，不读取 run-local 副本。
 
 ## RQ-016 - Reviewer 新鲜度与禁读路径
 
@@ -164,10 +165,10 @@ Requirement or question: 如何复用现有 receipt 判断 reviewer 属于本次
 Source: 由独立的零对话上下文文档审查于 2026-07-10 提出。
 Why it matters: 仅有 reviewer 自报不能把结果绑定到本次 workflow、gate、snapshot 和实际输出，也不能检查正式输入是否引用了禁读材料。
 Status: confirmed
-User answer: 补强现有 receipt，不另起一套零上下文机制。保留现有 dispatch registration、subagent start/stop、subagent ID 和 reviewer 产物哈希链；正式四门 PASS 必须提供与当前 workflow、role、gate、stage、snapshot、dispatch、reviewer session 和输出一致的 receipt。正式输入及其传递引用不得进入 `.claude/gates/runs/*/restricted/**`，路径判断覆盖规范化路径和符号链接；Carry-Forward Arbiter 仍可读取完整返修链。普通 CLI 可以正式 PASS，但只能证明 receipt、输入和产物的一致性，不得声称能抵御控制本地文件和 CLI 的操作者，也不得声称知道 reviewer 在受控输入之外实际读取了什么。Host hook 只有在 live canary 成功时，才能额外声称生命周期或文件访问由宿主自动捕获。
-Downstream effect: 复用并收紧现有 receipt 和路径校验；能力声明区分普通 CLI 一致性检查与经过 live canary 证明的 host 自动捕获，不新增 verifier、provider、trust root 或 nonce 机制。
+User answer: 补强现有 receipt，不另起一套零上下文机制。保留现有 dispatch registration、subagent start/stop、subagent ID 和 reviewer 产物哈希链；正式四门 PASS 必须提供与当前 workflow、role、gate、stage、snapshot、最终发送 prompt、reviewer session 和输出一致的 receipt。generation-only 模板不属于正式证据，reviewer/Carry JSON 也不反向引用 prompt。按照 RQ-010 的后续决定，prompt、receipt、事件、reviewer 输出和它们依赖的其他审查落盘材料全部保存在当前 run 的 `restricted/` 下，由主代理和 CLI 机械读取，不能作为 reviewer 输入。Reviewer 的实际提示只包含当前需求、角色和 diff；普通 CLI 不声称知道 reviewer 是否在提示之外读取了文件。Host hook 只有在 live canary 成功时，才能额外声称生命周期或文件访问由宿主自动捕获。
+Downstream effect: 复用并收紧现有 receipt 和路径校验，把“CLI 可读的黑名单内机器证据”与“reviewer 只能看到的需求、角色、diff”分开；能力声明继续区分普通 CLI 一致性检查与经过 live canary 证明的 host 自动捕获，不新增 verifier、provider、trust root 或 nonce 机制。
 Document impact: receipt 校验、隔离规则、host 能力声明和 canary。
-Evidence needed: 现有 receipt 正向用例；workflow、gate、stage、snapshot、session、输出或路径不匹配的失败测试；host 自动捕获声明必须绑定成功的 live canary。
+Evidence needed: 黑名单内 receipt 正向用例；reviewer 提示不包含任何 run-local 路径；workflow、gate、stage、snapshot、session、输出或 restricted 布局不匹配的失败测试；host 自动捕获声明必须绑定成功的 live canary。
 
 ## RQ-017 - 证据闭包图与哈希契约
 
@@ -175,7 +176,7 @@ Requirement or question: 应以什么样的逐记录与最终汇总闭包模型�
 Source: 由独立的零对话上下文文档审查于 2026-07-10 提出。
 Why it matters: 除非各实现就哪些字段建立边，以及如何在各平台上得到同一图哈希达成一致，否则“所有传递证据”这个说法并不充分。
 Status: confirmed
-User answer: 使用最小的逐门证据闭包，不增加额外的最终汇总根。按照后续 RQ-040，每条正式 PASS 的 closure manifest 包含 reviewer 输出、receipt 和该门实际使用的全部下层证据，gate record 只绑定一个 closure root。Receipt 在 closure 内引用 reviewer 输出哈希；reviewer 输出不反向引用 receipt 或 closure，因此没有自引用。后续 gate 准入和最终交付时逐门重新验证。只有结构化证据字段中的显式引用和 gate 记录要求的 receipt 形成依赖边，不从 Markdown 文本或关键词中猜测引用。每个引用必须是 workflow run 内的规范化相对路径并带哈希；缺失、篡改、路径逃逸、冲突别名或引用环都拒绝。闭包 manifest 使用版本化的 typed Go 结构和固定排序生成确定性 JSON，以 golden vector 锁定跨平台结果。
+User answer: 使用最小的逐门证据闭包，不增加额外的最终汇总根。每条正式 PASS 的 closure manifest 包含 reviewer 输出、receipt 和该门实际使用的全部下层证据，gate record 只绑定一个 closure root。Receipt 在 closure 内引用 reviewer 输出哈希；reviewer 输出不反向引用 receipt 或 closure，因此没有自引用。后续 gate 准入和最终交付时逐门重新验证。只有结构化证据字段中的显式引用和 gate 记录要求的 receipt 形成依赖边，不从 Markdown 文本或关键词中猜测引用。每个引用必须是 workflow run 内的规范化相对路径并带哈希；缺失、篡改、路径逃逸、冲突别名或引用环都拒绝。闭包 manifest 使用版本化的 typed Go 结构和固定排序生成确定性 JSON，以 golden vector 锁定跨平台结果。
 Downstream effect: 修改任一已使用证据都会使对应门的 PASS 失效，但后续门新增自己的证据不会改变此前门的闭包。最终交付逐门验证四门记录、Arbiter 证据和最终验证引用，不再维护第二层汇总根。
 Document impact: 证据闭包/路径安全规范、结构化证据 schema 和 policy rule。
 Evidence needed: 单一逐门 closure root；receipt 对 reviewer 输出哈希的单向引用；多层引用、PASS 后篡改、缺失节点、路径逃逸、别名冲突、引用环、后续门不影响此前闭包，以及跨平台 deterministic manifest 的正反向 golden vector。
@@ -197,7 +198,7 @@ Requirement or question: 当下游 gate 依赖提议继承的前置 gate 时，�
 Source: 于 2026-07-10 的对齐审查期间提出。
 Why it matters: 如果只在下游 gate 被正式准入后才判断继承，这些 gate 可能依赖从未被有效继承的前置结果；如果过于频繁地重复裁决，又会失去节省 token 的意义。
 Status: confirmed
-User answer: 实现修改完成并确定目标 snapshot 后，主代理先提出继承范围；在运行第一个依赖继承结果的下游 gate 之前，调用一次新的 Carry-Forward Arbiter。Arbiter 接受后，先正式准入被继承的 gate，再按固定顺序运行必须重跑的 gate。只要后续没有改变目标 snapshot，最终交付直接复用这次 Arbiter 决策，不再次调用模型。若后续 gate 引发代码或其他可交付内容修改并产生新 snapshot，旧裁决失效，必须针对新 snapshot 重新裁决。主代理不能自行批准继承，复杂返修链仍须完整展开。
+User answer: 实现修改完成并确定目标 snapshot 后，主代理先提出继承范围；在运行第一个依赖继承结果的下游 gate 之前，调用一次新的 Carry-Forward Arbiter。Arbiter 接受后，先正式准入被继承的 gate，再按固定顺序运行必须重跑的 gate。只要后续没有改变目标 snapshot，最终交付直接复用这次 Arbiter 决策，不再次调用模型。若后续 gate 引发代码或其他可交付内容修改并产生新 snapshot，旧裁决失效，必须针对新 snapshot 重新裁决。主代理不能自行批准继承。CLI 完整校验复杂返修链，Arbiter 只看累计 diff，不读取返修链材料。
 Downstream effect: 任何 fresh 下游 gate 都只依赖已经由 Arbiter 接受的继承前置条件；通常每个稳定 snapshot 只调用一次 Arbiter，同时避免最终阶段重复裁决。
 Document impact: 继承最终定稿 design、admission rule 和 rerun sequencing。
 Evidence needed: fresh-only、下游准入前接受或拒绝继承、snapshot 不变时复用裁决、snapshot 改变时裁决失效，以及 multi-hop repair chain 的正反向流程。
@@ -223,17 +224,6 @@ User answer: 逐题落盘、先查仓库事实、一次问一个高影响问题�
 Downstream effect: 删除 `requirements-clarification-interaction` 独立 capability，并从 tasks 和重复测试 capability 中移除为这些交互指导新增产品实现或专门测试的要求；保留 reference/agent 文档中的简洁操作说明。
 Document impact: requirements clarification reference/agent 和 Phase 1 的文档一致性任务。
 Evidence needed: 文档审查确认 reference/agent 说明存在、没有独立产品实现任务，并确认已有正式规则仍由各自的权威 spec 所有。
-
-## RQ-022 - 当前需求理由与 reviewer 隔离边界
-
-Requirement or question: 已由用户确认的当前需求文档，能否向 reviewer 展示解释需求原因的中性事实，即使这些事实源于过去暴露的问题？
-Source: 由针对 `files.45473e1a6d81` 的新鲜零对话上下文 complexity 开发前审查提出。
-Why it matters: proposal、design 和 alignment 需要说明需求为何存在，但四门 reviewer 又不得接触旧 verdict、finding、repair note、期望结论或定向关注材料。如果不区分“当前已批准的需求理由”和“历史审查材料”，当前需求文档本身可能触发污染规则。
-Status: withdrawn
-User answer: 用户指出该边界此前已经确认，不应作为新问题重复询问。经核对，RQ-010 已允许 reviewer 阅读当前需求和中性当前材料，现有 prompt 规则也已允许中性需求、验收标准和范围，同时禁止旧 finding、repair explanation、目标结论和 directed focus；因此本项不产生新需求。
-Downstream effect: 保留 RQ-022 编号和撤回原因；按现有规则把 proposal/design 改成中性当前问题陈述，并修正 reviewer isolation spec 的过宽措辞。
-Document impact: proposal、design 和 reviewer receipt/isolation spec 的既有规则修正。
-Evidence needed: 文档审查确认当前批准需求和验收标准仍可读取，而历史 verdict、逐条 finding、repair narrative、目标结论和 directed focus 仍被禁止。
 
 ## RQ-023 - Review finding 先筛选再决定是否澄清
 
@@ -318,7 +308,7 @@ Requirement or question: 开发前文档是否需要固定 schema 版本、字�
 Source: 针对 `files.5c28b5a5ac58` 的零对话上下文 architecture 开发前审查提出。
 Why it matters: 只写“typed/deterministic JSON”会让不同实现产生不同字节和哈希；写死全部 wire contract 又增加文档和实现约束。
 Status: confirmed
-User answer: 为正式证据规定一个由现有 Go CLI 权威解析和校验的严格 JSON 合同。按照后续 RQ-050 和 RQ-052，reviewer 和 requirements owner 直接写自己的语义 JSON；每种证据固定字段和类型，拒绝未知字段、重复字段和错误类型，但不把 JSON key 顺序当作输入准入条件。只有 receipt、closure、state 和 mechanical finalization 等 CLI 自己生成的机械材料，才使用标准库和 typed Go struct 产生固定输出顺序与确定性字节，并以少量 golden test 锁定。证据路径统一为 workflow 内使用 `/` 的相对路径，拒绝绝对路径、`..` 和符号链接逃逸，并覆盖 Windows 与 macOS/Linux 路径样本。不要求第二套独立实现，不新增通用 canonical JSON 库、跨语言协议或额外抽象。JSON 解码、字段校验、路径归一化、哈希和证据关系检查全部由现有 Go CLI 静态执行，不消耗 AI token；AI 只处理代码、需求和 reviewer 判断等机器不能替代的语义审查。
+User answer: 为正式证据规定一个由现有 Go CLI 权威解析和校验的严格 JSON 合同。Reviewer 和 requirements owner 直接写自己的语义 JSON；每种证据固定字段和类型，拒绝未知字段、重复字段和错误类型，但不把 JSON key 顺序当作输入准入条件。只有 receipt、closure、state 和 mechanical finalization 等 CLI 自己生成的机械材料，才使用标准库和 typed Go struct 产生固定输出顺序与确定性字节，并以少量 golden test 锁定。证据路径统一为 workflow 内使用 `/` 的相对路径，拒绝绝对路径、`..` 和符号链接逃逸，并覆盖 Windows 与 macOS/Linux 路径样本。不要求第二套独立实现，不新增通用 canonical JSON 库、跨语言协议或额外抽象。JSON 解码、字段校验、路径归一化、哈希和证据关系检查全部由现有 Go CLI 静态执行，不消耗 AI token；AI 只处理代码、需求和 reviewer 判断等机器不能替代的语义审查。
 Downstream effect: 收紧现有 JSON decoder 和 domain validator，由 CLI 输出确定性的成功或失败结果；语义 JSON 的等价 key 顺序都能进入同一类型化校验，CLI 拥有的机械输出仍保持确定性字节。正式 reviewer 不再承担手工解析大段 JSON 的工作，但静态校验不能代替四门的语义判断。
 Document impact: design、structured JSON spec、evidence closure spec 和 Phase 1 JSON/closure tasks。
 Evidence needed: CLI 拥有的机械 JSON 输出有固定 bytes/hash golden vector；语义 JSON 的不同 key 顺序都被接受；未知、重复、错类型字段和非法路径拒绝用例；Windows 与 macOS/Linux 路径样本；AI handoff 只消费 CLI 结果和语义审查所需材料，不要求手工读取完整机器证据 JSON。
@@ -327,9 +317,9 @@ Evidence needed: CLI 拥有的机械 JSON 输出有固定 bytes/hash golden vect
 
 Requirement or question: RQ-020 的“所有正式 PASS 机器字段统一 JSON”是否包括 QA、complexity、architecture、code-quality 各自目前会影响 PASS 的专属 judgment 字段？
 Source: 针对 `files.0b657a81a197` 的零对话上下文 complexity 开发前审查提出；用户于 2026-07-11 在 SARIF、GitHub Checks、SonarQube、Semgrep 和 OPA 的实现调研后确认。
-Why it matters: 若 reviewer payload 只有 dispatch/receipt，没有各门专属判断结果，validator 只能继续读取 Markdown 或放弃现有校验。
+Why it matters: 若 reviewer payload 只有机器绑定而没有各门专属判断结果，validator 只能继续读取 Markdown 或放弃现有校验。
 Status: confirmed
-User answer: 四门使用共享的严格 envelope、统一的 `checks[]` 结果和少量真正必要的专属证据引用，不为每个审查维度新增顶层 JSON 字段。每个 check 包含稳定 `id`、`status`、只用于说明的 `message`、`evidenceRefs` 和必要的 `findings`/`locations`；check ID 来自现有 Go policy catalog。QA 仅额外保留 approved case set、case-to-artifact binding 和 QA-owned evidence；complexity 仅额外保留新鲜 statistics-only script result；四门共用 changed files、verification 和 context bundle。Receipt 仍是四门必需证据，但按照 RQ-040 由 gate closure 绑定，不放进 reviewer payload。requirements、Carry-Forward Arbiter 和 FinalExecution 的操作数据形状确实不同，继续使用各自 typed payload。不得引入完整 SARIF、OPA、Sonar 指标引擎、自由 `properties` 扩展袋或新的通用 judgment 框架。
+User answer: 四门使用共享的严格 envelope、统一的 `checks[]` 结果和少量真正必要的专属证据引用，不为每个审查维度新增顶层 JSON 字段。每个 check 包含稳定 `id`、`status`、只用于说明的 `message`、`evidenceRefs` 和必要的 `findings`/`locations`；check ID 来自现有 Go policy catalog。QA 仅额外保留 approved case set、case-to-artifact binding 和 QA-owned evidence；complexity 仅额外保留新鲜 statistics-only script result；四门共用 changed files、verification 和 context bundle。这些引用是 CLI 校验的 machine-only binding，只能作为输出格式中的固定值，不能让 reviewer 读取其文件或内容。Receipt 由 gate closure 绑定，不放进 reviewer payload。requirements、Carry-Forward Arbiter 和 FinalExecution 继续使用各自 typed payload。不得引入完整 SARIF、OPA、Sonar 指标引擎、自由 `properties` 扩展袋或新的通用 judgment 框架。
 Downstream effect: CLI 拒绝缺失、未知或重复 check ID 和未知状态；`NOT_APPLICABLE` 只允许 policy 明确批准的 check 并要求理由；任一 `REVIEW`、`FAIL` 或 `BLOCKED` 都不能聚合为 PASS；只有所有必查项恰好出现一次并为 `PASS` 或允许的 `NOT_APPLICABLE`，且证据闭包和门禁前置条件有效时，才接受顶层 PASS。删除当前草案中 architecture、code-quality 和 complexity 不断扩张的专属 judgment 顶层字段，以及不能由 CLI 重算或 receipt 证明的 reviewer 自报布尔字段。proposal、design、structured JSON spec、四门 agent/reference、Go validator、测试、canary 和示例必须一次改成同一口径，不保留旧字段、旧 Markdown 准入或兼容解析。
 Document impact: structured JSON spec、design、agent/reference 模板和 Phase 1 reviewer migration tasks。
 Evidence needed: 每门必查 check catalog、合法聚合、缺失/未知/重复 ID、非法状态、非法 `NOT_APPLICABLE` 和顶层 verdict 不一致用例；repo-wide 检查确认旧专属 judgment 字段不再承担机器合同，旧 Markdown 字段校验和兼容路径已删除。
@@ -340,10 +330,10 @@ Requirement or question: 已确认的 QA `Design`、独立 `Design Review`、必
 Source: 针对 `files.e2676cb77217` 的零对话上下文 complexity 开发前审查提出。
 Why it matters: 当前封闭 schema 只允许 `Execution`/`FinalExecution`，但 QA admission 又要求 hash-bound Design 和独立 Design Review；实现者会被迫现场发明 stage/role。
 Status: confirmed
-User answer: 不把每个 QA 动作都升级成独立 JSON role 或 gate。`Design` 只生成 case set 并由现有 designer receipt 绑定，不记录 PASS；`Design Review` 复用统一 reviewer envelope 和 `checks[]`，绑定被审 case set 的哈希、独立 reviewer receipt 和最终接受的 case set；`Design Rework` 不设独立机器 role，case 修改后哈希变化使旧 review 失效，必须重新进行 Design Review。`Execution` 继续使用现有 `qa-test-gate` 并绑定 approved case、QA-owned evidence 和 case-to-result 对应关系；`FinalExecution` 继续作为机械收尾，不新增 QA 判断；`White-box Adequacy` 仅在实际需要时运行，并复用同一 QA reviewer payload 和 `checks[]`，不新增 gate 或专用框架。
-Downstream effect: QA admission 只验证 case set、designer receipt、独立 Design Review、approved case hash 和 development handoff 的绑定；删除为 Design Rework 或每个 QA 阶段新增独立 struct、validator、状态迁移和 role 的方案。Case hash 变化自动要求重新 review，静态记录与真实开发顺序一致。
+User answer: 不把每个 QA 动作都升级成独立 JSON role 或 gate。`Design` 只生成 case set 并由现有 designer receipt 绑定，不记录 PASS；`Design Review` 复用统一 reviewer envelope 和 `checks[]`，绑定被审 case set 的哈希、独立 reviewer receipt 和最终接受的 case set；`Design Rework` 不设独立机器 role，case 修改后哈希变化使旧 review 失效，必须重新进行 Design Review。`Execution` 继续使用现有 `qa-test-gate` 并绑定 approved case、QA-owned evidence 和 case-to-result 对应关系；`FinalExecution` 继续作为机械收尾，不新增 QA 判断。曾讨论的 `White-box Adequacy` 即使将来实际需要，也只能复用同一 QA reviewer payload 和 `checks[]`，不能新增 gate 或专用框架；RQ-063 已进一步确认本次 Phase 2 不实现它。
+Downstream effect: QA admission 只验证 case set、designer receipt、独立 Design Review、approved case hash 和 development handoff 的绑定；删除为 Design Rework 或每个 QA 阶段新增独立 struct、validator、状态迁移和 role 的方案。Design Review 保留开发前 snapshot，但开发后的 QA Execution 可按同一 workflow 和完全相同的 case-set hash 引用其不可变 closure；普通实现改动不会要求重审 case，case、oracle 或 Case ID 变化才自动要求重新 review，静态记录与真实开发顺序一致。
 Document impact: structured JSON spec、QA design admission spec、design 和 Phase 2 QA tasks。
-Evidence needed: case set 与 designer receipt 绑定、独立 Design Review 接受、handoff 使用准确 approved case hash、case 修改使旧 review 失效、Execution 使用批准链路、可选 White-box Adequacy 复用 QA reviewer payload，以及禁止新增 Design Rework 机器 role 的文档和实现检查。
+Evidence needed: case set 与 designer receipt 绑定、独立 Design Review 接受、handoff 使用准确 approved case hash、case 修改使旧 review 失效、Execution 使用批准链路，以及禁止新增 Design Rework 机器 role 的文档和实现检查；Phase 2 不出现 White-box 新增实现。
 
 ## RQ-036 - Reviewer 必须看到当前已确认的用户决策
 
@@ -351,7 +341,7 @@ Requirement or question: 所有 formal reviewer 是否必须收到与本次审�
 Source: 用户于 2026-07-11 要求检查，经现有 agent、zero-context 和 reviewer-isolation 文档对照发现。
 Why it matters: 当前规则允许 reviewer 读取 current approved requirements、acceptance criteria 和 `User request and acceptance criteria`，但没有要求 context bundle 覆盖所有相关已确认决策。Reviewer 因此可能重复质疑用户已经选定的方向。直接提供包含旧 finding 来源和 repair 历史的 alignment 又可能造成锚定污染。
 Status: confirmed
-User answer: 所有 formal reviewer 必须看到与当前审查相关的全部已确认用户决策，否则可能重复提出已决问题。复用现有 `Context bundle` 和 `User request and acceptance criteria` 字段，要求它们引用已吸收这些决策的当前批准需求文档；不新增字段、artifact 类型或状态机。Reviewer 可以指出决策冲突、文档遗漏或实现不符，但不得仅因为自己偏好不同就重新打开已确认决策。
+User answer: 所有 formal reviewer 必须看到与当前审查相关的全部已确认用户决策，否则可能重复提出已决问题。当前批准需求必须吸收这些决定，并通过 `Current requirement` 直接提供或定位；`contextBundle` 只用于 CLI 机械校验，不是 reviewer 输入。Reviewer 可以指出决策冲突、文档遗漏或实现不符，但不得仅因为自己偏好不同就重新打开已确认决策。
 Downstream effect: 派工前必须检查现有需求文档已覆盖所有相关确认决策；遗漏会影响判断的决策时，reviewer 返回 BLOCKED，不出具完整结论。
 Document impact: 所有 formal reviewer agent 的现有 prompt 字段说明、zero-context handoff 指引、reviewer isolation spec、Document Readiness 和 Phase 2 reviewer-context tasks。
 Evidence needed: 一个当前需求 bundle 覆盖已确认决策的正向用例，以及遗漏影响审查的已确认决策时不得出具完整结论的用例。
@@ -373,7 +363,7 @@ Requirement or question: 本次 OpenSpec 是否拆成多个独立实现阶段，
 Source: 用户于 2026-07-11 明确指定。
 Why it matters: 一次实现所有 capability 会扩大 diff、混淆问题修复与新机制，也会使测试、回滚和四门判断变得困难。
 Status: confirmed
-User answer: OpenSpec 必须分阶段实现，不得把全部 capability 挤进一次开发。按照后续 RQ-047 的最终排法，Phase 1 是统一 JSON cutover 并吸收当前 requirements/policy 修复，Phase 2 是 review chain，Phase 3 是 convergence；每阶段都必须独立实现、验证和审查。当前开发前审查只准入即将交接的阶段；后续阶段的合同必须在自己交接前基于当时的 snapshot 补齐并重新通过开发前审查，但未就绪的后续阶段不阻断更早阶段。
+User answer: OpenSpec 必须分阶段实现，不得把全部 capability 挤进一次开发。Phase 1 是统一 JSON cutover 并吸收当前 requirements/policy 修复，Phase 2 是 review chain，Phase 3 是 convergence；每阶段都必须独立实现、验证和审查。当前开发前审查只准入即将交接的阶段；后续阶段的合同必须在自己交接前基于当时的 snapshot 补齐并重新通过开发前审查，但未就绪的后续阶段不阻断更早阶段。
 Downstream effect: 每阶段有独立范围、验收、review snapshot 和开发前准入；后续阶段不会默认进入 Phase 1，也不会因尚未轮到详细设计而阻断 Phase 1。
 Document impact: proposal 的交付策略、design 的 migration/delivery 顺序、tasks 的 phase 分组和每阶段开发交接。
 Evidence needed: 三阶段任务清单，以及每阶段独立实现、验证、snapshot 和 review 的证据。
@@ -406,21 +396,10 @@ Requirement or question: 分阶段迁移 JSON 时，一个 role 或 stage 的结
 Source: 新鲜零对话上下文 complexity 开发前审查于 2026-07-11 对当前批准 bundle 提出。
 Why it matters: JSON 基础阶段不能提前定义后续阶段才会实现的 QA Design Review、White-box Adequacy 或 Carry role。
 Status: confirmed
-User answer: 只修改任务分组，不为开发中间态增加产品逻辑。按照 RQ-047 更新后的编号，Phase 1 完整交付 requirements、QA Execution、complexity、architecture、code-quality 和 mechanical FinalExecution 的统一 JSON 格式、validator、policy 与测试，并删除 Carry Arbiter、Design Review 和 White-box Adequacy 的提前占位。Phase 2 实现 Design Review、White-box Adequacy 或 Carry Arbiter 时，在各自任务中同时完成 JSON 内容、validator、policy 和正反向测试。统一 envelope 不变。
+User answer: 只修改任务分组，不为开发中间态增加产品逻辑。按照 RQ-047 更新后的编号，Phase 1 完整交付 requirements、QA Execution、complexity、architecture、code-quality 和 mechanical FinalExecution 的统一 JSON 格式、validator、policy 与测试，并删除 Carry Arbiter、Design Review 和 White-box Adequacy 的提前占位。Phase 2 实现 Design Review 和 Carry Arbiter 时，在各自任务中同时完成 JSON 内容、validator、policy 和正反向测试。统一 envelope 不变。RQ-063 已确认 Phase 2 不实现 White-box Adequacy；将来若重新纳入，仍遵守同阶段完整交付规则。
 Downstream effect: 每个业务功能在哪个阶段开发，就在该阶段从结构到语义和测试完整交付。不要增加 disabled role、临时错误码、占位 payload、兼容路径或其他中间态产品行为。
 Document impact: proposal delivery phases、design role activation、structured JSON spec 和新的 Phase 1/2 tasks。
 Evidence needed: 每个 role/stage 的结构、policy、validator 和测试属于同一阶段；阶段任务不存在结构与语义分离，也没有为开发中间态新增产品规则。
-
-## RQ-042 - Phase 1 的验收状态与 JSON 切换边界
-
-Requirement or question: Phase 1 只修当前 diff 已暴露的 requirements PASS 和 policy 行为时，应如何验收并复用到 Phase 2，才能既不提前拉入全量 JSON 切换，也不写一套马上被删除的临时代码？
-Source: 第二轮新鲜零对话上下文 complexity 开发前审查于 2026-07-11 对当前批准 bundle 提出。
-Why it matters: 最终 requirements capability 只接受 typed JSON，但 JSON 全面切换属于 Phase 2。当前 Phase 1 tasks 又要求完成 requirements PASS parity。若直接继续堆 Markdown 专用校验，Phase 2 会删除它；若 Phase 1 提前切 requirements JSON，则会产生混合格式或暗中吸收 Phase 2 范围。
-Status: withdrawn
-User answer: 本项原先定义独立的当前格式修复阶段；用户随后以 RQ-047 明确取消该阶段，并把 requirements PASS 与 typed policy 修复并入统一 JSON 的新 Phase 1。旧方案不再保留为可选或兼容路径。
-Downstream effect: 用户随后通过 RQ-047 改为把当前 diff 的 requirements/policy 修复并入统一 JSON 切换阶段，因此本项不再是现行阶段合同，也不保留当前格式的独立交付阶段。
-Document impact: 由 RQ-047 统一取代。
-Evidence needed: 由 RQ-047 的新 Phase 1 验收证据取代。
 
 ## RQ-043 - 严格 JSON 合同必须在开发前闭合
 
@@ -439,21 +418,10 @@ Requirement or question: JSON 基础阶段是否应提前定义 Design Review、
 Source: 第二轮新鲜零对话上下文 complexity 开发前审查的第三条 finding，并由用户在确认 RQ-043 时特别要求“对应的 phase 不要漏”。
 Why it matters: 如果 JSON 基础阶段声称完成封闭 QA schema，却包含下一阶段才能验证的字段，要么暗中提前实现后续范围，要么交付一套没有完整语义的占位格式。
 Status: confirmed
-User answer: 不提前定义。按照 RQ-047 更新后的编号和 RQ-059 的最终分工，Phase 1 只把当前已启用的 QA Execution 及其 approved case set、QA-owned results、case-result binding、changed files 和 verification 迁入专用机械 payload。Design Review 和可选 White-box Adequacy 都在 Phase 2 各自与 JSON 内容、policy、validator 和正反向测试同时完成；Phase 1 不注册 disabled stage，也不保留占位字段。
-Downstream effect: Phase 1 QA 合同可以独立实现和验收；Phase 2 增加真实业务能力时再扩展对应 stage，统一 envelope 不变。
+User answer: 不提前定义。按照 RQ-047 更新后的编号和 RQ-059 的最终分工，Phase 1 只把当前已启用的 QA Execution 及其 approved case set、QA-owned results、case-result binding、changed files 和 verification 迁入专用机械 payload。Design Review 在 Phase 2 与 JSON 内容、policy、validator 和正反向测试同时完成；Phase 1 不注册 disabled stage，也不保留占位字段。RQ-063 已确认 Phase 2 不实现 White-box Adequacy。
+Downstream effect: Phase 1 QA 合同可以独立实现和验收；Phase 2 只为本阶段实际增加的 Design Review 扩展对应 stage，统一 envelope 不变。
 Document impact: design 的 role/stage 表、structured JSON spec、QA design/admission spec 和新的 Phase 1/2 tasks。
-Evidence needed: Phase 1 对未来 QA stage/字段明确拒绝；Phase 2 每个新增 QA 能力的结构、policy、validator 和测试位于同一任务。
-
-## RQ-045 - 非权威进度状态的 snapshot 例外
-
-Requirement or question: 是否应为非权威进度状态定义专门的 snapshot 例外？
-Source: 第二轮新鲜零对话上下文 complexity 开发前审查的第四条 finding。
-Why it matters: 专门例外会把非产品材料永久提升成产品规则，并与“普通 tracked 文档按普通 snapshot 处理”产生额外分支。
-Status: withdrawn
-User answer: RQ-049 取代本项。产品不识别来源记录，因此也不定义专门 snapshot 例外；有用的实际交付要求直接写入其所属文档。
-Downstream effect: 所有 tracked 可交付文档遵循普通 snapshot 规则；生成证据遵循 closure 规则；不增加第三类特殊材料。
-Document impact: 由 RQ-049 的减法统一处理。
-Evidence needed: 产品 capability、design 和 tasks 中没有专用 snapshot 例外。
+Evidence needed: Phase 1 对未来 QA stage/字段明确拒绝；Phase 2 的 Design Review 结构、policy、validator 和测试位于同一任务，且不增加 White-box role、stage 或占位字段。
 
 ## RQ-046 - JSON 切换阶段的实际改动面必须可数清
 
@@ -473,7 +441,7 @@ Source: 第三轮新鲜零对话上下文 complexity 开发前审查的第一条
 Why it matters: Phase 1 文档说只使用当前格式且不预埋 JSON，但当前本地 diff 已经无条件调用 JSON evidence 校验，并包含 schema-v1 类型、policy 输出和 Markdown-only 拒绝测试。现有 Phase 1 tasks 没有授权或列出这项减法，开发者无法同时满足代码现状和阶段合同。
 Status: confirmed
 User answer: 删除独立的当前格式修复阶段，不先删除半成品 JSON 再重写。新的 Phase 1 完成原 JSON foundation/cutover 的全部范围，并在同一最终格式中吸收原 Phase 1 的 requirements PASS 和 typed policy 修复及其回归测试；不得保留临时 schema-v1 或混合 Markdown/JSON 可交付状态。原 Phase 3 成为新的 Phase 2，原 Phase 4 成为新的 Phase 3。
-Downstream effect: RQ-042 的独立当前格式阶段被取代；RQ-038 的分阶段原则保留，但第一阶段定义改为统一 JSON 切换加当前 diff 修复。所有 phase 编号、capability applicability、tasks 和验收口径必须同步前移。
+Downstream effect: 第一阶段是统一 JSON 切换加当前 diff 修复。所有 phase 编号、capability applicability、tasks 和验收口径必须保持一致。
 Document impact: alignment 中旧 phase 决定、proposal、design、所有带 phase applicability 的 specs 和 tasks。
 Evidence needed: 新 Phase 1 同时通过 requirements/policy 回归、严格 JSON 合同、全生产/消费面切换、closure/path/state 测试和独立 review；不存在独立 Markdown 修复交付或临时 schema-v1。
 
@@ -483,7 +451,7 @@ Requirement or question: 新 Phase 1 的全新鲜 FinalExecution 行是否还需
 Source: 第三轮新鲜零对话上下文 complexity 开发前审查的第二条 finding。
 Why it matters: Phase 1 已有 envelope snapshot 和逐门封存证据绑定；在只能 `FRESH_PASS` 时重复保存 source/target/result kind 没有新增判断价值，却提前发布了 Carry 才需要的形状。
 Status: confirmed
-User answer: Phase 1 不提前保存 Carry 专用信息。按照后续 RQ-053，Mechanical FinalExecution 的 `gateMatrix` 仍有四个固定 gate 行，但每行只包含 `gate` 和 `gateEvidence`；`gateEvidence` 引用该门已封存且不再变化的完整证据包。当前 snapshot 直接使用 envelope 的 `changeSnapshot`，CLI 重新验证证据包内的 gate、PASS、workflow 和 snapshot 必须与之匹配。Phase 2 实现 Carry Arbiter 时，再在同一任务扩展矩阵行为 `FRESH_PASS`/`CARRIED_PASS`、source/target snapshot 和 carry decision，并补齐校验与测试。
+User answer: Phase 1 不提前保存 Carry 专用信息。Mechanical FinalExecution 的 `gateMatrix` 有四个固定 gate 行，每行只包含 `gate` 和 `gateEvidence`；`gateEvidence` 引用该门已封存且不再变化的完整证据包。当前 snapshot 直接使用 envelope 的 `changeSnapshot`，CLI 重新验证证据包内的 gate、PASS、workflow 和 snapshot 必须与之匹配。Phase 2 实现 Carry Arbiter 时，在同一任务扩展矩阵行为 `FRESH_PASS`/`CARRIED_PASS`、source/target snapshot 和 carry decision，并补齐校验与测试。
 Downstream effect: Phase 1 删除恒定的 `resultKind` 和重复的 source/target snapshot，不损失 snapshot 约束；Carry 的完整矩阵形状只在真正有继承语义时出现。
 Document impact: structured JSON spec、design FinalExecution payload 和新的 Phase 1/2 tasks。
 Evidence needed: Phase 1 没有 Carry 专用字段；Phase 2 在实现继承时一次性补齐矩阵类型、校验和测试。
@@ -516,7 +484,7 @@ Requirement or question: 共享 reviewer payload 是否需要同时保留 `input
 Source: 第四轮新鲜零对话上下文 complexity 开发前审查的第三条 finding，用户于 2026-07-11 确认。
 Why it matters: 当前实际派发中两个字段指向同一份带哈希的输入清单；同时保留会重复公共字段、校验和闭包边，没有独立判断价值。
 Status: confirmed
-User answer: 删除 `inputManifest`，只保留 `contextBundle`。`contextBundle` 直接引用带哈希的初始输入清单；按照后续 RQ-054，该清单是 CLI 可静态校验的严格 JSON，其每个输入文件都进入证据闭包。Reviewer 后续用于具体判断的额外证据继续放在相应 `check.evidenceRefs[]` 中。不新增替代字段或另一套 manifest 机制。
+User answer: 删除 `inputManifest`，只保留 `contextBundle`。`contextBundle` 直接引用 CLI 可静态校验的严格 JSON 初始输入清单，其每个输入文件都进入证据闭包。`contextBundle` 和 `check.evidenceRefs[]` 都是 reviewer 输出格式中的 machine-only binding，不作为 reviewer 阅读材料。不新增替代字段或另一套 manifest 机制。
 Downstream effect: Reviewer payload 只有一个初始输入集合引用，隔离和闭包校验不再对同一文件建立重复边。
 Document impact: design 的共享 payload 和字段迁移表、structured JSON spec 的 reviewer payload 合同。
 Evidence needed: 合法 reviewer JSON 只要求 `contextBundle`；`inputManifest` 作为未知字段被拒绝；实际 evidence references 仍被递归验证。
@@ -549,7 +517,7 @@ Requirement or question: `contextBundle` 是只保护输入清单文件本身，
 Source: 新鲜零对话上下文 Phase 1 architecture 开发前审查的第二条 finding，用户于 2026-07-11 确认。
 Why it matters: 只校验清单文件的哈希，不能发现清单所列文件已被修改，无法兑现“审查输入变化使 PASS 失效”的已确认保证。继续使用未定义的普通文本，又会迫使实现者现场发明解析规则。
 Status: confirmed
-User answer: 保留原有保证。不新增第二份清单；把 `contextBundle` 已经引用的唯一初始输入清单改成严格 JSON，包含 `bundleVersion`、`workflowId`、`changeSnapshot` 和 `inputs[]`。`inputs[]` 的每项使用现有 `EvidenceRef` 的 `path` 和 `sha256`。CLI 静态校验清单与每个输入文件，并将它们纳入证据闭包；不新增 CLI 命令，不让 AI 解析清单。
+User answer: 不新增第二份清单；`contextBundle` 引用的唯一初始输入清单使用严格 JSON，包含 `bundleVersion`、`workflowId`、`changeSnapshot` 和 `inputs[]`。`inputs[]` 的每项使用现有 `EvidenceRef` 的 `path` 和 `sha256`。CLI 静态校验清单与每个输入文件并纳入证据闭包；不新增 CLI 命令，不让 AI 解析或读取清单。Bundle 路径和内容不进入 reviewer 实质输入。
 Downstream effect: `contextBundle` 仍是 reviewer payload 中唯一的初始输入集合引用，但它所列每个文件都成为可机械复验的闭包依赖。
 Document impact: design 的 reviewer 输入数据流、structured JSON 的 context bundle 合同、evidence closure 的图边和 Phase 1 closure task。
 Evidence needed: 合法 context bundle 和全部输入通过；未知/重复字段、workflow/snapshot 不匹配、重复路径、缺失文件或哈希不匹配失败；修改任一输入后对应 PASS 闭包失效。
@@ -609,12 +577,52 @@ Downstream effect: 将 Phase 1 `qa.execution.v2` 从 receipt-bound `QA_REVIEW` �
 Document impact: QA gate agent/reference、post-development artifacts、structured JSON、policy baseline、QA design admission、reviewer receipt/isolation、design、tasks、examples、canary 和 CLI/validator tests。
 Evidence needed: 独立 QA 执行证据和完整 binding 通过时，主代理可用机械 `QA_EXECUTION` artifact 记录 PASS；缺 case、失败结果、错误 hash、旧 snapshot、错误 binding 或开发者自测替代 QA 证据时拒绝且不改状态；QA Execution 不要求 reviewer dispatch/receipt；测试用例 Design Review 和其余三门 reviewer 仍要求独立子代理证据。
 
+## RQ-061 - 调度优化延后为 Phase 2.5
+
+Requirement or question: 是否把原调度优化阶段移到现有 Phase 2 之后，并使用 Phase 2 的实际开发和四门运行作为选择 A/B/C 的样本？
+Source: 用户于 2026-07-17 明确要求：“你就把 phase1.5 改成 2.5”。
+Why it matters: 当前没有本项目数据证明 QA 单独失败、QA 与 reviewer 同时失败、或后三门同时发现 blocker 各自出现的频率。提前固定 B 或 C 都是在猜；但为比较方案重复运行整套门又会额外消耗 token。
+Status: confirmed
+User answer: 该调度优化阶段命名为 Phase 2.5，并排在现有 Phase 2 之后。Phase 2 自然产生的开发、QA 和四门运行作为一次实际样本；不为实验重复跑另一套门。样本要分开记录开发前 QA Design/Design Review/Design Rework、候选开发与开发后 QA Execution，并汇总各阶段实际耗时、完成的 review-repair 轮次、去重后的 blocker、snapshot 变化和宿主能够可靠提供的 token 数据。材料只使用现有 run-local restricted 记录，不新增产品字段、统计命令、历史数据库或自动选择器。RQ-064 已进一步确认开发前 QA 样例循环与候选开发并行。Phase 2 完成后，主代理再向用户说明开发后 A/B/C 在该样本中的实际代价和可避免的重复，由用户确认一种方案；只有确认后才能补齐 Phase 2.5 的精确 policy、文档、测试和实现范围。
+Downstream effect: Phase 2 不依赖调度优化；开发前并行按 RQ-064 执行，开发后仍使用现行顺序产生样本。Phase 2.5 当前只定义评估和再次对齐，不预选开发后 A、B 或 C，不提前修改 post-development prerequisites。现有 Phase 3 继续位于其后。
+Document impact: proposal、design、tasks 和 alignment；撤回当前草稿中的 B 专属 policy baseline 变更。
+Evidence needed: Phase 2 自然运行的简短事实汇总、A/B/C 对照、用户对 Phase 2.5 最终方案的明确确认，以及确认后补齐并通过开发前检查的精确实现合同。
+
+## RQ-062 - Phase 2 每轮耗时与次数留痕
+
+Requirement or question: Phase 2 应如何记录 QA、review、repair 和等待，才能在 Phase 2.5 判断实际耽搁了多久、发生了多少轮？
+Source: 用户于 2026-07-17 启动 Phase 2 时明确要求每跑一轮都留痕统计耗时和次数。
+Why it matters: 只记录最终 PASS 或聊天感受，无法区分时间耗在 QA Design、Design Review、Design Rework、QA Execution、四门 reviewer、返修、重新验证、工具故障还是等待，也无法为 Phase 2.5 的 A/B/C 选择提供本项目事实。
+Status: confirmed
+User answer: 从 Phase 2 启动时开始维护一份 run-local restricted 台账。每个完整 QA/review/repair 轮次立即记录稳定编号、阶段或 gate、开始和结束时间、耗时、完整正式结果、去重后的 blocker 数与根因、接受的返修、复验、snapshot 前后变化、重跑次数和宿主能够可靠提供的 token。开发前 QA Design/Design Review/Design Rework、开发后 QA Execution 和四门 reviewer 必须分开统计。派发失败、网络或工具故障、中断、排队和纯等待也记录耗时及原因，但按照现有轮次定义不计为完成的 review-repair 轮次。记录使用现有 `.claude/gates/runs/<workflow-id>/restricted/`，不新增产品 schema、CLI 字段、统计命令、数据库、自动策略或 PASS 条件。
+Downstream effect: Phase 2.5 使用这份台账和正式产物做事实汇总；缺少宿主 token 指标时如实写 unavailable，不得估算或让缺失指标阻断 Phase 2。
+Document impact: alignment、Phase 2 run-local restricted 台账和 Phase 2.5 样本汇总；不修改产品 spec。
+Evidence needed: 每个完成轮次当场更新台账；Phase 2 结束时总次数、总耗时、等待/故障耗时和 snapshot 重跑链可由明细直接复核。
+
+## RQ-063 - Phase 2 是否实现 White-box Adequacy
+
+Requirement or question: Phase 2 是否现在实现可选的 `White-box Adequacy` reviewer stage？
+Source: Phase 2 合同刷新于 2026-07-17 发现 tasks 只写“如果实际需要”，当前没有决定是否进入本阶段。
+Why it matters: 实现它会增加一个正式 reviewer stage、policy、check catalog、validator、receipt 和正反测试；不实现则 Phase 2 只交付已明确需要的 Design Review、restricted 隔离和 Carry。该选择直接改变开发范围和后续 QA 循环成本。
+Status: confirmed
+User answer: Phase 2 先不实现 White-box Adequacy。
+Downstream effect: Phase 2 删除 White-box Adequacy 的可选实现任务和待实现占位口径，只交付已确认的 Design Review、restricted 隔离和 Carry。以后出现黑盒无法证明的具体正常使用缺口时，再单独对齐是否实现；当前不保留 disabled role、占位字段或半套实现。
+Document impact: Phase 2 tasks、QA design/admission spec、structured JSON applicability、policy catalog 和测试范围。
+Evidence needed: Phase 2 文档和开发 diff 不包含 White-box Adequacy 的新增 role、stage、payload、policy、validator、receipt 或测试。
+
+## RQ-064 - QA 样例循环与候选开发并行
+
+Requirement or question: QA Design、Design Review、Design Rework 是否可以与开发并行，以及是否纳入 Phase 2.5 的调度评估？
+Source: 用户于 2026-07-17 指出 QA 样例来自开发文档、开发代码不修改文档，并明确要求当前 Phase 2 也并行进行。
+Why it matters: 两边都从同一版冻结需求独立工作时，等待样例批准后才写代码没有技术依赖，只会把 QA 循环的全部耗时叠加到开发耗时上。
+Status: confirmed
+User answer: 可以并行。QA Design、Design Review、Design Rework 和候选开发都以同一版冻结需求为输入；QA 不看实现、diff、开发者自测或开发说明，开发者不看 QA 草稿、Design Review 结论或返修记录。Design Review 只返修样例、Case ID、oracle 和证据路径，不擅自改变需求。样例批准前可以产生候选代码，但不能宣称正式验收通过；若 QA 暴露出真正的需求歧义，则只暂停受影响的开发切片并向用户澄清。当前 Phase 2 按此方式并行，Phase 2.5 使用其自然数据评估相对串行等待节省的时间，并把该开发前调度与开发后四门 A/B/C 调度分开判断。
+Downstream effect: 本项取代 RQ-061 中“Phase 2 保持当前正式顺序”的开发前串行含义，不改变 QA Execution 和四门的正式 PASS 条件，也不预选开发后 A/B/C。Phase 2.5 不为此新增角色、证据字段、调度器、自动统计或第二套实验运行。
+Document impact: proposal、design、tasks 和 alignment；当前 Phase 2 的子代理派发与 run-local 台账。
+Evidence needed: Phase 2 台账分别记录 QA 样例循环和候选开发的开始、结束、重叠时间、真正因需求歧义造成的暂停及返工；Phase 2.5 区分实测数据和串行反事实估算。
+
 ## 完成决策
 
 Open questions: none
-
-Dropped question IDs: RQ-008, RQ-013, RQ-024, RQ-031, RQ-034
-Dropped question approval: YES
-Dropped question reason: RQ-008、RQ-013、RQ-024 和 RQ-034 因用户删除全部 OpenSpec 专用机制而删除；RQ-031 只是在已确认的 reviewer receipt 校验之外继续区分不实施的机制，没有新增决策价值。用户于 2026-07-11 明确要求不再保留已决定不做的方案正文，以避免对后续 reviewer 和开发代理造成语义污染。
-Blocking gaps: Phase 0 没有待用户决定的问题。
-Downstream permission: Phase 0 已由用户封板。用户于 2026-07-12 明确授权对当前 snapshot 运行 Phase 1 开发前检查；该授权不等于实现交接，只有当前 snapshot 的 complexity、architecture-health 和 cold-water 开发前审查全部通过后，才可准备 Phase 1 实现交接。
+Blocking gaps: 当前没有已知待用户决定的问题；仍需完成 Phase 2 合同的一致性检查。
+Downstream permission: Phase 0 已封板，Phase 1 已完成并推送。Phase 2 在精确合同补齐并通过开发前检查后方可实现；Phase 2.5 只能在 Phase 2 样本完成并由用户确认 A/B/C 后补齐合同和进入开发前检查。

@@ -2,11 +2,12 @@
 
 Phase 1 migrates only the formal roles that already exist and are enabled:
 requirements PASS, QA Execution, complexity, architecture, code quality, and
-mechanical FinalExecution. Design Review, optional White-box Adequacy, and
+mechanical FinalExecution. Design Review, White-box Adequacy, and
 Carry-Forward Arbiter are not registered, accepted, or represented by
-placeholder payloads in Phase 1. A later phase adds each role or stage only
-with its JSON content, policy, domain validator, and positive and negative
-tests in the same task. The envelope remains common.
+placeholder payloads in Phase 1. Phase 2 adds Design Review and Carry-Forward
+Arbiter only with their JSON content, policy, domain validator, and positive and
+negative tests in the same task. White-box Adequacy remains unsupported by this
+change. The envelope remains common.
 
 ## ADDED Requirements
 
@@ -49,6 +50,12 @@ The Phase 1 role combinations SHALL be exactly:
 | `CODE_QUALITY_REVIEW` | `code-quality-gate` | `""` | reviewer |
 | `FINAL_EXECUTION` | `qa-test-gate` | `FinalExecution` | final execution |
 
+Phase 2 adds exactly `QA_REVIEW` / `qa-test-gate` / `Design Review` with the
+shared reviewer payload and `CARRY_ARBITER` / `qa-test-gate` / `Carry` with the
+typed Carry payload. Their fields and domain rules are owned by
+`qa-design-admission` and `carry-forward-finalization`; the envelope decoder
+only dispatches the typed roles. White-box Adequacy remains unsupported.
+
 Phase 1 SHALL NOT contain `route`, `nextAction`, `reworkOwner`, or `rerunFrom`.
 The CLI SHALL derive admission from `artifactRole` and `verdict`. Unresolved
 requirements SHALL continue clarification without producing a
@@ -82,10 +89,10 @@ intermediate schema, or conversion layer.
 - **WHEN** required JSON evidence is missing but matching Markdown labels exist
 - **THEN** recording rejects the artifact without reading those labels as truth.
 
-#### Scenario: Future stage is sent during Phase 1
+#### Scenario: Unsupported or future stage is sent
 
-- **WHEN** QA evidence names Design Review or White-box Adequacy, or an artifact
-  names Carry Arbiter, before its owning Phase 2 task is delivered
+- **WHEN** QA evidence names White-box Adequacy, or names Design Review or Carry
+  Arbiter before its owning Phase 2 task is delivered
 - **THEN** role dispatch rejects the unknown role/stage without a disabled-role
   or compatibility branch.
 
@@ -141,12 +148,11 @@ reviewer payload containing exactly:
 
 | Field | Type | Rule |
 |---|---|---|
-| `dispatch` | `EvidenceRef` | required |
-| `contextBundle` | `EvidenceRef` | required; points to the typed initial-input bundle defined below |
+| `contextBundle` | `EvidenceRef` | required machine binding under `restricted/`; never supplied as reviewer context |
 | `reviewPolicyId` | string | required and non-empty; known by typed policy |
 | `checks` | array of `Check` | required |
-| `changedFiles` | `EvidenceRef` | required post-development; otherwise omitted |
-| `verification` | `EvidenceRef` | required post-development; otherwise omitted |
+| `changedFiles` | `EvidenceRef` | required post-development machine evidence under `restricted/`; the reviewer inspects the live diff instead |
+| `verification` | `EvidenceRef` | required post-development machine evidence under `restricted/`; not a pre-read reviewer summary |
 
 Each `Check` SHALL contain exactly `id`, `status`, `message`, `evidenceRefs`,
 and `findings`. `id` and `message` SHALL be non-empty. `status` SHALL be
@@ -156,20 +162,24 @@ a reviewer-payload field: the CLI hashes completed reviewer JSON first, then
 the receipt binds that hash, and the closure contains both.
 
 The reviewer payload SHALL NOT contain `reviewSessionId` or another
-self-reported identity field. The external receipt SHALL bind the
+self-reported identity field. It SHALL also reject legacy `dispatch` and prompt
+evidence fields. The external receipt SHALL bind the exact final-send prompt,
 system-generated dispatch ID, host-captured subagent ID, distinct review output
 path, exact output hash, workflow, gate, stage, and snapshot.
 
-The orchestrating caller SHALL write and validate `contextBundle` before
-dispatch, and the reviewer SHALL reference that exact unchanged bundle. The
+The orchestrating caller SHALL write and validate `contextBundle` under
+`restricted/` before dispatch, and the reviewer output SHALL name that exact
+unchanged machine binding without reading it. The
 JSON referenced by `contextBundle` SHALL contain exactly `bundleVersion`,
 `workflowId`, `changeSnapshot`, and `inputs`. `bundleVersion` SHALL be integer
 `1`; workflow and snapshot SHALL match the reviewer envelope; and `inputs`
 SHALL be a non-empty array of `EvidenceRef`. Unknown or duplicate fields and
 duplicate normalized input paths SHALL be rejected. The CLI SHALL verify every
 listed path and hash, and every `inputs[]` item SHALL become an evidence-closure
-edge. No second input manifest, untyped text-list parser, or context-bundle
-generation command SHALL be added.
+edge. Every referenced file SHALL also be under the active run's `restricted/`
+directory. No bundle path or content is included in the reviewer prompt. No
+second input manifest, untyped text-list parser, or context-bundle generation
+command SHALL be added.
 
 The typed Go policy catalog for the selected gate SHALL define required check
 IDs and which checks, if any, allow `NOT_APPLICABLE`. The CLI SHALL reject
@@ -213,11 +223,11 @@ The Phase 1 cutover SHALL map existing Markdown machine fields as follows:
 |---|---|
 | workflow, snapshot, gate, stage, verdict | envelope |
 | `gate_route` action, owner, and rerun fields | deleted; behavior is derived from `artifactRole + verdict` |
-| `Dispatch prompt artifact` | `payload.dispatch` |
-| declared hashed initial review inputs / `Context bundle` | `payload.contextBundle` |
+| `Dispatch prompt artifact` | deleted from reviewer JSON; the generation template is not evidence and the exact final-send prompt is bound by the external receipt |
+| machine-only hashed review bindings / `Context bundle` | `payload.contextBundle`, stored under `restricted/` and omitted from reviewer context |
 | `Prompt source` and formal mode | `payload.reviewPolicyId` |
 | changed-files/raw-diff field | `payload.changedFiles` |
-| verification/developer-self-test field | `payload.verification` |
+| verification/developer-self-test field | `payload.verification`, retained as restricted machine evidence rather than reviewer input |
 | prompt label scan | `review.prompt-fields` check |
 | semantic anti-anchor result | `review.prompt-semantics` check |
 | reviewer receipt | closure dependency outside reviewer JSON |
@@ -346,9 +356,10 @@ state entry SHALL bind the exact CLI-generated FinalExecution artifact path and
 hash and SHALL NOT satisfy a gate prerequisite.
 
 Phase 1 SHALL NOT define a Carry Arbiter payload, a carried matrix row, a Design
-Review payload, or a White-box payload. Phase 2 adds each only with its complete
-domain feature. FinalExecution MUST NOT require or accept task-checkbox
-evidence.
+Review payload, or a White-box payload. Phase 2 adds Carry Arbiter and Design
+Review only with their complete domain features; White-box Adequacy remains
+unsupported by this change. FinalExecution MUST NOT require or accept
+task-checkbox evidence.
 
 #### Scenario: Operational role impersonates reviewer
 

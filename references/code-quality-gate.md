@@ -60,6 +60,6 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 
 ## Output
 
-Write direct schema-version-2 `CODE_QUALITY_REVIEW` JSON using policy `code-quality.post-development.v2` and the shared reviewer payload. Every exported `code-quality.*` check appears exactly once with typed evidence and findings.
+Write direct schema-version-2 `CODE_QUALITY_REVIEW` JSON using policy `code-quality.post-development.v2` and the shared reviewer payload. The payload has no dispatch or prompt field; the external receipt binds and revalidates the exact final-send prompt. Every exported `code-quality.*` check appears exactly once with typed evidence and findings.
 
 Findings first. If there is nothing to report, say you cannot find a fault and list remaining verification gaps. Do not write “overall looks good.”

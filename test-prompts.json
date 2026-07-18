@@ -47,7 +47,7 @@
   {
     "id": "FG-BEH-010",
     "prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
-    "expected": "Refresh changeSnapshot, invalidate downstream PASS from the old snapshot, and resume from the required rerun point instead of reusing stale evidence."
+    "expected": "Refresh changeSnapshot, do not directly reuse old PASS, require a fresh target-bound Carry Arbiter decision before dependent gates or sealing, and rerun from the earliest required gate when carry is not accepted."
   },
   {
     "id": "FG-BEH-011",

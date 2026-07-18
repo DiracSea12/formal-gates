@@ -59,6 +59,15 @@ type WorkflowVerifyAdmissionOptions struct {
 	RunDir         string
 }
 
+type WorkflowRecordTransitionOptions struct {
+	Worktree       string
+	StatePath      string
+	RunDir         string
+	Artifact       string
+	WorkflowID     string
+	ChangeSnapshot string
+}
+
 type WorkflowFinalVerificationOptions struct {
 	Worktree        string
 	StatePath       string
@@ -201,6 +210,23 @@ func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
 	return GateRecord(record)
 }
 
+func WorkflowRecordTransition(options WorkflowRecordTransitionOptions) Result {
+	worktree := cleanRoot(options.Worktree)
+	var result Result
+	runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+	if err != nil {
+		result.add("run-dir", err.Error())
+		return result
+	}
+	addWorkflowPathFailure(&result, worktree, runDir, "artifact", options.Artifact, false)
+	addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
+	if !result.OK() {
+		return result
+	}
+	options.Worktree, options.StatePath, options.RunDir = worktree, workflowStatePath(worktree, options.StatePath, runDir), runDir
+	return GateRecordTransition(options)
+}
+
 func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
 	worktree := cleanRoot(options.Worktree)
 	var result Result
@@ -331,7 +357,7 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 	output := strings.TrimSpace(options.OutputArtifact)
 	if output == "" {
 		if runDir != "" {
-			output = relativePath(worktree, filepath.Join(runDir, "final-verification.json"))
+			output = relativePath(worktree, filepath.Join(runDir, "restricted", "final-verification.json"))
 		} else {
 			suffix := strings.TrimSpace(options.WorkflowID)
 			if suffix == "" {
@@ -391,7 +417,12 @@ func recordFinalQAWith(worktree, runDir, finalVerification, status string, optio
 			}
 		}
 		if selected == nil {
-			result.add("gate-state", "missing current-snapshot PASS closure for "+prerequisite.Gate)
+			decision, carryRef, err := acceptedCarryForGate(worktree, runDir, state, options.WorkflowID, options.ChangeSnapshot, prerequisite.Gate)
+			if err != nil {
+				result.add("gate-state", "missing current-snapshot PASS closure or accepted Carry for "+prerequisite.Gate+": "+err.Error())
+				continue
+			}
+			matrix = append(matrix, FinalGateRow{Gate: prerequisite.Gate, ResultKind: "CARRIED_PASS", SourceSnapshot: decision.SourceSnapshot, TargetSnapshot: options.ChangeSnapshot, GateEvidence: decision.SourceGateEvidence, CarryDecision: &carryRef})
 			continue
 		}
 		logical, err := logicalPathInRun(runDir, resolvePath(worktree, selected.Artifact))
@@ -399,7 +430,7 @@ func recordFinalQAWith(worktree, runDir, finalVerification, status string, optio
 			result.add("gate-state", err.Error())
 			continue
 		}
-		matrix = append(matrix, FinalGateRow{Gate: prerequisite.Gate, GateEvidence: EvidenceRef{Path: logical, SHA256: selected.ArtifactHash}})
+		matrix = append(matrix, FinalGateRow{Gate: prerequisite.Gate, ResultKind: "FRESH_PASS", SourceSnapshot: options.ChangeSnapshot, TargetSnapshot: options.ChangeSnapshot, GateEvidence: EvidenceRef{Path: logical, SHA256: selected.ArtifactHash}})
 	}
 	finalLogical, err := logicalPathInRun(runDir, resolvePath(worktree, finalVerification))
 	if err != nil {
@@ -524,7 +555,7 @@ func WorkflowCompact(options WorkflowCompactOptions) (WorkflowCompactArchive, Re
 		result.add("run-dir", "run directory does not exist: "+slash(runDir))
 		return WorkflowCompactArchive{}, result
 	}
-	output := filepath.Join(runDir, "formal-gates-workflow-archive.json")
+	output := filepath.Join(runDir, "restricted", "formal-gates-workflow-archive.json")
 
 	paths, err := workflowRunFiles(runDir, output)
 	if err != nil {
@@ -590,7 +621,7 @@ func workflowStatePath(worktree, statePath, runDir string) string {
 		return resolveStatePath(worktree, statePath)
 	}
 	if strings.TrimSpace(runDir) != "" {
-		return filepath.Join(runDir, "gate-state.json")
+		return filepath.Join(runDir, "restricted", "gate-state.json")
 	}
 	return resolveStatePath(worktree, "")
 }
@@ -614,9 +645,6 @@ func resolveWorkflowRunDir(worktree, workflowID, value string) (string, error) {
 
 func requireWorkflowPathUnderRunDir(worktree, runDir, label, value string, allowEmpty bool) error {
 	if strings.TrimSpace(value) == "" {
-		if allowEmpty {
-			return nil
-		}
 		return nil
 	}
 	return requireAbsPathUnderRunDir(runDir, label, resolvePath(worktree, value))
@@ -630,8 +658,9 @@ func addWorkflowPathFailure(result *Result, worktree, runDir, label, value strin
 
 func requireAbsPathUnderRunDir(runDir, label, path string) error {
 	full := absPath(path)
-	if samePath(full, runDir) || !pathUnder(full, runDir) {
-		return fmt.Errorf("%s must be under --run-dir: %s", label, slash(full))
+	restricted := filepath.Join(absPath(runDir), "restricted")
+	if samePath(full, restricted) || !pathUnder(full, restricted) {
+		return fmt.Errorf("%s must be under the active run restricted directory: %s", label, slash(full))
 	}
 	return nil
 }

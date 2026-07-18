@@ -90,7 +90,52 @@ func Handoff(options HandoffOptions) Result {
 			result.add(options.File, fmt.Sprintf("Development-time complexity budget %s=%d does not match Complexity check command --%s=%d", name, budgetValue, name, commandValue))
 		}
 	}
+	formalFlowMode := strings.ToLower(strings.TrimSpace(fieldValue(text, "Formal flow mode")))
+	switch formalFlowMode {
+	case "none", "four-gate", "release", "seal":
+	default:
+		result.add(options.File, "Formal flow mode must be one of: none, four-gate, release, seal")
+	}
+	if formalFlowMode == "four-gate" || formalFlowMode == "release" || formalFlowMode == "seal" {
+		for _, field := range []string{"QA case design artifact", "Approved QA case set", "Accepted Design Review closure"} {
+			if !meaningful(fieldValue(text, field)) {
+				result.add(options.File, "field has no meaningful value: "+field)
+			}
+		}
+		designCases, designOK := handoffEvidenceRef(fieldValue(text, "QA case design artifact"))
+		approvedCases, approvedOK := handoffEvidenceRef(fieldValue(text, "Approved QA case set"))
+		designReview, reviewOK := handoffEvidenceRef(fieldValue(text, "Accepted Design Review closure"))
+		if !designOK || !approvedOK || !reviewOK {
+			result.add(options.File, "formal QA handoff fields must use path=<run-relative-path> sha256=<lowercase-64-hex>")
+		} else if designCases != approvedCases {
+			result.add(options.File, "QA case design artifact and Approved QA case set must be the same exact EvidenceRef")
+		} else {
+			workflowID := firstNonEmpty(options.WorkflowID, fieldValue(text, "WorkflowId"))
+			snapshot := firstNonEmpty(options.ChangeSnapshot, fieldValue(text, "Change snapshot"))
+			runDir, err := resolveWorkflowRunDir(root, workflowID, "")
+			if err != nil {
+				result.add(options.File, err.Error())
+			} else {
+				envelope := FormalGateEvidence{WorkflowID: workflowID, ChangeSnapshot: snapshot}
+				artifact := decodedArtifact{Envelope: envelope, References: map[string][]EvidenceRef{}, RunDir: runDir}
+				validateAcceptedDesignReview(ArtifactOptions{Root: root, File: options.File, WorkflowID: workflowID, ChangeSnapshot: snapshot}, &artifact, designReview, approvedCases, snapshot, &result)
+			}
+		}
+	}
 	return result
+}
+
+func handoffEvidenceRef(value string) (EvidenceRef, bool) {
+	value = strings.TrimSpace(value)
+	separator := strings.LastIndex(value, " sha256=")
+	if separator < 0 || !strings.HasPrefix(value, "path=") {
+		return EvidenceRef{}, false
+	}
+	ref := EvidenceRef{
+		Path:   strings.Trim(strings.TrimSpace(value[len("path="):separator]), "`'\""),
+		SHA256: strings.Trim(strings.TrimSpace(value[separator+len(" sha256="):]), "`'\"(),;"),
+	}
+	return ref, ref.Path != "" && isSHA256(ref.SHA256)
 }
 
 func handoffBudgetValue(text, name string) (int, bool) {

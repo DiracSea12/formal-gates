@@ -82,4 +82,4 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 
 ## Output
 
-Write direct schema-version-2 `ARCHITECTURE_REVIEW` JSON with the matching typed policy and shared reviewer payload. Every exported `architecture.*` check appears exactly once. `REVIEW`, `FAIL`, and `BLOCKED` cannot proceed to code quality or write formal PASS state.
+Write direct schema-version-2 `ARCHITECTURE_REVIEW` JSON with the matching typed policy and shared reviewer payload. The payload has no dispatch or prompt field; the external receipt binds and revalidates the exact final-send prompt. Every exported `architecture.*` check appears exactly once. `REVIEW`, `FAIL`, and `BLOCKED` cannot proceed to code quality or write formal PASS state.

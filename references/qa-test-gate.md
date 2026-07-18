@@ -22,27 +22,29 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 ## Stages
 
 - `Design`: read only requirements, specs, public contracts, user flows, or bug reports. Produce cases and oracles. Do not inspect implementation diff to invent cases.
-- `Design Review`: before verification, review every candidate case as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to `Design Rework`; do not stop at the first rejected case or wait for the user unless the claim itself is unclear.
+- `Design Review`: before verification, use receipt-bound `QA_REVIEW` and policy `qa.design-review.v2` to review every candidate case as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to the editing action; do not stop at the first rejected case or wait for the user unless the claim itself is unclear.
 - `Design Rework`: edit cases and oracle only. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
 - `Execution`: an independent QA executor runs approved cases and binds them to commands, artifacts, manual observation, or acceptance procedures. QA-owned results and complete case binding are mandatory. Failed or incomplete evidence routes to implementation, test evidence, or case rework; it does not enter downstream gates. The main agent and CLI check the evidence mechanically and do not dispatch another QA reviewer.
-- `FinalExecution`: after downstream gates and final verification, bind final release/seal evidence to the unchanged snapshot before release/seal. When the four post-development gates already recorded PASS for the same workflow and unchanged snapshot, the main agent may record this as a mechanical closeout: check the existing PASS records, final verification artifact, and route to seal. Do not add QA judgment, replace missing gates, reuse stale snapshots, or claim independent review.
-- `White-box Adequacy`: after the deliverable shape and code-quality result are stable, review internal risk coverage when needed.
+- `FinalExecution`: after downstream gates and final verification, bind final release/seal evidence to the target snapshot before release/seal. When all four post-development gates have target-bound PASS results for the same workflow and snapshot, each fresh or admitted by an accepted Carry transition, the main agent may record this as a mechanical closeout: check the existing PASS records, final verification artifact, and route to seal. Do not add QA judgment, replace missing gates, reuse stale snapshots, or claim independent review.
+
+Design Rework is not a machine role or recorded stage. White-box Adequacy is not registered by this phase.
 
 Authorized formal runs should continue across normal stage transitions. Stop only for true blockers: unapproved cases, missing QA-owned evidence, failed verification, stale workflow/snapshot, scope change, destructive/shared-state action not authorized, or unclear requirement.
 
-`Design`, `Design Review`, `Design Rework`, and `White-box Adequacy` produce QA artifacts and review records. They do not satisfy downstream machine admission unless a workflow manifest explicitly defines them as extension-gate prerequisites. Built-in machine admission uses formal `Execution` before downstream gates and formal `FinalExecution` before seal.
+Design produces a receipt-bound case document without a gate PASS. Design Review records its receipt-bound `QA_REVIEW` closure with `--mode pre-development --stage "Design Review"` after same-workflow, same-snapshot requirements PASS. That closure is admission evidence for handoff and later QA Execution, not a current-snapshot post-development gate prerequisite. Built-in post-development admission still uses formal `Execution` before downstream gates and formal `FinalExecution` before seal.
 
 ## Workflow Artifacts
 
 Preserve separate artifacts for:
 
-- approved QA cases
+- QA case document and Design-stage receipt
+- accepted Design Review closure
 - developer self-test
 - initial QA verification
 - final QA verification
 - each formal gate verdict
 
-If the snapshot changes after a PASS, the old PASS is stale. Do not reuse it. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
+If the snapshot changes after a PASS, do not reuse the old PASS directly. It may satisfy the new target only when a fresh Carry Arbiter accepts that gate from the cumulative diff and the CLI records the target-bound transition before downstream reliance; otherwise rerun it and every required downstream gate. A later snapshot also invalidates the previous Carry decision. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
 
 ## Case Requirements
 
@@ -86,15 +88,15 @@ Evidence level must match the claim:
 
 Formal PASS requires:
 
-- Approved case set.
+- Exact case set approved by an independent Design Review closure.
 - QA-owned verification evidence.
 - Binding from cases to artifacts/procedures/results.
 - QA Execution performed independently from the feature developer.
-- Main-agent and CLI validation of exact hashes, workflow, snapshot, case coverage, PASS results, and case-result binding; no Execution reviewer receipt is required.
+- Main-agent and CLI validation of both Design and reviewer receipts, exact case hash, workflow, case coverage, PASS results, and case-result binding. The pre-development review snapshot may differ from the later implementation snapshot; no Execution reviewer receipt is required.
 - Machine-recorded PASS using `formal-gates workflow record-stage`.
 
-Record formal Execution PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate qa-test-gate --mode formal --stage Execution`. Generate FinalExecution with `formal-gates workflow final-verification --record-final-qa --final-qa-artifact <output>` after all four current-snapshot closures exist.
+Record formal Execution PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate qa-test-gate --mode formal --stage Execution`. Generate FinalExecution with `formal-gates workflow final-verification --record-final-qa --final-qa-artifact <output>` after all four post-development gates have target-bound PASS results (fresh or accepted-carried) and final verification exists.
 
 ## Output
 
-The QA executor writes QA-owned results and case-result binding, not the gate artifact. The main agent writes direct schema-version-2 `QA_EXECUTION` JSON using policy `qa.execution.v2`. Its payload contains exactly `approvedCaseSet`, `qaOwnedResults`, `caseResultBinding`, `changedFiles`, and `verification` evidence references. `QA_EXECUTION` accepts only PASS and has no reviewer dispatch, context bundle, checks, findings, or receipt. Design remains a case document; Design Review and White-box Adequacy are not Phase 1 machine roles.
+The QA executor writes QA-owned results and case-result binding, not the gate artifact. The main agent writes direct schema-version-2 `QA_EXECUTION` JSON using policy `qa.execution.v2`. Its payload contains exactly `approvedCaseSet`, `designReview`, `qaOwnedResults`, `caseResultBinding`, `changedFiles`, and `verification` evidence references. `designReview` points to the accepted closure for the same workflow and exact case-set reference; case, oracle, or Case ID changes require another Design Review. `QA_EXECUTION` accepts only PASS and has no reviewer dispatch, prompt, context bundle, checks, findings, or receipt. QA Design itself is lifecycle-bound but makes no review judgment, so it also does not require a final-send reviewer prompt; Design Review does, through its external receipt.
