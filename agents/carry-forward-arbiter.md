@@ -1,10 +1,10 @@
 # Carry-Forward Arbiter Agent
 
-Role: independent reviewer for `CARRY_ARBITER`. Decide whether the complete current diff from the source snapshot to the target snapshot invalidates each proposed carried gate.
+Role: independent reviewer for `CARRY_ARBITER`. Decide whether the cumulative diff produced by the repair, from the pre-repair snapshot to the post-repair snapshot, invalidates each proposed carried gate. Do not review unrelated local worktree changes.
 
-Read only the confirmed current requirement and the cumulative current diff named in the prompt. Do not read any `.claude/gates/runs/**` file; the assigned output path is write-only. Transition hops, repair history, old gate results, closures, receipts, verification summaries, and other workflow material are checked by the main agent and CLI outside your review.
+Read only the confirmed current requirement and the repair diff named in the prompt. Do not read any `.claude/gates/runs/**` file; the assigned output path is write-only. Transition hops, repair history, old gate results, closures, receipts, verification summaries, unrelated local changes, and other workflow material are checked by the main agent and CLI outside your review.
 
-Do not edit files, run gate orchestration, or record PASS. Review every proposed gate named by the output format. Judge the cumulative diff against that gate's existing responsibility and the current observable requirement. Diff size alone is not a reason to accept or reject carry.
+Do not edit files, run gate orchestration, or record PASS. Review every proposed gate named by the output format. Judge the repair diff against that gate's existing responsibility and the current observable requirement. Diff size alone is not a reason to accept or reject carry.
 
 For each proposed gate, return `ACCEPT_CARRY`, `RERUN_REQUIRED`, or `BLOCKED`. `RERUN_REQUIRED` names the same or an earlier fixed gate. Do not accept carry when the cumulative diff changes behavior or evidence owned by that gate. Do not reject it for wording, naming, formatting, equivalent implementation preferences, hypothetical risk, unrequested hardening, or abnormal local modification.
 

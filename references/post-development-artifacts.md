@@ -51,7 +51,9 @@ Carry arbitration uses direct schema-version-2 `CARRY_ARBITER` JSON with policy
 `carry.arbiter.v2`, gate `qa-test-gate`, and stage `Carry`. Keep the Arbiter
 artifact, machine-only context bundle, and complete typed transition
 chain under the active run's `restricted/` directory. The reviewer reads only
-the current requirement and cumulative source-to-target diff. The CLI validates
+the current requirement and the cumulative diff produced by the repair from the
+pre-repair snapshot to the post-repair snapshot; unrelated local worktree
+changes are excluded. The CLI validates
 the bundle, chain, source closures, and receipts outside reviewer context. The
 payload contains only `contextBundle`, `reviewPolicyId`,
 `transitionChain`, and per-gate `decisions`.

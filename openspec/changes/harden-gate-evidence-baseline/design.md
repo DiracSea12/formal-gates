@@ -86,17 +86,17 @@ feature includes its JSON content, policy, domain validator, and tests in one
 task. It does not implement White-box Adequacy.
 
 Phase 2.5 uses the natural Phase 2 development and formal run as the project
-sample for two separate scheduling decisions. The pre-development comparison
-is serial QA case approval versus QA Design/Design Review/Design Rework running
-concurrently with candidate development from the same frozen requirements. The
-post-development comparison is serial gates, QA followed by three parallel
-reviews, or one four-gate wave. Concurrent candidate development cannot see QA
-drafts or review findings, and it gains no formal acceptance before the case
-set is approved. A requirement ambiguity pauses only the affected development
-slice for user clarification. Phase 2.5 does not duplicate work for an
-experiment or preselect the post-development option. The main agent summarizes
-existing run-local facts, the user chooses the future schedule, and only then
-are exact policy and implementation requirements written. Phase 3 re-runs the
+sample, then implements the confirmed schedule. The three pre-development
+checks run concurrently. QA Execution and the three post-development gates
+also run concurrently. After each repair, a new independent zero-context agent
+reviews the cumulative diff produced by that repair, from the pre-repair
+snapshot to the post-repair snapshot, and decides per gate whether to rerun it
+or inherit its prior result. Unrelated local worktree changes are excluded.
+The main agent only dispatches and records that decision. Concurrent candidate development cannot see QA drafts or review
+findings, and it gains no formal acceptance before the case set is approved. A
+requirement ambiguity pauses only the affected development slice for user
+clarification. Phase 2.5 does not run a duplicate experiment or add an A/B/C
+selector. Phase 3 re-runs the
 Phase 1 stale-vocabulary scan as a regression audit and completes broad
 verification. Each implementation phase has its own snapshot and
 start-readiness review before handoff. A later phase that is not yet start-ready
@@ -284,7 +284,9 @@ context. An implementation that cannot keep this boundary must stop instead of
 adding another reviewer input or path exception.
 
 Carry-Forward Arbiter uses a separate role policy because it must decide whether
-the cumulative source-to-target diff invalidates each proposed carried gate.
+the cumulative diff produced by a repair, from the pre-repair snapshot to the
+post-repair snapshot, invalidates each proposed carried gate. Unrelated local
+worktree changes are excluded.
 The complete transition chain remains machine-only: the CLI validates its hops,
 old PASS closures, receipts, and references outside reviewer context. Only a
 canaried host may claim it observed every actual file read.
@@ -304,12 +306,12 @@ When carry is proposed, the main agent may suggest a rerun boundary but cannot
 approve it. After the target snapshot is fixed and before the first fresh
 downstream gate relies on a carried prerequisite, the CLI validates the complete
 uncompressed transition chain and one fresh Carry-Forward Arbiter reviews the
-cumulative source-to-target diff. It decides every carried gate as
+repair diff from the pre-repair snapshot to the post-repair snapshot. It decides every carried gate as
 `ACCEPT_CARRY`, `RERUN_REQUIRED`, or `BLOCKED`. Rejection names the earliest gate
 to rerun; downstream gates rerun from that point and the main agent cannot
 override the decision.
 
-The Arbiter judges the full repair set against each gate's responsibility,
+The Arbiter judges the repair diff against each gate's responsibility,
 checks, evidence, and observable behavior. Diff line count alone cannot approve
 or reject carry.
 
@@ -379,10 +381,10 @@ accepted role/stage only in the same task that delivers its JSON content,
 policy, domain validator, and tests. Phase 1 does not register disabled versions
 of those roles or stages, and Phase 2 does not register White-box Adequacy.
 
-Phase 2.5 adds no evidence role or payload. Before the user chooses a scheduling
-schedule from the Phase 2 sample, it also changes no prerequisite. Any later
-selected schedule must reuse the existing roles, envelopes, receipts, and
-state.
+Phase 2.5 adds no evidence role or payload. Its scheduling and repair-impact
+decision must reuse the existing roles, envelopes, receipts, and state; the
+per-gate rerun/inheritance decision is recorded through the existing Carry
+evidence rather than a new reviewer layer.
 
 ## Verification Strategy
 

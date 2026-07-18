@@ -44,7 +44,7 @@ Preserve separate artifacts for:
 - final QA verification
 - each formal gate verdict
 
-If the snapshot changes after a PASS, do not reuse the old PASS directly. It may satisfy the new target only when a fresh Carry Arbiter accepts that gate from the cumulative diff and the CLI records the target-bound transition before downstream reliance; otherwise rerun it and every required downstream gate. A later snapshot also invalidates the previous Carry decision. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
+If a repair changes the snapshot after a PASS, do not reuse the old PASS directly. It may satisfy the new target only when a fresh Carry Arbiter accepts that gate from the repair diff between the pre-repair and post-repair snapshots, excluding unrelated local worktree changes, and the CLI records the target-bound transition before downstream reliance; otherwise rerun it and every required downstream gate. A later repair invalidates the previous Carry decision. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
 
 ## Case Requirements
 

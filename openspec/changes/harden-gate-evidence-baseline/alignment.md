@@ -579,20 +579,20 @@ Evidence needed: 独立 QA 执行证据和完整 binding 通过时，主代理�
 
 ## RQ-061 - 调度优化延后为 Phase 2.5
 
-Requirement or question: 是否把原调度优化阶段移到现有 Phase 2 之后，并使用 Phase 2 的实际开发和四门运行作为选择 A/B/C 的样本？
+Requirement or question: 是否把原调度优化阶段移到现有 Phase 2 之后，并使用 Phase 2 的实际开发和四门运行作为 Phase 2.5 的样本？
 Source: 用户于 2026-07-17 明确要求：“你就把 phase1.5 改成 2.5”。
-Why it matters: 当前没有本项目数据证明 QA 单独失败、QA 与 reviewer 同时失败、或后三门同时发现 blocker 各自出现的频率。提前固定 B 或 C 都是在猜；但为比较方案重复运行整套门又会额外消耗 token。
+Why it matters: 需要用一次自然运行确认并行调度、返修影响判断和逐门继承记录是否覆盖真实使用，不为比较方案重复运行整套门。
 Status: confirmed
-User answer: 该调度优化阶段命名为 Phase 2.5，并排在现有 Phase 2 之后。Phase 2 自然产生的开发、QA 和四门运行作为一次实际样本；不为实验重复跑另一套门。样本要分开记录开发前 QA Design/Design Review/Design Rework、候选开发与开发后 QA Execution，并汇总各阶段实际耗时、完成的 review-repair 轮次、去重后的 blocker、snapshot 变化和宿主能够可靠提供的 token 数据。材料只使用现有 run-local restricted 记录，不新增产品字段、统计命令、历史数据库或自动选择器。RQ-064 已进一步确认开发前 QA 样例循环与候选开发并行。Phase 2 完成后，主代理再向用户说明开发后 A/B/C 在该样本中的实际代价和可避免的重复，由用户确认一种方案；只有确认后才能补齐 Phase 2.5 的精确 policy、文档、测试和实现范围。
-Downstream effect: Phase 2 不依赖调度优化；开发前并行按 RQ-064 执行，开发后仍使用现行顺序产生样本。Phase 2.5 当前只定义评估和再次对齐，不预选开发后 A、B 或 C，不提前修改 post-development prerequisites。现有 Phase 3 继续位于其后。
-Document impact: proposal、design、tasks 和 alignment；撤回当前草稿中的 B 专属 policy baseline 变更。
-Evidence needed: Phase 2 自然运行的简短事实汇总、A/B/C 对照、用户对 Phase 2.5 最终方案的明确确认，以及确认后补齐并通过开发前检查的精确实现合同。
+User answer: 该调度优化阶段命名为 Phase 2.5，并排在现有 Phase 2 之后。Phase 2 自然产生的开发、QA 和四门运行作为一次实际样本；不为实验重复跑另一套门。样本要分开记录开发前 QA Design/Design Review/Design Rework、候选开发与开发后 QA Execution，并汇总各阶段实际耗时、完成的 review-repair 轮次、去重后的 blocker、snapshot 变化和宿主能够可靠提供的 token 数据。材料只使用现有 run-local restricted 记录，不新增产品字段、统计命令、历史数据库或自动选择器。RQ-064 已进一步确认开发前 QA 样例循环与候选开发并行；RQ-065 已确认开发前三个检查并行、开发后 QA Execution 与三门并行，以及返修后的逐门重跑/继承判断。
+Downstream effect: Phase 2.5 使用自然样本补齐并实现已确认的并行调度、返修影响判断和逐门继承/重跑记录；现有 Phase 3 继续位于其后。
+Document impact: proposal、design、tasks 和 alignment；删除旧的调度选择口径，不新增专属 policy baseline。
+Evidence needed: Phase 2 自然运行的简短事实汇总、并行启动/完成与返修影响记录，以及确认后补齐并通过开发前检查的精确实现合同。
 
 ## RQ-062 - Phase 2 每轮耗时与次数留痕
 
 Requirement or question: Phase 2 应如何记录 QA、review、repair 和等待，才能在 Phase 2.5 判断实际耽搁了多久、发生了多少轮？
 Source: 用户于 2026-07-17 启动 Phase 2 时明确要求每跑一轮都留痕统计耗时和次数。
-Why it matters: 只记录最终 PASS 或聊天感受，无法区分时间耗在 QA Design、Design Review、Design Rework、QA Execution、四门 reviewer、返修、重新验证、工具故障还是等待，也无法为 Phase 2.5 的 A/B/C 选择提供本项目事实。
+Why it matters: 只记录最终 PASS 或聊天感受，无法区分时间耗在 QA Design、Design Review、Design Rework、QA Execution、四门 reviewer、返修、重新验证、工具故障还是等待，也无法为 Phase 2.5 的并行调度和逐门重跑判断提供本项目事实。
 Status: confirmed
 User answer: 从 Phase 2 启动时开始维护一份 run-local restricted 台账。每个完整 QA/review/repair 轮次立即记录稳定编号、阶段或 gate、开始和结束时间、耗时、完整正式结果、去重后的 blocker 数与根因、接受的返修、复验、snapshot 前后变化、重跑次数和宿主能够可靠提供的 token。开发前 QA Design/Design Review/Design Rework、开发后 QA Execution 和四门 reviewer 必须分开统计。派发失败、网络或工具故障、中断、排队和纯等待也记录耗时及原因，但按照现有轮次定义不计为完成的 review-repair 轮次。记录使用现有 `.claude/gates/runs/<workflow-id>/restricted/`，不新增产品 schema、CLI 字段、统计命令、数据库、自动策略或 PASS 条件。
 Downstream effect: Phase 2.5 使用这份台账和正式产物做事实汇总；缺少宿主 token 指标时如实写 unavailable，不得估算或让缺失指标阻断 Phase 2。
@@ -616,13 +616,24 @@ Requirement or question: QA Design、Design Review、Design Rework 是否可以�
 Source: 用户于 2026-07-17 指出 QA 样例来自开发文档、开发代码不修改文档，并明确要求当前 Phase 2 也并行进行。
 Why it matters: 两边都从同一版冻结需求独立工作时，等待样例批准后才写代码没有技术依赖，只会把 QA 循环的全部耗时叠加到开发耗时上。
 Status: confirmed
-User answer: 可以并行。QA Design、Design Review、Design Rework 和候选开发都以同一版冻结需求为输入；QA 不看实现、diff、开发者自测或开发说明，开发者不看 QA 草稿、Design Review 结论或返修记录。Design Review 只返修样例、Case ID、oracle 和证据路径，不擅自改变需求。样例批准前可以产生候选代码，但不能宣称正式验收通过；若 QA 暴露出真正的需求歧义，则只暂停受影响的开发切片并向用户澄清。当前 Phase 2 按此方式并行，Phase 2.5 使用其自然数据评估相对串行等待节省的时间，并把该开发前调度与开发后四门 A/B/C 调度分开判断。
-Downstream effect: 本项取代 RQ-061 中“Phase 2 保持当前正式顺序”的开发前串行含义，不改变 QA Execution 和四门的正式 PASS 条件，也不预选开发后 A/B/C。Phase 2.5 不为此新增角色、证据字段、调度器、自动统计或第二套实验运行。
+User answer: 可以并行。QA Design、Design Review、Design Rework 和候选开发都以同一版冻结需求为输入；QA 不看实现、diff、开发者自测或开发说明，开发者不看 QA 草稿、Design Review 结论或返修记录。Design Review 只返修样例、Case ID、oracle 和证据路径，不擅自改变需求。样例批准前可以产生候选代码，但不能宣称正式验收通过；若 QA 暴露出真正的需求歧义，则只暂停受影响的开发切片并向用户澄清。开发前的三个检查并行运行。开发后 QA Execution、Complexity、Architecture、Code Quality 四门也并行运行。
+Downstream effect: 本项取代 RQ-061 中“Phase 2 保持当前正式顺序”的开发前串行含义，不改变各门的正式 PASS 条件。开发后每轮如果发生返修，由新的独立零上下文子代理根据本轮返修前后 snapshot 之间实际产生的累计返修 diff，逐门判断哪些门必须重跑、哪些门可以继承；不把当前工作区其他本地改动带入判断。主代理只负责调度和记录，不能自审决定继承。Phase 2.5 不再比较 A/B/C，也不新增实验运行、自动选择器或额外审查层。
 Document impact: proposal、design、tasks 和 alignment；当前 Phase 2 的子代理派发与 run-local 台账。
-Evidence needed: Phase 2 台账分别记录 QA 样例循环和候选开发的开始、结束、重叠时间、真正因需求歧义造成的暂停及返工；Phase 2.5 区分实测数据和串行反事实估算。
+Evidence needed: Phase 2 台账分别记录 QA 样例循环和候选开发的开始、结束、重叠时间、真正因需求歧义造成的暂停及返工；Phase 2.5 区分实测数据和返修后的逐门判断。
 
 ## 完成决策
 
+## RQ-065 - Phase 2.5 调度方案
+
+Requirement or question: 开发前和开发后的审查如何并行，返修后哪些门重跑？
+Source: 用户于 2026-07-19 明确确认。
+Why it matters: 固定并行能减少等待；返修后逐门判断能避免无脑重跑，也不能由主代理自行继承结果。
+Status: confirmed
+User answer: 开发前三个检查并行运行。开发后 QA Execution、Complexity、Architecture、Code Quality 四门并行运行。每轮结束后如果有返修，返修时开新的独立零上下文子代理，依据本轮返修前后 snapshot 之间实际产生的累计返修 diff 逐门判断哪些门需要重跑、哪些门可以继承；不把当前工作区其他本地改动带入判断。不用重跑的门继承原结果。主代理负责调度，不能自审继承合理性。
+Downstream effect: Phase 2.5 只需补齐这套并行调度、返修影响判断和逐门继承/重跑记录；不实现 A/B/C 选择、不新增自动选择器或额外 reviewer 层。
+Document impact: proposal、design、tasks、四门调度说明、返修影响判断和 Carry 证据绑定。
+Evidence needed: Phase 2 自然运行记录中的并行启动/完成、返修、snapshot 变化、逐门重跑或继承决定；缺失的 token/精确等待数据标记 unavailable。
+
 Open questions: none
-Blocking gaps: 当前没有已知待用户决定的问题；仍需完成 Phase 2 合同的一致性检查。
-Downstream permission: Phase 0 已封板，Phase 1 已完成并推送。Phase 2 在精确合同补齐并通过开发前检查后方可实现；Phase 2.5 只能在 Phase 2 样本完成并由用户确认 A/B/C 后补齐合同和进入开发前检查。
+Blocking gaps: none
+Downstream permission: Phase 0 已封板，Phase 1 已完成并推送，Phase 2 已封板于提交 `a3c28a6`。Phase 2.5 的精确合同和实现仍须基于 Phase 2 样本补齐，并单独通过开发前检查。

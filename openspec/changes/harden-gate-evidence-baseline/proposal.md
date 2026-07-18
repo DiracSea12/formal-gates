@@ -84,11 +84,13 @@ the partial schema-v1 path.
    existing receipt chain to Design Review and carry-forward arbitration,
    with each feature's JSON,
    policy, validator, and tests delivered together on the shared envelope.
-2.5. **Review scheduling evaluation:** summarize the natural Phase 2 QA and
-   gate run, measure the approved pre-development overlap, present the actual
-   cost and repair implications of the three post-development scheduling
-   options, and obtain a user decision before specifying or implementing any
-   policy change. Add no metrics subsystem or duplicate run for the comparison.
+2.5. **Review scheduling:** use the confirmed schedule from the Phase 2 sample:
+   run the three pre-development checks in parallel, run QA Execution and the
+   three post-development gates in parallel, and after each repair use a new
+   independent zero-context agent to decide per gate whether the cumulative
+   diff produced by that repair requires a rerun or permits inheritance; do not
+   include unrelated local worktree changes. Add no A/B/C selector or
+   duplicate experiment; record unavailable timing/token data honestly.
 3. **Operational verification:** re-run the Phase 1 stale-vocabulary scan as a
    regression audit, complete broad verification, and obtain fresh review before
    delivery.

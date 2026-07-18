@@ -211,16 +211,17 @@ restricted and unreachable through transitive evidence references.
   development-time budget material
 - **THEN** PASS is rejected.
 
-### Requirement: Carry Arbiter receives only the cumulative diff
+### Requirement: Carry Arbiter receives only the repair diff
 
 Carry-Forward Arbiter SHALL use a separate receipt-bound role policy and judge
-whether the cumulative source-to-target diff invalidates each proposed carried
-gate. The transition and repair chain SHALL remain under `restricted/` and be
-validated by the CLI outside the Arbiter prompt, exactly like other workflow
-material.
+whether the cumulative diff produced by the repair from the pre-repair snapshot
+to the post-repair snapshot invalidates each proposed carried gate. Unrelated
+local worktree changes SHALL be excluded. The transition and repair chain SHALL
+remain under `restricted/` and be validated by the CLI outside the Arbiter
+prompt, exactly like other workflow material.
 
 #### Scenario: Carried result needs arbitration
 
 - **WHEN** a carried prerequisite is proposed
-- **THEN** a fresh Arbiter receives the cumulative diff while the CLI validates
-  the full chain outside reviewer context.
+- **THEN** a fresh Arbiter receives the repair diff while the CLI validates the
+  full chain outside reviewer context.

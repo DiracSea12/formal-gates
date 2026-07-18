@@ -41,7 +41,9 @@ Each hop contains exactly `fromSnapshot`, `toSnapshot`, `changedFiles`,
 adjacent hops are contiguous, and all three evidence fields are hashed
 `EvidenceRef` values. This material stays under `restricted/` and is validated
 by the CLI outside every reviewer prompt. The Arbiter receives the cumulative
-source-to-target diff instead of the hop or repair files.
+repair diff from the pre-repair snapshot to the post-repair snapshot, excluding
+unrelated local worktree changes, instead of the hop, receipt, or repair-history
+files.
 
 Top-level verdict is `PASS` only when every decision is `ACCEPT_CARRY`,
 `BLOCKED` when any decision is `BLOCKED`, and otherwise `REVIEW`. The existing
@@ -103,11 +105,12 @@ authorize carry.
 - **THEN** the old carry decision is stale and new arbitration is required
   before downstream reliance.
 
-### Requirement: Arbiter decides every carried gate from the cumulative diff
+### Requirement: Arbiter decides every carried gate from the repair diff
 
 The CLI SHALL validate every hop in the transition chain. The receipt-bound
-Arbiter SHALL receive the complete cumulative source-to-target diff, not the
-transition or repair files, and decide each carried gate as `ACCEPT_CARRY`,
+Arbiter SHALL receive the cumulative diff produced by the repair from the
+pre-repair snapshot to the post-repair snapshot, not the transition, receipt,
+or repair-history files and not unrelated local worktree changes, and decide each carried gate as `ACCEPT_CARRY`,
 `RERUN_REQUIRED`, or `BLOCKED`.
 `RERUN_REQUIRED` SHALL identify the earliest fixed gate that must run on the
 target snapshot. The main agent SHALL NOT override rejection.
