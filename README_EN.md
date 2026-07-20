@@ -53,7 +53,7 @@ The common AI failure is simple: the AI writes the code, says it tested it, and 
 - **Four gates**: `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, `code-quality-gate`
 - **hook**: host interception capability, not the four gates
 
-In plain terms, formal-gates does not trust "I tested it." The AI has to write evidence into a file, and the command layer checks whether that file can support a PASS.
+In plain terms, formal-gates does not trust "I tested it." The AI supplies semantic judgments or observations, scripts generate the static formal evidence, and the command layer checks whether the result can support a PASS.
 
 ### Why Is That Useful?
 
@@ -80,7 +80,7 @@ To reproduce the smallest case, run this demo: [Minimal Self-PASS Block Demo](ex
 | Check if the change is over-engineered | **complexity-gate** |
 | Check module boundaries and dependency direction | **architecture-health-gate** |
 | Check code correctness, dead code, fake tests | **code-quality-gate** |
-| Final validation before release/seal | Run all four gates in sequence |
+| Final validation before release/seal | Run all four gates on the same snapshot; they may execute in parallel |
 
 Only after you tell the AI "**run four gates**", "**do formal gate review**", or "**validate before seal**" will it follow the installed skill rules. Whether invalid commands are blocked automatically depends on the tool you use; if automatic blocking is unavailable, run the validation commands explicitly.
 
@@ -118,12 +118,16 @@ This is the best gate to run before AI starts coding, because direction errors h
 
 For requirement-like document edits, formal-gates uses lightweight semantic routing before editing. This covers OpenSpec, PRD, SDD, phase docs, development plans, technical plans, implementation plans, handoff docs, and roadmap or milestone sections when they define scope or acceptance. The routing check is not a formal gate: typo or formatting edits proceed with 0 questions and 0 artifacts; low-risk clarification uses confirmed sources; semantic changes need confirmation before the document states them as requirements.
 
-### Four Post-work Gates (run only when the user asks, in sequence)
+**Candidate development overlap**: once the requirement is frozen, candidate code may be developed alongside QA Design, Design Review, and Design Rework. The lanes are mutually blind: candidate development must not read QA drafts, conclusions, or repair records, while QA design, review, and case editing must not read production implementation, diffs, existing tests, developer self-tests, implementation notes, or developer explanations. Candidate code cannot claim formal acceptance; after the case set is approved, it may be adopted, modified, or deleted without a rewrite.
+
+### Four Post-work Gates (run only when the user asks; same-snapshot reviews may run in parallel)
 
 1. **qa-test-gate** — Are test cases and acceptance criteria trustworthy? Does QA have real, owned evidence?
 2. **complexity-gate** — Did the change bloat? Is it the minimum sufficient implementation? Over-engineered? Created unnecessary systems?
 3. **architecture-health-gate** — Are module boundaries, ownership, dependency directions, state/cache lifecycles, and performance shape sound?
 4. **code-quality-gate** — Correctness, edge cases, performance, dead code, fake tests, maintainability.
+
+All four review the same workflow and change snapshot independently. Reviewers may finish in parallel, while the main agent mechanically validates and serializes shared-state commits; the CLI cross-process lock prevents lost updates after an accidental concurrent commit. Finalization still requires all four target-bound PASS results or accepted per-gate Carry decisions. Before a repair, preserve a reproducible source. If an exact cumulative source-to-target diff cannot be produced, do not propose Carry; rerun the affected gates.
 
 QA has two separate responsibilities: an independent subagent reviews test-case design, and a QA executor independent from the developer runs the post-development cases. The main agent and CLI only check execution evidence, hashes, snapshot, and case binding; they do not add a second QA reviewer.
 
@@ -132,7 +136,7 @@ QA has two separate responsibilities: an independent subagent reviews test-case 
 ## Core Mechanism
 
 - Pass verdicts that require quality judgment must come from **zero-context independent review AI**—it doesn't know the main AI's conclusions or suspicions, avoiding echo chambers. QA Execution is the exception: it uses independent QA-owned execution evidence and main-agent/CLI mechanical validation, not a reviewer of the reviewer.
-- `prompt prepare` generates an unsealed seven-field reviewer message. `receipt register` is the single full pre-dispatch static check for all fields, routes, output contract, context-bundle bindings, policy-specific input placement, and pollution. Only after every check passes does registration write `static-validation=PASS` and bind the final bytes. The reviewer must confirm that binding without reading bound files. Finalization validates completed reviewer JSON before locking the receipt. QA Design does not require this binding.
+- All static formal content is script-generated. `prompt prepare` generates the seven-field message, and `receipt register` accepts only role-specific source paths and creates a read-only reviewer or Carry catalog with every static field populated; callers never supply check IDs or gate/path bindings. Reviewers, Carry, and QA Design submit only ordered semantic scalars. Requirements owners and QA executors likewise submit only pure semantic scalars with 1-based positions to compose commands; the CLI generates DIM/Case/Execution IDs, JSON keys/objects/arrays, references, and bindings. AI never edits formal JSON or QA Design Markdown and never repeats static content. Compose and submit reject duplicate, missing, out-of-range, empty, or illegal values before writing; failure leaves no partial artifact or proof, and success writes and validates the result atomically.
 - `receipt register` blocks a fourth finalized review for the same workflow, gate, and stage. `--user-authorized-extra-review` is permitted only after explicit user approval; the main agent cannot authorize itself.
 - Each enabled gate verdict is a closed schema-version-2 JSON **artifact** checked by the Go validator. Markdown may explain a result but cannot supply machine truth; missing fields, unknown fields, invalid evidence, or stale conclusions are rejected.
 - Cross-workflow isolation is enforced: prerequisite gates must belong to the same `workflowId` and `changeSnapshot`; extension gates also bind prerequisites to the same manifest path and hash.
@@ -231,7 +235,91 @@ Codex users should not rely only on automatic blocking. Unless `formal-gates can
 Maintenance local self-check commands live in [`references/local-validation.md`](references/local-validation.md). This section keeps the other cross-platform validation commands.
 
 ```bash
-# Validate a run-local reviewer JSON artifact
+# Generate requirements alignment, decision, and PASS from positioned semantic scalars
+bin/formal-gates artifact compose-requirements \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --requirement-source openspec/changes/CHANGE \
+  --alignment-id RQ-064 \
+  --alignment 1 \
+  --alignment-value '<requirement or question>' --alignment-value '<source>' \
+  --alignment-value '<why it matters>' --alignment-value CONFIRMED \
+  --alignment-value '<user answer>' --alignment-value '<downstream effect>' \
+  --alignment-value '<document impact>' --alignment-value '<evidence needed>' \
+  --user-original '<confirmed original user text>' --coverage-scan PASS \
+  --scope-status PASS --scope-message '<scope judgment>' \
+  --task-status PASS --task-message '<task proof judgment>' \
+  --dimension 1 --dimension-status COVERED \
+  --dimension-message '<coverage judgment>' \
+  --dimension-ref 1 --dimension-ref-item 1 \
+  --covered-target openspec/changes/CHANGE/alignment.md \
+  --covered-target openspec/changes/CHANGE/tasks.md \
+  --output-dir restricted/requirements
+
+# Repeat one positioned value group per alignment. Dimension groups must cover
+# positions 1 through 13 and bind at least one alignment position each.
+
+# Generate changed-files content, hash, and proof; untracked paths must be explicit
+bin/formal-gates artifact compose-changed-files \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --base-ref BASE --head-ref HEAD --include-working-tree \
+  --include-untracked new-file.go \
+  --output restricted/changed-files.txt
+
+# tracked range/staged/unstaged changes are automatic; unlisted untracked files are excluded
+
+# Generate a context bundle from run-local source paths; do not author paths or hashes
+bin/formal-gates artifact compose-context-bundle \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --output restricted/complexity/context-bundle.json \
+  --input restricted/requirements/requirements.json \
+  --input restricted/changed-files.txt
+
+# QA Design registration generates fixed Case IDs and the field catalog
+bin/formal-gates artifact compose-context-bundle \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <design-snapshot> \
+  --output restricted/qa-design/context-bundle.json \
+  --input restricted/requirements/requirements.json
+bin/formal-gates receipt register --provider codex --worktree . \
+  --run-dir .claude/gates/runs/RUN_ID \
+  --context-bundle restricted/qa-design/context-bundle.json \
+  --qa-case-count 6 \
+  --artifact .claude/gates/runs/RUN_ID/restricted/qa-design/cases.md \
+  --gate qa-test-gate --stage Design \
+  --workflow-id <workflow-id> --change-snapshot <design-snapshot>
+
+# The designer submits semantics only; the CLI writes the title, Case IDs,
+# labels, separators, and final newlines. For each --design-case, pass exactly
+# seven --case-value flags in Claim/Source/Action/Oracle/Failure signal/
+# Evidence/Gap order.
+bin/formal-gates receipt submit --worktree . \
+  --artifact .claude/gates/runs/RUN_ID/restricted/qa-design/cases.md \
+  --design-case 1 \
+  --case-value '<claim>' --case-value '<source>' \
+  --case-value '<action>' --case-value '<oracle>' \
+  --case-value '<failure signal>' --case-value '<evidence>' \
+  --case-value '<gap>'
+
+# Generate the development handoff from the approved case set and Design Review closure
+bin/formal-gates handoff compose --root . \
+  --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --output restricted/development-handoff.md \
+  --requirement-target openspec/changes/CHANGE \
+  --verification-requirements 'go test ./... && go vet ./...' \
+  --budget-stop-triggers 'stop when any numeric limit is exceeded' \
+  --budget-expansion-approval-path agents/anti-complexity-review.md \
+  --forbidden-context 'QA drafts, review conclusions, and repair history' \
+  --formal-flow-mode four-gate --trigger-source 'explicit user request' \
+  --task-type small-feature \
+  --max-net 250 --max-new-prod-files 2 --max-prod-insertions 300 \
+  --qa-case-set restricted/qa-design/cases.md \
+  --design-review restricted/closures/design-review.json
+
+# Validate a run-local reviewer JSON artifact generated by CLI finalization
 bin/formal-gates artifact validate \
   --root . \
   --file .claude/gates/runs/RUN_ID/restricted/complexity-review.json \
@@ -239,27 +327,48 @@ bin/formal-gates artifact validate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
 
+# Generate the complete current-snapshot statistics JSON and composition proof;
+# formal output rejects budgets and --json.
+bin/formal-gates complexity check --task-type <type> --worktree . --vcs auto \
+  --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --output restricted/complexity/statistics.json
+
 # Generate and validate the exact reviewer message
 bin/formal-gates prompt prepare --root . \
-  --dispatch .claude/gates/runs/RUN_ID/restricted/complexity/dispatch.txt \
   --output .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt \
-  --binding contextBundle=.claude/gates/runs/RUN_ID/restricted/complexity/context-bundle.json
+  --gate complexity-gate --current-requirement openspec/changes/CHANGE \
+  --current-diff 'git diff BASE --' --worktree . --change-snapshot SNAPSHOT \
+  --review-artifact .claude/gates/runs/RUN_ID/restricted/complexity/review.json \
+  --policy-id complexity.post-development.v2 \
+  --context-bundle .claude/gates/runs/RUN_ID/restricted/complexity/context-bundle.json
 
 # Revalidate the exact-send file; send it verbatim after PASS
 bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt
 
-# Bind the exact-send prompt in the receipt before dispatch; reviewer JSON does not reference it
-bin/formal-gates receipt register --provider codex --worktree . --run-dir .claude/gates/runs/RUN_ID --context-bundle restricted/complexity/context-bundle.json --prompt restricted/complexity/prompt.txt --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+# Bind prompt and machine evidence before dispatch and generate the read-only reviewer catalog
+bin/formal-gates receipt register --provider codex --worktree . --run-dir .claude/gates/runs/RUN_ID --context-bundle restricted/complexity/context-bundle.json --prompt restricted/complexity/prompt.txt --changed-files restricted/changed-files.txt --verification restricted/verification.json --complexity-statistics restricted/complexity/statistics.json --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+
+# Submit semantic values only; the CLI generates nested JSON, PENDING verdict, and submission proof
+bin/formal-gates receipt submit --worktree . --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --check 1 --status PASS --message '<semantic judgment>' --check 2 --status REVIEW --message '<semantic judgment>' --finding-check 2 --finding-message '<finding>' --location-finding 1 --location-path internal/example.go --location-start 10 --location-end 12
+
+# Generate QA-owned results and case binding from the QA executor's semantic observations
+bin/formal-gates artifact compose-qa-owned-evidence --root . --run-dir .claude/gates/runs/RUN_ID --workflow-id <workflow-id> --change-snapshot <snapshot> --approved-case-set restricted/qa-design/cases.md --case 1 --outcome PASS --procedure '<procedure>' --observation '<observation>' --oracle-result '<oracle result>' --output-dir restricted/qa-execution
+
+# Generate mechanical QA_EXECUTION from six existing sources; the main agent does not author its envelope or bindings
+bin/formal-gates artifact compose-qa-execution --root . --run-dir .claude/gates/runs/RUN_ID --workflow-id <workflow-id> --change-snapshot <snapshot> --output restricted/qa-execution.json --approved-case-set restricted/qa-design/cases.md --design-review restricted/closures/design-review.json --qa-owned-results restricted/qa-execution/qa-results.json --case-result-binding restricted/qa-execution/case-result-binding.json --changed-files restricted/changed-files.txt --verification restricted/verification.json
+
+# Generate the Carry transition chain from script-generated hop evidence; repeat all five hop scalars as an ordered group
+bin/formal-gates artifact compose-transition-chain --root . --run-dir .claude/gates/runs/RUN_ID --workflow-id <workflow-id> --target-snapshot <snapshot-2> --output restricted/carry/transition-chain.json --hop-from <snapshot-1> --hop-to <snapshot-2> --hop-changed-files restricted/changed-files.txt --hop-verification restricted/verification.json --hop-repair restricted/repair-evidence.json
 
 # Workflow foundation: snapshot, run-local state, final-verification, FinalExecution
 bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
 bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow verify-admission --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate architecture-health-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/restricted/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempt-artifact .claude/gates/runs/RUN_ID/restricted/final-verification-go-test.txt --attempt-artifact .claude/gates/runs/RUN_ID/restricted/final-verification-go-vet.txt --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/restricted/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
 
-Every accepted PASS attempt in `final-verification-attempts.json` must include the lowercase SHA-256 `artifactHash` of its artifact's current bytes.
+Each `--attempt-artifact` must be a run-local PASS output generated by the verification runner; the flag is repeatable. The runner must pass the path only after the command exits successfully. The CLI rejects output with clear `FAIL`, `FAILED`, `FAILURE`, `ERROR`, `FATAL`, or `PANIC` lines, a `COMMAND FAILED`/non-zero exit-status marker, or a Go compiler/vet diagnostic; empty output remains valid for successful commands such as `go build` and `go vet`. Rejected attempts produce a `FAIL` aggregate. The CLI writes the aggregate and every accepted attempt's path, hash, status, and accepted value; AI must not fill them. `--output` and `--final-qa-artifact` are never overwritten, so a rerun must use new output paths.
 
 On Windows, use `bin/formal-gates.exe`. For development tests from a source checkout, `go run ./cmd/formal-gates` is acceptable. Installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
@@ -271,7 +380,7 @@ This native CLI now has package validation, artifact field checks, prompt pollut
 
 ```
 formal-gates/
-  SKILL.md                  # Entry point (for AI): routing, red lines, four-gate sequence
+  SKILL.md                  # Entry point (for AI): routing, red lines, fixed gate IDs, final aggregation
   references/               # Gate-specific rules (loaded on demand)
     requirements-clarification-gate.md
     qa-test-gate.md
@@ -284,7 +393,7 @@ formal-gates/
   internal/                 # Go core implementation
   hooks/                    # Dispatch prompt pollution rules
   agents/                   # Independent gate review agent prompts
-  examples/                 # GateWorkflow and behavior-check prompt samples
+  examples/                 # CLI demos and behavior-check cases
   formal-gates.manifest.json # Package index and install config
 ```
 

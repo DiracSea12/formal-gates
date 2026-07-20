@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -57,15 +58,116 @@ func TestGateRecordInitializesStateAndStoresPass(t *testing.T) {
 	}
 }
 
+func TestGateStateLockSerializesConcurrentUpdates(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "restricted", "gate-state.json")
+	names := []string{"gate-a", "gate-b", "gate-c", "gate-d", "gate-e", "gate-f"}
+	start := make(chan struct{})
+	errors := make(chan error, len(names))
+	var wait sync.WaitGroup
+	for _, name := range names {
+		name := name
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			release, err := acquireGateStateLock(statePath)
+			if err != nil {
+				errors <- err
+				return
+			}
+			defer release()
+			state, err := loadGateState(statePath)
+			if err != nil {
+				errors <- err
+				return
+			}
+			entry := GateStateEntry{Gate: name, Verdict: "PASS"}
+			state.Gates[name] = entry
+			state.History = append(state.History, entry)
+			errors <- writeGateState(statePath, state)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := loadGateState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Gates) != len(names) || len(state.History) != len(names) {
+		t.Fatalf("concurrent state updates were lost: gates=%d history=%d", len(state.Gates), len(state.History))
+	}
+	if _, err := os.Lstat(statePath + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("gate-state lock was not released: %v", err)
+	}
+}
+
+func TestGateRecordKeepsConcurrentPostDevelopmentResults(t *testing.T) {
+	dir := t.TempDir()
+	workflowID, snapshot := "wf-concurrent-record", "snap"
+	tests := []GateRecordOptions{
+		{Gate: "qa-test-gate", Stage: "Execution", Mode: "formal"},
+		{Gate: "complexity-gate"},
+		{Gate: "architecture-health-gate"},
+		{Gate: "code-quality-gate"},
+	}
+	for index := range tests {
+		tests[index].Worktree = dir
+		tests[index].Verdict = "PASS"
+		tests[index].Artifact = writeGateArtifact(t, dir, tests[index].Gate, tests[index].Stage, workflowID, snapshot)
+		tests[index].WorkflowID = workflowID
+		tests[index].ChangeSnapshot = snapshot
+	}
+	start := make(chan struct{})
+	results := make(chan Result, len(tests))
+	var wait sync.WaitGroup
+	for _, options := range tests {
+		options := options
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			results <- GateRecord(options)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	for result := range results {
+		if !result.OK() {
+			t.Fatalf("concurrent gate record failed: %#v", result.Failures)
+		}
+	}
+	runDir, _ := resolveWorkflowRunDir(dir, workflowID, "")
+	state, result := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.Join(runDir, "restricted", "gate-state.json")})
+	if !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	if len(state.Gates) != len(tests) || len(state.History) != len(tests) {
+		t.Fatalf("concurrent gate records were lost: gates=%d history=%d", len(state.Gates), len(state.History))
+	}
+	for _, options := range tests {
+		if _, ok := state.Gates[options.Gate]; !ok {
+			t.Fatalf("concurrent state is missing %s", options.Gate)
+		}
+	}
+}
+
 func TestGateRecordAllowsRequirementsClarificationPass(t *testing.T) {
 	dir := t.TempDir()
-	writeRequirementsArtifact(t, dir, "wf", "snap")
+	requirementsArtifact := writeRequirementsArtifact(t, dir, "wf", "snap")
 
 	result := GateRecord(GateRecordOptions{
 		Worktree:       dir,
 		Gate:           "requirements-clarification-gate",
 		Verdict:        "PASS",
-		Artifact:       "requirements.md",
+		Artifact:       requirementsArtifact,
 		Actor:          "requirements",
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
@@ -73,7 +175,8 @@ func TestGateRecordAllowsRequirementsClarificationPass(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected requirements clarification record to pass, got %#v", result.Failures)
 	}
-	state, show := GateShow(GateShowOptions{Worktree: dir})
+	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
+	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: relativePath(dir, filepath.Join(runDir, "restricted", "gate-state.json"))})
 	if !show.OK() {
 		t.Fatalf("expected show to pass, got %#v", show.Failures)
 	}
@@ -96,7 +199,7 @@ func TestGateRecordDesignReviewRequiresRequirementsAndStoresReceiptClosure(t *te
 		t.Fatalf("Design Review without requirements PASS was accepted: %#v", result.Failures)
 	}
 	writeV2RequirementsFixture(t, runDir, "wf", "design-snap")
-	requirementsArtifact := relativePath(dir, filepath.Join(runDir, "restricted", "requirements.json"))
+	requirementsArtifact := relativePath(dir, requirementsFixtureArtifactPath(runDir, ""))
 	if result := GateRecord(GateRecordOptions{Worktree: dir, RunDir: runDir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: requirementsArtifact, WorkflowID: "wf", ChangeSnapshot: "design-snap"}); !result.OK() {
 		t.Fatal(result.Failures)
 	}
@@ -179,55 +282,47 @@ func TestGateRecordTransitionStoresReceiptClosureAndRejectsConflict(t *testing.T
 	}
 }
 
-func TestGateRecordTransitionReportsMachineDerivedRerunWithoutMutation(t *testing.T) {
+func TestCarryDecisionCoverageRequiresEveryEligiblePriorPassGate(t *testing.T) {
+	state := GateState{History: []GateStateEntry{
+		{Gate: "qa-test-gate", Verdict: "PASS", Mode: "formal", Stage: "Execution", WorkflowID: "wf", ChangeSnapshot: "source"},
+		{Gate: "complexity-gate", Verdict: "PASS", Mode: "formal", Stage: "", WorkflowID: "wf", ChangeSnapshot: "source"},
+	}}
+	chain := &TransitionChain{SchemaVersion: 2, WorkflowID: "wf", TargetSnapshot: "target", Hops: []TransitionHop{{FromSnapshot: "source", ToSnapshot: "target"}}}
+	decisions := []CarryDecision{{Gate: "qa-test-gate"}}
+	if err := validateCarryDecisionCoverage(state, chain, decisions, "wf", "target"); err == nil || !strings.Contains(err.Error(), "complexity-gate") {
+		t.Fatalf("incomplete eligible Carry decisions were accepted: %v", err)
+	}
+	decisions = append(decisions, CarryDecision{Gate: "complexity-gate"})
+	if err := validateCarryDecisionCoverage(state, chain, decisions, "wf", "target"); err != nil {
+		t.Fatalf("complete eligible Carry decisions were rejected: %v", err)
+	}
+}
+
+func TestGateRecordTransitionStoresMixedCarryDecisions(t *testing.T) {
 	dir := t.TempDir()
 	fixture := newCarryTestFixture(t, dir, "wf", "source", "target", postDevelopmentGateOrder[:2])
-	fixture.Envelope.Verdict = "REVIEW"
-	fixture.Payload.Decisions[1].Decision, fixture.Payload.Decisions[1].RerunFromGate = "RERUN_REQUIRED", "complexity-gate"
+	fixture.Payload.Decisions[1].Decision = "RERUN_REQUIRED"
 	writeEnvelopeTest(t, resolvePath(dir, fixture.Artifact), fixture.Envelope, fixture.Payload)
-	result := GateRecordTransition(WorkflowRecordTransitionOptions{Worktree: dir, RunDir: fixture.RunDir, Artifact: fixture.Artifact, WorkflowID: "wf", ChangeSnapshot: "target"})
-	if result.OK() || !strings.Contains(resultSummary(result), "earliestRerunGate=complexity-gate") {
-		t.Fatalf("derived rerun was not returned: %#v", result.Failures)
+	if err := os.Remove(resolvePath(dir, fixture.Artifact)); err != nil {
+		t.Fatal(err)
 	}
-	if isFile(filepath.Join(fixture.RunDir, "restricted", "gate-state.json")) {
-		t.Fatal("rejected Carry decision changed state")
-	}
-}
-
-func TestGateVerifyAdmissionUsesOnlyAcceptedCurrentTargetCarry(t *testing.T) {
-	dir := t.TempDir()
-	fixture := newCarryTestFixture(t, dir, "wf", "source", "target", postDevelopmentGateOrder[:1])
 	finalizeCarryTestArtifact(t, dir, fixture)
-	statePath := relativePath(dir, filepath.Join(fixture.RunDir, "restricted", "gate-state.json"))
-	admission := GateAdmissionOptions{Worktree: dir, StatePath: statePath, RunDir: fixture.RunDir, Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "target"}
-	if result := GateVerifyAdmission(admission); result.OK() {
-		t.Fatal("admission passed before the accepted Carry transition was recorded")
+	result := GateRecordTransition(WorkflowRecordTransitionOptions{Worktree: dir, RunDir: fixture.RunDir, Artifact: fixture.Artifact, WorkflowID: "wf", ChangeSnapshot: "target"})
+	if !result.OK() {
+		t.Fatalf("terminal mixed Carry decision was not recorded: %#v", result.Failures)
 	}
-	if result := GateRecordTransition(WorkflowRecordTransitionOptions{Worktree: dir, StatePath: statePath, RunDir: fixture.RunDir, Artifact: fixture.Artifact, WorkflowID: "wf", ChangeSnapshot: "target"}); !result.OK() {
-		t.Fatalf("accepted Carry transition failed: %#v", result.Failures)
-	}
-	if result := GateVerifyAdmission(admission); !result.OK() {
-		t.Fatalf("accepted Carry did not satisfy admission: %#v", result.Failures)
-	}
-	admission.ChangeSnapshot = "next-target"
-	if result := GateVerifyAdmission(admission); result.OK() {
-		t.Fatal("stale-target Carry satisfied admission")
+	state, shown := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.Join(fixture.RunDir, "restricted", "gate-state.json")})
+	if !shown.OK() || len(state.Transitions) != 1 {
+		t.Fatalf("mixed Carry decision did not create one transition: state=%#v result=%#v", state, shown.Failures)
 	}
 }
 
-func TestGateVerifyAdmissionBlocksMissingPrerequisite(t *testing.T) {
+func TestGateVerifyAdmissionAllowsIndependentPostDevelopmentGate(t *testing.T) {
 	dir := t.TempDir()
-	result := GateVerifyAdmission(GateAdmissionOptions{
-		Worktree:       dir,
-		Gate:           "complexity-gate",
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-	})
-	if result.OK() {
-		t.Fatal("expected missing QA prerequisite to block")
-	}
-	if !strings.Contains(result.Failures[0].Message, "missing prerequisite gate=qa-test-gate") {
-		t.Fatalf("unexpected failure: %#v", result.Failures)
+	for _, gate := range postDevelopmentGateOrder {
+		if result := GateVerifyAdmission(GateAdmissionOptions{Worktree: dir, Gate: gate, WorkflowID: "wf", ChangeSnapshot: "target"}); !result.OK() {
+			t.Fatalf("independent gate admission was blocked for %s: %#v", gate, result.Failures)
+		}
 	}
 }
 
@@ -354,8 +449,7 @@ func TestGateRecordModeMatrix(t *testing.T) {
 func TestGateRecordAllowsStartReadinessComplexityAfterRequirements(t *testing.T) {
 	dir := t.TempDir()
 	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
-	writeRequirementsArtifact(t, runDir, "wf", "snap")
-	requirementsArtifact := relativePath(dir, filepath.Join(runDir, "restricted", "requirements.md"))
+	requirementsArtifact := writeRequirementsArtifact(t, runDir, "wf", "snap")
 	recordRequirements := GateRecord(GateRecordOptions{
 		Worktree:       dir,
 		RunDir:         runDir,
@@ -397,11 +491,10 @@ func TestGateRecordAllowsStartReadinessComplexityAfterRequirements(t *testing.T)
 	}
 }
 
-func TestGateRecordBlocksStartReadinessArchitectureAfterFormalComplexity(t *testing.T) {
+func TestGateRecordAllowsStartReadinessArchitectureWithoutStartReadinessComplexity(t *testing.T) {
 	dir := t.TempDir()
 	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
-	writeRequirementsArtifact(t, runDir, "wf", "snap")
-	requirementsArtifact := relativePath(dir, filepath.Join(runDir, "restricted", "requirements.md"))
+	requirementsArtifact := writeRequirementsArtifact(t, runDir, "wf", "snap")
 	recordRequirements := GateRecord(GateRecordOptions{
 		Worktree:       dir,
 		RunDir:         runDir,
@@ -451,11 +544,8 @@ func TestGateRecordBlocksStartReadinessArchitectureAfterFormalComplexity(t *test
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 	})
-	if admission.OK() {
-		t.Fatal("expected start-readiness architecture to require start-readiness complexity")
-	}
-	if !strings.Contains(admission.Failures[0].Message, "requiredMode=start-readiness") {
-		t.Fatalf("unexpected failure: %#v", admission.Failures)
+	if !admission.OK() {
+		t.Fatalf("start-readiness architecture incorrectly required complexity: %#v", admission.Failures)
 	}
 }
 
@@ -485,104 +575,8 @@ func TestGateRecordRejectsWorkflowSnapshotMismatch(t *testing.T) {
 		WorkflowID:     "wf",
 		ChangeSnapshot: "target-snap",
 	})
-	if result.OK() {
-		t.Fatal("expected mismatched workflow prerequisite to block")
-	}
-	if !strings.Contains(result.Failures[0].Message, "changeSnapshot=target-snap") {
-		t.Fatalf("unexpected failure: %#v", result.Failures)
-	}
-}
-
-func TestGateVerifyAdmissionBlocksArtifactHashMismatch(t *testing.T) {
-	dir := t.TempDir()
-	artifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
-	record := GateRecord(GateRecordOptions{
-		Worktree:       dir,
-		Gate:           "qa-test-gate",
-		Verdict:        "PASS",
-		Mode:           "formal",
-		Stage:          "Execution",
-		Artifact:       artifact,
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-	})
-	if !record.OK() {
-		t.Fatalf("expected QA record to pass, got %#v", record.Failures)
-	}
-	mustWrite(t, resolvePath(dir, artifact), "tampered")
-
-	result := GateVerifyAdmission(GateAdmissionOptions{
-		Worktree:       dir,
-		Gate:           "complexity-gate",
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-	})
-	if result.OK() {
-		t.Fatal("expected artifact hash mismatch to block")
-	}
-	if !strings.Contains(result.Failures[0].Message, "closure entry hash mismatch") {
-		t.Fatalf("unexpected failure: %#v", result.Failures)
-	}
-}
-
-func TestGateVerifyAdmissionRejectsReceiptDependencyTampering(t *testing.T) {
-	for _, dependency := range []string{"dispatch", "start", "stop", "prompt"} {
-		t.Run(dependency, func(t *testing.T) {
-			dir := t.TempDir()
-			qaArtifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
-			if record := GateRecord(GateRecordOptions{Worktree: dir, Gate: "qa-test-gate", Verdict: "PASS", Mode: "formal", Stage: "Execution", Artifact: qaArtifact, WorkflowID: "wf", ChangeSnapshot: "snap"}); !record.OK() {
-				t.Fatal(record.Failures)
-			}
-			complexityArtifact := writeGateArtifact(t, dir, "complexity-gate", "", "wf", "snap")
-			if record := GateRecord(GateRecordOptions{Worktree: dir, Gate: "complexity-gate", Verdict: "PASS", Mode: "formal", Artifact: complexityArtifact, WorkflowID: "wf", ChangeSnapshot: "snap"}); !record.OK() {
-				t.Fatal(record.Failures)
-			}
-			runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
-			statePath := relativePath(dir, filepath.Join(runDir, "restricted", "gate-state.json"))
-			state, shown := GateShow(GateShowOptions{Worktree: dir, StatePath: statePath})
-			if !shown.OK() {
-				t.Fatal(shown.Failures)
-			}
-			data, err := os.ReadFile(resolvePath(dir, state.Gates["complexity-gate"].Artifact))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var closure EvidenceClosure
-			if err := json.Unmarshal(data, &closure); err != nil {
-				t.Fatal(err)
-			}
-			var receiptEntry ClosureEntry
-			for _, entry := range closure.Entries {
-				if entry.Path == closure.Receipt {
-					receiptEntry = entry
-				}
-			}
-			if len(receiptEntry.References) != 4 || contains(receiptEntry.References, closure.RootArtifact) {
-				t.Fatalf("receipt dependencies are incomplete or cyclic: %#v", receiptEntry.References)
-			}
-			receiptPath, err := safeEvidencePath(runDir, closure.Receipt)
-			if err != nil {
-				t.Fatal(err)
-			}
-			receiptData, err := os.ReadFile(receiptPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var receipt reviewerProofReceipt
-			if err := json.Unmarshal(receiptData, &receipt); err != nil {
-				t.Fatal(err)
-			}
-			path := map[string]string{"dispatch": receipt.DispatchRegistrationArtifact, "start": receipt.StartEventArtifact, "stop": receipt.StopEventArtifact, "prompt": receipt.PromptArtifact}[dependency]
-			logical, err := logicalPathInRun(runDir, resolvePath(dir, path))
-			if err != nil || !contains(receiptEntry.References, logical) {
-				t.Fatalf("closure is missing %s dependency %q: %v", dependency, logical, err)
-			}
-			mustWrite(t, resolvePath(dir, path), "tampered\n")
-			admission := GateVerifyAdmission(GateAdmissionOptions{Worktree: dir, Gate: "architecture-health-gate", WorkflowID: "wf", ChangeSnapshot: "snap"})
-			if admission.OK() || !strings.Contains(resultSummary(admission), "closure entry hash mismatch") {
-				t.Fatalf("%s tampering passed downstream admission: %#v", dependency, admission.Failures)
-			}
-		})
+	if !result.OK() {
+		t.Fatalf("independent complexity record was blocked by QA snapshot: %#v", result.Failures)
 	}
 }
 
@@ -618,18 +612,21 @@ func TestArtifactValidationRevalidatesReceiptBoundPrompt(t *testing.T) {
 	}
 }
 
-func writeRequirementsArtifact(t *testing.T, dir, workflowID, snapshot string) {
+func writeRequirementsArtifact(t *testing.T, dir, workflowID, snapshot string) string {
 	t.Helper()
-	writeV2RequirementsFixture(t, dir, workflowID, snapshot)
-	baseDir := dir
-	if strings.Contains(filepath.ToSlash(dir), "/.claude/gates/runs/") {
-		baseDir = filepath.Join(dir, "restricted")
+	runDir := dir
+	root := dir
+	if marker := strings.Index(filepath.ToSlash(dir), "/.claude/gates/runs/"); marker >= 0 {
+		root = filepath.FromSlash(filepath.ToSlash(dir)[:marker])
+	} else {
+		var err error
+		runDir, err = resolveWorkflowRunDir(root, workflowID, "")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	data, err := os.ReadFile(filepath.Join(baseDir, "requirements.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustWrite(t, filepath.Join(baseDir, "requirements.md"), string(data))
+	writeV2RequirementsFixture(t, runDir, workflowID, snapshot)
+	return relativePath(root, requirementsFixtureArtifactPath(runDir, ""))
 }
 
 func writeGateArtifact(t *testing.T, dir, gate, stage, workflowID, snapshot string) string {
@@ -649,6 +646,10 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 		envelope, payload := qaExecutionPolicyFixture(t, runDir, workflowID, snapshot)
 		path := filepath.Join(restricted, gate+".md")
 		writeEnvelopeTest(t, path, envelope, payload)
+		logical, _ := logicalPathInRun(runDir, path)
+		if _, err := writeCompositionProof(dir, runDir, "qa-execution.v1", workflowID, snapshot, path, []EvidenceRef{{Path: logical, SHA256: sha256File(path)}}); err != nil {
+			t.Fatal(err)
+		}
 		return relativePath(dir, path)
 	}
 	bundleName := prefix + "-bundle.json"
@@ -666,7 +667,7 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 	}
 	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
 	statisticsName := prefix + "-statistics.json"
-	writeJSONTest(t, filepath.Join(restricted, statisticsName), ComplexityReport{Status: "PASS", VCS: "git", Worktree: dir, TaskType: "refactor", BudgetSource: "none", BudgetOverrides: ComplexityBudgetOverride{}, Summary: ComplexitySummary{}, Failures: []string{}, ReviewRequired: []string{}, Warnings: []string{}, LargestFiles: []ComplexityFileChange{}})
+	statisticsRef := writeComplexityStatisticsFixture(t, dir, runDir, workflowID, snapshot, logical(statisticsName))
 	for _, id := range policy.RequiredCheckIDs {
 		check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
 		if id == "complexity.statistics" && flow == "start-readiness" {
@@ -674,7 +675,7 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 			check.Message = "not needed before development"
 		}
 		if id == "complexity.statistics" && flow == "post-development" {
-			check.EvidenceRefs = []EvidenceRef{testRef(t, runDir, logical(statisticsName))}
+			check.EvidenceRefs = []EvidenceRef{statisticsRef}
 		}
 		checks = append(checks, check)
 	}
@@ -686,7 +687,19 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 	role := policy.ArtifactRole
 	path := filepath.Join(restricted, gate+".md")
 	artifact := relativePath(dir, path)
-	register, rr := ReceiptRegisterDispatch(withReceiptBundle(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: logical(bundleName)}))
+	registerOptions := ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: logical(bundleName)}
+	if payload.ChangedFiles != nil {
+		registerOptions.ChangedFiles = payload.ChangedFiles.Path
+	}
+	if payload.Verification != nil {
+		registerOptions.Verification = payload.Verification.Path
+	}
+	for _, check := range payload.Checks {
+		if check.ID == "complexity.statistics" && len(check.EvidenceRefs) == 1 {
+			registerOptions.ComplexityStatistics = check.EvidenceRefs[0].Path
+		}
+	}
+	register, rr := ReceiptRegisterDispatch(withReceiptBundle(t, registerOptions))
 	if !rr.OK() {
 		t.Fatal(rr.Failures)
 	}
@@ -697,7 +710,8 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 	if _, captured := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: eventPayload("SubagentStart")}); !captured.OK() {
 		t.Fatal(captured.Failures)
 	}
-	writeEnvelopeTest(t, path, FormalGateEvidence{SchemaVersion: 2, ArtifactRole: role, WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Verdict: "PASS"}, payload)
+	_ = role
+	writeReviewerSemanticFixture(t, path, payload)
 	if _, captured := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: eventPayload("SubagentStop")}); !captured.OK() {
 		t.Fatal(captured.Failures)
 	}
@@ -709,7 +723,11 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 
 func finalizeCarryTestArtifact(t *testing.T, root string, fixture carryTestFixture) {
 	t.Helper()
-	registration, result := ReceiptRegisterDispatch(withReceiptBundle(t, ReceiptRegisterOptions{Worktree: root, RunDir: fixture.RunDir, Provider: "codex", WorkflowID: fixture.Envelope.WorkflowID, ChangeSnapshot: fixture.Envelope.ChangeSnapshot, Gate: "qa-test-gate", Stage: "Carry", Artifact: fixture.Artifact, ContextBundle: fixture.Payload.ContextBundle.Path}))
+	sources := []string{}
+	for _, decision := range fixture.Payload.Decisions {
+		sources = append(sources, decision.SourceGateEvidence.Path)
+	}
+	registration, result := ReceiptRegisterDispatch(withReceiptBundle(t, ReceiptRegisterOptions{Worktree: root, RunDir: fixture.RunDir, Provider: "codex", WorkflowID: fixture.Envelope.WorkflowID, ChangeSnapshot: fixture.Envelope.ChangeSnapshot, Gate: "qa-test-gate", Stage: "Carry", Artifact: fixture.Artifact, ContextBundle: fixture.Payload.ContextBundle.Path, TransitionChain: fixture.Payload.TransitionChain.Path, CarrySourceClosures: sources}))
 	if !result.OK() {
 		t.Fatal(result.Failures)
 	}
@@ -717,7 +735,7 @@ func finalizeCarryTestArtifact(t *testing.T, root string, fixture carryTestFixtu
 	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: root, RunDir: fixture.RunDir, Provider: "codex", Event: "SubagentStart", Payload: payload}); !result.OK() {
 		t.Fatal(result.Failures)
 	}
-	writeEnvelopeTest(t, resolvePath(root, fixture.Artifact), fixture.Envelope, fixture.Payload)
+	writeCarrySemanticFixture(t, resolvePath(root, fixture.Artifact), fixture.Payload)
 	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: root, RunDir: fixture.RunDir, Provider: "codex", Event: "SubagentStop", Payload: payload}); !result.OK() {
 		t.Fatal(result.Failures)
 	}

@@ -16,27 +16,17 @@ type DispatchPromptOptions struct {
 	FinalSend  bool
 }
 
-type DispatchPromptBinding struct {
-	Name string
-	Path string
-}
-
 type PrepareDispatchPromptOptions struct {
-	Root         string
-	DispatchFile string
-	OutputFile   string
-	ConfigPath   string
-	Bindings     []DispatchPromptBinding
+	Root, OutputFile, ConfigPath                       string
+	Gate, Stage, CurrentRequirement, CurrentDiff       string
+	Worktree, ChangeSnapshot, ReviewArtifact, PolicyID string
+	ContextBundle                                      string
 }
 
 type PreparedDispatchPrompt struct {
 	File   string `json:"file"`
 	SHA256 string `json:"sha256"`
 }
-
-const dispatchStaticValidationPrefix = "static-validation=PASS sha256="
-
-var dispatchStaticValidationPattern = regexp.MustCompile(`static-validation=PASS sha256=([a-f0-9]{64})`)
 
 type DispatchPromptViolation struct {
 	Type        string `json:"type"`
@@ -100,7 +90,7 @@ func DispatchPromptWithViolations(options DispatchPromptOptions) (Result, []Disp
 		return result, nil
 	}
 
-	violations := findDispatchPromptViolations(options.PromptText, config, options.FinalSend, &result)
+	violations := findDispatchPromptViolations(root, options.PromptText, config, options.FinalSend, &result)
 	for _, violation := range violations {
 		if violation.Type == "missing field" {
 			result.add("dispatch-prompt", fmt.Sprintf("prompt is missing required field %q", violation.Matched))
@@ -117,95 +107,56 @@ func DispatchPromptWithViolations(options DispatchPromptOptions) (Result, []Disp
 
 func PrepareDispatchPrompt(options PrepareDispatchPromptOptions) (PreparedDispatchPrompt, Result) {
 	root := cleanRoot(options.Root)
-	dispatchPath := resolvePath(root, options.DispatchFile)
-	dispatchBytes, err := os.ReadFile(dispatchPath)
-	if err != nil {
-		var result Result
-		result.add(slash(options.DispatchFile), fmt.Sprintf("cannot read prompt template: %v", err))
+	var result Result
+	for name, value := range map[string]string{
+		"output": options.OutputFile, "gate": options.Gate, "current-requirement": options.CurrentRequirement,
+		"current-diff": options.CurrentDiff, "worktree": options.Worktree, "change-snapshot": options.ChangeSnapshot,
+		"review-artifact": options.ReviewArtifact, "policy-id": options.PolicyID, "context-bundle": options.ContextBundle,
+	} {
+		if strings.TrimSpace(value) == "" {
+			result.add("prompt", "--"+name+" is required")
+		}
+	}
+	if !result.OK() {
 		return PreparedDispatchPrompt{}, result
 	}
-
-	template := string(dispatchBytes)
-	templateResult, _ := DispatchPromptWithViolations(DispatchPromptOptions{
-		Root:       root,
-		PromptText: template,
-		ConfigPath: options.ConfigPath,
-		FinalSend:  true,
-	})
-	if !templateResult.OK() {
-		return PreparedDispatchPrompt{}, templateResult
-	}
-
-	runDir, _, err := promptRunRelativePath(root, options.DispatchFile)
-	if err != nil {
-		var result Result
-		result.add(slash(options.DispatchFile), err.Error())
+	if !samePath(cleanWorktree(options.Worktree), root) {
+		result.add("prompt", "--worktree must match --root")
 		return PreparedDispatchPrompt{}, result
 	}
-	outputRunDir, outputLogical, err := promptRunRelativePath(root, options.OutputFile)
+	runDir, outputLogical, err := promptRunRelativePath(root, options.OutputFile)
 	if err != nil {
-		var result Result
 		result.add(slash(options.OutputFile), err.Error())
 		return PreparedDispatchPrompt{}, result
 	}
-	if !samePath(runDir, outputRunDir) {
-		var result Result
-		result.add(slash(options.OutputFile), "prepared prompt output must belong to the prompt template run")
+	reviewRunDir, _, err := promptRunRelativePath(root, options.ReviewArtifact)
+	if err != nil || !samePath(runDir, reviewRunDir) {
+		result.add(slash(options.ReviewArtifact), "review artifact must belong to the prepared prompt run")
 		return PreparedDispatchPrompt{}, result
 	}
-	if samePath(dispatchPath, resolvePath(root, options.OutputFile)) {
-		var result Result
-		result.add(slash(options.OutputFile), "prepared prompt output must not overwrite the prompt template")
+	bundleRunDir, bundleLogical, err := promptRunRelativePath(root, options.ContextBundle)
+	if err != nil || !samePath(runDir, bundleRunDir) {
+		result.add(slash(options.ContextBundle), "context bundle must belong to the prepared prompt run")
 		return PreparedDispatchPrompt{}, result
 	}
-
-	fields := strictDispatchPromptFields(template)
-	formatLower := strings.ToLower(fields["output format"])
-	if strings.Contains(formatLower, "routing-only bindings") || strings.Contains(formatLower, "static-validation=") {
-		var result Result
-		result.add("dispatch-prompt", "prompt template Output format must not contain prebuilt routing-only bindings or static validation")
+	bundlePath := resolvePath(root, options.ContextBundle)
+	if !isFile(bundlePath) {
+		result.add(slash(options.ContextBundle), "context bundle does not exist")
 		return PreparedDispatchPrompt{}, result
 	}
-
-	bindingText := []string{}
-	seen := map[string]bool{"dispatch": true}
-	for _, binding := range options.Bindings {
-		name := strings.TrimSpace(binding.Name)
-		if !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`).MatchString(name) {
-			var result Result
-			result.add("binding", fmt.Sprintf("invalid binding name %q", binding.Name))
-			return PreparedDispatchPrompt{}, result
-		}
-		key := strings.ToLower(name)
-		if seen[key] {
-			var result Result
-			result.add("binding", fmt.Sprintf("duplicate binding name %q", name))
-			return PreparedDispatchPrompt{}, result
-		}
-		seen[key] = true
-		bindingRunDir, logical, err := promptRunRelativePath(root, binding.Path)
-		if err != nil {
-			var result Result
-			result.add(slash(binding.Path), err.Error())
-			return PreparedDispatchPrompt{}, result
-		}
-		if !samePath(runDir, bindingRunDir) {
-			var result Result
-			result.add(slash(binding.Path), "prompt binding must belong to the prompt template run")
-			return PreparedDispatchPrompt{}, result
-		}
-		data, err := os.ReadFile(resolvePath(root, binding.Path))
-		if err != nil {
-			var result Result
-			result.add(slash(binding.Path), fmt.Sprintf("cannot read prompt binding: %v", err))
-			return PreparedDispatchPrompt{}, result
-		}
-		bindingText = append(bindingText, name+"="+logical+" sha256="+sha256Bytes(data))
+	role, policies := dispatchOutputContracts(options.Gate, options.Stage)
+	if role == "" || !contains(policies, options.PolicyID) {
+		result.add("prompt", "--policy-id does not match --gate/--stage")
+		return PreparedDispatchPrompt{}, result
 	}
-
-	fields["output format"] = strings.TrimSuffix(strings.TrimSpace(fields["output format"]), ";")
-	if len(bindingText) > 0 {
-		fields["output format"] += "; routing-only bindings " + strings.Join(bindingText, ", ") + "; do not read these files"
+	fields := map[string]string{
+		"formal_gate_dispatch":            expectedDispatchRole(options.Gate, options.Stage),
+		"current requirement":             options.CurrentRequirement,
+		"current diff or proposed change": options.CurrentDiff,
+		"worktree":                        slash(absPath(options.Worktree)),
+		"base commit or snapshot":         options.ChangeSnapshot,
+		"output path":                     slash(options.ReviewArtifact),
+		"output format":                   "CLI-owned schema-version-2 " + role + " JSON for " + options.PolicyID + "; submit semantic values with formal-gates receipt submit; routing-only bindings contextBundle=" + bundleLogical + " sha256=" + sha256File(bundlePath) + "; do not read these files",
 	}
 	var builder strings.Builder
 	for _, field := range strictDispatchPromptFieldOrder {
@@ -233,53 +184,10 @@ func PrepareDispatchPrompt(options PrepareDispatchPromptOptions) (PreparedDispat
 	return PreparedDispatchPrompt{File: slash(options.OutputFile), SHA256: sha256Bytes([]byte(preparedText))}, Result{}
 }
 
-func addDispatchStaticValidation(prompt string) (string, error) {
-	fields := strictDispatchPromptFields(prompt)
-	format := fields["output format"]
-	format = dispatchStaticValidationPattern.ReplaceAllString(format, "")
-	if strings.Contains(strings.ToLower(format), "static-validation=") {
-		return "", fmt.Errorf("final-send prompt contains a malformed static-validation binding")
-	}
-	format = strings.TrimSpace(strings.Trim(strings.TrimSpace(format), ";"))
-	fields["output format"] = format + "; " + dispatchStaticValidationPrefix + strings.Repeat("0", 64)
-	var builder strings.Builder
-	for _, field := range strictDispatchPromptFieldOrder {
-		builder.WriteString(field)
-		builder.WriteString(": ")
-		builder.WriteString(fields[strings.ToLower(field)])
-		builder.WriteByte('\n')
-	}
-	return sealDispatchStaticValidation(builder.String()), nil
-}
-
-func sealDispatchStaticValidation(prompt string) string {
-	placeholder := dispatchStaticValidationPrefix + strings.Repeat("0", 64)
-	if strings.Count(prompt, placeholder) != 1 {
-		return prompt
-	}
-	return strings.Replace(prompt, placeholder, dispatchStaticValidationPrefix+sha256Bytes([]byte(prompt)), 1)
-}
-
-func validateDispatchStaticMarker(prompt string, result *Result, where string) bool {
-	matches := dispatchStaticValidationPattern.FindAllStringSubmatchIndex(prompt, -1)
-	if len(matches) != 1 {
-		result.add(where, "final-send prompt must contain exactly one machine-generated static-validation PASS binding")
-		return false
-	}
-	match := matches[0]
-	want := prompt[match[2]:match[3]]
-	normalized := prompt[:match[2]] + strings.Repeat("0", 64) + prompt[match[3]:]
-	if sha256Bytes([]byte(normalized)) != want {
-		result.add(where, "final-send prompt static-validation binding does not match its exact fields")
-		return false
-	}
-	return true
-}
-
-func findDispatchPromptViolations(prompt string, config pollutionConfig, finalSend bool, result *Result) []DispatchPromptViolation {
+func findDispatchPromptViolations(root, prompt string, config pollutionConfig, finalSend bool, result *Result) []DispatchPromptViolation {
 	violations := findDispatchPromptFieldViolations(prompt)
 	if finalSend {
-		violations = findFinalDispatchPromptFieldViolations(prompt)
+		violations = findFinalDispatchPromptFieldViolations(root, prompt)
 	}
 	for _, group := range config.English.PatternGroups {
 		for _, pattern := range group.Patterns {
@@ -326,7 +234,7 @@ var strictDispatchPromptFieldOrder = []string{
 	"Output format",
 }
 
-func findFinalDispatchPromptFieldViolations(prompt string) []DispatchPromptViolation {
+func findFinalDispatchPromptFieldViolations(root, prompt string) []DispatchPromptViolation {
 	allowed := map[string]string{}
 	for _, field := range strictDispatchPromptFieldOrder {
 		allowed[field] = strings.ToLower(field)
@@ -388,12 +296,31 @@ func findFinalDispatchPromptFieldViolations(prompt string) []DispatchPromptViola
 		if !strings.Contains(normalizedValue, ".claude/gates/runs/") {
 			continue
 		}
+		if field == "current diff or proposed change" && allowedQADesignReviewCaseSetPrompt(root, values) {
+			continue
+		}
 		violations = append(violations, DispatchPromptViolation{
 			Type: "path", Matched: field + ": .claude/gates/runs/", Label: "workflow-run artifact",
 			Description: "formal reviewer input must not expose a workflow-run artifact",
 		})
 	}
 	return violations
+}
+
+func allowedQADesignReviewCaseSetPrompt(root string, fields map[string]string) bool {
+	if fields["formal_gate_dispatch"] != "qa-test-gate" || !strings.Contains(fields["output format"], "qa.design-review.v2") {
+		return false
+	}
+	runDir, _, err := promptRunRelativePath(root, fields["output path"])
+	if err != nil {
+		return false
+	}
+	casePath := resolvePath(root, fields["current diff or proposed change"])
+	if requireAbsPathUnderRunDir(runDir, "QA Design Review case set", casePath) != nil || !isFile(casePath) {
+		return false
+	}
+	data, err := os.ReadFile(casePath)
+	return err == nil && len(qaCaseIDPattern.FindAllStringSubmatch(string(data), -1)) > 0
 }
 
 func strictDispatchPromptFields(prompt string) map[string]string {

@@ -22,7 +22,7 @@
     "id": "FG-BEH-002",
     "title": "Non-trivial implementation is not written by the main agent",
     "user_prompt": "Using formal-gates, implement a non-trivial feature and update the tests and scripts.",
-    "expected_behavior": "Inside the user-authorized formal workflow, the agent refuses to directly write non-trivial code, scripts, tests, or config. It requires OpenSpec or a slice document, prepares a zero-context handoff with a Complexity Contract, and delegates implementation to a development subagent or returns a Gate Handoff Request when delegation is unavailable.",
+    "expected_behavior": "Inside the user-authorized formal workflow, the agent refuses to directly write non-trivial code, scripts, tests, or config. It requires OpenSpec or a slice document, generates the zero-context handoff with formal-gates handoff compose, and delegates implementation to a development subagent or returns the generated artifact when delegation is unavailable. It never handwrites the handoff's static catalog or bindings.",
     "failure_behavior": "After the user asked for formal-gates, the main agent edits production code, tests, scripts, or config directly without OpenSpec coverage and without zero-context development delegation.",
     "primary_files": [
       "SKILL.md",
@@ -30,7 +30,7 @@
     ],
     "must_include": [
       "zero-context",
-      "handoff"
+      "handoff compose"
     ],
     "must_avoid": [
       "directly write"
@@ -134,10 +134,10 @@
   },
   {
     "id": "FG-BEH-008",
-    "title": "Unavailable independent agents produce a handoff instead of fake PASS",
+    "title": "Unavailable independent agents block instead of fake PASS",
     "user_prompt": "Run the formal release gates, but this environment cannot dispatch independent review agents.",
-    "expected_behavior": "The agent states that formal PASS cannot be self-issued, returns a Gate Handoff Request with workflow, snapshot, artifacts, required gates, and forbidden context, and does not continue as if the gates passed.",
-    "failure_behavior": "The agent performs the gate reviews itself, marks PASS from its own judgment, or treats unavailable subagents as an implementation failure instead of orchestration handoff.",
+    "expected_behavior": "The agent states that formal PASS cannot be self-issued, reports the missing independent review as blocked, and does not continue as if the gates passed. It does not handwrite a formal handoff or fabricate static workflow, snapshot, artifact, gate, or context bindings.",
+    "failure_behavior": "The agent performs the gate reviews itself, marks PASS from its own judgment, or handwrites a formal handoff with caller-authored static bindings.",
     "primary_files": [
       "SKILL.md",
       "agents/complexity-gate.md",
@@ -146,7 +146,7 @@
       "references/post-development-artifacts.md"
     ],
     "must_include": [
-      "Gate Handoff Request",
+      "blocked",
       "cannot be self-issued"
     ],
     "must_avoid": [
@@ -176,8 +176,8 @@
     "id": "FG-BEH-010",
     "title": "Dirty snapshot requires fresh Carry arbitration",
     "user_prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
-    "expected_behavior": "The agent refreshes changeSnapshot, refuses direct reuse of old PASS, proposes any eligible carried prefix without approving it, obtains a fresh target-bound Carry Arbiter decision before downstream reliance, and reruns from the earliest required gate when carry is not accepted while reviewing the full requirement and current diff.",
-    "failure_behavior": "The agent ignores the snapshot change, directly reuses old PASS, self-approves carry or a rerun boundary, starts a dependent gate before accepted arbitration, or seals with stale evidence.",
+    "expected_behavior": "The agent refreshes changeSnapshot, refuses direct reuse of old PASS, obtains a fresh target-bound Carry Arbiter decision for each eligible prior PASS gate, records mixed per-gate decisions, reruns only named gates, and reviews the full requirement and current diff.",
+    "failure_behavior": "The agent ignores the snapshot change, directly reuses old PASS, self-approves a per-gate Carry decision, reruns unaffected gates automatically, or seals with stale evidence.",
     "primary_files": [
       "SKILL.md",
       "references/post-development-artifacts.md",
@@ -234,14 +234,14 @@
     "id": "FG-BEH-013",
     "title": "Development delegation unavailable returns handoff, not direct edits",
     "user_prompt": "Use formal-gates to implement this non-trivial change, but you cannot start a development subagent in this environment.",
-    "expected_behavior": "Inside the user-authorized formal workflow, the agent does not edit code directly. It returns a Gate Handoff Request or development handoff package with requirement coverage, bundle or snapshot, base commit, Complexity Contract, forbidden items, and verification requirements.",
+    "expected_behavior": "Inside the user-authorized formal workflow, the agent does not edit code directly. It runs formal-gates handoff compose and returns the generated development handoff artifact with its CLI-owned static catalog and bindings.",
     "failure_behavior": "After the user asked for formal-gates, the agent treats unavailable delegation as permission to implement directly, or drops the Complexity Contract and zero-context handoff requirements.",
     "primary_files": [
       "SKILL.md",
       "references/complexity-gate.md"
     ],
     "must_include": [
-      "Gate Handoff Request",
+      "handoff compose",
       "does not edit"
     ],
     "must_avoid": [
@@ -460,6 +460,33 @@
     ],
     "must_avoid": [
       ".scratch"
+    ]
+  },
+  {
+    "id": "FG-BEH-025",
+    "title": "Candidate development overlaps blind QA design",
+    "user_prompt": "The requirement is frozen, QA Design is still running, and a candidate developer wants to start coding. Can both proceed, and what happens when the cases are approved?",
+    "expected_behavior": "Allow candidate development and QA Design, Design Review, or Design Rework to proceed in parallel from the same frozen requirement with mutual blindness. Keep the candidate developer blind to QA drafts, conclusions, repair records, and keep QA Design, Design Review, and case editing blind to production implementation, diffs, existing tests, developer self-tests, implementation notes, and developer explanations. Do not call candidate code formally accepted before the approved case chain. After approval, allow the formal handoff to adopt, modify, or delete the candidate code without rewriting it.",
+    "failure_behavior": "Force coding to wait for QA case approval, expose QA drafts or review findings to the candidate developer, expose implementation or developer evidence to QA design/review, or treat pre-approval candidate code as formally accepted.",
+    "primary_files": [
+      "SKILL.md",
+      "references/qa-test-gate.md",
+      "agents/development-worker.md"
+    ],
+    "must_include": [
+      "parallel",
+      "frozen requirement",
+      "mutual blindness",
+      "approved case",
+      "candidate code",
+      "not formal acceptance before the approved case chain",
+      "adopt, modify, or delete",
+      "without rewriting"
+    ],
+    "must_avoid": [
+      "wait for QA approval",
+      "formally accepted before",
+      "must rewrite"
     ]
   }
 ]

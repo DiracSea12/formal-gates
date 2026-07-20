@@ -2,7 +2,7 @@
 
 > 防止 AI 自写、自审、自测，最后自己宣布 PASS。
 
-**formal-gates** 是给 AI 开发流程用的证据门禁系统。AI 动手前先对齐需求，写完后按顺序留下独立审查和机器可校验的证据。它不替你写代码，而是裁决"方向对不对、证据够不够、能不能放行"。
+**formal-gates** 是给 AI 开发流程用的证据门禁系统。AI 动手前先对齐需求，写完后留下独立审查和机器可校验的证据。四门可以在同一 snapshot 上并行执行，最终由机器聚合是否放行。它不替你写代码，而是裁决"方向对不对、证据够不够、能不能放行"。
 
 **内置安装目标：** Claude Code · Codex · Cursor
 
@@ -110,13 +110,15 @@ AI 写代码有几个通病，这套门禁专门拦：
 ### 两种审查流程
 
 **开发前审查（Pre-development）**：可选地审查 OpenSpec / PRD / 设计文档
-- 流程：requirements-clarification → complexity → architecture → cold-water
+- 流程：requirements-clarification 通过后，complexity、architecture、cold-water 三项独立检查并行
 - **不需要 QA 门**（还没有代码和测试）
 - 目标：在用户要求时，确认需求清晰、方向正确、架构合理、可以开工
 
+**候选开发并行 lane**：需求冻结后，候选代码可以和 QA Design、Design Review、Design Rework 同时进行。双方保持盲态：候选开发不看 QA 草稿、结论或返修记录；QA 设计、审查和 case 编辑不看生产实现、diff、现有测试、开发者自测、实现说明或开发者解释。候选代码不能提前宣称正式验收；case set 批准后可以直接采用、修改或删除，不要求重写。
+
 **开发后审查（Post-development）**：用户要求后，审查代码实现
-- 流程：QA → complexity → architecture → code-quality
-- **必须先过 QA 门**（验证测试和证据）
+- 流程：QA Execution、complexity、architecture、code-quality 四项独立审查并行
+- reviewer 可以并行完成；主代理负责机械校验并串行提交共享 state，CLI 的跨进程锁会防止误并发时丢更新；FinalExecution 仍要求同一 workflow 和 target snapshot 上四门全部 PASS
 - 目标：确认实现正确、测试充分、代码质量达标
 
 如果用户已经主动开启 formal-gates，系统会按当前 artifact 判断走开发前流程还是开发后流程。没有用户要求时，不自动进入门禁。
@@ -131,12 +133,14 @@ AI 写代码有几个通病，这套门禁专门拦：
 
 改 OpenSpec、PRD、SDD、phase docs、开发计划、技术计划、实现计划、handoff 文档，以及带具体范围或验收标准的 roadmap / milestone 段落时，先做轻量语义判断。这个判断不是正式门禁：错别字、格式、标题编号这类不改变含义的改动，直接改，不问问题，也不创建 artifact；低风险澄清只使用已确认来源；会改变需求含义的改动，先确认再写进正式需求文本。
 
-### 四道事后门（用户要求后才跑，按顺序，前一道不过不准进下一道）
+### 四道事后门（用户要求后才跑，同一 snapshot 可并行）
 
 1. **qa-test-gate** —— 用例和验收标准是否可信，有没有真实证据。
 2. **complexity-gate** —— 改动有没有做大、是否是完成目标所需的最小实现、有没有过度工程或凭空造系统。
 3. **architecture-health-gate** —— 模块边界、所有权、依赖方向、状态/缓存生命周期、性能形态有没有烂。
 4. **code-quality-gate** —— 正确性、边界、性能、死代码、假测试、可维护性。
+
+四门都针对同一 workflow 和 change snapshot 独立判断，结果可以按完成顺序处理，但共享 state 由主代理串行提交；封板前必须四门全部有当前 snapshot 的 PASS，或有本轮 Carry Arbiter 接受的逐门继承结果。返修前必须保存可重现的 source；若无法得到精确的 source-to-target 累计 diff，就不得提议 Carry，只能重跑受影响门。
 
 QA 分两件事：测试用例设计由独立子代理审；开发后的测试由独立于开发者的 QA 执行者运行。主代理和 CLI 只机械核对执行证据、hash、snapshot 和 case binding，不再加第二个 QA reviewer。
 
@@ -145,7 +149,7 @@ QA 分两件事：测试用例设计由独立子代理审；开发后的测试�
 ## 核心机制
 
 - 需要质量判断的通过结论必须由**零上下文的独立审查 AI** 给出——它不知道主 AI 的结论和怀疑点，避免回声。QA Execution 是例外：它依赖独立 QA 执行证据，由主代理和 CLI 机械核对，不做 reviewer 的 reviewer。
-- **发送前全量静态检查**——`prompt prepare` 先生成未盖章的七字段 prompt；`receipt register` 是发送前唯一一次全量静态检查，校验七字段、角色、worktree、snapshot、gate/stage 输出合同、输出路径、context bundle 的结构/路径/hash、各门材料放置和污染。只有全部通过后，`receipt register` 才由程序写入 `static-validation=PASS` 并绑定最终字节；reviewer 必须核对该绑定但不得读取绑定文件。任何检查失败都不能派发。reviewer 返回后，finalize 先校验完整 JSON，通过后才锁定 receipt；无效输出保持未完成。QA Design 不是 review judgment，不强制 prompt 绑定。
+- **静态内容全部由脚本生成**——`prompt prepare` 生成七字段 prompt；`receipt register` 只接受角色专用的源路径参数并生成预填全部静态字段的只读 reviewer/Carry 目录，不接受调用方提供 check ID 或 gate/path binding。reviewer、Carry 和 QA Design 只提交按生成顺序排列的语义标量。Requirements owner 与 QA executor 也只能向 compose 命令提交带 1-based 位置的纯语义标量；CLI 生成 DIM/Case/Execution ID、JSON key/object/array、引用和 binding。AI 不编辑正式 JSON/QA Design Markdown，也不复述静态内容。compose/submit 在落盘前拒绝重复、缺失、越界、空值和非法枚举；失败不产生部分 artifact 或 proof，成功时原子写入并机械校验。
 - **每门最多三轮**——`receipt register` 在派发前统计同一 workflow、gate 和 stage 的已完成 reviewer receipt；达到三次后默认拒绝。只有用户明确批准额外一轮时才能使用 `--user-authorized-extra-review`，主代理不能自行放行。
 - **跨 workflow 隔离**——每个 workflow 的门禁链必须完整，不能复用其他 workflow 的门禁结果。系统会递归验证所有前置门和传递依赖是否属于同一个 workflowId 和 changeSnapshot；扩展门还必须绑定同一个 manifest 路径和哈希。
 - 每个已启用 gate 的结论都是封闭的 schema-version-2 JSON **artifact**，由 Go 校验器检查。Markdown 只能解释，不能补充机器真值；缺字段、未知字段、非法证据或过期结论都会被拒绝。
@@ -244,7 +248,90 @@ Codex 用户不要只靠自动拦截。除非 `formal-gates canary codex-hook --
 维护者本地自检链路见 [`references/local-validation.md`](references/local-validation.md)。本节只保留其余跨平台验证命令。
 
 ```bash
-# 校验 run-local reviewer JSON artifact
+# 从带位置的语义标量生成 requirements 的 alignment、decision 和 PASS artifact
+bin/formal-gates artifact compose-requirements \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --requirement-source openspec/changes/CHANGE \
+  --alignment-id RQ-064 \
+  --alignment 1 \
+  --alignment-value '<需求或问题>' --alignment-value '<来源>' \
+  --alignment-value '<重要性>' --alignment-value CONFIRMED \
+  --alignment-value '<用户回答>' --alignment-value '<下游影响>' \
+  --alignment-value '<文档影响>' --alignment-value '<所需证据>' \
+  --user-original '<用户确认的原始表述>' --coverage-scan PASS \
+  --scope-status PASS --scope-message '<scope 判断>' \
+  --task-status PASS --task-message '<task proof 判断>' \
+  --dimension 1 --dimension-status COVERED \
+  --dimension-message '<coverage 判断>' \
+  --dimension-ref 1 --dimension-ref-item 1 \
+  --covered-target openspec/changes/CHANGE/alignment.md \
+  --covered-target openspec/changes/CHANGE/tasks.md \
+  --output-dir restricted/requirements
+
+# 每个 alignment 重复位置和值组；dimension 组必须覆盖位置 1 到 13，
+# 每个 dimension 至少用一组 ref/ref-item 关联 alignment 位置。
+
+# 从 git 生成 changed-files 内容、hash 和 composition proof；untracked 必须显式列出
+bin/formal-gates artifact compose-changed-files \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --base-ref BASE --head-ref HEAD --include-working-tree \
+  --include-untracked new-file.go \
+  --output restricted/changed-files.txt
+
+# tracked range/staged/unstaged changes are automatic; unlisted untracked files are excluded
+
+# 从 run-local 源路径生成 context bundle；不要手写路径或 hash
+bin/formal-gates artifact compose-context-bundle \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --output restricted/complexity/context-bundle.json \
+  --input restricted/requirements/requirements.json \
+  --input restricted/changed-files.txt
+
+# QA Design registration 生成固定 Case ID 和字段目录
+bin/formal-gates artifact compose-context-bundle \
+  --root . --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <design-snapshot> \
+  --output restricted/qa-design/context-bundle.json \
+  --input restricted/requirements/requirements.json
+bin/formal-gates receipt register --provider codex --worktree . \
+  --run-dir .claude/gates/runs/RUN_ID \
+  --context-bundle restricted/qa-design/context-bundle.json \
+  --qa-case-count 6 \
+  --artifact .claude/gates/runs/RUN_ID/restricted/qa-design/cases.md \
+  --gate qa-test-gate --stage Design \
+  --workflow-id <workflow-id> --change-snapshot <design-snapshot>
+
+# designer 只提交语义值；CLI 写入标题、Case ID、字段名、分隔符和末尾换行
+# 每个 --design-case 后恰好按 Claim/Source/Action/Oracle/
+# Failure signal/Evidence/Gap 顺序提供 7 个 --case-value
+bin/formal-gates receipt submit --worktree . \
+  --artifact .claude/gates/runs/RUN_ID/restricted/qa-design/cases.md \
+  --design-case 1 \
+  --case-value '<claim>' --case-value '<source>' \
+  --case-value '<action>' --case-value '<oracle>' \
+  --case-value '<failure signal>' --case-value '<evidence>' \
+  --case-value '<gap>'
+
+# 从批准的 case set、Design Review 闭包和语义参数生成开发交接
+bin/formal-gates handoff compose --root . \
+  --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --output restricted/development-handoff.md \
+  --requirement-target openspec/changes/CHANGE \
+  --verification-requirements 'go test ./... && go vet ./...' \
+  --budget-stop-triggers 'stop when any numeric limit is exceeded' \
+  --budget-expansion-approval-path agents/anti-complexity-review.md \
+  --forbidden-context 'QA drafts, review conclusions, and repair history' \
+  --formal-flow-mode four-gate --trigger-source 'explicit user request' \
+  --task-type small-feature \
+  --max-net 250 --max-new-prod-files 2 --max-prod-insertions 300 \
+  --qa-case-set restricted/qa-design/cases.md \
+  --design-review restricted/closures/design-review.json
+
+# 校验由 CLI finalize 生成的 run-local reviewer JSON artifact
 bin/formal-gates artifact validate \
   --root . \
   --file .claude/gates/runs/RUN_ID/restricted/complexity-review.json \
@@ -252,27 +339,47 @@ bin/formal-gates artifact validate \
   --workflow-id <workflow-id> \
   --change-snapshot <snapshot>
 
-# 从七字段 generation-only 模板和机器绑定生成、校验最终发送全文
+# 生成当前 snapshot 的完整 statistics JSON 和 composition proof；正式模式禁止 budget/--json
+bin/formal-gates complexity check --task-type <type> --worktree . --vcs auto \
+  --run-dir .claude/gates/runs/RUN_ID \
+  --workflow-id <workflow-id> --change-snapshot <snapshot> \
+  --output restricted/complexity/statistics.json
+
+# 从路由参数和机器绑定生成、校验最终发送全文
 bin/formal-gates prompt prepare --root . \
-  --dispatch .claude/gates/runs/RUN_ID/restricted/complexity/dispatch.txt \
   --output .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt \
-  --binding contextBundle=.claude/gates/runs/RUN_ID/restricted/complexity/context-bundle.json
+  --gate complexity-gate --current-requirement openspec/changes/CHANGE \
+  --current-diff 'git diff BASE --' --worktree . --change-snapshot SNAPSHOT \
+  --review-artifact .claude/gates/runs/RUN_ID/restricted/complexity/review.json \
+  --policy-id complexity.post-development.v2 \
+  --context-bundle .claude/gates/runs/RUN_ID/restricted/complexity/context-bundle.json
 
 # 单独复核最终发送文件；通过后必须原样发送
 bin/formal-gates prompt validate --root . --file .claude/gates/runs/RUN_ID/restricted/complexity/prompt.txt
 
-# 派发前由 receipt 绑定最终发送 prompt；reviewer JSON 不再引用它
-bin/formal-gates receipt register --provider codex --worktree . --run-dir .claude/gates/runs/RUN_ID --context-bundle restricted/complexity/context-bundle.json --prompt restricted/complexity/prompt.txt --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+# 派发前由 receipt 绑定 prompt 和机器证据并生成只读 reviewer 目录
+bin/formal-gates receipt register --provider codex --worktree . --run-dir .claude/gates/runs/RUN_ID --context-bundle restricted/complexity/context-bundle.json --prompt restricted/complexity/prompt.txt --changed-files restricted/changed-files.txt --verification restricted/verification.json --complexity-statistics restricted/complexity/statistics.json --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+
+# reviewer 只提交语义值；CLI 生成嵌套 JSON、PENDING verdict 和提交证明
+bin/formal-gates receipt submit --worktree . --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --check 1 --status PASS --message '<语义判断>' --check 2 --status REVIEW --message '<语义判断>' --finding-check 2 --finding-message '<问题>' --location-finding 1 --location-path internal/example.go --location-start 10 --location-end 12
+
+# QA 执行者提交语义观察后，由 CLI 生成 QA-owned results 和 case binding
+bin/formal-gates artifact compose-qa-owned-evidence --root . --run-dir .claude/gates/runs/RUN_ID --workflow-id <workflow-id> --change-snapshot <snapshot> --approved-case-set restricted/qa-design/cases.md --case 1 --outcome PASS --procedure '<执行步骤>' --observation '<观察结果>' --oracle-result '<oracle 判断>' --output-dir restricted/qa-execution
+
+# 从六个现有证据源生成机械 QA_EXECUTION；主代理不手写 envelope 或 binding
+bin/formal-gates artifact compose-qa-execution --root . --run-dir .claude/gates/runs/RUN_ID --workflow-id <workflow-id> --change-snapshot <snapshot> --output restricted/qa-execution.json --approved-case-set restricted/qa-design/cases.md --design-review restricted/closures/design-review.json --qa-owned-results restricted/qa-execution/qa-results.json --case-result-binding restricted/qa-execution/case-result-binding.json --changed-files restricted/changed-files.txt --verification restricted/verification.json
+
+# 从脚本生成的 hop 证据生成 Carry transition chain；五个 hop 标量按位置成组重复
+bin/formal-gates artifact compose-transition-chain --root . --run-dir .claude/gates/runs/RUN_ID --workflow-id <workflow-id> --target-snapshot <snapshot-2> --output restricted/carry/transition-chain.json --hop-from <snapshot-1> --hop-to <snapshot-2> --hop-changed-files restricted/changed-files.txt --hop-verification restricted/verification.json --hop-repair restricted/repair-evidence.json
 
 # workflow 基础封装：snapshot、run-local state、final-verification、FinalExecution
 bin/formal-gates workflow snapshot --worktree <repo> --vcs file-hash
 bin/formal-gates workflow record-stage --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate complexity-gate --verdict PASS --artifact .claude/gates/runs/RUN_ID/restricted/complexity-review.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 bin/formal-gates workflow verify-admission --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --gate architecture-health-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --workflow-id <workflow-id> --change-snapshot <snapshot>
-bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempts-file .claude/gates/runs/RUN_ID/restricted/final-verification-attempts.json --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/restricted/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
+bin/formal-gates workflow final-verification --worktree <repo> --run-dir .claude/gates/runs/RUN_ID --attempt-artifact .claude/gates/runs/RUN_ID/restricted/final-verification-go-test.txt --attempt-artifact .claude/gates/runs/RUN_ID/restricted/final-verification-go-vet.txt --output .claude/gates/runs/RUN_ID/restricted/final-verification.json --record-final-qa --final-qa-artifact .claude/gates/runs/RUN_ID/restricted/final-execution.json --workflow-id <workflow-id> --change-snapshot <snapshot>
 ```
 
-`final-verification-attempts.json` 中每个 accepted PASS attempt 都必须包含其 artifact 当前字节的 lowercase SHA-256 `artifactHash`。
+每个 `--attempt-artifact` 必须是验证 runner 生成的 run-local PASS 产物；该 flag 可重复。runner 只能在命令成功退出后传入路径。CLI 会拒绝包含明确失败标记的输出：以 `FAIL`、`FAILED`、`FAILURE`、`ERROR`、`FATAL` 或 `PANIC` 开头的行、`COMMAND FAILED`/非零退出状态标记，或 Go 编译器/vet 诊断；成功的 `go build`、`go vet` 等通常无输出的命令仍可通过。被拒绝的 attempt 会生成 `FAIL` 聚合结果。聚合输出和每个 accepted attempt 的路径、hash、status、accepted 值均由 CLI 写入，AI 不得手填。同一路径的 `--output` 和 `--final-qa-artifact` 不会被覆盖；需要重跑时必须使用新的输出路径。
 
 Windows 下命令名是 `bin/formal-gates.exe`。源码 checkout 做开发测试时，可临时用 `go run ./cmd/formal-gates`；安装后的 hook 和校验路径必须使用 `bin/formal-gates(.exe)`。
 
@@ -284,7 +391,7 @@ Windows 下命令名是 `bin/formal-gates.exe`。源码 checkout 做开发测试
 
 ```
 formal-gates/
-  SKILL.md                  # 入口（给 AI 读）：分流、红线、四门顺序
+  SKILL.md                  # 入口（给 AI 读）：分流、红线、四门 ID 和最终聚合
   references/               # 各门细则（按需加载）
     requirements-clarification-gate.md
     qa-test-gate.md
@@ -297,7 +404,7 @@ formal-gates/
   internal/                 # Go 核心实现
   hooks/                    # dispatch prompt 污染检测规则
   agents/                   # 独立门禁审查 agent 提示词
-  examples/                 # GateWorkflow、行为检查 prompt 样例
+  examples/                 # CLI demo 与行为检查样例
   formal-gates.manifest.json # 包索引和安装配置
 ```
 

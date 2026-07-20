@@ -1,8 +1,10 @@
 # Architecture Health Gate
 
-Use after complexity PASS in a user-authorized four-gate/release/seal flow, or when the user asks for architecture consultation. Review boundaries, ownership, public surface, dependencies, state/cache lifecycle, failure semantics, compatibility, performance shape, and maintainability.
+Use as an independent reviewer in a user-authorized four-gate/release/seal flow, or when the user asks for architecture consultation. Review boundaries, ownership, public surface, dependencies, state/cache lifecycle, failure semantics, compatibility, performance shape, and maintainability.
 
-Do not use architecture review to hide scope creep. If complexity is wrong, stop there.
+Do not use architecture review to hide scope creep. Report architecture-owned
+findings independently; complexity scope findings remain with the complexity
+gate and do not serialize this review.
 
 ## Applicability
 
@@ -24,20 +26,22 @@ For spec/doc/plan work, do not demand implementation evidence. Judge whether the
 
 ## Formal Entry
 
-Post-development formal flow requires machine-verifiable PASS for:
-
-- `qa-test-gate` formal Stage=`Execution`
-- `complexity-gate`
-
-Verify:
+Post-development architecture is an independent gate. Verify its own
+target-bound reviewer evidence:
 
 ```bash
 bin/formal-gates workflow verify-admission --worktree <repo> --gate architecture-health-gate --workflow-id <id> --change-snapshot <snapshot>
 ```
 
-No gate-state, stale snapshot, missing artifact, non-formal QA, or complexity REVIEW/FAIL/BLOCKED means `BLOCKED` or `GATE_SEQUENCE_ERROR`.
+No gate-state, stale snapshot, missing artifact, or non-formal evidence means
+`BLOCKED`. Post-development architecture has no gate-to-gate prerequisite;
+finalization checks the complete four-gate set.
 
-Start-readiness architecture review requires same-workflow, same-snapshot `requirements-clarification-gate` PASS and `complexity-gate` PASS recorded with `--mode start-readiness`. Verify and record start-readiness architecture with `--mode start-readiness`; do not require QA Execution before code exists.
+Start-readiness architecture review requires same-workflow, same-snapshot
+`requirements-clarification-gate` PASS recorded with `--mode requirements` (or
+the default requirements mode); it runs independently of the start-readiness
+complexity review. Verify and record the architecture result with
+`--mode start-readiness`; do not require QA Execution before code exists.
 
 ## Required Review
 
@@ -82,4 +86,4 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 
 ## Output
 
-Write direct schema-version-2 `ARCHITECTURE_REVIEW` JSON with the matching typed policy and shared reviewer payload. The payload has no dispatch or prompt field; the external receipt binds and revalidates the exact final-send prompt. Every exported `architecture.*` check appears exactly once. `REVIEW`, `FAIL`, and `BLOCKED` cannot proceed to code quality or write formal PASS state.
+Receipt registration generates the read-only schema-version-2 `ARCHITECTURE_REVIEW` catalog, matching policy, check IDs, and typed evidence bindings. Submit only ordered semantic statuses, messages, findings, and locations through `formal-gates receipt submit`; never edit the JSON. The CLI constructs the nested artifact and proof, and finalization derives the verdict and receipt. A non-PASS architecture result blocks only this gate; independent code-quality review may continue, while finalization still requires all four PASS results.

@@ -37,7 +37,11 @@ bin/formal-gates hook decide < payload.json
 To use the native receipt proof foundation:
 
 ```bash
-bin/formal-gates receipt register --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --context-bundle restricted/<bundle.json> --prompt restricted/<exact-send.txt> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --gate <gate-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --stage <stage>
+bin/formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto --run-dir .claude/gates/runs/<run-id> --workflow-id <workflow-id> --change-snapshot <snapshot> --output restricted/<statistics.json>
+
+bin/formal-gates receipt register --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --context-bundle restricted/<generated-bundle.json> --prompt restricted/<exact-send.txt> --changed-files restricted/<changed-files> --verification restricted/<verification> --complexity-statistics restricted/<statistics.json> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --gate complexity-gate --workflow-id <workflow-id> --change-snapshot <snapshot>
+
+bin/formal-gates receipt submit --worktree <repo> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --check 1 --status <status> --message <semantic-text> [--check <position> --status <status> --message <semantic-text> ...] [--finding-check <position> --finding-message <semantic-text> --location-finding <finding-position> --location-path <path> --location-start <line> --location-end <line> ...]
 bin/formal-gates receipt capture --provider codex --event SubagentStart --worktree <repo> < start-payload.json
 bin/formal-gates receipt capture --provider codex --event SubagentStop --worktree <repo> < stop-payload.json
 bin/formal-gates receipt finalize --provider codex --worktree <repo> --run-dir .claude/gates/runs/<run-id> --artifact .claude/gates/runs/<run-id>/restricted/<review.json> --gate <gate-id> --workflow-id <workflow-id> --stage <stage>
@@ -45,7 +49,13 @@ bin/formal-gates receipt validate --worktree <repo> --receipt .claude/gates/runs
 bin/formal-gates receipt preflight --host codex --worktree <repo>
 ```
 
-Generate the exact reviewer message with `prompt prepare`, then run the one full pre-dispatch check at `receipt register`. Registration validates every seven-field and routing value, the machine-generated static PASS binding, exact context-bundle path/hash and policy-specific input placement before it reserves capacity. Send the registered bytes unchanged. The reviewer confirms the static PASS binding without reading bound files. After lifecycle stop, finalization validates the completed reviewer JSON before writing a receipt or locking the registration; invalid output remains unfinalized. Only explicit user approval permits `--user-authorized-extra-review` beyond three completed reviews. QA Design omits `--prompt` because it is not a review judgment.
+The first command is the only formal post-development statistics producer. It
+writes a closed budget-free `ComplexityReport` and the existing composition
+proof under the active run. `--json` stdout, redirected output, handwritten
+JSON, and a report without the matching workflow/snapshot proof are diagnostic
+only and are rejected by receipt registration and later validation.
+
+Generate the exact reviewer message with `prompt prepare`, then run the one full pre-dispatch check at `receipt register`. Registration validates every seven-field and routing value, exact context-bundle path/hash, changed-files and verification sources, per-check evidence placement, and policy contract before it reserves capacity and generates the reviewer/Carry catalog plus immutable proof. Send the registered prompt bytes unchanged. The reviewer may read that catalog but must use `receipt submit` to provide only ordered semantic values; it never edits formal JSON or repeats check IDs, gates, bindings, or nested structure. `receipt submit` rejects unknown, duplicate, missing, wrongly typed, or illegal values before changing the artifact, then atomically records the composed artifact hash/proof. After lifecycle stop, finalization requires and revalidates that proof, derives the verdict, and writes the final artifact and receipt before locking the registration. Only explicit user approval permits `--user-authorized-extra-review` beyond three completed reviews. QA Design omits `--prompt` because it is not a review judgment. Its registration creates a static case template, and the designer passes exactly seven ordered `--case-value` semantics for each `--design-case`; the CLI writes all Case IDs, labels, separators, and newline layout and records the submission proof.
 
 Use `bin/formal-gates.exe` on Windows. Source checkout development tests may use `go run ./cmd/formal-gates`, but installed hook and validation paths must use `bin/formal-gates(.exe)`.
 
@@ -61,7 +71,7 @@ bin/formal-gates install --source <formal-gates> --host cursor --scope project -
 
 The native installer requires `bin/formal-gates(.exe)` under `--source`; build it first with `go build -o bin/formal-gates ./cmd/formal-gates` or the Windows `.exe` equivalent. `--configure-hooks` writes native hook commands: `hook decide` for PreToolUse/preToolUse and `receipt capture` for subagent lifecycle events. It preserves non-formal-gates hook entries and replaces only formal-gates hook commands.
 
-This Go path is the portable CLI entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, admission checks for the fixed post-development order, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, final verification aggregation, CLI-generated mechanical FinalExecution closeout, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
+This Go path is the portable CLI entrypoint for Windows, macOS, and Linux. It now includes basic gate-state recording, independent same-snapshot gate admission, deterministic state display, native install, a native workflow foundation for file-hash/git snapshots, record-stage, admission wrappers, script-generated formal templates and composition, final verification aggregation, CLI-generated mechanical FinalExecution closeout, dry-run-first cleanup, a native receipt foundation for dispatch registration, lifecycle event capture, receipt finalization, receipt validation, diagnostic preflight, and a native Codex hook live canary. It is not a persistent report system, cache, receipt-sensitive full workflow, or release-trust mechanism.
 
 ## Maintained Source
 
@@ -121,7 +131,7 @@ bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prom
 
 Without answers, cases are reported as `PENDING`. With answers, the harness checks explicit `must_include` and `must_avoid` markers when present, or derives a small set of key terms from the expected behavior. This is a repeatable local harness for behavior evidence; it is not a replacement for a human or model judge on nuanced semantic quality.
 
-`examples/skill-behavior-prompts.json` is the portable marker fixture used by `package validate` and `canary portable`. `examples/skill-behavior-answers.json` is the checked answer fixture and must make all 24 portable cases pass. Root `test-prompts.json` is a broader 20-case prompt set for manual or agent-level evaluation; it is intentionally not used as the fixed package self-check fixture.
+`examples/skill-behavior-prompts.json` is the portable marker fixture used by `package validate` and `canary portable`. `examples/skill-behavior-answers.json` is the checked answer fixture and must make all 24 portable cases pass. Root `test-prompts.json` is a broader 22-case prompt set for manual or agent-level evaluation; it is intentionally not used as the fixed package self-check fixture.
 
 ## Install To Claude
 
@@ -237,66 +247,48 @@ Do not fall back to:
 
 In A/B testing, a hook that silently uses the global binary tests the old package while pretending to test the candidate.
 
-Claude Code loads hooks from Claude settings. Global example:
+Claude Code loads hooks from Claude settings. Generate or update the
+formal-gates entries with the installer; do not paste a hand-authored settings
+object:
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"%USERPROFILE%\\.claude\\skills\\formal-gates\\bin\\formal-gates.exe\" hook decide"
-          }
-        ]
-      }
-    ]
-  }
-}
+```bash
+bin/formal-gates install --source <formal-gates> --host claude \
+  --scope global --force --configure-hooks
 ```
 
-For project-local installs, change the `command` path to `<project>\\.claude\\skills\\formal-gates\\bin\\formal-gates.exe hook decide` on Windows, or the matching `bin/formal-gates hook decide` path on Linux/macOS. Whether a client or hosted gateway actually executes command hooks must be proven with a live canary on the target machine. Inspecting settings files is not proof.
+For a project-local install, pass `--scope project --project <project>`
+instead. The installer selects the installed binary path for Windows, Linux,
+or macOS. Whether a client or hosted gateway actually executes command hooks
+must be proven with a live canary on the target machine. Inspecting settings
+files is not proof.
 
-Codex may load hooks from `~/.codex/hooks.json`, `[hooks]` in `~/.codex/config.toml`, or project-local `.codex` config. Do not route through Codex plugin packaging just to load hooks.
+Codex may load hooks from `~/.codex/hooks.json`, `[hooks]` in
+`~/.codex/config.toml`, or project-local `.codex` config. Generate the supported
+formal-gates entries with the installer; do not copy a static TOML/JSON shape:
 
-Minimal Codex `config.toml` shape:
-
-```toml
-[features]
-hooks = true
-
-[[hooks.PreToolUse]]
-matcher = "*"
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = "\"%USERPROFILE%\\.codex\\skills\\formal-gates\\bin\\formal-gates.exe\" hook decide"
-timeout = 30
+```bash
+bin/formal-gates install --source <formal-gates> --host codex \
+  --scope project --project <project> --force --configure-hooks
 ```
 
-On Windows, use the absolute installed binary path when the host does not expand `%USERPROFILE%`.
+The installer writes the absolute installed binary path where the host
+requires it. Do not route through Codex plugin packaging just to load hooks.
 
 Unmanaged Codex command hooks must be reviewed and trusted through `/hooks` before ordinary interactive use. `--dangerously-bypass-hook-trust` is only for automated canaries after the hook source has been reviewed; do not use it as a daily bypass.
 
-Cursor loads hooks from `~/.cursor/hooks.json` or project `.cursor/hooks.json`. Minimal project-level shape:
+Cursor loads hooks from `~/.cursor/hooks.json` or project `.cursor/hooks.json`.
+Generate the project-level entry with:
 
-```json
-{
-  "version": 1,
-  "hooks": {
-    "preToolUse": [
-      {
-        "command": "\".cursor/formal-gates/bin/formal-gates.exe\" hook decide",
-        "timeout": 30,
-        "failClosed": true
-      }
-    ]
-  }
-}
+```bash
+bin/formal-gates install --source <formal-gates> --host cursor \
+  --scope project --project <project> --force --configure-hooks
 ```
 
-The Cursor hook command reads JSON from stdin and blocks by returning `permission: "deny"` on stdout or exit code 2. The example leaves `matcher` out so the command can filter only formal-gates commands internally and avoid Cursor-version matcher-shape drift. Inspecting `hooks.json` still is not a live canary.
+The generated Cursor hook command reads JSON from stdin and blocks by returning
+`permission: "deny"` on stdout or exit code 2. It omits matcher configuration so
+the command can filter only formal-gates commands internally and avoid
+Cursor-version matcher-shape drift. Inspecting `hooks.json` still is not a live
+canary.
 
 ## GateWorkflow And Gate State
 
@@ -310,20 +302,18 @@ Formal gates require structured `GateWorkflow`. Minimum fields:
 
 `formal-gates gate record` and `formal-gates gate verify-admission` use the active workflow's `restricted/gate-state.json`; `formal-gates gate show` requires that path through `--state` and has no repository-global fallback. `formal-gates workflow snapshot`, `formal-gates workflow record-stage`, `formal-gates workflow verify-admission`, `formal-gates workflow final-verification`, `formal-gates workflow cleanup`, and `formal-gates workflow show` provide the current native workflow foundation. `formal-gates install` copies the verifiable installable package subset and can write native host hook config. `formal-gates receipt register`, `receipt capture`, `receipt finalize`, `receipt validate`, and `receipt preflight` provide the current native receipt foundation. Installed `SubagentStart` and `SubagentStop` hooks call `formal-gates receipt capture` directly.
 
-`GateWorkflow` is JSON. Escape Windows backslashes as double backslashes, or use forward slashes:
-
-```text
-GateWorkflow={"gate":"complexity-gate","workflowId":"wf","changeSnapshot":"snap","worktree":"C:\\Users\\me\\repo"}
-GateWorkflow={"gate":"complexity-gate","workflowId":"wf","changeSnapshot":"snap","worktree":"C:/Users/me/repo"}
-```
-
-Do not write `"worktree":"C:\Users\me\repo"`; `\U` is not valid JSON escaping and the hook reports `Malformed GateWorkflow JSON`.
+Do not hand-author a `GateWorkflow` JSON object. Supply workflow, snapshot,
+worktree/state, gate, and optional stage or manifest values through the
+documented CLI flags or host adapter; the typed implementation owns encoding
+and escaping. In particular, never make an AI format Windows paths into JSON.
 
 ## Manifest Extension Gates
 
-Custom extension gates must provide `manifestPath` and define dependencies under `stages.<gate-id>` in the manifest. Example: `GateWorkflow={"gate":"security-gate","workflowId":"...","changeSnapshot":"...","worktree":"...","manifestPath":"gate-manifest.json"}`.
+Custom extension gates must provide `manifestPath` through the documented CLI
+flag and define dependencies under `stages.<gate-id>` in the manifest. The host
+adapter or CLI owns the encoded workflow object.
 
-Manifests can define only extension gates. They cannot define or override `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, or `code-quality-gate`. The four built-in gate IDs and order are fixed.
+Manifests can define only extension gates. They cannot define or override `qa-test-gate`, `complexity-gate`, `architecture-health-gate`, or `code-quality-gate`. The four built-in gate IDs and deterministic display order are fixed; they are not an admission sequence.
 
 Manifest extension gates bind to the manifest hash. Their prerequisite gates must also be recorded with the same `-ManifestPath`; old records or records without `manifestHash` do not satisfy extension-gate admission. After adding a manifest to an existing flow, re-record prerequisites under that manifest instead of reusing old built-in PASS records.
 

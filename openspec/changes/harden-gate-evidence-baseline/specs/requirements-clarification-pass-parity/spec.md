@@ -9,6 +9,19 @@ compatibility branch.
 
 ### Requirement: Requirements PASS is enforced from typed per-item data
 
+The CLI SHALL accept only positioned semantic scalar arguments and generate the
+alignment, user decision, and `REQUIREMENTS_PASS` artifacts as one composition.
+It SHALL own schema/version, workflow/snapshot, IDs and counts derived from the
+ordered `--alignment-id` catalog, DIM-01 through DIM-13 labels, RQ/DIM mappings,
+JSON keys/objects/arrays, evidence paths and
+hashes, continuity binding, gate/stage/role, and PASS verdict. AI SHALL supply
+only confirmed requirement text, user answers and dispositions, coverage and
+scope judgments, and messages through 1-based alignment and dimension
+positions; it SHALL NOT author semantic JSON, repeat RQ/DIM mappings, or
+handwrite any of the three formal artifacts. Composition SHALL refuse to
+overwrite existing output and SHALL leave no partial formal output or proof
+after invalid semantic arguments or evidence.
+
 The system SHALL reject a requirements-clarification PASS whose machine-decoded
 payload or referenced alignment leaves open questions or blockers, lacks user
 confirmation, fails coverage or scope preservation, names imprecise targets, or
@@ -21,6 +34,25 @@ values.
 - **WHEN** any alignment item lacks a stable RQ ID or required field, has an
   illegal status, or lacks required approval
 - **THEN** the complete PASS is rejected and identifies that item.
+
+#### Scenario: Positioned requirements semantics are composed
+
+- **WHEN** multiple positioned alignment items, all 13 positioned dimensions,
+  global semantic scalars, and referenced evidence validate
+- **THEN** the CLI generates alignment, decision, and requirements PASS with
+  deterministic static fields and returns their evidence references.
+
+#### Scenario: Positioned requirements semantics are incomplete or duplicated
+
+- **WHEN** an alignment or dimension position is missing, duplicated, or out
+  of range, or a required scalar is empty, unresolved, or illegal
+- **THEN** composition is rejected before any target or proof is written.
+
+#### Scenario: Existing requirements output would be overwritten
+
+- **WHEN** any target composition output already exists
+- **THEN** the CLI rejects the operation without changing any existing or
+  sibling output.
 
 #### Scenario: Count or continuity is wrong
 

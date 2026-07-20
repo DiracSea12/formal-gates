@@ -44,6 +44,17 @@ func TestPolicyV2ExportIsExactAndDeterministic(t *testing.T) {
 	if !ok || carry.ArtifactRole != "CARRY_ARBITER" || carry.Gate != "qa-test-gate" || carry.Stage != "Carry" || carry.Flow != "carry" || !carry.ReceiptRequired || carry.Mechanical || len(carry.RequiredCheckIDs) != 0 {
 		t.Fatalf("unexpected Carry Arbiter policy: %#v", carry)
 	}
+	for _, policy := range Policy().ArtifactPolicies {
+		if policy.ArtifactRole != "QA_REVIEW" && policy.ArtifactRole != "COMPLEXITY_REVIEW" && policy.ArtifactRole != "ARCHITECTURE_REVIEW" && policy.ArtifactRole != "CODE_QUALITY_REVIEW" {
+			continue
+		}
+		if stringSet(policy.RequiredCheckIDs)["review.prompt-fields"] {
+			t.Fatalf("static prompt validation leaked into reviewer policy %s", policy.ID)
+		}
+		if !stringSet(policy.RequiredCheckIDs)["review.prompt-semantics"] {
+			t.Fatalf("semantic prompt review missing from reviewer policy %s", policy.ID)
+		}
+	}
 }
 
 func TestRecordingSelectionUsesExportedArtifactPolicies(t *testing.T) {
@@ -166,24 +177,10 @@ func TestRequirementsCoveredTargetsMatrix(t *testing.T) {
 		{name: "backslash", target: `docs\requirements.md`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
-			writeV2RequirementsFixture(t, runDir, "wf", "snap")
-			mutateJSONObject(t, filepath.Join(runDir, "restricted", "requirements.json"), func(root map[string]any) {
-				jsonObject(root, "payload")["coveredTargets"] = []any{test.target}
-			})
-			artifact := relativePath(dir, filepath.Join(runDir, "restricted", "requirements.json"))
-			statePath := filepath.Join(runDir, "restricted", "gate-state.json")
-			result := WorkflowRecordStage(WorkflowRecordStageOptions{Worktree: dir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: artifact, WorkflowID: "wf", ChangeSnapshot: "snap"})
+			var result Result
+			validateCoveredTargets([]string{test.target}, &result, "covered-target")
 			if result.OK() != test.accept {
 				t.Fatalf("target=%q accept=%v failures=%#v", test.target, test.accept, result.Failures)
-			}
-			_, stateErr := os.ReadFile(statePath)
-			if !test.accept && !os.IsNotExist(stateErr) {
-				t.Fatalf("rejected target changed authoritative state: %v", stateErr)
-			}
-			if test.accept && stateErr != nil {
-				t.Fatalf("accepted target did not record authoritative state: %v", stateErr)
 			}
 		})
 	}
@@ -206,7 +203,7 @@ func TestRequirementsContinuityUsesActualRecordedPriorPass(t *testing.T) {
 			dir := t.TempDir()
 			runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
 			_, actual := writeV2RequirementsFixtureAt(t, runDir, "wf", "snap", "first-", nil)
-			firstArtifact := relativePath(dir, filepath.Join(runDir, "restricted", "first-requirements.json"))
+			firstArtifact := relativePath(dir, requirementsFixtureArtifactPath(runDir, "first-"))
 			if test.withPrior {
 				result := GateRecord(GateRecordOptions{Worktree: dir, RunDir: runDir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: firstArtifact, WorkflowID: "wf", ChangeSnapshot: "snap"})
 				if !result.OK() {
@@ -230,7 +227,7 @@ func TestRequirementsContinuityUsesActualRecordedPriorPass(t *testing.T) {
 			writeV2RequirementsFixtureAt(t, runDir, "wf", "snap", "second-", previous)
 			statePath := filepath.Join(runDir, "restricted", "gate-state.json")
 			before, beforeErr := os.ReadFile(statePath)
-			secondArtifact := relativePath(dir, filepath.Join(runDir, "restricted", "second-requirements.json"))
+			secondArtifact := relativePath(dir, requirementsFixtureArtifactPath(runDir, "second-"))
 			result := GateRecord(GateRecordOptions{Worktree: dir, RunDir: runDir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: secondArtifact, WorkflowID: "wf", ChangeSnapshot: "snap"})
 			if result.OK() != test.accept {
 				t.Fatalf("accept=%v failures=%#v", test.accept, result.Failures)
@@ -250,17 +247,23 @@ func TestRequirementsContinuityUsesActualRecordedPriorPass(t *testing.T) {
 
 func TestRequirementsV2RecordsClosureAndPreservesStateOnRejection(t *testing.T) {
 	dir := t.TempDir()
-	valid := writeV2RequirementsFixture(t, dir, "wf", "snap")
-	result := GateRecord(GateRecordOptions{Worktree: dir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: "requirements.json", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	runDir, err := resolveWorkflowRunDir(dir, "wf", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeV2RequirementsFixture(t, runDir, "wf", "snap")
+	artifact := relativePath(dir, requirementsFixtureArtifactPath(runDir, ""))
+	result := GateRecord(GateRecordOptions{Worktree: dir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: artifact, WorkflowID: "wf", ChangeSnapshot: "snap"})
 	if !result.OK() {
 		t.Fatalf("valid requirements failed: %#v", result.Failures)
 	}
-	statePath := filepath.Join(dir, ".claude", "gates", "gate-state.json")
+	statePath := filepath.Join(runDir, "restricted", "gate-state.json")
+	stateRel := relativePath(dir, statePath)
 	before, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, show := GateShow(GateShowOptions{Worktree: dir})
+	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: stateRel})
 	if !show.OK() {
 		t.Fatal(show.Failures)
 	}
@@ -268,10 +271,11 @@ func TestRequirementsV2RecordsClosureAndPreservesStateOnRejection(t *testing.T) 
 	if !strings.Contains(entry.Artifact, "closures/") || entry.Mode != "requirements" {
 		t.Fatalf("state did not bind requirements closure: %#v", entry)
 	}
-	mustWrite(t, filepath.Join(dir, "requirements.json"), strings.Replace(valid, `"openBlockers": []`, `"openBlockers": ["blocked"]`, 1))
-	rejected := GateRecord(GateRecordOptions{Worktree: dir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: "requirements.json", WorkflowID: "wf", ChangeSnapshot: "snap"})
+	writeV2RequirementsFixtureAt(t, runDir, "wf", "other-snapshot", "other-", nil)
+	otherArtifact := relativePath(dir, requirementsFixtureArtifactPath(runDir, "other-"))
+	rejected := GateRecord(GateRecordOptions{Worktree: dir, StatePath: stateRel, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: otherArtifact, WorkflowID: "wf", ChangeSnapshot: "snap"})
 	if rejected.OK() {
-		t.Fatal("open blocker was accepted")
+		t.Fatal("snapshot-mismatched requirements were accepted")
 	}
 	after, err := os.ReadFile(statePath)
 	if err != nil {
@@ -387,7 +391,7 @@ func TestExportedReviewerPolicyCheckBehaviorMatrix(t *testing.T) {
 	}
 }
 
-func TestPostDevelopmentComplexityStatisticsChecksEveryDecodableReport(t *testing.T) {
+func TestPostDevelopmentComplexityStatisticsRejectsAdditionalReport(t *testing.T) {
 	dir := t.TempDir()
 	policy, _ := policyByID("complexity.post-development.v2")
 	envelope, payload := reviewerPolicyFixture(t, dir, policy)
@@ -406,8 +410,8 @@ func TestPostDevelopmentComplexityStatisticsChecksEveryDecodableReport(t *testin
 	writeEnvelopeTest(t, filepath.Join(dir, "review.json"), envelope, payload)
 
 	result := Artifact(ArtifactOptions{Root: dir, RunDir: dir, File: "review.json", Gate: policy.Gate, WorkflowID: "wf", ChangeSnapshot: "snap", Flow: policy.Flow})
-	if result.OK() || !strings.Contains(resultSummary(result), "post-development complexity evidence must be statistics-only") {
-		t.Fatalf("later budget-bearing report was accepted: %#v", result.Failures)
+	if result.OK() || !strings.Contains(resultSummary(result), "exactly one CLI-generated statistics report") {
+		t.Fatalf("additional complexity statistics report was accepted: %#v", result.Failures)
 	}
 }
 
@@ -1022,6 +1026,26 @@ func TestCarryArtifactAcceptsRestrictedMultiHopChain(t *testing.T) {
 	if result.OK() || !strings.Contains(resultSummary(result), "unknown field") {
 		t.Fatalf("Carry payload accepted reviewer checks: %#v", result.Failures)
 	}
+	fixture = newCarryTestFixture(t, dir, "wf-old-field", "source", "target", postDevelopmentGateOrder[:1])
+	writeJSONTest(t, filepath.Join(fixture.RunDir, filepath.FromSlash(fixture.ChainPath)), fixture.Chain)
+	chainData, _ := os.ReadFile(filepath.Join(fixture.RunDir, filepath.FromSlash(fixture.ChainPath)))
+	chainData = bytes.Replace(chainData, []byte(`"targetSnapshot":`), []byte(`"proposedCarriedGates":["qa-test-gate"],"targetSnapshot":`), 1)
+	mustWrite(t, filepath.Join(fixture.RunDir, filepath.FromSlash(fixture.ChainPath)), string(chainData))
+	fixture.Payload.TransitionChain = testRef(t, fixture.RunDir, fixture.ChainPath)
+	writeEnvelopeTest(t, resolvePath(dir, fixture.Artifact), fixture.Envelope, fixture.Payload)
+	result = Artifact(ArtifactOptions{Root: dir, RunDir: fixture.RunDir, File: fixture.Artifact, Gate: "qa-test-gate", Stage: "Carry", WorkflowID: "wf-old-field", ChangeSnapshot: "target"})
+	if result.OK() || !strings.Contains(resultSummary(result), "unknown field") {
+		t.Fatalf("Carry transition accepted removed proposedCarriedGates field: %#v", result.Failures)
+	}
+	fixture = newCarryTestFixture(t, dir, "wf-old-decision-field", "source", "target", postDevelopmentGateOrder[:1])
+	writeEnvelopeTest(t, resolvePath(dir, fixture.Artifact), fixture.Envelope, fixture.Payload)
+	decisionData, _ := os.ReadFile(resolvePath(dir, fixture.Artifact))
+	decisionData = bytes.Replace(decisionData, []byte(`"reason":`), []byte(`"rerunFromGate":"qa-test-gate","reason":`), 1)
+	mustWrite(t, resolvePath(dir, fixture.Artifact), string(decisionData))
+	result = Artifact(ArtifactOptions{Root: dir, RunDir: fixture.RunDir, File: fixture.Artifact, Gate: "qa-test-gate", Stage: "Carry", WorkflowID: "wf-old-decision-field", ChangeSnapshot: "target"})
+	if result.OK() || !strings.Contains(resultSummary(result), "unknown field") {
+		t.Fatalf("Carry transition accepted removed rerunFromGate field: %#v", result.Failures)
+	}
 }
 
 func TestCarryArtifactRejectsRepairHistoryInReviewerPrompt(t *testing.T) {
@@ -1041,12 +1065,11 @@ func TestCarryArtifactRejectsBrokenChainDecisionAndSourceClosure(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "non-prefix gates",
+			name: "duplicate gates",
 			mutate: func(f *carryTestFixture) {
-				f.Chain.ProposedCarriedGates[0] = "complexity-gate"
-				f.Payload.Decisions[0].Gate = "complexity-gate"
+				f.Payload.Decisions[1].Gate = f.Payload.Decisions[0].Gate
 			},
-			want: "unique prefix",
+			want: "at most once",
 		},
 		{
 			name: "discontinuous hop",
@@ -1070,20 +1093,10 @@ func TestCarryArtifactRejectsBrokenChainDecisionAndSourceClosure(t *testing.T) {
 			want: "required source-snapshot PASS closure",
 		},
 		{
-			name: "rerun later than rejected gate",
-			mutate: func(f *carryTestFixture) {
-				f.Envelope.Verdict = "REVIEW"
-				f.Payload.Decisions[0].Decision = "RERUN_REQUIRED"
-				f.Payload.Decisions[0].RerunFromGate = "complexity-gate"
-			},
-			want: "same or an earlier fixed gate",
-		},
-		{
 			name: "verdict mismatch",
 			mutate: func(f *carryTestFixture) {
-				f.Envelope.Verdict = "PASS"
+				f.Envelope.Verdict = "BLOCKED"
 				f.Payload.Decisions[1].Decision = "RERUN_REQUIRED"
-				f.Payload.Decisions[1].RerunFromGate = "complexity-gate"
 			},
 			want: "contradicts Carry decision aggregation",
 		},
@@ -1104,14 +1117,13 @@ func TestCarryArtifactRejectsBrokenChainDecisionAndSourceClosure(t *testing.T) {
 	}
 }
 
-func TestCarryDerivesEarliestRerunAndBlockedAggregation(t *testing.T) {
+func TestCarryAggregatesTerminalDecisions(t *testing.T) {
 	decisions := []CarryDecision{
 		{Decision: "ACCEPT_CARRY"},
-		{Decision: "RERUN_REQUIRED", RerunFromGate: "complexity-gate"},
-		{Decision: "RERUN_REQUIRED", RerunFromGate: "qa-test-gate"},
+		{Decision: "RERUN_REQUIRED"},
 	}
-	if got := deriveEarliestCarryRerun(decisions); got != "qa-test-gate" {
-		t.Fatalf("earliest rerun was not machine-derived: %q", got)
+	if got := carryAggregateVerdict(decisions); got != "PASS" {
+		t.Fatalf("terminal mixed decisions did not aggregate to PASS: %q", got)
 	}
 	decisions = append(decisions, CarryDecision{Decision: "BLOCKED"})
 	if got := carryAggregateVerdict(decisions); got != "BLOCKED" {
@@ -1154,7 +1166,6 @@ func newCarryTestFixture(t *testing.T, root, workflowID, sourceSnapshot, targetS
 	})
 	chain := TransitionChain{
 		SchemaVersion: 2, WorkflowID: workflowID, TargetSnapshot: targetSnapshot,
-		ProposedCarriedGates: append([]string{}, proposed...),
 		Hops: []TransitionHop{
 			{FromSnapshot: sourceSnapshot, ToSnapshot: "middle-" + targetSnapshot, ChangedFiles: testRef(t, runDir, base+"/hop-one-files.txt"), Verification: testRef(t, runDir, base+"/hop-one-verification.txt"), RepairEvidence: testRef(t, runDir, base+"/hop-one-repair.txt")},
 			{FromSnapshot: "middle-" + targetSnapshot, ToSnapshot: targetSnapshot, ChangedFiles: testRef(t, runDir, base+"/hop-two-files.txt"), Verification: testRef(t, runDir, base+"/hop-two-verification.txt"), RepairEvidence: testRef(t, runDir, base+"/hop-two-repair.txt")},
@@ -1164,7 +1175,7 @@ func newCarryTestFixture(t *testing.T, root, workflowID, sourceSnapshot, targetS
 	writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(chainPath)), chain)
 	decisions := make([]CarryDecision, 0, len(proposed))
 	for _, gate := range proposed {
-		decisions = append(decisions, CarryDecision{Gate: gate, SourceSnapshot: sourceSnapshot, SourceGateEvidence: closures[gate], Decision: "ACCEPT_CARRY", RerunFromGate: "", Reason: "The complete chain does not invalidate this gate."})
+		decisions = append(decisions, CarryDecision{Gate: gate, SourceSnapshot: sourceSnapshot, SourceGateEvidence: closures[gate], Decision: "ACCEPT_CARRY", Reason: "The complete chain does not invalidate this gate."})
 	}
 	payload := CarryPayload{
 		ContextBundle:  testRef(t, runDir, base+"/carry-context.json"),
@@ -1203,9 +1214,7 @@ func writeCarrySourceClosure(t *testing.T, root, runDir, workflowID, snapshot, g
 		for _, id := range policy.RequiredCheckIDs {
 			check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
 			if id == "complexity.statistics" {
-				report := ComplexityReport{Status: "PASS", VCS: "git", Worktree: root, TaskType: "small-feature", BudgetSource: "none", BudgetOverrides: ComplexityBudgetOverride{}, Summary: ComplexitySummary{}, Failures: []string{}, ReviewRequired: []string{}, Warnings: []string{}, LargestFiles: []ComplexityFileChange{}}
-				writeJSONTest(t, filepath.Join(restricted, prefix+"-statistics.json"), report)
-				check.EvidenceRefs = []EvidenceRef{testRef(t, runDir, logical(prefix+"-statistics.json"))}
+				check.EvidenceRefs = []EvidenceRef{writeComplexityStatisticsFixture(t, root, runDir, workflowID, snapshot, logical(prefix+"-statistics.json"))}
 			}
 			checks = append(checks, check)
 		}
@@ -1233,6 +1242,22 @@ func writeCarrySourceClosure(t *testing.T, root, runDir, workflowID, snapshot, g
 
 func refPtr(ref EvidenceRef) *EvidenceRef { return &ref }
 
+func writeComplexityStatisticsFixture(t *testing.T, root, runDir, workflowID, snapshot, output string) EvidenceRef {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	report, result := Complexity(ComplexityOptions{Worktree: root, VCS: "none", TaskType: "refactor"})
+	if !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	ref, result := writeComplexityStatisticsReport(root, runDir, workflowID, snapshot, output, report)
+	if !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	return ref
+}
+
 func reviewerPolicyFixture(t *testing.T, dir string, policy ArtifactPolicy) (FormalGateEvidence, ReviewerPayload) {
 	t.Helper()
 	restricted := filepath.Join(dir, "restricted")
@@ -1247,9 +1272,7 @@ func reviewerPolicyFixture(t *testing.T, dir string, policy ArtifactPolicy) (For
 		switch id {
 		case "complexity.statistics":
 			if policy.ID == "complexity.post-development.v2" {
-				report := ComplexityReport{Status: "PASS", VCS: "git", Worktree: dir, TaskType: "refactor", BudgetSource: "none", BudgetOverrides: ComplexityBudgetOverride{}, Summary: ComplexitySummary{}, Failures: []string{}, ReviewRequired: []string{}, Warnings: []string{}, LargestFiles: []ComplexityFileChange{}}
-				writeJSONTest(t, filepath.Join(restricted, "statistics.json"), report)
-				check.EvidenceRefs = []EvidenceRef{testRef(t, dir, logical("statistics.json"))}
+				check.EvidenceRefs = []EvidenceRef{writeComplexityStatisticsFixture(t, testWorktreeForRunDir(dir), dir, "wf", "snap", logical("statistics.json"))}
 			}
 		case "qa.design.case-set-binding":
 			mustWrite(t, filepath.Join(restricted, "approved-cases.md"), "# Cases\n\nCase ID: P1-001\n\nOracle: approved behavior\n")
@@ -1276,6 +1299,14 @@ func qaExecutionPolicyFixture(t *testing.T, dir, workflowID, snapshot string) (F
 	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
 	for name, text := range map[string]string{"qa-changed.txt": "changed", "qa-verification.txt": "verified"} {
 		mustWrite(t, filepath.Join(restricted, name), text)
+	}
+	root := testWorktreeForRunDir(dir)
+	for name, composer := range map[string]string{"qa-changed.txt": "changed-files.v1", "qa-verification.txt": "verification.v1"} {
+		path := filepath.Join(restricted, name)
+		ref := testRef(t, dir, logical(name))
+		if _, err := writeCompositionProof(root, dir, composer, workflowID, snapshot, path, []EvidenceRef{ref}); err != nil && !os.IsExist(err) {
+			t.Fatal(err)
+		}
 	}
 	mustWrite(t, filepath.Join(restricted, "approved-cases.md"), "# Cases\n\nStatus: APPROVED_FOR_EXECUTION\n\n## Login flow\n\nCase ID: P1-001\n\n## Execution notes\n")
 	approved := testRef(t, dir, logical("approved-cases.md"))
@@ -1395,14 +1426,32 @@ func writeProofReceiptFixtureWithSubagent(t *testing.T, dir, workflowID, snapsho
 	artifactPath := relativePath(root, filepath.Join(dir, filepath.FromSlash(artifact)))
 	writeJSONTest(t, filepath.Join(root, "hooks", "pollution-patterns.json"), map[string]any{"english": map[string]any{"patternGroups": []any{}}, "chinese": map[string]any{"termGroups": []any{}}})
 	promptPath, promptHash := "", ""
+	semanticSubmissionHash := ""
 	if reviewJudgmentLifecycle(gate, stage) {
 		promptName := prefix + "-final-send.txt"
 		promptAbs := filepath.Join(proofDir, promptName)
 		mustWrite(t, promptAbs, finalSendPromptFixture(root, expectedDispatchRole(gate, stage), artifactPath))
 		promptPath, promptHash = relativePath(root, promptAbs), sha256File(promptAbs)
+		finalBytes, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(artifact)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope FormalGateEvidence
+		if err := strictContractJSON(finalBytes, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		envelope.Verdict = "PENDING"
+		submittedBytes, err := json.MarshalIndent(envelope, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		submittedBytes = append(submittedBytes, '\n')
+		semanticSubmissionHash = sha256Bytes(submittedBytes)
+	} else if qaDesignLifecycle(gate, stage) {
+		semanticSubmissionHash = sha256File(filepath.Join(dir, filepath.FromSlash(artifact)))
 	}
 	dispatchID := prefix + "-dispatch-id"
-	dispatch := dispatchRegistration{ProofVersion: 1, DispatchID: dispatchID, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, ReviewArtifact: artifactPath, PromptArtifact: promptPath, PromptSha256: promptHash, ReceiptArtifact: receiptPath, Status: "finalized"}
+	dispatch := dispatchRegistration{ProofVersion: 1, DispatchID: dispatchID, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, ReviewArtifact: artifactPath, PromptArtifact: promptPath, PromptSha256: promptHash, SemanticSubmissionSHA: semanticSubmissionHash, ReceiptArtifact: receiptPath, Status: "finalized"}
 	writeJSONTest(t, filepath.Join(proofDir, dispatchName), dispatch)
 	for name, event := range map[string]string{startName: "subagent_start", stopName: "subagent_stop"} {
 		writeJSONTest(t, filepath.Join(proofDir, name), receiptEventRecord{Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, NormalizedEvent: event, RawEventName: map[string]string{"subagent_start": "SubagentStart", "subagent_stop": "SubagentStop"}[event], SubagentID: subagentID, Status: "completed", DispatchID: dispatchID, DispatchRegistrationArtifact: dispatchPath, CapturedAtUTC: "2026-07-17T00:00:00Z"})
@@ -1443,7 +1492,7 @@ func writeFinalExecutionPolicyFixture(t *testing.T, dir string) {
 		writeJSONTest(t, filepath.Join(restricted, closurePath), closure)
 		matrix = append(matrix, FinalGateRow{Gate: gate, ResultKind: "FRESH_PASS", SourceSnapshot: "snap", TargetSnapshot: "snap", GateEvidence: testRef(t, dir, logical(closurePath))})
 	}
-	attempt := WorkflowFinalVerificationAttempt{"name": "go test", "status": "PASS"}
+	attempt := WorkflowFinalVerificationAttempt{Status: "PASS", Accepted: true, Artifact: "restricted/final-run.json", ArtifactHash: strings.Repeat("a", 64)}
 	writeJSONTest(t, filepath.Join(restricted, "final-verification.json"), WorkflowFinalVerificationArtifact{SchemaVersion: 2, WorkflowID: "wf", ChangeSnapshot: "snap", Status: "PASS", Attempts: []WorkflowFinalVerificationAttempt{attempt}, AcceptedAttempts: []WorkflowFinalVerificationAttempt{attempt}})
 	payload := FinalExecutionPayload{Mode: "MECHANICAL_CLOSEOUT", GateMatrix: matrix, FinalVerification: testRef(t, dir, logical("final-verification.json")), ReleaseJudgment: "SEAL"}
 	writeEnvelopeTest(t, filepath.Join(restricted, "final-execution.json"), FormalGateEvidence{SchemaVersion: 2, ArtifactRole: "FINAL_EXECUTION", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "qa-test-gate", Stage: "FinalExecution", Verdict: "PASS"}, payload)
@@ -1481,12 +1530,44 @@ func writeV2RequirementsFixture(t *testing.T, dir, workflow, snapshot string) st
 
 func writeV2RequirementsFixtureAt(t *testing.T, dir, workflow, snapshot, prefix string, previous *EvidenceRef) (string, EvidenceRef) {
 	t.Helper()
+	if strings.Contains(filepath.ToSlash(dir), "/.claude/gates/runs/") {
+		rootMarker := strings.Index(filepath.ToSlash(dir), "/.claude/gates/runs/")
+		if rootMarker < 0 {
+			t.Fatal("cannot derive test worktree root")
+		}
+		root := filepath.FromSlash(filepath.ToSlash(dir)[:rootMarker])
+		dimensions := make([]RequirementsDimensionSubmission, len(dimensionIDs))
+		for index := range dimensions {
+			dimensions[index] = RequirementsDimensionSubmission{Position: index + 1, Status: "COVERED", AlignmentItemPositions: []int{1}, Message: "covered"}
+		}
+		alignments := []RequirementsAlignmentSubmission{{
+			Position:              1,
+			RequirementOrQuestion: "What", Source: "user", WhyItMatters: "value", Status: "CONFIRMED",
+			UserAnswer: "approved", DownstreamEffect: "implement", DocumentImpact: "docs/requirements.md", EvidenceNeeded: "tests",
+		}}
+		previousPath := ""
+		if previous != nil {
+			previousPath = previous.Path
+		}
+		output, result := ComposeRequirements(ComposeRequirementsOptions{
+			Root: root, RunDir: dir, WorkflowID: workflow, ChangeSnapshot: snapshot,
+			OutputDir: "restricted/" + prefix + "requirements", PreviousAlignment: previousPath,
+			RequirementSource: "brief", AlignmentIDs: []string{"RQ-001"}, CoveredTargets: []string{"docs/requirements.md"},
+			Alignments: alignments, UserOriginal: "approved", OpenBlockers: []string{}, CoverageScan: "PASS",
+			ScopePreservation: PassOrNA{Status: "PASS", Message: "scope preserved"}, TaskProof: PassOrNA{Status: "PASS", Message: "task proved"}, Dimensions: dimensions,
+		})
+		if !result.OK() {
+			t.Fatalf("cannot compose requirements fixture: %#v", result.Failures)
+		}
+		path := filepath.Join(dir, filepath.FromSlash(output.Requirements.Path))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data), output.Alignment
+	}
 	baseDir := dir
 	logicalPrefix := ""
-	if strings.Contains(filepath.ToSlash(dir), "/.claude/gates/runs/") {
-		baseDir = filepath.Join(dir, "restricted")
-		logicalPrefix = "restricted/"
-	}
 	alignmentPath := logicalPrefix + prefix + "alignment.json"
 	decisionPath := logicalPrefix + prefix + "decision.json"
 	alignment := AlignmentArtifact{SchemaVersion: 2, WorkflowID: workflow, ChangeSnapshot: snapshot, Items: []AlignmentItem{{ID: "RQ-001", RequirementOrQuestion: "What", Source: "user", WhyItMatters: "value", Status: "CONFIRMED", UserAnswer: "approved", DownstreamEffect: "implement", DocumentImpact: "docs/requirements.md", EvidenceNeeded: "tests"}}}
@@ -1506,6 +1587,10 @@ func writeV2RequirementsFixtureAt(t *testing.T, dir, workflow, snapshot, prefix 
 		t.Fatal(err)
 	}
 	return string(data), alignmentRef
+}
+
+func requirementsFixtureArtifactPath(runDir, prefix string) string {
+	return filepath.Join(runDir, "restricted", prefix+"requirements", "requirements.json")
 }
 
 func writeEnvelopeTest(t *testing.T, path string, envelope FormalGateEvidence, payload any) {

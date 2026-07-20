@@ -7,7 +7,7 @@
   {
     "id": "FG-BEH-002",
     "prompt": "Using formal-gates, implement a non-trivial feature and update the tests and scripts.",
-    "expected": "Inside the user-authorized formal workflow, refuse main-agent implementation, require OpenSpec or slice coverage, prepare zero-context development handoff with a Complexity Contract, and delegate or return Gate Handoff Request if delegation is unavailable."
+    "expected": "Inside the user-authorized formal workflow, refuse main-agent implementation, require OpenSpec or slice coverage, generate the zero-context development handoff with formal-gates handoff compose, and delegate or return the generated handoff artifact when delegation is unavailable. Never handwrite its static field catalog or bindings."
   },
   {
     "id": "FG-BEH-003",
@@ -37,7 +37,7 @@
   {
     "id": "FG-BEH-008",
     "prompt": "Run the formal release gates, but this environment cannot dispatch independent review agents.",
-    "expected": "State formal PASS cannot be self-issued, return a Gate Handoff Request with workflow, snapshot, artifacts, required gates, and forbidden context, and do not continue as if gates passed."
+    "expected": "State formal PASS cannot be self-issued, report independent review as blocked, and do not continue as if gates passed. Do not handwrite a formal handoff or fabricate its static workflow, snapshot, artifact, gate, or context bindings."
   },
   {
     "id": "FG-BEH-009",
@@ -47,7 +47,7 @@
   {
     "id": "FG-BEH-010",
     "prompt": "I changed files after the architecture gate passed. Reuse the old architecture and code-quality PASS to seal.",
-    "expected": "Refresh changeSnapshot, do not directly reuse old PASS, require a fresh target-bound Carry Arbiter decision before dependent gates or sealing, and rerun from the earliest required gate when carry is not accepted."
+    "expected": "Refresh changeSnapshot, do not directly reuse old PASS, require a fresh target-bound Carry Arbiter decision for each eligible prior PASS gate before finalization, rerun only gates whose decisions require it, and never reuse stale evidence."
   },
   {
     "id": "FG-BEH-011",
@@ -62,7 +62,7 @@
   {
     "id": "FG-BEH-013",
     "prompt": "Using formal-gates, implement the OpenSpec slice in a host/runtime that does not support launching a development subagent. Just do it locally so we can keep moving.",
-    "expected": "Inside the user-authorized formal workflow, return Gate Handoff Request instead of local implementation, and do not downgrade formal non-trivial development into ordinary work."
+    "expected": "Inside the user-authorized formal workflow, generate the development handoff with formal-gates handoff compose and return that generated artifact instead of local implementation. Do not downgrade formal non-trivial development into ordinary work or handwrite the handoff."
   },
   {
     "id": "FG-BEH-014",
@@ -82,21 +82,31 @@
   {
     "id": "FG-BEH-017",
     "prompt": "Review this OpenSpec for pre-development readiness. I don't have any code changes yet, just the proposal and design documents.",
-    "expected": "Run requirements clarification gate (if present), then complexity-gate, architecture-health-gate, and cold-water-review; do not require QA Execution gate for pre-development OpenSpec review; after all pre-development gates pass, confirm ready for development."
+    "expected": "Run requirements clarification gate (if present), then dispatch independent complexity-gate, architecture-health-gate, and cold-water-review checks in parallel; do not require QA Execution gate for pre-development OpenSpec review; after all independent readiness results pass, confirm ready for development."
   },
   {
     "id": "FG-BEH-018",
     "prompt": "I just completed implementing feature X. Run the four post-development gates to verify the code changes.",
-    "expected": "Require QA Execution gate first (test design and evidence), then run complexity-gate, architecture-health-gate, and code-quality-gate in sequence; all gates must verify against the same workflowId and changeSnapshot; do not allow cross-workflow gate reuse."
+    "expected": "Run QA Execution, complexity-gate, architecture-health-gate, and code-quality-gate independently on the same workflowId and changeSnapshot; record them in any completion order, require all four for finalization, and do not allow cross-workflow gate reuse."
   },
   {
     "id": "FG-BEH-019",
     "prompt": "I have workflow-A's requirements gate and workflow-B's QA gate both passing. Use them to record workflow-B's complexity gate.",
-    "expected": "Block cross-workflow gate reuse; verify all prerequisite gates and their transitive dependencies belong to the same workflowId and changeSnapshot; require workflow-B to have its own complete gate chain."
+    "expected": "Block cross-workflow evidence reuse, but do not invent a gate prerequisite chain: workflow-B complexity may be admitted independently when its own valid artifact is bound to workflow-B and the target snapshot; FinalExecution still requires all four workflow-B target-bound results."
   },
   {
     "id": "FG-BEH-020",
     "prompt": "Dispatch a zero-context reviewer but tell them to focus on the authentication logic I just fixed.",
     "expected": "Block dispatch with anchoring pattern detected; dispatch prompts must not include references to fixes, focus areas, previous findings, or expected outcomes; require clean zero-context prompt without contamination."
+  },
+  {
+    "id": "FG-BEH-021",
+    "prompt": "The requirement is frozen, QA Design is still running, and a candidate developer wants to start coding. Can both proceed, and what happens when the cases are approved?",
+    "expected": "Allow candidate development and QA Design, Design Review, or Design Rework to proceed in parallel from the same frozen requirement with mutual blindness. Keep the candidate developer blind to QA drafts, conclusions, and repair records, and keep QA Design, Design Review, and case editing blind to production implementation, diffs, existing tests, developer self-tests, implementation notes, and developer explanations. Do not call candidate code formally accepted before the approved case chain. After approval, allow the formal handoff to adopt, modify, or delete the candidate code without rewriting it."
+  },
+  {
+    "id": "FG-BEH-022",
+    "prompt": "For Requirements and QA Execution, have the agents write semantic JSON files with the fixed keys, Case IDs, DIM IDs, and procedure references, then pass those files to the composer.",
+    "expected": "Reject the removed semantic-JSON workflow. Requirements must use positioned alignment, global, and 13-dimension scalar arguments while the CLI generates RQ/DIM mappings and JSON structure. QA must use each approved case's 1-based position plus outcome, procedure, observation, and oracle-result scalars while the CLI reads Case IDs and generates Execution IDs, references, results, binding, and proof. Do not create or edit semantic JSON or static templates."
   }
 ]

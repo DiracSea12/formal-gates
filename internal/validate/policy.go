@@ -32,7 +32,7 @@ type PolicyPrereq struct {
 	Flow  string `json:"flow"`
 }
 
-var commonReviewChecks = []string{"review.prompt-fields", "review.prompt-semantics"}
+var commonReviewChecks = []string{"review.prompt-semantics"}
 
 var qaDesignReviewChecks = []string{
 	"qa.design.requirement-coverage", "qa.design.executability", "qa.design.oracles",
@@ -96,27 +96,21 @@ func Policy() BuiltInPolicy {
 		{
 			ID: "complexity.post-development.v2", ArtifactRole: "COMPLEXITY_REVIEW",
 			Gate: "complexity-gate", Stage: "", Flow: "post-development",
-			Prerequisites:    []PolicyPrereq{{Gate: "qa-test-gate", Stage: "Execution", Flow: "post-development"}},
+			Prerequisites:    []PolicyPrereq{},
 			RequiredCheckIDs: checks("complexity-gate"), AllowedNotApplicableCheckIDs: []string{},
 			ReceiptRequired: true, ChangedFilesRequired: true, VerificationRequired: true,
 		},
 		{
 			ID: "architecture.start-readiness.v2", ArtifactRole: "ARCHITECTURE_REVIEW",
 			Gate: "architecture-health-gate", Stage: "", Flow: "start-readiness",
-			Prerequisites: []PolicyPrereq{
-				{Gate: "requirements-clarification-gate", Stage: "", Flow: "requirements"},
-				{Gate: "complexity-gate", Stage: "", Flow: "start-readiness"},
-			},
+			Prerequisites:                []PolicyPrereq{{Gate: "requirements-clarification-gate", Stage: "", Flow: "requirements"}},
 			RequiredCheckIDs:             checks("architecture-health-gate"),
 			AllowedNotApplicableCheckIDs: []string{}, ReceiptRequired: true,
 		},
 		{
 			ID: "architecture.post-development.v2", ArtifactRole: "ARCHITECTURE_REVIEW",
 			Gate: "architecture-health-gate", Stage: "", Flow: "post-development",
-			Prerequisites: []PolicyPrereq{
-				{Gate: "qa-test-gate", Stage: "Execution", Flow: "post-development"},
-				{Gate: "complexity-gate", Stage: "", Flow: "post-development"},
-			},
+			Prerequisites:                []PolicyPrereq{},
 			RequiredCheckIDs:             checks("architecture-health-gate"),
 			AllowedNotApplicableCheckIDs: []string{}, ReceiptRequired: true,
 			ChangedFilesRequired: true, VerificationRequired: true,
@@ -124,11 +118,7 @@ func Policy() BuiltInPolicy {
 		{
 			ID: "code-quality.post-development.v2", ArtifactRole: "CODE_QUALITY_REVIEW",
 			Gate: "code-quality-gate", Stage: "", Flow: "post-development",
-			Prerequisites: []PolicyPrereq{
-				{Gate: "qa-test-gate", Stage: "Execution", Flow: "post-development"},
-				{Gate: "complexity-gate", Stage: "", Flow: "post-development"},
-				{Gate: "architecture-health-gate", Stage: "", Flow: "post-development"},
-			},
+			Prerequisites:                []PolicyPrereq{},
 			RequiredCheckIDs:             checks("code-quality-gate"),
 			AllowedNotApplicableCheckIDs: []string{}, ReceiptRequired: true,
 			ChangedFilesRequired: true, VerificationRequired: true,

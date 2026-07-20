@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type ReceiptRegisterOptions struct {
@@ -25,6 +27,14 @@ type ReceiptRegisterOptions struct {
 	Artifact                  string
 	ContextBundle             string
 	Prompt                    string
+	ChangedFiles              string
+	Verification              string
+	QADesignCaseSet           string
+	QADesignReceipt           string
+	ComplexityStatistics      string
+	TransitionChain           string
+	CarrySourceClosures       []string
+	QACaseCount               int
 	UserAuthorizedExtraReview bool
 }
 
@@ -64,6 +74,52 @@ type ReceiptFinalizeOutput struct {
 	ReceiptSha256   string `json:"receiptSha256"`
 }
 
+type ReceiptSubmitOptions struct {
+	Worktree       string
+	Artifact       string
+	Checks         []ReceiptSemanticCheck
+	Findings       []ReceiptSemanticFinding
+	Locations      []ReceiptSemanticLocation
+	CarryDecisions []ReceiptSemanticCarryDecision
+	DesignCases    []ReceiptSemanticDesignCase
+}
+
+type ReceiptSemanticCheck struct {
+	Position int
+	Status   string
+	Message  string
+}
+
+type ReceiptSemanticFinding struct {
+	CheckPosition int
+	Message       string
+}
+
+type ReceiptSemanticLocation struct {
+	FindingPosition int
+	Path            string
+	StartLine       int
+	EndLine         int
+}
+
+type ReceiptSemanticCarryDecision struct {
+	GatePosition int
+	Decision     string
+	Reason       string
+}
+
+type ReceiptSemanticDesignCase struct {
+	Position int
+	Values   []string
+}
+
+type ReceiptSubmission struct {
+	Artifact       string `json:"artifact"`
+	ArtifactRole   string `json:"artifactRole,omitempty"`
+	ArtifactSha256 string `json:"artifactSha256"`
+	Status         string `json:"status"`
+}
+
 type ReceiptValidateOptions struct {
 	Worktree       string
 	Receipt        string
@@ -94,21 +150,42 @@ type ReceiptPreflightReport struct {
 }
 
 type dispatchRegistration struct {
-	ProofVersion          int    `json:"proofVersion"`
-	DispatchID            string `json:"dispatchId"`
-	Provider              string `json:"provider"`
-	WorkflowID            string `json:"workflowId"`
-	ChangeSnapshot        string `json:"changeSnapshot"`
-	Gate                  string `json:"gate"`
-	Stage                 string `json:"stage"`
-	ReviewArtifact        string `json:"reviewArtifact"`
-	ContextBundle         string `json:"contextBundle,omitempty"`
-	ContextSHA256         string `json:"contextSha256,omitempty"`
-	ExtraReviewAuthorized bool   `json:"extraReviewAuthorized,omitempty"`
-	PromptArtifact        string `json:"promptArtifact,omitempty"`
-	PromptSha256          string `json:"promptSha256,omitempty"`
-	ReceiptArtifact       string `json:"receiptArtifact,omitempty"`
-	Status                string `json:"status"`
+	ProofVersion          int                       `json:"proofVersion"`
+	DispatchID            string                    `json:"dispatchId"`
+	Provider              string                    `json:"provider"`
+	WorkflowID            string                    `json:"workflowId"`
+	ChangeSnapshot        string                    `json:"changeSnapshot"`
+	Gate                  string                    `json:"gate"`
+	Stage                 string                    `json:"stage"`
+	ReviewArtifact        string                    `json:"reviewArtifact"`
+	ContextBundle         string                    `json:"contextBundle,omitempty"`
+	ContextSHA256         string                    `json:"contextSha256,omitempty"`
+	ReviewPolicyID        string                    `json:"reviewPolicyId,omitempty"`
+	ReviewTemplate        string                    `json:"reviewTemplate,omitempty"`
+	ReviewTemplateSHA256  string                    `json:"reviewTemplateSha256,omitempty"`
+	SemanticSubmissionSHA string                    `json:"semanticSubmissionSha256,omitempty"`
+	ChangedFiles          *EvidenceRef              `json:"changedFiles,omitempty"`
+	Verification          *EvidenceRef              `json:"verification,omitempty"`
+	CheckEvidence         []registeredCheckEvidence `json:"checkEvidence,omitempty"`
+	TransitionChain       *EvidenceRef              `json:"transitionChain,omitempty"`
+	CarrySources          []registeredCarrySource   `json:"carrySources,omitempty"`
+	QACaseCount           int                       `json:"qaCaseCount,omitempty"`
+	ExtraReviewAuthorized bool                      `json:"extraReviewAuthorized,omitempty"`
+	PromptArtifact        string                    `json:"promptArtifact,omitempty"`
+	PromptSha256          string                    `json:"promptSha256,omitempty"`
+	ReceiptArtifact       string                    `json:"receiptArtifact,omitempty"`
+	Status                string                    `json:"status"`
+}
+
+type registeredCheckEvidence struct {
+	ID           string        `json:"id"`
+	EvidenceRefs []EvidenceRef `json:"evidenceRefs"`
+}
+
+type registeredCarrySource struct {
+	Gate               string      `json:"gate"`
+	SourceSnapshot     string      `json:"sourceSnapshot"`
+	SourceGateEvidence EvidenceRef `json:"sourceGateEvidence"`
 }
 
 type reviewerProofReceipt struct {
@@ -157,6 +234,10 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 		result.add("receipt", "unsupported provider: "+options.Provider)
 		return ReceiptRegistration{}, result
 	}
+	if !reviewJudgmentLifecycle(options.Gate, options.Stage) && !qaDesignLifecycle(options.Gate, options.Stage) {
+		result.add("receipt", "receipt registration supports only QA Design or an independent review judgment; QA Execution uses CLI composition")
+		return ReceiptRegistration{}, result
+	}
 	for flag, value := range map[string]string{"workflow-id": options.WorkflowID, "gate": options.Gate, "artifact": options.Artifact, "context-bundle": options.ContextBundle} {
 		if strings.TrimSpace(value) == "" {
 			result.add("receipt", "--"+flag+" is required")
@@ -175,7 +256,6 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 	}
 	promptArtifact, promptSHA256 := "", ""
 	var promptPath string
-	var registeredPromptBytes []byte
 	if reviewJudgmentLifecycle(options.Gate, options.Stage) {
 		if strings.TrimSpace(options.Prompt) == "" {
 			result.add("receipt", "--prompt is required for a review judgment")
@@ -206,32 +286,34 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 		return ReceiptRegistration{}, result
 	}
 	contextRefs := validateContextBundle(ArtifactOptions{Root: repo, File: options.ContextBundle}, runDir, options.ContextBundle, bundleData, options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), &result)
+	bundleRef := EvidenceRef{Path: options.ContextBundle, SHA256: sha256File(bundlePath)}
+	if result.OK() {
+		if proofErr := validateStandaloneCompositionProof(repo, runDir, "context-bundle.v1", options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), bundleRef); proofErr != nil {
+			result.add(options.ContextBundle, proofErr.Error())
+		}
+	}
+	policyID := ""
 	if reviewJudgmentLifecycle(options.Gate, options.Stage) {
-		policyID := validateDispatchRegistrationContract(repo, runDir, promptArtifact, promptSHA256, options, bundlePath, &result)
+		policyID = validateDispatchRegistrationContract(repo, runDir, promptArtifact, promptSHA256, options, bundlePath, &result)
 		validateDispatchContextForPolicy(repo, runDir, policyID, contextRefs, &result)
+	}
+	changedFiles, verification, checkEvidence := registeredReviewEvidence(repo, runDir, policyID, options, &result)
+	validateRegisteredComplexityStatistics(repo, runDir, policyID, checkEvidence, options.WorkflowID, options.ChangeSnapshot, &result, "receipt")
+	if reviewJudgmentLifecycle(options.Gate, options.Stage) {
+		validateQADesignReviewPromptBinding(repo, runDir, policyID, promptArtifact, checkEvidence, options.WorkflowID, options.ChangeSnapshot, &result)
+	}
+	transitionChain, carrySources := registeredCarryEvidence(repo, runDir, policyID, options, &result)
+	if qaDesignLifecycle(options.Gate, options.Stage) {
+		if options.QACaseCount < 1 || options.QACaseCount > 200 {
+			result.add("receipt", "--qa-case-count between 1 and 200 is required for QA Design")
+		}
+	} else if options.QACaseCount != 0 {
+		result.add("receipt", "--qa-case-count is accepted only for QA Design")
 	}
 	if !result.OK() {
 		return ReceiptRegistration{}, result
 	}
-	if reviewJudgmentLifecycle(options.Gate, options.Stage) {
-		promptData, readErr := os.ReadFile(promptPath)
-		if readErr != nil {
-			result.add(options.Prompt, readErr.Error())
-			return ReceiptRegistration{}, result
-		}
-		registeredPrompt, markerErr := addDispatchStaticValidation(string(promptData))
-		if markerErr != nil {
-			result.add(options.Prompt, markerErr.Error())
-			return ReceiptRegistration{}, result
-		}
-		registeredPromptBytes = []byte(registeredPrompt)
-		promptSHA256 = sha256Bytes(registeredPromptBytes)
-		var markerResult Result
-		if !validateDispatchStaticMarker(registeredPrompt, &markerResult, options.Prompt) {
-			return ReceiptRegistration{}, markerResult
-		}
-	}
-	artifactPath, err := reserveAbsentReviewArtifact(repo, runDir, options.Artifact)
+	artifactPath, err := runLocalReviewArtifactPath(repo, runDir, options.Artifact)
 	if err != nil {
 		result.add(options.Artifact, err.Error())
 		return ReceiptRegistration{}, result
@@ -255,10 +337,50 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 		ReviewArtifact:        relativePath(repo, artifactPath),
 		ContextBundle:         slash(relativePath(runDir, bundlePath)),
 		ContextSHA256:         sha256File(bundlePath),
+		ReviewPolicyID:        policyID,
+		ChangedFiles:          changedFiles,
+		Verification:          verification,
+		CheckEvidence:         checkEvidence,
+		TransitionChain:       transitionChain,
+		CarrySources:          carrySources,
+		QACaseCount:           options.QACaseCount,
 		ExtraReviewAuthorized: options.UserAuthorizedExtraReview,
 		PromptArtifact:        promptArtifact,
 		PromptSha256:          promptSHA256,
 		Status:                "open",
+	}
+	var reviewTemplate FormalGateEvidence
+	var templateBytes []byte
+	var marshalErr error
+	if reviewJudgmentLifecycle(record.Gate, record.Stage) {
+		reviewTemplate, err = generatedDispatchTemplate(record)
+		if err != nil {
+			result.add("receipt", err.Error())
+			return ReceiptRegistration{}, result
+		}
+		templateBytes, marshalErr = json.MarshalIndent(reviewTemplate, "", "  ")
+		if marshalErr != nil {
+			result.add("receipt", marshalErr.Error())
+			return ReceiptRegistration{}, result
+		}
+		templateBytes = append(templateBytes, '\n')
+	} else if qaDesignLifecycle(record.Gate, record.Stage) {
+		templateBytes = generatedQADesignTemplate(record.QACaseCount)
+	}
+	if len(templateBytes) > 0 {
+		templateHash := sha256Bytes(templateBytes)
+		suffix := ".json"
+		if qaDesignLifecycle(record.Gate, record.Stage) {
+			suffix = ".md"
+		}
+		templatePath := filepath.Join(receiptProofDir(repo, runDir, "templates"), templateHash+suffix)
+		templateRel, relErr := filepath.Rel(absPath(repo), absPath(templatePath))
+		if relErr != nil || strings.HasPrefix(templateRel, "..") {
+			result.add("receipt", "cannot derive run-local review template path")
+			return ReceiptRegistration{}, result
+		}
+		record.ReviewTemplate = filepath.ToSlash(templateRel)
+		record.ReviewTemplateSHA256 = templateHash
 	}
 	if existing, ok := decodeDispatch(path); ok {
 		if existing.Status != "open" || strings.TrimSpace(existing.ReceiptArtifact) != "" {
@@ -266,32 +388,62 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 			return ReceiptRegistration{}, result
 		}
 		if hasLifecycleEventForDispatch(repo, runDir, existing.DispatchID, relativePath(repo, path)) {
-			result.add("receipt", "review artifact path is already bound to a dispatch that has started; it cannot be rebound")
+			result.add("receipt", "review artifact path already exists; dispatch has started and cannot be rebound")
 			return ReceiptRegistration{}, result
 		}
-		if existing.Provider == record.Provider && existing.WorkflowID == record.WorkflowID && existing.ChangeSnapshot == record.ChangeSnapshot && existing.Gate == record.Gate && normalizeStage(existing.Stage) == normalizeStage(record.Stage) && existing.ReviewArtifact == record.ReviewArtifact && existing.ContextBundle == record.ContextBundle && existing.ContextSHA256 == record.ContextSHA256 && existing.PromptArtifact == record.PromptArtifact && existing.PromptSha256 == record.PromptSha256 {
-			if len(registeredPromptBytes) > 0 {
-				if err := writeFileAtomic(promptPath, registeredPromptBytes, 0o600); err != nil {
-					result.add(options.Prompt, err.Error())
+		if !samePath(resolvePath(repo, existing.ReviewArtifact), artifactPath) || existing.ReviewTemplate == "" || !isSHA256(existing.ReviewTemplateSHA256) {
+			result.add(options.Artifact, "review artifact path is already reserved by a non-generated dispatch; use a distinct output path")
+			return ReceiptRegistration{}, result
+		}
+		existingTemplate, templateErr := os.ReadFile(resolvePath(repo, existing.ReviewTemplate))
+		existingArtifact, artifactErr := os.ReadFile(artifactPath)
+		if templateErr != nil || artifactErr != nil || sha256Bytes(existingTemplate) != existing.ReviewTemplateSHA256 || !bytes.Equal(existingTemplate, artifactBytesForDispatch(existing)) || !bytes.Equal(existingArtifact, existingTemplate) {
+			result.add(options.Artifact, "review artifact path is already reserved by a non-CLI-generated template; use a distinct output path")
+			return ReceiptRegistration{}, result
+		}
+		oldArtifact := append([]byte{}, existingArtifact...)
+		newTemplatePath := resolvePath(repo, record.ReviewTemplate)
+		newTemplateCreated := false
+		if record.ReviewTemplate != "" {
+			if _, statErr := os.Lstat(newTemplatePath); os.IsNotExist(statErr) {
+				if err := writeBytesExclusive(newTemplatePath, templateBytes); err != nil {
+					result.add("receipt", "cannot write generated review template: "+err.Error())
 					return ReceiptRegistration{}, result
 				}
+				newTemplateCreated = true
+			} else if statErr != nil || sha256File(newTemplatePath) != record.ReviewTemplateSHA256 {
+				result.add("receipt", "cannot verify generated review template: "+record.ReviewTemplate)
+				return ReceiptRegistration{}, result
 			}
-			result.add("receipt", "review artifact path is already reserved by this dispatch")
+		}
+		if existing.Provider == record.Provider && existing.WorkflowID == record.WorkflowID && existing.ChangeSnapshot == record.ChangeSnapshot && existing.Gate == record.Gate && normalizeStage(existing.Stage) == normalizeStage(record.Stage) && existing.ReviewArtifact == record.ReviewArtifact && existing.ContextBundle == record.ContextBundle && existing.ContextSHA256 == record.ContextSHA256 && existing.PromptArtifact == record.PromptArtifact && existing.PromptSha256 == record.PromptSha256 {
+			result.add("receipt", "review artifact path already exists; already reserved by this dispatch")
+			if newTemplateCreated {
+				_ = os.Remove(newTemplatePath)
+			}
 			return ReceiptRegistration{}, result
 		}
 		if existing.WorkflowID != record.WorkflowID || existing.Gate != record.Gate || normalizeStage(existing.Stage) != normalizeStage(record.Stage) {
 			if err := enforceReviewCapacity(repo, runDir, record.WorkflowID, record.Gate, record.Stage, options.UserAuthorizedExtraReview); err != nil {
 				result.add("receipt", err.Error())
+				if newTemplateCreated {
+					_ = os.Remove(newTemplatePath)
+				}
 				return ReceiptRegistration{}, result
 			}
 		}
-		if len(registeredPromptBytes) > 0 {
-			if err := writeFileAtomic(promptPath, registeredPromptBytes, 0o600); err != nil {
-				result.add(options.Prompt, err.Error())
-				return ReceiptRegistration{}, result
+		if err := writeFileAtomic(artifactPath, templateBytes, 0o600); err != nil {
+			result.add(options.Artifact, "cannot rebind generated review template: "+err.Error())
+			if newTemplateCreated {
+				_ = os.Remove(newTemplatePath)
 			}
+			return ReceiptRegistration{}, result
 		}
 		if err := writeJSON(path, record); err != nil {
+			_ = writeFileAtomic(artifactPath, oldArtifact, 0o600)
+			if newTemplateCreated {
+				_ = os.Remove(newTemplatePath)
+			}
 			result.add("receipt", err.Error())
 			return ReceiptRegistration{}, result
 		}
@@ -301,17 +453,34 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 			DispatchRegistrationStatusText: "rebound",
 		}, result
 	}
+	if _, statErr := os.Lstat(artifactPath); statErr == nil {
+		result.add(options.Artifact, "review artifact path already exists; stale output must be removed before registration")
+		return ReceiptRegistration{}, result
+	} else if !os.IsNotExist(statErr) {
+		result.add(options.Artifact, statErr.Error())
+		return ReceiptRegistration{}, result
+	}
 	if err := enforceReviewCapacity(repo, runDir, record.WorkflowID, record.Gate, record.Stage, options.UserAuthorizedExtraReview); err != nil {
 		result.add("receipt", err.Error())
 		return ReceiptRegistration{}, result
 	}
-	if len(registeredPromptBytes) > 0 {
-		if err := writeFileAtomic(promptPath, registeredPromptBytes, 0o600); err != nil {
-			result.add(options.Prompt, err.Error())
+	if record.ReviewTemplate != "" {
+		templatePath := resolvePath(repo, record.ReviewTemplate)
+		if err := writeBytesExclusive(templatePath, templateBytes); err != nil {
+			if !os.IsExist(err) || sha256File(templatePath) != record.ReviewTemplateSHA256 {
+				result.add("receipt", "cannot write generated review template: "+err.Error())
+				return ReceiptRegistration{}, result
+			}
+		}
+		if err := writeBytesExclusive(artifactPath, templateBytes); err != nil {
+			result.add(options.Artifact, "cannot write generated review template: "+err.Error())
 			return ReceiptRegistration{}, result
 		}
 	}
 	if err := writeJSONExclusive(path, record); err != nil {
+		if record.ReviewTemplate != "" {
+			_ = os.Remove(artifactPath)
+		}
 		if os.IsExist(err) {
 			result.add("receipt", "review artifact path is already reserved by a dispatch; use a distinct output path for each review attempt")
 			return ReceiptRegistration{}, result
@@ -324,6 +493,732 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 		DispatchRegistrationArtifact:   relativePath(repo, path),
 		DispatchRegistrationStatusText: "open",
 	}, result
+}
+
+func artifactBytesForDispatch(record dispatchRegistration) []byte {
+	if qaDesignLifecycle(record.Gate, record.Stage) {
+		return generatedQADesignTemplate(record.QACaseCount)
+	}
+	expected, err := generatedDispatchTemplate(record)
+	if err != nil {
+		return nil
+	}
+	data, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil
+	}
+	return append(data, '\n')
+}
+
+func registeredReviewEvidence(repo, runDir, policyID string, options ReceiptRegisterOptions, result *Result) (*EvidenceRef, *EvidenceRef, []registeredCheckEvidence) {
+	if policyID == "" || policyID == "carry.arbiter.v2" {
+		if options.ChangedFiles != "" || options.Verification != "" || options.QADesignCaseSet != "" || options.QADesignReceipt != "" || options.ComplexityStatistics != "" {
+			result.add("receipt", "static reviewer evidence is not accepted for this dispatch role")
+		}
+		return nil, nil, nil
+	}
+	policy, ok := policyByID(policyID)
+	if !ok {
+		result.add("receipt", "review policy is unknown")
+		return nil, nil, nil
+	}
+	resolve := func(label, logical string, required bool) *EvidenceRef {
+		if strings.TrimSpace(logical) == "" {
+			if required {
+				result.add("receipt", "--"+label+" is required for "+policyID)
+			}
+			return nil
+		}
+		if !required {
+			result.add("receipt", "--"+label+" is not allowed for "+policyID)
+			return nil
+		}
+		ref, err := registeredEvidenceRef(repo, runDir, logical)
+		if err != nil {
+			result.add(logical, err.Error())
+			return nil
+		}
+		composer := map[string]string{"changed-files": "changed-files.v1", "verification": "verification.v1"}[label]
+		if composer != "" {
+			if err := validateStandaloneCompositionProof(repo, runDir, composer, options.WorkflowID, options.ChangeSnapshot, ref); err != nil {
+				result.add(logical, err.Error())
+				return nil
+			}
+		}
+		return &ref
+	}
+	changedFiles := resolve("changed-files", options.ChangedFiles, policy.ChangedFilesRequired)
+	verification := resolve("verification", options.Verification, policy.VerificationRequired)
+	resolveBinding := func(label, logical string) *EvidenceRef {
+		if strings.TrimSpace(logical) == "" {
+			result.add("receipt", "--"+label+" is required for "+policyID)
+			return nil
+		}
+		ref, err := registeredEvidenceRef(repo, runDir, logical)
+		if err != nil {
+			result.add(logical, err.Error())
+			return nil
+		}
+		return &ref
+	}
+	var bindings []registeredCheckEvidence
+	switch policyID {
+	case "qa.design-review.v2":
+		if options.ComplexityStatistics != "" {
+			result.add("receipt", "--complexity-statistics is not allowed for "+policyID)
+		}
+		caseSet := resolveBinding("qa-design-case-set", options.QADesignCaseSet)
+		designReceipt := resolveBinding("qa-design-receipt", options.QADesignReceipt)
+		if caseSet != nil && designReceipt != nil {
+			bindings = []registeredCheckEvidence{{ID: "qa.design.case-set-binding", EvidenceRefs: []EvidenceRef{*caseSet, *designReceipt}}}
+		}
+	case "complexity.post-development.v2":
+		if options.QADesignCaseSet != "" || options.QADesignReceipt != "" {
+			result.add("receipt", "QA Design binding flags are not allowed for "+policyID)
+		}
+		statistics := resolveBinding("complexity-statistics", options.ComplexityStatistics)
+		if statistics != nil {
+			bindings = []registeredCheckEvidence{{ID: "complexity.statistics", EvidenceRefs: []EvidenceRef{*statistics}}}
+		}
+	default:
+		if options.QADesignCaseSet != "" || options.QADesignReceipt != "" || options.ComplexityStatistics != "" {
+			result.add("receipt", "role-specific check evidence is not accepted for "+policyID)
+		}
+	}
+	return changedFiles, verification, bindings
+}
+
+func registeredCarryEvidence(repo, runDir, policyID string, options ReceiptRegisterOptions, result *Result) (*EvidenceRef, []registeredCarrySource) {
+	if policyID != "carry.arbiter.v2" {
+		if options.TransitionChain != "" || len(options.CarrySourceClosures) > 0 {
+			result.add("receipt", "Carry static evidence is not accepted for this dispatch role")
+		}
+		return nil, nil
+	}
+	if strings.TrimSpace(options.TransitionChain) == "" {
+		result.add("receipt", "--transition-chain is required for carry.arbiter.v2")
+		return nil, nil
+	}
+	transition, err := registeredEvidenceRef(repo, runDir, options.TransitionChain)
+	if err != nil {
+		result.add(options.TransitionChain, err.Error())
+		return nil, nil
+	}
+	if err := validateStandaloneCompositionProof(repo, runDir, "transition-chain.v1", options.WorkflowID, options.ChangeSnapshot, transition); err != nil {
+		result.add(options.TransitionChain, err.Error())
+		return nil, nil
+	}
+	if len(options.CarrySourceClosures) == 0 {
+		result.add("receipt", "at least one --carry-source-closure is required for carry.arbiter.v2")
+	}
+	seen := map[string]bool{}
+	byGate := map[string]registeredCarrySource{}
+	for _, logical := range options.CarrySourceClosures {
+		logical = strings.TrimSpace(logical)
+		if logical == "" {
+			result.add("receipt", "--carry-source-closure must name a run-relative closure path")
+			continue
+		}
+		ref, refErr := registeredEvidenceRef(repo, runDir, logical)
+		if refErr != nil {
+			result.add(logical, refErr.Error())
+			continue
+		}
+		data, readErr := os.ReadFile(resolvePath(runDir, ref.Path))
+		if readErr != nil {
+			result.add(logical, readErr.Error())
+			continue
+		}
+		var closure EvidenceClosure
+		if strictContractJSON(data, &closure) != nil || closure.WorkflowID != options.WorkflowID || !stringSet(postDevelopmentGateOrder)[closure.Gate] || closure.Verdict != "PASS" || strings.TrimSpace(closure.ChangeSnapshot) == "" {
+			result.add(logical, "Carry source must be a same-workflow PASS closure for a fixed post-development gate")
+			continue
+		}
+		gate := closure.Gate
+		stage, role := sourceGateContract(gate)
+		if normalizeStage(closure.Stage) != stage || closure.RootRole != role {
+			result.add(logical, "Carry source closure does not match the fixed gate contract")
+			continue
+		}
+		if err := verifyClosure(ArtifactOptions{Root: repo, RunDir: runDir, WorkflowID: options.WorkflowID}, runDir, closure); err != nil {
+			result.add(logical, err.Error())
+			continue
+		}
+		if seen[gate] {
+			result.add("receipt", "duplicate Carry source closure for gate: "+gate)
+			continue
+		}
+		seen[gate] = true
+		byGate[gate] = registeredCarrySource{Gate: gate, SourceSnapshot: closure.ChangeSnapshot, SourceGateEvidence: ref}
+	}
+	sources := make([]registeredCarrySource, 0, len(byGate))
+	for _, gate := range postDevelopmentGateOrder {
+		if source, ok := byGate[gate]; ok {
+			sources = append(sources, source)
+		}
+	}
+	return &transition, sources
+}
+
+func validateRegisteredComplexityStatistics(repo, runDir, policyID string, checkEvidence []registeredCheckEvidence, workflowID, snapshot string, result *Result, where string) {
+	if policyID != "complexity.post-development.v2" {
+		return
+	}
+	var refs []EvidenceRef
+	for _, binding := range checkEvidence {
+		if binding.ID == "complexity.statistics" {
+			refs = append(refs, binding.EvidenceRefs...)
+		}
+	}
+	if len(refs) != 1 {
+		result.add(where, "complexity.statistics requires exactly one CLI-generated statistics report")
+		return
+	}
+	if err := validateComplexityStatisticsEvidence(repo, runDir, workflowID, snapshot, refs[0]); err != nil {
+		result.add(refs[0].Path, err.Error())
+	}
+}
+
+func registeredEvidenceRef(repo, runDir, logical string) (EvidenceRef, error) {
+	path, err := safeEvidencePath(runDir, logical)
+	if err != nil {
+		return EvidenceRef{}, err
+	}
+	logicalPath, err := logicalPathInRun(runDir, path)
+	if err != nil || !restrictedEvidencePath(repo, runDir, logicalPath) {
+		return EvidenceRef{}, fmt.Errorf("static evidence must be under the active run restricted directory")
+	}
+	if !isFile(path) {
+		return EvidenceRef{}, fmt.Errorf("static evidence file does not exist")
+	}
+	return EvidenceRef{Path: slash(logicalPath), SHA256: sha256File(path)}, nil
+}
+
+func generatedDispatchTemplate(record dispatchRegistration) (FormalGateEvidence, error) {
+	if record.ReviewPolicyID == "carry.arbiter.v2" {
+		return generatedCarryTemplate(record)
+	}
+	return generatedReviewTemplate(record)
+}
+
+func generatedCarryTemplate(record dispatchRegistration) (FormalGateEvidence, error) {
+	if record.TransitionChain == nil || len(record.CarrySources) == 0 {
+		return FormalGateEvidence{}, fmt.Errorf("Carry template requires script-owned transition and source bindings")
+	}
+	decisions := make([]CarryDecision, 0, len(record.CarrySources))
+	for _, source := range record.CarrySources {
+		decisions = append(decisions, CarryDecision{
+			Gate: source.Gate, SourceSnapshot: source.SourceSnapshot,
+			SourceGateEvidence: source.SourceGateEvidence,
+			Decision:           "PENDING", Reason: "PENDING",
+		})
+	}
+	payloadBytes, err := json.Marshal(CarryPayload{
+		ContextBundle:  EvidenceRef{Path: record.ContextBundle, SHA256: record.ContextSHA256},
+		ReviewPolicyID: "carry.arbiter.v2", TransitionChain: *record.TransitionChain,
+		Decisions: decisions,
+	})
+	if err != nil {
+		return FormalGateEvidence{}, err
+	}
+	return FormalGateEvidence{
+		SchemaVersion: 2, ArtifactRole: "CARRY_ARBITER",
+		WorkflowID: record.WorkflowID, ChangeSnapshot: record.ChangeSnapshot,
+		Gate: "qa-test-gate", Stage: "Carry", Verdict: "PENDING", Payload: payloadBytes,
+	}, nil
+}
+
+func generatedReviewTemplate(record dispatchRegistration) (FormalGateEvidence, error) {
+	policy, ok := policyByID(record.ReviewPolicyID)
+	if !ok || policy.ArtifactRole == "" || policy.ArtifactRole == "CARRY_ARBITER" {
+		return FormalGateEvidence{}, fmt.Errorf("review policy cannot generate a reviewer template")
+	}
+	evidence := map[string][]EvidenceRef{}
+	for _, binding := range record.CheckEvidence {
+		if _, duplicate := evidence[binding.ID]; duplicate {
+			return FormalGateEvidence{}, fmt.Errorf("duplicate generated check evidence id: %s", binding.ID)
+		}
+		evidence[binding.ID] = append([]EvidenceRef{}, binding.EvidenceRefs...)
+	}
+	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
+	for _, id := range policy.RequiredCheckIDs {
+		checks = append(checks, ReviewCheck{
+			ID: id, Status: "PENDING", Message: "PENDING",
+			EvidenceRefs: append([]EvidenceRef{}, evidence[id]...), Findings: []Finding{},
+		})
+	}
+	payload := ReviewerPayload{
+		ContextBundle:  EvidenceRef{Path: record.ContextBundle, SHA256: record.ContextSHA256},
+		ReviewPolicyID: record.ReviewPolicyID,
+		Checks:         checks,
+		ChangedFiles:   record.ChangedFiles,
+		Verification:   record.Verification,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return FormalGateEvidence{}, err
+	}
+	return FormalGateEvidence{
+		SchemaVersion: 2, ArtifactRole: policy.ArtifactRole,
+		WorkflowID: record.WorkflowID, ChangeSnapshot: record.ChangeSnapshot,
+		Gate: record.Gate, Stage: normalizeStage(record.Stage), Verdict: "PENDING",
+		Payload: payloadBytes,
+	}, nil
+}
+
+const QADesignSemanticValuesPerCase = 7
+
+var qaDesignFieldLabels = []string{"Claim", "Source", "Action", "Oracle", "Failure signal", "Evidence", "Gap"}
+
+func generatedQADesignTemplate(count int) []byte {
+	var builder strings.Builder
+	builder.WriteString("# QA Design\n\n")
+	for index := 1; index <= count; index++ {
+		fmt.Fprintf(&builder, "Case ID: CASE-%03d\n", index)
+		for _, label := range qaDesignFieldLabels {
+			builder.WriteString(label)
+			builder.WriteString(": PENDING\n")
+		}
+		builder.WriteByte('\n')
+	}
+	return []byte(builder.String())
+}
+
+func ReceiptSubmit(options ReceiptSubmitOptions) (ReceiptSubmission, Result) {
+	var result Result
+	repo := cleanWorktree(options.Worktree)
+	runDir, _, err := promptRunRelativePath(repo, options.Artifact)
+	if err != nil {
+		result.add(options.Artifact, err.Error())
+		return ReceiptSubmission{}, result
+	}
+	artifactPath, err := runLocalReviewArtifactPath(repo, runDir, options.Artifact)
+	if err != nil {
+		result.add(options.Artifact, err.Error())
+		return ReceiptSubmission{}, result
+	}
+	release, err := acquireReceiptRegistrationLock(repo, runDir)
+	if err != nil {
+		result.add("receipt", err.Error())
+		return ReceiptSubmission{}, result
+	}
+	defer release()
+
+	dispatchPath := filepath.Join(receiptProofDir(repo, runDir, "dispatch"), sha256Bytes([]byte(artifactPath))+".json")
+	dispatch, ok := decodeDispatch(dispatchPath)
+	if !ok || dispatch.Status != "open" || strings.TrimSpace(dispatch.ReceiptArtifact) != "" ||
+		!samePath(resolvePath(repo, dispatch.ReviewArtifact), artifactPath) ||
+		(!reviewJudgmentLifecycle(dispatch.Gate, dispatch.Stage) && !qaDesignLifecycle(dispatch.Gate, dispatch.Stage)) {
+		result.add("receipt", "semantic submission requires the assigned artifact from one open review or QA Design dispatch")
+		return ReceiptSubmission{}, result
+	}
+	var expected FormalGateEvidence
+	var templateBytes []byte
+	if qaDesignLifecycle(dispatch.Gate, dispatch.Stage) {
+		templateBytes = generatedQADesignTemplate(dispatch.QACaseCount)
+	} else {
+		expected, err = generatedDispatchTemplate(dispatch)
+		if err != nil {
+			result.add("receipt", err.Error())
+			return ReceiptSubmission{}, result
+		}
+		templateBytes, err = json.MarshalIndent(expected, "", "  ")
+		if err != nil {
+			result.add("receipt", err.Error())
+			return ReceiptSubmission{}, result
+		}
+		templateBytes = append(templateBytes, '\n')
+	}
+	proofBytes, proofErr := os.ReadFile(resolvePath(repo, dispatch.ReviewTemplate))
+	artifactBytes, artifactErr := os.ReadFile(artifactPath)
+	if proofErr != nil || artifactErr != nil || sha256Bytes(proofBytes) != dispatch.ReviewTemplateSHA256 ||
+		!bytes.Equal(proofBytes, templateBytes) || !bytes.Equal(artifactBytes, templateBytes) {
+		result.add(options.Artifact, "assigned artifact is not the untouched CLI-generated semantic template")
+		return ReceiptSubmission{}, result
+	}
+
+	var submittedBytes, finalizedBytes []byte
+	if qaDesignLifecycle(dispatch.Gate, dispatch.Stage) {
+		submittedBytes, err = composeQADesignSemanticSubmission(dispatch, options)
+		if err == nil {
+			finalizedBytes, err = finalizeGeneratedQADesign(repo, dispatch, submittedBytes)
+		}
+	} else if dispatch.ReviewPolicyID == "carry.arbiter.v2" {
+		submittedBytes, err = composeCarrySemanticSubmission(expected, options)
+		if err == nil {
+			finalizedBytes, err = finalizeGeneratedCarry(repo, dispatch, submittedBytes)
+		}
+	} else {
+		submittedBytes, err = composeReviewSemanticSubmission(expected, options)
+		if err == nil {
+			finalizedBytes, err = finalizeGeneratedReview(repo, dispatch, submittedBytes)
+		}
+	}
+	if err != nil {
+		result.add(options.Artifact, err.Error())
+		return ReceiptSubmission{}, result
+	}
+	if reviewJudgmentLifecycle(dispatch.Gate, dispatch.Stage) {
+		artifactOptions := ArtifactOptions{
+			Root: repo, RunDir: runDir, File: relativePath(repo, artifactPath), Gate: dispatch.Gate,
+			Stage: dispatch.Stage, WorkflowID: dispatch.WorkflowID, ChangeSnapshot: dispatch.ChangeSnapshot,
+		}
+		decodeArtifact(artifactOptions, finalizedBytes, &result)
+		if !result.OK() {
+			return ReceiptSubmission{}, result
+		}
+	}
+	submittedDispatch := dispatch
+	submittedDispatch.SemanticSubmissionSHA = sha256Bytes(submittedBytes)
+	dispatchBytes, err := json.MarshalIndent(submittedDispatch, "", "  ")
+	if err != nil {
+		result.add(options.Artifact, err.Error())
+		return ReceiptSubmission{}, result
+	}
+	dispatchBytes = append(dispatchBytes, '\n')
+	if err := writeFileAtomic(artifactPath, submittedBytes, 0o600); err != nil {
+		result.add(options.Artifact, err.Error())
+		return ReceiptSubmission{}, result
+	}
+	if err := writeFileAtomic(dispatchPath, dispatchBytes, 0o600); err != nil {
+		_ = writeFileAtomic(artifactPath, templateBytes, 0o600)
+		result.add(options.Artifact, "cannot commit semantic submission proof: "+err.Error())
+		return ReceiptSubmission{}, result
+	}
+	return ReceiptSubmission{
+		Artifact: relativePath(repo, artifactPath), ArtifactRole: expected.ArtifactRole,
+		ArtifactSha256: sha256Bytes(submittedBytes), Status: "submitted",
+	}, result
+}
+
+func composeQADesignSemanticSubmission(record dispatchRegistration, options ReceiptSubmitOptions) ([]byte, error) {
+	if len(options.Checks) != 0 || len(options.Findings) != 0 || len(options.Locations) != 0 || len(options.CarryDecisions) != 0 {
+		return nil, fmt.Errorf("QA Design submission accepts only ordered case values")
+	}
+	if len(options.DesignCases) != record.QACaseCount {
+		return nil, fmt.Errorf("QA Design semantics must cover every generated case exactly once")
+	}
+	values := make([][]string, record.QACaseCount)
+	for _, semantic := range options.DesignCases {
+		index := semantic.Position - 1
+		if index < 0 || index >= record.QACaseCount {
+			return nil, fmt.Errorf("QA Design case position is unknown: %d", semantic.Position)
+		}
+		if values[index] != nil {
+			return nil, fmt.Errorf("QA Design case position is duplicated: %d", semantic.Position)
+		}
+		if len(semantic.Values) != len(qaDesignFieldLabels) {
+			return nil, fmt.Errorf("QA Design case position %d requires exactly %d semantic values", semantic.Position, len(qaDesignFieldLabels))
+		}
+		values[index] = append([]string{}, semantic.Values...)
+		for valueIndex, value := range values[index] {
+			if strings.TrimSpace(value) == "" || strings.TrimSpace(value) == "PENDING" || strings.ContainsAny(value, "\r\n") {
+				return nil, fmt.Errorf("QA Design semantic value %d is invalid at case position %d", valueIndex+1, semantic.Position)
+			}
+		}
+	}
+	var builder strings.Builder
+	builder.WriteString("# QA Design\n\n")
+	for index, semanticValues := range values {
+		if semanticValues == nil {
+			return nil, fmt.Errorf("QA Design case position is missing: %d", index+1)
+		}
+		fmt.Fprintf(&builder, "Case ID: CASE-%03d\n", index+1)
+		for fieldIndex, label := range qaDesignFieldLabels {
+			fmt.Fprintf(&builder, "%s: %s\n", label, semanticValues[fieldIndex])
+		}
+		builder.WriteByte('\n')
+	}
+	return []byte(builder.String()), nil
+}
+
+func composeReviewSemanticSubmission(expected FormalGateEvidence, options ReceiptSubmitOptions) ([]byte, error) {
+	if len(options.CarryDecisions) != 0 || len(options.DesignCases) != 0 {
+		return nil, fmt.Errorf("reviewer submission accepts only checks, findings, and locations")
+	}
+	var payload ReviewerPayload
+	if err := strictContractJSON(expected.Payload, &payload); err != nil {
+		return nil, err
+	}
+	policy, ok := policyByID(payload.ReviewPolicyID)
+	if !ok {
+		return nil, fmt.Errorf("review policy is unknown")
+	}
+	if len(options.Checks) != len(payload.Checks) {
+		return nil, fmt.Errorf("semantic checks must cover every generated check exactly once")
+	}
+	allowedNA := stringSet(policy.AllowedNotApplicableCheckIDs)
+	seenChecks := make([]bool, len(payload.Checks))
+	for _, semantic := range options.Checks {
+		index := semantic.Position - 1
+		if index < 0 || index >= len(payload.Checks) {
+			return nil, fmt.Errorf("semantic check position is unknown: %d", semantic.Position)
+		}
+		if seenChecks[index] {
+			return nil, fmt.Errorf("semantic check position is duplicated: %d", semantic.Position)
+		}
+		seenChecks[index] = true
+		if !map[string]bool{"PASS": true, "REVIEW": true, "FAIL": true, "BLOCKED": true, "NOT_APPLICABLE": true}[semantic.Status] {
+			return nil, fmt.Errorf("semantic check status is invalid at position %d", semantic.Position)
+		}
+		if semantic.Status == "NOT_APPLICABLE" && !allowedNA[payload.Checks[index].ID] {
+			return nil, fmt.Errorf("NOT_APPLICABLE is not allowed at semantic check position %d", semantic.Position)
+		}
+		if strings.TrimSpace(semantic.Message) == "" || strings.TrimSpace(semantic.Message) == "PENDING" {
+			return nil, fmt.Errorf("semantic check message is missing at position %d", semantic.Position)
+		}
+		payload.Checks[index].Status = semantic.Status
+		payload.Checks[index].Message = semantic.Message
+		payload.Checks[index].Findings = []Finding{}
+	}
+	for index, semantic := range options.Findings {
+		checkIndex := semantic.CheckPosition - 1
+		if checkIndex < 0 || checkIndex >= len(payload.Checks) {
+			return nil, fmt.Errorf("finding %d names an unknown semantic check position", index+1)
+		}
+		if strings.TrimSpace(semantic.Message) == "" {
+			return nil, fmt.Errorf("finding message is missing at position %d", index+1)
+		}
+		payload.Checks[checkIndex].Findings = append(payload.Checks[checkIndex].Findings, Finding{Message: semantic.Message, Locations: []Location{}})
+	}
+	for index, semantic := range options.Locations {
+		findingIndex := semantic.FindingPosition - 1
+		if findingIndex < 0 || findingIndex >= len(options.Findings) {
+			return nil, fmt.Errorf("location %d names an unknown finding position", index+1)
+		}
+		finding := options.Findings[findingIndex]
+		checkIndex := finding.CheckPosition - 1
+		location := Location{Path: semantic.Path, StartLine: semantic.StartLine, EndLine: semantic.EndLine}
+		var locationResult Result
+		validateFindings([]Finding{{Message: finding.Message, Locations: []Location{location}}}, &locationResult, "semantic location")
+		if !locationResult.OK() {
+			return nil, fmt.Errorf("location %d is invalid: %s", index+1, locationResult.Failures[0].Message)
+		}
+		findingOffset := 0
+		for prior := 0; prior < findingIndex; prior++ {
+			if options.Findings[prior].CheckPosition == finding.CheckPosition {
+				findingOffset++
+			}
+		}
+		payload.Checks[checkIndex].Findings[findingOffset].Locations = append(payload.Checks[checkIndex].Findings[findingOffset].Locations, location)
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	expected.Payload = payloadBytes
+	encoded, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+func composeCarrySemanticSubmission(expected FormalGateEvidence, options ReceiptSubmitOptions) ([]byte, error) {
+	if len(options.Checks) != 0 || len(options.Findings) != 0 || len(options.Locations) != 0 || len(options.DesignCases) != 0 {
+		return nil, fmt.Errorf("Carry submission accepts only per-gate decisions and reasons")
+	}
+	var payload CarryPayload
+	if err := strictContractJSON(expected.Payload, &payload); err != nil {
+		return nil, err
+	}
+	if len(options.CarryDecisions) != len(payload.Decisions) {
+		return nil, fmt.Errorf("Carry semantics must cover every generated gate exactly once")
+	}
+	seenGates := make([]bool, len(payload.Decisions))
+	for _, semantic := range options.CarryDecisions {
+		index := semantic.GatePosition - 1
+		if index < 0 || index >= len(payload.Decisions) {
+			return nil, fmt.Errorf("Carry gate position is unknown: %d", semantic.GatePosition)
+		}
+		if seenGates[index] {
+			return nil, fmt.Errorf("Carry gate position is duplicated: %d", semantic.GatePosition)
+		}
+		seenGates[index] = true
+		if !map[string]bool{"ACCEPT_CARRY": true, "RERUN_REQUIRED": true, "BLOCKED": true}[semantic.Decision] {
+			return nil, fmt.Errorf("Carry decision is invalid at gate position %d", semantic.GatePosition)
+		}
+		if strings.TrimSpace(semantic.Reason) == "" || strings.TrimSpace(semantic.Reason) == "PENDING" {
+			return nil, fmt.Errorf("Carry reason is missing at gate position %d", semantic.GatePosition)
+		}
+		payload.Decisions[index].Decision = semantic.Decision
+		payload.Decisions[index].Reason = semantic.Reason
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	expected.Payload = payloadBytes
+	encoded, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+func finalizeGeneratedQADesign(repo string, record dispatchRegistration, designBytes []byte) ([]byte, error) {
+	expected := generatedQADesignTemplate(record.QACaseCount)
+	proofBytes, err := os.ReadFile(resolvePath(repo, record.ReviewTemplate))
+	if err != nil || sha256Bytes(proofBytes) != record.ReviewTemplateSHA256 || !bytes.Equal(proofBytes, expected) {
+		return nil, fmt.Errorf("script-generated QA Design template proof is invalid")
+	}
+	if !utf8.Valid(designBytes) || bytes.Contains(designBytes, []byte{'\r'}) || len(designBytes) == 0 || designBytes[len(designBytes)-1] != '\n' {
+		return nil, fmt.Errorf("QA Design must preserve the generated UTF-8 line structure")
+	}
+	lines := strings.Split(string(designBytes), "\n")
+	wantLines := 2 + record.QACaseCount*9
+	if len(lines) != wantLines+1 || lines[0] != "# QA Design" || lines[1] != "" || lines[len(lines)-1] != "" {
+		return nil, fmt.Errorf("AI modified the script-owned QA Design structure")
+	}
+	position := 2
+	for index := 1; index <= record.QACaseCount; index++ {
+		if lines[position] != fmt.Sprintf("Case ID: CASE-%03d", index) {
+			return nil, fmt.Errorf("AI modified the script-owned QA case catalog")
+		}
+		position++
+		for _, label := range qaDesignFieldLabels {
+			prefix := label + ": "
+			if !strings.HasPrefix(lines[position], prefix) {
+				return nil, fmt.Errorf("AI modified the script-owned QA Design field catalog")
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(lines[position], prefix))
+			if value == "" || value == "PENDING" {
+				return nil, fmt.Errorf("QA designer must fill every semantic case slot")
+			}
+			position++
+		}
+		if lines[position] != "" {
+			return nil, fmt.Errorf("AI modified the script-owned QA Design separators")
+		}
+		position++
+	}
+	return designBytes, nil
+}
+
+func finalizeGeneratedReview(repo string, record dispatchRegistration, reviewerBytes []byte) ([]byte, error) {
+	expected, err := generatedReviewTemplate(record)
+	if err != nil {
+		return nil, err
+	}
+	expectedBytes, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	expectedBytes = append(expectedBytes, '\n')
+	templatePath := resolvePath(repo, record.ReviewTemplate)
+	templateBytes, err := os.ReadFile(templatePath)
+	if err != nil || sha256Bytes(templateBytes) != record.ReviewTemplateSHA256 || !bytes.Equal(templateBytes, expectedBytes) {
+		return nil, fmt.Errorf("script-generated review template proof is invalid")
+	}
+	var actual FormalGateEvidence
+	if err := strictContractJSON(reviewerBytes, &actual); err != nil {
+		return nil, fmt.Errorf("review judgment JSON is invalid: %w", err)
+	}
+	if actual.SchemaVersion != expected.SchemaVersion || actual.ArtifactRole != expected.ArtifactRole || actual.WorkflowID != expected.WorkflowID || actual.ChangeSnapshot != expected.ChangeSnapshot || actual.Gate != expected.Gate || normalizeStage(actual.Stage) != normalizeStage(expected.Stage) || actual.Verdict != "PENDING" {
+		return nil, fmt.Errorf("AI modified script-owned reviewer envelope fields")
+	}
+	var actualPayload, expectedPayload ReviewerPayload
+	if err := strictContractJSON(actual.Payload, &actualPayload); err != nil {
+		return nil, fmt.Errorf("review judgment payload is invalid: %w", err)
+	}
+	if err := strictContractJSON(expected.Payload, &expectedPayload); err != nil {
+		return nil, err
+	}
+	if actualPayload.ContextBundle != expectedPayload.ContextBundle || actualPayload.ReviewPolicyID != expectedPayload.ReviewPolicyID || !reflect.DeepEqual(actualPayload.ChangedFiles, expectedPayload.ChangedFiles) || !reflect.DeepEqual(actualPayload.Verification, expectedPayload.Verification) || len(actualPayload.Checks) != len(expectedPayload.Checks) {
+		return nil, fmt.Errorf("AI modified script-owned reviewer payload fields")
+	}
+	priority := map[string]int{"PASS": 0, "NOT_APPLICABLE": 0, "REVIEW": 1, "FAIL": 2, "BLOCKED": 3}
+	aggregate := "PASS"
+	checks := make([]ReviewCheck, 0, len(actualPayload.Checks))
+	for i := range actualPayload.Checks {
+		actualCheck, expectedCheck := actualPayload.Checks[i], expectedPayload.Checks[i]
+		if actualCheck.ID != expectedCheck.ID || !reflect.DeepEqual(actualCheck.EvidenceRefs, expectedCheck.EvidenceRefs) {
+			return nil, fmt.Errorf("AI modified script-owned reviewer check catalog or evidence binding")
+		}
+		if _, ok := priority[actualCheck.Status]; !ok || strings.TrimSpace(actualCheck.Message) == "" || actualCheck.Message == "PENDING" {
+			return nil, fmt.Errorf("reviewer must fill every semantic status and message slot")
+		}
+		if actualCheck.Findings == nil {
+			return nil, fmt.Errorf("reviewer must provide each semantic findings array")
+		}
+		if priority[actualCheck.Status] > priority[aggregate] {
+			aggregate = actualCheck.Status
+		}
+		checks = append(checks, ReviewCheck{
+			ID: expectedCheck.ID, Status: actualCheck.Status, Message: actualCheck.Message,
+			EvidenceRefs: append([]EvidenceRef{}, expectedCheck.EvidenceRefs...), Findings: actualCheck.Findings,
+		})
+	}
+	expectedPayload.Checks = checks
+	payloadBytes, err := json.Marshal(expectedPayload)
+	if err != nil {
+		return nil, err
+	}
+	expected.Verdict = aggregate
+	expected.Payload = payloadBytes
+	finalBytes, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(finalBytes, '\n'), nil
+}
+
+func finalizeGeneratedCarry(repo string, record dispatchRegistration, reviewerBytes []byte) ([]byte, error) {
+	expected, err := generatedCarryTemplate(record)
+	if err != nil {
+		return nil, err
+	}
+	expectedBytes, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	expectedBytes = append(expectedBytes, '\n')
+	templateBytes, err := os.ReadFile(resolvePath(repo, record.ReviewTemplate))
+	if err != nil || sha256Bytes(templateBytes) != record.ReviewTemplateSHA256 || !bytes.Equal(templateBytes, expectedBytes) {
+		return nil, fmt.Errorf("script-generated Carry template proof is invalid")
+	}
+	var actual FormalGateEvidence
+	if err := strictContractJSON(reviewerBytes, &actual); err != nil {
+		return nil, fmt.Errorf("Carry judgment JSON is invalid: %w", err)
+	}
+	if actual.SchemaVersion != expected.SchemaVersion || actual.ArtifactRole != expected.ArtifactRole || actual.WorkflowID != expected.WorkflowID || actual.ChangeSnapshot != expected.ChangeSnapshot || actual.Gate != expected.Gate || normalizeStage(actual.Stage) != normalizeStage(expected.Stage) || actual.Verdict != "PENDING" {
+		return nil, fmt.Errorf("AI modified script-owned Carry envelope fields")
+	}
+	var actualPayload, expectedPayload CarryPayload
+	if err := strictContractJSON(actual.Payload, &actualPayload); err != nil {
+		return nil, fmt.Errorf("Carry judgment payload is invalid: %w", err)
+	}
+	if err := strictContractJSON(expected.Payload, &expectedPayload); err != nil {
+		return nil, err
+	}
+	if actualPayload.ContextBundle != expectedPayload.ContextBundle || actualPayload.ReviewPolicyID != expectedPayload.ReviewPolicyID || actualPayload.TransitionChain != expectedPayload.TransitionChain || len(actualPayload.Decisions) != len(expectedPayload.Decisions) {
+		return nil, fmt.Errorf("AI modified script-owned Carry payload fields")
+	}
+	decisions := make([]CarryDecision, 0, len(actualPayload.Decisions))
+	for i := range actualPayload.Decisions {
+		actualDecision, expectedDecision := actualPayload.Decisions[i], expectedPayload.Decisions[i]
+		if actualDecision.Gate != expectedDecision.Gate || actualDecision.SourceSnapshot != expectedDecision.SourceSnapshot || actualDecision.SourceGateEvidence != expectedDecision.SourceGateEvidence {
+			return nil, fmt.Errorf("AI modified script-owned Carry decision bindings")
+		}
+		if !map[string]bool{"ACCEPT_CARRY": true, "RERUN_REQUIRED": true, "BLOCKED": true}[actualDecision.Decision] || strings.TrimSpace(actualDecision.Reason) == "" || actualDecision.Reason == "PENDING" {
+			return nil, fmt.Errorf("Carry reviewer must fill every semantic decision and reason slot")
+		}
+		expectedDecision.Decision = actualDecision.Decision
+		expectedDecision.Reason = actualDecision.Reason
+		decisions = append(decisions, expectedDecision)
+	}
+	expectedPayload.Decisions = decisions
+	payloadBytes, err := json.Marshal(expectedPayload)
+	if err != nil {
+		return nil, err
+	}
+	expected.Verdict = carryAggregateVerdict(decisions)
+	expected.Payload = payloadBytes
+	finalBytes, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(finalBytes, '\n'), nil
 }
 
 func hasLifecycleEventForDispatch(repo, runDir, dispatchID, dispatchArtifact string) bool {
@@ -541,6 +1436,14 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		if !validateFinalSendPrompt(repo, runDir, dispatch.PromptArtifact, dispatch.PromptSha256, dispatch.Gate, dispatch.Stage, &result, "receipt") {
 			return ReceiptFinalizeOutput{}, result
 		}
+		validateQADesignReviewPromptBinding(repo, runDir, dispatch.ReviewPolicyID, dispatch.PromptArtifact, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, &result)
+		if !result.OK() {
+			return ReceiptFinalizeOutput{}, result
+		}
+	}
+	validateRegisteredComplexityStatistics(repo, runDir, dispatch.ReviewPolicyID, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, &result, "receipt")
+	if !result.OK() {
+		return ReceiptFinalizeOutput{}, result
 	}
 	release, err := acquireReceiptRegistrationLock(repo, runDir)
 	if err != nil {
@@ -548,6 +1451,12 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		return ReceiptFinalizeOutput{}, result
 	}
 	defer release()
+	lockedDispatch, ok := decodeDispatch(dispatchPath)
+	if !ok || lockedDispatch.DispatchID != dispatch.DispatchID || lockedDispatch.Status != "open" || strings.TrimSpace(lockedDispatch.ReceiptArtifact) != "" {
+		result.add("receipt", "UNPROVEN receipt finalization lost its open dispatch registration")
+		return ReceiptFinalizeOutput{}, result
+	}
+	dispatch = lockedDispatch
 	completed, _, err := reviewReservationCounts(repo, runDir, dispatch.WorkflowID, dispatch.Gate, dispatch.Stage)
 	if err != nil {
 		result.add("receipt", err.Error())
@@ -562,51 +1471,24 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		result.add(options.Artifact, err.Error())
 		return ReceiptFinalizeOutput{}, result
 	}
-	if !qaDesignLifecycle(dispatch.Gate, dispatch.Stage) {
-		var envelope FormalGateEvidence
-		if err := strictJSON(artifactBytes, &envelope); err != nil {
-			result.add(options.Artifact, "completed review artifact does not match dispatch binding")
+	if reviewJudgmentLifecycle(dispatch.Gate, dispatch.Stage) || qaDesignLifecycle(dispatch.Gate, dispatch.Stage) {
+		if !isSHA256(dispatch.SemanticSubmissionSHA) || dispatch.SemanticSubmissionSHA != sha256Bytes(artifactBytes) {
+			result.add(options.Artifact, "review or QA Design output requires CLI semantic submission before finalization")
 			return ReceiptFinalizeOutput{}, result
 		}
-		envelope.WorkflowID = dispatch.WorkflowID
-		envelope.ChangeSnapshot = dispatch.ChangeSnapshot
-		envelope.Gate = dispatch.Gate
-		envelope.Stage = normalizeStage(dispatch.Stage)
-		envelope.SchemaVersion = 2
-		if role, ok := reviewArtifactRole(dispatch.Gate, dispatch.Stage); ok {
-			envelope.ArtifactRole = role
+	}
+	if dispatch.ReviewTemplate != "" {
+		if qaDesignLifecycle(dispatch.Gate, dispatch.Stage) {
+			artifactBytes, err = finalizeGeneratedQADesign(repo, dispatch, artifactBytes)
+		} else if dispatch.ReviewPolicyID == "carry.arbiter.v2" {
+			artifactBytes, err = finalizeGeneratedCarry(repo, dispatch, artifactBytes)
+		} else {
+			artifactBytes, err = finalizeGeneratedReview(repo, dispatch, artifactBytes)
 		}
-		if dispatch.ContextBundle != "" && dispatch.ContextSHA256 != "" {
-			contextRef := EvidenceRef{Path: dispatch.ContextBundle, SHA256: dispatch.ContextSHA256}
-			switch envelope.ArtifactRole {
-			case "CARRY_ARBITER":
-				var payload CarryPayload
-				if err := strictContractJSON(envelope.Payload, &payload); err != nil {
-					result.add(options.Artifact, "completed review artifact does not match dispatch binding")
-					return ReceiptFinalizeOutput{}, result
-				}
-				payload.ContextBundle = contextRef
-				envelope.Payload, err = json.Marshal(payload)
-			default:
-				var payload ReviewerPayload
-				if err := strictContractJSON(envelope.Payload, &payload); err != nil {
-					result.add(options.Artifact, "completed review artifact does not match dispatch binding")
-					return ReceiptFinalizeOutput{}, result
-				}
-				payload.ContextBundle = contextRef
-				envelope.Payload, err = json.Marshal(payload)
-			}
-			if err != nil {
-				result.add(options.Artifact, err.Error())
-				return ReceiptFinalizeOutput{}, result
-			}
-		}
-		artifactBytes, err = json.MarshalIndent(envelope, "", "  ")
 		if err != nil {
 			result.add(options.Artifact, err.Error())
 			return ReceiptFinalizeOutput{}, result
 		}
-		artifactBytes = append(artifactBytes, '\n')
 	}
 	if reviewJudgmentLifecycle(dispatch.Gate, dispatch.Stage) {
 		artifactOptions := ArtifactOptions{Root: repo, RunDir: runDir, File: relativePath(repo, artifactPath), Gate: dispatch.Gate, Stage: dispatch.Stage, WorkflowID: dispatch.WorkflowID, ChangeSnapshot: dispatch.ChangeSnapshot}
@@ -829,6 +1711,36 @@ func validateDispatchRegistrationContract(root, runDir, promptArtifact, promptHa
 		result.add("receipt", "final-send prompt contextBundle binding does not match --context-bundle")
 	}
 	return policyID
+}
+
+func validateQADesignReviewPromptBinding(root, runDir, policyID, promptArtifact string, checkEvidence []registeredCheckEvidence, workflowID, changeSnapshot string, result *Result) {
+	if policyID != "qa.design-review.v2" {
+		return
+	}
+	data, err := os.ReadFile(resolvePath(root, promptArtifact))
+	if err != nil {
+		result.add(promptArtifact, "cannot read QA Design Review prompt")
+		return
+	}
+	target := strictDispatchPromptFields(string(data))["current diff or proposed change"]
+	targetPath := resolvePath(root, target)
+	if requireAbsPathUnderRunDir(runDir, "QA Design Review prompt target", targetPath) != nil || !isFile(targetPath) {
+		result.add(promptArtifact, "QA Design Review prompt must target an existing case set under the active run restricted directory")
+		return
+	}
+	var refs []EvidenceRef
+	for _, binding := range checkEvidence {
+		if binding.ID == "qa.design.case-set-binding" {
+			refs = append(refs, binding.EvidenceRefs...)
+		}
+	}
+	caseSet, _ := validateQADesignCaseSetBindingRefs(ArtifactOptions{Root: root, File: promptArtifact, RunDir: runDir}, runDir, workflowID, changeSnapshot, refs, result)
+	if caseSet == nil {
+		return
+	}
+	if !samePath(targetPath, resolvePath(runDir, caseSet.Path)) || sha256File(targetPath) != caseSet.SHA256 {
+		result.add(promptArtifact, "QA Design Review prompt target must exactly match the bound case set")
+	}
 }
 
 func dispatchOutputContracts(gate, stage string) (string, []string) {
@@ -1386,19 +2298,6 @@ func dispatchArtifactRunDir(repo, artifact string) (string, error) {
 		return "", fmt.Errorf("UNPROVEN lifecycle dispatch registration path is outside an active dispatch proof directory")
 	}
 	return runDir, nil
-}
-
-func reserveAbsentReviewArtifact(repo, runDir, logical string) (string, error) {
-	path, err := runLocalReviewArtifactPath(repo, runDir, logical)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Lstat(path); err == nil {
-		return "", fmt.Errorf("review artifact path already exists; stale output must be removed before registration")
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	return path, nil
 }
 
 func runLocalReviewArtifactPath(repo, runDir, logical string) (string, error) {

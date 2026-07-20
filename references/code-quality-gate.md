@@ -1,6 +1,6 @@
 # Code Quality Gate
 
-Use after architecture PASS in a user-authorized four-gate/release/seal flow, or when the user asks for code quality consultation. Review correctness, maintainability, local coupling, performance, test quality, dead/redundant code, overfitting, encoding, and validation integrity.
+Use as an independent reviewer in a user-authorized four-gate/release/seal flow, or when the user asks for code quality consultation. Review correctness, maintainability, local coupling, performance, test quality, dead/redundant code, overfitting, encoding, and validation integrity.
 
 Do not bless unfinished requirements, oversized scope, or bad architecture.
 
@@ -17,19 +17,16 @@ Do not run for pure OpenSpec/PRD/SDD/design prose with no executable content. If
 
 ## Formal Entry
 
-Formal flow requires machine-verifiable PASS for:
-
-- `qa-test-gate` formal Stage=`Execution`
-- `complexity-gate`
-- `architecture-health-gate`
-
-Verify:
+Formal flow treats code quality as an independent gate. Verify its own
+target-bound reviewer evidence:
 
 ```bash
 bin/formal-gates workflow verify-admission --worktree <repo> --gate code-quality-gate --workflow-id <id> --change-snapshot <snapshot>
 ```
 
-Missing state, stale snapshot, missing artifact, or any non-PASS prerequisite is `BLOCKED` or `GATE_SEQUENCE_ERROR`.
+Missing state, stale snapshot, or missing artifact is `BLOCKED`; post-development
+code quality has no gate-to-gate prerequisite. Finalization, not this reviewer,
+checks that all four gate results exist.
 
 ## Required Review
 
@@ -60,6 +57,6 @@ Record PASS with `references/post-development-artifacts.md`, using `formal-gates
 
 ## Output
 
-Write direct schema-version-2 `CODE_QUALITY_REVIEW` JSON using policy `code-quality.post-development.v2` and the shared reviewer payload. The payload has no dispatch or prompt field; the external receipt binds and revalidates the exact final-send prompt. Every exported `code-quality.*` check appears exactly once with typed evidence and findings.
+Receipt registration generates the read-only schema-version-2 `CODE_QUALITY_REVIEW` catalog, policy, check IDs, and typed evidence bindings. Submit only ordered semantic statuses, messages, findings, and locations through `formal-gates receipt submit`; never edit the JSON. The CLI constructs the nested artifact and proof, and finalization derives the verdict and receipt.
 
 Findings first. If there is nothing to report, say you cannot find a fault and list remaining verification gaps. Do not write “overall looks good.”

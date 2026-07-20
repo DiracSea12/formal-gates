@@ -69,20 +69,24 @@ type WorkflowRecordTransitionOptions struct {
 }
 
 type WorkflowFinalVerificationOptions struct {
-	Worktree        string
-	StatePath       string
-	RunDir          string
-	AttemptsJSON    string
-	AttemptsFile    string
-	OutputArtifact  string
-	FinalQAArtifact string
-	RecordFinalQA   bool
-	Actor           string
-	WorkflowID      string
-	ChangeSnapshot  string
+	Worktree         string
+	StatePath        string
+	RunDir           string
+	AttemptArtifacts []string
+	OutputArtifact   string
+	FinalQAArtifact  string
+	RecordFinalQA    bool
+	Actor            string
+	WorkflowID       string
+	ChangeSnapshot   string
 }
 
-type WorkflowFinalVerificationAttempt map[string]any
+type WorkflowFinalVerificationAttempt struct {
+	Status       string `json:"status"`
+	Accepted     bool   `json:"accepted"`
+	Artifact     string `json:"artifact"`
+	ArtifactHash string `json:"artifactHash"`
+}
 
 type WorkflowFinalVerificationArtifact struct {
 	SchemaVersion    int                                `json:"schemaVersion"`
@@ -265,7 +269,9 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 			result.add("run-dir", err.Error())
 			return WorkflowFinalVerificationArtifact{}, result
 		}
-		addWorkflowPathFailure(&result, worktree, runDir, "attempts-file", options.AttemptsFile, false)
+		for _, artifact := range options.AttemptArtifacts {
+			addWorkflowPathFailure(&result, worktree, runDir, "attempt-artifact", artifact, false)
+		}
 		addWorkflowPathFailure(&result, worktree, runDir, "output", options.OutputArtifact, true)
 		addWorkflowPathFailure(&result, worktree, runDir, "final-qa-artifact", options.FinalQAArtifact, false)
 		addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
@@ -273,70 +279,51 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 			return WorkflowFinalVerificationArtifact{}, result
 		}
 	}
-	attemptText := strings.TrimSpace(options.AttemptsJSON)
-	if strings.TrimSpace(options.AttemptsFile) != "" {
-		if attemptText != "" {
-			result.add("attempts", "use only one of --attempts-json or --attempts-file")
-			return WorkflowFinalVerificationArtifact{}, result
+	if len(options.AttemptArtifacts) == 0 {
+		result.add("attempts", "at least one --attempt-artifact is required")
+		return WorkflowFinalVerificationArtifact{}, result
+	}
+	attempts := make([]WorkflowFinalVerificationAttempt, 0, len(options.AttemptArtifacts))
+	accepted := make([]WorkflowFinalVerificationAttempt, 0, len(options.AttemptArtifacts))
+	seenAttempts := map[string]bool{}
+	for i, artifact := range options.AttemptArtifacts {
+		artifact = strings.TrimSpace(artifact)
+		where := fmt.Sprintf("attempt-artifact[%d]", i)
+		if artifact == "" || seenAttempts[artifact] {
+			result.add(where, "verification attempt artifacts must be non-empty and unique")
+			continue
 		}
-		path := resolvePath(worktree, options.AttemptsFile)
-		data, err := os.ReadFile(path)
+		seenAttempts[artifact] = true
+		if runDir != "" {
+			if err := requireWorkflowPathUnderRunDir(worktree, runDir, where, artifact, false); err != nil {
+				result.add(where, err.Error())
+				continue
+			}
+		}
+		artifactPath := resolvePath(worktree, artifact)
+		if cleanupScratchPath(worktree, artifactPath) {
+			result.add(where, "verification attempt artifact cannot be under cleanup scratch: "+slash(artifactPath))
+			continue
+		}
+		if !isFile(artifactPath) {
+			result.add(where, "verification attempt artifact does not exist: "+slash(artifactPath))
+			continue
+		}
+		data, err := os.ReadFile(artifactPath)
 		if err != nil {
-			result.add("attempts-file", "cannot read attempts file: "+err.Error())
-			return WorkflowFinalVerificationArtifact{}, result
+			result.add(where, "verification attempt artifact cannot be read: "+err.Error())
+			continue
 		}
-		attemptText = strings.TrimSpace(string(data))
-	}
-	if attemptText == "" {
-		result.add("attempts", "--attempts-json or --attempts-file is required")
-		return WorkflowFinalVerificationArtifact{}, result
-	}
-
-	var attempts []WorkflowFinalVerificationAttempt
-	if err := json.Unmarshal([]byte(attemptText), &attempts); err != nil {
-		result.add("attempts", "attempts JSON must be an array: "+err.Error())
-		return WorkflowFinalVerificationArtifact{}, result
-	}
-	if len(attempts) == 0 {
-		result.add("attempts", "at least one attempt is required")
-		return WorkflowFinalVerificationArtifact{}, result
-	}
-
-	accepted := make([]WorkflowFinalVerificationAttempt, 0, len(attempts))
-	for i, attempt := range attempts {
-		if attemptAccepted(attempt) {
-			artifact := strings.TrimSpace(attemptString(attempt, "artifact"))
-			if artifact == "" {
-				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt is missing artifact")
-				continue
-			}
-			if runDir != "" {
-				if err := requireWorkflowPathUnderRunDir(worktree, runDir, fmt.Sprintf("attempts[%d].artifact", i), artifact, false); err != nil {
-					result.add(fmt.Sprintf("attempts[%d].artifact", i), err.Error())
-					continue
-				}
-			}
-			artifactPath := resolvePath(worktree, artifact)
-			if cleanupScratchPath(worktree, artifactPath) {
-				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt artifact cannot be under cleanup scratch: "+slash(artifactPath))
-				continue
-			}
-			if !isFile(artifactPath) {
-				result.add(fmt.Sprintf("attempts[%d].artifact", i), "accepted attempt artifact does not exist: "+slash(artifactPath))
-				continue
-			}
-			artifactHash, ok := attempt["artifactHash"].(string)
-			artifactHash = strings.TrimSpace(artifactHash)
-			if !ok || !isSHA256(artifactHash) {
-				result.add(fmt.Sprintf("attempts[%d].artifactHash", i), "accepted attempt requires a valid SHA-256 artifactHash")
-				continue
-			}
-			if actual := sha256File(artifactPath); actual != artifactHash {
-				result.add(fmt.Sprintf("attempts[%d].artifactHash", i), "accepted attempt artifactHash does not match artifact bytes")
-				continue
-			}
-			accepted = append(accepted, attempt)
+		attempt := WorkflowFinalVerificationAttempt{Status: "PASS", Accepted: true, Artifact: artifact, ArtifactHash: sha256File(artifactPath)}
+		if failure := verificationAttemptFailure(data); failure != "" {
+			attempt.Status = "FAIL"
+			attempt.Accepted = false
+			result.add(where, failure)
+			attempts = append(attempts, attempt)
+			continue
 		}
+		attempts = append(attempts, attempt)
+		accepted = append(accepted, attempt)
 	}
 	if len(accepted) == 0 {
 		result.add("acceptedAttempts", "at least one accepted PASS attempt is required")
@@ -371,9 +358,27 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 		result.add("output", "final verification artifact cannot be under cleanup scratch: "+slash(outputPath))
 		return artifact, result
 	}
+	if _, err := os.Lstat(outputPath); err == nil || !os.IsNotExist(err) {
+		result.add("output", "generated final verification output already exists")
+		return artifact, result
+	}
 	if err := writeFinalVerificationArtifact(outputPath, artifact); err != nil {
 		result.add("output", err.Error())
 		return artifact, result
+	}
+	if artifact.Status == "PASS" && runDir != "" {
+		logical, logicalErr := logicalPathInRun(runDir, outputPath)
+		if logicalErr != nil {
+			_ = os.Remove(outputPath)
+			result.add("output", logicalErr.Error())
+			return artifact, result
+		}
+		ref := EvidenceRef{Path: logical, SHA256: sha256File(outputPath)}
+		if _, proofErr := writeCompositionProof(worktree, runDir, "verification.v1", options.WorkflowID, options.ChangeSnapshot, outputPath, []EvidenceRef{ref}); proofErr != nil {
+			_ = os.Remove(outputPath)
+			result.add("output", proofErr.Error())
+			return artifact, result
+		}
 	}
 	if options.RecordFinalQA {
 		recordResult := recordFinalQA(worktree, runDir, output, artifact.Status, options)
@@ -396,6 +401,13 @@ func recordFinalQAWith(worktree, runDir, finalVerification, status string, optio
 	finalQAPath := resolvePath(worktree, finalQA)
 	if cleanupScratchPath(worktree, finalQAPath) {
 		result.add("final-qa-artifact", "final QA artifact cannot be under cleanup scratch: "+slash(finalQAPath))
+		return result
+	}
+	if _, err := os.Lstat(finalQAPath); err == nil {
+		result.add("final-qa-artifact", "final QA artifact already exists; use a distinct output path")
+		return result
+	} else if !os.IsNotExist(err) {
+		result.add("final-qa-artifact", err.Error())
 		return result
 	}
 	statePath := workflowStatePath(worktree, options.StatePath, runDir)
@@ -450,13 +462,7 @@ func recordFinalQAWith(worktree, runDir, finalVerification, status string, optio
 	if !result.OK() {
 		return result
 	}
-	previous, err := os.ReadFile(finalQAPath)
-	previousExists := err == nil
-	if !previousExists && !os.IsNotExist(err) {
-		result.add("final-qa-artifact", err.Error())
-		return result
-	}
-	if err := writeFileAtomic(finalQAPath, append(data, '\n'), 0o600); err != nil {
+	if err := writeBytesExclusive(finalQAPath, append(data, '\n')); err != nil {
 		result.add("final-qa-artifact", err.Error())
 		return result
 	}
@@ -478,11 +484,7 @@ func recordFinalQAWith(worktree, runDir, finalVerification, status string, optio
 		ChangeSnapshot: options.ChangeSnapshot,
 	})
 	if !recordResult.OK() {
-		if previousExists {
-			if err := writeFileAtomic(finalQAPath, previous, 0o600); err != nil {
-				recordResult.add("final-qa-artifact", "cannot restore previous FinalExecution: "+err.Error())
-			}
-		} else if err := os.Remove(finalQAPath); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(finalQAPath); err != nil && !os.IsNotExist(err) {
 			recordResult.add("final-qa-artifact", "cannot remove failed FinalExecution: "+err.Error())
 		}
 	}
@@ -973,41 +975,91 @@ func ignoredSnapshotDir(rel, name string) bool {
 		strings.HasPrefix(rel, ".artifacts/cleanup/")
 }
 
-func attemptAccepted(attempt WorkflowFinalVerificationAttempt) bool {
-	return attemptBool(attempt, "accepted") && strings.EqualFold(strings.TrimSpace(attemptString(attempt, "status")), "PASS")
-}
-
-func attemptBool(attempt WorkflowFinalVerificationAttempt, key string) bool {
-	value, ok := attempt[key]
-	if !ok {
-		return false
-	}
-	if b, ok := value.(bool); ok {
-		return b
-	}
-	if s, ok := value.(string); ok {
-		return strings.EqualFold(strings.TrimSpace(s), "true")
-	}
-	return false
-}
-
-func attemptString(attempt WorkflowFinalVerificationAttempt, key string) string {
-	value, ok := attempt[key]
-	if !ok || value == nil {
-		return ""
-	}
-	if s, ok := value.(string); ok {
-		return s
-	}
-	return fmt.Sprint(value)
-}
-
 func writeFinalVerificationArtifact(path string, artifact WorkflowFinalVerificationArtifact) error {
 	data, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+// verificationAttemptFailure recognizes output lines that unambiguously report
+// a failed command. Empty output remains valid for commands such as go build
+// and go vet, whose successful runs normally produce no stdout or stderr.
+func verificationAttemptFailure(data []byte) string {
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	for index, raw := range lines {
+		line := strings.TrimSpace(raw)
+		upper := strings.ToUpper(line)
+		switch {
+		case upper == "FAIL", strings.HasPrefix(upper, "FAIL "), strings.HasPrefix(upper, "FAIL:"), strings.HasPrefix(upper, "FAIL\t"), strings.HasPrefix(upper, "--- FAIL:"):
+			return "verification attempt artifact contains a FAIL result"
+		case strings.HasPrefix(upper, "FAILED"), strings.HasPrefix(upper, "FAILURE"):
+			return "verification attempt artifact contains a failed-command result"
+		case strings.HasPrefix(upper, "ERROR:"), strings.HasPrefix(upper, "ERROR "), strings.HasPrefix(upper, "ERROR\t"), strings.HasPrefix(upper, "FATAL:"), strings.HasPrefix(upper, "FATAL "), strings.HasPrefix(upper, "FATAL\t"), strings.HasPrefix(upper, "PANIC:"), strings.HasPrefix(upper, "PANIC "), strings.HasPrefix(upper, "PANIC\t"):
+			return "verification attempt artifact contains a fatal or error result"
+		case strings.Contains(upper, "COMMAND FAILED"), hasNonZeroExitMarker(upper):
+			return "verification attempt artifact reports a non-zero command exit"
+		}
+		if strings.HasPrefix(line, "# ") && index+1 < len(lines) && looksLikeGoDiagnostic(lines[index+1]) {
+			return "verification attempt artifact contains a Go compiler or vet diagnostic"
+		}
+	}
+	return ""
+}
+
+func hasNonZeroExitMarker(text string) bool {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ':' || r == '=' || r == '(' || r == ')'
+	})
+	for index, field := range fields {
+		if field != "STATUS" && field != "CODE" || index == 0 || index+1 >= len(fields) {
+			continue
+		}
+		exitWord := false
+		for previous := index - 1; previous >= 0 && previous >= index-3; previous-- {
+			if fields[previous] == "EXIT" || fields[previous] == "EXITED" {
+				exitWord = true
+				break
+			}
+		}
+		if !exitWord {
+			continue
+		}
+		value := fields[index+1]
+		value = strings.TrimLeft(value, "0")
+		if value != "" {
+			allDigits := true
+			for _, digit := range value {
+				if digit < '0' || digit > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func looksLikeGoDiagnostic(raw string) bool {
+	line := strings.TrimSpace(raw)
+	marker := strings.Index(line, ".go:")
+	if marker < 0 {
+		return false
+	}
+	rest := line[marker+len(".go:"):]
+	digits := 0
+	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	return digits > 0 && digits < len(rest) && rest[digits] == ':'
 }
 
 func allowedCleanupPath(worktree, value string) (string, error) {

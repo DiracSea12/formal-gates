@@ -46,9 +46,11 @@ Calls remain one-way:
 5. Requirements, closure/path, receipt/isolation, QA admission, and carry
    validators return results; they do not call CLI code or write state.
 
-Serialized ownership is intentionally narrow. Reviewer, requirements, QA
-Execution, context-bundle, FinalExecution, and `policy show --format json` shapes are public
-machine contracts and are closed in the owning specifications. Receipt files,
+Serialized ownership is intentionally narrow. Reviewer semantic slots,
+requirements/QA positioned scalar submissions, context-bundle and FinalExecution outputs, and
+`policy show --format json` shapes are public machine contracts and are closed
+in the owning specifications. Their static formal fields are CLI-generated;
+callers supply only documented semantic values and source paths. Receipt files,
 closure manifests, gate state, and final-verification records are run-local CLI
 implementation artifacts: users do not author them, only the CLI reads or
 writes them, and old workflows restart after the cutover. Their typed Go
@@ -85,10 +87,12 @@ Design Review, stronger QA admission, and carry on that foundation; each added
 feature includes its JSON content, policy, domain validator, and tests in one
 task. It does not implement White-box Adequacy.
 
-Phase 2.5 uses the natural Phase 2 development and formal run as the project
-sample, then implements the confirmed schedule. The three pre-development
-checks run concurrently. QA Execution and the three post-development gates
-also run concurrently. After each repair, a new independent zero-context agent
+Phase 2.5 implements the confirmed schedule. The three pre-development
+start-readiness checks (`complexity-gate`, `architecture-health-gate`, and
+cold-water review) run concurrently. QA Design, Design Review, and Design
+Rework retain their own case-set/review/rework dependencies but may overlap
+isolated candidate development. QA Execution and the three post-development
+gates also run concurrently. After each repair, a new independent zero-context agent
 reviews the cumulative diff produced by that repair, from the pre-repair
 snapshot to the post-repair snapshot, and decides per gate whether to rerun it
 or inherit its prior result. Unrelated local worktree changes are excluded.
@@ -111,11 +115,14 @@ Execution, the three independent post-development reviewers, and mechanical Fina
 owns the exact fields, role combinations, payloads, and rejection scenarios;
 this design does not duplicate that public contract.
 
-Semantic owners write their own JSON judgments or confirmed requirement data.
-The existing Go CLI is the authoritative decoder, validator, aggregate checker,
-and state-recording entrypoint, but it does not generate or rewrite semantic
-judgments. CLI-owned receipts, closures, state, and finalization files remain
-typed internal artifacts rather than expanded public schemas.
+Semantic owners provide only positioned scalar statuses, reasons, findings,
+confirmed answers, and execution observations through typed commands. They do
+not author semantic JSON or edit generated templates. The existing Go CLI generates every
+deterministic envelope field, policy/check catalog, evidence reference, hash
+binding, and aggregate verdict, then validates and records the composed result.
+It never generates or rewrites semantic judgment. Receipts, closures, state,
+finalization, and the static portions of requirements, reviewer, QA, and Carry
+artifacts are CLI-owned typed output rather than AI-authored JSON.
 
 Markdown may explain a result but cannot satisfy, complete, or override machine
 evidence. Phase 1 has no route object or reviewer self-certification, accepts no
@@ -123,26 +130,36 @@ legacy format, and restarts old workflows instead of adding compatibility.
 
 ### 3. Reviewer Judgment Uses Stable Checks
 
-Complexity, architecture, and code quality use one reviewer payload without a
-dispatch or prompt evidence field and stable checks from the typed policy catalog. The main agent creates the single typed
-context bundle before dispatch as a machine-only binding. Its fixed reference
-may appear only in the output format; the reviewer does not read the bundle or
-its files. The CLI verifies those files and hashes outside reviewer context.
-Gate-specific evidence attaches to the relevant check instead of creating
-another top-level schema.
+Complexity, architecture, code quality, QA Design Review, and Carry use a
+CLI-generated judgment catalog. Registration writes all route fields, policy
+IDs, check IDs, and machine-only evidence bindings before dispatch. The
+reviewer submits only ordered semantic status, reason, finding, and location
+values through `receipt submit`; it never edits JSON, reads bound evidence
+files, or handwrites a static field. Submission validates all values before an
+atomic artifact/proof write. Finalization requires that proof, computes the
+aggregate verdict, and emits the final formal JSON.
 
-The CLI validates the complete required check set and recomputes the aggregate
+Registration accepts machine evidence only through role-specific path flags:
+Design Review supplies its case set and Design receipt, post-development
+complexity supplies its statistics report, and Carry supplies source closure
+paths. The CLI generates the fixed check bindings and derives each Carry gate
+from the verified closure. Transition composition accepts ordered scalar groups
+for each hop and generates every hop field and object. No generic check-ID map,
+gate/path mini-language, or hop string DSL remains as a production input.
+
+The CLI owns the complete required check set and computes the aggregate
 verdict. Reviewer messages remain explanatory text rather than machine rules.
 The matching external receipt binds the exact final-send prompt and each
 completed reviewer output, and the gate closure contains both; reviewer JSON
 does not self-report identity, prompt evidence, or receipt proof.
 
 QA Execution is different: the QA executor owns the approved-case results and
-binding, while the main agent submits the six typed references for the approved
-case set, accepted Design Review, QA results, binding, changed files, and
-verification. The CLI
-checks case coverage, PASS results, hashes, workflow, snapshot, and binding and
-records the gate without reviewer checks or a reviewer receipt.
+binding, while the main agent supplies the six source paths to
+`artifact compose-qa-execution` for the approved case set, accepted Design
+Review, QA results, binding, changed files, and verification. The CLI generates
+their evidence references and the complete `QA_EXECUTION` envelope, checks case
+coverage, PASS results, hashes, workflow, snapshot, and binding, and records the
+gate without reviewer checks or a reviewer receipt.
 
 Requirements PASS and FinalExecution keep dedicated typed payloads because they
 carry operational data rather than reviewer judgment. Their exact fields, the
@@ -172,7 +189,7 @@ before asking the next question. No runtime interaction state is added.
 Admission, role/stage rules, required check catalogs, permitted
 NOT_APPLICABLE checks, and active role exceptions are declared once in typed Go
 data. Validators execute those objects and `policy show --format json` projects
-the schema owned by `policy-baseline`: schema version, fixed gate order, the
+the schema owned by `policy-baseline`: schema version, fixed gate ID/display order, the
 eight Phase 1 policies, and the two Phase 2 policies when their complete domain
 features are enabled. It does not export human prose, maps, future-role
 placeholders, or a properties bag. Every exported policy or check ID has
@@ -181,9 +198,11 @@ not parity evidence.
 
 The selected policy's flow is also executable data. Existing record/admission
 mode and persisted state must match it: start-readiness cannot satisfy
-post-development, and prerequisites match gate, stage, and flow. Standalone
-artifact validation is not authority to record PASS. This reuses the existing
-mode input and adds no artifact field or CLI flag.
+post-development, and any declared prerequisite must match gate, stage, and
+flow. The four post-development gates have no gate-to-gate PASS prerequisites;
+the finalization policy alone aggregates all four target-bound results.
+Standalone artifact validation is not authority to record PASS. This reuses the
+existing mode input and adds no artifact field or CLI flag.
 
 ### 6. Each Gate Or Requirements PASS Owns A Recursive Evidence Closure
 
@@ -214,11 +233,10 @@ and no separate report root or final aggregate root is created.
 
 `changeSnapshot` covers deliverable source, tests, configuration, requirements,
 and tracked project documentation. Generated reports, dispatches, receipts, and
-run logs are excluded and protected by evidence closure. In Phase 1, a
-deliverable edit creates a new snapshot, unconditionally invalidates old PASS
-results, and requires fresh gate execution. Phase 2 may evaluate carry and the
-earliest rerun boundary only after Carry arbitration is implemented. A bound
-evidence edit invalidates the dependent PASS on the same deliverable snapshot.
+run logs are excluded and protected by evidence closure. A deliverable edit
+creates a new snapshot and invalidates old PASS results for that target unless
+an independent Carry Arbiter accepts the individual gate. A bound evidence edit
+invalidates the dependent PASS on the same deliverable snapshot.
 
 Document checkboxes are ordinary, non-authoritative content. A tracked document
 edit follows the same snapshot rule as any other edit; there is no general
@@ -230,10 +248,11 @@ Formal reviewer and Carry-Forward Arbiter results use the current
 dispatch registration, subagent start/stop, subagent ID, artifact hash, and
 receipt chain. The generation-only prompt template is not evidence and its own
 hash is never embedded in the final prompt. Registration is the single full
-pre-dispatch static check: it validates the seven fields, route values, output
-contract, context-bundle bindings and policy-specific input placement, then
-writes and verifies the reviewer-visible static PASS binding into the final
-bytes. Validation binds workflow, gate, stage, target snapshot,
+pre-dispatch static check and judgment-template generator: it validates the
+seven fields, route values, output contract, context-bundle bindings, evidence
+references, and policy-specific input placement, then generates the immutable
+reviewer/Carry static projection and proof. The reviewer does not confirm or
+repeat that projection. Validation binds workflow, gate, stage, target snapshot,
 final-send prompt, host-captured subagent identity, lifecycle, and exact output. Missing
 or mismatched receipt data blocks PASS; actor labels and provider names are not
 substitutes. Mechanical QA Execution is excluded because it contains no second
@@ -248,16 +267,24 @@ resolved by choosing or combining a result. An operator may replace the single
 open reservation in place when correcting its prompt or route before lifecycle
 capture starts. Started and finalized dispatches remain immutable.
 
-Receipt finalization first applies dispatch-owned fields in memory and runs the
-complete artifact policy validator. Invalid reviewer output leaves its original
-bytes and open registration unchanged. Valid finalization computes the completed
+Receipt submission first combines semantic values with the assigned catalog,
+rejects unknown, duplicate, missing, wrongly typed, or illegal values, and
+atomically records the PENDING artifact hash/proof. Receipt finalization
+requires that proof, derives the verdict, and runs the complete artifact policy
+validator. Invalid semantic input leaves the assigned artifact and open registration
+unchanged. Valid finalization generates the formal artifact and computes the completed
 registration and receipt bytes before changing either file. It writes the receipt completely first, then
 atomically replaces the still-open registration with its finalized form. The
 registration is the commit point: if either write fails before that replacement,
 the registration remains open and no formal PASS may use an orphan receipt.
 
 QA Design retains lifecycle/output binding but is not a review judgment and
-does not require a reviewer prompt. Ordinary CLI receipt validation proves record consistency. It does not claim
+does not require a reviewer prompt. Its registration creates the static case
+template, and the designer submits exactly seven ordered semantic values per
+generated case position through `receipt submit`. The CLI writes the complete
+canonical Markdown, commits its hash to the dispatch proof, and finalization
+requires that proof. The designer never writes Case IDs, labels, separators,
+or newline layout. Ordinary CLI receipt validation proves record consistency. It does not claim
 resistance to an operator who controls local files and CLI execution. A host may
 claim automatic lifecycle or file-access capture only after a same-host live
 canary demonstrates it. Hosts without such hooks can still record formal PASS
@@ -276,16 +303,20 @@ The reviewer receives only the confirmed current requirement, its current role,
 and the current diff or pre-development proposed change. Worktree, base
 revision, output location, and output format are operational routing only.
 Requirements and changed files are read directly from the current repository;
-the reviewer runs its own checks. It receives no workflow-run file, copied
+the reviewer runs its own checks. Within the workflow run it may read only the
+assigned CLI-generated catalog and writes the result only through `receipt
+submit`; it never edits formal JSON. It receives no other workflow-run file, copied
 requirement or project-rule file, prior gate result, verification summary,
 receipt, closure, state, repair history, or main-agent conclusion. The main
 agent and CLI validate prerequisites and machine evidence outside reviewer
-context. An implementation that cannot keep this boundary must stop instead of
-adding another reviewer input or path exception.
+context. The assigned catalog is not substantive reviewer context because its
+static projection is immutable and its bound files remain unread. An
+implementation that cannot keep this boundary must stop instead of adding
+another reviewer input or path exception.
 
 Carry-Forward Arbiter uses a separate role policy because it must decide whether
 the cumulative diff produced by a repair, from the pre-repair snapshot to the
-post-repair snapshot, invalidates each proposed carried gate. Unrelated local
+post-repair snapshot, invalidates each eligible prior PASS gate. Unrelated local
 worktree changes are excluded.
 The complete transition chain remains machine-only: the CLI validates its hops,
 old PASS closures, receipts, and references outside reviewer context. Only a
@@ -294,30 +325,42 @@ canaried host may claim it observed every actual file read.
 Post-development complexity accepts only a fresh statistics-only report for the
 current diff. Development handoff, numeric budgets, budget checks, expansion
 requests, and anti-complexity decisions remain restricted and cannot be reached
-through transitive evidence references.
+through transitive evidence references. `complexity check` formal-output mode
+requires the active run, workflow, snapshot, and restricted output together;
+it writes the complete budget-free `ComplexityReport` and the existing
+`complexity-statistics.v1` proof. Registration, finalization, receipt
+validation, and artifact validation all recheck the closed report, exact
+path/hash, and workflow/snapshot proof. Stdout JSON, redirected or handwritten
+reports, missing required fields, absent proof, and stale proof are not formal
+statistics evidence.
 
-### 10. Carry Is Decided Before Downstream Reliance
+### 10. Carry Is Decided Per Gate Before Final Composition
 
 Final composition has one row per fixed gate, marked `FRESH_PASS` or
 `CARRIED_PASS`, with target/source snapshots and evidence references. A fresh-only
 composition needs no Arbiter.
 
-When carry is proposed, the main agent may suggest a rerun boundary but cannot
-approve it. After the target snapshot is fixed and before the first fresh
-downstream gate relies on a carried prerequisite, the CLI validates the complete
-uncompressed transition chain and one fresh Carry-Forward Arbiter reviews the
-repair diff from the pre-repair snapshot to the post-repair snapshot. It decides every carried gate as
-`ACCEPT_CARRY`, `RERUN_REQUIRED`, or `BLOCKED`. Rejection names the earliest gate
-to rerun; downstream gates rerun from that point and the main agent cannot
-override the decision.
+After the target snapshot is fixed, the CLI validates the complete transition
+chain and one fresh Carry-Forward Arbiter reviews the repair diff from the
+pre-repair snapshot to the post-repair snapshot. The Arbiter decides every
+eligible prior PASS gate independently as `ACCEPT_CARRY`, `RERUN_REQUIRED`, or
+`BLOCKED`. A completed arbitration may contain a mixture of accepted carries
+and gates that must rerun. There is no carried prefix, earliest rerun boundary,
+or automatic downstream suffix rerun, and the main agent cannot override an
+individual decision.
 
 The Arbiter judges the repair diff against each gate's responsibility,
 checks, evidence, and observable behavior. Diff line count alone cannot approve
 or reject carry.
 
-The accepted decision may be reused at finalization only while the target
-snapshot remains unchanged. Any deliverable edit invalidates it and requires a
-new decision before downstream reliance.
+When another repair follows an accepted Carry transition, the next chain starts
+at the latest fresh-PASS baseline and includes the prior and new hops through the
+current target. This lets the Arbiter re-evaluate each eligible gate from one
+complete cumulative diff without adding a prefix or earliest-rerun selector.
+
+The accepted per-gate decisions may be reused at finalization only while the
+target snapshot remains unchanged. Any deliverable edit invalidates them and
+requires a new decision set before final composition.
 
 ### 11. QA Admission Records Only Meaningful Boundaries
 
@@ -331,7 +374,8 @@ Design creates a case set and binds it to the designer receipt; it is not a
 PASS or a gate. Independent Design Review uses the shared reviewer envelope and
 the `qa.design-*` checks, binding the exact case-set hash and Design-stage
 receipt. Design Rework is not a machine role: changing cases changes the hash
-and requires another Design Review. The accepted Design Review closure is the
+and requires another Design Review. Rework uses another Design registration
+and semantic submission; it never edits the submitted case artifact. The accepted Design Review closure is the
 approval; no second copy of the case set is created.
 
 Development handoff binds the approved case set and accepted review. A worker
@@ -356,10 +400,12 @@ All supplied artifacts, paths, hashes, receipts, role data, verdict admission,
 policy checks, and prerequisites validate before authoritative state changes.
 Any rejection leaves prior state byte-identical.
 
-The existing gate-state writer writes complete JSON to a same-directory
-temporary file and then replaces the formal state file. This is a local
-write-safety change, not a new persistence abstraction or a broader concurrency
-guarantee.
+The gate-state writer writes complete JSON to a same-directory temporary file
+and then replaces the formal state file. Phase 2.5 also serializes each
+cross-process state mutation with a same-directory lock covering reload,
+state-dependent validation, mutation, and replacement. Parallel reviewers and
+QA execution remain independent; only their shared commit point is serialized.
+This adds no state schema or persistence layer.
 
 ## Evidence Roles
 
@@ -384,7 +430,19 @@ of those roles or stages, and Phase 2 does not register White-box Adequacy.
 Phase 2.5 adds no evidence role or payload. Its scheduling and repair-impact
 decision must reuse the existing roles, envelopes, receipts, and state; the
 per-gate rerun/inheritance decision is recorded through the existing Carry
-evidence rather than a new reviewer layer.
+evidence rather than a new reviewer layer. It does add composition paths and
+template proofs so every existing role's static formal content is CLI-generated.
+Those paths accept only role-specific source paths and ordered semantic or
+per-hop scalars; callers do not transcribe static IDs, gates, keys, or mini
+languages.
+
+Phase 2.5 preserves an explicitly resolved workflow run directory through
+handoff composition and its immediate validation instead of deriving another
+directory from the workflow ID. Carry tree identity is deliberately separated:
+Phase 3 will persist the source and target dirty trees and mechanically bind the
+review diff to them. Until that binding exists, a missing pre-repair source tree
+makes Carry unavailable rather than permitting a reconstructed or whole-file
+guess.
 
 ## Verification Strategy
 
@@ -392,6 +450,8 @@ evidence rather than a new reviewer layer.
   unknown, and non-PASS results.
 - Strict JSON tests for duplicate/unknown fields, types, UTF-8, trailing values,
   role conflicts, old schema, and deterministic bytes.
+- Template/composition tests proving semantic-only success, rejection of every
+  static projection change, no overwrite, and no partial formal output.
 - Closure/path tests for nested tampering, cycles, aliases, cross-run and
   symlink escape, plus Windows and macOS/Linux path fixtures.
 - Receipt tests for every bound lifecycle dimension and honest host capability
@@ -400,8 +460,8 @@ evidence rather than a new reviewer layer.
   budget material.
 - QA tests for case/review hash binding, case changes, weakened cases, and
   Execution evidence.
-- Carry tests for fresh-only, accepted carry, multi-hop chains, early admission,
-  rejection, earliest rerun, reuse, and invalidation.
+- Carry tests for fresh-only, accepted carry, mixed per-gate decisions,
+  multi-hop chains, rejected transitions, reuse, and invalidation.
 - State tests proving rejected writes preserve bytes and successful replacement
   produces complete valid JSON.
 

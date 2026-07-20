@@ -185,15 +185,15 @@ func TestPrepareDispatchPromptBuildsAndValidatesExactSendBytes(t *testing.T) {
 	}
 	mustWrite(filepath.Join(root, "hooks", "pollution-patterns.json"), `{"english":{"patternGroups":[]},"chinese":{"termGroups":[]}}`)
 	run := filepath.Join(root, ".claude", "gates", "runs", "wf", "restricted")
-	dispatch := filepath.Join(run, "complexity", "dispatch.txt")
 	output := filepath.Join(run, "complexity", "prompt.txt")
 	bundle := filepath.Join(run, "complexity", "bundle.json")
-	mustWrite(dispatch, validReviewerDispatch+"Worktree: "+root+"\nBase commit or snapshot: base..snapshot\nOutput path: .claude/gates/runs/wf/restricted/complexity/review.json\nOutput format: schema-version-2 JSON\n")
 	mustWrite(bundle, "{}\n")
 
 	prepared, result := PrepareDispatchPrompt(PrepareDispatchPromptOptions{
-		Root: root, DispatchFile: dispatch, OutputFile: output,
-		Bindings: []DispatchPromptBinding{{Name: "contextBundle", Path: bundle}},
+		Root: root, OutputFile: output, Gate: "complexity-gate", CurrentRequirement: "requirements/current.md",
+		CurrentDiff: "git diff base --", Worktree: root, ChangeSnapshot: "base..snapshot",
+		ReviewArtifact: ".claude/gates/runs/wf/restricted/complexity/review.json",
+		PolicyID:       "complexity.post-development.v2", ContextBundle: bundle,
 	})
 	if !result.OK() {
 		t.Fatalf("prepare failed: %#v", result.Failures)
@@ -210,17 +210,63 @@ func TestPrepareDispatchPromptBuildsAndValidatesExactSendBytes(t *testing.T) {
 			t.Fatalf("prepared prompt missing %q: %s", expected, text)
 		}
 	}
-	if strings.Contains(text, "dispatch=restricted/complexity/dispatch.txt") {
-		t.Fatalf("prepared prompt contains its template hash: %s", text)
-	}
 	if prepared.SHA256 != sha256Bytes(data) {
 		t.Fatalf("prepared hash mismatch: got %s want %s", prepared.SHA256, sha256Bytes(data))
-	}
-	if strings.Contains(text, dispatchStaticValidationPrefix) {
-		t.Fatal("prompt prepare wrote PASS before receipt registration")
 	}
 	validated, _ := DispatchPromptWithViolations(DispatchPromptOptions{Root: root, PromptText: text, FinalSend: true})
 	if !validated.OK() {
 		t.Fatalf("prepared bytes failed final validation: %#v", validated.Failures)
+	}
+}
+
+func TestPrepareDispatchPromptAllowsOnlyActiveQADesignReviewCaseSet(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(filepath.Join(root, "hooks", "pollution-patterns.json"), `{"english":{"patternGroups":[]},"chinese":{"termGroups":[]}}`)
+	run := filepath.Join(root, ".claude", "gates", "runs", "wf", "restricted")
+	caseSet := filepath.Join(run, "qa-design", "cases.md")
+	bundle := filepath.Join(run, "qa-design", "bundle.json")
+	mustWrite(caseSet, string(generatedQADesignTemplate(1)))
+	mustWrite(bundle, "{}\n")
+	options := PrepareDispatchPromptOptions{Root: root, OutputFile: filepath.Join(run, "qa-design", "prompt.txt"), Gate: "qa-test-gate", Stage: "Design Review", CurrentRequirement: "requirements/current.md", CurrentDiff: ".claude/gates/runs/wf/restricted/qa-design/cases.md", Worktree: root, ChangeSnapshot: "snap", ReviewArtifact: ".claude/gates/runs/wf/restricted/qa-design/review.json", PolicyID: "qa.design-review.v2", ContextBundle: bundle}
+	if _, result := PrepareDispatchPrompt(options); !result.OK() {
+		t.Fatalf("active QA case set was rejected: %#v", result.Failures)
+	}
+	for name, mutate := range map[string]func(*PrepareDispatchPromptOptions){
+		"current requirement": func(o *PrepareDispatchPromptOptions) { o.CurrentRequirement = caseSet },
+		"other gate": func(o *PrepareDispatchPromptOptions) {
+			o.Gate, o.Stage, o.PolicyID = "complexity-gate", "", "complexity.post-development.v2"
+		},
+		"different run": func(o *PrepareDispatchPromptOptions) {
+			o.CurrentDiff = ".claude/gates/runs/other/restricted/qa-design/cases.md"
+		},
+		"outside restricted": func(o *PrepareDispatchPromptOptions) {
+			o.CurrentDiff = ".claude/gates/runs/wf/qa-design/cases.md"
+		},
+		"other run artifact": func(o *PrepareDispatchPromptOptions) {
+			o.CurrentDiff = ".claude/gates/runs/wf/restricted/qa-design/context-bundle.json"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := options
+			mutate(&candidate)
+			if name == "different run" {
+				mustWrite(filepath.Join(root, ".claude", "gates", "runs", "other", "restricted", "qa-design", "cases.md"), string(generatedQADesignTemplate(1)))
+			}
+			if name == "outside restricted" {
+				mustWrite(filepath.Join(root, ".claude", "gates", "runs", "wf", "qa-design", "cases.md"), string(generatedQADesignTemplate(1)))
+			}
+			if _, result := PrepareDispatchPrompt(candidate); result.OK() {
+				t.Fatal("workflow-run input was accepted outside the QA Design Review exception")
+			}
+		})
 	}
 }

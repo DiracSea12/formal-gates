@@ -140,14 +140,14 @@ func TestArtifactRejectsActiveRunRootFile(t *testing.T) {
 
 func TestWorkflowVerifyAdmissionPositiveAndNegative(t *testing.T) {
 	dir := t.TempDir()
-	blocked := WorkflowVerifyAdmission(WorkflowVerifyAdmissionOptions{
+	allowedBeforeQA := WorkflowVerifyAdmission(WorkflowVerifyAdmissionOptions{
 		Worktree:       dir,
 		Gate:           "complexity-gate",
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 	})
-	if blocked.OK() {
-		t.Fatal("expected missing QA prerequisite to block")
+	if !allowedBeforeQA.OK() {
+		t.Fatalf("independent complexity admission was blocked before QA: %#v", allowedBeforeQA.Failures)
 	}
 
 	artifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
@@ -180,15 +180,14 @@ func TestWorkflowFinalVerificationAcceptedAttempt(t *testing.T) {
 	dir := t.TempDir()
 	finalRunRel, finalRun := workflowRunTestPath(t, dir, "wf", "final-run.json")
 	mustWrite(t, finalRun, `{"ok":true}`+"\n")
-	attempts := `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `","contextBundle":"bundle.zip sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`
 	output, outputPath := workflowRunTestPath(t, dir, "wf", "final-verification.json")
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:       dir,
-		AttemptsJSON:   attempts,
-		OutputArtifact: output,
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
+		Worktree:         dir,
+		AttemptArtifacts: []string{finalRunRel},
+		OutputArtifact:   output,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if !result.OK() {
 		t.Fatalf("expected final verification to pass, got %#v", result.Failures)
@@ -212,6 +211,51 @@ func TestWorkflowFinalVerificationAcceptedAttempt(t *testing.T) {
 	}
 }
 
+func TestWorkflowFinalVerificationAcceptsEmptySuccessfulAttemptOutput(t *testing.T) {
+	dir := t.TempDir()
+	attemptRel, attemptPath := workflowRunTestPath(t, dir, "wf", "go-build.txt")
+	mustWrite(t, attemptPath, "")
+	output, _ := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+
+	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree:         dir,
+		AttemptArtifacts: []string{attemptRel},
+		OutputArtifact:   output,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
+	})
+	if !result.OK() || artifact.Status != "PASS" || len(artifact.AcceptedAttempts) != 1 {
+		t.Fatalf("expected empty successful output to pass, artifact=%#v failures=%#v", artifact, result.Failures)
+	}
+}
+
+func TestWorkflowFinalVerificationRejectsFailedAttemptOutput(t *testing.T) {
+	dir := t.TempDir()
+	attemptRel, attemptPath := workflowRunTestPath(t, dir, "wf", "failed-command.txt")
+	mustWrite(t, attemptPath, "FAIL: command exited with status 1\n")
+	output, outputPath := workflowRunTestPath(t, dir, "wf", "final-verification.json")
+
+	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree:         dir,
+		AttemptArtifacts: []string{attemptRel},
+		OutputArtifact:   output,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
+	})
+	if result.OK() {
+		t.Fatal("expected failed command output to be rejected")
+	}
+	if artifact.Status != "FAIL" || len(artifact.AcceptedAttempts) != 0 || len(artifact.Attempts) != 1 || artifact.Attempts[0].Status != "FAIL" || artifact.Attempts[0].Accepted {
+		t.Fatalf("unexpected failed aggregate: %#v", artifact)
+	}
+	if !strings.Contains(resultSummary(result), "contains a FAIL result") {
+		t.Fatalf("unexpected failure: %#v", result.Failures)
+	}
+	if !isFile(outputPath) {
+		t.Fatal("expected deterministic failure artifact to be written")
+	}
+}
+
 func TestWorkflowFinalVerificationWithoutRunDirRejectsRepositoryPaths(t *testing.T) {
 	dir := t.TempDir()
 	runAttempt, runAttemptPath := workflowRunTestPath(t, dir, "wf", "attempt.json")
@@ -219,20 +263,14 @@ func TestWorkflowFinalVerificationWithoutRunDirRejectsRepositoryPaths(t *testing
 	mustWrite(t, runAttemptPath, `{"ok":true}`+"\n")
 	rootAttempt := filepath.Join(dir, "attempt.json")
 	mustWrite(t, rootAttempt, `{"ok":true}`+"\n")
-	rootAttemptsFile := filepath.Join(dir, "attempts.json")
-	mustWrite(t, rootAttemptsFile, `[]`)
-
-	validAttempts := `[{"status":"PASS","accepted":true,"artifact":"` + runAttempt + `","artifactHash":"` + sha256FileForTest(t, runAttemptPath) + `"}]`
-	rootAttempts := `[{"status":"PASS","accepted":true,"artifact":"attempt.json","artifactHash":"` + sha256FileForTest(t, rootAttempt) + `"}]`
 	for _, test := range []struct {
 		name    string
 		options WorkflowFinalVerificationOptions
 		want    string
 	}{
-		{name: "attempt artifact", options: WorkflowFinalVerificationOptions{AttemptsJSON: rootAttempts, OutputArtifact: runOutput}, want: "attempts[0].artifact"},
-		{name: "attempts file", options: WorkflowFinalVerificationOptions{AttemptsFile: "attempts.json", OutputArtifact: runOutput}, want: "attempts-file"},
-		{name: "output", options: WorkflowFinalVerificationOptions{AttemptsJSON: validAttempts, OutputArtifact: "final-verification.json"}, want: "output"},
-		{name: "final QA artifact", options: WorkflowFinalVerificationOptions{AttemptsJSON: validAttempts, OutputArtifact: runOutput, FinalQAArtifact: "final-execution.json", RecordFinalQA: true}, want: "final-qa-artifact"},
+		{name: "attempt artifact", options: WorkflowFinalVerificationOptions{AttemptArtifacts: []string{"attempt.json"}, OutputArtifact: runOutput}, want: "attempt-artifact"},
+		{name: "output", options: WorkflowFinalVerificationOptions{AttemptArtifacts: []string{runAttempt}, OutputArtifact: "final-verification.json"}, want: "output"},
+		{name: "final QA artifact", options: WorkflowFinalVerificationOptions{AttemptArtifacts: []string{runAttempt}, OutputArtifact: runOutput, FinalQAArtifact: "final-execution.json", RecordFinalQA: true}, want: "final-qa-artifact"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			test.options.Worktree = dir
@@ -255,15 +293,15 @@ func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	recordFourGatePrerequisites(t, dir, "wf", "snap")
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:        dir,
-		RunDir:          runRel,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
-		OutputArtifact:  filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json")),
-		FinalQAArtifact: filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.md")),
-		RecordFinalQA:   true,
-		Actor:           "gate-workflow",
-		WorkflowID:      "wf",
-		ChangeSnapshot:  "snap",
+		Worktree:         dir,
+		RunDir:           runRel,
+		AttemptArtifacts: []string{finalRunRel},
+		OutputArtifact:   filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json")),
+		FinalQAArtifact:  filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.md")),
+		RecordFinalQA:    true,
+		Actor:            "gate-workflow",
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if !result.OK() {
 		t.Fatalf("expected final QA record to pass, got %#v", result.Failures)
@@ -323,8 +361,8 @@ func TestWorkflowFinalVerificationBuildsMixedCarryMatrix(t *testing.T) {
 	closuresBefore, _ := filepath.Glob(filepath.Join(fixture.RunDir, "closures", "*.json"))
 	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 		Worktree: dir, RunDir: runRel, WorkflowID: "wf", ChangeSnapshot: "target", RecordFinalQA: true,
-		AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":"` + attemptRel + `","artifactHash":"` + sha256FileForTest(t, attemptPath) + `"}]`,
-		OutputArtifact: filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json")), FinalQAArtifact: finalRel,
+		AttemptArtifacts: []string{attemptRel},
+		OutputArtifact:   filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json")), FinalQAArtifact: finalRel,
 	})
 	if !result.OK() {
 		t.Fatalf("mixed FinalExecution failed: %#v", result.Failures)
@@ -399,13 +437,13 @@ func TestWorkflowFinalVerificationWriteFailureDoesNotRecordFinalExecution(t *tes
 	mustWrite(t, finalExecution, "previous FinalExecution\n")
 
 	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:        dir,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
-		OutputArtifact:  output,
-		FinalQAArtifact: finalExecutionRel,
-		RecordFinalQA:   true,
-		WorkflowID:      "wf",
-		ChangeSnapshot:  "snap",
+		Worktree:         dir,
+		AttemptArtifacts: []string{finalRunRel},
+		OutputArtifact:   output,
+		FinalQAArtifact:  finalExecutionRel,
+		RecordFinalQA:    true,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if result.OK() || len(result.Failures) == 0 || result.Failures[0].Path != "output" {
 		t.Fatalf("expected write failure, got %#v", result.Failures)
@@ -430,12 +468,12 @@ func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
 			recordFourGatePrerequisites(t, dir, "wf", "snap")
 			finalVerification := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json"))
 			_, verificationResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-				Worktree:       dir,
-				RunDir:         runRel,
-				AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
-				OutputArtifact: finalVerification,
-				WorkflowID:     "wf",
-				ChangeSnapshot: "snap",
+				Worktree:         dir,
+				RunDir:           runRel,
+				AttemptArtifacts: []string{finalRunRel},
+				OutputArtifact:   finalVerification,
+				WorkflowID:       "wf",
+				ChangeSnapshot:   "snap",
 			})
 			if !verificationResult.OK() {
 				t.Fatal(verificationResult.Failures)
@@ -447,6 +485,24 @@ func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
 			}
 			recordCalled := false
 			runDir, _ := resolveWorkflowRunDir(dir, "wf", runRel)
+			if previousExists {
+				result := recordFinalQAWith(dir, runDir, finalVerification, "PASS", WorkflowFinalVerificationOptions{
+					FinalQAArtifact: finalExecutionRel,
+					WorkflowID:      "wf",
+					ChangeSnapshot:  "snap",
+				}, func(GateRecordOptions) Result {
+					recordCalled = true
+					return Result{}
+				})
+				if result.OK() || recordCalled {
+					t.Fatalf("existing FinalExecution was overwritten or recorded: called=%v failures=%#v", recordCalled, result.Failures)
+				}
+				data, err := os.ReadFile(finalExecution)
+				if err != nil || string(data) != "previous FinalExecution\n" {
+					t.Fatalf("existing FinalExecution changed after rejection: data=%q err=%v", data, err)
+				}
+				return
+			}
 			result := recordFinalQAWith(dir, runDir, finalVerification, "PASS", WorkflowFinalVerificationOptions{
 				FinalQAArtifact: finalExecutionRel,
 				WorkflowID:      "wf",
@@ -465,11 +521,7 @@ func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
 				t.Fatalf("expected state recording failure, got called=%v failures=%#v", recordCalled, result.Failures)
 			}
 			data, err := os.ReadFile(finalExecution)
-			if previousExists {
-				if err != nil || string(data) != "previous FinalExecution\n" {
-					t.Fatalf("previous FinalExecution was not restored: data=%q err=%v", data, err)
-				}
-			} else if !os.IsNotExist(err) {
+			if !os.IsNotExist(err) {
 				t.Fatalf("new FinalExecution was not removed: data=%q err=%v", data, err)
 			}
 		})
@@ -512,14 +564,14 @@ func TestWorkflowFinalVerificationRecordFinalQARequiresFourGatePrerequisites(t *
 	mustWrite(t, finalRun, `{"ok":true}`+"\n")
 
 	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:        dir,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
-		OutputArtifact:  output,
-		FinalQAArtifact: finalQA,
-		RecordFinalQA:   true,
-		Actor:           "gate-workflow",
-		WorkflowID:      "wf",
-		ChangeSnapshot:  "snap",
+		Worktree:         dir,
+		AttemptArtifacts: []string{finalRunRel},
+		OutputArtifact:   output,
+		FinalQAArtifact:  finalQA,
+		RecordFinalQA:    true,
+		Actor:            "gate-workflow",
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if result.OK() {
 		t.Fatal("expected FinalExecution record to require four gate prerequisites")
@@ -534,13 +586,13 @@ func TestWorkflowFinalVerificationRecordFinalQARequiresGateClosures(t *testing.T
 	mustWrite(t, finalRun, `{"ok":true}`+"\n")
 
 	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:        dir,
-		AttemptsJSON:    `[{"status":"PASS","accepted":true,"artifact":"` + finalRunRel + `","artifactHash":"` + sha256FileForTest(t, finalRun) + `"}]`,
-		OutputArtifact:  output,
-		FinalQAArtifact: finalQA,
-		RecordFinalQA:   true,
-		WorkflowID:      "wf",
-		ChangeSnapshot:  "snap",
+		Worktree:         dir,
+		AttemptArtifacts: []string{finalRunRel},
+		OutputArtifact:   output,
+		FinalQAArtifact:  finalQA,
+		RecordFinalQA:    true,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if result.OK() {
 		t.Fatal("expected missing final QA artifact to fail")
@@ -556,11 +608,11 @@ func TestWorkflowFinalVerificationMissingAcceptedArtifactFails(t *testing.T) {
 	output, outputPath := workflowRunTestPath(t, dir, "wf", "final-verification.json")
 
 	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:       dir,
-		AttemptsJSON:   `[{"status":"PASS","accepted":true,"artifact":"` + missing + `"}]`,
-		OutputArtifact: output,
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
+		Worktree:         dir,
+		AttemptArtifacts: []string{missing},
+		OutputArtifact:   output,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if result.OK() {
 		t.Fatal("expected missing accepted artifact to fail")
@@ -578,22 +630,17 @@ func TestWorkflowFinalVerificationMissingAcceptedArtifactFails(t *testing.T) {
 
 func TestWorkflowFinalVerificationNoAcceptedFails(t *testing.T) {
 	dir := t.TempDir()
-	run, runPath := workflowRunTestPath(t, dir, "wf", "run.json")
 	output, _ := workflowRunTestPath(t, dir, "wf", "final-verification.json")
-	mustWrite(t, runPath, `{"ok":false}`+"\n")
 
-	artifact, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
-		Worktree:       dir,
-		AttemptsJSON:   `[{"status":"FAIL","accepted":false,"artifact":"` + run + `"}]`,
-		OutputArtifact: output,
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
+	_, result := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree:         dir,
+		AttemptArtifacts: []string{},
+		OutputArtifact:   output,
+		WorkflowID:       "wf",
+		ChangeSnapshot:   "snap",
 	})
 	if result.OK() {
 		t.Fatal("expected no accepted attempts to fail")
-	}
-	if artifact.Status != "FAIL" || len(artifact.AcceptedAttempts) != 0 {
-		t.Fatalf("unexpected aggregate: %#v", artifact)
 	}
 }
 

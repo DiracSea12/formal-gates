@@ -125,6 +125,7 @@ func gateRecord(options GateRecordOptions) Result {
 	}
 	artifactOptions := ArtifactOptions{Root: worktree, File: options.Artifact, Gate: options.Gate, WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot, Stage: options.Stage, Flow: flow, RunDir: options.RunDir}
 	decoded := decodeArtifact(artifactOptions, data, &result)
+	validateCompositionProof(artifactOptions, &decoded, &result)
 	if !result.OK() || decoded.Envelope.Verdict != options.Verdict {
 		if result.OK() {
 			result.add("artifact", "artifact verdict must match --verdict")
@@ -134,6 +135,12 @@ func gateRecord(options GateRecordOptions) Result {
 	if options.Verdict != "PASS" {
 		return result
 	}
+	releaseState, err := acquireGateStateLock(statePath)
+	if err != nil {
+		result.add(slash(statePath), "cannot lock gate state: "+err.Error())
+		return result
+	}
+	defer releaseState()
 	state, err := loadGateState(statePath)
 	if err != nil {
 		result.add(slash(statePath), err.Error())
@@ -232,11 +239,7 @@ func GateRecordTransition(options WorkflowRecordTransitionOptions) Result {
 		return result
 	}
 	if decoded.Envelope.Verdict != "PASS" {
-		if decoded.EarliestRerun != "" {
-			result.add("artifact", "Carry Arbiter did not accept carry; earliestRerunGate="+decoded.EarliestRerun)
-		} else {
-			result.add("artifact", "workflow record-transition accepts only a PASS Carry Arbiter artifact")
-		}
+		result.add("artifact", "workflow record-transition accepts only a terminal PASS Carry Arbiter artifact")
 		return result
 	}
 	receipt, err := matchingReceiptRef(artifactOptions, decoded)
@@ -251,9 +254,19 @@ func GateRecordTransition(options WorkflowRecordTransitionOptions) Result {
 	}
 	closurePath := filepath.Join(decoded.RunDir, filepath.FromSlash(closure.Path))
 	storedPath := relativePath(worktree, closurePath)
+	releaseState, err := acquireGateStateLock(statePath)
+	if err != nil {
+		result.add(slash(statePath), "cannot lock gate state: "+err.Error())
+		return result
+	}
+	defer releaseState()
 	state, err := loadGateState(statePath)
 	if err != nil {
 		result.add(slash(statePath), err.Error())
+		return result
+	}
+	if err := validateCarryDecisionCoverage(state, decoded.CarryChain, decoded.Carry.Decisions, options.WorkflowID, options.ChangeSnapshot); err != nil {
+		result.add("transition", err.Error())
 		return result
 	}
 	for _, existing := range state.Transitions {
@@ -273,6 +286,48 @@ func GateRecordTransition(options WorkflowRecordTransitionOptions) Result {
 		result.add(slash(statePath), err.Error())
 	}
 	return result
+}
+
+// validateCarryDecisionCoverage keeps the typed transition complete for the
+// normal workflow: every prior PASS gate represented by the repair chain must
+// receive exactly one independent decision.
+func validateCarryDecisionCoverage(state GateState, chain *TransitionChain, decisions []CarryDecision, workflowID, targetSnapshot string) error {
+	if chain == nil {
+		return fmt.Errorf("transition chain is required before checking eligible Carry decisions")
+	}
+	sourceSnapshots := map[string]bool{}
+	for _, hop := range chain.Hops {
+		sourceSnapshots[hop.FromSnapshot] = true
+	}
+	eligible := map[string]bool{}
+	for _, entry := range state.History {
+		if entry.WorkflowID != workflowID || entry.Verdict != "PASS" || !sourceSnapshots[entry.ChangeSnapshot] {
+			continue
+		}
+		if entry.Mode != "formal" && entry.Mode != "post-development" && entry.Mode != "" {
+			continue
+		}
+		stage, role := sourceGateContract(entry.Gate)
+		if role != "" && normalizeStage(entry.Stage) == normalizeStage(stage) {
+			eligible[entry.Gate] = true
+		}
+	}
+	if len(eligible) == 0 {
+		return nil
+	}
+	decided := map[string]bool{}
+	for _, decision := range decisions {
+		if !eligible[decision.Gate] {
+			return fmt.Errorf("Carry decision gate=%s has no eligible prior PASS for target=%s", decision.Gate, targetSnapshot)
+		}
+		decided[decision.Gate] = true
+	}
+	for gate := range eligible {
+		if !decided[gate] {
+			return fmt.Errorf("Carry decisions are incomplete: eligible prior PASS gate=%s has no decision", gate)
+		}
+	}
+	return nil
 }
 
 func GateVerifyAdmission(options GateAdmissionOptions) Result {
@@ -299,7 +354,7 @@ func GateVerifyAdmission(options GateAdmissionOptions) Result {
 		return result
 	}
 	requirements := policy.Prerequisites
-	if len(requirements) > 0 {
+	if flow == "post-development" || flow == "start-readiness" {
 		if strings.TrimSpace(options.WorkflowID) == "" {
 			result.add("workflow-id", "--workflow-id is required for admission checks")
 		}
@@ -591,6 +646,35 @@ func writeGateState(path string, state GateState) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'), 0o600)
+}
+
+func acquireGateStateLock(statePath string) (func(), error) {
+	lockPath := statePath + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(lockPath)
+				return nil, closeErr
+			}
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for another gate-state update to finish")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 func newGateState() GateState {

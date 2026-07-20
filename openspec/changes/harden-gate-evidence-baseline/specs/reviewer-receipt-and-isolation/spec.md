@@ -47,11 +47,19 @@ file first, and atomically replace the open registration last. The registration
 replacement SHALL be the commit point. Any earlier failure SHALL leave the
 registration open; an unreferenced receipt SHALL NOT authorize PASS.
 
-Schema version, artifact role, registered workflow, snapshot, gate, stage, and
-context-bundle reference are machine-owned fields. Before hashing the completed
-reviewer envelope, finalization SHALL write those values from policy and the
-dispatch registration. A reviewer transcription error in those fields SHALL NOT
-require repeating the review or changing its judgment.
+Schema/version, artifact role, registered workflow/snapshot, gate/stage,
+policy/check catalog, context bundle, evidence references, paths, hashes,
+bindings, and aggregate verdict are machine-owned fields. Registration SHALL
+generate the complete static projection and an immutable catalog proof before
+dispatch. The reviewer SHALL pass only ordered status, message, finding, and
+location values to `receipt submit`; a Carry Arbiter SHALL pass only ordered
+decision and reason values. Reviewer submission SHALL reject Carry and QA
+Design fields; Carry submission SHALL reject reviewer and QA Design fields;
+QA Design submission SHALL reject reviewer and Carry fields. Submission SHALL reject unknown, duplicate,
+missing, wrongly typed, or illegal values before changing the artifact, then
+atomically record the composed PENDING artifact hash/proof. Finalization SHALL
+require that proof and mechanically derive the verdict. No reviewer SHALL edit
+formal JSON, transcribe, or confirm a machine-owned field.
 
 #### Scenario: Receipt is missing or mismatched
 
@@ -113,24 +121,37 @@ The reviewer SHALL receive only the confirmed current requirement, its current
 role, and the current diff or proposed change. Worktree, base revision, output
 location, and output format MAY be supplied as operational routing only. The
 reviewer SHALL read current requirements and changed files directly from the
-repository, run its own checks, read no workflow-run artifact, and write only
-its assigned output under `restricted/`. The main agent and CLI MAY read
+repository, run its own checks, and under the workflow run read only its
+assigned CLI-generated catalog and write the result through `receipt submit`.
+It SHALL NOT edit formal JSON or open
+referenced evidence or any other workflow-run artifact. The main agent and CLI MAY read
 restricted machine evidence to verify prerequisites, receipts, and recording,
 but SHALL NOT expose that evidence to the reviewer.
 
 Before dispatch, the orchestrator SHALL use `prompt prepare` to generate the
 exact seven-field message. Receipt registration SHALL be the single full
-pre-dispatch static check and SHALL reject any mismatch in role, seven fields,
-worktree, snapshot, gate/stage output contract, output path, context-bundle
-schema/path/hash, policy-specific input placement, unresolved `PENDING`, or
-pollution. Only after all checks pass SHALL registration write one machine-generated
-`static-validation=PASS` binding into the final prompt and bind those bytes. The reviewer SHALL verify that binding in its
-prompt-field check without reading bound files. The orchestrator SHALL send
-those exact bytes and append nothing. Finalization SHALL validate the complete
-reviewer artifact with dispatch-owned fields applied in memory before writing a
-receipt or finalizing the registration. Reviewer and Carry payloads SHALL contain no dispatch or prompt
-evidence field. QA Design makes no review judgment and SHALL NOT be forced to
-register a reviewer prompt. Receipt registration SHALL reject a fourth
+pre-dispatch static check and catalog generator and SHALL reject any mismatch
+in role, seven fields, worktree, snapshot, gate/stage output contract, output
+path, context-bundle schema/path/hash, policy-specific input placement,
+unresolved `PENDING`, or pollution. It SHALL bind the exact-send prompt and
+generate all static catalog fields, including evidence references supplied by
+role-specific CLI path flags. Design Review SHALL accept separate case-set and
+Design-receipt paths, post-development complexity SHALL accept a statistics
+path, and Carry SHALL accept source closure paths from which the CLI derives
+fixed gates. Registration SHALL NOT accept caller-authored check-ID/path or
+gate/path bindings. The orchestrator SHALL send those exact prompt bytes
+and append nothing. The reviewer SHALL make no prompt-field confirmation;
+`review.prompt-semantics` remains its only prompt-owned semantic check. The
+reviewer SHALL call `receipt submit`; successful submission SHALL record the
+artifact hash/proof and finalization SHALL require it, aggregate the semantic
+values, and write the final artifact and receipt before finalizing the registration. Reviewer and
+Carry payloads SHALL contain no dispatch or prompt evidence field. QA Design
+makes no review judgment and SHALL NOT be forced to register a reviewer prompt,
+but its formal static content SHALL still be generated by the CLI. Its semantic
+owner SHALL submit seven ordered values per generated case through `receipt
+submit`; the owner SHALL NOT edit Case IDs, field labels, separators, or newline
+layout, and finalization SHALL require the CLI-recorded submission hash. Receipt
+registration SHALL reject a fourth
 finalized review for the same workflow, gate, and stage unless the user has
 explicitly authorized the extra round.
 
@@ -148,12 +169,25 @@ explicitly authorized the extra round.
 - **THEN** receipt registration rejects the dispatch before capacity is
   reserved and no reviewer receives it.
 
+#### Scenario: Reviewer changes a static template field
+
+- **WHEN** a reviewer changes an envelope field, policy/check ID, evidence
+  reference, path/hash/binding, source gate, or other generated value
+- **THEN** finalization rejects the template, writes no receipt or final
+  artifact, and leaves the dispatch open.
+
+#### Scenario: Reviewer submits only semantic values
+
+- **WHEN** every required semantic value is supplied through `receipt submit`
+- **THEN** finalization derives the verdict and writes the final formal
+  artifact and receipt without AI-authored static content.
+
 #### Scenario: Reviewer output is invalid before finalization
 
-- **WHEN** the completed reviewer JSON violates its closed schema or selected
-  policy
-- **THEN** finalization writes no receipt, leaves the dispatch unfinalized, and
-  does not rewrite the reviewer bytes.
+- **WHEN** semantic input is incomplete, duplicated, unknown, wrongly typed, or
+  violates the selected policy
+- **THEN** submission leaves the assigned artifact byte-for-byte unchanged and
+  finalization writes no receipt.
 
 #### Scenario: Review file is outside restricted
 
@@ -215,7 +249,7 @@ restricted and unreachable through transitive evidence references.
 
 Carry-Forward Arbiter SHALL use a separate receipt-bound role policy and judge
 whether the cumulative diff produced by the repair from the pre-repair snapshot
-to the post-repair snapshot invalidates each proposed carried gate. Unrelated
+to the post-repair snapshot invalidates each eligible prior PASS gate. Unrelated
 local worktree changes SHALL be excluded. The transition and repair chain SHALL
 remain under `restricted/` and be validated by the CLI outside the Arbiter
 prompt, exactly like other workflow material.

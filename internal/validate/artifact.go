@@ -3,6 +3,7 @@ package validate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,6 +70,7 @@ func Artifact(options ArtifactOptions) Result {
 }
 
 func validateReceipt(options ArtifactOptions, runDir string, ref EvidenceRef, result *Result) {
+	options.RunDir = runDir
 	if activeWorkflowRun(options.Root, runDir) && !restrictedEvidencePath(options.Root, runDir, ref.Path) {
 		result.add(options.File, "reviewer receipt must be under the active run restricted directory")
 		return
@@ -143,6 +145,31 @@ func validateReceiptDispatch(options ArtifactOptions, receipt reviewerProofRecei
 	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) && (dispatch.PromptArtifact != receipt.PromptArtifact || dispatch.PromptSha256 != receipt.PromptSha256) {
 		result.add(options.File, "finalized dispatch registration prompt binding does not match receipt")
 	}
+	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) {
+		reviewBytes, err := os.ReadFile(resolvePath(options.Root, receipt.ReviewArtifact))
+		var envelope FormalGateEvidence
+		if err != nil || strictContractJSON(reviewBytes, &envelope) != nil {
+			result.add(options.File, "final review artifact cannot be related to its semantic submission")
+		} else {
+			envelope.Verdict = "PENDING"
+			submittedBytes, marshalErr := json.MarshalIndent(envelope, "", "  ")
+			if marshalErr != nil {
+				result.add(options.File, marshalErr.Error())
+			} else {
+				submittedBytes = append(submittedBytes, '\n')
+				if !isSHA256(dispatch.SemanticSubmissionSHA) || dispatch.SemanticSubmissionSHA != sha256Bytes(submittedBytes) {
+					result.add(options.File, "finalized dispatch does not prove the CLI semantic submission")
+				}
+			}
+		}
+	} else if qaDesignLifecycle(receipt.Gate, receipt.Stage) {
+		designBytes, err := os.ReadFile(resolvePath(options.Root, receipt.ReviewArtifact))
+		if err != nil || !isSHA256(dispatch.SemanticSubmissionSHA) || dispatch.SemanticSubmissionSHA != sha256Bytes(designBytes) {
+			result.add(options.File, "finalized dispatch does not prove the CLI QA Design submission")
+		}
+	}
+	validateRegisteredComplexityStatistics(options.Root, options.RunDir, dispatch.ReviewPolicyID, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, result, options.File)
+	validateQADesignReviewPromptBinding(options.Root, options.RunDir, dispatch.ReviewPolicyID, dispatch.PromptArtifact, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, result)
 }
 
 func validateReceiptEvent(options ArtifactOptions, receipt reviewerProofReceipt, pathText, expectedHash, expectedEvent string, result *Result) receiptEventRecord {

@@ -9,7 +9,8 @@ Adequacy, or stronger approved-chain admission.
 Phase 2 delivers Design Review and its pre-development approved-chain admission.
 Each newly enabled stage includes its JSON content, policy, domain
 validator, and positive and negative tests in that phase. Design Rework remains
-an editing action, not a machine role or stage. Phase 2 does not implement or
+a semantic revision action through another Design registration/submission, not
+a machine role or stage. Phase 2 does not implement or
 register White-box Adequacy.
 
 Phase 2 adds policy `qa.design-review.v2` with role `QA_REVIEW`, gate
@@ -18,7 +19,6 @@ same-workflow, same-snapshot requirements PASS, a reviewer receipt, no changed
 files or verification fields, no `NOT_APPLICABLE`, and exactly these checks in
 the shared reviewer payload:
 
-- `review.prompt-fields`
 - `review.prompt-semantics`
 - `qa.design.requirement-coverage`
 - `qa.design.executability`
@@ -31,9 +31,24 @@ the shared reviewer payload:
 its Design-stage lifecycle receipt. That receipt reuses the existing lifecycle
 registration, start/stop, subagent-ID, snapshot, and exact-output-hash chain,
 but Design itself records no gate PASS and requires no reviewer-prompt binding.
-The Design Review's own external receipt binds its exact final-send prompt and
-exact JSON result. A PASS review makes that exact case-set hash approved; no copied or
-rewritten approved-case artifact is created.
+Design registration SHALL generate the title, stable Case IDs, seven-field
+catalog, separators, and newline layout. The designer SHALL submit exactly the
+ordered Claim, Source, Action, Oracle, Failure signal, Evidence, and Gap values
+for each generated case position through `receipt submit`; it SHALL NOT edit
+the generated Markdown. The CLI SHALL reject missing, duplicate, unknown,
+incomplete, empty, `PENDING`, or multiline values before changing the case
+artifact, then write canonical case order and atomically record the exact
+artifact hash in the open dispatch. Finalization SHALL require that submission
+proof. Design Rework SHALL use another Design registration and semantic
+submission rather than rewriting a submitted or finalized case set.
+Receipt registration generates the Design Review catalog and exact
+case-set/Design-receipt evidence binding. The reviewer supplies only ordered
+semantic status, message, finding, and location values through `receipt submit`;
+the CLI constructs the JSON and submission proof, and finalization mechanically
+derives the verdict. The Design Review's own external receipt binds
+its exact final-send prompt and finalized JSON result. A PASS review makes that
+exact case-set hash approved; no copied or rewritten approved-case artifact is
+created.
 
 ## ADDED Requirements
 
@@ -45,6 +60,18 @@ cases from confirmed requirements and public contracts. The designer SHALL NOT
 inspect implementation or diff to invent cases. The case set SHALL bind the
 designer receipt but SHALL NOT record a gate PASS.
 
+The CLI SHALL generate the formal development-handoff template and populate
+its field catalog, workflow/snapshot, approved-case and Design Review evidence
+references, paths/hashes, and complexity-check command shape. The orchestrator
+MAY supply only semantic scope, verification expectations, budget choices, stop
+conditions, and residual-risk text. A hand-authored static handoff SHALL NOT
+satisfy admission.
+
+The orchestrator SHALL select one existing supported complexity task type. The
+CLI SHALL reject a missing or unsupported type before writing the handoff or
+composition proof, and SHALL generate an executable complexity command using
+that type and the same three numeric limits as the budget field.
+
 #### Scenario: Development handoff has approved cases
 
 - **WHEN** formal implementation handoff is validated
@@ -55,6 +82,26 @@ designer receipt but SHALL NOT record a gate PASS.
 
 - **WHEN** any required case, receipt, review, or hash binding is absent
 - **THEN** handoff is rejected before implementation.
+
+#### Scenario: Generated complexity command is executable
+
+- **WHEN** a handoff is composed with a supported complexity task type and
+  numeric budget
+- **THEN** the handoff validates and its generated complexity command executes
+  with that exact type and budget.
+
+#### Scenario: Handoff task type is unsupported
+
+- **WHEN** handoff composition receives a task type outside the existing
+  complexity checker enum
+- **THEN** composition is rejected without a partial handoff or proof.
+
+#### Scenario: Handoff uses an explicit workflow run directory
+
+- **WHEN** handoff composition receives a valid `--run-dir` whose directory name
+  differs from the workflow ID
+- **THEN** composition and subsequent validation use that same resolved run,
+  validate its generated proof, and retain the handoff.
 
 ### Requirement: Existing code starts a new blind-design workflow
 
@@ -108,6 +155,31 @@ Review.
 Formal QA Execution PASS SHALL require the approved case chain, QA-owned
 execution evidence, and complete case-to-result binding. Developer self-test or
 field labels alone SHALL NOT satisfy admission.
+
+The independent QA executor SHALL call the QA-owned evidence composer with only
+one approved case's 1-based position, PASS/FAIL outcome, procedure,
+observation, and oracle-result scalars per repeated group. The CLI SHALL read
+approved Case IDs and generate QA results, Execution IDs, procedure references,
+paths, hashes, arrays, pair proof, and complete case-result binding. It SHALL
+reject missing, duplicate, out-of-range, empty, `PENDING`, or illegal
+submissions before writing any target or proof. The CLI SHALL then hash the six
+evidence sources and generate the complete `QA_EXECUTION` envelope; neither the
+QA executor nor the main agent may author semantic JSON, edit a static
+template, or handwrite static formal content.
+
+#### Scenario: QA submits positioned scalar observations
+
+- **WHEN** every approved case position appears exactly once with a legal
+  outcome and non-empty resolved procedure, observation, and oracle result
+- **THEN** the CLI derives Case/Execution IDs and writes a complete QA-owned
+  result and binding pair that the existing QA Execution validator accepts.
+
+#### Scenario: QA positioned submission is incomplete
+
+- **WHEN** a case position is missing, duplicated, out of range, empty,
+  `PENDING`, or carries an illegal outcome
+- **THEN** the CLI rejects before changing any target, proof, or approved case
+  source.
 
 In Phase 2 the `QA_EXECUTION` payload contains the Phase 1 five evidence
 references plus `designReview`, which references the accepted Design Review

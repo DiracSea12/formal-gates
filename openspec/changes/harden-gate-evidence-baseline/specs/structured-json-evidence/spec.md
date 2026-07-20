@@ -11,6 +11,56 @@ change. The envelope remains common.
 
 ## ADDED Requirements
 
+### Requirement: CLI generation owns every deterministic formal field
+
+Every static formal-workflow value SHALL be script-generated. This includes
+schema/version, artifact role, workflow/snapshot, gate/stage, policy and check
+catalogs, context and evidence paths, hashes, bindings, verification/statistics
+envelopes, receipts, closures, state, and aggregate verdicts. AI SHALL provide
+only semantic requirement judgments, reviewer statuses/messages/findings,
+Carry decisions/reasons, and QA execution observations. A public composition or
+registration path SHALL generate the static template or final artifact before
+that artifact can be validated or recorded. There SHALL be no compatibility
+path for an AI-authored complete formal JSON artifact.
+
+Receipt registration SHALL accept only role-specific source paths for
+Design Review case-set/Design-receipt binding, post-development complexity
+statistics, and Carry source closures. It SHALL generate the fixed check IDs
+and bindings and derive every Carry gate from a verified source closure.
+Transition-chain composition SHALL accept ordered scalar snapshot and evidence
+path values for each hop and generate the hop fields, objects, and array. A
+generic caller-authored check-ID map, gate/path binding, or hop string DSL SHALL
+NOT be a supported production input.
+
+#### Scenario: Old complete producer artifact is supplied
+
+- **WHEN** an AI actor supplies a complete reviewer, requirements, QA
+  Execution, Carry, verification, or statistics formal artifact without its
+  required CLI generation/proof step
+- **THEN** validation or finalization rejects it and records no PASS.
+
+#### Scenario: Semantic owner changes a static field
+
+- **WHEN** a semantic owner changes a generated schema field, check ID,
+  evidence reference, hash, binding, source gate, or verdict
+- **THEN** the immutable projection check rejects the output before receipt,
+  closure, or state mutation.
+
+#### Scenario: Semantic-only input completes normally
+
+- **WHEN** a generated template keeps its static projection and the semantic
+  owner completes every required semantic slot
+- **THEN** the CLI derives the verdict and writes the final formal artifact and
+  downstream machine bindings.
+
+#### Scenario: Caller supplies a removed static mini-language
+
+- **WHEN** a public caller supplies a check ID/path pair, a Carry gate/path
+  pair, or a key/value hop string instead of role-specific paths and ordered
+  hop scalars
+- **THEN** the CLI rejects the unsupported input before writing an output or
+  composition/dispatch proof.
+
 ### Requirement: Public and internal JSON ownership stays narrow
 
 Public reviewer, requirements, QA Execution, context-bundle, FinalExecution, and `policy show --format json` structures SHALL have closed machine contracts.
@@ -66,23 +116,88 @@ and human-readable output MAY describe rework, but SHALL NOT supply a machine
 routing field. Rerun-boundary behavior is outside Phase 1 and SHALL be defined
 only with Phase 2 Carry arbitration and transitions.
 
-The semantic owner SHALL write its own typed JSON; in particular, a reviewer
-SHALL write its review judgment and the QA executor SHALL write QA-owned
-results and bindings. The orchestrating main agent SHALL write only the small
-`QA_EXECUTION` envelope that references those completed inputs. The existing Go CLI SHALL be the only
-authoritative decoder, validator, and state-recording entrypoint and SHALL NOT
-generate or rewrite reviewer judgments. Typed Go structs and the standard
-library SHALL define output bytes for deterministic mechanical artifacts owned
-by the CLI, including receipts, closure manifests, state, and finalization
-output. The decoder SHALL reject invalid UTF-8, duplicate keys, unknown fields
+Phase 2.5 supersedes direct formal-JSON authoring. The CLI SHALL generate every
+deterministic field in reviewer, requirements, QA Execution, Carry,
+verification/statistics binding, receipt, closure, state, and finalization
+artifacts. Reviewer and Carry semantic owners SHALL submit only ordered values
+through `receipt submit`; confirmed requirement and QA execution owners use
+documented compose commands with 1-based positions and pure semantic scalar
+arguments. Reviewer submission SHALL reject Carry and QA Design fields; Carry
+submission SHALL reject reviewer and QA Design fields; QA Design submission
+SHALL reject reviewer and Carry fields. Cross-role rejection SHALL happen
+before either the assigned artifact or dispatch proof changes. Requirements composition SHALL derive every RQ/DIM mapping and JSON
+structure. QA-owned evidence composition SHALL read Case IDs from the approved
+case set and derive every Execution ID, procedure reference, result array, and
+binding. No AI-authored semantic JSON or editable generated template SHALL be
+a production input. No semantic owner SHALL handwrite a complete formal
+artifact or repeat schema/version, role, workflow/snapshot, gate/stage,
+policy/check catalog, evidence path/hash/binding, or aggregate verdict. The CLI
+SHALL NOT generate or rewrite semantic judgments; it SHALL validate the
+semantic values, leave the artifact unchanged on rejection, atomically record
+the composed reviewer/Carry artifact hash and submission proof, and
+mechanically compose the final artifact.
+The Requirements and QA-owned evidence composers SHALL reject missing,
+duplicate, out-of-range, empty, `PENDING`, or illegal semantic values before
+writing any target or sibling composition proof. Existing inputs and targets
+SHALL remain byte-identical after rejection.
+Changed-files composition with working-tree inclusion SHALL combine the git
+range, staged and unstaged tracked changes, plus only the non-ignored untracked
+files explicitly submitted through repeatable `--include-untracked <path>`
+arguments. It SHALL reject missing, duplicated, tracked, ignored, out-of-tree,
+and workflow-run artifact paths, then normalize, deduplicate, and sort the
+path list. Untracked files not explicitly submitted SHALL be excluded. Without
+working-tree inclusion it SHALL retain committed-range-only behavior, and
+`--include-untracked` SHALL be rejected unless working-tree inclusion is active.
+Post-development complexity statistics SHALL be generated by `complexity
+check` with the active run, workflow, snapshot, and restricted output supplied
+together. That mode SHALL reject numeric budget flags and stdout `--json`,
+write the complete closed budget-free `ComplexityReport`, and create the
+existing `complexity-statistics.v1` proof. Registration, finalization, receipt
+validation, and artifact validation SHALL revalidate the exact path/hash,
+required fields and nested arrays, enums, no-budget contract, and current
+workflow/snapshot proof. Redirected stdout, handwritten or partial reports,
+missing proof, and another-snapshot proof SHALL be rejected.
+Typed Go structs and the standard library SHALL define deterministic output
+bytes. The decoder SHALL reject invalid UTF-8, duplicate keys, unknown fields
 at every level, wrong types, trailing JSON values, old schema, and
 role/gate/stage conflicts before domain validation. Required arrays SHALL be
 present even when empty; `null` SHALL be rejected; and optional fields SHALL be
 omitted rather than emitted as `null`. A reviewer artifact receipt SHALL hash
 the exact submitted bytes without canonicalizing key order. Markdown MAY
 explain a result but MUST NOT satisfy, complete, or override a machine field.
-Reviewer output SHALL NOT require a separate artifact-generation command,
-intermediate schema, or conversion layer.
+Reviewer registration and `receipt submit` SHALL be the only supported judgment path;
+old full-artifact producer input is unsupported and SHALL NOT receive a
+compatibility path.
+
+#### Scenario: Complexity statistics are not CLI-generated
+
+- **WHEN** post-development complexity registration receives a partial report,
+  a complete handwritten or stdout-redirected report without proof, or a report
+  proved for another snapshot
+- **THEN** registration rejects it before reserving the reviewer artifact, and
+  the same proof contract is rechecked during finalization, receipt validation,
+  and artifact validation.
+
+#### Scenario: Receipt submission mixes role semantics
+
+- **WHEN** reviewer or Carry submission also supplies QA Design case values, or
+  any role supplies another role's semantic fields
+- **THEN** submission rejects before changing the artifact or open dispatch.
+
+#### Scenario: Working-tree changed-files includes only submitted new files
+
+- **WHEN** a normal worktree contains a tracked edit, a non-ignored untracked
+  production file, another non-ignored untracked file, and an ignored file and
+  composition requests working-tree inclusion with the first untracked
+  production file explicitly submitted
+- **THEN** the generated sorted changed-files artifact and proof bind the
+  tracked edit and submitted untracked production file, omit the other
+  untracked file, and omit the ignored file.
+
+#### Scenario: Working-tree inclusion is not requested
+
+- **WHEN** changed-files composition is run without working-tree inclusion
+- **THEN** only paths from the requested committed range are generated.
 
 #### Scenario: Markdown cannot complete JSON
 
@@ -143,7 +258,7 @@ objects.
 
 ### Requirement: Reviewer gates use one reviewer payload
 
-Complexity, architecture, and code quality SHALL use the same
+Complexity, architecture, and code quality SHALL use the same CLI-generated
 reviewer payload containing exactly:
 
 | Field | Type | Rule |
@@ -155,7 +270,10 @@ reviewer payload containing exactly:
 | `verification` | `EvidenceRef` | required post-development machine evidence under `restricted/`; not a pre-read reviewer summary |
 
 Each `Check` SHALL contain exactly `id`, `status`, `message`, `evidenceRefs`,
-and `findings`. `id` and `message` SHALL be non-empty. `status` SHALL be
+and `findings`. Registration SHALL generate `id` and `evidenceRefs`; the
+reviewer SHALL pass ordered `status`, `message`, `findings`, and locations to
+`receipt submit`, and the CLI SHALL construct the complete `Check`. `id` and `message`
+SHALL be non-empty. `status` SHALL be
 `PASS`, `REVIEW`, `FAIL`, `BLOCKED`, or `NOT_APPLICABLE`. `evidenceRefs[]` and
 `findings[]` SHALL always be present. A matching reviewer receipt SHALL NOT be
 a reviewer-payload field: the CLI hashes completed reviewer JSON first, then
@@ -167,9 +285,10 @@ evidence fields. The external receipt SHALL bind the exact final-send prompt,
 system-generated dispatch ID, host-captured subagent ID, distinct review output
 path, exact output hash, workflow, gate, stage, and snapshot.
 
-The orchestrating caller SHALL write and validate `contextBundle` under
-`restricted/` before dispatch, and the reviewer output SHALL name that exact
-unchanged machine binding without reading it. The
+The CLI SHALL generate and validate `contextBundle` under `restricted/` before
+dispatch from caller-supplied source paths, and registration SHALL place that
+exact unchanged machine binding in the reviewer template. The reviewer SHALL
+not transcribe it or read the bound files. The
 JSON referenced by `contextBundle` SHALL contain exactly `bundleVersion`,
 `workflowId`, `changeSnapshot`, and `inputs`. `bundleVersion` SHALL be integer
 `1`; workflow and snapshot SHALL match the reviewer envelope; and `inputs`
@@ -178,23 +297,24 @@ duplicate normalized input paths SHALL be rejected. The CLI SHALL verify every
 listed path and hash, and every `inputs[]` item SHALL become an evidence-closure
 edge. Every referenced file SHALL also be under the active run's `restricted/`
 directory. No bundle path or content is included in the reviewer prompt. No
-second input manifest, untyped text-list parser, or context-bundle generation
-command SHALL be added.
+second input manifest or untyped text-list parser SHALL be added.
 
-The typed Go policy catalog for the selected gate SHALL define required check
-IDs and which checks, if any, allow `NOT_APPLICABLE`. The CLI SHALL reject
-missing, unknown, or duplicate IDs, unknown status, and unapproved
+The typed Go policy catalog for the selected gate SHALL define and generate
+required check IDs and which checks, if any, allow `NOT_APPLICABLE`. The CLI
+SHALL reject any static template change, including missing, unknown, reordered,
+or duplicate IDs or modified evidence references, plus unknown status and unapproved
 `NOT_APPLICABLE`. `NOT_APPLICABLE` SHALL require a reason in `message`. Any
 `REVIEW`, `FAIL`, or `BLOCKED` SHALL prevent aggregate PASS. The CLI SHALL
-recompute the aggregate and compare the envelope verdict; messages SHALL never
-determine it.
+compute and write the aggregate verdict; the semantic owner SHALL not supply it
+and messages SHALL never determine it.
 
 `reviewPolicyId` SHALL select one of the reviewer policies exported by
 `policy show`; its artifact role, gate, and stage SHALL match the envelope.
 Unknown or mismatched policy IDs SHALL be rejected before check aggregation.
 
-Every reviewer policy SHALL require `review.prompt-fields` and
-`review.prompt-semantics` in addition to the gate-specific IDs below. The only
+Every reviewer policy SHALL require `review.prompt-semantics` in addition to
+the gate-specific IDs below. Purely static prompt-field validation SHALL remain
+CLI-owned and SHALL NOT appear as a reviewer check. The only
 Phase 1 check allowed to use `NOT_APPLICABLE` SHALL be
 `complexity.statistics` under policy `complexity.start-readiness.v2`.
 
@@ -228,7 +348,7 @@ The Phase 1 cutover SHALL map existing Markdown machine fields as follows:
 | `Prompt source` and formal mode | `payload.reviewPolicyId` |
 | changed-files/raw-diff field | `payload.changedFiles` |
 | verification/developer-self-test field | `payload.verification`, retained as restricted machine evidence rather than reviewer input |
-| prompt label scan | `review.prompt-fields` check |
+| prompt label scan | CLI pre-dispatch validation; no reviewer check |
 | semantic anti-anchor result | `review.prompt-semantics` check |
 | reviewer receipt | closure dependency outside reviewer JSON |
 
@@ -244,12 +364,12 @@ The reviewer gate-specific fields SHALL map to these policy-owned check IDs:
 | Architecture | `architecture.boundaries`, `architecture.ownership`, `architecture.public-surface`, `architecture.state-lifecycle`, `architecture.dependencies`, `architecture.failure-semantics`, `architecture.performance`, `architecture.decoupling` |
 | Code quality | `code-quality.correctness`, `code-quality.maintainability`, `code-quality.performance`, `code-quality.test-quality`, `code-quality.dead-code`, `code-quality.overfitting`, `code-quality.validation-encoding`, `code-quality.verification`, `code-quality.residual-risk` |
 
-The old field's explanatory text SHALL become the matching check `message`,
-its proof SHALL become `evidenceRefs`, and its concrete issues SHALL become
-`findings`. Complexity `Decision evidence` SHALL be distributed to the
-affected checks' evidence references. The envelope verdict SHALL determine
-machine admission; findings and human-readable output SHALL describe required
-rework. No gate-specific judgment or
+The old field's explanatory text SHALL become the matching semantic check
+`message`, and its concrete issues SHALL become `findings`. The orchestrator
+supplies proof source paths to registration; the CLI generates the matching
+`evidenceRefs`, including the complexity statistics binding. The CLI-generated
+envelope verdict SHALL determine machine admission; findings and human-readable
+output SHALL describe required rework. No gate-specific judgment or
 evidence field SHALL be added to the reviewer payload.
 
 #### Scenario: Old judgment field is supplied
@@ -290,12 +410,24 @@ workflow or snapshot, wrong hashes, or mismatched bindings SHALL reject PASS
 without state mutation. `QA_EXECUTION` SHALL NOT contain reviewer dispatch,
 context-bundle, policy-check, finding, or receipt fields.
 
+The `artifact compose-qa-owned-evidence` entrypoint SHALL read approved Case
+IDs in document order and accept only one group of 1-based case position,
+PASS/FAIL outcome, procedure, observation, and oracle-result scalars per case.
+The CLI SHALL generate QA-owned results, Execution IDs, procedure references,
+case-result binding, static workflow/snapshot fields, paths, hashes, arrays,
+and pair proof. Missing, duplicate, out-of-range, empty, `PENDING`, or illegal
+submissions SHALL be rejected before any output or proof is written. The
+`artifact compose-qa-execution` entrypoint SHALL hash the six Phase 2 sources,
+generate the complete `QA_EXECUTION` envelope and payload, validate it, refuse
+overwrite, and remove any partial output on failure. No AI actor SHALL author
+either envelope, evidence references, semantic JSON, or a static template.
+
 #### Scenario: QA Execution evidence is complete
 
 - **WHEN** approved cases, QA-owned PASS results, complete result bindings,
   changed files, and verification all match the envelope workflow and snapshot
-- **THEN** the main agent may submit `QA_EXECUTION` for deterministic CLI
-  validation and recording without dispatching a second QA reviewer.
+- **THEN** the main agent may invoke CLI composition and recording without
+  authoring `QA_EXECUTION` or dispatching a second QA reviewer.
 
 #### Scenario: QA Execution tries to self-review
 

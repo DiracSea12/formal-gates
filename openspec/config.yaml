@@ -21,5 +21,5 @@ schema: spec-driven
 context: |
   Project: formal-gates
   Tech stack: Go CLI with internal validator packages and markdown/json evidence artifacts.
-  Domain: AI development workflow evidence gates. The project values machine-checkable proof, fixed gate order, no chat-only PASS, and minimal local validation over new framework layers.
+  Domain: AI development workflow evidence gates. The project values machine-checkable proof, fixed gate IDs and deterministic final-matrix display order, no chat-only PASS, and minimal local validation over new framework layers.
   Current scope boundary: local package, hook, artifact, receipt, workflow, canary, behavior validation, and reviewer receipt consistency checks.

@@ -98,14 +98,15 @@ Requirements and Phase 1 QA Execution have no gate prerequisite. Phase 2
 Design Review requires requirements PASS on its pre-development snapshot.
 Phase 2 QA Execution validates its `designReview` closure by same workflow and
 exact case-set hash in the QA domain validator; Design Review is not a
-current-snapshot gate-state prerequisite. Start-readiness
-complexity requires requirements PASS; start-readiness architecture requires
-requirements PASS and start-readiness complexity. Post-development complexity
-requires QA Execution; post-development architecture requires QA Execution and
-complexity; code quality requires QA Execution, complexity, and architecture;
-FinalExecution requires all four fixed gate results. Every shared-payload
-reviewer policy requires `review.prompt-fields`, `review.prompt-semantics`, and
-its gate-specific check IDs. Only
+current-snapshot gate-state prerequisite. Both start-readiness reviewer
+policies require requirements PASS and are independently recordable. The three
+start-readiness conclusions are collected in parallel and aggregated by the
+readiness workflow. All four post-development gate policies are independently
+recordable on the same workflow and target snapshot; none requires another
+post-development gate. FinalExecution requires all four fixed gate results.
+Every shared-payload reviewer policy requires `review.prompt-semantics` and its
+gate-specific check IDs. Static prompt structure and bindings are validated by
+the CLI before dispatch and SHALL NOT be exported as a reviewer check. Only
 `complexity.start-readiness.v2` allows `complexity.statistics` to be
 `NOT_APPLICABLE`; every other allowed list is empty.
 

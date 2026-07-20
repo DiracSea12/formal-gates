@@ -129,15 +129,13 @@ type CarryDecision struct {
 	SourceSnapshot     string      `json:"sourceSnapshot"`
 	SourceGateEvidence EvidenceRef `json:"sourceGateEvidence"`
 	Decision           string      `json:"decision"`
-	RerunFromGate      string      `json:"rerunFromGate"`
 	Reason             string      `json:"reason"`
 }
 type TransitionChain struct {
-	SchemaVersion        int             `json:"schemaVersion"`
-	WorkflowID           string          `json:"workflowId"`
-	TargetSnapshot       string          `json:"targetSnapshot"`
-	ProposedCarriedGates []string        `json:"proposedCarriedGates"`
-	Hops                 []TransitionHop `json:"hops"`
+	SchemaVersion  int             `json:"schemaVersion"`
+	WorkflowID     string          `json:"workflowId"`
+	TargetSnapshot string          `json:"targetSnapshot"`
+	Hops           []TransitionHop `json:"hops"`
 }
 type TransitionHop struct {
 	FromSnapshot   string      `json:"fromSnapshot"`
@@ -146,35 +144,41 @@ type TransitionHop struct {
 	Verification   EvidenceRef `json:"verification"`
 	RepairEvidence EvidenceRef `json:"repairEvidence"`
 }
-type qaResultsArtifact struct {
-	Owner          string `json:"owner"`
-	WorkflowID     string `json:"workflowId"`
-	ChangeSnapshot string `json:"changeSnapshot"`
-	Stage          string `json:"stage"`
-	Status         string `json:"status"`
-	OverallOutcome string `json:"overallOutcome"`
-	Executions     []struct {
-		ID        string `json:"id"`
-		Outcome   string `json:"outcome"`
-		Procedure string `json:"procedure"`
-		Result    string `json:"result"`
-	} `json:"executions"`
-	CaseResults []struct {
-		CaseID     string   `json:"caseId"`
-		Status     string   `json:"status"`
-		Procedures []string `json:"procedures"`
-		Oracle     string   `json:"oracle"`
-	} `json:"caseResults"`
+type QAResultsArtifact struct {
+	Owner          string                   `json:"owner"`
+	WorkflowID     string                   `json:"workflowId"`
+	ChangeSnapshot string                   `json:"changeSnapshot"`
+	Stage          string                   `json:"stage"`
+	Status         string                   `json:"status"`
+	OverallOutcome string                   `json:"overallOutcome"`
+	Executions     []QAExecutionObservation `json:"executions"`
+	CaseResults    []QACaseObservation      `json:"caseResults"`
 }
-type qaCaseBindingArtifact struct {
+
+type QAExecutionObservation struct {
+	ID        string `json:"id"`
+	Outcome   string `json:"outcome"`
+	Procedure string `json:"procedure"`
+	Result    string `json:"result"`
+}
+
+type QACaseObservation struct {
+	CaseID     string   `json:"caseId"`
+	Status     string   `json:"status"`
+	Procedures []string `json:"procedures"`
+	Oracle     string   `json:"oracle"`
+}
+
+type QACaseBindingArtifact struct {
 	WorkflowID      string          `json:"workflowId"`
 	ChangeSnapshot  string          `json:"changeSnapshot"`
 	ApprovedCaseSet EvidenceRef     `json:"approvedCaseSet"`
 	QAOwnedResults  EvidenceRef     `json:"qaOwnedResults"`
 	Complete        bool            `json:"complete"`
-	Bindings        []qaCaseBinding `json:"bindings"`
+	Bindings        []QACaseBinding `json:"bindings"`
 }
-type qaCaseBinding struct {
+
+type QACaseBinding struct {
 	CaseID        string   `json:"caseId"`
 	ResultPointer string   `json:"resultPointer"`
 	Status        string   `json:"status"`
@@ -209,7 +213,6 @@ type decodedArtifact struct {
 	QAExecution   *QAExecutionPayload
 	Carry         *CarryPayload
 	CarryChain    *TransitionChain
-	EarliestRerun string
 	Reviewer      *ReviewerPayload
 	DesignCaseSet *EvidenceRef
 	Final         *FinalExecutionPayload
@@ -367,9 +370,6 @@ func validateTransitionChain(options ArtifactOptions, artifact *decodedArtifact,
 	if chain.SchemaVersion != 2 || chain.WorkflowID != e.WorkflowID || chain.TargetSnapshot != e.ChangeSnapshot {
 		result.add(artifact.Carry.TransitionChain.Path, "transition chain schema, workflow, and target snapshot must match")
 	}
-	if !validCarriedPrefix(chain.ProposedCarriedGates) {
-		result.add(artifact.Carry.TransitionChain.Path, "proposedCarriedGates must be a non-empty unique prefix of the fixed gate order")
-	}
 	if len(chain.Hops) == 0 {
 		result.add(artifact.Carry.TransitionChain.Path, "transition chain hops must be non-empty")
 		return
@@ -397,25 +397,25 @@ func validateTransitionChain(options ArtifactOptions, artifact *decodedArtifact,
 
 func validateCarryDecisions(options ArtifactOptions, artifact *decodedArtifact, result *Result) {
 	p, e := artifact.Carry, artifact.Envelope
-	if p.Decisions == nil {
-		result.add(options.File, "decisions array must be present")
+	if len(p.Decisions) == 0 {
+		result.add(options.File, "decisions array must be non-empty")
 	}
-	proposed := []string{}
 	validSources := map[string]bool{}
 	if artifact.CarryChain != nil {
-		proposed = artifact.CarryChain.ProposedCarriedGates
 		for _, hop := range artifact.CarryChain.Hops {
 			validSources[hop.FromSnapshot] = true
 		}
 	}
-	if len(p.Decisions) != len(proposed) {
-		result.add(options.File, "decisions must contain one entry per proposed carried gate")
-	}
+	seenGates := map[string]bool{}
 	for i, decision := range p.Decisions {
 		where := fmt.Sprintf("%s decisions[%d]", options.File, i)
-		if i >= len(proposed) || decision.Gate != proposed[i] {
-			result.add(where, "decision gates must exactly match proposedCarriedGates in fixed order")
+		if _, ok := sourceGateContracts[decision.Gate]; !ok {
+			result.add(where, "gate must be a fixed post-development gate")
 		}
+		if seenGates[decision.Gate] {
+			result.add(where, "decisions must contain each gate at most once")
+		}
+		seenGates[decision.Gate] = true
 		if decision.Decision != "ACCEPT_CARRY" && decision.Decision != "RERUN_REQUIRED" && decision.Decision != "BLOCKED" {
 			result.add(where, "decision must be ACCEPT_CARRY, RERUN_REQUIRED, or BLOCKED")
 		}
@@ -425,18 +425,8 @@ func validateCarryDecisions(options ArtifactOptions, artifact *decodedArtifact, 
 		if decision.SourceSnapshot == e.ChangeSnapshot || !validSources[decision.SourceSnapshot] {
 			result.add(where, "sourceSnapshot must identify a source hop before the target snapshot")
 		}
-		if decision.Decision == "RERUN_REQUIRED" {
-			rerunIndex, rerunOK := fixedGateIndex(decision.RerunFromGate)
-			gateIndex, gateOK := fixedGateIndex(decision.Gate)
-			if !rerunOK || !gateOK || rerunIndex > gateIndex {
-				result.add(where, "RERUN_REQUIRED must name the same or an earlier fixed gate")
-			}
-		} else if decision.RerunFromGate != "" {
-			result.add(where, "rerunFromGate must be empty unless decision is RERUN_REQUIRED")
-		}
 		validateCarrySourceClosure(options, artifact, decision, result)
 	}
-	artifact.EarliestRerun = deriveEarliestCarryRerun(p.Decisions)
 	wantVerdict := carryAggregateVerdict(p.Decisions)
 	if e.Verdict != wantVerdict {
 		result.add(options.File, "top-level verdict contradicts Carry decision aggregation")
@@ -503,18 +493,6 @@ func validateAcceptedCarryDecision(options ArtifactOptions, closureRef EvidenceR
 	return CarryDecision{}, fmt.Errorf("accepted Carry closure has no ACCEPT_CARRY decision for gate=%s", gate)
 }
 
-func validCarriedPrefix(gates []string) bool {
-	if len(gates) == 0 || len(gates) > len(postDevelopmentGateOrder) {
-		return false
-	}
-	for i, gate := range gates {
-		if gate != postDevelopmentGateOrder[i] {
-			return false
-		}
-	}
-	return true
-}
-
 var sourceGateContracts = map[string][2]string{
 	"qa-test-gate": {"Execution", "QA_EXECUTION"}, "complexity-gate": {"", "COMPLEXITY_REVIEW"},
 	"architecture-health-gate": {"", "ARCHITECTURE_REVIEW"}, "code-quality-gate": {"", "CODE_QUALITY_REVIEW"},
@@ -525,42 +503,13 @@ func sourceGateContract(gate string) (string, string) {
 	return contract[0], contract[1]
 }
 
-func fixedGateIndex(gate string) (int, bool) {
-	for i, candidate := range postDevelopmentGateOrder {
-		if gate == candidate {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-func deriveEarliestCarryRerun(decisions []CarryDecision) string {
-	earliest, found := len(postDevelopmentGateOrder), false
-	for _, decision := range decisions {
-		if decision.Decision != "RERUN_REQUIRED" {
-			continue
-		}
-		if index, ok := fixedGateIndex(decision.RerunFromGate); ok && index < earliest {
-			earliest, found = index, true
-		}
-	}
-	if !found {
-		return ""
-	}
-	return postDevelopmentGateOrder[earliest]
-}
-
 func carryAggregateVerdict(decisions []CarryDecision) string {
-	verdict := "PASS"
 	for _, decision := range decisions {
-		switch decision.Decision {
-		case "BLOCKED":
+		if decision.Decision == "BLOCKED" {
 			return "BLOCKED"
-		case "RERUN_REQUIRED":
-			verdict = "REVIEW"
 		}
 	}
-	return verdict
+	return "PASS"
 }
 
 func validateRequirements(options ArtifactOptions, artifact *decodedArtifact, result *Result) {
@@ -755,7 +704,7 @@ func validateQAExecution(options ArtifactOptions, artifact *decodedArtifact, res
 		result.add(p.ApprovedCaseSet.Path, "approved case set must contain unique case IDs")
 	}
 	approved := stringSet(approvedIDs)
-	var results qaResultsArtifact
+	var results QAResultsArtifact
 	if err := strictContractJSON(resultsData, &results); err != nil {
 		result.add(p.QAOwnedResults.Path, "QA-owned results are invalid: "+err.Error())
 		return
@@ -787,7 +736,7 @@ func validateQAExecution(options ArtifactOptions, artifact *decodedArtifact, res
 	if !sameIDSet(resultIDs, approved) {
 		result.add(p.QAOwnedResults.Path, "QA case results must exactly cover the approved case set")
 	}
-	var binding qaCaseBindingArtifact
+	var binding QACaseBindingArtifact
 	if err := strictContractJSON(bindingData, &binding); err != nil {
 		result.add(p.CaseResultBinding.Path, "case-result binding is invalid: "+err.Error())
 		return
@@ -863,9 +812,6 @@ func validateReviewer(options ArtifactOptions, artifact *decodedArtifact, result
 		if strings.TrimSpace(check.Message) == "" || !map[string]bool{"PASS": true, "REVIEW": true, "FAIL": true, "BLOCKED": true, "NOT_APPLICABLE": true}[check.Status] {
 			result.add(where, "check status or message is invalid")
 		}
-		if check.ID == "review.prompt-fields" && !strings.Contains(check.Message, "static-validation=PASS") {
-			result.add(where, "review.prompt-fields must explicitly confirm the static-validation=PASS binding")
-		}
 		if check.Status == "NOT_APPLICABLE" && (!allowedNA[check.ID] || strings.TrimSpace(check.Message) == "") {
 			result.add(where, "NOT_APPLICABLE is not allowed for this check")
 		}
@@ -884,7 +830,7 @@ func validateReviewer(options ArtifactOptions, artifact *decodedArtifact, result
 		artifact.References[options.File] = append(artifact.References[options.File], check.EvidenceRefs...)
 		validateFindings(check.Findings, result, where)
 		if policy.ID == "complexity.post-development.v2" && check.ID == "complexity.statistics" {
-			validateStatisticsOnly(options, artifact.RunDir, check.EvidenceRefs, result)
+			validateStatisticsOnly(options, artifact.RunDir, e.WorkflowID, e.ChangeSnapshot, check.EvidenceRefs, result)
 		}
 		if policy.ID == "qa.design-review.v2" && check.ID == "qa.design.case-set-binding" {
 			validateQADesignCaseSetBinding(options, artifact, check, result)
@@ -902,21 +848,34 @@ func validateReviewer(options ArtifactOptions, artifact *decodedArtifact, result
 }
 
 func reviewerCheckMessage(id string) string {
-	if id == "review.prompt-fields" {
-		return "checked static-validation=PASS binding and all required prompt fields"
-	}
 	return "checked"
 }
 
 func validateQADesignCaseSetBinding(options ArtifactOptions, artifact *decodedArtifact, check ReviewCheck, result *Result) {
-	if len(check.EvidenceRefs) != 2 {
+	caseSet, designReceipt := validateQADesignCaseSetBindingRefs(options, artifact.RunDir, artifact.Envelope.WorkflowID, artifact.Envelope.ChangeSnapshot, check.EvidenceRefs, result)
+	if caseSet != nil {
+		artifact.DesignCaseSet = caseSet
+	}
+	if caseSet != nil && designReceipt != nil {
+		casePath, _ := safeEvidencePath(artifact.RunDir, caseSet.Path)
+		receiptOptions := ArtifactOptions{Root: options.Root, File: relativePath(options.Root, casePath), Gate: "qa-test-gate", Stage: "Design", WorkflowID: artifact.Envelope.WorkflowID, ChangeSnapshot: artifact.Envelope.ChangeSnapshot, RunDir: artifact.RunDir}
+		if dependencies, err := receiptClosureDependencies(receiptOptions, artifact.RunDir, *designReceipt); err != nil {
+			result.add(designReceipt.Path, err.Error())
+		} else {
+			artifact.References[designReceipt.Path] = dependencies
+		}
+	}
+}
+
+func validateQADesignCaseSetBindingRefs(options ArtifactOptions, runDir, workflowID, changeSnapshot string, refs []EvidenceRef, result *Result) (*EvidenceRef, *EvidenceRef) {
+	if len(refs) != 2 {
 		result.add(options.File, "qa.design.case-set-binding must reference exactly the case set and Design receipt")
-		return
+		return nil, nil
 	}
 	var caseSet, designReceipt *EvidenceRef
-	for i := range check.EvidenceRefs {
-		ref := check.EvidenceRefs[i]
-		data, ok := readReviewerEvidenceRef(options, artifact.RunDir, ref, result)
+	for i := range refs {
+		ref := refs[i]
+		data, ok := readReviewerEvidenceRef(options, runDir, ref, result)
 		if !ok {
 			continue
 		}
@@ -935,16 +894,16 @@ func validateQADesignCaseSetBinding(options ArtifactOptions, artifact *decodedAr
 	}
 	if caseSet == nil || designReceipt == nil {
 		result.add(options.File, "qa.design.case-set-binding must identify one case set and one Design receipt")
-		return
+		return nil, nil
 	}
-	casePath, err := safeEvidencePath(artifact.RunDir, caseSet.Path)
+	casePath, err := safeEvidencePath(runDir, caseSet.Path)
 	if err != nil {
 		result.add(caseSet.Path, err.Error())
-		return
+		return nil, nil
 	}
-	caseData, ok := readReviewerEvidenceRef(options, artifact.RunDir, *caseSet, result)
+	caseData, ok := readReviewerEvidenceRef(options, runDir, *caseSet, result)
 	if !ok {
-		return
+		return nil, nil
 	}
 	caseIDs := qaCaseIDPattern.FindAllStringSubmatch(string(caseData), -1)
 	ids := make([]string, 0, len(caseIDs))
@@ -954,16 +913,10 @@ func validateQADesignCaseSetBinding(options ArtifactOptions, artifact *decodedAr
 	if len(ids) == 0 || hasDuplicate(ids) {
 		result.add(caseSet.Path, "reviewed case set must contain unique Case ID fields")
 	}
-	receiptOptions := ArtifactOptions{Root: options.Root, File: relativePath(options.Root, casePath), Gate: "qa-test-gate", Stage: "Design", WorkflowID: artifact.Envelope.WorkflowID, ChangeSnapshot: artifact.Envelope.ChangeSnapshot}
-	validateReceipt(receiptOptions, artifact.RunDir, *designReceipt, result)
-	dependencies, err := receiptClosureDependencies(receiptOptions, artifact.RunDir, *designReceipt)
-	if err != nil {
-		result.add(designReceipt.Path, err.Error())
-	} else {
-		artifact.References[designReceipt.Path] = dependencies
-	}
+	receiptOptions := ArtifactOptions{Root: options.Root, File: relativePath(options.Root, casePath), Gate: "qa-test-gate", Stage: "Design", WorkflowID: workflowID, ChangeSnapshot: changeSnapshot, RunDir: runDir}
+	validateReceipt(receiptOptions, runDir, *designReceipt, result)
 	copy := *caseSet
-	artifact.DesignCaseSet = &copy
+	return &copy, designReceipt
 }
 
 func validateAcceptedDesignReview(options ArtifactOptions, artifact *decodedArtifact, closureRef, approvedCaseSet EvidenceRef, requiredSnapshot string, result *Result) {
@@ -1106,28 +1059,13 @@ func validateFindings(findings []Finding, result *Result, file string) {
 		}
 	}
 }
-func validateStatisticsOnly(options ArtifactOptions, runDir string, refs []EvidenceRef, result *Result) {
-	if len(refs) == 0 {
-		result.add(options.File, "complexity.statistics requires statistics evidence")
+func validateStatisticsOnly(options ArtifactOptions, runDir, workflowID, snapshot string, refs []EvidenceRef, result *Result) {
+	if len(refs) != 1 {
+		result.add(options.File, "complexity.statistics requires exactly one CLI-generated statistics report")
 		return
 	}
-	found := false
-	for _, ref := range refs {
-		data, ok := readEvidenceRef(options, runDir, ref, result)
-		if !ok {
-			continue
-		}
-		var report ComplexityReport
-		if err := strictJSON(data, &report); err != nil {
-			continue
-		}
-		found = true
-		if report.Budget != nil || report.BudgetSource != "none" || report.BudgetOverrides.MaxNet || report.BudgetOverrides.MaxNewProdFiles || report.BudgetOverrides.MaxProdInsertions {
-			result.add(ref.Path, "post-development complexity evidence must be statistics-only")
-		}
-	}
-	if !found {
-		result.add(options.File, "complexity.statistics does not reference a valid statistics report")
+	if err := validateComplexityStatisticsEvidence(options.Root, runDir, workflowID, snapshot, refs[0]); err != nil {
+		result.add(refs[0].Path, err.Error())
 	}
 }
 

@@ -1,10 +1,10 @@
 # Complexity Gate
 
-Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract and development-time budget before an authorized formal handoff. Before, during, and after development, it checks whether the work modifies and simplifies existing structures before adding new ones, especially when additions are justified only as making the system more rigorous, complete, robust, or secure. After QA Execution PASS, it reviews diff shape, new concepts, public/config surface, minimum sufficient implementation, reuse/deletion, and overengineering; it does not enforce development-time numeric budgets as the post-development gate threshold.
+Use when the user asks for formal complexity review, start-readiness review, formal development handoff, or an already-authorized four-gate/release/seal flow reaches this gate. It sets a Complexity Contract and development-time budget before an authorized formal handoff. Before, during, and after development, it checks whether the work modifies and simplifies existing structures before adding new ones, especially when additions are justified only as making the system more rigorous, complete, robust, or secure. Post-development complexity reviews the same target snapshot independently of QA, architecture, and code quality; it does not enforce development-time numeric budgets as the post-development gate threshold.
 
 ## Applicability
 
-- `code-implementation` / `refactor-cleanup`: when the user authorized formal handoff, write a contract before coding; formal delivery review requires prior `qa-test-gate` formal Execution PASS.
+- Code implementation or refactor cleanup: when the user authorized formal handoff, write a contract before coding and select one existing checker task type: `delete-or-consolidate`, `bugfix`, `small-feature`, `refactor`, or `new-system`. Formal delivery review runs complexity independently alongside the other post-development gates.
 - `test-only`: use when harness, fixtures, runners, or evidence flow starts growing.
 - `openspec-spec` / `prd` / `design-spec`: scope-review requirements, scenarios, schema, acceptance, compatibility promises, and extension hooks.
 - `architecture-plan`: use when the plan adds components, state, public contract, or ownership.
@@ -99,19 +99,45 @@ Development-time budget data belongs only to the formal development handoff, wor
 
 ## Diff Script
 
-Run only when there is a diff to review:
+For an ordinary human-readable development diagnostic, run:
 
 ```bash
 bin/formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto
 ```
 
-Use `--json` for machine output and `--staged` only for staged review. Post-development complexity gate evidence must be a fresh report for the reviewed diff, omit all three numeric budget flags, omit `budget`, set `budget_source` to `none`, and leave every `budget_overrides` value `false`. Formal handoff and development-time checks must pass all three numeric budget flags together. The native checker uses git, SVN, or manual-evidence REVIEW when neither VCS is detected.
+For formal post-development evidence, the CLI must write the report and its
+workflow/snapshot-bound composition proof under the active run:
+
+```bash
+bin/formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto \
+  --run-dir <active-run> --workflow-id <id> \
+  --change-snapshot <snapshot> \
+  --output restricted/complexity/statistics.json
+```
+
+All four formal-output flags are required together. Formal output rejects all
+three numeric budget flags and `--json`; the latter is stdout-only and never
+creates proof, so redirecting old JSON stdout to a file cannot satisfy receipt
+registration. The generated report is closed `ComplexityReport` JSON with all
+required nested fields and arrays. It omits `budget`, sets `budget_source` to
+`none`, leaves every `budget_overrides` value `false`, and is accepted only with
+the matching `complexity-statistics.v1` proof for the same workflow and
+snapshot. `--staged` remains available when the reviewed target is explicitly
+the staged diff. Formal handoff and development-time checks must pass all three
+numeric budget flags together and must not use the formal statistics-output
+flags. The native checker uses git, SVN, or manual-evidence REVIEW when neither
+VCS is detected.
 
 In non-git worktrees, script totals may include stale logs, generated files, or old changes. Cross-check changed files against the Complexity Contract, task brief, or OpenSpec change. Record which counts are working-copy noise versus this task. Do not dismiss REVIEW/FAIL as noise without that subtraction.
 
-Exit codes: `0` PASS alarm state or stats-only success, `2` REVIEW alarm state, `1` FAIL alarm state. In post-development gate use, a numeric-budget REVIEW/FAIL result means the wrong command was used; rerun statistics-only instead of recording that result.
+Exit codes: `0` PASS alarm state, `2` REVIEW alarm state, `1` FAIL alarm state.
+Formal statistics output may validly be written with status `REVIEW`; the
+independent reviewer must address that signal, but only its finalized semantic
+verdict determines gate admission. Budget-free formal statistics cannot have
+status `FAIL`. A numeric-budget REVIEW/FAIL result means the wrong mode was
+used; rerun the formal budget-free command instead of registering it.
 
-Script PASS does not mean design PASS. REVIEW/FAIL in formal flow blocks downstream gates.
+Script PASS does not mean design PASS. REVIEW/FAIL in formal flow blocks final composition for the current target, but does not stop independent gate reviews from completing their own checks.
 
 ## Impact Surface Review
 
@@ -135,14 +161,18 @@ Stop when the current contract did not budget:
 
 ## Formal PASS
 
-Post-development formal complexity review can run only after `qa-test-gate` formal Execution PASS for the same workflow and snapshot.
+Post-development formal complexity review runs independently on the same workflow and target snapshot as QA, architecture, and code quality; finalization requires all four results.
 
 Start-readiness complexity review runs after `requirements-clarification-gate` PASS for the same workflow and snapshot. Record and verify start-readiness reviews with `--mode start-readiness`; do not invent QA Execution evidence before code exists.
 
-Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate complexity-gate`. For start-readiness, include `--mode start-readiness`. Write direct schema-version-2 `COMPLEXITY_REVIEW` JSON using the matching typed policy. Put each judgment in its exported `complexity.*` check and attach the fresh statistics report to `complexity.statistics`.
+Record PASS with `references/post-development-artifacts.md`, using `formal-gates workflow record-stage --gate complexity-gate`. For start-readiness, include `--mode start-readiness`. Receipt registration generates the matching read-only `COMPLEXITY_REVIEW` catalog, all `complexity.*` check IDs, and the `complexity.statistics` evidence binding. The reviewer supplies only ordered semantic statuses, messages, findings, and locations through `formal-gates receipt submit`; the CLI constructs every JSON object and finalization derives the verdict.
 
-Post-development validation rejects a statistics report containing `budget`, a `budget_source` other than `none`, or any true override. Phase 2 adds restricted-path enforcement; Phase 1 does not claim that later behavior.
+Post-development registration, finalization, receipt validation, and artifact
+validation all recheck the complete report, restricted path/hash, no-budget
+contract, and current workflow/snapshot composition proof. A partial or
+handwritten report, redirected stdout, missing proof, stale proof, report with
+`budget`, non-`none` budget source, or any true override is rejected.
 
 ## Output
 
-Use the shared reviewer payload only. It has no dispatch or prompt field; the external receipt binds and revalidates the exact final-send prompt. Human prose may summarize the judgment, but only the envelope verdict and complete check catalog determine admission.
+Do not edit or patch the assigned JSON. Use `formal-gates receipt submit` as documented in `references/post-development-artifacts.md`; invalid or incomplete input leaves the generated artifact unchanged. Human prose may summarize the judgment, but only the CLI-finalized artifact and submission proof determine admission.

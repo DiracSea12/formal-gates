@@ -19,11 +19,14 @@ to rerun after a small repair. `alignment.md` is the requirement source.
   the existing Go CLI. Old workflows restart; there is no compatibility path.
 - Represent independent reviewer judgments as stable policy-owned `checks[]`
   results, while QA Execution uses a small mechanical payload over QA-owned evidence.
-- Use the completed Phase 2 workflow as a real project sample before changing
-  review scheduling. Evaluate concurrent QA case design and candidate
-  development separately from the post-development choice among serial,
-  post-QA parallel, and all-four-in-one-wave execution, without duplicate
-  experimental runs.
+- Generate every deterministic artifact field, policy/check catalog, path/hash
+  binding, and aggregate verdict in the CLI; reviewers submit only semantic
+  statuses, reasons, findings, and locations through the CLI, which constructs
+  and proves the formal judgment JSON.
+- Run the confirmed pre-development checks and post-development gates
+  independently in parallel without duplicate experimental runs. Record results
+  as they arrive through a cross-process single-writer state mutation that
+  reloads the latest state before each atomic replacement.
 - Bind each requirements and post-development gate PASS to its own run-local recursive
   evidence closure, keep that identity separate from the deliverable
   `changeSnapshot`, and keep mechanical FinalExecution out of a fifth closure.
@@ -31,17 +34,23 @@ to rerun after a small repair. `alignment.md` is the requirement source.
   reviewer, output, workflow, gate, stage, or snapshot data. Host auto-capture
   is claimed only after a same-host live canary.
 - Put every review-related workflow file under the existing per-run
-  `restricted/` path. Formal reviewers, including Carry-Forward Arbiter, read
-  only the current requirement and current diff or proposed change; the CLI
-  validates process history and transition chains outside reviewer context.
+  `restricted/` path. Formal reviewers, including Carry-Forward Arbiter, receive
+  only the current requirement and current diff or proposed change as
+  substantive context. Reviewer and QA Design semantic owners submit ordered
+  values through the CLI; they never edit assigned formal artifacts. The CLI validates process history,
+  evidence bindings, and transition chains outside reviewer context.
 - Allow final composition to mix explicit `FRESH_PASS` and independently
-  accepted `CARRIED_PASS` rows. Arbitration happens before a fresh downstream
-  gate relies on carried prerequisites.
+  accepted `CARRIED_PASS` rows. Carry arbitration records a complete per-gate
+  decision set; it is not a prerequisite ordering or downstream suffix rule.
 - Enforce pre-implementation QA case design, independent Design Review,
   development handoff binding, and QA Execution admission without creating a
   gate or machine role for every editing step.
 - Validate all inputs before state mutation and replace gate state through a
   completed same-directory temporary file.
+- Preserve an explicitly selected workflow run directory through generated
+  handoff validation. Defer machine-bound source/target dirty-tree identity and
+  mechanically derived Carry diffs to Phase 3; without a preserved source tree,
+  do not carry a prior gate.
 - Keep requirement document formats interchangeable. OpenSpec, PRD, SDD,
   issues, and ordinary Markdown are adapters, not formal-gates dependencies;
   document checkboxes are non-authoritative progress hints.
@@ -84,16 +93,19 @@ the partial schema-v1 path.
    existing receipt chain to Design Review and carry-forward arbitration,
    with each feature's JSON,
    policy, validator, and tests delivered together on the shared envelope.
-2.5. **Review scheduling:** use the confirmed schedule from the Phase 2 sample:
+2.5. **Review scheduling and static generation:** use the confirmed schedule:
    run the three pre-development checks in parallel, run QA Execution and the
    three post-development gates in parallel, and after each repair use a new
    independent zero-context agent to decide per gate whether the cumulative
    diff produced by that repair requires a rerun or permits inheritance; do not
    include unrelated local worktree changes. Add no A/B/C selector or
-   duplicate experiment; record unavailable timing/token data honestly.
-3. **Operational verification:** re-run the Phase 1 stale-vocabulary scan as a
-   regression audit, complete broad verification, and obtain fresh review before
-   delivery.
+   duplicate experiment, selector, or additional reviewer layer. Move every
+   static formal field and artifact envelope to CLI generation, leaving AI only
+   semantic judgment and observation slots.
+3. **Operational verification and tree-bound Carry:** persist source/target
+   dirty-tree identities, derive and revalidate the exact Carry diff, re-run the
+   Phase 1 stale-vocabulary scan as a regression audit, complete broad
+   verification, and obtain fresh review before delivery.
 
 Each phase has its own implementation snapshot and review. Later phases do not
 silently enter an earlier phase, and Phase 1 has no separately deliverable

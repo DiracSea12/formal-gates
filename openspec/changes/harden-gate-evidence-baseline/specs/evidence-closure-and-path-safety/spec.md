@@ -156,6 +156,9 @@ byte-identical.
 
 The existing gate-state writer SHALL write complete JSON to a same-directory
 temporary file and replace the formal state file only after that write succeeds.
+Every mutating gate-state command SHALL take a cross-process same-directory
+lock before loading authoritative state, reload under that lock, perform its
+state-dependent validation and mutation, and keep the lock through replacement.
 This requirement MUST NOT add a new persistence abstraction.
 
 #### Scenario: Validation fails
@@ -174,3 +177,10 @@ This requirement MUST NOT add a new persistence abstraction.
 - **WHEN** all validation and the replacement succeed
 - **THEN** the formal state is complete valid JSON referencing only already
   verified artifacts.
+
+#### Scenario: Independent results finish together
+
+- **WHEN** valid gate or Carry results concurrently record against one workflow
+  state
+- **THEN** every command reloads under the shared lock and no completed gate,
+  history entry, or transition is lost.

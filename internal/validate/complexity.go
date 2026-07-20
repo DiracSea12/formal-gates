@@ -22,6 +22,14 @@ type ComplexityOptions struct {
 	Staged            bool
 }
 
+type ComplexityStatisticsOptions struct {
+	ComplexityOptions
+	RunDir         string
+	WorkflowID     string
+	ChangeSnapshot string
+	Output         string
+}
+
 type ComplexityReport struct {
 	Status          string                   `json:"status"`
 	VCS             string                   `json:"vcs"`
@@ -175,6 +183,164 @@ func Complexity(options ComplexityOptions) (ComplexityReport, Result) {
 
 func ComplexityJSON(report ComplexityReport) ([]byte, error) {
 	return json.MarshalIndent(report, "", "  ")
+}
+
+func ComplexityStatistics(options ComplexityStatisticsOptions) (EvidenceRef, ComplexityReport, Result) {
+	var result Result
+	root := cleanWorktree(options.Worktree)
+	if strings.TrimSpace(options.RunDir) == "" || !meaningful(options.WorkflowID) || !meaningful(options.ChangeSnapshot) || strings.TrimSpace(options.Output) == "" {
+		result.add("complexity", "--run-dir, --workflow-id, --change-snapshot, and --output are required for formal statistics")
+		return EvidenceRef{}, ComplexityReport{}, result
+	}
+	runDir, err := resolveWorkflowRunDir(root, options.WorkflowID, options.RunDir)
+	if err != nil {
+		result.add("run-dir", err.Error())
+		return EvidenceRef{}, ComplexityReport{}, result
+	}
+	if options.MaxNet != nil || options.MaxNewProdFiles != nil || options.MaxProdInsertions != nil {
+		result.add("complexity", "formal post-development statistics must omit all numeric budget flags")
+		return EvidenceRef{}, ComplexityReport{}, result
+	}
+	report, complexityResult := Complexity(options.ComplexityOptions)
+	if !complexityResult.OK() {
+		return EvidenceRef{}, ComplexityReport{}, complexityResult
+	}
+	ref, writeResult := writeComplexityStatisticsReport(root, runDir, options.WorkflowID, options.ChangeSnapshot, options.Output, report)
+	return ref, report, writeResult
+}
+
+func writeComplexityStatisticsReport(root, runDir, workflowID, snapshot, output string, report ComplexityReport) (EvidenceRef, Result) {
+	var result Result
+	if err := validatePostDevelopmentComplexityReport(root, report); err != nil {
+		result.add("complexity", err.Error())
+		return EvidenceRef{}, result
+	}
+	outputPath, err := prospectiveRestrictedPath(runDir, output)
+	if err != nil {
+		result.add(output, "output must be under the active run restricted directory")
+		return EvidenceRef{}, result
+	}
+	data, err := ComplexityJSON(report)
+	if err != nil {
+		result.add(output, err.Error())
+		return EvidenceRef{}, result
+	}
+	data = append(data, '\n')
+	if err := writeBytesExclusive(outputPath, data); err != nil {
+		result.add(output, err.Error())
+		return EvidenceRef{}, result
+	}
+	logical, err := logicalPathInRun(runDir, outputPath)
+	if err != nil {
+		_ = os.Remove(outputPath)
+		result.add(output, err.Error())
+		return EvidenceRef{}, result
+	}
+	ref := EvidenceRef{Path: logical, SHA256: sha256File(outputPath)}
+	if _, err := writeCompositionProof(root, runDir, "complexity-statistics.v1", workflowID, snapshot, outputPath, []EvidenceRef{ref}); err != nil {
+		_ = os.Remove(outputPath)
+		result.add(output, err.Error())
+		return EvidenceRef{}, result
+	}
+	return ref, result
+}
+
+func decodeComplexityReport(data []byte) (ComplexityReport, error) {
+	var report ComplexityReport
+	if err := strictContractJSON(data, &report); err != nil {
+		return ComplexityReport{}, err
+	}
+	if err := validateComplexityReport(report); err != nil {
+		return ComplexityReport{}, err
+	}
+	return report, nil
+}
+
+func validateComplexityReport(report ComplexityReport) error {
+	if !map[string]bool{"PASS": true, "REVIEW": true, "FAIL": true}[report.Status] {
+		return fmt.Errorf("complexity report status is invalid")
+	}
+	if !map[string]bool{"git": true, "svn": true, "none": true}[report.VCS] {
+		return fmt.Errorf("complexity report VCS is invalid")
+	}
+	if strings.TrimSpace(report.Worktree) == "" || !filepath.IsAbs(report.Worktree) {
+		return fmt.Errorf("complexity report worktree must be an absolute path")
+	}
+	if !complexityTaskTypes[report.TaskType] {
+		return fmt.Errorf("complexity report task type is invalid")
+	}
+	if report.BudgetSource != "none" && report.BudgetSource != "explicit" {
+		return fmt.Errorf("complexity report budget source is invalid")
+	}
+	hasBudget := report.Budget != nil
+	if (report.BudgetSource == "explicit") != hasBudget || report.BudgetOverrides.MaxNet != hasBudget || report.BudgetOverrides.MaxNewProdFiles != hasBudget || report.BudgetOverrides.MaxProdInsertions != hasBudget {
+		return fmt.Errorf("complexity report budget fields are inconsistent")
+	}
+	summary := report.Summary
+	if summary.Insertions < 0 || summary.Deletions < 0 || summary.ProductionInsertions < 0 || summary.NewProductionFiles < 0 || summary.UntrackedProductionFiles < 0 || summary.UntrackedProductionInsertions < 0 || summary.ChangedFiles < 0 || summary.UntrackedFiles < 0 || summary.Net != summary.Insertions-summary.Deletions || summary.UntrackedProductionFiles > summary.UntrackedFiles {
+		return fmt.Errorf("complexity report summary is invalid")
+	}
+	for _, values := range [][]string{report.Failures, report.ReviewRequired, report.Warnings} {
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("complexity report messages must be non-empty")
+			}
+		}
+	}
+	if report.Status == "PASS" && (len(report.Failures) != 0 || len(report.ReviewRequired) != 0) || report.Status == "REVIEW" && (len(report.Failures) != 0 || len(report.ReviewRequired) == 0) || report.Status == "FAIL" && len(report.Failures) == 0 {
+		return fmt.Errorf("complexity report status contradicts its findings")
+	}
+	if len(report.LargestFiles) > 10 || len(report.LargestFiles) > report.Summary.ChangedFiles {
+		return fmt.Errorf("complexity report largest_files is inconsistent")
+	}
+	for _, change := range report.LargestFiles {
+		path := strings.TrimSpace(change.Path)
+		if path == "" || filepath.IsAbs(path) || strings.Contains(path, "\\") || strings.HasPrefix(path, "../") || strings.Contains(path, "/../") || change.Insertions < 0 || change.Deletions < 0 || strings.TrimSpace(change.Status) == "" || !map[string]bool{"production": true, "test": true, "doc": true, "other": true}[change.Category] {
+			return fmt.Errorf("complexity report largest_files entry is invalid")
+		}
+	}
+	return nil
+}
+
+func validatePostDevelopmentComplexityReport(root string, report ComplexityReport) error {
+	if err := validateComplexityReport(report); err != nil {
+		return err
+	}
+	if report.Budget != nil || report.BudgetSource != "none" || report.BudgetOverrides.MaxNet || report.BudgetOverrides.MaxNewProdFiles || report.BudgetOverrides.MaxProdInsertions {
+		return fmt.Errorf("post-development complexity evidence must be statistics-only")
+	}
+	if report.Status == "FAIL" {
+		return fmt.Errorf("budget-free post-development complexity statistics cannot have FAIL status")
+	}
+	if !samePath(report.Worktree, cleanWorktree(root)) {
+		return fmt.Errorf("complexity report worktree does not match the reviewed repository")
+	}
+	return nil
+}
+
+func validateComplexityStatisticsEvidence(root, runDir, workflowID, snapshot string, ref EvidenceRef) error {
+	if !restrictedEvidencePath(root, runDir, ref.Path) {
+		return fmt.Errorf("complexity statistics must be under the active run restricted directory")
+	}
+	path, err := safeEvidencePath(runDir, ref.Path)
+	if err != nil || sha256File(path) != ref.SHA256 {
+		return fmt.Errorf("complexity statistics path or hash is invalid")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	report, err := decodeComplexityReport(data)
+	if err != nil {
+		return fmt.Errorf("complexity statistics report is incomplete or invalid: %w", err)
+	}
+	if err := validatePostDevelopmentComplexityReport(root, report); err != nil {
+		return err
+	}
+	if err := validateStandaloneCompositionProof(root, runDir, "complexity-statistics.v1", workflowID, snapshot, ref); err != nil {
+		return err
+	}
+	return nil
 }
 
 func ComplexityText(report ComplexityReport) string {
