@@ -323,6 +323,10 @@ func ComposeQAExecution(options ComposeQAExecutionOptions) (EvidenceRef, Result)
 		result.add("run-dir", err.Error())
 		return EvidenceRef{}, result
 	}
+	if err := requirePostDevelopmentRerunAdmission(root, runDir, options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), "qa-test-gate", "Execution"); err != nil {
+		result.add("gate-state", err.Error())
+		return EvidenceRef{}, result
+	}
 	resolve := func(label, logical string) EvidenceRef {
 		if strings.TrimSpace(logical) == "" {
 			result.add("compose", "--"+label+" is required")

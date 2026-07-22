@@ -31,7 +31,7 @@ func TestReceiptCaptureSavesLifecycleEvent(t *testing.T) {
 	if event.NormalizedEvent != "subagent_start" {
 		t.Fatalf("unexpected normalized event: %#v", event)
 	}
-	if !strings.HasPrefix(event.EventArtifact, ".claude/gates/runs/wf/restricted/proofs/events/") {
+	if !strings.HasPrefix(event.EventArtifact, ".gates/runs/wf/restricted/proofs/events/") {
 		t.Fatalf("unexpected event artifact path: %q", event.EventArtifact)
 	}
 	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(event.EventArtifact))); err != nil {
@@ -41,11 +41,11 @@ func TestReceiptCaptureSavesLifecycleEvent(t *testing.T) {
 
 func TestReceiptCaptureAutoSelectsRunLocalDispatch(t *testing.T) {
 	dir := t.TempDir()
-	runDir := filepath.Join(dir, ".claude", "gates", "runs", "active-run")
+	runDir := filepath.Join(dir, ".gates", "runs", "active-run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	artifact := ".claude/gates/runs/active-run/restricted/review.json"
+	artifact := ".gates/runs/active-run/restricted/review.json"
 	dispatch, registered := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, RunDir: runDir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact})
 	if !registered.OK() {
 		t.Fatal(registered.Failures)
@@ -55,21 +55,21 @@ func TestReceiptCaptureAutoSelectsRunLocalDispatch(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("run-local capture failed: %#v", result.Failures)
 	}
-	if !strings.HasPrefix(event.EventArtifact, ".claude/gates/runs/active-run/restricted/proofs/events/") {
+	if !strings.HasPrefix(event.EventArtifact, ".gates/runs/active-run/restricted/proofs/events/") {
 		t.Fatalf("capture escaped correlated run: %q", event.EventArtifact)
 	}
 }
 
 func TestReceiptCaptureRejectsExplicitRunConflict(t *testing.T) {
 	dir := t.TempDir()
-	runA := filepath.Join(dir, ".claude", "gates", "runs", "run-a")
-	runB := filepath.Join(dir, ".claude", "gates", "runs", "run-b")
+	runA := filepath.Join(dir, ".gates", "runs", "run-a")
+	runB := filepath.Join(dir, ".gates", "runs", "run-b")
 	for _, runDir := range []string{runA, runB} {
 		if err := os.MkdirAll(runDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	dispatch, registered := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, RunDir: runA, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: ".claude/gates/runs/run-a/restricted/review.json"})
+	dispatch, registered := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, RunDir: runA, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: ".gates/runs/run-a/restricted/review.json"})
 	if !registered.OK() {
 		t.Fatal(registered.Failures)
 	}
@@ -103,11 +103,11 @@ func TestReceiptCaptureDispatchCorrelationMatrix(t *testing.T) {
 			dir := t.TempDir()
 			aArtifact := defaultReceiptArtifact(t, dir, "wf", "a.json")
 			bArtifact := defaultReceiptArtifact(t, dir, "wf", "b.json")
-			a, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: aArtifact})
+			a, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: aArtifact})
 			if !result.OK() {
 				t.Fatal(result.Failures)
 			}
-			b, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "architecture-health-gate", Artifact: bArtifact})
+			b, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "architecture-health-gate", Artifact: bArtifact})
 			if !result.OK() {
 				t.Fatal(result.Failures)
 			}
@@ -132,7 +132,7 @@ func TestReceiptCaptureDispatchCorrelationMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			event, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: raw})
+			event, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "cursor", Event: "SubagentStart", Payload: raw})
 			if !test.accept {
 				if result.OK() {
 					t.Fatalf("expected correlation rejection, event=%#v", event)
@@ -172,11 +172,11 @@ func TestReceiptFinalizeRejectsMismatchedPreexistingDispatchEvents(t *testing.T)
 			dir := t.TempDir()
 			aArtifact := defaultReceiptArtifact(t, dir, "wf", "a.json")
 			bArtifact := defaultReceiptArtifact(t, dir, "wf", "b.json")
-			a, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: aArtifact})
+			a, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: aArtifact})
 			if !result.OK() {
 				t.Fatal(result.Failures)
 			}
-			b, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "architecture-health-gate", Artifact: bArtifact})
+			b, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "architecture-health-gate", Artifact: bArtifact})
 			if !result.OK() {
 				t.Fatal(result.Failures)
 			}
@@ -186,14 +186,14 @@ func TestReceiptFinalizeRejectsMismatchedPreexistingDispatchEvents(t *testing.T)
 			runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
 			eventDir := receiptProofDir(dir, runDir, "events")
 			for name, event := range map[string]receiptEventRecord{
-				"start.json": {Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", NormalizedEvent: "subagent_start", RawEventName: "SubagentStart", SubagentID: "subagent-1", DispatchID: ids[test.startID], DispatchRegistrationArtifact: paths[test.startPath]},
-				"stop.json":  {Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", NormalizedEvent: "subagent_stop", RawEventName: "SubagentStop", SubagentID: "subagent-1", DispatchID: ids[test.stopID], DispatchRegistrationArtifact: paths[test.stopPath]},
+				"start.json": {Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", NormalizedEvent: "subagent_start", RawEventName: "SubagentStart", SubagentID: "subagent-1", DispatchID: ids[test.startID], DispatchRegistrationArtifact: paths[test.startPath]},
+				"stop.json":  {Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", NormalizedEvent: "subagent_stop", RawEventName: "SubagentStop", SubagentID: "subagent-1", DispatchID: ids[test.stopID], DispatchRegistrationArtifact: paths[test.stopPath]},
 			} {
 				if err := writeJSON(filepath.Join(eventDir, name), event); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if _, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", Gate: "complexity-gate", Artifact: aArtifact}); result.OK() || !strings.Contains(result.Failures[0].Message, "matching subagent_start") {
+			if _, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", Gate: "complexity-gate", Artifact: aArtifact}); result.OK() || !strings.Contains(result.Failures[0].Message, "matching subagent_start") {
 				t.Fatalf("mismatched lifecycle event was accepted: %#v", result.Failures)
 			}
 		})
@@ -203,19 +203,19 @@ func TestReceiptFinalizeRejectsMismatchedPreexistingDispatchEvents(t *testing.T)
 func TestReceiptFinalizeRejectsStopCapturedBeforeStart(t *testing.T) {
 	dir := t.TempDir()
 	artifact := defaultReceiptArtifact(t, dir, "wf", "review.json")
-	dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact})
+	dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact})
 	if !result.OK() {
 		t.Fatal(result.Failures)
 	}
 	payload := []byte(`{"workflowId":"wf","changeSnapshot":"snap","gate":"complexity-gate","subagentId":"reviewer","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`)
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: payload}); !result.OK() {
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "cursor", Event: "SubagentStop", Payload: payload}); !result.OK() {
 		t.Fatal(result.Failures)
 	}
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: payload}); !result.OK() {
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "cursor", Event: "SubagentStart", Payload: payload}); !result.OK() {
 		t.Fatal(result.Failures)
 	}
 	writeReceiptArtifactFixture(t, dir, artifact, "snap")
-	if _, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", Gate: "complexity-gate", Artifact: artifact}); result.OK() || !strings.Contains(resultSummary(result), "strictly after") {
+	if _, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", Gate: "complexity-gate", Artifact: artifact}); result.OK() || !strings.Contains(resultSummary(result), "strictly after") {
 		t.Fatalf("stop-before-start lifecycle was accepted: %#v", result.Failures)
 	}
 }
@@ -254,7 +254,7 @@ func TestReceiptFinalizeAndValidate(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected dispatch registration to pass, got %#v", result.Failures)
 	}
-	if !strings.HasPrefix(dispatch.DispatchRegistrationArtifact, ".claude/gates/runs/wf/restricted/proofs/dispatch/") {
+	if !strings.HasPrefix(dispatch.DispatchRegistrationArtifact, ".gates/runs/wf/restricted/proofs/dispatch/") {
 		t.Fatalf("omitted --run-dir registered outside the default run: %#v", dispatch)
 	}
 	registeredDispatch, ok := decodeDispatch(resolvePath(dir, dispatch.DispatchRegistrationArtifact))
@@ -271,14 +271,7 @@ func TestReceiptFinalizeAndValidate(t *testing.T) {
 	assertTypedWireRoundTrip(t, resolvePath(dir, dispatch.DispatchRegistrationArtifact), &dispatchRegistration{}, []string{
 		"proofVersion", "dispatchId", "provider", "workflowId", "changeSnapshot", "gate", "stage", "reviewArtifact", "contextBundle", "contextSha256", "reviewPolicyId", "reviewTemplate", "reviewTemplateSha256", "promptArtifact", "promptSha256", "status",
 	})
-	capturePayload := `{"workflowId":"wf","gate":"complexity-gate","stage":"","subagentId":"subagent-1","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: []byte(capturePayload)}); !result.OK() {
-		t.Fatalf("expected start capture to pass, got %#v", result.Failures)
-	}
 	writeReceiptArtifactFixture(t, dir, artifact, "snap")
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: []byte(capturePayload)}); !result.OK() {
-		t.Fatalf("expected stop capture to pass, got %#v", result.Failures)
-	}
 	receipt, result := ReceiptFinalize(ReceiptFinalizeOptions{
 		Worktree:   dir,
 		Provider:   "codex",
@@ -289,10 +282,10 @@ func TestReceiptFinalizeAndValidate(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected receipt finalize to pass, got %#v", result.Failures)
 	}
-	if !strings.HasPrefix(receipt.ReceiptArtifact, ".claude/gates/runs/wf/restricted/proofs/") {
+	if !strings.HasPrefix(receipt.ReceiptArtifact, ".gates/runs/wf/restricted/proofs/") {
 		t.Fatalf("omitted --run-dir finalized outside the default run: %#v", receipt)
 	}
-	if isDir(filepath.Join(dir, ".claude", "gates", "proofs")) {
+	if isDir(filepath.Join(dir, ".gates", "proofs")) {
 		t.Fatal("omitted --run-dir wrote repository-level receipt proofs")
 	}
 	assertTypedWireRoundTrip(t, resolvePath(dir, dispatch.DispatchRegistrationArtifact), &dispatchRegistration{}, []string{
@@ -320,6 +313,9 @@ func TestReceiptFinalizeAndValidate(t *testing.T) {
 	if err := strictContractJSON(receiptData, &bound); err != nil {
 		t.Fatal(err)
 	}
+	if bound.SubagentID != "" || len(bound.NormalizedEvents) != 0 || bound.StartEventArtifact != "" || bound.StopEventArtifact != "" {
+		t.Fatalf("Codex receipt claimed unavailable lifecycle evidence: %#v", bound)
+	}
 	promptPath := resolvePath(dir, bound.PromptArtifact)
 	promptBytes, err := os.ReadFile(promptPath)
 	if err != nil {
@@ -341,55 +337,38 @@ func TestReceiptFinalizeAndValidate(t *testing.T) {
 	if result.OK() {
 		t.Fatal("expected snapshot mismatch to fail")
 	}
-	receiptPath := resolvePath(dir, receipt.ReceiptArtifact)
-	receiptData, err = os.ReadFile(receiptPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var receiptWire reviewerProofReceipt
-	if err := strictContractJSON(receiptData, &receiptWire); err != nil {
-		t.Fatal(err)
-	}
-	receiptWire.SubagentID = "different-subagent"
-	if err := writeJSON(receiptPath, receiptWire); err != nil {
-		t.Fatal(err)
-	}
-	result = ReceiptValidate(ReceiptValidateOptions{
-		Worktree:       dir,
-		Receipt:        receipt.ReceiptArtifact,
-		Artifact:       artifact,
-		Gate:           "complexity-gate",
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-	})
-	if result.OK() || !strings.Contains(resultSummary(result), "subagent IDs do not match") {
-		t.Fatalf("typed receipt subagent binding drift was accepted: %#v", result.Failures)
-	}
 }
 
 func TestReceiptFinalizeAndValidateQADesignDocument(t *testing.T) {
 	dir := t.TempDir()
-	artifact := defaultReceiptArtifact(t, dir, "wf", "qa-cases.md")
-	options := ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "design-snap", Gate: "qa-test-gate", Stage: "Design", Artifact: artifact, QACaseCount: 1}
-	dispatch, result := registerReceiptFixture(t, options)
-	if !result.OK() {
-		t.Fatal(result.Failures)
+	var artifact string
+	var dispatch ReceiptRegistration
+	var receipt ReceiptFinalizeOutput
+	for i := 1; i <= 4; i++ {
+		snapshot := fmt.Sprintf("design-snap-%d", i)
+		artifact = defaultReceiptArtifact(t, dir, "wf", fmt.Sprintf("qa-cases-%d.md", i))
+		options := ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: snapshot, Gate: "qa-test-gate", Stage: "Design", Artifact: artifact, QACaseCount: 1}
+		var result Result
+		dispatch, result = registerReceiptFixture(t, options)
+		if !result.OK() {
+			t.Fatalf("Design %d registration failed: %#v", i, result.Failures)
+		}
+		payload := []byte(`{"workflowId":"wf","changeSnapshot":"` + snapshot + `","gate":"qa-test-gate","stage":"Design","subagentId":"designer","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`)
+		if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: payload}); !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		if _, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, DesignCases: []ReceiptSemanticDesignCase{{Position: 1, Values: designSemanticValues("confirmed")}}}); !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: payload}); !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		receipt, result = ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", Gate: "qa-test-gate", Stage: "Design", Artifact: artifact})
+		if !result.OK() {
+			t.Fatalf("Design %d finalization failed: %#v", i, result.Failures)
+		}
 	}
-	payload := []byte(`{"workflowId":"wf","changeSnapshot":"design-snap","gate":"qa-test-gate","stage":"Design","subagentId":"designer","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`)
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: payload}); !result.OK() {
-		t.Fatal(result.Failures)
-	}
-	if _, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, DesignCases: []ReceiptSemanticDesignCase{{Position: 1, Values: designSemanticValues("confirmed")}}}); !result.OK() {
-		t.Fatal(result.Failures)
-	}
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: payload}); !result.OK() {
-		t.Fatal(result.Failures)
-	}
-	receipt, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", Gate: "qa-test-gate", Stage: "Design", Artifact: artifact})
-	if !result.OK() {
-		t.Fatalf("Design document finalization failed: %#v", result.Failures)
-	}
-	result = ReceiptValidate(ReceiptValidateOptions{Worktree: dir, Receipt: receipt.ReceiptArtifact, Artifact: artifact, Gate: "qa-test-gate", Stage: "Design", WorkflowID: "wf", ChangeSnapshot: "design-snap"})
+	result := ReceiptValidate(ReceiptValidateOptions{Worktree: dir, Receipt: receipt.ReceiptArtifact, Artifact: artifact, Gate: "qa-test-gate", Stage: "Design", WorkflowID: "wf", ChangeSnapshot: "design-snap-4"})
 	if !result.OK() {
 		t.Fatalf("Design document receipt validation failed: %#v", result.Failures)
 	}
@@ -613,6 +592,83 @@ func TestReceiptRegisterRejectsQAExecutionLifecycle(t *testing.T) {
 	}
 }
 
+func TestReceiptRegisterRequiresRecordedRerunForPriorPostDevelopmentPass(t *testing.T) {
+	const workflowID, sourceSnapshot, targetSnapshot, gate = "wf-rerun-register", "source", "target", "code-quality-gate"
+	tests := []struct {
+		name           string
+		setup          func(*testing.T, string)
+		wantOK         bool
+		wantTransition string
+	}{
+		{name: "first run", wantOK: true},
+		{name: "prior other gate", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, "complexity-gate")
+		}, wantOK: true},
+		{name: "prior Design Review", setup: func(t *testing.T, root string) {
+			recordDesignReviewPassFixture(t, root, workflowID, sourceSnapshot)
+		}, wantOK: true},
+		{name: "missing transition", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, gate)
+		}, wantTransition: "required for new snapshot"},
+		{name: "ACCEPT_CARRY transition", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, gate)
+			if result := recordCarryDecisionTransitionFixture(t, root, workflowID, sourceSnapshot, targetSnapshot, gate, "ACCEPT_CARRY"); !result.OK() {
+				t.Fatalf("cannot record ACCEPT_CARRY transition: %#v", result.Failures)
+			}
+		}, wantTransition: "explicit RERUN decision"},
+		{name: "BLOCKED transition", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, gate)
+			if result := recordCarryDecisionTransitionFixture(t, root, workflowID, sourceSnapshot, targetSnapshot, gate, "BLOCKED"); result.OK() {
+				t.Fatal("BLOCKED Carry artifact was recorded as a terminal transition")
+			}
+		}, wantTransition: "required for new snapshot"},
+		{name: "RERUN_REQUIRED transition", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, gate)
+			if result := recordCarryDecisionTransitionFixture(t, root, workflowID, sourceSnapshot, targetSnapshot, gate, "RERUN_REQUIRED"); !result.OK() {
+				t.Fatalf("cannot record RERUN_REQUIRED transition: %#v", result.Failures)
+			}
+		}, wantOK: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if test.setup != nil {
+				test.setup(t, root)
+			}
+			runDir, err := resolveWorkflowRunDir(root, workflowID, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "target-code-quality.json"))
+			options := withReceiptBundle(t, ReceiptRegisterOptions{Worktree: root, RunDir: runDir, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: targetSnapshot, Gate: gate, Artifact: artifact})
+			artifactPath, err := runLocalReviewArtifactPath(root, runDir, artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatchPath := filepath.Join(receiptProofDir(root, runDir, "dispatch"), sha256Bytes([]byte(artifactPath))+".json")
+			registration, result := ReceiptRegisterDispatch(options)
+			if result.OK() != test.wantOK {
+				t.Fatalf("registration OK=%v, want %v: %#v", result.OK(), test.wantOK, result.Failures)
+			}
+			if test.wantTransition != "" && !strings.Contains(resultSummary(result), test.wantTransition) {
+				t.Fatalf("missing transition failure %q: %#v", test.wantTransition, result.Failures)
+			}
+			if test.wantOK {
+				if !isFile(artifactPath) || !isFile(resolvePath(root, registration.DispatchRegistrationArtifact)) {
+					t.Fatal("successful registration did not create artifact and dispatch proof")
+				}
+				return
+			}
+			if _, err := os.Lstat(artifactPath); !os.IsNotExist(err) {
+				t.Fatalf("rejected registration left reviewer artifact: %v", err)
+			}
+			if _, err := os.Lstat(dispatchPath); !os.IsNotExist(err) {
+				t.Fatalf("rejected registration left dispatch proof: %v", err)
+			}
+		})
+	}
+}
+
 func TestReceiptFinalizeRejectsPromptChangedAfterRegistration(t *testing.T) {
 	dir := t.TempDir()
 	artifact := defaultReceiptArtifact(t, dir, "wf", "review.json")
@@ -629,7 +685,7 @@ func TestReceiptFinalizeRejectsPromptChangedAfterRegistration(t *testing.T) {
 	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: payload}); !result.OK() {
 		t.Fatal(result.Failures)
 	}
-	promptPath, err := safeEvidencePath(filepath.Join(dir, ".claude", "gates", "runs", "wf"), options.Prompt)
+	promptPath, err := safeEvidencePath(filepath.Join(dir, ".gates", "runs", "wf"), options.Prompt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,12 +699,12 @@ func TestReceiptFinalizeRejectsPromptChangedAfterRegistration(t *testing.T) {
 	}
 }
 
-func TestReceiptFinalizeMissingLifecycleIsUnproven(t *testing.T) {
+func TestReceiptFinalizeMissingLifecycleIsUnprovenForSupportedProvider(t *testing.T) {
 	dir := t.TempDir()
 	artifact := defaultReceiptArtifact(t, dir, "wf", "complexity.json")
 	dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{
 		Worktree:       dir,
-		Provider:       "codex",
+		Provider:       "cursor",
 		WorkflowID:     "wf",
 		ChangeSnapshot: "snap",
 		Gate:           "complexity-gate",
@@ -658,13 +714,13 @@ func TestReceiptFinalizeMissingLifecycleIsUnproven(t *testing.T) {
 		t.Fatalf("expected dispatch registration to pass, got %#v", result.Failures)
 	}
 	payload := `{"workflowId":"wf","gate":"complexity-gate","stage":"","subagentId":"subagent-1","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`
-	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: []byte(payload)}); !result.OK() {
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "cursor", Event: "SubagentStart", Payload: []byte(payload)}); !result.OK() {
 		t.Fatalf("expected start capture to pass, got %#v", result.Failures)
 	}
 	writeReceiptArtifactFixture(t, dir, artifact, "snap")
 	_, result = ReceiptFinalize(ReceiptFinalizeOptions{
 		Worktree:   dir,
-		Provider:   "codex",
+		Provider:   "cursor",
 		WorkflowID: "wf",
 		Gate:       "complexity-gate",
 		Artifact:   artifact,
@@ -674,6 +730,33 @@ func TestReceiptFinalizeMissingLifecycleIsUnproven(t *testing.T) {
 	}
 	if len(result.Failures) == 0 || !strings.Contains(result.Failures[0].Message, "UNPROVEN") {
 		t.Fatalf("expected UNPROVEN failure, got %#v", result.Failures)
+	}
+}
+
+func TestReceiptFinalizeAcceptsLifecycleForSupportedProvider(t *testing.T) {
+	dir := t.TempDir()
+	artifact := defaultReceiptArtifact(t, dir, "wf", "complexity.json")
+	dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{
+		Worktree: dir, Provider: "cursor", WorkflowID: "wf", ChangeSnapshot: "snap",
+		Gate: "complexity-gate", Artifact: artifact,
+	})
+	if !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	payload := []byte(`{"workflowId":"wf","changeSnapshot":"snap","gate":"complexity-gate","subagentId":"reviewer","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`)
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "cursor", Event: "SubagentStart", Payload: payload}); !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	writeReceiptArtifactFixture(t, dir, artifact, "snap")
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "cursor", Event: "SubagentStop", Payload: payload}); !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	receipt, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "cursor", WorkflowID: "wf", Gate: "complexity-gate", Artifact: artifact})
+	if !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	if result := ReceiptValidate(ReceiptValidateOptions{Worktree: dir, Receipt: receipt.ReceiptArtifact, Artifact: artifact, Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"}); !result.OK() {
+		t.Fatal(result.Failures)
 	}
 }
 
@@ -777,6 +860,202 @@ func TestReceiptSubmitBuildsFinalizableReviewWithMultipleFindingsAndLocations(t 
 	}
 }
 
+func TestReceiptSubmitAllowsCompleteReviewResubmissionAndFinalize(t *testing.T) {
+	dir := t.TempDir()
+	artifact := defaultReceiptArtifact(t, dir, "wf", "review-resubmit.json")
+	dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{
+		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap",
+		Gate: "complexity-gate", Artifact: artifact,
+	})
+	if !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	firstChecks := receiptSemanticChecks(t, dir, artifact, "PASS")
+	firstChecks[0].Message = "Initial complete review."
+	first, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, Checks: firstChecks})
+	if !result.OK() {
+		t.Fatalf("initial submission failed: %#v", result.Failures)
+	}
+	lifecycle := []byte(`{"workflowId":"wf","changeSnapshot":"snap","gate":"complexity-gate","subagentId":"reviewer","dispatchId":"` + dispatch.DispatchID + `","dispatchRegistrationArtifact":"` + dispatch.DispatchRegistrationArtifact + `"}`)
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStart", Payload: lifecycle}); !result.OK() {
+		t.Fatal(result.Failures)
+	}
+	if _, result := ReceiptCapture(ReceiptCaptureOptions{Worktree: dir, Provider: "codex", Event: "SubagentStop", Payload: lifecycle}); !result.OK() {
+		t.Fatal(result.Failures)
+	}
+
+	secondChecks := receiptSemanticChecks(t, dir, artifact, "PASS")
+	secondChecks[0].Status = "REVIEW"
+	secondChecks[0].Message = "Replacement complete review."
+	second, result := ReceiptSubmit(ReceiptSubmitOptions{
+		Worktree: dir, Artifact: artifact, Checks: secondChecks,
+		Findings:  []ReceiptSemanticFinding{{CheckPosition: 1, Message: "Replacement finding."}},
+		Locations: []ReceiptSemanticLocation{{FindingPosition: 1, Path: "internal/validate/receipt.go", StartLine: 1, EndLine: 1}},
+	})
+	if !result.OK() {
+		t.Fatalf("complete resubmission failed: %#v", result.Failures)
+	}
+	if first.ArtifactSha256 == second.ArtifactSha256 {
+		t.Fatal("resubmission did not replace the semantic projection")
+	}
+	registered, ok := decodeDispatch(resolvePath(dir, dispatch.DispatchRegistrationArtifact))
+	if !ok || registered.SemanticSubmissionSHA != second.ArtifactSha256 {
+		t.Fatalf("dispatch does not bind the replacement submission: %#v", registered)
+	}
+
+	receipt, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", Gate: "complexity-gate", Artifact: artifact})
+	if !result.OK() {
+		t.Fatalf("replacement submission was not finalizable: %#v", result.Failures)
+	}
+	if result := ReceiptValidate(ReceiptValidateOptions{Worktree: dir, Receipt: receipt.ReceiptArtifact, Artifact: artifact, Gate: "complexity-gate", WorkflowID: "wf", ChangeSnapshot: "snap"}); !result.OK() {
+		t.Fatalf("replacement submission receipt did not validate: %#v", result.Failures)
+	}
+	finalArtifact, err := os.ReadFile(resolvePath(dir, artifact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(finalArtifact, []byte("Replacement complete review.")) || bytes.Contains(finalArtifact, []byte("Initial complete review.")) {
+		t.Fatalf("final artifact was not rebuilt from the static catalog: %s", finalArtifact)
+	}
+	finalDispatch, err := os.ReadFile(resolvePath(dir, dispatch.DispatchRegistrationArtifact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, Checks: secondChecks}); result.OK() {
+		t.Fatal("finalized dispatch accepted a resubmission")
+	}
+	assertFileBytes(t, resolvePath(dir, artifact), finalArtifact)
+	assertFileBytes(t, resolvePath(dir, dispatch.DispatchRegistrationArtifact), finalDispatch)
+}
+
+func TestReceiptSubmitRejectsInvalidReviewResubmissionsWithoutChangingFiles(t *testing.T) {
+	setup := func(t *testing.T) (string, string, ReceiptRegistration, []ReceiptSemanticCheck) {
+		t.Helper()
+		dir := t.TempDir()
+		artifact := defaultReceiptArtifact(t, dir, "wf", "review-resubmit-invalid.json")
+		dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{
+			Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap",
+			Gate: "complexity-gate", Artifact: artifact,
+		})
+		if !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		checks := receiptSemanticChecks(t, dir, artifact, "PASS")
+		if _, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, Checks: checks}); !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		return dir, artifact, dispatch, checks
+	}
+
+	for _, test := range []struct {
+		name    string
+		options func(string, string, []ReceiptSemanticCheck) ReceiptSubmitOptions
+	}{
+		{name: "static validation", options: func(dir, artifact string, checks []ReceiptSemanticCheck) ReceiptSubmitOptions {
+			checks[0].Status = "REVIEW"
+			return ReceiptSubmitOptions{
+				Worktree: dir, Artifact: artifact, Checks: checks,
+				Findings:  []ReceiptSemanticFinding{{CheckPosition: 1, Message: "Invalid location."}},
+				Locations: []ReceiptSemanticLocation{{FindingPosition: 1, Path: ".gates/runs/wf/restricted/review.json", StartLine: 1, EndLine: 1}},
+			}
+		}},
+		{name: "incomplete semantics", options: func(dir, artifact string, checks []ReceiptSemanticCheck) ReceiptSubmitOptions {
+			return ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, Checks: checks[:len(checks)-1]}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir, artifact, dispatch, checks := setup(t)
+			artifactBefore, err := os.ReadFile(resolvePath(dir, artifact))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatchPath := resolvePath(dir, dispatch.DispatchRegistrationArtifact)
+			dispatchBefore, err := os.ReadFile(dispatchPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, result := ReceiptSubmit(test.options(dir, artifact, checks)); result.OK() {
+				t.Fatal("invalid resubmission passed")
+			}
+			assertFileBytes(t, resolvePath(dir, artifact), artifactBefore)
+			assertFileBytes(t, dispatchPath, dispatchBefore)
+		})
+	}
+
+	t.Run("edited assigned artifact", func(t *testing.T) {
+		dir, artifact, dispatch, checks := setup(t)
+		artifactPath := resolvePath(dir, artifact)
+		artifactBefore, err := os.ReadFile(artifactPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifactBefore = append(artifactBefore, '\n')
+		if err := os.WriteFile(artifactPath, artifactBefore, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		dispatchPath := resolvePath(dir, dispatch.DispatchRegistrationArtifact)
+		dispatchBefore, err := os.ReadFile(dispatchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, Checks: checks}); result.OK() {
+			t.Fatal("edited assigned artifact accepted a resubmission")
+		}
+		assertFileBytes(t, artifactPath, artifactBefore)
+		assertFileBytes(t, dispatchPath, dispatchBefore)
+	})
+}
+
+func TestReceiptSubmitResubmissionContractAppliesToCarryAndQADesign(t *testing.T) {
+	t.Run("Carry", func(t *testing.T) {
+		dir := t.TempDir()
+		artifact := defaultReceiptArtifact(t, dir, "wf", "carry-resubmit.json")
+		dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{
+			Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "target",
+			Gate: "qa-test-gate", Stage: "Carry", Artifact: artifact,
+		})
+		if !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		first, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, CarryDecisions: []ReceiptSemanticCarryDecision{{GatePosition: 1, Decision: "ACCEPT_CARRY", Reason: "Initially unchanged."}}})
+		if !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		second, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, CarryDecisions: []ReceiptSemanticCarryDecision{{GatePosition: 1, Decision: "RERUN_REQUIRED", Reason: "Replacement decision."}}})
+		if !result.OK() || first.ArtifactSha256 == second.ArtifactSha256 {
+			t.Fatalf("Carry resubmission failed: first=%#v second=%#v failures=%#v", first, second, result.Failures)
+		}
+		registered, ok := decodeDispatch(resolvePath(dir, dispatch.DispatchRegistrationArtifact))
+		if !ok || registered.SemanticSubmissionSHA != second.ArtifactSha256 {
+			t.Fatalf("Carry dispatch does not bind replacement: %#v", registered)
+		}
+	})
+
+	t.Run("QA Design", func(t *testing.T) {
+		dir := t.TempDir()
+		artifact := defaultReceiptArtifact(t, dir, "wf", "design-resubmit.md")
+		dispatch, result := registerReceiptFixture(t, ReceiptRegisterOptions{
+			Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "design-snap",
+			Gate: "qa-test-gate", Stage: "Design", Artifact: artifact, QACaseCount: 1,
+		})
+		if !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		first, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, DesignCases: []ReceiptSemanticDesignCase{{Position: 1, Values: designSemanticValues("initial")}}})
+		if !result.OK() {
+			t.Fatal(result.Failures)
+		}
+		second, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, DesignCases: []ReceiptSemanticDesignCase{{Position: 1, Values: designSemanticValues("replacement")}}})
+		if !result.OK() || first.ArtifactSha256 == second.ArtifactSha256 {
+			t.Fatalf("QA Design resubmission failed: first=%#v second=%#v failures=%#v", first, second, result.Failures)
+		}
+		registered, ok := decodeDispatch(resolvePath(dir, dispatch.DispatchRegistrationArtifact))
+		if !ok || registered.SemanticSubmissionSHA != second.ArtifactSha256 {
+			t.Fatalf("QA Design dispatch does not bind replacement: %#v", registered)
+		}
+	})
+}
+
 func TestReceiptSubmitRejectsInvalidReviewSemanticsWithoutChangingArtifact(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -807,6 +1086,9 @@ func TestReceiptSubmitRejectsInvalidReviewSemanticsWithoutChangingArtifact(t *te
 		}, want: "unknown semantic check"},
 		{name: "invalid location", mutate: func(checks []ReceiptSemanticCheck) ReceiptSubmitOptions {
 			return ReceiptSubmitOptions{Checks: checks, Findings: []ReceiptSemanticFinding{{CheckPosition: 1, Message: "finding"}}, Locations: []ReceiptSemanticLocation{{FindingPosition: 1, Path: "/absolute.go", StartLine: 0, EndLine: 0}}}
+		}, want: "location 1 is invalid"},
+		{name: "workflow evidence location", mutate: func(checks []ReceiptSemanticCheck) ReceiptSubmitOptions {
+			return ReceiptSubmitOptions{Checks: checks, Findings: []ReceiptSemanticFinding{{CheckPosition: 1, Message: "finding"}}, Locations: []ReceiptSemanticLocation{{FindingPosition: 1, Path: ".gates/runs/wf/restricted/review.json", StartLine: 1, EndLine: 1}}}
 		}, want: "location 1 is invalid"},
 		{name: "QA Design fields", mutate: func(checks []ReceiptSemanticCheck) ReceiptSubmitOptions {
 			return ReceiptSubmitOptions{Checks: checks, DesignCases: []ReceiptSemanticDesignCase{{Position: 1, Values: designSemanticValues("wrong role")}}}
@@ -1258,81 +1540,16 @@ func TestReceiptCarryDerivesGateAndRejectsDuplicateSourceClosure(t *testing.T) {
 	}
 }
 
-func TestReceiptRegisterLeavesRestrictedContextAvailableToCarryArbitration(t *testing.T) {
+func TestReceiptRegisterLeavesRestrictedRequirementAvailableToCarryArbitration(t *testing.T) {
 	dir := t.TempDir()
 	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
-	mustWrite(t, filepath.Join(runDir, "restricted", "repair-chain.json"), "{}\n")
+	mustWrite(t, filepath.Join(runDir, "restricted", "requirement.md"), "current requirement\n")
 	bundleName := "restricted/carry-bundle.json"
-	writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(bundleName)), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "target", Inputs: []EvidenceRef{testRef(t, runDir, "restricted/repair-chain.json")}})
+	writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(bundleName)), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "target", Inputs: []EvidenceRef{testRef(t, runDir, "restricted/requirement.md")}})
 	artifact := relativePath(dir, filepath.Join(runDir, "restricted", "carry-review.json"))
 	_, result := ReceiptRegisterDispatch(withReceiptBundle(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "target", Gate: "qa-test-gate", Stage: "Carry", Artifact: artifact, ContextBundle: bundleName}))
 	if !result.OK() {
-		t.Fatalf("Carry arbitration lost access to its restricted repair chain: %#v", result.Failures)
-	}
-}
-
-func TestReceiptRegisterRejectsInvalidComplexityContextBeforeDispatch(t *testing.T) {
-	dir := t.TempDir()
-	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
-	writeComplexityStatisticsFixture(t, dir, runDir, "wf", "snap", "restricted/statistics.json")
-	bundleName := "restricted/complexity-bundle.json"
-	writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(bundleName)), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{testRef(t, runDir, "restricted/statistics.json")}})
-	artifact := relativePath(dir, filepath.Join(runDir, "restricted", "review.json"))
-	mustWrite(t, filepath.Join(runDir, "restricted", "changed.txt"), "changed\n")
-	mustWrite(t, filepath.Join(runDir, "restricted", "verification.txt"), "verified\n")
-	_, result := ReceiptRegisterDispatch(withReceiptBundle(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact, ContextBundle: bundleName, ChangedFiles: "restricted/changed.txt", Verification: "restricted/verification.txt", ComplexityStatistics: "restricted/statistics.json"}))
-	if result.OK() || !strings.Contains(resultSummary(result), "must not include development-time budget or statistics schema fields") {
-		t.Fatalf("invalid complexity dispatch context was accepted: %#v", result.Failures)
-	}
-	entries, err := os.ReadDir(receiptProofDir(dir, runDir, "dispatch"))
-	if err == nil && len(entries) != 0 {
-		t.Fatalf("failed static validation still reserved a dispatch: %v", entries)
-	}
-}
-
-func TestReceiptRegisterRequiresGeneratedCurrentComplexityStatistics(t *testing.T) {
-	tests := []struct {
-		name string
-		want string
-		make func(*testing.T, string, string)
-	}{
-		{name: "partial report", want: "missing required field", make: func(t *testing.T, _ string, runDir string) {
-			mustWrite(t, filepath.Join(runDir, "restricted", "statistics.json"), "{\"budget_source\":\"none\"}\n")
-		}},
-		{name: "complete report without proof", want: "composition proof is missing", make: func(t *testing.T, root, runDir string) {
-			report, result := Complexity(ComplexityOptions{Worktree: root, VCS: "none", TaskType: "refactor"})
-			if !result.OK() {
-				t.Fatal(result.Failures)
-			}
-			writeJSONTest(t, filepath.Join(runDir, "restricted", "statistics.json"), report)
-		}},
-		{name: "proof for another snapshot", want: "composition proof is invalid", make: func(t *testing.T, root, runDir string) {
-			writeComplexityStatisticsFixture(t, root, runDir, "wf", "old-snapshot", "restricted/statistics.json")
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			runDir, _ := resolveWorkflowRunDir(root, "wf", "")
-			mustWrite(t, filepath.Join(runDir, "restricted", "changed.txt"), "changed\n")
-			mustWrite(t, filepath.Join(runDir, "restricted", "verification.txt"), "verified\n")
-			test.make(t, root, runDir)
-			artifact := relativePath(root, filepath.Join(runDir, "restricted", "review.json"))
-			options := withReceiptBundle(t, ReceiptRegisterOptions{
-				Worktree: root, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact,
-				ChangedFiles: "restricted/changed.txt", Verification: "restricted/verification.txt", ComplexityStatistics: "restricted/statistics.json",
-			})
-			if _, result := ReceiptRegisterDispatch(options); result.OK() || !strings.Contains(resultSummary(result), test.want) {
-				t.Fatalf("invalid complexity statistics registration was accepted: %#v", result.Failures)
-			}
-			if _, err := os.Stat(resolvePath(root, artifact)); !os.IsNotExist(err) {
-				t.Fatalf("rejected registration wrote reviewer artifact: %v", err)
-			}
-			dispatches, err := filepath.Glob(filepath.Join(receiptProofDir(root, runDir, "dispatch"), "*.json"))
-			if err != nil || len(dispatches) != 0 {
-				t.Fatalf("rejected registration reserved dispatch: paths=%v err=%v", dispatches, err)
-			}
-		})
+		t.Fatalf("Carry arbitration lost access to its restricted requirement: %#v", result.Failures)
 	}
 }
 
@@ -1415,19 +1632,19 @@ func TestReceiptRegisterBlocksFourthFinalizedReviewWithoutUserAuthorization(t *t
 		writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("completed-%d.json", i)), dispatchRegistration{
 			ProofVersion: 1, DispatchID: fmt.Sprintf("dispatch-%d", i), Provider: "codex",
 			WorkflowID: "wf", ChangeSnapshot: fmt.Sprintf("snap-%d", i), Gate: "complexity-gate",
-			ReviewArtifact:  fmt.Sprintf(".claude/gates/runs/wf/restricted/review-%d.json", i),
-			ReceiptArtifact: fmt.Sprintf(".claude/gates/runs/wf/restricted/proofs/receipt-%d.json", i), Status: "finalized",
+			ReviewArtifact:  fmt.Sprintf(".gates/runs/wf/restricted/review-%d.json", i),
+			ReceiptArtifact: fmt.Sprintf(".gates/runs/wf/restricted/proofs/receipt-%d.json", i), Status: "finalized",
 		})
 	}
 	writeJSONTest(t, filepath.Join(dispatchDir, "failed-open.json"), dispatchRegistration{
 		ProofVersion: 1, DispatchID: "failed", Provider: "codex", WorkflowID: "wf",
 		ChangeSnapshot: "snap-failed", Gate: "complexity-gate",
-		ReviewArtifact: ".claude/gates/runs/wf/restricted/review-failed.json", Status: "open",
+		ReviewArtifact: ".gates/runs/wf/restricted/review-failed.json", Status: "open",
 	})
 
 	options := ReceiptRegisterOptions{
 		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-4",
-		Gate: "complexity-gate", Artifact: ".claude/gates/runs/wf/restricted/review-4.json",
+		Gate: "complexity-gate", Artifact: ".gates/runs/wf/restricted/review-4.json",
 	}
 	if _, result := registerReceiptFixture(t, options); result.OK() || !strings.Contains(resultSummary(result), "review limit reached") {
 		t.Fatalf("fourth finalized review was not blocked: %#v", result.Failures)
@@ -1435,6 +1652,58 @@ func TestReceiptRegisterBlocksFourthFinalizedReviewWithoutUserAuthorization(t *t
 	options.UserAuthorizedExtraReview = true
 	if _, result := registerReceiptFixture(t, options); !result.OK() {
 		t.Fatalf("explicitly authorized extra review was rejected: %#v", result.Failures)
+	}
+}
+
+func TestReceiptRegisterDesignReviewRetainsReviewCapacity(t *testing.T) {
+	dir := t.TempDir()
+	runDir, err := resolveWorkflowRunDir(dir, "wf", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseSet, _, err := writeCanaryDesignReviewClosure(dir, runDir, "wf", "design-snap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	designReceipt := testDesignReceiptForCaseSet(t, dir, runDir, caseSet)
+	dispatchDir := receiptProofDir(dir, runDir, "dispatch")
+	for i := 2; i <= 3; i++ {
+		writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("completed-design-review-%d.json", i)), dispatchRegistration{
+			ProofVersion: 1, DispatchID: fmt.Sprintf("design-review-dispatch-%d", i), Provider: "codex",
+			WorkflowID: "wf", ChangeSnapshot: "design-snap", Gate: "qa-test-gate", Stage: "Design Review",
+			ReviewArtifact:  fmt.Sprintf(".gates/runs/wf/restricted/design-review-%d.json", i),
+			ReceiptArtifact: fmt.Sprintf(".gates/runs/wf/restricted/proofs/design-review-receipt-%d.json", i), Status: "finalized",
+		})
+	}
+	artifact := ".gates/runs/wf/restricted/design-review-4.json"
+	prompt := "restricted/design-review-4-prompt.txt"
+	currentDiff := relativePath(dir, filepath.Join(runDir, filepath.FromSlash(caseSet.Path)))
+	if err := writeCanaryPreparedPromptForRun(dir, runDir, "wf", "design-snap", "qa-test-gate", "Design Review", artifact, "restricted/design-bundle.json", prompt, currentDiff); err != nil {
+		t.Fatal(err)
+	}
+	options := ReceiptRegisterOptions{
+		Worktree: dir, RunDir: runDir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "design-snap",
+		Gate: "qa-test-gate", Stage: "Design Review", Artifact: artifact, ContextBundle: "restricted/design-bundle.json", Prompt: prompt,
+		QADesignCaseSet: caseSet.Path, QADesignReceipt: designReceipt.Path,
+	}
+	if _, result := ReceiptRegisterDispatch(options); result.OK() || !strings.Contains(resultSummary(result), "review limit reached") {
+		t.Fatalf("fourth unauthorized Design Review was not blocked: %#v", result.Failures)
+	}
+}
+
+func TestReceiptRegisterRejectsExtraReviewAuthorizationForQADesign(t *testing.T) {
+	dir := t.TempDir()
+	artifact := ".gates/runs/wf/restricted/cases.md"
+	_, result := ReceiptRegisterDispatch(ReceiptRegisterOptions{
+		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "design-snap",
+		Gate: "qa-test-gate", Stage: "Design", Artifact: artifact, ContextBundle: "restricted/context-bundle.json",
+		QACaseCount: 1, UserAuthorizedExtraReview: true,
+	})
+	if result.OK() || !strings.Contains(resultSummary(result), "--user-authorized-extra-review is accepted only for a review judgment") {
+		t.Fatalf("QA Design accepted extra-review authorization: %#v", result.Failures)
+	}
+	if isDir(filepath.Join(dir, ".gates")) || isFile(resolvePath(dir, artifact)) {
+		t.Fatal("rejected QA Design authorization wrote an artifact or proof")
 	}
 }
 
@@ -1449,13 +1718,13 @@ func TestReceiptRegisterOpenReservationUsesRemainingReviewCapacity(t *testing.T)
 		writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("completed-%d.json", i)), dispatchRegistration{
 			ProofVersion: 1, DispatchID: fmt.Sprintf("dispatch-%d", i), Provider: "codex",
 			WorkflowID: "wf", ChangeSnapshot: fmt.Sprintf("snap-%d", i), Gate: "complexity-gate",
-			ReviewArtifact:  fmt.Sprintf(".claude/gates/runs/wf/restricted/review-%d.json", i),
-			ReceiptArtifact: fmt.Sprintf(".claude/gates/runs/wf/restricted/proofs/receipt-%d.json", i), Status: "finalized",
+			ReviewArtifact:  fmt.Sprintf(".gates/runs/wf/restricted/review-%d.json", i),
+			ReceiptArtifact: fmt.Sprintf(".gates/runs/wf/restricted/proofs/receipt-%d.json", i), Status: "finalized",
 		})
 	}
 	first := withReceiptBundle(t, ReceiptRegisterOptions{
 		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-3",
-		Gate: "complexity-gate", Artifact: ".claude/gates/runs/wf/restricted/review-3.json",
+		Gate: "complexity-gate", Artifact: ".gates/runs/wf/restricted/review-3.json",
 	})
 	if _, result := ReceiptRegisterDispatch(first); !result.OK() {
 		t.Fatalf("remaining review slot was not reserved: %#v", result.Failures)
@@ -1471,7 +1740,7 @@ func TestReceiptRegisterOpenReservationUsesRemainingReviewCapacity(t *testing.T)
 	}
 	second := withReceiptBundle(t, ReceiptRegisterOptions{
 		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-4",
-		Gate: "complexity-gate", Artifact: ".claude/gates/runs/wf/restricted/review-4.json",
+		Gate: "complexity-gate", Artifact: ".gates/runs/wf/restricted/review-4.json",
 	})
 	if _, result := ReceiptRegisterDispatch(second); result.OK() || !strings.Contains(resultSummary(result), "review capacity reserved") {
 		t.Fatalf("open reservation did not hold the remaining review slot: %#v", result.Failures)
@@ -1482,7 +1751,7 @@ func TestReceiptRegisterOpenReservationUsesRemainingReviewCapacity(t *testing.T)
 	}
 	independent := withReceiptBundle(t, ReceiptRegisterOptions{
 		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-4",
-		Gate: "architecture-health-gate", Artifact: ".claude/gates/runs/wf/restricted/architecture-review.json",
+		Gate: "architecture-health-gate", Artifact: ".gates/runs/wf/restricted/architecture-review.json",
 	})
 	if _, result := ReceiptRegisterDispatch(independent); !result.OK() {
 		t.Fatalf("a different gate incorrectly shared review capacity: %#v", result.Failures)
@@ -1491,41 +1760,41 @@ func TestReceiptRegisterOpenReservationUsesRemainingReviewCapacity(t *testing.T)
 		writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("qa-execution-%d.json", i)), dispatchRegistration{
 			ProofVersion: 1, DispatchID: fmt.Sprintf("qa-dispatch-%d", i), Provider: "codex",
 			WorkflowID: "wf", ChangeSnapshot: fmt.Sprintf("qa-snap-%d", i), Gate: "qa-test-gate", Stage: "Execution",
-			ReviewArtifact:  fmt.Sprintf(".claude/gates/runs/wf/restricted/qa-review-%d.json", i),
-			ReceiptArtifact: fmt.Sprintf(".claude/gates/runs/wf/restricted/proofs/qa-receipt-%d.json", i), Status: "finalized",
+			ReviewArtifact:  fmt.Sprintf(".gates/runs/wf/restricted/qa-review-%d.json", i),
+			ReceiptArtifact: fmt.Sprintf(".gates/runs/wf/restricted/proofs/qa-receipt-%d.json", i), Status: "finalized",
 		})
 	}
 	independentStage := withReceiptBundle(t, ReceiptRegisterOptions{
 		Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "target",
-		Gate: "qa-test-gate", Stage: "Carry", Artifact: ".claude/gates/runs/wf/restricted/carry-review.json",
+		Gate: "qa-test-gate", Stage: "Carry", Artifact: ".gates/runs/wf/restricted/carry-review.json",
 	})
 	if _, result := ReceiptRegisterDispatch(independentStage); !result.OK() {
 		t.Fatalf("a different stage incorrectly shared review capacity: %#v", result.Failures)
 	}
 }
 
-func TestReceiptRegisterConcurrentOpenReservationsShareCapacityAtomically(t *testing.T) {
+func TestReceiptRegisterConcurrentQADesignReservationsDoNotShareReviewCapacity(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		worktree := t.TempDir()
-		runDir := filepath.Join(worktree, ".claude", "gates", "runs", "run")
+		runDir := filepath.Join(worktree, ".gates", "runs", "run")
 		dispatchDir := receiptProofDir(worktree, runDir, "dispatch")
 		for completed := 1; completed <= 2; completed++ {
 			writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("completed-%d.json", completed)), dispatchRegistration{
 				ProofVersion: 1, DispatchID: fmt.Sprintf("dispatch-%d", completed), Provider: "codex",
 				WorkflowID: "wf", ChangeSnapshot: fmt.Sprintf("snap-%d", completed), Gate: "qa-test-gate", Stage: "Design",
-				ReviewArtifact:  fmt.Sprintf(".claude/gates/runs/run/restricted/review-%d.json", completed),
-				ReceiptArtifact: fmt.Sprintf(".claude/gates/runs/run/restricted/proofs/receipt-%d.json", completed), Status: "finalized",
+				ReviewArtifact:  fmt.Sprintf(".gates/runs/run/restricted/review-%d.json", completed),
+				ReceiptArtifact: fmt.Sprintf(".gates/runs/run/restricted/proofs/receipt-%d.json", completed), Status: "finalized",
 			})
 		}
 		codes, output := runSimultaneousReceiptRegistrations(t, worktree, runDir, [2]string{
-			".claude/gates/runs/run/restricted/third-a.json",
-			".claude/gates/runs/run/restricted/third-b.json",
+			".gates/runs/run/restricted/third-a.json",
+			".gates/runs/run/restricted/third-b.json",
 		})
-		if !((codes[0] == 0 && codes[1] == 11) || (codes[0] == 11 && codes[1] == 0)) {
-			t.Fatalf("pair %d did not reserve exactly one remaining review slot: codes=%v output=%q", i+1, codes, output)
+		if codes != [2]int{0, 0} {
+			t.Fatalf("pair %d incorrectly shared review capacity: codes=%v output=%q", i+1, codes, output)
 		}
 		completed, open, err := reviewReservationCounts(worktree, runDir, "wf", "qa-test-gate", "Design")
-		if err != nil || completed != 2 || open != 1 {
+		if err != nil || completed != 2 || open != 2 {
 			t.Fatalf("pair %d committed the wrong capacity state: completed=%d open=%d err=%v", i+1, completed, open, err)
 		}
 	}
@@ -1536,7 +1805,7 @@ func TestStoppedUnfinalizedReviewReleasesDispatchCapacityButCannotCommitFourth(t
 	runDir, _ := resolveWorkflowRunDir(dir, "wf", "")
 	dispatchDir := receiptProofDir(dir, runDir, "dispatch")
 	for i := 1; i <= 2; i++ {
-		writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("completed-%d.json", i)), dispatchRegistration{ProofVersion: 1, DispatchID: fmt.Sprintf("done-%d", i), Provider: "codex", WorkflowID: "wf", ChangeSnapshot: fmt.Sprintf("snap-%d", i), Gate: "complexity-gate", ReviewArtifact: fmt.Sprintf(".claude/gates/runs/wf/restricted/done-%d.json", i), ReceiptArtifact: fmt.Sprintf(".claude/gates/runs/wf/restricted/proofs/done-%d.json", i), Status: "finalized"})
+		writeJSONTest(t, filepath.Join(dispatchDir, fmt.Sprintf("completed-%d.json", i)), dispatchRegistration{ProofVersion: 1, DispatchID: fmt.Sprintf("done-%d", i), Provider: "codex", WorkflowID: "wf", ChangeSnapshot: fmt.Sprintf("snap-%d", i), Gate: "complexity-gate", ReviewArtifact: fmt.Sprintf(".gates/runs/wf/restricted/done-%d.json", i), ReceiptArtifact: fmt.Sprintf(".gates/runs/wf/restricted/proofs/done-%d.json", i), Status: "finalized"})
 	}
 	artifact := defaultReceiptArtifact(t, dir, "wf", "attempt.json")
 	options := withReceiptBundle(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-3", Gate: "complexity-gate", Artifact: artifact})
@@ -1556,7 +1825,7 @@ func TestStoppedUnfinalizedReviewReleasesDispatchCapacityButCannotCommitFourth(t
 	if _, result := ReceiptRegisterDispatch(other); !result.OK() {
 		t.Fatalf("stopped failed attempt did not release dispatch capacity: %#v", result.Failures)
 	}
-	writeJSONTest(t, filepath.Join(dispatchDir, "completed-3.json"), dispatchRegistration{ProofVersion: 1, DispatchID: "done-3", Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-final", Gate: "complexity-gate", ReviewArtifact: ".claude/gates/runs/wf/restricted/done-3.json", ReceiptArtifact: ".claude/gates/runs/wf/restricted/proofs/done-3.json", Status: "finalized"})
+	writeJSONTest(t, filepath.Join(dispatchDir, "completed-3.json"), dispatchRegistration{ProofVersion: 1, DispatchID: "done-3", Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap-final", Gate: "complexity-gate", ReviewArtifact: ".gates/runs/wf/restricted/done-3.json", ReceiptArtifact: ".gates/runs/wf/restricted/proofs/done-3.json", Status: "finalized"})
 	if _, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", Gate: "complexity-gate", Artifact: artifact}); result.OK() || !strings.Contains(resultSummary(result), "review limit reached") {
 		t.Fatalf("stopped attempt committed a fourth unauthorized review: %#v", result.Failures)
 	}
@@ -1567,7 +1836,7 @@ func TestReceiptRegisterWithoutRunDirRejectsRepositoryArtifact(t *testing.T) {
 	if _, result := registerReceiptFixture(t, ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: "review.json"}); result.OK() || !strings.Contains(resultSummary(result), "outside active run") {
 		t.Fatalf("repository-level review output was accepted: %#v", result.Failures)
 	}
-	if isDir(filepath.Join(dir, ".claude", "gates", "proofs")) {
+	if isDir(filepath.Join(dir, ".gates", "proofs")) {
 		t.Fatal("rejected registration wrote repository-level proofs")
 	}
 }
@@ -1575,8 +1844,8 @@ func TestReceiptRegisterWithoutRunDirRejectsRepositoryArtifact(t *testing.T) {
 func TestReceiptRegisterConcurrentReservationProcesses(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		worktree := t.TempDir()
-		runDir := filepath.Join(worktree, ".claude", "gates", "runs", "run")
-		artifact := ".claude/gates/runs/run/restricted/shared.json"
+		runDir := filepath.Join(worktree, ".gates", "runs", "run")
+		artifact := ".gates/runs/run/restricted/shared.json"
 		codes, output := runSimultaneousReceiptRegistrations(t, worktree, runDir, [2]string{artifact, artifact})
 		if !((codes[0] == 0 && codes[1] == 10) || (codes[0] == 10 && codes[1] == 0)) {
 			t.Fatalf("pair %d did not produce exactly one success and one reservation rejection: codes=%v output=%q", i+1, codes, output)
@@ -1588,10 +1857,10 @@ func TestReceiptRegisterConcurrentReservationProcesses(t *testing.T) {
 	}
 
 	worktree := t.TempDir()
-	runDir := filepath.Join(worktree, ".claude", "gates", "runs", "run")
+	runDir := filepath.Join(worktree, ".gates", "runs", "run")
 	codes, output := runSimultaneousReceiptRegistrations(t, worktree, runDir, [2]string{
-		".claude/gates/runs/run/restricted/first.json",
-		".claude/gates/runs/run/restricted/second.json",
+		".gates/runs/run/restricted/first.json",
+		".gates/runs/run/restricted/second.json",
 	})
 	if codes != [2]int{0, 0} {
 		t.Fatalf("distinct simultaneous outputs did not both succeed: codes=%v output=%q", codes, output)
@@ -1604,11 +1873,11 @@ func TestReceiptRegisterConcurrentReservationProcesses(t *testing.T) {
 
 func TestReceiptRegisterWriteFailureIsRetryable(t *testing.T) {
 	worktree := t.TempDir()
-	runDir := filepath.Join(worktree, ".claude", "gates", "runs", "run")
+	runDir := filepath.Join(worktree, ".gates", "runs", "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	options := withReceiptBundle(t, ReceiptRegisterOptions{Worktree: worktree, RunDir: runDir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "qa-test-gate", Stage: "Design", Artifact: ".claude/gates/runs/run/restricted/review.json", QACaseCount: 1})
+	options := withReceiptBundle(t, ReceiptRegisterOptions{Worktree: worktree, RunDir: runDir, Provider: "codex", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "qa-test-gate", Stage: "Design", Artifact: ".gates/runs/run/restricted/review.json", QACaseCount: 1})
 	dispatchProofs := receiptProofDir(worktree, runDir, "dispatch")
 	mustWrite(t, dispatchProofs, "blocks dispatch directory creation\n")
 	if _, result := ReceiptRegisterDispatch(options); result.OK() {
@@ -1695,7 +1964,7 @@ func TestReceiptFinalizeRejectsAIChangesToScriptOwnedFields(t *testing.T) {
 	}
 }
 
-func TestReceiptPreflightReadsNativeHookConfig(t *testing.T) {
+func TestReceiptPreflightReportsCodexLifecycleUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1731,19 +2000,14 @@ func TestReceiptPreflightReadsNativeHookConfig(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected preflight diagnostic to pass, got %#v", result.Failures)
 	}
-	if report.Status != "HOST_AUTO_CAPTURE_UNPROVEN" {
+	if report.Status != "HOST_LIFECYCLE_UNAVAILABLE" {
 		t.Fatalf("unexpected status: %#v", report)
 	}
-	if report.ConfigPath == "" || !strings.Contains(report.ConfigPath, ".codex/hooks.json") {
-		t.Fatalf("expected config path, got %#v", report)
+	if report.ConfigPath != "" || len(report.RequiredLifecycleEvents) != 0 {
+		t.Fatalf("Codex preflight claimed lifecycle configuration: %#v", report)
 	}
-	if len(report.ConfiguredLifecycleHooks["SubagentStart"]) != 1 || len(report.ConfiguredLifecycleHooks["SubagentStop"]) != 1 {
-		t.Fatalf("expected lifecycle hook commands, got %#v", report.ConfiguredLifecycleHooks)
-	}
-	for _, missing := range report.Missing {
-		if strings.Contains(missing, "receipt capture hook") {
-			t.Fatalf("did not expect hook-missing diagnostic when config contains hooks: %#v", report.Missing)
-		}
+	if len(report.ConfiguredLifecycleHooks) != 0 || len(report.Missing) != 0 {
+		t.Fatalf("Codex preflight treated unavailable lifecycle as missing configuration: %#v", report)
 	}
 }
 
@@ -1775,6 +2039,17 @@ func defaultReceiptArtifact(t *testing.T, worktree, workflowID, name string) str
 		t.Fatal(err)
 	}
 	return relativePath(worktree, path)
+}
+
+func assertFileBytes(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("file bytes changed: %s", path)
+	}
 }
 
 func registerReceiptFixture(t *testing.T, options ReceiptRegisterOptions) (ReceiptRegistration, Result) {
@@ -1815,11 +2090,11 @@ func withReceiptBundle(t *testing.T, options ReceiptRegisterOptions) ReceiptRegi
 		options.QACaseCount = 1
 	}
 	if options.Gate == "qa-test-gate" && normalizeStage(options.Stage) == "Carry" && options.TransitionChain == "" {
-		for _, name := range []string{"carry-changed.txt", "carry-verification.txt", "carry-repair.txt"} {
+		for _, name := range []string{"carry-changed.txt", "carry-verification.txt"} {
 			mustWrite(t, filepath.Join(runDir, "restricted", name), name+"\n")
 		}
 		options.TransitionChain = "restricted/carry-transition.json"
-		writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(options.TransitionChain)), TransitionChain{SchemaVersion: 2, WorkflowID: options.WorkflowID, TargetSnapshot: options.ChangeSnapshot, Hops: []TransitionHop{{FromSnapshot: "source", ToSnapshot: options.ChangeSnapshot, ChangedFiles: testRef(t, runDir, "restricted/carry-changed.txt"), Verification: testRef(t, runDir, "restricted/carry-verification.txt"), RepairEvidence: testRef(t, runDir, "restricted/carry-repair.txt")}}})
+		writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(options.TransitionChain)), TransitionChain{SchemaVersion: 2, WorkflowID: options.WorkflowID, TargetSnapshot: options.ChangeSnapshot, Hops: []TransitionHop{{FromSnapshot: "source", ToSnapshot: options.ChangeSnapshot, ChangedFiles: testRef(t, runDir, "restricted/carry-changed.txt"), Verification: testRef(t, runDir, "restricted/carry-verification.txt")}}})
 		closure := "restricted/carry-source-qa.json"
 		rootArtifact := "restricted/source.json"
 		mustWrite(t, filepath.Join(runDir, filepath.FromSlash(rootArtifact)), "{}\n")
@@ -1842,11 +2117,6 @@ func withReceiptBundle(t *testing.T, options ReceiptRegisterOptions) ReceiptRegi
 		if policy.VerificationRequired && options.Verification == "" {
 			options.Verification = "restricted/receipt-verification.txt"
 			mustWrite(t, filepath.Join(runDir, filepath.FromSlash(options.Verification)), "verified\n")
-		}
-		if policyID == "complexity.post-development.v2" && options.ComplexityStatistics == "" {
-			statistics := "restricted/receipt-statistics.json"
-			writeComplexityStatisticsFixture(t, options.Worktree, runDir, options.WorkflowID, options.ChangeSnapshot, statistics)
-			options.ComplexityStatistics = statistics
 		}
 	}
 	for logical, composer := range map[string]string{options.ChangedFiles: "changed-files.v1", options.Verification: "verification.v1"} {
@@ -1888,7 +2158,7 @@ func finalSendPromptForOptions(runDir string, options ReceiptRegisterOptions) st
 func TestReceiptRegisterBindsQADesignReviewPromptToGeneratedCaseSet(t *testing.T) {
 	root := t.TempDir()
 	workflowID, snapshot := "wf", "snap"
-	runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	runDir := filepath.Join(root, ".gates", "runs", workflowID)
 	caseSet, _, err := writeCanaryDesignReviewClosure(root, runDir, workflowID, snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -1896,7 +2166,7 @@ func TestReceiptRegisterBindsQADesignReviewPromptToGeneratedCaseSet(t *testing.T
 	designReceipt := testDesignReceiptForCaseSet(t, root, runDir, caseSet)
 	register := func(name, target, casePath, receiptPath string) Result {
 		t.Helper()
-		artifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "qa-design", name+".json"))
+		artifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "qa-design", name+".json"))
 		prompt := filepath.ToSlash(filepath.Join("restricted", "qa-design", name+".txt"))
 		_, result := PrepareDispatchPrompt(PrepareDispatchPromptOptions{Root: root, OutputFile: filepath.Join(runDir, filepath.FromSlash(prompt)), Gate: "qa-test-gate", Stage: "Design Review", CurrentRequirement: "requirements/current.md", CurrentDiff: target, Worktree: root, ChangeSnapshot: snapshot, ReviewArtifact: artifact, PolicyID: "qa.design-review.v2", ContextBundle: filepath.Join(runDir, "restricted", "design-bundle.json")})
 		if !result.OK() {
@@ -1905,7 +2175,7 @@ func TestReceiptRegisterBindsQADesignReviewPromptToGeneratedCaseSet(t *testing.T
 		_, result = ReceiptRegisterDispatch(ReceiptRegisterOptions{Worktree: root, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: "qa-test-gate", Stage: "Design Review", Artifact: artifact, ContextBundle: "restricted/design-bundle.json", Prompt: prompt, QADesignCaseSet: casePath, QADesignReceipt: receiptPath})
 		return result
 	}
-	target := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, caseSet.Path))
+	target := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, caseSet.Path))
 	if result := register("bound", target, caseSet.Path, designReceipt.Path); !result.OK() {
 		t.Fatalf("exact generated QA case binding was rejected: %#v", result.Failures)
 	}
@@ -1917,7 +2187,7 @@ func TestReceiptRegisterBindsQADesignReviewPromptToGeneratedCaseSet(t *testing.T
 			t.Fatalf("%s binding was accepted", name)
 		}
 	}
-	otherArtifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "qa-design", "other-cases.md"))
+	otherArtifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "qa-design", "other-cases.md"))
 	otherReceipt, err := writeCanaryReceiptBoundOutput(root, runDir, workflowID, snapshot, "Design", otherArtifact, "restricted/design-bundle.json", "other-designer", func() error {
 		_, submitResult := ReceiptSubmit(ReceiptSubmitOptions{Worktree: root, Artifact: otherArtifact, DesignCases: []ReceiptSemanticDesignCase{{Position: 1, Values: designSemanticValues("other")}}})
 		if !submitResult.OK() {
@@ -2011,9 +2281,6 @@ func writeReceiptArtifactFixture(t *testing.T, dir, artifact, snapshot string) {
 	checks := make([]ReceiptSemanticCheck, 0, len(payload.Checks))
 	for i := range payload.Checks {
 		status, message := "PASS", "checked"
-		if payload.ReviewPolicyID == "complexity.start-readiness.v2" && payload.Checks[i].ID == "complexity.statistics" {
-			status, message = "NOT_APPLICABLE", "not applicable before development"
-		}
 		checks = append(checks, ReceiptSemanticCheck{Position: i + 1, Status: status, Message: message})
 	}
 	if _, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: dir, Artifact: artifact, Checks: checks}); !result.OK() {
@@ -2130,7 +2397,7 @@ func writeCarrySemanticFixture(t *testing.T, path string, source CarryPayload) {
 func receiptFixtureArtifactLocation(t *testing.T, path string) (string, string) {
 	t.Helper()
 	abs := absPath(path)
-	marker := string(filepath.Separator) + filepath.Join(".claude", "gates", "runs") + string(filepath.Separator)
+	marker := string(filepath.Separator) + filepath.Join(".gates", "runs") + string(filepath.Separator)
 	index := strings.Index(abs, marker)
 	if index < 0 {
 		t.Fatalf("review fixture is outside a workflow run: %s", path)

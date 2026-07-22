@@ -9,12 +9,12 @@ import (
 )
 
 type InstallOptions struct {
-	Source         string
-	Host           string
-	Scope          string
-	Project        string
-	Force          bool
-	ConfigureHooks bool
+	Source    string
+	Host      string
+	Scope     string
+	Project   string
+	Force     bool
+	SkipHooks bool
 }
 
 type InstallReport struct {
@@ -95,7 +95,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			Host:       target.host,
 			TargetPath: filepath.ToSlash(target.targetPath),
 		}
-		if options.ConfigureHooks {
+		if !options.SkipHooks {
 			receiptWorktree := "."
 			if projectAbs != "" {
 				receiptWorktree = projectAbs

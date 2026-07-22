@@ -51,7 +51,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	addResult("package-validate", Package(root))
 	addResult("prompt-clean", DispatchPrompt(DispatchPromptOptions{
 		Root:       root,
-		PromptText: "formal_gate_dispatch: complexity-gate\nCurrent requirement: requirements/current.md\nCurrent diff or proposed change: git diff base --\nWorktree: /tmp/repo\nBase commit or snapshot: base..snapshot\nOutput path: .claude/gates/runs/wf/restricted/review.json\nOutput format: schema-version-2 JSON\n",
+		PromptText: "formal_gate_dispatch: complexity-gate\nCurrent requirement: requirements/current.md\nCurrent diff or proposed change: git diff base --\nWorktree: /tmp/repo\nBase commit or snapshot: base..snapshot\nOutput path: .gates/runs/wf/restricted/review.json\nOutput format: schema-version-2 JSON\n",
 		FinalSend:  true,
 	}))
 	contaminated := DispatchPrompt(DispatchPromptOptions{
@@ -93,18 +93,11 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 		addCheck("temp-worktree", false, err.Error())
 		return report, result
 	}
-	if err := writeCanaryFile(filepath.Join(worktree, "src.txt"), "source\n"); err != nil {
-		addCheck("temp-worktree", false, err.Error())
-		return report, result
-	}
-	firstSnapshot, snapshotResult := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: worktree, VCS: "file-hash"})
-	addResult("workflow-file-hash-snapshot", snapshotResult)
-	secondSnapshot, secondSnapshotResult := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: worktree, VCS: "file-hash"})
-	addCheck("workflow-file-hash-stable", secondSnapshotResult.OK() && firstSnapshot.ChangeSnapshot == secondSnapshot.ChangeSnapshot, "file-hash snapshots are stable across repeated runs")
+	snapshot := "canary-vcs:base..target"
 
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	restrictedRel := filepath.ToSlash(filepath.Join(runRel, "restricted"))
-	if err := writeCanaryGateArtifact(worktree, "qa-test-gate", "Execution", "wf", "snap"); err != nil {
+	if err := writeCanaryGateArtifact(worktree, "qa-test-gate", "Execution", "wf", snapshot); err != nil {
 		addCheck("workflow-record-fixture", false, err.Error())
 	} else {
 		addResult("workflow-record-qa-execution", WorkflowRecordStage(WorkflowRecordStageOptions{
@@ -116,16 +109,16 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			Artifact:       filepath.ToSlash(filepath.Join(restrictedRel, "qa-test-gate.md")),
 			Actor:          "native-canary",
 			WorkflowID:     "wf",
-			ChangeSnapshot: "snap",
+			ChangeSnapshot: snapshot,
 		}))
 		addResult("workflow-admission-after-qa", WorkflowVerifyAdmission(WorkflowVerifyAdmissionOptions{
 			Worktree:       worktree,
 			Gate:           "complexity-gate",
 			WorkflowID:     "wf",
-			ChangeSnapshot: "snap",
+			ChangeSnapshot: snapshot,
 		}))
 		for _, gate := range []string{"complexity-gate", "architecture-health-gate", "code-quality-gate"} {
-			if err := writeCanaryGateArtifact(worktree, gate, "", "wf", "snap"); err != nil {
+			if err := writeCanaryGateArtifact(worktree, gate, "", "wf", snapshot); err != nil {
 				addCheck("workflow-"+gate+"-fixture", false, err.Error())
 				continue
 			}
@@ -136,7 +129,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 				Artifact:       filepath.ToSlash(filepath.Join(restrictedRel, gate+".md")),
 				Actor:          "native-canary",
 				WorkflowID:     "wf",
-				ChangeSnapshot: "snap",
+				ChangeSnapshot: snapshot,
 			}))
 		}
 	}
@@ -148,7 +141,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 		_, finalResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
 			Worktree: worktree, RunDir: runRel, AttemptArtifacts: []string{attemptRel},
 			OutputArtifact: filepath.ToSlash(filepath.Join(restrictedRel, "final-verification.json")),
-			WorkflowID:     "wf", ChangeSnapshot: "snap",
+			WorkflowID:     "wf", ChangeSnapshot: snapshot,
 		})
 		addResult("workflow-final-verification", finalResult)
 		_, finalQAResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
@@ -160,7 +153,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			RecordFinalQA:    true,
 			Actor:            "gate-workflow",
 			WorkflowID:       "wf",
-			ChangeSnapshot:   "snap",
+			ChangeSnapshot:   snapshot,
 		})
 		addResult("workflow-final-execution-record", finalQAResult)
 	}
@@ -170,6 +163,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	if err := os.MkdirAll(filepath.Dir(resolvePath(receiptWorktree, receiptArtifact)), 0o700); err != nil {
 		addCheck("receipt-worktree", false, err.Error())
 	} else {
+		receiptSnapshot := "canary-vcs:base..target"
 		patterns, patternErr := os.ReadFile(filepath.Join(root, "hooks", "pollution-patterns.json"))
 		if patternErr != nil {
 			addCheck("receipt-prompt-patterns", false, patternErr.Error())
@@ -182,16 +176,16 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 		receiptPrompt := filepath.ToSlash(filepath.Join("restricted", "receipt-final-send.txt"))
 		if err := writeCanaryFile(receiptInput, "context\n"); err != nil {
 			addCheck("receipt-context-bundle", false, err.Error())
-		} else if err := writeCanaryJSON(filepath.Join(receiptWorktree, filepath.FromSlash(runRel), filepath.FromSlash(receiptBundle)), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{{Path: filepath.ToSlash(filepath.Join("restricted", "receipt-context.txt")), SHA256: sha256File(receiptInput)}}}); err != nil {
+		} else if err := writeCanaryJSON(filepath.Join(receiptWorktree, filepath.FromSlash(runRel), filepath.FromSlash(receiptBundle)), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: receiptSnapshot, Inputs: []EvidenceRef{{Path: filepath.ToSlash(filepath.Join("restricted", "receipt-context.txt")), SHA256: sha256File(receiptInput)}}}); err != nil {
 			addCheck("receipt-context-bundle", false, err.Error())
 		} else {
 			bundlePath := filepath.Join(receiptRunDir, filepath.FromSlash(receiptBundle))
 			bundleRef := EvidenceRef{Path: receiptBundle, SHA256: sha256File(bundlePath)}
-			if _, err := writeCompositionProof(receiptWorktree, receiptRunDir, "context-bundle.v1", "wf", "snap", bundlePath, []EvidenceRef{bundleRef}); err != nil {
+			if _, err := writeCompositionProof(receiptWorktree, receiptRunDir, "context-bundle.v1", "wf", receiptSnapshot, bundlePath, []EvidenceRef{bundleRef}); err != nil {
 				addCheck("receipt-context-bundle", false, err.Error())
 			}
 		}
-		if err := writeCanaryPreparedPrompt(receiptWorktree, "wf", "snap", "complexity-gate", "", receiptArtifact, receiptBundle, receiptPrompt, "git diff base --"); err != nil {
+		if err := writeCanaryPreparedPrompt(receiptWorktree, "wf", receiptSnapshot, "complexity-gate", "", receiptArtifact, receiptBundle, receiptPrompt, "git diff base --"); err != nil {
 			addCheck("receipt-final-send-prompt", false, err.Error())
 		}
 		receiptRestricted := filepath.Join(receiptWorktree, filepath.FromSlash(runRel), "restricted")
@@ -205,39 +199,27 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			path := filepath.Join(receiptRestricted, name)
 			logical := filepath.ToSlash(filepath.Join("restricted", name))
 			ref := EvidenceRef{Path: logical, SHA256: sha256File(path)}
-			if _, err := writeCompositionProof(receiptWorktree, receiptRunDir, composer, "wf", "snap", path, []EvidenceRef{ref}); err != nil {
+			if _, err := writeCompositionProof(receiptWorktree, receiptRunDir, composer, "wf", receiptSnapshot, path, []EvidenceRef{ref}); err != nil {
 				addCheck("receipt-"+name+"-proof", false, err.Error())
 			}
 		}
-		if _, _, statisticsResult := ComplexityStatistics(ComplexityStatisticsOptions{
-			ComplexityOptions: ComplexityOptions{Worktree: receiptWorktree, VCS: "none", TaskType: "refactor"},
-			RunDir:            receiptRunDir, WorkflowID: "wf", ChangeSnapshot: "snap", Output: "restricted/receipt-statistics.json",
-		}); !statisticsResult.OK() {
-			addCheck("receipt-statistics", false, resultSummary(statisticsResult))
-		}
-		registration, registerResult := ReceiptRegisterDispatch(ReceiptRegisterOptions{
-			Worktree:             receiptWorktree,
-			Provider:             "codex",
-			WorkflowID:           "wf",
-			ChangeSnapshot:       "snap",
-			Gate:                 "complexity-gate",
-			Artifact:             receiptArtifact,
-			ContextBundle:        receiptBundle,
-			Prompt:               receiptPrompt,
-			ChangedFiles:         "restricted/receipt-changed.txt",
-			Verification:         "restricted/receipt-verification.txt",
-			ComplexityStatistics: "restricted/receipt-statistics.json",
+		_, registerResult := ReceiptRegisterDispatch(ReceiptRegisterOptions{
+			Worktree:       receiptWorktree,
+			Provider:       "codex",
+			WorkflowID:     "wf",
+			ChangeSnapshot: receiptSnapshot,
+			Gate:           "complexity-gate",
+			Artifact:       receiptArtifact,
+			ContextBundle:  receiptBundle,
+			Prompt:         receiptPrompt,
+			ChangedFiles:   "restricted/receipt-changed.txt",
+			Verification:   "restricted/receipt-verification.txt",
 		})
 		addResult("receipt-register", registerResult)
 		if registerResult.OK() {
-			payload := fmt.Sprintf(`{"workflowId":"wf","gate":"complexity-gate","subagentId":"subagent-1","dispatchId":%q,"dispatchRegistrationArtifact":%q}`, registration.DispatchID, registration.DispatchRegistrationArtifact)
-			_, startResult := ReceiptCapture(ReceiptCaptureOptions{Worktree: receiptWorktree, Provider: "codex", Event: "SubagentStart", Payload: []byte(payload)})
-			addResult("receipt-capture-start", startResult)
-			if err := writeCanaryComplexityArtifact(receiptWorktree, "wf", "snap"); err != nil {
+			if err := writeCanaryComplexityArtifact(receiptWorktree, "wf", receiptSnapshot); err != nil {
 				addCheck("receipt-fixture", false, err.Error())
 			}
-			_, stopResult := ReceiptCapture(ReceiptCaptureOptions{Worktree: receiptWorktree, Provider: "codex", Event: "SubagentStop", Payload: []byte(payload)})
-			addResult("receipt-capture-stop", stopResult)
 			receipt, finalizeResult := ReceiptFinalize(ReceiptFinalizeOptions{
 				Worktree:   receiptWorktree,
 				Provider:   "codex",
@@ -253,7 +235,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 					Artifact:       receiptArtifact,
 					Gate:           "complexity-gate",
 					WorkflowID:     "wf",
-					ChangeSnapshot: "snap",
+					ChangeSnapshot: receiptSnapshot,
 				}))
 			}
 		}
@@ -262,10 +244,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	addInstallChecks(root, tempRoot, addCheck)
 	preflight, preflightResult := ReceiptPreflight(ReceiptPreflightOptions{Host: "codex", Worktree: worktree})
 	addResult("receipt-preflight-diagnostic", preflightResult)
-	addCheck("receipt-preflight-unproven-not-pass", preflight.Status == "HOST_AUTO_CAPTURE_UNPROVEN", preflight.Status)
-	complexityReport, complexityResult := Complexity(ComplexityOptions{Worktree: worktree, VCS: "none", TaskType: "bugfix"})
-	addResult("complexity-manual-review-diagnostic", complexityResult)
-	addCheck("complexity-no-vcs-is-review", complexityReport.Status == "REVIEW", complexityReport.Status)
+	addCheck("receipt-preflight-capability-honest", preflight.Status == "HOST_LIFECYCLE_UNAVAILABLE", preflight.Status)
 
 	return report, result
 }
@@ -288,12 +267,11 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		report, err := Install(InstallOptions{
-			Source:         root,
-			Host:           tc.host,
-			Scope:          "project",
-			Project:        project,
-			Force:          true,
-			ConfigureHooks: true,
+			Source:  root,
+			Host:    tc.host,
+			Scope:   "project",
+			Project: project,
+			Force:   true,
 		})
 		if err != nil {
 			addCheck(tc.name, false, err.Error())
@@ -362,7 +340,7 @@ func resultSummary(result Result) string {
 }
 
 func writeCanaryGateArtifact(root, gate, stage, workflowID, snapshot string) error {
-	runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	runDir := filepath.Join(root, ".gates", "runs", workflowID)
 	restrictedDir := filepath.Join(runDir, "restricted")
 	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
 	prefix := strings.TrimSuffix(gate, "-gate")
@@ -426,23 +404,8 @@ func writeCanaryGateArtifact(root, gate, stage, workflowID, snapshot string) err
 		return fmt.Errorf("missing canary policy %s", policyID)
 	}
 	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
-	statsName := prefix + "-statistics.json"
-	var statisticsRef EvidenceRef
-	if gate == "complexity-gate" {
-		var statisticsResult Result
-		statisticsRef, _, statisticsResult = ComplexityStatistics(ComplexityStatisticsOptions{
-			ComplexityOptions: ComplexityOptions{Worktree: root, VCS: "none", TaskType: "refactor"},
-			RunDir:            runDir, WorkflowID: workflowID, ChangeSnapshot: snapshot, Output: logical(statsName),
-		})
-		if !statisticsResult.OK() {
-			return fmt.Errorf("%s", resultSummary(statisticsResult))
-		}
-	}
 	for _, id := range policy.RequiredCheckIDs {
 		check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
-		if id == "complexity.statistics" {
-			check.EvidenceRefs = []EvidenceRef{statisticsRef}
-		}
 		checks = append(checks, check)
 	}
 	changed, verification := ref(prefix+"-changed.txt"), ref(prefix+"-verification.txt")
@@ -451,17 +414,9 @@ func writeCanaryGateArtifact(root, gate, stage, workflowID, snapshot string) err
 	if err := writeCanaryPreparedPrompt(root, workflowID, snapshot, gate, stage, artifact, logical(bundleName), logical(promptName), "git diff base --"); err != nil {
 		return err
 	}
-	complexityStatistics := ""
-	if gate == "complexity-gate" {
-		complexityStatistics = statisticsRef.Path
-	}
-	registration, rr := ReceiptRegisterDispatch(ReceiptRegisterOptions{Worktree: root, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: logical(bundleName), Prompt: logical(promptName), ChangedFiles: changed.Path, Verification: verification.Path, ComplexityStatistics: complexityStatistics})
+	_, rr := ReceiptRegisterDispatch(ReceiptRegisterOptions{Worktree: root, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: logical(bundleName), Prompt: logical(promptName), ChangedFiles: changed.Path, Verification: verification.Path})
 	if !rr.OK() {
 		return fmt.Errorf("%s", resultSummary(rr))
-	}
-	raw, _ := json.Marshal(map[string]any{"workflowId": workflowID, "changeSnapshot": snapshot, "gate": gate, "stage": stage, "subagentId": prefix + "-agent", "dispatchId": registration.DispatchID, "dispatchRegistrationArtifact": registration.DispatchRegistrationArtifact})
-	if _, r := ReceiptCapture(ReceiptCaptureOptions{Worktree: root, Provider: "codex", Event: "SubagentStart", Payload: raw}); !r.OK() {
-		return fmt.Errorf("%s", resultSummary(r))
 	}
 	semanticChecks := make([]ReceiptSemanticCheck, 0, len(checks))
 	for index, check := range checks {
@@ -469,9 +424,6 @@ func writeCanaryGateArtifact(root, gate, stage, workflowID, snapshot string) err
 	}
 	if _, submitResult := ReceiptSubmit(ReceiptSubmitOptions{Worktree: root, Artifact: artifact, Checks: semanticChecks}); !submitResult.OK() {
 		return fmt.Errorf("%s", resultSummary(submitResult))
-	}
-	if _, r := ReceiptCapture(ReceiptCaptureOptions{Worktree: root, Provider: "codex", Event: "SubagentStop", Payload: raw}); !r.OK() {
-		return fmt.Errorf("%s", resultSummary(r))
 	}
 	if _, r := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: root, Provider: "codex", WorkflowID: workflowID, Gate: gate, Stage: stage, Artifact: artifact}); !r.OK() {
 		return fmt.Errorf("%s", resultSummary(r))
@@ -484,6 +436,18 @@ func writeCanaryDesignReviewClosure(root, runDir, workflowID, snapshot string) (
 	if !isFile(patterns) {
 		if err := writeCanaryJSON(patterns, map[string]any{"english": map[string]any{"patternGroups": []any{}}, "chinese": map[string]any{"termGroups": []any{}}}); err != nil {
 			return EvidenceRef{}, EvidenceRef{}, err
+		}
+	}
+	// Fixtures may be called with either the repository root or an active run
+	// directory. Ensure the active run's actual worktree also has the native
+	// pollution-patterns input used by final-send validation.
+	activeRoot := filepath.Dir(filepath.Dir(filepath.Dir(runDir)))
+	if !samePath(activeRoot, root) {
+		activePatterns := filepath.Join(activeRoot, "hooks", "pollution-patterns.json")
+		if !isFile(activePatterns) {
+			if err := writeCanaryJSON(activePatterns, map[string]any{"english": map[string]any{"patternGroups": []any{}}, "chinese": map[string]any{"termGroups": []any{}}}); err != nil {
+				return EvidenceRef{}, EvidenceRef{}, err
+			}
 		}
 	}
 	inputName, bundleName := "design-input.txt", "design-bundle.json"
@@ -573,19 +537,12 @@ func writeCanaryReceiptBoundOutput(root, runDir, workflowID, snapshot, stage, ar
 		}
 		options.Prompt = filepath.ToSlash(filepath.Join("restricted", name))
 	}
-	registration, result := ReceiptRegisterDispatch(options)
+	_, result := ReceiptRegisterDispatch(options)
 	if !result.OK() {
-		return EvidenceRef{}, fmt.Errorf("%s", resultSummary(result))
-	}
-	raw, _ := json.Marshal(map[string]any{"workflowId": workflowID, "changeSnapshot": snapshot, "gate": "qa-test-gate", "stage": stage, "subagentId": subagentID, "dispatchId": registration.DispatchID, "dispatchRegistrationArtifact": registration.DispatchRegistrationArtifact})
-	if _, result = ReceiptCapture(ReceiptCaptureOptions{Worktree: root, RunDir: runDir, Provider: "codex", Event: "SubagentStart", Payload: raw}); !result.OK() {
 		return EvidenceRef{}, fmt.Errorf("%s", resultSummary(result))
 	}
 	if err := writeOutput(); err != nil {
 		return EvidenceRef{}, err
-	}
-	if _, result = ReceiptCapture(ReceiptCaptureOptions{Worktree: root, RunDir: runDir, Provider: "codex", Event: "SubagentStop", Payload: raw}); !result.OK() {
-		return EvidenceRef{}, fmt.Errorf("%s", resultSummary(result))
 	}
 	output, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: root, RunDir: runDir, Provider: "codex", WorkflowID: workflowID, Gate: "qa-test-gate", Stage: stage, Artifact: artifact})
 	if !result.OK() {
@@ -629,7 +586,7 @@ func writeCanaryComplexityArtifact(root, workflowID, snapshot string) error {
 	for index, id := range policy.RequiredCheckIDs {
 		checks = append(checks, ReceiptSemanticCheck{Position: index + 1, Status: "PASS", Message: reviewerCheckMessage(id)})
 	}
-	artifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "complexity.json"))
+	artifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "complexity.json"))
 	_, result := ReceiptSubmit(ReceiptSubmitOptions{Worktree: root, Artifact: artifact, Checks: checks})
 	if !result.OK() {
 		return fmt.Errorf("%s", resultSummary(result))

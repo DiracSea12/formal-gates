@@ -103,97 +103,7 @@ func validateCompositionProofOutputs(root, runDir, composer, workflowID, snapsho
 
 type ComposeChangedFilesOptions struct {
 	Root, RunDir, WorkflowID, ChangeSnapshot, Output string
-	BaseRef, HeadRef                                 string
-	IncludeWorkingTree                               bool
-	IncludeUntracked                                 []string
-}
-
-func gitPathSet(root string, args ...string) (map[string]bool, error) {
-	data, err := gitText(root, args...)
-	if err != nil {
-		return nil, err
-	}
-	paths := map[string]bool{}
-	for _, value := range strings.Split(data, "\n") {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			paths[filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))] = true
-		}
-	}
-	return paths, nil
-}
-
-func validateExplicitUntracked(root string, submitted []string) ([]string, Result) {
-	var result Result
-	if len(submitted) == 0 {
-		return nil, result
-	}
-	tracked, err := gitPathSet(root, "ls-files", "--cached", "--", ".")
-	if err != nil {
-		result.add("include-untracked", "cannot inspect tracked files: "+err.Error())
-		return nil, result
-	}
-	ignored, err := gitPathSet(root, "ls-files", "--others", "--ignored", "--exclude-standard", "--", ".")
-	if err != nil {
-		result.add("include-untracked", "cannot inspect ignored files: "+err.Error())
-		return nil, result
-	}
-	untracked, err := gitPathSet(root, "ls-files", "--others", "--exclude-standard", "--", ".")
-	if err != nil {
-		result.add("include-untracked", "cannot inspect untracked files: "+err.Error())
-		return nil, result
-	}
-	seen := map[string]bool{}
-	valid := make([]string, 0, len(submitted))
-	for index, raw := range submitted {
-		where := fmt.Sprintf("include-untracked[%d]", index)
-		value := strings.TrimSpace(raw)
-		if value == "" {
-			result.add(where, "path must not be empty")
-			continue
-		}
-		if filepath.IsAbs(filepath.FromSlash(value)) {
-			result.add(where, "path must be relative to the worktree")
-			continue
-		}
-		clean := filepath.Clean(filepath.FromSlash(value))
-		if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			result.add(where, "path must remain under the worktree")
-			continue
-		}
-		normalized := filepath.ToSlash(clean)
-		if normalized == ".claude/gates/runs" || strings.HasPrefix(normalized, ".claude/gates/runs/") {
-			result.add(where, "workflow-run artifacts cannot be included")
-			continue
-		}
-		if seen[normalized] {
-			result.add(where, "path must not be repeated")
-			continue
-		}
-		seen[normalized] = true
-		if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(normalized))); statErr != nil {
-			if os.IsNotExist(statErr) {
-				result.add(where, "path does not exist")
-			} else {
-				result.add(where, "cannot inspect path: "+statErr.Error())
-			}
-			continue
-		}
-		if tracked[normalized] {
-			result.add(where, "path is tracked; only non-ignored untracked files may be listed")
-			continue
-		}
-		if ignored[normalized] {
-			result.add(where, "path is ignored; ignored files cannot be listed")
-			continue
-		}
-		if !untracked[normalized] {
-			result.add(where, "path is not a non-ignored untracked file")
-			continue
-		}
-		valid = append(valid, normalized)
-	}
-	return valid, result
+	Paths                                            []string
 }
 
 func ComposeChangedFiles(options ComposeChangedFilesOptions) (EvidenceRef, Result) {
@@ -204,75 +114,49 @@ func ComposeChangedFiles(options ComposeChangedFilesOptions) (EvidenceRef, Resul
 		result.add("run-dir", err.Error())
 		return EvidenceRef{}, result
 	}
-	if !meaningful(options.WorkflowID) || !meaningful(options.ChangeSnapshot) || strings.TrimSpace(options.BaseRef) == "" {
-		result.add("compose", "--workflow-id, --change-snapshot, and --base-ref are required")
+	if !meaningful(options.WorkflowID) || !meaningful(options.ChangeSnapshot) || len(options.Paths) == 0 {
+		result.add("changed-files", "--workflow-id, --change-snapshot, and at least one --path are required")
 		return EvidenceRef{}, result
 	}
-	if !isGitWorktree(root) {
-		result.add("compose", "changed-files composition requires a git worktree")
+	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
+		result.add("run-dir", err.Error())
 		return EvidenceRef{}, result
 	}
-	if len(options.IncludeUntracked) > 0 && !options.IncludeWorkingTree {
-		result.add("include-untracked", "--include-untracked requires --include-working-tree")
-		return EvidenceRef{}, result
-	}
-	head := strings.TrimSpace(options.HeadRef)
-	if head == "" {
-		head = "HEAD"
-	}
-	commands := [][]string{{"diff", "--name-only", options.BaseRef, head, "--", ".", ":(exclude).claude/gates/**"}}
-	if options.IncludeWorkingTree {
-		commands = append(commands,
-			[]string{"diff", "--name-only", head, "--", ".", ":(exclude).claude/gates/**"},
-			[]string{"diff", "--cached", "--name-only", head, "--", ".", ":(exclude).claude/gates/**"},
-		)
-	}
-	paths := map[string]bool{}
-	for _, args := range commands {
-		data, commandErr := gitText(root, args...)
-		if commandErr != nil {
-			result.add("compose", "cannot calculate changed files from git: "+commandErr.Error())
-			return EvidenceRef{}, result
+	pathSet := make(map[string]bool, len(options.Paths))
+	for _, value := range options.Paths {
+		path, pathErr := normalizeRepositoryRelativePath(value)
+		if pathErr != nil {
+			result.add("path", pathErr.Error())
+			continue
 		}
-		for _, value := range strings.Split(data, "\n") {
-			value = strings.TrimSpace(value)
-			if value != "" {
-				paths[filepath.ToSlash(value)] = true
-			}
-		}
+		pathSet[path] = true
 	}
-	if options.IncludeWorkingTree {
-		explicit, explicitResult := validateExplicitUntracked(root, options.IncludeUntracked)
-		if !explicitResult.OK() {
-			return EvidenceRef{}, explicitResult
-		}
-		for _, value := range explicit {
-			paths[value] = true
-		}
-	}
-	if len(paths) == 0 {
-		result.add("compose", "git range contains no changed files")
+	if !result.OK() {
 		return EvidenceRef{}, result
 	}
-	list := make([]string, 0, len(paths))
-	for value := range paths {
-		list = append(list, value)
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
 	}
-	sort.Strings(list)
-	outputPath, err := prospectiveRestrictedPath(runDir, options.Output)
-	if err != nil {
-		result.add(options.Output, "output must be under the active run restricted directory")
+	sort.Strings(paths)
+	outputPath, pathErr := prospectiveRestrictedPath(runDir, options.Output)
+	if pathErr != nil {
+		result.add(options.Output, pathErr.Error())
 		return EvidenceRef{}, result
 	}
-	if err := writeBytesExclusive(outputPath, []byte(strings.Join(list, "\n")+"\n")); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o700); err != nil {
+		result.add(options.Output, err.Error())
+		return EvidenceRef{}, result
+	}
+	if err := writeBytesExclusive(outputPath, []byte(strings.Join(paths, "\n")+"\n")); err != nil {
 		result.add(options.Output, err.Error())
 		return EvidenceRef{}, result
 	}
 	logical, _ := logicalPathInRun(runDir, outputPath)
 	ref := EvidenceRef{Path: logical, SHA256: sha256File(outputPath)}
-	if _, err := writeCompositionProof(root, runDir, "changed-files.v1", options.WorkflowID, options.ChangeSnapshot, outputPath, []EvidenceRef{ref}); err != nil {
+	if _, proofErr := writeCompositionProof(root, runDir, "changed-files.v1", options.WorkflowID, options.ChangeSnapshot, outputPath, []EvidenceRef{ref}); proofErr != nil {
 		_ = os.Remove(outputPath)
-		result.add(options.Output, err.Error())
+		result.add(options.Output, proofErr.Error())
 		return EvidenceRef{}, result
 	}
 	return ref, result
@@ -395,8 +279,8 @@ func ComposeContextBundle(options ComposeContextBundleOptions) (EvidenceRef, Res
 }
 
 type TransitionHopSource struct {
-	FromSnapshot, ToSnapshot                   string
-	ChangedFiles, Verification, RepairEvidence string
+	FromSnapshot, ToSnapshot   string
+	ChangedFiles, Verification string
 }
 
 type ComposeTransitionChainOptions struct {
@@ -416,10 +300,14 @@ func ComposeTransitionChain(options ComposeTransitionChainOptions) (EvidenceRef,
 		result.add("compose", "--workflow-id, --target-snapshot, and at least one complete transition hop are required")
 		return EvidenceRef{}, result
 	}
-	resolve := func(logical string) EvidenceRef {
+	resolve := func(logical, composer, snapshot string) EvidenceRef {
 		ref, refErr := registeredEvidenceRef(root, runDir, logical)
 		if refErr != nil {
 			result.add(logical, refErr.Error())
+			return ref
+		}
+		if proofErr := validateStandaloneCompositionProof(root, runDir, composer, options.WorkflowID, snapshot, ref); proofErr != nil {
+			result.add(logical, proofErr.Error())
 		}
 		return ref
 	}
@@ -432,7 +320,7 @@ func ComposeTransitionChain(options ComposeTransitionChainOptions) (EvidenceRef,
 		if index > 0 && options.Hops[index-1].ToSnapshot != source.FromSnapshot {
 			result.add("compose", "transition hops must be contiguous")
 		}
-		for _, logical := range []string{source.ChangedFiles, source.Verification, source.RepairEvidence} {
+		for _, logical := range []string{source.ChangedFiles, source.Verification} {
 			if seenEvidencePaths[logical] {
 				result.add(logical, "transition hop evidence paths must be unique")
 			}
@@ -440,7 +328,8 @@ func ComposeTransitionChain(options ComposeTransitionChainOptions) (EvidenceRef,
 		}
 		hops = append(hops, TransitionHop{
 			FromSnapshot: source.FromSnapshot, ToSnapshot: source.ToSnapshot,
-			ChangedFiles: resolve(source.ChangedFiles), Verification: resolve(source.Verification), RepairEvidence: resolve(source.RepairEvidence),
+			ChangedFiles: resolve(source.ChangedFiles, "changed-files.v1", source.ToSnapshot),
+			Verification: resolve(source.Verification, "verification.v1", source.ToSnapshot),
 		})
 	}
 	if options.Hops[len(options.Hops)-1].ToSnapshot != options.TargetSnapshot {

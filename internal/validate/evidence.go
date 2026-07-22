@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -138,11 +139,10 @@ type TransitionChain struct {
 	Hops           []TransitionHop `json:"hops"`
 }
 type TransitionHop struct {
-	FromSnapshot   string      `json:"fromSnapshot"`
-	ToSnapshot     string      `json:"toSnapshot"`
-	ChangedFiles   EvidenceRef `json:"changedFiles"`
-	Verification   EvidenceRef `json:"verification"`
-	RepairEvidence EvidenceRef `json:"repairEvidence"`
+	FromSnapshot string      `json:"fromSnapshot"`
+	ToSnapshot   string      `json:"toSnapshot"`
+	ChangedFiles EvidenceRef `json:"changedFiles"`
+	Verification EvidenceRef `json:"verification"`
 }
 type QAResultsArtifact struct {
 	Owner          string                   `json:"owner"`
@@ -387,7 +387,7 @@ func validateTransitionChain(options ArtifactOptions, artifact *decodedArtifact,
 				result.add(where, "last hop must end at targetSnapshot")
 			}
 		}
-		refs := []EvidenceRef{hop.ChangedFiles, hop.Verification, hop.RepairEvidence}
+		refs := []EvidenceRef{hop.ChangedFiles, hop.Verification}
 		for _, ref := range refs {
 			readEvidenceRef(options, artifact.RunDir, ref, result)
 		}
@@ -788,7 +788,6 @@ func validateReviewer(options ArtifactOptions, artifact *decodedArtifact, result
 		rootRefs = append(rootRefs, *p.Verification)
 	}
 	contextData, contextOK := readReviewerEvidenceRef(options, artifact.RunDir, p.ContextBundle, result)
-	var complexityNonStatisticsRefs []EvidenceRef
 	for _, ref := range rootRefs[1:] {
 		readReviewerEvidenceRef(options, artifact.RunDir, ref, result)
 	}
@@ -796,9 +795,6 @@ func validateReviewer(options ArtifactOptions, artifact *decodedArtifact, result
 	if contextOK {
 		contextRefs := validateContextBundle(options, artifact.RunDir, p.ContextBundle.Path, contextData, e.WorkflowID, e.ChangeSnapshot, result)
 		artifact.References[p.ContextBundle.Path] = contextRefs
-		if policy.ID == "complexity.post-development.v2" {
-			complexityNonStatisticsRefs = append(complexityNonStatisticsRefs, contextRefs...)
-		}
 	}
 	want, allowedNA, seen := stringSet(policy.RequiredCheckIDs), stringSet(policy.AllowedNotApplicableCheckIDs), map[string]bool{}
 	aggregate := "PASS"
@@ -823,24 +819,15 @@ func validateReviewer(options ArtifactOptions, artifact *decodedArtifact, result
 		}
 		for _, ref := range check.EvidenceRefs {
 			readReviewerEvidenceRef(options, artifact.RunDir, ref, result)
-			if policy.ID == "complexity.post-development.v2" && check.ID != "complexity.statistics" {
-				complexityNonStatisticsRefs = append(complexityNonStatisticsRefs, ref)
-			}
 		}
 		artifact.References[options.File] = append(artifact.References[options.File], check.EvidenceRefs...)
 		validateFindings(check.Findings, result, where)
-		if policy.ID == "complexity.post-development.v2" && check.ID == "complexity.statistics" {
-			validateStatisticsOnly(options, artifact.RunDir, e.WorkflowID, e.ChangeSnapshot, check.EvidenceRefs, result)
-		}
 		if policy.ID == "qa.design-review.v2" && check.ID == "qa.design.case-set-binding" {
 			validateQADesignCaseSetBinding(options, artifact, check, result)
 		}
 	}
 	if len(seen) != len(want) {
 		result.add(options.File, "checks must contain every policy check exactly once")
-	}
-	if policy.ID == "complexity.post-development.v2" {
-		validateNoBudgetComplexityReports(options, artifact.RunDir, complexityNonStatisticsRefs, result)
 	}
 	if e.Verdict != aggregate {
 		result.add(options.File, "top-level verdict contradicts check aggregation")
@@ -1043,74 +1030,27 @@ func validateFindings(findings []Finding, result *Result, file string) {
 			result.add(file, "finding message must be non-empty")
 		}
 		for _, location := range finding.Locations {
-			invalidPath := strings.TrimSpace(location.Path) == "" ||
-				strings.Contains(location.Path, "\\") ||
-				strings.HasPrefix(location.Path, "/") ||
-				filepath.IsAbs(location.Path) ||
-				regexp.MustCompile(`^[A-Za-z]:|^[A-Za-z][A-Za-z0-9+.-]*:`).MatchString(location.Path)
-			for _, part := range strings.Split(location.Path, "/") {
-				if part == "" || part == "." || part == ".." {
-					invalidPath = true
-				}
-			}
-			if invalidPath || location.StartLine <= 0 || location.EndLine < location.StartLine {
+			if _, err := normalizeRepositoryRelativePath(location.Path); err != nil || location.StartLine <= 0 || location.EndLine < location.StartLine {
 				result.add(file, "finding location is invalid")
 			}
 		}
 	}
 }
-func validateStatisticsOnly(options ArtifactOptions, runDir, workflowID, snapshot string, refs []EvidenceRef, result *Result) {
-	if len(refs) != 1 {
-		result.add(options.File, "complexity.statistics requires exactly one CLI-generated statistics report")
-		return
-	}
-	if err := validateComplexityStatisticsEvidence(options.Root, runDir, workflowID, snapshot, refs[0]); err != nil {
-		result.add(refs[0].Path, err.Error())
-	}
-}
 
-func validateNoBudgetComplexityReports(options ArtifactOptions, runDir string, refs []EvidenceRef, result *Result) {
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		if seen[ref.Path] {
-			continue
-		}
-		seen[ref.Path] = true
-		data, ok := readEvidenceRef(options, runDir, ref, result)
-		if !ok {
-			continue
-		}
-		var value any
-		if err := json.Unmarshal(data, &value); err != nil {
-			continue
-		}
-		if containsDevelopmentBudgetMaterial(value) {
-			result.add(ref.Path, "post-development complexity evidence must not include development-time budget material")
+func normalizeRepositoryRelativePath(value string) (string, error) {
+	if value == "" || strings.TrimSpace(value) == "" || strings.Contains(value, "\\") || filepath.IsAbs(value) || regexp.MustCompile(`^[A-Za-z]:|^[A-Za-z][A-Za-z0-9+.-]*:`).MatchString(value) || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("path must be repository-relative and use forward slashes: %q", value)
+	}
+	parts := strings.Split(value, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("path must remain under the repository: %q", value)
 		}
 	}
-}
-
-func containsDevelopmentBudgetMaterial(value any) bool {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, nested := range typed {
-			normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(key))
-			switch normalized {
-			case "budget", "budgetsource", "budgetoverrides", "developmenttimecomplexitybudget", "maxnet", "maxnewprodfiles", "maxprodinsertions":
-				return true
-			}
-			if containsDevelopmentBudgetMaterial(nested) {
-				return true
-			}
-		}
-	case []any:
-		for _, nested := range typed {
-			if containsDevelopmentBudgetMaterial(nested) {
-				return true
-			}
-		}
+	if strings.EqualFold(parts[0], ".gates") {
+		return "", fmt.Errorf("path cannot name workflow evidence: %q", value)
 	}
-	return false
+	return strings.Join(parts, "/"), nil
 }
 func validateFinalExecution(options ArtifactOptions, artifact *decodedArtifact, result *Result) {
 	p, e := artifact.Final, artifact.Envelope
@@ -1383,8 +1323,11 @@ func restrictedRepoPath(root, runDir, value string) bool {
 	if underRestricted(resolvePath(root, value)) {
 		return true
 	}
-	prefix := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", filepath.Base(run))) + "/"
+	prefix := filepath.ToSlash(filepath.Join(".gates", "runs", filepath.Base(run))) + "/"
 	logical := filepath.ToSlash(value)
+	if strings.HasPrefix(logical, "restricted/") {
+		return underRestricted(filepath.Join(run, filepath.FromSlash(logical)))
+	}
 	if strings.HasPrefix(logical, prefix) {
 		return underRestricted(filepath.Join(run, filepath.FromSlash(strings.TrimPrefix(logical, prefix))))
 	}
@@ -1392,7 +1335,7 @@ func restrictedRepoPath(root, runDir, value string) bool {
 }
 
 func activeWorkflowRun(root, runDir string) bool {
-	runsRoot := filepath.Join(absPath(cleanRoot(root)), ".claude", "gates", "runs")
+	runsRoot := filepath.Join(absPath(cleanRoot(root)), ".gates", "runs")
 	run := absPath(runDir)
 	if samePath(run, runsRoot) || !pathUnder(run, runsRoot) {
 		return false
@@ -1435,7 +1378,7 @@ func artifactRunDir(options ArtifactOptions, _ string) string {
 	}
 	root := absPath(cleanRoot(options.Root))
 	path := absPath(resolvePath(root, options.File))
-	runsRoot := filepath.Join(root, ".claude", "gates", "runs")
+	runsRoot := filepath.Join(root, ".gates", "runs")
 	if relative, err := filepath.Rel(runsRoot, path); err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		parts := strings.Split(relative, string(filepath.Separator))
 		if len(parts) > 1 {

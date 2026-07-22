@@ -7,7 +7,7 @@ param(
   [string]$Scope = "global",
   [string]$Project = "",
   [switch]$Force,
-  [switch]$ConfigureHooks
+  [switch]$SkipHooks
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,16 +66,16 @@ try {
   if (Test-Path $formalBinary) { Remove-Item $formalBinary -Force }
   New-Item -ItemType SymbolicLink -Path $formalBinary -Target (Join-Path $current "bin\formal-gates.exe") | Out-Null
 
+  if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
+  $args = @("install", "--source", $installRoot, "--host", $TargetHost, "--scope", $Scope)
+  if ($Project) { $args += @("--project", $Project) }
+  if ($Force) { $args += "--force" }
+  if ($SkipHooks) { $args += "--skip-hooks" }
+  & $formalBinary @args
+  if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+
   Write-Host "Installed formal-gates to $installRoot"
   Write-Host "Binary symlink: $formalBinary"
-  if ($ConfigureHooks) {
-    if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-    $args = @("install", "--source", $installRoot, "--host", $TargetHost, "--scope", $Scope)
-    if ($Project) { $args += @("--project", $Project) }
-    if ($Force) { $args += "--force" }
-    $args += "--configure-hooks"
-    & $formalBinary @args
-  }
 }
 finally {
   Remove-Item $tmp -Recurse -Force

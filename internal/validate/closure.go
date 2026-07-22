@@ -137,8 +137,12 @@ func receiptClosureDependencies(options ArtifactOptions, runDir string, ref Evid
 	}
 	values := []EvidenceRef{
 		{Path: receipt.DispatchRegistrationArtifact, SHA256: receipt.DispatchRegistrationSha256},
-		{Path: receipt.StartEventArtifact, SHA256: receipt.StartEventSha256},
-		{Path: receipt.StopEventArtifact, SHA256: receipt.StopEventSha256},
+	}
+	if providerRequiresLifecycle(receipt.Provider) {
+		values = append(values,
+			EvidenceRef{Path: receipt.StartEventArtifact, SHA256: receipt.StartEventSha256},
+			EvidenceRef{Path: receipt.StopEventArtifact, SHA256: receipt.StopEventSha256},
+		)
 	}
 	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) {
 		var result Result

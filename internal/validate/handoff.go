@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -20,12 +17,10 @@ type HandoffOptions struct {
 
 type HandoffComposeOptions struct {
 	Root, RunDir, WorkflowID, ChangeSnapshot, Output string
+	VCS                                              string
 	RequirementTarget, VerificationRequirements      string
-	BudgetStopTriggers, BudgetExpansionApprovalPath  string
 	ForbiddenContext, FormalFlowMode, TriggerSource  string
-	TaskType                                         string
 	QACaseSet, DesignReview                          string
-	MaxNet, MaxNewProdFiles, MaxProdInsertions       int
 }
 
 type handoffLineScalar struct {
@@ -48,20 +43,17 @@ func ComposeHandoff(options HandoffComposeOptions) (EvidenceRef, Result) {
 	rejectHandoffLineBreaks(&result,
 		handoffLineScalar{"workflow-id", options.WorkflowID},
 		handoffLineScalar{"change-snapshot", options.ChangeSnapshot},
+		handoffLineScalar{"vcs", options.VCS},
 		handoffLineScalar{"requirement-target", options.RequirementTarget},
 		handoffLineScalar{"verification-requirements", options.VerificationRequirements},
-		handoffLineScalar{"budget-stop-triggers", options.BudgetStopTriggers},
-		handoffLineScalar{"budget-expansion-approval-path", options.BudgetExpansionApprovalPath},
 		handoffLineScalar{"forbidden-context", options.ForbiddenContext},
 		handoffLineScalar{"formal-flow-mode", options.FormalFlowMode},
 		handoffLineScalar{"trigger-source", options.TriggerSource},
-		handoffLineScalar{"task-type", options.TaskType},
 		handoffLineScalar{"worktree", worktree},
 	)
 	for _, value := range []handoffLineScalar{
 		{"workflow-id", options.WorkflowID}, {"change-snapshot", options.ChangeSnapshot},
 		{"requirement-target", options.RequirementTarget}, {"verification-requirements", options.VerificationRequirements},
-		{"budget-stop-triggers", options.BudgetStopTriggers}, {"budget-expansion-approval-path", options.BudgetExpansionApprovalPath},
 		{"forbidden-context", options.ForbiddenContext}, {"trigger-source", options.TriggerSource},
 	} {
 		if !meaningful(value.value) {
@@ -70,12 +62,6 @@ func ComposeHandoff(options HandoffComposeOptions) (EvidenceRef, Result) {
 	}
 	if strings.TrimSpace(options.FormalFlowMode) == "" {
 		result.add("handoff", "--formal-flow-mode is required")
-	}
-	if options.MaxNet < 0 || options.MaxNewProdFiles < 0 || options.MaxProdInsertions < 0 {
-		result.add("handoff", "complexity budgets must be non-negative")
-	}
-	if !complexityTaskTypes[options.TaskType] {
-		result.add("handoff", "--task-type must be one of: "+strings.Join(sortedComplexityTaskTypes(), ", "))
 	}
 	if !result.OK() {
 		return EvidenceRef{}, result
@@ -86,6 +72,10 @@ func ComposeHandoff(options HandoffComposeOptions) (EvidenceRef, Result) {
 		return EvidenceRef{}, result
 	}
 	formal := options.FormalFlowMode == "four-gate" || options.FormalFlowMode == "release" || options.FormalFlowMode == "seal"
+	if formal && (!meaningful(options.VCS) || strings.EqualFold(strings.TrimSpace(options.VCS), "none")) {
+		result.add("vcs", "formal development handoff requires an external VCS")
+		return EvidenceRef{}, result
+	}
 	caseText, reviewText := "NOT_APPLICABLE", "NOT_APPLICABLE"
 	if formal {
 		caseRef, refErr := registeredEvidenceRef(root, runDir, options.QACaseSet)
@@ -121,18 +111,13 @@ func ComposeHandoff(options HandoffComposeOptions) (EvidenceRef, Result) {
 		result.add(options.Output, "generated handoff already exists")
 		return EvidenceRef{}, result
 	}
-	budget := fmt.Sprintf("max-net=%d max-new-prod-files=%d max-prod-insertions=%d", options.MaxNet, options.MaxNewProdFiles, options.MaxProdInsertions)
-	command := fmt.Sprintf("formal-gates complexity check --task-type %s --worktree %s --max-net %d --max-new-prod-files %d --max-prod-insertions %d", options.TaskType, quoteCommandArg(worktree), options.MaxNet, options.MaxNewProdFiles, options.MaxProdInsertions)
 	text := "Gate Handoff Request\n" +
 		"WorkflowId: " + options.WorkflowID + "\n" +
 		"Change snapshot: " + options.ChangeSnapshot + "\n" +
+		"VCS: " + strings.TrimSpace(options.VCS) + "\n" +
 		"Worktree: " + worktree + "\n" +
 		"Requirement document target or OpenSpec change: " + options.RequirementTarget + "\n" +
 		"Verification requirements: " + options.VerificationRequirements + "\n" +
-		"Development-time complexity budget: " + budget + "\n" +
-		"Complexity check command: " + command + "\n" +
-		"Budget stop triggers: " + options.BudgetStopTriggers + "\n" +
-		"Budget expansion approval path: " + options.BudgetExpansionApprovalPath + "\n" +
 		"Forbidden context: " + options.ForbiddenContext + "\n" +
 		"Formal flow mode: " + options.FormalFlowMode + "\n" +
 		"Trigger source: " + options.TriggerSource + "\n" +
@@ -204,10 +189,6 @@ func Handoff(options HandoffOptions) Result {
 		"Worktree:",
 		"Requirement document target or OpenSpec change:",
 		"Verification requirements:",
-		"Development-time complexity budget:",
-		"Complexity check command:",
-		"Budget stop triggers:",
-		"Budget expansion approval path:",
 		"Forbidden context:",
 	} {
 		if !strings.Contains(text, field) {
@@ -220,10 +201,6 @@ func Handoff(options HandoffOptions) Result {
 		"Worktree",
 		"Requirement document target or OpenSpec change",
 		"Verification requirements",
-		"Development-time complexity budget",
-		"Complexity check command",
-		"Budget stop triggers",
-		"Budget expansion approval path",
 		"Forbidden context",
 	} {
 		if !meaningful(fieldValue(text, field)) {
@@ -236,32 +213,6 @@ func Handoff(options HandoffOptions) Result {
 	if options.ChangeSnapshot != "" && fieldValue(text, "Change snapshot") != options.ChangeSnapshot {
 		result.add(options.File, "Change snapshot does not match --change-snapshot")
 	}
-	command := fieldValue(text, "Complexity check command")
-	if meaningful(command) {
-		if !strings.Contains(command, "complexity check") {
-			result.add(options.File, "Complexity check command must run formal-gates complexity check")
-		}
-		taskType, ok := handoffCommandTaskType(command)
-		if !ok {
-			result.add(options.File, "Complexity check command must contain exactly one --task-type")
-		} else if !complexityTaskTypes[taskType] {
-			result.add(options.File, "Complexity check command has unsupported --task-type: "+taskType)
-		}
-	}
-	budget := fieldValue(text, "Development-time complexity budget")
-	for _, name := range []string{"max-net", "max-new-prod-files", "max-prod-insertions"} {
-		budgetValue, budgetOK := handoffBudgetValue(budget, name)
-		commandValue, commandOK := handoffCommandBudgetValue(command, name)
-		if !budgetOK {
-			result.add(options.File, "Development-time complexity budget missing numeric "+name)
-		}
-		if meaningful(command) && !commandOK {
-			result.add(options.File, "Complexity check command missing numeric --"+name)
-		}
-		if budgetOK && commandOK && budgetValue != commandValue {
-			result.add(options.File, fmt.Sprintf("Development-time complexity budget %s=%d does not match Complexity check command --%s=%d", name, budgetValue, name, commandValue))
-		}
-	}
 	formalFlowMode := strings.ToLower(strings.TrimSpace(fieldValue(text, "Formal flow mode")))
 	switch formalFlowMode {
 	case "none", "four-gate", "release", "seal":
@@ -269,6 +220,10 @@ func Handoff(options HandoffOptions) Result {
 		result.add(options.File, "Formal flow mode must be one of: none, four-gate, release, seal")
 	}
 	if formalFlowMode == "four-gate" || formalFlowMode == "release" || formalFlowMode == "seal" {
+		vcs := fieldValue(text, "VCS")
+		if !meaningful(vcs) || strings.EqualFold(strings.TrimSpace(vcs), "none") {
+			result.add(options.File, "formal handoff requires an external VCS")
+		}
 		for _, field := range []string{"QA case design artifact", "Approved QA case set", "Accepted Design Review closure"} {
 			if !meaningful(fieldValue(text, field)) {
 				result.add(options.File, "field has no meaningful value: "+field)
@@ -307,48 +262,4 @@ func handoffEvidenceRef(value string) (EvidenceRef, bool) {
 		SHA256: strings.Trim(strings.TrimSpace(value[separator+len(" sha256="):]), "`'\"(),;"),
 	}
 	return ref, ref.Path != "" && isSHA256(ref.SHA256)
-}
-
-func handoffBudgetValue(text, name string) (int, bool) {
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(name) + `[ \t]*(?:[:=]|[ \t])[ \t]*(-?\d+)(?:[^0-9]|$)`),
-		regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])--` + regexp.QuoteMeta(name) + `[ \t]*(?:=|[ \t])[ \t]*(-?\d+)(?:[^0-9]|$)`),
-	}
-	for _, pattern := range patterns {
-		if match := pattern.FindStringSubmatch(text); len(match) == 2 {
-			value, err := strconv.Atoi(match[1])
-			if err == nil {
-				return value, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func handoffCommandBudgetValue(text, name string) (int, bool) {
-	pattern := regexp.MustCompile(`(?i)(?:^|[ \t])--` + regexp.QuoteMeta(name) + `[ \t]*(?:=|[ \t])[ \t]*(-?\d+)(?:[ \t]|$)`)
-	match := pattern.FindStringSubmatch(text)
-	if len(match) != 2 {
-		return 0, false
-	}
-	value, err := strconv.Atoi(match[1])
-	return value, err == nil
-}
-
-func handoffCommandTaskType(text string) (string, bool) {
-	pattern := regexp.MustCompile(`(?i)(?:^|[ \t])--task-type[ \t]*(?:=|[ \t])[ \t]*([^ \t]+)(?:[ \t]|$)`)
-	matches := pattern.FindAllStringSubmatch(text, -1)
-	if len(matches) != 1 || len(matches[0]) != 2 {
-		return "", false
-	}
-	return matches[0][1], true
-}
-
-func sortedComplexityTaskTypes() []string {
-	values := make([]string, 0, len(complexityTaskTypes))
-	for value := range complexityTaskTypes {
-		values = append(values, value)
-	}
-	sort.Strings(values)
-	return values
 }

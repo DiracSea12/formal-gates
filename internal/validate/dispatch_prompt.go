@@ -293,14 +293,14 @@ func findFinalDispatchPromptFieldViolations(root, prompt string) []DispatchPromp
 	}
 	for _, field := range []string{"current requirement", "current diff or proposed change"} {
 		normalizedValue := strings.ToLower(strings.ReplaceAll(values[field], "\\", "/"))
-		if !strings.Contains(normalizedValue, ".claude/gates/runs/") {
+		if !strings.Contains(normalizedValue, ".gates/runs/") {
 			continue
 		}
 		if field == "current diff or proposed change" && allowedQADesignReviewCaseSetPrompt(root, values) {
 			continue
 		}
 		violations = append(violations, DispatchPromptViolation{
-			Type: "path", Matched: field + ": .claude/gates/runs/", Label: "workflow-run artifact",
+			Type: "path", Matched: field + ": .gates/runs/", Label: "workflow-run artifact",
 			Description: "formal reviewer input must not expose a workflow-run artifact",
 		})
 	}
@@ -340,7 +340,7 @@ func promptRunRelativePath(root, value string) (string, string, error) {
 		return "", "", err
 	}
 	path := resolvePath(rootAbs, value)
-	runsRoot := filepath.Join(rootAbs, ".claude", "gates", "runs")
+	runsRoot := filepath.Join(rootAbs, ".gates", "runs")
 	rel, err := filepath.Rel(runsRoot, path)
 	if err != nil {
 		return "", "", err
@@ -395,12 +395,12 @@ func findDispatchPromptFieldViolations(prompt string) []DispatchPromptViolation 
 
 	for _, field := range []string{"current requirement", "current diff or proposed change"} {
 		normalizedValue := strings.ToLower(strings.ReplaceAll(fields[field], "\\", "/"))
-		if !strings.Contains(normalizedValue, ".claude/gates/runs/") {
+		if !strings.Contains(normalizedValue, ".gates/runs/") {
 			continue
 		}
 		violations = append(violations, DispatchPromptViolation{
 			Type:        "path",
-			Matched:     field + ": .claude/gates/runs/",
+			Matched:     field + ": .gates/runs/",
 			Label:       "workflow-run artifact",
 			Description: "formal reviewer input must not expose a workflow-run artifact",
 		})

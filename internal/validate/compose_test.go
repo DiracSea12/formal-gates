@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -308,10 +309,150 @@ func TestComposeQAExecutionRequiresMatchingQAOwnedEvidencePairProof(t *testing.T
 	}
 }
 
+func TestComposeQAExecutionRequiresRecordedRerunForPriorExecutionPass(t *testing.T) {
+	const workflowID, sourceSnapshot, targetSnapshot = "wf-rerun-qa", "source", "target"
+	tests := []struct {
+		name           string
+		setup          func(*testing.T, string)
+		wantOK         bool
+		wantTransition string
+		staleOutput    bool
+	}{
+		{name: "first run", wantOK: true},
+		{name: "prior Design Review", setup: func(t *testing.T, root string) {
+			recordDesignReviewPassFixture(t, root, workflowID, sourceSnapshot)
+		}, wantOK: true},
+		{name: "missing transition", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, "qa-test-gate")
+		}, wantTransition: "required for new snapshot", staleOutput: true},
+		{name: "RERUN_REQUIRED transition", setup: func(t *testing.T, root string) {
+			recordPostDevelopmentPassFixture(t, root, workflowID, sourceSnapshot, "qa-test-gate")
+			if result := recordCarryDecisionTransitionFixture(t, root, workflowID, sourceSnapshot, targetSnapshot, "qa-test-gate", "RERUN_REQUIRED"); !result.OK() {
+				t.Fatalf("cannot record QA RERUN_REQUIRED transition: %#v", result.Failures)
+			}
+		}, wantOK: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if test.setup != nil {
+				test.setup(t, root)
+			}
+			runDir, err := resolveWorkflowRunDir(root, workflowID, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			inputs := qaExecutionComposeInputsFixture(t, root, runDir, workflowID, targetSnapshot, "target")
+			qaOwned, qaOwnedResult := ComposeQAOwnedEvidence(ComposeQAOwnedEvidenceOptions{
+				Root: root, RunDir: runDir, WorkflowID: workflowID, ChangeSnapshot: targetSnapshot,
+				ApprovedCaseSet: inputs.ApprovedCaseSet.Path, OutputDir: "restricted/generated/target-qa-owned",
+				Cases: []QAExecutionCaseSubmission{{Position: 1, Outcome: "PASS", Procedure: "Run the approved case", Observation: "The case passed", OracleResult: "The approved behavior is observed"}},
+			})
+			if !qaOwnedResult.OK() {
+				t.Fatalf("cannot compose target QA-owned evidence: %#v", qaOwnedResult.Failures)
+			}
+			options := ComposeQAExecutionOptions{
+				Root: root, RunDir: runDir, WorkflowID: workflowID, ChangeSnapshot: targetSnapshot,
+				Output: "restricted/generated/target-qa-execution.json", ApprovedCaseSet: inputs.ApprovedCaseSet.Path,
+				DesignReview: inputs.DesignReview.Path, QAOwnedResults: qaOwned.Results.Path, CaseResultBinding: qaOwned.Binding.Path,
+				ChangedFiles: inputs.ChangedFiles.Path, Verification: inputs.Verification.Path,
+			}
+			outputPath := filepath.Join(runDir, filepath.FromSlash(options.Output))
+			proofPath := filepath.Join(receiptProofDir(root, runDir, "compositions"), sha256Bytes([]byte("qa-execution.v1\n"+options.Output))+".json")
+			var before []byte
+			if test.staleOutput {
+				before = []byte("existing target bytes\n")
+				if err := os.MkdirAll(filepath.Dir(outputPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(outputPath, before, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, result := ComposeQAExecution(options)
+			if result.OK() != test.wantOK {
+				t.Fatalf("composition OK=%v, want %v: %#v", result.OK(), test.wantOK, result.Failures)
+			}
+			if test.wantTransition != "" && !strings.Contains(resultSummary(result), test.wantTransition) {
+				t.Fatalf("missing transition failure %q: %#v", test.wantTransition, result.Failures)
+			}
+			if test.wantOK {
+				if !isFile(outputPath) || !isFile(proofPath) {
+					t.Fatal("successful QA composition did not create output and proof")
+				}
+				return
+			}
+			after, err := os.ReadFile(outputPath)
+			if err != nil || !reflect.DeepEqual(after, before) {
+				t.Fatalf("rejected QA composition changed existing output: err=%v got=%q want=%q", err, after, before)
+			}
+			if _, err := os.Lstat(proofPath); !os.IsNotExist(err) {
+				t.Fatalf("rejected QA composition left proof: %v", err)
+			}
+		})
+	}
+}
+
+func qaExecutionComposeInputsFixture(t *testing.T, root, runDir, workflowID, snapshot, prefix string) QAExecutionPayload {
+	t.Helper()
+	restricted := filepath.Join(runDir, "restricted")
+	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
+	changedName, verificationName := prefix+"-qa-changed.txt", prefix+"-qa-verification.txt"
+	for name, content := range map[string]string{changedName: "changed\n", verificationName: "verified\n"} {
+		mustWrite(t, filepath.Join(restricted, name), content)
+		composer := map[string]string{changedName: "changed-files.v1", verificationName: "verification.v1"}[name]
+		path := filepath.Join(restricted, name)
+		ref := testRef(t, runDir, logical(name))
+		if _, err := writeCompositionProof(root, runDir, composer, workflowID, snapshot, path, []EvidenceRef{ref}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	casesName := prefix + "-approved-cases.md"
+	mustWrite(t, filepath.Join(restricted, casesName), "# Cases\n\nStatus: APPROVED_FOR_EXECUTION\n\n## Login flow\n\nCase ID: P1-001\n")
+	approved := testRef(t, runDir, logical(casesName))
+
+	designInputName, designBundleName := prefix+"-design-input.txt", prefix+"-design-bundle.json"
+	mustWrite(t, filepath.Join(restricted, designInputName), "requirements\n")
+	writeJSONTest(t, filepath.Join(restricted, designBundleName), ContextBundle{BundleVersion: 1, WorkflowID: workflowID, ChangeSnapshot: snapshot + "-design", Inputs: []EvidenceRef{testRef(t, runDir, logical(designInputName))}})
+	designReceipt := writeProofReceiptFixture(t, runDir, workflowID, snapshot+"-design", "qa-test-gate", "Design", approved.Path, prefix+"-design")
+	policy, _ := policyByID("qa.design-review.v2")
+	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
+	for _, id := range policy.RequiredCheckIDs {
+		check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
+		if id == "qa.design.case-set-binding" {
+			check.EvidenceRefs = []EvidenceRef{approved, designReceipt}
+		}
+		checks = append(checks, check)
+	}
+	designArtifactName := prefix + "-design-review.json"
+	designPayload := ReviewerPayload{ContextBundle: testRef(t, runDir, logical(designBundleName)), ReviewPolicyID: policy.ID, Checks: checks}
+	writeEnvelopeTest(t, filepath.Join(restricted, designArtifactName), FormalGateEvidence{SchemaVersion: 2, ArtifactRole: "QA_REVIEW", WorkflowID: workflowID, ChangeSnapshot: snapshot + "-design", Gate: "qa-test-gate", Stage: "Design Review", Verdict: "PASS"}, designPayload)
+	reviewReceipt := writeProofReceiptFixture(t, runDir, workflowID, snapshot+"-design", "qa-test-gate", "Design Review", logical(designArtifactName), prefix+"-design-review")
+	designArtifactPath := filepath.Join(restricted, designArtifactName)
+	designData, err := os.ReadFile(designArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := ArtifactOptions{Root: root, RunDir: runDir, File: filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", designArtifactName)), Gate: "qa-test-gate", Stage: "Design Review", Flow: "pre-development", WorkflowID: workflowID, ChangeSnapshot: snapshot + "-design"}
+	var result Result
+	decoded := decodeArtifact(options, designData, &result)
+	if !result.OK() {
+		t.Fatalf("target Design Review fixture is invalid: %#v", result.Failures)
+	}
+	designClosure, err := buildClosure(options, decoded, &reviewReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return QAExecutionPayload{
+		ApprovedCaseSet: approved, DesignReview: designClosure,
+		ChangedFiles: testRef(t, runDir, logical(changedName)), Verification: testRef(t, runDir, logical(verificationName)),
+	}
+}
+
 func composeTestRun(t *testing.T, workflowID string) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	runDir := filepath.Join(root, ".gates", "runs", workflowID)
 	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -7,14 +7,14 @@ host="claude"
 scope="global"
 project=""
 force=false
-configure_hooks=false
+skip_hooks=false
 
 usage() {
   cat <<'EOF'
-Usage: install.command [--version vX.Y.Z] [--host claude|codex|cursor|both] [--scope global|project] [--project PATH] [--force] [--configure-hooks]
+Usage: install.command [--version vX.Y.Z] [--host claude|codex|cursor|both] [--scope global|project] [--project PATH] [--force] [--skip-hooks]
 
 Downloads the release source snapshot and the matching native binary for the current platform,
-assembles a local package copy, and optionally runs formal-gates install against a target host.
+assembles a local package copy, and runs formal-gates install against the selected target host.
 EOF
 }
 
@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     --scope) scope="$2"; shift 2 ;;
     --project) project="$2"; shift 2 ;;
     --force) force=true; shift ;;
-    --configure-hooks) configure_hooks=true; shift ;;
+    --skip-hooks) skip_hooks=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -97,18 +97,18 @@ cp -R "$source_root" "$install_root"
 mkdir -p "$home/.local/bin"
 ln -sfn "$install_root/bin/formal-gates" "$home/.local/bin/formal-gates"
 
+cmd=("$home/.local/bin/formal-gates" install --source "$install_root" --host "$host" --scope "$scope")
+if [ -n "$project" ]; then
+  cmd+=(--project "$project")
+fi
+if [ "$force" = true ]; then
+  cmd+=(--force)
+fi
+if [ "$skip_hooks" = true ]; then
+  cmd+=(--skip-hooks)
+fi
+"${cmd[@]}"
+
 echo "Installed package to $install_root"
 echo "Native binary symlink: $home/.local/bin/formal-gates"
 echo "Release canary: $tmp/$canary"
-
-if [ "$configure_hooks" = true ]; then
-  cmd=("$home/.local/bin/formal-gates" install --source "$install_root" --host "$host" --scope "$scope")
-  if [ -n "$project" ]; then
-    cmd+=(--project "$project")
-  fi
-  if [ "$force" = true ]; then
-    cmd+=(--force)
-  fi
-  cmd+=(--configure-hooks)
-  "${cmd[@]}"
-fi

@@ -94,7 +94,11 @@ After Phase 2, mode `pre-development` maps to the Design Review flow and
 requires requirements PASS. Carry validates source closures through its domain
 payload instead of declaring current-target gate prerequisites in the policy.
 
-Requirements and Phase 1 QA Execution have no gate prerequisite. Phase 2
+Requirements and Phase 1 QA Execution have no ordinary gate prerequisite. If an
+active workflow already has an older-snapshot PASS for the same post-development
+QA Execution lane, new-snapshot composition still requires a terminal Carry
+transition that decides `RERUN_REQUIRED`; `ACCEPT_CARRY`, `BLOCKED`, or no
+decision rejects it before output or proof. Phase 2
 Design Review requires requirements PASS on its pre-development snapshot.
 Phase 2 QA Execution validates its `designReview` closure by same workflow and
 exact case-set hash in the QA domain validator; Design Review is not a
@@ -106,9 +110,8 @@ recordable on the same workflow and target snapshot; none requires another
 post-development gate. FinalExecution requires all four fixed gate results.
 Every shared-payload reviewer policy requires `review.prompt-semantics` and its
 gate-specific check IDs. Static prompt structure and bindings are validated by
-the CLI before dispatch and SHALL NOT be exported as a reviewer check. Only
-`complexity.start-readiness.v2` allows `complexity.statistics` to be
-`NOT_APPLICABLE`; every other allowed list is empty.
+the CLI before dispatch and SHALL NOT be exported as a reviewer check. Every
+allowed `NOT_APPLICABLE` list is empty.
 
 `receiptRequired` SHALL be true only for reviewer and Carry Arbiter policies.
 `changedFilesRequired` and `verificationRequired` SHALL be true for QA

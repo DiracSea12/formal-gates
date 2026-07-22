@@ -78,7 +78,8 @@ If coupling is making responsibilities mixed, tests painful, rules duplicated, o
 5. Keep reasonable local coupling or simplify in place.
 6. Extract narrowly or redesign only when it reduces real risk.
 
-New abstraction/framework/manager/service needs active Complexity Contract budget and deletion of old complexity as trade.
+New abstraction/framework/manager/service must be justified by the current
+requirement and delete or replace old complexity where applicable.
 
 ## Formal PASS
 

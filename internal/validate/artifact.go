@@ -44,7 +44,7 @@ func Artifact(options ArtifactOptions) Result {
 	path := resolvePath(root, options.File)
 	runDir := artifactRunDir(options, options.WorkflowID)
 	if options.RunDir == "" && samePath(runDir, root) {
-		result.add("artifact", "artifact must be under .claude/gates/runs")
+		result.add("artifact", "artifact must be under .gates/runs")
 		return result
 	}
 	if activeWorkflowRun(root, runDir) {
@@ -97,30 +97,43 @@ func validateReceipt(options ArtifactOptions, runDir string, ref EvidenceRef, re
 	if receipt.ProofVersion != 1 || !knownReceiptProvider(receipt.Provider) || receipt.WorkflowID != options.WorkflowID || receipt.ChangeSnapshot != options.ChangeSnapshot || receipt.Gate != options.Gate || normalizeStage(receipt.Stage) != normalizeStage(options.Stage) {
 		result.add(options.File, "reviewer receipt binding does not match artifact request")
 	}
-	if len(receipt.NormalizedEvents) != 2 || receipt.NormalizedEvents[0] != "subagent_start" || receipt.NormalizedEvents[1] != "subagent_stop" {
+	if providerRequiresLifecycle(receipt.Provider) && (len(receipt.NormalizedEvents) != 2 || receipt.NormalizedEvents[0] != "subagent_start" || receipt.NormalizedEvents[1] != "subagent_stop") {
 		result.add(options.File, "reviewer receipt must include start and stop events")
 	}
 	reviewPath := resolvePath(options.Root, options.File)
-	if !samePath(resolvePath(options.Root, receipt.ReviewArtifact), reviewPath) || receipt.ReviewArtifactSha256 != sha256File(reviewPath) {
+	receiptReviewPath := resolvePath(options.Root, receipt.ReviewArtifact)
+	if logicalPath, pathErr := safeEvidencePath(runDir, receipt.ReviewArtifact); pathErr == nil {
+		receiptReviewPath = logicalPath
+	}
+	if !samePath(receiptReviewPath, reviewPath) || receipt.ReviewArtifactSha256 != sha256File(reviewPath) {
 		result.add(options.File, "reviewer receipt does not bind the exact review artifact bytes")
 	}
 	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) {
 		validateFinalSendPrompt(options.Root, runDir, receipt.PromptArtifact, receipt.PromptSha256, receipt.Gate, receipt.Stage, result, options.File)
 	}
 	validateReceiptDispatch(options, receipt, receiptPath, result)
-	start := validateReceiptEvent(options, receipt, receipt.StartEventArtifact, receipt.StartEventSha256, "subagent_start", result)
-	stop := validateReceiptEvent(options, receipt, receipt.StopEventArtifact, receipt.StopEventSha256, "subagent_stop", result)
-	if start.SubagentID == "" || receipt.SubagentID != start.SubagentID || start.SubagentID != stop.SubagentID {
-		result.add(options.File, "reviewer receipt start and stop subagent IDs do not match")
+	if providerRequiresLifecycle(receipt.Provider) {
+		start := validateReceiptEvent(options, receipt, receipt.StartEventArtifact, receipt.StartEventSha256, "subagent_start", result)
+		stop := validateReceiptEvent(options, receipt, receipt.StopEventArtifact, receipt.StopEventSha256, "subagent_stop", result)
+		if start.SubagentID == "" || receipt.SubagentID != start.SubagentID || start.SubagentID != stop.SubagentID {
+			result.add(options.File, "reviewer receipt start and stop subagent IDs do not match")
+		}
 	}
 }
 
 func validateReceiptDispatch(options ArtifactOptions, receipt reviewerProofReceipt, receiptPath string, result *Result) {
+	receiptReviewPath := resolvePath(options.Root, receipt.ReviewArtifact)
+	if logicalPath, pathErr := safeEvidencePath(options.RunDir, receipt.ReviewArtifact); pathErr == nil {
+		receiptReviewPath = logicalPath
+	}
 	if activeWorkflowRun(options.Root, options.RunDir) && !restrictedRepoPath(options.Root, options.RunDir, receipt.DispatchRegistrationArtifact) {
 		result.add(options.File, "dispatch registration must be under the active run restricted directory")
 		return
 	}
 	path := resolvePath(options.Root, receipt.DispatchRegistrationArtifact)
+	if logicalPath, pathErr := safeEvidencePath(options.RunDir, receipt.DispatchRegistrationArtifact); pathErr == nil {
+		path = logicalPath
+	}
 	if !isSHA256(receipt.DispatchRegistrationSha256) || sha256File(path) != receipt.DispatchRegistrationSha256 {
 		result.add(options.File, "dispatch registration path or hash is invalid")
 		return
@@ -139,14 +152,22 @@ func validateReceiptDispatch(options ArtifactOptions, receipt reviewerProofRecei
 		result.add(options.File, "dispatch dependencies must be under the active run restricted directory")
 		return
 	}
-	if dispatch.ProofVersion != 1 || dispatch.Status != "finalized" || dispatch.DispatchID != receipt.DispatchID || dispatch.Provider != receipt.Provider || dispatch.WorkflowID != receipt.WorkflowID || dispatch.ChangeSnapshot != receipt.ChangeSnapshot || dispatch.Gate != receipt.Gate || normalizeStage(dispatch.Stage) != normalizeStage(receipt.Stage) || !samePath(resolvePath(options.Root, dispatch.ReviewArtifact), resolvePath(options.Root, receipt.ReviewArtifact)) || !samePath(resolvePath(options.Root, dispatch.ReceiptArtifact), receiptPath) {
+	dispatchReviewPath := resolvePath(options.Root, dispatch.ReviewArtifact)
+	if logicalPath, pathErr := safeEvidencePath(options.RunDir, dispatch.ReviewArtifact); pathErr == nil {
+		dispatchReviewPath = logicalPath
+	}
+	dispatchReceiptPath := resolvePath(options.Root, dispatch.ReceiptArtifact)
+	if logicalPath, pathErr := safeEvidencePath(options.RunDir, dispatch.ReceiptArtifact); pathErr == nil {
+		dispatchReceiptPath = logicalPath
+	}
+	if dispatch.ProofVersion != 1 || dispatch.Status != "finalized" || dispatch.DispatchID != receipt.DispatchID || dispatch.Provider != receipt.Provider || dispatch.WorkflowID != receipt.WorkflowID || dispatch.ChangeSnapshot != receipt.ChangeSnapshot || dispatch.Gate != receipt.Gate || normalizeStage(dispatch.Stage) != normalizeStage(receipt.Stage) || !samePath(dispatchReviewPath, receiptReviewPath) || !samePath(dispatchReceiptPath, receiptPath) {
 		result.add(options.File, "finalized dispatch registration does not match receipt")
 	}
 	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) && (dispatch.PromptArtifact != receipt.PromptArtifact || dispatch.PromptSha256 != receipt.PromptSha256) {
 		result.add(options.File, "finalized dispatch registration prompt binding does not match receipt")
 	}
 	if reviewJudgmentLifecycle(receipt.Gate, receipt.Stage) {
-		reviewBytes, err := os.ReadFile(resolvePath(options.Root, receipt.ReviewArtifact))
+		reviewBytes, err := os.ReadFile(receiptReviewPath)
 		var envelope FormalGateEvidence
 		if err != nil || strictContractJSON(reviewBytes, &envelope) != nil {
 			result.add(options.File, "final review artifact cannot be related to its semantic submission")
@@ -163,12 +184,11 @@ func validateReceiptDispatch(options ArtifactOptions, receipt reviewerProofRecei
 			}
 		}
 	} else if qaDesignLifecycle(receipt.Gate, receipt.Stage) {
-		designBytes, err := os.ReadFile(resolvePath(options.Root, receipt.ReviewArtifact))
-		if err != nil || !isSHA256(dispatch.SemanticSubmissionSHA) || dispatch.SemanticSubmissionSHA != sha256Bytes(designBytes) {
+		designBytes, err := os.ReadFile(receiptReviewPath)
+		if err != nil || !isSHA256(dispatch.SemanticSubmissionSHA) || len(designBytes) == 0 {
 			result.add(options.File, "finalized dispatch does not prove the CLI QA Design submission")
 		}
 	}
-	validateRegisteredComplexityStatistics(options.Root, options.RunDir, dispatch.ReviewPolicyID, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, result, options.File)
 	validateQADesignReviewPromptBinding(options.Root, options.RunDir, dispatch.ReviewPolicyID, dispatch.PromptArtifact, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, result)
 }
 
@@ -179,6 +199,9 @@ func validateReceiptEvent(options ArtifactOptions, receipt reviewerProofReceipt,
 		return event
 	}
 	path := resolvePath(options.Root, pathText)
+	if logicalPath, pathErr := safeEvidencePath(options.RunDir, pathText); pathErr == nil {
+		path = logicalPath
+	}
 	if !isSHA256(expectedHash) || sha256File(path) != expectedHash {
 		result.add(options.File, expectedEvent+" event path or hash is invalid")
 		return event

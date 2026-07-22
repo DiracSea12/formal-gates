@@ -41,7 +41,7 @@ var qaDesignReviewChecks = []string{
 
 var gateCheckIDs = map[string][]string{
 	"complexity-gate": {
-		"complexity.statistics", "complexity.diff-shape", "complexity.impact-surface",
+		"complexity.diff-shape", "complexity.impact-surface",
 		"complexity.public-config-surface", "complexity.new-concepts",
 		"complexity.minimum-sufficient", "complexity.shrink-opportunities",
 	},
@@ -91,7 +91,7 @@ func Policy() BuiltInPolicy {
 			Gate: "complexity-gate", Stage: "", Flow: "start-readiness",
 			Prerequisites:                []PolicyPrereq{{Gate: "requirements-clarification-gate", Stage: "", Flow: "requirements"}},
 			RequiredCheckIDs:             checks("complexity-gate"),
-			AllowedNotApplicableCheckIDs: []string{"complexity.statistics"}, ReceiptRequired: true,
+			AllowedNotApplicableCheckIDs: []string{}, ReceiptRequired: true,
 		},
 		{
 			ID: "complexity.post-development.v2", ArtifactRole: "COMPLEXITY_REVIEW",

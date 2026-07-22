@@ -223,6 +223,10 @@ func GateRecordTransition(options WorkflowRecordTransitionOptions) Result {
 	if !result.OK() {
 		return result
 	}
+	if _, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir); err != nil {
+		result.add("run-dir", err.Error())
+		return result
+	}
 	artifactPath := resolvePath(worktree, options.Artifact)
 	data, err := os.ReadFile(artifactPath)
 	if err != nil {
@@ -289,7 +293,7 @@ func GateRecordTransition(options WorkflowRecordTransitionOptions) Result {
 }
 
 // validateCarryDecisionCoverage keeps the typed transition complete for the
-// normal workflow: every prior PASS gate represented by the repair chain must
+// normal workflow: every prior PASS gate represented by the transition chain must
 // receive exactly one independent decision.
 func validateCarryDecisionCoverage(state GateState, chain *TransitionChain, decisions []CarryDecision, workflowID, targetSnapshot string) error {
 	if chain == nil {
@@ -455,6 +459,87 @@ func acceptedCarryForGate(worktree, runDir string, state GateState, workflowID, 
 		return decision, ref, err
 	}
 	return CarryDecision{}, EvidenceRef{}, fmt.Errorf("accepted Carry transition is missing for workflow=%s targetSnapshot=%s", workflowID, targetSnapshot)
+}
+
+// requirePostDevelopmentRerunAdmission prevents a fresh post-development
+// artifact from silently replacing an earlier same-workflow PASS at a new
+// snapshot. The typed Carry transition records the rerun authorization as
+// RERUN_REQUIRED for the affected gate.
+func requirePostDevelopmentRerunAdmission(worktree, runDir, workflowID, targetSnapshot, gate, stage string) error {
+	statePath := workflowStatePath(worktree, "", runDir)
+	state, err := loadGateState(statePath)
+	if err != nil {
+		return fmt.Errorf("cannot inspect gate state: %w", err)
+	}
+	contractStage, contractRole := sourceGateContract(gate)
+	if contractRole == "" || (contractStage != "" && normalizeStage(stage) != normalizeStage(contractStage)) {
+		return nil
+	}
+	wantStage := normalizeStage(contractStage)
+	priorPass := false
+	for _, entry := range entriesForGateNewestFirst(state, gate) {
+		if entry.Gate != gate || entry.WorkflowID != workflowID || entry.Verdict != "PASS" || entry.ChangeSnapshot == targetSnapshot {
+			continue
+		}
+		if entry.Mode != "" && entry.Mode != "formal" && entry.Mode != "post-development" {
+			continue
+		}
+		if normalizeStage(entry.Stage) != wantStage {
+			continue
+		}
+		priorPass = true
+		break
+	}
+	if !priorPass {
+		return nil
+	}
+
+	for index := len(state.Transitions) - 1; index >= 0; index-- {
+		transition := state.Transitions[index]
+		if transition.WorkflowID != workflowID || transition.ChangeSnapshot != targetSnapshot {
+			continue
+		}
+		closurePath := resolvePath(worktree, transition.ArbiterClosure)
+		if strings.TrimSpace(transition.ArbiterClosureHash) == "" || sha256File(closurePath) != transition.ArbiterClosureHash {
+			return fmt.Errorf("rerun transition for gate=%s is invalid", gate)
+		}
+		closureData, readErr := os.ReadFile(closurePath)
+		if readErr != nil {
+			return fmt.Errorf("rerun transition for gate=%s is invalid: %w", gate, readErr)
+		}
+		var closure EvidenceClosure
+		if strictContractJSON(closureData, &closure) != nil || closure.WorkflowID != workflowID || closure.ChangeSnapshot != targetSnapshot || closure.Gate != "qa-test-gate" || normalizeStage(closure.Stage) != "Carry" || closure.RootRole != "CARRY_ARBITER" || closure.Verdict != "PASS" {
+			return fmt.Errorf("rerun transition for gate=%s is invalid", gate)
+		}
+		if err := verifyClosure(ArtifactOptions{Root: worktree, RunDir: runDir, WorkflowID: workflowID, ChangeSnapshot: targetSnapshot}, runDir, closure); err != nil {
+			return fmt.Errorf("rerun transition for gate=%s is invalid: %w", gate, err)
+		}
+		rootPath, pathErr := safeEvidencePath(runDir, closure.RootArtifact)
+		if pathErr != nil {
+			return fmt.Errorf("rerun transition for gate=%s is invalid: %w", gate, pathErr)
+		}
+		rootData, readErr := os.ReadFile(rootPath)
+		if readErr != nil {
+			return fmt.Errorf("rerun transition for gate=%s is invalid: %w", gate, readErr)
+		}
+		var artifactResult Result
+		rootFile := relativePath(worktree, rootPath)
+		decoded := decodeArtifact(ArtifactOptions{Root: worktree, RunDir: runDir, File: rootFile, Gate: "qa-test-gate", Stage: "Carry", Flow: "carry", WorkflowID: workflowID, ChangeSnapshot: targetSnapshot}, rootData, &artifactResult)
+		if !artifactResult.OK() || decoded.Carry == nil {
+			return fmt.Errorf("rerun transition for gate=%s is invalid", gate)
+		}
+		for _, decision := range decoded.Carry.Decisions {
+			if decision.Gate != gate {
+				continue
+			}
+			if decision.Decision == "RERUN_REQUIRED" {
+				return nil
+			}
+			return fmt.Errorf("rerun transition for gate=%s requires explicit RERUN decision", gate)
+		}
+		return fmt.Errorf("rerun transition for gate=%s has no gate decision", gate)
+	}
+	return fmt.Errorf("rerun transition for gate=%s is required for new snapshot", gate)
 }
 
 func verifyRequirementsContinuity(worktree, statePath, runDir string, state GateState, current decodedArtifact) error {
@@ -693,7 +778,7 @@ func resolveStatePath(worktree, statePath string) string {
 		}
 		return filepath.Clean(filepath.Join(worktree, filepath.FromSlash(statePath)))
 	}
-	return filepath.Join(worktree, ".claude", "gates", "gate-state.json")
+	return filepath.Join(worktree, ".gates", "gate-state.json")
 }
 
 func hashArtifactIfPresent(worktree, artifact string) string {

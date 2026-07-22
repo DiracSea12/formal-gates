@@ -12,23 +12,14 @@ The generated shared reviewer payload contains only `contextBundle`, `reviewPoli
 
 The context bundle is strict JSON containing exactly bundle version 1, workflow, snapshot, and a non-empty `inputs` array of evidence references. It is a machine-only binding: the CLI verifies the bundle and every listed file, while the reviewer does not read it. No second input manifest is supported.
 
-Post-development complexity first runs `complexity check` with the active
-`--run-dir`, `--workflow-id`, `--change-snapshot`, and restricted `--output`.
-That mode writes the complete no-budget report and existing
-`complexity-statistics.v1` composition proof. `--json` stdout, redirected JSON,
-handwritten JSON, partial reports, and reports without a current proof cannot
-satisfy registration. Pass the generated path through
-`--complexity-statistics <path>`; the CLI attaches it to the fixed
-`complexity.statistics` check. Callers never submit a check ID/path pair.
+The reviewer's `Current diff` field names the external VCS command and exact
+snapshot target to inspect. The reviewer invokes the on-site VCS directly and
+supplies a semantic judgment. For Carry, the field identifies the exact
+pre-repair and post-repair snapshots. If the reviewer cannot compare them
+reliably, Carry is unavailable and an affected gate cannot enter a new-snapshot
+rerun without terminal `RERUN_REQUIRED`.
 
-```bash
-formal-gates complexity check --task-type <type> --worktree <repo> --vcs auto \
-  --run-dir <active-run> --workflow-id <id> \
-  --change-snapshot <snapshot> \
-  --output restricted/complexity/statistics.json
-```
-
-`QA_REVIEW` uses policy `qa.design-review.v2` at `qa-test-gate / Design Review`, flow `pre-development`. Its seven generated checks are `review.prompt-semantics`, `qa.design.requirement-coverage`, `qa.design.executability`, `qa.design.oracles`, `qa.design.evidence-binding`, `qa.design.independence`, and `qa.design.case-set-binding`. Registration statically binds the last check to the exact case document and its Design-stage lifecycle receipt. Recording requires a separate reviewer receipt and same-workflow, same-snapshot requirements PASS. The resulting closure is the approval; no copied approved-case artifact is created.
+`QA_REVIEW` uses policy `qa.design-review.v2` at `qa-test-gate / Design Review`, flow `pre-development`. Its seven generated checks are `review.prompt-semantics`, `qa.design.requirement-coverage`, `qa.design.executability`, `qa.design.oracles`, `qa.design.evidence-binding`, `qa.design.independence`, and `qa.design.case-set-binding`. Registration statically binds the last check to the exact case document and its Design-stage receipt. Recording requires a separate reviewer receipt and same-workflow, same-snapshot requirements PASS. Lifecycle-capable providers additionally bind real start/stop events; Codex keeps all non-lifecycle bindings without requiring unavailable events. The resulting closure is the approval; no copied approved-case artifact is created.
 
 ## Mechanical QA Execution
 
@@ -36,19 +27,19 @@ The independent QA executor submits only each approved case's positioned semanti
 
 QA-owned results are closed JSON containing exactly `owner`, `workflowId`, `changeSnapshot`, `stage`, `status`, `overallOutcome`, `executions`, and `caseResults`. Each execution contains exactly `id`, `outcome`, `procedure`, and `result`; each case result contains exactly `caseId`, `status`, `procedures`, and `oracle`. Case-result binding is closed JSON containing exactly `workflowId`, `changeSnapshot`, `approvedCaseSet`, `qaOwnedResults`, `complete`, and `bindings`; each binding contains exactly `caseId`, `resultPointer`, `status`, `executionRefs`, `procedures`, and `oracle`. `oracleBound` is not part of the contract.
 
-The CLI verifies every path and hash, the same workflow, exact Design Review case-set binding, current QA snapshot, complete approved-case coverage, PASS executions and case results, and exact result/oracle/procedure binding. The Design Review closure may use its earlier pre-development snapshot only when its case reference remains exact. It then creates the normal gate closure and records PASS. QA Execution has no reviewer dispatch, context bundle, checks, findings, or reviewer receipt.
+The CLI verifies every path and hash, the same workflow, exact Design Review case-set binding, current QA snapshot, complete approved-case coverage, PASS executions and case results, and exact result/oracle/procedure binding. The Design Review closure may use its earlier pre-development snapshot only when its case reference remains exact. If the active workflow already has an older-snapshot QA Execution PASS, new-snapshot `artifact compose-qa-execution` requires the target's terminal Carry decision `RERUN_REQUIRED` before writing output or proof; `ACCEPT_CARRY`, `BLOCKED`, or no decision rejects it. The first QA Execution with no prior same-lane PASS remains allowed. It then creates the normal gate closure and records PASS. QA Execution has no reviewer dispatch, context bundle, checks, findings, or reviewer receipt.
 
 ## Receipt And Closure
 
 Reviewer JSON contains no self-reported identity, dispatch, prompt, or receipt field. First use `formal-gates prompt prepare` with routing arguments; the CLI generates the exact seven-field reviewer message without a caller-authored seven-field template. Registration validates and binds those exact-send bytes and generates the reviewer or Carry artifact composer output plus an immutable composition proof.
 
-Before reviewer dispatch, register the meaningful target snapshot, generated prompt, context bundle, absent run-local output path, and all policy-owned evidence references. `receipt register` is the single full pre-dispatch static check and catalog generator: it validates every prompt and routing field, the role/policy contract, exact bundle path/hash, changed-files and verification inputs, per-check evidence bindings, and Carry transition/source bindings before reserving capacity. Post-development complexity additionally requires the complete CLI-generated statistics report and its current composition proof. The reviewer may read that catalog but submits values only with `receipt submit`; it does not edit JSON, confirm or repeat static facts, or open bound evidence. Each role accepts only its own semantic fields: reviewers accept checks/findings/locations, Carry accepts decisions/reasons, and QA Design accepts case values. Cross-role values, unknown, duplicate, missing, wrongly typed, or illegal values leave the artifact and open dispatch byte-for-byte unchanged. Successful submission atomically writes the CLI-composed PENDING artifact and commits its hash to the existing open dispatch proof; it creates no second artifact role or proof system. Registration rejects a fourth finalized review unless the user explicitly approved it. After lifecycle stop, finalization requires that submitted hash, derives the aggregate result, writes the final artifact and receipt, and locks the registration. QA Design omits reviewer prompt binding: registration reserves the generated Markdown artifact, the designer submits only seven ordered semantic values per case, and the CLI writes canonical case bytes and commits their hash before finalization.
+Before reviewer dispatch, register the meaningful target snapshot, generated prompt, context bundle, absent run-local output path, and all policy-owned evidence references. `receipt register` is the single full pre-dispatch static check and catalog generator: it validates every prompt and routing field, the role/policy contract, exact bundle path/hash, changed-files and verification inputs, per-check evidence bindings, and Carry transition/source bindings before reserving capacity. The reviewer may read that catalog but submits values only with `receipt submit`; it does not edit JSON, confirm or repeat static facts, or open bound evidence. Each role accepts only its own semantic fields: reviewers accept checks/findings/locations, Carry accepts decisions/reasons, and QA Design accepts case values. Cross-role values, unknown, duplicate, missing, wrongly typed, or illegal values leave the artifact and open dispatch byte-for-byte unchanged. Successful submission atomically writes the CLI-composed PENDING artifact and commits its hash to the existing open dispatch proof; it creates no second artifact role or proof system. While that same dispatch remains open and unfinalized, any submission role may call `receipt submit` again with its complete role-specific semantics when the recorded `SemanticSubmissionSHA` exactly matches the current artifact bytes. The CLI rebuilds the projection from the original static catalog, reruns all validation, and atomically replaces the artifact and dispatch proof. Manual artifact changes, a missing or mismatched submission SHA, finalized dispatch, incomplete input, or any other rejection leave both byte-for-byte unchanged. This is ordinary resubmission, not a reset/reopen command or state. Registration rejects a fourth finalized review unless the user explicitly approved it. Finalization requires the current submitted hash and any lifecycle events required by the selected provider, derives the aggregate result, writes the final artifact and receipt, and locks the registration. QA Design omits reviewer prompt binding: registration reserves the generated Markdown artifact, the designer submits only seven ordered semantic values per case, and the CLI writes canonical case bytes and commits their hash before finalization.
 
 Registration accepts Carry sources as repeatable `--carry-source-closure
 <path>` values. It verifies each closure and mechanically derives its fixed gate
 and source snapshot; the caller never repeats the gate ID. Transition-chain
 composition accepts one ordered group of `--hop-from`, `--hop-to`,
-`--hop-changed-files`, `--hop-verification`, and `--hop-repair` scalars per hop.
+`--hop-changed-files` and `--hop-verification` scalars per hop.
 The CLI generates the hop objects and rejects missing, mismatched, duplicate,
 or invalid path input before writing the chain or its proof.
 
@@ -85,9 +76,8 @@ Recording reviewer PASS requires that external receipt and builds one determinis
 
 ```bash
 formal-gates artifact compose-changed-files --root <repo> --run-dir <run-dir> \
-  --workflow-id <id> --change-snapshot <snapshot> \
-  --base-ref <base> --head-ref <head> --include-working-tree \
-  --include-untracked <worktree-relative-untracked-path> \
+  --workflow-id <id> --change-snapshot <external-vcs-snapshot> \
+  --path <delivery/path> \
   --output <restricted/changed-files.txt>
 
 formal-gates artifact compose-context-bundle --root <repo> --run-dir <run-dir> \
@@ -121,15 +111,12 @@ formal-gates workflow record-stage --worktree <repo> --run-dir <run-dir> \
   --workflow-id <id> --change-snapshot <snapshot>
 ```
 
-With `--include-working-tree`, changed-files composition combines the committed
-range and tracked staged/unstaged changes. Each untracked file must be supplied
-explicitly with repeatable `--include-untracked <path>`; omitted untracked files,
-ignored files, tracked paths, missing paths, and workflow-run artifacts are
-rejected or excluded as applicable. The CLI requires each path to be relative to
-the worktree, existing, non-ignored, and genuinely untracked, then normalizes,
-deduplicates, and sorts the output. `--include-untracked` without
-`--include-working-tree` is rejected, and without either working-tree flag the
-committed-range-only behavior is unchanged.
+Changed-files composition accepts repeated explicit `--path` values and emits a
+normalized, sorted path projection. The worker supplies every delivery path
+after verifying with the on-site VCS that all delivery paths are tracked and
+present in the native delivery comparison. Reviewers invoke that VCS directly;
+formal-gates records the snapshot identity, changed-files projection, and normal
+workflow evidence. Workflow-run paths are rejected.
 
 Repeat the five semantic arguments once for every approved 1-based case position. Missing, duplicate, out-of-range, empty, `PENDING`, and illegal enum values are rejected before either QA-owned target or its pair proof is written. A rejected call leaves the approved case set and any existing targets byte-identical.
 
@@ -147,19 +134,27 @@ chain, and source-gate bindings already populated. Keep the catalog,
 machine-only context bundle, and complete typed transition chain under the
 active run's `restricted/` directory. The reviewer reads the generated gate
 order and supplies one `--carry-gate <position>`, `--decision <value>`, and
-`--reason <text>` group per gate through `receipt submit`; it never edits Carry JSON. It reads only
-the current requirement and the cumulative diff produced by the repair from the
-pre-repair snapshot to the post-repair snapshot; unrelated local worktree
-changes are excluded. The CLI validates
+`--reason <text>` group per gate through `receipt submit`; it never edits Carry
+JSON. It reads only the current requirement and the native VCS comparison target
+for the pre-repair and post-repair snapshots, then invokes that VCS directly;
+unrelated local worktree changes are excluded. The CLI validates
 the bundle, chain, source closures, and receipts outside reviewer context. The
 final payload contains only `contextBundle`, `reviewPolicyId`,
 `transitionChain`, and per-gate `decisions`; the CLI constructs that payload,
 records the submission proof, and finalization derives the verdict.
 
-Preserve a reproducible pre-repair source before editing. Until source/target
-tree identity is mechanically bound, a missing source or unreproducible exact
-diff makes Carry unavailable; rerun the affected gates instead of substituting
-a whole-file reconstruction.
+The external VCS owns repair history. Before editing, the worker or orchestrator
+ensures every repair path is tracked and uses the VCS's native state or
+checkpoint facility to fix the pre-repair snapshot. After editing, it fixes the
+post-repair snapshot and verifies that the VCS can compare the two directly.
+Those identifiers become transition-hop labels; formal-gates receives no diff
+artifact. The orchestrator may prepare source-closure selection, context inputs,
+and immutable command shape during the repair, but Carry registration, dispatch,
+and judgment wait for the worker's exact post-repair snapshot and the
+CLI-composed exact transition. No mutable future ref, waiting Arbiter, or
+two-phase judgment is used. If that exact comparison is unavailable, Carry is
+unavailable and affected gates cannot enter a new-snapshot rerun without
+terminal `RERUN_REQUIRED`.
 
 After a finalized matching receipt exists, record an accepted transition with:
 
@@ -169,8 +164,7 @@ formal-gates artifact compose-transition-chain --root <repo> --run-dir <run-dir>
   --output <restricted/transition-chain.json> \
   --hop-from <source> --hop-to <target> \
   --hop-changed-files <restricted/changed-files.txt> \
-  --hop-verification <restricted/verification.json> \
-  --hop-repair <restricted/repair.json>
+  --hop-verification <restricted/verification.json>
 
 formal-gates receipt register --provider codex --worktree <repo> \
   --run-dir <run-dir> --context-bundle <restricted/context-bundle.json> \

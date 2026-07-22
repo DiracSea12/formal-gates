@@ -8,71 +8,6 @@ import (
 	"testing"
 )
 
-func TestWorkflowFileHashSnapshotIsStable(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "a.txt"), "alpha\n")
-	mustWrite(t, filepath.Join(dir, "nested", "b.txt"), "beta\n")
-
-	first, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "file-hash"})
-	if !result.OK() {
-		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
-	}
-	second, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "file-hash"})
-	if !result.OK() {
-		t.Fatalf("expected second snapshot to pass, got %#v", result.Failures)
-	}
-	if first.ChangeSnapshot != second.ChangeSnapshot || first.RangeHash != second.RangeHash {
-		t.Fatalf("expected stable snapshot, first=%#v second=%#v", first, second)
-	}
-	if !strings.HasPrefix(first.ChangeSnapshot, "files.") {
-		t.Fatalf("expected files snapshot id, got %q", first.ChangeSnapshot)
-	}
-	if first.WorkingTreeHash != first.RangeHash || !first.IncludeWorkingTree {
-		t.Fatalf("unexpected file-hash fields: %#v", first)
-	}
-}
-
-func TestWorkflowFileHashSnapshotIgnoresGateAndTempDirs(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "src.txt"), "source\n")
-
-	before, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "file-hash"})
-	if !result.OK() {
-		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
-	}
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "gate-state.json"), `{"schemaVersion":1}`)
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifacts", "review.md"), "artifact\n")
-	mustWrite(t, filepath.Join(dir, ".artifacts", "tmp", "scratch.txt"), "tmp\n")
-	mustWrite(t, filepath.Join(dir, ".artifacts", "scratch", "scratch.txt"), "scratch\n")
-	mustWrite(t, filepath.Join(dir, ".artifacts", "cleanup", "old.txt"), "cleanup\n")
-
-	after, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "file-hash"})
-	if !result.OK() {
-		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
-	}
-	if before.ChangeSnapshot != after.ChangeSnapshot {
-		t.Fatalf("ignored directories changed snapshot: before=%#v after=%#v", before, after)
-	}
-}
-
-func TestWorkflowGitSnapshotIgnoresGeneratedGateEvidenceWithoutIgnoreRules(t *testing.T) {
-	dir := initComplexityGitRepo(t)
-
-	before, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "git", BaseRef: "HEAD", IncludeWorkingTree: true})
-	if !result.OK() {
-		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
-	}
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "runs", "wf", "generated.json"), `{"generated":true}`+"\n")
-
-	after, result := WorkflowSnapshot(WorkflowSnapshotOptions{Worktree: dir, VCS: "git", BaseRef: "HEAD", IncludeWorkingTree: true})
-	if !result.OK() {
-		t.Fatalf("expected snapshot to pass, got %#v", result.Failures)
-	}
-	if before != after {
-		t.Fatalf("generated gate evidence changed snapshot: before=%#v after=%#v", before, after)
-	}
-}
-
 func TestWorkflowRecordStageCallsGateState(t *testing.T) {
 	dir := t.TempDir()
 	artifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
@@ -91,7 +26,7 @@ func TestWorkflowRecordStageCallsGateState(t *testing.T) {
 	if !result.OK() {
 		t.Fatalf("expected workflow record-stage to pass, got %#v", result.Failures)
 	}
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	state, show := GateShow(GateShowOptions{Worktree: dir, StatePath: filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))})
 	if !show.OK() {
 		t.Fatalf("expected show to pass, got %#v", show.Failures)
@@ -99,7 +34,7 @@ func TestWorkflowRecordStageCallsGateState(t *testing.T) {
 	if state.Gates["qa-test-gate"].Actor != "qa" {
 		t.Fatalf("expected gate-state entry from workflow record-stage, got %#v", state.Gates["qa-test-gate"])
 	}
-	if isFile(filepath.Join(dir, ".claude", "gates", "gate-state.json")) {
+	if isFile(filepath.Join(dir, ".gates", "gate-state.json")) {
 		t.Fatal("omitted --run-dir wrote repository-level gate state")
 	}
 }
@@ -122,7 +57,7 @@ func TestWorkflowRecordStageWithoutRunDirRejectsArtifactOutsideDefaultRun(t *tes
 	if result.OK() || !strings.Contains(resultSummary(result), "artifact must be under the active run restricted directory") {
 		t.Fatalf("repository-level artifact was accepted: %#v", result.Failures)
 	}
-	if isFile(filepath.Join(dir, ".claude", "gates", "gate-state.json")) || isFile(filepath.Join(dir, ".claude", "gates", "runs", "wf", "gate-state.json")) {
+	if isFile(filepath.Join(dir, ".gates", "gate-state.json")) || isFile(filepath.Join(dir, ".gates", "runs", "wf", "gate-state.json")) {
 		t.Fatal("rejected repository-level artifact changed gate state")
 	}
 }
@@ -286,7 +221,7 @@ func TestWorkflowFinalVerificationWithoutRunDirRejectsRepositoryPaths(t *testing
 
 func TestWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	finalRunRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-run.json"))
 	finalRun := filepath.Join(dir, filepath.FromSlash(finalRunRel))
 	mustWrite(t, finalRun, `{"ok":true}`+"\n")
@@ -354,7 +289,7 @@ func TestWorkflowFinalVerificationBuildsMixedCarryMatrix(t *testing.T) {
 			t.Fatalf("fresh %s record failed: %#v", gate, result.Failures)
 		}
 	}
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	attemptRel, attemptPath := workflowRunTestPath(t, dir, "wf", "final-run.json")
 	mustWrite(t, attemptPath, "{}\n")
 	finalRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-execution.json"))
@@ -461,7 +396,7 @@ func TestRecordFinalQARollsBackArtifactWhenStateRecordingFails(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+			runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 			finalRunRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-run.json"))
 			finalRun := filepath.Join(dir, filepath.FromSlash(finalRunRel))
 			mustWrite(t, finalRun, `{"ok":true}`+"\n")
@@ -648,7 +583,7 @@ func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 	dir := t.TempDir()
 	tmpFile := filepath.Join(dir, ".artifacts", "tmp", "run", "scratch.txt")
 	mustWrite(t, tmpFile, "scratch\n")
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "artifact.md"), "evidence\n")
+	mustWrite(t, filepath.Join(dir, ".gates", "artifact.md"), "evidence\n")
 
 	dryRun, result := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir})
 	if !result.OK() {
@@ -661,9 +596,9 @@ func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 		t.Fatal("dry-run removed scratch file")
 	}
 
-	_, denied := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Paths: []string{".claude/gates/artifact.md"}})
+	_, denied := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Paths: []string{".gates/artifact.md"}})
 	if denied.OK() {
-		t.Fatal("expected .claude/gates cleanup to be denied")
+		t.Fatal("expected .gates cleanup to be denied")
 	}
 
 	_, deniedRoot := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Paths: []string{"."}})
@@ -680,69 +615,6 @@ func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 	}
 	if exists(tmpFile) {
 		t.Fatal("execute did not remove scratch file")
-	}
-}
-
-func TestWorkflowCompactArchivesRunDirThenLeavesSingleFile(t *testing.T) {
-	dir := t.TempDir()
-	runDir := ".claude/gates/runs/wf"
-	runAbs := filepath.Join(dir, filepath.FromSlash(runDir))
-	qaArtifact := filepath.Join(runAbs, "qa.json")
-	if err := writeGateState(filepath.Join(runAbs, "gate-state.json"), newGateState()); err != nil {
-		t.Fatal(err)
-	}
-	mustWrite(t, qaArtifact, "{}\n")
-	mustWrite(t, filepath.Join(runAbs, "notes", "scratch.txt"), "temporary note\n")
-
-	dryRun, result := WorkflowCompact(WorkflowCompactOptions{
-		Worktree:       dir,
-		RunDir:         runDir,
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-	})
-	if !result.OK() {
-		t.Fatalf("expected compact dry-run to pass, got %#v", result.Failures)
-	}
-	if !dryRun.DryRun || len(dryRun.Files) != 3 || len(dryRun.Cleanup) != 3 {
-		t.Fatalf("unexpected dry-run archive: %#v", dryRun)
-	}
-	if !isFile(qaArtifact) {
-		t.Fatal("dry-run removed source artifact")
-	}
-	archivedLeftover := filepath.Join(dir, ".claude", "gates", "runs", "old", "leftover.txt")
-	mustWrite(t, filepath.Join(dir, ".claude", "gates", "runs", "old", "formal-gates-workflow-archive.json"), "{}\n")
-	mustWrite(t, archivedLeftover, "stale\n")
-	activeLeftover := filepath.Join(dir, ".claude", "gates", "runs", "active", "leftover.txt")
-	mustWrite(t, activeLeftover, "active\n")
-
-	archive, result := WorkflowCompact(WorkflowCompactOptions{
-		Worktree:       dir,
-		RunDir:         runDir,
-		WorkflowID:     "wf",
-		ChangeSnapshot: "snap",
-		Execute:        true,
-	})
-	if !result.OK() {
-		t.Fatalf("expected compact execute to pass, got %#v", result.Failures)
-	}
-	if archive.DryRun {
-		t.Fatalf("expected execute archive, got %#v", archive)
-	}
-	archivePath := filepath.Join(runAbs, "restricted", "formal-gates-workflow-archive.json")
-	if !isFile(archivePath) {
-		t.Fatal("expected archive file to remain")
-	}
-	if isFile(qaArtifact) || isFile(filepath.Join(runAbs, "notes", "scratch.txt")) {
-		t.Fatal("expected source run files removed")
-	}
-	if len(archive.OtherRunCleanup) != 1 || archive.OtherRunCleanup[0].Status != "removed" {
-		t.Fatalf("expected one other archived cleanup, got %#v", archive.OtherRunCleanup)
-	}
-	if exists(archivedLeftover) {
-		t.Fatal("expected archived run leftover removed")
-	}
-	if !isFile(activeLeftover) {
-		t.Fatal("active unarchived run was removed")
 	}
 }
 
@@ -778,7 +650,7 @@ func recordFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot string)
 
 func workflowRunTestPath(t *testing.T, worktree, workflowID, name string) (string, string) {
 	t.Helper()
-	rel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", name))
+	rel := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", name))
 	path := filepath.Join(worktree, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)

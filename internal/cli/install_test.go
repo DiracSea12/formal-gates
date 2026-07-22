@@ -47,7 +47,7 @@ func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
 	}
 }
 
-func TestRunInstallConfigureHooksUsesNativeBinaryCommands(t *testing.T) {
+func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		host       string
@@ -60,54 +60,144 @@ func TestRunInstallConfigureHooksUsesNativeBinaryCommands(t *testing.T) {
 		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", startEvent: "SubagentStart", stopEvent: "SubagentStop"},
 		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", startEvent: "subagentStart", stopEvent: "subagentStop"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			source := writeInstallSource(t, "source")
-			project := t.TempDir()
-			configPath := filepath.Join(project, filepath.FromSlash(tc.configRel))
-			writeOldHookConfig(t, configPath, tc.host)
-			var stdout, stderr bytes.Buffer
+		for _, scope := range []string{"global", "project"} {
+			t.Run(tc.name+"/"+scope, func(t *testing.T) {
+				source := writeInstallSource(t, "source")
+				installRoot := t.TempDir()
+				args := []string{
+					"install",
+					"--source", source,
+					"--host", tc.host,
+					"--scope", scope,
+				}
+				if scope == "global" {
+					t.Setenv("HOME", installRoot)
+					t.Setenv("USERPROFILE", installRoot)
+				} else {
+					args = append(args, "--project", installRoot)
+				}
+				configPath := filepath.Join(installRoot, filepath.FromSlash(tc.configRel))
+				writeOldHookConfig(t, configPath, tc.host)
+				var stdout, stderr bytes.Buffer
 
-			code := Run("formal-gates", []string{
-				"install",
-				"--source", source,
-				"--host", tc.host,
-				"--scope", "project",
-				"--project", project,
-				"--configure-hooks",
-			}, IO{Stdout: &stdout, Stderr: &stderr})
+				code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr})
 
-			if code != 0 {
-				t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-			}
-			raw := readFile(t, configPath)
-			if strings.Contains(raw, ".ps1") {
-				t.Fatalf("hook config still contains PowerShell command: %s", raw)
-			}
-			for _, expected := range []string{
-				"keep-non-formal-hook",
-				"bin",
-				installTestBinaryName(),
-				"hook decide",
-				"receipt capture",
-				"--provider",
-				"--worktree",
-			} {
-				if !strings.Contains(raw, expected) {
-					t.Fatalf("hook config missing %q: %s", expected, raw)
+				if code != 0 {
+					t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
-			}
-			hooks := readHooksMap(t, configPath)
-			for _, event := range []string{tc.preEvent, tc.startEvent, tc.stopEvent} {
-				if _, ok := hooks[event]; !ok {
-					t.Fatalf("expected hook event %s in %s", event, raw)
+				if !strings.Contains(stdout.String(), "formal-gates hooks configured for "+tc.host) {
+					t.Fatalf("expected hook success output, got %q", stdout.String())
 				}
-			}
-			for _, command := range hookCommands(hooks) {
-				if strings.Contains(command, `\`) {
-					t.Fatalf("hook command should use slash paths for shell compatibility: %s", command)
+				raw := readFile(t, configPath)
+				if strings.Contains(raw, ".ps1") {
+					t.Fatalf("hook config still contains PowerShell command: %s", raw)
 				}
-			}
-		})
+				for _, expected := range []string{
+					"keep-non-formal-hook",
+					"bin",
+					installTestBinaryName(),
+					"hook decide",
+					"receipt capture",
+					"--provider",
+					"--worktree",
+				} {
+					if !strings.Contains(raw, expected) {
+						t.Fatalf("hook config missing %q: %s", expected, raw)
+					}
+				}
+				hooks := readHooksMap(t, configPath)
+				for _, event := range []string{tc.preEvent, tc.startEvent, tc.stopEvent} {
+					if _, ok := hooks[event]; !ok {
+						t.Fatalf("expected hook event %s in %s", event, raw)
+					}
+				}
+				for _, command := range hookCommands(hooks) {
+					if strings.Contains(command, `\`) {
+						t.Fatalf("hook command should use slash paths for shell compatibility: %s", command)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunInstallConfiguresEverySelectedHostByDefault(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	project := t.TempDir()
+	var stdout, stderr bytes.Buffer
+
+	code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "both", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code != 0 {
+		t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, expected := range []string{
+		filepath.Join(project, ".claude", "settings.json"),
+		filepath.Join(project, ".codex", "hooks.json"),
+	} {
+		if _, err := os.Stat(expected); err != nil {
+			t.Fatalf("expected selected-host hook config %s: %v", expected, err)
+		}
+	}
+}
+
+func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	project := t.TempDir()
+	configPath := filepath.Join(project, ".codex", "hooks.json")
+	original := "{\n  \"custom\": \"unchanged\"\n}\n"
+	mustWriteCLI(t, configPath, original)
+	var stdout, stderr bytes.Buffer
+
+	code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code != 0 {
+		t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertFileContains(t, filepath.Join(project, ".codex", "skills", "formal-gates", "SKILL.md"), "source")
+	if got := readFile(t, configPath); got != original {
+		t.Fatalf("--skip-hooks changed hook config: got %q want %q", got, original)
+	}
+	if strings.Contains(stdout.String(), "hooks configured") {
+		t.Fatalf("--skip-hooks reported hook configuration success: %q", stdout.String())
+	}
+}
+
+func TestRunInstallRejectsRemovedConfigureHooksFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"install", "--configure-hooks"}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code == 0 {
+		t.Fatal("expected removed --configure-hooks flag to be rejected")
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -configure-hooks") {
+		t.Fatalf("expected unknown flag error, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunInstallHookFailureDoesNotClaimInstallSuccess(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	project := t.TempDir()
+	configPath := filepath.Join(project, ".claude", "settings.json")
+	mustWriteCLI(t, configPath, "not json\n")
+	var stdout, stderr bytes.Buffer
+
+	code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "claude", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code == 0 {
+		t.Fatal("expected invalid hook config to fail install")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("failed install emitted success output: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "existing hook config is not valid JSON") {
+		t.Fatalf("expected hook configuration error, got %q", stderr.String())
 	}
 }
 

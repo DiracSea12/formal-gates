@@ -23,7 +23,7 @@ Do not run only because a public API, behavior, OpenSpec, or document changed. P
 
 - `Design`: read only requirements, specs, public contracts, user flows, or bug reports. Produce cases and oracles. Do not inspect implementation diff to invent cases.
 - `Design Review`: before verification, use receipt-bound `QA_REVIEW` and policy `qa.design-review.v2` to review every candidate case as `ACCEPT / REWORK / DROP / SPLIT / MERGE`. Block only when a case changes the target claim, cannot be executed, lacks an oracle, or lacks evidence binding. Wording polish, style, formatting, or non-execution-affecting phrasing is nonblocking. If rework is needed, route to semantic resubmission; do not stop at the first rejected case or wait for the user unless the claim itself is unclear.
-- `Design Rework`: revise case and oracle semantics only, then use another Design registration and `receipt submit`; never edit a submitted or finalized case file. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
+- `Design Rework`: after the Design dispatch is finalized, revise case and oracle semantics only, then use another Design registration and `receipt submit`; never manually edit the finalized case file. Do not run tests or change implementation. After three failed rework loops, stop and split, merge, delete, or redefine the claim.
 - `Execution`: an independent QA executor runs approved cases and binds them to commands, artifacts, manual observation, or acceptance procedures. QA-owned results and complete case binding are mandatory. Failed or incomplete evidence routes to implementation, test evidence, or case rework; it does not enter final composition. The main agent and CLI check the evidence mechanically and do not dispatch another QA reviewer.
 - `FinalExecution`: after the independent post-development results and final verification, bind final release/seal evidence to the target snapshot before release/seal. When all four post-development gates have target-bound PASS results for the same workflow and snapshot, each fresh or admitted by an accepted per-gate Carry decision, the main agent may record this as a mechanical closeout: check the existing PASS records, final verification artifact, and route to seal. Do not add QA judgment, replace missing gates, reuse stale snapshots, or claim independent review.
 
@@ -62,7 +62,7 @@ Preserve separate artifacts for:
 - final QA verification
 - each formal gate verdict
 
-If a repair changes the snapshot after a PASS, do not reuse the old PASS directly. It may satisfy the new target only when a fresh Carry Arbiter accepts that gate from the repair diff between the pre-repair and post-repair snapshots, excluding unrelated local worktree changes, and the CLI records the target-bound transition; otherwise rerun that gate only. A later repair invalidates the previous Carry decision. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
+If a repair changes the snapshot after a PASS, do not reuse the old PASS directly. It may satisfy the new target only when a fresh Carry Arbiter directly compares the pre-repair and post-repair snapshots with the on-site VCS, excludes unrelated local worktree changes, and accepts that gate before the CLI records the target-bound transition; otherwise rerun that gate only after the terminal target decision is `RERUN_REQUIRED`. `ACCEPT_CARRY`, `BLOCKED`, or no decision rejects the new-snapshot rerun before output/proof, while first execution with no prior same-gate PASS remains allowed. During repair, the orchestrator may prepare source closures, context inputs, and immutable command shape in parallel, but Carry registration, dispatch, and judgment wait for the exact post-repair VCS snapshot and CLI-composed transition. A later repair invalidates the previous Carry decision. GateWorkflow and worktree rules live in `SKILL.md`; recording commands and machine fields live in `references/post-development-artifacts.md`.
 
 ## Case Requirements
 
@@ -78,7 +78,7 @@ formal-gates receipt register --provider codex --worktree <repo> \
   --workflow-id <id> --change-snapshot <design-snapshot>
 ```
 
-The designer does not edit the generated file. After lifecycle start, it calls
+The designer does not edit the generated file. After registration, it calls
 `receipt submit` with one `--design-case <position>` and exactly seven ordered
 `--case-value <text>` flags per case. The value order is Claim, Source, Action,
 Oracle, Failure signal, Evidence, and Gap:
@@ -98,9 +98,9 @@ the CLI writes cases in canonical Case ID order. It owns the title, Case IDs,
 field labels, separators, and final newlines, rejects missing, duplicate,
 unknown, incomplete, empty, `PENDING`, or multiline values before changing the
 artifact, and records the exact generated hash in the open dispatch.
-Finalization requires that submission proof. Design Rework creates another
-Design registration and semantic submission instead of editing a submitted or
-finalized case set. Every approved generated Case ID remains present and
+Finalization requires that submission proof. After Design finalization, Design
+Rework creates another Design registration and semantic submission instead of
+manually editing the finalized case set. Every approved generated Case ID remains present and
 unique by construction.
 For Design Review, `Current diff or proposed change` names this exact generated
 case-set file. Receipt registration binds that target to the same finalized
@@ -148,4 +148,4 @@ Record formal Execution PASS with `references/post-development-artifacts.md`, us
 
 ## Output
 
-The QA executor calls `formal-gates artifact compose-qa-owned-evidence` with one repeated group of approved case 1-based position, PASS/FAIL outcome, procedure, observation, and oracle result. The executor does not provide Case IDs, Execution IDs, procedure references, JSON keys/objects/arrays, paths, hashes, or bindings and does not edit a generated template. The CLI reads approved Case IDs and generates the complete QA-results and case-binding pair plus proof, rejecting missing, duplicate, out-of-range, empty, `PENDING`, or illegal values before writing. The orchestrator then calls `formal-gates artifact compose-qa-execution` with `approvedCaseSet`, `designReview`, `qaOwnedResults`, `caseResultBinding`, `changedFiles`, and `verification` source paths. The CLI hashes those sources and generates the complete schema-version-2 `QA_EXECUTION` envelope under policy `qa.execution.v2`. `designReview` points to the accepted closure for the same workflow and exact case-set reference; case, oracle, or Case ID changes require another Design Review. `QA_EXECUTION` accepts only PASS and has no reviewer dispatch, prompt, context bundle, checks, findings, or receipt. QA Design itself is lifecycle-bound but makes no review judgment, so it does not require a final-send reviewer prompt; Design Review does, through its external receipt.
+The QA executor calls `formal-gates artifact compose-qa-owned-evidence` with one repeated group of approved case 1-based position, PASS/FAIL outcome, procedure, observation, and oracle result. The executor does not provide Case IDs, Execution IDs, procedure references, JSON keys/objects/arrays, paths, hashes, or bindings and does not edit a generated template. The CLI reads approved Case IDs and generates the complete QA-results and case-binding pair plus proof, rejecting missing, duplicate, out-of-range, empty, `PENDING`, or illegal values before writing. The orchestrator then calls `formal-gates artifact compose-qa-execution` with `approvedCaseSet`, `designReview`, `qaOwnedResults`, `caseResultBinding`, `changedFiles`, and `verification` source paths. The CLI hashes those sources and generates the complete schema-version-2 `QA_EXECUTION` envelope under policy `qa.execution.v2`. `designReview` points to the accepted closure for the same workflow and exact case-set reference; case, oracle, or Case ID changes require another Design Review. `QA_EXECUTION` accepts only PASS and has no reviewer dispatch, prompt, context bundle, checks, findings, or receipt. QA Design itself is receipt-bound but makes no review judgment, so it does not require a final-send reviewer prompt; lifecycle-capable providers additionally bind real start/stop events, while Codex does not require unavailable events. Design Review requires its own external receipt.

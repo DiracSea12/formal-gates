@@ -315,7 +315,7 @@ func TestReviewerV2ChecksAndContextBundle(t *testing.T) {
 
 func TestActiveWorkflowRejectsNestedEvidenceOutsideRestricted(t *testing.T) {
 	dir := t.TempDir()
-	runDir := filepath.Join(dir, ".claude", "gates", "runs", "wf")
+	runDir := filepath.Join(dir, ".gates", "runs", "wf")
 	policy, _ := policyByID("architecture.post-development.v2")
 	envelope, payload := reviewerPolicyFixture(t, runDir, policy)
 	mustWrite(t, filepath.Join(runDir, "outside.txt"), "outside restricted")
@@ -386,70 +386,6 @@ func TestExportedReviewerPolicyCheckBehaviorMatrix(t *testing.T) {
 						t.Fatalf("NOT_APPLICABLE allowed=%v failures=%#v", allowed, result.Failures)
 					}
 				})
-			}
-		})
-	}
-}
-
-func TestPostDevelopmentComplexityStatisticsRejectsAdditionalReport(t *testing.T) {
-	dir := t.TempDir()
-	policy, _ := policyByID("complexity.post-development.v2")
-	envelope, payload := reviewerPolicyFixture(t, dir, policy)
-	budgetReport := ComplexityReport{
-		Status: "PASS", VCS: "git", Worktree: dir, TaskType: "bugfix",
-		Budget:       &ComplexityBudget{MaxNet: -600, MaxNewProdFiles: 5, MaxProdInsertions: 2400},
-		BudgetSource: "explicit", BudgetOverrides: ComplexityBudgetOverride{MaxNet: true, MaxNewProdFiles: true, MaxProdInsertions: true},
-		Summary: ComplexitySummary{}, Failures: []string{}, ReviewRequired: []string{}, Warnings: []string{}, LargestFiles: []ComplexityFileChange{},
-	}
-	writeJSONTest(t, filepath.Join(dir, "budget-report.json"), budgetReport)
-	for i := range payload.Checks {
-		if payload.Checks[i].ID == "complexity.statistics" {
-			payload.Checks[i].EvidenceRefs = append(payload.Checks[i].EvidenceRefs, testRef(t, dir, "budget-report.json"))
-		}
-	}
-	writeEnvelopeTest(t, filepath.Join(dir, "review.json"), envelope, payload)
-
-	result := Artifact(ArtifactOptions{Root: dir, RunDir: dir, File: "review.json", Gate: policy.Gate, WorkflowID: "wf", ChangeSnapshot: "snap", Flow: policy.Flow})
-	if result.OK() || !strings.Contains(resultSummary(result), "exactly one CLI-generated statistics report") {
-		t.Fatalf("additional complexity statistics report was accepted: %#v", result.Failures)
-	}
-}
-
-func TestPostDevelopmentComplexityRejectsBudgetReportsOutsideStatisticsCheck(t *testing.T) {
-	policy, _ := policyByID("complexity.post-development.v2")
-	for _, location := range []string{"context bundle", "wrapped handoff", "other check"} {
-		t.Run(location, func(t *testing.T) {
-			dir := t.TempDir()
-			envelope, payload := reviewerPolicyFixture(t, dir, policy)
-			budgetReport := ComplexityReport{
-				Status: "PASS", VCS: "git", Worktree: dir, TaskType: "bugfix",
-				Budget:       &ComplexityBudget{MaxNet: -600, MaxNewProdFiles: 5, MaxProdInsertions: 2400},
-				BudgetSource: "explicit", BudgetOverrides: ComplexityBudgetOverride{MaxNet: true, MaxNewProdFiles: true, MaxProdInsertions: true},
-				Summary: ComplexitySummary{}, Failures: []string{}, ReviewRequired: []string{}, Warnings: []string{}, LargestFiles: []ComplexityFileChange{},
-			}
-			budgetName := "budget-report.json"
-			budgetPath := filepath.Join(dir, "restricted", budgetName)
-			writeJSONTest(t, budgetPath, budgetReport)
-			if location == "wrapped handoff" {
-				budgetName = "handoff.json"
-				budgetPath = filepath.Join(dir, "restricted", budgetName)
-				writeJSONTest(t, budgetPath, map[string]any{"handoff": map[string]any{"developmentTimeComplexityBudget": map[string]any{"maxNet": 100}}})
-			}
-			budgetRef := testRef(t, dir, "restricted/"+budgetName)
-			if location == "context bundle" || location == "wrapped handoff" {
-				writeJSONTest(t, filepath.Join(dir, "restricted", "bundle.json"), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{budgetRef}})
-				payload.ContextBundle = testRef(t, dir, "restricted/bundle.json")
-			} else {
-				for i := range payload.Checks {
-					if payload.Checks[i].ID == "complexity.diff-shape" {
-						payload.Checks[i].EvidenceRefs = []EvidenceRef{budgetRef}
-					}
-				}
-			}
-			writeEnvelopeTest(t, filepath.Join(dir, "review.json"), envelope, payload)
-			result := Artifact(ArtifactOptions{Root: dir, RunDir: dir, File: "review.json", Gate: policy.Gate, WorkflowID: "wf", ChangeSnapshot: "snap", Flow: policy.Flow})
-			if result.OK() || !strings.Contains(resultSummary(result), "development-time budget material") {
-				t.Fatalf("budget-bearing report outside statistics check was accepted: %#v", result.Failures)
 			}
 		})
 	}
@@ -789,7 +725,7 @@ func TestReviewerRejectsInputsOutsideActiveRestrictedDirectory(t *testing.T) {
 		{
 			name: "another run",
 			mutate: func(t *testing.T, dir string, payload *ReviewerPayload) {
-				logical := ".claude/gates/runs/older/restricted/verdict.txt"
+				logical := ".gates/runs/older/restricted/verdict.txt"
 				mustWrite(t, filepath.Join(dir, filepath.FromSlash(logical)), "PASS")
 				writeJSONTest(t, filepath.Join(dir, "restricted", "bundle.json"), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{testRef(t, dir, logical)}})
 				payload.ContextBundle = testRef(t, dir, "restricted/bundle.json")
@@ -827,7 +763,7 @@ func TestReviewerPayloadRejectsLegacyDispatchField(t *testing.T) {
 func TestFinalSendPromptRequiresCurrentContextAndRejectsHistoricalFields(t *testing.T) {
 	root := t.TempDir()
 	writeJSONTest(t, filepath.Join(root, "hooks", "pollution-patterns.json"), map[string]any{"english": map[string]any{"patternGroups": []any{}}, "chinese": map[string]any{"termGroups": []any{}}})
-	valid := finalSendPromptFixture(root, "architecture-health-gate", ".claude/gates/runs/wf/restricted/review.json")
+	valid := finalSendPromptFixture(root, "architecture-health-gate", ".gates/runs/wf/restricted/review.json")
 	for _, test := range []struct {
 		name   string
 		prompt string
@@ -1051,7 +987,7 @@ func TestCarryArtifactAcceptsRestrictedMultiHopChain(t *testing.T) {
 func TestCarryArtifactRejectsRepairHistoryInReviewerPrompt(t *testing.T) {
 	root := t.TempDir()
 	writeJSONTest(t, filepath.Join(root, "hooks", "pollution-patterns.json"), map[string]any{"english": map[string]any{"patternGroups": []any{}}, "chinese": map[string]any{"termGroups": []any{}}})
-	prompt := finalSendPromptFixture(root, "carry-forward-arbiter", ".claude/gates/runs/wf/restricted/carry.json") + "Repair history: restricted/target/repair-history.txt\n"
+	prompt := finalSendPromptFixture(root, "carry-forward-arbiter", ".gates/runs/wf/restricted/carry.json") + "Repair history: restricted/target/repair-history.txt\n"
 	result, _ := DispatchPromptWithViolations(DispatchPromptOptions{Root: root, PromptText: prompt, FinalSend: true})
 	if result.OK() {
 		t.Fatalf("Carry reviewer prompt accepted repair history: %#v", result.Failures)
@@ -1140,7 +1076,8 @@ type carryTestFixture struct {
 
 func newCarryTestFixture(t *testing.T, root, workflowID, sourceSnapshot, targetSnapshot string, proposed []string) carryTestFixture {
 	t.Helper()
-	runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	runDir := filepath.Join(root, ".gates", "runs", workflowID)
+	middleSnapshot := "middle-" + targetSnapshot
 	base := "restricted/" + targetSnapshot
 	if err := os.MkdirAll(filepath.Join(runDir, filepath.FromSlash(base)), 0o700); err != nil {
 		t.Fatal(err)
@@ -1150,25 +1087,23 @@ func newCarryTestFixture(t *testing.T, root, workflowID, sourceSnapshot, targetS
 		closures[gate] = writeCarrySourceClosure(t, root, runDir, workflowID, sourceSnapshot, gate)
 	}
 	for name, text := range map[string]string{
-		base + "/repair-history.txt":       "normal repair history",
+		base + "/requirement.txt":          "current requirement",
 		base + "/hop-one-files.txt":        "first change set",
 		base + "/hop-one-verification.txt": "first verification",
-		base + "/hop-one-repair.txt":       "first repair evidence",
 		base + "/hop-two-files.txt":        "second change set",
 		base + "/hop-two-verification.txt": "second verification",
-		base + "/hop-two-repair.txt":       "second repair evidence",
 	} {
 		mustWrite(t, filepath.Join(runDir, filepath.FromSlash(name)), text)
 	}
 	writeJSONTest(t, filepath.Join(runDir, filepath.FromSlash(base), "carry-context.json"), ContextBundle{
 		BundleVersion: 1, WorkflowID: workflowID, ChangeSnapshot: targetSnapshot,
-		Inputs: []EvidenceRef{testRef(t, runDir, base+"/repair-history.txt")},
+		Inputs: []EvidenceRef{testRef(t, runDir, base+"/requirement.txt")},
 	})
 	chain := TransitionChain{
 		SchemaVersion: 2, WorkflowID: workflowID, TargetSnapshot: targetSnapshot,
 		Hops: []TransitionHop{
-			{FromSnapshot: sourceSnapshot, ToSnapshot: "middle-" + targetSnapshot, ChangedFiles: testRef(t, runDir, base+"/hop-one-files.txt"), Verification: testRef(t, runDir, base+"/hop-one-verification.txt"), RepairEvidence: testRef(t, runDir, base+"/hop-one-repair.txt")},
-			{FromSnapshot: "middle-" + targetSnapshot, ToSnapshot: targetSnapshot, ChangedFiles: testRef(t, runDir, base+"/hop-two-files.txt"), Verification: testRef(t, runDir, base+"/hop-two-verification.txt"), RepairEvidence: testRef(t, runDir, base+"/hop-two-repair.txt")},
+			{FromSnapshot: sourceSnapshot, ToSnapshot: middleSnapshot, ChangedFiles: testRef(t, runDir, base+"/hop-one-files.txt"), Verification: testRef(t, runDir, base+"/hop-one-verification.txt")},
+			{FromSnapshot: middleSnapshot, ToSnapshot: targetSnapshot, ChangedFiles: testRef(t, runDir, base+"/hop-two-files.txt"), Verification: testRef(t, runDir, base+"/hop-two-verification.txt")},
 		},
 	}
 	chainPath := base + "/transition-chain.json"
@@ -1213,9 +1148,6 @@ func writeCarrySourceClosure(t *testing.T, root, runDir, workflowID, snapshot, g
 		checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
 		for _, id := range policy.RequiredCheckIDs {
 			check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
-			if id == "complexity.statistics" {
-				check.EvidenceRefs = []EvidenceRef{writeComplexityStatisticsFixture(t, root, runDir, workflowID, snapshot, logical(prefix+"-statistics.json"))}
-			}
 			checks = append(checks, check)
 		}
 		payload := ReviewerPayload{ContextBundle: testRef(t, runDir, logical(prefix+"-bundle.json")), ReviewPolicyID: policyID, Checks: checks, ChangedFiles: refPtr(testRef(t, runDir, logical(prefix+"-changed.txt"))), Verification: refPtr(testRef(t, runDir, logical(prefix+"-verification.txt")))}
@@ -1242,22 +1174,6 @@ func writeCarrySourceClosure(t *testing.T, root, runDir, workflowID, snapshot, g
 
 func refPtr(ref EvidenceRef) *EvidenceRef { return &ref }
 
-func writeComplexityStatisticsFixture(t *testing.T, root, runDir, workflowID, snapshot, output string) EvidenceRef {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	report, result := Complexity(ComplexityOptions{Worktree: root, VCS: "none", TaskType: "refactor"})
-	if !result.OK() {
-		t.Fatal(result.Failures)
-	}
-	ref, result := writeComplexityStatisticsReport(root, runDir, workflowID, snapshot, output, report)
-	if !result.OK() {
-		t.Fatal(result.Failures)
-	}
-	return ref
-}
-
 func reviewerPolicyFixture(t *testing.T, dir string, policy ArtifactPolicy) (FormalGateEvidence, ReviewerPayload) {
 	t.Helper()
 	restricted := filepath.Join(dir, "restricted")
@@ -1270,10 +1186,6 @@ func reviewerPolicyFixture(t *testing.T, dir string, policy ArtifactPolicy) (For
 	for _, id := range policy.RequiredCheckIDs {
 		check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
 		switch id {
-		case "complexity.statistics":
-			if policy.ID == "complexity.post-development.v2" {
-				check.EvidenceRefs = []EvidenceRef{writeComplexityStatisticsFixture(t, testWorktreeForRunDir(dir), dir, "wf", "snap", logical("statistics.json"))}
-			}
 		case "qa.design.case-set-binding":
 			mustWrite(t, filepath.Join(restricted, "approved-cases.md"), "# Cases\n\nCase ID: P1-001\n\nOracle: approved behavior\n")
 			caseSet := testRef(t, dir, logical("approved-cases.md"))
@@ -1376,7 +1288,7 @@ func TestDesignReviewRejectsDesignerAsReviewer(t *testing.T) {
 	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
 	mustWrite(t, filepath.Join(restricted, "cases.md"), "# Cases\n\nCase ID: P2-001\n")
 	caseSet := testRef(t, dir, logical("cases.md"))
-	designReceipt := writeProofReceiptFixtureWithSubagent(t, dir, "wf", "snap", "qa-test-gate", "Design", caseSet.Path, "design-same", "same-agent")
+	designReceipt := writeProofReceiptFixtureWithProviderAndSubagent(t, dir, "wf", "snap", "qa-test-gate", "Design", caseSet.Path, "design-same", "cursor", "same-agent")
 	mustWrite(t, filepath.Join(restricted, "input.txt"), "requirements")
 	writeJSONTest(t, filepath.Join(restricted, "bundle.json"), ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []EvidenceRef{testRef(t, dir, logical("input.txt"))}})
 	policy, _ := policyByID("qa.design-review.v2")
@@ -1391,7 +1303,7 @@ func TestDesignReviewRejectsDesignerAsReviewer(t *testing.T) {
 	payload := ReviewerPayload{ContextBundle: testRef(t, dir, logical("bundle.json")), ReviewPolicyID: policy.ID, Checks: checks}
 	path := filepath.Join(restricted, "review.json")
 	writeEnvelopeTest(t, path, FormalGateEvidence{SchemaVersion: 2, ArtifactRole: "QA_REVIEW", WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "qa-test-gate", Stage: "Design Review", Verdict: "PASS"}, payload)
-	reviewReceipt := writeProofReceiptFixtureWithSubagent(t, dir, "wf", "snap", "qa-test-gate", "Design Review", logical("review.json"), "review-same", "same-agent")
+	reviewReceipt := writeProofReceiptFixtureWithProviderAndSubagent(t, dir, "wf", "snap", "qa-test-gate", "Design Review", logical("review.json"), "review-same", "cursor", "same-agent")
 	options := ArtifactOptions{Root: root, RunDir: dir, File: relativePath(root, path), Gate: "qa-test-gate", Stage: "Design Review", Flow: "pre-development", WorkflowID: "wf", ChangeSnapshot: "snap"}
 	data, _ := os.ReadFile(path)
 	var result Result
@@ -1409,6 +1321,10 @@ func writeProofReceiptFixture(t *testing.T, dir, workflowID, snapshot, gate, sta
 }
 
 func writeProofReceiptFixtureWithSubagent(t *testing.T, dir, workflowID, snapshot, gate, stage, artifact, prefix, subagentID string) EvidenceRef {
+	return writeProofReceiptFixtureWithProviderAndSubagent(t, dir, workflowID, snapshot, gate, stage, artifact, prefix, "codex", subagentID)
+}
+
+func writeProofReceiptFixtureWithProviderAndSubagent(t *testing.T, dir, workflowID, snapshot, gate, stage, artifact, prefix, provider, subagentID string) EvidenceRef {
 	t.Helper()
 	root := testWorktreeForRunDir(dir)
 	proofDir := filepath.Join(dir, "restricted", "proofs", "fixtures")
@@ -1451,20 +1367,20 @@ func writeProofReceiptFixtureWithSubagent(t *testing.T, dir, workflowID, snapsho
 		semanticSubmissionHash = sha256File(filepath.Join(dir, filepath.FromSlash(artifact)))
 	}
 	dispatchID := prefix + "-dispatch-id"
-	dispatch := dispatchRegistration{ProofVersion: 1, DispatchID: dispatchID, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, ReviewArtifact: artifactPath, PromptArtifact: promptPath, PromptSha256: promptHash, SemanticSubmissionSHA: semanticSubmissionHash, ReceiptArtifact: receiptPath, Status: "finalized"}
+	dispatch := dispatchRegistration{ProofVersion: 1, DispatchID: dispatchID, Provider: provider, WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, ReviewArtifact: artifactPath, PromptArtifact: promptPath, PromptSha256: promptHash, SemanticSubmissionSHA: semanticSubmissionHash, ReceiptArtifact: receiptPath, Status: "finalized"}
 	writeJSONTest(t, filepath.Join(proofDir, dispatchName), dispatch)
 	for name, event := range map[string]string{startName: "subagent_start", stopName: "subagent_stop"} {
-		writeJSONTest(t, filepath.Join(proofDir, name), receiptEventRecord{Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, NormalizedEvent: event, RawEventName: map[string]string{"subagent_start": "SubagentStart", "subagent_stop": "SubagentStop"}[event], SubagentID: subagentID, Status: "completed", DispatchID: dispatchID, DispatchRegistrationArtifact: dispatchPath, CapturedAtUTC: "2026-07-17T00:00:00Z"})
+		writeJSONTest(t, filepath.Join(proofDir, name), receiptEventRecord{Provider: provider, WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, NormalizedEvent: event, RawEventName: map[string]string{"subagent_start": "SubagentStart", "subagent_stop": "SubagentStop"}[event], SubagentID: subagentID, Status: "completed", DispatchID: dispatchID, DispatchRegistrationArtifact: dispatchPath, CapturedAtUTC: "2026-07-17T00:00:00Z"})
 	}
-	receipt := reviewerProofReceipt{ProofVersion: 1, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, DispatchID: dispatchID, DispatchRegistrationArtifact: dispatchPath, DispatchRegistrationSha256: sha256File(filepath.Join(proofDir, dispatchName)), SubagentID: subagentID, NormalizedEvents: []string{"subagent_start", "subagent_stop"}, StartEventArtifact: startPath, StartEventSha256: sha256File(filepath.Join(proofDir, startName)), StopEventArtifact: stopPath, StopEventSha256: sha256File(filepath.Join(proofDir, stopName)), ReviewArtifact: artifactPath, ReviewArtifactSha256: sha256File(filepath.Join(dir, filepath.FromSlash(artifact))), PromptArtifact: promptPath, PromptSha256: promptHash}
+	receipt := reviewerProofReceipt{ProofVersion: 1, Provider: provider, WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, DispatchID: dispatchID, DispatchRegistrationArtifact: dispatchPath, DispatchRegistrationSha256: sha256File(filepath.Join(proofDir, dispatchName)), SubagentID: subagentID, NormalizedEvents: []string{"subagent_start", "subagent_stop"}, StartEventArtifact: startPath, StartEventSha256: sha256File(filepath.Join(proofDir, startName)), StopEventArtifact: stopPath, StopEventSha256: sha256File(filepath.Join(proofDir, stopName)), ReviewArtifact: artifactPath, ReviewArtifactSha256: sha256File(filepath.Join(dir, filepath.FromSlash(artifact))), PromptArtifact: promptPath, PromptSha256: promptHash}
 	writeJSONTest(t, filepath.Join(proofDir, receiptName), receipt)
 	return testRef(t, dir, logical(receiptName))
 }
 
 func testWorktreeForRunDir(dir string) string {
 	current := filepath.Clean(dir)
-	if filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(current)))) == ".claude" {
-		return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(current))))
+	if filepath.Base(filepath.Dir(filepath.Dir(current))) == ".gates" {
+		return filepath.Dir(filepath.Dir(filepath.Dir(current)))
 	}
 	return current
 }
@@ -1530,8 +1446,8 @@ func writeV2RequirementsFixture(t *testing.T, dir, workflow, snapshot string) st
 
 func writeV2RequirementsFixtureAt(t *testing.T, dir, workflow, snapshot, prefix string, previous *EvidenceRef) (string, EvidenceRef) {
 	t.Helper()
-	if strings.Contains(filepath.ToSlash(dir), "/.claude/gates/runs/") {
-		rootMarker := strings.Index(filepath.ToSlash(dir), "/.claude/gates/runs/")
+	if strings.Contains(filepath.ToSlash(dir), "/.gates/runs/") {
+		rootMarker := strings.Index(filepath.ToSlash(dir), "/.gates/runs/")
 		if rootMarker < 0 {
 			t.Fatal("cannot derive test worktree root")
 		}

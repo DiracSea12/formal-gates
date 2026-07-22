@@ -250,12 +250,11 @@ func run(program string, args []string, streams IO) (int, error) {
 			workflowID := fs.String("workflow-id", "", "workflow id")
 			targetSnapshot := fs.String("target-snapshot", "", "target change snapshot")
 			output := fs.String("output", "", "run-local restricted transition-chain output")
-			var fromSnapshots, toSnapshots, changedFiles, verifications, repairEvidence stringListFlag
+			var fromSnapshots, toSnapshots, changedFiles, verifications stringListFlag
 			fs.Var(&fromSnapshots, "hop-from", "source snapshot for the corresponding transition hop")
 			fs.Var(&toSnapshots, "hop-to", "target snapshot for the corresponding transition hop")
 			fs.Var(&changedFiles, "hop-changed-files", "changed-files path for the corresponding transition hop")
 			fs.Var(&verifications, "hop-verification", "verification path for the corresponding transition hop")
-			fs.Var(&repairEvidence, "hop-repair", "repair-evidence path for the corresponding transition hop")
 			if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 				return code, err
 			}
@@ -263,14 +262,14 @@ func run(program string, args []string, streams IO) (int, error) {
 				return 1, fmt.Errorf("artifact compose-transition-chain does not accept positional arguments")
 			}
 			hopCount := len(fromSnapshots)
-			if hopCount == 0 || len(toSnapshots) != hopCount || len(changedFiles) != hopCount || len(verifications) != hopCount || len(repairEvidence) != hopCount {
-				return 1, fmt.Errorf("transition hops require equal non-zero counts of --hop-from, --hop-to, --hop-changed-files, --hop-verification, and --hop-repair")
+			if hopCount == 0 || len(toSnapshots) != hopCount || len(changedFiles) != hopCount || len(verifications) != hopCount {
+				return 1, fmt.Errorf("transition hops require equal non-zero counts of --hop-from, --hop-to, --hop-changed-files, and --hop-verification")
 			}
 			hops := make([]validate.TransitionHopSource, 0, hopCount)
 			for index := 0; index < hopCount; index++ {
 				hops = append(hops, validate.TransitionHopSource{
 					FromSnapshot: fromSnapshots[index], ToSnapshot: toSnapshots[index], ChangedFiles: changedFiles[index],
-					Verification: verifications[index], RepairEvidence: repairEvidence[index],
+					Verification: verifications[index],
 				})
 			}
 			ref, result := validate.ComposeTransitionChain(validate.ComposeTransitionChainOptions{
@@ -321,16 +320,13 @@ func run(program string, args []string, streams IO) (int, error) {
 		case "compose-changed-files":
 			fs := flag.NewFlagSet("artifact compose-changed-files", flag.ContinueOnError)
 			fs.SetOutput(streams.Stderr)
-			root := fs.String("root", ".", "git repository root")
+			root := fs.String("root", ".", "repository root")
 			runDir := fs.String("run-dir", "", "active workflow run directory")
 			workflowID := fs.String("workflow-id", "", "workflow id")
 			changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
 			output := fs.String("output", "", "run-local restricted changed-files output")
-			baseRef := fs.String("base-ref", "", "base git revision")
-			headRef := fs.String("head-ref", "HEAD", "head git revision")
-			includeWorkingTree := fs.Bool("include-working-tree", false, "include staged and unstaged tracked working-tree changes")
-			var includeUntracked stringListFlag
-			fs.Var(&includeUntracked, "include-untracked", "explicit non-ignored untracked path; may be repeated with --include-working-tree")
+			var paths stringListFlag
+			fs.Var(&paths, "path", "delivery path relative to the repository; may be repeated")
 			if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 				return code, err
 			}
@@ -339,7 +335,7 @@ func run(program string, args []string, streams IO) (int, error) {
 			}
 			ref, result := validate.ComposeChangedFiles(validate.ComposeChangedFilesOptions{
 				Root: *root, RunDir: *runDir, WorkflowID: *workflowID, ChangeSnapshot: *changeSnapshot,
-				Output: *output, BaseRef: *baseRef, HeadRef: *headRef, IncludeWorkingTree: *includeWorkingTree, IncludeUntracked: includeUntracked,
+				Output: *output, Paths: paths,
 			})
 			if !result.OK() {
 				return printValidationResult(streams.Stdout, "artifact compose-changed-files", result)
@@ -372,30 +368,23 @@ func run(program string, args []string, streams IO) (int, error) {
 			runDir := fs.String("run-dir", "", "active workflow run directory")
 			workflowID := fs.String("workflow-id", "", "workflow id")
 			changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
+			vcs := fs.String("vcs", "", "external VCS used for development and review comparisons")
 			output := fs.String("output", "", "run-local restricted handoff output")
 			requirementTarget := fs.String("requirement-target", "", "requirement document or OpenSpec target")
 			verificationRequirements := fs.String("verification-requirements", "", "semantic verification requirements")
-			budgetStopTriggers := fs.String("budget-stop-triggers", "", "semantic budget stop triggers")
-			budgetExpansionPath := fs.String("budget-expansion-approval-path", "", "approved budget expansion route")
 			forbiddenContext := fs.String("forbidden-context", "", "forbidden context description")
 			formalFlowMode := fs.String("formal-flow-mode", "", "none, four-gate, release, or seal")
 			triggerSource := fs.String("trigger-source", "", "formal flow trigger source")
 			qaCaseSet := fs.String("qa-case-set", "", "approved QA case-set path")
 			designReview := fs.String("design-review", "", "accepted Design Review closure path")
-			taskType := fs.String("task-type", "", "complexity task type: delete-or-consolidate, bugfix, small-feature, refactor, or new-system")
-			maxNet := fs.Int("max-net", -1, "maximum development-time net lines")
-			maxNewProdFiles := fs.Int("max-new-prod-files", -1, "maximum new production files")
-			maxProdInsertions := fs.Int("max-prod-insertions", -1, "maximum production insertions")
 			if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 				return code, err
 			}
 			ref, result := validate.ComposeHandoff(validate.HandoffComposeOptions{
-				Root: *root, RunDir: *runDir, WorkflowID: *workflowID, ChangeSnapshot: *changeSnapshot, Output: *output,
+				Root: *root, RunDir: *runDir, WorkflowID: *workflowID, ChangeSnapshot: *changeSnapshot, Output: *output, VCS: *vcs,
 				RequirementTarget: *requirementTarget, VerificationRequirements: *verificationRequirements,
-				BudgetStopTriggers: *budgetStopTriggers, BudgetExpansionApprovalPath: *budgetExpansionPath,
 				ForbiddenContext: *forbiddenContext, FormalFlowMode: *formalFlowMode, TriggerSource: *triggerSource,
-				TaskType: *taskType, QACaseSet: *qaCaseSet, DesignReview: *designReview, MaxNet: *maxNet,
-				MaxNewProdFiles: *maxNewProdFiles, MaxProdInsertions: *maxProdInsertions,
+				QACaseSet: *qaCaseSet, DesignReview: *designReview,
 			})
 			if !result.OK() {
 				return printValidationResult(streams.Stdout, "handoff compose", result)
@@ -520,7 +509,7 @@ func run(program string, args []string, streams IO) (int, error) {
 		scope := fs.String("scope", "", "install scope: global or project")
 		project := fs.String("project", "", "project path for project installs, or receipt worktree for global hook config")
 		force := fs.Bool("force", false, "replace an existing formal-gates target")
-		configureHooks := fs.Bool("configure-hooks", false, "write native host hook configuration")
+		skipHooks := fs.Bool("skip-hooks", false, "install runtime without changing native host hook configuration")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -528,12 +517,12 @@ func run(program string, args []string, streams IO) (int, error) {
 			return 1, fmt.Errorf("install does not accept positional arguments")
 		}
 		report, err := validate.Install(validate.InstallOptions{
-			Source:         *source,
-			Host:           *host,
-			Scope:          *scope,
-			Project:        *project,
-			Force:          *force,
-			ConfigureHooks: *configureHooks,
+			Source:    *source,
+			Host:      *host,
+			Scope:     *scope,
+			Project:   *project,
+			Force:     *force,
+			SkipHooks: *skipHooks,
 		})
 		if err != nil {
 			return 1, err
@@ -553,8 +542,6 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runReceipt(args, streams)
 	case "canary":
 		return runCanary(args, streams)
-	case "complexity":
-		return runComplexity(args, streams)
 	case "behavior":
 		return runBehavior(args, streams)
 	case "policy":
@@ -631,96 +618,6 @@ func runBehavior(args []string, streams IO) (int, error) {
 		return 0, nil
 	default:
 		return 1, fmt.Errorf("unknown behavior subcommand: %s", subcommand)
-	}
-}
-
-func runComplexity(args []string, streams IO) (int, error) {
-	if len(args) == 0 {
-		printUsage(streams.Stdout, "formal-gates")
-		return 1, fmt.Errorf("complexity subcommand is required")
-	}
-	subcommand := args[0]
-	args = args[1:]
-	switch subcommand {
-	case "check":
-		fs := flag.NewFlagSet("complexity check", flag.ContinueOnError)
-		fs.SetOutput(streams.Stderr)
-		worktree := fs.String("worktree", ".", "repository root")
-		vcs := fs.String("vcs", "auto", "diff source: auto, git, svn, or none")
-		taskType := fs.String("task-type", "", "task type: delete-or-consolidate, bugfix, small-feature, refactor, or new-system")
-		maxNet := fs.String("max-net", "", "maximum net diff budget")
-		maxNewProdFiles := fs.String("max-new-prod-files", "", "maximum new production files")
-		maxProdInsertions := fs.String("max-prod-insertions", "", "maximum production insertions")
-		staged := fs.Bool("staged", false, "review staged git diff only")
-		jsonOutput := fs.Bool("json", false, "emit JSON")
-		runDir := fs.String("run-dir", "", "active workflow run directory for formal statistics output")
-		workflowID := fs.String("workflow-id", "", "workflow id for formal statistics output")
-		changeSnapshot := fs.String("change-snapshot", "", "change snapshot for formal statistics output")
-		output := fs.String("output", "", "run-local restricted formal statistics output path")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		if strings.TrimSpace(*taskType) == "" {
-			return 1, fmt.Errorf("--task-type is required")
-		}
-		maxNetValue, err := optionalInt(maxNet, "--max-net")
-		if err != nil {
-			return 1, err
-		}
-		maxNewProdFilesValue, err := optionalInt(maxNewProdFiles, "--max-new-prod-files")
-		if err != nil {
-			return 1, err
-		}
-		maxProdInsertionsValue, err := optionalInt(maxProdInsertions, "--max-prod-insertions")
-		if err != nil {
-			return 1, err
-		}
-		options := validate.ComplexityOptions{
-			Worktree:          *worktree,
-			VCS:               *vcs,
-			TaskType:          *taskType,
-			MaxNet:            maxNetValue,
-			MaxNewProdFiles:   maxNewProdFilesValue,
-			MaxProdInsertions: maxProdInsertionsValue,
-			Staged:            *staged,
-		}
-		formalStatistics := strings.TrimSpace(*runDir) != "" || strings.TrimSpace(*workflowID) != "" || strings.TrimSpace(*changeSnapshot) != "" || strings.TrimSpace(*output) != ""
-		if formalStatistics {
-			if strings.TrimSpace(*runDir) == "" || strings.TrimSpace(*workflowID) == "" || strings.TrimSpace(*changeSnapshot) == "" || strings.TrimSpace(*output) == "" {
-				return 1, fmt.Errorf("--run-dir, --workflow-id, --change-snapshot, and --output must be passed together")
-			}
-			if *jsonOutput {
-				return 1, fmt.Errorf("--json is stdout-only and cannot be combined with formal statistics output")
-			}
-			ref, report, result := validate.ComplexityStatistics(validate.ComplexityStatisticsOptions{
-				ComplexityOptions: options, RunDir: *runDir, WorkflowID: *workflowID,
-				ChangeSnapshot: *changeSnapshot, Output: *output,
-			})
-			if !result.OK() {
-				return printValidationResult(streams.Stdout, "complexity", result)
-			}
-			if _, err := printJSON(streams.Stdout, ref); err != nil {
-				return 1, err
-			}
-			return validate.ComplexityExitCode(report.Status), nil
-		}
-		report, result := validate.Complexity(options)
-		if !result.OK() {
-			return printValidationResult(streams.Stdout, "complexity", result)
-		}
-		if *jsonOutput {
-			data, err := validate.ComplexityJSON(report)
-			if err != nil {
-				return 1, err
-			}
-			fmt.Fprintln(streams.Stdout, string(data))
-		} else {
-			fmt.Fprintln(streams.Stdout, validate.ComplexityText(report))
-		}
-		return validate.ComplexityExitCode(report.Status), nil
-	default:
-		printUsage(streams.Stdout, "formal-gates")
-		return 1, fmt.Errorf("unknown complexity subcommand: %s", subcommand)
 	}
 }
 
@@ -852,7 +749,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("receipt register", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		artifact := fs.String("artifact", "", "review artifact path")
 		contextBundle := fs.String("context-bundle", "", "validated context bundle path")
@@ -861,7 +758,6 @@ func runReceipt(args []string, streams IO) (int, error) {
 		verification := fs.String("verification", "", "run-relative verification evidence; required by post-development reviewer policies")
 		qaDesignCaseSet := fs.String("qa-design-case-set", "", "QA Design case-set path for Design Review")
 		qaDesignReceipt := fs.String("qa-design-receipt", "", "QA Design receipt path for Design Review")
-		complexityStatistics := fs.String("complexity-statistics", "", "statistics path for post-development complexity review")
 		transitionChain := fs.String("transition-chain", "", "script-owned Carry transition chain evidence")
 		var carrySourceClosures stringListFlag
 		fs.Var(&carrySourceClosures, "carry-source-closure", "verified source closure path for Carry; may be repeated")
@@ -885,7 +781,6 @@ func runReceipt(args []string, streams IO) (int, error) {
 			Verification:              *verification,
 			QADesignCaseSet:           *qaDesignCaseSet,
 			QADesignReceipt:           *qaDesignReceipt,
-			ComplexityStatistics:      *complexityStatistics,
 			TransitionChain:           *transitionChain,
 			CarrySourceClosures:       carrySourceClosures,
 			QACaseCount:               *qaCaseCount,
@@ -967,7 +862,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("receipt capture", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		event := fs.String("event", "", "host lifecycle event name")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -995,7 +890,7 @@ func runReceipt(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("receipt finalize", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		provider := fs.String("provider", "", "receipt provider: claude-code, codex, or cursor")
 		artifact := fs.String("artifact", "", "review artifact path")
 		gate := fs.String("gate", "", "gate id")
@@ -1070,39 +965,12 @@ func runWorkflow(args []string, streams IO) (int, error) {
 	subcommand := args[0]
 	args = args[1:]
 	switch subcommand {
-	case "snapshot":
-		fs := flag.NewFlagSet("workflow snapshot", flag.ContinueOnError)
-		fs.SetOutput(streams.Stderr)
-		worktree := fs.String("worktree", ".", "repository root")
-		vcs := fs.String("vcs", "auto", "snapshot source: auto, file-hash, git, or svn")
-		baseRef := fs.String("base-ref", "", "base ref for git snapshots")
-		headRef := fs.String("head-ref", "HEAD", "head ref for git snapshots")
-		includeWorkingTree := fs.Bool("include-working-tree", false, "include dirty git working tree content")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		snapshot, result := validate.WorkflowSnapshot(validate.WorkflowSnapshotOptions{
-			Worktree:           *worktree,
-			VCS:                *vcs,
-			BaseRef:            *baseRef,
-			HeadRef:            *headRef,
-			IncludeWorkingTree: *includeWorkingTree,
-		})
-		if !result.OK() {
-			return printValidationResult(streams.Stdout, "workflow snapshot", result)
-		}
-		encoded, err := validate.WorkflowSnapshotJSON(snapshot)
-		if err != nil {
-			return 1, err
-		}
-		fmt.Fprintln(streams.Stdout, string(encoded))
-		return 0, nil
 	case "record-stage":
 		fs := flag.NewFlagSet("workflow record-stage", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
 		state := fs.String("state", "", "gate state JSON path; defaults to gate-state.json in the active workflow run")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		gate := fs.String("gate", "", "gate id")
 		verdict := fs.String("verdict", "", "gate verdict")
 		mode := fs.String("mode", "", "gate mode")
@@ -1146,7 +1014,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
 		state := fs.String("state", "", "gate state JSON path; defaults to gate-state.json in the active workflow run")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		artifact := fs.String("artifact", "", "receipt-bound Carry Arbiter JSON artifact")
 		workflowID := fs.String("workflow-id", "", "workflow id")
 		changeSnapshot := fs.String("change-snapshot", "", "target change snapshot")
@@ -1167,7 +1035,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
 		state := fs.String("state", "", "gate state JSON path; defaults to gate-state.json in the active workflow run")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		gate := fs.String("gate", "", "gate id")
 		mode := fs.String("mode", "", "gate mode")
 		workflowID := fs.String("workflow-id", "", "workflow id")
@@ -1193,7 +1061,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("workflow final-verification", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
+		runDir := fs.String("run-dir", "", "workflow run directory under .gates/runs")
 		var attemptArtifacts stringListFlag
 		fs.Var(&attemptArtifacts, "attempt-artifact", "run-local PASS verification artifact; may be repeated")
 		output := fs.String("output", "", "output aggregate artifact path")
@@ -1225,40 +1093,6 @@ func runWorkflow(args []string, streams IO) (int, error) {
 			return 1, fmt.Errorf("formal-gates workflow final-verification failed with %d issue(s)", len(result.Failures))
 		}
 		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_FINAL_VERIFICATION status=%s accepted=%d attempts=%d\n", artifact.Status, len(artifact.AcceptedAttempts), len(artifact.Attempts))
-		return 0, nil
-	case "compact":
-		fs := flag.NewFlagSet("workflow compact", flag.ContinueOnError)
-		fs.SetOutput(streams.Stderr)
-		worktree := fs.String("worktree", ".", "repository root")
-		runDir := fs.String("run-dir", "", "workflow run directory under .claude/gates/runs")
-		workflowID := fs.String("workflow-id", "", "workflow id")
-		changeSnapshot := fs.String("change-snapshot", "", "change snapshot")
-		dryRun := fs.Bool("dry-run", false, "write archive and list cleanup without deleting source files")
-		execute := fs.Bool("execute", false, "write verified archive and delete source files")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		if *dryRun && *execute {
-			return 1, fmt.Errorf("use only one of --dry-run or --execute")
-		}
-		archive, result := validate.WorkflowCompact(validate.WorkflowCompactOptions{
-			Worktree:       *worktree,
-			RunDir:         *runDir,
-			WorkflowID:     *workflowID,
-			ChangeSnapshot: *changeSnapshot,
-			Execute:        *execute,
-		})
-		if !result.OK() {
-			for _, failure := range result.Failures {
-				fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_COMPACT_BLOCKED %s: %s\n", failure.Path, failure.Message)
-			}
-			return 1, fmt.Errorf("formal-gates workflow compact failed with %d issue(s)", len(result.Failures))
-		}
-		encoded, err := json.MarshalIndent(archive, "", "  ")
-		if err != nil {
-			return 1, err
-		}
-		fmt.Fprintln(streams.Stdout, string(encoded))
 		return 0, nil
 	case "cleanup":
 		fs := flag.NewFlagSet("workflow cleanup", flag.ContinueOnError)
@@ -1442,17 +1276,6 @@ func (s *intListFlag) Set(value string) error {
 	return nil
 }
 
-func optionalInt(value *string, name string) (*int, error) {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		return nil, nil
-	}
-	parsed, err := strconv.Atoi(strings.TrimSpace(*value))
-	if err != nil {
-		return nil, fmt.Errorf("%s must be an integer: %w", name, err)
-	}
-	return &parsed, nil
-}
-
 func readPromptInput(text, file string, stdin bool, input io.Reader) (string, error) {
 	sources := 0
 	if text != "" {
@@ -1552,7 +1375,7 @@ Exit codes:
 }
 
 func printUsage(stdout io.Writer, program string) {
-	fmt.Fprintf(stdout, `%s
+	usage := `%s
 
 Usage:
   %s package validate  --root <formal-gates>
@@ -1560,25 +1383,23 @@ Usage:
   %s artifact compose-requirements --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --output-dir <restricted/dir> --requirement-source <source> --alignment-id <RQ-###> --alignment <position> --alignment-value <semantic-value>... --user-original <text> --coverage-scan PASS --scope-status <status> --scope-message <text> --task-status <status> --task-message <text> --dimension <position> --dimension-status <status> --dimension-message <text> --dimension-ref <position> --dimension-ref-item <alignment-position> --covered-target <path> [--previous-alignment <alignment.json> --approved-dropped-id <RQ-###> ...]
   %s artifact compose-qa-execution --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --output <restricted/execution.json> --approved-case-set <ref> --design-review <ref> --qa-owned-results <ref> --case-result-binding <ref> --changed-files <ref> --verification <ref>
   %s artifact compose-context-bundle --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --output <restricted/bundle.json> --input <restricted/path> [--input <restricted/path> ...]
-  %s artifact compose-transition-chain --root <repo> [--run-dir <dir>] --workflow-id <id> --target-snapshot <snapshot> --output <restricted/chain.json> --hop-from <snapshot> --hop-to <snapshot> --hop-changed-files <path> --hop-verification <path> --hop-repair <path> [...]
+  %s artifact compose-transition-chain --root <repo> [--run-dir <dir>] --workflow-id <id> --target-snapshot <snapshot> --output <restricted/chain.json> --hop-from <snapshot> --hop-to <snapshot> --hop-changed-files <path> --hop-verification <path> [...]
   %s artifact compose-qa-owned-evidence --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --approved-case-set <ref> --case <position> --outcome PASS|FAIL --procedure <text> --observation <text> --oracle-result <text> --output-dir <restricted/dir>
-  %s artifact compose-changed-files --root <git-repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --base-ref <revision> [--head-ref <revision>] [--include-working-tree] [--include-untracked <path> ...] --output <restricted/changed-files.txt>
+  %s artifact compose-changed-files --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <external-vcs-snapshot> --path <delivery/path> [--path <delivery/path> ...] --output <restricted/changed-files.txt>
   %s handoff validate  --root <repo> --file <handoff> --workflow-id <id> --change-snapshot <snapshot>
-  %s handoff compose   --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --output <restricted/handoff.md> --requirement-target <target> --verification-requirements <text> --budget-stop-triggers <text> --budget-expansion-approval-path <text> --forbidden-context <text> --formal-flow-mode <mode> --trigger-source <text> --task-type <type> --max-net <n> --max-new-prod-files <n> --max-prod-insertions <n> [--qa-case-set <path> --design-review <closure>]
+  %s handoff compose   --root <repo> [--run-dir <dir>] --workflow-id <id> --change-snapshot <snapshot> --vcs <git|svn|p4|other> --output <restricted/handoff.md> --requirement-target <target> --verification-requirements <text> --forbidden-context <text> --formal-flow-mode <mode> --trigger-source <text> [--qa-case-set <path> --design-review <closure>]
   %s prompt validate   --root <formal-gates> (--text <text> | --file <file> | --stdin) [--patterns <json>] [--format text|json]
   %s prompt prepare    --root <repo> --output <exact-send.txt> --gate <gate> [--stage <stage>] --current-requirement <target> --current-diff <target> --worktree <repo> --change-snapshot <snapshot> --review-artifact <review.json> --policy-id <policy> --context-bundle <bundle.json> [--patterns <json>]
-  %s install           --source <formal-gates-dir> --host claude|codex|cursor|both --scope global|project [--project <path>] [--force] [--configure-hooks]
+  %s install           --source <formal-gates-dir> --host claude|codex|cursor|both --scope global|project [--project <path>] [--force] [--skip-hooks]
   %s gate record       --worktree <repo> --gate <gate-id> --verdict <verdict> --artifact <artifact> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--stage <stage>] [--state <active-run-json>] [--actor <actor>] [--reason <text>]
   %s gate verify-admission --worktree <repo> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--state <active-run-json>]
   %s gate show         --worktree <repo> --state <active-run-json> [--format json|text]
-  %s workflow snapshot --worktree <repo> --vcs file-hash|git|auto [--base-ref <ref>] [--head-ref <ref>] [--include-working-tree]
   %s workflow record-stage --worktree <repo> [--run-dir <dir>] --gate <gate-id> --verdict <verdict> --artifact <artifact> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--stage <stage>] [--state <active-run-json>] [--actor <actor>] [--reason <text>]
   %s workflow record-transition --worktree <repo> [--run-dir <dir>] --artifact <carry-arbiter.json> --workflow-id <id> --change-snapshot <target> [--state <active-run-json>]
   %s workflow verify-admission --worktree <repo> [--run-dir <dir>] --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--state <active-run-json>]
   %s workflow final-verification --worktree <repo> [--run-dir <dir>] --attempt-artifact <restricted/path> [--attempt-artifact <restricted/path> ...] --output <artifact> --workflow-id <id> --change-snapshot <snapshot> [--state <active-run-json>] [--record-final-qa --final-qa-artifact <artifact> --actor <actor>]
-  %s workflow compact --worktree <repo> --run-dir .claude/gates/runs/<id> --workflow-id <id> [--change-snapshot <snapshot>] [--dry-run | --execute]
   %s workflow cleanup --worktree <repo> [--path <scratch-path>] [--dry-run | --execute]
-  %s receipt register --provider <provider> --worktree <repo> [--run-dir <dir>] --context-bundle <bundle.json> [--prompt <exact-send.txt>] [--qa-case-count <n>] [--changed-files <ref>] [--verification <ref>] [--qa-design-case-set <ref> --qa-design-receipt <ref>] [--complexity-statistics <ref>] [--transition-chain <ref> --carry-source-closure <closure> ...] --artifact <review.json> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>] [--user-authorized-extra-review]
+  %s receipt register --provider <provider> --worktree <repo> [--run-dir <dir>] --context-bundle <bundle.json> [--prompt <exact-send.txt>] [--qa-case-count <n>] [--changed-files <ref>] [--verification <ref>] [--qa-design-case-set <ref> --qa-design-receipt <ref>] [--transition-chain <ref> --carry-source-closure <closure> ...] --artifact <review.json> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>] [--user-authorized-extra-review]
   %s receipt submit --worktree <repo> --artifact <assigned-output> [--check <position> --status <status> --message <text> ...] [--finding-check <position> --finding-message <text> ...] [--location-finding <position> --location-path <path> --location-start <line> --location-end <line> ...] [--carry-gate <position> --decision <decision> --reason <text> ...] [--design-case <position> --case-value <semantic-value> ...]
   %s receipt capture --provider <provider> --event <event> --worktree <repo> [--run-dir <dir>] < payload.json
   %s receipt finalize --provider <provider> --worktree <repo> [--run-dir <dir>] --artifact <review.json> --gate <gate-id> --workflow-id <id> [--stage <stage>]
@@ -1589,7 +1410,10 @@ Usage:
   %s canary codex-hook --worktree <repo> [--codex-command <codex>] [--keep-temp]
   %s behavior evaluate --root <formal-gates> [--cases <cases.json>] [--answers <answers.json>]
   %s policy show       --format json
-  %s complexity check  --task-type <type> --worktree <repo> [--max-net <n> --max-new-prod-files <n> --max-prod-insertions <n>] [--staged] [--json] [--run-dir <dir> --workflow-id <id> --change-snapshot <snapshot> --output <restricted/statistics.json>]
-
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`
+	args := make([]any, strings.Count(usage, "%s"))
+	for i := range args {
+		args[i] = program
+	}
+	fmt.Fprintf(stdout, usage, args...)
 }

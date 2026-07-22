@@ -50,14 +50,14 @@ func TestReviewerNonPassDoesNotWriteFormalState(t *testing.T) {
 	if !result.OK() {
 		t.Fatal(result.Failures)
 	}
-	if isFile(filepath.Join(dir, ".claude", "gates", "gate-state.json")) {
+	if isFile(filepath.Join(dir, ".gates", "gate-state.json")) {
 		t.Fatal("reviewer non-PASS wrote authoritative state")
 	}
 }
 
 func TestOldGateStateRequiresNewWorkflow(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".claude", "gates", "gate-state.json")
+	path := filepath.Join(dir, ".gates", "gate-state.json")
 	mustWrite(t, path, `{"schemaVersion":1,"gates":{},"history":[]}`)
 	_, result := GateShow(GateShowOptions{Worktree: dir})
 	if result.OK() || !strings.Contains(result.Failures[0].Message, "start a new workflow") {

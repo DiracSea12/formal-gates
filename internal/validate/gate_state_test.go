@@ -580,6 +580,22 @@ func TestGateRecordRejectsWorkflowSnapshotMismatch(t *testing.T) {
 	}
 }
 
+func TestGateRecordRejectsSnapshotMismatchBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	artifact := writeGateArtifact(t, dir, "qa-test-gate", "Execution", "wf", "frozen-target")
+	result := GateRecord(GateRecordOptions{
+		Worktree: dir, Gate: "qa-test-gate", Verdict: "PASS", Mode: "formal", Stage: "Execution",
+		Artifact: artifact, WorkflowID: "wf", ChangeSnapshot: "caller-label",
+	})
+	if result.OK() || !strings.Contains(resultSummary(result), "changeSnapshot") {
+		t.Fatalf("snapshot mismatch entered formal state: %#v", result.Failures)
+	}
+	statePath := filepath.Join(dir, ".gates", "runs", "wf", "restricted", "gate-state.json")
+	if isFile(statePath) {
+		t.Fatal("rejected caller target mutated gate state")
+	}
+}
+
 func TestArtifactValidationRevalidatesReceiptBoundPrompt(t *testing.T) {
 	dir := t.TempDir()
 	artifact := writeGateArtifact(t, dir, "complexity-gate", "", "wf", "snap")
@@ -616,7 +632,7 @@ func writeRequirementsArtifact(t *testing.T, dir, workflowID, snapshot string) s
 	t.Helper()
 	runDir := dir
 	root := dir
-	if marker := strings.Index(filepath.ToSlash(dir), "/.claude/gates/runs/"); marker >= 0 {
+	if marker := strings.Index(filepath.ToSlash(dir), "/.gates/runs/"); marker >= 0 {
 		root = filepath.FromSlash(filepath.ToSlash(dir)[:marker])
 	} else {
 		var err error
@@ -666,17 +682,8 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 		t.Fatal("missing test policy")
 	}
 	checks := make([]ReviewCheck, 0, len(policy.RequiredCheckIDs))
-	statisticsName := prefix + "-statistics.json"
-	statisticsRef := writeComplexityStatisticsFixture(t, dir, runDir, workflowID, snapshot, logical(statisticsName))
 	for _, id := range policy.RequiredCheckIDs {
 		check := ReviewCheck{ID: id, Status: "PASS", Message: reviewerCheckMessage(id), EvidenceRefs: []EvidenceRef{}, Findings: []Finding{}}
-		if id == "complexity.statistics" && flow == "start-readiness" {
-			check.Status = "NOT_APPLICABLE"
-			check.Message = "not needed before development"
-		}
-		if id == "complexity.statistics" && flow == "post-development" {
-			check.EvidenceRefs = []EvidenceRef{statisticsRef}
-		}
 		checks = append(checks, check)
 	}
 	payload := ReviewerPayload{ContextBundle: testRef(t, runDir, logical(bundleName)), ReviewPolicyID: policy.ID, Checks: checks}
@@ -693,11 +700,6 @@ func writeGateArtifactMode(t *testing.T, dir, gate, stage, workflowID, snapshot,
 	}
 	if payload.Verification != nil {
 		registerOptions.Verification = payload.Verification.Path
-	}
-	for _, check := range payload.Checks {
-		if check.ID == "complexity.statistics" && len(check.EvidenceRefs) == 1 {
-			registerOptions.ComplexityStatistics = check.EvidenceRefs[0].Path
-		}
 	}
 	register, rr := ReceiptRegisterDispatch(withReceiptBundle(t, registerOptions))
 	if !rr.OK() {
@@ -742,4 +744,55 @@ func finalizeCarryTestArtifact(t *testing.T, root string, fixture carryTestFixtu
 	if _, result := ReceiptFinalize(ReceiptFinalizeOptions{Worktree: root, RunDir: fixture.RunDir, Provider: "codex", WorkflowID: fixture.Envelope.WorkflowID, Gate: "qa-test-gate", Stage: "Carry", Artifact: fixture.Artifact}); !result.OK() {
 		t.Fatal(result.Failures)
 	}
+}
+
+func recordPostDevelopmentPassFixture(t *testing.T, root, workflowID, snapshot, gate string) string {
+	t.Helper()
+	runDir, err := resolveWorkflowRunDir(root, workflowID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := sourceGateContract(gate)
+	artifact := writeGateArtifact(t, root, gate, stage, workflowID, snapshot)
+	result := WorkflowRecordStage(WorkflowRecordStageOptions{
+		Worktree: root, RunDir: runDir, Gate: gate, Verdict: "PASS", Mode: "formal", Stage: stage,
+		Artifact: artifact, WorkflowID: workflowID, ChangeSnapshot: snapshot,
+	})
+	if !result.OK() {
+		t.Fatalf("cannot record prior %s PASS: %#v", gate, result.Failures)
+	}
+	return runDir
+}
+
+func recordCarryDecisionTransitionFixture(t *testing.T, root, workflowID, sourceSnapshot, targetSnapshot, gate, decision string) Result {
+	t.Helper()
+	fixture := newCarryTestFixture(t, root, workflowID, sourceSnapshot, targetSnapshot, []string{gate})
+	fixture.Payload.Decisions[0].Decision = decision
+	fixture.Payload.Decisions[0].Reason = "The terminal transition decision for the gate."
+	finalizeCarryTestArtifact(t, root, fixture)
+	return WorkflowRecordTransition(WorkflowRecordTransitionOptions{
+		Worktree: root, RunDir: fixture.RunDir, Artifact: fixture.Artifact,
+		WorkflowID: workflowID, ChangeSnapshot: targetSnapshot,
+	})
+}
+
+func recordDesignReviewPassFixture(t *testing.T, root, workflowID, snapshot string) string {
+	t.Helper()
+	runDir, err := resolveWorkflowRunDir(root, workflowID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := writeCanaryDesignReviewClosure(root, runDir, workflowID, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	writeV2RequirementsFixture(t, runDir, workflowID, snapshot)
+	requirements := relativePath(root, requirementsFixtureArtifactPath(runDir, ""))
+	if result := WorkflowRecordStage(WorkflowRecordStageOptions{Worktree: root, RunDir: runDir, Gate: "requirements-clarification-gate", Verdict: "PASS", Artifact: requirements, WorkflowID: workflowID, ChangeSnapshot: snapshot}); !result.OK() {
+		t.Fatalf("cannot record Design Review prerequisite: %#v", result.Failures)
+	}
+	designReview := relativePath(root, filepath.Join(runDir, "restricted", "design-review.json"))
+	if result := WorkflowRecordStage(WorkflowRecordStageOptions{Worktree: root, RunDir: runDir, Gate: "qa-test-gate", Verdict: "PASS", Mode: "pre-development", Stage: "Design Review", Artifact: designReview, WorkflowID: workflowID, ChangeSnapshot: snapshot}); !result.OK() {
+		t.Fatalf("cannot record Design Review PASS: %#v", result.Failures)
+	}
+	return runDir
 }

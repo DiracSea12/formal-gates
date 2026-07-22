@@ -39,9 +39,9 @@ caller SHALL provide only repeatable source closure paths; registration SHALL
 verify each closure and derive its fixed gate and source snapshot rather than
 accepting a caller-authored gate/path binding. Transition-chain composition
 SHALL receive one ordered group of source snapshot, target snapshot,
-changed-files path, verification path, and repair-evidence path per hop and
-SHALL generate the typed chain. Missing, mismatched, duplicate, or invalid path
-input SHALL be rejected before the chain or proof is written. The
+changed-files path, and verification path per hop and SHALL generate the typed
+chain. Missing, mismatched, duplicate, or invalid input SHALL be rejected before
+the chain or proof is written. The
 Arbiter SHALL pass one ordered `decision` and `reason` pair per generated gate
 to `receipt submit`; it SHALL NOT edit Carry JSON or repeat the gate/static
 bindings. Submission SHALL reject invalid or incomplete values before changing
@@ -51,19 +51,21 @@ artifact; no AI actor may author or repeat the static fields.
 
 The referenced transition chain contains exactly `schemaVersion=2`,
 `workflowId`, `targetSnapshot`, and non-empty `hops`. Each hop contains exactly
-`fromSnapshot`, `toSnapshot`, `changedFiles`,
-`verification`, and `repairEvidence`; the last `toSnapshot` equals the target,
-adjacent hops are contiguous, and all three evidence fields are hashed
-`EvidenceRef` values. This material stays under `restricted/` and is validated
-by the CLI outside every reviewer prompt. The Arbiter receives the cumulative
-repair diff from the pre-repair snapshot to the post-repair snapshot, excluding
-unrelated local worktree changes, instead of the hop, receipt, or repair-history
-files.
+`fromSnapshot`, `toSnapshot`, `changedFiles`, and `verification`; the last
+`toSnapshot` equals the target, adjacent hops are contiguous, and both evidence
+fields are hashed `EvidenceRef` values. This material stays under `restricted/`
+and is validated by the CLI outside every reviewer prompt. The CLI owns the
+workflow chain rather than project changes. The Arbiter receives only the
+worktree and exact native VCS comparison target for the newest adjacent repair,
+excluding unrelated local worktree changes, instead of the hop, receipt, prior
+Carry decisions, or repair-history files.
 
-For successive repairs, the chain starts at the most recent fresh-PASS baseline
-and includes every hop through the new target. A target-to-new-target-only chain
-cannot carry a gate whose source evidence predates that hop; the complete
-cumulative chain is required for the next independent per-gate decision.
+For successive repairs, the machine chain retains every contiguous snapshot hop
+and accepted decision needed to prove how earlier gate evidence
+reaches the new target. The CLI validates that provenance outside the prompt;
+the new Arbiter judges only the newest adjacent hop. `CarryDecision.sourceSnapshot`
+continues to identify the source gate evidence snapshot and MAY predate the
+current hop's `fromSnapshot`; those two meanings SHALL NOT be conflated.
 
 Top-level verdict is `PASS` when every decision is terminal
 (`ACCEPT_CARRY` or `RERUN_REQUIRED`) and `BLOCKED` when any decision is
@@ -110,10 +112,41 @@ MAY supply transition source paths to the CLI, but the CLI SHALL generate their
 static chain and bindings. The main agent MUST NOT author the formal chain or
 authorize carry or rerun.
 
+Before `receipt register` admits a post-development gate at a new target
+snapshot, the CLI SHALL check the active workflow for an older-snapshot PASS for
+that same gate. If one exists, a recorded terminal Carry transition for the
+target SHALL explicitly decide `RERUN_REQUIRED` for that gate; `ACCEPT_CARRY`,
+`BLOCKED`, or no decision SHALL reject registration before its artifact or
+proof is written. If no prior PASS exists for that gate in the active workflow,
+the first execution MAY register normally. Mechanical QA Execution composition
+at a new snapshot SHALL apply the same rule to an older-snapshot QA Execution
+PASS before writing any output or proof.
+
+During repair, the orchestrator MAY prepare source-closure selection, context
+inputs, and immutable command shape in parallel with the worker. Carry
+registration, dispatch, and judgment SHALL wait until the worker fixes the exact
+post-repair VCS snapshot and the CLI composes the exact transition. A mutable
+future reference, waiting Arbiter, or two-phase judgment SHALL NOT be used.
+
 #### Scenario: Final composition starts before arbitration
 
 - **WHEN** final composition depends on an undecided carried gate
 - **THEN** finalization blocks that workflow.
+
+#### Scenario: New-snapshot rerun lacks terminal Carry permission
+
+- **WHEN** an active workflow has an older-snapshot PASS for a gate and the
+  caller registers that gate, or composes QA Execution, at a new snapshot
+  without a terminal target transition deciding `RERUN_REQUIRED` for it
+- **THEN** the CLI rejects before writing the new artifact or proof; an
+  `ACCEPT_CARRY`, `BLOCKED`, or absent decision does not permit rerun.
+
+#### Scenario: Repair preparation overlaps implementation safely
+
+- **WHEN** the worker is still repairing while the orchestrator prepares source
+  closures, context inputs, and immutable command shape
+- **THEN** no Carry registration, dispatch, or judgment occurs until the exact
+  post-repair VCS snapshot and CLI-composed transition exist.
 
 #### Scenario: Accepted decision reaches finalization
 
@@ -127,21 +160,25 @@ authorize carry or rerun.
 - **THEN** the old carry decision is stale and new arbitration is required
   before final composition.
 
-### Requirement: Arbiter decides every carried gate from the repair diff
+### Requirement: Arbiter decides every carried gate from a native VCS comparison
 
-The CLI SHALL validate every hop in the transition chain. The receipt-bound
-Arbiter SHALL receive the cumulative diff produced by the repair from the
-pre-repair snapshot to the post-repair snapshot, not the transition, receipt,
-or repair-history files and not unrelated local worktree changes, and decide
-each eligible prior PASS gate as `ACCEPT_CARRY`, `RERUN_REQUIRED`, or `BLOCKED`.
-The main agent SHALL NOT override or aggregate those individual decisions.
+The CLI SHALL validate every hop and accepted prior transition in the machine
+chain. The receipt-bound Arbiter SHALL receive only the worktree and exact
+pre-repair and post-repair snapshot identities, invoke the on-site VCS directly
+to compare them, and decide each eligible prior PASS gate as `ACCEPT_CARRY`,
+`RERUN_REQUIRED`, or `BLOCKED`. It SHALL NOT receive the transition, receipt,
+prior decision, repair history, or unrelated local worktree changes. The main
+agent SHALL NOT override or aggregate those
+individual decisions.
 
-Phase 2.5 relies on an exact pre-repair source that was preserved before the
-repair. If that source is unavailable, Carry SHALL NOT be proposed and the
-affected gate SHALL run fresh. Phase 3 SHALL replace this operational
-precondition with CLI-persisted source/target dirty-tree identities and an
-exact diff mechanically derived and revalidated from those trees; old hash-only
-snapshots SHALL NOT be represented as tree-bound.
+Before changing a delivery path for a repair, the worker or orchestrator SHALL
+ensure the path is tracked and use the named external VCS's native state or
+checkpoint facility to fix the pre-repair snapshot. After the repair, it SHALL
+fix the post-repair snapshot and verify that the same VCS can compare those two
+states directly. Formal-gates SHALL retain only workflow snapshots, static
+evidence, and decisions. If the exact native comparison is unavailable, Carry SHALL NOT be
+proposed and an affected gate SHALL NOT enter a new-snapshot rerun without a
+terminal `RERUN_REQUIRED` decision.
 
 #### Scenario: Multi-hop machine history is incomplete
 
@@ -149,6 +186,13 @@ snapshots SHALL NOT be represented as tree-bound.
   surface, or proof reference
 - **THEN** CLI validation rejects the carry record without exposing that chain
   to the Arbiter.
+
+#### Scenario: Gate evidence predates the current repair source
+
+- **WHEN** a gate passed fresh on `T1`, was validly carried to `T2`, and the
+  current repair creates `T3`
+- **THEN** the CLI validates the accepted `T1`-to-`T2` provenance while the new
+  Arbiter directly compares native VCS snapshots `T2` and `T3`.
 
 #### Scenario: Different gates receive different decisions
 

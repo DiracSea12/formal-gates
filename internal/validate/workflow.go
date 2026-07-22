@@ -1,38 +1,13 @@
 package validate
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 )
-
-type WorkflowSnapshotOptions struct {
-	Worktree           string
-	VCS                string
-	BaseRef            string
-	HeadRef            string
-	IncludeWorkingTree bool
-}
-
-type WorkflowSnapshotRecord struct {
-	VCS                string `json:"vcs"`
-	BaseRef            string `json:"baseRef,omitempty"`
-	BaseCommit         string `json:"baseCommit,omitempty"`
-	HeadRef            string `json:"headRef,omitempty"`
-	HeadCommit         string `json:"headCommit,omitempty"`
-	RangeHash          string `json:"rangeHash"`
-	IncludeWorkingTree bool   `json:"includeWorkingTree"`
-	WorkingTreeHash    string `json:"workingTreeHash,omitempty"`
-	ChangeSnapshot     string `json:"changeSnapshot"`
-}
 
 type WorkflowRecordStageOptions struct {
 	Worktree       string
@@ -103,14 +78,6 @@ type WorkflowCleanupOptions struct {
 	Execute  bool
 }
 
-type WorkflowCompactOptions struct {
-	Worktree       string
-	RunDir         string
-	WorkflowID     string
-	ChangeSnapshot string
-	Execute        bool
-}
-
 type WorkflowCleanupRecord struct {
 	Path   string `json:"path"`
 	Status string `json:"status"`
@@ -121,67 +88,6 @@ type WorkflowCleanupReport struct {
 	Worktree      string                  `json:"worktree"`
 	DryRun        bool                    `json:"dryRun"`
 	Paths         []WorkflowCleanupRecord `json:"paths"`
-}
-
-type WorkflowCompactArchive struct {
-	SchemaVersion   int                     `json:"schemaVersion"`
-	WorkflowID      string                  `json:"workflowId"`
-	ChangeSnapshot  string                  `json:"changeSnapshot,omitempty"`
-	RunDir          string                  `json:"runDir"`
-	Files           []WorkflowCompactFile   `json:"files"`
-	Cleanup         []WorkflowCleanupRecord `json:"cleanup"`
-	OtherRunCleanup []WorkflowCleanupRecord `json:"otherRunCleanup,omitempty"`
-	DryRun          bool                    `json:"dryRun"`
-}
-
-type WorkflowCompactFile struct {
-	Path          string `json:"path"`
-	ContentBase64 string `json:"contentBase64,omitempty"`
-}
-
-func WorkflowSnapshot(options WorkflowSnapshotOptions) (WorkflowSnapshotRecord, Result) {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	if !isDir(worktree) {
-		result.add("worktree", "worktree does not exist: "+worktree)
-		return WorkflowSnapshotRecord{}, result
-	}
-	vcs := strings.TrimSpace(options.VCS)
-	if vcs == "" {
-		vcs = "auto"
-	}
-	switch vcs {
-	case "auto":
-		if isGitWorktree(worktree) {
-			vcs = "git"
-		} else if hasAncestorDir(worktree, ".svn") {
-			vcs = "svn"
-		} else {
-			vcs = "file-hash"
-		}
-	case "file-hash", "git", "svn":
-	default:
-		result.add("vcs", "unsupported --vcs value: "+vcs)
-		return WorkflowSnapshotRecord{}, result
-	}
-
-	if vcs != "git" {
-		snapshot, err := fileHashSnapshot(worktree, vcs)
-		if err != nil {
-			result.add("workflow snapshot", err.Error())
-		}
-		return snapshot, result
-	}
-
-	snapshot, err := gitSnapshot(worktree, options)
-	if err != nil {
-		result.add("workflow snapshot", err.Error())
-	}
-	return snapshot, result
-}
-
-func WorkflowSnapshotJSON(snapshot WorkflowSnapshotRecord) ([]byte, error) {
-	return json.MarshalIndent(snapshot, "", "  ")
 }
 
 func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
@@ -350,7 +256,7 @@ func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (Workfl
 			if suffix == "" {
 				suffix = "workflow"
 			}
-			output = filepath.ToSlash(filepath.Join(".claude", "gates", "artifacts", "final-verification-"+suffix+".json"))
+			output = filepath.ToSlash(filepath.Join(".gates", "artifacts", "final-verification-"+suffix+".json"))
 		}
 	}
 	outputPath := resolvePath(worktree, output)
@@ -536,88 +442,6 @@ func WorkflowCleanup(options WorkflowCleanupOptions) (WorkflowCleanupReport, Res
 	return report, result
 }
 
-func WorkflowCompact(options WorkflowCompactOptions) (WorkflowCompactArchive, Result) {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	if !isDir(worktree) {
-		result.add("worktree", "worktree does not exist: "+worktree)
-		return WorkflowCompactArchive{}, result
-	}
-	workflowID := strings.TrimSpace(options.WorkflowID)
-	if workflowID == "" {
-		result.add("workflow-id", "--workflow-id is required")
-		return WorkflowCompactArchive{}, result
-	}
-	runDir, err := resolveWorkflowRunDir(worktree, workflowID, options.RunDir)
-	if err != nil {
-		result.add("run-dir", err.Error())
-		return WorkflowCompactArchive{}, result
-	}
-	if !isDir(runDir) {
-		result.add("run-dir", "run directory does not exist: "+slash(runDir))
-		return WorkflowCompactArchive{}, result
-	}
-	output := filepath.Join(runDir, "restricted", "formal-gates-workflow-archive.json")
-
-	paths, err := workflowRunFiles(runDir, output)
-	if err != nil {
-		result.add("compact", err.Error())
-		return WorkflowCompactArchive{}, result
-	}
-	files := make([]WorkflowCompactFile, 0, len(paths))
-	cleanup := make([]WorkflowCleanupRecord, 0, len(paths))
-	for _, path := range paths {
-		if samePath(path, output) {
-			continue
-		}
-		file := WorkflowCompactFile{Path: relativePath(worktree, path)}
-		files = append(files, file)
-		cleanup = append(cleanup, WorkflowCleanupRecord{Path: file.Path, Status: "would-remove"})
-	}
-	otherCleanup, err := orphanedArchivedRunFiles(worktree, runDir)
-	if err != nil {
-		result.add("runs", err.Error())
-		return WorkflowCompactArchive{}, result
-	}
-	if !result.OK() {
-		return WorkflowCompactArchive{}, result
-	}
-	archive := WorkflowCompactArchive{
-		SchemaVersion:   1,
-		WorkflowID:      workflowID,
-		ChangeSnapshot:  strings.TrimSpace(options.ChangeSnapshot),
-		RunDir:          relativePath(worktree, runDir),
-		Files:           files,
-		Cleanup:         cleanup,
-		OtherRunCleanup: otherCleanup,
-		DryRun:          !options.Execute,
-	}
-	if !options.Execute {
-		return archive, result
-	}
-	if err := writeWorkflowCompactArchive(worktree, output, archive); err != nil {
-		result.add("output", err.Error())
-		return archive, result
-	}
-	if err := verifyWorkflowCompactArchive(output, len(archive.Files)); err != nil {
-		result.add("output", "archive verification failed: "+err.Error())
-		return archive, result
-	}
-	removeWorkflowFiles(worktree, archive.Cleanup, &result)
-	removeWorkflowFiles(worktree, archive.OtherRunCleanup, &result)
-	archive.DryRun = false
-	if err := removeEmptyDirsUnder(runDir); err != nil {
-		result.add("run-dir", "cannot remove empty run directories: "+err.Error())
-	}
-	runsRoot := filepath.Join(absPath(worktree), ".claude", "gates", "runs")
-	if isDir(runsRoot) {
-		if err := removeEmptyDirsUnder(runsRoot); err != nil {
-			result.add("runs", "cannot remove empty archived run directories: "+err.Error())
-		}
-	}
-	return archive, result
-}
-
 func workflowStatePath(worktree, statePath, runDir string) string {
 	if strings.TrimSpace(statePath) != "" {
 		return resolveStatePath(worktree, statePath)
@@ -635,12 +459,12 @@ func resolveWorkflowRunDir(worktree, workflowID, value string) (string, error) {
 		if strings.TrimSpace(workflowID) == "" {
 			return "", fmt.Errorf("--workflow-id is required when using a default workflow run directory")
 		}
-		runDir = filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID))
+		runDir = filepath.ToSlash(filepath.Join(".gates", "runs", workflowID))
 	}
 	full := absPath(resolvePath(worktreeAbs, runDir))
-	runsRoot := filepath.Join(worktreeAbs, ".claude", "gates", "runs")
+	runsRoot := filepath.Join(worktreeAbs, ".gates", "runs")
 	if samePath(full, runsRoot) || !pathUnder(full, runsRoot) {
-		return "", fmt.Errorf("run directory must be under .claude/gates/runs: %s", slash(full))
+		return "", fmt.Errorf("run directory must be under .gates/runs: %s", slash(full))
 	}
 	return full, nil
 }
@@ -665,314 +489,6 @@ func requireAbsPathUnderRunDir(runDir, label, path string) error {
 		return fmt.Errorf("%s must be under the active run restricted directory: %s", label, slash(full))
 	}
 	return nil
-}
-
-func workflowRunFiles(runDir, output string) ([]string, error) {
-	paths := map[string]bool{}
-	err := filepath.WalkDir(runDir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if entry.Type()&os.ModeType != 0 {
-			return nil
-		}
-		full := absPath(path)
-		if !samePath(full, output) {
-			paths[full] = true
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(paths))
-	for path := range paths {
-		out = append(out, path)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-func removeWorkflowFiles(worktree string, records []WorkflowCleanupRecord, result *Result) {
-	for i, record := range records {
-		path := resolvePath(worktree, record.Path)
-		if !isFile(path) {
-			records[i].Status = "missing"
-			continue
-		}
-		if err := os.Remove(path); err != nil {
-			records[i].Status = "remove-failed"
-			result.add(record.Path, "cleanup remove failed: "+err.Error())
-			continue
-		}
-		records[i].Status = "removed"
-	}
-}
-
-func writeWorkflowCompactArchive(worktree, path string, archive WorkflowCompactArchive) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	out := archive
-	out.Files = append([]WorkflowCompactFile(nil), archive.Files...)
-	for _, item := range archive.Files {
-		data, err := os.ReadFile(resolvePath(worktree, item.Path))
-		if err != nil {
-			return err
-		}
-		for i := range out.Files {
-			if out.Files[i].Path == item.Path {
-				out.Files[i].ContentBase64 = base64.StdEncoding.EncodeToString(data)
-				break
-			}
-		}
-	}
-	data, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(path, append(data, '\n'), 0o600)
-}
-
-func verifyWorkflowCompactArchive(path string, expectedFiles int) error {
-	var archive WorkflowCompactArchive
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(data, &archive); err != nil {
-		return err
-	}
-	if len(archive.Files) != expectedFiles {
-		return fmt.Errorf("expected %d archived files, got %d", expectedFiles, len(archive.Files))
-	}
-	for _, file := range archive.Files {
-		if _, err := base64.StdEncoding.DecodeString(file.ContentBase64); err != nil {
-			return fmt.Errorf("invalid content for %s: %w", file.Path, err)
-		}
-	}
-	return nil
-}
-
-func removeEmptyDirsUnder(root string) error {
-	var dirs []string
-	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() && !samePath(path, root) {
-			dirs = append(dirs, path)
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	sort.Slice(dirs, func(i, j int) bool {
-		return len(dirs[i]) > len(dirs[j])
-	})
-	for _, dir := range dirs {
-		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
-			if entries, readErr := os.ReadDir(dir); readErr == nil && len(entries) > 0 {
-				continue
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func orphanedArchivedRunFiles(worktree, currentRunDir string) ([]WorkflowCleanupRecord, error) {
-	worktreeAbs := absPath(worktree)
-	runsRoot := filepath.Join(worktreeAbs, ".claude", "gates", "runs")
-	if !isDir(runsRoot) {
-		return nil, nil
-	}
-	var records []WorkflowCleanupRecord
-	err := filepath.WalkDir(runsRoot, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !entry.IsDir() || samePath(path, runsRoot) {
-			return nil
-		}
-		if samePath(path, currentRunDir) || pathUnder(path, currentRunDir) {
-			return filepath.SkipDir
-		}
-		archive := workflowArchiveInDir(path)
-		if archive == "" {
-			return nil
-		}
-		return filepath.WalkDir(path, func(candidate string, candidateEntry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if candidateEntry.IsDir() {
-				return nil
-			}
-			if candidateEntry.Type()&os.ModeType != 0 {
-				return nil
-			}
-			if samePath(candidate, archive) {
-				return nil
-			}
-			records = append(records, WorkflowCleanupRecord{
-				Path:   relativePath(worktreeAbs, candidate),
-				Status: "would-remove",
-			})
-			return nil
-		})
-	})
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].Path < records[j].Path
-	})
-	return records, err
-}
-
-func workflowArchiveInDir(dir string) string {
-	for _, name := range []string{"formal-gates-workflow-archive.zip", "formal-gates-workflow-archive.json"} {
-		path := filepath.Join(dir, name)
-		if isFile(path) {
-			return path
-		}
-	}
-	return ""
-}
-
-func fileHashSnapshot(worktree, detectedVCS string) (WorkflowSnapshotRecord, error) {
-	digest, err := fileTreeDigest(worktree)
-	if err != nil {
-		return WorkflowSnapshotRecord{}, err
-	}
-	treeHash := textHash(digest)
-	prefix := "files"
-	if detectedVCS == "svn" {
-		prefix = "svn-files"
-	}
-	return WorkflowSnapshotRecord{
-		VCS:                detectedVCS,
-		RangeHash:          treeHash,
-		IncludeWorkingTree: true,
-		WorkingTreeHash:    treeHash,
-		ChangeSnapshot:     prefix + "." + treeHash[:12],
-	}, nil
-}
-
-func gitSnapshot(worktree string, options WorkflowSnapshotOptions) (WorkflowSnapshotRecord, error) {
-	baseRef := strings.TrimSpace(options.BaseRef)
-	if baseRef == "" {
-		return WorkflowSnapshotRecord{}, fmt.Errorf("--base-ref is required for git snapshot")
-	}
-	headRef := strings.TrimSpace(options.HeadRef)
-	if headRef == "" {
-		headRef = "HEAD"
-	}
-	baseCommit, err := gitText(worktree, "rev-parse", baseRef)
-	if err != nil {
-		return WorkflowSnapshotRecord{}, fmt.Errorf("git rev-parse base failed: %w", err)
-	}
-	headCommit, err := gitText(worktree, "rev-parse", headRef)
-	if err != nil {
-		return WorkflowSnapshotRecord{}, fmt.Errorf("git rev-parse head failed: %w", err)
-	}
-	status, err := gitText(worktree, "status", "--short", "--", ".", ":(exclude).claude/gates/**")
-	if err != nil {
-		return WorkflowSnapshotRecord{}, fmt.Errorf("git status failed: %w", err)
-	}
-	if strings.TrimSpace(status) != "" && !options.IncludeWorkingTree {
-		return WorkflowSnapshotRecord{}, fmt.Errorf("git worktree is dirty; pass --include-working-tree to include it")
-	}
-	rangeDiff, err := gitText(worktree, "diff", "--binary", baseCommit+".."+headCommit, "--", ".", ":(exclude).claude/gates/**")
-	if err != nil {
-		return WorkflowSnapshotRecord{}, fmt.Errorf("git diff range failed: %w", err)
-	}
-	rangeHash := textHash(rangeDiff)
-	snapshot := WorkflowSnapshotRecord{
-		VCS:                "git",
-		BaseRef:            baseRef,
-		BaseCommit:         baseCommit,
-		HeadRef:            headRef,
-		HeadCommit:         headCommit,
-		RangeHash:          rangeHash,
-		IncludeWorkingTree: options.IncludeWorkingTree,
-		ChangeSnapshot:     baseCommit[:12] + ".." + headCommit[:12] + "+" + rangeHash[:12],
-	}
-	if options.IncludeWorkingTree {
-		workingDiff, err := gitText(worktree, "diff", "--binary", "--", ".", ":(exclude).claude/gates/**")
-		if err != nil {
-			return WorkflowSnapshotRecord{}, fmt.Errorf("git diff working tree failed: %w", err)
-		}
-		cachedDiff, err := gitText(worktree, "diff", "--binary", "--cached", "--", ".", ":(exclude).claude/gates/**")
-		if err != nil {
-			return WorkflowSnapshotRecord{}, fmt.Errorf("git diff cached failed: %w", err)
-		}
-		untracked, err := gitText(worktree, "ls-files", "--others", "--exclude-standard", "--", ".", ":(exclude).claude/gates/**")
-		if err != nil {
-			return WorkflowSnapshotRecord{}, fmt.Errorf("git ls-files untracked failed: %w", err)
-		}
-		untrackedDigest, err := untrackedContentDigest(worktree, untracked)
-		if err != nil {
-			return WorkflowSnapshotRecord{}, err
-		}
-		workingHash := textHash(status + "\n" + cachedDiff + "\n" + workingDiff + "\n" + untrackedDigest)
-		snapshot.WorkingTreeHash = workingHash
-		snapshot.ChangeSnapshot = baseCommit[:12] + ".." + headCommit[:12] + "+wt." + workingHash[:12]
-	}
-	return snapshot, nil
-}
-
-func fileTreeDigest(worktree string) (string, error) {
-	var entries []string
-	err := filepath.WalkDir(worktree, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == worktree {
-			return nil
-		}
-		rel, err := filepath.Rel(worktree, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if entry.IsDir() {
-			if ignoredSnapshotDir(rel, entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.Type()&os.ModeType != 0 {
-			return nil
-		}
-		hash := sha256File(path)
-		if hash == "" {
-			return fmt.Errorf("cannot hash file: %s", rel)
-		}
-		entries = append(entries, rel+" sha256="+hash)
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	sort.Strings(entries)
-	return strings.Join(entries, "\n"), nil
-}
-
-func ignoredSnapshotDir(rel, name string) bool {
-	switch name {
-	case ".git", ".svn", ".hg", "node_modules", "__pycache__":
-		return true
-	}
-	switch rel {
-	case ".claude/gates", ".artifacts/tmp", ".artifacts/scratch", ".artifacts/cleanup":
-		return true
-	}
-	return strings.HasPrefix(rel, ".claude/gates/") ||
-		strings.HasPrefix(rel, ".artifacts/tmp/") ||
-		strings.HasPrefix(rel, ".artifacts/scratch/") ||
-		strings.HasPrefix(rel, ".artifacts/cleanup/")
 }
 
 func writeFinalVerificationArtifact(path string, artifact WorkflowFinalVerificationArtifact) error {
@@ -1079,7 +595,7 @@ func allowedCleanupPath(worktree, value string) (string, error) {
 	if samePath(fullAbs, artifactsRoot) {
 		return "", fmt.Errorf("cleanup refuses .artifacts root: %s", slash(fullAbs))
 	}
-	gateRoot := filepath.Join(worktreeAbs, ".claude", "gates")
+	gateRoot := filepath.Join(worktreeAbs, ".gates")
 	if samePath(fullAbs, gateRoot) || pathUnder(fullAbs, gateRoot) {
 		return "", fmt.Errorf("cleanup refuses formal gate evidence: %s", slash(fullAbs))
 	}
@@ -1159,71 +675,4 @@ func pathUnder(path, root string) bool {
 		return false
 	}
 	return true
-}
-
-func untrackedContentDigest(worktree, untracked string) (string, error) {
-	var entries []string
-	for _, rel := range strings.Split(untracked, "\n") {
-		rel = strings.TrimSpace(rel)
-		if rel == "" {
-			continue
-		}
-		path := filepath.Join(worktree, filepath.FromSlash(rel))
-		if !isFile(path) {
-			continue
-		}
-		hash := sha256File(path)
-		if hash == "" {
-			return "", fmt.Errorf("cannot hash untracked file: %s", rel)
-		}
-		entries = append(entries, rel+" sha256="+hash)
-	}
-	sort.Strings(entries)
-	return strings.Join(entries, "\n"), nil
-}
-
-func isGitWorktree(worktree string) bool {
-	out, err := gitText(worktree, "rev-parse", "--is-inside-work-tree")
-	return err == nil && strings.TrimSpace(out) == "true"
-}
-
-func hasAncestorDir(root, marker string) bool {
-	current, err := filepath.Abs(root)
-	if err != nil {
-		current = filepath.Clean(root)
-	}
-	for {
-		if isDir(filepath.Join(current, marker)) {
-			return true
-		}
-		next := filepath.Dir(current)
-		if next == current {
-			return false
-		}
-		current = next
-	}
-}
-
-func gitText(worktree string, args ...string) (string, error) {
-	all := append([]string{"-C", worktree}, args...)
-	cmd := exec.Command("git", all...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = strings.TrimSpace(stdout.String())
-		}
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("%s", msg)
-	}
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-func textHash(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
 }

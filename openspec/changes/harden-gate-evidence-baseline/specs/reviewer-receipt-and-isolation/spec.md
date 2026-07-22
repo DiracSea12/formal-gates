@@ -1,8 +1,9 @@
 ## Delivery Applicability
 
-Phase 1 reuses the existing dispatch/lifecycle receipt chain and completes the
+Phase 1 reuses the existing dispatch receipt chain and completes the
 parts required by its enabled reviewer roles: exact completed-output hash
-binding, workflow/gate/stage/snapshot and actual subagent consistency, distinct
+binding, workflow/gate/stage/snapshot and, where the provider supplies usable
+lifecycle events, actual subagent consistency; it also requires distinct
 open output-path reservation, closure inclusion, and receipt-first,
 registration-last finalization. It does not add restricted-path enforcement,
 or a Carry Arbiter role, and it makes no host file-access-capture claim. Phase 2
@@ -15,20 +16,23 @@ capture claims remain conditional on a successful same-host live canary.
 ### Requirement: Formal reviewer results are receipt-bound
 
 Every formal reviewer result and Carry-Forward Arbiter result SHALL reuse the
-existing dispatch-registration, subagent start/stop, subagent-ID,
-artifact-hash, and receipt-validation chain. Before dispatch, registration
+existing dispatch-registration, artifact-hash, and receipt-validation chain.
+Providers with usable lifecycle events SHALL also bind subagent start/stop and
+subagent ID. Before dispatch, registration
 SHALL validate and bind the exact final-send prompt path and hash. Validation
 SHALL bind workflow, gate, stage, target snapshot, exact final-send prompt,
-host-captured subagent identity, lifecycle, and output hash. Plain actor labels,
+semantic submission proof, and output hash. Lifecycle-capable providers SHALL
+also bind host-captured subagent identity and lifecycle. Plain actor labels,
 provider names, or dispatch IDs
 SHALL NOT substitute for a matching receipt.
 
 Reviewer JSON SHALL NOT self-report a session ID. Parallel reviews SHALL be
-distinguished by the system-generated dispatch ID, host-captured subagent ID,
-distinct review-artifact path, exact output hash, workflow, gate, stage, and
-snapshot. Two open dispatches SHALL NOT reserve the same review-artifact path;
+distinguished by the system-generated dispatch ID, distinct review-artifact
+path, exact output hash, workflow, gate, stage, and snapshot. Providers with
+usable lifecycle events SHALL additionally bind the host-captured subagent ID.
+Two open dispatches SHALL NOT reserve the same review-artifact path;
 registration or finalization SHALL reject the ambiguity rather than select or
-combine a result. Before any lifecycle event is captured, registration MAY
+combine a result. Before any lifecycle event is captured on a capable provider, registration MAY
 replace the single open reservation for that output path with a changed prompt
 or route. Once lifecycle capture starts, the reservation SHALL NOT be rebound.
 
@@ -36,6 +40,12 @@ Mechanical QA Execution is not a reviewer result: it binds independent
 QA-owned execution evidence and SHALL NOT require reviewer dispatch or a
 reviewer receipt. Design Review, complexity, architecture, code quality, and
 Carry-Forward Arbiter remain reviewer results when their stages are enabled.
+
+Codex SHALL retain its existing `SubagentStart` / `SubagentStop` hook
+installation, but SHALL NOT require those events in receipt finalization or
+validation. Its receipt SHALL retain every non-lifecycle binding above. No replacement
+agent tracker, session manager, event emulation, compatibility alias, or manual
+capture fallback SHALL be added.
 
 The ordinary CLI receipt path proves consistency among local records. It SHALL
 remain capable of formal PASS and SHALL NOT claim resistance to an operator who
@@ -60,11 +70,19 @@ missing, wrongly typed, or illegal values before changing the artifact, then
 atomically record the composed PENDING artifact hash/proof. Finalization SHALL
 require that proof and mechanically derive the verdict. No reviewer SHALL edit
 formal JSON, transcribe, or confirm a machine-owned field.
+While the same dispatch remains open and unfinalized, every submission role
+MAY use the existing `receipt submit` command to replace its complete semantic
+submission when the existing valid `SemanticSubmissionSHA` exactly matches the
+current artifact bytes. The CLI SHALL rebuild from the original static catalog,
+rerun all validation, and atomically replace the artifact and dispatch proof.
+A manually changed artifact, missing or mismatched submission SHA, finalized
+dispatch, incomplete input, or other rejection SHALL leave both files
+byte-for-byte unchanged. No reset/reopen command or state SHALL be added.
 
 #### Scenario: Receipt is missing or mismatched
 
-- **WHEN** any required receipt is absent or binds a different lifecycle,
-  reviewer, output, workflow, gate, stage, or snapshot
+- **WHEN** any required receipt is absent or binds a different reviewer output,
+  workflow, gate, stage, snapshot, prompt, submission, or provider-required lifecycle
 - **THEN** formal PASS is rejected.
 
 #### Scenario: Receipt write fails before commit
@@ -75,9 +93,9 @@ formal JSON, transcribe, or confirm a machine-owned field.
 
 #### Scenario: Parallel reviews use distinct outputs
 
-- **WHEN** two reviews run concurrently with distinct dispatches, subagent IDs,
-  and output paths
-- **THEN** each output validates only with its own lifecycle events and receipt.
+- **WHEN** two reviews run concurrently with distinct dispatches and output paths
+- **THEN** each output validates only with its own receipt and, for a
+  lifecycle-capable provider, its own lifecycle events and subagent ID.
 
 #### Scenario: Parallel reviews reuse one output path
 
@@ -108,13 +126,20 @@ formal JSON, transcribe, or confirm a machine-owned field.
 - **THEN** a same-host live canary must prove that capability; otherwise the
   claim remains unproven while ordinary CLI validation stays available.
 
+#### Scenario: Codex finalizes without lifecycle events
+
+- **WHEN** a Codex dispatch, exact prompt, semantic submission, artifact hash,
+  and all other non-lifecycle receipt bindings validate without start/stop events
+- **THEN** receipt finalization and formal validation proceed without claiming
+  or synthesizing lifecycle evidence.
+
 ### Requirement: Every review file is restricted and never reviewer context
 
 Every review-related workflow file SHALL be stored under
-`.claude/gates/runs/<workflow-id>/restricted/` without exception. This includes
+`.gates/runs/<workflow-id>/restricted/` without exception. This includes
 current and old dispatch copies, context bundles or manifests, reviewer and QA
 outputs, receipts, lifecycle events, closures, state, reports, logs,
-statistics, verification records, repair history, transition and Carry
+verification records, repair history, transition and Carry
 material, and main-agent summaries.
 
 The reviewer SHALL receive only the confirmed current requirement, its current
@@ -128,6 +153,16 @@ referenced evidence or any other workflow-run artifact. The main agent and CLI M
 restricted machine evidence to verify prerequisites, receipts, and recording,
 but SHALL NOT expose that evidence to the reviewer.
 
+For a post-development target, the orchestrator SHALL generate `Current diff`
+with the on-site external VCS and provide it as operational reviewer input. It
+SHALL NOT expose an internal workflow-run evidence file as the project diff.
+Formal-gates SHALL retain the workflow snapshot identity and static review
+evidence.
+
+The `.gates` root SHALL be shared by Claude Code, Codex, Cursor, and any other
+supported host for the same project. Host-specific install, skill, and hook
+files MAY remain under the locations required by each host.
+
 Before dispatch, the orchestrator SHALL use `prompt prepare` to generate the
 exact seven-field message. Receipt registration SHALL be the single full
 pre-dispatch static check and catalog generator and SHALL reject any mismatch
@@ -136,8 +171,7 @@ path, context-bundle schema/path/hash, policy-specific input placement,
 unresolved `PENDING`, or pollution. It SHALL bind the exact-send prompt and
 generate all static catalog fields, including evidence references supplied by
 role-specific CLI path flags. Design Review SHALL accept separate case-set and
-Design-receipt paths, post-development complexity SHALL accept a statistics
-path, and Carry SHALL accept source closure paths from which the CLI derives
+Design-receipt paths, and Carry SHALL accept source closure paths from which the CLI derives
 fixed gates. Registration SHALL NOT accept caller-authored check-ID/path or
 gate/path bindings. The orchestrator SHALL send those exact prompt bytes
 and append nothing. The reviewer SHALL make no prompt-field confirmation;
@@ -176,24 +210,33 @@ explicitly authorized the extra round.
 - **THEN** finalization rejects the template, writes no receipt or final
   artifact, and leaves the dispatch open.
 
-#### Scenario: Reviewer submits only semantic values
+#### Scenario: Semantic owner submits only complete semantic values
 
-- **WHEN** every required semantic value is supplied through `receipt submit`
+- **WHEN** every required role-specific semantic value is supplied through
+  `receipt submit`, either initially or as a valid full replacement on the same
+  open, unfinalized dispatch
 - **THEN** finalization derives the verdict and writes the final formal
   artifact and receipt without AI-authored static content.
 
-#### Scenario: Reviewer output is invalid before finalization
+#### Scenario: Semantic submission is invalid or no longer replaceable
 
 - **WHEN** semantic input is incomplete, duplicated, unknown, wrongly typed, or
-  violates the selected policy
-- **THEN** submission leaves the assigned artifact byte-for-byte unchanged and
-  finalization writes no receipt.
+  violates the selected policy, the artifact bytes no longer match the recorded
+  `SemanticSubmissionSHA`, that SHA is missing or invalid, or the dispatch is
+  finalized
+- **THEN** submission leaves the assigned artifact and dispatch proof
+  byte-for-byte unchanged and creates no reset/reopen state.
 
 #### Scenario: Review file is outside restricted
 
 - **WHEN** any review-related workflow file resolves outside the active run's
   `restricted/` directory
 - **THEN** validation rejects the workflow without creating an exception.
+
+#### Scenario: Workflow uses a host-named run root
+
+- **WHEN** a workflow supplies a host-specific evidence root
+- **THEN** validation rejects it and requires `.gates`.
 
 #### Scenario: Extra reviewer material is supplied
 
@@ -208,6 +251,34 @@ explicitly authorized the extra round.
   no canaried file-access capture
 - **THEN** the system validates declared paths without claiming knowledge of
   every out-of-band file read.
+
+### Requirement: Native install configures selected host hooks by default
+
+The native installer SHALL copy the runtime/skill subset and configure native
+hooks for every selected Claude Code, Codex, or Cursor target by default in
+both global and project scopes. A caller MAY skip hook configuration only with
+the explicit `--skip-hooks` flag. The installer SHALL reject the obsolete
+`--configure-hooks` flag and SHALL NOT provide a compatibility alias.
+
+Hook configuration SHALL preserve unrelated non-formal-gates entries and
+replace only formal-gates entries. A hook configuration read, merge, directory,
+backup, or write failure SHALL fail the installation command; the command SHALL
+NOT print a successful install report after that failure.
+
+#### Scenario: Default install includes native hooks
+
+- **WHEN** a caller installs any supported selected host without hook flags
+- **THEN** the runtime/skill target and that host's native hook configuration are installed
+
+#### Scenario: Explicit opt-out preserves hook configuration
+
+- **WHEN** a caller installs with `--skip-hooks`
+- **THEN** the runtime/skill target is installed and the existing hook configuration remains byte-identical
+
+#### Scenario: Hook failure fails installation
+
+- **WHEN** default hook configuration cannot read, merge, back up, or write the selected host config
+- **THEN** installation returns failure and emits no successful install claim
 
 ### Requirement: Current confirmed decisions remain visible and binding
 
@@ -231,31 +302,64 @@ not copied into a workflow run for reviewer consumption.
   artifact
 - **THEN** prompt/input validation rejects formal review.
 
-### Requirement: Post-development complexity cannot read development budgets
+### Requirement: Reviewers complete related-problem sweeps before returning
 
-Post-development complexity SHALL accept a fresh statistics-only report for the
-current diff. The report SHALL omit budget, set `budget_source` to `none`, and
-leave every budget override false. Development handoff, budget reports, budget
-checks, expansion requests, and anti-complexity decisions SHALL remain
-restricted and unreachable through transitive evidence references.
+Every enabled review role SHALL complete all safe checks it owns before
+returning when it can report a blocker, failure, concern, or decision gap.
+After finding one such problem, it SHALL inspect every allowed part of the
+confirmed requirement and current change for other instances of the same defect
+pattern, then trace the same causal, behavioral, data, dependency, or
+architecture chain until every related in-scope consequence caused by the current
+change is identified. It SHALL report every independently actionable problem in
+the same result. Multiple manifestations of one root cause SHALL be one finding
+that names every affected location or case.
 
-#### Scenario: Budget history enters post-development evidence
+The sweep SHALL NOT include unrelated pre-existing problems, another gate's
+responsibilities, or unapproved QA cases. QA Execution SHALL execute and report
+all approved cases but SHALL NOT invent additional cases. Carry-Forward Arbiter
+is excluded from defect discovery: it SHALL still decide every eligible prior
+PASS gate independently as its own carry, rerun, or blocked decision.
 
-- **WHEN** post-development complexity input directly or transitively references
-  development-time budget material
-- **THEN** PASS is rejected.
+The complexity role SHALL preserve its solution-first order: it must finish the
+solution-level sweep before returning; if the solution fails, dependent
+code-level checks are blocked rather than reviewed as if the solution were
+accepted. Output concision SHALL never reduce the number of reported findings.
 
-### Requirement: Carry Arbiter receives only the repair diff
+#### Scenario: A finding has related instances and downstream consequences
+
+- **WHEN** a review discovers one blocker caused by the current change and the
+  same defect pattern or its causal chain affects other in-scope locations
+- **THEN** the review continues through those locations and reports all
+  independently actionable consequences in one result before returning.
+
+#### Scenario: One root cause has multiple manifestations
+
+- **WHEN** the same current-change defect appears in multiple files, checks, or
+  cases
+- **THEN** the result contains one finding with every affected location or case,
+  rather than one partial finding per manifestation.
+
+#### Scenario: Related problem is outside the review boundary
+
+- **WHEN** a discovered issue is historical and unrelated, belongs to another
+  gate, or would require an unapproved QA case
+- **THEN** it is not reported as an in-scope blocker or used to broaden the
+  current review.
+
+### Requirement: Carry Arbiter receives only the native comparison target
 
 Carry-Forward Arbiter SHALL use a separate receipt-bound role policy and judge
-whether the cumulative diff produced by the repair from the pre-repair snapshot
-to the post-repair snapshot invalidates each eligible prior PASS gate. Unrelated
-local worktree changes SHALL be excluded. The transition and repair chain SHALL
-remain under `restricted/` and be validated by the CLI outside the Arbiter
-prompt, exactly like other workflow material.
+whether the exact repair comparison it obtains directly from the on-site VCS
+invalidates each eligible prior PASS gate. Formal-gates SHALL retain only the
+workflow snapshots, static evidence, and decisions.
+Unrelated local worktree changes SHALL be excluded. Earlier hops, accepted Carry
+decisions, source gate evidence, and the transition chain SHALL remain under
+`restricted/` and be validated by the CLI outside the Arbiter prompt, exactly
+like other workflow material.
 
 #### Scenario: Carried result needs arbitration
 
 - **WHEN** a carried prerequisite is proposed
-- **THEN** a fresh Arbiter receives the repair diff while the CLI validates the
-  full chain outside reviewer context.
+- **THEN** a fresh Arbiter directly compares the native pre-repair and
+  post-repair snapshots while the CLI validates the full chain outside reviewer
+  context.

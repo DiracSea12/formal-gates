@@ -30,9 +30,13 @@ to rerun after a small repair. `alignment.md` is the requirement source.
 - Bind each requirements and post-development gate PASS to its own run-local recursive
   evidence closure, keep that identity separate from the deliverable
   `changeSnapshot`, and keep mechanical FinalExecution out of a fifth closure.
-- Reuse the existing reviewer receipt chain for actual reviewer judgments and reject mismatched lifecycle,
-  reviewer, output, workflow, gate, stage, or snapshot data. Host auto-capture
-  is claimed only after a same-host live canary.
+- Reuse the existing reviewer receipt chain for actual reviewer judgments and
+  reject mismatched reviewer output, workflow, gate, stage, snapshot, prompt,
+  submission, and artifact data. Require lifecycle evidence only from providers
+  that expose usable lifecycle events; Codex does not, so its normal receipt
+  path keeps every non-lifecycle check without requiring the host to emit
+  `SubagentStart` / `SubagentStop`; the existing complete hook installation is
+  unchanged.
 - Put every review-related workflow file under the existing per-run
   `restricted/` path. Formal reviewers, including Carry-Forward Arbiter, receive
   only the current requirement and current diff or proposed change as
@@ -48,9 +52,48 @@ to rerun after a small repair. `alignment.md` is the requirement source.
 - Validate all inputs before state mutation and replace gate state through a
   completed same-directory temporary file.
 - Preserve an explicitly selected workflow run directory through generated
-  handoff validation. Defer machine-bound source/target dirty-tree identity and
-  mechanically derived Carry diffs to Phase 3; without a preserved source tree,
-  do not carry a prior gate.
+  handoff validation. Before a repair, ensure every affected delivery path is
+  tracked and use the named external VCS's native state or checkpoint facility
+  to fix the pre-repair snapshot. The Carry reviewer compares that snapshot with
+  the post-repair snapshot directly; when the exact comparison is unavailable,
+  the affected gate cannot enter a new-snapshot rerun without terminal
+  `RERUN_REQUIRED`. During repair, the orchestrator may prepare source
+  closures, context inputs, and immutable command shape in parallel, but it
+  must wait for the worker's exact post-repair VCS snapshot and CLI-composed
+  transition before Carry registration, dispatch, or judgment.
+- Store every new workflow run under the host-neutral `.gates/runs/` root.
+  Claude Code, Codex, and Cursor keep their required host-specific install and
+  hook directories, but they do not own separate gate evidence trees.
+- Make native install complete by default: every selected Claude Code, Codex,
+  or Cursor target receives the runtime subset and the native hooks that host
+  actually supports.
+  Skipping hook configuration requires explicit `--skip-hooks`; hook merge
+  failure fails installation, and unrelated host hooks remain intact.
+- Require a usable VCS for formal development, four-gate, Carry, and seal flows.
+  The worker invokes the available Git, SVN, P4, or equivalent tool outside
+  formal-gates to produce the complete delivery diff and, after a repair, the
+  exact repair comparison. The complexity reviewer invokes that same on-site VCS
+  directly to inspect its native diff, stat, and changed contents. formal-gates
+  owns only external-tool metadata, workflow snapshots, static evidence, and
+  decisions. If the VCS cannot make the exact repair comparison, Carry is
+  unavailable and affected gates cannot enter a new-snapshot rerun without
+  terminal `RERUN_REQUIRED` instead of using Carry.
+- Require the worker to submit every delivery path explicitly. The CLI validates
+  repository-relative paths, rejects `.gates`, sorts and deduplicates them, then
+  generates changed-files evidence and its composition proof. A worker adds each
+  new delivery file to the named VCS immediately before further edits and adds
+  an existing untracked delivery file before modifying or deleting it. Before a
+  repair, every path it may touch is tracked before the native comparison
+  boundary is fixed. Only explicit delivery paths may be added, never the whole
+  worktree. Before return, every delivery path is
+  tracked and present in the complete VCS diff, while unrelated untracked files
+  remain untouched. The CLI does not scan the VCS or worktree or infer intent.
+  No backend adapter, no-VCS backup, content store, draft/freeze lifecycle, or
+  best-effort fallback is added.
+- Audit the complete repository for obsolete contracts, conflicting docs, and
+  duplicated ownership. Delete obsolete paths and consolidate each proven
+  duplicate rule behind one existing or narrowly chosen owner without merging
+  host/platform responsibilities that have different behavior.
 - Keep requirement document formats interchangeable. OpenSpec, PRD, SDD,
   issues, and ordinary Markdown are adapters, not formal-gates dependencies;
   document checkboxes are non-authoritative progress hints.
@@ -96,16 +139,20 @@ the partial schema-v1 path.
 2.5. **Review scheduling and static generation:** use the confirmed schedule:
    run the three pre-development checks in parallel, run QA Execution and the
    three post-development gates in parallel, and after each repair use a new
-   independent zero-context agent to decide per gate whether the cumulative
-   diff produced by that repair requires a rerun or permits inheritance; do not
-   include unrelated local worktree changes. Add no A/B/C selector or
+   independent zero-context agent to compare the pre-repair and post-repair VCS
+   snapshots and decide per gate whether the repair requires a rerun or permits
+   inheritance; do not include unrelated local worktree changes. Add no A/B/C selector or
    duplicate experiment, selector, or additional reviewer layer. Move every
    static formal field and artifact envelope to CLI generation, leaving AI only
    semantic judgment and observation slots.
-3. **Operational verification and tree-bound Carry:** persist source/target
-   dirty-tree identities, derive and revalidate the exact Carry diff, re-run the
-   Phase 1 stale-vocabulary scan as a regression audit, complete broad
-   verification, and obtain fresh review before delivery.
+3. **Operational convergence and external VCS evidence:** move workflow evidence
+   to `.gates`, require an external VCS and explicit worker-owned delivery path
+   input, let workers and reviewers inspect native VCS comparisons directly,
+   consolidate proven duplicate owners and obsolete documentation
+   repository-wide, require every review role to sweep same-pattern findings and
+   their related causal chains before returning, re-run the Phase 1
+   stale-vocabulary scan, complete broad verification, and obtain fresh review
+   before delivery.
 
 Each phase has its own implementation snapshot and review. Later phases do not
 silently enter an earlier phase, and Phase 1 has no separately deliverable
@@ -117,6 +164,11 @@ deliverable change still invalidates earlier-snapshot PASS results.
 - Existing Go CLI and validator packages gain stricter typed validation; no new
   package or framework layer is introduced.
 - Formal evidence format is breaking and old workflows restart.
+- The workflow-run root is `.gates` for every host.
+- Formal workflows require caller-generated VCS diffs and explicit delivery
+  paths. Formal-gates does not add built-in Git/SVN/P4 acquisition, an
+  independent snapshot command, backend adapters, project-content storage, or a
+  no-VCS source backup.
 - Agent and reference templates move from Markdown field detection to the same
   JSON/check vocabulary used by the validator.
 - Document checkboxes remain non-authoritative progress hints outside formal

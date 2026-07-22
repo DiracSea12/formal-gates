@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,7 +84,7 @@ func TestRunPromptValidateJSON(t *testing.T) {
 func TestRunPromptPrepareWritesExactValidatedMessage(t *testing.T) {
 	root := t.TempDir()
 	mustWriteCLI(t, filepath.Join(root, "hooks", "pollution-patterns.json"), `{"english":{"patternGroups":[]},"chinese":{"termGroups":[]}}`)
-	run := filepath.Join(root, ".claude", "gates", "runs", "wf", "restricted")
+	run := filepath.Join(root, ".gates", "runs", "wf", "restricted")
 	prompt := filepath.Join(run, "complexity", "prompt.txt")
 	bundle := filepath.Join(run, "complexity", "bundle.json")
 	mustWriteCLI(t, bundle, "{}\n")
@@ -98,7 +97,7 @@ func TestRunPromptPrepareWritesExactValidatedMessage(t *testing.T) {
 		"--current-diff", "git diff base --",
 		"--worktree", root,
 		"--change-snapshot", "base..snapshot",
-		"--review-artifact", ".claude/gates/runs/wf/restricted/complexity/review.json",
+		"--review-artifact", ".gates/runs/wf/restricted/complexity/review.json",
 		"--policy-id", "complexity.post-development.v2",
 		"--context-bundle", bundle,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
@@ -126,7 +125,7 @@ func TestRunPromptPrepareWritesExactValidatedMessage(t *testing.T) {
 func TestRunQADesignReviewLifecycleUsesBoundCaseSet(t *testing.T) {
 	root := t.TempDir()
 	workflowID, snapshot := "wf", "snap"
-	run := filepath.Join(root, ".claude", "gates", "runs", workflowID)
+	run := filepath.Join(root, ".gates", "runs", workflowID)
 	mustWriteCLI(t, filepath.Join(root, "hooks", "pollution-patterns.json"), `{"english":{"patternGroups":[]},"chinese":{"termGroups":[]}}`)
 	mustWriteCLI(t, filepath.Join(run, "restricted", "qa-design", "requirement.txt"), "requirement\n")
 	runCLI := func(args []string, input string) bytes.Buffer {
@@ -138,7 +137,7 @@ func TestRunQADesignReviewLifecycleUsesBoundCaseSet(t *testing.T) {
 		return stdout
 	}
 	runCLI([]string{"artifact", "compose-context-bundle", "--root", root, "--run-dir", run, "--workflow-id", workflowID, "--change-snapshot", snapshot, "--output", "restricted/qa-design/context-bundle.json", "--input", "restricted/qa-design/requirement.txt"}, "")
-	designArtifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "qa-design", "cases.md"))
+	designArtifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "qa-design", "cases.md"))
 	registrationOut := runCLI([]string{"receipt", "register", "--provider", "codex", "--worktree", root, "--run-dir", run, "--context-bundle", "restricted/qa-design/context-bundle.json", "--qa-case-count", "1", "--artifact", designArtifact, "--gate", "qa-test-gate", "--stage", "Design", "--workflow-id", workflowID, "--change-snapshot", snapshot}, "")
 	var registration validate.ReceiptRegistration
 	if err := json.Unmarshal(registrationOut.Bytes(), &registration); err != nil {
@@ -173,11 +172,11 @@ func TestRunQADesignReviewLifecycleUsesBoundCaseSet(t *testing.T) {
 	if err := json.Unmarshal(designReceiptOut.Bytes(), &designReceipt); err != nil {
 		t.Fatal(err)
 	}
-	prompt := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "qa-design", "design-review-prompt.txt"))
-	reviewArtifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "qa-design", "design-review.json"))
-	runCLI([]string{"prompt", "prepare", "--root", root, "--output", prompt, "--gate", "qa-test-gate", "--stage", "Design Review", "--current-requirement", "requirements/current.md", "--current-diff", designArtifact, "--worktree", root, "--change-snapshot", snapshot, "--review-artifact", reviewArtifact, "--policy-id", "qa.design-review.v2", "--context-bundle", filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "qa-design", "context-bundle.json"))}, "")
+	prompt := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "qa-design", "design-review-prompt.txt"))
+	reviewArtifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "qa-design", "design-review.json"))
+	runCLI([]string{"prompt", "prepare", "--root", root, "--output", prompt, "--gate", "qa-test-gate", "--stage", "Design Review", "--current-requirement", "requirements/current.md", "--current-diff", designArtifact, "--worktree", root, "--change-snapshot", snapshot, "--review-artifact", reviewArtifact, "--policy-id", "qa.design-review.v2", "--context-bundle", filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "qa-design", "context-bundle.json"))}, "")
 	caseLogical := "restricted/qa-design/cases.md"
-	designReceiptLogical := strings.TrimPrefix(filepath.ToSlash(designReceipt.ReceiptArtifact), filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID))+"/")
+	designReceiptLogical := strings.TrimPrefix(filepath.ToSlash(designReceipt.ReceiptArtifact), filepath.ToSlash(filepath.Join(".gates", "runs", workflowID))+"/")
 	reviewRegistrationOut := runCLI([]string{"receipt", "register", "--provider", "codex", "--worktree", root, "--run-dir", run, "--context-bundle", "restricted/qa-design/context-bundle.json", "--prompt", "restricted/qa-design/design-review-prompt.txt", "--qa-design-case-set", caseLogical, "--qa-design-receipt", designReceiptLogical, "--artifact", reviewArtifact, "--gate", "qa-test-gate", "--stage", "Design Review", "--workflow-id", workflowID, "--change-snapshot", snapshot}, "")
 	var reviewRegistration validate.ReceiptRegistration
 	if err := json.Unmarshal(reviewRegistrationOut.Bytes(), &reviewRegistration); err != nil {
@@ -229,7 +228,6 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 		{"canary", "codex-hook-probe", "--help"},
 		{"behavior", "evaluate", "--help"},
 		{"policy", "show", "--help"},
-		{"workflow", "snapshot", "--help"},
 		{"workflow", "record-stage", "--help"},
 		{"workflow", "record-transition", "--help"},
 		{"workflow", "verify-admission", "--help"},
@@ -245,7 +243,6 @@ func TestRunHelpCommandsExitZero(t *testing.T) {
 		{"receipt", "finalize", "--help"},
 		{"receipt", "validate", "--help"},
 		{"receipt", "preflight", "--help"},
-		{"complexity", "check", "--help"},
 	}
 
 	for _, args := range cases {
@@ -273,7 +270,7 @@ func TestRunHelpExposesOnlyRoleSpecificStaticInputs(t *testing.T) {
 			t.Fatalf("help still exposes removed static mini-language %q: %s", removed, help)
 		}
 	}
-	for _, required := range []string{"--qa-design-case-set", "--qa-design-receipt", "--complexity-statistics", "--carry-source-closure", "--hop-from", "--hop-repair"} {
+	for _, required := range []string{"--qa-design-case-set", "--qa-design-receipt", "--carry-source-closure", "--hop-from"} {
 		if !strings.Contains(help, required) {
 			t.Fatalf("help is missing role-specific input %q: %s", required, help)
 		}
@@ -313,7 +310,7 @@ func TestRunStateHelpDocumentsActiveWorkflowRun(t *testing.T) {
 		if code := Run("formal-gates", append(args, "--help"), IO{Stdout: &stdout}); code != 0 {
 			t.Fatalf("help failed for %v: code=%d stdout=%q", args, code, stdout.String())
 		}
-		if help := stdout.String(); !strings.Contains(help, "defaults to gate-state.json in the active workflow run") || strings.Contains(help, "defaults to .claude/gates/gate-state.json under --worktree") {
+		if help := stdout.String(); !strings.Contains(help, "defaults to gate-state.json in the active workflow run") || strings.Contains(help, "defaults to .gates/gate-state.json under --worktree") {
 			t.Fatalf("stale state help for %v:\n%s", args, help)
 		}
 	}
@@ -327,37 +324,15 @@ func TestRunGateShowRequiresExplicitActiveRunState(t *testing.T) {
 	}
 }
 
-func TestRunHandoffValidateRequiresDevelopmentBudget(t *testing.T) {
+func TestRunHandoffComposeAndValidate(t *testing.T) {
 	dir := t.TempDir()
-	handoff := filepath.Join(dir, "handoff.md")
-	mustWriteCLI(t, handoff, `Gate Handoff Request
-WorkflowId: wf
-Change snapshot: snap
-Worktree: repo
-Requirement document target or OpenSpec change: openspec/changes/example
-Verification requirements: go test ./...
-Forbidden context: no prior findings
-`)
 	var stdout bytes.Buffer
 	code := Run("formal-gates", []string{
-		"handoff", "validate",
-		"--root", dir,
-		"--file", "handoff.md",
-		"--workflow-id", "wf",
-		"--change-snapshot", "snap",
-	}, IO{Stdout: &stdout})
-	if code == 0 {
-		t.Fatalf("expected handoff without complexity budget to fail, stdout=%q", stdout.String())
-	}
-
-	stdout.Reset()
-	code = Run("formal-gates", []string{
 		"handoff", "compose", "--root", dir, "--workflow-id", "wf", "--change-snapshot", "snap",
+		"--vcs", "git",
 		"--output", "restricted/handoff.md", "--requirement-target", "openspec/changes/example",
-		"--verification-requirements", "go test ./...", "--budget-stop-triggers", "stop on growth",
-		"--budget-expansion-approval-path", "agents/anti-complexity-review.md", "--forbidden-context", "prior findings",
-		"--formal-flow-mode", "none", "--trigger-source", "user", "--task-type", "small-feature", "--max-net", "250",
-		"--max-new-prod-files", "0", "--max-prod-insertions", "300",
+		"--verification-requirements", "go test ./...", "--forbidden-context", "prior findings",
+		"--formal-flow-mode", "none", "--trigger-source", "user",
 	}, IO{Stdout: &stdout})
 	if code != 0 {
 		t.Fatalf("expected handoff compose to pass, code=%d stdout=%q", code, stdout.String())
@@ -366,7 +341,7 @@ Forbidden context: no prior findings
 	code = Run("formal-gates", []string{
 		"handoff", "validate",
 		"--root", dir,
-		"--file", ".claude/gates/runs/wf/restricted/handoff.md",
+		"--file", ".gates/runs/wf/restricted/handoff.md",
 		"--workflow-id", "wf",
 		"--change-snapshot", "snap",
 	}, IO{Stdout: &stdout})
@@ -394,96 +369,9 @@ func TestRunPolicyShowJSON(t *testing.T) {
 	}
 }
 
-func TestRunComplexityJSONRoundTripsToArtifactValidation(t *testing.T) {
-	dir := initCLIGitRepo(t)
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
-	runDir := filepath.Join(dir, filepath.FromSlash(runRel))
-	restrictedDir := filepath.Join(runDir, "restricted")
-	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
-	mustWriteCLI(t, filepath.Join(dir, "feature.go"), "package feature\n")
-	if err := os.MkdirAll(restrictedDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	var stdout bytes.Buffer
-	code := Run("formal-gates", []string{
-		"complexity", "check", "--task-type", "refactor", "--worktree", dir, "--vcs", "git",
-		"--run-dir", runDir, "--workflow-id", "wf", "--change-snapshot", "snap", "--output", "restricted/statistics.json",
-	}, IO{Stdout: &stdout})
-	if code != 0 {
-		t.Fatalf("complexity producer failed, code=%d stdout=%q", code, stdout.String())
-	}
-	produced, err := os.ReadFile(filepath.Join(restrictedDir, "statistics.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(produced), `"failures": []`) || !strings.Contains(string(produced), `"review_required": []`) {
-		t.Fatalf("complexity producer must encode empty result slices as arrays: %s", produced)
-	}
-	var statisticsRef validate.EvidenceRef
-	if err := json.Unmarshal(stdout.Bytes(), &statisticsRef); err != nil {
-		t.Fatal(err)
-	}
-	proofsBefore, err := filepath.Glob(filepath.Join(runDir, "restricted", "proofs", "compositions", "*.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout.Reset()
-	if code := Run("formal-gates", []string{
-		"complexity", "check", "--task-type", "refactor", "--worktree", dir, "--vcs", "git",
-		"--max-net", "10", "--max-new-prod-files", "1", "--max-prod-insertions", "10",
-		"--run-dir", runDir, "--workflow-id", "wf", "--change-snapshot", "snap", "--output", "restricted/budget-statistics.json",
-	}, IO{Stdout: &stdout}); code == 0 {
-		t.Fatal("formal complexity statistics accepted development budget flags")
-	}
-	if _, err := os.Stat(filepath.Join(restrictedDir, "budget-statistics.json")); !os.IsNotExist(err) {
-		t.Fatalf("rejected budget-bearing formal statistics wrote output: %v", err)
-	}
-	proofsAfter, err := filepath.Glob(filepath.Join(runDir, "restricted", "proofs", "compositions", "*.json"))
-	if err != nil || !reflect.DeepEqual(proofsBefore, proofsAfter) {
-		t.Fatalf("rejected budget-bearing formal statistics changed proofs: before=%v after=%v err=%v", proofsBefore, proofsAfter, err)
-	}
-	stdout.Reset()
-	if code := Run("formal-gates", []string{
-		"complexity", "check", "--task-type", "refactor", "--worktree", dir, "--vcs", "git", "--workflow-id", "wf",
-	}, IO{Stdout: &stdout}); code == 0 {
-		t.Fatal("partial formal complexity output flags were accepted")
-	}
-	for name, text := range map[string]string{"input.txt": "input", "changed.txt": "changed", "verification.txt": "verified"} {
-		mustWriteCLI(t, filepath.Join(restrictedDir, name), text)
-	}
-	ref := func(name string) validate.EvidenceRef {
-		return validate.EvidenceRef{Path: logical(name), SHA256: cliFileHash(t, filepath.Join(restrictedDir, name))}
-	}
-	writeCLIJSON(t, filepath.Join(restrictedDir, "bundle.json"), validate.ContextBundle{BundleVersion: 1, WorkflowID: "wf", ChangeSnapshot: "snap", Inputs: []validate.EvidenceRef{ref("input.txt")}})
-	var policy validate.ArtifactPolicy
-	for _, candidate := range validate.Policy().ArtifactPolicies {
-		if candidate.ID == "complexity.post-development.v2" {
-			policy = candidate
-		}
-	}
-	checks := make([]validate.ReviewCheck, 0, len(policy.RequiredCheckIDs))
-	for _, id := range policy.RequiredCheckIDs {
-		check := validate.ReviewCheck{ID: id, Status: "PASS", Message: cliReviewCheckMessage(id), EvidenceRefs: []validate.EvidenceRef{}, Findings: []validate.Finding{}}
-		if id == "complexity.statistics" {
-			check.EvidenceRefs = []validate.EvidenceRef{statisticsRef}
-		}
-		checks = append(checks, check)
-	}
-	changed, verification := ref("changed.txt"), ref("verification.txt")
-	payloadData, _ := json.Marshal(validate.ReviewerPayload{ContextBundle: ref("bundle.json"), ReviewPolicyID: policy.ID, Checks: checks, ChangedFiles: &changed, Verification: &verification})
-	artifact := filepath.ToSlash(filepath.Join(runRel, "restricted", "review.json"))
-	writeCLIJSON(t, filepath.Join(runDir, "restricted", "review.json"), validate.FormalGateEvidence{SchemaVersion: 2, ArtifactRole: policy.ArtifactRole, WorkflowID: "wf", ChangeSnapshot: "snap", Gate: policy.Gate, Verdict: "PASS", Payload: payloadData})
-
-	stdout.Reset()
-	code = Run("formal-gates", []string{"artifact", "validate", "--root", dir, "--file", artifact, "--gate", policy.Gate, "--workflow-id", "wf", "--change-snapshot", "snap"}, IO{Stdout: &stdout})
-	if code != 0 {
-		t.Fatalf("artifact consumer rejected public complexity JSON, code=%d stdout=%q", code, stdout.String())
-	}
-}
-
 func TestRunArtifactValidateInfersCustomRunDirectory(t *testing.T) {
 	root := t.TempDir()
-	runRel := ".claude/gates/runs/custom-run-name"
+	runRel := ".gates/runs/custom-run-name"
 	runDir := filepath.Join(root, filepath.FromSlash(runRel))
 	restrictedDir := filepath.Join(runDir, "restricted")
 	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
@@ -535,7 +423,7 @@ func TestRunArtifactValidateInfersCustomRunDirectory(t *testing.T) {
 	}
 	stdout.Reset()
 	code = Run("formal-gates", []string{"artifact", "validate", "--root", copiedRoot, "--file", "architecture-review.json", "--gate", policy.Gate, "--workflow-id", "W", "--change-snapshot", "S"}, IO{Stdout: &stdout})
-	if code == 0 || !strings.Contains(stdout.String(), "artifact must be under .claude/gates/runs") {
+	if code == 0 || !strings.Contains(stdout.String(), "artifact must be under .gates/runs") {
 		t.Fatalf("copied run contents validated from repository root, code=%d stdout=%q", code, stdout.String())
 	}
 }
@@ -548,7 +436,7 @@ func TestTopLevelHelpShowsAllCommands(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected top-level help to exit 0, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "formal-gates workflow snapshot") || !strings.Contains(stdout.String(), "formal-gates behavior evaluate") {
+	if !strings.Contains(stdout.String(), "formal-gates workflow record-stage") || !strings.Contains(stdout.String(), "formal-gates behavior evaluate") {
 		t.Fatalf("expected global usage, got %q", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "Usage of package:") {
@@ -611,7 +499,7 @@ func TestRunBehaviorEvaluatePendingAndFailingAnswers(t *testing.T) {
 
 func TestRunGateRecordShowAndVerifyAdmission(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	stateRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))
 	artifact := writeCLIArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
 	var stdout bytes.Buffer
@@ -633,7 +521,7 @@ func TestRunGateRecordShowAndVerifyAdmission(t *testing.T) {
 	if !strings.Contains(stdout.String(), "GATE_STATE_RECORDED gate=qa-test-gate verdict=PASS workflowId=wf") {
 		t.Fatalf("unexpected record stdout: %q", stdout.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".claude", "gates", "gate-state.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, ".gates", "gate-state.json")); !os.IsNotExist(err) {
 		t.Fatalf("gate record wrote repository-level state: %v", err)
 	}
 	stateData, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(stateRel)))
@@ -703,26 +591,12 @@ func TestRunGateRejectsOutOfRunArtifactAndState(t *testing.T) {
 	}
 }
 
-func TestRunWorkflowSnapshotRecordStageAndAdmission(t *testing.T) {
+func TestRunWorkflowRecordStageAndAdmission(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteCLI(t, filepath.Join(dir, "src.txt"), "source\n")
 	artifact := writeCLIArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
 	var stdout bytes.Buffer
-
 	code := Run("formal-gates", []string{
-		"workflow", "snapshot",
-		"--worktree", dir,
-		"--vcs", "file-hash",
-	}, IO{Stdout: &stdout})
-	if code != 0 {
-		t.Fatalf("expected workflow snapshot to pass, code=%d stdout=%q", code, stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `"changeSnapshot": "files.`) {
-		t.Fatalf("unexpected snapshot stdout: %q", stdout.String())
-	}
-
-	stdout.Reset()
-	code = Run("formal-gates", []string{
 		"workflow", "record-stage",
 		"--worktree", dir,
 		"--gate", "qa-test-gate",
@@ -785,7 +659,7 @@ func TestRunWorkflowRecordStageAllowsIndependentGateOrder(t *testing.T) {
 
 func TestRunWorkflowRecordTransitionUsesOnlyTypedCarryArtifact(t *testing.T) {
 	dir, workflowID, source, target := t.TempDir(), "wf", "source", "target"
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID))
 	runDir := filepath.Join(dir, filepath.FromSlash(runRel))
 	sourceArtifact := writeCLIArtifact(t, dir, "qa-test-gate", "Execution", workflowID, source)
 	var stdout bytes.Buffer
@@ -806,11 +680,11 @@ func TestRunWorkflowRecordTransitionUsesOnlyTypedCarryArtifact(t *testing.T) {
 		return validate.EvidenceRef{Path: name, SHA256: cliFileHash(t, filepath.Join(runDir, filepath.FromSlash(name)))}
 	}
 	base := "restricted/target"
-	for name, text := range map[string]string{base + "/repair.txt": "repair history", base + "/changed.txt": "changed files", base + "/verification.txt": "verified", base + "/repair-evidence.txt": "repair evidence"} {
+	for name, text := range map[string]string{base + "/input.txt": "current requirement", base + "/changed.txt": "changed files", base + "/verification.txt": "verified"} {
 		mustWriteCLI(t, filepath.Join(runDir, filepath.FromSlash(name)), text)
 	}
-	writeCLIJSON(t, filepath.Join(runDir, filepath.FromSlash(base+"/context.json")), validate.ContextBundle{BundleVersion: 1, WorkflowID: workflowID, ChangeSnapshot: target, Inputs: []validate.EvidenceRef{ref(base + "/repair.txt")}})
-	chain := validate.TransitionChain{SchemaVersion: 2, WorkflowID: workflowID, TargetSnapshot: target, Hops: []validate.TransitionHop{{FromSnapshot: source, ToSnapshot: target, ChangedFiles: ref(base + "/changed.txt"), Verification: ref(base + "/verification.txt"), RepairEvidence: ref(base + "/repair-evidence.txt")}}}
+	writeCLIJSON(t, filepath.Join(runDir, filepath.FromSlash(base+"/context.json")), validate.ContextBundle{BundleVersion: 1, WorkflowID: workflowID, ChangeSnapshot: target, Inputs: []validate.EvidenceRef{ref(base + "/input.txt")}})
+	chain := validate.TransitionChain{SchemaVersion: 2, WorkflowID: workflowID, TargetSnapshot: target, Hops: []validate.TransitionHop{{FromSnapshot: source, ToSnapshot: target, ChangedFiles: ref(base + "/changed.txt"), Verification: ref(base + "/verification.txt")}}}
 	writeCLIJSON(t, filepath.Join(runDir, filepath.FromSlash(base+"/chain.json")), chain)
 	sourceClosure := state.Gates["qa-test-gate"]
 	complexityClosure := state.Gates["complexity-gate"]
@@ -920,7 +794,7 @@ func TestRunWorkflowNonPassReviewerResultIsNotReportedAsRecorded(t *testing.T) {
 	if strings.Contains(stdout.String(), "GATE_WORKFLOW_RECORDED") {
 		t.Fatalf("non-PASS result claimed to be recorded: %q", stdout.String())
 	}
-	statePath := filepath.Join(dir, ".claude", "gates", "runs", "wf", "restricted", "gate-state.json")
+	statePath := filepath.Join(dir, ".gates", "runs", "wf", "restricted", "gate-state.json")
 	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
 		t.Fatalf("non-PASS result changed authoritative state: %v", err)
 	}
@@ -928,7 +802,7 @@ func TestRunWorkflowNonPassReviewerResultIsNotReportedAsRecorded(t *testing.T) {
 
 func TestRunWorkflowRequirementsRejectsIncompatibleModesWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	artifact := filepath.ToSlash(filepath.Join(runRel, "restricted", "requirements.json"))
 	mustWriteCLI(t, filepath.Join(dir, filepath.FromSlash(artifact)), "{}\n")
 	stateRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))
@@ -966,7 +840,7 @@ func TestRunWorkflowRequirementsRejectsIncompatibleModesWithoutMutation(t *testi
 
 func TestRunWorkflowRejectsStateOutsideActiveRun(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	artifact := writeCLIArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
 	attemptRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "attempt.json"))
 	attemptPath := filepath.Join(dir, filepath.FromSlash(attemptRel))
@@ -1029,7 +903,7 @@ func TestRunWorkflowRecordQAExecutionWithRelativeWorktree(t *testing.T) {
 		}
 	})
 
-	runDir := ".claude/gates/runs/wf"
+	runDir := ".gates/runs/wf"
 	runAbs := filepath.Join(dir, filepath.FromSlash(runDir))
 	artifact := runDir + "/restricted/qa-execution.json"
 	payload := writeCLIQAEvidence(t, runAbs, "wf", "snap")
@@ -1046,7 +920,7 @@ func TestRunWorkflowRecordQAExecutionWithRelativeWorktree(t *testing.T) {
 
 func TestRunWorkflowRejectsQABindingMismatchWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	runDir := filepath.Join(dir, filepath.FromSlash(runRel))
 	artifact := writeCLIArtifact(t, dir, "qa-test-gate", "Execution", "wf", "snap")
 	stateRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))
@@ -1102,7 +976,7 @@ func TestRunWorkflowRejectsQABindingMismatchWithoutMutation(t *testing.T) {
 
 func TestRunWorkflowFinalVerification(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	attemptRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "attempt.json"))
 	attemptPath := filepath.Join(dir, filepath.FromSlash(attemptRel))
 	mustWriteCLI(t, attemptPath, `{"ok":true}`+"\n")
@@ -1130,7 +1004,7 @@ func TestRunWorkflowFinalVerification(t *testing.T) {
 
 func TestRunWorkflowFinalVerificationRejectsFailedCommandOutput(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	attemptRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "failed-command.txt"))
 	attemptPath := filepath.Join(dir, filepath.FromSlash(attemptRel))
 	mustWriteCLI(t, attemptPath, "FAIL: command exited with status 1\n")
@@ -1166,7 +1040,7 @@ func TestRunWorkflowFinalVerificationRejectsFailedCommandOutput(t *testing.T) {
 
 func TestRunRejectsCallerAuthoredFinalExecutionAtGenericRecordEntrypoints(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	attemptRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "attempt.json"))
 	attemptPath := filepath.Join(dir, filepath.FromSlash(attemptRel))
 	mustWriteCLI(t, attemptPath, `{"ok":true}`+"\n")
@@ -1241,7 +1115,7 @@ func TestRunRejectsCallerAuthoredFinalExecutionAtGenericRecordEntrypoints(t *tes
 
 func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	attemptRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "attempt.json"))
 	attemptPath := filepath.Join(dir, filepath.FromSlash(attemptRel))
 	mustWriteCLI(t, attemptPath, `{"ok":true}`+"\n")
@@ -1411,7 +1285,7 @@ func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 
 func TestRunWorkflowFinalVerificationSealsRunLocalClosuresWithoutMirrors(t *testing.T) {
 	dir := t.TempDir()
-	runRel := ".claude/gates/runs/W"
+	runRel := ".gates/runs/W"
 	runAbs := filepath.Join(dir, filepath.FromSlash(runRel))
 	recordCLIFourGatePrerequisites(t, dir, "W", "S")
 	attemptPath := filepath.Join(runAbs, "restricted", "attempt.json")
@@ -1460,7 +1334,7 @@ func TestRunWorkflowFinalVerificationSealsRunLocalClosuresWithoutMirrors(t *test
 
 func TestRunWorkflowFinalVerificationBlocksMissingArtifact(t *testing.T) {
 	dir := t.TempDir()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf"))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", "wf"))
 	missing := filepath.ToSlash(filepath.Join(runRel, "restricted", "missing.json"))
 	output := filepath.ToSlash(filepath.Join(runRel, "restricted", "final-verification.json"))
 	var stdout bytes.Buffer
@@ -1483,7 +1357,7 @@ func TestRunWorkflowFinalVerificationBlocksMissingArtifact(t *testing.T) {
 
 func TestRunWorkflowFinalVerificationGeneratesAcceptedAttemptHash(t *testing.T) {
 	dir := t.TempDir()
-	runRel := ".claude/gates/runs/W"
+	runRel := ".gates/runs/W"
 	runAbs := filepath.Join(dir, filepath.FromSlash(runRel))
 	attemptRel := runRel + "/restricted/attempt.json"
 	attemptPath := filepath.Join(runAbs, "restricted", "attempt.json")
@@ -1549,45 +1423,9 @@ func TestRunWorkflowCleanupDryRunAndExecute(t *testing.T) {
 	}
 }
 
-func TestRunWorkflowCompactExecuteRemovesRunGarbage(t *testing.T) {
-	dir := t.TempDir()
-	runDir := ".claude/gates/runs/wf"
-	runAbs := filepath.Join(dir, filepath.FromSlash(runDir))
-	artifact := filepath.Join(runAbs, "qa-test-gate.md")
-	mustWriteCLI(t, artifact, "{}\n")
-	writeCLIJSON(t, filepath.Join(runAbs, "restricted", "gate-state.json"), validate.GateState{SchemaVersion: 2, Gates: map[string]validate.GateStateEntry{}, History: []validate.GateStateEntry{}})
-	garbage := filepath.Join(runAbs, "tmp", "garbage.txt")
-	mustWriteCLI(t, garbage, "garbage\n")
-
-	var stdout bytes.Buffer
-	code := Run("formal-gates", []string{
-		"workflow", "compact",
-		"--worktree", dir,
-		"--run-dir", runDir,
-		"--workflow-id", "wf",
-		"--change-snapshot", "snap",
-		"--execute",
-	}, IO{Stdout: &stdout})
-	if code != 0 {
-		t.Fatalf("expected compact execute to pass, code=%d stdout=%q", code, stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `"dryRun": false`) || !strings.Contains(stdout.String(), `"status": "removed"`) {
-		t.Fatalf("unexpected compact stdout: %q", stdout.String())
-	}
-	if _, err := os.Stat(filepath.Join(runAbs, "restricted", "formal-gates-workflow-archive.json")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(artifact); !os.IsNotExist(err) {
-		t.Fatalf("expected source artifact removed, err=%v", err)
-	}
-	if _, err := os.Stat(garbage); !os.IsNotExist(err) {
-		t.Fatalf("expected run garbage removed, err=%v", err)
-	}
-}
-
 func TestRunReceiptCaptureAndPreflight(t *testing.T) {
 	dir := t.TempDir()
-	artifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf", "restricted", "review.json"))
+	artifact := filepath.ToSlash(filepath.Join(".gates", "runs", "wf", "restricted", "review.json"))
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, filepath.FromSlash(artifact))), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1620,14 +1458,14 @@ func TestRunReceiptCaptureAndPreflight(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected receipt preflight to produce diagnostic JSON, code=%d stdout=%q", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `"status": "HOST_AUTO_CAPTURE_UNPROVEN"`) {
+	if !strings.Contains(stdout.String(), `"status": "HOST_LIFECYCLE_UNAVAILABLE"`) {
 		t.Fatalf("unexpected preflight stdout: %q", stdout.String())
 	}
 }
 
 func TestRunReceiptRegisterRequiresSnapshotAndAbsentOutput(t *testing.T) {
 	dir := t.TempDir()
-	artifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf", "restricted", "review.json"))
+	artifact := filepath.ToSlash(filepath.Join(".gates", "runs", "wf", "restricted", "review.json"))
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, filepath.FromSlash(artifact))), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1656,7 +1494,6 @@ func TestRunReceiptRegisterRejectsRemovedBindingDSLFlags(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "check evidence", args: []string{"--check-evidence", "complexity.statistics=restricted/statistics.json"}},
 		{name: "Carry source", args: []string{"--carry-source", "qa-test-gate=restricted/closure.json"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1673,58 +1510,20 @@ func TestRunReceiptRegisterRejectsRemovedBindingDSLFlags(t *testing.T) {
 	}
 }
 
-func TestRunReceiptRegisterRejectsMissingRoleEvidenceBeforeDispatch(t *testing.T) {
-	root := t.TempDir()
-	runDir := filepath.Join(root, ".claude", "gates", "runs", "wf")
-	mustWriteCLI(t, filepath.Join(runDir, "restricted", "changed.txt"), "changed\n")
-	mustWriteCLI(t, filepath.Join(runDir, "restricted", "verification.txt"), "verified\n")
-	artifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf", "restricted", "review.json"))
-	fixture := withCLIReceiptBundle(t, validate.ReceiptRegisterOptions{Worktree: root, WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact, ChangedFiles: "restricted/changed.txt", Verification: "restricted/verification.txt"})
-	args := []string{
-		"receipt", "register", "--worktree", root, "--provider", "codex",
-		"--context-bundle", fixture.ContextBundle, "--prompt", fixture.Prompt,
-		"--changed-files", fixture.ChangedFiles, "--verification", fixture.Verification,
-		"--artifact", artifact, "--gate", "complexity-gate", "--workflow-id", "wf", "--change-snapshot", "snap",
-	}
-	var stdout bytes.Buffer
-	if code := Run("formal-gates", args, IO{Stdout: &stdout}); code == 0 || !strings.Contains(stdout.String(), "--complexity-statistics is required") {
-		t.Fatalf("missing role evidence was not rejected: code=%d stdout=%q", code, stdout.String())
-	}
-	if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(artifact))); !os.IsNotExist(err) {
-		t.Fatalf("rejected registration wrote reviewer artifact: %v", err)
-	}
-	dispatches, err := filepath.Glob(filepath.Join(runDir, "restricted", "proofs", "dispatch", "*.json"))
-	if err != nil || len(dispatches) != 0 {
-		t.Fatalf("rejected registration wrote dispatch proof: paths=%v err=%v", dispatches, err)
-	}
-}
-
 func TestRunReceiptSubmitCreatesFinalizableReviewAndRejectsBadTypeWithoutWriting(t *testing.T) {
 	dir := initCLIGitRepo(t)
-	artifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf", "restricted", "submitted-review.json"))
-	runDir := filepath.Join(dir, ".claude", "gates", "runs", "wf")
+	artifact := filepath.ToSlash(filepath.Join(".gates", "runs", "wf", "restricted", "submitted-review.json"))
+	runDir := filepath.Join(dir, ".gates", "runs", "wf")
 	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var statisticsOut bytes.Buffer
-	if code := Run("formal-gates", []string{
-		"complexity", "check", "--task-type", "refactor", "--worktree", dir, "--vcs", "git",
-		"--run-dir", runDir, "--workflow-id", "wf", "--change-snapshot", "snap", "--output", "restricted/receipt-statistics.json",
-	}, IO{Stdout: &statisticsOut}); code != 0 {
-		t.Fatalf("formal complexity statistics generation failed: code=%d stdout=%q", code, statisticsOut.String())
-	}
-	var statisticsRef validate.EvidenceRef
-	if err := json.Unmarshal(statisticsOut.Bytes(), &statisticsRef); err != nil {
-		t.Fatal(err)
-	}
 	mustWriteCLI(t, filepath.Join(runDir, "restricted", "changed.txt"), "changed\n")
 	mustWriteCLI(t, filepath.Join(runDir, "restricted", "verification.txt"), "verified\n")
-	fixture := withCLIReceiptBundle(t, validate.ReceiptRegisterOptions{Worktree: dir, WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact, ChangedFiles: "restricted/changed.txt", Verification: "restricted/verification.txt", ComplexityStatistics: statisticsRef.Path})
+	fixture := withCLIReceiptBundle(t, validate.ReceiptRegisterOptions{Worktree: dir, WorkflowID: "wf", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: artifact, ChangedFiles: "restricted/changed.txt", Verification: "restricted/verification.txt"})
 	registerArgs := []string{
 		"receipt", "register", "--worktree", dir, "--provider", "codex",
 		"--context-bundle", fixture.ContextBundle, "--prompt", fixture.Prompt,
 		"--changed-files", fixture.ChangedFiles, "--verification", fixture.Verification,
-		"--complexity-statistics", fixture.ComplexityStatistics,
 		"--artifact", artifact, "--gate", "complexity-gate", "--workflow-id", "wf", "--change-snapshot", "snap",
 	}
 	var stdout bytes.Buffer
@@ -1830,7 +1629,7 @@ func TestRunReceiptSubmitCreatesFinalizableReviewAndRejectsBadTypeWithoutWriting
 		t.Fatalf("public finalized complexity artifact did not validate: code=%d stdout=%q", code, stdout.String())
 	}
 
-	invalidArtifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", "wf2", "restricted", "invalid-type.json"))
+	invalidArtifact := filepath.ToSlash(filepath.Join(".gates", "runs", "wf2", "restricted", "invalid-type.json"))
 	invalidFixture := withCLIReceiptBundle(t, validate.ReceiptRegisterOptions{Worktree: dir, WorkflowID: "wf2", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: invalidArtifact})
 	if _, result := validate.ReceiptRegisterDispatch(validate.ReceiptRegisterOptions{
 		Worktree: dir, Provider: "codex", WorkflowID: "wf2", ChangeSnapshot: "snap", Gate: "complexity-gate", Artifact: invalidArtifact,
@@ -1892,24 +1691,6 @@ func TestRunCanaryCodexHookProbe(t *testing.T) {
 	}
 }
 
-func TestRunComplexityCheckReviewExitCode(t *testing.T) {
-	dir := t.TempDir()
-	var stdout bytes.Buffer
-
-	code := Run("formal-gates", []string{
-		"complexity", "check",
-		"--worktree", dir,
-		"--vcs", "none",
-		"--task-type", "bugfix",
-	}, IO{Stdout: &stdout})
-	if code != 2 {
-		t.Fatalf("expected REVIEW exit code 2, got %d stdout=%q", code, stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "Complexity Gate: REVIEW") {
-		t.Fatalf("unexpected complexity stdout: %q", stdout.String())
-	}
-}
-
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -1959,21 +1740,9 @@ func mustWriteCLI(t *testing.T, path, text string) {
 	}
 }
 
-func writeCLIComplexityStatisticsFixture(t *testing.T, root, runDir, workflowID, snapshot, output string) validate.EvidenceRef {
-	t.Helper()
-	ref, _, result := validate.ComplexityStatistics(validate.ComplexityStatisticsOptions{
-		ComplexityOptions: validate.ComplexityOptions{Worktree: root, VCS: "none", TaskType: "refactor"},
-		RunDir:            runDir, WorkflowID: workflowID, ChangeSnapshot: snapshot, Output: output,
-	})
-	if !result.OK() {
-		t.Fatal(result.Failures)
-	}
-	return ref
-}
-
 func writeCLIArtifact(t *testing.T, dir, gate, stage, workflowID, snapshot string) string {
 	t.Helper()
-	runRel := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID))
+	runRel := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID))
 	runDir := filepath.Join(dir, filepath.FromSlash(runRel))
 	restrictedDir := filepath.Join(runDir, "restricted")
 	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
@@ -2007,22 +1776,13 @@ func writeCLIArtifact(t *testing.T, dir, gate, stage, workflowID, snapshot strin
 		}
 	}
 	checks := make([]validate.ReviewCheck, 0, len(policy.RequiredCheckIDs))
-	statsName := prefix + "-statistics.json"
-	statisticsRef := writeCLIComplexityStatisticsFixture(t, dir, runDir, workflowID, snapshot, logical(statsName))
 	for _, id := range policy.RequiredCheckIDs {
 		check := validate.ReviewCheck{ID: id, Status: "PASS", Message: cliReviewCheckMessage(id), EvidenceRefs: []validate.EvidenceRef{}, Findings: []validate.Finding{}}
-		if id == "complexity.statistics" {
-			check.EvidenceRefs = []validate.EvidenceRef{statisticsRef}
-		}
 		checks = append(checks, check)
 	}
 	changed, verification := ref(prefix+"-changed.txt"), ref(prefix+"-verification.txt")
 	artifact := filepath.ToSlash(filepath.Join(runRel, "restricted", gate+".md"))
-	complexityStatistics := ""
-	if gate == "complexity-gate" {
-		complexityStatistics = ref(statsName).Path
-	}
-	registration, rr := validate.ReceiptRegisterDispatch(withCLIReceiptBundle(t, validate.ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: logical(bundleName), ChangedFiles: changed.Path, Verification: verification.Path, ComplexityStatistics: complexityStatistics}))
+	registration, rr := validate.ReceiptRegisterDispatch(withCLIReceiptBundle(t, validate.ReceiptRegisterOptions{Worktree: dir, Provider: "codex", WorkflowID: workflowID, ChangeSnapshot: snapshot, Gate: gate, Stage: stage, Artifact: artifact, ContextBundle: logical(bundleName), ChangedFiles: changed.Path, Verification: verification.Path}))
 	if !rr.OK() {
 		t.Fatal(rr.Failures)
 	}
@@ -2050,7 +1810,9 @@ func withCLIReceiptBundle(t *testing.T, options validate.ReceiptRegisterOptions)
 	t.Helper()
 	runDir := options.RunDir
 	if runDir == "" {
-		runDir = filepath.Join(options.Worktree, ".claude", "gates", "runs", options.WorkflowID)
+		runDir = filepath.Join(options.Worktree, ".gates", "runs", options.WorkflowID)
+	}
+	if options.Gate == "complexity-gate" || options.Gate == "architecture-health-gate" || options.Gate == "code-quality-gate" || (options.Gate == "qa-test-gate" && options.Stage == "Carry") {
 	}
 	if options.ContextBundle == "" {
 		inputName := filepath.ToSlash(filepath.Join("restricted", "receipt-context.txt"))
@@ -2074,11 +1836,11 @@ func withCLIReceiptBundle(t *testing.T, options validate.ReceiptRegisterOptions)
 		ref := func(name string) validate.EvidenceRef {
 			return validate.EvidenceRef{Path: logical(name), SHA256: cliFileHash(t, filepath.Join(runDir, "restricted", name))}
 		}
-		for _, name := range []string{"carry-changed.txt", "carry-verification.txt", "carry-repair.txt"} {
+		for _, name := range []string{"carry-changed.txt", "carry-verification.txt"} {
 			mustWriteCLI(t, filepath.Join(runDir, "restricted", name), name+"\n")
 		}
 		options.TransitionChain = logical("carry-transition.json")
-		writeCLIJSON(t, filepath.Join(runDir, filepath.FromSlash(options.TransitionChain)), validate.TransitionChain{SchemaVersion: 2, WorkflowID: options.WorkflowID, TargetSnapshot: options.ChangeSnapshot, Hops: []validate.TransitionHop{{FromSnapshot: "source", ToSnapshot: options.ChangeSnapshot, ChangedFiles: ref("carry-changed.txt"), Verification: ref("carry-verification.txt"), RepairEvidence: ref("carry-repair.txt")}}})
+		writeCLIJSON(t, filepath.Join(runDir, filepath.FromSlash(options.TransitionChain)), validate.TransitionChain{SchemaVersion: 2, WorkflowID: options.WorkflowID, TargetSnapshot: options.ChangeSnapshot, Hops: []validate.TransitionHop{{FromSnapshot: "source", ToSnapshot: options.ChangeSnapshot, ChangedFiles: ref("carry-changed.txt"), Verification: ref("carry-verification.txt")}}})
 		closure := logical("carry-source-qa.json")
 		rootArtifact := logical("source.json")
 		mustWriteCLI(t, filepath.Join(runDir, filepath.FromSlash(rootArtifact)), "{}\n")
@@ -2107,11 +1869,6 @@ func withCLIReceiptBundle(t *testing.T, options validate.ReceiptRegisterOptions)
 		options.Verification = filepath.ToSlash(filepath.Join("restricted", "receipt-verification.txt"))
 		mustWriteCLI(t, filepath.Join(runDir, filepath.FromSlash(options.Verification)), "verified\n")
 	}
-	if policyID == "complexity.post-development.v2" && options.ComplexityStatistics == "" {
-		statistics := filepath.ToSlash(filepath.Join("restricted", "receipt-statistics.json"))
-		writeCLIComplexityStatisticsFixture(t, options.Worktree, runDir, options.WorkflowID, options.ChangeSnapshot, statistics)
-		options.ComplexityStatistics = statistics
-	}
 	for logical, composer := range map[string]string{options.ChangedFiles: "changed-files.v1", options.Verification: "verification.v1"} {
 		if logical != "" {
 			writeCLICompositionProof(t, options.Worktree, runDir, options.WorkflowID, options.ChangeSnapshot, composer, logical)
@@ -2124,7 +1881,7 @@ func withCLIReceiptBundle(t *testing.T, options validate.ReceiptRegisterOptions)
 		currentDiff := "git diff base --"
 		if options.Gate == "qa-test-gate" && options.Stage == "Design Review" {
 			if strings.HasSuffix(options.QADesignCaseSet, ".md") {
-				currentDiff = filepath.ToSlash(filepath.Join(".claude", "gates", "runs", options.WorkflowID, options.QADesignCaseSet))
+				currentDiff = filepath.ToSlash(filepath.Join(".gates", "runs", options.WorkflowID, options.QADesignCaseSet))
 			}
 		}
 		prepared, result := validate.PrepareDispatchPrompt(validate.PrepareDispatchPromptOptions{
@@ -2182,7 +1939,7 @@ func validCLIFinalPrompt(worktree, gate, artifact string) string {
 
 func writeCLIQAEvidence(t *testing.T, dir, workflowID, snapshot string) validate.QAExecutionPayload {
 	t.Helper()
-	worktree := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(dir))))
+	worktree := filepath.Dir(filepath.Dir(filepath.Dir(dir)))
 	restrictedDir := filepath.Join(dir, "restricted")
 	logical := func(name string) string { return filepath.ToSlash(filepath.Join("restricted", name)) }
 	for name, text := range map[string]string{"qa-changed.txt": "changed", "qa-verification.txt": "verified"} {
@@ -2264,7 +2021,7 @@ func writeCLIDesignReviewClosure(t *testing.T, worktree, runDir, workflowID, sna
 		}
 		return validate.EvidenceRef{Path: filepath.ToSlash(logical), SHA256: output.ReceiptSha256}, deps
 	}
-	caseArtifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "approved-cases.md"))
+	caseArtifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "approved-cases.md"))
 	designReceipt, designDeps := receiptBound("Design", caseArtifact, "design-agent", "", "", func() {
 		if _, result := validate.ReceiptSubmit(validate.ReceiptSubmitOptions{Worktree: worktree, Artifact: caseArtifact, DesignCases: []validate.ReceiptSemanticDesignCase{{Position: 1, Values: []string{"claim", "source", "action", "oracle", "failure signal", "evidence", "gap"}}}}); !result.OK() {
 			t.Fatal(result.Failures)
@@ -2285,7 +2042,7 @@ func writeCLIDesignReviewClosure(t *testing.T, worktree, runDir, workflowID, sna
 		}
 		checks = append(checks, check)
 	}
-	reviewArtifact := filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "design-review.json"))
+	reviewArtifact := filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "design-review.json"))
 	reviewReceipt, reviewDeps := receiptBound("Design Review", reviewArtifact, "design-review-agent", approved.Path, designReceipt.Path, func() {
 		semantics := make([]validate.ReceiptSemanticCheck, 0, len(checks))
 		for index, check := range checks {
@@ -2303,7 +2060,13 @@ func writeCLIDesignReviewClosure(t *testing.T, worktree, runDir, workflowID, sna
 		return filepath.ToSlash(rel)
 	}
 	depsRefs := func(deps cliReceiptDeps) []validate.EvidenceRef {
-		refs := []validate.EvidenceRef{{Path: logical(deps.DispatchRegistrationArtifact), SHA256: deps.DispatchRegistrationSha256}, {Path: logical(deps.StartEventArtifact), SHA256: deps.StartEventSha256}, {Path: logical(deps.StopEventArtifact), SHA256: deps.StopEventSha256}}
+		refs := []validate.EvidenceRef{{Path: logical(deps.DispatchRegistrationArtifact), SHA256: deps.DispatchRegistrationSha256}}
+		if deps.StartEventArtifact != "" {
+			refs = append(refs, validate.EvidenceRef{Path: logical(deps.StartEventArtifact), SHA256: deps.StartEventSha256})
+		}
+		if deps.StopEventArtifact != "" {
+			refs = append(refs, validate.EvidenceRef{Path: logical(deps.StopEventArtifact), SHA256: deps.StopEventSha256})
+		}
 		if deps.PromptArtifact != "" {
 			refs = append(refs, validate.EvidenceRef{Path: logical(deps.PromptArtifact), SHA256: deps.PromptSha256})
 		}
@@ -2365,8 +2128,8 @@ func recordCLIFourGatePrerequisites(t *testing.T, dir, workflowID, snapshot stri
 		artifact := writeCLIArtifact(t, dir, item.gate, item.stage, workflowID, snapshot)
 		result := validate.GateRecord(validate.GateRecordOptions{
 			Worktree:       dir,
-			StatePath:      filepath.ToSlash(filepath.Join(".claude", "gates", "runs", workflowID, "restricted", "gate-state.json")),
-			RunDir:         filepath.Join(dir, ".claude", "gates", "runs", workflowID),
+			StatePath:      filepath.ToSlash(filepath.Join(".gates", "runs", workflowID, "restricted", "gate-state.json")),
+			RunDir:         filepath.Join(dir, ".gates", "runs", workflowID),
 			Gate:           item.gate,
 			Verdict:        "PASS",
 			Mode:           item.mode,
@@ -2387,9 +2150,10 @@ func validHandoffText() string {
 Reason: formal development handoff
 Skill source path: SKILL.md
 Copied skill path: .claude/skills/formal-gates/SKILL.md
-WorkflowId: wf
-Change snapshot: snap
-Worktree: repo
+	WorkflowId: wf
+	Change snapshot: snap
+	VCS: git
+	Worktree: repo
 Base commit: abc123
 Snapshot id: snap
 Requirement document target or OpenSpec change: openspec/changes/example
@@ -2397,11 +2161,7 @@ Required independent gates: qa-test-gate, complexity-gate, architecture-health-g
 Artifacts to provide: implementation evidence
 Bundle or manifest path: bundle.md sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 Verification requirements: go test ./...
-Development-time complexity budget: max-net 250, max-new-prod-files 0, max-prod-insertions 300
-Complexity check command: bin/formal-gates complexity check --task-type bugfix --max-net 250 --max-new-prod-files 0 --max-prod-insertions 300 --worktree repo --vcs auto
-Budget stop triggers: stop if any complexity check exits non-zero or new subsystem names appear
-Budget expansion approval path: .claude/gates/artifacts/anti-complexity-approval.md, required before continuing if exceeded
-Forbidden context: no prior findings
+	Forbidden context: no prior findings
 	Formal flow mode: none
 Trigger source: user
 QA case design artifact: qa-design.md

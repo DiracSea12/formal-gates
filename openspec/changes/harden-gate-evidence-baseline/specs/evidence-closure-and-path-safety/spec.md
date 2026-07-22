@@ -91,6 +91,9 @@ backslashes, cross-run references, and symlink escape SHALL be rejected. The CLI
 SHALL validate the logical form, resolve it beneath the active run directory,
 and verify the resolved target remains inside that directory.
 
+For every workflow, the active run directory SHALL resolve beneath
+`.gates/runs/<workflow-id>`.
+
 Repository requirement targets MAY identify review scope but MUST NOT serve as
 PASS evidence unless a run-local hashed artifact records the observation.
 
@@ -113,6 +116,18 @@ requirements, and tracked project documentation. Generated gate reports,
 dispatches, receipts, and run logs SHALL be excluded and protected by evidence
 closure.
 
+For Phase 3 formal flows, `changeSnapshot` SHALL be the caller-provided external
+VCS identity. Formal-gates SHALL NOT store project versions. A changed-files
+artifact SHALL NOT become a second target identity. Before the worker returns,
+every explicitly declared delivery path SHALL be tracked by the external VCS
+and present in its complete delivery diff. Generated workflow evidence remains
+excluded.
+
+A new delivery path SHALL be added to that VCS immediately before further
+edits, and an existing untracked delivery path SHALL be added before it is
+modified or deleted. Before a repair, every delivery path it may touch SHALL be
+tracked so the VCS can fix the native pre-repair comparison boundary.
+
 Document progress state SHALL have no authority over admission or finalization.
 Editing a tracked document or its checkboxes SHALL follow the ordinary
 deliverable snapshot rule; the system MUST NOT add general checkbox snapshot
@@ -132,6 +147,13 @@ other cross-snapshot PASS reusable.
 - **THEN** Phase 1 requires a new snapshot, invalidates every old PASS, and
   requires fresh gate execution; carry/rerun evaluation becomes available only
   after Phase 2 implements Carry arbitration.
+
+#### Scenario: External snapshot binding is missing
+
+- **WHEN** a Phase 3 gate artifact omits or mismatches the caller-provided
+  external VCS snapshot
+- **THEN** closure construction and admission reject it before PASS state is
+  written.
 
 #### Scenario: Development follows an approved Design Review
 

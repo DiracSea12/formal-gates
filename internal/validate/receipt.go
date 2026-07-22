@@ -31,7 +31,6 @@ type ReceiptRegisterOptions struct {
 	Verification              string
 	QADesignCaseSet           string
 	QADesignReceipt           string
-	ComplexityStatistics      string
 	TransitionChain           string
 	CarrySourceClosures       []string
 	QACaseCount               int
@@ -238,6 +237,10 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 		result.add("receipt", "receipt registration supports only QA Design or an independent review judgment; QA Execution uses CLI composition")
 		return ReceiptRegistration{}, result
 	}
+	if options.UserAuthorizedExtraReview && !reviewJudgmentLifecycle(options.Gate, options.Stage) {
+		result.add("receipt", "--user-authorized-extra-review is accepted only for a review judgment")
+		return ReceiptRegistration{}, result
+	}
 	for flag, value := range map[string]string{"workflow-id": options.WorkflowID, "gate": options.Gate, "artifact": options.Artifact, "context-bundle": options.ContextBundle} {
 		if strings.TrimSpace(value) == "" {
 			result.add("receipt", "--"+flag+" is required")
@@ -253,6 +256,12 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 	if err != nil {
 		result.add("run-dir", err.Error())
 		return ReceiptRegistration{}, result
+	}
+	if reviewJudgmentLifecycle(options.Gate, options.Stage) && options.Gate != "qa-test-gate" && stringSet(postDevelopmentGateOrder)[options.Gate] {
+		if err := requirePostDevelopmentRerunAdmission(repo, runDir, options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), options.Gate, options.Stage); err != nil {
+			result.add("gate-state", err.Error())
+			return ReceiptRegistration{}, result
+		}
 	}
 	promptArtifact, promptSHA256 := "", ""
 	var promptPath string
@@ -285,7 +294,7 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 	if !ok {
 		return ReceiptRegistration{}, result
 	}
-	contextRefs := validateContextBundle(ArtifactOptions{Root: repo, File: options.ContextBundle}, runDir, options.ContextBundle, bundleData, options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), &result)
+	validateContextBundle(ArtifactOptions{Root: repo, File: options.ContextBundle}, runDir, options.ContextBundle, bundleData, options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), &result)
 	bundleRef := EvidenceRef{Path: options.ContextBundle, SHA256: sha256File(bundlePath)}
 	if result.OK() {
 		if proofErr := validateStandaloneCompositionProof(repo, runDir, "context-bundle.v1", options.WorkflowID, strings.TrimSpace(options.ChangeSnapshot), bundleRef); proofErr != nil {
@@ -295,10 +304,8 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 	policyID := ""
 	if reviewJudgmentLifecycle(options.Gate, options.Stage) {
 		policyID = validateDispatchRegistrationContract(repo, runDir, promptArtifact, promptSHA256, options, bundlePath, &result)
-		validateDispatchContextForPolicy(repo, runDir, policyID, contextRefs, &result)
 	}
 	changedFiles, verification, checkEvidence := registeredReviewEvidence(repo, runDir, policyID, options, &result)
-	validateRegisteredComplexityStatistics(repo, runDir, policyID, checkEvidence, options.WorkflowID, options.ChangeSnapshot, &result, "receipt")
 	if reviewJudgmentLifecycle(options.Gate, options.Stage) {
 		validateQADesignReviewPromptBinding(repo, runDir, policyID, promptArtifact, checkEvidence, options.WorkflowID, options.ChangeSnapshot, &result)
 	}
@@ -423,7 +430,7 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 			}
 			return ReceiptRegistration{}, result
 		}
-		if existing.WorkflowID != record.WorkflowID || existing.Gate != record.Gate || normalizeStage(existing.Stage) != normalizeStage(record.Stage) {
+		if reviewJudgmentLifecycle(record.Gate, record.Stage) && (existing.WorkflowID != record.WorkflowID || existing.Gate != record.Gate || normalizeStage(existing.Stage) != normalizeStage(record.Stage)) {
 			if err := enforceReviewCapacity(repo, runDir, record.WorkflowID, record.Gate, record.Stage, options.UserAuthorizedExtraReview); err != nil {
 				result.add("receipt", err.Error())
 				if newTemplateCreated {
@@ -460,9 +467,11 @@ func ReceiptRegisterDispatch(options ReceiptRegisterOptions) (ReceiptRegistratio
 		result.add(options.Artifact, statErr.Error())
 		return ReceiptRegistration{}, result
 	}
-	if err := enforceReviewCapacity(repo, runDir, record.WorkflowID, record.Gate, record.Stage, options.UserAuthorizedExtraReview); err != nil {
-		result.add("receipt", err.Error())
-		return ReceiptRegistration{}, result
+	if reviewJudgmentLifecycle(record.Gate, record.Stage) {
+		if err := enforceReviewCapacity(repo, runDir, record.WorkflowID, record.Gate, record.Stage, options.UserAuthorizedExtraReview); err != nil {
+			result.add("receipt", err.Error())
+			return ReceiptRegistration{}, result
+		}
 	}
 	if record.ReviewTemplate != "" {
 		templatePath := resolvePath(repo, record.ReviewTemplate)
@@ -512,7 +521,7 @@ func artifactBytesForDispatch(record dispatchRegistration) []byte {
 
 func registeredReviewEvidence(repo, runDir, policyID string, options ReceiptRegisterOptions, result *Result) (*EvidenceRef, *EvidenceRef, []registeredCheckEvidence) {
 	if policyID == "" || policyID == "carry.arbiter.v2" {
-		if options.ChangedFiles != "" || options.Verification != "" || options.QADesignCaseSet != "" || options.QADesignReceipt != "" || options.ComplexityStatistics != "" {
+		if options.ChangedFiles != "" || options.Verification != "" || options.QADesignCaseSet != "" || options.QADesignReceipt != "" {
 			result.add("receipt", "static reviewer evidence is not accepted for this dispatch role")
 		}
 		return nil, nil, nil
@@ -564,24 +573,13 @@ func registeredReviewEvidence(repo, runDir, policyID string, options ReceiptRegi
 	var bindings []registeredCheckEvidence
 	switch policyID {
 	case "qa.design-review.v2":
-		if options.ComplexityStatistics != "" {
-			result.add("receipt", "--complexity-statistics is not allowed for "+policyID)
-		}
 		caseSet := resolveBinding("qa-design-case-set", options.QADesignCaseSet)
 		designReceipt := resolveBinding("qa-design-receipt", options.QADesignReceipt)
 		if caseSet != nil && designReceipt != nil {
 			bindings = []registeredCheckEvidence{{ID: "qa.design.case-set-binding", EvidenceRefs: []EvidenceRef{*caseSet, *designReceipt}}}
 		}
-	case "complexity.post-development.v2":
-		if options.QADesignCaseSet != "" || options.QADesignReceipt != "" {
-			result.add("receipt", "QA Design binding flags are not allowed for "+policyID)
-		}
-		statistics := resolveBinding("complexity-statistics", options.ComplexityStatistics)
-		if statistics != nil {
-			bindings = []registeredCheckEvidence{{ID: "complexity.statistics", EvidenceRefs: []EvidenceRef{*statistics}}}
-		}
 	default:
-		if options.QADesignCaseSet != "" || options.QADesignReceipt != "" || options.ComplexityStatistics != "" {
+		if options.QADesignCaseSet != "" || options.QADesignReceipt != "" {
 			result.add("receipt", "role-specific check evidence is not accepted for "+policyID)
 		}
 	}
@@ -606,6 +604,11 @@ func registeredCarryEvidence(repo, runDir, policyID string, options ReceiptRegis
 	}
 	if err := validateStandaloneCompositionProof(repo, runDir, "transition-chain.v1", options.WorkflowID, options.ChangeSnapshot, transition); err != nil {
 		result.add(options.TransitionChain, err.Error())
+		return nil, nil
+	}
+	var chain TransitionChain
+	if data, readErr := os.ReadFile(resolvePath(runDir, transition.Path)); readErr != nil || strictContractJSON(data, &chain) != nil {
+		result.add(options.TransitionChain, "Carry transition chain is invalid")
 		return nil, nil
 	}
 	if len(options.CarrySourceClosures) == 0 {
@@ -658,25 +661,6 @@ func registeredCarryEvidence(repo, runDir, policyID string, options ReceiptRegis
 		}
 	}
 	return &transition, sources
-}
-
-func validateRegisteredComplexityStatistics(repo, runDir, policyID string, checkEvidence []registeredCheckEvidence, workflowID, snapshot string, result *Result, where string) {
-	if policyID != "complexity.post-development.v2" {
-		return
-	}
-	var refs []EvidenceRef
-	for _, binding := range checkEvidence {
-		if binding.ID == "complexity.statistics" {
-			refs = append(refs, binding.EvidenceRefs...)
-		}
-	}
-	if len(refs) != 1 {
-		result.add(where, "complexity.statistics requires exactly one CLI-generated statistics report")
-		return
-	}
-	if err := validateComplexityStatisticsEvidence(repo, runDir, workflowID, snapshot, refs[0]); err != nil {
-		result.add(refs[0].Path, err.Error())
-	}
 }
 
 func registeredEvidenceRef(repo, runDir, logical string) (EvidenceRef, error) {
@@ -831,9 +815,17 @@ func ReceiptSubmit(options ReceiptSubmitOptions) (ReceiptSubmission, Result) {
 	}
 	proofBytes, proofErr := os.ReadFile(resolvePath(repo, dispatch.ReviewTemplate))
 	artifactBytes, artifactErr := os.ReadFile(artifactPath)
-	if proofErr != nil || artifactErr != nil || sha256Bytes(proofBytes) != dispatch.ReviewTemplateSHA256 ||
-		!bytes.Equal(proofBytes, templateBytes) || !bytes.Equal(artifactBytes, templateBytes) {
+	if proofErr != nil || artifactErr != nil || sha256Bytes(proofBytes) != dispatch.ReviewTemplateSHA256 || !bytes.Equal(proofBytes, templateBytes) {
 		result.add(options.Artifact, "assigned artifact is not the untouched CLI-generated semantic template")
+		return ReceiptSubmission{}, result
+	}
+	if dispatch.SemanticSubmissionSHA == "" {
+		if !bytes.Equal(artifactBytes, templateBytes) {
+			result.add(options.Artifact, "assigned artifact is not the untouched CLI-generated semantic template")
+			return ReceiptSubmission{}, result
+		}
+	} else if !isSHA256(dispatch.SemanticSubmissionSHA) || sha256Bytes(artifactBytes) != dispatch.SemanticSubmissionSHA {
+		result.add(options.Artifact, "assigned artifact does not match its recorded semantic submission")
 		return ReceiptSubmission{}, result
 	}
 
@@ -881,7 +873,7 @@ func ReceiptSubmit(options ReceiptSubmitOptions) (ReceiptSubmission, Result) {
 		return ReceiptSubmission{}, result
 	}
 	if err := writeFileAtomic(dispatchPath, dispatchBytes, 0o600); err != nil {
-		_ = writeFileAtomic(artifactPath, templateBytes, 0o600)
+		_ = writeFileAtomic(artifactPath, artifactBytes, 0o600)
 		result.add(options.Artifact, "cannot commit semantic submission proof: "+err.Error())
 		return ReceiptSubmission{}, result
 	}
@@ -1417,20 +1409,24 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		result.add("receipt", "UNPROVEN receipt finalization requires exactly one matching open dispatch registration")
 		return ReceiptFinalizeOutput{}, result
 	}
-	startPath, startEvent, stopPath, stopEvent, ok := findLifecyclePair(repo, runDir, dispatch.DispatchID, relativePath(repo, dispatchPath), options.Provider, options.WorkflowID, options.Gate, stage)
-	if !ok {
-		result.add("receipt", "UNPROVEN receipt finalization requires exactly one matching subagent_start and one matching subagent_stop lifecycle event")
-		return ReceiptFinalizeOutput{}, result
-	}
-	if startEvent.SubagentID != "" && stopEvent.SubagentID != "" && startEvent.SubagentID != stopEvent.SubagentID {
-		result.add("receipt", "UNPROVEN receipt finalization blocked: start/stop subagent ids mismatch")
-		return ReceiptFinalizeOutput{}, result
-	}
-	startAt, startErr := time.Parse(time.RFC3339Nano, startEvent.CapturedAtUTC)
-	stopAt, stopErr := time.Parse(time.RFC3339Nano, stopEvent.CapturedAtUTC)
-	if startErr != nil || stopErr != nil || !stopAt.After(startAt) {
-		result.add("receipt", "UNPROVEN receipt finalization blocked: subagent_stop must be captured strictly after subagent_start")
-		return ReceiptFinalizeOutput{}, result
+	var startPath, stopPath string
+	var startEvent, stopEvent receiptEventRecord
+	if providerRequiresLifecycle(options.Provider) {
+		startPath, startEvent, stopPath, stopEvent, ok = findLifecyclePair(repo, runDir, dispatch.DispatchID, relativePath(repo, dispatchPath), options.Provider, options.WorkflowID, options.Gate, stage)
+		if !ok {
+			result.add("receipt", "UNPROVEN receipt finalization requires exactly one matching subagent_start and one matching subagent_stop lifecycle event")
+			return ReceiptFinalizeOutput{}, result
+		}
+		if startEvent.SubagentID != "" && stopEvent.SubagentID != "" && startEvent.SubagentID != stopEvent.SubagentID {
+			result.add("receipt", "UNPROVEN receipt finalization blocked: start/stop subagent ids mismatch")
+			return ReceiptFinalizeOutput{}, result
+		}
+		startAt, startErr := time.Parse(time.RFC3339Nano, startEvent.CapturedAtUTC)
+		stopAt, stopErr := time.Parse(time.RFC3339Nano, stopEvent.CapturedAtUTC)
+		if startErr != nil || stopErr != nil || !stopAt.After(startAt) {
+			result.add("receipt", "UNPROVEN receipt finalization blocked: subagent_stop must be captured strictly after subagent_start")
+			return ReceiptFinalizeOutput{}, result
+		}
 	}
 	if reviewJudgmentLifecycle(dispatch.Gate, dispatch.Stage) {
 		if !validateFinalSendPrompt(repo, runDir, dispatch.PromptArtifact, dispatch.PromptSha256, dispatch.Gate, dispatch.Stage, &result, "receipt") {
@@ -1440,10 +1436,6 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		if !result.OK() {
 			return ReceiptFinalizeOutput{}, result
 		}
-	}
-	validateRegisteredComplexityStatistics(repo, runDir, dispatch.ReviewPolicyID, dispatch.CheckEvidence, dispatch.WorkflowID, dispatch.ChangeSnapshot, &result, "receipt")
-	if !result.OK() {
-		return ReceiptFinalizeOutput{}, result
 	}
 	release, err := acquireReceiptRegistrationLock(repo, runDir)
 	if err != nil {
@@ -1457,14 +1449,16 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		return ReceiptFinalizeOutput{}, result
 	}
 	dispatch = lockedDispatch
-	completed, _, err := reviewReservationCounts(repo, runDir, dispatch.WorkflowID, dispatch.Gate, dispatch.Stage)
-	if err != nil {
-		result.add("receipt", err.Error())
-		return ReceiptFinalizeOutput{}, result
-	}
-	if completed >= 3 && !dispatch.ExtraReviewAuthorized {
-		result.add("receipt", "review limit reached before finalization; another completed review requires explicit user authorization")
-		return ReceiptFinalizeOutput{}, result
+	if reviewJudgmentLifecycle(dispatch.Gate, dispatch.Stage) {
+		completed, _, err := reviewReservationCounts(repo, runDir, dispatch.WorkflowID, dispatch.Gate, dispatch.Stage)
+		if err != nil {
+			result.add("receipt", err.Error())
+			return ReceiptFinalizeOutput{}, result
+		}
+		if completed >= 3 && !dispatch.ExtraReviewAuthorized {
+			result.add("receipt", "review limit reached before finalization; another completed review requires explicit user authorization")
+			return ReceiptFinalizeOutput{}, result
+		}
 	}
 	artifactBytes, err := os.ReadFile(artifactPath)
 	if err != nil {
@@ -1525,16 +1519,19 @@ func ReceiptFinalize(options ReceiptFinalizeOptions) (ReceiptFinalizeOutput, Res
 		DispatchID:                   dispatch.DispatchID,
 		DispatchRegistrationArtifact: dispatchRel,
 		DispatchRegistrationSha256:   sha256Bytes(dispatchBytes),
-		SubagentID:                   startEvent.SubagentID,
-		NormalizedEvents:             []string{"subagent_start", "subagent_stop"},
-		StartEventArtifact:           relativePath(repo, startPath),
-		StartEventSha256:             sha256File(startPath),
-		StopEventArtifact:            relativePath(repo, stopPath),
-		StopEventSha256:              sha256File(stopPath),
+		NormalizedEvents:             []string{},
 		ReviewArtifact:               relativePath(repo, artifactPath),
 		ReviewArtifactSha256:         sha256Bytes(artifactBytes),
 		PromptArtifact:               dispatch.PromptArtifact,
 		PromptSha256:                 dispatch.PromptSha256,
+	}
+	if providerRequiresLifecycle(options.Provider) {
+		receipt.SubagentID = startEvent.SubagentID
+		receipt.NormalizedEvents = []string{"subagent_start", "subagent_stop"}
+		receipt.StartEventArtifact = relativePath(repo, startPath)
+		receipt.StartEventSha256 = sha256File(startPath)
+		receipt.StopEventArtifact = relativePath(repo, stopPath)
+		receipt.StopEventSha256 = sha256File(stopPath)
 	}
 	if err := writeJSON(receiptPath, receipt); err != nil {
 		result.add("receipt", err.Error())
@@ -1646,6 +1643,9 @@ func validateFinalSendPrompt(root, runDir, artifact, expectedHash, expectedGate,
 		return false
 	}
 	path := resolvePath(root, artifact)
+	if logicalPath, pathErr := safeEvidencePath(runDir, artifact); pathErr == nil {
+		path = logicalPath
+	}
 	data, err := os.ReadFile(path)
 	if err != nil || sha256Bytes(data) != expectedHash {
 		result.add(where, "final-send prompt path or hash is invalid")
@@ -1764,23 +1764,6 @@ func dispatchOutputContracts(gate, stage string) (string, []string) {
 	return role, policies
 }
 
-func validateDispatchContextForPolicy(root, runDir, policyID string, refs []EvidenceRef, result *Result) {
-	if policyID != "complexity.post-development.v2" {
-		return
-	}
-	options := ArtifactOptions{Root: root}
-	for _, ref := range refs {
-		data, ok := readReviewerEvidenceRef(options, runDir, ref, result)
-		if !ok {
-			continue
-		}
-		var value any
-		if json.Unmarshal(data, &value) == nil && containsDevelopmentBudgetMaterial(value) {
-			result.add(ref.Path, "post-development complexity dispatch context must not include development-time budget or statistics schema fields")
-		}
-	}
-}
-
 func ReceiptPreflight(options ReceiptPreflightOptions) (ReceiptPreflightReport, Result) {
 	var result Result
 	host := strings.TrimSpace(options.Host)
@@ -1790,6 +1773,19 @@ func ReceiptPreflight(options ReceiptPreflightOptions) (ReceiptPreflightReport, 
 		return ReceiptPreflightReport{}, result
 	}
 	repo := cleanWorktree(options.Worktree)
+	if !providerRequiresLifecycle(def.Provider) {
+		return ReceiptPreflightReport{
+			Status:                   "HOST_LIFECYCLE_UNAVAILABLE",
+			Host:                     def.DisplayName,
+			Provider:                 def.Provider,
+			Worktree:                 slash(repo),
+			RequiredLifecycleEvents:  []string{},
+			ConfiguredLifecycleHooks: map[string][]string{},
+			UsableCorrelationFields:  []string{},
+			RawPayloadArtifacts:      []string{},
+			Missing:                  []string{},
+		}, result
+	}
 	checkedConfigPaths := receiptCheckedConfigPaths(repo, def)
 	configPath := ""
 	for _, candidate := range checkedConfigPaths {
@@ -1903,29 +1899,8 @@ func receiptHostPreflightDefinition(host string) (receiptHostPreflight, bool) {
 		}, true
 	case "codex":
 		return receiptHostPreflight{
-			DisplayName:           "Codex",
-			Provider:              "codex",
-			ProjectConfigRelative: filepath.FromSlash(".codex/hooks.json"),
-			GlobalConfigRelative:  filepath.FromSlash(".codex/hooks.json"),
-			MissingConfigMessage:  "Codex hooks.json with SubagentStart/SubagentStop receipt hooks",
-			ConfigReadErrorPrefix: "readable Codex hook config JSON",
-			HookShape:             "nested",
-			Events: []receiptHostEvent{
-				{
-					ConfigEventName:  "SubagentStart",
-					ReceiptEventName: "SubagentStart",
-					OutputName:       "SubagentStart",
-					HookMissing:      "Codex SubagentStart receipt capture hook",
-					PayloadMissing:   "real Codex host-emitted SubagentStart payload artifact",
-				},
-				{
-					ConfigEventName:  "SubagentStop",
-					ReceiptEventName: "SubagentStop",
-					OutputName:       "SubagentStop",
-					HookMissing:      "Codex SubagentStop receipt capture hook",
-					PayloadMissing:   "real Codex host-emitted SubagentStop payload artifact",
-				},
-			},
+			DisplayName: "Codex",
+			Provider:    "codex",
 		}, true
 	case "cursor":
 		return receiptHostPreflight{
@@ -2026,6 +2001,15 @@ func normalizeReceiptEvent(provider, event string) (string, error) {
 		return "subagent_stop", nil
 	default:
 		return "", fmt.Errorf("unsupported %s lifecycle event: %s", provider, event)
+	}
+}
+
+func providerRequiresLifecycle(provider string) bool {
+	switch provider {
+	case "claude-code", "cursor":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -2269,7 +2253,7 @@ func receiptCaptureRunDir(repo, value, workflowID, provider, dispatchID, dispatc
 	if strings.TrimSpace(value) != "" || strings.TrimSpace(dispatchID) == "" {
 		return explicit, nil
 	}
-	runsRoot := filepath.Join(repo, ".claude", "gates", "runs")
+	runsRoot := filepath.Join(repo, ".gates", "runs")
 	entries, _ := os.ReadDir(runsRoot)
 	match, count := "", 0
 	for _, entry := range entries {
@@ -2293,7 +2277,7 @@ func dispatchArtifactRunDir(repo, artifact string) (string, error) {
 	proofsDir := filepath.Dir(dispatchDir)
 	restrictedDir := filepath.Dir(proofsDir)
 	runDir := filepath.Dir(restrictedDir)
-	runsRoot := filepath.Join(repo, ".claude", "gates", "runs")
+	runsRoot := filepath.Join(repo, ".gates", "runs")
 	if filepath.Base(dispatchDir) != "dispatch" || filepath.Base(proofsDir) != "proofs" || filepath.Base(restrictedDir) != "restricted" || samePath(runDir, runsRoot) || !pathUnder(runDir, runsRoot) {
 		return "", fmt.Errorf("UNPROVEN lifecycle dispatch registration path is outside an active dispatch proof directory")
 	}
@@ -2474,7 +2458,7 @@ func validateDesignReviewIndependence(options ArtifactOptions, artifact decodedA
 			if err != nil || designReceipt.Gate != "qa-test-gate" || normalizeStage(designReceipt.Stage) != "Design" {
 				continue
 			}
-			if designReceipt.SubagentID == reviewReceipt.SubagentID {
+			if providerRequiresLifecycle(designReceipt.Provider) && providerRequiresLifecycle(reviewReceipt.Provider) && designReceipt.SubagentID == reviewReceipt.SubagentID {
 				return fmt.Errorf("QA Design and Design Review must use different subagents")
 			}
 			return nil

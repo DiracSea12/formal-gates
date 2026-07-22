@@ -80,7 +80,7 @@ func TestHookRejectsLegacyPowerShellCommands(t *testing.T) {
 			payload: `{
 				"tool_name": "Bash",
 				"tool_input": {
-					"command": "powershell -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -Artifact .claude/gates/artifacts/complexity.md"
+					"command": "powershell -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -Artifact .gates/artifacts/complexity.md"
 				}
 			}`,
 		},
@@ -139,7 +139,7 @@ func TestHookAllowsRepresentativePayloads(t *testing.T) {
 			payload: `{
 				"tool_name": "Shell",
 				"input": {
-					"command": "formal-gates workflow record-stage --gate complexity-gate --verdict PASS --artifact=.claude/gates/artifacts/complexity.md --workflow-id wf --change-snapshot snap"
+					"command": "formal-gates workflow record-stage --gate complexity-gate --verdict PASS --artifact=.gates/artifacts/complexity.md --workflow-id wf --change-snapshot snap"
 				}
 			}`,
 		},

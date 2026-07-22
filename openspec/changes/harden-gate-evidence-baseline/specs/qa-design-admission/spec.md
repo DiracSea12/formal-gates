@@ -8,9 +8,9 @@ Adequacy, or stronger approved-chain admission.
 
 Phase 2 delivers Design Review and its pre-development approved-chain admission.
 Each newly enabled stage includes its JSON content, policy, domain
-validator, and positive and negative tests in that phase. Design Rework remains
-a semantic revision action through another Design registration/submission, not
-a machine role or stage. Phase 2 does not implement or
+validator, and positive and negative tests in that phase. After Design
+finalization, Design Rework remains a semantic revision action through another
+Design registration/submission, not a machine role or stage. Phase 2 does not implement or
 register White-box Adequacy.
 
 Phase 2 adds policy `qa.design-review.v2` with role `QA_REVIEW`, gate
@@ -28,8 +28,9 @@ the shared reviewer payload:
 - `qa.design.case-set-binding`
 
 `qa.design.case-set-binding` SHALL reference exactly the reviewed case set and
-its Design-stage lifecycle receipt. That receipt reuses the existing lifecycle
-registration, start/stop, subagent-ID, snapshot, and exact-output-hash chain,
+its Design-stage receipt. That receipt reuses the existing registration,
+snapshot, and exact-output-hash chain, plus start/stop and subagent ID only when
+the provider exposes usable lifecycle events,
 but Design itself records no gate PASS and requires no reviewer-prompt binding.
 Design registration SHALL generate the title, stable Case IDs, seven-field
 catalog, separators, and newline layout. The designer SHALL submit exactly the
@@ -39,8 +40,9 @@ the generated Markdown. The CLI SHALL reject missing, duplicate, unknown,
 incomplete, empty, `PENDING`, or multiline values before changing the case
 artifact, then write canonical case order and atomically record the exact
 artifact hash in the open dispatch. Finalization SHALL require that submission
-proof. Design Rework SHALL use another Design registration and semantic
-submission rather than rewriting a submitted or finalized case set.
+proof. After Design finalization, Design Rework SHALL use another Design
+registration and semantic submission rather than manually rewriting the
+finalized case set.
 Receipt registration generates the Design Review catalog and exact
 case-set/Design-receipt evidence binding. The reviewer supplies only ordered
 semantic status, message, finding, and location values through `receipt submit`;
@@ -62,15 +64,14 @@ designer receipt but SHALL NOT record a gate PASS.
 
 The CLI SHALL generate the formal development-handoff template and populate
 its field catalog, workflow/snapshot, approved-case and Design Review evidence
-references, paths/hashes, and complexity-check command shape. The orchestrator
-MAY supply only semantic scope, verification expectations, budget choices, stop
-conditions, and residual-risk text. A hand-authored static handoff SHALL NOT
-satisfy admission.
+references, and paths/hashes. The orchestrator MAY supply only semantic scope,
+verification expectations, isolation boundaries, and residual-risk text. A
+hand-authored static handoff SHALL NOT satisfy admission.
 
-The orchestrator SHALL select one existing supported complexity task type. The
-CLI SHALL reject a missing or unsupported type before writing the handoff or
-composition proof, and SHALL generate an executable complexity command using
-that type and the same three numeric limits as the budget field.
+For Phase 3 formal development, the generated handoff SHALL include the
+orchestrator-selected external `vcs`. Four-gate, release, and seal admission
+SHALL reject an empty value or `none`. It SHALL NOT admit a no-VCS source backup
+or best-effort fallback. The worker invokes that VCS directly.
 
 #### Scenario: Development handoff has approved cases
 
@@ -83,18 +84,10 @@ that type and the same three numeric limits as the budget field.
 - **WHEN** any required case, receipt, review, or hash binding is absent
 - **THEN** handoff is rejected before implementation.
 
-#### Scenario: Generated complexity command is executable
+#### Scenario: Handoff has no VCS
 
-- **WHEN** a handoff is composed with a supported complexity task type and
-  numeric budget
-- **THEN** the handoff validates and its generated complexity command executes
-  with that exact type and budget.
-
-#### Scenario: Handoff task type is unsupported
-
-- **WHEN** handoff composition receives a task type outside the existing
-  complexity checker enum
-- **THEN** composition is rejected without a partial handoff or proof.
+- **WHEN** approved cases exist but `vcs` is empty or `none`
+- **THEN** handoff is rejected before implementation.
 
 #### Scenario: Handoff uses an explicit workflow run directory
 
@@ -135,7 +128,8 @@ review and requires a new Design Review.
 
 #### Scenario: Designer or reviewer receipt does not bind the case set
 
-- **WHEN** either lifecycle receipt is absent, stale, or hashes different bytes
+- **WHEN** either receipt is absent, stale, hashes different bytes, or lacks
+  lifecycle evidence required by its provider
 - **THEN** Design Review cannot record PASS and the case set is not approved.
 
 ### Requirement: Approved cases cannot be weakened by development
@@ -166,6 +160,12 @@ submissions before writing any target or proof. The CLI SHALL then hash the six
 evidence sources and generate the complete `QA_EXECUTION` envelope; neither the
 QA executor nor the main agent may author semantic JSON, edit a static
 template, or handwrite static formal content.
+When the active workflow already has an older-snapshot `QA_EXECUTION` PASS,
+`artifact compose-qa-execution` at a new snapshot SHALL require a recorded
+terminal Carry transition that decides `RERUN_REQUIRED` for that QA Execution
+lane before writing either output or proof. `ACCEPT_CARRY`, `BLOCKED`, or no
+decision SHALL reject the new composition. If no prior QA Execution PASS exists
+in the active workflow, the first composition MAY proceed normally.
 
 #### Scenario: QA submits positioned scalar observations
 
@@ -180,6 +180,14 @@ template, or handwrite static formal content.
   `PENDING`, or carries an illegal outcome
 - **THEN** the CLI rejects before changing any target, proof, or approved case
   source.
+
+#### Scenario: New-snapshot QA Execution requires terminal rerun decision
+
+- **WHEN** the active workflow already has an older-snapshot QA Execution PASS
+  and composition targets a new snapshot without terminal Carry
+  `RERUN_REQUIRED`
+- **THEN** composition rejects before writing its output or proof; `ACCEPT_CARRY`,
+  `BLOCKED`, and no decision do not permit the rerun.
 
 In Phase 2 the `QA_EXECUTION` payload contains the Phase 1 five evidence
 references plus `designReview`, which references the accepted Design Review

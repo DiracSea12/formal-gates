@@ -119,7 +119,7 @@ Weak questions do not count toward coverage unless they affect acceptance, const
 - "Would you like detailed logging?"
 - "Do you prefer approach A or B?"
 
-Question budget is risk-based:
+Question count is risk-based:
 
 - Non-semantic edit: 0 questions.
 - Low-risk clarification with confirmed source: 0 questions; at most 1 confirmation if the source is unclear.
@@ -148,7 +148,7 @@ For requirement-like document work, use this primitive before drafting formal re
 7. When confirmed alignment already covers the work, reuse it during spec synthesis instead of repeating the interview. Return to clarification only for newly discovered blocking ambiguity.
 8. When a reviewer reports a problem, the main agent applies the finding filter above. Only a genuine unresolved user decision returns to this clarification loop; the main agent handles verified in-scope defects directly and does not silently promote preferences or broader scope into requirements.
 
-## File Budget
+## Clarification Artifact Hygiene
 
 Lightweight routing and informal clarification must not create gate artifacts.
 

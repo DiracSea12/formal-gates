@@ -2,12 +2,60 @@ package validate
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestComposeChangedFilesUsesExplicitSortedPaths(t *testing.T) {
+	root := t.TempDir()
+	runDir := filepath.Join(root, ".gates", "runs", "wf")
+	ref, result := ComposeChangedFiles(ComposeChangedFilesOptions{Root: root, RunDir: runDir, WorkflowID: "wf", ChangeSnapshot: "git:base..target", Paths: []string{"old.txt", "new.txt", "old.txt"}, Output: "restricted/changed.txt"})
+	if !result.OK() {
+		t.Fatalf("changed-files composition failed: %#v", result.Failures)
+	}
+	data, err := os.ReadFile(filepath.Join(runDir, filepath.FromSlash(ref.Path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new.txt\nold.txt\n" {
+		t.Fatalf("unexpected explicit path list: %q", data)
+	}
+}
+
+func TestComposeChangedFilesRejectsEveryUnsafeRepositoryPathClassWithoutOutput(t *testing.T) {
+	for name, path := range map[string]string{
+		"drive absolute":  "C:/repo/file.go",
+		"drive relative":  "C:file.go",
+		"scheme":          "https://example.test/file.go",
+		"absolute":        "/repo/file.go",
+		"UNC":             `\\server\share\file.go`,
+		"backslash":       `internal\file.go`,
+		"parent":          "../file.go",
+		"embedded parent": "internal/../file.go",
+		"workflow lower":  ".gates/state.json",
+		"workflow case":   ".GaTeS/state.json",
+		"control":         "file\nname.go",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			runDir := filepath.Join(root, ".gates", "runs", "wf")
+			output := filepath.Join(runDir, "restricted", "changed.txt")
+			_, result := ComposeChangedFiles(ComposeChangedFilesOptions{Root: root, RunDir: runDir, WorkflowID: "wf", ChangeSnapshot: "snap", Paths: []string{path}, Output: "restricted/changed.txt"})
+			if result.OK() {
+				t.Fatalf("unsafe path was accepted: %q", path)
+			}
+			if _, err := os.Lstat(output); !os.IsNotExist(err) {
+				t.Fatalf("rejected path wrote output: %v", err)
+			}
+			proofs, err := filepath.Glob(filepath.Join(runDir, "restricted", "proofs", "compositions", "*.json"))
+			if err != nil || len(proofs) != 0 {
+				t.Fatalf("rejected path wrote proof: paths=%v err=%v", proofs, err)
+			}
+		})
+	}
+}
 
 func TestComposeContextBundleGeneratesSortedRefs(t *testing.T) {
 	root, runDir := composeTestRun(t, "wf-context")
@@ -35,161 +83,15 @@ func TestComposeContextBundleGeneratesSortedRefs(t *testing.T) {
 	}
 }
 
-func TestComposeChangedFilesGeneratesGitListAndProof(t *testing.T) {
-	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		command := exec.Command("git", args...)
-		command.Dir = root
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, output)
-		}
-	}
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test")
-	mustWrite(t, filepath.Join(root, "tracked.txt"), "before\n")
-	mustWrite(t, filepath.Join(root, ".gitignore"), "ignored.tmp\n")
-	run("add", "tracked.txt", ".gitignore")
-	run("commit", "-m", "base")
-	mustWrite(t, filepath.Join(root, "tracked.txt"), "after\n")
-	mustWrite(t, filepath.Join(root, "new.go"), "package newfile\n")
-	mustWrite(t, filepath.Join(root, "not-selected.go"), "package notselected\n")
-	mustWrite(t, filepath.Join(root, "ignored.tmp"), "ignored\n")
-	runDir := filepath.Join(root, ".claude", "gates", "runs", "wf-changed")
-	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ref, result := ComposeChangedFiles(ComposeChangedFilesOptions{
-		Root: root, RunDir: runDir, WorkflowID: "wf-changed", ChangeSnapshot: "snapshot",
-		BaseRef: "HEAD", HeadRef: "HEAD", IncludeWorkingTree: true, IncludeUntracked: []string{"new.go"}, Output: "restricted/generated/changed.txt",
-	})
-	if !result.OK() {
-		t.Fatalf("compose changed files failed: %#v", result.Failures)
-	}
-	data, err := os.ReadFile(filepath.Join(runDir, filepath.FromSlash(ref.Path)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "new.go\ntracked.txt\n" {
-		t.Fatalf("unexpected changed-files output: %q", data)
-	}
-	if err := validateStandaloneCompositionProof(root, runDir, "changed-files.v1", "wf-changed", "snapshot", ref); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestComposeChangedFilesRejectsInvalidExplicitUntrackedPaths(t *testing.T) {
-	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		command := exec.Command("git", args...)
-		command.Dir = root
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, output)
-		}
-	}
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test")
-	mustWrite(t, filepath.Join(root, ".gitignore"), "ignored.tmp\n")
-	mustWrite(t, filepath.Join(root, "tracked.txt"), "tracked\n")
-	run("add", ".gitignore", "tracked.txt")
-	run("commit", "-m", "base")
-	mustWrite(t, filepath.Join(root, "untracked.go"), "package untracked\n")
-	mustWrite(t, filepath.Join(root, "ignored.tmp"), "ignored\n")
-	mustWrite(t, filepath.Join(root, ".claude", "gates", "runs", "other", "restricted", "artifact.txt"), "run artifact\n")
-
-	tests := []struct {
-		name               string
-		includeWorkingTree bool
-		paths              []string
-		want               string
-	}{
-		{name: "tracked", includeWorkingTree: true, paths: []string{"tracked.txt"}, want: "path is tracked"},
-		{name: "ignored", includeWorkingTree: true, paths: []string{"ignored.tmp"}, want: "path is ignored"},
-		{name: "missing", includeWorkingTree: true, paths: []string{"missing.go"}, want: "path does not exist"},
-		{name: "path traversal", includeWorkingTree: true, paths: []string{"../outside.go"}, want: "path must remain under the worktree"},
-		{name: "duplicate", includeWorkingTree: true, paths: []string{"untracked.go", "./untracked.go"}, want: "path must not be repeated"},
-		{name: "workflow run artifact", includeWorkingTree: true, paths: []string{".claude/gates/runs/other/restricted/artifact.txt"}, want: "workflow-run artifacts cannot be included"},
-		{name: "without working tree", paths: []string{"untracked.go"}, want: "requires --include-working-tree"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			workflowID := "wf-invalid-" + strings.ReplaceAll(tc.name, " ", "-")
-			runDir := filepath.Join(root, ".claude", "gates", "runs", workflowID)
-			if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			_, result := ComposeChangedFiles(ComposeChangedFilesOptions{
-				Root: root, RunDir: runDir, WorkflowID: workflowID, ChangeSnapshot: "snapshot",
-				BaseRef: "HEAD", HeadRef: "HEAD", IncludeWorkingTree: tc.includeWorkingTree,
-				IncludeUntracked: tc.paths, Output: "restricted/changed.txt",
-			})
-			if result.OK() || !strings.Contains(resultSummary(result), tc.want) {
-				t.Fatalf("invalid explicit untracked path was accepted: %#v", result.Failures)
-			}
-			if _, err := os.Lstat(filepath.Join(runDir, "restricted", "changed.txt")); !os.IsNotExist(err) {
-				t.Fatalf("rejected composition wrote output: %v", err)
-			}
-		})
-	}
-}
-
-func TestComposeChangedFilesWithoutWorkingTreeKeepsRangeOnly(t *testing.T) {
-	root := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		command := exec.Command("git", args...)
-		command.Dir = root
-		if output, err := command.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, output)
-		}
-	}
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "Test")
-	mustWrite(t, filepath.Join(root, "range.txt"), "before\n")
-	run("add", "range.txt")
-	run("commit", "-m", "base")
-	base, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustWrite(t, filepath.Join(root, "range.txt"), "after\n")
-	run("add", "range.txt")
-	run("commit", "-m", "range")
-	mustWrite(t, filepath.Join(root, "untracked.go"), "package untracked\n")
-	runDir := filepath.Join(root, ".claude", "gates", "runs", "wf-range")
-	if err := os.MkdirAll(filepath.Join(runDir, "restricted"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ref, result := ComposeChangedFiles(ComposeChangedFilesOptions{
-		Root: root, RunDir: runDir, WorkflowID: "wf-range", ChangeSnapshot: "snapshot",
-		BaseRef: strings.TrimSpace(string(base)), HeadRef: "HEAD", Output: "restricted/changed.txt",
-	})
-	if !result.OK() {
-		t.Fatalf("compose changed files failed: %#v", result.Failures)
-	}
-	data, err := os.ReadFile(filepath.Join(runDir, filepath.FromSlash(ref.Path)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "range.txt\n" {
-		t.Fatalf("working-tree file leaked without --include-working-tree: %q", data)
-	}
-}
-
 func TestComposeTransitionChainGeneratesEvidenceRefs(t *testing.T) {
 	root, runDir := composeTestRun(t, "wf-transition")
-	for _, name := range []string{"changed-1.txt", "verify-1.txt", "repair-1.txt", "changed-2.txt", "verify-2.txt", "repair-2.txt"} {
-		mustWrite(t, filepath.Join(runDir, "restricted", name), name+"\n")
-	}
+	changed1, verification1 := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition", "middle", "hop-1")
+	changed2, verification2 := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition", "target", "hop-2")
 	options := ComposeTransitionChainOptions{
 		Root: root, RunDir: runDir, WorkflowID: "wf-transition", TargetSnapshot: "target", Output: "restricted/generated/transition.json",
 		Hops: []TransitionHopSource{
-			{FromSnapshot: "source", ToSnapshot: "middle", ChangedFiles: "restricted/changed-1.txt", Verification: "restricted/verify-1.txt", RepairEvidence: "restricted/repair-1.txt"},
-			{FromSnapshot: "middle", ToSnapshot: "target", ChangedFiles: "restricted/changed-2.txt", Verification: "restricted/verify-2.txt", RepairEvidence: "restricted/repair-2.txt"},
+			{FromSnapshot: "source", ToSnapshot: "middle", ChangedFiles: changed1, Verification: verification1},
+			{FromSnapshot: "middle", ToSnapshot: "target", ChangedFiles: changed2, Verification: verification2},
 		},
 	}
 	ref, result := ComposeTransitionChain(options)
@@ -198,7 +100,7 @@ func TestComposeTransitionChainGeneratesEvidenceRefs(t *testing.T) {
 	}
 	var chain TransitionChain
 	readComposeJSON(t, filepath.Join(runDir, filepath.FromSlash(ref.Path)), &chain)
-	if chain.SchemaVersion != 2 || chain.WorkflowID != "wf-transition" || chain.TargetSnapshot != "target" || len(chain.Hops) != 2 || chain.Hops[0].ChangedFiles != testRef(t, runDir, "restricted/changed-1.txt") {
+	if chain.SchemaVersion != 2 || chain.WorkflowID != "wf-transition" || chain.TargetSnapshot != "target" || len(chain.Hops) != 2 || chain.Hops[0].ChangedFiles != testRef(t, runDir, changed1) {
 		t.Fatalf("unexpected generated transition chain: %#v", chain)
 	}
 	if err := validateStandaloneCompositionProof(root, runDir, "transition-chain.v1", "wf-transition", "target", ref); err != nil {
@@ -213,6 +115,76 @@ func TestComposeTransitionChainGeneratesEvidenceRefs(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(runDir, "restricted", "generated", "bad-transition.json")); !os.IsNotExist(err) {
 		t.Fatalf("failed transition composition left output: %v", err)
 	}
+}
+
+func TestComposeTransitionChainRequiresTypedCurrentHopEvidence(t *testing.T) {
+	tests := []struct {
+		name  string
+		input func(*testing.T, string, string) (string, string)
+	}{
+		{name: "wrong composer", input: func(t *testing.T, root, runDir string) (string, string) {
+			changed, _ := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition-proof", "target", "current")
+			otherChanged, _ := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition-proof", "target", "wrong-role")
+			return changed, otherChanged
+		}},
+		{name: "stale changed-files snapshot", input: func(t *testing.T, root, runDir string) (string, string) {
+			staleChanged, _ := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition-proof", "stale", "stale-changed")
+			_, verification := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition-proof", "target", "current-verification")
+			return staleChanged, verification
+		}},
+		{name: "stale verification snapshot", input: func(t *testing.T, root, runDir string) (string, string) {
+			changed, _ := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition-proof", "target", "current-changed")
+			_, staleVerification := composeTransitionHopEvidenceFixture(t, root, runDir, "wf-transition-proof", "stale", "stale-verification")
+			return changed, staleVerification
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, runDir := composeTestRun(t, "wf-transition-proof")
+			changed, verification := test.input(t, root, runDir)
+			output := "restricted/generated/rejected-transition.json"
+			_, result := ComposeTransitionChain(ComposeTransitionChainOptions{
+				Root: root, RunDir: runDir, WorkflowID: "wf-transition-proof", TargetSnapshot: "target", Output: output,
+				Hops: []TransitionHopSource{{FromSnapshot: "source", ToSnapshot: "target", ChangedFiles: changed, Verification: verification}},
+			})
+			if result.OK() || !strings.Contains(resultSummary(result), "composition proof") {
+				t.Fatalf("invalid typed hop evidence was accepted: %#v", result.Failures)
+			}
+			outputPath := filepath.Join(runDir, filepath.FromSlash(output))
+			if _, err := os.Lstat(outputPath); !os.IsNotExist(err) {
+				t.Fatalf("rejected transition left output: %v", err)
+			}
+			proofPath := filepath.Join(receiptProofDir(root, runDir, "compositions"), sha256Bytes([]byte("transition-chain.v1\n"+output))+".json")
+			if _, err := os.Lstat(proofPath); !os.IsNotExist(err) {
+				t.Fatalf("rejected transition left proof: %v", err)
+			}
+		})
+	}
+}
+
+func composeTransitionHopEvidenceFixture(t *testing.T, root, runDir, workflowID, snapshot, prefix string) (string, string) {
+	t.Helper()
+	changedOutput := filepath.ToSlash(filepath.Join("restricted", "generated", prefix+"-changed.txt"))
+	changed, result := ComposeChangedFiles(ComposeChangedFilesOptions{
+		Root: root, RunDir: runDir, WorkflowID: workflowID, ChangeSnapshot: snapshot,
+		Output: changedOutput, Paths: []string{"internal/" + prefix + ".go"},
+	})
+	if !result.OK() {
+		t.Fatalf("cannot compose changed-files fixture: %#v", result.Failures)
+	}
+	attemptLogical := filepath.ToSlash(filepath.Join("restricted", "generated", prefix+"-attempt.txt"))
+	attemptPath := filepath.Join(runDir, filepath.FromSlash(attemptLogical))
+	mustWrite(t, attemptPath, "PASS\n")
+	verificationLogical := filepath.ToSlash(filepath.Join("restricted", "generated", prefix+"-verification.json"))
+	verificationPath := filepath.Join(runDir, filepath.FromSlash(verificationLogical))
+	_, verificationResult := WorkflowFinalVerification(WorkflowFinalVerificationOptions{
+		Worktree: root, RunDir: runDir, AttemptArtifacts: []string{relativePath(root, attemptPath)},
+		OutputArtifact: relativePath(root, verificationPath), WorkflowID: workflowID, ChangeSnapshot: snapshot,
+	})
+	if !verificationResult.OK() {
+		t.Fatalf("cannot compose verification fixture: %#v", verificationResult.Failures)
+	}
+	return changed.Path, verificationLogical
 }
 
 func TestComposeQAOwnedEvidenceGeneratesStaticResultsAndBinding(t *testing.T) {
