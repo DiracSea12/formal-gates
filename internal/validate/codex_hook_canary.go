@@ -15,7 +15,6 @@ import (
 
 type CodexHookCanaryOptions struct {
 	Worktree       string
-	OutputDir      string
 	CodexCommand   string
 	TimeoutSeconds int
 	KeepTemp       bool
@@ -72,11 +71,7 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		codexCommand = "codex"
 	}
 	worktree := cleanWorktree(options.Worktree)
-	outputRoot := strings.TrimSpace(options.OutputDir)
-	if outputRoot == "" {
-		outputRoot = filepath.Join(worktree, ".artifacts", "ai", "formal-gates-hook-client-tests")
-	}
-	outputRoot = absPath(outputRoot)
+	outputRoot := filepath.Join(worktree, ".gates", "tmp", "codex-hook-canary")
 	if err := os.MkdirAll(outputRoot, 0o700); err != nil {
 		result.add("codex-hook-canary", err.Error())
 		return CodexHookCanarySummary{Status: "FAIL"}, result

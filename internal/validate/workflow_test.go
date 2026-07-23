@@ -581,9 +581,10 @@ func TestWorkflowFinalVerificationNoAcceptedFails(t *testing.T) {
 
 func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 	dir := t.TempDir()
-	tmpFile := filepath.Join(dir, ".artifacts", "tmp", "run", "scratch.txt")
+	tmpFile := filepath.Join(dir, ".gates", "tmp", "post-development-1", "scratch.txt")
+	closure := filepath.Join(dir, ".gates", "runs", "sealed", "restricted", "final-execution.json")
 	mustWrite(t, tmpFile, "scratch\n")
-	mustWrite(t, filepath.Join(dir, ".gates", "artifact.md"), "evidence\n")
+	mustWrite(t, closure, "formal closure\n")
 
 	dryRun, result := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir})
 	if !result.OK() {
@@ -596,17 +597,12 @@ func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 		t.Fatal("dry-run removed scratch file")
 	}
 
-	_, denied := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Paths: []string{".gates/artifact.md"}})
+	_, denied := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, FlowID: "../outside"})
 	if denied.OK() {
-		t.Fatal("expected .gates cleanup to be denied")
+		t.Fatal("expected invalid flow id to be denied")
 	}
 
-	_, deniedRoot := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Paths: []string{"."}})
-	if deniedRoot.OK() {
-		t.Fatal("expected repo root cleanup to be denied")
-	}
-
-	executed, result := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Paths: []string{".artifacts/tmp/run/scratch.txt"}, Execute: true})
+	executed, result := WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, FlowID: "post-development-1", Execute: true})
 	if !result.OK() {
 		t.Fatalf("expected cleanup execute to pass, got %#v", result.Failures)
 	}
@@ -615,6 +611,19 @@ func TestWorkflowCleanupDryRunExecuteAndDeny(t *testing.T) {
 	}
 	if exists(tmpFile) {
 		t.Fatal("execute did not remove scratch file")
+	}
+	if !isFile(closure) {
+		t.Fatal("cleanup removed formal closure evidence")
+	}
+
+	remainingTmp := filepath.Join(dir, ".gates", "tmp", "pre-development-1", "scratch.txt")
+	mustWrite(t, remainingTmp, "scratch\n")
+	executed, result = WorkflowCleanup(WorkflowCleanupOptions{Worktree: dir, Execute: true})
+	if !result.OK() || len(executed.Paths) != 1 || executed.Paths[0].Status != "removed" {
+		t.Fatalf("expected temporary root cleanup, report=%#v failures=%#v", executed, result.Failures)
+	}
+	if exists(remainingTmp) || !isFile(closure) {
+		t.Fatal("temporary-root cleanup did not preserve the sealed closure")
 	}
 }
 

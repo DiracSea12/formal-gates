@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -74,7 +73,7 @@ type WorkflowFinalVerificationArtifact struct {
 
 type WorkflowCleanupOptions struct {
 	Worktree string
-	Paths    []string
+	FlowID   string
 	Execute  bool
 }
 
@@ -404,41 +403,35 @@ func WorkflowCleanup(options WorkflowCleanupOptions) (WorkflowCleanupReport, Res
 		result.add("worktree", "worktree does not exist: "+worktree)
 		return WorkflowCleanupReport{}, result
 	}
-	paths := options.Paths
-	if len(paths) == 0 {
-		paths = defaultCleanupPaths(worktree)
+	path, err := cleanupPath(worktree, options.FlowID)
+	if err != nil {
+		result.add("cleanup", err.Error())
+		return WorkflowCleanupReport{}, result
 	}
 	report := WorkflowCleanupReport{
 		SchemaVersion: 1,
 		Worktree:      slash(absPath(worktree)),
 		DryRun:        !options.Execute,
-		Paths:         make([]WorkflowCleanupRecord, 0, len(paths)),
+		Paths:         make([]WorkflowCleanupRecord, 0, 1),
 	}
-	for _, value := range paths {
-		full, err := allowedCleanupPath(worktree, value)
-		if err != nil {
-			result.add("cleanup", err.Error())
-			continue
-		}
-		record := WorkflowCleanupRecord{Path: slash(full)}
-		if !exists(full) {
-			record.Status = "missing"
-			report.Paths = append(report.Paths, record)
-			continue
-		}
-		if !options.Execute {
-			record.Status = "would-remove"
-			report.Paths = append(report.Paths, record)
-			continue
-		}
-		if err := os.RemoveAll(full); err != nil {
-			result.add(slash(full), "cleanup remove failed: "+err.Error())
-			record.Status = "remove-failed"
-		} else {
-			record.Status = "removed"
-		}
+	record := WorkflowCleanupRecord{Path: slash(path)}
+	if !exists(path) {
+		record.Status = "missing"
 		report.Paths = append(report.Paths, record)
+		return report, result
 	}
+	if !options.Execute {
+		record.Status = "would-remove"
+		report.Paths = append(report.Paths, record)
+		return report, result
+	}
+	if err := os.RemoveAll(path); err != nil {
+		result.add(slash(path), "cleanup remove failed: "+err.Error())
+		record.Status = "remove-failed"
+	} else {
+		record.Status = "removed"
+	}
+	report.Paths = append(report.Paths, record)
 	return report, result
 }
 
@@ -578,75 +571,27 @@ func looksLikeGoDiagnostic(raw string) bool {
 	return digits > 0 && digits < len(rest) && rest[digits] == ':'
 }
 
-func allowedCleanupPath(worktree, value string) (string, error) {
-	if strings.TrimSpace(value) == "" {
-		return "", fmt.Errorf("cleanup path is required")
-	}
+func cleanupPath(worktree, flowID string) (string, error) {
 	worktreeAbs := absPath(worktree)
-	full := resolvePath(worktreeAbs, value)
-	fullAbs := absPath(full)
-	if samePath(fullAbs, worktreeAbs) {
-		return "", fmt.Errorf("cleanup refuses repo root: %s", slash(fullAbs))
+	root := filepath.Join(worktreeAbs, ".gates", "tmp")
+	flowID = strings.TrimSpace(flowID)
+	if flowID == "" {
+		return root, nil
 	}
-	if !pathUnder(fullAbs, worktreeAbs) {
-		return "", fmt.Errorf("cleanup refuses path outside worktree: %s", slash(fullAbs))
+	if filepath.Base(flowID) != flowID || flowID == "." || flowID == ".." {
+		return "", fmt.Errorf("cleanup flow id must be one directory name: %s", flowID)
 	}
-	artifactsRoot := filepath.Join(worktreeAbs, ".artifacts")
-	if samePath(fullAbs, artifactsRoot) {
-		return "", fmt.Errorf("cleanup refuses .artifacts root: %s", slash(fullAbs))
-	}
-	gateRoot := filepath.Join(worktreeAbs, ".gates")
-	if samePath(fullAbs, gateRoot) || pathUnder(fullAbs, gateRoot) {
-		return "", fmt.Errorf("cleanup refuses formal gate evidence: %s", slash(fullAbs))
-	}
-	for _, rel := range []string{".artifacts/tmp", ".artifacts/scratch", ".artifacts/cleanup"} {
-		root := filepath.Join(worktreeAbs, filepath.FromSlash(rel))
-		if pathUnder(fullAbs, root) {
-			return fullAbs, nil
-		}
-		if samePath(fullAbs, root) {
-			return "", fmt.Errorf("cleanup path must be a descendant under %s: %s", rel, slash(fullAbs))
-		}
-	}
-	return "", fmt.Errorf("cleanup path must be under .artifacts/tmp, .artifacts/scratch, or .artifacts/cleanup: %s", slash(fullAbs))
-}
-
-func defaultCleanupPaths(worktree string) []string {
-	worktreeAbs := absPath(worktree)
-	var paths []string
-	for _, rel := range []string{".artifacts/tmp", ".artifacts/scratch", ".artifacts/cleanup"} {
-		root := filepath.Join(worktreeAbs, filepath.FromSlash(rel))
-		if !isDir(root) {
-			continue
-		}
-		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-			if err != nil || path == root {
-				return nil
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			paths = append(paths, path)
-			return nil
-		})
-	}
-	sort.Strings(paths)
-	return paths
+	return filepath.Join(root, flowID), nil
 }
 
 func cleanupScratchPath(worktree, path string) bool {
-	full := absPath(path)
+	full := absPath(resolvePath(worktree, path))
 	worktreeAbs := absPath(worktree)
 	if !pathUnder(full, worktreeAbs) {
 		return false
 	}
-	for _, rel := range []string{".artifacts/tmp", ".artifacts/scratch", ".artifacts/cleanup"} {
-		root := filepath.Join(worktreeAbs, filepath.FromSlash(rel))
-		if samePath(full, root) || pathUnder(full, root) {
-			return true
-		}
-	}
-	return false
+	root := filepath.Join(worktreeAbs, ".gates", "tmp")
+	return samePath(full, root) || pathUnder(full, root)
 }
 
 func samePath(a, b string) bool {

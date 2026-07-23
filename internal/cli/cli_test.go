@@ -1119,6 +1119,8 @@ func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	attemptRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "attempt.json"))
 	attemptPath := filepath.Join(dir, filepath.FromSlash(attemptRel))
 	mustWriteCLI(t, attemptPath, `{"ok":true}`+"\n")
+	temporaryPath := filepath.Join(dir, ".gates", "tmp", "post-development-1", "runner.log")
+	mustWriteCLI(t, temporaryPath, "temporary\n")
 	recordCLIFourGatePrerequisites(t, dir, "wf", "snap")
 	stateRel := filepath.ToSlash(filepath.Join(runRel, "restricted", "gate-state.json"))
 	statePath := filepath.Join(dir, filepath.FromSlash(stateRel))
@@ -1158,6 +1160,9 @@ func TestRunWorkflowFinalVerificationRecordsFinalQA(t *testing.T) {
 	}
 	if envelope.ArtifactRole != "FINAL_EXECUTION" || envelope.Gate != "qa-test-gate" || envelope.Stage != "FinalExecution" || envelope.Verdict != "PASS" {
 		t.Fatalf("unexpected generated FinalExecution envelope: %#v", envelope)
+	}
+	if _, err := os.Stat(temporaryPath); !os.IsNotExist(err) {
+		t.Fatalf("FinalExecution did not clean temporary workflow output: err=%v", err)
 	}
 	beforeRerun, err := os.ReadFile(finalExecutionPath)
 	if err != nil {
@@ -1386,7 +1391,7 @@ func TestRunWorkflowFinalVerificationGeneratesAcceptedAttemptHash(t *testing.T) 
 
 func TestRunWorkflowCleanupDryRunAndExecute(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, ".artifacts", "scratch", "run", "scratch.txt")
+	target := filepath.Join(dir, ".gates", "tmp", "post-development-1", "scratch.txt")
 	mustWriteCLI(t, target, "scratch\n")
 	var stdout bytes.Buffer
 
@@ -1409,7 +1414,7 @@ func TestRunWorkflowCleanupDryRunAndExecute(t *testing.T) {
 	code = Run("formal-gates", []string{
 		"workflow", "cleanup",
 		"--worktree", dir,
-		"--path", ".artifacts/scratch/run/scratch.txt",
+		"--flow-id", "post-development-1",
 		"--execute",
 	}, IO{Stdout: &stdout})
 	if code != 0 {
@@ -1420,6 +1425,22 @@ func TestRunWorkflowCleanupDryRunAndExecute(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("expected scratch file removed, err=%v", err)
+	}
+}
+
+func TestRunCodexHookCanaryRejectsCustomOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{
+		"canary", "codex-hook",
+		"--worktree", dir,
+		"--output-dir", ".artifacts/ai",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 || !strings.Contains(stderr.String(), "flag provided but not defined: -output-dir") {
+		t.Fatalf("expected custom canary output directory flag to be rejected, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gates", "tmp", "codex-hook-canary")); !os.IsNotExist(err) {
+		t.Fatalf("rejected custom output directory started the canary: err=%v", err)
 	}
 }
 

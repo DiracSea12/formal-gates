@@ -163,6 +163,18 @@ The `.gates` root SHALL be shared by Claude Code, Codex, Cursor, and any other
 supported host for the same project. Host-specific install, skill, and hook
 files MAY remain under the locations required by each host.
 
+Formal closure evidence remains in the active run's `restricted/` directory
+after seal. Every disposable operational file from a development-readiness or
+post-development gate flow SHALL instead use one shared
+`.gates/tmp/<flow-id>/` directory. The flow ID is one directory name selected
+for that flow. `workflow cleanup` SHALL remove only `.gates/tmp` or one named
+child; it SHALL not delete formal closure evidence. Superseded flows use their
+own temporary directory and are removed as whole directories after the later
+flow seals. Successful `workflow final-verification --record-final-qa` SHALL
+remove the shared temporary root after it records FinalExecution. The Codex
+hook canary SHALL always use `.gates/tmp/codex-hook-canary/` and SHALL NOT
+offer a caller-selected output directory.
+
 Before dispatch, the orchestrator SHALL use `prompt prepare` to generate the
 exact seven-field message. Receipt registration SHALL be the single full
 pre-dispatch static check and catalog generator and SHALL reject any mismatch
@@ -237,6 +249,12 @@ explicitly authorized the extra round.
 
 - **WHEN** a workflow supplies a host-specific evidence root
 - **THEN** validation rejects it and requires `.gates`.
+
+#### Scenario: Seal cleanup preserves formal evidence
+
+- **WHEN** an operator cleans a sealed workflow's temporary files
+- **THEN** the CLI removes only `.gates/tmp` or the requested flow ID below it,
+  leaving the sealed run's `restricted/` closure unchanged.
 
 #### Scenario: Extra reviewer material is supplied
 

@@ -664,7 +664,6 @@ func runCanary(args []string, streams IO) (int, error) {
 		fs := flag.NewFlagSet("canary codex-hook", flag.ContinueOnError)
 		fs.SetOutput(streams.Stderr)
 		worktree := fs.String("worktree", ".", "repository root")
-		outputDir := fs.String("output-dir", "", "directory for canary artifacts")
 		codexCommand := fs.String("codex-command", "codex", "Codex executable path or command name")
 		timeoutSeconds := fs.Int("timeout-seconds", 180, "maximum seconds to wait for codex exec")
 		keepTemp := fs.Bool("keep-temp", false, "keep successful canary artifacts")
@@ -678,7 +677,6 @@ func runCanary(args []string, streams IO) (int, error) {
 		}
 		summary, result := validate.CodexHookCanary(validate.CodexHookCanaryOptions{
 			Worktree:       *worktree,
-			OutputDir:      *outputDir,
 			CodexCommand:   *codexCommand,
 			TimeoutSeconds: *timeoutSeconds,
 			KeepTemp:       *keepTemp,
@@ -1092,6 +1090,15 @@ func runWorkflow(args []string, streams IO) (int, error) {
 			}
 			return 1, fmt.Errorf("formal-gates workflow final-verification failed with %d issue(s)", len(result.Failures))
 		}
+		if *recordFinalQA {
+			_, cleanupResult := validate.WorkflowCleanup(validate.WorkflowCleanupOptions{Worktree: *worktree, Execute: true})
+			if !cleanupResult.OK() {
+				for _, failure := range cleanupResult.Failures {
+					fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_CLEANUP_BLOCKED %s: %s\n", failure.Path, failure.Message)
+				}
+				return 1, fmt.Errorf("formal-gates workflow cleanup failed with %d issue(s)", len(cleanupResult.Failures))
+			}
+		}
 		fmt.Fprintf(streams.Stdout, "GATE_WORKFLOW_FINAL_VERIFICATION status=%s accepted=%d attempts=%d\n", artifact.Status, len(artifact.AcceptedAttempts), len(artifact.Attempts))
 		return 0, nil
 	case "cleanup":
@@ -1100,8 +1107,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		worktree := fs.String("worktree", ".", "repository root")
 		dryRun := fs.Bool("dry-run", false, "list allowed cleanup paths without deleting")
 		execute := fs.Bool("execute", false, "delete allowed cleanup paths")
-		var paths stringListFlag
-		fs.Var(&paths, "path", "cleanup path; may be repeated")
+		flowID := fs.String("flow-id", "", "optional temporary workflow flow id")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -1110,7 +1116,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		}
 		report, result := validate.WorkflowCleanup(validate.WorkflowCleanupOptions{
 			Worktree: *worktree,
-			Paths:    paths,
+			FlowID:   *flowID,
 			Execute:  *execute,
 		})
 		if !result.OK() {
@@ -1398,7 +1404,7 @@ Usage:
   %s workflow record-transition --worktree <repo> [--run-dir <dir>] --artifact <carry-arbiter.json> --workflow-id <id> --change-snapshot <target> [--state <active-run-json>]
   %s workflow verify-admission --worktree <repo> [--run-dir <dir>] --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--mode <mode>] [--state <active-run-json>]
   %s workflow final-verification --worktree <repo> [--run-dir <dir>] --attempt-artifact <restricted/path> [--attempt-artifact <restricted/path> ...] --output <artifact> --workflow-id <id> --change-snapshot <snapshot> [--state <active-run-json>] [--record-final-qa --final-qa-artifact <artifact> --actor <actor>]
-  %s workflow cleanup --worktree <repo> [--path <scratch-path>] [--dry-run | --execute]
+  %s workflow cleanup --worktree <repo> [--flow-id <temporary-flow-id>] [--dry-run | --execute]
   %s receipt register --provider <provider> --worktree <repo> [--run-dir <dir>] --context-bundle <bundle.json> [--prompt <exact-send.txt>] [--qa-case-count <n>] [--changed-files <ref>] [--verification <ref>] [--qa-design-case-set <ref> --qa-design-receipt <ref>] [--transition-chain <ref> --carry-source-closure <closure> ...] --artifact <review.json> --gate <gate-id> --workflow-id <id> --change-snapshot <snapshot> [--stage <stage>] [--user-authorized-extra-review]
   %s receipt submit --worktree <repo> --artifact <assigned-output> [--check <position> --status <status> --message <text> ...] [--finding-check <position> --finding-message <text> ...] [--location-finding <position> --location-path <path> --location-start <line> --location-end <line> ...] [--carry-gate <position> --decision <decision> --reason <text> ...] [--design-case <position> --case-value <semantic-value> ...]
   %s receipt capture --provider <provider> --event <event> --worktree <repo> [--run-dir <dir>] < payload.json
