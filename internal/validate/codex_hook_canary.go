@@ -77,14 +77,16 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		return CodexHookCanarySummary{Status: "FAIL"}, result
 	}
 
-	caseName := "codex-hook-client-canary-" + time.Now().UTC().Format("20060102-150405")
-	caseDir := filepath.Join(outputRoot, caseName)
+	caseDir, err := os.MkdirTemp(outputRoot, "codex-hook-client-canary-")
+	if err != nil {
+		result.add("codex-hook-canary", err.Error())
+		return CodexHookCanarySummary{Status: "FAIL"}, result
+	}
+	caseName := filepath.Base(caseDir)
 	payloadDir := filepath.Join(caseDir, "payloads")
-	for _, dir := range []string{caseDir, payloadDir} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			result.add("codex-hook-canary", err.Error())
-			return CodexHookCanarySummary{Status: "FAIL"}, result
-		}
+	if err := os.MkdirAll(payloadDir, 0o700); err != nil {
+		result.add("codex-hook-canary", err.Error())
+		return CodexHookCanarySummary{Status: "FAIL"}, result
 	}
 
 	stdoutPath := filepath.Join(caseDir, "codex.stdout.jsonl")
@@ -138,7 +140,7 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		finishCodexHookCanary(summaryPath, summary, &result)
 		return summary, result
 	}
-	profileName := "formal-gates-hook-canary-" + time.Now().UTC().Format("20060102-150405")
+	profileName := "formal-gates-hook-canary-" + caseName
 	profilePath := filepath.Join(codexHome, profileName+".config.toml")
 	defer os.Remove(profilePath)
 	if err := writeCodexCanaryProfile(profilePath, binary, payloadDir, formalHookOutputPath); err != nil {

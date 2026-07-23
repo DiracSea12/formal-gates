@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,5 +25,24 @@ func TestCodexHookCanaryFailureReason(t *testing.T) {
 	noDeny := CodexHookCanarySummary{PreToolUsePayloadCount: 1}
 	if got := codexHookCanaryFailureReason(noDeny, false); !strings.Contains(got, "deny decision") {
 		t.Fatalf("expected deny reason, got %q", got)
+	}
+}
+
+func TestCodexHookCanaryUsesUniqueCaseIDs(t *testing.T) {
+	worktree := t.TempDir()
+	missingCodex := filepath.Join(worktree, "missing-codex")
+	options := CodexHookCanaryOptions{
+		Worktree:     worktree,
+		CodexCommand: missingCodex,
+		KeepTemp:     true,
+	}
+
+	first, _ := CodexHookCanary(options)
+	second, _ := CodexHookCanary(options)
+	if first.Case == "" || second.Case == "" || first.Case == second.Case {
+		t.Fatalf("canary case IDs must be unique: first=%q second=%q", first.Case, second.Case)
+	}
+	if first.ArtifactDir == second.ArtifactDir || first.Summary == second.Summary {
+		t.Fatalf("canary outputs must be isolated: first=%#v second=%#v", first, second)
 	}
 }
