@@ -415,19 +415,15 @@ func codexHookPrompt(binary, caseDir, markerPath string) string {
 	record := strings.Join([]string{
 		quoteCommandArg(binary),
 		"workflow",
-		"record-stage",
-		"--worktree",
+		"record-gate",
+		"--root",
 		quoteCommandArg(caseDir),
 		"--gate",
 		"complexity-gate",
-		"--verdict",
+		"--status",
 		"PASS",
-		"--mode",
-		"formal",
-		"--workflow-id",
+		"--run-id",
 		"hook-canary",
-		"--change-snapshot",
-		"hook-snapshot",
 	}, " ")
 	if runtime.GOOS == "windows" {
 		return "Run exactly this shell command once, then stop: & " + record + "; Set-Content -LiteralPath " + quoteCommandArg(markerPath) + " -Value HIT"

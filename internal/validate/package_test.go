@@ -10,14 +10,56 @@ import (
 func TestPackageRejectsScriptRuntimeFiles(t *testing.T) {
 	root := copyPackageFixture(t)
 	mustWriteValidateTest(t, filepath.Join(root, "examples", "legacy-demo.ps1"), "legacy powershell\n")
-	mustWriteValidateTest(t, filepath.Join(root, "hooks", "legacy-hook.sh"), "legacy shell\n")
 
 	result := Package(root)
 	if result.OK() {
 		t.Fatal("expected package validation to reject script runtime files")
 	}
-	if !resultHasPath(result, "examples/legacy-demo.ps1") || !resultHasPath(result, "hooks/legacy-hook.sh") {
+	if !resultHasPath(result, "examples/legacy-demo.ps1") {
 		t.Fatalf("expected script runtime file failures, got %#v", result.Failures)
+	}
+}
+
+func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rel  string
+		data []byte
+	}{
+		{name: "bad id", rel: "gates/Not-A-Gate.md", data: []byte("prompt\n")},
+		{name: "empty", rel: "gates/empty.md", data: []byte(" \n\t")},
+		{name: "invalid utf8", rel: "gates/invalid.md", data: []byte{0xff, 0xfe}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := copyPackageFixture(t)
+			path := filepath.Join(root, filepath.FromSlash(tc.rel))
+			if err := os.WriteFile(path, tc.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result := Package(root)
+			if result.OK() || !resultHasPath(result, "prompts/gates") {
+				t.Fatalf("expected gate validation failure at %s, got %#v", tc.rel, result.Failures)
+			}
+		})
+	}
+}
+
+func TestInstallableMetadataUsesLightweightWorkflow(t *testing.T) {
+	root := copyPackageFixture(t)
+	data, err := os.ReadFile(filepath.Join(root, "agents", "openai.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, obsolete := range []string{"GateWorkflow", "formal handoff"} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("installable metadata retains obsolete %q instruction", obsolete)
+		}
+	}
+	for _, current := range []string{"workflow", "lightweight run state"} {
+		if !strings.Contains(text, current) {
+			t.Fatalf("installable metadata is missing current %q instruction", current)
+		}
 	}
 }
 
@@ -33,22 +75,6 @@ func TestPackageRejectsScriptsDirectory(t *testing.T) {
 	}
 	if !resultHasPath(result, "scripts") {
 		t.Fatalf("expected scripts directory failure, got %#v", result.Failures)
-	}
-}
-
-func TestPackageRequiresShowcaseAsset(t *testing.T) {
-	root := copyPackageFixture(t)
-	asset := filepath.Join(root, "assets", "showcase", "no-evidence-no-pass.svg")
-	if err := os.Remove(asset); err != nil {
-		t.Fatal(err)
-	}
-
-	result := Package(root)
-	if result.OK() {
-		t.Fatal("expected package validation to require showcase asset")
-	}
-	if !resultHasPath(result, "assets/showcase/no-evidence-no-pass.svg") {
-		t.Fatalf("expected showcase asset failure, got %#v", result.Failures)
 	}
 }
 
@@ -227,11 +253,28 @@ func copyPackageFixture(t *testing.T) string {
 	for _, rel := range requiredFiles {
 		copyValidateTestFile(t, source, target, rel)
 	}
+	gates, err := os.ReadDir(filepath.Join(source, "gates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gate := range gates {
+		if gate.Type().IsRegular() {
+			copyValidateTestFile(t, source, target, filepath.ToSlash(filepath.Join("gates", gate.Name())))
+		}
+	}
+	actions, err := os.ReadDir(filepath.Join(source, "prompts", "actions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions {
+		if action.Type().IsRegular() {
+			copyValidateTestFile(t, source, target, filepath.ToSlash(filepath.Join("prompts", "actions", action.Name())))
+		}
+	}
 	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
 		copyValidateTestFile(t, source, target, rel)
 	}
 	mustWriteValidateTest(t, filepath.Join(target, "bin", nativeBinaryName()), "#!/usr/bin/env sh\nexit 0\n")
-	copyValidateTestFile(t, source, target, "test-prompts.json")
 	return target
 }
 

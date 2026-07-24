@@ -41,13 +41,13 @@ var installRuntimeEntries = []string{
 	"go.mod",
 	".github/workflows/portable-validation.yml",
 	"bin",
-	"assets",
 	"cmd",
 	"internal",
 	"agents",
+	"prompts",
+	"gates",
 	"examples",
 	"references",
-	"hooks/pollution-patterns.json",
 }
 
 func Install(options InstallOptions) (InstallReport, error) {
@@ -96,11 +96,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			TargetPath: filepath.ToSlash(target.targetPath),
 		}
 		if !options.SkipHooks {
-			receiptWorktree := "."
-			if projectAbs != "" {
-				receiptWorktree = projectAbs
-			}
-			if err := configureInstallHook(target, receiptWorktree); err != nil {
+			if err := configureInstallHook(target); err != nil {
 				return InstallReport{}, err
 			}
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
@@ -337,7 +333,7 @@ func removePycache(root string) error {
 	})
 }
 
-func configureInstallHook(target installTarget, receiptWorktree string) error {
+func configureInstallHook(target installTarget) error {
 	config, err := readHookConfig(target.hookConfig)
 	if err != nil {
 		return err
@@ -349,23 +345,17 @@ func configureInstallHook(target installTarget, receiptWorktree string) error {
 	switch target.host {
 	case "claude":
 		desired = map[string]any{
-			"PreToolUse":    nestedHookEntry("*", gateCommand, false),
-			"SubagentStart": nestedHookEntry("*", nativeReceiptCommand(target.targetPath, "claude-code", "SubagentStart", receiptWorktree), false),
-			"SubagentStop":  nestedHookEntry("*", nativeReceiptCommand(target.targetPath, "claude-code", "SubagentStop", receiptWorktree), false),
+			"PreToolUse": nestedHookEntry("*", gateCommand, false),
 		}
 	case "codex":
 		desired = map[string]any{
-			"PreToolUse":    nestedHookEntry("*", gateCommand, true),
-			"SubagentStart": nestedHookEntry("*", nativeReceiptCommand(target.targetPath, "codex", "SubagentStart", receiptWorktree), true),
-			"SubagentStop":  nestedHookEntry("*", nativeReceiptCommand(target.targetPath, "codex", "SubagentStop", receiptWorktree), true),
+			"PreToolUse": nestedHookEntry("*", gateCommand, true),
 		}
 	case "cursor":
 		shape = "flat"
 		config["version"] = float64(1)
 		desired = map[string]any{
-			"preToolUse":    flatHookEntry(gateCommand),
-			"subagentStart": flatHookEntry(nativeReceiptCommand(target.targetPath, "cursor", "SubagentStart", receiptWorktree)),
-			"subagentStop":  flatHookEntry(nativeReceiptCommand(target.targetPath, "cursor", "SubagentStop", receiptWorktree)),
+			"preToolUse": flatHookEntry(gateCommand),
 		}
 	}
 	for event, entry := range desired {
@@ -510,19 +500,6 @@ func nativeInstallCommand(skillRoot string, args ...string) string {
 		parts = append(parts, quoteCommandArg(arg))
 	}
 	return strings.Join(parts, " ")
-}
-
-func nativeReceiptCommand(skillRoot, provider, event, worktree string) string {
-	return nativeInstallCommand(skillRoot,
-		"receipt",
-		"capture",
-		"--provider",
-		provider,
-		"--event",
-		event,
-		"--worktree",
-		worktree,
-	)
 }
 
 func quoteCommandArg(value string) string {

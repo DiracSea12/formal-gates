@@ -1,27 +1,22 @@
 # Local Validation
 
-This file collects the repository's local self-check commands for maintainers.
-It is separate from install-and-hooks guidance and from the AI skill entrypoint.
-
-## Self-Check Chain
+Use this checklist when changing the formal-gates package itself:
 
 ```bash
+gofmt -w <changed-go-files>
 go test ./...
+go test -race ./internal/validate ./internal/cli
+go vet ./...
+go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates package validate --root .
 bin/formal-gates canary portable --root . --format json
-bin/formal-gates policy show --format json
-bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
+bin/formal-gates behavior evaluate --root . \
+  --cases examples/skill-behavior-prompts.json \
+  --answers examples/skill-behavior-answers.json
+git diff --check
+git diff --cached --check
 ```
 
-## Notes
-
-- `go test ./...` verifies the Go unit tests for the repository.
-- `package validate` checks package shape and required files.
-- `canary portable` checks the portable package evidence for the current platform.
-- `policy show` exports the current Go-enforced policy without authorizing PASS.
-- `behavior evaluate` checks the behavior answer fixture against the portable cases.
-
-## Companion Material
-
-- [Install And Hooks](install-and-hooks.md)
-- [`examples/package-validation-demo.md`](../examples/package-validation-demo.md)
+Use `bin\formal-gates.exe` on Windows. A live host-hook canary is separate and
+required only when changing or claiming that host's automatic interception.
+These checks do not replace independent review in a user-authorized formal run.

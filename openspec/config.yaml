@@ -1,25 +1,13 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
-
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
 context: |
   Project: formal-gates
-  Tech stack: Go CLI with internal validator packages and markdown/json evidence artifacts.
-  Domain: AI development workflow evidence gates. The project values machine-checkable proof, fixed gate IDs and deterministic final-matrix display order, no chat-only PASS, and minimal local validation over new framework layers.
-  Current scope boundary: local package, hook, artifact, receipt, workflow, canary, behavior validation, and reviewer receipt consistency checks.
+  Tech stack: Go CLI plus Markdown prompt files.
+  Domain: lightweight independent AI review orchestration.
+  Independent gates come only from package-local gates/*.md. Shared review
+  rules come only from prompts/reviewer-base.md. SKILL.md is the sole workflow
+  order owner. The external VCS owns snapshots and diffs; formal-gates does not
+  implement version control or retain an evidence graph.
+  Guarantee documented normal use and common operator mistakes only. Do not
+  add adversarial hardening, compatibility paths, or framework layers unless a
+  confirmed requirement needs them.

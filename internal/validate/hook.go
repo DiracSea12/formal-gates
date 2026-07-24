@@ -33,13 +33,13 @@ func Hook(payload []byte) (HookDecision, error) {
 			PermissionDecisionReason: "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
 		}, nil
 	}
-	if deniesFormalGatePassWithoutArtifact(command) {
+	if deniesFormalGatePassWithoutBinding(command) {
 		return HookDecision{
 			Decision:                 "block",
-			Reason:                   "formal gate PASS recording requires an artifact",
+			Reason:                   "formal gate PASS recording requires a run id, gate id, and live snapshot",
 			Permission:               "deny",
 			PermissionDecision:       "deny",
-			PermissionDecisionReason: "formal gate PASS recording requires an artifact",
+			PermissionDecisionReason: "formal gate PASS recording requires a run id, gate id, and live snapshot",
 		}, nil
 	}
 	return allowHook("command allowed"), nil
@@ -59,23 +59,18 @@ func allowHook(reason string) HookDecision {
 	}
 }
 
-func deniesFormalGatePassWithoutArtifact(command string) bool {
+func deniesFormalGatePassWithoutBinding(command string) bool {
 	tokens := splitCommand(command)
-	if !isFormalGatePassRecordCommand(command, tokens) {
+	if !mentionsNativeRecord(tokens) {
 		return false
 	}
-	if !hasSwitchValue(tokens, "Verdict", "PASS") {
+	if !hasSwitchValue(tokens, "Status", "PASS") {
 		return false
 	}
-	if !hasNonEmptySwitchValue(tokens, "Artifact") {
-		return true
-	}
-	return false
-}
-
-func isFormalGatePassRecordCommand(command string, tokens []string) bool {
-	if mentionsNativeRecord(tokens) {
-		return true
+	for _, name := range []string{"run-id", "gate", "live-snapshot"} {
+		if !hasNonEmptySwitchValue(tokens, name) {
+			return true
+		}
 	}
 	return false
 }
@@ -99,10 +94,7 @@ func mentionsNativeRecord(tokens []string) bool {
 		}
 		group := strings.ToLower(tokens[i+1])
 		action := strings.ToLower(tokens[i+2])
-		if group == "workflow" && action == "record-stage" {
-			return true
-		}
-		if group == "gate" && action == "record" {
+		if group == "workflow" && action == "record-gate" {
 			return true
 		}
 	}
@@ -115,9 +107,7 @@ func isFormalGatesExecutableToken(token string) bool {
 	parts := strings.Split(normalized, "/")
 	base := parts[len(parts)-1]
 	return base == "formal-gates" ||
-		base == "formal-gates.exe" ||
-		base == "formal-gates-validate" ||
-		base == "formal-gates-validate.exe"
+		base == "formal-gates.exe"
 }
 
 func hasSwitchValue(tokens []string, name, expected string) bool {

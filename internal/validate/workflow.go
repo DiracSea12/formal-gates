@@ -1,623 +1,824 @@
 package validate
 
 import (
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
-type WorkflowRecordStageOptions struct {
-	Worktree       string
-	StatePath      string
-	Gate           string
-	Verdict        string
-	Mode           string
-	Stage          string
-	Artifact       string
-	Actor          string
-	WorkflowID     string
-	ChangeSnapshot string
-	Reason         string
-	RunDir         string
+type StartOptions struct {
+	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot, CurrentSnapshot string
+	RequirementConfirmed                                                                  bool
 }
 
-type WorkflowVerifyAdmissionOptions struct {
-	Worktree       string
-	StatePath      string
-	Gate           string
-	Mode           string
-	WorkflowID     string
-	ChangeSnapshot string
-	RunDir         string
+type FindingInput struct {
+	Message   string
+	Locations []string
 }
 
-type WorkflowRecordTransitionOptions struct {
-	Worktree       string
-	StatePath      string
-	RunDir         string
-	Artifact       string
-	WorkflowID     string
-	ChangeSnapshot string
-}
+type QACaseInput struct{ Description, Procedure, Oracle string }
 
-type WorkflowFinalVerificationOptions struct {
-	Worktree         string
-	StatePath        string
-	RunDir           string
-	AttemptArtifacts []string
-	OutputArtifact   string
-	FinalQAArtifact  string
-	RecordFinalQA    bool
-	Actor            string
-	WorkflowID       string
-	ChangeSnapshot   string
-}
+type QAResultInput struct{ CaseID, Outcome, Procedure, Observation, OracleResult string }
 
-type WorkflowFinalVerificationAttempt struct {
-	Status       string `json:"status"`
-	Accepted     bool   `json:"accepted"`
-	Artifact     string `json:"artifact"`
-	ArtifactHash string `json:"artifactHash"`
-}
+type CarryInput struct{ GateID, Decision, Message string }
 
-type WorkflowFinalVerificationArtifact struct {
-	SchemaVersion    int                                `json:"schemaVersion"`
-	WorkflowID       string                             `json:"workflowId"`
-	ChangeSnapshot   string                             `json:"changeSnapshot"`
-	Status           string                             `json:"status"`
-	Attempts         []WorkflowFinalVerificationAttempt `json:"attempts"`
-	AcceptedAttempts []WorkflowFinalVerificationAttempt `json:"acceptedAttempts"`
-}
+const formalFlow = "formal"
 
-type WorkflowCleanupOptions struct {
-	Worktree string
-	FlowID   string
-	Execute  bool
-}
-
-type WorkflowCleanupRecord struct {
-	Path   string `json:"path"`
-	Status string `json:"status"`
-}
-
-type WorkflowCleanupReport struct {
-	SchemaVersion int                     `json:"schemaVersion"`
-	Worktree      string                  `json:"worktree"`
-	DryRun        bool                    `json:"dryRun"`
-	Paths         []WorkflowCleanupRecord `json:"paths"`
-}
-
-func WorkflowRecordStage(options WorkflowRecordStageOptions) Result {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
+func Start(options StartOptions) (RunState, error) {
+	root := cleanRoot(options.Root)
+	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS, "base snapshot": options.BaseSnapshot} {
+		if strings.TrimSpace(value) == "" {
+			return RunState{}, fmt.Errorf("%s is required", name)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(options.VCS), "none") {
+		return RunState{}, fmt.Errorf("a supported external VCS is required")
+	}
+	if strings.TrimSpace(options.Flow) != formalFlow {
+		return RunState{}, fmt.Errorf("flow must be formal")
+	}
+	currentSnapshot := strings.TrimSpace(options.CurrentSnapshot)
+	if currentSnapshot == "" {
+		currentSnapshot = strings.TrimSpace(options.BaseSnapshot)
+	}
+	catalog, err := LoadPromptCatalog(options.PackageRoot)
 	if err != nil {
-		result.add("run-dir", err.Error())
-		return result
+		return RunState{}, err
 	}
-	addWorkflowPathFailure(&result, worktree, runDir, "artifact", options.Artifact, false)
-	addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
-	if !result.OK() {
-		return result
+	requirementPath := resolveFromRoot(root, options.RequirementSource)
+	revision, err := RequirementRevision(requirementPath)
+	if err != nil {
+		return RunState{}, fmt.Errorf("requirement: %w", err)
 	}
-	record := GateRecordOptions{
-		Worktree:       worktree,
-		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
-		RunDir:         runDir,
-		Gate:           options.Gate,
-		Verdict:        options.Verdict,
-		Mode:           options.Mode,
-		Stage:          options.Stage,
-		Artifact:       options.Artifact,
-		Actor:          options.Actor,
-		WorkflowID:     options.WorkflowID,
-		ChangeSnapshot: options.ChangeSnapshot,
-		Reason:         options.Reason,
+	runID := strings.TrimSpace(options.RunID)
+	if runID == "" {
+		runID, err = newRunID()
+		if err != nil {
+			return RunState{}, err
+		}
 	}
-	return GateRecord(record)
+	if !promptIDPattern.MatchString(runID) {
+		return RunState{}, fmt.Errorf("run id must match [a-z0-9]+(?:-[a-z0-9]+)*")
+	}
+	if _, err := os.Stat(RunDir(root, runID)); err == nil {
+		return RunState{}, fmt.Errorf("run %q already exists", runID)
+	} else if !os.IsNotExist(err) {
+		return RunState{}, err
+	}
+	if _, err := os.Stat(RunSummaryPath(root, runID)); err == nil {
+		return RunState{}, fmt.Errorf("run %q already has a retained result", runID)
+	} else if !os.IsNotExist(err) {
+		return RunState{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(RunDir(root, runID)), 0o700); err != nil {
+		return RunState{}, err
+	}
+	if err := os.Mkdir(RunDir(root, runID), 0o700); err != nil {
+		return RunState{}, fmt.Errorf("cannot create run %q: %w", runID, err)
+	}
+	state := NewRunState(runID, strings.TrimSpace(options.Flow), options.RequirementSource, revision, strings.TrimSpace(options.VCS), strings.TrimSpace(options.BaseSnapshot), currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs())
+	if err := SaveRunState(root, state); err != nil {
+		_ = os.RemoveAll(RunDir(root, runID))
+		return RunState{}, err
+	}
+	return state, nil
 }
 
-func WorkflowRecordTransition(options WorkflowRecordTransitionOptions) Result {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
-	if err != nil {
-		result.add("run-dir", err.Error())
-		return result
-	}
-	addWorkflowPathFailure(&result, worktree, runDir, "artifact", options.Artifact, false)
-	addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
-	if !result.OK() {
-		return result
-	}
-	options.Worktree, options.StatePath, options.RunDir = worktree, workflowStatePath(worktree, options.StatePath, runDir), runDir
-	return GateRecordTransition(options)
+func Resume(root, packageRoot, runID string) (RunState, bool, error) {
+	var invalidated bool
+	state, err := mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := LoadPromptCatalog(packageRoot)
+		if err != nil {
+			return err
+		}
+		if state.BasePromptRevision != catalog.BaseRevision || state.CatalogRevision != catalog.CatalogRevision {
+			return fmt.Errorf("installed prompt catalog changed; start a new run")
+		}
+		revision, err := RequirementRevision(resolveFromRoot(cleanRoot(root), state.RequirementSource))
+		if err != nil {
+			return fmt.Errorf("requirement: %w", err)
+		}
+		if revision != state.RequirementRevision {
+			state.RequirementRevision = revision
+			state.RequirementConfirmed = false
+			invalidateRequirementResults(state, catalog.GateIDs())
+			invalidated = true
+		}
+		return nil
+	})
+	return state, invalidated, err
 }
 
-func WorkflowVerifyAdmission(options WorkflowVerifyAdmissionOptions) Result {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	runDir, err := resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
-	if err != nil {
-		result.add("run-dir", err.Error())
-		return result
-	}
-	addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
-	if !result.OK() {
-		return result
-	}
-	return GateVerifyAdmission(GateAdmissionOptions{
-		Worktree:       worktree,
-		StatePath:      workflowStatePath(worktree, options.StatePath, runDir),
-		RunDir:         runDir,
-		Gate:           options.Gate,
-		Mode:           options.Mode,
-		WorkflowID:     options.WorkflowID,
-		ChangeSnapshot: options.ChangeSnapshot,
+func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentCatalog(*state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(source) == "" {
+			source = state.RequirementSource
+		}
+		revision, err := RequirementRevision(resolveFromRoot(cleanRoot(root), source))
+		if err != nil {
+			return fmt.Errorf("requirement: %w", err)
+		}
+		if revision != state.RequirementRevision || source != state.RequirementSource {
+			state.RequirementSource, state.RequirementRevision = source, revision
+			invalidateRequirementResults(state, catalog.GateIDs())
+		}
+		state.RequirementConfirmed = confirmed
+		return nil
 	})
 }
 
-func WorkflowFinalVerification(options WorkflowFinalVerificationOptions) (WorkflowFinalVerificationArtifact, Result) {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	if !isDir(worktree) {
-		result.add("worktree", "worktree does not exist: "+worktree)
-		return WorkflowFinalVerificationArtifact{}, result
-	}
-	runDir := ""
-	if strings.TrimSpace(options.RunDir) != "" || strings.TrimSpace(options.WorkflowID) != "" {
-		var err error
-		runDir, err = resolveWorkflowRunDir(worktree, options.WorkflowID, options.RunDir)
-		if err != nil {
-			result.add("run-dir", err.Error())
-			return WorkflowFinalVerificationArtifact{}, result
-		}
-		for _, artifact := range options.AttemptArtifacts {
-			addWorkflowPathFailure(&result, worktree, runDir, "attempt-artifact", artifact, false)
-		}
-		addWorkflowPathFailure(&result, worktree, runDir, "output", options.OutputArtifact, true)
-		addWorkflowPathFailure(&result, worktree, runDir, "final-qa-artifact", options.FinalQAArtifact, false)
-		addWorkflowPathFailure(&result, worktree, runDir, "state", options.StatePath, true)
-		if !result.OK() {
-			return WorkflowFinalVerificationArtifact{}, result
-		}
-	}
-	if len(options.AttemptArtifacts) == 0 {
-		result.add("attempts", "at least one --attempt-artifact is required")
-		return WorkflowFinalVerificationArtifact{}, result
-	}
-	attempts := make([]WorkflowFinalVerificationAttempt, 0, len(options.AttemptArtifacts))
-	accepted := make([]WorkflowFinalVerificationAttempt, 0, len(options.AttemptArtifacts))
-	seenAttempts := map[string]bool{}
-	for i, artifact := range options.AttemptArtifacts {
-		artifact = strings.TrimSpace(artifact)
-		where := fmt.Sprintf("attempt-artifact[%d]", i)
-		if artifact == "" || seenAttempts[artifact] {
-			result.add(where, "verification attempt artifacts must be non-empty and unique")
-			continue
-		}
-		seenAttempts[artifact] = true
-		if runDir != "" {
-			if err := requireWorkflowPathUnderRunDir(worktree, runDir, where, artifact, false); err != nil {
-				result.add(where, err.Error())
-				continue
-			}
-		}
-		artifactPath := resolvePath(worktree, artifact)
-		if cleanupScratchPath(worktree, artifactPath) {
-			result.add(where, "verification attempt artifact cannot be under cleanup scratch: "+slash(artifactPath))
-			continue
-		}
-		if !isFile(artifactPath) {
-			result.add(where, "verification attempt artifact does not exist: "+slash(artifactPath))
-			continue
-		}
-		data, err := os.ReadFile(artifactPath)
-		if err != nil {
-			result.add(where, "verification attempt artifact cannot be read: "+err.Error())
-			continue
-		}
-		attempt := WorkflowFinalVerificationAttempt{Status: "PASS", Accepted: true, Artifact: artifact, ArtifactHash: sha256File(artifactPath)}
-		if failure := verificationAttemptFailure(data); failure != "" {
-			attempt.Status = "FAIL"
-			attempt.Accepted = false
-			result.add(where, failure)
-			attempts = append(attempts, attempt)
-			continue
-		}
-		attempts = append(attempts, attempt)
-		accepted = append(accepted, attempt)
-	}
-	if len(accepted) == 0 {
-		result.add("acceptedAttempts", "at least one accepted PASS attempt is required")
-	}
-
-	status := "PASS"
-	if !result.OK() {
-		status = "FAIL"
-	}
-	artifact := WorkflowFinalVerificationArtifact{
-		SchemaVersion:    2,
-		WorkflowID:       options.WorkflowID,
-		ChangeSnapshot:   options.ChangeSnapshot,
-		Status:           status,
-		Attempts:         attempts,
-		AcceptedAttempts: accepted,
-	}
-	output := strings.TrimSpace(options.OutputArtifact)
-	if output == "" {
-		if runDir != "" {
-			output = relativePath(worktree, filepath.Join(runDir, "restricted", "final-verification.json"))
-		} else {
-			suffix := strings.TrimSpace(options.WorkflowID)
-			if suffix == "" {
-				suffix = "workflow"
-			}
-			output = filepath.ToSlash(filepath.Join(".gates", "artifacts", "final-verification-"+suffix+".json"))
-		}
-	}
-	outputPath := resolvePath(worktree, output)
-	if cleanupScratchPath(worktree, outputPath) {
-		result.add("output", "final verification artifact cannot be under cleanup scratch: "+slash(outputPath))
-		return artifact, result
-	}
-	if _, err := os.Lstat(outputPath); err == nil || !os.IsNotExist(err) {
-		result.add("output", "generated final verification output already exists")
-		return artifact, result
-	}
-	if err := writeFinalVerificationArtifact(outputPath, artifact); err != nil {
-		result.add("output", err.Error())
-		return artifact, result
-	}
-	if artifact.Status == "PASS" && runDir != "" {
-		logical, logicalErr := logicalPathInRun(runDir, outputPath)
-		if logicalErr != nil {
-			_ = os.Remove(outputPath)
-			result.add("output", logicalErr.Error())
-			return artifact, result
-		}
-		ref := EvidenceRef{Path: logical, SHA256: sha256File(outputPath)}
-		if _, proofErr := writeCompositionProof(worktree, runDir, "verification.v1", options.WorkflowID, options.ChangeSnapshot, outputPath, []EvidenceRef{ref}); proofErr != nil {
-			_ = os.Remove(outputPath)
-			result.add("output", proofErr.Error())
-			return artifact, result
-		}
-	}
-	if options.RecordFinalQA {
-		recordResult := recordFinalQA(worktree, runDir, output, artifact.Status, options)
-		result.Failures = append(result.Failures, recordResult.Failures...)
-	}
-	return artifact, result
-}
-
-func recordFinalQA(worktree, runDir, finalVerification, status string, options WorkflowFinalVerificationOptions) Result {
-	return recordFinalQAWith(worktree, runDir, finalVerification, status, options, gateRecord)
-}
-
-func recordFinalQAWith(worktree, runDir, finalVerification, status string, options WorkflowFinalVerificationOptions, record func(GateRecordOptions) Result) Result {
-	var result Result
-	finalQA := strings.TrimSpace(options.FinalQAArtifact)
-	if finalQA == "" {
-		result.add("final-qa-artifact", "--final-qa-artifact is required when --record-final-qa is used")
-		return result
-	}
-	finalQAPath := resolvePath(worktree, finalQA)
-	if cleanupScratchPath(worktree, finalQAPath) {
-		result.add("final-qa-artifact", "final QA artifact cannot be under cleanup scratch: "+slash(finalQAPath))
-		return result
-	}
-	if _, err := os.Lstat(finalQAPath); err == nil {
-		result.add("final-qa-artifact", "final QA artifact already exists; use a distinct output path")
-		return result
-	} else if !os.IsNotExist(err) {
-		result.add("final-qa-artifact", err.Error())
-		return result
-	}
-	statePath := workflowStatePath(worktree, options.StatePath, runDir)
-	state, err := loadGateState(statePath)
+func PrepareGate(root, packageRoot, runID, gateID, liveSnapshot string) (string, error) {
+	state, err := LoadRunState(root, runID)
 	if err != nil {
-		result.add("gate-state", err.Error())
-		return result
+		return "", err
 	}
-	policy, _ := fixedPolicy("FINAL_EXECUTION", "qa-test-gate", "FinalExecution")
-	matrix := make([]FinalGateRow, 0, len(policy.Prerequisites))
-	for _, prerequisite := range policy.Prerequisites {
-		entries := entriesForGateNewestFirst(state, prerequisite.Gate)
-		var selected *GateStateEntry
-		for i := range entries {
-			entry := entries[i]
-			if entry.Verdict == "PASS" && entry.WorkflowID == options.WorkflowID && entry.ChangeSnapshot == options.ChangeSnapshot && entry.Mode == prerequisite.Flow && normalizeStage(entry.Stage) == normalizeStage(prerequisite.Stage) {
-				selected = &entry
+	if err := requireActive(state); err != nil {
+		return "", err
+	}
+	if !state.RequirementConfirmed {
+		return "", fmt.Errorf("the current requirement is not confirmed")
+	}
+	catalog, err := requireCurrentDefinitions(root, state, packageRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := requireLiveSnapshot(state, liveSnapshot); err != nil {
+		return "", err
+	}
+	result, ok := state.Gates[gateID]
+	if !ok {
+		return "", fmt.Errorf("gate %q is not in this run's discovered catalog", gateID)
+	}
+	if result.Status == "PASS" && result.Snapshot != state.CurrentSnapshot {
+		return "", fmt.Errorf("gate %q is awaiting a Carry decision", gateID)
+	}
+	return ComposeGatePrompt(catalog, gateID, routeForState(root, state))
+}
+
+func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (string, error) {
+	state, err := LoadRunState(root, runID)
+	if err != nil {
+		return "", err
+	}
+	if err := requireActive(state); err != nil {
+		return "", err
+	}
+	catalog, err := requireCurrentDefinitions(root, state, packageRoot)
+	if err != nil {
+		return "", err
+	}
+	if actionID != "requirements-clarification" && !state.RequirementConfirmed {
+		return "", fmt.Errorf("the current requirement is not confirmed")
+	}
+	if actionID == "qa-execution" || actionID == "carry" || actionID == "development-worker" {
+		if err := requireLiveSnapshot(state, liveSnapshot); err != nil {
+			return "", err
+		}
+	}
+	if actionID == "development-worker" {
+		if len(state.QACases) == 0 {
+			return "", fmt.Errorf("approved QA cases are required before development starts")
+		}
+	}
+	detail := ""
+	if actionID == "qa-execution" {
+		if len(state.QACases) == 0 {
+			return "", fmt.Errorf("approved QA cases are missing")
+		}
+		var lines []string
+		for _, testCase := range state.QACases {
+			lines = append(lines, fmt.Sprintf("%s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Description, testCase.Procedure, testCase.Oracle))
+		}
+		detail = strings.Join(lines, "\n\n")
+	} else if actionID == "carry" {
+		eligible := eligibleCarryGates(state)
+		if len(eligible) == 0 {
+			return "", fmt.Errorf("no prior passing gates require a Carry decision")
+		}
+		var lines []string
+		lines = append(lines, "Decide INHERIT or RERUN for each gate below:")
+		for _, id := range eligible {
+			gate, _ := catalog.Gate(id)
+			lines = append(lines, fmt.Sprintf("\n[Gate: %s]\n%s", id, gate.Content))
+		}
+		detail = strings.Join(lines, "\n")
+	}
+	return ComposeActionPrompt(catalog, actionID, routeForState(root, state), detail)
+}
+
+func RecordAction(root, packageRoot, runID, actionID, status, message string, findings []FindingInput, sourceRevision, sourceCatalogRevision string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, "", false); err != nil {
+			return err
+		}
+		if _, ok := catalog.Action(actionID); !ok {
+			return fmt.Errorf("unknown action prompt %q", actionID)
+		}
+		if actionID != "requirements-clarification" && actionID != "start-readiness" {
+			return fmt.Errorf("action %q has a dedicated workflow command and cannot use record-action", actionID)
+		}
+		if actionID == "start-readiness" && !state.RequirementConfirmed {
+			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		result, err := semanticActionResult(status, message, findings, state)
+		if err != nil {
+			return err
+		}
+		state.Actions[actionID] = result
+		return nil
+	})
+}
+
+func RecordGate(root, packageRoot, runID, gateID, status, message string, findings []FindingInput, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+			return err
+		}
+		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+			return err
+		}
+		if !state.RequirementConfirmed {
+			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		if _, ok := catalog.Gate(gateID); !ok {
+			return fmt.Errorf("gate %q is not discovered", gateID)
+		}
+		existing := state.Gates[gateID]
+		if existing.Status == "PASS" && existing.Snapshot != state.CurrentSnapshot {
+			return fmt.Errorf("gate %q requires a Carry decision before rerun", gateID)
+		}
+		result, err := semanticGateResult(status, message, findings, state)
+		if err != nil {
+			return err
+		}
+		state.Gates[gateID] = result
+		return nil
+	})
+}
+
+func RecordQADesign(root, packageRoot, runID string, cases []QACaseInput, runtimeError, sourceRevision, sourceCatalogRevision string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, "", false); err != nil {
+			return err
+		}
+		if !state.RequirementConfirmed {
+			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		if strings.TrimSpace(runtimeError) != "" {
+			if len(cases) != 0 {
+				return fmt.Errorf("QA Design runtime error cannot include cases")
+			}
+			state.QACases = []QACase{}
+			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			state.Actions["qa-design"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError)}
+			return nil
+		}
+		if len(cases) == 0 {
+			return fmt.Errorf("at least one QA case is required")
+		}
+		seen := map[string]bool{}
+		state.QACases = make([]QACase, 0, len(cases))
+		for index, item := range cases {
+			normalized := QACase{
+				Description: strings.TrimSpace(item.Description),
+				Procedure:   strings.TrimSpace(item.Procedure),
+				Oracle:      strings.TrimSpace(item.Oracle),
+			}
+			for name, value := range map[string]string{"description": normalized.Description, "procedure": normalized.Procedure, "oracle": normalized.Oracle} {
+				if value == "" {
+					return fmt.Errorf("QA case %d %s is required", index+1, name)
+				}
+			}
+			key := normalized.Description + "\x00" + normalized.Procedure + "\x00" + normalized.Oracle
+			if seen[key] {
+				return fmt.Errorf("duplicate QA case %d", index+1)
+			}
+			seen[key] = true
+			normalized.ID = fmt.Sprintf("CASE-%03d", index+1)
+			state.QACases = append(state.QACases, normalized)
+		}
+		state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		state.Actions["qa-design"] = ActionResult{Status: "PASS"}
+		return nil
+	})
+}
+
+func RecordQAExecution(root, packageRoot, runID string, results []QAResultInput, runtimeError, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+			return err
+		}
+		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+			return err
+		}
+		if !state.RequirementConfirmed {
+			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		if strings.TrimSpace(runtimeError) != "" {
+			if len(results) != 0 {
+				return fmt.Errorf("QA runtime error cannot include case results")
+			}
+			state.QAExecution = QAExecutionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), Snapshot: state.CurrentSnapshot}
+			return nil
+		}
+		if len(state.QACases) == 0 {
+			return fmt.Errorf("approved QA cases are missing")
+		}
+		if len(results) != len(state.QACases) {
+			return fmt.Errorf("QA execution must cover all %d approved cases", len(state.QACases))
+		}
+		byID := map[string]QAResultInput{}
+		for _, item := range results {
+			if _, exists := byID[item.CaseID]; exists {
+				return fmt.Errorf("duplicate QA result for %s", item.CaseID)
+			}
+			if item.Outcome != "PASS" && item.Outcome != "FAIL" {
+				return fmt.Errorf("QA outcome for %s must be PASS or FAIL", item.CaseID)
+			}
+			for name, value := range map[string]string{"procedure": item.Procedure, "observation": item.Observation, "oracle result": item.OracleResult} {
+				if strings.TrimSpace(value) == "" {
+					return fmt.Errorf("QA result %s %s is required", item.CaseID, name)
+				}
+			}
+			byID[item.CaseID] = item
+		}
+		status := "PASS"
+		findings := []Finding{}
+		recorded := make([]QAResultRecord, 0, len(state.QACases))
+		for _, testCase := range state.QACases {
+			item, ok := byID[testCase.ID]
+			if !ok {
+				return fmt.Errorf("QA result is missing for %s", testCase.ID)
+			}
+			if item.Outcome == "FAIL" {
+				status = "FAIL"
+				findings = append(findings, Finding{Message: testCase.ID + ": " + strings.TrimSpace(item.Observation)})
+			}
+			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
+		}
+		state.QAExecution = QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings}
+		return nil
+	})
+}
+
+func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if strings.TrimSpace(currentSnapshot) == "" || currentSnapshot == state.CurrentSnapshot {
+			return fmt.Errorf("a new current snapshot is required")
+		}
+		if strings.TrimSpace(liveSnapshot) == "" || liveSnapshot != currentSnapshot {
+			return fmt.Errorf("live VCS identity must match the new current snapshot")
+		}
+		if len(eligibleCarryGates(*state)) != 0 {
+			return fmt.Errorf("prior passing gates still await a Carry decision")
+		}
+		oldSnapshot := state.CurrentSnapshot
+		hasPriorPass := false
+		for _, result := range state.Gates {
+			if result.Status == "PASS" && result.Snapshot == oldSnapshot {
+				hasPriorPass = true
 				break
 			}
 		}
-		if selected == nil {
-			decision, carryRef, err := acceptedCarryForGate(worktree, runDir, state, options.WorkflowID, options.ChangeSnapshot, prerequisite.Gate)
-			if err != nil {
-				result.add("gate-state", "missing current-snapshot PASS closure or accepted Carry for "+prerequisite.Gate+": "+err.Error())
-				continue
+		state.CurrentSnapshot = currentSnapshot
+		if hasPriorPass {
+			state.PreRepairSnapshot = oldSnapshot
+		} else {
+			state.PreRepairSnapshot = ""
+		}
+		state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		state.Carry = map[string]CarryResult{}
+		for id, result := range state.Gates {
+			if result.Status != "PASS" {
+				state.Gates[id] = GateResult{Status: "PENDING"}
 			}
-			matrix = append(matrix, FinalGateRow{Gate: prerequisite.Gate, ResultKind: "CARRIED_PASS", SourceSnapshot: decision.SourceSnapshot, TargetSnapshot: options.ChangeSnapshot, GateEvidence: decision.SourceGateEvidence, CarryDecision: &carryRef})
-			continue
 		}
-		logical, err := logicalPathInRun(runDir, resolvePath(worktree, selected.Artifact))
-		if err != nil {
-			result.add("gate-state", err.Error())
-			continue
+		if hasPriorPass {
+			state.Actions["carry"] = ActionResult{Status: "PENDING"}
+		} else {
+			delete(state.Actions, "carry")
 		}
-		matrix = append(matrix, FinalGateRow{Gate: prerequisite.Gate, ResultKind: "FRESH_PASS", SourceSnapshot: options.ChangeSnapshot, TargetSnapshot: options.ChangeSnapshot, GateEvidence: EvidenceRef{Path: logical, SHA256: selected.ArtifactHash}})
-	}
-	finalLogical, err := logicalPathInRun(runDir, resolvePath(worktree, finalVerification))
-	if err != nil {
-		result.add("final-verification", err.Error())
-	}
-	if !result.OK() {
-		return result
-	}
-	payload, _ := json.Marshal(FinalExecutionPayload{Mode: "MECHANICAL_CLOSEOUT", GateMatrix: matrix, FinalVerification: EvidenceRef{Path: finalLogical, SHA256: sha256File(resolvePath(worktree, finalVerification))}, ReleaseJudgment: "SEAL"})
-	envelope := FormalGateEvidence{SchemaVersion: 2, ArtifactRole: policy.ArtifactRole, WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot, Gate: policy.Gate, Stage: policy.Stage, Verdict: status, Payload: payload}
-	data, err := json.MarshalIndent(envelope, "", "  ")
-	if err != nil {
-		result.add("final-qa-artifact", err.Error())
-		return result
-	}
-	decodeArtifact(ArtifactOptions{Root: worktree, File: finalQA, Gate: policy.Gate, Stage: policy.Stage, WorkflowID: options.WorkflowID, ChangeSnapshot: options.ChangeSnapshot, Flow: policy.Flow, RunDir: runDir}, data, &result)
-	if !result.OK() {
-		return result
-	}
-	if err := writeBytesExclusive(finalQAPath, append(data, '\n')); err != nil {
-		result.add("final-qa-artifact", err.Error())
-		return result
-	}
-	actor := strings.TrimSpace(options.Actor)
-	if actor == "" {
-		actor = "gate-workflow"
-	}
-	recordResult := record(GateRecordOptions{
-		Worktree:       worktree,
-		StatePath:      statePath,
-		RunDir:         runDir,
-		Gate:           policy.Gate,
-		Verdict:        status,
-		Mode:           "formal",
-		Stage:          policy.Stage,
-		Artifact:       finalQA,
-		Actor:          actor,
-		WorkflowID:     options.WorkflowID,
-		ChangeSnapshot: options.ChangeSnapshot,
-	})
-	if !recordResult.OK() {
-		if err := os.Remove(finalQAPath); err != nil && !os.IsNotExist(err) {
-			recordResult.add("final-qa-artifact", "cannot remove failed FinalExecution: "+err.Error())
-		}
-	}
-	return recordResult
-}
-
-func WorkflowCleanup(options WorkflowCleanupOptions) (WorkflowCleanupReport, Result) {
-	worktree := cleanRoot(options.Worktree)
-	var result Result
-	if !isDir(worktree) {
-		result.add("worktree", "worktree does not exist: "+worktree)
-		return WorkflowCleanupReport{}, result
-	}
-	path, err := cleanupPath(worktree, options.FlowID)
-	if err != nil {
-		result.add("cleanup", err.Error())
-		return WorkflowCleanupReport{}, result
-	}
-	report := WorkflowCleanupReport{
-		SchemaVersion: 1,
-		Worktree:      slash(absPath(worktree)),
-		DryRun:        !options.Execute,
-		Paths:         make([]WorkflowCleanupRecord, 0, 1),
-	}
-	record := WorkflowCleanupRecord{Path: slash(path)}
-	if !exists(path) {
-		record.Status = "missing"
-		report.Paths = append(report.Paths, record)
-		return report, result
-	}
-	if !options.Execute {
-		record.Status = "would-remove"
-		report.Paths = append(report.Paths, record)
-		return report, result
-	}
-	if err := os.RemoveAll(path); err != nil {
-		result.add(slash(path), "cleanup remove failed: "+err.Error())
-		record.Status = "remove-failed"
-	} else {
-		record.Status = "removed"
-	}
-	report.Paths = append(report.Paths, record)
-	return report, result
-}
-
-func workflowStatePath(worktree, statePath, runDir string) string {
-	if strings.TrimSpace(statePath) != "" {
-		return resolveStatePath(worktree, statePath)
-	}
-	if strings.TrimSpace(runDir) != "" {
-		return filepath.Join(runDir, "restricted", "gate-state.json")
-	}
-	return resolveStatePath(worktree, "")
-}
-
-func resolveWorkflowRunDir(worktree, workflowID, value string) (string, error) {
-	worktreeAbs := absPath(worktree)
-	runDir := strings.TrimSpace(value)
-	if runDir == "" {
-		if strings.TrimSpace(workflowID) == "" {
-			return "", fmt.Errorf("--workflow-id is required when using a default workflow run directory")
-		}
-		runDir = filepath.ToSlash(filepath.Join(".gates", "runs", workflowID))
-	}
-	full := absPath(resolvePath(worktreeAbs, runDir))
-	runsRoot := filepath.Join(worktreeAbs, ".gates", "runs")
-	if samePath(full, runsRoot) || !pathUnder(full, runsRoot) {
-		return "", fmt.Errorf("run directory must be under .gates/runs: %s", slash(full))
-	}
-	return full, nil
-}
-
-func requireWorkflowPathUnderRunDir(worktree, runDir, label, value string, allowEmpty bool) error {
-	if strings.TrimSpace(value) == "" {
 		return nil
-	}
-	return requireAbsPathUnderRunDir(runDir, label, resolvePath(worktree, value))
+	})
 }
 
-func addWorkflowPathFailure(result *Result, worktree, runDir, label, value string, allowEmpty bool) {
-	if err := requireWorkflowPathUnderRunDir(worktree, runDir, label, value, allowEmpty); err != nil {
-		result.add(label, err.Error())
+func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtimeError, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+			return err
+		}
+		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+			return err
+		}
+		if !state.RequirementConfirmed {
+			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		eligible := eligibleCarryGates(*state)
+		if len(eligible) == 0 {
+			return fmt.Errorf("no prior passing gates require a Carry decision")
+		}
+		if strings.TrimSpace(runtimeError) != "" {
+			if len(decisions) != 0 {
+				return fmt.Errorf("Carry runtime error cannot include decisions")
+			}
+			state.Actions["carry"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError)}
+			return nil
+		}
+		if len(decisions) != len(eligible) {
+			return fmt.Errorf("Carry must decide all %d prior passing gates", len(eligible))
+		}
+		wanted := map[string]bool{}
+		for _, id := range eligible {
+			wanted[id] = true
+		}
+		seen := map[string]bool{}
+		for _, decision := range decisions {
+			if !wanted[decision.GateID] {
+				return fmt.Errorf("gate %q is not eligible for Carry", decision.GateID)
+			}
+			if seen[decision.GateID] {
+				return fmt.Errorf("duplicate Carry decision for %s", decision.GateID)
+			}
+			if decision.Decision != "INHERIT" && decision.Decision != "RERUN" {
+				return fmt.Errorf("Carry decision for %s must be INHERIT or RERUN", decision.GateID)
+			}
+			if strings.TrimSpace(decision.Message) == "" {
+				return fmt.Errorf("Carry decision for %s requires a reason", decision.GateID)
+			}
+			seen[decision.GateID] = true
+			prior := state.Gates[decision.GateID]
+			state.Carry[decision.GateID] = CarryResult{Decision: decision.Decision, SourceSnapshot: state.PreRepairSnapshot, TargetSnapshot: state.CurrentSnapshot, Message: strings.TrimSpace(decision.Message)}
+			if decision.Decision == "INHERIT" {
+				prior.SourceSnapshot = state.PreRepairSnapshot
+				prior.Snapshot = state.CurrentSnapshot
+				state.Gates[decision.GateID] = prior
+			} else {
+				state.Gates[decision.GateID] = GateResult{Status: "PENDING"}
+			}
+		}
+		state.Actions["carry"] = ActionResult{Status: "PASS"}
+		return nil
+	})
+}
+
+func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runID, "ABORTED") }
+
+func Seal(root, packageRoot, runID, liveBefore, liveAfter string) (RunSummary, error) {
+	path := RunStatePath(root, runID)
+	release, err := acquireStateLock(path)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer release()
+	state, err := LoadRunState(root, runID)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	if err := requireActive(state); err != nil {
+		return RunSummary{}, err
+	}
+	if _, err := requireCurrentDefinitions(root, state, packageRoot); err != nil {
+		return RunSummary{}, err
+	}
+	if !state.RequirementConfirmed {
+		return RunSummary{}, fmt.Errorf("current requirement is not confirmed")
+	}
+	if liveBefore != state.CurrentSnapshot || liveAfter != state.CurrentSnapshot {
+		return RunSummary{}, fmt.Errorf("live VCS identity must match the current snapshot before and after aggregation")
+	}
+	state.Status = "SEALED"
+	if err := SaveRunState(root, state); err != nil {
+		return RunSummary{}, err
+	}
+	if err := SaveRunSummary(root, state); err != nil {
+		return RunSummary{}, err
+	}
+	summary := runSummary(state)
+	if err := DeleteRun(root, runID); err != nil {
+		return RunSummary{}, err
+	}
+	return summary, nil
+}
+
+func finishRun(root, runID, status string) (RunSummary, error) {
+	path := RunStatePath(root, runID)
+	release, err := acquireStateLock(path)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer release()
+	state, err := LoadRunState(root, runID)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	if err := requireActive(state); err != nil {
+		return RunSummary{}, err
+	}
+	state.Status = status
+	if err := SaveRunState(root, state); err != nil {
+		return RunSummary{}, err
+	}
+	if err := SaveRunSummary(root, state); err != nil {
+		return RunSummary{}, err
+	}
+	summary := runSummary(state)
+	if err := DeleteRun(root, runID); err != nil {
+		return RunSummary{}, err
+	}
+	return summary, nil
+}
+
+func mutateRun(root, runID string, change func(*RunState) error) (RunState, error) {
+	path := RunStatePath(root, runID)
+	release, err := acquireStateLock(path)
+	if err != nil {
+		return RunState{}, err
+	}
+	defer release()
+	state, err := LoadRunState(root, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	if err := requireActive(state); err != nil {
+		return RunState{}, err
+	}
+	if err := change(&state); err != nil {
+		return RunState{}, err
+	}
+	if err := SaveRunState(root, state); err != nil {
+		return RunState{}, err
+	}
+	return state, nil
+}
+
+func acquireStateLock(statePath string) (func(), error) {
+	lockPath := statePath + ".lock"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			file.Close()
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for another run-state update")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
-func requireAbsPathUnderRunDir(runDir, label, path string) error {
-	full := absPath(path)
-	restricted := filepath.Join(absPath(runDir), "restricted")
-	if samePath(full, restricted) || !pathUnder(full, restricted) {
-		return fmt.Errorf("%s must be under the active run restricted directory: %s", label, slash(full))
+func requireActive(state RunState) error {
+	if state.Status != "ACTIVE" {
+		return fmt.Errorf("run %s is %s", state.RunID, state.Status)
 	}
 	return nil
 }
 
-func writeFinalVerificationArtifact(path string, artifact WorkflowFinalVerificationArtifact) error {
-	data, err := json.MarshalIndent(artifact, "", "  ")
+func requireCurrentCatalog(state RunState, packageRoot string) (PromptCatalog, error) {
+	catalog, err := LoadPromptCatalog(packageRoot)
 	if err != nil {
-		return err
+		return PromptCatalog{}, err
 	}
-	return writeFileAtomic(path, append(data, '\n'), 0o600)
+	if state.BasePromptRevision != catalog.BaseRevision || state.CatalogRevision != catalog.CatalogRevision {
+		return PromptCatalog{}, fmt.Errorf("installed prompt catalog changed; start a new run")
+	}
+	return catalog, nil
 }
 
-// verificationAttemptFailure recognizes output lines that unambiguously report
-// a failed command. Empty output remains valid for commands such as go build
-// and go vet, whose successful runs normally produce no stdout or stderr.
-func verificationAttemptFailure(data []byte) string {
-	text := strings.TrimSpace(string(data))
-	if text == "" {
-		return ""
+func requireCurrentDefinitions(root string, state RunState, packageRoot string) (PromptCatalog, error) {
+	catalog, err := requireCurrentCatalog(state, packageRoot)
+	if err != nil {
+		return PromptCatalog{}, err
 	}
-	lines := strings.Split(text, "\n")
-	for index, raw := range lines {
-		line := strings.TrimSpace(raw)
-		upper := strings.ToUpper(line)
-		switch {
-		case upper == "FAIL", strings.HasPrefix(upper, "FAIL "), strings.HasPrefix(upper, "FAIL:"), strings.HasPrefix(upper, "FAIL\t"), strings.HasPrefix(upper, "--- FAIL:"):
-			return "verification attempt artifact contains a FAIL result"
-		case strings.HasPrefix(upper, "FAILED"), strings.HasPrefix(upper, "FAILURE"):
-			return "verification attempt artifact contains a failed-command result"
-		case strings.HasPrefix(upper, "ERROR:"), strings.HasPrefix(upper, "ERROR "), strings.HasPrefix(upper, "ERROR\t"), strings.HasPrefix(upper, "FATAL:"), strings.HasPrefix(upper, "FATAL "), strings.HasPrefix(upper, "FATAL\t"), strings.HasPrefix(upper, "PANIC:"), strings.HasPrefix(upper, "PANIC "), strings.HasPrefix(upper, "PANIC\t"):
-			return "verification attempt artifact contains a fatal or error result"
-		case strings.Contains(upper, "COMMAND FAILED"), hasNonZeroExitMarker(upper):
-			return "verification attempt artifact reports a non-zero command exit"
-		}
-		if strings.HasPrefix(line, "# ") && index+1 < len(lines) && looksLikeGoDiagnostic(lines[index+1]) {
-			return "verification attempt artifact contains a Go compiler or vet diagnostic"
-		}
+	revision, err := RequirementRevision(resolveFromRoot(cleanRoot(root), state.RequirementSource))
+	if err != nil {
+		return PromptCatalog{}, fmt.Errorf("requirement: %w", err)
 	}
-	return ""
+	if revision != state.RequirementRevision {
+		return PromptCatalog{}, fmt.Errorf("requirement changed; resume the run before continuing")
+	}
+	return catalog, nil
 }
 
-func hasNonZeroExitMarker(text string) bool {
-	fields := strings.FieldsFunc(text, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == ':' || r == '=' || r == '(' || r == ')'
-	})
-	for index, field := range fields {
-		if field != "STATUS" && field != "CODE" || index == 0 || index+1 >= len(fields) {
-			continue
+func requireLiveSnapshot(state RunState, live string) error {
+	if strings.TrimSpace(live) == "" {
+		return fmt.Errorf("live VCS identity is required")
+	}
+	if live != state.CurrentSnapshot {
+		return fmt.Errorf("live VCS identity does not match current snapshot")
+	}
+	return nil
+}
+
+func requireSourceBinding(state RunState, sourceRevision, sourceCatalogRevision, sourceSnapshot string, snapshotBound bool) error {
+	if strings.TrimSpace(sourceRevision) == "" {
+		return fmt.Errorf("source requirement revision is required")
+	}
+	if sourceRevision != state.RequirementRevision {
+		return fmt.Errorf("source requirement revision does not match the current requirement")
+	}
+	if strings.TrimSpace(sourceCatalogRevision) == "" {
+		return fmt.Errorf("source catalog revision is required")
+	}
+	if sourceCatalogRevision != state.CatalogRevision {
+		return fmt.Errorf("source catalog revision does not match the current catalog")
+	}
+	if !snapshotBound {
+		return nil
+	}
+	if strings.TrimSpace(sourceSnapshot) == "" {
+		return fmt.Errorf("source snapshot is required")
+	}
+	if sourceSnapshot != state.CurrentSnapshot {
+		return fmt.Errorf("source snapshot does not match the current snapshot")
+	}
+	return nil
+}
+
+func routeForState(root string, state RunState) PromptRoute {
+	return PromptRoute{RequirementSource: state.RequirementSource, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, Worktree: absPath(cleanRoot(root)), VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, PreRepairSnapshot: state.PreRepairSnapshot}
+}
+
+func semanticActionResult(status, message string, findings []FindingInput, state *RunState) (ActionResult, error) {
+	normalized, converted, err := validateSemanticResult(status, message, findings)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{Status: normalized, Message: strings.TrimSpace(message), Findings: converted}, nil
+}
+
+func semanticGateResult(status, message string, findings []FindingInput, state *RunState) (GateResult, error) {
+	normalized, converted, err := validateSemanticResult(status, message, findings)
+	if err != nil {
+		return GateResult{}, err
+	}
+	return GateResult{Status: normalized, Message: strings.TrimSpace(message), Snapshot: state.CurrentSnapshot, Findings: converted}, nil
+}
+
+func validateSemanticResult(status, message string, findings []FindingInput) (string, []Finding, error) {
+	status = strings.ToUpper(strings.TrimSpace(status))
+	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
+		return "", nil, fmt.Errorf("status must be PASS, FAIL, or RUNTIME_ERROR")
+	}
+	if status == "PASS" && len(findings) != 0 {
+		return "", nil, fmt.Errorf("PASS cannot include findings")
+	}
+	if status == "FAIL" && len(findings) == 0 {
+		return "", nil, fmt.Errorf("FAIL requires at least one finding")
+	}
+	if status == "RUNTIME_ERROR" {
+		if len(findings) != 0 {
+			return "", nil, fmt.Errorf("RUNTIME_ERROR cannot include reviewer findings")
 		}
-		exitWord := false
-		for previous := index - 1; previous >= 0 && previous >= index-3; previous-- {
-			if fields[previous] == "EXIT" || fields[previous] == "EXITED" {
-				exitWord = true
-				break
+		if strings.TrimSpace(message) == "" {
+			return "", nil, fmt.Errorf("RUNTIME_ERROR requires a message")
+		}
+	}
+	converted := make([]Finding, 0, len(findings))
+	for _, input := range findings {
+		if strings.TrimSpace(input.Message) == "" {
+			return "", nil, fmt.Errorf("finding message is required")
+		}
+		locations := make([]string, 0, len(input.Locations))
+		for _, location := range input.Locations {
+			if err := validateFindingLocation(location); err != nil {
+				return "", nil, err
 			}
+			locations = append(locations, strings.TrimSpace(location))
 		}
-		if !exitWord {
-			continue
+		converted = append(converted, Finding{Message: strings.TrimSpace(input.Message), Locations: locations})
+	}
+	return status, converted, nil
+}
+
+func validateFindingLocation(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("finding location is empty")
+	}
+	if strings.Contains(value, `\`) || strings.Contains(value, "://") || strings.HasPrefix(value, "/") || (len(value) > 1 && value[1] == ':') {
+		return fmt.Errorf("finding location must be repository-relative: %s", value)
+	}
+	path := value
+	for count := 0; count < 2; count++ {
+		index := strings.LastIndex(path, ":")
+		if index <= 0 {
+			break
 		}
-		value := fields[index+1]
-		value = strings.TrimLeft(value, "0")
-		if value != "" {
-			allDigits := true
-			for _, digit := range value {
-				if digit < '0' || digit > '9' {
-					allDigits = false
-					break
-				}
-			}
-			if allDigits {
-				return true
-			}
+		if !suffixIsDigits(path[index+1:]) {
+			break
 		}
+		path = path[:index]
 	}
-	return false
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("finding location must be repository-relative: %s", value)
+	}
+	return nil
 }
 
-func looksLikeGoDiagnostic(raw string) bool {
-	line := strings.TrimSpace(raw)
-	marker := strings.Index(line, ".go:")
-	if marker < 0 {
+func suffixIsDigits(value string) bool {
+	if value == "" {
 		return false
 	}
-	rest := line[marker+len(".go:"):]
-	digits := 0
-	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
-		digits++
-	}
-	return digits > 0 && digits < len(rest) && rest[digits] == ':'
-}
-
-func cleanupPath(worktree, flowID string) (string, error) {
-	worktreeAbs := absPath(worktree)
-	root := filepath.Join(worktreeAbs, ".gates", "tmp")
-	flowID = strings.TrimSpace(flowID)
-	if flowID == "" {
-		return root, nil
-	}
-	if filepath.Base(flowID) != flowID || flowID == "." || flowID == ".." {
-		return "", fmt.Errorf("cleanup flow id must be one directory name: %s", flowID)
-	}
-	return filepath.Join(root, flowID), nil
-}
-
-func cleanupScratchPath(worktree, path string) bool {
-	full := absPath(resolvePath(worktree, path))
-	worktreeAbs := absPath(worktree)
-	if !pathUnder(full, worktreeAbs) {
-		return false
-	}
-	root := filepath.Join(worktreeAbs, ".gates", "tmp")
-	return samePath(full, root) || pathUnder(full, root)
-}
-
-func samePath(a, b string) bool {
-	a = absPath(a)
-	b = absPath(b)
-	if resolved, err := filepath.EvalSymlinks(a); err == nil {
-		a = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(b); err == nil {
-		b = resolved
-	}
-	if os.PathSeparator == '\\' {
-		return strings.EqualFold(a, b)
-	}
-	return a == b
-}
-
-func pathUnder(path, root string) bool {
-	path = filepath.Clean(path)
-	root = filepath.Clean(root)
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == "." {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
-		return false
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
 	}
 	return true
+}
+
+func invalidateRequirementResults(state *RunState, gateIDs []string) {
+	state.Actions = pendingRequirementActions()
+	state.QACases = []QACase{}
+	state.QAExecution = QAExecutionResult{Status: "PENDING"}
+	state.Carry = map[string]CarryResult{}
+	state.PreRepairSnapshot = ""
+	state.Gates = map[string]GateResult{}
+	for _, id := range gateIDs {
+		state.Gates[id] = GateResult{Status: "PENDING"}
+	}
+}
+
+func eligibleCarryGates(state RunState) []string {
+	var ids []string
+	if state.PreRepairSnapshot == "" {
+		return ids
+	}
+	for id, result := range state.Gates {
+		if result.Status == "PASS" && result.Snapshot == state.PreRepairSnapshot {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func sortedGateIDs(gates map[string]GateResult) []string {
+	ids := make([]string, 0, len(gates))
+	for id := range gates {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func resolveFromRoot(root, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(root, filepath.FromSlash(path))
+}
+
+func absPath(path string) string {
+	full, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(full)
+}
+
+func newRunID() (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return strings.ToLower(time.Now().UTC().Format("20060102t150405000z")) + "-" + hex.EncodeToString(suffix[:]), nil
 }

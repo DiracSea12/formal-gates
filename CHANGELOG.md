@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Discover independent review gates from package-local `gates/*.md` files.
+- Compose every gate task from one shared reviewer base and one gate-specific
+  prompt.
+- Replace the receipt/closure workflow with one resumable run-state file and
+  one retained seal or abort summary.
+- Run QA Execution and all discovered independent gates in parallel on the
+  current native VCS snapshot.
+- Use Git, SVN, P4, or another named VCS directly for cumulative and repair
+  comparisons.
+- Let seal finalize a run with any selected combination of QA and gate results,
+  including none, without treating review completion or PASS as a prerequisite.
+
+### Removed
+
+- Fixed four-gate registries, extension manifests, prompt copies, context
+  bundles, receipt and closure graphs, recursive Carry chains, generated
+  handoffs, detailed gate-state trees, and their compatibility paths.
+- The duplicate `formal-gates-validate` command, old evidence demos, and the
+  standalone prompt-pollution pattern catalog.
+
 ---
 
 ## [0.1.0] — 2026-06-13

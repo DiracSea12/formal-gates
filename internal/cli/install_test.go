@@ -31,34 +31,50 @@ func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "bin", installTestBinaryName())); err != nil {
 		t.Fatalf("expected native binary copied: %v", err)
 	}
-	assertFileContains(t, filepath.Join(target, "assets", "showcase", "no-evidence-no-pass.svg"), "No evidence")
-	assertFileContains(t, filepath.Join(target, "hooks", "pollution-patterns.json"), "exact_terms")
+	assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
+	assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
+	assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
 	assertNoScriptRuntimeFiles(t, target)
-	for _, unexpected := range []string{
-		filepath.Join(target, "hooks", "enforce-gate-sequence.ps1"),
-		filepath.Join(target, "hooks", "capture-subagent-receipt.ps1"),
-		filepath.Join(target, "scripts", "gate-workflow.ps1"),
-		filepath.Join(target, "scripts", "complexity_gate.py"),
-		filepath.Join(target, "examples", "package-validation-demo.ps1"),
+}
+
+func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
+	for _, tc := range []struct {
+		host      string
+		targetRel string
+	}{
+		{host: "claude", targetRel: ".claude/skills/formal-gates"},
+		{host: "codex", targetRel: ".codex/skills/formal-gates"},
+		{host: "cursor", targetRel: ".cursor/formal-gates"},
 	} {
-		if _, err := os.Stat(unexpected); !os.IsNotExist(err) {
-			t.Fatalf("native install copied script runtime file %s, err=%v", unexpected, err)
-		}
+		t.Run(tc.host, func(t *testing.T) {
+			source := writeInstallSource(t, "source")
+			project := t.TempDir()
+			var stdout, stderr bytes.Buffer
+			code := Run("formal-gates", []string{
+				"install", "--source", source, "--host", tc.host, "--scope", "project",
+				"--project", project, "--skip-hooks",
+			}, IO{Stdout: &stdout, Stderr: &stderr})
+			if code != 0 {
+				t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			target := filepath.Join(project, filepath.FromSlash(tc.targetRel))
+			assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
+			assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
+			assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
+		})
 	}
 }
 
 func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		host       string
-		configRel  string
-		preEvent   string
-		startEvent string
-		stopEvent  string
+		name      string
+		host      string
+		configRel string
+		preEvent  string
 	}{
-		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse", startEvent: "SubagentStart", stopEvent: "SubagentStop"},
-		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", startEvent: "SubagentStart", stopEvent: "SubagentStop"},
-		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", startEvent: "subagentStart", stopEvent: "subagentStop"},
+		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse"},
+		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse"},
+		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse"},
 	} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(tc.name+"/"+scope, func(t *testing.T) {
@@ -97,18 +113,21 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 					"bin",
 					installTestBinaryName(),
 					"hook decide",
-					"receipt capture",
-					"--provider",
-					"--worktree",
 				} {
 					if !strings.Contains(raw, expected) {
 						t.Fatalf("hook config missing %q: %s", expected, raw)
 					}
 				}
+				if strings.Contains(raw, "receipt capture") {
+					t.Fatalf("hook config still contains removed receipt lifecycle command: %s", raw)
+				}
 				hooks := readHooksMap(t, configPath)
-				for _, event := range []string{tc.preEvent, tc.startEvent, tc.stopEvent} {
-					if _, ok := hooks[event]; !ok {
-						t.Fatalf("expected hook event %s in %s", event, raw)
+				if _, ok := hooks[tc.preEvent]; !ok {
+					t.Fatalf("expected hook event %s in %s", tc.preEvent, raw)
+				}
+				for _, event := range []string{"SubagentStart", "SubagentStop", "subagentStart", "subagentStop"} {
+					if _, ok := hooks[event]; ok {
+						t.Fatalf("unexpected removed lifecycle hook event %s in %s", event, raw)
 					}
 				}
 				for _, command := range hookCommands(hooks) {
@@ -299,19 +318,15 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	if err := os.Chmod(filepath.Join(source, "bin", installTestBinaryName()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{"cmd", "internal", "agents", "examples", "hooks", "references", "assets", "assets/showcase", "scripts"} {
+	for _, dir := range []string{"cmd", "internal", "agents", "prompts", "prompts/actions", "gates", "examples", "references"} {
 		if err := os.MkdirAll(filepath.Join(source, dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		mustWriteCLI(t, filepath.Join(source, dir, ".keep"), "keep\n")
 	}
-	mustWriteCLI(t, filepath.Join(source, "hooks", "pollution-patterns.json"), `{"regex_groups":[],"exact_terms":[]}`+"\n")
-	mustWriteCLI(t, filepath.Join(source, "assets", "showcase", "no-evidence-no-pass.svg"), "<svg>No evidence</svg>\n")
-	mustWriteCLI(t, filepath.Join(source, "hooks", "enforce-gate-sequence.ps1"), "legacy hook\n")
-	mustWriteCLI(t, filepath.Join(source, "hooks", "capture-subagent-receipt.ps1"), "legacy receipt hook\n")
-	mustWriteCLI(t, filepath.Join(source, "scripts", "gate-workflow.ps1"), "legacy workflow\n")
-	mustWriteCLI(t, filepath.Join(source, "scripts", "complexity_gate.py"), "legacy python\n")
-	mustWriteCLI(t, filepath.Join(source, "examples", "package-validation-demo.ps1"), "legacy demo\n")
+	mustWriteCLI(t, filepath.Join(source, "prompts", "reviewer-base.md"), "reviewer base\n")
+	mustWriteCLI(t, filepath.Join(source, "prompts", "actions", "sample-action.md"), "sample action\n")
+	mustWriteCLI(t, filepath.Join(source, "gates", "sample-gate.md"), "sample gate\n")
 	return source
 }
 

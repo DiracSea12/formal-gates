@@ -2,195 +2,63 @@ package validate
 
 import "testing"
 
-func TestHookDenyGateWorkflowPassWithoutArtifact(t *testing.T) {
-	cases := []struct {
-		name    string
-		payload string
-	}{
-		{
-			name: "native workflow missing artifact",
-			payload: `{
-				"tool_name": "Shell",
-				"input": {
-					"command": "\"C:\\tools\\formal-gates\\bin\\formal-gates.exe\" workflow record-stage --gate complexity-gate --verdict PASS --workflow-id wf --change-snapshot snap"
-				}
-			}`,
-		},
-		{
-			name: "native gate record missing artifact",
-			payload: `{
-				"tool_name": "shell_command",
-				"arguments": {
-					"command": "bin/formal-gates gate record --gate architecture-health-gate --verdict PASS --workflow-id wf --change-snapshot snap"
-				}
-			}`,
-		},
-		{
-			name: "go run native workflow missing artifact",
-			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "go run ./cmd/formal-gates workflow record-stage --gate code-quality-gate --verdict PASS --workflow-id wf --change-snapshot snap"
-				}
-			}`,
-		},
-		{
-			name: "duplicate verdict cannot hide pass",
-			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "formal-gates workflow record-stage --gate complexity-gate --verdict REVIEW --verdict PASS --workflow-id wf --change-snapshot snap"
-				}
-			}`,
-		},
-		{
-			name: "equals verdict and empty artifact",
-			payload: `{
-				"tool_name": "Shell",
-				"input": {
-					"command": "formal-gates workflow record-stage --gate=complexity-gate --verdict=PASS --artifact= --workflow-id=wf --change-snapshot=snap"
-				}
-			}`,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			decision, err := Hook([]byte(tc.payload))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if decision.Decision != "block" {
-				t.Fatalf("expected block, got %#v", decision)
-			}
-			if decision.Permission != "deny" || decision.PermissionDecision != "deny" {
-				t.Fatalf("expected deny-compatible host fields, got %#v", decision)
-			}
-		})
+func TestHookDeniesPassWithoutCurrentRunBinding(t *testing.T) {
+	for _, command := range []string{
+		`formal-gates workflow record-gate --gate quality --status PASS --run-id run`,
+		`formal-gates workflow record-gate --status PASS --run-id run --live-snapshot current`,
+		`formal-gates workflow record-gate --gate quality --status PASS --live-snapshot current`,
+	} {
+		decision, err := Hook([]byte(`{"command":"` + command + `"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.PermissionDecision != "deny" {
+			t.Fatalf("command was allowed: %s", command)
+		}
 	}
 }
 
-func TestHookRejectsLegacyPowerShellCommands(t *testing.T) {
-	cases := []struct {
-		name    string
-		payload string
-	}{
-		{
-			name: "legacy workflow with artifact",
-			payload: `{
-				"tool_name": "Bash",
-				"tool_input": {
-					"command": "powershell -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict PASS -Artifact .gates/artifacts/complexity.md"
-				}
-			}`,
-		},
-		{
-			name: "legacy workflow review",
-			payload: `{
-				"tool_name": "shell_command",
-				"arguments": {
-					"command": "pwsh -File ./scripts/gate-workflow.ps1 -Action record-stage -Gate complexity-gate -Verdict REVIEW"
-				}
-			}`,
-		},
-		{
-			name: "legacy gate-state",
-			payload: `{
-				"tool_name": "shell_command",
-				"params": {
-					"cmd": "pwsh -File ./scripts/gate-state.ps1 -Action assert-next -Gate complexity-gate"
-				}
-			}`,
-		},
-		{
-			name: "legacy receipt hook",
-			payload: `{
-				"tool_name": "Shell",
-				"input": {
-					"command": "pwsh -File ./hooks/capture-subagent-receipt.ps1"
-				}
-			}`,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			decision, err := Hook([]byte(tc.payload))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if decision.Decision != "block" {
-				t.Fatalf("expected block, got %#v", decision)
-			}
-			if decision.Reason == "" || decision.PermissionDecision != "deny" {
-				t.Fatalf("expected legacy deny reason and host fields, got %#v", decision)
-			}
-		})
+func TestHookAllowsBoundPassAndOtherCommands(t *testing.T) {
+	for _, payload := range []string{
+		`{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run --live-snapshot current"}`,
+		`{"command":"go test ./..."}`,
+		`{"event":"PreToolUse","value":{"text":"not a command"}}`,
+	} {
+		decision, err := Hook([]byte(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.PermissionDecision != "allow" {
+			t.Fatalf("payload was denied: %s %#v", payload, decision)
+		}
 	}
 }
 
-func TestHookAllowsRepresentativePayloads(t *testing.T) {
-	cases := []struct {
-		name    string
-		payload string
-	}{
-		{
-			name: "native workflow command with artifact",
-			payload: `{
-				"tool_name": "Shell",
-				"input": {
-					"command": "formal-gates workflow record-stage --gate complexity-gate --verdict PASS --artifact=.gates/artifacts/complexity.md --workflow-id wf --change-snapshot snap"
-				}
-			}`,
-		},
-		{
-			name: "cursor validation command",
-			payload: `{
-				"tool_name": "Shell",
-				"input": {
-					"command": "go run ./cmd/formal-gates package validate --root ."
-				}
-			}`,
-		},
-		{
-			name:    "unknown payload",
-			payload: `{"event":"PreToolUse","value":{"text":"not a command"}}`,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			decision, err := Hook([]byte(tc.payload))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if decision.Decision != "approve" {
-				t.Fatalf("expected approve, got %#v", decision)
-			}
-			if decision.Permission != "allow" || decision.PermissionDecision != "allow" {
-				t.Fatalf("expected allow-compatible host fields, got %#v", decision)
-			}
-		})
+func TestHookRejectsLegacyScriptCommands(t *testing.T) {
+	for _, command := range []string{"pwsh -File scripts/gate-workflow.ps1", "pwsh -File hooks/capture-subagent-receipt.ps1"} {
+		decision, err := Hook([]byte(`{"input":{"command":"` + command + `"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.PermissionDecision != "deny" {
+			t.Fatalf("legacy command was allowed: %s", command)
+		}
 	}
 }
 
-func TestHookAllowsMalformedNonCommandFailureIsNotHidden(t *testing.T) {
-	_, err := Hook([]byte(`{`))
-	if err == nil {
-		t.Fatal("expected invalid JSON to fail")
+func TestHookReportsMalformedJSON(t *testing.T) {
+	if _, err := Hook([]byte(`{`)); err == nil {
+		t.Fatal("malformed hook payload was accepted")
 	}
 }
 
-func TestHookAcceptsUTF8BOMPayload(t *testing.T) {
-	payload := append([]byte{0xef, 0xbb, 0xbf}, []byte(`{
-		"command": "formal-gates workflow record-stage --gate complexity-gate --verdict PASS --workflow-id wf --change-snapshot snap"
-	}`)...)
-
+func TestHookAcceptsUTF8BOM(t *testing.T) {
+	payload := append([]byte{0xef, 0xbb, 0xbf}, []byte(`{"command":"go test ./..."}`)...)
 	decision, err := Hook(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision != "block" || decision.PermissionDecision != "deny" {
-		t.Fatalf("expected denied hook decision, got %#v", decision)
+	if decision.PermissionDecision != "allow" {
+		t.Fatalf("BOM payload denied: %#v", decision)
 	}
 }

@@ -22,7 +22,7 @@
         "hook_configuration": "bundled-pretooluse-command-hook-guidance",
         "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
       },
-      "caveat": "Install the installable skill subset as a Codex skill. Codex may expose no usable SubagentStart/SubagentStop events, so receipts retain all non-lifecycle checks without requiring or emulating them while the existing complete hook set is still installed. PreToolUse hook enforcement still requires a live canary on Codex. This package does not claim Codex plugin distribution."
+      "caveat": "Install the installable skill subset as a Codex skill. PreToolUse hook enforcement still requires a live canary on Codex. This package does not claim Codex plugin distribution."
     },
     {
       "name": "Cursor",
@@ -77,12 +77,12 @@
     "go.mod",
     ".github/workflows/portable-validation.yml",
     "bin/",
-    "assets/",
     "references/",
     "cmd/",
     "internal/",
-    "hooks/",
     "agents/",
+    "prompts/",
+    "gates/",
     "examples/"
   ],
   "examples": [
@@ -107,12 +107,10 @@
   ],
   "validation_notes": [
     "The built formal-gates native binary is the installed package and artifact validation entrypoint for Windows, macOS, and Linux.",
-    "The native canary command validates package shape, strict final-send prompt checks, hook decisions, workflow state, CLI-generated FinalExecution recording, receipt flow, and install shape without PowerShell.",
-    "Native workflow foundation commands require an external Git, SVN, P4, or equivalent VCS for formal development, bind caller-provided snapshot identities while reviewers inspect native VCS diffs directly, and provide record-stage, verify-admission, final-verification aggregation, CLI-generated FinalExecution recording, dry-run-first cleanup of .gates/tmp, and show, backed by gate-state.json in the selected active workflow run.",
-    "Native prompt preparation generates and validates the exact seven-field reviewer message from a generation-only template without embedding the template's own hash.",
-    "Native receipt registration binds the exact final-send prompt path and hash for review judgments, blocks a fourth finalized review per workflow, gate, and stage unless the user explicitly authorizes it, and leaves non-judgment QA Design prompt-free.",
-    "Native receipt foundation commands revalidate the receipt-bound prompt during finalization, receipt validation, formal recording, and closure construction; lifecycle-capable providers additionally require real correlated events, while Codex keeps all non-lifecycle checks without requiring unavailable events.",
-    "Native install copies the verifiable installable package subset without PS1/Python script runtime files and writes each selected host's complete existing native hook configuration; Codex receipt finalization remains lifecycle-optional when its host emits no events.",
+    "The native canary command validates package shape, the file-driven prompt catalog, hook decisions, workflow state, and install shape without PowerShell.",
+    "GateRunner loads the shared reviewer base and every valid package-local gate prompt from the prompt catalog without a per-gate manifest or Go registry.",
+    "Native workflow commands require an external Git, SVN, P4, or equivalent VCS for formal development and bind caller-provided snapshot identities while reviewers inspect native VCS comparisons directly.",
+    "Native install copies the verifiable installable package subset, including prompts and gates, without PS1/Python script runtime files and writes each selected host's native hook configuration.",
     "Source checkout development tests may use go run ./cmd/formal-gates, but installed hook and validation paths must use bin/formal-gates(.exe).",
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root."

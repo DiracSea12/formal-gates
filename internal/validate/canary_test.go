@@ -26,7 +26,7 @@ func TestPortableCanaryPassesAgainstRepoRoot(t *testing.T) {
 func TestCodexHookProbeRecordsAndDeniesInvalidPass(t *testing.T) {
 	dir := t.TempDir()
 	output := filepath.Join(dir, "formal-hook-output.txt")
-	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Shell","input":{"command":"formal-gates workflow record-stage --gate complexity-gate --verdict PASS --workflow-id wf --change-snapshot snap"}}`)
+	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Shell","input":{"command":"formal-gates workflow record-gate --gate complexity-gate --status PASS --run-id wf"}}`)
 
 	probe, result := CodexHookProbe(CodexHookProbeOptions{
 		PayloadDir:       dir,

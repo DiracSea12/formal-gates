@@ -19,51 +19,32 @@ var requiredFiles = []string{
 	"go.mod",
 	".github/workflows/portable-validation.yml",
 	"cmd/formal-gates/main.go",
-	"cmd/formal-gates-validate/main.go",
 	"internal/cli/cli.go",
-	"internal/validate/compose.go",
-	"internal/validate/dispatch_prompt.go",
-	"internal/validate/gate_state.go",
-	"internal/validate/policy.go",
-	"internal/validate/evidence.go",
+	"internal/validate/catalog.go",
+	"internal/validate/runner.go",
+	"internal/validate/runstate.go",
 	"internal/validate/install.go",
 	"internal/validate/behavior.go",
-	"internal/validate/receipt.go",
 	"internal/validate/workflow.go",
 	"internal/validate/canary.go",
 	"internal/validate/codex_hook_canary.go",
-	"internal/validate/handoff.go",
-	"internal/validate/static_compose.go",
-	"agents/requirements-clarification-gate.md",
-	"agents/qa-test-gate.md",
-	"agents/complexity-gate.md",
-	"agents/development-worker.md",
-	"agents/architecture-health-gate.md",
-	"agents/code-quality-gate.md",
-	"agents/cold-water-review.md",
-	"agents/carry-forward-arbiter.md",
-	"references/requirements-clarification-gate.md",
-	"references/requirements-clarification-artifacts.md",
-	"references/requirement-document-adapters.md",
+	"internal/validate/hook.go",
+	"agents/openai.yaml",
+	"prompts/reviewer-base.md",
 	"references/install-and-hooks.md",
-	"references/qa-test-gate.md",
-	"references/complexity-gate.md",
-	"references/architecture-health-gate.md",
-	"references/code-quality-gate.md",
-	"references/post-development-artifacts.md",
-	"hooks/pollution-patterns.json",
-	"assets/showcase/no-evidence-no-pass.svg",
+	"references/local-validation.md",
+	"references/vcs-snapshots.md",
 	"examples/skill-behavior-prompts.json",
 	"examples/skill-behavior-answers.json",
-	"examples/sample-complexity-gate-artifact.md",
 }
 
 var requiredDirs = []string{
 	"agents",
+	"prompts",
+	"prompts/actions",
+	"gates",
 	"examples",
-	"hooks",
 	"bin",
-	"assets",
 	"cmd",
 	"internal",
 	"references",
@@ -118,9 +99,16 @@ func Package(root string) Result {
 	validateCI(root, &result)
 	validateBootstrapScripts(root, &result)
 	validateManifest(root, &result)
+	validatePromptCatalog(root, &result)
 	validateExamples(root, &result)
 	validateNoCoreScriptRuntime(root, &result)
 	return result
+}
+
+func validatePromptCatalog(root string, result *Result) {
+	if _, err := LoadPromptCatalog(root); err != nil {
+		result.add("prompts/gates", err.Error())
+	}
 }
 
 func validateNativeBinary(root string, result *Result) {
@@ -460,7 +448,7 @@ func validateManifest(root string, result *Result) {
 	if doc.Name != "formal-gates" {
 		result.add("formal-gates.manifest.json", "manifest name must be formal-gates")
 	}
-	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "assets/", "references/", "cmd/", "internal/", "hooks/", "agents/", "examples/"} {
+	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "agents/", "prompts/", "gates/", "examples/"} {
 		if !contains(doc.Parts, part) {
 			result.add("formal-gates.manifest.json", "package_parts missing "+part)
 		}
@@ -477,14 +465,8 @@ func validateManifest(root string, result *Result) {
 	if contains(doc.Commands, "go run ./cmd/formal-gates package validate --root .") {
 		result.add("formal-gates.manifest.json", "verification_commands must not use go run as the installed/package validation proof")
 	}
-	if !containsText(doc.Notes, "final-verification") {
-		result.add("formal-gates.manifest.json", "validation_notes must mention native final-verification foundation")
-	}
-	if !containsText(doc.Notes, "cleanup") {
-		result.add("formal-gates.manifest.json", "validation_notes must mention native cleanup foundation")
-	}
-	if !containsText(doc.Notes, "receipt foundation") {
-		result.add("formal-gates.manifest.json", "validation_notes must mention native receipt foundation")
+	if !containsText(doc.Notes, "prompt catalog") {
+		result.add("formal-gates.manifest.json", "validation_notes must mention the prompt catalog")
 	}
 	if !containsText(doc.Notes, "native install") {
 		result.add("formal-gates.manifest.json", "validation_notes must mention native install")
@@ -575,16 +557,6 @@ func validateExamples(root string, result *Result) {
 	} else if behaviorReport.Summary.Total == 0 || behaviorReport.Summary.Pass != behaviorReport.Summary.Total {
 		result.add("examples/skill-behavior-answers.json", fmt.Sprintf("behavior answers must pass every case; total=%d pass=%d pending=%d fail=%d", behaviorReport.Summary.Total, behaviorReport.Summary.Pass, behaviorReport.Summary.Pending, behaviorReport.Summary.Fail))
 	}
-
-	samplePath := filepath.Join(root, "examples", "sample-complexity-gate-artifact.md")
-	sample, err := readText(samplePath)
-	if err != nil {
-		result.add("examples/sample-complexity-gate-artifact.md", fmt.Sprintf("cannot read sample artifact: %v", err))
-		return
-	}
-	if !strings.Contains(sample, "Sample-only") {
-		result.add("examples/sample-complexity-gate-artifact.md", "sample artifact must clearly say it is not a formal PASS artifact")
-	}
 }
 
 func validateNoCoreScriptRuntime(root string, result *Result) {
@@ -592,7 +564,7 @@ func validateNoCoreScriptRuntime(root string, result *Result) {
 	if isDir(scriptDir) {
 		result.add("scripts", "core script runtime directory must not exist in the native package")
 	}
-	for _, rel := range []string{"hooks", "examples", "tests", "scripts"} {
+	for _, rel := range []string{"examples"} {
 		dir := filepath.Join(root, filepath.FromSlash(rel))
 		if !isDir(dir) {
 			continue
@@ -610,16 +582,6 @@ func validateNoCoreScriptRuntime(root string, result *Result) {
 			}
 			return nil
 		})
-	}
-	for _, rel := range []string{
-		"examples/package-validation-demo.ps1",
-		"tests/test-validate-dispatch-prompt.ps1",
-		"hooks/enforce-gate-sequence.ps1",
-		"hooks/capture-subagent-receipt.ps1",
-	} {
-		if isFile(filepath.Join(root, filepath.FromSlash(rel))) {
-			result.add(rel, "native package must not keep replaced script runtime file")
-		}
 	}
 }
 
