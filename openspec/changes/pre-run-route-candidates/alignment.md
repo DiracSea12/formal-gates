@@ -28,9 +28,8 @@ It SHALL not add another directory scanner, registry, manifest, or sort owner.
 
 The shared loader SHALL consider only direct `.md` files in `gates/` as gate
 candidates. It SHALL ignore unrelated non-Markdown files and ordinary
-subdirectories. A direct entry whose name ends in `.md` but is not a regular
-file SHALL remain invalid, as SHALL an invalid gate ID or the reserved
-`qa.md` name.
+subdirectories. A direct entry whose name ends in `.md` but is not a regular file
+SHALL remain invalid, as SHALL an invalid gate ID or the reserved `qa.md` name.
 
 ## RQ-003 - Existing workflow remains unchanged
 
