@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -534,10 +535,10 @@ func TestSharedReviewWavesIncludeInitialP2AndRerunQA(t *testing.T) {
 		}
 		next := "repair-" + string(rune('0'+repair))
 		state = advance(t, root, pkg, state, next)
-		if state.QAExecution.Status != "PENDING" {
-			t.Fatalf("QA was not reset for repair %d: %#v", repair, state.QAExecution)
+		if state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot == next {
+			t.Fatalf("prior QA PASS was not retained as non-authoritative for repair %d: %#v", repair, state.QAExecution)
 		}
-		state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "unaffected"}}, "", state.RequirementRevision, state.CatalogRevision, next, next)
+		state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "unaffected"}}, "", false, "", state.RequirementRevision, state.CatalogRevision, next, next)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -572,7 +573,7 @@ func TestIncompleteRepairVerificationBlocksNextDevelopmentPreparation(t *testing
 	}
 	state = advance(t, root, pkg, state, "repair-incomplete-snapshot")
 	var err error
-	state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "RERUN", Message: "affected"}}, "", state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "RERUN", Message: "affected"}}, "", false, "", state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,6 +782,103 @@ func TestCarryIncludesOnlyPreviouslyPassingSelectedGates(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "[Gate: architecture]") || strings.Contains(prompt, "[Gate: quality]") {
 		t.Fatalf("Carry prompt has wrong scope: %s", prompt)
+	}
+}
+
+func TestMainAgentCarryInheritsEveryPriorSelectedPass(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "main-carry", "full", nil)
+	state = recordQA(t, root, pkg, state, "PASS")
+	state = recordGate(t, root, pkg, state, "architecture", "PASS", []FindingInput{{Severity: "P2", Message: "retained recommendation"}})
+	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	prior := state.CurrentSnapshot
+	state = advance(t, root, pkg, state, "bounded-repair")
+	if state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != prior {
+		t.Fatalf("repair discarded prior QA PASS: %#v", state.QAExecution)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", state.CurrentSnapshot); err != nil {
+		t.Fatalf("retained prior QA PASS became authoritative for the repair: %v", err)
+	}
+
+	reason := "the immediate repair diff changes only the failed quality-owned path"
+	var err error
+	state, err = RecordCarry(root, pkg, state.RunID, nil, "", true, reason, "", "", "", state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"qa", "architecture"} {
+		carry := state.Carry[id]
+		if carry.Decision != "INHERIT" || carry.Origin != carryOriginMainShortcut || carry.SourceSnapshot != prior || carry.TargetSnapshot != state.CurrentSnapshot || carry.Message != reason {
+			t.Fatalf("main Carry audit for %s=%#v", id, carry)
+		}
+	}
+	if state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("QA PASS was not inherited: %#v", state.QAExecution)
+	}
+	architecture := state.Gates["architecture"]
+	if architecture.Status != "PASS" || architecture.Snapshot != state.CurrentSnapshot || architecture.SourceSnapshot != prior || len(architecture.Findings) != 1 {
+		t.Fatalf("gate PASS or findings were not inherited: %#v", architecture)
+	}
+	if quality := state.Gates["quality"]; quality.Status != "PENDING" || quality.Snapshot != "" {
+		t.Fatalf("non-PASS gate was inherited: %#v", quality)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "authoritative PASS") {
+		t.Fatalf("inherited QA PASS did not become authoritative: %v", err)
+	}
+}
+
+func TestMainAgentCarryRequiresReasonWithoutMutation(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "main-carry-reason", "custom", []string{"architecture", "quality"})
+	state = recordGate(t, root, pkg, state, "architecture", "PASS", nil)
+	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	state = advance(t, root, pkg, state, "repair")
+	before, err := os.ReadFile(RunStatePath(root, state.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordCarry(root, pkg, state.RunID, nil, "", true, " ", "", "", "", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "requires a reason") {
+		t.Fatalf("main-agent Carry without a reason was accepted: %v", err)
+	}
+	after, err := os.ReadFile(RunStatePath(root, state.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected main-agent Carry changed workflow state")
+	}
+}
+
+func TestIndependentCarryKeepsQAForRerunAndRecordsOrigin(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "independent-carry", "full", nil)
+	state = recordQA(t, root, pkg, state, "PASS")
+	state = recordGate(t, root, pkg, state, "architecture", "PASS", nil)
+	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	prior := state.CurrentSnapshot
+	state = advance(t, root, pkg, state, "uncertain-repair")
+	var err error
+	state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "independent comparison found no impact"}}, "", false, "", state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if carry := state.Carry["architecture"]; carry.Origin != carryOriginIndependent {
+		t.Fatalf("independent origin=%#v", carry)
+	}
+	if _, ok := state.Carry["qa"]; ok {
+		t.Fatalf("independent Carry decided QA: %#v", state.Carry)
+	}
+	if state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != prior {
+		t.Fatalf("independent Carry rebound QA: %#v", state.QAExecution)
 	}
 }
 

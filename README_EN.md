@@ -46,6 +46,13 @@ again. Prepared development tasks can be recomposed after normal interruption,
 while a recorded semantic PASS or FAIL remains authoritative for its immutable
 snapshot.
 
+After repair, the main agent inspects the immediate native repair diff. It may
+use `workflow carry --main-agent --main-reason '<reason>'` only when the repair
+cannot affect any previously passing selected verification; this inherits all
+prior PASS results, including QA. Shared behavior, configuration, dependencies,
+cross-gate ownership, or uncertain impact uses independent Carry as before,
+with QA rerun normally.
+
 ## Installation
 
 Build the native binary in the source checkout:
@@ -149,6 +156,10 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
 
 formal-gates workflow snapshot --root <repo> --package-root <package> \
   --run-id <id> --current-snapshot <new-current> --live-snapshot <new-current>
+
+formal-gates workflow carry --root <repo> --package-root <package> \
+  --run-id <id> --main-agent --main-reason '<bounded repair reason>' \
+  --live-snapshot <current>
 ```
 
 Use `formal-gates help` and `SKILL.md` for QA Execution, Carry, repair
@@ -163,8 +174,9 @@ formal-gates neither reads nor stores diff bytes and never copies project
 files. The worker, QA executor, and reviewers invoke the on-site VCS directly:
 
 - The total diff is base to current. Every fresh or rerun gate reviews it.
-- The repair diff is immediate pre-repair to current. Only Carry uses it to
-  decide which prior gate results remain valid.
+- The repair diff is immediate pre-repair to current. The main agent uses it
+  only for the all-PASS bounded-repair shortcut; otherwise independent Carry
+  decides which prior gate results remain valid.
 - A new delivery file, or an existing untracked delivery file in scope, must be
   added by explicit path before further edits. Never run `git add .` or touch
   unrelated untracked files.
