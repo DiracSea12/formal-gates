@@ -43,38 +43,66 @@ requested; omitted review stages are not backfilled during seal:
 
 1. **Start.** Select an external VCS, freeze its native base identity, and run
    `formal-gates workflow start`. No-VCS formal runs are unsupported.
-2. **Requirements.** Use `requirements-clarification` when meaning is not
-   already confirmed. Record the result, then bind the exact confirmed
-   requirement revision with `workflow requirement --confirmed`.
-3. **Before formal development.** Run the independent `start-readiness` action
-   and blind `qa-design` action. They may run in parallel after the requirement
-   is confirmed. Record all QA cases through `workflow qa-design`.
-4. **Development.** Prepare `development-worker` and dispatch a worker separate
-   from formal reviewers. Do not send it the QA cases. The worker implements
-   only the confirmed scope, adds each new or previously untracked delivery
-   path explicitly to the named VCS before continuing, and verifies the full
-   native base-to-current comparison before returning.
-5. **Fix the current snapshot.** Use the native VCS to create an immutable
+2. **Requirements.** The main agent uses `requirements-clarification`
+   interactively, one consequential decision at a time, and remains read-only
+   until the user confirms the outcome and consequential solution choices.
+   Record PASS, then bind the exact revision with `workflow requirement
+   --confirmed`. After a meaning-changing revision, QA Design receives every
+   prior case as unapproved review input and returns a revised complete
+   candidate set, retaining unaffected cases when impact is reliably bounded.
+3. **Route once.** Read `workflow route-candidates`, present QA first followed
+   by every discovered gate, and record one `none`, `full`, or `custom` route.
+   Custom omissions receive route skip authorization. Later additions require
+   explicit user direction; QA cannot be added after development begins.
+4. **Before formal development.** For `full` and `custom`, run
+   `start-readiness`; the `none` route omits it. Only when QA is selected, run
+   blind `qa-design`. These selected actions may run in parallel. Record the
+   complete candidate cases only through `workflow qa-design`, then dispatch
+   independent `qa-review`. PASS approves the cases and unlocks development.
+   FAIL retains them as unapproved rework input and returns to QA Design;
+   RUNTIME_ERROR retries QA Review without reopening design. This loop does
+   not consume post-development review waves.
+5. **Development.** Prepare `development-worker`; preparation records that
+   development started and freezes pre-development results and late QA routing.
+   After normal interruption, preparing the same PREPARED development or repair
+   task recomposes it without moving the recorded start boundary.
+   Dispatch a worker separate from formal reviewers. Do not send it the QA
+   cases. The worker implements only the confirmed scope, adds each new or
+   previously untracked delivery path explicitly to the named VCS before
+   continuing, and verifies the full native base-to-current comparison before
+   returning.
+6. **Fix the current snapshot.** Use the native VCS to create an immutable
    identity for the completed implementation and record it with `workflow
    snapshot`. Never send mutable working-tree state to review.
-6. **Post-development review, when requested.** Dispatch the user-selected
+7. **Post-development review.** Dispatch every selected
    combination of QA Execution and discovered gates. Selected independent
    actions may run in one parallel wave. QA receives the approved cases. Every
    selected gate receives the complete base-to-current VCS route and
    independently inspects that diff. Agents never write workflow state; the
-   orchestrator records returned semantic results.
-7. **Repair.** Before editing, freeze the current VCS identity. After the worker
+   orchestrator records returned semantic results. A semantic PASS or FAIL is
+   authoritative for its snapshot; only PENDING and RUNTIME_ERROR are retryable.
+8. **Repair.** A wave with QA FAIL or a P0/P1 gate finding returns to repair and
+   includes every P2 finding from that wave. Before editing, freeze the current
+   VCS identity. After the worker
    finishes, freeze the new identity and call `workflow snapshot`. Run independent
    `carry` against only the immediate pre-repair-to-current native comparison.
    Carry returns `INHERIT` or `RERUN` for every previously passing gate. Always
    rerun QA Execution; rerun only gates marked `RERUN`, and give each rerun gate
-   the complete base-to-current comparison.
-8. **Seal.** Confirm the live native VCS identity immediately before and after
-   aggregation. `workflow seal` requires the confirmed requirement and prompt
-   catalog to be unchanged, but it does not require QA, start-readiness, or any
-   gate to have run or passed. It records the current QA and gate statuses,
-   including pending or non-passing results, writes one retained summary, and
-   removes the run's temporary directory.
+   the complete base-to-current comparison. QA and every selected gate share
+   three completed review waves, counting the initial complete post-development
+   wave and every complete post-repair wave once. Incomplete or runtime-error
+   waves do not consume one. Additional waves require explicit user
+   authorization.
+9. **Seal.** Confirm the live native VCS identity immediately before and after
+   aggregation. Selected PENDING work blocks Seal. RUNTIME_ERROR requires an
+   explicit user skip, and QA FAIL or P0/P1 requires repair until the shared
+   limit is exhausted before a skip may be authorized. Route and Seal skips are
+   retained in the summary. Named Seal authorizations persist if another result
+   still blocks that attempt, apply only to the current snapshot, and clear on
+   a later repair snapshot. P2-only PASS recommendations remain visible but do
+   not block Seal. When a post-development addition makes an initial none route
+   non-empty, run deferred Start Readiness before preparing that gate or Seal;
+   retain the current immutable development snapshot.
 
 Use `workflow show` to inspect a run and `workflow resume` after interruption.
 An interrupted dispatch remains `PENDING`; preserve completed results. Use
@@ -105,6 +133,15 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt>
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --source <requirement-file> --confirmed
+# After Resume reports a changed revision, classify its semantic effect.
+formal-gates workflow requirement --root <repo> --package-root <package> \
+  --run-id <id> --meaning <preserved|changed>
+formal-gates workflow route-candidates --root <repo> --package-root <package> \
+  --run-id <id>
+formal-gates workflow route --root <repo> --package-root <package> \
+  --run-id <id> --mode <none|full|custom> [--gate <gate-id> ...]
+formal-gates workflow route-add --root <repo> --package-root <package> \
+  --run-id <id> --gate <gate-id>
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
@@ -112,13 +149,20 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt>
 
-# QA Design, then development worker.
+# QA Design, independent QA Review, then development worker.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-design
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --case '<description>' --procedure '<public procedure>' --oracle '<expected result>'
+formal-gates workflow prepare-action --root <repo> --package-root <package> \
+  --run-id <id> --action qa-review
+formal-gates workflow record-action --root <repo> --package-root <package> \
+  --run-id <id> --action qa-review --status <PASS|FAIL|RUNTIME_ERROR> \
+  --source-revision <revision-from-prepared-prompt> \
+  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
+  [--finding '<message>' --location '<path:line>']
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action development-worker --live-snapshot <current>
 
@@ -144,7 +188,8 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --source-snapshot <snapshot-from-prepared-prompt> \
-  --live-snapshot <current> [--finding '<message>' --location '<path:line>']
+  --live-snapshot <current> \
+  [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
 # After a repair snapshot, prepare and record Carry when prior PASS gates exist.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
@@ -155,9 +200,13 @@ formal-gates workflow carry --root <repo> --package-root <package> \
   --source-snapshot <snapshot-from-prepared-prompt> --live-snapshot <current> \
   --gate <gate-id> --decision <INHERIT|RERUN> --reason '<reason>'
 
-# Seal with any selected combination of review results, including none.
+formal-gates workflow authorize-repair --root <repo> --package-root <package> \
+  --run-id <id> --cycles 1
+
+# Seal only after every selected result passes or has permitted authorization.
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
-  --live-snapshot-before <current> --live-snapshot-after <current>
+  --live-snapshot-before <current> --live-snapshot-after <current> \
+  [--skip <selected-non-passing-gate> ...]
 ```
 
 Repeat `--case`, `--case-result`, findings, and Carry gate groups as needed.
@@ -167,11 +216,17 @@ results.
 
 ## Independent Dispatch
 
-For an action or gate, call `workflow prepare-action` or
-`workflow prepare-gate`, then send stdout as the complete task through the
-host's native independent-agent channel. Do not append chat history, findings,
-repair explanations, another reviewer's result, expected verdicts, or focus
-instructions.
+The main agent itself follows the prepared Requirements Clarification task.
+For an independently dispatched action or gate, call `workflow prepare-action`
+or `workflow prepare-gate`, then send stdout as the complete task through the
+host's native independent-agent channel. Send the development task only to the
+separate worker. Do not append chat history, findings, repair explanations,
+another reviewer's result, expected verdicts, or focus instructions.
+
+QA Review receives only the confirmed requirement and complete candidate case
+set assembled by the CLI. It must not inspect production implementation,
+implementation diffs, tests, developer explanations, later results, or another
+reviewer's conclusion.
 
 Every gate task is assembled in memory from exactly one shared
 `prompts/reviewer-base.md`, exactly one selected `gates/<gate-id>.md`, current
@@ -181,13 +236,13 @@ files are runtime errors and stop dispatch.
 
 An independent result is either:
 
-- `PASS` with no findings;
-- `FAIL` with one or more evidence-backed findings; or
+- `PASS` with no findings or only P2 findings;
+- `FAIL` with at least one P0/P1 finding and optional P2 findings; or
 - `RUNTIME_ERROR` when dispatch, context, VCS comparison, or result parsing
   fails.
 
-Runtime errors are not review findings. They remain visible in the run and seal
-summary but do not block seal. A reviewer must finish every safe in-scope check.
+Runtime errors are not review findings. They remain visible and require retry or
+explicit user skip authorization. A reviewer must finish every safe in-scope check.
 After finding a defect, it scans the whole current
 change for the same defect pattern and follows the same causal, behavioral,
 data, ownership, or dependency chain so one result reports the complete related
@@ -196,16 +251,18 @@ set instead of one symptom at a time. Advisory comments do not block PASS.
 Never hurry a reviewer. A status request may ask only for progress and must say
 to continue until all assigned checks are complete.
 
-## Review And Repair Limit
+## Review-Wave And Repair Limit
 
 The orchestrator validates findings against the confirmed scope, discards
-advisory or unsupported findings, groups one root cause once, and repairs all
-accepted findings from the same chain together. Each discovered gate gets at
-most three completed automatic review-repair cycles per delivery attempt. A
-cycle counts only after one complete independent result, accepted repairs, and
-re-verification. Dispatch failures and interrupted reviews do not count. After
-the third completed cycle for one gate, stop that gate and ask the user how to
-proceed; other gates keep their own counts.
+unsupported findings, groups one root cause once, and repairs all P0, P1, and
+P2 findings in a blocking wave together. QA and all selected gates share at
+most three completed automatic review waves per delivery attempt. The initial
+post-development wave and each post-repair wave count once after all required
+verification completes, regardless of semantic outcome. Each snapshot counts
+at most once. Dispatch failure, interruption, missing verification, PENDING,
+and RUNTIME_ERROR do not count. After exhaustion, present remaining blockers
+once; the user may authorize named Seal skips, additional repair, or a
+requirement change.
 
 ## Gate Files
 
@@ -215,8 +272,8 @@ files are sorted lexically. Adding a valid file and reinstalling adds a gate.
 Deleting it and reinstalling removes the gate. Do not add a gate registry,
 manifest, front matter, weight, dependency graph, or project-local overlay.
 
-QA, requirements clarification, start readiness, Carry, development, and seal
-are workflow actions, not gate files.
+QA Design, QA Review, QA Execution, requirements clarification, start
+readiness, Carry, development, and seal are workflow actions, not gate files.
 
 ## State And VCS
 

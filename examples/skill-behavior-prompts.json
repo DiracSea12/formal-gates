@@ -105,11 +105,11 @@
   },
   {
     "id": "FG-BEH-014",
-    "title": "Seal accepts any review combination",
-    "user_prompt": "Seal this run even though one installed gate has no result.",
-    "expected_behavior": "Allow seal without QA or gate PASS, retain the missing gate as PENDING, and still require the live VCS identity to match the current snapshot.",
-    "must_include": ["allow seal", "PENDING", "live VCS identity", "current snapshot"],
-    "must_avoid": ["require every gate to pass"]
+    "title": "QA Review gates development",
+    "user_prompt": "QA Design returned its complete candidate cases. Start formal development now.",
+    "expected_behavior": "Dispatch an independent QA Review with only the confirmed requirement and complete candidate cases; development remains blocked until it passes.",
+    "must_include": ["independent QA Review", "complete candidate cases", "development remains blocked"],
+    "must_avoid": ["start development before review"]
   },
   {
     "id": "FG-BEH-015",

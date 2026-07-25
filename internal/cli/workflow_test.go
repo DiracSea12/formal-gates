@@ -18,11 +18,24 @@ func TestCLIWorkflowStartPrepareRecordShow(t *testing.T) {
 		code := Run("formal-gates", args, IO{Stdout: &out, Stderr: &err})
 		return code, out.String(), err.String()
 	}
-	code, _, stderr := run("workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "cli-run", "--requirement", "requirements.md", "--confirmed", "--vcs", "git", "--base-snapshot", "base", "--current-snapshot", "current")
-	if code != 0 {
-		t.Fatalf("start failed: %s", stderr)
+	state := startCLIWorkflow(t, root, pkg, "cli-run")
+	var err error
+	state, err = validate.RecordAction(root, pkg, state.RunID, "start-readiness", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
 	}
-	state, err := validate.LoadRunState(root, "cli-run")
+	state, err = validate.RecordQADesign(root, pkg, state.RunID, []validate.QACaseInput{{Description: "behavior", Procedure: "exercise", Oracle: "observed"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.RecordAction(root, pkg, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validate.PrepareAction(root, pkg, state.RunID, "development-worker", "base"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.AdvanceSnapshot(root, pkg, state.RunID, "current", "current")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +43,7 @@ func TestCLIWorkflowStartPrepareRecordShow(t *testing.T) {
 	if code != 0 || !strings.Contains(prompt, "[Shared reviewer contract]") {
 		t.Fatalf("prepare failed code=%d err=%s prompt=%s", code, stderr, prompt)
 	}
-	code, _, stderr = run("workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", "cli-run", "--gate", "quality", "--status", "FAIL", "--finding", "broken behavior", "--location", "internal/x.go:10", "--source-revision", state.RequirementRevision, "--source-catalog-revision", state.CatalogRevision, "--source-snapshot", "current", "--live-snapshot", "current")
+	code, _, stderr = run("workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", "cli-run", "--gate", "quality", "--status", "FAIL", "--finding", "broken behavior", "--severity", "P1", "--location", "internal/x.go:10", "--source-revision", state.RequirementRevision, "--source-catalog-revision", state.CatalogRevision, "--source-snapshot", "current", "--live-snapshot", "current")
 	if code != 0 {
 		t.Fatalf("record failed: %s", stderr)
 	}
@@ -67,6 +80,55 @@ func TestCLIQADesignGeneratesCaseIDsAndRejectsMisorderedFields(t *testing.T) {
 	}
 }
 
+func TestCLIRouteCommandsExposeOrderedCandidatesAndPersistSelection(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "route-cli")
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"workflow", "route-candidates", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("route candidates failed: %s", stderr.String())
+	}
+	var candidates []string
+	if err := json.Unmarshal(stdout.Bytes(), &candidates); err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[0] != "qa" || candidates[1] != "quality" {
+		t.Fatalf("candidates=%v", candidates)
+	}
+	// startCLIWorkflow records a full route for parser setup; use a fresh run for route mutation.
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "custom-cli", "--requirement", "requirements.md", "--vcs", "git", "--base-snapshot", "base"}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("start failed: %s", stderr.String())
+	}
+	custom, err := validate.LoadRunState(root, "custom-cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom, err = validate.RecordAction(root, pkg, custom.RunID, "requirements-clarification", "PASS", "", nil, custom.RequirementRevision, custom.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom, err = validate.UpdateRequirement(root, pkg, custom.RunID, "", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", custom.RunID, "--mode", "custom", "--gate", "quality"}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("custom route failed: %s", stderr.String())
+	}
+	custom, err = validate.LoadRunState(root, custom.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom.RouteMode != "custom" || len(custom.SelectedGates) != 1 || custom.SelectedGates[0] != "quality" {
+		t.Fatalf("custom route=%#v", custom)
+	}
+}
+
 func TestCLIGroupedSemanticFieldsRejectDuplicatesWithoutStateMutation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -82,6 +144,7 @@ func TestCLIGroupedSemanticFieldsRejectDuplicatesWithoutStateMutation(t *testing
 		{name: "QA Execution oracle", command: "qa-execution", group: []string{"--case-result", "CASE-001"}, flag: "oracle-result"},
 		{name: "Carry decision", command: "carry", group: []string{"--gate", "quality"}, flag: "decision"},
 		{name: "Carry reason", command: "carry", group: []string{"--gate", "quality"}, flag: "reason"},
+		{name: "Gate finding severity", command: "record-gate", group: []string{"--finding", "problem"}, flag: "severity"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -132,7 +195,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	pkg := t.TempDir()
 	mustWriteCLI(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "shared contract\n")
-	for _, id := range []string{"requirements-clarification", "start-readiness", "qa-design", "qa-execution", "carry", "development-worker"} {
+	for _, id := range []string{"requirements-clarification", "start-readiness", "qa-design", "qa-review", "qa-execution", "carry", "development-worker"} {
 		mustWriteCLI(t, filepath.Join(pkg, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")
@@ -141,7 +204,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 func startCLIWorkflow(t *testing.T, root, pkg, id string) validate.RunState {
 	t.Helper()
 	var stderr bytes.Buffer
-	code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", id, "--requirement", "requirements.md", "--confirmed", "--vcs", "git", "--base-snapshot", "base", "--current-snapshot", "current"}, IO{Stderr: &stderr})
+	code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", id, "--requirement", "requirements.md", "--vcs", "git", "--base-snapshot", "base"}, IO{Stderr: &stderr})
 	if code != 0 {
 		t.Fatalf("start failed: %s", stderr.String())
 	}
@@ -149,6 +212,18 @@ func startCLIWorkflow(t *testing.T, root, pkg, id string) validate.RunState {
 		t.Fatal(err)
 	}
 	state, err := validate.LoadRunState(root, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.RecordAction(root, pkg, id, "requirements-clarification", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.UpdateRequirement(root, pkg, id, "", true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.SetRoute(root, pkg, id, "full", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

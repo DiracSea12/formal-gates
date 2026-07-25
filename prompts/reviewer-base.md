@@ -37,3 +37,11 @@ actions or common mistakes. Wording, naming, formatting, equivalent-design
 preferences, hypothetical risk, and unrequested hardening are advisory. If no
 in-scope blocker remains, PASS. Follow the result contract appended to this
 task exactly.
+
+Give every finding exactly one impact severity. `P0` means a systemic severe
+consequence or unusable core capability. `P1` means a confirmed requirement,
+acceptance, or architecture-boundary violation. `P2` means an improvement with
+no confirmed behavior violation. Return `PASS` with no findings or only P2
+findings, `FAIL` with at least one P0 or P1 finding and optional P2 findings, or
+`RUNTIME_ERROR` with no findings. Do not infer or discuss downstream blocking
+policy or remaining review waves; those belong to the orchestrator.
