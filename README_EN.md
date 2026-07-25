@@ -27,6 +27,9 @@ none, full, or custom selection from QA followed by the lexical gate list.
 
 QA is not part of the prompt-gate catalog. After development, selected QA
 Execution and review gates may run in one parallel wave.
+Start Readiness runs for full and custom routes and is omitted by the none
+route. Preparing the development worker freezes pre-development results and
+prevents QA from being added after development starts.
 
 ## Installation
 

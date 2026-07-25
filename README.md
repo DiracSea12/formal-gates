@@ -22,6 +22,8 @@ review 和小改动不会自动进入这套流程。
 
 QA 不属于提示词门目录。开发完成后，用户选择的 QA Execution 和审查门可以
 在同一批次并行执行。
+full 和 custom 路由运行 Start Readiness，none 路由省略它。准备 development
+worker 时即冻结开发前结果，并禁止在开发开始后再加入 QA。
 
 ## 安装
 

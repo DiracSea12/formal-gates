@@ -66,6 +66,19 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "base"); err != nil {
 		t.Fatalf("non-QA development was blocked by absent QA cases: %v", err)
 	}
+	prepared, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Actions["development-worker"].Status != developmentPrepared {
+		t.Fatalf("development preparation was not persisted: %#v", prepared.Actions["development-worker"])
+	}
+	if _, err := AddRouteGates(root, pkg, state.RunID, []string{"qa"}); err == nil || !strings.Contains(err.Error(), "after development") {
+		t.Fatalf("QA was added after worker preparation: %v", err)
+	}
+	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err == nil || !strings.Contains(err.Error(), "before development") {
+		t.Fatalf("Start Readiness was replaced after worker preparation: %v", err)
+	}
 	state = advance(t, root, pkg, state, "delivery")
 	if _, err := PrepareGate(root, pkg, state.RunID, "architecture", "delivery"); err == nil || !strings.Contains(err.Error(), "not selected") {
 		t.Fatalf("unselected gate was prepared: %v", err)
@@ -73,15 +86,31 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	if _, err := RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "late", Procedure: "late", Oracle: "late"}}, "", state.RequirementRevision, state.CatalogRevision); err == nil || !strings.Contains(err.Error(), "not selected") {
 		t.Fatalf("unselected QA Design was recorded: %v", err)
 	}
-	if _, err := AddRouteGates(root, pkg, state.RunID, []string{"qa"}); err == nil || !strings.Contains(err.Error(), "after development") {
-		t.Fatalf("late QA addition was accepted: %v", err)
-	}
-	state, err := AddRouteGates(root, pkg, state.RunID, []string{"architecture"})
+	state, err = AddRouteGates(root, pkg, state.RunID, []string{"architecture"})
 	if err != nil {
 		t.Fatalf("post-development gate addition was rejected: %v", err)
 	}
 	if !reflect.DeepEqual(state.SelectedGates, []string{"architecture", "quality"}) {
 		t.Fatalf("added route order=%v", state.SelectedGates)
+	}
+
+	qa := beginRoute(t, root, pkg, "direct-qa", "full", nil)
+	qa = recordReadiness(t, root, pkg, qa)
+	qa, err = RecordQADesign(root, pkg, qa.RunID, []QACaseInput{{Description: "behavior", Procedure: "exercise", Oracle: "observed"}}, "", qa.RequirementRevision, qa.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdvanceSnapshot(root, pkg, qa.RunID, "bypass", "bypass"); err == nil || !strings.Contains(err.Error(), "must be prepared") {
+		t.Fatalf("snapshot bypassed development preparation: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordQADesign(root, pkg, qa.RunID, []QACaseInput{{Description: "replacement", Procedure: "replace", Oracle: "changed"}}, "", qa.RequirementRevision, qa.CatalogRevision); err == nil || !strings.Contains(err.Error(), "before development") {
+		t.Fatalf("QA Design was replaced after worker preparation: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base"); err == nil || !strings.Contains(err.Error(), "already prepared") {
+		t.Fatalf("development worker was prepared twice: %v", err)
 	}
 }
 
@@ -170,6 +199,11 @@ func TestSharedRepairCyclesIncludeP2AndRerunQA(t *testing.T) {
 		t.Fatalf("repair prompt omitted wave findings: %s", prompt)
 	}
 	for cycle := 1; cycle <= automaticRepairLimit; cycle++ {
+		if cycle > 1 {
+			if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+				t.Fatal(err)
+			}
+		}
 		next := "repair-" + string(rune('0'+cycle))
 		state = advance(t, root, pkg, state, next)
 		if state.QAExecution.Status != "PENDING" {
@@ -200,6 +234,40 @@ func TestSharedRepairCyclesIncludeP2AndRerunQA(t *testing.T) {
 	}
 }
 
+func TestIncompleteRepairVerificationBlocksNextDevelopmentPreparation(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "repair-incomplete", "custom", []string{"architecture", "quality"})
+	state = recordGate(t, root, pkg, state, "architecture", "PASS", nil)
+	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	state = advance(t, root, pkg, state, "repair-incomplete-snapshot")
+	var err error
+	state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "RERUN", Message: "affected"}}, "", state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordGate(root, pkg, state.RunID, "architecture", "RUNTIME_ERROR", "review unavailable", nil, state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "still failing"}})
+	if state.PreRepairSnapshot == "" || state.CompletedRepairCycles != 0 {
+		t.Fatalf("incomplete verification was treated as completed: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "still requires verification") {
+		t.Fatalf("incomplete repair admitted another worker: %v", err)
+	}
+	unchanged, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("rejected preparation changed development state: %#v", unchanged.Actions["development-worker"])
+	}
+}
+
 func TestRuntimeAndPendingResultsRequireExplicitSealResolution(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	pending := readyDelivery(t, root, pkg, "pending-seal", "custom", []string{"quality"})
@@ -224,6 +292,9 @@ func TestRuntimeAndPendingResultsRequireExplicitSealResolution(t *testing.T) {
 	}
 	repaired := readyDelivery(t, root, pkg, "repair-runtime-seal", "custom", []string{"quality"})
 	repaired = recordGate(t, root, pkg, repaired, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if _, err := PrepareAction(root, pkg, repaired.RunID, "development-worker", repaired.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
 	repaired = advance(t, root, pkg, repaired, "runtime-repair")
 	repaired, err = RecordGate(root, pkg, repaired.RunID, "quality", "RUNTIME_ERROR", "review unavailable", nil, repaired.RequirementRevision, repaired.CatalogRevision, repaired.CurrentSnapshot, repaired.CurrentSnapshot)
 	if err != nil {
@@ -231,6 +302,9 @@ func TestRuntimeAndPendingResultsRequireExplicitSealResolution(t *testing.T) {
 	}
 	if repaired.CompletedRepairCycles != 0 || repaired.PreRepairSnapshot == "" {
 		t.Fatalf("runtime wave consumed or forgot its repair: %#v", repaired)
+	}
+	if _, err := PrepareAction(root, pkg, repaired.RunID, "development-worker", repaired.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "still requires verification") {
+		t.Fatalf("incomplete repair admitted another worker: %v", err)
 	}
 	if _, err := Seal(root, pkg, repaired.RunID, repaired.CurrentSnapshot, repaired.CurrentSnapshot, []string{"quality"}); err != nil {
 		t.Fatalf("repaired runtime result could not be explicitly skipped: %v", err)
@@ -245,6 +319,9 @@ func TestBlockingSealSkipWaitsForSharedLimit(t *testing.T) {
 		t.Fatalf("early blocker skip was accepted: %v", err)
 	}
 	for cycle := 1; cycle <= automaticRepairLimit; cycle++ {
+		if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+			t.Fatal(err)
+		}
 		next := "seal-repair-" + string(rune('0'+cycle))
 		state = advance(t, root, pkg, state, next)
 		state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
@@ -261,6 +338,12 @@ func TestBlockingSealSkipWaitsForSharedLimit(t *testing.T) {
 func TestNoneRouteSealsAfterDevelopmentAndRetainsRouteSkips(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "none-route", "none", nil)
+	if state.Actions["start-readiness"].Status != "PENDING" {
+		t.Fatalf("none route ran Start Readiness: %#v", state.Actions["start-readiness"])
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", ""); err == nil || !strings.Contains(err.Error(), "omitted") {
+		t.Fatalf("none route admitted Start Readiness: %v", err)
+	}
 	summary, err := Seal(root, pkg, state.RunID, "delivery", "delivery", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -275,6 +358,9 @@ func TestCarryIncludesOnlyPreviouslyPassingSelectedGates(t *testing.T) {
 	state := readyDelivery(t, root, pkg, "carry-scope", "custom", []string{"architecture", "quality"})
 	state = recordGate(t, root, pkg, state, "architecture", "PASS", nil)
 	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
 	state = advance(t, root, pkg, state, "repair")
 	if got := eligibleCarryGates(state); !reflect.DeepEqual(got, []string{"architecture"}) {
 		t.Fatalf("Carry gates=%v", got)
@@ -411,13 +497,18 @@ func recordClarificationAndConfirm(t *testing.T, root, pkg string, state RunStat
 func readyDelivery(t *testing.T, root, pkg, id, mode string, selected []string) RunState {
 	t.Helper()
 	state := beginRoute(t, root, pkg, id, mode, selected)
-	state = recordReadiness(t, root, pkg, state)
+	if mode != "none" {
+		state = recordReadiness(t, root, pkg, state)
+	}
 	if isSelected(state, "qa") {
 		var err error
 		state, err = RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "behavior", Procedure: "exercise", Oracle: "observed"}}, "", state.RequirementRevision, state.CatalogRevision)
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
 	}
 	return advance(t, root, pkg, state, "delivery")
 }

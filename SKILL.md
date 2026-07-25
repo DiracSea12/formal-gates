@@ -52,14 +52,17 @@ requested; omitted review stages are not backfilled during seal:
    by every discovered gate, and record one `none`, `full`, or `custom` route.
    Custom omissions receive route skip authorization. Later additions require
    explicit user direction; QA cannot be added after development begins.
-4. **Before formal development.** Run `start-readiness` and, only when QA is
-   selected, blind `qa-design`. They may run in parallel. Record QA cases only
-   through `workflow qa-design`.
-5. **Development.** Prepare `development-worker` and dispatch a worker separate
-   from formal reviewers. Do not send it the QA cases. The worker implements
-   only the confirmed scope, adds each new or previously untracked delivery
-   path explicitly to the named VCS before continuing, and verifies the full
-   native base-to-current comparison before returning.
+4. **Before formal development.** For `full` and `custom`, run
+   `start-readiness`; the `none` route omits it. Only when QA is selected, run
+   blind `qa-design`. These selected actions may run in parallel. Record QA
+   cases only through `workflow qa-design`.
+5. **Development.** Prepare `development-worker`; preparation records that
+   development started and freezes pre-development results and late QA routing.
+   Dispatch a worker separate from formal reviewers. Do not send it the QA
+   cases. The worker implements only the confirmed scope, adds each new or
+   previously untracked delivery path explicitly to the named VCS before
+   continuing, and verifies the full native base-to-current comparison before
+   returning.
 6. **Fix the current snapshot.** Use the native VCS to create an immutable
    identity for the completed implementation and record it with `workflow
    snapshot`. Never send mutable working-tree state to review.

@@ -31,6 +31,13 @@ type CarryInput struct{ GateID, Decision, Message string }
 const formalFlow = "formal"
 const automaticRepairLimit = 3
 
+const (
+	developmentPending        = "PENDING"
+	developmentPrepared       = "PREPARED"
+	developmentRepairPrepared = "REPAIR_PREPARED"
+	developmentComplete       = "PASS"
+)
+
 var routeModes = map[string]bool{"none": true, "full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
@@ -244,7 +251,7 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 			if chosen[id] {
 				return fmt.Errorf("gate %q is already selected", id)
 			}
-			if id == "qa" && state.Actions["development-worker"].Status == "PASS" {
+			if id == "qa" && developmentStarted(*state) {
 				return fmt.Errorf("QA cannot be added after development begins")
 			}
 			chosen[id] = true
@@ -284,6 +291,9 @@ func PrepareGate(root, packageRoot, runID, gateID, liveSnapshot string) (string,
 }
 
 func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (string, error) {
+	if actionID == "development-worker" {
+		return prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot)
+	}
 	state, err := LoadRunState(root, runID)
 	if err != nil {
 		return "", err
@@ -295,7 +305,7 @@ func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (str
 	if err != nil {
 		return "", err
 	}
-	if actionID == "qa-execution" || actionID == "carry" || actionID == "development-worker" {
+	if actionID == "qa-execution" || actionID == "carry" {
 		if err := requireLiveSnapshot(state, liveSnapshot); err != nil {
 			return "", err
 		}
@@ -325,10 +335,40 @@ func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (str
 			lines = append(lines, fmt.Sprintf("\n[Gate: %s]\n%s", id, gate.Content))
 		}
 		detail = strings.Join(lines, "\n")
-	} else if actionID == "development-worker" && state.Actions["development-worker"].Status == "PASS" {
-		detail = repairInput(state)
 	}
 	return ComposeActionPrompt(catalog, actionID, routeForState(root, state), detail)
+}
+
+func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (string, error) {
+	prompt := ""
+	_, err := mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+			return err
+		}
+		if err := requireTransition(*state, "development-worker", ""); err != nil {
+			return err
+		}
+		detail := ""
+		status := state.Actions["development-worker"].Status
+		if status == developmentComplete {
+			detail = repairInput(*state)
+		}
+		prompt, err = ComposeActionPrompt(catalog, "development-worker", routeForState(root, *state), detail)
+		if err != nil {
+			return err
+		}
+		if status == developmentComplete {
+			state.Actions["development-worker"] = ActionResult{Status: developmentRepairPrepared}
+		} else {
+			state.Actions["development-worker"] = ActionResult{Status: developmentPrepared}
+		}
+		return nil
+	})
+	return prompt, err
 }
 
 func RecordAction(root, packageRoot, runID, actionID, status, message string, findings []FindingInput, sourceRevision, sourceCatalogRevision string) (RunState, error) {
@@ -518,9 +558,9 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 			return err
 		}
 		oldSnapshot := state.CurrentSnapshot
-		isRepair := state.Actions["development-worker"].Status == "PASS"
+		isRepair := state.Actions["development-worker"].Status == developmentRepairPrepared
 		state.CurrentSnapshot = currentSnapshot
-		state.Actions["development-worker"] = ActionResult{Status: "PASS"}
+		state.Actions["development-worker"] = ActionResult{Status: developmentComplete}
 		if isRepair {
 			state.PreRepairSnapshot = oldSnapshot
 		} else {
@@ -986,24 +1026,34 @@ func requireTransition(state RunState, operation, target string) error {
 	case "route-add":
 		return nil
 	case "start-readiness":
-		if state.Actions["development-worker"].Status == "PASS" {
+		if state.RouteMode == "none" {
+			return fmt.Errorf("Start Readiness is omitted for the none route")
+		}
+		if developmentStarted(state) {
 			return fmt.Errorf("Start Readiness must be recorded before development")
 		}
 	case "qa-design":
 		if !isSelected(state, "qa") {
 			return fmt.Errorf("QA is not selected")
 		}
-		if state.Actions["development-worker"].Status == "PASS" {
+		if developmentStarted(state) {
 			return fmt.Errorf("QA Design must be recorded before development")
 		}
 	case "development-worker":
-		if state.Actions["start-readiness"].Status != "PASS" {
+		developmentStatus := state.Actions["development-worker"].Status
+		if developmentStatus != developmentPending && developmentStatus != developmentComplete {
+			return fmt.Errorf("development worker is already prepared")
+		}
+		if state.RouteMode != "none" && state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before development")
 		}
 		if isSelected(state, "qa") && state.Actions["qa-design"].Status != "PASS" {
 			return fmt.Errorf("approved QA cases are required before development starts")
 		}
-		if state.Actions["development-worker"].Status == "PASS" {
+		if developmentStatus == developmentComplete {
+			if state.PreRepairSnapshot != "" {
+				return fmt.Errorf("the current repair still requires verification")
+			}
 			if !reviewWaveRecorded(state) {
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
@@ -1015,7 +1065,11 @@ func requireTransition(state RunState, operation, target string) error {
 			}
 		}
 	case "snapshot":
-		if state.Actions["start-readiness"].Status != "PASS" {
+		developmentStatus := state.Actions["development-worker"].Status
+		if developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
+			return fmt.Errorf("development worker must be prepared before a snapshot")
+		}
+		if state.RouteMode != "none" && state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
 		if isSelected(state, "qa") && state.Actions["qa-design"].Status != "PASS" {
@@ -1024,7 +1078,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if state.PreRepairSnapshot != "" {
 			return fmt.Errorf("the current repair still requires verification")
 		}
-		if state.Actions["development-worker"].Status == "PASS" {
+		if developmentStatus == developmentRepairPrepared {
 			if !reviewWaveRecorded(state) {
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
@@ -1039,7 +1093,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if !isSelected(state, "qa") {
 			return fmt.Errorf("QA is not selected")
 		}
-		if state.Actions["development-worker"].Status != "PASS" {
+		if state.Actions["development-worker"].Status != developmentComplete {
 			return fmt.Errorf("an immutable development snapshot is required before QA Execution")
 		}
 		if state.Actions["qa-design"].Status != "PASS" {
@@ -1049,15 +1103,15 @@ func requireTransition(state RunState, operation, target string) error {
 		if !isSelected(state, target) {
 			return fmt.Errorf("gate %q is not selected", target)
 		}
-		if state.Actions["development-worker"].Status != "PASS" {
+		if state.Actions["development-worker"].Status != developmentComplete {
 			return fmt.Errorf("an immutable development snapshot is required before post-development review")
 		}
 	case "carry":
-		if state.Actions["development-worker"].Status != "PASS" || state.PreRepairSnapshot == "" {
+		if state.Actions["development-worker"].Status != developmentComplete || state.PreRepairSnapshot == "" {
 			return fmt.Errorf("a repaired immutable snapshot is required before Carry")
 		}
 	case "seal":
-		if state.Actions["development-worker"].Status != "PASS" {
+		if state.Actions["development-worker"].Status != developmentComplete {
 			return fmt.Errorf("an immutable development snapshot is required before Seal")
 		}
 		if err := requireSelectedResultsResolved(state); err != nil {
@@ -1067,6 +1121,10 @@ func requireTransition(state RunState, operation, target string) error {
 		return fmt.Errorf("unknown workflow transition %q", operation)
 	}
 	return nil
+}
+
+func developmentStarted(state RunState) bool {
+	return state.Actions["development-worker"].Status != developmentPending
 }
 
 func normalizeSelected(values, candidates []string) ([]string, error) {

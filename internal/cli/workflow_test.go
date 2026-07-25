@@ -28,6 +28,9 @@ func TestCLIWorkflowStartPrepareRecordShow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := validate.PrepareAction(root, pkg, state.RunID, "development-worker", "base"); err != nil {
+		t.Fatal(err)
+	}
 	state, err = validate.AdvanceSnapshot(root, pkg, state.RunID, "current", "current")
 	if err != nil {
 		t.Fatal(err)
