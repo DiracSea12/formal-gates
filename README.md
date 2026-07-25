@@ -35,6 +35,11 @@ Design 在影响边界明确时保留不受影响的用例，无法可靠确定�
 用例集，并重新经过独立 QA Review。正常中断后可以重新生成已准备的
 development 任务；不可变快照上已记录的语义 PASS 或 FAIL 仍为权威结果。
 
+返修后，主代理检查原生 VCS 的本轮返修 diff。只有能确定返修不会影响任何
+此前已通过的已选验证时，才可执行 `workflow carry --main-agent --main-reason
+'<reason>'`，一次继承包括 QA 在内的所有先前 PASS。涉及共享行为、配置、
+依赖、跨门职责或影响链不确定时，仍按原流程使用独立 Carry，并正常重跑 QA。
+
 ## 安装
 
 先在源码目录构建本机二进制：
@@ -123,6 +128,10 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
 
 formal-gates workflow snapshot --root <repo> --package-root <package> \
   --run-id <id> --current-snapshot <new-current> --live-snapshot <new-current>
+
+formal-gates workflow carry --root <repo> --package-root <package> \
+  --run-id <id> --main-agent --main-reason '<bounded repair reason>' \
+  --live-snapshot <current>
 ```
 
 QA Execution、Carry、额外返修授权和 Seal 的参数以 `formal-gates help` 及
@@ -136,8 +145,8 @@ formal-gates 不读取或保存 diff 内容，也不复制项目文件。worker�
 reviewer 直接运行现场 VCS：
 
 - 总 diff：开发前 base 到当前 snapshot，所有新跑或重跑的门都看它。
-- 本轮返修 diff：返修前 snapshot 到当前 snapshot，只给 Carry 判断哪些门
-  可以沿用。
+- 本轮返修 diff：返修前 snapshot 到当前 snapshot。主代理只用它判断能否走
+  一次继承全部 PASS 的小返修捷径；否则交给独立 Carry 判断哪些门可以沿用。
 - 新建文件或原本未跟踪但属于本次交付的文件，worker 必须先按路径加入 VCS，
   再继续修改；不要执行 `git add .` 或触碰无关未跟踪文件。
 

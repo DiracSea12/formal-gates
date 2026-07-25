@@ -352,6 +352,8 @@ func runCarry(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
 	runtimeError := fs.String("runtime-error", "", "Carry runtime error")
+	mainAgent := fs.Bool("main-agent", false, "inherit every prior PASS without independent Carry")
+	mainReason := fs.String("main-reason", "", "main-agent reason from the immediate repair comparison")
 	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
 	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
 	sourceSnapshot := fs.String("source-snapshot", "", "current snapshot from the prepared prompt")
@@ -363,7 +365,7 @@ func runCarry(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordCarry(*root, *pkg, *runID, decisions, *runtimeError, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
+	state, err := validate.RecordCarry(*root, *pkg, *runID, decisions, *runtimeError, *mainAgent, *mainReason, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
 	return printValue(streams.Stdout, state, err)
 }
 

@@ -73,11 +73,11 @@
   },
   {
     "id": "FG-BEH-010",
-    "title": "Carry sees only the immediate repair diff",
-    "user_prompt": "A repair changed the current snapshot after two gates passed.",
+    "title": "Uncertain repairs use independent Carry",
+    "user_prompt": "A repair changed shared configuration after two gates passed.",
     "expected_behavior": "Run independent Carry on the immediate pre-repair-to-current native VCS comparison and decide INHERIT or RERUN for every prior passing selected discovered gate.",
     "must_include": ["immediate pre-repair-to-current", "native VCS", "INHERIT or RERUN", "every prior passing selected discovered gate"],
-    "must_avoid": ["reuse every PASS automatically"]
+    "must_avoid": ["main-agent shortcut"]
   },
   {
     "id": "FG-BEH-011",
@@ -118,5 +118,13 @@
     "expected_behavior": "Block the formal run because no-VCS mode is unsupported; do not copy files or build a custom snapshot or diff system.",
     "must_include": ["no-VCS mode is unsupported", "do not copy files", "custom snapshot or diff system"],
     "must_avoid": ["implement a fallback"]
+  },
+  {
+    "id": "FG-BEH-016",
+    "title": "Bounded repair may inherit every PASS",
+    "user_prompt": "The immediate repair diff changes only a failed gate's private file and cannot affect any prior PASS.",
+    "expected_behavior": "The main agent may record a reasoned main-agent Carry decision that inherits every previously passing selected result, including QA; if any impact is uncertain, use independent Carry instead.",
+    "must_include": ["reasoned main-agent Carry", "every previously passing selected result", "including QA", "independent Carry"],
+    "must_avoid": ["fixed size threshold"]
   }
 ]
