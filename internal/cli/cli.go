@@ -110,14 +110,13 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		runID := fs.String("run-id", "", "optional run id")
 		flow := fs.String("flow", "formal", "workflow flow")
 		req := fs.String("requirement", "", "requirement source path")
-		confirmed := fs.Bool("confirmed", false, "mark the current requirement confirmed")
 		vcs := fs.String("vcs", "", "external VCS name")
 		base := fs.String("base-snapshot", "", "immutable base snapshot")
 		current := fs.String("current-snapshot", "", "immutable current snapshot")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementConfirmed: *confirmed, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *current})
+		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *current})
 		return printValue(streams.Stdout, state, err)
 	case "show":
 		fs := newFlagSet("workflow show", streams)
@@ -135,11 +134,11 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, invalidated, err := validate.Resume(*root, *pkg, *runID)
+		state, classificationRequired, err := validate.Resume(*root, *pkg, *runID)
 		if err != nil {
 			return 1, err
 		}
-		return printJSON(streams.Stdout, map[string]any{"invalidated": invalidated, "state": state})
+		return printJSON(streams.Stdout, map[string]any{"classificationRequired": classificationRequired, "state": state})
 	case "abort":
 		fs := newFlagSet("workflow abort", streams)
 		root := fs.String("root", ".", "repository root")
@@ -155,10 +154,43 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		runID := fs.String("run-id", "", "run id")
 		source := fs.String("source", "", "requirement source path; defaults to the current source")
 		confirmed := fs.Bool("confirmed", false, "mark this exact requirement revision confirmed")
+		meaning := fs.String("meaning", "", "semantic effect for a changed revision: preserved or changed")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed)
+		state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning)
+		return printValue(streams.Stdout, state, err)
+	case "route-candidates":
+		fs := newFlagSet("workflow route-candidates", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		candidates, err := validate.RouteCandidates(*root, *pkg, *runID)
+		return printValue(streams.Stdout, candidates, err)
+	case "route":
+		fs := newFlagSet("workflow route", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		mode := fs.String("mode", "", "none, full, or custom")
+		gates := stringListFlag{}
+		fs.Var(&gates, "gate", "selected gate id; repeat for custom route")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.SetRoute(*root, *pkg, *runID, *mode, gates)
+		return printValue(streams.Stdout, state, err)
+	case "route-add":
+		fs := newFlagSet("workflow route-add", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		gates := stringListFlag{}
+		fs.Var(&gates, "gate", "gate id to add; repeat as needed")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.AddRouteGates(*root, *pkg, *runID, gates)
 		return printValue(streams.Stdout, state, err)
 	case "prepare-gate":
 		fs := newFlagSet("workflow prepare-gate", streams)
@@ -211,16 +243,28 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		return printValue(streams.Stdout, state, err)
 	case "carry":
 		return runCarry(args, streams)
+	case "authorize-repair":
+		fs := newFlagSet("workflow authorize-repair", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		cycles := fs.Int("cycles", 1, "additional user-authorized repair cycles")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.AuthorizeExtraRepair(*root, *pkg, *runID, *cycles)
+		return printValue(streams.Stdout, state, err)
 	case "seal":
 		fs := newFlagSet("workflow seal", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		before := fs.String("live-snapshot-before", "", "native VCS identity immediately before aggregation")
 		after := fs.String("live-snapshot-after", "", "native VCS identity immediately after aggregation")
+		skips := stringListFlag{}
+		fs.Var(&skips, "skip", "selected non-passing gate explicitly authorized to skip")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		summary, err := validate.Seal(*root, *pkg, *runID, *before, *after)
+		summary, err := validate.Seal(*root, *pkg, *runID, *before, *after, skips)
 		return printValue(streams.Stdout, summary, err)
 	default:
 		return 1, fmt.Errorf("unknown workflow subcommand: %s", sub)
@@ -454,11 +498,35 @@ func (f *findingLocation) Set(v string) error {
 	(*f.items)[last].Locations = append((*f.items)[last].Locations, v)
 	return nil
 }
+
+type findingSeverity struct{ items *[]validate.FindingInput }
+
+func (f *findingSeverity) String() string { return "" }
+func (f *findingSeverity) Set(v string) error {
+	if len(*f.items) == 0 {
+		return fmt.Errorf("--severity must follow --finding")
+	}
+	last := len(*f.items) - 1
+	if (*f.items)[last].Severity != "" {
+		return fmt.Errorf("duplicate --severity for current finding")
+	}
+	(*f.items)[last].Severity = v
+	return nil
+}
 func newFindingFlags(fs *flag.FlagSet) *[]validate.FindingInput {
 	items := []validate.FindingInput{}
 	fs.Var(&findingStart{&items}, "finding", "start a finding with its message")
+	fs.Var(&findingSeverity{&items}, "severity", "P0, P1, or P2 for the current gate finding")
 	fs.Var(&findingLocation{&items}, "location", "repository location for the current finding")
 	return &items
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
 }
 
 type caseStart struct{ cases *[]validate.QACaseInput }
@@ -623,5 +691,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate\n  install\n  workflow start|show|resume|abort|requirement|prepare-gate|prepare-action|record-action|record-gate|qa-design|qa-execution|snapshot|carry|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|record-action|record-gate|qa-design|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
 }

@@ -22,8 +22,8 @@ automatically.
 
 Adding or removing a valid `gates/*.md` file and reinstalling adds or removes a
 gate. There is no Go registry, gate manifest, YAML front matter, weight,
-dependency graph, or ordering table. Gates run in lexical filename order, and
-the user may run any selection of gates or none.
+dependency graph, or ordering table. After clarification, the user makes one
+none, full, or custom selection from QA followed by the lexical gate list.
 
 QA is not part of the prompt-gate catalog. After development, selected QA
 Execution and review gates may run in one parallel wave.
@@ -69,8 +69,9 @@ formal-gates workflow resume --root <repo> --package-root <installed-formal-gate
 formal-gates workflow abort --root <repo> --run-id <id>
 ```
 
-Prompt preparation writes the complete task to stdout. Send stdout verbatim to
-an independent agent; do not append chat history, prior conclusions, or another
+Prompt preparation writes the complete task to stdout. The main agent follows
+Requirements Clarification itself; send independently dispatched action and gate
+tasks verbatim without appending chat history, prior conclusions, or another
 gate's result:
 
 ```bash
@@ -88,6 +89,11 @@ Record semantic results:
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --source <requirement-file> --confirmed
 
+formal-gates workflow route-candidates --root <repo> --package-root <package> \
+  --run-id <id>
+formal-gates workflow route --root <repo> --package-root <package> \
+  --run-id <id> --mode <none|full|custom> [--gate <gate-id> ...]
+
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --status PASS \
   --source-revision <revision-from-prepared-prompt> \
@@ -103,15 +109,17 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --source-snapshot <snapshot-from-prepared-prompt> \
-  --live-snapshot <current> [--finding '<message>' --location '<path:line>']
+  --live-snapshot <current> \
+  [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
 formal-gates workflow snapshot --root <repo> --package-root <package> \
   --run-id <id> --current-snapshot <new-current> --live-snapshot <new-current>
 ```
 
-Use `formal-gates help` and `SKILL.md` for QA Execution, Carry, and seal
-parameters. They record QA results, each gate's `INHERIT/RERUN` decision, and a
-summary of the results that currently exist.
+Use `formal-gates help` and `SKILL.md` for QA Execution, Carry, repair
+authorization, and Seal parameters. A changed requirement revision first needs
+`workflow requirement --meaning preserved|changed`; the CLI does not infer its
+semantic effect.
 
 ## Diffs And Repairs
 
@@ -130,11 +138,12 @@ P4 commands. Formal runs do not support a no-VCS worktree.
 
 ## Results And Interruption
 
-An independent gate returns `PASS`, `FAIL`, or `RUNTIME_ERROR`. A runtime error
-is not a reviewer finding. `PASS`, `FAIL`, `RUNTIME_ERROR`, and `PENDING` are
-retained as-is but do not block seal. If an agent is interrupted, its item
-remains `PENDING`; `resume` preserves completed results instead of rerunning
-everything.
+Every gate finding has P0, P1, or P2 impact. A gate returns `PASS` with no
+findings or P2-only recommendations, `FAIL` with at least one P0/P1 finding,
+or `RUNTIME_ERROR` with no findings. Selected `PENDING` work blocks Seal.
+Runtime errors require retry or explicit skip. QA FAIL and P0/P1 require repair
+until the shared three-cycle limit is exhausted before Seal skip is available.
+P2-only recommendations remain visible without blocking Seal.
 
 After successful seal or explicit abort, the CLI writes one summary and removes
 that run's entire temporary directory. It does not retain prompt copies,

@@ -16,10 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one retained seal or abort summary.
 - Run QA Execution and all discovered independent gates in parallel on the
   current native VCS snapshot.
+- Require adaptive requirement and consequential-solution alignment, then one
+  none, full, or custom route over QA and the dynamic gate catalog.
+- Classify changed requirement revisions explicitly as meaning-preserving or
+  meaning-changing before dependent state is preserved or invalidated.
+- Route P0/P1/P2 findings through one shared three-cycle repair limit, keep
+  Carry limited to previously passing selected gates, and persist route or Seal
+  skip authorization.
 - Use Git, SVN, P4, or another named VCS directly for cumulative and repair
   comparisons.
-- Let seal finalize a run with any selected combination of QA and gate results,
-  including none, without treating review completion or PASS as a prerequisite.
+- Reject Seal while selected work is pending or lacks a matching PASS or
+  permitted user skip authorization.
 
 ### Removed
 

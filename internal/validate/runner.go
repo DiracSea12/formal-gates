@@ -29,7 +29,7 @@ func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) 
 		fmt.Sprintf("[Gate: %s]\n%s", gate.ID, gate.Content),
 		fmt.Sprintf("[Current requirement]\nsource: %s\nrevision: %s\ncatalog revision: %s", route.RequirementSource, route.RequirementRevision, route.CatalogRevision),
 		fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s\nUse the named VCS directly to inspect the complete base-to-current comparison.", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot),
-		"[Result contract]\nReturn exactly one JSON object matching: {\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. PASS requires an empty findings array. FAIL requires at least one finding. RUNTIME_ERROR requires a non-empty message and an empty findings array. Do not add fields or Markdown fences.",
+		"[Result contract]\nReturn exactly one JSON object matching: {\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. PASS permits no findings or P2-only findings. FAIL requires at least one P0 or P1 finding and may include P2 findings. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Do not add fields or Markdown fences.",
 	}, "\n\n") + "\n", nil
 }
 
@@ -66,6 +66,8 @@ func actionResultContract(actionID string) string {
 		return "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
 	case "development-worker":
 		return "Perform the development action, track every delivery path in the named VCS before fixing the snapshot, and return the immutable current snapshot plus the delivery path names to the host. Do not return QA cases or a gate verdict."
+	case "requirements-clarification":
+		return "Return PASS only after the user confirms the requested outcome and consequential solution choices. Return FAIL with findings for unresolved consequential gaps, or a separate runtime error message."
 	default:
 		return "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding contains a message and optional repository-relative locations."
 	}

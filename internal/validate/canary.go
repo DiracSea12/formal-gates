@@ -80,28 +80,50 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err := os.WriteFile(requirement, []byte("confirmed behavior\n"), 0o600); err != nil {
 		return err
 	}
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", RequirementConfirmed: true, VCS: "git", BaseSnapshot: "base", CurrentSnapshot: "current"})
+	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", VCS: "git", BaseSnapshot: "base"})
+	if err != nil {
+		return err
+	}
+	if _, err := RecordAction(root, packageRoot, state.RunID, "requirements-clarification", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err != nil {
+		return err
+	}
+	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "")
+	if err != nil {
+		return err
+	}
+	state, err = SetRoute(root, packageRoot, state.RunID, "full", nil)
+	if err != nil {
+		return err
+	}
+	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		return err
+	}
+	state, err = RecordQADesign(root, packageRoot, state.RunID, []QACaseInput{{Description: "confirmed behavior", Procedure: "exercise it", Oracle: "it is observed"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		return err
+	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker", "base"); err != nil {
+		return err
+	}
+	state, err = AdvanceSnapshot(root, packageRoot, state.RunID, "current", "current")
 	if err != nil {
 		return err
 	}
 	if _, err := PrepareGate(root, packageRoot, state.RunID, catalog.Gates[0].ID, "current"); err != nil {
 		return err
 	}
-	if _, err := RecordAction(root, packageRoot, state.RunID, "start-readiness", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err != nil {
-		return err
-	}
-	if _, err := RecordQADesign(root, packageRoot, state.RunID, []QACaseInput{{Description: "confirmed behavior", Procedure: "exercise it", Oracle: "it is observed"}}, "", state.RequirementRevision, state.CatalogRevision); err != nil {
-		return err
-	}
-	if _, err := RecordQAExecution(root, packageRoot, state.RunID, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "exercised it", Observation: "observed", OracleResult: "matched"}}, "", state.RequirementRevision, state.CatalogRevision, "current", "current"); err != nil {
+	state, err = RecordQAExecution(root, packageRoot, state.RunID, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "exercised it", Observation: "observed", OracleResult: "matched"}}, "", state.RequirementRevision, state.CatalogRevision, "current", "current")
+	if err != nil {
 		return err
 	}
 	for _, gate := range catalog.Gates {
-		if _, err := RecordGate(root, packageRoot, state.RunID, gate.ID, "PASS", "", nil, state.RequirementRevision, state.CatalogRevision, "current", "current"); err != nil {
+		state, err = RecordGate(root, packageRoot, state.RunID, gate.ID, "PASS", "", nil, state.RequirementRevision, state.CatalogRevision, "current", "current")
+		if err != nil {
 			return err
 		}
 	}
-	_, err = Seal(root, packageRoot, state.RunID, "current", "current")
+	_, err = Seal(root, packageRoot, state.RunID, "current", "current", nil)
 	return err
 }
 

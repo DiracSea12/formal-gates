@@ -17,8 +17,8 @@ review 和小改动不会自动进入这套流程。
 - `.gates/results/<run-id>.json`：封板或中止后唯一保留的结果。
 
 增加或删除审查门只需增加或删除一个有效的 `gates/*.md` 文件并重新安装。
-不需要改 Go 注册表、manifest、YAML、权重、依赖关系或顺序表。门按文件名
-排序，用户可以选择运行任意门，也可以不运行门。
+不需要改 Go 注册表、manifest、YAML、权重、依赖关系或顺序表。需求对齐后，
+用户从“QA 优先、其余门按文件名排序”的列表中一次选择 none、full 或 custom。
 
 QA 不属于提示词门目录。开发完成后，用户选择的 QA Execution 和审查门可以
 在同一批次并行执行。
@@ -62,8 +62,9 @@ formal-gates workflow resume --root <repo> --package-root <installed-formal-gate
 formal-gates workflow abort --root <repo> --run-id <id>
 ```
 
-准备 AI 任务时，CLI 把完整提示词写到 stdout。把 stdout 原样交给独立
-代理，不要追加历史结论或其他门的结果：
+准备 AI 任务时，CLI 把完整提示词写到 stdout。Requirements Clarification
+由主代理直接执行；其余独立 action 和 gate 的 stdout 原样交给对应代理，不要
+追加历史结论或其他门的结果：
 
 ```bash
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
@@ -80,6 +81,11 @@ formal-gates workflow prepare-gate --root <repo> --package-root <package> \
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --source <requirement-file> --confirmed
 
+formal-gates workflow route-candidates --root <repo> --package-root <package> \
+  --run-id <id>
+formal-gates workflow route --root <repo> --package-root <package> \
+  --run-id <id> --mode <none|full|custom> [--gate <gate-id> ...]
+
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --status PASS \
   --source-revision <revision-from-prepared-prompt> \
@@ -95,14 +101,16 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --source-snapshot <snapshot-from-prepared-prompt> \
-  --live-snapshot <current> [--finding '<message>' --location '<path:line>']
+  --live-snapshot <current> \
+  [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
 formal-gates workflow snapshot --root <repo> --package-root <package> \
   --run-id <id> --current-snapshot <new-current> --live-snapshot <new-current>
 ```
 
-QA Execution、Carry 和 seal 的参数以 `formal-gates help` 及 `SKILL.md`
-为准。它们分别记录 QA 结果、每门 `INHERIT/RERUN` 判断和当前已有结果摘要。
+QA Execution、Carry、额外返修授权和 Seal 的参数以 `formal-gates help` 及
+`SKILL.md` 为准。需求文件修订变化后，先用 `workflow requirement --meaning
+preserved|changed` 明确语义影响；CLI 不自行猜测。
 
 ## Diff 与返修
 
@@ -121,10 +129,11 @@ Git、SVN、P4 的命令见
 
 ## 结果与中断
 
-独立门只有三种结果：`PASS`、`FAIL`、`RUNTIME_ERROR`。运行错误不是审查
-发现。`PASS`、`FAIL`、`RUNTIME_ERROR` 和 `PENDING` 都会原样记录，但不
-阻止封板。某个代理中断时，该项仍是 `PENDING`；`resume` 保留已经完成的
-结果，不会要求全部重跑。
+每条审查门 finding 都带 P0、P1 或 P2。无 finding 或仅 P2 时为 `PASS`；
+至少一条 P0/P1 时为 `FAIL`；`RUNTIME_ERROR` 不带 finding。已选择的
+`PENDING` 会阻止 Seal；运行错误需要重试或用户明确跳过。QA FAIL 和 P0/P1
+在共享三轮返修额度耗尽前必须返修，之后才可显式授权跳过。仅 P2 的建议会
+保留展示，但不阻止 Seal。
 
 封板成功或显式中止后，CLI 写入一个摘要并删除该 run 的整个临时目录。
 它不会留下提示词副本、分层证据图或详细状态文件。
