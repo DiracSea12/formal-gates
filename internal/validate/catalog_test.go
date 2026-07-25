@@ -47,8 +47,33 @@ func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
 		t.Fatalf("candidates=%v want=%v", got, want)
 	}
 
+	emptyRoot := promptPackage(t, nil)
+	emptyCandidates, err := PackageRouteCandidates(emptyRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := emptyCandidates, []string{"qa"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("empty candidates=%v want=%v", got, want)
+	}
+
 	if _, err := PackageRouteCandidates(t.TempDir()); err == nil {
 		t.Fatal("invalid prompt package was accepted")
+	}
+}
+
+func TestGateDiscoveryIgnoresUnrelatedDirectEntries(t *testing.T) {
+	root := promptPackage(t, map[string]string{"quality": "checks"})
+	if err := os.Mkdir(filepath.Join(root, "gates", "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "gates", "notes.txt"), "not a gate\n")
+
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := catalog.GateIDs(), []string{"quality"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gate IDs=%v want=%v", got, want)
 	}
 }
 
@@ -69,7 +94,6 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"non-markdown", func(root string) { writeTestFile(t, filepath.Join(root, "gates", "notes.txt"), "bad") }},
 		{"reserved-qa", func(root string) {
 			writeTestFile(t, filepath.Join(root, "gates", "qa.md"), "collides with built-in QA")
 		}},
@@ -160,6 +184,9 @@ func promptPackage(t *testing.T, gates map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "prompts", "reviewer-base.md"), "shared contract\n")
+	if err := os.MkdirAll(filepath.Join(root, "gates"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range requiredActionIDs {
 		writeTestFile(t, filepath.Join(root, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
