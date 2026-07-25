@@ -61,6 +61,63 @@ func TestCLIWorkflowStartPrepareRecordShow(t *testing.T) {
 	}
 }
 
+func TestCLIMainAgentCarryParsesReasonWithoutAgentBindings(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "main-carry-cli")
+	var err error
+	state, err = validate.RecordAction(root, pkg, state.RunID, "start-readiness", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.RecordQADesign(root, pkg, state.RunID, []validate.QACaseInput{{Description: "behavior", Procedure: "exercise", Oracle: "observed"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.RecordAction(root, pkg, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validate.PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.AdvanceSnapshot(root, pkg, state.RunID, "delivery", "delivery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.RecordQAExecution(root, pkg, state.RunID, []validate.QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "exercised", Observation: "observed", OracleResult: "matched"}}, "", state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.RecordGate(root, pkg, state.RunID, "quality", "FAIL", "", []validate.FindingInput{{Severity: "P1", Message: "blocker"}}, state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validate.PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	state, err = validate.AdvanceSnapshot(root, pkg, state.RunID, "repair", "repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	missingReason := []string{"workflow", "carry", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--main-agent", "--live-snapshot", state.CurrentSnapshot}
+	if code := Run("formal-gates", missingReason, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires a reason") {
+		t.Fatalf("main-agent Carry without reason: code=%d stderr=%s", code, stderr.String())
+	}
+	stderr.Reset()
+	args := []string{"workflow", "carry", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--main-agent", "--main-reason", "only the failed result is affected", "--live-snapshot", state.CurrentSnapshot}
+	if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("main-agent Carry failed: %s", stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Carry["qa"].Origin != "MAIN_SHORTCUT" || state.QAExecution.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("main-agent Carry was not parsed: %#v", state)
+	}
+}
+
 func TestCLIQADesignGeneratesCaseIDsAndRejectsMisorderedFields(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
 	state := startCLIWorkflow(t, root, pkg, "qa-cli")
@@ -160,6 +217,44 @@ func TestCLIRouteCommandsExposeOrderedCandidatesAndPersistSelection(t *testing.T
 	if persisted.SelectedGates == nil || !reflect.DeepEqual(none.SelectedGates, persisted.SelectedGates) {
 		t.Fatalf("none route response and persisted state disagree: response=%#v persisted=%#v", none.SelectedGates, persisted.SelectedGates)
 	}
+}
+
+func TestCLIPackageRouteCandidatesIsStateless(t *testing.T) {
+	_, pkg := cliWorkflowFixture(t)
+	mustWriteCLI(t, filepath.Join(pkg, "gates", "architecture.md"), "architecture checks\n")
+	before, err := os.ReadDir(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"package", "route-candidates", "--root", pkg}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("package route candidates failed: %s", stderr.String())
+	}
+	var candidates []string
+	if err := json.Unmarshal(stdout.Bytes(), &candidates); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := candidates, []string{"qa", "architecture", "quality"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates=%v want=%v", got, want)
+	}
+
+	after, err := os.ReadDir(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(directoryEntryNames(before), directoryEntryNames(after)) {
+		t.Fatalf("package query changed package entries: before=%v after=%v", directoryEntryNames(before), directoryEntryNames(after))
+	}
+}
+
+func directoryEntryNames(entries []os.DirEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 func TestCLIRequirementRevisionRequiresAndRebindsLiveSnapshot(t *testing.T) {

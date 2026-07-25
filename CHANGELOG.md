@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Route P0/P1/P2 findings through one shared three-review-wave limit, keep
   Carry limited to previously passing selected gates, treat semantic results as
   authoritative for their snapshot, and persist snapshot-bound Seal skips.
+- Allow a reasoned main-agent Carry shortcut for a bounded repair that cannot
+  affect any prior selected PASS, inheriting both QA and discovered-gate PASS
+  results while retaining independent Carry for uncertain or wider changes.
 - Recompose interrupted prepared development tasks and require deferred Start
   Readiness when a post-development addition makes a none route non-empty.
 - Restore independent QA Review between QA Design and development, with failed

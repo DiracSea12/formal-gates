@@ -28,6 +28,11 @@ type QAResultInput struct{ CaseID, Outcome, Procedure, Observation, OracleResult
 
 type CarryInput struct{ GateID, Decision, Message string }
 
+const (
+	carryOriginIndependent  = "INDEPENDENT"
+	carryOriginMainShortcut = "MAIN_SHORTCUT"
+)
+
 const formalFlow = "formal"
 const automaticReviewWaveLimit = 3
 
@@ -190,7 +195,7 @@ func RouteCandidates(root, packageRoot, runID string) ([]string, error) {
 	if !state.RequirementConfirmed {
 		return nil, fmt.Errorf("the current requirement is not confirmed")
 	}
-	return append([]string{"qa"}, catalog.GateIDs()...), nil
+	return catalog.RouteCandidates(), nil
 }
 
 func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunState, error) {
@@ -206,7 +211,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 		if !routeModes[mode] {
 			return fmt.Errorf("route mode must be none, full, or custom")
 		}
-		candidates := append([]string{"qa"}, catalog.GateIDs()...)
+		candidates := catalog.RouteCandidates()
 		if mode == "none" {
 			if len(selected) != 0 {
 				return fmt.Errorf("none route cannot include selected gates")
@@ -251,7 +256,7 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 		if len(additions) == 0 {
 			return fmt.Errorf("at least one gate addition is required")
 		}
-		candidates := append([]string{"qa"}, catalog.GateIDs()...)
+		candidates := catalog.RouteCandidates()
 		normalized, err := normalizeSelected(additions, candidates)
 		if err != nil {
 			return err
@@ -615,7 +620,9 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 		} else {
 			state.PreRepairSnapshot = ""
 		}
-		state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		if !isRepair || state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != oldSnapshot {
+			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		}
 		state.Carry = map[string]CarryResult{}
 		for id, authorization := range state.SkipAuthorizations {
 			if authorization.Origin == "SEAL" {
@@ -639,7 +646,7 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 	})
 }
 
-func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtimeError, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtimeError string, mainAgent bool, mainReason, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
@@ -647,10 +654,38 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
 			return err
 		}
-		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+		if err := requireTransition(*state, "carry", ""); err != nil {
 			return err
 		}
-		if err := requireTransition(*state, "carry", ""); err != nil {
+		if mainAgent {
+			if len(decisions) != 0 || strings.TrimSpace(runtimeError) != "" {
+				return fmt.Errorf("main-agent Carry cannot include independent decisions or a runtime error")
+			}
+			if strings.TrimSpace(sourceRevision) != "" || strings.TrimSpace(sourceCatalogRevision) != "" || strings.TrimSpace(sourceSnapshot) != "" {
+				return fmt.Errorf("main-agent Carry does not accept independent source bindings")
+			}
+			reason := strings.TrimSpace(mainReason)
+			if reason == "" {
+				return fmt.Errorf("main-agent Carry requires a reason")
+			}
+			if len(state.Carry) != 0 || repairRerunRecorded(*state) {
+				return fmt.Errorf("main-agent Carry must be recorded before independent Carry or repair reruns")
+			}
+			eligible := eligibleMainCarryResults(*state)
+			if len(eligible) == 0 {
+				return fmt.Errorf("no prior passing selected results are eligible for main-agent Carry")
+			}
+			for _, id := range eligible {
+				inheritCarryResult(state, id, carryOriginMainShortcut, reason)
+			}
+			state.Actions["carry"] = ActionResult{Status: "PASS"}
+			completeReviewWaveIfReady(state)
+			return nil
+		}
+		if strings.TrimSpace(mainReason) != "" {
+			return fmt.Errorf("--main-reason requires main-agent Carry")
+		}
+		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
 			return err
 		}
 		eligible := eligibleCarryGates(*state)
@@ -687,13 +722,10 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 				return fmt.Errorf("Carry decision for %s requires a reason", decision.GateID)
 			}
 			seen[decision.GateID] = true
-			prior := state.Gates[decision.GateID]
-			state.Carry[decision.GateID] = CarryResult{Decision: decision.Decision, SourceSnapshot: state.PreRepairSnapshot, TargetSnapshot: state.CurrentSnapshot, Message: strings.TrimSpace(decision.Message)}
 			if decision.Decision == "INHERIT" {
-				prior.SourceSnapshot = state.PreRepairSnapshot
-				prior.Snapshot = state.CurrentSnapshot
-				state.Gates[decision.GateID] = prior
+				inheritCarryResult(state, decision.GateID, carryOriginIndependent, strings.TrimSpace(decision.Message))
 			} else {
+				state.Carry[decision.GateID] = CarryResult{Decision: decision.Decision, Origin: carryOriginIndependent, SourceSnapshot: state.PreRepairSnapshot, TargetSnapshot: state.CurrentSnapshot, Message: strings.TrimSpace(decision.Message)}
 				state.Gates[decision.GateID] = GateResult{Status: "PENDING"}
 			}
 		}
@@ -701,6 +733,45 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 		completeReviewWaveIfReady(state)
 		return nil
 	})
+}
+
+func eligibleMainCarryResults(state RunState) []string {
+	if state.PreRepairSnapshot == "" {
+		return nil
+	}
+	ids := []string{}
+	if isSelected(state, "qa") && state.QAExecution.Status == "PASS" && state.QAExecution.Snapshot == state.PreRepairSnapshot {
+		ids = append(ids, "qa")
+	}
+	return append(ids, eligibleCarryGates(state)...)
+}
+
+func repairRerunRecorded(state RunState) bool {
+	if isSelected(state, "qa") && state.QAExecution.Snapshot == state.CurrentSnapshot && state.QAExecution.Status != "" && state.QAExecution.Status != "PENDING" {
+		return true
+	}
+	for id := range selectedSet(state) {
+		if id == "qa" {
+			continue
+		}
+		result := state.Gates[id]
+		if result.Snapshot == state.CurrentSnapshot && result.Status != "" && result.Status != "PENDING" {
+			return true
+		}
+	}
+	return false
+}
+
+func inheritCarryResult(state *RunState, id, origin, reason string) {
+	state.Carry[id] = CarryResult{Decision: "INHERIT", Origin: origin, SourceSnapshot: state.PreRepairSnapshot, TargetSnapshot: state.CurrentSnapshot, Message: reason}
+	if id == "qa" {
+		state.QAExecution.Snapshot = state.CurrentSnapshot
+		return
+	}
+	prior := state.Gates[id]
+	prior.SourceSnapshot = state.PreRepairSnapshot
+	prior.Snapshot = state.CurrentSnapshot
+	state.Gates[id] = prior
 }
 
 func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState, error) {

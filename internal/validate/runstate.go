@@ -79,6 +79,7 @@ type GateResult struct {
 
 type CarryResult struct {
 	Decision       string `json:"decision"`
+	Origin         string `json:"origin"`
 	SourceSnapshot string `json:"sourceSnapshot"`
 	TargetSnapshot string `json:"targetSnapshot"`
 	Message        string `json:"message,omitempty"`

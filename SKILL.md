@@ -86,11 +86,16 @@ requested; omitted review stages are not backfilled during seal:
 8. **Repair.** A wave with QA FAIL or a P0/P1 gate finding returns to repair and
    includes every P2 finding from that wave. Before editing, freeze the current
    VCS identity. After the worker
-   finishes, freeze the new identity and call `workflow snapshot`. Run independent
-   `carry` against only the immediate pre-repair-to-current native comparison.
-   Carry returns `INHERIT` or `RERUN` for every previously passing gate. Always
-   rerun QA Execution; rerun only gates marked `RERUN`, and give each rerun gate
-   the complete base-to-current comparison. QA and every selected gate share
+   finishes, freeze the new identity and call `workflow snapshot`. The main
+   agent inspects the immediate pre-repair-to-current native comparison. Only
+   when it can bound the repair so no previously passing selected verification
+   can be affected, it may use main-agent Carry to inherit every prior PASS,
+   including QA, with a non-empty reason. Otherwise dispatch independent Carry
+   for every previously passing selected discovered gate and rerun QA. Shared
+   APIs, public behavior, configuration, dependencies, cross-gate ownership,
+   and uncertain causal chains always use independent Carry. Rerun only gates
+   marked `RERUN`, and give each rerun gate the complete base-to-current
+   comparison. QA and every selected gate share
    three completed review waves, counting the initial complete post-development
    wave and every complete post-repair wave once. Incomplete or runtime-error
    waves do not consume one. Additional waves require explicit user
@@ -193,7 +198,12 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   --live-snapshot <current> \
   [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
-# After a repair snapshot, prepare and record Carry when prior PASS gates exist.
+# For a bounded repair, inherit every prior selected PASS with no agent dispatch.
+formal-gates workflow carry --root <repo> --package-root <package> \
+  --run-id <id> --main-agent --main-reason '<reason>' \
+  --live-snapshot <current>
+
+# Otherwise prepare and record independent Carry when prior PASS gates exist.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action carry --live-snapshot <current>
 formal-gates workflow carry --root <repo> --package-root <package> \
@@ -218,7 +228,8 @@ results.
 
 ## Independent Dispatch
 
-The main agent itself follows the prepared Requirements Clarification task.
+The main agent itself follows the prepared Requirements Clarification task and
+records justified main-agent Carry directly without preparing a Carry prompt.
 For an independently dispatched action or gate, call `workflow prepare-action`
 or `workflow prepare-gate`, then send stdout as the complete task through the
 host's native independent-agent channel. Send the development task only to the

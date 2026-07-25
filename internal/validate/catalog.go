@@ -36,19 +36,16 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 	if err != nil {
 		return PromptCatalog{}, fmt.Errorf("reviewer base: %w", err)
 	}
-	gates, err := discoverPromptDirectory(filepath.Join(root, "gates"), true)
+	gates, err := discoverPromptDirectory(filepath.Join(root, "gates"))
 	if err != nil {
 		return PromptCatalog{}, fmt.Errorf("gate catalog: %w", err)
-	}
-	if len(gates) == 0 {
-		return PromptCatalog{}, fmt.Errorf("gate catalog: no gate prompt files found")
 	}
 	for _, gate := range gates {
 		if gate.ID == "qa" {
 			return PromptCatalog{}, fmt.Errorf("gate catalog: gate id %q is reserved for built-in QA", gate.ID)
 		}
 	}
-	actions, err := discoverPromptDirectory(filepath.Join(root, "prompts", "actions"), false)
+	actions, err := discoverPromptDirectory(filepath.Join(root, "prompts", "actions"))
 	if err != nil {
 		return PromptCatalog{}, fmt.Errorf("action prompts: %w", err)
 	}
@@ -72,6 +69,14 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 		Gates:           gates,
 		Actions:         actions,
 	}, nil
+}
+
+func PackageRouteCandidates(root string) ([]string, error) {
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.RouteCandidates(), nil
 }
 
 func validateActionCatalog(actions []PromptDefinition) error {
@@ -116,7 +121,11 @@ func (catalog PromptCatalog) GateIDs() []string {
 	return ids
 }
 
-func discoverPromptDirectory(dir string, rejectEveryInvalidEntry bool) ([]PromptDefinition, error) {
+func (catalog PromptCatalog) RouteCandidates() []string {
+	return append([]string{"qa"}, catalog.GateIDs()...)
+}
+
+func discoverPromptDirectory(dir string) ([]PromptDefinition, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -125,15 +134,12 @@ func discoverPromptDirectory(dir string, rejectEveryInvalidEntry bool) ([]Prompt
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
-			if rejectEveryInvalidEntry || strings.HasSuffix(name, ".md") {
+			if strings.HasSuffix(name, ".md") {
 				return nil, fmt.Errorf("%s is not a direct regular file", name)
 			}
 			continue
 		}
 		if filepath.Ext(name) != ".md" {
-			if rejectEveryInvalidEntry {
-				return nil, fmt.Errorf("invalid gate filename %q", name)
-			}
 			continue
 		}
 		id := strings.TrimSuffix(name, ".md")

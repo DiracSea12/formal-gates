@@ -60,14 +60,29 @@ func run(program string, args []string, streams IO) (int, error) {
 }
 
 func runPackage(args []string, streams IO) (int, error) {
-	args = dropOptionalVerb(args, "validate")
-	fs := flag.NewFlagSet("package", flag.ContinueOnError)
-	fs.SetOutput(streams.Stderr)
-	root := fs.String("root", ".", "formal-gates package root")
-	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-		return code, err
+	subcommand := "validate"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		subcommand, args = args[0], args[1:]
 	}
-	return printValidationResult(streams.Stdout, "package", validate.Package(*root))
+	switch subcommand {
+	case "validate":
+		fs := newFlagSet("package validate", streams)
+		root := fs.String("root", ".", "formal-gates package root")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		return printValidationResult(streams.Stdout, "package", validate.Package(*root))
+	case "route-candidates":
+		fs := newFlagSet("package route-candidates", streams)
+		root := fs.String("root", ".", "formal-gates package root")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		candidates, err := validate.PackageRouteCandidates(*root)
+		return printValue(streams.Stdout, candidates, err)
+	default:
+		return 1, fmt.Errorf("unknown package subcommand: %s", subcommand)
+	}
 }
 
 func runInstall(args []string, streams IO) (int, error) {
@@ -352,6 +367,8 @@ func runCarry(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
 	runtimeError := fs.String("runtime-error", "", "Carry runtime error")
+	mainAgent := fs.Bool("main-agent", false, "inherit every prior PASS without independent Carry")
+	mainReason := fs.String("main-reason", "", "main-agent reason from the immediate repair comparison")
 	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
 	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
 	sourceSnapshot := fs.String("source-snapshot", "", "current snapshot from the prepared prompt")
@@ -363,7 +380,7 @@ func runCarry(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordCarry(*root, *pkg, *runID, decisions, *runtimeError, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
+	state, err := validate.RecordCarry(*root, *pkg, *runID, decisions, *runtimeError, *mainAgent, *mainReason, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -639,12 +656,6 @@ func newFlagSet(name string, streams IO) *flag.FlagSet {
 	fs.SetOutput(streams.Stderr)
 	return fs
 }
-func dropOptionalVerb(args []string, verb string) []string {
-	if len(args) > 0 && args[0] == verb {
-		return args[1:]
-	}
-	return args
-}
 func printValue(stdout io.Writer, value any, err error) (int, error) {
 	if err != nil {
 		return 1, err
@@ -692,5 +703,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|record-action|record-gate|qa-design|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|record-action|record-gate|qa-design|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
 }
