@@ -47,7 +47,9 @@ requested; omitted review stages are not backfilled during seal:
    interactively, one consequential decision at a time, and remains read-only
    until the user confirms the outcome and consequential solution choices.
    Record PASS, then bind the exact revision with `workflow requirement
-   --confirmed`.
+   --confirmed`. After a meaning-changing revision, QA Design receives every
+   prior case as unapproved review input and returns a newly approved complete
+   set, retaining unaffected cases when impact is reliably bounded.
 3. **Route once.** Read `workflow route-candidates`, present QA first followed
    by every discovered gate, and record one `none`, `full`, or `custom` route.
    Custom omissions receive route skip authorization. Later additions require
@@ -58,6 +60,8 @@ requested; omitted review stages are not backfilled during seal:
    cases only through `workflow qa-design`.
 5. **Development.** Prepare `development-worker`; preparation records that
    development started and freezes pre-development results and late QA routing.
+   After normal interruption, preparing the same PREPARED development or repair
+   task recomposes it without moving the recorded start boundary.
    Dispatch a worker separate from formal reviewers. Do not send it the QA
    cases. The worker implements only the confirmed scope, adds each new or
    previously untracked delivery path explicitly to the named VCS before
@@ -71,7 +75,8 @@ requested; omitted review stages are not backfilled during seal:
    actions may run in one parallel wave. QA receives the approved cases. Every
    selected gate receives the complete base-to-current VCS route and
    independently inspects that diff. Agents never write workflow state; the
-   orchestrator records returned semantic results.
+   orchestrator records returned semantic results. A semantic PASS or FAIL is
+   authoritative for its snapshot; only PENDING and RUNTIME_ERROR are retryable.
 8. **Repair.** A wave with QA FAIL or a P0/P1 gate finding returns to repair and
    includes every P2 finding from that wave. Before editing, freeze the current
    VCS identity. After the worker
@@ -80,14 +85,20 @@ requested; omitted review stages are not backfilled during seal:
    Carry returns `INHERIT` or `RERUN` for every previously passing gate. Always
    rerun QA Execution; rerun only gates marked `RERUN`, and give each rerun gate
    the complete base-to-current comparison. QA and every selected gate share
-   three completed repair-review cycles; incomplete or runtime-error waves do
-   not consume one. Additional cycles require explicit user authorization.
+   three completed review waves, counting the initial complete post-development
+   wave and every complete post-repair wave once. Incomplete or runtime-error
+   waves do not consume one. Additional waves require explicit user
+   authorization.
 9. **Seal.** Confirm the live native VCS identity immediately before and after
    aggregation. Selected PENDING work blocks Seal. RUNTIME_ERROR requires an
    explicit user skip, and QA FAIL or P0/P1 requires repair until the shared
    limit is exhausted before a skip may be authorized. Route and Seal skips are
-   retained in the summary. P2-only PASS recommendations remain visible but do
-   not block Seal.
+   retained in the summary. Named Seal authorizations persist if another result
+   still blocks that attempt, apply only to the current snapshot, and clear on
+   a later repair snapshot. P2-only PASS recommendations remain visible but do
+   not block Seal. When a post-development addition makes an initial none route
+   non-empty, run deferred Start Readiness before preparing that gate or Seal;
+   retain the current immutable development snapshot.
 
 Use `workflow show` to inspect a run and `workflow resume` after interruption.
 An interrupted dispatch remains `PENDING`; preserve completed results. Use
@@ -224,17 +235,18 @@ set instead of one symptom at a time. Advisory comments do not block PASS.
 Never hurry a reviewer. A status request may ask only for progress and must say
 to continue until all assigned checks are complete.
 
-## Review And Repair Limit
+## Review-Wave And Repair Limit
 
 The orchestrator validates findings against the confirmed scope, discards
 unsupported findings, groups one root cause once, and repairs all P0, P1, and
 P2 findings in a blocking wave together. QA and all selected gates share at
-most three completed automatic repair-review cycles per delivery attempt. A
-cycle counts once only after a repair snapshot and all required verification
-complete. Dispatch failure, interruption, missing verification, PENDING, and
-RUNTIME_ERROR do not count. After exhaustion, present remaining blockers once;
-the user may authorize named Seal skips, additional repair, or a requirement
-change.
+most three completed automatic review waves per delivery attempt. The initial
+post-development wave and each post-repair wave count once after all required
+verification completes, regardless of semantic outcome. Each snapshot counts
+at most once. Dispatch failure, interruption, missing verification, PENDING,
+and RUNTIME_ERROR do not count. After exhaustion, present remaining blockers
+once; the user may authorize named Seal skips, additional repair, or a
+requirement change.
 
 ## Gate Files
 

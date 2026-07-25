@@ -26,10 +26,22 @@ dependency graph, or ordering table. After clarification, the user makes one
 none, full, or custom selection from QA followed by the lexical gate list.
 
 QA is not part of the prompt-gate catalog. After development, selected QA
-Execution and review gates may run in one parallel wave.
-Start Readiness runs for full and custom routes and is omitted by the none
-route. Preparing the development worker freezes pre-development results and
-prevents QA from being added after development starts.
+Execution and review gates may run in one parallel wave. The initial complete
+post-development wave and each complete post-repair wave share one three-wave
+limit.
+Start Readiness runs before development for full and custom routes. A none
+route omits it unless a post-development gate addition makes the selected set
+non-empty; that deferred readiness must pass before review or Seal and keeps
+the current development snapshot. Preparing the development worker freezes
+pre-development results and prevents QA from being added after development
+starts.
+
+After a meaning-changing requirement revision, previously approved QA cases
+remain as unapproved input to a complete coverage review. The next QA Design
+retains unaffected cases when impact is bounded and replaces the complete set
+when it is not. Prepared development tasks can be recomposed after normal
+interruption, while a recorded semantic PASS or FAIL remains authoritative for
+its immutable snapshot.
 
 ## Installation
 
@@ -145,8 +157,8 @@ Every gate finding has P0, P1, or P2 impact. A gate returns `PASS` with no
 findings or P2-only recommendations, `FAIL` with at least one P0/P1 finding,
 or `RUNTIME_ERROR` with no findings. Selected `PENDING` work blocks Seal.
 Runtime errors require retry or explicit skip. QA FAIL and P0/P1 require repair
-until the shared three-cycle limit is exhausted before Seal skip is available.
-P2-only recommendations remain visible without blocking Seal.
+until the shared three-review-wave limit is exhausted before Seal skip is
+available. P2-only recommendations remain visible without blocking Seal.
 
 After successful seal or explicit abort, the CLI writes one summary and removes
 that run's entire temporary directory. It does not retain prompt copies,

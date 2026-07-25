@@ -103,14 +103,80 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	if _, err := AdvanceSnapshot(root, pkg, qa.RunID, "bypass", "bypass"); err == nil || !strings.Contains(err.Error(), "must be prepared") {
 		t.Fatalf("snapshot bypassed development preparation: %v", err)
 	}
-	if _, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base"); err != nil {
+	firstPrompt, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RecordQADesign(root, pkg, qa.RunID, []QACaseInput{{Description: "replacement", Procedure: "replace", Oracle: "changed"}}, "", qa.RequirementRevision, qa.CatalogRevision); err == nil || !strings.Contains(err.Error(), "before development") {
 		t.Fatalf("QA Design was replaced after worker preparation: %v", err)
 	}
-	if _, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base"); err == nil || !strings.Contains(err.Error(), "already prepared") {
-		t.Fatalf("development worker was prepared twice: %v", err)
+	secondPrompt, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base")
+	if err != nil || secondPrompt != firstPrompt {
+		t.Fatalf("prepared development task was not recomposed: err=%v", err)
+	}
+}
+
+func TestDeferredReadinessAfterNoneRouteAdditionKeepsSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "deferred-readiness", "none", nil)
+	state, err := AddRouteGates(root, pkg, state.RunID, []string{"quality"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["start-readiness"].Status != "PENDING" || state.CurrentSnapshot != "delivery" {
+		t.Fatalf("gate addition did not activate deferred readiness while retaining the snapshot: %#v", state)
+	}
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", "delivery"); err == nil || !strings.Contains(err.Error(), "Start Readiness") {
+		t.Fatalf("added gate bypassed deferred readiness: %v", err)
+	}
+	if _, err := Seal(root, pkg, state.RunID, "delivery", "delivery", nil); err == nil || !strings.Contains(err.Error(), "Start Readiness") {
+		t.Fatalf("Seal bypassed deferred readiness: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", ""); err != nil {
+		t.Fatal(err)
+	}
+	state = recordReadiness(t, root, pkg, state)
+	if state.CurrentSnapshot != "delivery" || state.CompletedReviewWaves != 0 {
+		t.Fatalf("deferred readiness changed snapshot or completed a wave: %#v", state)
+	}
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", "delivery"); err != nil {
+		t.Fatalf("added gate remained blocked after deferred readiness: %v", err)
+	}
+	state = recordGate(t, root, pkg, state, "quality", "PASS", nil)
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("added gate did not complete the current snapshot's initial wave: %#v", state)
+	}
+}
+
+func TestSemanticResultsAreAuthoritativeForCurrentSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "immutable-results", "full", nil)
+	state = recordQA(t, root, pkg, state, "FAIL")
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "authoritative FAIL") {
+		t.Fatalf("completed QA result was prepared again: %v", err)
+	}
+	if _, err := RecordQAExecution(root, pkg, state.RunID, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "again", Observation: "again", OracleResult: "again"}}, "", state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "authoritative FAIL") {
+		t.Fatalf("completed QA result was replaced: %v", err)
+	}
+	state = recordGate(t, root, pkg, state, "architecture", "PASS", nil)
+	if _, err := PrepareGate(root, pkg, state.RunID, "architecture", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "authoritative PASS") {
+		t.Fatalf("completed gate result was prepared again: %v", err)
+	}
+	if _, err := RecordGate(root, pkg, state.RunID, "architecture", "FAIL", "", []FindingInput{{Severity: "P1", Message: "replacement"}}, state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "authoritative PASS") {
+		t.Fatalf("completed gate result was replaced: %v", err)
+	}
+
+	retry := readyDelivery(t, root, pkg, "retry-results", "custom", []string{"quality"})
+	var err error
+	retry, err = RecordGate(root, pkg, retry.RunID, "quality", "RUNTIME_ERROR", "interrupted", nil, retry.RequirementRevision, retry.CatalogRevision, retry.CurrentSnapshot, retry.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareGate(root, pkg, retry.RunID, "quality", retry.CurrentSnapshot); err != nil {
+		t.Fatalf("runtime error was not retryable: %v", err)
+	}
+	if _, err := RecordGate(root, pkg, retry.RunID, "quality", "PASS", "", nil, retry.RequirementRevision, retry.CatalogRevision, retry.CurrentSnapshot, retry.CurrentSnapshot); err != nil {
+		t.Fatalf("runtime error could not be replaced by semantic result: %v", err)
 	}
 }
 
@@ -142,10 +208,28 @@ func TestRequirementRevisionWaitsForExplicitSemanticClassification(t *testing.T)
 	if state.RequirementConfirmed || state.RouteMode != "full" || len(state.SelectedGates) != 3 || state.Actions["development-worker"].Status != "PENDING" {
 		t.Fatalf("meaning change did not invalidate dependent results while preserving route: %#v", state)
 	}
+	if len(state.QACases) != 1 || state.Actions["qa-design"].Status != "PENDING" {
+		t.Fatalf("prior QA cases were not retained as unapproved input: %#v", state)
+	}
 	for id, result := range state.Gates {
 		if result.Status != "PENDING" {
 			t.Fatalf("gate %s survived meaning change: %#v", id, result)
 		}
+	}
+	state = recordClarificationAndConfirm(t, root, pkg, state)
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "every prior case") || !strings.Contains(prompt, "description: behavior") {
+		t.Fatalf("QA Design did not receive prior cases for coverage review: %s", prompt)
+	}
+	state, err = RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "updated behavior", Procedure: "exercise update", Oracle: "updated result"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.QACases) != 1 || state.QACases[0].Description != "updated behavior" || state.Actions["qa-design"].Status != "PASS" {
+		t.Fatalf("approved QA coverage did not atomically replace prior input: %#v", state)
 	}
 }
 
@@ -185,12 +269,15 @@ func TestGateSeverityControlsSemanticStatusWithoutMutationOnRejection(t *testing
 	}
 }
 
-func TestSharedRepairCyclesIncludeP2AndRerunQA(t *testing.T) {
+func TestSharedReviewWavesIncludeInitialP2AndRerunQA(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "cycles", "full", nil)
 	state = recordQA(t, root, pkg, state, "PASS")
 	state = recordGate(t, root, pkg, state, "architecture", "PASS", nil)
 	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}, {Severity: "P2", Message: "same-wave cleanup"}})
+	if state.CompletedReviewWaves != 1 || state.Actions["development-worker"].Status != developmentVerified {
+		t.Fatalf("initial completed wave was not counted: %#v", state)
+	}
 	prompt, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -198,16 +285,20 @@ func TestSharedRepairCyclesIncludeP2AndRerunQA(t *testing.T) {
 	if !strings.Contains(prompt, "quality P1: blocker") || !strings.Contains(prompt, "quality P2: same-wave cleanup") {
 		t.Fatalf("repair prompt omitted wave findings: %s", prompt)
 	}
-	for cycle := 1; cycle <= automaticRepairLimit; cycle++ {
-		if cycle > 1 {
+	resumedPrompt, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot)
+	if err != nil || resumedPrompt != prompt {
+		t.Fatalf("prepared repair task was not recomposed: err=%v", err)
+	}
+	for repair := 1; repair < automaticReviewWaveLimit; repair++ {
+		if repair > 1 {
 			if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
 				t.Fatal(err)
 			}
 		}
-		next := "repair-" + string(rune('0'+cycle))
+		next := "repair-" + string(rune('0'+repair))
 		state = advance(t, root, pkg, state, next)
 		if state.QAExecution.Status != "PENDING" {
-			t.Fatalf("QA was not reset for cycle %d: %#v", cycle, state.QAExecution)
+			t.Fatalf("QA was not reset for repair %d: %#v", repair, state.QAExecution)
 		}
 		state, err = RecordCarry(root, pkg, state.RunID, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "unaffected"}}, "", state.RequirementRevision, state.CatalogRevision, next, next)
 		if err != nil {
@@ -215,8 +306,8 @@ func TestSharedRepairCyclesIncludeP2AndRerunQA(t *testing.T) {
 		}
 		state = recordQA(t, root, pkg, state, "PASS")
 		state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "still failing"}})
-		if state.CompletedRepairCycles != cycle || state.PreRepairSnapshot != "" {
-			t.Fatalf("completed cycles after wave %d: %#v", cycle, state)
+		if state.CompletedReviewWaves != repair+1 || state.PreRepairSnapshot != "" {
+			t.Fatalf("completed review waves after repair %d: %#v", repair, state)
 		}
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "exhausted") {
@@ -226,8 +317,8 @@ func TestSharedRepairCyclesIncludeP2AndRerunQA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.ExtraRepairCycles != 1 {
-		t.Fatalf("extra cycles=%d", state.ExtraRepairCycles)
+	if state.ExtraReviewWaves != 1 {
+		t.Fatalf("extra waves=%d", state.ExtraReviewWaves)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
 		t.Fatalf("authorized repair remained blocked: %v", err)
@@ -253,7 +344,7 @@ func TestIncompleteRepairVerificationBlocksNextDevelopmentPreparation(t *testing
 		t.Fatal(err)
 	}
 	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "still failing"}})
-	if state.PreRepairSnapshot == "" || state.CompletedRepairCycles != 0 {
+	if state.PreRepairSnapshot == "" || state.CompletedReviewWaves != 1 {
 		t.Fatalf("incomplete verification was treated as completed: %#v", state)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "still requires verification") {
@@ -300,7 +391,7 @@ func TestRuntimeAndPendingResultsRequireExplicitSealResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repaired.CompletedRepairCycles != 0 || repaired.PreRepairSnapshot == "" {
+	if repaired.CompletedReviewWaves != 1 || repaired.PreRepairSnapshot == "" {
 		t.Fatalf("runtime wave consumed or forgot its repair: %#v", repaired)
 	}
 	if _, err := PrepareAction(root, pkg, repaired.RunID, "development-worker", repaired.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "still requires verification") {
@@ -315,10 +406,10 @@ func TestBlockingSealSkipWaitsForSharedLimit(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "blocking-seal", "custom", []string{"quality"})
 	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "blocker"}})
-	if _, err := Seal(root, pkg, state.RunID, "delivery", "delivery", []string{"quality"}); err == nil || !strings.Contains(err.Error(), "repair limit") {
+	if _, err := Seal(root, pkg, state.RunID, "delivery", "delivery", []string{"quality"}); err == nil || !strings.Contains(err.Error(), "review-wave limit") {
 		t.Fatalf("early blocker skip was accepted: %v", err)
 	}
-	for cycle := 1; cycle <= automaticRepairLimit; cycle++ {
+	for cycle := 1; cycle < automaticReviewWaveLimit; cycle++ {
 		if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
 			t.Fatal(err)
 		}
@@ -330,8 +421,50 @@ func TestBlockingSealSkipWaitsForSharedLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.CompletedRepairCycles != automaticRepairLimit || summary.SkipAuthorizations["quality"].Status != "FAIL" {
+	if summary.CompletedReviewWaves != automaticReviewWaveLimit || summary.SkipAuthorizations["quality"].Status != "FAIL" || summary.SkipAuthorizations["quality"].Snapshot != state.CurrentSnapshot {
 		t.Fatalf("exhausted blocker authorization missing: %#v", summary)
+	}
+}
+
+func TestSealPersistsNamedSubsetAndRepairClearsSnapshotAuthorization(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "partial-seal", "custom", []string{"architecture", "quality"})
+	for _, gate := range []string{"architecture", "quality"} {
+		state = recordGate(t, root, pkg, state, gate, "FAIL", []FindingInput{{Severity: "P1", Message: gate + " blocker"}})
+	}
+	for repair := 1; repair < automaticReviewWaveLimit; repair++ {
+		if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+			t.Fatal(err)
+		}
+		state = advance(t, root, pkg, state, "partial-repair-"+string(rune('0'+repair)))
+		for _, gate := range []string{"architecture", "quality"} {
+			state = recordGate(t, root, pkg, state, gate, "FAIL", []FindingInput{{Severity: "P1", Message: gate + " blocker"}})
+		}
+	}
+	if _, err := Seal(root, pkg, state.RunID, state.CurrentSnapshot, state.CurrentSnapshot, []string{"quality"}); err == nil || !strings.Contains(err.Error(), "architecture") {
+		t.Fatalf("partial Seal did not report the remaining blocker: %v", err)
+	}
+	persisted, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := persisted.SkipAuthorizations["quality"]
+	if authorization.Origin != "SEAL" || authorization.Status != "FAIL" || authorization.Snapshot != persisted.CurrentSnapshot {
+		t.Fatalf("named Seal authorization was not persisted: %#v", authorization)
+	}
+	persisted, err = AuthorizeExtraRepair(root, pkg, persisted.RunID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, persisted.RunID, "development-worker", persisted.CurrentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	persisted = advance(t, root, pkg, persisted, "after-partial-authorization")
+	if _, ok := persisted.SkipAuthorizations["quality"]; ok {
+		t.Fatalf("Seal-origin authorization survived a new repair snapshot: %#v", persisted.SkipAuthorizations)
+	}
+	if routeSkip := persisted.SkipAuthorizations["qa"]; routeSkip.Origin != "ROUTE" {
+		t.Fatalf("route authorization was cleared with snapshot authorization: %#v", routeSkip)
 	}
 }
 

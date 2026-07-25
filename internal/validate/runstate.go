@@ -11,28 +11,28 @@ import (
 )
 
 type RunState struct {
-	RunID                 string                       `json:"runId"`
-	Flow                  string                       `json:"flow"`
-	Status                string                       `json:"status"`
-	RequirementSource     string                       `json:"requirementSource"`
-	RequirementRevision   string                       `json:"requirementRevision"`
-	RequirementConfirmed  bool                         `json:"requirementConfirmed"`
-	BasePromptRevision    string                       `json:"basePromptRevision"`
-	CatalogRevision       string                       `json:"catalogRevision"`
-	VCS                   string                       `json:"vcs"`
-	BaseSnapshot          string                       `json:"baseSnapshot"`
-	CurrentSnapshot       string                       `json:"currentSnapshot"`
-	PreRepairSnapshot     string                       `json:"preRepairSnapshot,omitempty"`
-	RouteMode             string                       `json:"routeMode,omitempty"`
-	SelectedGates         []string                     `json:"selectedGates"`
-	SkipAuthorizations    map[string]SkipAuthorization `json:"skipAuthorizations"`
-	CompletedRepairCycles int                          `json:"completedRepairCycles"`
-	ExtraRepairCycles     int                          `json:"extraRepairCycles"`
-	Actions               map[string]ActionResult      `json:"actions"`
-	QACases               []QACase                     `json:"qaCases"`
-	QAExecution           QAExecutionResult            `json:"qaExecution"`
-	Gates                 map[string]GateResult        `json:"gates"`
-	Carry                 map[string]CarryResult       `json:"carry"`
+	RunID                string                       `json:"runId"`
+	Flow                 string                       `json:"flow"`
+	Status               string                       `json:"status"`
+	RequirementSource    string                       `json:"requirementSource"`
+	RequirementRevision  string                       `json:"requirementRevision"`
+	RequirementConfirmed bool                         `json:"requirementConfirmed"`
+	BasePromptRevision   string                       `json:"basePromptRevision"`
+	CatalogRevision      string                       `json:"catalogRevision"`
+	VCS                  string                       `json:"vcs"`
+	BaseSnapshot         string                       `json:"baseSnapshot"`
+	CurrentSnapshot      string                       `json:"currentSnapshot"`
+	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
+	RouteMode            string                       `json:"routeMode,omitempty"`
+	SelectedGates        []string                     `json:"selectedGates"`
+	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
+	CompletedReviewWaves int                          `json:"completedReviewWaves"`
+	ExtraReviewWaves     int                          `json:"extraReviewWaves"`
+	Actions              map[string]ActionResult      `json:"actions"`
+	QACases              []QACase                     `json:"qaCases"`
+	QAExecution          QAExecutionResult            `json:"qaExecution"`
+	Gates                map[string]GateResult        `json:"gates"`
+	Carry                map[string]CarryResult       `json:"carry"`
 }
 
 type ActionResult struct {
@@ -64,8 +64,9 @@ type Finding struct {
 }
 
 type SkipAuthorization struct {
-	Origin string `json:"origin"`
-	Status string `json:"status"`
+	Origin   string `json:"origin"`
+	Status   string `json:"status"`
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 type GateResult struct {
@@ -91,22 +92,22 @@ type QACase struct {
 }
 
 type RunSummary struct {
-	RunID                 string                       `json:"runId"`
-	Flow                  string                       `json:"flow"`
-	Status                string                       `json:"status"`
-	RequirementRevision   string                       `json:"requirementRevision"`
-	BasePromptRevision    string                       `json:"basePromptRevision"`
-	CatalogRevision       string                       `json:"catalogRevision"`
-	VCS                   string                       `json:"vcs"`
-	BaseSnapshot          string                       `json:"baseSnapshot"`
-	CurrentSnapshot       string                       `json:"currentSnapshot"`
-	RouteMode             string                       `json:"routeMode"`
-	SelectedGates         []string                     `json:"selectedGates"`
-	SkipAuthorizations    map[string]SkipAuthorization `json:"skipAuthorizations"`
-	CompletedRepairCycles int                          `json:"completedRepairCycles"`
-	ExtraRepairCycles     int                          `json:"extraRepairCycles"`
-	Gates                 map[string]GateResult        `json:"gates"`
-	QA                    QAExecutionResult            `json:"qaExecution"`
+	RunID                string                       `json:"runId"`
+	Flow                 string                       `json:"flow"`
+	Status               string                       `json:"status"`
+	RequirementRevision  string                       `json:"requirementRevision"`
+	BasePromptRevision   string                       `json:"basePromptRevision"`
+	CatalogRevision      string                       `json:"catalogRevision"`
+	VCS                  string                       `json:"vcs"`
+	BaseSnapshot         string                       `json:"baseSnapshot"`
+	CurrentSnapshot      string                       `json:"currentSnapshot"`
+	RouteMode            string                       `json:"routeMode"`
+	SelectedGates        []string                     `json:"selectedGates"`
+	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
+	CompletedReviewWaves int                          `json:"completedReviewWaves"`
+	ExtraReviewWaves     int                          `json:"extraReviewWaves"`
+	Gates                map[string]GateResult        `json:"gates"`
+	QA                   QAExecutionResult            `json:"qaExecution"`
 }
 
 func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseSnapshot, currentSnapshot, basePromptRevision, catalogRevision string, confirmed bool, gateIDs []string) RunState {
@@ -202,7 +203,7 @@ func RunSummaryPath(root, runID string) string {
 }
 
 func runSummary(state RunState) RunSummary {
-	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedRepairCycles: state.CompletedRepairCycles, ExtraRepairCycles: state.ExtraRepairCycles, Gates: state.Gates, QA: state.QAExecution}
+	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution}
 }
 
 func RequirementRevision(path string) (string, error) {

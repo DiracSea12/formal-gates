@@ -65,6 +65,34 @@ review, or verification scope.
 - **WHEN** a confirmed route omits QA and Start Readiness passes
 - **THEN** development can be prepared without QA cases
 
+#### Scenario: Added gate activates readiness
+
+- **WHEN** the user explicitly adds a discovered gate to an initial none route
+  after development but before Seal
+- **THEN** Start Readiness becomes required immediately and the added gate
+  cannot be prepared until readiness passes
+
+#### Scenario: Deferred readiness keeps the development snapshot
+
+- **WHEN** deferred Start Readiness passes after a post-development gate
+  addition
+- **THEN** the added gate reviews the current immutable development snapshot
+  without forcing another development snapshot or consuming a review wave
+
+#### Scenario: Completed semantic result is immutable on its snapshot
+
+- **WHEN** QA or a discovered gate already has PASS or FAIL recorded for the
+  current immutable snapshot
+- **THEN** duplicate preparation or recording cannot replace that result, while
+  PENDING and RUNTIME_ERROR remain retryable
+
+#### Scenario: Prepared development dispatch resumes
+
+- **WHEN** normal interruption occurs after a development or repair task is
+  prepared but before the host retains or completes its dispatch
+- **THEN** Resume can recompose the current prepared task without advancing or
+  resetting its workflow boundary
+
 ### Requirement: User-owned route changes
 
 Only explicit user direction SHALL add a gate after routing. A gate SHALL be
@@ -91,6 +119,21 @@ clarification.
 - **THEN** prior confirmation, readiness, QA, development, and review results
   cannot authorize continued delivery, while the confirmed route remains and
   no second routing prompt is shown
+
+#### Scenario: Changed meaning revalidates QA incrementally
+
+- **WHEN** a meaning-changing revision has a reliably bounded effect on some
+  previously approved QA cases
+- **THEN** QA Design reviews the complete current requirement and every prior
+  case, preserves confirmed unaffected cases, changes only affected cases, and
+  blocks development until the resulting complete set is approved
+
+#### Scenario: Unbounded QA impact triggers full redesign
+
+- **WHEN** QA Design cannot reliably bound which prior cases a semantic change
+  affects or the change alters the overall workflow
+- **THEN** it replaces the complete QA case set instead of assuming unaffected
+  coverage
 
 #### Scenario: Meaning-preserving change keeps routing
 
@@ -136,27 +179,42 @@ failure SHALL always block without being converted to P2.
 - **WHEN** a discovered-gate finding has another severity value
 - **THEN** the result is rejected without mutating run state
 
-### Requirement: One shared completed-cycle limit
+### Requirement: One shared completed review-wave limit
 
-Selected QA and selected discovered gates SHALL share three completed
-automatic repair-review cycles. A cycle SHALL count once only after a repair
-produces a new immutable snapshot and all required verification for that
-snapshot is recorded. Failed dispatch, interruption, missing verification,
-and no-repair results SHALL not count. PENDING and RUNTIME_ERROR SHALL not
-consume the limit, and the workflow SHALL not maintain a separate runtime
-retry counter.
+Selected QA and selected discovered gates SHALL share three completed automatic
+review waves. The initial post-development wave and every post-repair wave SHALL
+each count once when every selected result for its immutable snapshot is
+recorded and none is PENDING or RUNTIME_ERROR. A complete PASS, P2-only, QA
+FAIL, or discovered-gate P0/P1 wave SHALL count; QA and all selected discovered
+gates in that wave SHALL produce only one increment. Each immutable snapshot
+SHALL count at most once. Failed dispatch, interruption, missing verification,
+PENDING, and RUNTIME_ERROR SHALL leave the wave incomplete and SHALL not consume
+the limit. The workflow SHALL not maintain a separate runtime retry counter.
 
-#### Scenario: QA and different gates share one count
+#### Scenario: Initial wave counts
 
-- **WHEN** repairs originating from QA and two different gates complete
-  verification
-- **THEN** all three consume the same delivery-level count
+- **WHEN** every selected review result for the initial immutable development
+  snapshot completes without PENDING or RUNTIME_ERROR
+- **THEN** the delivery-level completed-wave count increases from zero to one
+
+#### Scenario: QA and different gates share one wave count
+
+- **WHEN** QA and multiple discovered gates all complete for one immutable
+  snapshot
+- **THEN** that complete wave increases the delivery-level count only once,
+  regardless of whether its semantic result passes or requires repair
 
 #### Scenario: Incomplete verification does not count
 
-- **WHEN** a repair snapshot exists but one required selected result remains
-  pending
-- **THEN** the completed-cycle count remains unchanged
+- **WHEN** an initial or repair snapshot exists but one required selected result
+  remains pending or has RUNTIME_ERROR
+- **THEN** the completed-wave count remains unchanged
+
+#### Scenario: Duplicate submission does not recount a snapshot
+
+- **WHEN** a complete wave has already incremented the count for its immutable
+  snapshot
+- **THEN** retrying or repeating result submission cannot increment it again
 
 ### Requirement: Carry remains selected-gate routing
 
@@ -172,7 +230,7 @@ selected discovered gates.
 ### Requirement: Seal requires explicit unresolved authorization
 
 Seal SHALL enforce explicit authorization for unresolved selected results.
-Before three completed cycles are exhausted, a selected QA FAIL or
+Before three completed review waves are exhausted, a selected QA FAIL or
 discovered-gate P0/P1 result SHALL return to repair and SHALL not offer Seal
 skip. After exhaustion, Seal SHALL require authorization for every remaining
 repairable blocker. Custom omissions SHALL use their route authorization. A
@@ -184,14 +242,28 @@ authorization source and result status.
 
 #### Scenario: Early skip is rejected
 
-- **WHEN** a selected gate remains blocking before three completed cycles
+- **WHEN** a selected gate remains blocking before three completed review waves
 - **THEN** Seal rejects skip authorization and returns the run to repair
 
 #### Scenario: Partial exhausted-limit authorization is rejected
 
-- **WHEN** three cycles are exhausted and the user authorizes only some of the
-  selected non-passing gates
+- **WHEN** three review waves are exhausted and the user authorizes only some
+  of the selected non-passing gates
 - **THEN** Seal remains blocked by every unapproved result
+
+#### Scenario: Partial authorization persists
+
+- **WHEN** the user authorizes a named subset but the same Seal attempt remains
+  blocked by another selected result
+- **THEN** the named authorization is saved and remains effective after normal
+  continuation or Resume
+
+#### Scenario: Repair snapshot clears prior Seal authorization
+
+- **WHEN** a named Seal authorization is recorded for one snapshot and the user
+  then authorizes another repair that produces a new immutable snapshot
+- **THEN** the prior Seal authorization cannot cover a result from the new
+  snapshot, while route-origin authorization remains unchanged
 
 #### Scenario: Interrupted dispatch cannot be sealed
 
@@ -202,11 +274,11 @@ authorization source and result status.
 
 - **WHEN** a selected QA or discovered gate returns RUNTIME_ERROR
 - **THEN** the user may retry it or explicitly authorize its skip without
-  changing the completed repair-cycle count
+  completing the current review wave
 
 #### Scenario: Additional repair is user-authorized
 
-- **WHEN** three cycles are exhausted and the user authorizes another repair
+- **WHEN** three review waves are exhausted and the user authorizes another repair
 - **THEN** the effective limit for that run increases and the normal repair
   path resumes
 

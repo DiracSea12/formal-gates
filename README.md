@@ -21,9 +21,17 @@ review 和小改动不会自动进入这套流程。
 用户从“QA 优先、其余门按文件名排序”的列表中一次选择 none、full 或 custom。
 
 QA 不属于提示词门目录。开发完成后，用户选择的 QA Execution 和审查门可以
-在同一批次并行执行。
-full 和 custom 路由运行 Start Readiness，none 路由省略它。准备 development
-worker 时即冻结开发前结果，并禁止在开发开始后再加入 QA。
+在同一批次并行执行。首次完整开发后审查和每次完整返修后审查共享三轮
+review-wave 上限。
+full 和 custom 路由在开发前运行 Start Readiness。none 路由原本省略它；如果
+开发后加入审查门使选择集合变为非空，则必须补做 Start Readiness，且它通过前
+不能审查或 Seal，同时保留当前开发快照。准备 development worker 时即冻结
+开发前结果，并禁止在开发开始后再加入 QA。
+
+需求语义变化后，原有 QA 用例保留为未批准的完整覆盖复核输入。下一次 QA
+Design 在影响边界明确时保留不受影响的用例，无法可靠确定边界时则替换完整
+用例集。正常中断后可以重新生成已准备的 development 任务；不可变快照上已
+记录的语义 PASS 或 FAIL 仍为权威结果。
 
 ## 安装
 
@@ -134,8 +142,8 @@ Git、SVN、P4 的命令见
 每条审查门 finding 都带 P0、P1 或 P2。无 finding 或仅 P2 时为 `PASS`；
 至少一条 P0/P1 时为 `FAIL`；`RUNTIME_ERROR` 不带 finding。已选择的
 `PENDING` 会阻止 Seal；运行错误需要重试或用户明确跳过。QA FAIL 和 P0/P1
-在共享三轮返修额度耗尽前必须返修，之后才可显式授权跳过。仅 P2 的建议会
-保留展示，但不阻止 Seal。
+在共享三轮 review-wave 额度耗尽前必须返修，之后才可显式授权跳过。仅 P2
+的建议会保留展示，但不阻止 Seal。
 
 封板成功或显式中止后，CLI 写入一个摘要并删除该 run 的整个临时目录。
 它不会留下提示词副本、分层证据图或详细状态文件。
