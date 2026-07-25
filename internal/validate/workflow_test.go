@@ -299,34 +299,47 @@ func TestQAReviewGatesDevelopmentAndLoopsThroughDesignRework(t *testing.T) {
 }
 
 func TestDeferredReadinessAfterNoneRouteAdditionKeepsSnapshot(t *testing.T) {
-	root, pkg := workflowFixture(t)
-	state := readyDelivery(t, root, pkg, "deferred-readiness", "none", nil)
-	state, err := AddRouteGates(root, pkg, state.RunID, []string{"quality"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.Actions["start-readiness"].Status != "PENDING" || state.CurrentSnapshot != "delivery" {
-		t.Fatalf("gate addition did not activate deferred readiness while retaining the snapshot: %#v", state)
-	}
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality", "delivery"); err == nil || !strings.Contains(err.Error(), "Start Readiness") {
-		t.Fatalf("added gate bypassed deferred readiness: %v", err)
-	}
-	if _, err := Seal(root, pkg, state.RunID, "delivery", "delivery", nil); err == nil || !strings.Contains(err.Error(), "Start Readiness") {
-		t.Fatalf("Seal bypassed deferred readiness: %v", err)
-	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", ""); err != nil {
-		t.Fatal(err)
-	}
-	state = recordReadiness(t, root, pkg, state)
-	if state.CurrentSnapshot != "delivery" || state.CompletedReviewWaves != 0 {
-		t.Fatalf("deferred readiness changed snapshot or completed a wave: %#v", state)
-	}
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality", "delivery"); err != nil {
-		t.Fatalf("added gate remained blocked after deferred readiness: %v", err)
-	}
-	state = recordGate(t, root, pkg, state, "quality", "PASS", nil)
-	if state.CompletedReviewWaves != 1 {
-		t.Fatalf("added gate did not complete the current snapshot's initial wave: %#v", state)
+	for _, tc := range []struct {
+		name, snapshot string
+	}{
+		{name: "changed snapshot", snapshot: "delivery"},
+		{name: "unchanged snapshot", snapshot: "base"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			state := beginRoute(t, root, pkg, "deferred-readiness", "none", nil)
+			if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			state = advance(t, root, pkg, state, tc.snapshot)
+			state, err := AddRouteGates(root, pkg, state.RunID, []string{"quality"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Actions["start-readiness"].Status != "PENDING" || state.CurrentSnapshot != tc.snapshot {
+				t.Fatalf("gate addition did not activate deferred readiness while retaining the snapshot: %#v", state)
+			}
+			if _, err := PrepareGate(root, pkg, state.RunID, "quality", tc.snapshot); err == nil || !strings.Contains(err.Error(), "Start Readiness") {
+				t.Fatalf("added gate bypassed deferred readiness: %v", err)
+			}
+			if _, err := Seal(root, pkg, state.RunID, tc.snapshot, tc.snapshot, nil); err == nil || !strings.Contains(err.Error(), "Start Readiness") {
+				t.Fatalf("Seal bypassed deferred readiness: %v", err)
+			}
+			if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", ""); err != nil {
+				t.Fatal(err)
+			}
+			state = recordReadiness(t, root, pkg, state)
+			if state.CurrentSnapshot != tc.snapshot || state.CompletedReviewWaves != 0 {
+				t.Fatalf("deferred readiness changed snapshot or completed a wave: %#v", state)
+			}
+			if _, err := PrepareGate(root, pkg, state.RunID, "quality", tc.snapshot); err != nil {
+				t.Fatalf("added gate remained blocked after deferred readiness: %v", err)
+			}
+			state = recordGate(t, root, pkg, state, "quality", "PASS", nil)
+			if state.CompletedReviewWaves != 1 {
+				t.Fatalf("added gate did not complete the current snapshot's initial wave: %#v", state)
+			}
+		})
 	}
 }
 

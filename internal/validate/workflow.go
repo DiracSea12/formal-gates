@@ -1121,7 +1121,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if len(state.SelectedGates) == 0 {
 			return fmt.Errorf("Start Readiness is omitted for the none route")
 		}
-		deferred := state.RouteMode == "none" && state.CurrentSnapshot != state.BaseSnapshot && state.Actions["start-readiness"].Status != "PASS"
+		deferred := state.RouteMode == "none" && hasDevelopmentSnapshot(state) && state.Actions["start-readiness"].Status != "PASS"
 		if developmentStarted(state) && !deferred {
 			return fmt.Errorf("Start Readiness must be recorded before development")
 		}
