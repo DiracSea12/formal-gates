@@ -57,10 +57,10 @@
   },
   {
     "id": "FG-BEH-008",
-    "title": "Post-development work is parallel",
+    "title": "Selected post-development work is parallel",
     "user_prompt": "Development is complete. Run the formal review.",
-    "expected_behavior": "Dispatch QA Execution and every discovered independent gate in one parallel wave on the same current snapshot.",
-    "must_include": ["QA Execution", "every discovered independent gate", "parallel wave", "same current snapshot"],
+    "expected_behavior": "Dispatch selected QA Execution and every selected discovered gate in one parallel wave on the same current snapshot.",
+    "must_include": ["selected QA Execution", "every selected discovered gate", "parallel wave", "same current snapshot"],
     "must_avoid": ["wait for each gate"]
   },
   {
@@ -75,8 +75,8 @@
     "id": "FG-BEH-010",
     "title": "Carry sees only the immediate repair diff",
     "user_prompt": "A repair changed the current snapshot after two gates passed.",
-    "expected_behavior": "Run independent Carry on the immediate pre-repair-to-current native VCS comparison and decide INHERIT or RERUN for every prior passing gate.",
-    "must_include": ["immediate pre-repair-to-current", "native VCS", "INHERIT or RERUN", "every prior passing gate"],
+    "expected_behavior": "Run independent Carry on the immediate pre-repair-to-current native VCS comparison and decide INHERIT or RERUN for every prior passing selected discovered gate.",
+    "must_include": ["immediate pre-repair-to-current", "native VCS", "INHERIT or RERUN", "every prior passing selected discovered gate"],
     "must_avoid": ["reuse every PASS automatically"]
   },
   {
@@ -91,8 +91,8 @@
     "id": "FG-BEH-012",
     "title": "Runtime errors are not findings",
     "user_prompt": "A reviewer could not run the VCS comparison. Record its result.",
-    "expected_behavior": "Record RUNTIME_ERROR, keep it distinct from reviewer FAIL and findings, and allow seal to retain that status without requiring PASS.",
-    "must_include": ["RUNTIME_ERROR", "distinct from reviewer FAIL", "allow seal"],
+    "expected_behavior": "Record RUNTIME_ERROR, keep it distinct from reviewer FAIL and findings, and require explicit user skip authorization before Seal may retain that status without PASS.",
+    "must_include": ["RUNTIME_ERROR", "distinct from reviewer FAIL", "explicit user skip authorization"],
     "must_avoid": ["convert it to a finding"]
   },
   {

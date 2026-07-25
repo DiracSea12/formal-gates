@@ -50,6 +50,8 @@ requested; omitted review stages are not backfilled during seal:
    --confirmed`. After a meaning-changing revision, QA Design receives every
    prior case as unapproved review input and returns a revised complete
    candidate set, retaining unaffected cases when impact is reliably bounded.
+   Classifying any changed revision also binds the current immutable live VCS
+   identity that contains it.
 3. **Route once.** Read `workflow route-candidates`, present QA first followed
    by every discovered gate, and record one `none`, `full`, or `custom` route.
    Custom omissions receive route skip authorization. Later additions require
@@ -135,7 +137,7 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --source <requirement-file> --confirmed
 # After Resume reports a changed revision, classify its semantic effect.
 formal-gates workflow requirement --root <repo> --package-root <package> \
-  --run-id <id> --meaning <preserved|changed>
+  --run-id <id> --meaning <preserved|changed> --live-snapshot <current>
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
@@ -176,7 +178,7 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id> --live-snapshot <current>
 
-# Record one group for every approved case and every discovered gate.
+# Record one group for every approved QA case and every selected discovered gate.
 formal-gates workflow qa-execution --root <repo> --package-root <package> \
   --run-id <id> --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
@@ -268,7 +270,9 @@ requirement change.
 
 Independent post-development gates are the valid direct Markdown children of
 the installed package's `gates/` directory. The filename stem is the gate ID;
-files are sorted lexically. Adding a valid file and reinstalling adds a gate.
+files are sorted lexically. `qa` is reserved for the built-in QA flow, so
+`gates/qa.md` is invalid. Adding any other valid file and reinstalling adds a
+gate.
 Deleting it and reinstalling removes the gate. Do not add a gate registry,
 manifest, front matter, weight, dependency graph, or project-local overlay.
 

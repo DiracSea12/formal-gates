@@ -87,7 +87,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if _, err := RecordAction(root, packageRoot, state.RunID, "requirements-clarification", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err != nil {
 		return err
 	}
-	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "")
+	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", "")
 	if err != nil {
 		return err
 	}

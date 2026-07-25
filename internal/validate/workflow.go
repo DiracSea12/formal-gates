@@ -125,7 +125,7 @@ func Resume(root, packageRoot, runID string) (RunState, bool, error) {
 	return state, revision != state.RequirementRevision, nil
 }
 
-func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect string) (RunState, error) {
+func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect, liveSnapshot string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentCatalog(*state, packageRoot)
 		if err != nil {
@@ -144,13 +144,19 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			if semanticEffect != "preserved" && semanticEffect != "changed" {
 				return fmt.Errorf("changed requirement requires semantic effect preserved or changed")
 			}
+			liveSnapshot = strings.TrimSpace(liveSnapshot)
+			if liveSnapshot == "" {
+				return fmt.Errorf("changed requirement requires the current live VCS snapshot")
+			}
 			state.RequirementSource, state.RequirementRevision = source, revision
 			if semanticEffect == "preserved" {
 				if !state.RequirementConfirmed {
 					return fmt.Errorf("meaning can be preserved only for a previously confirmed requirement")
 				}
+				rebindCurrentSnapshot(state, liveSnapshot)
 				return nil
 			}
+			state.CurrentSnapshot = liveSnapshot
 			invalidateRequirementResults(state, catalog.GateIDs())
 			state.RequirementConfirmed = false
 			if confirmed {
@@ -160,6 +166,9 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		}
 		if semanticEffect != "" {
 			return fmt.Errorf("semantic effect is accepted only when the requirement revision changed")
+		}
+		if strings.TrimSpace(liveSnapshot) != "" {
+			return fmt.Errorf("live VCS snapshot is accepted only when the requirement revision changed")
 		}
 		if confirmed && state.Actions["requirements-clarification"].Status != "PASS" {
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
@@ -218,7 +227,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 			}
 		}
 		state.RouteMode = mode
-		state.SelectedGates = append([]string(nil), selected...)
+		state.SelectedGates = append([]string{}, selected...)
 		state.SkipAuthorizations = map[string]SkipAuthorization{}
 		chosen := selectedSet(*state)
 		for _, id := range candidates {
@@ -381,14 +390,14 @@ func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (st
 		}
 		detail := ""
 		status := state.Actions["development-worker"].Status
-		if status == developmentVerified || status == developmentRepairPrepared {
+		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
 			detail = repairInput(*state)
 		}
 		prompt, err = ComposeActionPrompt(catalog, "development-worker", routeForState(root, *state), detail)
 		if err != nil {
 			return err
 		}
-		if status == developmentVerified {
+		if status == developmentComplete || status == developmentVerified {
 			state.Actions["development-worker"] = ActionResult{Status: developmentRepairPrepared}
 		} else if status == developmentPending {
 			state.Actions["development-worker"] = ActionResult{Status: developmentPrepared}
@@ -585,10 +594,13 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if strings.TrimSpace(currentSnapshot) == "" || currentSnapshot == state.CurrentSnapshot {
+		currentSnapshot = strings.TrimSpace(currentSnapshot)
+		developmentStatus := state.Actions["development-worker"].Status
+		if currentSnapshot == "" || (currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared) {
 			return fmt.Errorf("a new current snapshot is required")
 		}
-		if strings.TrimSpace(liveSnapshot) == "" || liveSnapshot != currentSnapshot {
+		liveSnapshot = strings.TrimSpace(liveSnapshot)
+		if liveSnapshot == "" || liveSnapshot != currentSnapshot {
 			return fmt.Errorf("live VCS identity must match the new current snapshot")
 		}
 		if err := requireTransition(*state, "snapshot", ""); err != nil {
@@ -1011,7 +1023,7 @@ func suffixIsDigits(value string) bool {
 
 func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	routeMode := state.RouteMode
-	selected := append([]string(nil), state.SelectedGates...)
+	selected := append([]string{}, state.SelectedGates...)
 	routeSkips := map[string]SkipAuthorization{}
 	for id, authorization := range state.SkipAuthorizations {
 		if authorization.Origin == "ROUTE" {
@@ -1031,6 +1043,35 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.SkipAuthorizations = routeSkips
 	state.CompletedReviewWaves = 0
 	state.ExtraReviewWaves = 0
+}
+
+func rebindCurrentSnapshot(state *RunState, snapshot string) {
+	previous := state.CurrentSnapshot
+	state.CurrentSnapshot = snapshot
+	if previous == snapshot {
+		return
+	}
+	if state.QAExecution.Snapshot == previous {
+		state.QAExecution.Snapshot = snapshot
+	}
+	for id, result := range state.Gates {
+		if result.Snapshot == previous {
+			result.Snapshot = snapshot
+			state.Gates[id] = result
+		}
+	}
+	for id, authorization := range state.SkipAuthorizations {
+		if authorization.Origin == "SEAL" && authorization.Snapshot == previous {
+			authorization.Snapshot = snapshot
+			state.SkipAuthorizations[id] = authorization
+		}
+	}
+	for id, result := range state.Carry {
+		if result.TargetSnapshot == previous {
+			result.TargetSnapshot = snapshot
+			state.Carry[id] = result
+		}
+	}
 }
 
 func eligibleCarryGates(state RunState) []string {
@@ -1068,12 +1109,19 @@ func requireTransition(state RunState, operation, target string) error {
 	}
 	switch operation {
 	case "route-add":
+		developmentStatus := state.Actions["development-worker"].Status
+		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
+			return fmt.Errorf("the gate route cannot change while a development worker is prepared")
+		}
+		if state.PreRepairSnapshot != "" {
+			return fmt.Errorf("the gate route cannot change while a repair snapshot requires verification")
+		}
 		return nil
 	case "start-readiness":
 		if len(state.SelectedGates) == 0 {
 			return fmt.Errorf("Start Readiness is omitted for the none route")
 		}
-		deferred := state.RouteMode == "none" && state.CurrentSnapshot != state.BaseSnapshot && state.Actions["start-readiness"].Status != "PASS"
+		deferred := state.RouteMode == "none" && hasDevelopmentSnapshot(state) && state.Actions["start-readiness"].Status != "PASS"
 		if developmentStarted(state) && !deferred {
 			return fmt.Errorf("Start Readiness must be recorded before development")
 		}
@@ -1115,16 +1163,29 @@ func requireTransition(state RunState, operation, target string) error {
 			return nil
 		}
 		if developmentStatus == developmentComplete || developmentStatus == developmentVerified {
-			if state.PreRepairSnapshot != "" {
-				return fmt.Errorf("the current repair still requires verification")
-			}
 			if !reviewWaveRecorded(state) {
+				if state.PreRepairSnapshot != "" {
+					return fmt.Errorf("the current repair still requires verification")
+				}
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
 			if !hasRepairableBlocker(state) && !hasP2Recommendation(state) {
+				if state.PreRepairSnapshot != "" {
+					return fmt.Errorf("the current repair still requires verification")
+				}
 				return fmt.Errorf("no recorded result requires repair")
 			}
-			if developmentStatus != developmentVerified {
+			hasRuntimeError := false
+			for id := range selectedSet(state) {
+				if selectedResultStatus(state, id) == "RUNTIME_ERROR" {
+					hasRuntimeError = true
+					break
+				}
+			}
+			if (developmentStatus != developmentVerified || hasRuntimeError) && !runtimeErrorsAuthorizedForRepair(state) {
+				if state.PreRepairSnapshot != "" {
+					return fmt.Errorf("the current repair still requires verification")
+				}
 				return fmt.Errorf("the current review wave is not complete")
 			}
 			if state.CompletedReviewWaves >= effectiveReviewWaveLimit(state) {
@@ -1142,7 +1203,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("QA Review must pass before a development snapshot")
 		}
-		if state.PreRepairSnapshot != "" {
+		if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
 			return fmt.Errorf("the current repair still requires verification")
 		}
 		if developmentStatus == developmentRepairPrepared {
@@ -1292,6 +1353,21 @@ func hasP2Recommendation(state RunState) bool {
 		}
 	}
 	return false
+}
+
+func runtimeErrorsAuthorizedForRepair(state RunState) bool {
+	foundRuntime := false
+	for id := range selectedSet(state) {
+		if selectedResultStatus(state, id) != "RUNTIME_ERROR" {
+			continue
+		}
+		foundRuntime = true
+		authorization, ok := state.SkipAuthorizations[id]
+		if !ok || authorization.Origin != "SEAL" || authorization.Status != "RUNTIME_ERROR" || authorization.Snapshot != state.CurrentSnapshot {
+			return false
+		}
+	}
+	return foundRuntime
 }
 
 func repairInput(state RunState) string {

@@ -72,17 +72,21 @@ repair task after normal interruption because prepared prompts are not retained.
 
 ## RQ-004 - Route changes and invalidation
 
-Only an explicit user decision may change the selected gate set. A gate may be
-added only before its required workflow node has passed. A selected gate SHALL
-not be silently removed; it must pass or receive user skip authorization at
-Seal. QA cannot be added after development begins because its design action is
-pre-development. A post-development gate may be added after development but
-before Seal. If that addition changes an initial none route into a non-empty
-selection, the workflow SHALL require the deferred Start Readiness action; it
-SHALL not discard the current immutable development snapshot merely because
-readiness ran after it. The confirmed none, full, or custom route SHALL remain
-the run's single routing decision across requirement revisions; the workflow
-SHALL NOT ask the user to choose the route again.
+Only an explicit user decision may change the selected gate set. A selected
+gate SHALL not be silently removed; it must pass or receive user skip
+authorization at Seal. QA cannot be added after development begins because its
+design action is pre-development. A discovered gate may be added after
+development until Seal, including after the current snapshot's review wave has
+completed. Review only the added gate on that immutable snapshot and do not
+count the snapshot as another wave. A late-added `RUNTIME_ERROR` still requires
+retry or matching explicit authorization before repair or Seal. A prepared
+development or repair worker and a repair snapshot awaiting verification SHALL
+still freeze route additions. If the addition changes an initial none route
+into a non-empty selection, the workflow SHALL require deferred Start Readiness
+without discarding the current immutable development snapshot. The confirmed
+none, full, or custom route SHALL remain the run's single routing decision
+across requirement revisions; the workflow SHALL NOT ask the user to choose the
+route again.
 
 When the bound requirement revision changes, Resume SHALL pause without
 preserving or invalidating dependent results until the main agent explicitly

@@ -37,9 +37,10 @@ the same current task after interruption while preserving its start boundary.
 When Resume detects a changed requirement revision, it returns a pending
 classification and does not mutate dependent state. The existing requirement
 update owner accepts one explicit semantic-effect decision. A
-meaning-preserving decision rebinds the revision while retaining results; a
-meaning-changing decision uses the existing invalidation path. The main agent
-makes that decision from the confirmed meaning and asks the user when it cannot
+meaning-preserving decision rebinds the revision and current native VCS
+identity while retaining results; a meaning-changing decision binds that same
+live identity before using the existing invalidation path. The main agent makes
+that decision from the confirmed meaning and asks the user when it cannot
 establish preservation. The CLI does not infer meaning from filenames, changed
 lines, edit categories, or project vocabulary.
 
@@ -77,9 +78,16 @@ and never touches the post-development completed-wave count.
 Expose the current route candidates through the existing run/catalog view:
 `qa` first, then lexically sorted discovered gate IDs. One route mutation
 records none, full, or the exact custom set. A custom complement becomes
-route-authorized skips. Later additions use the same mutation owner and reject
-nodes whose prerequisite point has passed. Requirement rebinding and
-invalidation preserve this route and do not emit another route prompt.
+route-authorized skips. Reserve `qa` at catalog load so a gate file cannot
+collide with the built-in QA result owner. Later additions use the same mutation
+owner. A discovered gate may be added before development starts or against the
+current immutable development snapshot until Seal, including after that
+snapshot's wave completed. Review only the added gate on the same snapshot and
+do not count the snapshot again. A late-added RUNTIME_ERROR still requires retry
+or matching explicit authorization before repair or Seal. Development or repair
+preparation and repair-snapshot verification freeze the selected set.
+Requirement rebinding and invalidation preserve this route and do not emit
+another route prompt.
 Start Readiness is keyed to the effective selected set rather than only the
 original route label. When a post-development addition changes an initial none
 route into a non-empty selection, set readiness to its required pending state
@@ -130,7 +138,9 @@ The existing `PENDING` status continues to mean incomplete or interrupted
 dispatch. Resume continues it and Seal rejects it. `RUNTIME_ERROR` remains
 distinct from a semantic result; it may be retried or covered by explicit user
 skip authorization. Neither status completes a review wave, and no runtime
-retry counter is added.
+retry counter is added. When that snapshot also has a repairable blocker, an
+authorized runtime error no longer prevents repair of the blocker, but the
+incomplete wave still does not increment the shared count.
 
 Before the effective review-wave limit is exhausted, repairable blockers reject
 Seal and cannot receive skip authorization. After exhaustion, repeated Seal

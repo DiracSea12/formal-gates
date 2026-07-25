@@ -14,13 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt.
 - Replace the receipt/closure workflow with one resumable run-state file and
   one retained seal or abort summary.
-- Run QA Execution and all discovered independent gates in parallel on the
+- Run selected QA Execution and selected independent gates in parallel on the
   current native VCS snapshot.
 - Require adaptive requirement and consequential-solution alignment, then one
   none, full, or custom route over QA and the dynamic gate catalog.
 - Classify changed requirement revisions explicitly as meaning-preserving or
-  meaning-changing before dependent state is preserved or invalidated, and
-  retain prior QA cases as unapproved coverage-review input after invalidation.
+  meaning-changing, rebind the current native VCS identity before results are
+  preserved or invalidated, and retain prior QA cases as unapproved
+  coverage-review input after invalidation.
 - Route P0/P1/P2 findings through one shared three-review-wave limit, keep
   Carry limited to previously passing selected gates, treat semantic results as
   authoritative for their snapshot, and persist snapshot-bound Seal skips.
@@ -28,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Readiness when a post-development addition makes a none route non-empty.
 - Restore independent QA Review between QA Design and development, with failed
   review returning the retained complete case set to Design rework.
+- Reserve `qa` for the built-in QA flow so a discovered gate cannot collide
+  with its routing and result ownership.
 - Use Git, SVN, P4, or another named VCS directly for cumulative and repair
   comparisons.
 - Reject Seal while selected work is pending or lacks a matching PASS or

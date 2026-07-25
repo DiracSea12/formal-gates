@@ -142,7 +142,9 @@ The workflow SHALL ask for none, full, or custom routing only once per run. A
 changed requirement revision
 SHALL first pause for an explicit semantic-effect classification. A
 meaning-preserving classification SHALL rebind the revision and preserve
-dependent results. Classification SHALL depend on whether confirmed meaning
+dependent results. Both semantic classifications SHALL bind the current native
+VCS identity containing the changed revision so later development and Seal use
+the live snapshot. Classification SHALL depend on whether confirmed meaning
 changed, not an enumerated set of edit types; uncertainty SHALL return to user
 clarification.
 
@@ -150,6 +152,23 @@ clarification.
 
 - **WHEN** the user requests QA after the pre-development QA Design point
 - **THEN** the current run rejects the insertion instead of backfilling QA
+
+#### Scenario: Prepared work freezes the selected set
+
+- **WHEN** a development or repair worker has been prepared but its snapshot
+  has not yet been recorded
+- **THEN** a route addition is rejected without changing the selected set
+
+#### Scenario: A completed wave accepts a late discovered gate
+
+- **WHEN** the current review wave completed and the user explicitly adds an
+  omitted discovered gate before Seal
+- **THEN** only that gate is reviewed on the unchanged snapshot, previously
+  completed work does not rerun, and the wave count remains unchanged
+- **AND** its RUNTIME_ERROR requires retry or matching explicit authorization
+  before repair or Seal
+- **WHEN** a repair snapshot is awaiting verification
+- **THEN** a route addition is rejected without changing the selected set
 
 #### Scenario: Semantic change preserves the one route decision
 
@@ -178,7 +197,13 @@ clarification.
 - **WHEN** the bound revision changes but the confirmed outcome, acceptance,
   public behavior, and consequential solution boundaries remain unchanged
 - **THEN** Resume pauses for classification and an explicit
-  meaning-preserving decision rebinds the revision without discarding results
+  meaning-preserving decision rebinds the revision and live VCS snapshot without
+  discarding results
+
+#### Scenario: Built-in QA ID cannot collide with a gate
+
+- **WHEN** the installed gate directory contains a direct `qa.md` file
+- **THEN** catalog loading rejects it before routing can expose duplicate IDs
 
 #### Scenario: Uncertain meaning is not guessed
 
@@ -313,6 +338,12 @@ authorization source and result status.
 - **WHEN** a selected QA or discovered gate returns RUNTIME_ERROR
 - **THEN** the user may retry it or explicitly authorize its skip without
   completing the current review wave
+
+#### Scenario: Authorized runtime error does not strand another blocker
+
+- **WHEN** one selected result has an authorized RUNTIME_ERROR and another
+  selected result on the same snapshot requires repair
+- **THEN** repair may proceed without counting the incomplete review wave
 
 #### Scenario: Additional repair is user-authorized
 

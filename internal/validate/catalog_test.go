@@ -55,6 +55,9 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 			}
 		}},
 		{"non-markdown", func(root string) { writeTestFile(t, filepath.Join(root, "gates", "notes.txt"), "bad") }},
+		{"reserved-qa", func(root string) {
+			writeTestFile(t, filepath.Join(root, "gates", "qa.md"), "collides with built-in QA")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := promptPackage(t, map[string]string{"good": "checks"})

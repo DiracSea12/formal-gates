@@ -15,6 +15,7 @@ automatically.
 
 - `prompts/reviewer-base.md` contains the shared independent-review contract.
 - Each `gates/*.md` file is one independent review gate; its filename is its ID.
+  `qa` is reserved for the built-in QA flow and cannot be a file ID.
 - `prompts/actions/*.md` contains requirements, readiness, QA, worker, and Carry
   roles.
 - `.gates/tmp/<run-id>/state.json` is the only temporary run-state file.
@@ -140,8 +141,9 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 
 Use `formal-gates help` and `SKILL.md` for QA Execution, Carry, repair
 authorization, and Seal parameters. A changed requirement revision first needs
-`workflow requirement --meaning preserved|changed`; the CLI does not infer its
-semantic effect.
+`workflow requirement --meaning preserved|changed --live-snapshot <current>`
+with the native VCS identity containing that revision; the CLI does not infer
+its semantic effect.
 
 ## Diffs And Repairs
 
