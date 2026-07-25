@@ -594,10 +594,13 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if strings.TrimSpace(currentSnapshot) == "" || currentSnapshot == state.CurrentSnapshot {
+		currentSnapshot = strings.TrimSpace(currentSnapshot)
+		developmentStatus := state.Actions["development-worker"].Status
+		if currentSnapshot == "" || (currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared) {
 			return fmt.Errorf("a new current snapshot is required")
 		}
-		if strings.TrimSpace(liveSnapshot) == "" || liveSnapshot != currentSnapshot {
+		liveSnapshot = strings.TrimSpace(liveSnapshot)
+		if liveSnapshot == "" || liveSnapshot != currentSnapshot {
 			return fmt.Errorf("live VCS identity must match the new current snapshot")
 		}
 		if err := requireTransition(*state, "snapshot", ""); err != nil {

@@ -432,6 +432,13 @@ func TestRequirementRevisionWaitsForExplicitSemanticClassification(t *testing.T)
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
 		t.Fatalf("meaning-changing revision could not prepare development at the live snapshot: %v", err)
 	}
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatalf("unchanged implementation could not complete development at the requirement snapshot: %v", err)
+	}
+	if state.Actions["development-worker"].Status != developmentComplete || state.CurrentSnapshot != "requirement-changed-snapshot" {
+		t.Fatalf("unchanged implementation did not complete at the requirement snapshot: %#v", state)
+	}
 
 	none := beginRoute(t, root, pkg, "requirement-change-none", "none", nil)
 	if none.SelectedGates == nil {
@@ -498,6 +505,9 @@ func TestSharedReviewWavesIncludeInitialP2AndRerunQA(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "quality P1: blocker") || !strings.Contains(prompt, "quality P2: same-wave cleanup") {
 		t.Fatalf("repair prompt omitted wave findings: %s", prompt)
+	}
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, state.CurrentSnapshot, state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "new current snapshot") {
+		t.Fatalf("repair completed without a new immutable snapshot: %v", err)
 	}
 	resumedPrompt, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot)
 	if err != nil || resumedPrompt != prompt {
