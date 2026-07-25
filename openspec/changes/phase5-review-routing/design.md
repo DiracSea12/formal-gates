@@ -78,8 +78,12 @@ Expose the current route candidates through the existing run/catalog view:
 `qa` first, then lexically sorted discovered gate IDs. One route mutation
 records none, full, or the exact custom set. A custom complement becomes
 route-authorized skips. Later additions use the same mutation owner and reject
-nodes whose prerequisite point has passed. Requirement rebinding and
-invalidation preserve this route and do not emit another route prompt.
+nodes whose prerequisite point has passed. A discovered gate may be added
+before development starts, or against the initial immutable development
+snapshot while its review wave remains open. Development or repair preparation,
+repair-snapshot verification, and completed review waves freeze the selected
+set. Requirement rebinding and invalidation preserve this route and do not emit
+another route prompt.
 Start Readiness is keyed to the effective selected set rather than only the
 original route label. When a post-development addition changes an initial none
 route into a non-empty selection, set readiness to its required pending state

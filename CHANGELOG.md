@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt.
 - Replace the receipt/closure workflow with one resumable run-state file and
   one retained seal or abort summary.
-- Run QA Execution and all discovered independent gates in parallel on the
+- Run selected QA Execution and selected independent gates in parallel on the
   current native VCS snapshot.
 - Require adaptive requirement and consequential-solution alignment, then one
   none, full, or custom route over QA and the dynamic gate catalog.

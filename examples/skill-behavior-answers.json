@@ -29,7 +29,7 @@
   },
   {
     "id": "FG-BEH-008",
-    "answer": "Run QA Execution and every discovered independent gate in one parallel wave on the same current snapshot."
+    "answer": "Run selected QA Execution and every selected discovered gate in one parallel wave on the same current snapshot."
   },
   {
     "id": "FG-BEH-009",
@@ -37,7 +37,7 @@
   },
   {
     "id": "FG-BEH-010",
-    "answer": "Use the immediate pre-repair-to-current native VCS comparison and decide INHERIT or RERUN for every prior passing gate."
+    "answer": "Use the immediate pre-repair-to-current native VCS comparison and decide INHERIT or RERUN for every prior passing selected discovered gate."
   },
   {
     "id": "FG-BEH-011",
@@ -45,7 +45,7 @@
   },
   {
     "id": "FG-BEH-012",
-    "answer": "Record RUNTIME_ERROR, distinct from reviewer FAIL, and allow seal to retain that status without requiring PASS."
+    "answer": "Record RUNTIME_ERROR, distinct from reviewer FAIL, and require explicit user skip authorization before Seal may retain it without PASS."
   },
   {
     "id": "FG-BEH-013",

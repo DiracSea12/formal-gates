@@ -151,6 +151,18 @@ clarification.
 - **WHEN** the user requests QA after the pre-development QA Design point
 - **THEN** the current run rejects the insertion instead of backfilling QA
 
+#### Scenario: Prepared work freezes the selected set
+
+- **WHEN** a development or repair worker has been prepared but its snapshot
+  has not yet been recorded
+- **THEN** a route addition is rejected without changing the selected set
+
+#### Scenario: Completed or repairing wave freezes the selected set
+
+- **WHEN** the current review wave completed or a repair snapshot is awaiting
+  verification
+- **THEN** a route addition is rejected without changing results or wave count
+
 #### Scenario: Semantic change preserves the one route decision
 
 - **WHEN** the bound requirement changes meaning

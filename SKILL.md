@@ -176,7 +176,7 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id> --live-snapshot <current>
 
-# Record one group for every approved case and every discovered gate.
+# Record one group for every approved QA case and every selected discovered gate.
 formal-gates workflow qa-execution --root <repo> --package-root <package> \
   --run-id <id> --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \

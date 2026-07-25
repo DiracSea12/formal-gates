@@ -1068,6 +1068,16 @@ func requireTransition(state RunState, operation, target string) error {
 	}
 	switch operation {
 	case "route-add":
+		developmentStatus := state.Actions["development-worker"].Status
+		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
+			return fmt.Errorf("the gate route cannot change while a development worker is prepared")
+		}
+		if developmentStatus == developmentVerified {
+			return fmt.Errorf("the gate route cannot change after the current review wave completed")
+		}
+		if state.PreRepairSnapshot != "" {
+			return fmt.Errorf("the gate route cannot change while a repair snapshot requires verification")
+		}
 		return nil
 	case "start-readiness":
 		if len(state.SelectedGates) == 0 {
@@ -1115,16 +1125,22 @@ func requireTransition(state RunState, operation, target string) error {
 			return nil
 		}
 		if developmentStatus == developmentComplete || developmentStatus == developmentVerified {
-			if state.PreRepairSnapshot != "" {
-				return fmt.Errorf("the current repair still requires verification")
-			}
 			if !reviewWaveRecorded(state) {
+				if state.PreRepairSnapshot != "" {
+					return fmt.Errorf("the current repair still requires verification")
+				}
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
 			if !hasRepairableBlocker(state) && !hasP2Recommendation(state) {
+				if state.PreRepairSnapshot != "" {
+					return fmt.Errorf("the current repair still requires verification")
+				}
 				return fmt.Errorf("no recorded result requires repair")
 			}
 			if developmentStatus != developmentVerified && !runtimeErrorsAuthorizedForRepair(state) {
+				if state.PreRepairSnapshot != "" {
+					return fmt.Errorf("the current repair still requires verification")
+				}
 				return fmt.Errorf("the current review wave is not complete")
 			}
 			if state.CompletedReviewWaves >= effectiveReviewWaveLimit(state) {
@@ -1142,7 +1158,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("QA Review must pass before a development snapshot")
 		}
-		if state.PreRepairSnapshot != "" {
+		if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
 			return fmt.Errorf("the current repair still requires verification")
 		}
 		if developmentStatus == developmentRepairPrepared {
