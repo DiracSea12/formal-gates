@@ -159,11 +159,16 @@ clarification.
   has not yet been recorded
 - **THEN** a route addition is rejected without changing the selected set
 
-#### Scenario: Completed or repairing wave freezes the selected set
+#### Scenario: A completed wave accepts a late discovered gate
 
-- **WHEN** the current review wave completed or a repair snapshot is awaiting
-  verification
-- **THEN** a route addition is rejected without changing results or wave count
+- **WHEN** the current review wave completed and the user explicitly adds an
+  omitted discovered gate before Seal
+- **THEN** only that gate is reviewed on the unchanged snapshot, previously
+  completed work does not rerun, and the wave count remains unchanged
+- **AND** its RUNTIME_ERROR requires retry or matching explicit authorization
+  before repair or Seal
+- **WHEN** a repair snapshot is awaiting verification
+- **THEN** a route addition is rejected without changing the selected set
 
 #### Scenario: Semantic change preserves the one route decision
 

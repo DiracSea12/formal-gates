@@ -1110,9 +1110,6 @@ func requireTransition(state RunState, operation, target string) error {
 		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
 			return fmt.Errorf("the gate route cannot change while a development worker is prepared")
 		}
-		if developmentStatus == developmentVerified {
-			return fmt.Errorf("the gate route cannot change after the current review wave completed")
-		}
 		if state.PreRepairSnapshot != "" {
 			return fmt.Errorf("the gate route cannot change while a repair snapshot requires verification")
 		}
@@ -1175,7 +1172,14 @@ func requireTransition(state RunState, operation, target string) error {
 				}
 				return fmt.Errorf("no recorded result requires repair")
 			}
-			if developmentStatus != developmentVerified && !runtimeErrorsAuthorizedForRepair(state) {
+			hasRuntimeError := false
+			for id := range selectedSet(state) {
+				if selectedResultStatus(state, id) == "RUNTIME_ERROR" {
+					hasRuntimeError = true
+					break
+				}
+			}
+			if (developmentStatus != developmentVerified || hasRuntimeError) && !runtimeErrorsAuthorizedForRepair(state) {
 				if state.PreRepairSnapshot != "" {
 					return fmt.Errorf("the current repair still requires verification")
 				}
