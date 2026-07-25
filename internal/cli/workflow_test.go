@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -110,7 +111,7 @@ func TestCLIRouteCommandsExposeOrderedCandidatesAndPersistSelection(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	custom, err = validate.UpdateRequirement(root, pkg, custom.RunID, "", true, "")
+	custom, err = validate.UpdateRequirement(root, pkg, custom.RunID, "", true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +127,61 @@ func TestCLIRouteCommandsExposeOrderedCandidatesAndPersistSelection(t *testing.T
 	}
 	if custom.RouteMode != "custom" || len(custom.SelectedGates) != 1 || custom.SelectedGates[0] != "quality" {
 		t.Fatalf("custom route=%#v", custom)
+	}
+
+	none, err := validate.Start(validate.StartOptions{Root: root, PackageRoot: pkg, RunID: "none-cli", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", BaseSnapshot: "base"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, err = validate.RecordAction(root, pkg, none.RunID, "requirements-clarification", "PASS", "", nil, none.RequirementRevision, none.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, err = validate.UpdateRequirement(root, pkg, none.RunID, "", true, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", none.RunID, "--mode", "none"}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("none route failed: %s", stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &none); err != nil {
+		t.Fatal(err)
+	}
+	if none.SelectedGates == nil {
+		t.Fatalf("none route response encoded selectedGates as null: %s", stdout.String())
+	}
+	persisted, err := validate.LoadRunState(root, none.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SelectedGates == nil || !reflect.DeepEqual(none.SelectedGates, persisted.SelectedGates) {
+		t.Fatalf("none route response and persisted state disagree: response=%#v persisted=%#v", none.SelectedGates, persisted.SelectedGates)
+	}
+}
+
+func TestCLIRequirementRevisionRequiresAndRebindsLiveSnapshot(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "requirement-cli")
+	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "updated wording\n")
+	var stdout, stderr bytes.Buffer
+	args := []string{"workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--meaning", "preserved"}
+	if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "live VCS snapshot") {
+		t.Fatalf("requirement revision was rebound without live snapshot: code=%d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	args = append(args, "--live-snapshot", "updated-requirement-snapshot")
+	if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("requirement revision rebind failed: %s", stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentSnapshot != "updated-requirement-snapshot" {
+		t.Fatalf("requirement response kept a stale snapshot: %#v", state)
 	}
 }
 
@@ -219,7 +275,7 @@ func startCLIWorkflow(t *testing.T, root, pkg, id string) validate.RunState {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = validate.UpdateRequirement(root, pkg, id, "", true, "")
+	state, err = validate.UpdateRequirement(root, pkg, id, "", true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -125,7 +125,7 @@ func Resume(root, packageRoot, runID string) (RunState, bool, error) {
 	return state, revision != state.RequirementRevision, nil
 }
 
-func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect string) (RunState, error) {
+func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect, liveSnapshot string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentCatalog(*state, packageRoot)
 		if err != nil {
@@ -144,13 +144,19 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			if semanticEffect != "preserved" && semanticEffect != "changed" {
 				return fmt.Errorf("changed requirement requires semantic effect preserved or changed")
 			}
+			liveSnapshot = strings.TrimSpace(liveSnapshot)
+			if liveSnapshot == "" {
+				return fmt.Errorf("changed requirement requires the current live VCS snapshot")
+			}
 			state.RequirementSource, state.RequirementRevision = source, revision
 			if semanticEffect == "preserved" {
 				if !state.RequirementConfirmed {
 					return fmt.Errorf("meaning can be preserved only for a previously confirmed requirement")
 				}
+				rebindCurrentSnapshot(state, liveSnapshot)
 				return nil
 			}
+			state.CurrentSnapshot = liveSnapshot
 			invalidateRequirementResults(state, catalog.GateIDs())
 			state.RequirementConfirmed = false
 			if confirmed {
@@ -160,6 +166,9 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		}
 		if semanticEffect != "" {
 			return fmt.Errorf("semantic effect is accepted only when the requirement revision changed")
+		}
+		if strings.TrimSpace(liveSnapshot) != "" {
+			return fmt.Errorf("live VCS snapshot is accepted only when the requirement revision changed")
 		}
 		if confirmed && state.Actions["requirements-clarification"].Status != "PASS" {
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
@@ -218,7 +227,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 			}
 		}
 		state.RouteMode = mode
-		state.SelectedGates = append([]string(nil), selected...)
+		state.SelectedGates = append([]string{}, selected...)
 		state.SkipAuthorizations = map[string]SkipAuthorization{}
 		chosen := selectedSet(*state)
 		for _, id := range candidates {
@@ -1011,7 +1020,7 @@ func suffixIsDigits(value string) bool {
 
 func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	routeMode := state.RouteMode
-	selected := append([]string(nil), state.SelectedGates...)
+	selected := append([]string{}, state.SelectedGates...)
 	routeSkips := map[string]SkipAuthorization{}
 	for id, authorization := range state.SkipAuthorizations {
 		if authorization.Origin == "ROUTE" {
@@ -1031,6 +1040,35 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.SkipAuthorizations = routeSkips
 	state.CompletedReviewWaves = 0
 	state.ExtraReviewWaves = 0
+}
+
+func rebindCurrentSnapshot(state *RunState, snapshot string) {
+	previous := state.CurrentSnapshot
+	state.CurrentSnapshot = snapshot
+	if previous == snapshot {
+		return
+	}
+	if state.QAExecution.Snapshot == previous {
+		state.QAExecution.Snapshot = snapshot
+	}
+	for id, result := range state.Gates {
+		if result.Snapshot == previous {
+			result.Snapshot = snapshot
+			state.Gates[id] = result
+		}
+	}
+	for id, authorization := range state.SkipAuthorizations {
+		if authorization.Origin == "SEAL" && authorization.Snapshot == previous {
+			authorization.Snapshot = snapshot
+			state.SkipAuthorizations[id] = authorization
+		}
+	}
+	for id, result := range state.Carry {
+		if result.TargetSnapshot == previous {
+			result.TargetSnapshot = snapshot
+			state.Carry[id] = result
+		}
+	}
 }
 
 func eligibleCarryGates(state RunState) []string {

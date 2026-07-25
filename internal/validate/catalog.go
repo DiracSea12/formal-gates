@@ -43,6 +43,11 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 	if len(gates) == 0 {
 		return PromptCatalog{}, fmt.Errorf("gate catalog: no gate prompt files found")
 	}
+	for _, gate := range gates {
+		if gate.ID == "qa" {
+			return PromptCatalog{}, fmt.Errorf("gate catalog: gate id %q is reserved for built-in QA", gate.ID)
+		}
+	}
 	actions, err := discoverPromptDirectory(filepath.Join(root, "prompts", "actions"), false)
 	if err != nil {
 		return PromptCatalog{}, fmt.Errorf("action prompts: %w", err)

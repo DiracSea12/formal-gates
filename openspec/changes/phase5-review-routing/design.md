@@ -37,9 +37,10 @@ the same current task after interruption while preserving its start boundary.
 When Resume detects a changed requirement revision, it returns a pending
 classification and does not mutate dependent state. The existing requirement
 update owner accepts one explicit semantic-effect decision. A
-meaning-preserving decision rebinds the revision while retaining results; a
-meaning-changing decision uses the existing invalidation path. The main agent
-makes that decision from the confirmed meaning and asks the user when it cannot
+meaning-preserving decision rebinds the revision and current native VCS
+identity while retaining results; a meaning-changing decision binds that same
+live identity before using the existing invalidation path. The main agent makes
+that decision from the confirmed meaning and asks the user when it cannot
 establish preservation. The CLI does not infer meaning from filenames, changed
 lines, edit categories, or project vocabulary.
 
@@ -77,7 +78,8 @@ and never touches the post-development completed-wave count.
 Expose the current route candidates through the existing run/catalog view:
 `qa` first, then lexically sorted discovered gate IDs. One route mutation
 records none, full, or the exact custom set. A custom complement becomes
-route-authorized skips. Later additions use the same mutation owner and reject
+route-authorized skips. Reserve `qa` at catalog load so a gate file cannot
+collide with the built-in QA result owner. Later additions use the same mutation owner and reject
 nodes whose prerequisite point has passed. A discovered gate may be added
 before development starts, or against the initial immutable development
 snapshot while its review wave remains open. Development or repair preparation,

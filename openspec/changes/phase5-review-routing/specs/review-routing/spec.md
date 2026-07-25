@@ -142,7 +142,9 @@ The workflow SHALL ask for none, full, or custom routing only once per run. A
 changed requirement revision
 SHALL first pause for an explicit semantic-effect classification. A
 meaning-preserving classification SHALL rebind the revision and preserve
-dependent results. Classification SHALL depend on whether confirmed meaning
+dependent results. Both semantic classifications SHALL bind the current native
+VCS identity containing the changed revision so later development and Seal use
+the live snapshot. Classification SHALL depend on whether confirmed meaning
 changed, not an enumerated set of edit types; uncertainty SHALL return to user
 clarification.
 
@@ -190,7 +192,13 @@ clarification.
 - **WHEN** the bound revision changes but the confirmed outcome, acceptance,
   public behavior, and consequential solution boundaries remain unchanged
 - **THEN** Resume pauses for classification and an explicit
-  meaning-preserving decision rebinds the revision without discarding results
+  meaning-preserving decision rebinds the revision and live VCS snapshot without
+  discarding results
+
+#### Scenario: Built-in QA ID cannot collide with a gate
+
+- **WHEN** the installed gate directory contains a direct `qa.md` file
+- **THEN** catalog loading rejects it before routing can expose duplicate IDs
 
 #### Scenario: Uncertain meaning is not guessed
 

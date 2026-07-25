@@ -11,7 +11,8 @@ review 和小改动不会自动进入这套流程。
 ## 核心设计
 
 - `prompts/reviewer-base.md`：所有独立审查门共用的规则。
-- `gates/*.md`：每个文件就是一道独立审查门，文件名就是门 ID。
+- `gates/*.md`：每个文件就是一道独立审查门，文件名就是门 ID；`qa` 保留给
+  内建 QA 流程，不能作为文件 ID。
 - `prompts/actions/*.md`：需求澄清、开发前审查、QA、开发 worker 和 Carry。
 - `.gates/tmp/<run-id>/state.json`：运行期间唯一的临时状态文件。
 - `.gates/results/<run-id>.json`：封板或中止后唯一保留的结果。
@@ -126,7 +127,8 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 
 QA Execution、Carry、额外返修授权和 Seal 的参数以 `formal-gates help` 及
 `SKILL.md` 为准。需求文件修订变化后，先用 `workflow requirement --meaning
-preserved|changed` 明确语义影响；CLI 不自行猜测。
+preserved|changed --live-snapshot <current>` 明确语义影响并绑定包含该修订的
+原生 VCS identity；CLI 不自行猜测。
 
 ## Diff 与返修
 

@@ -155,10 +155,11 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		source := fs.String("source", "", "requirement source path; defaults to the current source")
 		confirmed := fs.Bool("confirmed", false, "mark this exact requirement revision confirmed")
 		meaning := fs.String("meaning", "", "semantic effect for a changed revision: preserved or changed")
+		live := fs.String("live-snapshot", "", "current native VCS identity for a changed requirement")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning)
+		state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, *live)
 		return printValue(streams.Stdout, state, err)
 	case "route-candidates":
 		fs := newFlagSet("workflow route-candidates", streams)

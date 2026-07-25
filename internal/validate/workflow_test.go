@@ -22,7 +22,7 @@ func TestClarificationConfirmationAndRouteOrderAreHardGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := UpdateRequirement(root, pkg, state.RunID, "", true, ""); err == nil || !strings.Contains(err.Error(), "Clarification") {
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", true, "", ""); err == nil || !strings.Contains(err.Error(), "Clarification") {
 		t.Fatalf("requirement confirmation bypassed clarification: %v", err)
 	}
 	if _, err := SetRoute(root, pkg, state.RunID, "full", nil); err == nil {
@@ -316,30 +316,44 @@ func TestSemanticResultsAreAuthoritativeForCurrentSnapshot(t *testing.T) {
 
 func TestRequirementRevisionWaitsForExplicitSemanticClassification(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := readyDelivery(t, root, pkg, "requirement-change", "full", nil)
-	state = recordAllPassing(t, root, pkg, state)
-	oldRevision := state.RequirementRevision
+	preserved := readyDelivery(t, root, pkg, "requirement-preserved", "full", nil)
+	preserved = recordAllPassing(t, root, pkg, preserved)
+	oldRevision := preserved.RequirementRevision
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "meaning-preserving wording\n")
-	resumed, classificationRequired, err := Resume(root, pkg, state.RunID)
+	resumed, classificationRequired, err := Resume(root, pkg, preserved.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !classificationRequired || resumed.RequirementRevision != oldRevision || resumed.Gates["quality"].Status != "PASS" {
 		t.Fatalf("resume mutated results before classification: %#v", resumed)
 	}
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "preserved")
+	if _, err := UpdateRequirement(root, pkg, preserved.RunID, "", false, "preserved", ""); err == nil || !strings.Contains(err.Error(), "live VCS snapshot") {
+		t.Fatalf("changed requirement was rebound without a live VCS identity: %v", err)
+	}
+	preserved, err = UpdateRequirement(root, pkg, preserved.RunID, "", false, "preserved", "requirement-preserved-snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.RequirementConfirmed || state.RequirementRevision == oldRevision || state.Gates["quality"].Status != "PASS" {
-		t.Fatalf("preserving classification discarded results: %#v", state)
+	if !preserved.RequirementConfirmed || preserved.RequirementRevision == oldRevision || preserved.CurrentSnapshot != "requirement-preserved-snapshot" || preserved.QAExecution.Snapshot != preserved.CurrentSnapshot {
+		t.Fatalf("preserving classification did not rebind the current snapshot: %#v", preserved)
 	}
+	for id, result := range preserved.Gates {
+		if result.Status != "PASS" || result.Snapshot != preserved.CurrentSnapshot {
+			t.Fatalf("preserving classification discarded or stranded gate %s: %#v", id, result)
+		}
+	}
+	if _, err := Seal(root, pkg, preserved.RunID, preserved.CurrentSnapshot, preserved.CurrentSnapshot, nil); err != nil {
+		t.Fatalf("preserved requirement revision could not Seal at the live snapshot: %v", err)
+	}
+
+	state := readyDelivery(t, root, pkg, "requirement-change", "full", nil)
+	oldRevision = state.RequirementRevision
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "meaning changed\n")
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed")
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", "requirement-changed-snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.RequirementConfirmed || state.RouteMode != "full" || len(state.SelectedGates) != 3 || state.Actions["development-worker"].Status != "PENDING" {
+	if state.RequirementConfirmed || state.RequirementRevision == oldRevision || state.CurrentSnapshot != "requirement-changed-snapshot" || state.RouteMode != "full" || len(state.SelectedGates) != 3 || state.Actions["development-worker"].Status != "PENDING" {
 		t.Fatalf("meaning change did not invalidate dependent results while preserving route: %#v", state)
 	}
 	if len(state.QACases) != 1 || state.Actions["qa-design"].Status != "PENDING" || state.Actions["qa-review"].Status != "PENDING" {
@@ -364,6 +378,24 @@ func TestRequirementRevisionWaitsForExplicitSemanticClassification(t *testing.T)
 	}
 	if len(state.QACases) != 1 || state.QACases[0].Description != "updated behavior" || state.Actions["qa-design"].Status != "PASS" {
 		t.Fatalf("approved QA coverage did not atomically replace prior input: %#v", state)
+	}
+	state = recordQAReview(t, root, pkg, state, "PASS", nil)
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
+		t.Fatalf("meaning-changing revision could not prepare development at the live snapshot: %v", err)
+	}
+
+	none := beginRoute(t, root, pkg, "requirement-change-none", "none", nil)
+	if none.SelectedGates == nil {
+		t.Fatal("none route returned a nil selected gate set")
+	}
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "another meaning change\n")
+	none, err = UpdateRequirement(root, pkg, none.RunID, "", false, "changed", "none-requirement-snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.SelectedGates == nil {
+		t.Fatal("meaning-changing invalidation returned a nil selected gate set")
 	}
 }
 
@@ -794,7 +826,7 @@ func recordClarificationAndConfirm(t *testing.T, root, pkg string, state RunStat
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", true, "")
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
