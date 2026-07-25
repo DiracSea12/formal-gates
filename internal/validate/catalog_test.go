@@ -37,6 +37,21 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 	}
 }
 
+func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
+	root := promptPackage(t, map[string]string{"z-last": "last checks", "a-first": "first checks"})
+	candidates, err := PackageRouteCandidates(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := candidates, []string{"qa", "a-first", "z-last"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates=%v want=%v", got, want)
+	}
+
+	if _, err := PackageRouteCandidates(t.TempDir()); err == nil {
+		t.Fatal("invalid prompt package was accepted")
+	}
+}
+
 func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 	for _, tc := range []struct {
 		name string

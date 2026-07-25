@@ -61,6 +61,16 @@ Windows 使用 `bin\formal-gates.exe`。也可以运行 `install.command` 或
 
 下面只展示命令入口；完整顺序由 [SKILL.md](SKILL.md) 唯一维护。
 
+启动 run 之前，可以只读查询当前安装包提供的路由候选；该命令不需要仓库、
+需求、run ID、VCS 快照或工作流状态，也不会创建工作流状态：
+
+```bash
+formal-gates package route-candidates --root <package>
+```
+
+返回的 JSON 数组以 `qa` 开头，后接按文件名 ID 排序的动态审查门。run 启动
+并确认需求后，仍使用下文的 `workflow route-candidates` 查询该 run 绑定的候选。
+
 启动和查看：
 
 ```bash

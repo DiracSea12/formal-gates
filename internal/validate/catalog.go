@@ -74,6 +74,14 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 	}, nil
 }
 
+func PackageRouteCandidates(root string) ([]string, error) {
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.RouteCandidates(), nil
+}
+
 func validateActionCatalog(actions []PromptDefinition) error {
 	ids := make([]string, 0, len(actions))
 	for _, action := range actions {
@@ -114,6 +122,10 @@ func (catalog PromptCatalog) GateIDs() []string {
 		ids = append(ids, gate.ID)
 	}
 	return ids
+}
+
+func (catalog PromptCatalog) RouteCandidates() []string {
+	return append([]string{"qa"}, catalog.GateIDs()...)
 }
 
 func discoverPromptDirectory(dir string, rejectEveryInvalidEntry bool) ([]PromptDefinition, error) {

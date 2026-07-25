@@ -162,6 +162,44 @@ func TestCLIRouteCommandsExposeOrderedCandidatesAndPersistSelection(t *testing.T
 	}
 }
 
+func TestCLIPackageRouteCandidatesIsStateless(t *testing.T) {
+	_, pkg := cliWorkflowFixture(t)
+	mustWriteCLI(t, filepath.Join(pkg, "gates", "architecture.md"), "architecture checks\n")
+	before, err := os.ReadDir(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"package", "route-candidates", "--root", pkg}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("package route candidates failed: %s", stderr.String())
+	}
+	var candidates []string
+	if err := json.Unmarshal(stdout.Bytes(), &candidates); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := candidates, []string{"qa", "architecture", "quality"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidates=%v want=%v", got, want)
+	}
+
+	after, err := os.ReadDir(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(directoryEntryNames(before), directoryEntryNames(after)) {
+		t.Fatalf("package query changed package entries: before=%v after=%v", directoryEntryNames(before), directoryEntryNames(after))
+	}
+}
+
+func directoryEntryNames(entries []os.DirEntry) []string {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
 func TestCLIRequirementRevisionRequiresAndRebindsLiveSnapshot(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
 	state := startCLIWorkflow(t, root, pkg, "requirement-cli")

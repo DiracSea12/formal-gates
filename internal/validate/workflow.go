@@ -190,7 +190,7 @@ func RouteCandidates(root, packageRoot, runID string) ([]string, error) {
 	if !state.RequirementConfirmed {
 		return nil, fmt.Errorf("the current requirement is not confirmed")
 	}
-	return append([]string{"qa"}, catalog.GateIDs()...), nil
+	return catalog.RouteCandidates(), nil
 }
 
 func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunState, error) {
@@ -206,7 +206,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 		if !routeModes[mode] {
 			return fmt.Errorf("route mode must be none, full, or custom")
 		}
-		candidates := append([]string{"qa"}, catalog.GateIDs()...)
+		candidates := catalog.RouteCandidates()
 		if mode == "none" {
 			if len(selected) != 0 {
 				return fmt.Errorf("none route cannot include selected gates")
@@ -251,7 +251,7 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 		if len(additions) == 0 {
 			return fmt.Errorf("at least one gate addition is required")
 		}
-		candidates := append([]string{"qa"}, catalog.GateIDs()...)
+		candidates := catalog.RouteCandidates()
 		normalized, err := normalizeSelected(additions, candidates)
 		if err != nil {
 			return err

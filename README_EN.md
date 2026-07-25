@@ -74,6 +74,18 @@ download matching release assets and invoke the same installer.
 These examples show command entrypoints only. [SKILL.md](SKILL.md) is the sole
 owner of workflow order.
 
+Before starting a run, query the installed package's route candidates without
+a repository, requirement, run ID, VCS snapshot, or workflow state. This
+read-only command does not create workflow state:
+
+```bash
+formal-gates package route-candidates --root <package>
+```
+
+The JSON array starts with `qa`, followed by the dynamically discovered gates
+in filename ID order. After starting a run and confirming its requirement, use
+the run-bound `workflow route-candidates` command shown below instead.
+
 Start and inspect a run:
 
 ```bash
