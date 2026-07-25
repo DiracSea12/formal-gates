@@ -3,6 +3,8 @@
 contract_review/
 
 # Local gate/review artifacts
+.gates/results/
+.gates/tmp/
 gate-artifacts/
 gate-workflow-state/
 review_scratch/
