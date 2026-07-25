@@ -43,8 +43,9 @@ makes that decision from the confirmed meaning and asks the user when it cannot
 establish preservation. The CLI does not infer meaning from filenames, changed
 lines, edit categories, or project vocabulary.
 
-On a meaning-changing decision, reset QA Design approval but retain the prior
-approved cases in the existing case collection as unapproved review input.
+On a meaning-changing decision, reset QA Design completion and QA Review
+approval but retain the prior approved cases in the existing case collection
+as unapproved review input.
 Compose QA Design from the complete current requirement plus those cases, while
 continuing to withhold production implementation, diffs, and tests. The agent
 checks complete coverage, carries unaffected cases forward, edits only affected
@@ -53,6 +54,23 @@ record owner atomically replaces the collection and restores approval. If the
 agent cannot bound impact reliably or the workflow changed as a whole, it
 returns a fully redesigned complete set. No case-history store, change-kind
 registry, or second approval state is added.
+
+## QA Design Review loop
+
+Add `qa-review` as an installed workflow action, not a discovered gate. QA
+selection activates QA Design, QA Review, and QA Execution together. Start
+Readiness and QA Design may run in parallel, but QA Review is composed only
+after QA Design records the complete candidate set. Its prompt contains the
+confirmed requirement and candidate cases and excludes production code, diffs,
+tests, developer explanations, later results, and other reviewer conclusions.
+
+Record QA Review through the existing action-result owner. PASS unlocks
+development. FAIL retains the candidate cases as unapproved input, resets QA
+Design to PENDING, and permits a new design task; recording the revised complete
+set resets QA Review to PENDING for a fresh independent dispatch. RUNTIME_ERROR
+and PENDING remain on QA Review and can be recomposed without reopening design.
+The loop uses existing action statuses and QA cases, adds no review-cycle state,
+and never touches the post-development completed-wave count.
 
 ## Gate selection and direct guards
 
@@ -72,10 +90,11 @@ snapshot or complete a review wave.
 Use one central validation function from every prepare and record path. Each
 operation reads only the minimum workflow state needed for its direct ordering
 prerequisites. In particular, development requires confirmed routing, passing
-Start Readiness, and QA cases only when QA is selected. Post-development
-review requires a bound immutable snapshot and selection of the requested
-gate. This optimization is limited to sequence guards and does not reduce the
-scope of clarification, readiness, QA, review, or repository verification.
+Start Readiness, and passing QA Review only when QA is selected.
+Post-development review requires a bound immutable snapshot and selection of
+the requested gate. This optimization is limited to sequence guards and does
+not reduce the scope of clarification, readiness, QA, review, or repository
+verification.
 
 ## Review and repair aggregation
 

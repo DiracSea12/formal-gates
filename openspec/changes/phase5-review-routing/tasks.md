@@ -11,6 +11,9 @@
 - [x] On meaning-changing revisions, invalidate QA Design approval but retain
   prior cases as review input, recheck complete coverage, and replace only the
   affected cases unless impact cannot be bounded reliably.
+- [x] Restore independent QA Review after QA Design, loop FAIL back through
+  case rework and fresh review, and require PASS before development without
+  consuming post-development review waves.
 - [x] Apply one direct transition guard to every prepare and record owner,
   including deferred readiness when a none route becomes non-empty, immutable
   same-snapshot semantic results, and resumable prepared development or repair
@@ -36,8 +39,9 @@
 
 ## Focused verification
 
-- [x] Update direct workflow tests for routing, transition rejection, shared
-  wave completion, severity, Carry scope, and Seal authorization.
+- [x] Update direct workflow tests for QA Review ordering and rework plus
+  routing, transition rejection, shared wave completion, severity, Carry scope,
+  and Seal authorization.
 - [x] Update only CLI parsing tests with unique coverage, then run the existing
   repository validation commands and the selected post-development gates.
 - [x] Remove or consolidate superseded code and documentation before adding

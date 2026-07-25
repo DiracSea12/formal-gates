@@ -3,7 +3,10 @@
 Phase 5 prevents formal development from starting before the user and main
 agent align on both the requested outcome and consequential technical choices.
 It then records one full, custom, or empty gate selection and makes every
-selected stage mandatory in the existing lightweight workflow.
+selected stage mandatory in the existing lightweight workflow. Selecting QA
+also restores an independent QA Review between QA Design and development;
+failed review returns to design rework and does not consume post-development
+review waves.
 
 The same change completes review routing: selected QA and discovered gates
 share three automatic complete review waves beginning with the initial

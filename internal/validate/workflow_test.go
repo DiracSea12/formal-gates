@@ -86,6 +86,12 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	if _, err := RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "late", Procedure: "late", Oracle: "late"}}, "", state.RequirementRevision, state.CatalogRevision); err == nil || !strings.Contains(err.Error(), "not selected") {
 		t.Fatalf("unselected QA Design was recorded: %v", err)
 	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", ""); err == nil || !strings.Contains(err.Error(), "not selected") {
+		t.Fatalf("unselected QA Review was prepared: %v", err)
+	}
+	if _, err := RecordAction(root, pkg, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err == nil || !strings.Contains(err.Error(), "not selected") {
+		t.Fatalf("unselected QA Review was recorded: %v", err)
+	}
 	state, err = AddRouteGates(root, pkg, state.RunID, []string{"architecture"})
 	if err != nil {
 		t.Fatalf("post-development gate addition was rejected: %v", err)
@@ -100,6 +106,7 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	qa = recordQAReview(t, root, pkg, qa, "PASS", nil)
 	if _, err := AdvanceSnapshot(root, pkg, qa.RunID, "bypass", "bypass"); err == nil || !strings.Contains(err.Error(), "must be prepared") {
 		t.Fatalf("snapshot bypassed development preparation: %v", err)
 	}
@@ -113,6 +120,86 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	secondPrompt, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base")
 	if err != nil || secondPrompt != firstPrompt {
 		t.Fatalf("prepared development task was not recomposed: err=%v", err)
+	}
+}
+
+func TestQAReviewGatesDevelopmentAndLoopsThroughDesignRework(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := beginRoute(t, root, pkg, "qa-review-loop", "full", nil)
+	state = recordReadiness(t, root, pkg, state)
+
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", ""); err == nil || !strings.Contains(err.Error(), "complete QA case set") {
+		t.Fatalf("QA Review ran before QA Design: %v", err)
+	}
+	if _, err := RecordAction(root, pkg, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err == nil || !strings.Contains(err.Error(), "complete QA case set") {
+		t.Fatalf("QA Review result bypassed QA Design: %v", err)
+	}
+
+	var err error
+	state, err = RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "behavior", Procedure: "exercise", Oracle: "observed"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "replacement", Procedure: "replace", Oracle: "changed"}}, "", state.RequirementRevision, state.CatalogRevision); err == nil || !strings.Contains(err.Error(), "awaiting QA Review") {
+		t.Fatalf("candidate cases changed before QA Review completed: %v", err)
+	}
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"[Action: qa-review]", "description: behavior", "procedure: exercise", "oracle: observed", "requirements.md"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("QA Review prompt missing %q:\n%s", required, prompt)
+		}
+	}
+	for _, forbidden := range []string{"[Current change]", "base snapshot:", "current snapshot:", "pre-repair snapshot:"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("QA Review prompt exposed change context %q:\n%s", forbidden, prompt)
+		}
+	}
+	repeatedPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "")
+	if err != nil || repeatedPrompt != prompt {
+		t.Fatalf("pending QA Review task was not recomposed: err=%v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "base"); err == nil || !strings.Contains(err.Error(), "QA Review") {
+		t.Fatalf("development bypassed QA Review: %v", err)
+	}
+
+	state = recordQAReview(t, root, pkg, state, "RUNTIME_ERROR", nil)
+	if state.Actions["qa-design"].Status != "PASS" || state.CompletedReviewWaves != 0 {
+		t.Fatalf("QA Review runtime error reopened design or consumed a wave: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", ""); err != nil {
+		t.Fatalf("QA Review runtime error was not retryable: %v", err)
+	}
+	state = recordQAReview(t, root, pkg, state, "FAIL", []FindingInput{{Message: "missing case"}})
+	if state.Actions["qa-design"].Status != "PENDING" || len(state.QACases) != 1 || state.CompletedReviewWaves != 0 {
+		t.Fatalf("QA Review FAIL did not retain unapproved cases and reopen design: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", ""); err == nil || !strings.Contains(err.Error(), "complete QA case set") {
+		t.Fatalf("failed QA Review was retried before case rework: %v", err)
+	}
+	reworkPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "")
+	if err != nil || !strings.Contains(reworkPrompt, "every prior case") || !strings.Contains(reworkPrompt, "description: behavior") || !strings.Contains(reworkPrompt, "missing case") {
+		t.Fatalf("QA Design did not receive the rejected cases: err=%v\n%s", err, reworkPrompt)
+	}
+	state, err = RecordQADesign(root, pkg, state.RunID, []QACaseInput{{Description: "revised behavior", Procedure: "exercise revised behavior", Oracle: "revised result"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-review"].Status != "PENDING" {
+		t.Fatalf("revised complete case set did not reset QA Review: %#v", state.Actions["qa-review"])
+	}
+	revisedPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "")
+	if err != nil || !strings.Contains(revisedPrompt, "description: revised behavior") || strings.Contains(revisedPrompt, "missing case") {
+		t.Fatalf("fresh QA Review did not receive only the revised complete set: err=%v\n%s", err, revisedPrompt)
+	}
+	state = recordQAReview(t, root, pkg, state, "PASS", nil)
+	if state.CompletedReviewWaves != 0 {
+		t.Fatalf("QA Review PASS consumed a post-development wave: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "base"); err != nil {
+		t.Fatalf("QA Review PASS did not unlock development: %v", err)
 	}
 }
 
@@ -208,7 +295,7 @@ func TestRequirementRevisionWaitsForExplicitSemanticClassification(t *testing.T)
 	if state.RequirementConfirmed || state.RouteMode != "full" || len(state.SelectedGates) != 3 || state.Actions["development-worker"].Status != "PENDING" {
 		t.Fatalf("meaning change did not invalidate dependent results while preserving route: %#v", state)
 	}
-	if len(state.QACases) != 1 || state.Actions["qa-design"].Status != "PENDING" {
+	if len(state.QACases) != 1 || state.Actions["qa-design"].Status != "PENDING" || state.Actions["qa-review"].Status != "PENDING" {
 		t.Fatalf("prior QA cases were not retained as unapproved input: %#v", state)
 	}
 	for id, result := range state.Gates {
@@ -639,11 +726,25 @@ func readyDelivery(t *testing.T, root, pkg, id, mode string, selected []string) 
 		if err != nil {
 			t.Fatal(err)
 		}
+		state = recordQAReview(t, root, pkg, state, "PASS", nil)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err != nil {
 		t.Fatal(err)
 	}
 	return advance(t, root, pkg, state, "delivery")
+}
+
+func recordQAReview(t *testing.T, root, pkg string, state RunState, status string, findings []FindingInput) RunState {
+	t.Helper()
+	message := ""
+	if status == "RUNTIME_ERROR" {
+		message = "review could not run"
+	}
+	state, err := RecordAction(root, pkg, state.RunID, "qa-review", status, message, findings, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
 }
 
 func recordReadiness(t *testing.T, root, pkg string, state RunState) RunState {

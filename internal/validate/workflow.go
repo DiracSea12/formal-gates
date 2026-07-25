@@ -327,13 +327,23 @@ func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (str
 	detail := ""
 	if actionID == "qa-design" && len(state.QACases) != 0 && state.Actions["qa-design"].Status != "PASS" {
 		lines := []string{"Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain confirmed unaffected cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed."}
+		if review := state.Actions["qa-review"]; review.Status == "FAIL" {
+			lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
+			for _, finding := range review.Findings {
+				line := "- " + finding.Message
+				if len(finding.Locations) != 0 {
+					line += " (" + strings.Join(finding.Locations, ", ") + ")"
+				}
+				lines = append(lines, line)
+			}
+		}
 		for _, testCase := range state.QACases {
 			lines = append(lines, fmt.Sprintf("%s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Description, testCase.Procedure, testCase.Oracle))
 		}
 		detail = strings.Join(lines, "\n\n")
-	} else if actionID == "qa-execution" {
+	} else if actionID == "qa-review" || actionID == "qa-execution" {
 		if len(state.QACases) == 0 {
-			return "", fmt.Errorf("approved QA cases are missing")
+			return "", fmt.Errorf("QA cases are missing")
 		}
 		var lines []string
 		for _, testCase := range state.QACases {
@@ -400,7 +410,7 @@ func RecordAction(root, packageRoot, runID, actionID, status, message string, fi
 		if _, ok := catalog.Action(actionID); !ok {
 			return fmt.Errorf("unknown action prompt %q", actionID)
 		}
-		if actionID != "requirements-clarification" && actionID != "start-readiness" {
+		if actionID != "requirements-clarification" && actionID != "start-readiness" && actionID != "qa-review" {
 			return fmt.Errorf("action %q has a dedicated workflow command and cannot use record-action", actionID)
 		}
 		if err := requireTransition(*state, actionID, ""); err != nil {
@@ -411,6 +421,10 @@ func RecordAction(root, packageRoot, runID, actionID, status, message string, fi
 			return err
 		}
 		state.Actions[actionID] = result
+		if actionID == "qa-review" && result.Status == "FAIL" {
+			state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
+			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		}
 		return nil
 	})
 }
@@ -495,6 +509,7 @@ func RecordQADesign(root, packageRoot, runID string, cases []QACaseInput, runtim
 		}
 		state.QAExecution = QAExecutionResult{Status: "PENDING"}
 		state.Actions["qa-design"] = ActionResult{Status: "PASS"}
+		state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
 		return nil
 	})
 }
@@ -1069,6 +1084,22 @@ func requireTransition(state RunState, operation, target string) error {
 		if developmentStarted(state) {
 			return fmt.Errorf("QA Design must be recorded before development")
 		}
+		if state.Actions["qa-design"].Status == "PASS" {
+			return fmt.Errorf("the complete QA case set is awaiting QA Review")
+		}
+	case "qa-review":
+		if !isSelected(state, "qa") {
+			return fmt.Errorf("QA is not selected")
+		}
+		if developmentStarted(state) {
+			return fmt.Errorf("QA Review must be recorded before development")
+		}
+		if state.Actions["qa-design"].Status != "PASS" || len(state.QACases) == 0 {
+			return fmt.Errorf("a complete QA case set is required before QA Review")
+		}
+		if status := state.Actions["qa-review"].Status; status == "PASS" || status == "FAIL" {
+			return fmt.Errorf("QA Review already has an authoritative %s result for the current case set", status)
+		}
 	case "development-worker":
 		developmentStatus := state.Actions["development-worker"].Status
 		if developmentStatus != developmentPending && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared && developmentStatus != developmentComplete && developmentStatus != developmentVerified {
@@ -1077,8 +1108,8 @@ func requireTransition(state RunState, operation, target string) error {
 		if len(state.SelectedGates) != 0 && state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before development")
 		}
-		if isSelected(state, "qa") && state.Actions["qa-design"].Status != "PASS" {
-			return fmt.Errorf("approved QA cases are required before development starts")
+		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
+			return fmt.Errorf("QA Review must pass before development starts")
 		}
 		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
 			return nil
@@ -1108,8 +1139,8 @@ func requireTransition(state RunState, operation, target string) error {
 		if len(state.SelectedGates) != 0 && state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
-		if isSelected(state, "qa") && state.Actions["qa-design"].Status != "PASS" {
-			return fmt.Errorf("QA Design must pass before a development snapshot")
+		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
+			return fmt.Errorf("QA Review must pass before a development snapshot")
 		}
 		if state.PreRepairSnapshot != "" {
 			return fmt.Errorf("the current repair still requires verification")

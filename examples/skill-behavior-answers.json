@@ -53,7 +53,7 @@
   },
   {
     "id": "FG-BEH-014",
-    "answer": "Allow seal without QA or gate PASS, retain the missing gate as PENDING, and require the live VCS identity to match the current snapshot."
+    "answer": "Dispatch an independent QA Review with the confirmed requirement and complete candidate cases; development remains blocked until QA Review passes."
   },
   {
     "id": "FG-BEH-015",

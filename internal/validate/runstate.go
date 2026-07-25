@@ -119,7 +119,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 }
 
 func pendingRequirementActions() map[string]ActionResult {
-	return map[string]ActionResult{"requirements-clarification": {Status: "PENDING"}, "start-readiness": {Status: "PENDING"}, "qa-design": {Status: "PENDING"}, "development-worker": {Status: "PENDING"}}
+	return map[string]ActionResult{"requirements-clarification": {Status: "PENDING"}, "start-readiness": {Status: "PENDING"}, "qa-design": {Status: "PENDING"}, "qa-review": {Status: "PENDING"}, "development-worker": {Status: "PENDING"}}
 }
 
 func RunDir(root, runID string) string {

@@ -44,10 +44,14 @@ func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRou
 	parts := []string{
 		fmt.Sprintf("[Action: %s]\n%s", action.ID, action.Content),
 		fmt.Sprintf("[Current requirement]\nsource: %s\nrevision: %s\ncatalog revision: %s", route.RequirementSource, route.RequirementRevision, route.CatalogRevision),
-		fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot),
 	}
-	if route.PreRepairSnapshot != "" {
-		parts[2] += "\npre-repair snapshot: " + route.PreRepairSnapshot
+	if actionID == "qa-review" {
+		parts[1] += "\nworktree: " + route.Worktree
+	} else {
+		parts = append(parts, fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot))
+		if route.PreRepairSnapshot != "" {
+			parts[2] += "\npre-repair snapshot: " + route.PreRepairSnapshot
+		}
 	}
 	if strings.TrimSpace(detail) != "" {
 		parts = append(parts, "[Action input]\n"+strings.TrimSpace(detail))
@@ -62,6 +66,8 @@ func actionResultContract(actionID string) string {
 		return "Return only ordered semantic cases. Each case must contain description, procedure, and oracle. Do not assign case IDs; the CLI assigns them."
 	case "qa-execution":
 		return "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. Return a runtime error separately if execution could not run."
+	case "qa-review":
+		return "Return PASS with no findings when the complete candidate set is approved, FAIL with one or more findings when it requires rework, or a separate runtime error message. Each finding contains a message and optional repository-relative locations."
 	case "carry":
 		return "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
 	case "development-worker":

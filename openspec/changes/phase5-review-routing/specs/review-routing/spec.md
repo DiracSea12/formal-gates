@@ -27,16 +27,16 @@ discovered gate in one ordered list. The user SHALL choose no gate flow, the
 full list, or a custom subset in one routing decision. Selected gates SHALL be
 required; custom omissions SHALL receive route skip authorization.
 
-#### Scenario: QA selection owns both QA actions
+#### Scenario: QA selection owns the complete QA flow
 
 - **WHEN** QA is selected
-- **THEN** QA Design is required before development and QA Execution is
-  required after development
+- **THEN** QA Design and independent QA Review are required in that order before
+  development, and QA Execution is required after development
 
-#### Scenario: QA omission removes both QA actions
+#### Scenario: QA omission removes the complete QA flow
 
 - **WHEN** QA is not selected
-- **THEN** neither QA Design nor QA Execution blocks the selected flow
+- **THEN** QA Design, QA Review, and QA Execution are all omitted
 
 #### Scenario: Discovered gate count changes
 
@@ -48,7 +48,7 @@ required; custom omissions SHALL receive route skip authorization.
 
 The main agent SHALL not modify delivery code during a formal run. The CLI
 SHALL compose a separate development-worker task only after the requirement,
-route, Start Readiness, and selected QA Design prerequisites pass. Every
+route, Start Readiness, and selected QA Review prerequisites pass. Every
 prepare and record entrypoint SHALL independently reject a transition whose
 direct prerequisite is not satisfied. A transition guard SHALL inspect only
 the minimum workflow state needed to establish those direct ordering
@@ -93,6 +93,44 @@ review, or verification scope.
 - **THEN** Resume can recompose the current prepared task without advancing or
   resetting its workflow boundary
 
+### Requirement: Independent QA Review gates development
+
+When QA is selected, the CLI SHALL compose QA Review only after QA Design has
+recorded a complete candidate case set. A separate reviewer SHALL inspect the
+confirmed requirement and complete candidate set without production
+implementation, implementation diffs, tests, developer explanations,
+post-development results, or another reviewer's conclusion. It SHALL check
+complete coverage, necessity and duplication, documented public procedures,
+observable oracles, the normal-use project boundary, and lowest-layer
+ownership. QA Review PASS SHALL be required before development and SHALL not
+consume the post-development review-wave limit.
+
+#### Scenario: QA Review cannot run before design
+
+- **WHEN** QA is selected but QA Design has not recorded a complete candidate
+  set
+- **THEN** QA Review preparation and recording are rejected without state
+  mutation
+
+#### Scenario: QA Review PASS unlocks development
+
+- **WHEN** an independent QA Review passes the complete candidate case set and
+  all other direct prerequisites pass
+- **THEN** development preparation succeeds without incrementing a review wave
+
+#### Scenario: QA Review FAIL returns to design rework
+
+- **WHEN** QA Review returns FAIL with findings
+- **THEN** the candidate cases remain as unapproved rework input, QA Design
+  reopens, development stays blocked, and the revised complete set requires a
+  fresh independent QA Review
+
+#### Scenario: QA Review interruption is retryable
+
+- **WHEN** QA Review is PENDING or returns RUNTIME_ERROR
+- **THEN** that review can be resumed or retried without reopening QA Design or
+  consuming a review wave
+
 ### Requirement: User-owned route changes
 
 Only explicit user direction SHALL add a gate after routing. A gate SHALL be
@@ -126,7 +164,7 @@ clarification.
   previously approved QA cases
 - **THEN** QA Design reviews the complete current requirement and every prior
   case, preserves confirmed unaffected cases, changes only affected cases, and
-  blocks development until the resulting complete set is approved
+  blocks development until the resulting complete set passes QA Review
 
 #### Scenario: Unbounded QA impact triggers full redesign
 

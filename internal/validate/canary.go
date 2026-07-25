@@ -103,6 +103,10 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
+	state, err = RecordAction(root, packageRoot, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		return err
+	}
 	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker", "base"); err != nil {
 		return err
 	}

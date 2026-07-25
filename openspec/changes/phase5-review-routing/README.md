@@ -7,6 +7,10 @@ discovered gate. The main agent orchestrates but does not edit delivery code;
 the CLI releases a separate development worker only when required
 pre-development results are complete.
 
+When QA is selected, QA Design is followed by an independent QA Review. A
+failed review returns the cases for rework and a fresh review; only PASS can
+start development, and this loop does not consume post-development waves.
+
 Selected QA and gates share three completed automatic review waves, beginning
 with the initial complete post-development wave.
 Discovered-gate findings use P0/P1/P2, QA failures block directly, Carry stays

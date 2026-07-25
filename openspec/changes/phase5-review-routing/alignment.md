@@ -33,8 +33,10 @@ count SHALL remain dynamic; Phase 5 SHALL reuse the existing discovery owner.
 
 Full flow SHALL select QA and every discovered gate. Custom flow SHALL require
 every selected gate and SHALL record every unselected gate as user-authorized
-to skip. Selecting QA SHALL require pre-development QA Design and
-post-development QA Execution. Omitting QA SHALL omit both actions.
+to skip. Selecting QA SHALL require pre-development QA Design, an independent
+pre-development QA Review, and post-development QA Execution. Omitting QA SHALL
+omit all three actions. QA Review SHALL be automatic when QA is selected and
+SHALL NOT appear as another route choice or discovered gate.
 
 Start Readiness SHALL remain a separate binary readiness action. It SHALL run
 automatically for full and custom gate flows before development and SHALL NOT
@@ -50,7 +52,7 @@ orchestration, and result recording but SHALL NOT modify delivery code. A
 separate development worker SHALL be the only formal-flow role that modifies
 delivery code. The CLI SHALL compose its task only after the current
 requirement is confirmed, routing is confirmed, Start Readiness passes, and QA
-Design is complete when QA is selected.
+Review passes after QA Design when QA is selected.
 
 Every prepare and record entrypoint SHALL enforce the same direct transition
 preconditions. A command SHALL reject an unselected gate, a skipped
@@ -95,12 +97,30 @@ complete current requirement and every prior case, retain confirmed unaffected
 cases, and add, modify, or remove only affected cases. It SHALL replace the
 complete case set only when the impact cannot be bounded reliably or the change
 alters the overall workflow. Development SHALL remain blocked until this
-coverage review produces a newly approved complete case set. Classification and
-QA impact SHALL depend on semantic effect, not an enumerated list of edit types.
-If the main agent cannot establish that meaning is preserved, it SHALL clarify
-with the user instead of guessing.
+coverage pass produces a complete case set and independent QA Review passes it.
+Classification and QA impact SHALL depend on semantic effect, not an enumerated
+list of edit types. If the main agent cannot establish that meaning is
+preserved, it SHALL clarify with the user instead of guessing.
 
-## RQ-005 - Severity and QA routing
+## RQ-005 - Independent QA Review
+
+When QA is selected, the CLI SHALL compose QA Review only after QA Design has
+recorded a complete candidate case set. A separate reviewer SHALL read the
+current confirmed requirement and that complete case set, but SHALL NOT receive
+production implementation, implementation diffs, tests, developer explanation,
+post-development results, or another reviewer's conclusion. It SHALL check
+complete requirement coverage, case necessity and duplication, documented
+public procedures, observable oracles, the normal-use project boundary, and
+lowest-layer ownership.
+
+QA Review SHALL return `PASS`, `FAIL` with findings, or `RUNTIME_ERROR`. `PASS`
+is required before development. `FAIL` SHALL reopen QA Design with the current
+cases as unapproved rework input, and the revised complete set SHALL undergo a
+new independent QA Review. `RUNTIME_ERROR` and interrupted `PENDING` work SHALL
+remain retryable without reopening QA Design. This pre-development loop SHALL
+not consume or alter the post-development review-wave count.
+
+## RQ-006 - Severity and QA routing
 
 Every discovered-gate finding SHALL contain exactly one severity: `P0`, `P1`,
 or `P2`. A reviewer SHALL complete the related-chain scan and SHALL not receive
@@ -119,7 +139,7 @@ that wave. P2-only findings SHALL remain visible as non-blocking
 recommendations for the user's final decision. A QA case failure SHALL always
 block and SHALL not be converted to P2.
 
-## RQ-006 - One shared review-wave limit
+## RQ-007 - One shared review-wave limit
 
 One delivery attempt SHALL share at most three completed automatic review waves
 across selected QA and all selected discovered gates. The initial complete
@@ -139,15 +159,15 @@ authorize additional repair, or authorize Seal skips. An explicitly requested
 repair for a P2-only recommendation SHALL use the same shared limit, and Phase
 5 SHALL NOT add a separate runtime retry counter.
 
-## RQ-007 - Narrow Carry responsibility
+## RQ-008 - Narrow Carry responsibility
 
 After repair, selected QA SHALL always rerun. Carry SHALL use only the named
 native VCS immediate pre-repair-to-current comparison and SHALL decide
 `INHERIT` or `RERUN` only for previously passing selected discovered gates.
-Requirements Clarification, Start Readiness, QA Design, skipped gates, and QA
-Execution SHALL not be Carry inputs.
+Requirements Clarification, Start Readiness, QA Design, QA Review, skipped
+gates, and QA Execution SHALL not be Carry inputs.
 
-## RQ-008 - Explicit Seal authorization
+## RQ-009 - Explicit Seal authorization
 
 The custom route decision SHALL persist skip authorization for unselected
 gates. A selected `PENDING` result means dispatch is incomplete or interrupted;
@@ -171,7 +191,7 @@ authorization SHALL apply only to the immutable snapshot whose result the user
 authorized and SHALL be cleared when a later repair snapshot is recorded.
 Route-origin authorization SHALL remain unchanged across snapshots.
 
-## RQ-009 - Lightweight generic implementation
+## RQ-010 - Lightweight generic implementation
 
 Phase 5 SHALL extend the existing run state, lock, prompt catalog, native VCS
 routing, action results, QA results, gate results, Carry state, and snapshots.

@@ -20,9 +20,10 @@ review 和小改动不会自动进入这套流程。
 不需要改 Go 注册表、manifest、YAML、权重、依赖关系或顺序表。需求对齐后，
 用户从“QA 优先、其余门按文件名排序”的列表中一次选择 none、full 或 custom。
 
-QA 不属于提示词门目录。开发完成后，用户选择的 QA Execution 和审查门可以
-在同一批次并行执行。首次完整开发后审查和每次完整返修后审查共享三轮
-review-wave 上限。
+QA 不属于提示词门目录。选择 QA 后，QA Design 先产出完整候选用例，独立
+QA Review 通过后才能开发；Review 失败会带着原用例返回 Design 修改，且不
+占用开发后三轮 review-wave。开发完成后，QA Execution 和审查门可以在同一
+批次并行执行。
 full 和 custom 路由在开发前运行 Start Readiness。none 路由原本省略它；如果
 开发后加入审查门使选择集合变为非空，则必须补做 Start Readiness，且它通过前
 不能审查或 Seal，同时保留当前开发快照。准备 development worker 时即冻结
@@ -30,8 +31,8 @@ full 和 custom 路由在开发前运行 Start Readiness。none 路由原本省�
 
 需求语义变化后，原有 QA 用例保留为未批准的完整覆盖复核输入。下一次 QA
 Design 在影响边界明确时保留不受影响的用例，无法可靠确定边界时则替换完整
-用例集。正常中断后可以重新生成已准备的 development 任务；不可变快照上已
-记录的语义 PASS 或 FAIL 仍为权威结果。
+用例集，并重新经过独立 QA Review。正常中断后可以重新生成已准备的
+development 任务；不可变快照上已记录的语义 PASS 或 FAIL 仍为权威结果。
 
 ## 安装
 
@@ -78,7 +79,7 @@ formal-gates workflow abort --root <repo> --run-id <id>
 
 ```bash
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|development-worker|qa-execution|carry> \
+  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|qa-review|development-worker|qa-execution|carry> \
   --live-snapshot <current>
 
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
@@ -105,6 +106,11 @@ formal-gates workflow qa-design --root <repo> --package-root <package> --run-id 
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --case '<behavior>' --procedure '<public procedure>' --oracle '<expected result>'
+
+formal-gates workflow record-action --root <repo> --package-root <package> \
+  --run-id <id> --action qa-review --status <PASS|FAIL|RUNTIME_ERROR> \
+  --source-revision <revision-from-prepared-prompt> \
+  --source-catalog-revision <catalog-revision-from-prepared-prompt>
 
 formal-gates workflow record-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id> --status <PASS|FAIL|RUNTIME_ERROR> \

@@ -25,10 +25,11 @@ gate. There is no Go registry, gate manifest, YAML front matter, weight,
 dependency graph, or ordering table. After clarification, the user makes one
 none, full, or custom selection from QA followed by the lexical gate list.
 
-QA is not part of the prompt-gate catalog. After development, selected QA
-Execution and review gates may run in one parallel wave. The initial complete
-post-development wave and each complete post-repair wave share one three-wave
-limit.
+QA is not part of the prompt-gate catalog. When selected, QA Design first
+returns the complete candidate set and an independent QA Review must pass
+before development. Review failure returns the retained cases to Design rework
+without consuming a post-development review wave. After development, QA
+Execution and review gates may run in one parallel wave.
 Start Readiness runs before development for full and custom routes. A none
 route omits it unless a post-development gate addition makes the selected set
 non-empty; that deferred readiness must pass before review or Seal and keeps
@@ -39,9 +40,10 @@ starts.
 After a meaning-changing requirement revision, previously approved QA cases
 remain as unapproved input to a complete coverage review. The next QA Design
 retains unaffected cases when impact is bounded and replaces the complete set
-when it is not. Prepared development tasks can be recomposed after normal
-interruption, while a recorded semantic PASS or FAIL remains authoritative for
-its immutable snapshot.
+when it is not, then sends the complete set through independent QA Review
+again. Prepared development tasks can be recomposed after normal interruption,
+while a recorded semantic PASS or FAIL remains authoritative for its immutable
+snapshot.
 
 ## Installation
 
@@ -91,7 +93,7 @@ gate's result:
 
 ```bash
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|development-worker|qa-execution|carry> \
+  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|qa-review|development-worker|qa-execution|carry> \
   --live-snapshot <current>
 
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
@@ -118,6 +120,11 @@ formal-gates workflow qa-design --root <repo> --package-root <package> --run-id 
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --case '<behavior>' --procedure '<public procedure>' --oracle '<expected result>'
+
+formal-gates workflow record-action --root <repo> --package-root <package> \
+  --run-id <id> --action qa-review --status <PASS|FAIL|RUNTIME_ERROR> \
+  --source-revision <revision-from-prepared-prompt> \
+  --source-catalog-revision <catalog-revision-from-prepared-prompt>
 
 formal-gates workflow record-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id> --status <PASS|FAIL|RUNTIME_ERROR> \

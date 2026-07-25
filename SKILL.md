@@ -48,16 +48,20 @@ requested; omitted review stages are not backfilled during seal:
    until the user confirms the outcome and consequential solution choices.
    Record PASS, then bind the exact revision with `workflow requirement
    --confirmed`. After a meaning-changing revision, QA Design receives every
-   prior case as unapproved review input and returns a newly approved complete
-   set, retaining unaffected cases when impact is reliably bounded.
+   prior case as unapproved review input and returns a revised complete
+   candidate set, retaining unaffected cases when impact is reliably bounded.
 3. **Route once.** Read `workflow route-candidates`, present QA first followed
    by every discovered gate, and record one `none`, `full`, or `custom` route.
    Custom omissions receive route skip authorization. Later additions require
    explicit user direction; QA cannot be added after development begins.
 4. **Before formal development.** For `full` and `custom`, run
    `start-readiness`; the `none` route omits it. Only when QA is selected, run
-   blind `qa-design`. These selected actions may run in parallel. Record QA
-   cases only through `workflow qa-design`.
+   blind `qa-design`. These selected actions may run in parallel. Record the
+   complete candidate cases only through `workflow qa-design`, then dispatch
+   independent `qa-review`. PASS approves the cases and unlocks development.
+   FAIL retains them as unapproved rework input and returns to QA Design;
+   RUNTIME_ERROR retries QA Review without reopening design. This loop does
+   not consume post-development review waves.
 5. **Development.** Prepare `development-worker`; preparation records that
    development started and freezes pre-development results and late QA routing.
    After normal interruption, preparing the same PREPARED development or repair
@@ -145,13 +149,20 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt>
 
-# QA Design, then development worker.
+# QA Design, independent QA Review, then development worker.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-design
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
   --source-revision <revision-from-prepared-prompt> \
   --source-catalog-revision <catalog-revision-from-prepared-prompt> \
   --case '<description>' --procedure '<public procedure>' --oracle '<expected result>'
+formal-gates workflow prepare-action --root <repo> --package-root <package> \
+  --run-id <id> --action qa-review
+formal-gates workflow record-action --root <repo> --package-root <package> \
+  --run-id <id> --action qa-review --status <PASS|FAIL|RUNTIME_ERROR> \
+  --source-revision <revision-from-prepared-prompt> \
+  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
+  [--finding '<message>' --location '<path:line>']
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action development-worker --live-snapshot <current>
 
@@ -212,6 +223,11 @@ host's native independent-agent channel. Send the development task only to the
 separate worker. Do not append chat history, findings, repair explanations,
 another reviewer's result, expected verdicts, or focus instructions.
 
+QA Review receives only the confirmed requirement and complete candidate case
+set assembled by the CLI. It must not inspect production implementation,
+implementation diffs, tests, developer explanations, later results, or another
+reviewer's conclusion.
+
 Every gate task is assembled in memory from exactly one shared
 `prompts/reviewer-base.md`, exactly one selected `gates/<gate-id>.md`, current
 requirement routing, native VCS routing, and the result contract. Do not bypass
@@ -256,8 +272,8 @@ files are sorted lexically. Adding a valid file and reinstalling adds a gate.
 Deleting it and reinstalling removes the gate. Do not add a gate registry,
 manifest, front matter, weight, dependency graph, or project-local overlay.
 
-QA, requirements clarification, start readiness, Carry, development, and seal
-are workflow actions, not gate files.
+QA Design, QA Review, QA Execution, requirements clarification, start
+readiness, Carry, development, and seal are workflow actions, not gate files.
 
 ## State And VCS
 

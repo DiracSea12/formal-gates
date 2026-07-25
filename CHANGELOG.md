@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authoritative for their snapshot, and persist snapshot-bound Seal skips.
 - Recompose interrupted prepared development tasks and require deferred Start
   Readiness when a post-development addition makes a none route non-empty.
+- Restore independent QA Review between QA Design and development, with failed
+  review returning the retained complete case set to Design rework.
 - Use Git, SVN, P4, or another named VCS directly for cumulative and repair
   comparisons.
 - Reject Seal while selected work is pending or lacks a matching PASS or

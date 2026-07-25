@@ -28,6 +28,10 @@ func TestCLIWorkflowStartPrepareRecordShow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state, err = validate.RecordAction(root, pkg, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := validate.PrepareAction(root, pkg, state.RunID, "development-worker", "base"); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +195,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	pkg := t.TempDir()
 	mustWriteCLI(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "shared contract\n")
-	for _, id := range []string{"requirements-clarification", "start-readiness", "qa-design", "qa-execution", "carry", "development-worker"} {
+	for _, id := range []string{"requirements-clarification", "start-readiness", "qa-design", "qa-review", "qa-execution", "carry", "development-worker"} {
 		mustWriteCLI(t, filepath.Join(pkg, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")
