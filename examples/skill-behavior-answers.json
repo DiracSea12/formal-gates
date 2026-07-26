@@ -77,10 +77,18 @@
   },
   {
     "id": "FG-BEH-020",
-    "answer": "Keep the overall run at the original base, use separate VCS worktrees and slice runs, merge them, and review integration in the same overall run."
+    "answer": "Start the overall run at the original base with --retained-overall, use separate VCS worktrees and slice runs for implementation, record the merged snapshot directly after merge, and review integration in the same overall run."
   },
   {
     "id": "FG-BEH-021",
     "answer": "Treat the result as candidate input, independently reproduce the normal public path and verify its requirement premise before recording or presenting it; discard it if validation fails."
+  },
+  {
+    "id": "FG-BEH-022",
+    "answer": "Treat PASS as candidate input and validate the complete confirmed requirement, normal-use boundary, and result contract before recording or presenting it."
+  },
+  {
+    "id": "FG-BEH-023",
+    "answer": "Inspect and separately explain total size, coupling, risk, and verification complexity, then tie all four factors to the route recommendation."
   }
 ]

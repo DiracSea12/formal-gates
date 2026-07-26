@@ -61,6 +61,22 @@ func TestCLIWorkflowStartPrepareRecordShow(t *testing.T) {
 	}
 }
 
+func TestCLIWorkflowStartMarksRetainedOverallRun(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "overall-cli", "--requirement", "requirements.md", "--vcs", "git", "--base-snapshot", "base", "--retained-overall"}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("retained overall start failed: %s", stderr.String())
+	}
+	var state validate.RunState
+	if err := json.Unmarshal(stdout.Bytes(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.RetainedOverall {
+		t.Fatalf("retained overall role was not persisted: %s", stdout.String())
+	}
+}
+
 func TestCLIMainAgentCarryParsesReasonWithoutAgentBindings(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
 	state := startCLIWorkflow(t, root, pkg, "main-carry-cli")

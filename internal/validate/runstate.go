@@ -22,6 +22,7 @@ type RunState struct {
 	VCS                  string                       `json:"vcs"`
 	BaseSnapshot         string                       `json:"baseSnapshot"`
 	CurrentSnapshot      string                       `json:"currentSnapshot"`
+	RetainedOverall      bool                         `json:"retainedOverall,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	RouteMode            string                       `json:"routeMode,omitempty"`
 	SelectedGates        []string                     `json:"selectedGates"`

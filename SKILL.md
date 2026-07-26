@@ -65,13 +65,15 @@ When the total confirmed formal request cannot be implemented and verified as
 one coherent bounded unit, split it by dependency, ownership, risk, and
 verification surface. Before any slice development, start and retain one overall
 formal run at the complete request's original base with the complete requirement
-and chosen route. Give each slice a separate formal run and native VCS worktree;
-run independent slices concurrently when capacity allows and wait on dependency
-edges. After merging sealed slice branches and resolving conflicts, record the
-merged identity as completed development in the retained overall run and execute
-its integration QA and gates from the original base to the merged snapshot. Do
-not create a second overall run, replace its base, or repeat clarification or
-routing after the merge.
+and chosen route by passing `--retained-overall` to `workflow start`. Give each
+slice a separate formal run and native VCS worktree; run independent slices
+concurrently when capacity allows and wait on dependency edges. After merging
+sealed slice branches and resolving conflicts, use `workflow snapshot` to record
+the merged identity as completed development in the retained overall run, then
+execute its integration QA and gates from the original base to the merged
+snapshot. Do not create a second overall run, replace its base, prepare or
+dispatch an overall development worker, or repeat clarification or routing after
+the merge.
 
 ## Single Formal Flow
 
@@ -160,7 +162,7 @@ finding or case groups.
 # Start. --current-snapshot defaults to the base.
 formal-gates workflow start --root <repo> --package-root <package> \
   --run-id <id> --flow formal --requirement <requirement-file> \
-  --vcs <vcs> --base-snapshot <base>
+  --vcs <vcs> --base-snapshot <base> [--retained-overall]
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <package> --run-id <id>
@@ -283,7 +285,10 @@ the CLI composer or invoke a gate prompt directly. Missing or invalid prompt
 files are runtime errors and stop dispatch.
 
 Every returned independent result is candidate input until the main agent
-validates it. Its result contract is one of:
+validates it against the complete confirmed requirement, the documented
+normal-use boundary, and the result contract. The main agent records and
+presents no semantic result before making that validation explicit. The result
+contract is one of:
 
 - `PASS` with no findings or only P2 findings;
 - `FAIL` with at least one P0/P1 finding and optional P2 findings; or
@@ -302,14 +307,15 @@ to continue until all assigned checks are complete.
 
 ## Result Validation And Repair Limit
 
-Before recording or presenting a FAIL or blocker, the main agent independently
-checks it against the complete confirmed requirement, retained workflow state,
-normal-use boundary, result contract, scope, severity, causal claim, and cited
-evidence. It MUST reproduce the end-to-end failure from a documented public
-entrypoint using normal user actions or a common mistake. Discard a finding if
-any premise, reproduction, or evidence check fails: do not record it, present it
-as a blocker, or change requirements or implementation because of it. This is
-orchestration validation, not a second verdict, gate, agent, or evidence store.
+Before recording or presenting any semantic PASS or FAIL, the main agent makes
+its complete-requirement, normal-use-boundary, and result-contract validation
+explicit. For a FAIL or blocker it additionally checks retained workflow state,
+scope, severity, causal claim, and cited evidence, and MUST reproduce the
+end-to-end failure from a documented public entrypoint using normal user actions
+or a common mistake. Discard a finding if any premise, reproduction, or evidence
+check fails: do not record it, present it as a blocker, or change requirements or
+implementation because of it. This is orchestration validation, not a second
+verdict, gate, agent, or evidence store.
 
 After validation, the orchestrator groups one root cause once and repairs all
 P0, P1, and P2 findings in a blocking wave together. QA and all selected gates

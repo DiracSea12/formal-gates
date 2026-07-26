@@ -39,9 +39,10 @@ QA Review 通过后才能开发；Review 失败会带着原用例返回 Design �
 
 同一次路由选择覆盖后续新增需求和任务切片。新增范围会暂停相关写入，重新澄清
 并确认刷新后的完整摘要，但除非用户要求，不重复询问路由。过大的正式工作按
-依赖、职责、风险和验证边界切分；一个总体 run 保留原始 base、完整需求和路由，
-独立切片使用不同 VCS worktree 和正式 run，合并后的快照再由原总体 run 从原始
-base 执行集成审查。
+依赖、职责、风险和验证边界切分；一个通过 `--retained-overall` 启动的总体 run
+保留原始 base、完整需求和路由。独立切片使用不同 VCS worktree 和正式 run 并
+负责实际开发；合并及解决冲突后，用 `workflow snapshot` 把合并提交直接记入
+保留的总体 run，再由它从原始 base 执行集成审查。
 
 需求语义变化后，原有 QA 用例保留为未批准的完整覆盖复核输入。下一次 QA
 Design 在影响边界明确时保留不受影响的用例，无法可靠确定边界时则替换完整
@@ -95,7 +96,7 @@ formal-gates package route-candidates --root <package>
 formal-gates workflow start \
   --root <repo> --package-root <installed-formal-gates> \
   --run-id <id> --flow formal --requirement <requirement-file> \
-  --vcs <git|svn|p4> --base-snapshot <base>
+  --vcs <git|svn|p4> --base-snapshot <base> [--retained-overall]
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <installed-formal-gates> --run-id <id>
@@ -185,10 +186,11 @@ Git、SVN、P4 的命令见
 在共享三轮 review-wave 额度耗尽前必须返修，之后才可显式授权跳过。仅 P2
 的建议会保留展示，但不阻止 Seal。
 
-每个独立代理结果都只是候选输入。记录或展示 blocker 前，主代理必须按完整已
-确认需求和保留的工作流状态检查它，独立复现其文档化正常使用公开入口路径，
-并核实证据、范围、严重度和因果关系。任一检查失败就丢弃该 finding，不改变
-工作流状态、需求或实现。
+每个独立代理结果都只是候选输入。记录或展示任何 PASS 或 FAIL 前，主代理必须
+明确完成对完整已确认需求、正常使用边界和结果格式的核验。对于 FAIL 或 blocker，
+还必须按保留的工作流状态检查它，独立复现其文档化正常使用公开入口路径，并核实
+证据、范围、严重度和因果关系。任一检查失败就丢弃该 finding，不改变工作流状态、
+需求或实现。
 
 封板成功或显式中止后，CLI 写入一个摘要并删除该 run 的整个临时目录。
 它不会留下提示词副本、分层证据图或详细状态文件。

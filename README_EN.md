@@ -50,9 +50,11 @@ The chosen route covers later requirements and task slices. Added scope pauses
 related writes for clarification and confirmation of a refreshed complete
 summary, without another route question unless the user requests one. Large
 formal work is split by dependency, ownership, risk, and verification surface.
-One overall run retains the original base, complete requirement, and route;
-independent slices use separate VCS worktrees and formal runs, then their merged
-snapshot is reviewed in that retained overall run from its original base.
+One overall run, started with `--retained-overall`, retains the original base,
+complete requirement, and route. Independent slices use separate VCS worktrees
+and formal runs and own implementation. After merge and conflict resolution,
+`workflow snapshot` records the merged commit directly in the retained overall
+run, which reviews it from the original base.
 
 After a meaning-changing requirement revision, previously approved QA cases
 remain as unapproved input to a complete coverage review. The next QA Design
@@ -115,7 +117,7 @@ Start and inspect a run:
 formal-gates workflow start \
   --root <repo> --package-root <installed-formal-gates> \
   --run-id <id> --flow formal --requirement <requirement-file> \
-  --vcs <git|svn|p4> --base-snapshot <base>
+  --vcs <git|svn|p4> --base-snapshot <base> [--retained-overall]
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <installed-formal-gates> --run-id <id>
@@ -209,12 +211,13 @@ Runtime errors require retry or explicit skip. QA FAIL and P0/P1 require repair
 until the shared three-review-wave limit is exhausted before Seal skip is
 available. P2-only recommendations remain visible without blocking Seal.
 
-Every independent result is candidate input. Before recording or presenting a
-blocker, the main agent checks it against the complete confirmed requirement and
-retained workflow state, independently reproduces its documented normal-use
-public path, and verifies its evidence, scope, severity, and causal claim. A
-finding that fails any check is discarded without changing workflow state,
-requirements, or implementation.
+Every independent result is candidate input. Before recording or presenting any
+PASS or FAIL, the main agent explicitly validates it against the complete
+confirmed requirement, normal-use boundary, and result contract. For a FAIL or
+blocker, the main agent also checks retained workflow state, independently
+reproduces its documented normal-use public path, and verifies its evidence,
+scope, severity, and causal claim. A finding that fails any check is discarded
+without changing workflow state, requirements, or implementation.
 
 After successful seal or explicit abort, the CLI writes one summary and removes
 that run's entire temporary directory. It does not retain prompt copies,

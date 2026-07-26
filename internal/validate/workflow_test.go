@@ -135,6 +135,40 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	}
 }
 
+func TestRetainedOverallRunAdoptsMergedSliceSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "overall-integration", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", BaseSnapshot: "base", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordClarificationAndConfirm(t, root, pkg, state)
+	state, err = SetRoute(root, pkg, state.RunID, "custom", []string{"quality"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "retained overall run") {
+		t.Fatalf("retained overall run duplicated slice development ownership: %v", err)
+	}
+
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "merged-slices", "merged-slices")
+	if err != nil {
+		t.Fatalf("retained overall run could not adopt the merged slice snapshot: %v", err)
+	}
+	if !state.RetainedOverall || state.CurrentSnapshot != "merged-slices" || state.Actions["development-worker"].Status != developmentComplete || state.PreRepairSnapshot != "" {
+		t.Fatalf("merged slice snapshot was not recorded as initial completed development: %#v", state)
+	}
+	prompt, err := PrepareGate(root, pkg, state.RunID, "quality", state.CurrentSnapshot)
+	if err != nil {
+		t.Fatalf("integration review was not available at the merged snapshot: %v", err)
+	}
+	for _, want := range []string{"base snapshot: base", "current snapshot: merged-slices"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("integration review did not retain %q in the original base-to-merged route: %s", want, prompt)
+		}
+	}
+}
+
 func TestRouteAdditionAfterCompletedWaveReviewsOnlyAddedGate(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "route-add-completed", "custom", []string{"quality"})

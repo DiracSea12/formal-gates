@@ -128,10 +128,11 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		vcs := fs.String("vcs", "", "external VCS name")
 		base := fs.String("base-snapshot", "", "immutable base snapshot")
 		current := fs.String("current-snapshot", "", "immutable current snapshot")
+		retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *current})
+		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *current, RetainedOverall: *retainedOverall})
 		return printValue(streams.Stdout, state, err)
 	case "show":
 		fs := newFlagSet("workflow show", streams)

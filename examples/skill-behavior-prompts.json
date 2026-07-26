@@ -155,9 +155,9 @@
     "id": "FG-BEH-020",
     "title": "Sliced work retains overall run",
     "user_prompt": "Two independent formal slices are ready to develop in parallel.",
-    "expected_behavior": "Retain one overall run at the original base, use separate VCS worktrees and slice runs, merge them, then run integration review in that same overall run.",
-    "must_include": ["overall run at the original base", "separate VCS worktrees", "merge", "same overall run"],
-    "must_avoid": ["new integration run"]
+    "expected_behavior": "Start one overall run at the original base with --retained-overall, use separate VCS worktrees and slice runs for implementation, merge them, record the merged snapshot directly in the retained overall run, then run integration review there.",
+    "must_include": ["overall run at the original base", "--retained-overall", "separate VCS worktrees", "record the merged snapshot", "same overall run"],
+    "must_avoid": ["new integration run", "prepare the overall development worker"]
   },
   {
     "id": "FG-BEH-021",
@@ -166,5 +166,21 @@
     "expected_behavior": "Treat it as candidate input, independently reproduce its documented normal-use public path and verify its requirement premise and evidence before recording or presenting it; discard it if any check fails.",
     "must_include": ["candidate input", "independently reproduce", "requirement premise", "before recording or presenting", "discard"],
     "must_avoid": ["record the agent output directly"]
+  },
+  {
+    "id": "FG-BEH-022",
+    "title": "PASS requires main-agent validation",
+    "user_prompt": "An independent reviewer returned PASS.",
+    "expected_behavior": "Treat PASS as candidate input and explicitly validate it against the complete confirmed requirement, documented normal-use boundary, and result contract before recording or presenting it.",
+    "must_include": ["candidate input", "complete confirmed requirement", "normal-use boundary", "result contract", "before recording or presenting"],
+    "must_avoid": ["record PASS immediately"]
+  },
+  {
+    "id": "FG-BEH-023",
+    "title": "Route recommendation explains every factor",
+    "user_prompt": "Recommend lightweight, full, or custom for this confirmed modification.",
+    "expected_behavior": "Inspect the total request and separately explain its size, coupling, risk, and verification complexity before tying all four factors to one route recommendation.",
+    "must_include": ["size", "coupling", "risk", "verification complexity", "route recommendation"],
+    "must_avoid": ["small and low-risk is sufficient"]
   }
 ]

@@ -13,7 +13,7 @@ import (
 
 type StartOptions struct {
 	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot, CurrentSnapshot string
-	RequirementConfirmed                                                                  bool
+	RequirementConfirmed, RetainedOverall                                                 bool
 }
 
 type FindingInput struct {
@@ -105,6 +105,7 @@ func Start(options StartOptions) (RunState, error) {
 		return RunState{}, fmt.Errorf("cannot create run %q: %w", runID, err)
 	}
 	state := NewRunState(runID, strings.TrimSpace(options.Flow), options.RequirementSource, revision, strings.TrimSpace(options.VCS), strings.TrimSpace(options.BaseSnapshot), currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs())
+	state.RetainedOverall = options.RetainedOverall
 	if err := SaveRunState(root, state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))
 		return RunState{}, err
@@ -378,6 +379,12 @@ func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (st
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
+		}
+		if state.RetainedOverall && state.Actions["development-worker"].Status == developmentPending {
+			if err := requireTransition(*state, "development-worker", ""); err != nil {
+				return err
+			}
+			return fmt.Errorf("a retained overall run records merged slice development with workflow snapshot")
 		}
 		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
 			return err
@@ -1253,7 +1260,8 @@ func requireTransition(state RunState, operation, target string) error {
 		}
 	case "snapshot":
 		developmentStatus := state.Actions["development-worker"].Status
-		if developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
+		adoptingMergedSlices := state.RetainedOverall && developmentStatus == developmentPending
+		if !adoptingMergedSlices && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
 			return fmt.Errorf("development worker must be prepared before a snapshot")
 		}
 		if state.Actions["start-readiness"].Status != "PASS" {
