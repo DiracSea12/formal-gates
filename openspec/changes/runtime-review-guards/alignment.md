@@ -15,12 +15,17 @@ one host-provided reviewer or session identity to that dispatch and reject a
 missing, unknown, stale, already completed, or mismatched dispatch before
 changing semantic state.
 
+The host reviewer or session identity SHALL be claimed and reserved on the open
+dispatch before any result can be accepted. The reservation remains used when
+an interrupted dispatch returns no result, so a later dispatch cannot reuse it.
+
 ## RQ-002 - Review identities are not reused
 
 QA Review and every post-development review gate SHALL use a zero-context
 reviewer identity that has not been used by any prior QA Review or gate review
 in the same run. This applies across gates, retries, repair waves, and runtime
-error retries. The CLI SHALL reject reuse before recording the result.
+error retries. The CLI SHALL reject reuse when the later dispatch is claimed,
+before recording any result.
 
 QA Design, QA Execution, Carry, requirements clarification, Start Readiness,
 and development workers SHALL NOT require this review-identity uniqueness.
@@ -105,4 +110,3 @@ It SHALL NOT restore or add an evidence graph, receipt subsystem, policy engine,
 closure graph, provider adapter, hook-dependent identity proof, second VCS
 model, project-specific route, dry-run phase, or compatibility path for
 manually rewritten temporary state.
-

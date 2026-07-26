@@ -25,6 +25,12 @@ catalog revisions, and current native VCS identity.
 - **WHEN** an interrupted or runtime-error review is prepared again
 - **THEN** the CLI creates a new dispatch and requires a fresh reviewer identity
 
+#### Scenario: An interrupted reviewer returned no result
+
+- **WHEN** the host claimed a reviewer identity for a dispatch that was later
+  interrupted before result recording
+- **THEN** a later QA Review or gate dispatch cannot claim that identity
+
 ### Requirement: The selected native VCS supplies immutable identities
 
 The main agent SHALL select the actual VCS once. The CLI SHALL resolve and
@@ -81,4 +87,3 @@ isolated normal-use environment and compare observable results with an oracle.
   oracle comparison
 - **AND** code inspection, simulated output, or developer self-test claims do
   not substitute for live execution
-
