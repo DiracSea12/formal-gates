@@ -9,11 +9,19 @@ set of reviewer identities already used for QA Review and gate reviews.
 
 `prepare-action qa-review` and `prepare-gate` always create a fresh review
 dispatch. Their composed prompts include the dispatch ID in the result contract.
-Recording reads all static bindings from the open dispatch and accepts the
-returned dispatch ID plus the host reviewer/session identity. The mutation lock
-checks the dispatch, identity uniqueness, snapshot, and existing authoritative
-result together before recording. Runtime-error retry creates a new dispatch
-and also requires a new review identity.
+After the host creates the zero-context reviewer and obtains its reviewer/session
+identity, the main agent immediately claims the open dispatch through one small
+CLI transition. Claiming reserves that identity in the run before any result can
+be accepted. A claim rejects an identity reserved by any earlier dispatch,
+including an interrupted dispatch that never returned a result.
+
+Recording accepts the returned dispatch ID and reads the claimed identity and
+all static bindings from the open dispatch. The mutation lock checks the claim,
+dispatch, snapshot, and existing authoritative result together before recording.
+An unclaimed dispatch cannot record a result. Runtime-error or interrupted retry
+creates a new dispatch and requires a new claim with a fresh review identity.
+The CLI stores only the identity string and claim state; no provider SDK,
+session transcript, receipt, or external identity service is introduced.
 
 Non-review actions may use the same compact prepared binding to remove repeated
 source arguments, but do not enter the reviewer-identity uniqueness set. Do not
@@ -76,4 +84,3 @@ routing, so this remains one bounded slice. Implement dispatch bindings first,
 then native VCS resolution, then requirement freezing and QA kinds. Reuse
 historical code only at the level of small ID, prompt-hash, and native-command
 helpers; do not restore historical subsystems.
-

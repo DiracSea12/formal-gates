@@ -4,6 +4,9 @@
   attempts, waves, source bindings, and reviewer identity history.
 - [ ] Bind QA Review and every gate result to one open dispatch and reject
   missing, stale, mismatched, completed, or reused reviewer identities.
+- [ ] Add a lightweight dispatch-claim transition that reserves the host
+  reviewer/session identity before results are accepted, including when an
+  earlier dispatch is interrupted without returning a result.
 - [ ] Remove repeated operator-supplied source binding fields where prepared
   state is the existing owner.
 - [ ] Add native Git, SVN, and P4 snapshot resolvers selected by the run's VCS;
@@ -21,4 +24,3 @@
 - [ ] Run full tests, race tests, vet, build, package validation, portable
   canary, behavior evaluation, diff checks, QA Execution, and every full-route
   review gate.
-
