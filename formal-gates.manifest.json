@@ -109,7 +109,7 @@
     "The built formal-gates native binary is the installed package and artifact validation entrypoint for Windows, macOS, and Linux.",
     "The native canary command validates package shape, the file-driven prompt catalog, hook decisions, workflow state, and install shape without PowerShell.",
     "GateRunner loads the shared reviewer base and every valid package-local gate prompt from the prompt catalog without a per-gate manifest or Go registry.",
-    "Native workflow commands require an external Git, SVN, P4, or equivalent VCS for formal development and bind caller-provided snapshot identities while reviewers inspect native VCS comparisons directly.",
+    "Native workflow commands resolve and verify immutable identities through the selected Git, SVN, or P4 command while reviewers inspect native comparisons directly.",
     "Native install copies the verifiable installable package subset, including prompts and gates, without PS1/Python script runtime files and writes each selected host's native hook configuration.",
     "Source checkout development tests may use go run ./cmd/formal-gates, but installed hook and validation paths must use bin/formal-gates(.exe).",
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",

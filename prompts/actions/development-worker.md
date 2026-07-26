@@ -6,7 +6,9 @@ public API, configuration, reports, runners, state, evidence, cleanup, or
 compatibility paths that the requirement does not need. Reuse, modify, or delete
 the existing owner before adding a new concept. Do not handwrite or edit
 workflow state or final summaries; provide only the semantic values accepted by
-the CLI.
+the CLI. Do not edit any registered requirement or solution artifact after the
+development boundary; those frozen paths are acceptance inputs, not delivery
+targets.
 
 Use the named external VCS directly. Add each new delivery path explicitly
 before further edits, and add an existing untracked delivery path before

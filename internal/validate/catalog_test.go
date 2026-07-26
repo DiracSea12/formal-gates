@@ -115,7 +115,7 @@ func TestGatePromptContainsEachPromptExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt, err := ComposeGatePrompt(catalog, "quality", PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b"})
+	prompt, err := ComposeGatePrompt(catalog, "quality", PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", DispatchID: "dispatch-test", DispatchAttempt: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestActionPromptsDescribeTheirSemanticReturn(t *testing.T) {
 		t.Fatal(err)
 	}
 	route := PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", PreRepairSnapshot: "old"}
-	for action, want := range map[string]string{"requirements-clarification": "user confirms", "qa-design": "description, procedure, and oracle", "qa-review": "complete candidate set is approved", "qa-execution": "case ID, PASS or FAIL outcome", "carry": "INHERIT or RERUN", "development-worker": "delivery path names", "start-readiness": "PASS with no findings"} {
+	for action, want := range map[string]string{"requirements-clarification": "user confirms", "qa-design": "STATIC or LIVE", "qa-review": "decision for every supplied pending case", "qa-execution": "case ID, PASS or FAIL outcome", "carry": "INHERIT or RERUN", "development-worker": "delivery path names", "start-readiness": "PASS with no findings"} {
 		prompt, err := ComposeActionPrompt(catalog, action, route, "input")
 		if err != nil {
 			t.Fatal(err)

@@ -38,6 +38,10 @@ preferences, hypothetical risk, and unrequested hardening are advisory. If no
 in-scope blocker remains, PASS. Follow the result contract appended to this
 task exactly.
 
+Frozen requirement and solution artifacts are acceptance inputs, not review
+targets. Use them to judge the change, but do not request ordinary repair edits
+to a path listed as an excluded review target.
+
 Your returned result is candidate input. The main agent independently validates
 its requirement premise, normal public reproduction, evidence, scope, severity,
 and causal claim before recording or presenting any blocker.

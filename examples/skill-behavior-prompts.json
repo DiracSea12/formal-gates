@@ -182,5 +182,45 @@
     "expected_behavior": "Inspect the total request and separately explain its size, coupling, risk, and verification complexity before tying all four factors to one route recommendation.",
     "must_include": ["size", "coupling", "risk", "verification complexity", "route recommendation"],
     "must_avoid": ["small and low-risk is sufficient"]
+  },
+  {
+    "id": "FG-BEH-024",
+    "title": "Review dispatches reserve fresh identities",
+    "user_prompt": "Retry a QA Review after its claimed reviewer was interrupted.",
+    "expected_behavior": "Prepare a new dispatch, create a new zero-context reviewer, and claim its fresh reviewer identity; the interrupted identity remains reserved and cannot be reused.",
+    "must_include": ["new dispatch", "new zero-context reviewer", "fresh reviewer identity", "remains reserved"],
+    "must_avoid": ["reuse the interrupted reviewer"]
+  },
+  {
+    "id": "FG-BEH-025",
+    "title": "Requirement artifacts freeze at development",
+    "user_prompt": "Prepare development after confirming a requirement and solution document.",
+    "expected_behavior": "Register and freeze both documents at the development boundary, use them as acceptance inputs, and exclude their paths from ordinary post-development review targets.",
+    "must_include": ["register and freeze", "development boundary", "acceptance inputs", "exclude their paths"],
+    "must_avoid": ["edit frozen requirements during repair"]
+  },
+  {
+    "id": "FG-BEH-026",
+    "title": "Formal QA includes static and live cases",
+    "user_prompt": "Design a complete formal QA case set.",
+    "expected_behavior": "Include STATIC direct-owner automated checks and LIVE execution through documented public entrypoints against the built current snapshot.",
+    "must_include": ["STATIC", "direct-owner automated checks", "LIVE", "documented public entrypoints", "built current snapshot"],
+    "must_avoid": ["code inspection counts as LIVE"]
+  },
+  {
+    "id": "FG-BEH-027",
+    "title": "QA Review retains exact passing cases",
+    "user_prompt": "One pending QA case failed review while another passed unchanged.",
+    "expected_behavior": "Store both per-case outcomes, preserve the exact unchanged passing case during QA Design rework, and ask the next QA Review only about failed, new, or changed cases.",
+    "must_include": ["per-case outcomes", "exact unchanged passing case", "failed, new, or changed cases"],
+    "must_avoid": ["review every passing case again"]
+  },
+  {
+    "id": "FG-BEH-028",
+    "title": "The CLI owns native snapshot bindings",
+    "user_prompt": "Record a prepared gate result at the current snapshot.",
+    "expected_behavior": "Pass the dispatch ID and semantic result only; the CLI obtains source bindings from the dispatch and resolves the current identity through the selected Git, SVN, or P4 command.",
+    "must_include": ["dispatch ID", "semantic result only", "source bindings from the dispatch", "Git, SVN, or P4"],
+    "must_avoid": ["transcribe source snapshot flags"]
   }
 ]

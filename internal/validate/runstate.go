@@ -17,6 +17,8 @@ type RunState struct {
 	RequirementSource    string                       `json:"requirementSource"`
 	RequirementRevision  string                       `json:"requirementRevision"`
 	RequirementConfirmed bool                         `json:"requirementConfirmed"`
+	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
+	ArtifactsFrozen      bool                         `json:"artifactsFrozen"`
 	BasePromptRevision   string                       `json:"basePromptRevision"`
 	CatalogRevision      string                       `json:"catalogRevision"`
 	VCS                  string                       `json:"vcs"`
@@ -34,12 +36,35 @@ type RunState struct {
 	QAExecution          QAExecutionResult            `json:"qaExecution"`
 	Gates                map[string]GateResult        `json:"gates"`
 	Carry                map[string]CarryResult       `json:"carry"`
+	Dispatches           map[string]PreparedDispatch  `json:"dispatches"`
+	UsedReviewers        map[string]string            `json:"usedReviewers"`
+}
+
+type RequirementArtifact struct {
+	Path     string `json:"path"`
+	Revision string `json:"revision"`
+}
+
+type PreparedDispatch struct {
+	ID                  string `json:"id"`
+	Target              string `json:"target"`
+	TargetKind          string `json:"targetKind"`
+	Attempt             int    `json:"attempt"`
+	ReviewWave          int    `json:"reviewWave"`
+	PromptHash          string `json:"promptHash"`
+	RequirementRevision string `json:"requirementRevision"`
+	CatalogRevision     string `json:"catalogRevision"`
+	SourceSnapshot      string `json:"sourceSnapshot"`
+	ReviewerRequired    bool   `json:"reviewerRequired"`
+	ReviewerIdentity    string `json:"reviewerIdentity,omitempty"`
+	Status              string `json:"status"`
 }
 
 type ActionResult struct {
-	Status   string    `json:"status"`
-	Message  string    `json:"message,omitempty"`
-	Findings []Finding `json:"findings,omitempty"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message,omitempty"`
+	Findings   []Finding `json:"findings,omitempty"`
+	DispatchID string    `json:"dispatchId,omitempty"`
 }
 
 type QAExecutionResult struct {
@@ -52,6 +77,7 @@ type QAExecutionResult struct {
 
 type QAResultRecord struct {
 	CaseID       string `json:"caseId"`
+	Kind         string `json:"kind"`
 	Outcome      string `json:"outcome"`
 	Procedure    string `json:"procedure"`
 	Observation  string `json:"observation"`
@@ -76,6 +102,7 @@ type GateResult struct {
 	SourceSnapshot string    `json:"sourceSnapshot,omitempty"`
 	Findings       []Finding `json:"findings,omitempty"`
 	Message        string    `json:"message,omitempty"`
+	DispatchID     string    `json:"dispatchId,omitempty"`
 }
 
 type CarryResult struct {
@@ -87,10 +114,13 @@ type CarryResult struct {
 }
 
 type QACase struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
-	Procedure   string `json:"procedure"`
-	Oracle      string `json:"oracle"`
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Description  string `json:"description"`
+	Procedure    string `json:"procedure"`
+	Oracle       string `json:"oracle"`
+	ReviewStatus string `json:"reviewStatus"`
+	ReviewReason string `json:"reviewReason,omitempty"`
 }
 
 type RunSummary struct {
@@ -103,6 +133,7 @@ type RunSummary struct {
 	VCS                  string                       `json:"vcs"`
 	BaseSnapshot         string                       `json:"baseSnapshot"`
 	CurrentSnapshot      string                       `json:"currentSnapshot"`
+	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
 	RouteMode            string                       `json:"routeMode"`
 	SelectedGates        []string                     `json:"selectedGates"`
 	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
@@ -112,12 +143,12 @@ type RunSummary struct {
 	QA                   QAExecutionResult            `json:"qaExecution"`
 }
 
-func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseSnapshot, currentSnapshot, basePromptRevision, catalogRevision string, confirmed bool, gateIDs []string) RunState {
+func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseSnapshot, currentSnapshot, basePromptRevision, catalogRevision string, confirmed bool, gateIDs []string, artifacts []RequirementArtifact) RunState {
 	gates := map[string]GateResult{}
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, UsedReviewers: map[string]string{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -150,6 +181,15 @@ func SaveRunState(root string, state RunState) error {
 	}
 	if state.SkipAuthorizations == nil {
 		state.SkipAuthorizations = map[string]SkipAuthorization{}
+	}
+	if state.Dispatches == nil {
+		state.Dispatches = map[string]PreparedDispatch{}
+	}
+	if state.UsedReviewers == nil {
+		state.UsedReviewers = map[string]string{}
+	}
+	if state.RequirementArtifacts == nil {
+		state.RequirementArtifacts = []RequirementArtifact{}
 	}
 	if state.SelectedGates == nil {
 		state.SelectedGates = []string{}
@@ -205,7 +245,7 @@ func RunSummaryPath(root, runID string) string {
 }
 
 func runSummary(state RunState) RunSummary {
-	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution}
+	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution}
 }
 
 func RequirementRevision(path string) (string, error) {

@@ -6,14 +6,18 @@ import (
 )
 
 type PromptRoute struct {
-	RequirementSource   string
-	RequirementRevision string
-	CatalogRevision     string
-	Worktree            string
-	VCS                 string
-	BaseSnapshot        string
-	CurrentSnapshot     string
-	PreRepairSnapshot   string
+	RequirementSource    string
+	RequirementRevision  string
+	CatalogRevision      string
+	Worktree             string
+	VCS                  string
+	BaseSnapshot         string
+	CurrentSnapshot      string
+	PreRepairSnapshot    string
+	RequirementArtifacts []RequirementArtifact
+	DispatchID           string
+	DispatchAttempt      int
+	ReviewWave           int
 }
 
 func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) (string, error) {
@@ -24,13 +28,18 @@ func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) 
 	if err := validateRoute(route, false); err != nil {
 		return "", err
 	}
-	return strings.Join([]string{
+	if strings.TrimSpace(route.DispatchID) == "" || route.DispatchAttempt <= 0 {
+		return "", fmt.Errorf("gate dispatch binding is required")
+	}
+	parts := []string{
 		"[Shared reviewer contract]\n" + catalog.Base,
 		fmt.Sprintf("[Gate: %s]\n%s", gate.ID, gate.Content),
-		fmt.Sprintf("[Current requirement]\nsource: %s\nrevision: %s\ncatalog revision: %s", route.RequirementSource, route.RequirementRevision, route.CatalogRevision),
-		fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s\nUse the named VCS directly to inspect the complete base-to-current comparison.", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot),
-		"[Result contract]\nReturn exactly one JSON object matching: {\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. PASS permits no findings or P2-only findings. FAIL requires at least one P0 or P1 finding and may include P2 findings. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Do not add fields or Markdown fences.",
-	}, "\n\n") + "\n", nil
+		currentRequirementBlock(route),
+		currentChangeBlock(route, true),
+		dispatchBlock(route),
+		fmt.Sprintf("[Result contract]\nReturn exactly one JSON object matching: {\"dispatchId\":%q,\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. PASS permits no findings or P2-only findings. FAIL requires at least one P0 or P1 finding and may include P2 findings. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Return this dispatch ID unchanged. Do not add fields or Markdown fences.", route.DispatchID),
+	}
+	return strings.Join(parts, "\n\n") + "\n", nil
 }
 
 func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRoute, detail string) (string, error) {
@@ -43,12 +52,12 @@ func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRou
 	}
 	parts := []string{
 		fmt.Sprintf("[Action: %s]\n%s", action.ID, action.Content),
-		fmt.Sprintf("[Current requirement]\nsource: %s\nrevision: %s\ncatalog revision: %s", route.RequirementSource, route.RequirementRevision, route.CatalogRevision),
+		currentRequirementBlock(route),
 	}
 	if actionID == "qa-review" {
 		parts[1] += "\nworktree: " + route.Worktree
 	} else {
-		parts = append(parts, fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot))
+		parts = append(parts, currentChangeBlock(route, actionID == "qa-execution"))
 		if route.PreRepairSnapshot != "" {
 			parts[2] += "\npre-repair snapshot: " + route.PreRepairSnapshot
 		}
@@ -56,27 +65,60 @@ func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRou
 	if strings.TrimSpace(detail) != "" {
 		parts = append(parts, "[Action input]\n"+strings.TrimSpace(detail))
 	}
-	parts = append(parts, "[Result contract]\n"+actionResultContract(actionID))
+	if route.DispatchID != "" {
+		parts = append(parts, dispatchBlock(route))
+	}
+	parts = append(parts, "[Result contract]\n"+actionResultContract(actionID, route.DispatchID))
 	return strings.Join(parts, "\n\n") + "\n", nil
 }
 
-func actionResultContract(actionID string) string {
+func actionResultContract(actionID, dispatchID string) string {
+	prefix := ""
+	if dispatchID != "" {
+		prefix = fmt.Sprintf("Return dispatch ID %q unchanged. ", dispatchID)
+	}
 	switch actionID {
 	case "qa-design":
-		return "Return only ordered semantic cases. Each case must contain description, procedure, and oracle. Do not assign case IDs; the CLI assigns them."
+		return prefix + "Return only ordered semantic cases. Each case must contain exactly one kind (STATIC or LIVE), description, procedure, and oracle. Do not assign case IDs; the CLI assigns them."
 	case "qa-execution":
-		return "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. Return a runtime error separately if execution could not run."
+		return prefix + "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. Return a runtime error separately if execution could not run."
 	case "qa-review":
-		return "Return PASS with no findings when the complete candidate set is approved, FAIL with one or more findings when it requires rework, or a separate runtime error message. Each finding contains a message and optional repository-relative locations."
+		return prefix + "Return one PASS or FAIL decision for every supplied pending case; each FAIL decision requires a reason. Do not return decisions for accepted cases. Return set-level findings separately for missing or duplicated coverage. The CLI derives the aggregate result. Return a runtime error separately if review could not run."
 	case "carry":
-		return "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
+		return prefix + "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
 	case "development-worker":
 		return "Perform the development action, track every delivery path in the named VCS before fixing the snapshot, and return the immutable current snapshot plus the delivery path names to the host. Do not return QA cases or a gate verdict."
 	case "requirements-clarification":
-		return "Return PASS only after the user confirms the requested outcome and consequential solution choices. Return FAIL with findings for unresolved consequential gaps, or a separate runtime error message."
+		return prefix + "Return PASS only after the user confirms the requested outcome and consequential solution choices. Return FAIL with findings for unresolved consequential gaps, or a separate runtime error message."
 	default:
-		return "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding contains a message and optional repository-relative locations."
+		return prefix + "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding contains a message and optional repository-relative locations."
 	}
+}
+
+func currentRequirementBlock(route PromptRoute) string {
+	lines := []string{fmt.Sprintf("[Current requirement]\nsource: %s\nrevision: %s\ncatalog revision: %s", route.RequirementSource, route.RequirementRevision, route.CatalogRevision)}
+	if len(route.RequirementArtifacts) != 0 {
+		lines = append(lines, "acceptance artifacts:")
+		for _, artifact := range route.RequirementArtifacts {
+			lines = append(lines, fmt.Sprintf("- %s (revision %s)", artifact.Path, artifact.Revision))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func currentChangeBlock(route PromptRoute, reviewTargets bool) string {
+	lines := []string{fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot)}
+	if reviewTargets {
+		lines = append(lines, "Use the named VCS directly to inspect the complete base-to-current comparison.", "Excluded review targets (acceptance inputs only):")
+		for _, artifact := range route.RequirementArtifacts {
+			lines = append(lines, "- "+artifact.Path)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func dispatchBlock(route PromptRoute) string {
+	return fmt.Sprintf("[Dispatch]\nid: %s\nattempt: %d\nreview wave: %d", route.DispatchID, route.DispatchAttempt, route.ReviewWave)
 }
 
 func validateRoute(route PromptRoute, requireRepair bool) error {

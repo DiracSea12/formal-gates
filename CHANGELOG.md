@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one retained seal or abort summary.
 - Run selected QA Execution and selected independent gates in parallel on the
   current native VCS snapshot.
+- Bind QA Review and gate results to unique prepared dispatches, reserve a fresh
+  zero-context reviewer identity before recording, and source static result
+  bindings from the dispatch rather than repeated operator flags.
+- Resolve and verify immutable identities through the selected Git, SVN, or P4
+  command for preparation, snapshots, results, Carry, and Seal.
+- Register and freeze the complete requirement and solution artifact set at
+  development start, retaining it as acceptance input while excluding it from
+  ordinary post-development review targets.
+- Require every formal QA set to include STATIC and LIVE cases, store per-case
+  QA Review outcomes, and preserve exact unchanged passing cases across rework.
 - Activate one pre-write intake for every project-content modification, require
   confirmation of the complete outcome and solution, then ask once for
   lightweight, full, or custom execution over the dynamic gate catalog.
@@ -27,8 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation ownership.
 - Classify changed requirement revisions explicitly as meaning-preserving or
   meaning-changing, rebind the current native VCS identity before results are
-  preserved or invalidated, and retain prior QA cases as unapproved
-  coverage-review input after invalidation.
+  preserved or invalidated, and retain exact passing QA cases for unaffected
+  coverage while new or changed cases become pending.
 - Route P0/P1/P2 findings through one shared three-review-wave limit, keep
   Carry limited to previously passing selected gates, treat semantic results as
   authoritative for their snapshot, and persist snapshot-bound Seal skips.
@@ -44,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review returning the retained complete case set to Design rework.
 - Reserve `qa` for the built-in QA flow so a discovered gate cannot collide
   with its routing and result ownership.
-- Use Git, SVN, P4, or another named VCS directly for cumulative and repair
+- Use the selected Git, SVN, or P4 command directly for cumulative and repair
   comparisons.
 - Reject Seal while selected work is pending or lacks a matching PASS or
   permitted user skip authorization.

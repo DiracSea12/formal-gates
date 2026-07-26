@@ -83,13 +83,16 @@ with `workflow snapshot` in the retained overall run.
 `full` or `custom`; omitted review stages are not backfilled during seal:
 
 1. **Start.** Select an external VCS, freeze its native base identity, and run
-   `formal-gates workflow start`. No-VCS formal runs are unsupported.
+   `formal-gates workflow start`. Register the primary requirement plus every
+   additional requirement or solution document. No-VCS formal runs are
+   unsupported.
 2. **Requirements.** The main agent follows `requirements-clarification`,
    records the already confirmed complete outcome and solution as PASS, then
    binds the exact durable revision with `workflow requirement --confirmed`.
-   After a meaning-changing revision, QA Design receives every
-   prior case as unapproved review input and returns a revised complete
-   candidate set, retaining unaffected cases when impact is reliably bounded.
+   After a meaning-changing revision, QA Design receives every prior case and
+   its review marker, then returns a revised complete candidate set. Exact
+   retained passing cases for unaffected requirements remain approved; new or
+   changed cases become pending.
    Classifying any changed revision also binds the current immutable live VCS
    identity that contains it.
 3. **Bind the chosen route.** Read `workflow route-candidates` to verify the
@@ -99,9 +102,12 @@ with `workflow snapshot` in the retained overall run.
    development begins.
 4. **Before formal development.** Run `start-readiness`. Only when QA is selected, run
    blind `qa-design`. These selected actions may run in parallel. Record the
-   complete candidate cases only through `workflow qa-design`, then dispatch
-   independent `qa-review`. PASS approves the cases and unlocks development.
-   FAIL retains them as unapproved rework input and returns to QA Design;
+   complete candidate cases only through `workflow qa-design`; every complete
+   set contains STATIC direct-owner checks and LIVE public-entrypoint execution.
+   Then dispatch independent `qa-review`, claim its dispatch with the new
+   zero-context reviewer identity, and record one decision per pending case.
+   Passing unchanged cases remain approved across Design rework. PASS approves
+   the cases and unlocks development. FAIL returns to QA Design;
    RUNTIME_ERROR retries QA Review without reopening design. This loop does
    not consume post-development review waves.
 5. **Development.** Prepare `development-worker`; preparation records that
@@ -164,10 +170,11 @@ Use the installed `formal-gates` binary. The examples below omit only repeated
 finding or case groups.
 
 ```bash
-# Start. --current-snapshot defaults to the base.
+# Start. The CLI resolves the native current identity as the base.
 formal-gates workflow start --root <repo> --package-root <package> \
   --run-id <id> --flow formal --requirement <requirement-file> \
-  --vcs <vcs> --base-snapshot <base> [--retained-overall]
+  [--requirement-artifact <requirement-or-solution-file> ...] \
+  --vcs <git|svn|p4> [--base-snapshot <identity-to-verify>] [--retained-overall]
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <package> --run-id <id>
@@ -177,14 +184,15 @@ formal-gates workflow abort --root <repo> --run-id <id>
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action requirements-clarification
 formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action requirements-clarification --status <PASS|FAIL|RUNTIME_ERROR> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt>
+  --run-id <id> --action requirements-clarification --dispatch <dispatch-id> \
+  --status <PASS|FAIL|RUNTIME_ERROR>
 formal-gates workflow requirement --root <repo> --package-root <package> \
-  --run-id <id> --source <requirement-file> --confirmed
+  --run-id <id> --source <requirement-file> \
+  [--requirement-artifact <requirement-or-solution-file> ... | \
+   --clear-requirement-artifacts] --confirmed
 # After Resume reports a changed revision, classify its semantic effect.
 formal-gates workflow requirement --root <repo> --package-root <package> \
-  --run-id <id> --meaning <preserved|changed> --live-snapshot <current>
+  --run-id <id> --meaning <preserved|changed>
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
@@ -194,64 +202,57 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action start-readiness --status <PASS|FAIL|RUNTIME_ERROR> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt>
+  --run-id <id> --action start-readiness --dispatch <dispatch-id> \
+  --status <PASS|FAIL|RUNTIME_ERROR>
 
 # QA Design, independent QA Review, then development worker.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-design
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  --case '<description>' --procedure '<public procedure>' --oracle '<expected result>'
+  --dispatch <dispatch-id> --case '<description>' --kind <STATIC|LIVE> \
+  --procedure '<public procedure>' --oracle '<expected result>'
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-review
-formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action qa-review --status <PASS|FAIL|RUNTIME_ERROR> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  [--finding '<message>' --location '<path:line>']
+formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --reviewer <reviewer-or-session-id>
+formal-gates workflow qa-review --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> \
+  --case CASE-001 --outcome <PASS|FAIL> [--reason '<required for FAIL>'] \
+  [--finding '<set-level finding>' --location '<path:line>']
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action development-worker --live-snapshot <current>
+  --run-id <id> --action development-worker
 
 # Record the immutable post-development or post-repair identity.
 formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id> --current-snapshot <new-current> --live-snapshot <new-current>
+  --run-id <id>
 
 # Prepare QA Execution and every gate in parallel.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action qa-execution --live-snapshot <current>
+  --run-id <id> --action qa-execution
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <gate-id> --live-snapshot <current>
+  --run-id <id> --gate <gate-id>
 
 # Record one group for every approved QA case and every selected discovered gate.
 formal-gates workflow qa-execution --root <repo> --package-root <package> \
-  --run-id <id> --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  --source-snapshot <snapshot-from-prepared-prompt> --live-snapshot <current> \
+  --run-id <id> --dispatch <dispatch-id> \
   --case-result CASE-001 --outcome <PASS|FAIL> --procedure '<actual>' \
   --observation '<observed>' --oracle-result '<comparison>'
+formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --reviewer <reviewer-or-session-id>
 formal-gates workflow record-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <gate-id> --status <PASS|FAIL|RUNTIME_ERROR> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  --source-snapshot <snapshot-from-prepared-prompt> \
-  --live-snapshot <current> \
+  --run-id <id> --gate <gate-id> --dispatch <dispatch-id> \
+  --status <PASS|FAIL|RUNTIME_ERROR> \
   [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
 # For a bounded repair, inherit every prior selected PASS with no agent dispatch.
 formal-gates workflow carry --root <repo> --package-root <package> \
-  --run-id <id> --main-agent --main-reason '<reason>' \
-  --live-snapshot <current>
+  --run-id <id> --main-agent --main-reason '<reason>'
 
 # Otherwise prepare and record independent Carry when prior PASS gates exist.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action carry --live-snapshot <current>
+  --run-id <id> --action carry
 formal-gates workflow carry --root <repo> --package-root <package> \
-  --run-id <id> --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  --source-snapshot <snapshot-from-prepared-prompt> --live-snapshot <current> \
+  --run-id <id> --dispatch <dispatch-id> \
   --gate <gate-id> --decision <INHERIT|RERUN> --reason '<reason>'
 
 formal-gates workflow authorize-repair --root <repo> --package-root <package> \
@@ -259,7 +260,6 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 
 # Seal only after every selected result passes or has permitted authorization.
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
-  --live-snapshot-before <current> --live-snapshot-after <current> \
   [--skip <selected-non-passing-gate> ...]
 ```
 
@@ -277,6 +277,12 @@ or `workflow prepare-gate`, then send stdout as the complete task through the
 host's native independent-agent channel. Send the development task only to the
 separate worker. Do not append chat history, findings, repair explanations,
 another reviewer's result, expected verdicts, or focus instructions.
+
+For QA Review and every discovered gate, create a new zero-context reviewer,
+immediately reserve its host identity with `workflow claim-dispatch`, and pass
+the returned dispatch ID unchanged when recording. Never reuse a QA Review or
+gate reviewer identity anywhere else in the same run, including retries and
+repair waves. An interrupted claimed identity remains reserved.
 
 QA Review receives only the confirmed requirement and complete candidate case
 set assembled by the CLI. It must not inspect production implementation,
@@ -353,11 +359,13 @@ gate statuses, approved cases, and current snapshot bindings. It does not store
 diff bytes, project file contents, an evidence graph, layered run artifacts, or
 a second version-control model.
 
-The host and agents use Git, SVN, P4, or another named VCS directly. The base
-to current comparison is the total delivery diff. The immediate pre-repair to
-current comparison is the repair diff used only by Carry. If the VCS cannot
-reproduce a supplied immutable comparison, record `RUNTIME_ERROR`; do not
-guess or implement a fallback diff engine. See `references/vcs-snapshots.md`.
+The CLI resolves and verifies identities through the selected Git, SVN, or P4
+native command. The host and agents use that same VCS directly for comparisons.
+The base-to-current comparison is the total delivery diff. The immediate
+pre-repair-to-current comparison is the repair diff used only by Carry. If the
+selected VCS cannot reproduce an immutable comparison, record `RUNTIME_ERROR`;
+do not guess, silently switch VCS, or implement a fallback diff engine. See
+`references/vcs-snapshots.md`.
 
 ## Installation And Maintenance
 

@@ -29,13 +29,14 @@ formal-gates 是一套轻量的 AI 开发审查流程。它把“写代码”和
 custom；只有 full 或 custom 才启动正式工作流状态。
 
 QA 不属于提示词门目录。选择 QA 后，QA Design 先产出完整候选用例，独立
-QA Review 通过后才能开发；Review 失败会带着原用例返回 Design 修改，且不
-占用开发后三轮 review-wave。开发完成后，QA Execution 和审查门可以在同一
-批次并行执行。
+QA Review 通过后才能开发。完整用例集同时包含 STATIC 直接责任层检查和
+LIVE 公共入口真实执行；逐用例审查结果会在 Design 返工时保留完全未变的
+PASS，用下一轮只复核失败、新增或已变化的用例，且不占用开发后三轮
+review-wave。开发完成后，QA Execution 和审查门可以在同一批次并行执行。
 每条正式路由都在开发前运行 Start Readiness。准备 development worker 时即
-冻结开发前结果，并禁止在开发开始后再加入 QA。full 和 custom 还要求在开发前
-用当前环境可用的任意稳定文档格式保存完整已确认需求和技术方案，不要求指定
-文档插件。
+冻结已登记的需求和方案文档集，将其作为验收输入，并禁止在开发开始后再加入
+QA。开发后提示词把这些冻结路径排除在普通审查目标之外。full 和 custom 还要求
+在开发前用任意稳定文档格式保存完整已确认需求和技术方案，不要求指定插件。
 
 同一次路由选择覆盖后续新增需求和任务切片。新增范围会暂停相关写入，重新澄清
 并确认刷新后的完整摘要，但除非用户要求，不重复询问路由。过大的正式工作按
@@ -46,10 +47,11 @@ QA Review 通过后才能开发；Review 失败会带着原用例返回 Design �
 run；切片返修通过并重新合并后，总体 run 不准备自己的 development worker，
 而是直接记录新的合并快照。
 
-需求语义变化后，原有 QA 用例保留为未批准的完整覆盖复核输入。下一次 QA
-Design 在影响边界明确时保留不受影响的用例，无法可靠确定边界时则替换完整
-用例集，并重新经过独立 QA Review。正常中断后可以重新生成已准备的
+需求语义变化后，下一次 QA Design 会为不受影响的需求保留完全未变的 PASS
+用例，并把新增或变化用例标为待复核。正常中断后可以重新生成已准备的
 development 任务；不可变快照上已记录的语义 PASS 或 FAIL 仍为权威结果。
+每次 QA Review 和 gate 尝试都使用唯一 dispatch 和新认领的零上下文 reviewer
+identity，重试也不复用。
 
 返修后，主代理检查原生 VCS 的本轮返修 diff。只有能确定返修不会影响任何
 此前已通过的已选验证时，才可执行 `workflow carry --main-agent --main-reason
@@ -98,7 +100,8 @@ formal-gates package route-candidates --root <package>
 formal-gates workflow start \
   --root <repo> --package-root <installed-formal-gates> \
   --run-id <id> --flow formal --requirement <requirement-file> \
-  --vcs <git|svn|p4> --base-snapshot <base> [--retained-overall]
+  [--requirement-artifact <requirement-or-solution-file> ...] \
+  --vcs <git|svn|p4> [--base-snapshot <identity-to-verify>] [--retained-overall]
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <installed-formal-gates> --run-id <id>
@@ -111,18 +114,21 @@ formal-gates workflow abort --root <repo> --run-id <id>
 
 ```bash
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|qa-review|development-worker|qa-execution|carry> \
-  --live-snapshot <current>
+  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|qa-review|development-worker|qa-execution|carry>
 
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <discovered-gate-id> --live-snapshot <current>
+  --run-id <id> --gate <discovered-gate-id>
+
+formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --reviewer <reviewer-or-session-id>
 ```
 
 记录语义结果：
 
 ```bash
 formal-gates workflow requirement --root <repo> --package-root <package> \
-  --run-id <id> --source <requirement-file> --confirmed
+  --run-id <id> --source <requirement-file> \
+  [--requirement-artifact <file> ... | --clear-requirement-artifacts] --confirmed
 
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
@@ -130,40 +136,32 @@ formal-gates workflow route --root <repo> --package-root <package> \
   --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
 
 formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action start-readiness --status PASS \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt>
+  --run-id <id> --action start-readiness --dispatch <dispatch-id> --status PASS
 
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  --case '<behavior>' --procedure '<public procedure>' --oracle '<expected result>'
+  --dispatch <dispatch-id> --case '<behavior>' --kind <STATIC|LIVE> \
+  --procedure '<public procedure>' --oracle '<expected result>'
 
-formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action qa-review --status <PASS|FAIL|RUNTIME_ERROR> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt>
+formal-gates workflow qa-review --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --case CASE-001 \
+  --outcome <PASS|FAIL> [--reason '<required for FAIL>]
 
 formal-gates workflow record-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <gate-id> --status <PASS|FAIL|RUNTIME_ERROR> \
-  --source-revision <revision-from-prepared-prompt> \
-  --source-catalog-revision <catalog-revision-from-prepared-prompt> \
-  --source-snapshot <snapshot-from-prepared-prompt> \
-  --live-snapshot <current> \
+  --run-id <id> --gate <gate-id> --dispatch <dispatch-id> \
+  --status <PASS|FAIL|RUNTIME_ERROR> \
   [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
 formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id> --current-snapshot <new-current> --live-snapshot <new-current>
+  --run-id <id>
 
 formal-gates workflow carry --root <repo> --package-root <package> \
-  --run-id <id> --main-agent --main-reason '<bounded repair reason>' \
-  --live-snapshot <current>
+  --run-id <id> --main-agent --main-reason '<bounded repair reason>'
 ```
 
 QA Execution、Carry、额外返修授权和 Seal 的参数以 `formal-gates help` 及
 `SKILL.md` 为准。需求文件修订变化后，先用 `workflow requirement --meaning
-preserved|changed --live-snapshot <current>` 明确语义影响并绑定包含该修订的
-原生 VCS identity；CLI 不自行猜测。
+preserved|changed` 明确语义影响；CLI 自行解析包含该修订的原生 VCS identity，
+但不自行猜测语义影响。
 
 ## Diff 与返修
 

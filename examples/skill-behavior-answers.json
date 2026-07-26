@@ -90,5 +90,25 @@
   {
     "id": "FG-BEH-023",
     "answer": "Inspect and separately explain total size, coupling, risk, and verification complexity, then tie all four factors to the route recommendation."
+  },
+  {
+    "id": "FG-BEH-024",
+    "answer": "Prepare a new dispatch with a new zero-context reviewer and claim its fresh reviewer identity; the interrupted identity remains reserved."
+  },
+  {
+    "id": "FG-BEH-025",
+    "answer": "Register and freeze both documents at the development boundary, retain them as acceptance inputs, and exclude their paths from ordinary review targets."
+  },
+  {
+    "id": "FG-BEH-026",
+    "answer": "Include STATIC direct-owner automated checks and LIVE execution through documented public entrypoints against the built current snapshot."
+  },
+  {
+    "id": "FG-BEH-027",
+    "answer": "Store per-case outcomes, preserve the exact unchanged passing case, and review only failed, new, or changed cases next."
+  },
+  {
+    "id": "FG-BEH-028",
+    "answer": "Pass the dispatch ID and semantic result only; source bindings from the dispatch are CLI-owned and the CLI resolves Git, SVN, or P4 identity."
   }
 ]

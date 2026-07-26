@@ -80,14 +80,25 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err := os.WriteFile(requirement, []byte("confirmed behavior\n"), 0o600); err != nil {
 		return err
 	}
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", VCS: "git", BaseSnapshot: "base"})
+	if err := initializeCanaryGit(root); err != nil {
+		return err
+	}
+	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", VCS: "git"})
 	if err != nil {
 		return err
 	}
-	if _, err := RecordAction(root, packageRoot, state.RunID, "requirements-clarification", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "requirements-clarification"); err != nil {
 		return err
 	}
-	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", "")
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		return err
+	}
+	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil)
+	if err != nil {
+		return err
+	}
+	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", nil)
 	if err != nil {
 		return err
 	}
@@ -95,40 +106,101 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "start-readiness"); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", openDispatchID(state, "action", "start-readiness"), "PASS", "", nil)
 	if err != nil {
 		return err
 	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, []QACaseInput{{Description: "confirmed behavior", Procedure: "exercise it", Oracle: "it is observed"}}, "", state.RequirementRevision, state.CatalogRevision)
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design"); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	state, err = RecordQADesign(root, packageRoot, state.RunID, openDispatchID(state, "action", "qa-design"), []QACaseInput{{Kind: "STATIC", Description: "direct behavior", Procedure: "run the direct automated check", Oracle: "the check passes"}, {Kind: "LIVE", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "qa-review", "PASS", "", nil, state.RequirementRevision, state.CatalogRevision)
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review"); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID := openDispatchID(state, "action", "qa-review")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-reviewer")
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker", "base"); err != nil {
-		return err
-	}
-	state, err = AdvanceSnapshot(root, packageRoot, state.RunID, "current", "current")
+	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-001", Outcome: "PASS"}, {CaseID: "CASE-002", Outcome: "PASS"}}, "", nil)
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareGate(root, packageRoot, state.RunID, catalog.Gates[0].ID, "current"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker"); err != nil {
 		return err
 	}
-	state, err = RecordQAExecution(root, packageRoot, state.RunID, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "exercised it", Observation: "observed", OracleResult: "matched"}}, "", state.RequirementRevision, state.CatalogRevision, "current", "current")
+	if err := os.WriteFile(filepath.Join(root, "delivery.txt"), []byte("delivery\n"), 0o600); err != nil {
+		return err
+	}
+	if err := commitCanaryGit(root, "delivery"); err != nil {
+		return err
+	}
+	state, err = AdvanceSnapshot(root, packageRoot, state.RunID)
 	if err != nil {
 		return err
 	}
-	for _, gate := range catalog.Gates {
-		state, err = RecordGate(root, packageRoot, state.RunID, gate.ID, "PASS", "", nil, state.RequirementRevision, state.CatalogRevision, "current", "current")
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution"); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	state, err = RecordQAExecution(root, packageRoot, state.RunID, openDispatchID(state, "action", "qa-execution"), []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran direct check", Observation: "passed", OracleResult: "matched"}, {CaseID: "CASE-002", Outcome: "PASS", Procedure: "exercised public command", Observation: "observed", OracleResult: "matched"}}, "")
+	if err != nil {
+		return err
+	}
+	for index, gate := range catalog.Gates {
+		if _, err := PrepareGate(root, packageRoot, state.RunID, gate.ID); err != nil {
+			return err
+		}
+		state, _ = LoadRunState(root, state.RunID)
+		dispatchID = openDispatchID(state, "gate", gate.ID)
+		state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, fmt.Sprintf("canary-gate-reviewer-%d", index+1))
+		if err != nil {
+			return err
+		}
+		state, err = RecordGate(root, packageRoot, state.RunID, gate.ID, dispatchID, "PASS", "", nil)
 		if err != nil {
 			return err
 		}
 	}
-	_, err = Seal(root, packageRoot, state.RunID, "current", "current", nil)
+	_, err = Seal(root, packageRoot, state.RunID, nil)
 	return err
+}
+
+func initializeCanaryGit(root string) error {
+	runner := execNativeCommandRunner{}
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "formal-gates@example.invalid"}, {"config", "user.name", "Formal Gates Canary"}} {
+		if _, err := runner.Run(root, "git", args...); err != nil {
+			return err
+		}
+	}
+	return commitCanaryGit(root, "base")
+}
+
+func commitCanaryGit(root, message string) error {
+	runner := execNativeCommandRunner{}
+	if _, err := runner.Run(root, "git", "add", "--all"); err != nil {
+		return err
+	}
+	_, err := runner.Run(root, "git", "commit", "-m", message)
+	return err
+}
+
+func openDispatchID(state RunState, kind, target string) string {
+	for id, dispatch := range state.Dispatches {
+		if dispatch.TargetKind == kind && dispatch.Target == target && (dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED") {
+			return id
+		}
+	}
+	return ""
 }
 
 func PortableCanaryJSON(report PortableCanaryReport) ([]byte, error) {

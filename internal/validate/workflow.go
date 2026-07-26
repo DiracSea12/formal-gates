@@ -2,6 +2,7 @@ package validate
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -12,8 +13,9 @@ import (
 )
 
 type StartOptions struct {
-	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot, CurrentSnapshot string
-	RequirementConfirmed, RetainedOverall                                                 bool
+	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot string
+	RequirementArtifacts                                                 []string
+	RequirementConfirmed, RetainedOverall                                bool
 }
 
 type FindingInput struct {
@@ -22,7 +24,9 @@ type FindingInput struct {
 	Locations []string
 }
 
-type QACaseInput struct{ Description, Procedure, Oracle string }
+type QACaseInput struct{ Kind, Description, Procedure, Oracle string }
+
+type QAReviewInput struct{ CaseID, Outcome, Reason string }
 
 type QAResultInput struct{ CaseID, Outcome, Procedure, Observation, OracleResult string }
 
@@ -48,13 +52,10 @@ var routeModes = map[string]bool{"full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
 	root := cleanRoot(options.Root)
-	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS, "base snapshot": options.BaseSnapshot} {
+	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
 		if strings.TrimSpace(value) == "" {
 			return RunState{}, fmt.Errorf("%s is required", name)
 		}
-	}
-	if strings.EqualFold(strings.TrimSpace(options.VCS), "none") {
-		return RunState{}, fmt.Errorf("a supported external VCS is required")
 	}
 	if strings.TrimSpace(options.Flow) != formalFlow {
 		return RunState{}, fmt.Errorf("flow must be formal")
@@ -62,22 +63,32 @@ func Start(options StartOptions) (RunState, error) {
 	if options.RequirementConfirmed {
 		return RunState{}, fmt.Errorf("a run cannot start with a pre-confirmed requirement; record Requirements Clarification first")
 	}
-	currentSnapshot := strings.TrimSpace(options.CurrentSnapshot)
-	if currentSnapshot == "" {
-		currentSnapshot = strings.TrimSpace(options.BaseSnapshot)
+	vcs := strings.ToLower(strings.TrimSpace(options.VCS))
+	resolver, err := resolverForVCS(vcs, nil)
+	if err != nil {
+		return RunState{}, err
 	}
-	if currentSnapshot != strings.TrimSpace(options.BaseSnapshot) {
-		return RunState{}, fmt.Errorf("a new run's current snapshot must equal its base snapshot")
+	currentSnapshot, err := resolver.Resolve(root)
+	if err != nil {
+		return RunState{}, err
+	}
+	if supplied := strings.TrimSpace(options.BaseSnapshot); supplied != "" {
+		if err := resolver.Verify(root, supplied); err != nil {
+			return RunState{}, err
+		}
+		if !strings.EqualFold(supplied, currentSnapshot) {
+			return RunState{}, fmt.Errorf("native current snapshot does not match the requested base snapshot")
+		}
 	}
 	catalog, err := LoadPromptCatalog(options.PackageRoot)
 	if err != nil {
 		return RunState{}, err
 	}
-	requirementPath := resolveFromRoot(root, options.RequirementSource)
-	revision, err := RequirementRevision(requirementPath)
+	artifacts, err := requirementArtifactSet(root, options.RequirementSource, options.RequirementArtifacts)
 	if err != nil {
-		return RunState{}, fmt.Errorf("requirement: %w", err)
+		return RunState{}, err
 	}
+	revision := artifactRevision(artifacts, normalizeArtifactPath(root, options.RequirementSource))
 	runID := strings.TrimSpace(options.RunID)
 	if runID == "" {
 		runID, err = newRunID()
@@ -104,7 +115,7 @@ func Start(options StartOptions) (RunState, error) {
 	if err := os.Mkdir(RunDir(root, runID), 0o700); err != nil {
 		return RunState{}, fmt.Errorf("cannot create run %q: %w", runID, err)
 	}
-	state := NewRunState(runID, strings.TrimSpace(options.Flow), options.RequirementSource, revision, strings.TrimSpace(options.VCS), strings.TrimSpace(options.BaseSnapshot), currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs())
+	state := NewRunState(runID, strings.TrimSpace(options.Flow), normalizeArtifactPath(root, options.RequirementSource), revision, vcs, currentSnapshot, currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs(), artifacts)
 	state.RetainedOverall = options.RetainedOverall
 	if err := SaveRunState(root, state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))
@@ -124,37 +135,48 @@ func Resume(root, packageRoot, runID string) (RunState, bool, error) {
 	if _, err := requireCurrentCatalog(state, packageRoot); err != nil {
 		return RunState{}, false, err
 	}
-	revision, err := RequirementRevision(resolveFromRoot(cleanRoot(root), state.RequirementSource))
-	if err != nil {
-		return RunState{}, false, fmt.Errorf("requirement: %w", err)
-	}
-	return state, revision != state.RequirementRevision, nil
+	changed, err := requirementArtifactsChanged(root, state.RequirementArtifacts)
+	return state, changed, err
 }
 
-func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect, liveSnapshot string) (RunState, error) {
+func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect string, artifactPaths []string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentCatalog(*state, packageRoot)
 		if err != nil {
 			return err
 		}
+		oldSource := state.RequirementSource
 		if strings.TrimSpace(source) == "" {
 			source = state.RequirementSource
 		}
-		revision, err := RequirementRevision(resolveFromRoot(cleanRoot(root), source))
-		if err != nil {
-			return fmt.Errorf("requirement: %w", err)
+		additional := artifactPaths
+		if additional == nil {
+			for _, artifact := range state.RequirementArtifacts {
+				if artifact.Path != oldSource {
+					additional = append(additional, artifact.Path)
+				}
+			}
 		}
-		changed := revision != state.RequirementRevision || source != state.RequirementSource
+		artifacts, err := requirementArtifactSet(cleanRoot(root), source, additional)
+		if err != nil {
+			return err
+		}
+		source = normalizeArtifactPath(root, source)
+		revision := artifactRevision(artifacts, source)
+		changed := revision != state.RequirementRevision || source != state.RequirementSource || !sameArtifactSet(artifacts, state.RequirementArtifacts)
 		semanticEffect = strings.ToLower(strings.TrimSpace(semanticEffect))
 		if changed {
 			if semanticEffect != "preserved" && semanticEffect != "changed" {
 				return fmt.Errorf("changed requirement requires semantic effect preserved or changed")
 			}
-			liveSnapshot = strings.TrimSpace(liveSnapshot)
-			if liveSnapshot == "" {
-				return fmt.Errorf("changed requirement requires the current live VCS snapshot")
+			liveSnapshot, err := resolveNativeSnapshot(root, state.VCS)
+			if err != nil {
+				return err
 			}
-			state.RequirementSource, state.RequirementRevision = source, revision
+			if state.ArtifactsFrozen && semanticEffect == "preserved" {
+				return fmt.Errorf("meaning-preserved requirement rebinding is unavailable after development starts")
+			}
+			state.RequirementSource, state.RequirementRevision, state.RequirementArtifacts = source, revision, artifacts
 			if semanticEffect == "preserved" {
 				if !state.RequirementConfirmed {
 					return fmt.Errorf("meaning can be preserved only for a previously confirmed requirement")
@@ -164,6 +186,7 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			}
 			state.CurrentSnapshot = liveSnapshot
 			invalidateRequirementResults(state, catalog.GateIDs())
+			state.ArtifactsFrozen = false
 			state.RequirementConfirmed = false
 			if confirmed {
 				return fmt.Errorf("a meaning-changing requirement must return to Requirements Clarification")
@@ -172,9 +195,6 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		}
 		if semanticEffect != "" {
 			return fmt.Errorf("semantic effect is accepted only when the requirement revision changed")
-		}
-		if strings.TrimSpace(liveSnapshot) != "" {
-			return fmt.Errorf("live VCS snapshot is accepted only when the requirement revision changed")
 		}
 		if confirmed && state.Actions["requirements-clarification"].Status != "PASS" {
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
@@ -274,66 +294,81 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 	})
 }
 
-func PrepareGate(root, packageRoot, runID, gateID, liveSnapshot string) (string, error) {
-	state, err := LoadRunState(root, runID)
-	if err != nil {
-		return "", err
-	}
-	if err := requireActive(state); err != nil {
-		return "", err
-	}
-	catalog, err := requireCurrentDefinitions(root, state, packageRoot)
-	if err != nil {
-		return "", err
-	}
-	if err := requireLiveSnapshot(state, liveSnapshot); err != nil {
-		return "", err
-	}
-	if err := requireTransition(state, "gate", gateID); err != nil {
-		return "", err
-	}
-	result, ok := state.Gates[gateID]
-	if !ok {
-		return "", fmt.Errorf("gate %q is not in this run's discovered catalog", gateID)
-	}
-	if result.Status == "PASS" && result.Snapshot != state.CurrentSnapshot {
-		return "", fmt.Errorf("gate %q is awaiting a Carry decision", gateID)
-	}
-	if semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) {
-		return "", fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot", gateID, result.Status)
-	}
-	return ComposeGatePrompt(catalog, gateID, routeForState(root, state))
-}
-
-func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (string, error) {
-	if actionID == "development-worker" {
-		return prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot)
-	}
-	state, err := LoadRunState(root, runID)
-	if err != nil {
-		return "", err
-	}
-	if err := requireActive(state); err != nil {
-		return "", err
-	}
-	catalog, err := requireCurrentDefinitions(root, state, packageRoot)
-	if err != nil {
-		return "", err
-	}
-	if actionID == "qa-execution" || actionID == "carry" {
-		if err := requireLiveSnapshot(state, liveSnapshot); err != nil {
+func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, func(state RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+		if err := requireTransition(state, "gate", gateID); err != nil {
 			return "", err
 		}
+		result, ok := state.Gates[gateID]
+		if !ok {
+			return "", fmt.Errorf("gate %q is not in this run's discovered catalog", gateID)
+		}
+		if result.Status == "PASS" && result.Snapshot != state.CurrentSnapshot {
+			return "", fmt.Errorf("gate %q is awaiting a Carry decision", gateID)
+		}
+		if semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) {
+			return "", fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot", gateID, result.Status)
+		}
+		return ComposeGatePrompt(catalog, gateID, route)
+	})
+}
+
+func PrepareAction(root, packageRoot, runID, actionID string) (string, error) {
+	if actionID == "development-worker" {
+		return prepareDevelopmentAction(root, packageRoot, runID)
 	}
-	if err := requireTransition(state, actionID, ""); err != nil {
-		return "", err
-	}
-	if actionID == "qa-execution" && semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
-		return "", fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
-	}
-	detail := ""
+	reviewerRequired := actionID == "qa-review"
+	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, func(state RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+		if err := requireTransition(state, actionID, ""); err != nil {
+			return "", err
+		}
+		if actionID == "qa-execution" && semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
+			return "", fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
+		}
+		detail, err := actionPromptDetail(state, catalog, actionID)
+		if err != nil {
+			return "", err
+		}
+		return ComposeActionPrompt(catalog, actionID, route, detail)
+	})
+}
+
+func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, compose func(RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
+	prompt := ""
+	_, err := mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if _, err := requireNativeCurrent(root, *state); err != nil {
+			return err
+		}
+		wave := 0
+		if targetKind == "gate" {
+			wave = state.CompletedReviewWaves + 1
+		}
+		attempt := nextDispatchAttempt(*state, targetKind, target, wave)
+		dispatchID, err := newDispatchID()
+		if err != nil {
+			return err
+		}
+		route := routeForState(root, *state)
+		route.DispatchID, route.DispatchAttempt, route.ReviewWave = dispatchID, attempt, wave
+		prompt, err = compose(*state, catalog, route)
+		if err != nil {
+			return err
+		}
+		staleOpenDispatches(state, targetKind, target)
+		sum := sha256.Sum256([]byte(prompt))
+		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: hex.EncodeToString(sum[:]), RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: state.CurrentSnapshot, ReviewerRequired: reviewerRequired, Status: "OPEN"}
+		return nil
+	})
+	return prompt, err
+}
+
+func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) (string, error) {
 	if actionID == "qa-design" && len(state.QACases) != 0 && state.Actions["qa-design"].Status != "PASS" {
-		lines := []string{"Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain confirmed unaffected cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed."}
+		lines := []string{"Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain exact unaffected passing cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed."}
 		if review := state.Actions["qa-review"]; review.Status == "FAIL" {
 			lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
 			for _, finding := range review.Findings {
@@ -345,35 +380,65 @@ func PrepareAction(root, packageRoot, runID, actionID, liveSnapshot string) (str
 			}
 		}
 		for _, testCase := range state.QACases {
-			lines = append(lines, fmt.Sprintf("%s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Description, testCase.Procedure, testCase.Oracle))
+			lines = append(lines, formatQACase(testCase, true))
 		}
-		detail = strings.Join(lines, "\n\n")
-	} else if actionID == "qa-review" || actionID == "qa-execution" {
+		return strings.Join(lines, "\n\n"), nil
+	}
+	if actionID == "qa-review" {
+		if len(state.QACases) == 0 {
+			return "", fmt.Errorf("QA cases are missing")
+		}
+		accepted := []string{"Accepted coverage context; do not return new decisions for these cases:"}
+		pending := []string{"Return one decision for every pending case below:"}
+		for _, testCase := range state.QACases {
+			if testCase.ReviewStatus == "PASS" {
+				accepted = append(accepted, fmt.Sprintf("%s: %s", testCase.ID, testCase.Description))
+			} else {
+				pending = append(pending, formatQACase(testCase, false))
+			}
+		}
+		if len(pending) == 1 {
+			return "", fmt.Errorf("QA Review has no pending cases")
+		}
+		if len(accepted) == 1 {
+			return strings.Join(pending, "\n\n"), nil
+		}
+		return strings.Join(append(accepted, pending...), "\n\n"), nil
+	}
+	if actionID == "qa-execution" {
 		if len(state.QACases) == 0 {
 			return "", fmt.Errorf("QA cases are missing")
 		}
 		var lines []string
 		for _, testCase := range state.QACases {
-			lines = append(lines, fmt.Sprintf("%s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Description, testCase.Procedure, testCase.Oracle))
+			lines = append(lines, formatQACase(testCase, false))
 		}
-		detail = strings.Join(lines, "\n\n")
-	} else if actionID == "carry" {
+		return strings.Join(lines, "\n\n"), nil
+	}
+	if actionID == "carry" {
 		eligible := eligibleCarryGates(state)
 		if len(eligible) == 0 {
 			return "", fmt.Errorf("no prior passing gates require a Carry decision")
 		}
-		var lines []string
-		lines = append(lines, "Decide INHERIT or RERUN for each gate below:")
+		lines := []string{"Decide INHERIT or RERUN for each gate below:"}
 		for _, id := range eligible {
 			gate, _ := catalog.Gate(id)
 			lines = append(lines, fmt.Sprintf("\n[Gate: %s]\n%s", id, gate.Content))
 		}
-		detail = strings.Join(lines, "\n")
+		return strings.Join(lines, "\n"), nil
 	}
-	return ComposeActionPrompt(catalog, actionID, routeForState(root, state), detail)
+	return "", nil
 }
 
-func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (string, error) {
+func formatQACase(testCase QACase, includeReview bool) string {
+	value := fmt.Sprintf("%s\nkind: %s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Kind, testCase.Description, testCase.Procedure, testCase.Oracle)
+	if includeReview {
+		value += "\nreview status: " + testCase.ReviewStatus
+	}
+	return value
+}
+
+func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
 	prompt := ""
 	_, err := mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
@@ -381,12 +446,12 @@ func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (st
 			return err
 		}
 		if state.RetainedOverall {
-			if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+			if _, err := requireNativeCurrent(root, *state); err != nil {
 				return err
 			}
 			return fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
-		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		if err := requireTransition(*state, "development-worker", ""); err != nil {
@@ -405,26 +470,63 @@ func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (st
 			state.Actions["development-worker"] = ActionResult{Status: developmentRepairPrepared}
 		} else if status == developmentPending {
 			state.Actions["development-worker"] = ActionResult{Status: developmentPrepared}
+			state.ArtifactsFrozen = true
 		}
 		return nil
 	})
 	return prompt, err
 }
 
-func RecordAction(root, packageRoot, runID, actionID, status, message string, findings []FindingInput, sourceRevision, sourceCatalogRevision string) (RunState, error) {
+func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if _, err := requireNativeCurrent(root, *state); err != nil {
+			return err
+		}
+		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
+		dispatch, ok := state.Dispatches[dispatchID]
+		if !ok {
+			return fmt.Errorf("unknown dispatch %q", dispatchID)
+		}
+		if !dispatch.ReviewerRequired {
+			return fmt.Errorf("dispatch %q does not require a reviewer claim", dispatchID)
+		}
+		if dispatch.Status != "OPEN" {
+			return fmt.Errorf("dispatch %q is %s and cannot be claimed", dispatchID, dispatch.Status)
+		}
+		if reviewerIdentity == "" {
+			return fmt.Errorf("reviewer identity is required")
+		}
+		if prior, used := state.UsedReviewers[reviewerIdentity]; used {
+			return fmt.Errorf("reviewer identity is already reserved by dispatch %s", prior)
+		}
+		dispatch.ReviewerIdentity, dispatch.Status = reviewerIdentity, "CLAIMED"
+		state.Dispatches[dispatchID] = dispatch
+		state.UsedReviewers[reviewerIdentity] = dispatchID
+		return nil
+	})
+}
+
+func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
 		}
-		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, "", false); err != nil {
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		if _, ok := catalog.Action(actionID); !ok {
 			return fmt.Errorf("unknown action prompt %q", actionID)
 		}
-		if actionID != "requirements-clarification" && actionID != "start-readiness" && actionID != "qa-review" {
+		if actionID != "requirements-clarification" && actionID != "start-readiness" {
 			return fmt.Errorf("action %q has a dedicated workflow command and cannot use record-action", actionID)
+		}
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", actionID)
+		if err != nil {
+			return err
 		}
 		if err := requireTransition(*state, actionID, ""); err != nil {
 			return err
@@ -433,29 +535,28 @@ func RecordAction(root, packageRoot, runID, actionID, status, message string, fi
 		if err != nil {
 			return err
 		}
+		result.DispatchID = dispatch.ID
 		state.Actions[actionID] = result
-		if actionID == "qa-review" && result.Status == "FAIL" {
-			state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
-			state.QAExecution = QAExecutionResult{Status: "PENDING"}
-		}
+		completeDispatch(state, dispatch.ID)
 		return nil
 	})
 }
 
-func RecordGate(root, packageRoot, runID, gateID, status, message string, findings []FindingInput, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message string, findings []FindingInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
 		}
-		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
-			return err
-		}
-		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		if _, ok := catalog.Gate(gateID); !ok {
 			return fmt.Errorf("gate %q is not discovered", gateID)
+		}
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, "gate", gateID)
+		if err != nil {
+			return err
 		}
 		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return err
@@ -471,21 +572,30 @@ func RecordGate(root, packageRoot, runID, gateID, status, message string, findin
 		if err != nil {
 			return err
 		}
+		if err := rejectFrozenArtifactFindings(*state, result.Findings); err != nil {
+			return err
+		}
+		result.DispatchID = dispatch.ID
 		state.Gates[gateID] = result
+		completeDispatch(state, dispatch.ID)
 		completeReviewWaveIfReady(state)
 		return nil
 	})
 }
 
-func RecordQADesign(root, packageRoot, runID string, cases []QACaseInput, runtimeError, sourceRevision, sourceCatalogRevision string) (RunState, error) {
+func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseInput, runtimeError string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, "", false); err != nil {
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		if err := requireTransition(*state, "qa-design", ""); err != nil {
+			return err
+		}
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-design")
+		if err != nil {
 			return err
 		}
 		if strings.TrimSpace(runtimeError) != "" {
@@ -493,52 +603,172 @@ func RecordQADesign(root, packageRoot, runID string, cases []QACaseInput, runtim
 				return fmt.Errorf("QA Design runtime error cannot include cases")
 			}
 			state.QAExecution = QAExecutionResult{Status: "PENDING"}
-			state.Actions["qa-design"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError)}
+			state.Actions["qa-design"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID}
+			completeDispatch(state, dispatch.ID)
 			return nil
 		}
 		if len(cases) == 0 {
 			return fmt.Errorf("at least one QA case is required")
 		}
 		seen := map[string]bool{}
-		state.QACases = make([]QACase, 0, len(cases))
+		priorByKey := map[string]QACase{}
+		usedIDs := map[string]bool{}
+		for _, prior := range state.QACases {
+			usedIDs[prior.ID] = true
+			priorByKey[qaCaseSemanticKey(prior.Kind, prior.Description, prior.Procedure, prior.Oracle)] = prior
+		}
+		nextID := 1
+		updated := make([]QACase, 0, len(cases))
+		kinds := map[string]bool{}
 		for index, item := range cases {
 			normalized := QACase{
+				Kind:        strings.ToUpper(strings.TrimSpace(item.Kind)),
 				Description: strings.TrimSpace(item.Description),
 				Procedure:   strings.TrimSpace(item.Procedure),
 				Oracle:      strings.TrimSpace(item.Oracle),
+			}
+			if normalized.Kind != "STATIC" && normalized.Kind != "LIVE" {
+				return fmt.Errorf("QA case %d kind must be STATIC or LIVE", index+1)
 			}
 			for name, value := range map[string]string{"description": normalized.Description, "procedure": normalized.Procedure, "oracle": normalized.Oracle} {
 				if value == "" {
 					return fmt.Errorf("QA case %d %s is required", index+1, name)
 				}
 			}
-			key := normalized.Description + "\x00" + normalized.Procedure + "\x00" + normalized.Oracle
+			key := qaCaseSemanticKey(normalized.Kind, normalized.Description, normalized.Procedure, normalized.Oracle)
 			if seen[key] {
 				return fmt.Errorf("duplicate QA case %d", index+1)
 			}
 			seen[key] = true
-			normalized.ID = fmt.Sprintf("CASE-%03d", index+1)
-			state.QACases = append(state.QACases, normalized)
+			kinds[normalized.Kind] = true
+			if prior, ok := priorByKey[key]; ok {
+				normalized.ID = prior.ID
+				if prior.ReviewStatus == "PASS" {
+					normalized.ReviewStatus = "PASS"
+				} else {
+					normalized.ReviewStatus = "PENDING"
+				}
+			} else {
+				for usedIDs[fmt.Sprintf("CASE-%03d", nextID)] {
+					nextID++
+				}
+				normalized.ID, normalized.ReviewStatus = fmt.Sprintf("CASE-%03d", nextID), "PENDING"
+				usedIDs[normalized.ID] = true
+				nextID++
+			}
+			updated = append(updated, normalized)
 		}
+		if !kinds["STATIC"] || !kinds["LIVE"] {
+			return fmt.Errorf("complete QA case set requires at least one STATIC and one LIVE case")
+		}
+		state.QACases = updated
 		state.QAExecution = QAExecutionResult{Status: "PENDING"}
-		state.Actions["qa-design"] = ActionResult{Status: "PASS"}
+		state.Actions["qa-design"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
 		state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
+		completeDispatch(state, dispatch.ID)
 		return nil
 	})
 }
 
-func RecordQAExecution(root, packageRoot, runID string, results []QAResultInput, runtimeError, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAReviewInput, runtimeError string, setFindings []FindingInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
-		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+		if err := requireTransition(*state, "qa-review", ""); err != nil {
+			return err
+		}
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-review")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(runtimeError) != "" {
+			if len(decisions) != 0 || len(setFindings) != 0 {
+				return fmt.Errorf("QA Review runtime error cannot include case decisions or findings")
+			}
+			state.Actions["qa-review"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID}
+			completeDispatch(state, dispatch.ID)
+			return nil
+		}
+		pending := map[string]int{}
+		for index, testCase := range state.QACases {
+			if testCase.ReviewStatus != "PASS" {
+				pending[testCase.ID] = index
+			}
+		}
+		if len(decisions) != len(pending) {
+			return fmt.Errorf("QA Review must decide all %d pending cases", len(pending))
+		}
+		seen := map[string]bool{}
+		findings := make([]Finding, 0, len(decisions)+len(setFindings))
+		status := "PASS"
+		for _, input := range decisions {
+			caseID := strings.TrimSpace(input.CaseID)
+			index, ok := pending[caseID]
+			if !ok {
+				return fmt.Errorf("QA Review case %q is not pending in this dispatch", input.CaseID)
+			}
+			if seen[caseID] {
+				return fmt.Errorf("duplicate QA Review decision for %s", caseID)
+			}
+			seen[caseID] = true
+			outcome := strings.ToUpper(strings.TrimSpace(input.Outcome))
+			if outcome != "PASS" && outcome != "FAIL" {
+				return fmt.Errorf("QA Review outcome for %s must be PASS or FAIL", caseID)
+			}
+			reason := strings.TrimSpace(input.Reason)
+			if outcome == "FAIL" && reason == "" {
+				return fmt.Errorf("QA Review FAIL for %s requires a reason", caseID)
+			}
+			state.QACases[index].ReviewStatus, state.QACases[index].ReviewReason = outcome, reason
+			if outcome == "FAIL" {
+				status = "FAIL"
+				findings = append(findings, Finding{Message: caseID + ": " + reason})
+			}
+		}
+		for _, input := range setFindings {
+			if strings.TrimSpace(input.Severity) != "" {
+				return fmt.Errorf("QA Review findings do not accept severity")
+			}
+			if strings.TrimSpace(input.Message) == "" {
+				return fmt.Errorf("QA Review finding message is required")
+			}
+			locations := make([]string, 0, len(input.Locations))
+			for _, location := range input.Locations {
+				if err := validateFindingLocation(location); err != nil {
+					return err
+				}
+				locations = append(locations, strings.TrimSpace(location))
+			}
+			findings = append(findings, Finding{Message: strings.TrimSpace(input.Message), Locations: locations})
+			status = "FAIL"
+		}
+		state.Actions["qa-review"] = ActionResult{Status: status, Findings: findings, DispatchID: dispatch.ID}
+		if status == "FAIL" {
+			state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
+			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		}
+		completeDispatch(state, dispatch.ID)
+		return nil
+	})
+}
+
+func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QAResultInput, runtimeError string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		if err := requireTransition(*state, "qa-execution", ""); err != nil {
+			return err
+		}
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-execution")
+		if err != nil {
 			return err
 		}
 		if semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
@@ -549,6 +779,7 @@ func RecordQAExecution(root, packageRoot, runID string, results []QAResultInput,
 				return fmt.Errorf("QA runtime error cannot include case results")
 			}
 			state.QAExecution = QAExecutionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), Snapshot: state.CurrentSnapshot}
+			completeDispatch(state, dispatch.ID)
 			completeReviewWaveIfReady(state)
 			return nil
 		}
@@ -585,27 +816,30 @@ func RecordQAExecution(root, packageRoot, runID string, results []QAResultInput,
 				status = "FAIL"
 				findings = append(findings, Finding{Message: testCase.ID + ": " + strings.TrimSpace(item.Observation)})
 			}
-			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
+			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Kind: testCase.Kind, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
 		}
 		state.QAExecution = QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings}
+		completeDispatch(state, dispatch.ID)
 		completeReviewWaveIfReady(state)
 		return nil
 	})
 }
 
-func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot string) (RunState, error) {
+func AdvanceSnapshot(root, packageRoot, runID string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		currentSnapshot = strings.TrimSpace(currentSnapshot)
+		currentSnapshot, err := resolveNativeSnapshot(root, state.VCS)
+		if err != nil {
+			return err
+		}
 		developmentStatus := state.Actions["development-worker"].Status
-		if currentSnapshot == "" || (currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared) {
+		if currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared {
 			return fmt.Errorf("a new current snapshot is required")
 		}
-		liveSnapshot = strings.TrimSpace(liveSnapshot)
-		if liveSnapshot == "" || liveSnapshot != currentSnapshot {
-			return fmt.Errorf("live VCS identity must match the new current snapshot")
+		if err := verifyNativeSnapshot(root, state.VCS, state.CurrentSnapshot); err != nil {
+			return err
 		}
 		if err := requireTransition(*state, "snapshot", ""); err != nil {
 			return err
@@ -646,12 +880,12 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 	})
 }
 
-func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtimeError string, mainAgent bool, mainReason, sourceRevision, sourceCatalogRevision, sourceSnapshot, liveSnapshot string) (RunState, error) {
+func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryInput, runtimeError string, mainAgent bool, mainReason string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
+		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		if err := requireTransition(*state, "carry", ""); err != nil {
@@ -661,8 +895,8 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 			if len(decisions) != 0 || strings.TrimSpace(runtimeError) != "" {
 				return fmt.Errorf("main-agent Carry cannot include independent decisions or a runtime error")
 			}
-			if strings.TrimSpace(sourceRevision) != "" || strings.TrimSpace(sourceCatalogRevision) != "" || strings.TrimSpace(sourceSnapshot) != "" {
-				return fmt.Errorf("main-agent Carry does not accept independent source bindings")
+			if strings.TrimSpace(dispatchID) != "" {
+				return fmt.Errorf("main-agent Carry does not accept an independent dispatch")
 			}
 			reason := strings.TrimSpace(mainReason)
 			if reason == "" {
@@ -685,7 +919,8 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 		if strings.TrimSpace(mainReason) != "" {
 			return fmt.Errorf("--main-reason requires main-agent Carry")
 		}
-		if err := requireSourceBinding(*state, sourceRevision, sourceCatalogRevision, sourceSnapshot, true); err != nil {
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "carry")
+		if err != nil {
 			return err
 		}
 		eligible := eligibleCarryGates(*state)
@@ -696,7 +931,8 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 			if len(decisions) != 0 {
 				return fmt.Errorf("Carry runtime error cannot include decisions")
 			}
-			state.Actions["carry"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError)}
+			state.Actions["carry"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID}
+			completeDispatch(state, dispatch.ID)
 			completeReviewWaveIfReady(state)
 			return nil
 		}
@@ -729,7 +965,8 @@ func RecordCarry(root, packageRoot, runID string, decisions []CarryInput, runtim
 				state.Gates[decision.GateID] = GateResult{Status: "PENDING"}
 			}
 		}
-		state.Actions["carry"] = ActionResult{Status: "PASS"}
+		state.Actions["carry"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
+		completeDispatch(state, dispatch.ID)
 		completeReviewWaveIfReady(state)
 		return nil
 	})
@@ -795,7 +1032,7 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState
 
 func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runID, "ABORTED") }
 
-func Seal(root, packageRoot, runID, liveBefore, liveAfter string, skips []string) (RunSummary, error) {
+func Seal(root, packageRoot, runID string, skips []string) (RunSummary, error) {
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -812,17 +1049,28 @@ func Seal(root, packageRoot, runID, liveBefore, liveAfter string, skips []string
 	if _, err := requireCurrentDefinitions(root, state, packageRoot); err != nil {
 		return RunSummary{}, err
 	}
-	if liveBefore != state.CurrentSnapshot || liveAfter != state.CurrentSnapshot {
-		return RunSummary{}, fmt.Errorf("live VCS identity must match the current snapshot before and after aggregation")
+	before, err := resolveNativeSnapshot(root, state.VCS)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	if before != state.CurrentSnapshot {
+		return RunSummary{}, fmt.Errorf("native VCS identity does not match the current snapshot before aggregation")
 	}
 	if err := authorizeSealSkips(&state, skips); err != nil {
 		return RunSummary{}, err
 	}
-	if err := SaveRunState(root, state); err != nil {
+	if err := requireTransition(state, "seal", ""); err != nil {
+		if saveErr := SaveRunState(root, state); saveErr != nil {
+			return RunSummary{}, saveErr
+		}
 		return RunSummary{}, err
 	}
-	if err := requireTransition(state, "seal", ""); err != nil {
+	after, err := resolveNativeSnapshot(root, state.VCS)
+	if err != nil {
 		return RunSummary{}, err
+	}
+	if after != state.CurrentSnapshot {
+		return RunSummary{}, fmt.Errorf("native VCS identity does not match the current snapshot after aggregation")
 	}
 	state.Status = "SEALED"
 	if err := SaveRunState(root, state); err != nil {
@@ -935,53 +1183,93 @@ func requireCurrentDefinitions(root string, state RunState, packageRoot string) 
 	if err != nil {
 		return PromptCatalog{}, err
 	}
-	revision, err := RequirementRevision(resolveFromRoot(cleanRoot(root), state.RequirementSource))
+	changed, err := requirementArtifactsChanged(root, state.RequirementArtifacts)
 	if err != nil {
-		return PromptCatalog{}, fmt.Errorf("requirement: %w", err)
+		return PromptCatalog{}, err
 	}
-	if revision != state.RequirementRevision {
-		return PromptCatalog{}, fmt.Errorf("requirement changed; resume the run before continuing")
+	if changed {
+		if state.ArtifactsFrozen {
+			return PromptCatalog{}, fmt.Errorf("frozen requirement artifact changed; return to requirement clarification before continuing")
+		}
+		return PromptCatalog{}, fmt.Errorf("requirement artifacts changed; resume the run before continuing")
 	}
 	return catalog, nil
 }
 
-func requireLiveSnapshot(state RunState, live string) error {
-	if strings.TrimSpace(live) == "" {
-		return fmt.Errorf("live VCS identity is required")
+func requireNativeCurrent(root string, state RunState) (string, error) {
+	current, err := resolveNativeSnapshot(root, state.VCS)
+	if err != nil {
+		return "", err
 	}
-	if live != state.CurrentSnapshot {
-		return fmt.Errorf("live VCS identity does not match current snapshot")
+	if current != state.CurrentSnapshot {
+		return "", fmt.Errorf("native VCS identity does not match the current snapshot")
 	}
-	return nil
-}
-
-func requireSourceBinding(state RunState, sourceRevision, sourceCatalogRevision, sourceSnapshot string, snapshotBound bool) error {
-	if strings.TrimSpace(sourceRevision) == "" {
-		return fmt.Errorf("source requirement revision is required")
-	}
-	if sourceRevision != state.RequirementRevision {
-		return fmt.Errorf("source requirement revision does not match the current requirement")
-	}
-	if strings.TrimSpace(sourceCatalogRevision) == "" {
-		return fmt.Errorf("source catalog revision is required")
-	}
-	if sourceCatalogRevision != state.CatalogRevision {
-		return fmt.Errorf("source catalog revision does not match the current catalog")
-	}
-	if !snapshotBound {
-		return nil
-	}
-	if strings.TrimSpace(sourceSnapshot) == "" {
-		return fmt.Errorf("source snapshot is required")
-	}
-	if sourceSnapshot != state.CurrentSnapshot {
-		return fmt.Errorf("source snapshot does not match the current snapshot")
-	}
-	return nil
+	return current, nil
 }
 
 func routeForState(root string, state RunState) PromptRoute {
-	return PromptRoute{RequirementSource: state.RequirementSource, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, Worktree: absPath(cleanRoot(root)), VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, PreRepairSnapshot: state.PreRepairSnapshot}
+	return PromptRoute{RequirementSource: state.RequirementSource, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, Worktree: absPath(cleanRoot(root)), VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, PreRepairSnapshot: state.PreRepairSnapshot, RequirementArtifacts: append([]RequirementArtifact{}, state.RequirementArtifacts...)}
+}
+
+func requirePreparedDispatch(state RunState, dispatchID, targetKind, target string) (PreparedDispatch, error) {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return PreparedDispatch{}, fmt.Errorf("dispatch id is required")
+	}
+	dispatch, ok := state.Dispatches[dispatchID]
+	if !ok {
+		return PreparedDispatch{}, fmt.Errorf("unknown dispatch %q", dispatchID)
+	}
+	if dispatch.TargetKind != targetKind || dispatch.Target != target {
+		return PreparedDispatch{}, fmt.Errorf("dispatch %q does not belong to %s %q", dispatchID, targetKind, target)
+	}
+	wantedStatus := "OPEN"
+	if dispatch.ReviewerRequired {
+		wantedStatus = "CLAIMED"
+		if strings.TrimSpace(dispatch.ReviewerIdentity) == "" {
+			return PreparedDispatch{}, fmt.Errorf("dispatch %q has no claimed reviewer identity", dispatchID)
+		}
+	}
+	if dispatch.Status != wantedStatus {
+		return PreparedDispatch{}, fmt.Errorf("dispatch %q is %s and cannot record a result", dispatchID, dispatch.Status)
+	}
+	if dispatch.RequirementRevision != state.RequirementRevision || dispatch.CatalogRevision != state.CatalogRevision || dispatch.SourceSnapshot != state.CurrentSnapshot {
+		return PreparedDispatch{}, fmt.Errorf("dispatch %q has stale source bindings", dispatchID)
+	}
+	return dispatch, nil
+}
+
+func completeDispatch(state *RunState, dispatchID string) {
+	dispatch := state.Dispatches[dispatchID]
+	dispatch.Status = "COMPLETED"
+	state.Dispatches[dispatchID] = dispatch
+}
+
+func staleOpenDispatches(state *RunState, targetKind, target string) {
+	for id, dispatch := range state.Dispatches {
+		if dispatch.TargetKind == targetKind && dispatch.Target == target && (dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED") {
+			dispatch.Status = "STALE"
+			state.Dispatches[id] = dispatch
+		}
+	}
+}
+
+func nextDispatchAttempt(state RunState, targetKind, target string, wave int) int {
+	attempt := 1
+	for _, dispatch := range state.Dispatches {
+		if dispatch.TargetKind == targetKind && dispatch.Target == target && dispatch.ReviewWave == wave && dispatch.Attempt >= attempt {
+			attempt = dispatch.Attempt + 1
+		}
+	}
+	return attempt
+}
+
+func newDispatchID() (string, error) {
+	var value [12]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return "dispatch-" + hex.EncodeToString(value[:]), nil
 }
 
 func semanticActionResult(status, message string, findings []FindingInput, state *RunState) (ActionResult, error) {
@@ -1080,6 +1368,29 @@ func validateFindingLocation(value string) error {
 	return nil
 }
 
+func rejectFrozenArtifactFindings(state RunState, findings []Finding) error {
+	excluded := map[string]bool{}
+	for _, artifact := range state.RequirementArtifacts {
+		excluded[artifact.Path] = true
+	}
+	for _, finding := range findings {
+		for _, location := range finding.Locations {
+			path := location
+			for count := 0; count < 2; count++ {
+				index := strings.LastIndex(path, ":")
+				if index <= 0 || !suffixIsDigits(path[index+1:]) {
+					break
+				}
+				path = path[:index]
+			}
+			if excluded[filepath.ToSlash(filepath.Clean(path))] {
+				return fmt.Errorf("finding location %s is a frozen acceptance artifact and not a review target", location)
+			}
+		}
+	}
+	return nil
+}
+
 func suffixIsDigits(value string) bool {
 	if value == "" {
 		return false
@@ -1114,6 +1425,12 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.SkipAuthorizations = routeSkips
 	state.CompletedReviewWaves = 0
 	state.ExtraReviewWaves = 0
+	for id, dispatch := range state.Dispatches {
+		if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {
+			dispatch.Status = "STALE"
+			state.Dispatches[id] = dispatch
+		}
+	}
 }
 
 func rebindCurrentSnapshot(state *RunState, snapshot string) {
@@ -1121,6 +1438,12 @@ func rebindCurrentSnapshot(state *RunState, snapshot string) {
 	state.CurrentSnapshot = snapshot
 	if previous == snapshot {
 		return
+	}
+	for id, dispatch := range state.Dispatches {
+		if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {
+			dispatch.Status = "STALE"
+			state.Dispatches[id] = dispatch
+		}
 	}
 	if state.QAExecution.Snapshot == previous {
 		state.QAExecution.Snapshot = snapshot
@@ -1575,4 +1898,97 @@ func newRunID() (string, error) {
 		return "", err
 	}
 	return strings.ToLower(time.Now().UTC().Format("20060102t150405000z")) + "-" + hex.EncodeToString(suffix[:]), nil
+}
+
+func requirementArtifactSet(root, primary string, additional []string) ([]RequirementArtifact, error) {
+	root = cleanWorktree(root)
+	paths := append([]string{primary}, additional...)
+	seen := map[string]bool{}
+	artifacts := make([]RequirementArtifact, 0, len(paths))
+	for _, raw := range paths {
+		path, err := validatedArtifactPath(root, raw)
+		if err != nil {
+			return nil, err
+		}
+		if seen[path] {
+			return nil, fmt.Errorf("duplicate requirement artifact %q", path)
+		}
+		seen[path] = true
+		revision, err := RequirementRevision(resolveFromRoot(root, path))
+		if err != nil {
+			return nil, fmt.Errorf("requirement artifact %s: %w", path, err)
+		}
+		artifacts = append(artifacts, RequirementArtifact{Path: path, Revision: revision})
+	}
+	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
+	return artifacts, nil
+}
+
+func validatedArtifactPath(root, raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("requirement artifact path is required")
+	}
+	full := resolveFromRoot(root, strings.TrimSpace(raw))
+	rel, err := filepath.Rel(root, full)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("requirement artifact must be a file under the repository root: %s", raw)
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", fmt.Errorf("requirement artifact %s: %w", filepath.ToSlash(rel), err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("requirement artifact %s is not a regular file", filepath.ToSlash(rel))
+	}
+	return filepath.ToSlash(filepath.Clean(rel)), nil
+}
+
+func normalizeArtifactPath(root, raw string) string {
+	full := resolveFromRoot(cleanWorktree(root), strings.TrimSpace(raw))
+	rel, err := filepath.Rel(cleanWorktree(root), full)
+	if err != nil {
+		return filepath.ToSlash(filepath.Clean(raw))
+	}
+	return filepath.ToSlash(filepath.Clean(rel))
+}
+
+func artifactRevision(artifacts []RequirementArtifact, path string) string {
+	for _, artifact := range artifacts {
+		if artifact.Path == path {
+			return artifact.Revision
+		}
+	}
+	return ""
+}
+
+func requirementArtifactsChanged(root string, artifacts []RequirementArtifact) (bool, error) {
+	if len(artifacts) == 0 {
+		return false, fmt.Errorf("requirement artifact set is empty")
+	}
+	for _, artifact := range artifacts {
+		revision, err := RequirementRevision(resolveFromRoot(cleanWorktree(root), artifact.Path))
+		if err != nil {
+			return false, fmt.Errorf("requirement artifact %s: %w", artifact.Path, err)
+		}
+		if revision != artifact.Revision {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func sameArtifactSet(left, right []RequirementArtifact) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func qaCaseSemanticKey(kind, description, procedure, oracle string) string {
+	return strings.Join([]string{strings.ToUpper(strings.TrimSpace(kind)), strings.TrimSpace(description), strings.TrimSpace(procedure), strings.TrimSpace(oracle)}, "\x00")
 }

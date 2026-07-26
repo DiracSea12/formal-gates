@@ -126,13 +126,14 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		flow := fs.String("flow", "formal", "workflow flow")
 		req := fs.String("requirement", "", "requirement source path")
 		vcs := fs.String("vcs", "", "external VCS name")
-		base := fs.String("base-snapshot", "", "immutable base snapshot")
-		current := fs.String("current-snapshot", "", "immutable current snapshot")
+		base := fs.String("base-snapshot", "", "optional native base identity to verify")
+		artifacts := stringListFlag{}
+		fs.Var(&artifacts, "requirement-artifact", "additional requirement or solution document; repeat as needed")
 		retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *current, RetainedOverall: *retainedOverall})
+		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, RetainedOverall: *retainedOverall})
 		return printValue(streams.Stdout, state, err)
 	case "show":
 		fs := newFlagSet("workflow show", streams)
@@ -171,11 +172,22 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		source := fs.String("source", "", "requirement source path; defaults to the current source")
 		confirmed := fs.Bool("confirmed", false, "mark this exact requirement revision confirmed")
 		meaning := fs.String("meaning", "", "semantic effect for a changed revision: preserved or changed")
-		live := fs.String("live-snapshot", "", "current native VCS identity for a changed requirement")
+		var artifacts stringListFlag
+		fs.Var(&artifacts, "requirement-artifact", "complete additional requirement artifact set; repeat as needed")
+		clearArtifacts := fs.Bool("clear-requirement-artifacts", false, "replace the set with the primary requirement only")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, *live)
+		var artifactSet []string
+		if *clearArtifacts && len(artifacts) != 0 {
+			return 1, fmt.Errorf("--clear-requirement-artifacts cannot be combined with --requirement-artifact")
+		}
+		if *clearArtifacts {
+			artifactSet = []string{}
+		} else if artifacts != nil {
+			artifactSet = artifacts
+		}
+		state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, artifactSet)
 		return printValue(streams.Stdout, state, err)
 	case "route-candidates":
 		fs := newFlagSet("workflow route-candidates", streams)
@@ -214,11 +226,10 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		gate := fs.String("gate", "", "discovered gate id")
-		live := fs.String("live-snapshot", "", "current native VCS identity")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		prompt, err := validate.PrepareGate(*root, *pkg, *runID, *gate, *live)
+		prompt, err := validate.PrepareGate(*root, *pkg, *runID, *gate)
 		if err != nil {
 			return 1, err
 		}
@@ -229,34 +240,44 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		action := fs.String("action", "", "installed action prompt id")
-		live := fs.String("live-snapshot", "", "current native VCS identity")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		prompt, err := validate.PrepareAction(*root, *pkg, *runID, *action, *live)
+		prompt, err := validate.PrepareAction(*root, *pkg, *runID, *action)
 		if err != nil {
 			return 1, err
 		}
 		fmt.Fprint(streams.Stdout, prompt)
 		return 0, nil
+	case "claim-dispatch":
+		fs := newFlagSet("workflow claim-dispatch", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		dispatch := fs.String("dispatch", "", "prepared dispatch id")
+		reviewer := fs.String("reviewer", "", "host reviewer or session identity")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.ClaimDispatch(*root, *pkg, *runID, *dispatch, *reviewer)
+		return printValue(streams.Stdout, state, err)
 	case "record-action":
 		return runRecordAction(args, streams)
 	case "record-gate":
 		return runRecordGate(args, streams)
 	case "qa-design":
 		return runQADesign(args, streams)
+	case "qa-review":
+		return runQAReview(args, streams)
 	case "qa-execution":
 		return runQAExecution(args, streams)
 	case "snapshot":
 		fs := newFlagSet("workflow snapshot", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
-		current := fs.String("current-snapshot", "", "new immutable current snapshot")
-		live := fs.String("live-snapshot", "", "current native VCS identity")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *current, *live)
+		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID)
 		return printValue(streams.Stdout, state, err)
 	case "carry":
 		return runCarry(args, streams)
@@ -274,14 +295,12 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs := newFlagSet("workflow seal", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
-		before := fs.String("live-snapshot-before", "", "native VCS identity immediately before aggregation")
-		after := fs.String("live-snapshot-after", "", "native VCS identity immediately after aggregation")
 		skips := stringListFlag{}
 		fs.Var(&skips, "skip", "selected non-passing gate explicitly authorized to skip")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		summary, err := validate.Seal(*root, *pkg, *runID, *before, *after, skips)
+		summary, err := validate.Seal(*root, *pkg, *runID, skips)
 		return printValue(streams.Stdout, summary, err)
 	default:
 		return 1, fmt.Errorf("unknown workflow subcommand: %s", sub)
@@ -295,13 +314,12 @@ func runRecordAction(args []string, streams IO) (int, error) {
 	action := fs.String("action", "", "installed action id")
 	status := fs.String("status", "", "PASS, FAIL, or RUNTIME_ERROR")
 	message := fs.String("message", "", "runtime or result message")
-	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
-	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
+	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	findings := newFindingFlags(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *status, *message, *findings, *sourceRevision, *sourceCatalogRevision)
+	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -312,15 +330,12 @@ func runRecordGate(args []string, streams IO) (int, error) {
 	gate := fs.String("gate", "", "discovered gate id")
 	status := fs.String("status", "", "PASS, FAIL, or RUNTIME_ERROR")
 	message := fs.String("message", "", "runtime or result message")
-	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
-	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
-	sourceSnapshot := fs.String("source-snapshot", "", "current snapshot from the prepared prompt")
-	live := fs.String("live-snapshot", "", "current native VCS identity")
+	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	findings := newFindingFlags(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordGate(*root, *pkg, *runID, *gate, *status, *message, *findings, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
+	state, err := validate.RecordGate(*root, *pkg, *runID, *gate, *dispatch, *status, *message, *findings)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -329,16 +344,34 @@ func runQADesign(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
 	runtimeError := fs.String("runtime-error", "", "QA Design runtime error")
-	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
-	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
+	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	cases := []validate.QACaseInput{}
 	fs.Var(&caseStart{cases: &cases}, "case", "start a QA case with its behavior description")
+	fs.Var(&caseField{cases: &cases, field: "kind"}, "kind", "STATIC or LIVE for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "procedure"}, "procedure", "procedure for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "oracle"}, "oracle", "oracle for the current QA case")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQADesign(*root, *pkg, *runID, cases, *runtimeError, *sourceRevision, *sourceCatalogRevision)
+	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError)
+	return printValue(streams.Stdout, state, err)
+}
+
+func runQAReview(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow qa-review", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
+	runtimeError := fs.String("runtime-error", "", "QA Review runtime error")
+	decisions := []validate.QAReviewInput{}
+	fs.Var(&qaReviewStart{items: &decisions}, "case", "start a decision for a pending CASE id")
+	fs.Var(&qaReviewField{items: &decisions, field: "outcome"}, "outcome", "PASS or FAIL")
+	fs.Var(&qaReviewField{items: &decisions, field: "reason"}, "reason", "required reason for FAIL")
+	findings := newFindingFlags(fs)
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.RecordQAReview(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *findings)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -347,10 +380,7 @@ func runQAExecution(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
 	runtimeError := fs.String("runtime-error", "", "QA execution runtime error")
-	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
-	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
-	sourceSnapshot := fs.String("source-snapshot", "", "current snapshot from the prepared prompt")
-	live := fs.String("live-snapshot", "", "current native VCS identity")
+	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	results := []validate.QAResultInput{}
 	fs.Var(&qaResultStart{results: &results}, "case-result", "start a result using its generated CASE id")
 	for _, item := range []struct{ name, field, usage string }{{"outcome", "outcome", "PASS or FAIL"}, {"procedure", "procedure", "executed procedure"}, {"observation", "observation", "observed result"}, {"oracle-result", "oracle-result", "oracle comparison"}} {
@@ -359,7 +389,7 @@ func runQAExecution(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQAExecution(*root, *pkg, *runID, results, *runtimeError, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
+	state, err := validate.RecordQAExecution(*root, *pkg, *runID, *dispatch, results, *runtimeError)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -370,10 +400,7 @@ func runCarry(args []string, streams IO) (int, error) {
 	runtimeError := fs.String("runtime-error", "", "Carry runtime error")
 	mainAgent := fs.Bool("main-agent", false, "inherit every prior PASS without independent Carry")
 	mainReason := fs.String("main-reason", "", "main-agent reason from the immediate repair comparison")
-	sourceRevision := fs.String("source-revision", "", "requirement revision from the prepared prompt")
-	sourceCatalogRevision := fs.String("source-catalog-revision", "", "catalog revision from the prepared prompt")
-	sourceSnapshot := fs.String("source-snapshot", "", "current snapshot from the prepared prompt")
-	live := fs.String("live-snapshot", "", "current native VCS identity")
+	dispatch := fs.String("dispatch", "", "prepared Carry dispatch id")
 	decisions := []validate.CarryInput{}
 	fs.Var(&carryStart{items: &decisions}, "gate", "start a Carry decision for a gate")
 	fs.Var(&carryField{items: &decisions, field: "decision"}, "decision", "INHERIT or RERUN")
@@ -381,7 +408,7 @@ func runCarry(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordCarry(*root, *pkg, *runID, decisions, *runtimeError, *mainAgent, *mainReason, *sourceRevision, *sourceCatalogRevision, *sourceSnapshot, *live)
+	state, err := validate.RecordCarry(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *mainAgent, *mainReason)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -571,12 +598,46 @@ func (f *caseField) Set(v string) error {
 		return fmt.Errorf("duplicate --%s for current QA case", f.field)
 	}
 	p := &(*f.cases)[len(*f.cases)-1]
-	if f.field == "procedure" {
+	if f.field == "kind" {
+		p.Kind = v
+	} else if f.field == "procedure" {
 		p.Procedure = v
 	} else {
 		p.Oracle = v
 	}
 	f.assignedGroup = len(*f.cases)
+	return nil
+}
+
+type qaReviewStart struct{ items *[]validate.QAReviewInput }
+
+func (f *qaReviewStart) String() string { return "" }
+func (f *qaReviewStart) Set(v string) error {
+	*f.items = append(*f.items, validate.QAReviewInput{CaseID: v})
+	return nil
+}
+
+type qaReviewField struct {
+	items         *[]validate.QAReviewInput
+	field         string
+	assignedGroup int
+}
+
+func (f *qaReviewField) String() string { return "" }
+func (f *qaReviewField) Set(v string) error {
+	if len(*f.items) == 0 {
+		return fmt.Errorf("QA Review field must follow --case")
+	}
+	if f.assignedGroup == len(*f.items) {
+		return fmt.Errorf("duplicate --%s for current QA Review decision", f.field)
+	}
+	p := &(*f.items)[len(*f.items)-1]
+	if f.field == "outcome" {
+		p.Outcome = v
+	} else {
+		p.Reason = v
+	}
+	f.assignedGroup = len(*f.items)
 	return nil
 }
 
@@ -704,5 +765,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|record-action|record-gate|qa-design|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
 }
