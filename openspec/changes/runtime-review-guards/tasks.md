@@ -17,6 +17,11 @@
   while retaining them as acceptance input.
 - [ ] Add `STATIC` and `LIVE` QA case kinds and require both in every complete
   QA set and execution.
+- [ ] Add per-case QA Review outcomes, preserve approval only for exact
+  unchanged cases retained by incremental QA Design, and compose retries from
+  failed, new, or changed cases plus accepted coverage summaries.
+- [ ] Update the QA Review prompt and result contract so reviewers return one
+  decision for every assigned case and do not reopen accepted cases.
 - [ ] Update SKILL, READMEs, prompts, help, examples, metadata, and changelog
   without restoring evidence-heavy subsystems or adding dry-run behavior.
 - [ ] Add focused state, CLI, resolver, prompt, package, and behavior coverage at

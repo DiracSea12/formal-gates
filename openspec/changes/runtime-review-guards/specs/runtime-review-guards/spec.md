@@ -87,3 +87,45 @@ isolated normal-use environment and compare observable results with an oracle.
   oracle comparison
 - **AND** code inspection, simulated output, or developer self-test claims do
   not substitute for live execution
+
+### Requirement: QA Review preserves unchanged case approvals
+
+QA Review SHALL return one outcome for every case assigned in its current
+dispatch. The CLI SHALL store those outcomes on the existing QA cases and SHALL
+derive the aggregate QA Review result without direct reviewer edits to workflow
+state or a separate case file.
+
+#### Scenario: Some cases fail review
+
+- **WHEN** one QA Review attempt passes some assigned cases and fails others
+- **THEN** the CLI retains PASS on the passing cases and returns the candidate
+  set to QA Design with the failed cases and findings
+- **AND** the next QA Review requests decisions only for failed, new, or changed
+  cases
+
+#### Scenario: QA Design preserves a passing case
+
+- **WHEN** QA Design returns a case whose kind, description, procedure, and
+  oracle exactly match a previously passing case retained for an unaffected
+  requirement
+- **THEN** the CLI preserves that case's PASS marker
+
+#### Scenario: QA Design changes a passing case
+
+- **WHEN** any semantic field of a passing case changes
+- **THEN** the resulting case is pending and must be reviewed again
+
+#### Scenario: Review finds missing coverage
+
+- **WHEN** the reviewer passes every assigned case but reports a set-level
+  missing-coverage finding
+- **THEN** QA Review remains failed until QA Design adds or revises the needed
+  case and that pending case passes review
+
+#### Scenario: Requirements change incrementally
+
+- **WHEN** a requirement revision adds, changes, or removes scope and QA Design
+  returns the revised complete candidate set
+- **THEN** exact retained cases for unaffected requirements keep PASS
+- **AND** new or changed cases are pending while omitted obsolete cases are
+  removed

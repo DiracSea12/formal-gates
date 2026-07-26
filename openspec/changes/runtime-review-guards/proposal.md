@@ -26,3 +26,10 @@ and real public-entrypoint execution. This does not introduce dry-run behavior
 or require duplicate higher-level tests for deterministic rules already covered
 at their owning layer.
 
+Make QA Review incremental at case level. A reviewer returns a decision for
+each case assigned in that attempt, and the CLI stores the marker on the
+existing case. After QA Design addresses failures, unchanged passing cases stay
+approved; only failed, new, or changed cases require another independent QA
+Review. Requirement changes use the existing incremental QA Design behavior:
+unaffected retained cases keep approval, affected cases are revised and reset,
+and cases for removed requirements disappear from the complete set.

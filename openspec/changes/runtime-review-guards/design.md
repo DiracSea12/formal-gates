@@ -77,10 +77,35 @@ Update public workflow documentation and behavior cases so `LIVE` means actual
 public-entrypoint execution, not textual review or developer self-test evidence.
 No dry-run case kind or phase is introduced.
 
+## Incremental QA Review decisions
+
+Extend the existing `QACase` state record with its review status. Add a
+dedicated grouped QA Review result input, reusing the CLI's existing
+grouped-flag parsing pattern. The reviewer returns one PASS or FAIL decision
+for every case assigned in the open
+QA Review dispatch; FAIL requires a reason. The CLI, not the reviewer, writes
+the markers under the existing state mutation lock and derives the aggregate
+action result. No separate case artifact is created.
+
+When QA Design records a revised complete set after Review FAIL, match old and
+new cases by the complete normalized semantic tuple of kind, description,
+procedure, and oracle. Preserve PASS for an exact retained match. New or
+modified cases become pending, and omitted cases are removed. Apply the same
+matching after requirement changes so additions do not reopen unaffected cases,
+while affected cases reset when QA Design revises them.
+
+QA Review prompt composition separates unchanged passing cases from cases that
+need a decision. The former are rendered only as accepted coverage context by
+ID and description; the latter include their complete semantic fields. The
+review prompt and result contract explicitly prohibit returning new decisions
+for already accepted cases. Set-level findings remain available for missing or
+duplicated coverage that is not attributable to one current case.
+
 ## Scope and sequencing
 
 The capabilities share run state, preparation, result recording, and prompt
 routing, so this remains one bounded slice. Implement dispatch bindings first,
-then native VCS resolution, then requirement freezing and QA kinds. Reuse
+then native VCS resolution, requirement freezing, QA kinds, and incremental QA
+Review markers. Reuse
 historical code only at the level of small ID, prompt-hash, and native-command
 helpers; do not restore historical subsystems.

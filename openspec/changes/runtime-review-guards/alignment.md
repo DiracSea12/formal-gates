@@ -110,3 +110,23 @@ It SHALL NOT restore or add an evidence graph, receipt subsystem, policy engine,
 closure graph, provider adapter, hook-dependent identity proof, second VCS
 model, project-specific route, dry-run phase, or compatibility path for
 manually rewritten temporary state.
+
+## RQ-009 - QA Review approvals persist per unchanged case
+
+QA Review SHALL return a review outcome for every case assigned in the current
+attempt. The CLI SHALL store each outcome on the existing `qaCases` record and
+derive the aggregate QA Review result. It SHALL NOT require a separate QA case
+file or direct reviewer edits to workflow state.
+
+After a failed QA Review returns to QA Design, an unchanged case that already
+passed and is retained by incremental QA Design SHALL remain approved. The next
+QA Review SHALL request decisions only for failed, new, or changed cases. It MAY
+receive the IDs and descriptions of unchanged passing cases as accepted
+coverage context, but SHALL NOT be asked to review them again.
+
+A set-level finding such as missing coverage MAY fail QA Review without marking
+an otherwise valid existing case as failed. QA Design SHALL add or revise the
+necessary case, and the next Review SHALL assess that pending work. When
+requirements change, QA Design SHALL preserve approvals for unaffected retained
+cases, reset affected revised cases, add pending cases for new coverage, and
+remove cases whose requirements were removed.

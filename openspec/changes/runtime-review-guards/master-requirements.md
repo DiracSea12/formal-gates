@@ -26,7 +26,9 @@ The delivered workflow must:
 7. return any later requirement-document change to requirement clarification or
    requirement change instead of accepting it as ordinary repair; and
 8. require the approved QA set and QA Execution to contain both fast static
-   checks and real execution through documented public entrypoints.
+   checks and real execution through documented public entrypoints; and
+9. let QA Review approve cases individually so unchanged passing cases are not
+   reviewed again while failed, new, or changed cases remain reviewable.
 
 Dry-run behavior is not part of this slice. QA Design, QA Execution, Carry, and
 development workers do not require zero-context identity isolation. QA Review
@@ -45,7 +47,12 @@ and every discovered post-development review gate do.
 - QA cases gain one structured kind: `STATIC` or `LIVE`. The complete approved
   set must contain both kinds, without mechanically repeating every
   deterministic rule at both layers.
+- QA Review returns one outcome for every case assigned in that attempt. The
+  CLI stores those outcomes on the existing cases, preserves PASS only for
+  semantically unchanged cases retained by incremental QA Design, and sends
+  only failed, new, or changed cases for decision on the next attempt. Prior
+  passing case descriptions may be shown as accepted coverage context but are
+  not reopened for review.
 - Existing run state, prompt composition, transition validation, and result
   recording remain the owners. No provider SDK, receipt hook, identity service,
   evidence database, compatibility path, or adversarial hardening is added.
-
