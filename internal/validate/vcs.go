@@ -69,6 +69,21 @@ func verifyNativeSnapshot(root, vcs, identity string) error {
 	return resolver.Verify(cleanWorktree(root), strings.TrimSpace(identity))
 }
 
+func verifySnapshotReady(root, vcs string) error {
+	if strings.ToLower(strings.TrimSpace(vcs)) != "git" {
+		return nil
+	}
+	root = cleanWorktree(root)
+	status, err := (execNativeCommandRunner{}).Run(root, "git", "status", "--porcelain=v1", "--untracked-files=no")
+	if err != nil {
+		return fmt.Errorf("cannot inspect tracked Git changes: %w", err)
+	}
+	if strings.TrimSpace(status) != "" {
+		return fmt.Errorf("tracked Git changes must be committed before recording a snapshot")
+	}
+	return nil
+}
+
 func (r commandVCSResolver) Resolve(root string) (string, error) {
 	if err := r.verifyRoot(root); err != nil {
 		return "", err
@@ -109,7 +124,7 @@ func (r commandVCSResolver) Verify(root, identity string) error {
 	case "svn":
 		resolved, err = r.runner.Run(root, "svn", "info", "--show-item", "revision", "-r", identity, root)
 	case "p4":
-		resolved, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%change%", "changes", "-e", identity, "-m", "1")
+		resolved, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%change%", "changes", "-m", "1", "...@"+identity)
 	}
 	if err != nil {
 		return fmt.Errorf("cannot verify %s snapshot %s: %w", r.name, identity, err)

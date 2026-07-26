@@ -18,7 +18,6 @@ type RunState struct {
 	RequirementRevision  string                       `json:"requirementRevision"`
 	RequirementConfirmed bool                         `json:"requirementConfirmed"`
 	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
-	ArtifactsFrozen      bool                         `json:"artifactsFrozen"`
 	BasePromptRevision   string                       `json:"basePromptRevision"`
 	CatalogRevision      string                       `json:"catalogRevision"`
 	VCS                  string                       `json:"vcs"`

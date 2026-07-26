@@ -65,8 +65,8 @@ p4 sync
 
 The CLI confirms the client root from tagged `p4 info`, resolves the current
 submitted changelist from `p4 changes -m 1 ...#have`, and verifies a recorded
-number with `p4 changes -e <change> -m 1`. Reviewers compare depot state with
-native `diff2`:
+number within the client path using `p4 changes -m 1 ...@<change>`. Reviewers
+compare depot state with native `diff2`:
 
 ```bash
 p4 diff2 -Od //depot/path/...@<base-change> //depot/path/...@<current-change>

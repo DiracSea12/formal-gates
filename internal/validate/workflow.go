@@ -173,7 +173,7 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			if err != nil {
 				return err
 			}
-			if state.ArtifactsFrozen && semanticEffect == "preserved" {
+			if developmentStarted(*state) && semanticEffect == "preserved" {
 				return fmt.Errorf("meaning-preserved requirement rebinding is unavailable after development starts")
 			}
 			state.RequirementSource, state.RequirementRevision, state.RequirementArtifacts = source, revision, artifacts
@@ -186,7 +186,6 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			}
 			state.CurrentSnapshot = liveSnapshot
 			invalidateRequirementResults(state, catalog.GateIDs())
-			state.ArtifactsFrozen = false
 			state.RequirementConfirmed = false
 			if confirmed {
 				return fmt.Errorf("a meaning-changing requirement must return to Requirements Clarification")
@@ -470,7 +469,6 @@ func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
 			state.Actions["development-worker"] = ActionResult{Status: developmentRepairPrepared}
 		} else if status == developmentPending {
 			state.Actions["development-worker"] = ActionResult{Status: developmentPrepared}
-			state.ArtifactsFrozen = true
 		}
 		return nil
 	})
@@ -661,6 +659,18 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		if !kinds["STATIC"] || !kinds["LIVE"] {
 			return fmt.Errorf("complete QA case set requires at least one STATIC and one LIVE case")
 		}
+		if state.Actions["qa-review"].Status == "FAIL" {
+			pending := false
+			for _, testCase := range updated {
+				if testCase.ReviewStatus != "PASS" {
+					pending = true
+					break
+				}
+			}
+			if !pending {
+				return fmt.Errorf("QA Design rework must add or revise a case that QA Review can assess")
+			}
+		}
 		state.QACases = updated
 		state.QAExecution = QAExecutionResult{Status: "PENDING"}
 		state.Actions["qa-design"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
@@ -832,6 +842,9 @@ func AdvanceSnapshot(root, packageRoot, runID string) (RunState, error) {
 		}
 		currentSnapshot, err := resolveNativeSnapshot(root, state.VCS)
 		if err != nil {
+			return err
+		}
+		if err := verifySnapshotReady(root, state.VCS); err != nil {
 			return err
 		}
 		developmentStatus := state.Actions["development-worker"].Status
@@ -1188,7 +1201,7 @@ func requireCurrentDefinitions(root string, state RunState, packageRoot string) 
 		return PromptCatalog{}, err
 	}
 	if changed {
-		if state.ArtifactsFrozen {
+		if developmentStarted(state) {
 			return PromptCatalog{}, fmt.Errorf("frozen requirement artifact changed; return to requirement clarification before continuing")
 		}
 		return PromptCatalog{}, fmt.Errorf("requirement artifacts changed; resume the run before continuing")

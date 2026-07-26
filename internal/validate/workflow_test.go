@@ -28,7 +28,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	if !state.ArtifactsFrozen {
+	if !developmentStarted(state) {
 		t.Fatal("first development preparation did not freeze artifacts")
 	}
 	before := stateBytes(t, root, state.RunID)
@@ -47,7 +47,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.RequirementConfirmed || state.ArtifactsFrozen || state.CurrentSnapshot != gitHead(t, root) {
+	if state.RequirementConfirmed || developmentStarted(state) || state.CurrentSnapshot != gitHead(t, root) {
 		t.Fatalf("meaning-changing requirement did not establish a new boundary: %#v", state)
 	}
 }
@@ -308,6 +308,70 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	}
 	if state.Actions["qa-review"].Status != "FAIL" || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PASS" {
 		t.Fatalf("set-level finding changed valid decisions: %#v", state)
+	}
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), ""); err == nil || !strings.Contains(err.Error(), "add or revise a case") {
+		t.Fatalf("unchanged all-PASS QA rework was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected QA rework changed state")
+	}
+	revised := baselineCases()
+	revised = append(revised, QACaseInput{Kind: "STATIC", Description: "failure paths are covered", Procedure: "run direct failure-path tests", Oracle: "all failure-path tests pass"})
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-design"].Status != "PASS" || state.QACases[2].ReviewStatus != "PENDING" {
+		t.Fatalf("corrected QA rework did not reopen review: %#v", state)
+	}
+}
+
+func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "retained-freeze", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = confirmAndRoute(t, root, pkg, state, "custom", []string{"quality"})
+	state = recordReadiness(t, root, pkg, state)
+	writeTestFile(t, filepath.Join(root, "merged-delivery.txt"), "merged delivery\n")
+	commitAll(t, root, "merged delivery")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !developmentStarted(state) {
+		t.Fatalf("retained snapshot did not establish development start: %#v", state.Actions["development-worker"])
+	}
+	writeTestFile(t, filepath.Join(root, "design.md"), "changed design\n")
+	commitAll(t, root, "changed retained requirement")
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil); err == nil || !strings.Contains(err.Error(), "unavailable after development") {
+		t.Fatalf("retained snapshot allowed meaning-preserved artifact rebinding: %v", err)
+	}
+}
+
+func TestDevelopmentSnapshotRejectsUncommittedTrackedGitChanges(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "base delivery\n")
+	commitAll(t, root, "tracked delivery")
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "uncommitted-snapshot"), "custom", []string{"quality"})
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "edited delivery\n")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err == nil || !strings.Contains(err.Error(), "tracked Git changes must be committed") {
+		t.Fatalf("uncommitted tracked delivery was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected uncommitted snapshot changed state")
+	}
+	commitAll(t, root, "commit delivery")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err != nil {
+		t.Fatalf("committed delivery snapshot was rejected: %v", err)
 	}
 }
 
