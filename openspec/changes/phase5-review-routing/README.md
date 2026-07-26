@@ -1,24 +1,12 @@
 # Phase 5: Clarification And Review Routing
 
-Phase 5 makes formal development start with adaptive alignment of both the
-requested outcome and consequential technical choices. After confirmation,
-the user chooses once from a unified dynamic list containing QA and every
-discovered gate. The main agent orchestrates but does not edit delivery code;
-the CLI releases a separate development worker only when required
-pre-development results are complete.
+This implementation record is amended by
+`../universal-modification-intake/alignment.md`. Current routing is:
 
-When QA is selected, QA Design is followed by an independent QA Review. A
-failed review returns the cases for rework and a fresh review; only PASS can
-start development, and this loop does not consume post-development waves.
+- lightweight execution creates no formal run;
+- a formal run accepts only `full` or `custom`;
+- `full` selects QA and every discovered gate;
+- `custom` selects a non-empty proper subset.
 
-Selected QA and gates share three completed automatic review waves, beginning
-with the initial complete post-development wave.
-Discovered-gate findings use P0/P1/P2, QA failures block directly, Carry stays
-limited to previously passing selected gates, interrupted work remains
-resumable, and Seal records explicit route or final skip authorization.
-Meaning-changing revisions recheck complete QA coverage while retaining
-unaffected cases and changing only the impacted set when impact is bounded.
-
-See `alignment.md` for confirmed requirements, `design.md` for the minimal
-state and guard design, `specs/review-routing/spec.md` for observable behavior,
-and `tasks.md` for implementation work.
+The alignment, design, specification, and tasks in this directory use that
+current contract while retaining the rest of the Phase 5 behavior.

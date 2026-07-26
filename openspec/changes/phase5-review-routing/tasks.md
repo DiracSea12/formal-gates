@@ -4,8 +4,8 @@
 
 - [x] Make Requirements Clarification an adaptive main-agent hard gate for
   requirement and consequential solution alignment.
-- [x] Add one none/full/custom selection over QA plus discovered gates, route
-  authorization for omissions, and guarded later additions.
+- [x] Add one full/custom selection over QA plus discovered gates, route
+  authorization for custom omissions, and guarded later additions.
 - [x] Pause changed requirement revisions until an explicit semantic-effect
   decision preserves or invalidates dependent state.
 - [x] On meaning-changing revisions, invalidate QA Design approval but retain
@@ -15,9 +15,8 @@
   case rework and fresh review, and require PASS before development without
   consuming post-development review waves.
 - [x] Apply one direct transition guard to every prepare and record owner,
-  including deferred readiness when a none route becomes non-empty, immutable
-  same-snapshot semantic results, and resumable prepared development or repair
-  dispatch.
+  including mandatory pre-development readiness, immutable same-snapshot
+  semantic results, and resumable prepared development or repair dispatch.
 - [x] Keep the main agent read-only and make the development worker the formal
   delivery-code write owner.
 

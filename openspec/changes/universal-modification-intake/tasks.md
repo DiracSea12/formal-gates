@@ -15,7 +15,8 @@
 - [ ] Start and retain one overall formal run before sliced development; run
   independent formal slices concurrently in separate VCS worktrees; after
   merging and conflict resolution, record the merged snapshot and run
-  integration QA and gates in that same overall run.
+  integration QA and gates in that same overall run; return findings to slice
+  runs and record merged slice repairs without an overall development worker.
 - [ ] Remove `none` route code, tests, and every public description.
 - [ ] Remove repository-specialized intake and maintenance branches.
 - [ ] Integrate small-repair Carry/QA inheritance guidance.

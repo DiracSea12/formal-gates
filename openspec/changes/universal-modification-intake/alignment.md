@@ -90,6 +90,14 @@ using its original base-to-merged comparison and inherited route. The workflow
 SHALL NOT start a second overall or integration run after merging, replace the
 original base, repeat Requirements Clarification, or repeat the route question.
 
+The retained overall run SHALL NOT prepare or dispatch a development or repair
+worker at any lifecycle state. Integration findings SHALL return to their
+owning slice runs. After those slice repairs are sealed, merged, and conflicts
+resolved, the main agent SHALL record the repaired merged VCS identity directly
+as the next snapshot of the retained overall run. This direct snapshot SHALL
+enforce the same completed-result, repairable-finding, runtime-error
+authorization, and review-wave-limit prerequisites as ordinary repair.
+
 Lightweight execution SHALL NOT introduce formal task slices.
 
 ## RQ-007 - Formal none route is removed

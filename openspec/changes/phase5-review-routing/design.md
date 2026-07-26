@@ -1,5 +1,9 @@
 # Design
 
+This design uses the current routing contract from
+`../universal-modification-intake/design.md`: lightweight execution is pre-run,
+and formal routing accepts only `full` or `custom`.
+
 ## Reuse existing state owners
 
 Do not store a second phase value. Derive allowed transitions from the existing
@@ -77,7 +81,7 @@ and never touches the post-development completed-wave count.
 
 Expose the current route candidates through the existing run/catalog view:
 `qa` first, then lexically sorted discovered gate IDs. One route mutation
-records none, full, or the exact custom set. A custom complement becomes
+records full or the exact non-empty custom set. A custom complement becomes
 route-authorized skips. Reserve `qa` at catalog load so a gate file cannot
 collide with the built-in QA result owner. Later additions use the same mutation
 owner. A discovered gate may be added before development starts or against the
@@ -87,13 +91,9 @@ do not count the snapshot again. A late-added RUNTIME_ERROR still requires retry
 or matching explicit authorization before repair or Seal. Development or repair
 preparation and repair-snapshot verification freeze the selected set.
 Requirement rebinding and invalidation preserve this route and do not emit
-another route prompt.
-Start Readiness is keyed to the effective selected set rather than only the
-original route label. When a post-development addition changes an initial none
-route into a non-empty selection, set readiness to its required pending state
-and block preparation of the added gate and Seal until it passes. Keep the
-current immutable development snapshot; readiness itself does not create a
-snapshot or complete a review wave.
+another route prompt. Start Readiness has already passed before every formal
+development snapshot; a later gate addition does not reset it or replace the
+current immutable snapshot.
 
 Use one central validation function from every prepare and record path. Each
 operation reads only the minimum workflow state needed for its direct ordering

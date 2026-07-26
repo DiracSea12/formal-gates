@@ -31,7 +31,10 @@ Route for this delivery: full
    Record the merged code as the retained overall run's completed development
    snapshot, then run its integration QA and gates from the original base to the
    merged result. Do not start another run, replace the base, or repeat
-   clarification or routing after the merge.
+   clarification or routing after the merge. Return integration findings to
+   their owning slice runs. After sealed slice repairs are merged, record the
+   repaired merged snapshot directly in the retained overall run; that run
+   never prepares a development or repair worker.
 7. A read-only package command lists QA and dynamic gates before a run by
    reusing the existing prompt catalog. The obsolete formal none route is
    removed from CLI, state validation, tests, skill text, and public docs.
@@ -75,7 +78,9 @@ Route for this delivery: full
 4. Integration: keep the overall run that began before sliced development,
    merge the sealed slices, resolve conflicts, record the merged snapshot, and
    run that same overall run's full post-development review on the combined
-   result.
+   result. Send findings back to their slice runs, merge sealed repairs, and
+   record each repaired merged snapshot in the same overall run without an
+   overall development worker.
 
 Slices 1 and 2 are independent and run in parallel. Slice 3 depends on their
 public contracts and begins after both are integrated.

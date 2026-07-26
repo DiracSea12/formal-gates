@@ -73,7 +73,9 @@ the merged identity as completed development in the retained overall run, then
 execute its integration QA and gates from the original base to the merged
 snapshot. Do not create a second overall run, replace its base, prepare or
 dispatch an overall development worker, or repeat clarification or routing after
-the merge.
+the merge. Integration findings return to their owning slice runs. After those
+slice repairs are sealed and merged, record the new merged identity directly
+with `workflow snapshot` in the retained overall run.
 
 ## Single Formal Flow
 
@@ -124,8 +126,11 @@ the merge.
    RUNTIME_ERROR are retryable.
 8. **Repair.** A wave with QA FAIL or a P0/P1 gate finding returns to repair and
    includes every P2 finding from that wave. Before editing, freeze the current
-   VCS identity. After the worker
-   finishes, freeze the new identity and call `workflow snapshot`. The main
+   VCS identity. For a retained overall run, return integration findings to the
+   owning slice runs, merge their sealed repairs, and call `workflow snapshot`
+   directly without preparing an overall development worker. For every other
+   run, prepare and dispatch the development worker, then freeze its new identity
+   and call `workflow snapshot`. The main
    agent inspects the immediate pre-repair-to-current native comparison. Only
    when it can bound the repair so no previously passing selected verification
    can be affected, it may use main-agent Carry to inherit every prior PASS,

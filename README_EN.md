@@ -54,7 +54,10 @@ One overall run, started with `--retained-overall`, retains the original base,
 complete requirement, and route. Independent slices use separate VCS worktrees
 and formal runs and own implementation. After merge and conflict resolution,
 `workflow snapshot` records the merged commit directly in the retained overall
-run, which reviews it from the original base.
+run, which reviews it from the original base. Integration findings return to
+their owning slice runs; after sealed slice repairs are merged, the retained
+overall run records the new merged snapshot directly without preparing its own
+development worker.
 
 After a meaning-changing requirement revision, previously approved QA cases
 remain as unapproved input to a complete coverage review. The next QA Design

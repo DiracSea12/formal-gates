@@ -1,7 +1,12 @@
 # Requirements Alignment
 
 Date: 2026-07-25
-Status: confirmed for Phase 5 implementation
+Status: amended by universal modification intake
+
+This document retains the Phase 5 requirements under the current routing
+contract in `../universal-modification-intake/alignment.md`: lightweight
+execution creates no formal run, and formal runs accept only `full` or
+`custom`.
 
 ## RQ-001 - Adaptive requirement and solution alignment
 
@@ -27,9 +32,10 @@ domain, or project-specific document path.
 
 After the confirmed requirement is recorded, the main agent SHALL present one
 ordered gate list containing QA followed by every valid gate dynamically
-discovered from the current package. The user SHALL make one routing decision:
-no gate flow, the full gate flow, or a custom selection from that list. Gate
-count SHALL remain dynamic; Phase 5 SHALL reuse the existing discovery owner.
+discovered from the current package. A formal run SHALL record one routing
+decision: the full gate flow or a non-empty custom selection from that list.
+Gate count SHALL remain dynamic; Phase 5 SHALL reuse the existing discovery
+owner.
 
 Full flow SHALL select QA and every discovered gate. Custom flow SHALL require
 every selected gate and SHALL record every unselected gate as user-authorized
@@ -41,9 +47,7 @@ SHALL NOT appear as another route choice or discovered gate.
 Start Readiness SHALL remain a separate binary readiness action. It SHALL run
 automatically for full and custom gate flows before development and SHALL NOT
 require a separate user selection. It SHALL not use finding severity or consume
-a review wave. When an initial none route first becomes non-empty after
-development, Start Readiness SHALL run at that point and SHALL pass before the
-newly selected gate is prepared or Seal may proceed.
+a review wave.
 
 ## RQ-003 - Role and transition enforcement
 
@@ -81,12 +85,9 @@ completed. Review only the added gate on that immutable snapshot and do not
 count the snapshot as another wave. A late-added `RUNTIME_ERROR` still requires
 retry or matching explicit authorization before repair or Seal. A prepared
 development or repair worker and a repair snapshot awaiting verification SHALL
-still freeze route additions. If the addition changes an initial none route
-into a non-empty selection, the workflow SHALL require deferred Start Readiness
-without discarding the current immutable development snapshot. The confirmed
-none, full, or custom route SHALL remain the run's single routing decision
-across requirement revisions; the workflow SHALL NOT ask the user to choose the
-route again.
+still freeze route additions. The confirmed full or custom route SHALL remain
+the run's single routing decision across requirement revisions; the workflow
+SHALL NOT ask the user to choose the route again.
 
 When the bound requirement revision changes, Resume SHALL pause without
 preserving or invalidating dependent results until the main agent explicitly

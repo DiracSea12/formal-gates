@@ -158,6 +158,12 @@ func TestRetainedOverallRunAdoptsMergedSliceSnapshot(t *testing.T) {
 	if !state.RetainedOverall || state.CurrentSnapshot != "merged-slices" || state.Actions["development-worker"].Status != developmentComplete || state.PreRepairSnapshot != "" {
 		t.Fatalf("merged slice snapshot was not recorded as initial completed development: %#v", state)
 	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "implementation and repair ownership in slice runs") {
+		t.Fatalf("retained overall run prepared development while integration review was pending: %v", err)
+	}
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, "premature-merged-slice-repair", "premature-merged-slice-repair"); err == nil || !strings.Contains(err.Error(), "all selected review results") {
+		t.Fatalf("retained overall run accepted a repair before integration review: %v", err)
+	}
 	prompt, err := PrepareGate(root, pkg, state.RunID, "quality", state.CurrentSnapshot)
 	if err != nil {
 		t.Fatalf("integration review was not available at the merged snapshot: %v", err)
@@ -166,6 +172,73 @@ func TestRetainedOverallRunAdoptsMergedSliceSnapshot(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("integration review did not retain %q in the original base-to-merged route: %s", want, prompt)
 		}
+	}
+
+	state = recordGate(t, root, pkg, state, "quality", "FAIL", []FindingInput{{Severity: "P1", Message: "integration blocker"}})
+	if state.Actions["development-worker"].Status != developmentVerified {
+		t.Fatalf("failed integration wave did not become repairable: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "repair ownership in slice runs") {
+		t.Fatalf("retained overall run reclaimed repair ownership from slice runs: %v", err)
+	}
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "merged-slice-repair", "merged-slice-repair")
+	if err != nil {
+		t.Fatalf("retained overall run could not adopt the merged slice repair: %v", err)
+	}
+	if state.PreRepairSnapshot != "merged-slices" || state.CurrentSnapshot != "merged-slice-repair" || state.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("merged slice repair did not preserve repair snapshot ownership: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "implementation and repair ownership in slice runs") {
+		t.Fatalf("retained overall run prepared development after adopting a repair: %v", err)
+	}
+	state = recordGate(t, root, pkg, state, "quality", "PASS", nil)
+	if state.PreRepairSnapshot != "" || state.CompletedReviewWaves != 2 || state.Actions["development-worker"].Status != developmentVerified {
+		t.Fatalf("merged slice repair did not complete integration verification: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "implementation and repair ownership in slice runs") {
+		t.Fatalf("retained overall run prepared development after repaired integration passed: %v", err)
+	}
+}
+
+func TestRetainedOverallRunUsesNormalRuntimeAuthorizationForMergedSliceRepair(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "overall-runtime-repair", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", BaseSnapshot: "base", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordClarificationAndConfirm(t, root, pkg, state)
+	state, err = SetRoute(root, pkg, state.RunID, "custom", []string{"architecture", "quality"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordReadiness(t, root, pkg, state)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "merged-slices", "merged-slices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordGate(t, root, pkg, state, "architecture", "FAIL", []FindingInput{{Severity: "P1", Message: "integration blocker"}})
+	state, err = RecordGate(root, pkg, state.RunID, "quality", "RUNTIME_ERROR", "review unavailable", nil, state.RequirementRevision, state.CatalogRevision, state.CurrentSnapshot, state.CurrentSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, "unauthorized-merged-repair", "unauthorized-merged-repair"); err == nil || !strings.Contains(err.Error(), "review wave is not complete") {
+		t.Fatalf("retained overall run bypassed runtime-error authorization: %v", err)
+	}
+	if _, err := Seal(root, pkg, state.RunID, state.CurrentSnapshot, state.CurrentSnapshot, []string{"quality"}); err == nil || !strings.Contains(err.Error(), "architecture") {
+		t.Fatalf("Seal did not retain the integration blocker while authorizing the runtime error: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "implementation and repair ownership in slice runs") {
+		t.Fatalf("retained overall run prepared a repair worker after runtime authorization: %v", err)
+	}
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "authorized-merged-repair", "authorized-merged-repair")
+	if err != nil {
+		t.Fatalf("authorized runtime error blocked the merged slice repair: %v", err)
+	}
+	if state.PreRepairSnapshot != "merged-slices" || state.CompletedReviewWaves != 0 {
+		t.Fatalf("authorized incomplete wave was counted or lost its repair boundary: %#v", state)
+	}
+	if _, ok := state.SkipAuthorizations["quality"]; ok {
+		t.Fatalf("runtime authorization survived the merged repair snapshot: %#v", state.SkipAuthorizations)
 	}
 }
 

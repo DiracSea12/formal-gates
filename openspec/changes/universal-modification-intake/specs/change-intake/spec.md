@@ -58,6 +58,16 @@ still receive clarification and complete-summary confirmation.
 - **AND** that same overall run reviews the original base-to-merged comparison
   with the inherited route without another clarification or route decision
 
+#### Scenario: Integration repair remains slice-owned
+
+- **WHEN** the retained overall run's integration review returns a repairable
+  finding
+- **THEN** the finding returns to its owning slice run and the retained overall
+  run does not prepare a development or repair worker
+- **AND** after the repaired slices are sealed, merged, and conflicts resolved,
+  the repaired merged snapshot is recorded directly in the same retained
+  overall run under the ordinary repair prerequisites
+
 #### Scenario: Lightweight request is large
 
 - **WHEN** the user selected lightweight execution

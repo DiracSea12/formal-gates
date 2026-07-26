@@ -42,7 +42,9 @@ QA Review 通过后才能开发；Review 失败会带着原用例返回 Design �
 依赖、职责、风险和验证边界切分；一个通过 `--retained-overall` 启动的总体 run
 保留原始 base、完整需求和路由。独立切片使用不同 VCS worktree 和正式 run 并
 负责实际开发；合并及解决冲突后，用 `workflow snapshot` 把合并提交直接记入
-保留的总体 run，再由它从原始 base 执行集成审查。
+保留的总体 run，再由它从原始 base 执行集成审查。集成 finding 返回负责的切片
+run；切片返修通过并重新合并后，总体 run 不准备自己的 development worker，
+而是直接记录新的合并快照。
 
 需求语义变化后，原有 QA 用例保留为未批准的完整覆盖复核输入。下一次 QA
 Design 在影响边界明确时保留不受影响的用例，无法可靠确定边界时则替换完整

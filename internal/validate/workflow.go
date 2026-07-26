@@ -380,11 +380,11 @@ func prepareDevelopmentAction(root, packageRoot, runID, liveSnapshot string) (st
 		if err != nil {
 			return err
 		}
-		if state.RetainedOverall && state.Actions["development-worker"].Status == developmentPending {
-			if err := requireTransition(*state, "development-worker", ""); err != nil {
+		if state.RetainedOverall {
+			if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
 				return err
 			}
-			return fmt.Errorf("a retained overall run records merged slice development with workflow snapshot")
+			return fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
 		if err := requireLiveSnapshot(*state, liveSnapshot); err != nil {
 			return err
@@ -611,7 +611,8 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 			return err
 		}
 		oldSnapshot := state.CurrentSnapshot
-		isRepair := state.Actions["development-worker"].Status == developmentRepairPrepared
+		isRepair := developmentStatus == developmentRepairPrepared ||
+			(state.RetainedOverall && (developmentStatus == developmentComplete || developmentStatus == developmentVerified))
 		state.CurrentSnapshot = currentSnapshot
 		state.Actions["development-worker"] = ActionResult{Status: developmentComplete}
 		if isRepair {
@@ -1241,14 +1242,7 @@ func requireTransition(state RunState, operation, target string) error {
 				}
 				return fmt.Errorf("no recorded result requires repair")
 			}
-			hasRuntimeError := false
-			for id := range selectedSet(state) {
-				if selectedResultStatus(state, id) == "RUNTIME_ERROR" {
-					hasRuntimeError = true
-					break
-				}
-			}
-			if (developmentStatus != developmentVerified || hasRuntimeError) && !runtimeErrorsAuthorizedForRepair(state) {
+			if (developmentStatus != developmentVerified || hasSelectedRuntimeError(state)) && !runtimeErrorsAuthorizedForRepair(state) {
 				if state.PreRepairSnapshot != "" {
 					return fmt.Errorf("the current repair still requires verification")
 				}
@@ -1261,7 +1255,8 @@ func requireTransition(state RunState, operation, target string) error {
 	case "snapshot":
 		developmentStatus := state.Actions["development-worker"].Status
 		adoptingMergedSlices := state.RetainedOverall && developmentStatus == developmentPending
-		if !adoptingMergedSlices && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
+		adoptingSliceRepair := state.RetainedOverall && (developmentStatus == developmentComplete || developmentStatus == developmentVerified)
+		if !adoptingMergedSlices && !adoptingSliceRepair && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
 			return fmt.Errorf("development worker must be prepared before a snapshot")
 		}
 		if state.Actions["start-readiness"].Status != "PASS" {
@@ -1273,12 +1268,15 @@ func requireTransition(state RunState, operation, target string) error {
 		if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
 			return fmt.Errorf("the current repair still requires verification")
 		}
-		if developmentStatus == developmentRepairPrepared {
+		if developmentStatus == developmentRepairPrepared || adoptingSliceRepair {
 			if !reviewWaveRecorded(state) {
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
 			if !hasRepairableBlocker(state) && !hasP2Recommendation(state) {
 				return fmt.Errorf("no recorded result requires repair")
+			}
+			if adoptingSliceRepair && (developmentStatus != developmentVerified || hasSelectedRuntimeError(state)) && !runtimeErrorsAuthorizedForRepair(state) {
+				return fmt.Errorf("the current review wave is not complete")
 			}
 			if state.CompletedReviewWaves >= effectiveReviewWaveLimit(state) {
 				return fmt.Errorf("review-wave limit is exhausted; explicit additional repair authorization is required")
@@ -1417,6 +1415,15 @@ func hasP2Recommendation(state RunState) bool {
 			if finding.Severity == "P2" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func hasSelectedRuntimeError(state RunState) bool {
+	for id := range selectedSet(state) {
+		if selectedResultStatus(state, id) == "RUNTIME_ERROR" {
+			return true
 		}
 	}
 	return false

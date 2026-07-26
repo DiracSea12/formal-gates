@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep lightweight execution stateless while full and custom require durable
   format-neutral requirements and solution documentation plus Start Readiness.
 - Retain the chosen route across added requirements and dependency-aware formal
-  slices, with one explicitly marked original-base overall run adopting the
-  merged snapshot and performing integration review for separate slice worktrees.
+  slices, with one explicitly marked original-base overall run adopting initial
+  and repaired merged snapshots for integration review while slice runs retain
+  implementation ownership.
 - Classify changed requirement revisions explicitly as meaning-preserving or
   meaning-changing, rebind the current native VCS identity before results are
   preserved or invalidated, and retain prior QA cases as unapproved

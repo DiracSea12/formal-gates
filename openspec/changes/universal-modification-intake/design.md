@@ -47,7 +47,10 @@ integration QA and gates in that retained overall run against its original
 base-to-merged comparison. Do not prepare or dispatch an overall development
 task, create a new integration run after the merge, move the original base, or
 repeat clarification or routing. Dependent slices start only after their
-upstream contracts are integrated.
+upstream contracts are integrated. Integration findings return to their owning
+slice runs. Merge sealed slice repairs, then record the new merged snapshot
+directly in the retained overall run without preparing an overall development
+worker.
 
 ## Documentation consistency
 

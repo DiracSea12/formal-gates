@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+This specification uses the current routing contract from
+`../../../universal-modification-intake/alignment.md`: lightweight execution
+creates no formal run, and formal routing accepts only `full` or `custom`.
+
 ### Requirement: Adaptive clarification blocks development
 
 Requirements Clarification SHALL adapt to the actual request and SHALL align
@@ -23,8 +27,8 @@ pre-development results are recorded.
 ### Requirement: One unified dynamic gate selection
 
 After clarification, the main agent SHALL present QA and every dynamically
-discovered gate in one ordered list. The user SHALL choose no gate flow, the
-full list, or a custom subset in one routing decision. Selected gates SHALL be
+discovered gate in one ordered list. A formal run SHALL choose the full list or
+a non-empty custom subset in one routing decision. Selected gates SHALL be
 required; custom omissions SHALL receive route skip authorization.
 
 #### Scenario: QA selection owns the complete QA flow
@@ -65,19 +69,11 @@ review, or verification scope.
 - **WHEN** a confirmed route omits QA and Start Readiness passes
 - **THEN** development can be prepared without QA cases
 
-#### Scenario: Added gate activates readiness
+#### Scenario: Formal routing always runs readiness
 
-- **WHEN** the user explicitly adds a discovered gate to an initial none route
-  after development but before Seal
-- **THEN** Start Readiness becomes required immediately and the added gate
-  cannot be prepared until readiness passes
-
-#### Scenario: Deferred readiness keeps the development snapshot
-
-- **WHEN** deferred Start Readiness passes after a post-development gate
-  addition
-- **THEN** the added gate reviews the current immutable development snapshot
-  without forcing another development snapshot or consuming a review wave
+- **WHEN** a formal run selects full or custom routing
+- **THEN** Start Readiness passes before development and a later discovered-gate
+  addition keeps that result and the current immutable development snapshot
 
 #### Scenario: Completed semantic result is immutable on its snapshot
 
