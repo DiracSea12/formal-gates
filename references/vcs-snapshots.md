@@ -20,7 +20,9 @@ git commit -m '<message>'
 
 The CLI confirms the repository root with `git rev-parse --show-toplevel`,
 resolves the current identity with `git rev-parse HEAD`, and verifies a recorded
-commit with `git rev-parse --verify '<identity>^{commit}'`.
+commit with `git rev-parse --verify '<identity>^{commit}'`. Before recording a
+snapshot, `git status --porcelain=v1 --untracked-files=no` must report no
+tracked changes.
 
 Reviewers use the recorded commit identities directly:
 
@@ -45,8 +47,9 @@ svn update
 
 The CLI confirms the working-copy root with `svn info --show-item wc-root`,
 resolves the numeric revision with `svn info --show-item revision`, and verifies
-it with `svn info --show-item revision -r <revision>`. Reviewers compare the
-same branch or repository URL:
+it with `svn info --show-item revision -r <revision>`. Before recording a
+snapshot, `svn status --quiet <working-copy-root>` must report no versioned
+changes. Reviewers compare the same branch or repository URL:
 
 ```bash
 svn diff --notice-ancestry -r <base-revision>:<current-revision> <working-copy-or-url>
@@ -65,8 +68,9 @@ p4 sync
 
 The CLI confirms the client root from tagged `p4 info`, resolves the current
 submitted changelist from `p4 changes -m 1 ...#have`, and verifies a recorded
-number within the client path using `p4 changes -m 1 ...@<change>`. Reviewers
-compare depot state with native `diff2`:
+number within the client path using `p4 changes -m 1 ...@<change>`. Before
+recording a snapshot, `p4 opened ...` must report no files opened on the client.
+Reviewers compare depot state with native `diff2`:
 
 ```bash
 p4 diff2 -Od //depot/path/...@<base-change> //depot/path/...@<current-change>

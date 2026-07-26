@@ -32,6 +32,7 @@ func (execNativeCommandRunner) Run(dir, command string, args ...string) (string,
 type nativeVCSResolver interface {
 	Resolve(root string) (string, error)
 	Verify(root, identity string) error
+	VerifyReady(root string) error
 }
 
 type commandVCSResolver struct {
@@ -70,16 +71,35 @@ func verifyNativeSnapshot(root, vcs, identity string) error {
 }
 
 func verifySnapshotReady(root, vcs string) error {
-	if strings.ToLower(strings.TrimSpace(vcs)) != "git" {
-		return nil
-	}
-	root = cleanWorktree(root)
-	status, err := (execNativeCommandRunner{}).Run(root, "git", "status", "--porcelain=v1", "--untracked-files=no")
+	resolver, err := resolverForVCS(vcs, nil)
 	if err != nil {
-		return fmt.Errorf("cannot inspect tracked Git changes: %w", err)
+		return err
 	}
-	if strings.TrimSpace(status) != "" {
-		return fmt.Errorf("tracked Git changes must be committed before recording a snapshot")
+	return resolver.VerifyReady(cleanWorktree(root))
+}
+
+func (r commandVCSResolver) VerifyReady(root string) error {
+	if err := r.verifyRoot(root); err != nil {
+		return err
+	}
+	var pending string
+	var err error
+	switch r.name {
+	case "git":
+		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1", "--untracked-files=no")
+	case "svn":
+		pending, err = r.runner.Run(root, "svn", "status", "--quiet", root)
+	case "p4":
+		pending, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%depotFile%", "opened", "...")
+		if err != nil && strings.Contains(strings.ToLower(err.Error()), "file(s) not opened on this client") {
+			return nil
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("cannot inspect unsubmitted %s changes: %w", r.name, err)
+	}
+	if strings.TrimSpace(pending) != "" {
+		return fmt.Errorf("unsubmitted %s changes must be committed before recording a snapshot", r.name)
 	}
 	return nil
 }

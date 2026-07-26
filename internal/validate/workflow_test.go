@@ -363,7 +363,7 @@ func TestDevelopmentSnapshotRejectsUncommittedTrackedGitChanges(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(root, "delivery.txt"), "edited delivery\n")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err == nil || !strings.Contains(err.Error(), "tracked Git changes must be committed") {
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes must be committed") {
 		t.Fatalf("uncommitted tracked delivery was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
