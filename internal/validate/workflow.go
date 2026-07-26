@@ -600,8 +600,7 @@ func AdvanceSnapshot(root, packageRoot, runID, currentSnapshot, liveSnapshot str
 		}
 		currentSnapshot = strings.TrimSpace(currentSnapshot)
 		developmentStatus := state.Actions["development-worker"].Status
-		adoptingReboundMergedSlices := state.RetainedOverall && developmentStatus == developmentPending && currentSnapshot != state.BaseSnapshot
-		if currentSnapshot == "" || (currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared && !adoptingReboundMergedSlices) {
+		if currentSnapshot == "" || (currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared) {
 			return fmt.Errorf("a new current snapshot is required")
 		}
 		liveSnapshot = strings.TrimSpace(liveSnapshot)

@@ -150,22 +150,10 @@ func TestRetainedOverallRunAdoptsMergedSliceSnapshot(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "retained overall run") {
 		t.Fatalf("retained overall run duplicated slice development ownership: %v", err)
 	}
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID, state.CurrentSnapshot, state.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "new current snapshot") {
-		t.Fatalf("retained overall run recorded its untouched base as merged development: %v", err)
-	}
-	oldRevision := state.RequirementRevision
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "meaning-preserving merged wording\n")
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", "merged-slices")
-	if err != nil {
-		t.Fatalf("merged requirement revision could not be rebound: %v", err)
-	}
-	if state.RequirementRevision == oldRevision || state.CurrentSnapshot != "merged-slices" {
-		t.Fatalf("meaning-preserving merge did not rebind the retained run: %#v", state)
-	}
 
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, state.CurrentSnapshot, state.CurrentSnapshot)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "merged-slices", "merged-slices")
 	if err != nil {
-		t.Fatalf("retained overall run could not adopt its rebound merged slice snapshot: %v", err)
+		t.Fatalf("retained overall run could not adopt the merged slice snapshot: %v", err)
 	}
 	if !state.RetainedOverall || state.CurrentSnapshot != "merged-slices" || state.Actions["development-worker"].Status != developmentComplete || state.PreRepairSnapshot != "" {
 		t.Fatalf("merged slice snapshot was not recorded as initial completed development: %#v", state)
