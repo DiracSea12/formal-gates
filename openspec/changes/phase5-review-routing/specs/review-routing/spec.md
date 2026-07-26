@@ -134,9 +134,10 @@ addable only before its prerequisite node has passed. A selected gate SHALL
 remain required until it passes or the user authorizes a Seal skip. A semantic
 requirement or consequential solution change SHALL invalidate dependent
 results except the confirmed route and SHALL return the run to clarification.
-The workflow SHALL ask for none, full, or custom routing only once per run. A
-changed requirement revision
-SHALL first pause for an explicit semantic-effect classification. A
+The workflow SHALL ask for routing only once. Lightweight execution SHALL NOT
+create a formal run, and a formal run SHALL accept only full or custom routing.
+A changed requirement revision SHALL first pause for an explicit
+semantic-effect classification. A
 meaning-preserving classification SHALL rebind the revision and preserve
 dependent results. Both semantic classifications SHALL bind the current native
 VCS identity containing the changed revision so later development and Seal use
