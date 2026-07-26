@@ -23,3 +23,8 @@ request's original base, requirements, and route. After slice code is merged and
 conflicts are resolved, the merged snapshot is recorded in that same overall
 run, which then executes the integration QA and gates. No new run, base,
 clarification, or route choice is created after merging.
+
+Independent agent conclusions remain candidate inputs until the main agent
+validates their requirement premise, normal public-entrypoint reproduction, and
+evidence. A blocker that does not survive that independent validation is
+discarded and is never recorded or presented as a formal blocker.

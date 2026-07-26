@@ -41,6 +41,11 @@ Route for this delivery: full
    Shared or uncertain impact requires independent Carry.
 9. No intake, maintenance, or execution rule changes based on whether the
    current repository is formal-gates itself.
+10. Independent agent results are candidate inputs. Before recording or
+    reporting a blocker, the main agent independently checks its confirmed
+    requirement premise, normal public-entrypoint reproduction, evidence,
+    scope, severity, and causal claim. A finding that fails any check is
+    discarded and cannot change workflow state, requirements, or code.
 
 ## Confirmed Technical Solution
 
@@ -55,6 +60,10 @@ Route for this delivery: full
 - Remove the `none` route rather than retaining a compatibility path. Do not add
   lightweight workflow state, a second gate scanner, a size registry, a second
   Carry state machine, or project detection.
+- Strengthen the existing orchestrator validation rule: an agent's FAIL cannot
+  be recorded or reported until the main agent independently verifies its
+  requirement premise, normal public reproduction, and evidence. Do not add a
+  second verdict system or evidence store.
 
 ## Delivery Slices
 

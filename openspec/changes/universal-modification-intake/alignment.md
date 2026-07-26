@@ -109,3 +109,18 @@ small-repair shortcut: the main agent may inherit prior PASS QA and gates only
 after bounding the immediate repair diff; otherwise independent Carry remains
 required. This slice SHALL consume the already implemented Carry command and
 state contract rather than add another shortcut.
+
+## RQ-009 - Main-agent result validation is mandatory
+
+Every independent agent result SHALL remain a candidate result until the main
+agent validates it against the complete confirmed requirement, the documented
+normal-use boundary, and the result contract. Before recording or presenting a
+FAIL or blocker, the main agent SHALL independently reproduce its claimed
+end-to-end path from a documented public entrypoint using normal user actions or
+common mistakes and verify the cited evidence.
+
+The main agent SHALL discard a finding whose requirement premise, public
+reproduction, evidence, scope, severity, or causal claim does not survive that
+validation. It SHALL NOT write that finding into workflow state, present it as a
+blocker, or change requirements or implementation because of it. Agent output
+alone SHALL NOT authorize a formal semantic result.

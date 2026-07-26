@@ -57,3 +57,16 @@ changing intake based on repository identity.
 Integrate the small-repair shortcut and stateless candidate command already
 delivered by prior slices. Do not add a second catalog, project detector, size
 registry, lightweight state file, or another Carry owner.
+
+## Result validation hard stop
+
+Treat every independently returned result as unrecorded input. Before invoking
+any workflow command that records FAIL or a blocking finding, the main agent
+must check the finding against the complete confirmed requirement, verify that
+its premise matches the actual retained workflow state, reproduce its public
+normal-use path independently, and inspect the cited evidence. Reject the
+finding if any check fails.
+
+This validation is orchestration, not another review gate or another agent.
+Reuse the existing result-recording commands only after validation. Do not add
+an evidence database, approval state, second verdict, or compatibility layer.

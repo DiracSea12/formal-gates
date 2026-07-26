@@ -19,5 +19,8 @@
 - [ ] Remove `none` route code, tests, and every public description.
 - [ ] Remove repository-specialized intake and maintenance branches.
 - [ ] Integrate small-repair Carry/QA inheritance guidance.
+- [ ] Require the main agent to validate every candidate blocker against the
+  confirmed requirement and independently reproduce its normal public path and
+  evidence before recording or reporting it; discard unsupported findings.
 - [ ] Align SKILL, READMEs, agent metadata, changelog, and behavior examples.
 - [ ] Run the complete package validation checklist and selected formal gates.

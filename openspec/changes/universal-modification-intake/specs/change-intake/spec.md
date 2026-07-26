@@ -64,6 +64,31 @@ still receive clarification and complete-summary confirmation.
 - **THEN** the workflow does not create formal task slices or require a formal
   requirements artifact
 
+### Requirement: Main agent validates blockers before recording them
+
+Every independent agent result SHALL remain unrecorded input until the main
+agent validates it against the complete confirmed requirement and normal-use
+boundary. Before recording or presenting a blocker, the main agent SHALL
+independently reproduce the documented public-entrypoint path and verify its
+evidence, scope, severity, and causal claim.
+
+#### Scenario: Reviewer assumes the wrong workflow state
+
+- **WHEN** an independent reviewer returns FAIL based on a workflow premise that
+  conflicts with the confirmed retained state or route
+- **THEN** the main agent independently checks the actual state and public
+  reproduction before recording the result
+- **AND** if the premise is false, the finding is discarded and is not written
+  to workflow state, presented as a blocker, or used to change requirements or
+  implementation
+
+#### Scenario: Valid blocker survives independent reproduction
+
+- **WHEN** a reviewer finding matches the confirmed requirement and the main
+  agent independently reproduces its end-to-end normal-use failure and evidence
+- **THEN** the main agent records the validated semantic result through the
+  existing workflow command
+
 ## REMOVED Requirements
 
 ### Requirement: Formal runs may select none
