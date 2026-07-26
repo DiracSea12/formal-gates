@@ -1,11 +1,11 @@
 [
   {
     "id": "FG-BEH-001",
-    "title": "Formal flow requires explicit activation",
+    "title": "Every modification uses intake",
     "user_prompt": "Explain this function and fix one typo.",
-    "expected_behavior": "Do not activate formal-gates for routine explanation or a tiny edit unless the user explicitly requests the formal workflow.",
-    "must_include": ["do not activate", "explicitly requests"],
-    "must_avoid": ["start a formal run"]
+    "expected_behavior": "Answer the read-only explanation outside automatic intake, but activate universal modification intake before fixing even one typo and obtain the confirmed summary plus route choice before writing.",
+    "must_include": ["read-only explanation", "universal modification intake", "confirmed summary", "route choice"],
+    "must_avoid": ["tiny edit exemption"]
   },
   {
     "id": "FG-BEH-002",
@@ -126,5 +126,45 @@
     "expected_behavior": "The main agent may record a reasoned main-agent Carry decision that inherits every previously passing selected result, including QA; if any impact is uncertain, use independent Carry instead.",
     "must_include": ["reasoned main-agent Carry", "every previously passing selected result", "including QA", "independent Carry"],
     "must_avoid": ["fixed size threshold"]
+  },
+  {
+    "id": "FG-BEH-017",
+    "title": "Confirmation precedes every write",
+    "user_prompt": "Implement the clear requirement using the obvious existing owner.",
+    "expected_behavior": "Inspect workspace facts, present the complete consolidated requirements and technical solution, and wait for explicit confirmation before any write or implementation dispatch.",
+    "must_include": ["complete consolidated requirements", "technical solution", "explicit confirmation", "before any write"],
+    "must_avoid": ["write first"]
+  },
+  {
+    "id": "FG-BEH-018",
+    "title": "Lightweight planning stays stateless",
+    "user_prompt": "Use lightweight execution, but also create an OpenSpec artifact.",
+    "expected_behavior": "Create the requested OpenSpec as an ordinary deliverable without a formal run or formal task slices.",
+    "must_include": ["ordinary deliverable", "without a formal run", "formal task slices"],
+    "must_avoid": ["OpenSpec selects formal gates"]
+  },
+  {
+    "id": "FG-BEH-019",
+    "title": "Added requirements retain route",
+    "user_prompt": "Add another requirement during full development.",
+    "expected_behavior": "Pause related writes, clarify the addition, confirm a refreshed complete summary, and retain the full route without another route question.",
+    "must_include": ["pause related writes", "refreshed complete summary", "retain the full route", "without another route question"],
+    "must_avoid": ["choose the route again"]
+  },
+  {
+    "id": "FG-BEH-020",
+    "title": "Sliced work retains overall run",
+    "user_prompt": "Two independent formal slices are ready to develop in parallel.",
+    "expected_behavior": "Retain one overall run at the original base, use separate VCS worktrees and slice runs, merge them, then run integration review in that same overall run.",
+    "must_include": ["overall run at the original base", "separate VCS worktrees", "merge", "same overall run"],
+    "must_avoid": ["new integration run"]
+  },
+  {
+    "id": "FG-BEH-021",
+    "title": "Blockers require main-agent validation",
+    "user_prompt": "An independent reviewer returned a P1 blocker.",
+    "expected_behavior": "Treat it as candidate input, independently reproduce its documented normal-use public path and verify its requirement premise and evidence before recording or presenting it; discard it if any check fails.",
+    "must_include": ["candidate input", "independently reproduce", "requirement premise", "before recording or presenting", "discard"],
+    "must_avoid": ["record the agent output directly"]
   }
 ]

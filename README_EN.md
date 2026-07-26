@@ -5,11 +5,19 @@ implementation worker from independent reviewers, uses the project's existing
 Git, SVN, or P4 for diffs, and lets the CLI retain the results of whichever
 reviews the user selected.
 
-It activates only when the user explicitly requests formal-gates requirements
-alignment, start-readiness review, formal development, post-development review,
-release, or formal run seal. Ordinary delivery wrap-up, development,
-explanation, informal review, and tiny changes do not enter the workflow
-automatically.
+Its intake activates for every request that creates, edits, moves, or deletes
+project content, regardless of repository, product, file type, or estimated
+size. Read-only questions, explanations, diagnostics, and reviews remain outside
+automatic modification intake unless the user explicitly requests formal
+execution.
+
+Before any write or implementation dispatch, the main agent inspects workspace
+facts, clarifies the outcome and consequential technical choices one at a time,
+then presents the complete requirements and solution for explicit confirmation.
+It recommends and asks once for lightweight, full, or custom execution using the
+stateless package route-candidate query. Lightweight creates no formal run;
+full selects QA and every discovered gate; custom shows the complete list for a
+non-empty subset choice.
 
 ## Design
 
@@ -24,19 +32,27 @@ automatically.
 Adding or removing a valid `gates/*.md` file and reinstalling adds or removes a
 gate. There is no Go registry, gate manifest, YAML front matter, weight,
 dependency graph, or ordering table. After clarification, the user makes one
-none, full, or custom selection from QA followed by the lexical gate list.
+lightweight, full, or custom selection from QA followed by the lexical gate
+list. Formal workflow state starts only for full or custom.
 
 QA is not part of the prompt-gate catalog. When selected, QA Design first
 returns the complete candidate set and an independent QA Review must pass
 before development. Review failure returns the retained cases to Design rework
 without consuming a post-development review wave. After development, QA
 Execution and review gates may run in one parallel wave.
-Start Readiness runs before development for full and custom routes. A none
-route omits it unless a post-development gate addition makes the selected set
-non-empty; that deferred readiness must pass before review or Seal and keeps
-the current development snapshot. Preparing the development worker freezes
-pre-development results and prevents QA from being added after development
-starts.
+Start Readiness runs before development for every formal route. Preparing the
+development worker freezes pre-development results and prevents QA from being
+added after development starts. Full and custom also require the complete
+confirmed requirements and technical solution in any stable available document
+format; no named document plugin is required.
+
+The chosen route covers later requirements and task slices. Added scope pauses
+related writes for clarification and confirmation of a refreshed complete
+summary, without another route question unless the user requests one. Large
+formal work is split by dependency, ownership, risk, and verification surface.
+One overall run retains the original base, complete requirement, and route;
+independent slices use separate VCS worktrees and formal runs, then their merged
+snapshot is reviewed in that retained overall run from its original base.
 
 After a meaning-changing requirement revision, previously approved QA cases
 remain as unapproved input to a complete coverage review. The next QA Design
@@ -129,7 +145,7 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <none|full|custom> [--gate <gate-id> ...]
+  --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
 
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --status PASS \
@@ -192,6 +208,13 @@ or `RUNTIME_ERROR` with no findings. Selected `PENDING` work blocks Seal.
 Runtime errors require retry or explicit skip. QA FAIL and P0/P1 require repair
 until the shared three-review-wave limit is exhausted before Seal skip is
 available. P2-only recommendations remain visible without blocking Seal.
+
+Every independent result is candidate input. Before recording or presenting a
+blocker, the main agent checks it against the complete confirmed requirement and
+retained workflow state, independently reproduces its documented normal-use
+public path, and verifies its evidence, scope, severity, and causal claim. A
+finding that fails any check is discarded without changing workflow state,
+requirements, or implementation.
 
 After successful seal or explicit abort, the CLI writes one summary and removes
 that run's entire temporary directory. It does not retain prompt copies,

@@ -189,7 +189,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs := newFlagSet("workflow route", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
-		mode := fs.String("mode", "", "none, full, or custom")
+		mode := fs.String("mode", "", "full or custom")
 		gates := stringListFlag{}
 		fs.Var(&gates, "gate", "selected gate id; repeat for custom route")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {

@@ -22,6 +22,7 @@ hide an implementation proposal inside a clarification question.
 Check the entire relevant requirement chain before returning so related gaps are
 identified together, while asking consequential questions one at a time. Decide
 minor implementation details unless they become consequential. Remain read-only:
-do not prepare development, dispatch a worker, or modify delivery code until the
-user explicitly confirms the shared understanding. Return PASS only after that
-confirmation.
+do not prepare development, dispatch a worker, or modify any project content.
+After all questions are resolved, present the complete consolidated requirements
+and technical solution and wait for explicit user confirmation. Return PASS only
+after that confirmation.

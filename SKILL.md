@@ -1,6 +1,6 @@
 ---
 name: formal-gates
-description: Use when the user explicitly asks for formal requirements alignment, development readiness, formal development, independent post-development gates, release, an explicit formal-gates run seal, or formal-gates installation and diagnosis. Do not activate for ordinary delivery wrap-up, implementation, review, explanation, or tiny edits unless explicitly requested.
+description: Use for every request that creates, edits, moves, or deletes project content, regardless of repository, product, file type, or estimated size, and for explicitly requested formal-gates alignment, review, release, seal, installation, or diagnosis. Read-only questions, explanations, diagnostics, and reviews stay outside automatic modification intake unless the user requests formal execution.
 ---
 
 # Formal Gates
@@ -22,42 +22,78 @@ normal user actions or a common mistake. Test a deterministic rule at the
 lowest layer that owns it; do not add tests whose main purpose is to retest
 another test or validator.
 
-## Activation
+## Universal Modification Intake
 
-Activate the formal workflow only when the user asks for formal requirements
-alignment, start-readiness review, formal development, post-development gates,
-release, or an explicit formal-gates run seal. Routine coding, informal review,
-ordinary delivery wrap-up, explanations, typo fixes, and other small low-risk
-work stay outside this workflow.
+Activate this intake for every request that creates, edits, moves, or deletes
+project content. Apply the same rules in the formal-gates source repository and
+every other project. Read-only questions, explanations, diagnostics, and reviews
+that request no modification remain outside automatic intake unless the user
+explicitly requests formal execution.
 
-When requirement-like text changes meaning, clarify the consequential gap
-before writing it as confirmed requirement text. Non-semantic edits need no
-formal run or artifact. Questions must explain the real user-visible choice in
-plain language; if a question cannot be explained without internal jargon, do
-not ask it yet.
+Before any file write or implementation dispatch, the main agent MUST:
+
+1. Inspect the workspace for facts it can determine directly.
+2. Clarify the requested outcome and every technical choice that materially
+   changes public behavior, acceptance, or architecture. Ask one consequential
+   decision at a time in plain language and decide minor implementation details.
+3. Present the complete consolidated requirements and technical solution, then
+   wait for explicit user confirmation.
+4. Assess total size, coupling, risk, and verification complexity; explain the
+   recommendation; query `formal-gates package route-candidates --root
+   <package>`; and present exactly one combined choice:
+   - lightweight execution with no formal run;
+   - `full`, meaning QA plus every discovered gate; or
+   - `custom`, showing QA and the complete discovered gate list for subset
+     selection.
+
+When no earlier clarification question was needed, the complete-summary
+confirmation and route choice may be one user response. Ask for the route only
+once. A later requirement pauses related writes for clarification, a refreshed
+complete summary, and explicit confirmation, but retains the chosen route unless
+the user explicitly requests reconsideration.
+
+Lightweight execution creates no workflow state and no formal task slices. It
+may omit PRD, OpenSpec, design, and task-plan artifacts, but the user may request
+any of them as ordinary deliverables without selecting formal gates.
+
+For `full` or `custom`, persist the complete confirmed requirements and
+technical solution in any stable document format available in the environment
+before development. Do not require a named format or document plugin. Then run
+the formal flow below. Both routes always run Start Readiness.
+
+When the total confirmed formal request cannot be implemented and verified as
+one coherent bounded unit, split it by dependency, ownership, risk, and
+verification surface. Before any slice development, start and retain one overall
+formal run at the complete request's original base with the complete requirement
+and chosen route. Give each slice a separate formal run and native VCS worktree;
+run independent slices concurrently when capacity allows and wait on dependency
+edges. After merging sealed slice branches and resolving conflicts, record the
+merged identity as completed development in the retained overall run and execute
+its integration QA and gates from the original base to the merged snapshot. Do
+not create a second overall run, replace its base, or repeat clarification or
+routing after the merge.
 
 ## Single Formal Flow
 
-`SKILL.md` is the only owner of this order. Run only the stages the user
-requested; omitted review stages are not backfilled during seal:
+`SKILL.md` is the only owner of this order. The intake has already selected
+`full` or `custom`; omitted review stages are not backfilled during seal:
 
 1. **Start.** Select an external VCS, freeze its native base identity, and run
    `formal-gates workflow start`. No-VCS formal runs are unsupported.
-2. **Requirements.** The main agent uses `requirements-clarification`
-   interactively, one consequential decision at a time, and remains read-only
-   until the user confirms the outcome and consequential solution choices.
-   Record PASS, then bind the exact revision with `workflow requirement
-   --confirmed`. After a meaning-changing revision, QA Design receives every
+2. **Requirements.** The main agent follows `requirements-clarification`,
+   records the already confirmed complete outcome and solution as PASS, then
+   binds the exact durable revision with `workflow requirement --confirmed`.
+   After a meaning-changing revision, QA Design receives every
    prior case as unapproved review input and returns a revised complete
    candidate set, retaining unaffected cases when impact is reliably bounded.
    Classifying any changed revision also binds the current immutable live VCS
    identity that contains it.
-3. **Route once.** Read `workflow route-candidates`, present QA first followed
-   by every discovered gate, and record one `none`, `full`, or `custom` route.
-   Custom omissions receive route skip authorization. Later additions require
-   explicit user direction; QA cannot be added after development begins.
-4. **Before formal development.** For `full` and `custom`, run
-   `start-readiness`; the `none` route omits it. Only when QA is selected, run
+3. **Bind the chosen route.** Read `workflow route-candidates` to verify the
+   run-bound catalog and record the already chosen `full` or `custom` route
+   without asking again. Custom omissions receive route skip authorization.
+   Later additions require explicit user direction; QA cannot be added after
+   development begins.
+4. **Before formal development.** Run `start-readiness`. Only when QA is selected, run
    blind `qa-design`. These selected actions may run in parallel. Record the
    complete candidate cases only through `workflow qa-design`, then dispatch
    independent `qa-review`. PASS approves the cases and unlocks development.
@@ -81,8 +117,9 @@ requested; omitted review stages are not backfilled during seal:
    actions may run in one parallel wave. QA receives the approved cases. Every
    selected gate receives the complete base-to-current VCS route and
    independently inspects that diff. Agents never write workflow state; the
-   orchestrator records returned semantic results. A semantic PASS or FAIL is
-   authoritative for its snapshot; only PENDING and RUNTIME_ERROR are retryable.
+   orchestrator validates and records returned semantic results. A recorded
+   semantic PASS or FAIL is authoritative for its snapshot; only PENDING and
+   RUNTIME_ERROR are retryable.
 8. **Repair.** A wave with QA FAIL or a P0/P1 gate finding returns to repair and
    includes every P2 finding from that wave. Before editing, freeze the current
    VCS identity. After the worker
@@ -107,9 +144,7 @@ requested; omitted review stages are not backfilled during seal:
    retained in the summary. Named Seal authorizations persist if another result
    still blocks that attempt, apply only to the current snapshot, and clear on
    a later repair snapshot. P2-only PASS recommendations remain visible but do
-   not block Seal. When a post-development addition makes an initial none route
-   non-empty, run deferred Start Readiness before preparing that gate or Seal;
-   retain the current immutable development snapshot.
+   not block Seal.
 
 Use `workflow show` to inspect a run and `workflow resume` after interruption.
 An interrupted dispatch remains `PENDING`; preserve completed results. Use
@@ -146,7 +181,7 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <none|full|custom> [--gate <gate-id> ...]
+  --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
 formal-gates workflow route-add --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
@@ -247,7 +282,8 @@ requirement routing, native VCS routing, and the result contract. Do not bypass
 the CLI composer or invoke a gate prompt directly. Missing or invalid prompt
 files are runtime errors and stop dispatch.
 
-An independent result is either:
+Every returned independent result is candidate input until the main agent
+validates it. Its result contract is one of:
 
 - `PASS` with no findings or only P2 findings;
 - `FAIL` with at least one P0/P1 finding and optional P2 findings; or
@@ -264,12 +300,20 @@ set instead of one symptom at a time. Advisory comments do not block PASS.
 Never hurry a reviewer. A status request may ask only for progress and must say
 to continue until all assigned checks are complete.
 
-## Review-Wave And Repair Limit
+## Result Validation And Repair Limit
 
-The orchestrator validates findings against the confirmed scope, discards
-unsupported findings, groups one root cause once, and repairs all P0, P1, and
-P2 findings in a blocking wave together. QA and all selected gates share at
-most three completed automatic review waves per delivery attempt. The initial
+Before recording or presenting a FAIL or blocker, the main agent independently
+checks it against the complete confirmed requirement, retained workflow state,
+normal-use boundary, result contract, scope, severity, causal claim, and cited
+evidence. It MUST reproduce the end-to-end failure from a documented public
+entrypoint using normal user actions or a common mistake. Discard a finding if
+any premise, reproduction, or evidence check fails: do not record it, present it
+as a blocker, or change requirements or implementation because of it. This is
+orchestration validation, not a second verdict, gate, agent, or evidence store.
+
+After validation, the orchestrator groups one root cause once and repairs all
+P0, P1, and P2 findings in a blocking wave together. QA and all selected gates
+share at most three completed automatic review waves per delivery attempt. The initial
 post-development wave and each post-repair wave count once after all required
 verification completes, regardless of semantic outcome. Each snapshot counts
 at most once. Dispatch failure, interruption, missing verification, PENDING,

@@ -186,36 +186,23 @@ func TestCLIRouteCommandsExposeOrderedCandidatesAndPersistSelection(t *testing.T
 		t.Fatalf("custom route=%#v", custom)
 	}
 
-	none, err := validate.Start(validate.StartOptions{Root: root, PackageRoot: pkg, RunID: "none-cli", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", BaseSnapshot: "base"})
+	removed, err := validate.Start(validate.StartOptions{Root: root, PackageRoot: pkg, RunID: "none-cli", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", BaseSnapshot: "base"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	none, err = validate.RecordAction(root, pkg, none.RunID, "requirements-clarification", "PASS", "", nil, none.RequirementRevision, none.CatalogRevision)
+	removed, err = validate.RecordAction(root, pkg, removed.RunID, "requirements-clarification", "PASS", "", nil, removed.RequirementRevision, removed.CatalogRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	none, err = validate.UpdateRequirement(root, pkg, none.RunID, "", true, "", "")
+	removed, err = validate.UpdateRequirement(root, pkg, removed.RunID, "", true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code = Run("formal-gates", []string{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", none.RunID, "--mode", "none"}, IO{Stdout: &stdout, Stderr: &stderr})
-	if code != 0 {
-		t.Fatalf("none route failed: %s", stderr.String())
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &none); err != nil {
-		t.Fatal(err)
-	}
-	if none.SelectedGates == nil {
-		t.Fatalf("none route response encoded selectedGates as null: %s", stdout.String())
-	}
-	persisted, err := validate.LoadRunState(root, none.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.SelectedGates == nil || !reflect.DeepEqual(none.SelectedGates, persisted.SelectedGates) {
-		t.Fatalf("none route response and persisted state disagree: response=%#v persisted=%#v", none.SelectedGates, persisted.SelectedGates)
+	code = Run("formal-gates", []string{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", removed.RunID, "--mode", "none"}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 || !strings.Contains(stderr.String(), "full or custom") {
+		t.Fatalf("removed none route was accepted: code=%d stderr=%s", code, stderr.String())
 	}
 }
 

@@ -44,7 +44,7 @@ const (
 	developmentVerified       = "VERIFIED"
 )
 
-var routeModes = map[string]bool{"none": true, "full": true, "custom": true}
+var routeModes = map[string]bool{"full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
 	root := cleanRoot(options.Root)
@@ -209,14 +209,10 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 		}
 		mode = strings.ToLower(strings.TrimSpace(mode))
 		if !routeModes[mode] {
-			return fmt.Errorf("route mode must be none, full, or custom")
+			return fmt.Errorf("route mode must be full or custom")
 		}
 		candidates := catalog.RouteCandidates()
-		if mode == "none" {
-			if len(selected) != 0 {
-				return fmt.Errorf("none route cannot include selected gates")
-			}
-		} else if mode == "full" {
+		if mode == "full" {
 			if len(selected) != 0 {
 				return fmt.Errorf("full route selects the complete discovered list without --gate")
 			}
@@ -228,7 +224,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 				return err
 			}
 			if len(selected) == 0 || len(selected) == len(candidates) {
-				return fmt.Errorf("custom route must select a non-empty proper subset; use none or full otherwise")
+				return fmt.Errorf("custom route must select a non-empty proper subset; use full for the complete list")
 			}
 		}
 		state.RouteMode = mode
@@ -262,7 +258,6 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 			return err
 		}
 		chosen := selectedSet(*state)
-		wasEmpty := len(chosen) == 0
 		for _, id := range normalized {
 			if chosen[id] {
 				return fmt.Errorf("gate %q is already selected", id)
@@ -274,9 +269,6 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 			delete(state.SkipAuthorizations, id)
 		}
 		state.SelectedGates = orderedSelection(chosen, candidates)
-		if wasEmpty && len(state.SelectedGates) != 0 {
-			state.Actions["start-readiness"] = ActionResult{Status: "PENDING"}
-		}
 		return nil
 	})
 }
@@ -1189,11 +1181,7 @@ func requireTransition(state RunState, operation, target string) error {
 		}
 		return nil
 	case "start-readiness":
-		if len(state.SelectedGates) == 0 {
-			return fmt.Errorf("Start Readiness is omitted for the none route")
-		}
-		deferred := state.RouteMode == "none" && hasDevelopmentSnapshot(state) && state.Actions["start-readiness"].Status != "PASS"
-		if developmentStarted(state) && !deferred {
+		if developmentStarted(state) {
 			return fmt.Errorf("Start Readiness must be recorded before development")
 		}
 	case "qa-design":
@@ -1224,7 +1212,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if developmentStatus != developmentPending && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared && developmentStatus != developmentComplete && developmentStatus != developmentVerified {
 			return fmt.Errorf("development worker is already prepared")
 		}
-		if len(state.SelectedGates) != 0 && state.Actions["start-readiness"].Status != "PASS" {
+		if state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before development")
 		}
 		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
@@ -1268,7 +1256,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
 			return fmt.Errorf("development worker must be prepared before a snapshot")
 		}
-		if len(state.SelectedGates) != 0 && state.Actions["start-readiness"].Status != "PASS" {
+		if state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
 		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
@@ -1316,7 +1304,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if !hasDevelopmentSnapshot(state) {
 			return fmt.Errorf("an immutable development snapshot is required before Seal")
 		}
-		if len(state.SelectedGates) != 0 && state.Actions["start-readiness"].Status != "PASS" {
+		if state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before Seal")
 		}
 		if err := requireSelectedResultsResolved(state); err != nil {

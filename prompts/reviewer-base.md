@@ -38,6 +38,10 @@ preferences, hypothetical risk, and unrequested hardening are advisory. If no
 in-scope blocker remains, PASS. Follow the result contract appended to this
 task exactly.
 
+Your returned result is candidate input. The main agent independently validates
+its requirement premise, normal public reproduction, evidence, scope, severity,
+and causal claim before recording or presenting any blocker.
+
 Give every finding exactly one impact severity. `P0` means a systemic severe
 consequence or unusable core capability. `P1` means a confirmed requirement,
 acceptance, or architecture-boundary violation. `P2` means an improvement with

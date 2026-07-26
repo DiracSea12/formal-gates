@@ -1,4 +1,4 @@
 interface:
   display_name: "Formal Gates"
   short_description: "Runtime-neutral formal gate workflow with bundled Claude Code, Codex, and Cursor install targets."
-  default_prompt: "Use formal-gates for an explicitly requested formal workflow. Start with the documented workflow command, keep one lightweight run state, and report independent review unavailable instead of claiming formal PASS."
+  default_prompt: "Use formal-gates intake for every project-content modification. Clarify and confirm the complete outcome and solution before writes, ask once for lightweight, full, or custom execution, and report independent review unavailable instead of claiming formal PASS."

@@ -4,9 +4,15 @@ formal-gates 是一套轻量的 AI 开发审查流程。它把“写代码”和
 通过”交给不同代理，用项目现有的 Git、SVN 或 P4 提供 diff，最后由 CLI
 保存用户实际选择执行的审查结果。
 
-它只在你明确要求使用 formal-gates 进行需求对齐、开发前审查、正式开发、
-开发后审查或正式 run 封板时启用。普通封板交付、普通开发、解释、随手
-review 和小改动不会自动进入这套流程。
+每个创建、编辑、移动或删除项目内容的请求都会启用它的 intake，不区分仓库、
+产品、文件类型或预估规模。未要求修改的只读提问、解释、诊断和 review 不会
+自动进入修改 intake，除非用户明确要求正式执行。
+
+任何写入或实现派发前，主代理先自行检查工作区事实，逐个澄清目标和会影响
+公开行为、验收或架构的技术选择，再展示完整需求和技术方案并等待用户明确
+确认。随后根据总规模、耦合、风险和验证复杂度提出建议，并利用无状态候选
+查询只问一次 lightweight、full 或 custom。lightweight 不创建正式 run；full
+选择 QA 和全部动态门；custom 展示完整列表供用户选择非空子集。
 
 ## 核心设计
 
@@ -19,16 +25,23 @@ review 和小改动不会自动进入这套流程。
 
 增加或删除审查门只需增加或删除一个有效的 `gates/*.md` 文件并重新安装。
 不需要改 Go 注册表、manifest、YAML、权重、依赖关系或顺序表。需求对齐后，
-用户从“QA 优先、其余门按文件名排序”的列表中一次选择 none、full 或 custom。
+用户从“QA 优先、其余门按文件名排序”的列表中一次选择 lightweight、full 或
+custom；只有 full 或 custom 才启动正式工作流状态。
 
 QA 不属于提示词门目录。选择 QA 后，QA Design 先产出完整候选用例，独立
 QA Review 通过后才能开发；Review 失败会带着原用例返回 Design 修改，且不
 占用开发后三轮 review-wave。开发完成后，QA Execution 和审查门可以在同一
 批次并行执行。
-full 和 custom 路由在开发前运行 Start Readiness。none 路由原本省略它；如果
-开发后加入审查门使选择集合变为非空，则必须补做 Start Readiness，且它通过前
-不能审查或 Seal，同时保留当前开发快照。准备 development worker 时即冻结
-开发前结果，并禁止在开发开始后再加入 QA。
+每条正式路由都在开发前运行 Start Readiness。准备 development worker 时即
+冻结开发前结果，并禁止在开发开始后再加入 QA。full 和 custom 还要求在开发前
+用当前环境可用的任意稳定文档格式保存完整已确认需求和技术方案，不要求指定
+文档插件。
+
+同一次路由选择覆盖后续新增需求和任务切片。新增范围会暂停相关写入，重新澄清
+并确认刷新后的完整摘要，但除非用户要求，不重复询问路由。过大的正式工作按
+依赖、职责、风险和验证边界切分；一个总体 run 保留原始 base、完整需求和路由，
+独立切片使用不同 VCS worktree 和正式 run，合并后的快照再由原总体 run 从原始
+base 执行集成审查。
 
 需求语义变化后，原有 QA 用例保留为未批准的完整覆盖复核输入。下一次 QA
 Design 在影响边界明确时保留不受影响的用例，无法可靠确定边界时则替换完整
@@ -111,7 +124,7 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <none|full|custom> [--gate <gate-id> ...]
+  --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
 
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --status PASS \
@@ -171,6 +184,11 @@ Git、SVN、P4 的命令见
 `PENDING` 会阻止 Seal；运行错误需要重试或用户明确跳过。QA FAIL 和 P0/P1
 在共享三轮 review-wave 额度耗尽前必须返修，之后才可显式授权跳过。仅 P2
 的建议会保留展示，但不阻止 Seal。
+
+每个独立代理结果都只是候选输入。记录或展示 blocker 前，主代理必须按完整已
+确认需求和保留的工作流状态检查它，独立复现其文档化正常使用公开入口路径，
+并核实证据、范围、严重度和因果关系。任一检查失败就丢弃该 finding，不改变
+工作流状态、需求或实现。
 
 封板成功或显式中止后，CLI 写入一个摘要并删除该 run 的整个临时目录。
 它不会留下提示词副本、分层证据图或详细状态文件。

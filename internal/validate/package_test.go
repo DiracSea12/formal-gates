@@ -44,7 +44,7 @@ func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 	}
 }
 
-func TestInstallableMetadataUsesLightweightWorkflow(t *testing.T) {
+func TestInstallableMetadataUsesUniversalModificationIntake(t *testing.T) {
 	root := copyPackageFixture(t)
 	data, err := os.ReadFile(filepath.Join(root, "agents", "openai.yaml"))
 	if err != nil {
@@ -56,7 +56,7 @@ func TestInstallableMetadataUsesLightweightWorkflow(t *testing.T) {
 			t.Fatalf("installable metadata retains obsolete %q instruction", obsolete)
 		}
 	}
-	for _, current := range []string{"workflow", "lightweight run state"} {
+	for _, current := range []string{"every project-content modification", "before writes", "lightweight, full, or custom"} {
 		if !strings.Contains(text, current) {
 			t.Fatalf("installable metadata is missing current %q instruction", current)
 		}

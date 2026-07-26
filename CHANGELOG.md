@@ -16,8 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one retained seal or abort summary.
 - Run selected QA Execution and selected independent gates in parallel on the
   current native VCS snapshot.
-- Require adaptive requirement and consequential-solution alignment, then one
-  none, full, or custom route over QA and the dynamic gate catalog.
+- Activate one pre-write intake for every project-content modification, require
+  confirmation of the complete outcome and solution, then ask once for
+  lightweight, full, or custom execution over the dynamic gate catalog.
+- Keep lightweight execution stateless while full and custom require durable
+  format-neutral requirements and solution documentation plus Start Readiness.
+- Retain the chosen route across added requirements and dependency-aware formal
+  slices, with one original-base overall run performing post-merge integration
+  review for separately developed slice worktrees.
 - Classify changed requirement revisions explicitly as meaning-preserving or
   meaning-changing, rebind the current native VCS identity before results are
   preserved or invalidated, and retain prior QA cases as unapproved
@@ -28,8 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow a reasoned main-agent Carry shortcut for a bounded repair that cannot
   affect any prior selected PASS, inheriting both QA and discovered-gate PASS
   results while retaining independent Carry for uncertain or wider changes.
-- Recompose interrupted prepared development tasks and require deferred Start
-  Readiness when a post-development addition makes a none route non-empty.
+- Recompose interrupted prepared development tasks without moving their recorded
+  development boundary.
+- Treat independent results as candidate input until the main agent validates
+  their confirmed premise, normal public reproduction, and evidence before
+  recording or presenting a blocker.
 - Restore independent QA Review between QA Design and development, with failed
   review returning the retained complete case set to Design rework.
 - Reserve `qa` for the built-in QA flow so a discovered gate cannot collide
@@ -41,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The formal `none` route and its empty-run branches; lightweight execution now
+  occurs before workflow state exists.
 - Fixed four-gate registries, extension manifests, prompt copies, context
   bundles, receipt and closure graphs, recursive Carry chains, generated
   handoffs, detailed gate-state trees, and their compatibility paths.

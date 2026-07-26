@@ -1,7 +1,7 @@
 [
   {
     "id": "FG-BEH-001",
-    "answer": "Do not activate formal-gates for routine work unless the user explicitly requests the formal workflow."
+    "answer": "Handle the read-only explanation outside automatic intake, then activate universal modification intake and obtain the confirmed summary plus route choice before fixing the typo."
   },
   {
     "id": "FG-BEH-002",
@@ -62,5 +62,25 @@
   {
     "id": "FG-BEH-016",
     "answer": "Use reasoned main-agent Carry to inherit every previously passing selected result, including QA, only when the immediate repair diff proves all are unaffected; otherwise use independent Carry."
+  },
+  {
+    "id": "FG-BEH-017",
+    "answer": "Present the complete consolidated requirements and technical solution and wait for explicit confirmation before any write or dispatch."
+  },
+  {
+    "id": "FG-BEH-018",
+    "answer": "Create OpenSpec as an ordinary deliverable without a formal run and without formal task slices."
+  },
+  {
+    "id": "FG-BEH-019",
+    "answer": "Pause related writes, confirm the refreshed complete summary, and retain the full route without another route question."
+  },
+  {
+    "id": "FG-BEH-020",
+    "answer": "Keep the overall run at the original base, use separate VCS worktrees and slice runs, merge them, and review integration in the same overall run."
+  },
+  {
+    "id": "FG-BEH-021",
+    "answer": "Treat the result as candidate input, independently reproduce the normal public path and verify its requirement premise before recording or presenting it; discard it if validation fails."
   }
 ]
