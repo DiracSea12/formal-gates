@@ -119,8 +119,8 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	qa = recordQAReview(t, root, pkg, qa, "PASS", nil)
-	if _, err := AdvanceSnapshot(root, pkg, qa.RunID, "bypass", "bypass"); err == nil || !strings.Contains(err.Error(), "must be prepared") {
-		t.Fatalf("snapshot bypassed development preparation: %v", err)
+	if _, err := AdvanceSnapshot(root, pkg, qa.RunID, qa.CurrentSnapshot, qa.CurrentSnapshot); err == nil || !strings.Contains(err.Error(), "new current snapshot") {
+		t.Fatalf("unchanged snapshot bypassed development preparation: %v", err)
 	}
 	firstPrompt, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base")
 	if err != nil {
@@ -132,6 +132,29 @@ func TestDirectTransitionsRespectSelectionAndDevelopmentSnapshot(t *testing.T) {
 	secondPrompt, err := PrepareAction(root, pkg, qa.RunID, "development-worker", "base")
 	if err != nil || secondPrompt != firstPrompt {
 		t.Fatalf("prepared development task was not recomposed: err=%v", err)
+	}
+}
+
+func TestRetainedOverallRunAdoptsMergedSliceSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := beginRoute(t, root, pkg, "overall-integration", "custom", []string{"quality"})
+	state = recordReadiness(t, root, pkg, state)
+
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, "merged-slices", "merged-slices")
+	if err != nil {
+		t.Fatalf("retained overall run could not adopt the merged slice snapshot: %v", err)
+	}
+	if state.CurrentSnapshot != "merged-slices" || state.Actions["development-worker"].Status != developmentComplete || state.PreRepairSnapshot != "" {
+		t.Fatalf("merged slice snapshot was not recorded as initial completed development: %#v", state)
+	}
+	prompt, err := PrepareGate(root, pkg, state.RunID, "quality", state.CurrentSnapshot)
+	if err != nil {
+		t.Fatalf("integration review was not available at the merged snapshot: %v", err)
+	}
+	for _, want := range []string{"base snapshot: base", "current snapshot: merged-slices"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("integration review did not retain %q in the original base-to-merged route: %s", want, prompt)
+		}
 	}
 }
 
