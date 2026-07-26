@@ -26,11 +26,15 @@ func TestNativeVCSResolverCommandShapes(t *testing.T) {
 		want     [][]string
 	}{
 		{name: "git", identity: gitID, want: [][]string{{"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "HEAD"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "--verify", gitID + "^{commit}"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "status", "--porcelain=v1", "--untracked-files=no"}}},
-		{name: "svn", identity: "123", want: [][]string{{"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "info", "--show-item", "revision", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "info", "--show-item", "revision", "-r", "123", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "status", "--quiet", "/repo"}}},
-		{name: "p4", identity: "456", want: [][]string{{"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...#have"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "opened", "..."}}},
+		{name: "svn", identity: "123", want: [][]string{{"svn", "info", "--show-item", "wc-root", "/repo"}, {"svnversion", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "info", "--show-item", "revision", "-r", "123", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "status", "--quiet", "/repo"}}},
+		{name: "p4", identity: "456", want: [][]string{{"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...#have"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "sync", "-n", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "opened", "..."}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runner := &scriptedNativeRunner{outputs: []string{"/repo", test.identity, "/repo", test.identity, "/repo", ""}}
+			outputs := []string{"/repo", test.identity, "/repo", test.identity, "/repo", ""}
+			if test.name == "p4" {
+				outputs = []string{"/repo", test.identity, "", "/repo", test.identity, "/repo", ""}
+			}
+			runner := &scriptedNativeRunner{outputs: outputs}
 			resolver, err := resolverForVCS(test.name, runner)
 			if err != nil {
 				t.Fatal(err)
@@ -47,6 +51,28 @@ func TestNativeVCSResolverCommandShapes(t *testing.T) {
 			}
 			if !reflect.DeepEqual(runner.calls, test.want) {
 				t.Fatalf("calls=%v want=%v", runner.calls, test.want)
+			}
+		})
+	}
+}
+
+func TestNativeVCSResolverRejectsNonUniformWorkspace(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		outputs []string
+		want    string
+	}{
+		{name: "svn", outputs: []string{"/repo", "2:3"}, want: "not at one uniform revision"},
+		{name: "p4", outputs: []string{"/repo", "456", "//depot/project/older.txt"}, want: "not uniformly synced"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &scriptedNativeRunner{outputs: test.outputs}
+			resolver, err := resolverForVCS(test.name, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := resolver.Resolve("/repo"); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("non-uniform workspace was accepted: %v", err)
 			}
 		})
 	}

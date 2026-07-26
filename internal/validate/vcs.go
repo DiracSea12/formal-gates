@@ -114,7 +114,7 @@ func (r commandVCSResolver) Resolve(root string) (string, error) {
 	case "git":
 		identity, err = r.runner.Run(root, "git", "rev-parse", "HEAD")
 	case "svn":
-		identity, err = r.runner.Run(root, "svn", "info", "--show-item", "revision", root)
+		identity, err = r.runner.Run(root, "svnversion", root)
 	case "p4":
 		identity, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%change%", "changes", "-m", "1", "...#have")
 	}
@@ -123,7 +123,19 @@ func (r commandVCSResolver) Resolve(root string) (string, error) {
 	}
 	identity = strings.TrimSpace(identity)
 	if !r.validIdentity(identity) {
+		if r.name == "svn" {
+			return "", fmt.Errorf("svn workspace is not at one uniform revision: %q", identity)
+		}
 		return "", fmt.Errorf("%s returned an invalid immutable identity %q", r.name, identity)
+	}
+	if r.name == "p4" {
+		pending, err := r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%depotFile%", "sync", "-n", "...@"+identity)
+		if err != nil {
+			return "", fmt.Errorf("cannot inspect p4 workspace at changelist %s: %w", identity, err)
+		}
+		if strings.TrimSpace(pending) != "" {
+			return "", fmt.Errorf("p4 workspace is not uniformly synced to changelist %s", identity)
+		}
 	}
 	return strings.ToLower(identity), nil
 }

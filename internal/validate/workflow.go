@@ -397,7 +397,8 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 			}
 		}
 		if len(pending) == 1 {
-			return "", fmt.Errorf("QA Review has no pending cases")
+			accepted = append(accepted, "There are no pending case decisions. Review the corrected complete set for set-level missing or duplicated coverage and return no case decisions.")
+			return strings.Join(accepted, "\n\n"), nil
 		}
 		if len(accepted) == 1 {
 			return strings.Join(pending, "\n\n"), nil
@@ -484,6 +485,9 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 			return err
 		}
 		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
+		if dispatchID == "" {
+			return fmt.Errorf("dispatch id is required")
+		}
 		dispatch, ok := state.Dispatches[dispatchID]
 		if !ok {
 			return fmt.Errorf("unknown dispatch %q", dispatchID)
@@ -668,7 +672,9 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				}
 			}
 			if !pending {
-				return fmt.Errorf("QA Design rework must add or revise a case that QA Review can assess")
+				if len(updated) == len(state.QACases) {
+					return fmt.Errorf("QA Design rework must add or revise a case, or remove an obsolete or duplicated case")
+				}
 			}
 		}
 		state.QACases = updated

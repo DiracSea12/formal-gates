@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -97,6 +99,18 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	}
 	if _, err := RecordQAReview(root, pkg, state.RunID, second, nil, "", nil); err == nil {
 		t.Fatal("completed dispatch was reused")
+	}
+}
+
+func TestDispatchClaimRequiresAnIDWithoutMutation(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := beginQA(t, root, pkg, "missing-dispatch")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := ClaimDispatch(root, pkg, state.RunID, "", "reviewer-one"); err == nil || !strings.Contains(err.Error(), "dispatch id is required") {
+		t.Fatalf("missing dispatch was not rejected consistently: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected dispatch claim changed state")
 	}
 }
 
@@ -328,6 +342,42 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	}
 }
 
+func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "remove-duplicate"), "full", nil)
+	cases := append(baselineCases(), QACaseInput{Kind: "STATIC", Description: "duplicate direct coverage", Procedure: "run overlapping direct checks", Oracle: "the same rules pass"})
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, cases, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "duplicate-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Message: "remove duplicated direct coverage"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), "")
+	if err != nil {
+		t.Fatalf("removal-only duplicate correction was rejected: %v", err)
+	}
+	if len(state.QACases) != 2 || state.Actions["qa-review"].Status != "PENDING" {
+		t.Fatalf("removal-only correction did not retain approvals: %#v", state)
+	}
+	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "duplicate-recheck-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, nil, "", nil)
+	if err != nil {
+		t.Fatalf("set-only QA recheck was rejected: %v", err)
+	}
+	if state.Actions["qa-review"].Status != "PASS" {
+		t.Fatalf("set-only QA recheck did not approve the correction: %#v", state.Actions["qa-review"])
+	}
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("approved removal-only correction did not unlock development: %v", err)
+	}
+}
+
 func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "retained-freeze", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
@@ -373,6 +423,177 @@ func TestDevelopmentSnapshotRejectsUncommittedTrackedGitChanges(t *testing.T) {
 	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err != nil {
 		t.Fatalf("committed delivery snapshot was rejected: %v", err)
 	}
+}
+
+func TestRouteAdditionAfterCompletedWaveReviewsOnlyAddedGate(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "route-add", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "route-quality", "PASS", "", nil)
+	if state.CompletedReviewWaves != 1 || state.Actions["development-worker"].Status != developmentVerified {
+		t.Fatalf("initial wave did not complete: %#v", state)
+	}
+	quality := state.Gates["quality"]
+	state, err := AddRouteGates(root, pkg, state.RunID, []string{"architecture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state.SelectedGates, []string{"architecture", "quality"}) || state.CompletedReviewWaves != 1 {
+		t.Fatalf("late addition changed route order or wave count: %#v", state)
+	}
+	if got := state.Gates["quality"]; got.Status != quality.Status || got.Snapshot != quality.Snapshot || got.DispatchID != quality.DispatchID || state.Gates["architecture"].Status != "PENDING" {
+		t.Fatalf("late addition changed the completed result set: %#v", state.Gates)
+	}
+	state = recordGateResult(t, root, pkg, state, "architecture", "route-architecture", "PASS", "", nil)
+	if got := state.Gates["quality"]; state.CompletedReviewWaves != 1 || got.Status != quality.Status || got.Snapshot != quality.Snapshot || got.DispatchID != quality.DispatchID {
+		t.Fatalf("late gate recounted the snapshot or replaced a result: %#v", state)
+	}
+}
+
+func TestReviewWaveLimitAndCarryScope(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "wave-limit", "custom", []string{"architecture", "quality"})
+	state = recordGateResult(t, root, pkg, state, "architecture", "wave-architecture-1", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "wave-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("initial review wave count=%d", state.CompletedReviewWaves)
+	}
+	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
+		state = advanceRepair(t, root, pkg, state, fmt.Sprintf("wave-%d", wave))
+		if got := eligibleCarryGates(state); !reflect.DeepEqual(got, []string{"architecture"}) {
+			t.Fatalf("wave %d Carry scope=%v", wave, got)
+		}
+		carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
+		if wave == 2 {
+			before := stateBytes(t, root, state.RunID)
+			if _, err := RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "quality", Decision: "INHERIT", Message: "not eligible"}}, "", false, ""); err == nil || !strings.Contains(err.Error(), "not eligible") {
+				t.Fatalf("Carry accepted a non-passing gate: %v", err)
+			}
+			if stateBytes(t, root, state.RunID) != before {
+				t.Fatal("rejected Carry changed state")
+			}
+		}
+		var err error
+		state, err = RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "repair is outside architecture ownership"}}, "", false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("wave-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		if state.CompletedReviewWaves != wave {
+			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
+		}
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
+		t.Fatalf("automatic wave limit was not enforced: %v", err)
+	}
+	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("authorized extra repair remained blocked: %v", err)
+	}
+}
+
+func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "runtime-authorization", "custom", []string{"architecture", "quality"})
+	state = recordGateResult(t, root, pkg, state, "architecture", "runtime-architecture", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repairable blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "runtime-quality", "RUNTIME_ERROR", "review unavailable", nil)
+	if state.CompletedReviewWaves != 0 {
+		t.Fatalf("runtime-error wave was counted: %#v", state)
+	}
+	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}); err == nil || !strings.Contains(err.Error(), "architecture") {
+		t.Fatalf("partial Seal authorization lost the other blocker: %v", err)
+	}
+	persisted, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := persisted.SkipAuthorizations["quality"]
+	if authorization.Origin != "SEAL" || authorization.Status != "RUNTIME_ERROR" || authorization.Snapshot != persisted.CurrentSnapshot {
+		t.Fatalf("named runtime authorization was not persisted: %#v", authorization)
+	}
+	persisted = advanceRepair(t, root, pkg, persisted, "after-runtime-authorization")
+	if _, ok := persisted.SkipAuthorizations["quality"]; ok {
+		t.Fatalf("Seal authorization survived a repair snapshot: %#v", persisted.SkipAuthorizations)
+	}
+	if authorization := persisted.SkipAuthorizations["qa"]; authorization.Origin != "ROUTE" {
+		t.Fatalf("route authorization was cleared with snapshot authorization: %#v", persisted.SkipAuthorizations)
+	}
+	if persisted.CompletedReviewWaves != 0 {
+		t.Fatalf("authorized incomplete wave was counted: %#v", persisted)
+	}
+}
+
+func TestConcurrentSelectedGateRecordingPreservesResults(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "concurrent-gates", "custom", []string{"architecture", "quality"})
+	dispatches := map[string]string{}
+	for _, gate := range []string{"architecture", "quality"} {
+		dispatches[gate] = prepareAndClaim(t, root, pkg, state.RunID, gate, "concurrent-"+gate)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(dispatches))
+	for gate, dispatchID := range dispatches {
+		wg.Add(1)
+		go func(gate, dispatchID string) {
+			defer wg.Done()
+			_, err := RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", nil)
+			errs <- err
+		}(gate, dispatchID)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gate := range []string{"architecture", "quality"} {
+		if state.Gates[gate].Status != "PASS" {
+			t.Fatalf("concurrent recording lost %s: %#v", gate, state.Gates)
+		}
+	}
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("concurrent wave count=%d", state.CompletedReviewWaves)
+	}
+}
+
+func TestResumeAndAbortNormalLifecycle(t *testing.T) {
+	t.Run("resume", func(t *testing.T) {
+		root, pkg := workflowFixture(t)
+		state := mustStart(t, root, pkg, "resume")
+		resumed, classificationRequired, err := Resume(root, pkg, state.RunID)
+		if err != nil || classificationRequired || resumed.RunID != state.RunID {
+			t.Fatalf("unchanged run did not resume: state=%#v changed=%v err=%v", resumed, classificationRequired, err)
+		}
+		writeTestFile(t, filepath.Join(root, "requirements.md"), "revised requirement\n")
+		_, classificationRequired, err = Resume(root, pkg, state.RunID)
+		if err != nil || !classificationRequired {
+			t.Fatalf("normal requirement edit was not reported on Resume: changed=%v err=%v", classificationRequired, err)
+		}
+	})
+	t.Run("abort", func(t *testing.T) {
+		root, pkg := workflowFixture(t)
+		state := mustStart(t, root, pkg, "abort")
+		summary, err := Abort(root, state.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if summary.Status != "ABORTED" {
+			t.Fatalf("abort summary=%#v", summary)
+		}
+		if _, err := os.Stat(RunDir(root, state.RunID)); !os.IsNotExist(err) {
+			t.Fatalf("aborted run directory remained: %v", err)
+		}
+		if _, err := os.Stat(RunSummaryPath(root, state.RunID)); err != nil {
+			t.Fatalf("abort summary was not retained: %v", err)
+		}
+	})
 }
 
 func mustStart(t *testing.T, root, pkg, id string) RunState {
@@ -429,6 +650,59 @@ func readyDelivery(t *testing.T, root, pkg, id string) RunState {
 	writeTestFile(t, filepath.Join(root, "delivery-"+id+".txt"), "delivery\n")
 	commitAll(t, root, "delivery "+id)
 	state, err = AdvanceSnapshot(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func readyDeliveryForRoute(t *testing.T, root, pkg, id, mode string, selected []string) RunState {
+	t.Helper()
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, id), mode, selected)
+	state = recordReadiness(t, root, pkg, state)
+	if isSelected(state, "qa") {
+		designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+		var err error
+		state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", id+"-qa-reviewer")
+		state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "delivery-"+id+".txt"), "delivery\n")
+	commitAll(t, root, "delivery "+id)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func recordGateResult(t *testing.T, root, pkg string, state RunState, gate, reviewer, status, message string, findings []FindingInput) RunState {
+	t.Helper()
+	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, gate, reviewer)
+	state, err := RecordGate(root, pkg, state.RunID, gate, dispatchID, status, message, findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func advanceRepair(t *testing.T, root, pkg string, state RunState, suffix string) RunState {
+	t.Helper()
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "repair-"+suffix+".txt"), "repair\n")
+	commitAll(t, root, "repair "+suffix)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}

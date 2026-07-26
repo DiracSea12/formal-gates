@@ -45,11 +45,13 @@ svn commit -m '<message>' <path> [<path> ...]
 svn update
 ```
 
-The CLI confirms the working-copy root with `svn info --show-item wc-root`,
-resolves the numeric revision with `svn info --show-item revision`, and verifies
-it with `svn info --show-item revision -r <revision>`. Before recording a
-snapshot, `svn status --quiet <working-copy-root>` must report no versioned
-changes. Reviewers compare the same branch or repository URL:
+The CLI confirms the working-copy root with `svn info --show-item wc-root` and
+uses `svnversion <working-copy-root>` to require one numeric revision across the
+whole working copy. Mixed-revision, modified, switched, or partial results are
+not immutable whole-workspace identities and stop the transition. It verifies
+the revision with `svn info --show-item revision -r <revision>`. Before
+recording a snapshot, `svn status --quiet <working-copy-root>` must report no
+versioned changes. Reviewers compare the same branch or repository URL:
 
 ```bash
 svn diff --notice-ancestry -r <base-revision>:<current-revision> <working-copy-or-url>
@@ -66,11 +68,14 @@ p4 submit -c <change>
 p4 sync
 ```
 
-The CLI confirms the client root from tagged `p4 info`, resolves the current
-submitted changelist from `p4 changes -m 1 ...#have`, and verifies a recorded
-number within the client path using `p4 changes -m 1 ...@<change>`. Before
-recording a snapshot, `p4 opened ...` must report no files opened on the client.
-Reviewers compare depot state with native `diff2`:
+The CLI confirms the client root from tagged `p4 info`, obtains the candidate
+submitted changelist from `p4 changes -m 1 ...#have`, and requires a tagged
+`p4 sync -n ...@<change>` preview to report no files. This proves the whole
+client view matches that changelist instead of collapsing mixed `#have` state
+to its latest change. It verifies a recorded number within the client path
+using `p4 changes -m 1 ...@<change>`. Before recording a snapshot, `p4 opened
+...` must report no files opened on the client. Reviewers compare depot state
+with native `diff2`:
 
 ```bash
 p4 diff2 -Od //depot/path/...@<base-change> //depot/path/...@<current-change>
