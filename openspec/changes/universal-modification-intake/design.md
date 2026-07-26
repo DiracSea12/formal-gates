@@ -34,10 +34,17 @@ environment supports. Do not depend on a PRD/OpenSpec plugin. Lightweight work
 does not create formal slices or require this formal artifact.
 
 For independent formal slices, create separate native VCS worktrees and runs.
-Dispatch them concurrently when host capacity allows. Merge sealed slice
-branches and resolve conflicts before starting a final integration formal run
-against the combined result. Dependent slices start only after their upstream
-contracts are integrated.
+Before dispatching them, start one overall formal run at the complete request's
+original VCS base and keep it active throughout sliced development. Dispatch
+independent slices concurrently when host capacity allows. Slice runs provide
+their own bounded verification but do not replace the overall run.
+
+Merge sealed slice branches and resolve conflicts, then record that merged VCS
+identity as the overall run's completed development snapshot. Run the final
+integration QA and gates in that retained overall run against its original
+base-to-merged comparison. Do not create a new integration run after the merge,
+move the original base, or repeat clarification or routing. Dependent slices
+start only after their upstream contracts are integrated.
 
 ## Documentation consistency
 

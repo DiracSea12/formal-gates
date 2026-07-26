@@ -18,5 +18,8 @@ but the route question is not repeated unless the user explicitly reopens it.
 No rule distinguishes the formal-gates source repository from another project.
 
 Independent formal slices may execute concurrently in separate VCS worktrees.
-After their code is merged and conflicts are resolved, the combined result
-receives one integration formal run using the original full or custom route.
+One overall formal run starts before sliced development and retains the complete
+request's original base, requirements, and route. After slice code is merged and
+conflicts are resolved, the merged snapshot is recorded in that same overall
+run, which then executes the integration QA and gates. No new run, base,
+clarification, or route choice is created after merging.

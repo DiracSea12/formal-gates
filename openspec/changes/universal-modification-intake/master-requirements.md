@@ -23,10 +23,15 @@ Route for this delivery: full
 5. Formal work that is too large for one coherent unit is split by dependency,
    ownership, risk, and verification boundaries. Independent slices use
    separate VCS worktrees and formal runs in parallel. Dependent slices wait
-   for their prerequisites. Lightweight work has no formal task slices.
-6. After parallel formal slices pass, merge their code and resolve conflicts
-   before running one integration formal run on the combined result with the
-   original full or custom selection.
+   for their prerequisites. Before sliced development, one overall formal run
+   fixes the complete request's original base, requirements, and route and stays
+   active until integration finishes. Lightweight work has no formal task
+   slices.
+6. After parallel formal slices pass, merge their code and resolve conflicts.
+   Record the merged code as the retained overall run's completed development
+   snapshot, then run its integration QA and gates from the original base to the
+   merged result. Do not start another run, replace the base, or repeat
+   clarification or routing after the merge.
 7. A read-only package command lists QA and dynamic gates before a run by
    reusing the existing prompt catalog. The obsolete formal none route is
    removed from CLI, state validation, tests, skill text, and public docs.
@@ -58,8 +63,10 @@ Route for this delivery: full
 3. `universal-modification-intake`: mandatory intake, durable formal
    requirements, route simplification, parallel slicing, none removal, and
    documentation alignment.
-4. Integration: merge the sealed slices, resolve conflicts, and run full formal
-   review on the combined result.
+4. Integration: keep the overall run that began before sliced development,
+   merge the sealed slices, resolve conflicts, record the merged snapshot, and
+   run that same overall run's full post-development review on the combined
+   result.
 
 Slices 1 and 2 are independent and run in parallel. Slice 3 depends on their
 public contracts and begins after both are integrated.

@@ -12,8 +12,10 @@
 - [ ] Preserve route choice across added requirements and require renewed summary
   confirmation without another route question.
 - [ ] Require judgment-based task slicing and independent formal runs per slice.
-- [ ] Run independent formal slices concurrently in separate VCS worktrees and
-  require a post-merge, post-conflict-resolution integration formal run.
+- [ ] Start and retain one overall formal run before sliced development; run
+  independent formal slices concurrently in separate VCS worktrees; after
+  merging and conflict resolution, record the merged snapshot and run
+  integration QA and gates in that same overall run.
 - [ ] Remove `none` route code, tests, and every public description.
 - [ ] Remove repository-specialized intake and maintenance branches.
 - [ ] Integrate small-repair Carry/QA inheritance guidance.

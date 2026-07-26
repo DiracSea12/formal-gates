@@ -49,9 +49,14 @@ still receive clarification and complete-summary confirmation.
 #### Scenario: Independent slices run concurrently
 
 - **WHEN** two formal slices have no dependency edge
-- **THEN** they may run concurrently in separate native VCS worktrees
-- **AND** after their branches are merged and conflicts are resolved, the
-  combined result runs one integration formal review with the inherited route
+- **THEN** an overall formal run already retains the complete request's original
+  base, requirements, and route
+- **AND** the slices may run concurrently in separate native VCS worktrees and
+  independent slice runs
+- **AND** after their branches are merged and conflicts are resolved, the merged
+  snapshot is recorded as completed development in the retained overall run
+- **AND** that same overall run reviews the original base-to-merged comparison
+  with the inherited route without another clarification or route decision
 
 #### Scenario: Lightweight request is large
 

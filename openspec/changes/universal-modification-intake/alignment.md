@@ -75,10 +75,20 @@ Under `full` or `custom`, each slice SHALL use an independent formal run and
 inherit the one route choice. Cross-slice dependencies and the complete outcome
 SHALL remain explicit.
 
+Before slice development begins, the main agent SHALL start and retain one
+overall formal run for the complete request. That overall run owns the original
+base snapshot, complete confirmed requirements, selected route, and final
+integration review. Slice runs supplement the overall run; they do not replace,
+restart, or close it.
+
 Independent slices SHALL use separate VCS worktrees and MAY run concurrently.
 Dependent slices SHALL wait for their prerequisites. After parallel slices are
-merged and conflicts are resolved, the combined result SHALL receive one
-integration formal run using the inherited route.
+merged and conflicts are resolved, the main agent SHALL record the merged VCS
+identity as the completed development snapshot of the retained overall run.
+That same overall run SHALL then execute one integration post-development wave
+using its original base-to-merged comparison and inherited route. The workflow
+SHALL NOT start a second overall or integration run after merging, replace the
+original base, repeat Requirements Clarification, or repeat the route question.
 
 Lightweight execution SHALL NOT introduce formal task slices.
 
