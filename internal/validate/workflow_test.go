@@ -54,6 +54,22 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	}
 }
 
+func TestRequirementSourceCanPromoteAnAdditionalArtifact(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "promote-artifact"), "custom", []string{"quality"})
+
+	state, err := UpdateRequirement(root, pkg, state.RunID, "design.md", false, "preserved", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RequirementSource != "design.md" || state.RequirementRevision != artifactRevision(state.RequirementArtifacts, "design.md") {
+		t.Fatalf("promoted requirement source was not bound: %#v", state)
+	}
+	if got := artifactPaths(state.RequirementArtifacts); !reflect.DeepEqual(got, []string{"design.md"}) {
+		t.Fatalf("promoted requirement artifact set=%v", got)
+	}
+}
+
 func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := beginQA(t, root, pkg, "dispatch")
@@ -446,6 +462,39 @@ func TestRouteAdditionAfterCompletedWaveReviewsOnlyAddedGate(t *testing.T) {
 	state = recordGateResult(t, root, pkg, state, "architecture", "route-architecture", "PASS", "", nil)
 	if got := state.Gates["quality"]; state.CompletedReviewWaves != 1 || got.Status != quality.Status || got.Snapshot != quality.Snapshot || got.DispatchID != quality.DispatchID {
 		t.Fatalf("late gate recounted the snapshot or replaced a result: %#v", state)
+	}
+}
+
+func TestLateRouteGateRepairStartsAFreshAttemptInTheNextWave(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "late-route-repair", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "late-quality", "PASS", "", nil)
+	state, err := AddRouteGates(root, pkg, state.RunID, []string{"architecture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "architecture", "late-architecture")
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatch := state.Dispatches[dispatchID]; dispatch.ReviewWave != 1 || dispatch.Attempt != 1 {
+		t.Fatalf("supplemental review binding=%#v", dispatch)
+	}
+	state, err = RecordGate(root, pkg, state.RunID, "architecture", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = advanceRepair(t, root, pkg, state, "late-route")
+
+	dispatchID = prepareAndClaim(t, root, pkg, state.RunID, "architecture", "repaired-architecture")
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatch := state.Dispatches[dispatchID]; dispatch.ReviewWave != 2 || dispatch.Attempt != 1 {
+		t.Fatalf("post-repair review binding=%#v", dispatch)
 	}
 }
 

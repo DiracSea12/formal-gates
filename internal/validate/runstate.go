@@ -119,7 +119,6 @@ type QACase struct {
 	Procedure    string `json:"procedure"`
 	Oracle       string `json:"oracle"`
 	ReviewStatus string `json:"reviewStatus"`
-	ReviewReason string `json:"reviewReason,omitempty"`
 }
 
 type RunSummary struct {

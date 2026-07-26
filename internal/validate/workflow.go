@@ -149,10 +149,11 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		if strings.TrimSpace(source) == "" {
 			source = state.RequirementSource
 		}
+		source = normalizeArtifactPath(root, source)
 		additional := artifactPaths
 		if additional == nil {
 			for _, artifact := range state.RequirementArtifacts {
-				if artifact.Path != oldSource {
+				if artifact.Path != oldSource && artifact.Path != source {
 					additional = append(additional, artifact.Path)
 				}
 			}
@@ -161,7 +162,6 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		if err != nil {
 			return err
 		}
-		source = normalizeArtifactPath(root, source)
 		revision := artifactRevision(artifacts, source)
 		changed := revision != state.RequirementRevision || source != state.RequirementSource || !sameArtifactSet(artifacts, state.RequirementArtifacts)
 		semanticEffect = strings.ToLower(strings.TrimSpace(semanticEffect))
@@ -344,7 +344,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		}
 		wave := 0
 		if targetKind == "gate" {
-			wave = state.CompletedReviewWaves + 1
+			wave = currentGateReviewWave(*state)
 		}
 		attempt := nextDispatchAttempt(*state, targetKind, target, wave)
 		dispatchID, err := newDispatchID()
@@ -739,7 +739,7 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			if outcome == "FAIL" && reason == "" {
 				return fmt.Errorf("QA Review FAIL for %s requires a reason", caseID)
 			}
-			state.QACases[index].ReviewStatus, state.QACases[index].ReviewReason = outcome, reason
+			state.QACases[index].ReviewStatus = outcome
 			if outcome == "FAIL" {
 				status = "FAIL"
 				findings = append(findings, Finding{Message: caseID + ": " + reason})
@@ -1281,6 +1281,13 @@ func nextDispatchAttempt(state RunState, targetKind, target string, wave int) in
 		}
 	}
 	return attempt
+}
+
+func currentGateReviewWave(state RunState) int {
+	if state.CompletedReviewWaves > 0 && state.Actions["development-worker"].Status == developmentVerified {
+		return state.CompletedReviewWaves
+	}
+	return state.CompletedReviewWaves + 1
 }
 
 func newDispatchID() (string, error) {
