@@ -1253,8 +1253,8 @@ func requireTransition(state RunState, operation, target string) error {
 		}
 	case "snapshot":
 		developmentStatus := state.Actions["development-worker"].Status
-		if developmentStatus != developmentPending && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
-			return fmt.Errorf("development must be pending or prepared before a snapshot")
+		if developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
+			return fmt.Errorf("development worker must be prepared before a snapshot")
 		}
 		if state.Actions["start-readiness"].Status != "PASS" {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
