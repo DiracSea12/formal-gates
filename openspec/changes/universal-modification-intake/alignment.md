@@ -28,8 +28,8 @@ confirmation MAY be combined with the route choice.
 
 ## RQ-003 - One combined route choice
 
-The main agent SHALL assess total size, coupling, and risk, explain its
-recommendation, and present exactly these choices once:
+The main agent SHALL assess total size, coupling, and risk, explain its recommendation,
+and present exactly these choices once:
 
 - lightweight execution with no formal run;
 - `full`, meaning QA plus every dynamically discovered gate;
