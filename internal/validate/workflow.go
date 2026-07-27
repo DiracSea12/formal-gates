@@ -298,8 +298,8 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 }
 
 func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, func(state RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
-		if err := requireTransition(state, "gate", gateID); err != nil {
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return "", err
 		}
 		result, ok := state.Gates[gateID]
@@ -321,14 +321,14 @@ func PrepareAction(root, packageRoot, runID, actionID string) (string, error) {
 		return prepareDevelopmentAction(root, packageRoot, runID)
 	}
 	reviewerRequired := actionID != "requirements-clarification"
-	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, func(state RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
-		if err := requireTransition(state, actionID, ""); err != nil {
+	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+		if err := requireTransition(*state, actionID, ""); err != nil {
 			return "", err
 		}
 		if actionID == "qa-execution" && semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
 			return "", fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
 		}
-		detail, err := actionPromptDetail(state, catalog, actionID)
+		detail, err := actionPromptDetail(*state, catalog, actionID)
 		if err != nil {
 			return "", err
 		}
@@ -336,7 +336,7 @@ func PrepareAction(root, packageRoot, runID, actionID string) (string, error) {
 	})
 }
 
-func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, compose func(RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
+func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, compose func(*RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
 	prompt := ""
 	_, err := mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
@@ -357,7 +357,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		}
 		route := routeForState(root, *state)
 		route.DispatchID, route.DispatchAttempt, route.ReviewWave = dispatchID, attempt, wave
-		prompt, err = compose(*state, catalog, route)
+		prompt, err = compose(state, catalog, route)
 		if err != nil {
 			return err
 		}
@@ -443,51 +443,29 @@ func formatQACase(testCase QACase, includeReview bool) string {
 }
 
 func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
-	prompt := ""
-	_, err := mutateRun(root, runID, func(state *RunState) error {
-		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
-		if err != nil {
-			return err
-		}
+	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if state.RetainedOverall {
-			if _, err := requireNativeCurrent(root, *state); err != nil {
-				return err
-			}
-			return fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
-		}
-		if _, err := requireNativeCurrent(root, *state); err != nil {
-			return err
+			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
 		if err := requireTransition(*state, "development-worker", ""); err != nil {
-			return err
+			return "", err
 		}
 		detail := ""
 		status := state.Actions["development-worker"].Status
 		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
 			detail = repairInput(*state)
 		}
-		attempt := nextDispatchAttempt(*state, "action", "development-worker", 0)
-		dispatchID, err := newDispatchID()
+		prompt, err := ComposeActionPrompt(catalog, "development-worker", route, detail)
 		if err != nil {
-			return err
+			return "", err
 		}
-		route := routeForState(root, *state)
-		route.DispatchID, route.DispatchAttempt = dispatchID, attempt
-		prompt, err = ComposeActionPrompt(catalog, "development-worker", route, detail)
-		if err != nil {
-			return err
-		}
-		staleOpenDispatches(state, "action", "development-worker")
-		sum := sha256.Sum256([]byte(prompt))
-		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: "development-worker", TargetKind: "action", Attempt: attempt, PromptHash: hex.EncodeToString(sum[:]), RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: state.CurrentSnapshot, ReviewerRequired: true, Status: "OPEN"}
 		if status == developmentComplete || status == developmentVerified {
 			state.Actions["development-worker"] = ActionResult{Status: developmentRepairPrepared}
 		} else if status == developmentPending {
 			state.Actions["development-worker"] = ActionResult{Status: developmentPrepared}
 		}
-		return nil
+		return prompt, nil
 	})
-	return prompt, err
 }
 
 func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string) (RunState, error) {

@@ -64,7 +64,7 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if err := json.Unmarshal(bytes.TrimPrefix(payload, []byte{0xef, 0xbb, 0xbf}), &decoded); err != nil {
 		return CaptureResult{}, fmt.Errorf("host lifecycle payload is not valid JSON: %w", err)
 	}
-	root, err = captureRoot(root, adapter, decoded)
+	roots, err := captureRoots(root, adapter, decoded)
 	if err != nil {
 		return CaptureResult{}, err
 	}
@@ -80,17 +80,22 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if identity == "" && correlation == "" {
 		return result, nil
 	}
-	duplicate, err := recordEvent(root, eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation})
-	if err != nil {
-		return CaptureResult{}, err
+	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation}
+	duplicate := true
+	for _, root := range roots {
+		alreadyExists, err := recordEvent(root, record)
+		if err != nil {
+			return CaptureResult{}, err
+		}
+		duplicate = duplicate && alreadyExists
 	}
 	result.Duplicate = duplicate
 	return result, nil
 }
 
-func captureRoot(root string, adapter providerAdapter, payload any) (string, error) {
+func captureRoots(root string, adapter providerAdapter, payload any) ([]string, error) {
 	if root = strings.TrimSpace(root); root != "" {
-		return root, nil
+		return []string{root}, nil
 	}
 	candidates := adapter.projectRoots(payload)
 	if len(candidates) == 0 {
@@ -100,19 +105,16 @@ func captureRoot(root string, adapter providerAdapter, payload any) (string, err
 	for _, candidate := range candidates {
 		activeRoot, found, err := activeRunRoot(candidate)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if found {
 			activeRoots = appendUniqueStrings(activeRoots, activeRoot)
 		}
 	}
-	if len(activeRoots) == 1 {
-		return activeRoots[0], nil
+	if len(activeRoots) > 0 {
+		return activeRoots, nil
 	}
-	if len(activeRoots) > 1 {
-		return "", fmt.Errorf("%s lifecycle payload matches multiple project roots with active formal runs", adapter.name)
-	}
-	return candidates[0], nil
+	return []string{candidates[0]}, nil
 }
 
 func activeRunRoot(candidate string) (string, bool, error) {

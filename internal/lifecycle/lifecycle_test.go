@@ -217,8 +217,11 @@ func TestClaudeCaptureResolvesActiveRunAboveSubagentWorkingDirectory(t *testing.
 	}
 }
 
-func TestCursorCaptureSelectsActiveRunFromAllWorkspaceRoots(t *testing.T) {
+func TestCursorCaptureStagesForAllActiveWorkspaceRoots(t *testing.T) {
 	firstRoot, runRoot := t.TempDir(), t.TempDir()
+	if err := BeginRun(firstRoot, "run-2"); err != nil {
+		t.Fatal(err)
+	}
 	if err := BeginRun(runRoot, "run-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +249,12 @@ func TestCursorCaptureSelectsActiveRunFromAllWorkspaceRoots(t *testing.T) {
 	if verification.Outcome != Verified {
 		t.Fatalf("expected Cursor multi-root events to verify at the active run root, got %+v", verification)
 	}
-	if _, err := os.Stat(filepath.Join(firstRoot, ".gates")); !os.IsNotExist(err) {
-		t.Fatalf("Cursor capture wrote lifecycle data beneath the first inactive workspace root: %v", err)
+	pending, err := pendingEvents(firstRoot, "run-2", ProviderCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("expected unclaimed observations to remain available to the other active workspace root, got %d", len(pending))
 	}
 }
 
