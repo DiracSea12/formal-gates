@@ -186,8 +186,8 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 func buildInstalledHostCLI(t *testing.T, provider string) string {
 	t.Helper()
 	relative := map[string]string{
-		lifecycle.ProviderClaude: filepath.Join(".claude", "skills", "formal-gates", "bin", "formal-gates"),
-		lifecycle.ProviderCursor: filepath.Join(".cursor", "formal-gates", "bin", "formal-gates"),
+		lifecycle.ProviderClaude: filepath.Join(".claude", "skills", "formal-gates", "bin", installTestBinaryName()),
+		lifecycle.ProviderCursor: filepath.Join(".cursor", "formal-gates", "bin", installTestBinaryName()),
 	}[provider]
 	path := filepath.Join(t.TempDir(), relative)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
