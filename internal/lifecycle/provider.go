@@ -20,8 +20,16 @@ const (
 type providerAdapter struct {
 	name           string
 	required       bool
+	hookEvents     []string
 	normalizeEvent func(string) (string, error)
-	identity       func(any) string
+	identity       func(string, any) string
+	correlation    func(string, any) string
+	projectRoot    func(any) string
+}
+
+type HookDefinition struct {
+	Event   string
+	Command []string
 }
 
 func adapterFor(provider string) (providerAdapter, error) {
@@ -35,6 +43,21 @@ func adapterFor(provider string) (providerAdapter, error) {
 	default:
 		return providerAdapter{}, fmt.Errorf("unsupported lifecycle provider %q", provider)
 	}
+}
+
+func HookDefinitions(host string) ([]HookDefinition, error) {
+	adapter, err := adapterFor(host)
+	if err != nil {
+		return nil, err
+	}
+	hooks := make([]HookDefinition, 0, len(adapter.hookEvents))
+	for _, event := range adapter.hookEvents {
+		hooks = append(hooks, HookDefinition{
+			Event:   event,
+			Command: []string{"lifecycle", "capture", "--provider", adapter.name, "--event", event},
+		})
+	}
+	return hooks, nil
 }
 
 func CurrentProvider() (string, error) {
@@ -79,6 +102,48 @@ func normalizeNamedEvent(provider, eventName, startName, stopName string) (strin
 
 func payloadIdentity(value any, names []string) string {
 	return payloadScalar(value, names, 0)
+}
+
+func payloadRoot(value any) string {
+	if root := payloadScalar(value, []string{"cwd", "projectDir", "project_dir"}, 0); root != "" {
+		return root
+	}
+	return payloadWorkspaceRoot(value)
+}
+
+func payloadWorkspaceRoot(value any) string {
+	return firstPayloadString(value, []string{"workspaceRoots", "workspace_roots"}, 0)
+}
+
+func firstPayloadString(value any, names []string, depth int) string {
+	if value == nil || depth > 3 {
+		return ""
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	for _, name := range names {
+		for key, raw := range object {
+			if !strings.EqualFold(key, name) {
+				continue
+			}
+			values, ok := raw.([]any)
+			if ok && len(values) > 0 {
+				return scalarString(values[0])
+			}
+		}
+	}
+	for _, container := range []string{"payload", "event", "data", "hook", "tool_input", "toolInput", "input"} {
+		for key, raw := range object {
+			if strings.EqualFold(key, container) {
+				if result := firstPayloadString(raw, names, depth+1); result != "" {
+					return result
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func payloadScalar(value any, names []string, depth int) string {

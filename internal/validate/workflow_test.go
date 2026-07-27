@@ -139,8 +139,11 @@ func TestRequiredLifecycleKeepsGatePendingUntilMatchingEventsArrive(t *testing.T
 	t.Cleanup(func() { currentLifecycleProvider = priorProvider })
 
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "claude-agent-1")
-	for _, event := range []string{"subagentStart", "subagentStop"} {
-		if _, err := lifecycle.Capture(root, lifecycle.ProviderCursor, event, []byte(`{"agentId":"claude-agent-1"}`)); err != nil {
+	for event, payload := range map[string]string{
+		"subagentStart": `{"subagent_id":"claude-agent-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"wrong provider dispatch"}`,
+		"subagentStop":  `{"conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"wrong provider dispatch"}`,
+	} {
+		if _, err := lifecycle.Capture(root, lifecycle.ProviderCursor, event, []byte(payload)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,6 +166,42 @@ func TestRequiredLifecycleKeepsGatePendingUntilMatchingEventsArrive(t *testing.T
 	}
 	if state.Gates["quality"].Status != "PASS" || state.Dispatches[dispatchID].Status != "COMPLETED" {
 		t.Fatalf("verified lifecycle did not permit recording: %#v", state.Gates["quality"])
+	}
+}
+
+func TestWorkflowCapturesRequiredLifecycleBeforeDispatchClaim(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "before-claim-lifecycle", "custom", []string{"quality"})
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "quality")
+
+	priorProvider := currentLifecycleProvider
+	currentLifecycleProvider = func() (string, error) { return lifecycle.ProviderCursor, nil }
+	t.Cleanup(func() { currentLifecycleProvider = priorProvider })
+
+	for event, payload := range map[string]string{
+		"subagentStart": fmt.Sprintf(`{"subagent_id":"cursor-agent-before-claim","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared dispatch %s","workspace_roots":[%q]}`, dispatchID, root),
+		"subagentStop":  fmt.Sprintf(`{"conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared dispatch %s","workspace_roots":[%q]}`, dispatchID, root),
+	} {
+		if _, err := lifecycle.Capture("", lifecycle.ProviderCursor, event, []byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ClaimDispatch(root, pkg, state.RunID, dispatchID, "cursor-agent-before-claim"); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := lifecycle.VerifyDispatch(root, state.RunID, dispatchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Outcome != lifecycle.Verified {
+		t.Fatalf("expected pre-claim events to verify after claim, got %+v", verification)
+	}
+	state, err = RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Gates["quality"].Status != "PASS" {
+		t.Fatalf("verified pre-claim lifecycle did not permit recording: %#v", state.Gates["quality"])
 	}
 }
 

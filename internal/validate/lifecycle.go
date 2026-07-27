@@ -7,11 +7,16 @@ import (
 )
 
 type workflowLifecycleVerifier interface {
+	Begin(root, runID string) error
 	Bind(root, runID, dispatchID, provider, identity string) error
 	Verify(root, runID, dispatchID string) (lifecycle.Verification, error)
 }
 
 type nativeWorkflowLifecycle struct{}
+
+func (nativeWorkflowLifecycle) Begin(root, runID string) error {
+	return lifecycle.BeginRun(root, runID)
+}
 
 func (nativeWorkflowLifecycle) Bind(root, runID, dispatchID, provider, identity string) error {
 	return lifecycle.BindDispatch(root, runID, dispatchID, provider, identity)

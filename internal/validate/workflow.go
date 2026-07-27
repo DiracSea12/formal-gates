@@ -115,6 +115,10 @@ func Start(options StartOptions) (RunState, error) {
 	if err := os.Mkdir(RunDir(root, runID), 0o700); err != nil {
 		return RunState{}, fmt.Errorf("cannot create run %q: %w", runID, err)
 	}
+	if err := workflowLifecycle.Begin(root, runID); err != nil {
+		_ = os.RemoveAll(RunDir(root, runID))
+		return RunState{}, err
+	}
 	state := NewRunState(runID, strings.TrimSpace(options.Flow), normalizeArtifactPath(root, options.RequirementSource), revision, vcs, currentSnapshot, currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs(), artifacts)
 	state.RetainedOverall = options.RetainedOverall
 	if err := SaveRunState(root, state); err != nil {

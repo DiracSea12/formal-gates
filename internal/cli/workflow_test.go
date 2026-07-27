@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,14 +122,24 @@ func TestCLILifecycleCaptureAndVerify(t *testing.T) {
 	if err := lifecycle.BindDispatch(root, "run-1", "dispatch-1", lifecycle.ProviderCursor, "cursor-agent-1"); err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range []string{"subagentStop", "subagentStart"} {
+	for _, tc := range []struct {
+		event    string
+		payload  string
+		identity bool
+	}{
+		{event: "subagentStop", payload: fmt.Sprintf(`{"conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared dispatch","workspace_roots":[%q]}`, root)},
+		{event: "subagentStart", payload: fmt.Sprintf(`{"subagent_id":"cursor-agent-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared dispatch","workspace_roots":[%q]}`, root), identity: true},
+	} {
 		var stdout, stderr bytes.Buffer
-		code := Run("formal-gates", []string{"lifecycle", "capture", "--root", root, "--provider", "cursor", "--event", event}, IO{Stdin: strings.NewReader(`{"data":{"task_id":"cursor-agent-1"}}`), Stdout: &stdout, Stderr: &stderr})
+		code := Run("formal-gates", []string{"lifecycle", "capture", "--provider", "cursor", "--event", tc.event}, IO{Stdin: strings.NewReader(tc.payload), Stdout: &stdout, Stderr: &stderr})
 		if code != 0 {
-			t.Fatalf("capture %s failed: %s", event, stderr.String())
+			t.Fatalf("capture %s failed: %s", tc.event, stderr.String())
 		}
-		if !strings.Contains(stdout.String(), `"identity": "cursor-agent-1"`) {
+		if tc.identity && !strings.Contains(stdout.String(), `"identity": "cursor-agent-1"`) {
 			t.Fatalf("capture omitted normalized identity: %s", stdout.String())
+		}
+		if !tc.identity && strings.Contains(stdout.String(), `"identity": "cursor-agent-1"`) {
+			t.Fatalf("Cursor stop invented an identity: %s", stdout.String())
 		}
 	}
 	out := runCLI(t, "lifecycle", "verify", "--root", root, "--run-id", "run-1", "--dispatch", "dispatch-1")

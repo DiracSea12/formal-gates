@@ -448,7 +448,7 @@ func runLifecycle(args []string, streams IO) (int, error) {
 	switch sub {
 	case "capture":
 		fs := newFlagSet("lifecycle capture", streams)
-		root := fs.String("root", ".", "repository root")
+		root := fs.String("root", "", "repository root override (normally derived from the host payload)")
 		provider := fs.String("provider", "", "host provider: claude-code, codex, or cursor")
 		event := fs.String("event", "", "provider lifecycle event name")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {

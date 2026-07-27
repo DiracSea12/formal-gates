@@ -139,6 +139,9 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 					if strings.Contains(command, `\`) {
 						t.Fatalf("hook command should use slash paths for shell compatibility: %s", command)
 					}
+					if strings.Contains(command, "lifecycle capture") && strings.Contains(command, "--root") {
+						t.Fatalf("lifecycle hook command must derive the project root from its payload: %s", command)
+					}
 				}
 			})
 		}

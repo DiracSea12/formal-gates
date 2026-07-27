@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -30,6 +32,25 @@ type Verification struct {
 	Diagnostic    string `json:"diagnostic"`
 }
 
+func BeginRun(root, runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return fmt.Errorf("run id is required")
+	}
+	path := runLifecycleRoot(root, runID)
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(filepath.Join(path, "active"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if os.IsExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
 func Capture(root, provider, eventName string, payload []byte) (CaptureResult, error) {
 	adapter, err := adapterFor(provider)
 	if err != nil {
@@ -43,15 +64,44 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if err := json.Unmarshal(bytes.TrimPrefix(payload, []byte{0xef, 0xbb, 0xbf}), &decoded); err != nil {
 		return CaptureResult{}, fmt.Errorf("host lifecycle payload is not valid JSON: %w", err)
 	}
-	identity := adapter.identity(decoded)
-	if identity == "" {
+	root = captureRoot(root, adapter, decoded)
+	identity := adapter.identity(event, decoded)
+	correlation := adapter.correlation(event, decoded)
+	if event == eventStart && identity == "" && adapter.required {
 		return CaptureResult{}, fmt.Errorf("%s %s payload is missing a host agent identity", adapter.name, eventName)
 	}
-	duplicate, err := recordEvent(root, eventRecord{Provider: adapter.name, Event: event, Identity: identity})
+	if event == eventStop && identity == "" && correlation == "" && adapter.required {
+		return CaptureResult{}, fmt.Errorf("%s %s payload cannot be correlated to a host agent", adapter.name, eventName)
+	}
+	result := CaptureResult{Provider: adapter.name, Event: event, Identity: identity}
+	if identity == "" && correlation == "" {
+		return result, nil
+	}
+	duplicate, err := recordEvent(root, eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation})
 	if err != nil {
 		return CaptureResult{}, err
 	}
-	return CaptureResult{Provider: adapter.name, Event: event, Identity: identity, Duplicate: duplicate}, nil
+	result.Duplicate = duplicate
+	return result, nil
+}
+
+func captureRoot(root string, adapter providerAdapter, payload any) string {
+	if root = strings.TrimSpace(root); root != "" {
+		return root
+	}
+	if root = strings.TrimSpace(adapter.projectRoot(payload)); root != "" {
+		return root
+	}
+	environmentRoots := map[string][]string{
+		ProviderClaude: {"CLAUDE_PROJECT_DIR"},
+		ProviderCursor: {"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"},
+	}[adapter.name]
+	for _, name := range environmentRoots {
+		if root = strings.TrimSpace(os.Getenv(name)); root != "" {
+			return root
+		}
+	}
+	return "."
 }
 
 func BindDispatch(root, runID, dispatchID, provider, identity string) error {
@@ -64,6 +114,9 @@ func BindDispatch(root, runID, dispatchID, provider, identity string) error {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
 		}
+	}
+	if err := BeginRun(root, runID); err != nil {
+		return err
 	}
 	return writeBinding(root, bindingRecord{RunID: runID, DispatchID: dispatchID, Provider: adapter.name, Identity: identity})
 }
@@ -90,11 +143,11 @@ func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 		result.Diagnostic = "provider does not expose usable lifecycle events; dispatch identity checks remain authoritative"
 		return result, nil
 	}
-	result.StartObserved, err = eventExists(root, binding.Provider, binding.Identity, eventStart)
+	result.StartObserved, err = eventExists(root, binding.RunID, binding.DispatchID, binding.Provider, binding.Identity, eventStart)
 	if err != nil {
 		return Verification{}, err
 	}
-	result.StopObserved, err = eventExists(root, binding.Provider, binding.Identity, eventStop)
+	result.StopObserved, err = eventExists(root, binding.RunID, binding.DispatchID, binding.Provider, binding.Identity, eventStop)
 	if err != nil {
 		return Verification{}, err
 	}

@@ -2,13 +2,16 @@ package lifecycle
 
 func claudeAdapter() providerAdapter {
 	return providerAdapter{
-		name:     ProviderClaude,
-		required: true,
+		name:       ProviderClaude,
+		required:   true,
+		hookEvents: []string{"SubagentStart", "SubagentStop"},
 		normalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(ProviderClaude, eventName, "SubagentStart", "SubagentStop")
 		},
-		identity: func(payload any) string {
+		identity: func(_ string, payload any) string {
 			return payloadIdentity(payload, []string{"subagentId", "subagent_id", "agentId", "agent_id", "taskId", "task_id"})
 		},
+		correlation: func(_ string, _ any) string { return "" },
+		projectRoot: payloadRoot,
 	}
 }

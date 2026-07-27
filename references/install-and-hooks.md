@@ -76,9 +76,20 @@ Code and Codex, and `subagentStart` and `subagentStop` for Cursor. Those hooks
 send the host payload on stdin to the installed native binary:
 
 ```bash
-bin/formal-gates lifecycle capture --root <repo> \
+bin/formal-gates lifecycle capture \
   --provider <claude-code|codex|cursor> --event <provider-event-name>
 ```
+
+The capture command derives the project root from the normal host payload (or
+the host's project-directory environment when needed), so global hooks do not
+depend on their configuration directory as the working directory. `--root`
+remains available as an explicit command-line override.
+
+Lifecycle observations are retained only while at least one formal run is
+active in that project. Each run owns its pending and claimed observations
+under `.gates/tmp/<run-id>/lifecycle`, so normal Seal or Abort cleanup retires
+them with the rest of the run. Hooks fired when no formal run is active do not
+create a lifecycle journal.
 
 After `workflow claim-dispatch` binds the host identity, inspect the derived
 outcome without changing workflow state:
