@@ -148,8 +148,11 @@ with `workflow snapshot` in the retained overall run.
    comparison. QA and every selected gate share
    three completed review waves, counting the initial complete post-development
    wave and every complete post-repair wave once. Incomplete or runtime-error
-   waves do not consume one. Additional waves require explicit user
-   authorization.
+   waves do not consume one. After the automatic limit is exhausted, present
+   the current blockers and ask before every additional repair. Each explicit
+   authorization adds exactly one next repair/review wave; it cannot
+   preauthorize later waves. If that wave still blocks, present its problems
+   and ask again before another repair.
 9. **Seal.** Confirm the live native VCS identity immediately before and after
    aggregation. Selected PENDING work blocks Seal. RUNTIME_ERROR requires an
    explicit user skip, and QA FAIL or P0/P1 requires repair until the shared
@@ -342,9 +345,12 @@ share at most three completed automatic review waves per delivery attempt. The i
 post-development wave and each post-repair wave count once after all required
 verification completes, regardless of semantic outcome. Each snapshot counts
 at most once. Dispatch failure, interruption, missing verification, PENDING,
-and RUNTIME_ERROR do not count. After exhaustion, present remaining blockers
-once; the user may authorize named Seal skips, additional repair, or a
-requirement change.
+and RUNTIME_ERROR do not count. After exhaustion, before every additional
+repair, present the current blockers and ask the user whether to proceed. One
+explicit authorization permits exactly one next repair/review wave and cannot
+be reused or accumulated for later waves. If that wave still blocks, repeat
+the explanation and authorization step. The user may instead authorize named
+Seal skips or a requirement change.
 
 ## Gate Files
 

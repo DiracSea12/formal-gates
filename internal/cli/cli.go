@@ -289,7 +289,7 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs := newFlagSet("workflow authorize-repair", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
-		cycles := fs.Int("cycles", 1, "additional user-authorized review waves")
+		cycles := fs.Int("cycles", 1, "must be 1; each invocation authorizes one additional review wave")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}

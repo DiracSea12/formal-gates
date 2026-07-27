@@ -582,9 +582,26 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
 		t.Fatalf("automatic wave limit was not enforced: %v", err)
 	}
+	beforeAuthorization := stateBytes(t, root, state.RunID)
+	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 2); err == nil || !strings.Contains(err.Error(), "exactly one review wave") {
+		t.Fatalf("multiple extra waves were authorized at once: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != beforeAuthorization {
+		t.Fatal("rejected multi-wave authorization changed state")
+	}
 	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if state.ExtraReviewWaves != 1 {
+		t.Fatalf("extra review waves=%d want=1", state.ExtraReviewWaves)
+	}
+	authorizedState := stateBytes(t, root, state.RunID)
+	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1); err == nil || !strings.Contains(err.Error(), "not exhausted") {
+		t.Fatalf("another wave was preauthorized before the current one ran: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != authorizedState {
+		t.Fatal("rejected stacked authorization changed state")
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
 		t.Fatalf("authorized extra repair remained blocked: %v", err)

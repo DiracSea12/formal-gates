@@ -1068,8 +1068,8 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if cycles <= 0 {
-			return fmt.Errorf("extra review waves must be positive")
+		if cycles != 1 {
+			return fmt.Errorf("each extra repair authorization must add exactly one review wave")
 		}
 		if state.CompletedReviewWaves < effectiveReviewWaveLimit(*state) {
 			return fmt.Errorf("automatic review waves are not exhausted")
