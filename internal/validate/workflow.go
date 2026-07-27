@@ -316,7 +316,7 @@ func PrepareAction(root, packageRoot, runID, actionID string) (string, error) {
 	if actionID == "development-worker" {
 		return prepareDevelopmentAction(root, packageRoot, runID)
 	}
-	reviewerRequired := actionID == "qa-review"
+	reviewerRequired := actionID != "requirements-clarification"
 	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, func(state RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if err := requireTransition(state, actionID, ""); err != nil {
 			return "", err
@@ -462,10 +462,20 @@ func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
 		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
 			detail = repairInput(*state)
 		}
-		prompt, err = ComposeActionPrompt(catalog, "development-worker", routeForState(root, *state), detail)
+		attempt := nextDispatchAttempt(*state, "action", "development-worker", 0)
+		dispatchID, err := newDispatchID()
 		if err != nil {
 			return err
 		}
+		route := routeForState(root, *state)
+		route.DispatchID, route.DispatchAttempt = dispatchID, attempt
+		prompt, err = ComposeActionPrompt(catalog, "development-worker", route, detail)
+		if err != nil {
+			return err
+		}
+		staleOpenDispatches(state, "action", "development-worker")
+		sum := sha256.Sum256([]byte(prompt))
+		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: "development-worker", TargetKind: "action", Attempt: attempt, PromptHash: hex.EncodeToString(sum[:]), RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: state.CurrentSnapshot, ReviewerRequired: true, Status: "OPEN"}
 		if status == developmentComplete || status == developmentVerified {
 			state.Actions["development-worker"] = ActionResult{Status: developmentRepairPrepared}
 		} else if status == developmentPending {
@@ -506,6 +516,13 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 				return fmt.Errorf("reviewer identity is already reserved by dispatch %s", priorID)
 			}
 		}
+		provider, err := currentLifecycleProvider()
+		if err != nil {
+			return err
+		}
+		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, provider, reviewerIdentity); err != nil {
+			return err
+		}
 		dispatch.ReviewerIdentity, dispatch.Status = reviewerIdentity, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
 		return nil
@@ -533,6 +550,11 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		}
 		if err := requireTransition(*state, actionID, ""); err != nil {
 			return err
+		}
+		if actionID == "start-readiness" {
+			if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
+				return err
+			}
 		}
 		result, err := semanticActionResult(status, message, findings, state)
 		if err != nil {
@@ -562,6 +584,9 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message st
 			return err
 		}
 		if err := requireTransition(*state, "gate", gateID); err != nil {
+			return err
+		}
+		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
 		existing := state.Gates[gateID]
@@ -599,6 +624,9 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-design")
 		if err != nil {
+			return err
+		}
+		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
 		if strings.TrimSpace(runtimeError) != "" {
@@ -702,6 +730,9 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		if err != nil {
 			return err
 		}
+		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
+			return err
+		}
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(decisions) != 0 || len(setFindings) != 0 {
 				return fmt.Errorf("QA Review runtime error cannot include case decisions or findings")
@@ -788,6 +819,9 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		if err != nil {
 			return err
 		}
+		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
+			return err
+		}
 		if semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
 			return fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
 		}
@@ -842,7 +876,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 	})
 }
 
-func AdvanceSnapshot(root, packageRoot, runID string) (RunState, error) {
+func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
@@ -864,11 +898,28 @@ func AdvanceSnapshot(root, packageRoot, runID string) (RunState, error) {
 		if err := requireTransition(*state, "snapshot", ""); err != nil {
 			return err
 		}
+		var developmentDispatch PreparedDispatch
+		if state.RetainedOverall {
+			if strings.TrimSpace(dispatchID) != "" {
+				return fmt.Errorf("a retained overall snapshot does not accept a development dispatch")
+			}
+		} else {
+			developmentDispatch, err = requirePreparedDispatch(*state, dispatchID, "action", "development-worker")
+			if err != nil {
+				return err
+			}
+			if err := requireLifecycleVerification(root, *state, developmentDispatch); err != nil {
+				return err
+			}
+		}
 		oldSnapshot := state.CurrentSnapshot
 		isRepair := developmentStatus == developmentRepairPrepared ||
 			(state.RetainedOverall && (developmentStatus == developmentComplete || developmentStatus == developmentVerified))
 		state.CurrentSnapshot = currentSnapshot
-		state.Actions["development-worker"] = ActionResult{Status: developmentComplete}
+		state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
+		if developmentDispatch.ID != "" {
+			completeDispatch(state, developmentDispatch.ID)
+		}
 		if isRepair {
 			state.PreRepairSnapshot = oldSnapshot
 		} else {
@@ -941,6 +992,9 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "carry")
 		if err != nil {
+			return err
+		}
+		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
 		eligible := eligibleCarryGates(*state)

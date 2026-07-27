@@ -71,10 +71,13 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 		host      string
 		configRel string
 		preEvent  string
+		provider  string
+		start     string
+		stop      string
 	}{
-		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse"},
-		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse"},
-		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse"},
+		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse", provider: "claude-code", start: "SubagentStart", stop: "SubagentStop"},
+		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", provider: "codex", start: "SubagentStart", stop: "SubagentStop"},
+		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", provider: "cursor", start: "subagentStart", stop: "subagentStop"},
 	} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(tc.name+"/"+scope, func(t *testing.T) {
@@ -113,6 +116,8 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 					"bin",
 					installTestBinaryName(),
 					"hook decide",
+					"lifecycle capture",
+					tc.provider,
 				} {
 					if !strings.Contains(raw, expected) {
 						t.Fatalf("hook config missing %q: %s", expected, raw)
@@ -125,9 +130,9 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 				if _, ok := hooks[tc.preEvent]; !ok {
 					t.Fatalf("expected hook event %s in %s", tc.preEvent, raw)
 				}
-				for _, event := range []string{"SubagentStart", "SubagentStop", "subagentStart", "subagentStop"} {
-					if _, ok := hooks[event]; ok {
-						t.Fatalf("unexpected removed lifecycle hook event %s in %s", event, raw)
+				for _, event := range []string{tc.start, tc.stop} {
+					if _, ok := hooks[event]; !ok {
+						t.Fatalf("expected lifecycle hook event %s in %s", event, raw)
 					}
 				}
 				for _, command := range hookCommands(hooks) {

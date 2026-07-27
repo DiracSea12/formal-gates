@@ -96,7 +96,11 @@ func Install(options InstallOptions) (InstallReport, error) {
 			TargetPath: filepath.ToSlash(target.targetPath),
 		}
 		if !options.SkipHooks {
-			if err := configureInstallHook(target); err != nil {
+			lifecycleRoot := "."
+			if projectAbs != "" {
+				lifecycleRoot = projectAbs
+			}
+			if err := configureInstallHook(target, lifecycleRoot); err != nil {
 				return InstallReport{}, err
 			}
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
@@ -333,7 +337,7 @@ func removePycache(root string) error {
 	})
 }
 
-func configureInstallHook(target installTarget) error {
+func configureInstallHook(target installTarget, lifecycleRoot string) error {
 	config, err := readHookConfig(target.hookConfig)
 	if err != nil {
 		return err
@@ -345,17 +349,23 @@ func configureInstallHook(target installTarget) error {
 	switch target.host {
 	case "claude":
 		desired = map[string]any{
-			"PreToolUse": nestedHookEntry("*", gateCommand, false),
+			"PreToolUse":    nestedHookEntry("*", gateCommand, false),
+			"SubagentStart": nestedHookEntry("*", nativeLifecycleCommand(target.targetPath, "claude-code", "SubagentStart", lifecycleRoot), false),
+			"SubagentStop":  nestedHookEntry("*", nativeLifecycleCommand(target.targetPath, "claude-code", "SubagentStop", lifecycleRoot), false),
 		}
 	case "codex":
 		desired = map[string]any{
-			"PreToolUse": nestedHookEntry("*", gateCommand, true),
+			"PreToolUse":    nestedHookEntry("*", gateCommand, true),
+			"SubagentStart": nestedHookEntry("*", nativeLifecycleCommand(target.targetPath, "codex", "SubagentStart", lifecycleRoot), true),
+			"SubagentStop":  nestedHookEntry("*", nativeLifecycleCommand(target.targetPath, "codex", "SubagentStop", lifecycleRoot), true),
 		}
 	case "cursor":
 		shape = "flat"
 		config["version"] = float64(1)
 		desired = map[string]any{
-			"preToolUse": flatHookEntry(gateCommand),
+			"preToolUse":    flatHookEntry(gateCommand),
+			"subagentStart": flatHookEntry(nativeLifecycleCommand(target.targetPath, "cursor", "subagentStart", lifecycleRoot)),
+			"subagentStop":  flatHookEntry(nativeLifecycleCommand(target.targetPath, "cursor", "subagentStop", lifecycleRoot)),
 		}
 	}
 	for event, entry := range desired {
@@ -500,6 +510,10 @@ func nativeInstallCommand(skillRoot string, args ...string) string {
 		parts = append(parts, quoteCommandArg(arg))
 	}
 	return strings.Join(parts, " ")
+}
+
+func nativeLifecycleCommand(skillRoot, provider, event, root string) string {
+	return nativeInstallCommand(skillRoot, "lifecycle", "capture", "--provider", provider, "--event", event, "--root", root)
 }
 
 func quoteCommandArg(value string) string {

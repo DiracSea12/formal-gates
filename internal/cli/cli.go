@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
 
@@ -49,6 +50,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runWorkflow(args[1:], streams)
 	case "hook":
 		return runHook(args[1:], streams)
+	case "lifecycle":
+		return runLifecycle(args[1:], streams)
 	case "canary":
 		return runCanary(args[1:], streams)
 	case "behavior":
@@ -274,10 +277,11 @@ func runWorkflow(args []string, streams IO) (int, error) {
 		fs := newFlagSet("workflow snapshot", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
+		dispatch := fs.String("dispatch", "", "prepared Development or Repair dispatch id")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID)
+		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *dispatch)
 		return printValue(streams.Stdout, state, err)
 	case "carry":
 		return runCarry(args, streams)
@@ -434,6 +438,41 @@ func runHook(args []string, streams IO) (int, error) {
 		return 2, nil
 	}
 	return 0, nil
+}
+
+func runLifecycle(args []string, streams IO) (int, error) {
+	if len(args) == 0 {
+		return 1, fmt.Errorf("lifecycle subcommand is required")
+	}
+	sub, args := args[0], args[1:]
+	switch sub {
+	case "capture":
+		fs := newFlagSet("lifecycle capture", streams)
+		root := fs.String("root", ".", "repository root")
+		provider := fs.String("provider", "", "host provider: claude-code, codex, or cursor")
+		event := fs.String("event", "", "provider lifecycle event name")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		payload, err := io.ReadAll(streams.Stdin)
+		if err != nil {
+			return 1, err
+		}
+		result, err := lifecycle.Capture(*root, *provider, *event, payload)
+		return printValue(streams.Stdout, result, err)
+	case "verify":
+		fs := newFlagSet("lifecycle verify", streams)
+		root := fs.String("root", ".", "repository root")
+		runID := fs.String("run-id", "", "run id")
+		dispatch := fs.String("dispatch", "", "prepared dispatch id")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		result, err := lifecycle.VerifyDispatch(*root, *runID, *dispatch)
+		return printValue(streams.Stdout, result, err)
+	default:
+		return 1, fmt.Errorf("unknown lifecycle subcommand: %s", sub)
+	}
 }
 
 func runBehavior(args []string, streams IO) (int, error) {
@@ -765,5 +804,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
 }

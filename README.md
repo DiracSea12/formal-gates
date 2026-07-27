@@ -152,7 +152,7 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 
 formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id>
+  --run-id <id> --dispatch <development-or-repair-dispatch-id>
 
 formal-gates workflow carry --root <repo> --package-root <package> \
   --run-id <id> --main-agent --main-reason '<bounded repair reason>'

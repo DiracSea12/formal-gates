@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"formal-gates/internal/lifecycle"
 )
 
 func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
@@ -26,9 +28,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	}
 	state = confirmAndRoute(t, root, pkg, state, "custom", []string{"quality"})
 	state = recordReadiness(t, root, pkg, state)
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatal(err)
-	}
+	prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	state, _ = LoadRunState(root, state.RunID)
 	if !developmentStarted(state) {
 		t.Fatal("first development preparation did not freeze artifacts")
@@ -130,6 +130,42 @@ func TestDispatchClaimRequiresAnIDWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRequiredLifecycleKeepsGatePendingUntilMatchingEventsArrive(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "required-lifecycle", "custom", []string{"quality"})
+
+	priorProvider := currentLifecycleProvider
+	currentLifecycleProvider = func() (string, error) { return lifecycle.ProviderClaude, nil }
+	t.Cleanup(func() { currentLifecycleProvider = priorProvider })
+
+	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "claude-agent-1")
+	for _, event := range []string{"subagentStart", "subagentStop"} {
+		if _, err := lifecycle.Capture(root, lifecycle.ProviderCursor, event, []byte(`{"agentId":"claude-agent-1"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := stateBytes(t, root, state.RunID)
+	if _, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil); err == nil || !strings.Contains(err.Error(), "lifecycle verification REJECTED") {
+		t.Fatalf("gate result without matching provider events was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected lifecycle result changed workflow state")
+	}
+
+	for _, event := range []string{"SubagentStop", "SubagentStart"} {
+		if _, err := lifecycle.Capture(root, lifecycle.ProviderClaude, event, []byte(`{"payload":{"agent_id":"claude-agent-1"}}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Gates["quality"].Status != "PASS" || state.Dispatches[dispatchID].Status != "COMPLETED" {
+		t.Fatalf("verified lifecycle did not permit recording: %#v", state.Gates["quality"])
+	}
+}
+
 func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "incremental"), "full", nil)
@@ -163,6 +199,10 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	}
 	state, _ = LoadRunState(root, state.RunID)
 	designDispatch = openDispatchID(state, "action", "qa-design")
+	state, err = ClaimDispatch(root, pkg, state.RunID, designDispatch, "qa-design-rework")
+	if err != nil {
+		t.Fatal(err)
+	}
 	revised := []QACaseInput{cases[0], {Kind: "LIVE", Description: "public workflow succeeds", Procedure: "run the public CLI against a built snapshot", Oracle: "observable output matches"}}
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
@@ -282,12 +322,10 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 		t.Fatalf("blocking wave was not completed: %#v", state)
 	}
 	prior := state.CurrentSnapshot
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatal(err)
-	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "repair.txt"), "repair\n")
 	commitAll(t, root, "repair")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +442,7 @@ func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	state = recordReadiness(t, root, pkg, state)
 	writeTestFile(t, filepath.Join(root, "merged-delivery.txt"), "merged delivery\n")
 	commitAll(t, root, "merged delivery")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,19 +462,17 @@ func TestDevelopmentSnapshotRejectsUncommittedTrackedGitChanges(t *testing.T) {
 	commitAll(t, root, "tracked delivery")
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "uncommitted-snapshot"), "custom", []string{"quality"})
 	state = recordReadiness(t, root, pkg, state)
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatal(err)
-	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery.txt"), "edited delivery\n")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes must be committed") {
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes must be committed") {
 		t.Fatalf("uncommitted tracked delivery was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected uncommitted snapshot changed state")
 	}
 	commitAll(t, root, "commit delivery")
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID); err != nil {
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch); err != nil {
 		t.Fatalf("committed delivery snapshot was rejected: %v", err)
 	}
 }
@@ -693,12 +729,10 @@ func readyDelivery(t *testing.T, root, pkg, id string) RunState {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatal(err)
-	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-"+id+".txt"), "delivery\n")
 	commitAll(t, root, "delivery "+id)
-	state, err = AdvanceSnapshot(root, pkg, state.RunID)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,12 +756,10 @@ func readyDeliveryForRoute(t *testing.T, root, pkg, id, mode string, selected []
 			t.Fatal(err)
 		}
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatal(err)
-	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-"+id+".txt"), "delivery\n")
 	commitAll(t, root, "delivery "+id)
-	state, err := AdvanceSnapshot(root, pkg, state.RunID)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -746,12 +778,10 @@ func recordGateResult(t *testing.T, root, pkg string, state RunState, gate, revi
 
 func advanceRepair(t *testing.T, root, pkg string, state RunState, suffix string) RunState {
 	t.Helper()
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatal(err)
-	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "repair-"+suffix+".txt"), "repair\n")
 	commitAll(t, root, "repair "+suffix)
-	state, err := AdvanceSnapshot(root, pkg, state.RunID)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -787,7 +817,14 @@ func prepareDispatch(t *testing.T, root, pkg, runID, target string) string {
 	if target == "quality" || target == "architecture" {
 		kind = "gate"
 	}
-	return openDispatchID(state, kind, target)
+	dispatchID := openDispatchID(state, kind, target)
+	if kind == "action" && target != "requirements-clarification" && target != "qa-review" {
+		identity := fmt.Sprintf("%s-%s-%s", runID, target, dispatchID)
+		if _, err := ClaimDispatch(root, pkg, runID, dispatchID, identity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dispatchID
 }
 
 func prepareAndClaim(t *testing.T, root, pkg, runID, target, reviewer string) string {

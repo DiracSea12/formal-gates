@@ -201,6 +201,9 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
+# Repeat this claim after preparing every independently dispatched action or gate.
+formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --reviewer <host-agent-id>
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR>
@@ -224,7 +227,7 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
 
 # Record the immutable post-development or post-repair identity.
 formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id>
+  --run-id <id> --dispatch <development-or-repair-dispatch-id>
 
 # Prepare QA Execution and every gate in parallel.
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
@@ -278,11 +281,16 @@ host's native independent-agent channel. Send the development task only to the
 separate worker. Do not append chat history, findings, repair explanations,
 another reviewer's result, expected verdicts, or focus instructions.
 
+Bind every independently dispatched action and gate to the host identity with
+`workflow claim-dispatch` after the host starts it. The corresponding result
+command, or `workflow snapshot --dispatch` for Development and Repair, checks
+the lifecycle module before changing workflow state. A retained-overall
+integration snapshot is a main-agent operation and omits `--dispatch`.
+
 For QA Review and every discovered gate, create a new zero-context reviewer,
-immediately reserve its host identity with `workflow claim-dispatch`, and pass
-the returned dispatch ID unchanged when recording. Never reuse a QA Review or
-gate reviewer identity anywhere else in the same run, including retries and
-repair waves. An interrupted claimed identity remains reserved.
+and pass the prepared dispatch ID unchanged when recording. Never reuse a host
+agent identity anywhere else in the same run, including retries and repair
+waves. An interrupted claimed identity remains reserved.
 
 QA Review receives only the confirmed requirement and complete candidate case
 set assembled by the CLI. It must not inspect production implementation,

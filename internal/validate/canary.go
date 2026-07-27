@@ -110,7 +110,12 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", openDispatchID(state, "action", "start-readiness"), "PASS", "", nil)
+	dispatchID := openDispatchID(state, "action", "start-readiness")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-start-readiness")
+	if err != nil {
+		return err
+	}
+	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
 	if err != nil {
 		return err
 	}
@@ -118,7 +123,12 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	state, err = RecordQADesign(root, packageRoot, state.RunID, openDispatchID(state, "action", "qa-design"), []QACaseInput{{Kind: "STATIC", Description: "direct behavior", Procedure: "run the direct automated check", Oracle: "the check passes"}, {Kind: "LIVE", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
+	dispatchID = openDispatchID(state, "action", "qa-design")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-design")
+	if err != nil {
+		return err
+	}
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Kind: "STATIC", Description: "direct behavior", Procedure: "run the direct automated check", Oracle: "the check passes"}, {Kind: "LIVE", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
 	if err != nil {
 		return err
 	}
@@ -126,7 +136,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	dispatchID := openDispatchID(state, "action", "qa-review")
+	dispatchID = openDispatchID(state, "action", "qa-review")
 	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-reviewer")
 	if err != nil {
 		return err
@@ -138,13 +148,19 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker"); err != nil {
 		return err
 	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID = openDispatchID(state, "action", "development-worker")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-development")
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(root, "delivery.txt"), []byte("delivery\n"), 0o600); err != nil {
 		return err
 	}
 	if err := commitCanaryGit(root, "delivery"); err != nil {
 		return err
 	}
-	state, err = AdvanceSnapshot(root, packageRoot, state.RunID)
+	state, err = AdvanceSnapshot(root, packageRoot, state.RunID, dispatchID)
 	if err != nil {
 		return err
 	}
@@ -152,7 +168,12 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	state, err = RecordQAExecution(root, packageRoot, state.RunID, openDispatchID(state, "action", "qa-execution"), []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran direct check", Observation: "passed", OracleResult: "matched"}, {CaseID: "CASE-002", Outcome: "PASS", Procedure: "exercised public command", Observation: "observed", OracleResult: "matched"}}, "")
+	dispatchID = openDispatchID(state, "action", "qa-execution")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-execution")
+	if err != nil {
+		return err
+	}
+	state, err = RecordQAExecution(root, packageRoot, state.RunID, dispatchID, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran direct check", Observation: "passed", OracleResult: "matched"}, {CaseID: "CASE-002", Outcome: "PASS", Procedure: "exercised public command", Observation: "observed", OracleResult: "matched"}}, "")
 	if err != nil {
 		return err
 	}

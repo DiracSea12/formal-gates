@@ -33,7 +33,7 @@ bin/formal-gates install --source <formal-gates> \
 
 The installer copies one runtime package, including `SKILL.md`, the CLI,
 `prompts/`, `gates/`, and maintained references. It configures the selected
-host's formal-gates `PreToolUse`/`preToolUse` command hook by default. Existing
+host's formal-gates command and subagent lifecycle hooks by default. Existing
 unrelated hook entries are preserved. Use `--skip-hooks` only when the host's
 hook configuration must remain byte-for-byte unchanged.
 
@@ -71,6 +71,26 @@ It accepts the host's JSON payload on stdin and returns the host-compatible
 allow/block decision. It is a guardrail around formal-gates commands, not proof
 of code quality and not a replacement for explicit workflow state checks.
 
+The installer also configures `SubagentStart` and `SubagentStop` for Claude
+Code and Codex, and `subagentStart` and `subagentStop` for Cursor. Those hooks
+send the host payload on stdin to the installed native binary:
+
+```bash
+bin/formal-gates lifecycle capture --root <repo> \
+  --provider <claude-code|codex|cursor> --event <provider-event-name>
+```
+
+After `workflow claim-dispatch` binds the host identity, inspect the derived
+outcome without changing workflow state:
+
+```bash
+bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
+  --dispatch <dispatch-id>
+```
+
+Claude Code and Cursor require matching start and stop events. Codex reports
+`UNAVAILABLE`, so the existing dispatch and identity checks remain authoritative.
+
 A settings file or direct `hook decide` unit test proves only local decision
 logic. Claim automatic blocking only after the actual target host sends a live
 `PreToolUse` payload and the hook blocks the test command. A canary on one host
@@ -84,8 +104,7 @@ bin/formal-gates canary codex-hook --worktree <repo>
 
 Failure means that client/version did not prove closed-loop automatic
 interception. Explicit `formal-gates workflow ...` commands still remain the
-normal authority for the run. The installer does not invent unavailable
-subagent lifecycle events.
+normal authority for the run.
 
 ## Candidate Package Checks
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
 
@@ -30,11 +31,11 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	runCLI(t, "workflow", "qa-review", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch,
 		"--case", "CASE-001", "--outcome", "PASS", "--case", "CASE-002", "--outcome", "PASS")
 
-	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "development-worker")
+	developmentDispatch := cliPrepareAction(t, root, pkg, state.RunID, "development-worker")
 	mustWriteCLI(t, filepath.Join(root, "delivery.txt"), "delivery\n")
 	cliGit(t, root, "add", "--all")
 	cliGit(t, root, "commit", "-m", "delivery")
-	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID)
+	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", developmentDispatch)
 
 	executionDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-execution")
 	runCLI(t, "workflow", "qa-execution", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", executionDispatch,
@@ -108,10 +109,31 @@ func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
 	if code := Run("formal-gates", []string{"--help"}, IO{Stdout: &stdout}); code != 0 {
 		t.Fatalf("help code=%d", code)
 	}
-	for _, want := range []string{"claim-dispatch", "qa-review"} {
+	for _, want := range []string{"claim-dispatch", "qa-review", "lifecycle capture|verify"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("help omitted %s: %s", want, stdout.String())
 		}
+	}
+}
+
+func TestCLILifecycleCaptureAndVerify(t *testing.T) {
+	root := t.TempDir()
+	if err := lifecycle.BindDispatch(root, "run-1", "dispatch-1", lifecycle.ProviderCursor, "cursor-agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"subagentStop", "subagentStart"} {
+		var stdout, stderr bytes.Buffer
+		code := Run("formal-gates", []string{"lifecycle", "capture", "--root", root, "--provider", "cursor", "--event", event}, IO{Stdin: strings.NewReader(`{"data":{"task_id":"cursor-agent-1"}}`), Stdout: &stdout, Stderr: &stderr})
+		if code != 0 {
+			t.Fatalf("capture %s failed: %s", event, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), `"identity": "cursor-agent-1"`) {
+			t.Fatalf("capture omitted normalized identity: %s", stdout.String())
+		}
+	}
+	out := runCLI(t, "lifecycle", "verify", "--root", root, "--run-id", "run-1", "--dispatch", "dispatch-1")
+	if !strings.Contains(out, `"outcome": "VERIFIED"`) || !strings.Contains(out, `"startObserved": true`) || !strings.Contains(out, `"stopObserved": true`) {
+		t.Fatalf("unexpected lifecycle verification: %s", out)
 	}
 }
 
@@ -145,6 +167,9 @@ func cliPrepareAction(t *testing.T, root, pkg, runID, action string) string {
 	id := cliOpenDispatch(state, "action", action)
 	if id == "" || !strings.Contains(prompt, id) {
 		t.Fatalf("prepared prompt missing dispatch: %s", prompt)
+	}
+	if action != "requirements-clarification" && action != "qa-review" {
+		runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", runID, "--dispatch", id, "--reviewer", runID+"-"+action)
 	}
 	return id
 }
