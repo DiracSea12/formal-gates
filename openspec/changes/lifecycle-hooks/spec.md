@@ -30,9 +30,22 @@ is the only extension point: every discovered gate automatically requires a
 new independent reviewer identity and inherits lifecycle verification without
 provider-specific or gate-specific workflow changes.
 
-Fixed workflow actions that require independent agents shall retain their
-existing explicit rules. Main-agent Requirements Clarification, Seal, and
-explicit `--main-agent` Carry do not require lifecycle proof.
+The fixed independently dispatched actions are Start Readiness, QA Design, QA
+Review, Development or Repair, QA Execution, and independent Carry. Each shall
+bind its prepared dispatch to the host agent identity through
+`workflow claim-dispatch`. Their lifecycle verification points are:
+
+- `workflow record-action` for Start Readiness;
+- `workflow qa-design`, `workflow qa-review`, and `workflow qa-execution` for
+  the corresponding QA actions;
+- `workflow snapshot --dispatch <id>` for Development or Repair completion;
+- `workflow carry --dispatch <id>` for independent Carry; and
+- `workflow record-gate` for every discovered gate.
+
+Main-agent Requirements Clarification, Seal, and explicit `--main-agent` Carry
+do not require lifecycle proof. A retained-overall snapshot that records
+already sealed slice work also remains a main-agent integration operation and
+does not create a development-worker lifecycle requirement.
 
 ### RQ-004 Decide lifecycle compliance mechanically
 
@@ -59,7 +72,32 @@ installed lifecycle hook entries. Claude Code and Cursor shall require their
 normal lifecycle events. A provider marked required shall not silently
 downgrade when events are absent.
 
-### RQ-006 Preserve the normal-use boundary
+The program shall resolve the host provider automatically from the installed
+native binary's canonical location when `workflow start` runs and persist that
+provider in the run state. The Codex, Claude Code, and Cursor installers place
+their binaries in distinct maintained roots, so later result commands use the
+run-bound provider rather than guessing from event absence or accepting an
+AI-supplied lifecycle decision. A directly built source binary outside a
+maintained host installation uses the conservative Codex `UNAVAILABLE` policy
+for portable development and package checks.
+
+The provider is immutable for a run. A lifecycle event from another provider
+cannot satisfy that run.
+
+### RQ-006 Provide public lifecycle capture and verification entrypoints
+
+The CLI shall provide a host-hook entrypoint that accepts provider and event
+name plus the host JSON payload on stdin, and a read-only verification
+entrypoint that reports the mechanically derived lifecycle outcome for a
+prepared dispatch. These commands expose only normalized status and diagnostic
+facts; they do not let callers submit or override an outcome.
+
+Start and stop events may arrive before or after the dispatch claim and may be
+delivered more than once. Matching is by the run-bound provider and claimed
+host agent identity. A complete matching start/stop set verifies regardless of
+capture order; duplicates have no additional effect.
+
+### RQ-007 Preserve the normal-use boundary
 
 This feature guarantees documented normal use and common operator mistakes.
 Adversarial evidence tampering, malicious local edits, manual rewriting of
@@ -71,16 +109,18 @@ additional hardening.
 
 Add a standalone lifecycle package with provider adapters and a small journal
 owned by the lifecycle module. The hook entrypoint captures a provider and
-event name plus the host JSON payload, normalizes the agent identity and any
-dispatch correlation, and stores idempotent start/stop observations under the
-active run's temporary data.
+event name plus the host JSON payload, normalizes the host agent identity, and
+stores idempotent start/stop observations in plugin-owned temporary data. A
+later dispatch claim binds matching observations to the run without requiring
+the host event to contain formal-gates fields.
 
-Workflow dispatches retain their existing dispatch and reviewer identity
-ownership. Result recording asks the lifecycle verifier for the dispatch
-outcome. For catalog gates, reviewer requirement and lifecycle enforcement are
-automatic. Codex returns `UNAVAILABLE`; Claude Code and Cursor return
-`VERIFIED` only after matching start and stop observations and otherwise return
-`REJECTED`.
+Every independently dispatched fixed action and every catalog gate owns a
+prepared dispatch and claimed host agent identity. Result recording, or
+snapshot recording for Development and Repair, asks the lifecycle verifier for
+the dispatch outcome. For catalog gates, independent-agent and lifecycle
+requirements are automatic. Codex returns `UNAVAILABLE`; Claude Code and
+Cursor return `VERIFIED` only after matching start and stop observations and
+otherwise return `REJECTED`.
 
 Provider payload parsing and hook naming stay in provider-specific files.
 Installer composition knows only the lifecycle hook command supplied by the
@@ -92,11 +132,30 @@ the workflow state machine or gate catalog.
 - Direct lifecycle tests cover normalization, idempotent event order, matching
   identity, missing events, mismatched identity, and provider capability.
 - Workflow tests prove required-provider rejection leaves a gate pending,
-  verified lifecycle permits recording, and Codex `UNAVAILABLE` preserves the
-  existing dispatch path.
+  verified lifecycle permits recording, every fixed independent action checks
+  at its named transition, and Codex `UNAVAILABLE` preserves the existing
+  dispatch path.
 - Catalog tests prove newly discovered gates inherit independent reviewer and
   lifecycle requirements.
 - Installer tests prove all supported host configurations receive lifecycle
   hooks while unrelated hooks remain intact.
 - Run the Go test suite, race detector, vet, build, package validation,
   portable canary, behavior evaluation, and relevant live host canaries.
+
+The Claude Code and Cursor live procedures are:
+
+1. install the candidate for that host with hooks enabled;
+2. start a run through that host's installed binary and confirm the run-bound
+   provider with `workflow show`;
+3. prepare an independent gate, start one normal host subagent with the exact
+   prepared task, and claim the returned host identity;
+4. let the subagent finish normally;
+5. run `lifecycle verify --root <repo> --run-id <id> --dispatch <id>` and then
+   record its semantic result.
+
+The canary passes only when verification reports `VERIFIED` and result
+recording succeeds. Missing events, provider mismatch, or `UNAVAILABLE` on
+Claude Code or Cursor fails that host canary. When a host executable is not
+installed or cannot normally launch a subagent in the test environment, that
+live-host canary is unavailable rather than simulated; direct provider,
+installer, hook-entrypoint, and workflow tests still run.
