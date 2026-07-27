@@ -5,8 +5,9 @@ import "testing"
 func TestHookDeniesPassWithoutCurrentRunBinding(t *testing.T) {
 	for _, command := range []string{
 		`formal-gates workflow record-gate --gate quality --status PASS --run-id run`,
-		`formal-gates workflow record-gate --status PASS --run-id run --live-snapshot current`,
-		`formal-gates workflow record-gate --gate quality --status PASS --live-snapshot current`,
+		`formal-gates workflow record-gate --status PASS --run-id run --dispatch dispatch-1`,
+		`formal-gates workflow record-gate --gate quality --status PASS --dispatch dispatch-1`,
+		`formal-gates workflow record-gate --gate quality --status PASS --run-id run --live-snapshot current`,
 	} {
 		decision, err := Hook([]byte(`{"command":"` + command + `"}`))
 		if err != nil {
@@ -20,7 +21,7 @@ func TestHookDeniesPassWithoutCurrentRunBinding(t *testing.T) {
 
 func TestHookAllowsBoundPassAndOtherCommands(t *testing.T) {
 	for _, payload := range []string{
-		`{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run --live-snapshot current"}`,
+		`{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run --dispatch dispatch-1"}`,
 		`{"command":"go test ./..."}`,
 		`{"event":"PreToolUse","value":{"text":"not a command"}}`,
 	} {

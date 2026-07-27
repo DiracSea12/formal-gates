@@ -36,10 +36,10 @@ func Hook(payload []byte) (HookDecision, error) {
 	if deniesFormalGatePassWithoutBinding(command) {
 		return HookDecision{
 			Decision:                 "block",
-			Reason:                   "formal gate PASS recording requires a run id, gate id, and live snapshot",
+			Reason:                   "formal gate PASS recording requires a run id, gate id, and dispatch id",
 			Permission:               "deny",
 			PermissionDecision:       "deny",
-			PermissionDecisionReason: "formal gate PASS recording requires a run id, gate id, and live snapshot",
+			PermissionDecisionReason: "formal gate PASS recording requires a run id, gate id, and dispatch id",
 		}, nil
 	}
 	return allowHook("command allowed"), nil
@@ -67,7 +67,7 @@ func deniesFormalGatePassWithoutBinding(command string) bool {
 	if !hasSwitchValue(tokens, "Status", "PASS") {
 		return false
 	}
-	for _, name := range []string{"run-id", "gate", "live-snapshot"} {
+	for _, name := range []string{"run-id", "gate", "dispatch"} {
 		if !hasNonEmptySwitchValue(tokens, name) {
 			return true
 		}
