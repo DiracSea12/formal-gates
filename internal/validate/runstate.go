@@ -36,7 +36,6 @@ type RunState struct {
 	Gates                map[string]GateResult        `json:"gates"`
 	Carry                map[string]CarryResult       `json:"carry"`
 	Dispatches           map[string]PreparedDispatch  `json:"dispatches"`
-	UsedReviewers        map[string]string            `json:"usedReviewers"`
 }
 
 type RequirementArtifact struct {
@@ -146,7 +145,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, UsedReviewers: map[string]string{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -182,9 +181,6 @@ func SaveRunState(root string, state RunState) error {
 	}
 	if state.Dispatches == nil {
 		state.Dispatches = map[string]PreparedDispatch{}
-	}
-	if state.UsedReviewers == nil {
-		state.UsedReviewers = map[string]string{}
 	}
 	if state.RequirementArtifacts == nil {
 		state.RequirementArtifacts = []RequirementArtifact{}

@@ -501,12 +501,13 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		if reviewerIdentity == "" {
 			return fmt.Errorf("reviewer identity is required")
 		}
-		if prior, used := state.UsedReviewers[reviewerIdentity]; used {
-			return fmt.Errorf("reviewer identity is already reserved by dispatch %s", prior)
+		for priorID, prior := range state.Dispatches {
+			if prior.ReviewerIdentity == reviewerIdentity {
+				return fmt.Errorf("reviewer identity is already reserved by dispatch %s", priorID)
+			}
 		}
 		dispatch.ReviewerIdentity, dispatch.Status = reviewerIdentity, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
-		state.UsedReviewers[reviewerIdentity] = dispatchID
 		return nil
 	})
 }
