@@ -72,17 +72,18 @@ installed lifecycle hook entries. Claude Code and Cursor shall require their
 normal lifecycle events. A provider marked required shall not silently
 downgrade when events are absent.
 
-The program shall resolve the host provider automatically from the installed
-native binary's canonical location when `workflow start` runs and persist that
-provider in the run state. The Codex, Claude Code, and Cursor installers place
-their binaries in distinct maintained roots, so later result commands use the
-run-bound provider rather than guessing from event absence or accepting an
-AI-supplied lifecycle decision. A directly built source binary outside a
-maintained host installation uses the conservative Codex `UNAVAILABLE` policy
-for portable development and package checks.
+When `workflow claim-dispatch` binds the host agent identity, the lifecycle
+module shall resolve the host provider automatically from the installed native
+binary's canonical location and persist that provider in its own dispatch
+binding. The Codex, Claude Code, and Cursor installers place their binaries in
+distinct maintained roots. Workflow state does not own provider capability or
+event data; later result commands ask the lifecycle module to verify the
+dispatch. A directly built source binary outside a maintained host installation
+uses the conservative Codex `UNAVAILABLE` policy for portable development and
+package checks.
 
-The provider is immutable for a run. A lifecycle event from another provider
-cannot satisfy that run.
+The provider is immutable for that dispatch. An event from another provider
+cannot satisfy it.
 
 ### RQ-006 Provide public lifecycle capture and verification entrypoints
 
@@ -93,9 +94,9 @@ prepared dispatch. These commands expose only normalized status and diagnostic
 facts; they do not let callers submit or override an outcome.
 
 Start and stop events may arrive before or after the dispatch claim and may be
-delivered more than once. Matching is by the run-bound provider and claimed
-host agent identity. A complete matching start/stop set verifies regardless of
-capture order; duplicates have no additional effect.
+delivered more than once. Matching is by the dispatch-bound provider and
+claimed host agent identity. A complete matching start/stop set verifies
+regardless of capture order; duplicates have no additional effect.
 
 ### RQ-007 Preserve the normal-use boundary
 
@@ -111,8 +112,8 @@ Add a standalone lifecycle package with provider adapters and a small journal
 owned by the lifecycle module. The hook entrypoint captures a provider and
 event name plus the host JSON payload, normalizes the host agent identity, and
 stores idempotent start/stop observations in plugin-owned temporary data. A
-later dispatch claim binds matching observations to the run without requiring
-the host event to contain formal-gates fields.
+later dispatch claim binds matching observations to the dispatch without
+requiring the host event to contain formal-gates fields.
 
 Every independently dispatched fixed action and every catalog gate owns a
 prepared dispatch and claimed host agent identity. Result recording, or
@@ -145,10 +146,11 @@ the workflow state machine or gate catalog.
 The Claude Code and Cursor live procedures are:
 
 1. install the candidate for that host with hooks enabled;
-2. start a run through that host's installed binary and confirm the run-bound
-   provider with `workflow show`;
-3. prepare an independent gate, start one normal host subagent with the exact
-   prepared task, and claim the returned host identity;
+2. start a run and prepare an independent gate through that host's installed
+   binary;
+3. start one normal host subagent with the exact prepared task, claim the
+   returned host identity, and confirm the dispatch-bound provider with
+   `lifecycle verify`;
 4. let the subagent finish normally;
 5. run `lifecycle verify --root <repo> --run-id <id> --dispatch <id>` and then
    record its semantic result.
