@@ -10,6 +10,7 @@ import (
 
 func TestLifecycleCaptureAndVerification(t *testing.T) {
 	root := t.TempDir()
+	useProvider(t, ProviderClaude)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +29,7 @@ func TestLifecycleCaptureAndVerification(t *testing.T) {
 	if start.Event != eventStart || !duplicate.Duplicate {
 		t.Fatalf("unexpected capture results: start=%+v duplicate=%+v", start, duplicate)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", ProviderClaude, "agent-1"); err != nil {
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -43,6 +44,7 @@ func TestLifecycleCaptureAndVerification(t *testing.T) {
 
 func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *testing.T) {
 	root, otherRoot := t.TempDir(), t.TempDir()
+	useProvider(t, ProviderCursor)
 	if err := BeginRun(root, "run-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *tes
 	if _, err := Capture("", ProviderCursor, "subagentStart", start); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(root, "run-1", "dispatch-1", ProviderCursor, "cursor-agent-1"); err != nil {
+	if err := BindDispatch(root, "run-1", "dispatch-1", "cursor-agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -73,7 +75,7 @@ func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *tes
 	if _, err := Capture("", ProviderCursor, "subagentStart", cursorPayload(otherRoot, true)); err != nil {
 		t.Fatal(err)
 	}
-	if err := BindDispatch(otherRoot, "run-2", "dispatch-2", ProviderCursor, "cursor-agent-1"); err != nil {
+	if err := BindDispatch(otherRoot, "run-2", "dispatch-2", "cursor-agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	other, err := VerifyDispatch(otherRoot, "run-2", "dispatch-2")
@@ -87,7 +89,8 @@ func TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots(t *tes
 
 func TestLifecycleRequiredProviderRejectsMissingOrMismatchedEvents(t *testing.T) {
 	root := t.TempDir()
-	if err := BindDispatch(root, "run-1", "dispatch-1", ProviderCursor, "agent-1"); err != nil {
+	useProvider(t, ProviderCursor)
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Capture(root, ProviderCursor, "subagentStart", []byte(`{"subagent_id":"other-agent","conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"different task"}`)); err != nil {
@@ -153,7 +156,8 @@ func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
 
 func TestLifecycleCodexIsUnavailable(t *testing.T) {
 	root := t.TempDir()
-	if err := BindDispatch(root, "run-1", "dispatch-1", ProviderCodex, "agent-1"); err != nil {
+	useProvider(t, ProviderCodex)
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
@@ -174,10 +178,76 @@ func TestProviderFromExecutable(t *testing.T) {
 	}
 	for path, want := range tests {
 		t.Run(fmt.Sprintf("%s", want), func(t *testing.T) {
-			if got := ProviderFromExecutable(path); got != want {
-				t.Fatalf("ProviderFromExecutable(%q)=%q want %q", path, got, want)
+			if got := providerFromExecutable(path); got != want {
+				t.Fatalf("providerFromExecutable(%q)=%q want %q", path, got, want)
 			}
 		})
+	}
+}
+
+func TestClaudeCaptureResolvesActiveRunAboveSubagentWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	subdirectory := filepath.Join(root, "services", "worker")
+	if err := os.MkdirAll(subdirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := BeginRun(root, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PROJECT_DIR", root)
+	useProvider(t, ProviderClaude)
+	for _, event := range []string{"SubagentStart", "SubagentStop"} {
+		payload := []byte(fmt.Sprintf(`{"cwd":%q,"agent_id":"claude-subdirectory-agent"}`, subdirectory))
+		if _, err := Capture("", ProviderClaude, event, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := BindDispatch(root, "run-1", "dispatch-1", "claude-subdirectory-agent"); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Outcome != Verified {
+		t.Fatalf("expected Claude subdirectory events to verify at the active run root, got %+v", verification)
+	}
+	if _, err := os.Stat(filepath.Join(subdirectory, ".gates")); !os.IsNotExist(err) {
+		t.Fatalf("Claude capture wrote lifecycle data beneath mutable cwd: %v", err)
+	}
+}
+
+func TestCursorCaptureSelectsActiveRunFromAllWorkspaceRoots(t *testing.T) {
+	firstRoot, runRoot := t.TempDir(), t.TempDir()
+	if err := BeginRun(runRoot, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	useProvider(t, ProviderCursor)
+	payload := func(includeIdentity bool) []byte {
+		identity := ""
+		if includeIdentity {
+			identity = `"subagent_id":"cursor-multi-root-agent",`
+		}
+		return []byte(fmt.Sprintf(`{%s"conversation_id":"conversation-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared formal-gates dispatch","workspace_roots":[%q,%q]}`, identity, firstRoot, runRoot))
+	}
+	if _, err := Capture("", ProviderCursor, "subagentStart", payload(true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindDispatch(runRoot, "run-1", "dispatch-1", "cursor-multi-root-agent"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Capture("", ProviderCursor, "subagentStop", payload(false)); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := VerifyDispatch(runRoot, "run-1", "dispatch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Outcome != Verified {
+		t.Fatalf("expected Cursor multi-root events to verify at the active run root, got %+v", verification)
+	}
+	if _, err := os.Stat(filepath.Join(firstRoot, ".gates")); !os.IsNotExist(err) {
+		t.Fatalf("Cursor capture wrote lifecycle data beneath the first inactive workspace root: %v", err)
 	}
 }
 
@@ -203,4 +273,16 @@ func assertRunOwnedEvents(t *testing.T, root, runID, dispatchID string) {
 	if len(pending) != 0 {
 		t.Fatalf("claimed observations remained outside the run: %v", pending)
 	}
+}
+
+func useProvider(t *testing.T, provider string) {
+	t.Helper()
+	prior := executablePath
+	path := map[string]string{
+		ProviderClaude: filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderCodex:  filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderCursor: filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
+	}[provider]
+	executablePath = func() (string, error) { return path, nil }
+	t.Cleanup(func() { executablePath = prior })
 }

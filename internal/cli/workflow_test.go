@@ -117,35 +117,126 @@ func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
 	}
 }
 
-func TestCLILifecycleCaptureAndVerify(t *testing.T) {
-	root := t.TempDir()
-	if err := lifecycle.BindDispatch(root, "run-1", "dispatch-1", lifecycle.ProviderCursor, "cursor-agent-1"); err != nil {
+func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.T) {
+	tests := []struct {
+		name       string
+		provider   string
+		startEvent string
+		stopEvent  string
+		payloads   func(root, alternateRoot, identity string) (string, string, string, []string)
+	}{
+		{
+			name:       "claude-subdirectory",
+			provider:   lifecycle.ProviderClaude,
+			startEvent: "SubagentStart",
+			stopEvent:  "SubagentStop",
+			payloads: func(root, _ string, identity string) (string, string, string, []string) {
+				workdir := filepath.Join(root, "services", "worker")
+				if err := os.MkdirAll(workdir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				payload := fmt.Sprintf(`{"cwd":%q,"agent_id":%q}`, workdir, identity)
+				return payload, payload, workdir, []string{"CLAUDE_PROJECT_DIR=" + root}
+			},
+		},
+		{
+			name:       "cursor-multi-root",
+			provider:   lifecycle.ProviderCursor,
+			startEvent: "subagentStart",
+			stopEvent:  "subagentStop",
+			payloads: func(root, alternateRoot, identity string) (string, string, string, []string) {
+				common := fmt.Sprintf(`"conversation_id":"conversation-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared formal-gates dispatch","workspace_roots":[%q,%q]`, alternateRoot, root)
+				return fmt.Sprintf(`{"subagent_id":%q,%s}`, identity, common), "{" + common + "}", root, nil
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root, pkg := cliWorkflowFixture(t)
+			alternateRoot := t.TempDir()
+			binary := buildInstalledHostCLI(t, tc.provider)
+			runID := strings.ReplaceAll(tc.name, "_", "-")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", runID, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git")
+
+			requirementsDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "requirements-clarification")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", requirementsDispatch, "--status", "PASS")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", runID, "--confirmed")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "quality")
+
+			dispatchID := prepareInstalledAction(t, binary, root, pkg, runID, "start-readiness")
+			identity := tc.name + "-agent"
+			startPayload, stopPayload, captureDir, environment := tc.payloads(root, alternateRoot, identity)
+			runInstalledCLI(t, binary, captureDir, environment, startPayload, "lifecycle", "capture", "--provider", tc.provider, "--event", tc.startEvent)
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", runID, "--dispatch", dispatchID, "--reviewer", identity)
+			runInstalledCLI(t, binary, captureDir, environment, stopPayload, "lifecycle", "capture", "--provider", tc.provider, "--event", tc.stopEvent)
+
+			verification := runInstalledCLI(t, binary, root, nil, "", "lifecycle", "verify", "--root", root, "--run-id", runID, "--dispatch", dispatchID)
+			if !strings.Contains(verification, `"outcome": "VERIFIED"`) || !strings.Contains(verification, `"provider": "`+tc.provider+`"`) {
+				t.Fatalf("unexpected lifecycle verification: %s", verification)
+			}
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "start-readiness", "--dispatch", dispatchID, "--status", "PASS")
+			state := installedWorkflowState(t, binary, root, runID)
+			if state.Actions["start-readiness"].Status != "PASS" {
+				t.Fatalf("verified lifecycle did not permit public workflow recording: %#v", state.Actions["start-readiness"])
+			}
+		})
+	}
+}
+
+func buildInstalledHostCLI(t *testing.T, provider string) string {
+	t.Helper()
+	relative := map[string]string{
+		lifecycle.ProviderClaude: filepath.Join(".claude", "skills", "formal-gates", "bin", "formal-gates"),
+		lifecycle.ProviderCursor: filepath.Join(".cursor", "formal-gates", "bin", "formal-gates"),
+	}[provider]
+	path := filepath.Join(t.TempDir(), relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		event    string
-		payload  string
-		identity bool
-	}{
-		{event: "subagentStop", payload: fmt.Sprintf(`{"conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared dispatch","workspace_roots":[%q]}`, root)},
-		{event: "subagentStart", payload: fmt.Sprintf(`{"subagent_id":"cursor-agent-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared dispatch","workspace_roots":[%q]}`, root), identity: true},
-	} {
-		var stdout, stderr bytes.Buffer
-		code := Run("formal-gates", []string{"lifecycle", "capture", "--provider", "cursor", "--event", tc.event}, IO{Stdin: strings.NewReader(tc.payload), Stdout: &stdout, Stderr: &stderr})
-		if code != 0 {
-			t.Fatalf("capture %s failed: %s", tc.event, stderr.String())
-		}
-		if tc.identity && !strings.Contains(stdout.String(), `"identity": "cursor-agent-1"`) {
-			t.Fatalf("capture omitted normalized identity: %s", stdout.String())
-		}
-		if !tc.identity && strings.Contains(stdout.String(), `"identity": "cursor-agent-1"`) {
-			t.Fatalf("Cursor stop invented an identity: %s", stdout.String())
-		}
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
 	}
-	out := runCLI(t, "lifecycle", "verify", "--root", root, "--run-id", "run-1", "--dispatch", "dispatch-1")
-	if !strings.Contains(out, `"outcome": "VERIFIED"`) || !strings.Contains(out, `"startObserved": true`) || !strings.Contains(out, `"stopObserved": true`) {
-		t.Fatalf("unexpected lifecycle verification: %s", out)
+	cmd := exec.Command("go", "build", "-o", path, "./cmd/formal-gates")
+	cmd.Dir = repoRoot
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build installed %s CLI: %v: %s", provider, err, output)
 	}
+	return path
+}
+
+func prepareInstalledAction(t *testing.T, binary, root, pkg, runID, action string) string {
+	t.Helper()
+	runInstalledCLI(t, binary, root, nil, "", "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", action)
+	state := installedWorkflowState(t, binary, root, runID)
+	dispatchID := cliOpenDispatch(state, "action", action)
+	if dispatchID == "" {
+		t.Fatalf("prepared action %s has no open dispatch", action)
+	}
+	return dispatchID
+}
+
+func installedWorkflowState(t *testing.T, binary, root, runID string) validate.RunState {
+	t.Helper()
+	out := runInstalledCLI(t, binary, root, nil, "", "workflow", "show", "--root", root, "--run-id", runID)
+	var state validate.RunState
+	if err := json.Unmarshal([]byte(out), &state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func runInstalledCLI(t *testing.T, binary, workdir string, environment []string, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = workdir
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Env = append(os.Environ(), environment...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v: %s", binary, strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }
 
 func startCLIWorkflow(t *testing.T, root, pkg, id string) validate.RunState {

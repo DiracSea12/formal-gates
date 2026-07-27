@@ -520,11 +520,7 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 				return fmt.Errorf("reviewer identity is already reserved by dispatch %s", priorID)
 			}
 		}
-		provider, err := currentLifecycleProvider()
-		if err != nil {
-			return err
-		}
-		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, provider, reviewerIdentity); err != nil {
+		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, reviewerIdentity); err != nil {
 			return err
 		}
 		dispatch.ReviewerIdentity, dispatch.Status = reviewerIdentity, "CLAIMED"

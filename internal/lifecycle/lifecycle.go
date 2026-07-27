@@ -64,7 +64,10 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if err := json.Unmarshal(bytes.TrimPrefix(payload, []byte{0xef, 0xbb, 0xbf}), &decoded); err != nil {
 		return CaptureResult{}, fmt.Errorf("host lifecycle payload is not valid JSON: %w", err)
 	}
-	root = captureRoot(root, adapter, decoded)
+	root, err = captureRoot(root, adapter, decoded)
+	if err != nil {
+		return CaptureResult{}, err
+	}
 	identity := adapter.identity(event, decoded)
 	correlation := adapter.correlation(event, decoded)
 	if event == eventStart && identity == "" && adapter.required {
@@ -85,26 +88,62 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	return result, nil
 }
 
-func captureRoot(root string, adapter providerAdapter, payload any) string {
+func captureRoot(root string, adapter providerAdapter, payload any) (string, error) {
 	if root = strings.TrimSpace(root); root != "" {
-		return root
+		return root, nil
 	}
-	if root = strings.TrimSpace(adapter.projectRoot(payload)); root != "" {
-		return root
+	candidates := adapter.projectRoots(payload)
+	if len(candidates) == 0 {
+		candidates = []string{"."}
 	}
-	environmentRoots := map[string][]string{
-		ProviderClaude: {"CLAUDE_PROJECT_DIR"},
-		ProviderCursor: {"CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR"},
-	}[adapter.name]
-	for _, name := range environmentRoots {
-		if root = strings.TrimSpace(os.Getenv(name)); root != "" {
-			return root
+	activeRoots := []string{}
+	for _, candidate := range candidates {
+		activeRoot, found, err := activeRunRoot(candidate)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			activeRoots = appendUniqueStrings(activeRoots, activeRoot)
 		}
 	}
-	return "."
+	if len(activeRoots) == 1 {
+		return activeRoots[0], nil
+	}
+	if len(activeRoots) > 1 {
+		return "", fmt.Errorf("%s lifecycle payload matches multiple project roots with active formal runs", adapter.name)
+	}
+	return candidates[0], nil
 }
 
-func BindDispatch(root, runID, dispatchID, provider, identity string) error {
+func activeRunRoot(candidate string) (string, bool, error) {
+	root, err := filepath.Abs(strings.TrimSpace(candidate))
+	if err != nil {
+		return "", false, err
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	for {
+		runIDs, err := activeRuns(root)
+		if err != nil {
+			return "", false, err
+		}
+		if len(runIDs) > 0 {
+			return root, true, nil
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return "", false, nil
+		}
+		root = parent
+	}
+}
+
+func BindDispatch(root, runID, dispatchID, identity string) error {
+	provider, err := currentProvider()
+	if err != nil {
+		return err
+	}
 	adapter, err := adapterFor(provider)
 	if err != nil {
 		return err

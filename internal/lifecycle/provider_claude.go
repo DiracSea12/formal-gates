@@ -1,5 +1,7 @@
 package lifecycle
 
+import "os"
+
 func claudeAdapter() providerAdapter {
 	return providerAdapter{
 		name:       ProviderClaude,
@@ -12,6 +14,10 @@ func claudeAdapter() providerAdapter {
 			return payloadIdentity(payload, []string{"subagentId", "subagent_id", "agentId", "agent_id", "taskId", "task_id"})
 		},
 		correlation: func(_ string, _ any) string { return "" },
-		projectRoot: payloadRoot,
+		projectRoots: func(payload any) []string {
+			roots := appendUniqueStrings(nil, os.Getenv("CLAUDE_PROJECT_DIR"))
+			roots = appendUniqueStrings(roots, payloadProjectRoots(payload)...)
+			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
+		},
 	}
 }

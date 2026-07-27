@@ -1,6 +1,9 @@
 package lifecycle
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 func cursorAdapter() providerAdapter {
 	return providerAdapter{
@@ -26,11 +29,11 @@ func cursorAdapter() providerAdapter {
 			}
 			return strings.Join([]string{conversation, generation, subagentType, task}, "\x00")
 		},
-		projectRoot: func(payload any) string {
-			if root := payloadWorkspaceRoot(payload); root != "" {
-				return root
-			}
-			return payloadRoot(payload)
+		projectRoots: func(payload any) []string {
+			roots := appendUniqueStrings(nil, os.Getenv("CURSOR_PROJECT_DIR"), os.Getenv("CLAUDE_PROJECT_DIR"))
+			roots = appendUniqueStrings(roots, payloadWorkspaceRoots(payload)...)
+			roots = appendUniqueStrings(roots, payloadProjectRoots(payload)...)
+			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
 		},
 	}
 }

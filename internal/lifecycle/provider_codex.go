@@ -12,6 +12,9 @@ func codexAdapter() providerAdapter {
 			return payloadIdentity(payload, []string{"subagentId", "subagent_id", "agentId", "agent_id", "taskId", "task_id"})
 		},
 		correlation: func(_ string, _ any) string { return "" },
-		projectRoot: payloadRoot,
+		projectRoots: func(payload any) []string {
+			roots := payloadProjectRoots(payload)
+			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
+		},
 	}
 }

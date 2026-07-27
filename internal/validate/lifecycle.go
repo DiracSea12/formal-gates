@@ -8,7 +8,7 @@ import (
 
 type workflowLifecycleVerifier interface {
 	Begin(root, runID string) error
-	Bind(root, runID, dispatchID, provider, identity string) error
+	Bind(root, runID, dispatchID, identity string) error
 	Verify(root, runID, dispatchID string) (lifecycle.Verification, error)
 }
 
@@ -18,8 +18,8 @@ func (nativeWorkflowLifecycle) Begin(root, runID string) error {
 	return lifecycle.BeginRun(root, runID)
 }
 
-func (nativeWorkflowLifecycle) Bind(root, runID, dispatchID, provider, identity string) error {
-	return lifecycle.BindDispatch(root, runID, dispatchID, provider, identity)
+func (nativeWorkflowLifecycle) Bind(root, runID, dispatchID, identity string) error {
+	return lifecycle.BindDispatch(root, runID, dispatchID, identity)
 }
 
 func (nativeWorkflowLifecycle) Verify(root, runID, dispatchID string) (lifecycle.Verification, error) {
@@ -27,7 +27,6 @@ func (nativeWorkflowLifecycle) Verify(root, runID, dispatchID string) (lifecycle
 }
 
 var workflowLifecycle workflowLifecycleVerifier = nativeWorkflowLifecycle{}
-var currentLifecycleProvider = lifecycle.CurrentProvider
 
 func requireLifecycleVerification(root string, state RunState, dispatch PreparedDispatch) error {
 	verification, err := workflowLifecycle.Verify(root, state.RunID, dispatch.ID)

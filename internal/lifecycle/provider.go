@@ -24,7 +24,7 @@ type providerAdapter struct {
 	normalizeEvent func(string) (string, error)
 	identity       func(string, any) string
 	correlation    func(string, any) string
-	projectRoot    func(any) string
+	projectRoots   func(any) []string
 }
 
 type HookDefinition struct {
@@ -60,15 +60,17 @@ func HookDefinitions(host string) ([]HookDefinition, error) {
 	return hooks, nil
 }
 
-func CurrentProvider() (string, error) {
-	path, err := os.Executable()
+var executablePath = os.Executable
+
+func currentProvider() (string, error) {
+	path, err := executablePath()
 	if err != nil {
 		return "", err
 	}
-	return ProviderFromExecutable(path), nil
+	return providerFromExecutable(path), nil
 }
 
-func ProviderFromExecutable(path string) string {
+func providerFromExecutable(path string) string {
 	path = strings.TrimSpace(path)
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
@@ -104,46 +106,52 @@ func payloadIdentity(value any, names []string) string {
 	return payloadScalar(value, names, 0)
 }
 
-func payloadRoot(value any) string {
-	if root := payloadScalar(value, []string{"cwd", "projectDir", "project_dir"}, 0); root != "" {
-		return root
-	}
-	return payloadWorkspaceRoot(value)
+func payloadProjectRoots(value any) []string {
+	return appendUniqueStrings(
+		payloadStrings(value, []string{"projectDir", "project_dir"}, 0),
+		payloadWorkspaceRoots(value)...,
+	)
 }
 
-func payloadWorkspaceRoot(value any) string {
-	return firstPayloadString(value, []string{"workspaceRoots", "workspace_roots"}, 0)
+func payloadWorkingDirectories(value any) []string {
+	return payloadStrings(value, []string{"cwd"}, 0)
 }
 
-func firstPayloadString(value any, names []string, depth int) string {
+func payloadWorkspaceRoots(value any) []string {
+	return payloadStrings(value, []string{"workspaceRoots", "workspace_roots"}, 0)
+}
+
+func payloadStrings(value any, names []string, depth int) []string {
 	if value == nil || depth > 3 {
-		return ""
+		return nil
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
-		return ""
+		return nil
 	}
+	var results []string
 	for _, name := range names {
 		for key, raw := range object {
 			if !strings.EqualFold(key, name) {
 				continue
 			}
-			values, ok := raw.([]any)
-			if ok && len(values) > 0 {
-				return scalarString(values[0])
+			if values, ok := raw.([]any); ok {
+				for _, value := range values {
+					results = appendUniqueStrings(results, scalarString(value))
+				}
+			} else {
+				results = appendUniqueStrings(results, scalarString(raw))
 			}
 		}
 	}
 	for _, container := range []string{"payload", "event", "data", "hook", "tool_input", "toolInput", "input"} {
 		for key, raw := range object {
 			if strings.EqualFold(key, container) {
-				if result := firstPayloadString(raw, names, depth+1); result != "" {
-					return result
-				}
+				results = appendUniqueStrings(results, payloadStrings(raw, names, depth+1)...)
 			}
 		}
 	}
-	return ""
+	return results
 }
 
 func payloadScalar(value any, names []string, depth int) string {
@@ -186,4 +194,24 @@ func scalarString(value any) string {
 		}
 	}
 	return ""
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		addition = strings.TrimSpace(addition)
+		if addition == "" {
+			continue
+		}
+		found := false
+		for _, value := range values {
+			if value == addition {
+				found = true
+				break
+			}
+		}
+		if !found {
+			values = append(values, addition)
+		}
+	}
+	return values
 }
