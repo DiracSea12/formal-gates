@@ -47,11 +47,16 @@ svn update
 
 The CLI confirms the working-copy root with `svn info --show-item wc-root` and
 uses `svnversion <working-copy-root>` to require one numeric revision across the
-whole working copy. Mixed-revision, modified, switched, or partial results are
-not immutable whole-workspace identities and stop the transition. It verifies
-the revision with `svn info --show-item revision -r <revision>`. Before
-recording a snapshot, `svn status --quiet <working-copy-root>` must report no
-versioned changes. Reviewers compare the same branch or repository URL:
+whole working copy. It combines that revision with the exact repository URL
+reported by `svn info --show-item url` in one compact JSON identity. A clean
+`svn switch` at the same numeric revision therefore changes the identity rather
+than silently replacing the recorded branch. Mixed-revision, modified, or
+partial results are not immutable whole-workspace identities and stop the
+transition. The CLI verifies the revision against the URL stored in the
+identity, not whichever URL the working copy currently uses. Before recording
+a snapshot, `svn status --quiet <working-copy-root>` must report no versioned
+changes. Reviewers extract the URL and revisions from the recorded identities
+and compare that exact repository path:
 
 ```bash
 svn diff --notice-ancestry -r <base-revision>:<current-revision> <working-copy-or-url>
@@ -72,10 +77,14 @@ The CLI confirms the client root from tagged `p4 info`, obtains the candidate
 submitted changelist from `p4 changes -m 1 ...#have`, and requires a tagged
 `p4 sync -n ...@<change>` preview to report no files. This proves the whole
 client view matches that changelist instead of collapsing mixed `#have` state
-to its latest change. It verifies a recorded number within the client path
-using `p4 changes -m 1 ...@<change>`. Before recording a snapshot, `p4 opened
-...` must report no files opened on the client. Reviewers compare depot state
-with native `diff2`:
+to its latest change. The compact JSON identity also stores the exact client,
+ordered `View` and `ChangeView` mappings, and stream context reported by tagged
+`p4 client -o`. Editing a client view at the same changelist therefore changes
+the identity. The CLI verifies the recorded submitted changelist independently
+of the mutable live client view with `p4 change -o <change>`. Before recording a
+snapshot, `p4 opened ...` must report no files opened on the client. Reviewers
+use the depot mappings and changelists from the recorded identities to compare
+the same view with native `diff2`:
 
 ```bash
 p4 diff2 -Od //depot/path/...@<base-change> //depot/path/...@<current-change>

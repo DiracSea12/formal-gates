@@ -76,7 +76,7 @@ func Start(options StartOptions) (RunState, error) {
 		if err := resolver.Verify(root, supplied); err != nil {
 			return RunState{}, err
 		}
-		if !strings.EqualFold(supplied, currentSnapshot) {
+		if !nativeSnapshotsEqual(vcs, supplied, currentSnapshot) {
 			return RunState{}, fmt.Errorf("native current snapshot does not match the requested base snapshot")
 		}
 	}

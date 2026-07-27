@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-context reviewer identity before recording, and source static result
   bindings from the dispatch rather than repeated operator flags.
 - Resolve and verify immutable identities through the selected Git, SVN, or P4
-  command for preparation, snapshots, results, Carry, and Seal.
+  command for preparation, snapshots, results, Carry, and Seal, binding SVN
+  revisions to repository URLs and P4 changelists to complete client views.
 - Register and freeze the complete requirement and solution artifact set at
   development start, retaining it as acceptance input while excluding it from
   ordinary post-development review targets.
