@@ -1,28 +1,20 @@
-# Requirements Clarification
+# 需求澄清
 
-The main agent conducts this action interactively before formal development.
-Align both the requested outcome and every technical choice that materially
-changes public behavior, acceptance, or architecture. Ask one consequential
-decision at a time and adapt the next question to the user's answer and the
-actual request; do not use a fixed questionnaire.
+本动作由主代理在正式开发之前以交互方式进行。既要对齐用户想要的结果，也要对齐
+每一个会实质改变公开行为、验收或架构的技术选择。一次只问一个有实质影响的决策，
+并根据用户的回答和实际请求调整下一个问题；不要使用固定问卷。
 
-Inspect repository facts instead of asking the user to supply them. Use only the
-user's brief, explicit decisions, approved requirement notes, and current
-source-of-truth specifications as requirement evidence. Existing implementation,
-tests, task checkboxes, old workflow output, and long-term memory do not authorize
-changing scope. They may establish repository facts and existing constraints.
+自己检视仓库事实，而不是让用户来提供。只把用户的简述、明确决策、已批准的需求
+记录和当前作为唯一事实来源的规格说明，当作需求证据。既有实现、测试、任务勾选
+框、旧的流程输出和长期记忆都不足以授权改变范围；它们只能用于确立仓库事实和既
+有约束。
 
-Ask only questions whose answers can change scope, acceptance, public behavior,
-or a required architecture boundary. Explain each question in ordinary language:
-state the real user problem, user-visible consequence, choices, recommended
-answer, and why it matters. If you cannot do that without internal jargon or
-unexplained abstractions, you are not qualified to ask the question yet. Do not
-hide an implementation proposal inside a clarification question.
+只问那些答案会改变范围、验收、公开行为或必需架构边界的问题。用日常语言解释每
+个问题：说明真实的用户问题、用户可见的后果、可选项、推荐答案，以及它为什么重
+要。如果你做不到这一点，只能依赖内部术语或未加解释的抽象，那你还不具备提出这
+个问题的资格。不要把实现提案藏在澄清问题里。
 
-Check the entire relevant requirement chain before returning so related gaps are
-identified together, while asking consequential questions one at a time. Decide
-minor implementation details unless they become consequential. Remain read-only:
-do not prepare development, dispatch a worker, or modify any project content.
-After all questions are resolved, present the complete consolidated requirements
-and technical solution and wait for explicit user confirmation. Return PASS only
-after that confirmation.
+返回之前检查整条相关需求链，让相关缺口被一并识别，同时仍然一次只问一个有实质
+影响的问题。次要实现细节自行决定，除非它们变得有实质影响。保持只读：不要准备
+开发、不要派发工作者，也不要修改任何项目内容。所有问题解决之后，呈现完整整合
+后的需求与技术方案，并等待用户明确确认。只有在得到确认之后才返回 PASS。

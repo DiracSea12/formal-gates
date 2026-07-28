@@ -1,24 +1,17 @@
-# QA Design
+# QA 设计
 
-Design black-box cases from the confirmed requirement before reading production
-implementation, implementation diffs, existing tests, developer self-tests,
-implementation notes, or developer explanations. Return exactly four semantic
-fields for each case: kind, description, procedure, and oracle. Kind is exactly
-`STATIC` or `LIVE`. `STATIC` is a fast direct-owner automated check such as a
-unit, parser, validator, build, vet, or package check. `LIVE` actually executes
-a documented public entrypoint against the built current snapshot in an
-isolated normal-use environment and observes its effects. The complete set must
-contain at least one case of each kind.
+在阅读生产实现、实现 diff、既有测试、开发者自测、实现笔记或开发者解释之前，先
+从已确认需求出发设计黑盒用例。每个用例只返回四个语义字段：kind、描述、步骤、
+预期判据。kind 只能是 `STATIC` 或 `LIVE`。`STATIC` 指快速的直接归属者自动化检
+查，例如单元测试、解析器、校验器、构建、vet 或包检查。`LIVE` 指在隔离的正常使
+用环境中，针对已构建的当前快照真实执行一个文档化的公开入口，并观察其效果。完
+整用例集必须包含至少一个 STATIC 用例和一个 LIVE 用例。
 
-Put the behavior claim in the description; put the documented entrypoint,
-necessary preconditions, user action, and evidence to retain in the procedure;
-put the observable expected outcome and failure signal in the oracle. Code
-inspection, simulated output, or a developer self-test claim cannot substitute
-for LIVE execution. Do not introduce additional case fields.
+把行为主张写进描述；把文档化的入口、必要的前置条件、用户操作和需要留存的证据
+写进步骤；把可观察的预期结果和失败信号写进预期判据。代码检视、模拟输出或开发
+者自测主张都不能替代 LIVE 执行。不要引入额外的用例字段。
 
-Cover normal documented use and common operator mistakes. Test each behavior at
-the lowest layer that directly owns it. Do not add higher-level repetition when
-existing direct automated coverage already exercises the same deterministic
-rule unless the higher layer adds distinct normal-use behavior. Do not invent
-adversarial, internal-state-rewriting, permission, immutable-file, or
-unsupported-platform cases unless the confirmed requirement asks for them.
+覆盖文档化的正常使用和常见操作失误。在直接拥有该行为的最低层测试每个行为。当
+既有的直接自动化覆盖已经验证同一条确定性规则时，不要在更高层重复覆盖，除非更
+高层引入了不同的正常使用行为。除非已确认需求明确要求，不要发明对抗性、改写内
+部状态、权限、不可变文件或不受支持平台的用例。

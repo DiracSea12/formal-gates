@@ -1,25 +1,18 @@
-# QA Review
+# QA 审查
 
-Independently review the pending candidate QA cases against the confirmed
-requirement and the accepted coverage context supplied by the CLI. Return one
-PASS or FAIL decision for every pending case and a reason for every failed
-case. Do not return a new decision for an accepted case. Set-level findings may
-identify missing or duplicated coverage without failing an otherwise valid
-case. Do not inspect production implementation, implementation diffs, tests,
-developer explanations, post-development results, or another reviewer's
-conclusion.
+对照已确认需求，以及 CLI 提供的已接受覆盖上下文，独立审查处于待定状态的候选
+QA 用例。为每一个待定用例返回一个 PASS 或 FAIL 决策，并为每一个失败用例给出理
+由。不要为已接受的用例返回新决策。集合层面的发现项可以指出覆盖缺失或重复，而
+不必让一个本身有效的用例判为不通过。不要检视生产实现、实现 diff、测试、开发者
+解释、开发后结果或另一位审查者的结论。
 
-Check that the cases completely cover the requirement without unnecessary
-duplication, use documented public procedures, define observable oracles, stay
-within normal documented use and common operator mistakes, and exercise each
-behavior at the lowest layer that directly owns it. Missing higher-level
-repetition is not a blocker when direct automated coverage already exercises
-the same deterministic rule and the higher layer adds no distinct normal-use
-behavior. Confirm that the complete set includes both STATIC direct-owner checks
-and LIVE execution through documented public entrypoints against the built
-current snapshot. Code inspection, simulated output, and developer self-test
-claims do not qualify as LIVE execution.
+检查这些用例是否完整覆盖需求且没有不必要的重复、是否使用文档化的公开步骤、是
+否定义了可观察的预期判据、是否停留在文档化的正常使用和常见操作失误范围内，以
+及是否在直接拥有该行为的最低层验证每个行为。当直接自动化覆盖已经验证同一条确
+定性规则、且更高层没有引入不同的正常使用行为时，缺少更高层的重复覆盖不构成阻
+塞项。确认完整用例集同时包含 STATIC 直接归属者检查，以及针对已构建当前快照、
+经由文档化公开入口的 LIVE 执行。代码检视、模拟输出和开发者自测主张都不满足
+LIVE 执行。
 
-The CLI derives the aggregate result from the pending case decisions and any
-set-level findings. Do not design replacement cases in this action. Return a
-runtime error only when the review itself cannot run.
+CLI 会根据待定用例决策和集合层面的发现项推导汇总结果。不要在本动作中设计替代
+用例。只有当审查本身无法运行时，才返回运行时错误。

@@ -1,21 +1,15 @@
-# Complexity Gate
+# 复杂度门
 
-Judge whether the implemented solution is the simplest sufficient response to
-the confirmed requirement. This solution-level review comes first. Investigate
-the existing repository and available built-in or native capabilities before
-accepting a new abstraction, file, type, field, state, stage, wrapper, config,
-script, report, evidence layer, or process. A coherent implementation still
-fails when a materially simpler existing owner or workflow solves the same
-user problem and the change gives no concrete reason it cannot be used.
+判断已实现的方案是否是对已确认需求"足够且最简"的回应。这道方案层面的审查排
+在最前。在接受任何新的抽象、文件、类型、字段、状态、阶段、包装层、配置、
+脚本、报告、证据层或流程之前，先调查现有仓库以及可用的内置或原生能力。即使
+实现本身自洽，只要存在明显更简单的既有归属者或流程能解决同一个用户问题，而
+改动没有给出它不可用的具体理由，本门仍然判为不通过。
 
-Only after the solution itself passes, inspect implementation complexity. Judge
-whether code volume and changed-file count are proportionate to the requirement,
-whether new concepts and public/configuration surface are necessary, whether
-existing code could be reused or deleted, and whether duplicated, stale, unused,
-or shrinkable logic remains. Explicit refactoring or cleanup may justify a
-larger diff when it removes real duplication or complexity.
+只有方案本身通过之后，再检视实现复杂度。判断代码量和改动文件数是否与需求相
+称、新概念与公开/配置面是否必要、既有代码能否复用或删除，以及是否残留重复、
+过期、未使用或可收缩的逻辑。当重构或清理确实移除了真实的重复或复杂度时，更
+大的 diff 是合理的。
 
-Do not review detailed implementation complexity on the assumption that a
-rejected solution should exist. Report the simpler sufficient alternative and
-all in-scope consequences of the unnecessary design as one solution-level
-finding.
+不要在"被否决的方案本应存在"这一假设上继续审查实现细节。把更简单且足够的替
+代方案，与该多余设计带来的全部范围内后果，合并成一个方案层面的发现项报告。

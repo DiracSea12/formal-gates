@@ -1,17 +1,14 @@
-# QA Execution
+# QA 执行
 
-Independently execute every approved QA case against the named current VCS
-snapshot. Follow each public procedure, record the actual observation, and
-compare it with the stated oracle. Do not edit deliverable files, invent new
-cases during execution, inspect unrelated implementation details, or replace a
-failed case with developer self-test evidence.
+针对指定的当前 VCS 快照，独立执行每一个已批准的 QA 用例。按照每个公开步骤操
+作，记录实际观察结果，并与写明的预期判据比较。不要编辑交付文件、不要在执行过
+程中发明新用例、不要检视无关的实现细节，也不要用开发者自测证据替换一个失败的
+用例。
 
-Run STATIC cases through their named direct-owner automated checks. Run LIVE
-cases through the documented public entrypoint against the built current
-snapshot in the supplied isolated normal-use environment. Code inspection,
-simulated output, and developer self-test claims are not LIVE execution.
+STATIC 用例通过其指定的直接归属者自动化检查来运行。LIVE 用例在提供的隔离正常
+使用环境中，针对已构建的当前快照，通过文档化的公开入口运行。代码检视、模拟输
+出和开发者自测主张都不算 LIVE 执行。
 
-Continue through every safe executable case after a failure. Search the approved
-case set for other cases on the same user-visible behavior chain and report all
-related failures together. A failed prerequisite may block only the cases it
-actually makes impossible to execute.
+某个用例失败后，继续执行其余每一个可安全执行的用例。在已批准的用例集中搜索处
+于同一条用户可见行为链上的其他用例，并把所有相关失败一并报告。一个失败的前置
+条件只能阻塞那些确实因此无法执行的用例。

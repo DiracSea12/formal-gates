@@ -1,12 +1,10 @@
-# Install And Hooks
+# 安装与 Hook
 
-Use this reference only for package maintenance, installation, hooks, and
-canaries. Workflow order lives only in `SKILL.md`.
+这份参考只用于包维护、安装、hook 和 canary。流程顺序只由 `SKILL.md` 拥有。
 
-## Build And Validate
+## 构建与验证
 
-The installed package uses the native Go binary. Build it before installing
-from a source checkout:
+已安装的包使用原生 Go 二进制。从源码检出安装之前先构建它：
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates
@@ -14,14 +12,13 @@ bin/formal-gates package validate --root .
 bin/formal-gates canary portable --root . --format json
 ```
 
-On Windows, build and call `bin\formal-gates.exe`.
+Windows 上构建并调用 `bin\formal-gates.exe`。
 
-`package validate` checks the maintained package shape and file-driven prompt
-catalog. `canary portable` checks package, workflow, hook-decision, and install
-behavior that does not require a live AI host. Neither command is an
-independent review or formal seal result.
+`package validate` 检查所维护的包结构和基于文件的提示词目录。`canary portable`
+检查不需要实机 AI host 的包、流程、hook 决策和安装行为。这两个命令都不是独立审查
+或正式 Seal 结果。
 
-## Native Installation
+## 原生安装
 
 ```bash
 bin/formal-gates install --source <formal-gates> \
@@ -31,112 +28,101 @@ bin/formal-gates install --source <formal-gates> \
   --host <claude|codex|cursor> --scope project --project <project> --force
 ```
 
-The installer copies one runtime package, including `SKILL.md`, the CLI,
-`prompts/`, `gates/`, and maintained references. It configures the selected
-host's formal-gates command and subagent lifecycle hooks by default. Existing
-unrelated hook entries are preserved. Use `--skip-hooks` only when the host's
-hook configuration must remain byte-for-byte unchanged.
+安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
+考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
+关 hook 条目会被保留。只有当 host 的 hook 配置必须逐字节保持不变时，才使用
+`--skip-hooks`。
 
-Installation replaces only an existing formal-gates target when `--force` is
-present. It must not use another host's global installation as fallback.
+只有带 `--force` 时，安装才会替换一个已存在的 formal-gates 目标。它不得把另一个
+host 的全局安装当作回退。
 
-The bootstrap files `install.command` and `install.bat` download the matching
-release source and binary, verify the published checksum, assemble a local
-package, and call this same native installer. They are not a second installer.
+引导文件 `install.command` 和 `install.bat` 会下载匹配的 release 源码与二进制、
+校验已发布的 checksum、组装本地包，并调用同一个原生安装器。它们不是第二个安装器。
 
-## Installed Locations
+## 安装位置
 
-Typical global targets are:
+典型的全局目标是：
 
-- Claude Code: `~/.claude/skills/formal-gates`
-- Codex: `~/.codex/skills/formal-gates`
-- Cursor: `~/.cursor/formal-gates`
+- Claude Code：`~/.claude/skills/formal-gates`
+- Codex：`~/.codex/skills/formal-gates`
+- Cursor：`~/.cursor/formal-gates`
 
-Project installs use the matching directory below the selected project. The
-installer writes absolute native binary paths into hook configuration where the
-host requires them.
+项目级安装使用所选项目下的对应目录。当 host 需要时，安装器会把原生二进制的绝对
+路径写入 hook 配置。
 
-Other Agent Skill compatible hosts may read the Markdown manually, but this
-package does not claim an installer or hook integration for them.
+其他兼容 Agent Skill 的 host 可以手工阅读这些 Markdown，但本包不声明为它们提供
+安装器或 hook 集成。
 
-## Hook Boundary
+## Hook 边界
 
-The native hook entrypoint is:
+原生 hook 入口是：
 
 ```bash
 bin/formal-gates hook decide
 ```
 
-It accepts the host's JSON payload on stdin and returns the host-compatible
-allow/block decision. It is a guardrail around formal-gates commands, not proof
-of code quality and not a replacement for explicit workflow state checks.
+它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
+绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
 
-The installer also configures `SubagentStart` and `SubagentStop` for Claude
-Code and Codex, and `subagentStart` and `subagentStop` for Cursor. Those hooks
-send the host payload on stdin to the installed native binary:
+安装器还会为 Claude Code 和 Codex 配置 `SubagentStart` 与 `SubagentStop`，为
+Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷经 stdin 发
+送给已安装的原生二进制：
 
 ```bash
 bin/formal-gates lifecycle capture \
   --provider <claude-code|codex|cursor> --event <provider-event-name>
 ```
 
-The capture command derives the project root from the normal host payload (or
-the host's project-directory environment when needed), so global hooks do not
-depend on their configuration directory as the working directory. `--root`
-remains available as an explicit command-line override.
+capture 命令从正常的 host 载荷推导项目根（必要时使用 host 的项目目录环境变量），
+因此全局 hook 不依赖其配置目录作为工作目录。`--root` 仍然可用，作为显式的命令行
+覆盖。
 
-Lifecycle observations are retained only while at least one formal run is
-active in that project. Each run owns its pending and claimed observations
-under `.gates/tmp/<run-id>/lifecycle`, so normal Seal or Abort cleanup retires
-them with the rest of the run. Hooks fired when no formal run is active do not
-create a lifecycle journal.
+生命周期观测只在该项目中至少有一个正式 run 处于活动状态时保留。每个 run 在
+`.gates/tmp/<run-id>/lifecycle` 下拥有自己的待定与已认领观测，因此正常的 Seal 或
+Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动正式 run 时触发的 hook
+不会创建生命周期日志。
 
-After `workflow claim-dispatch` binds the host identity, inspect the derived
-outcome without changing workflow state:
+在 `workflow claim-dispatch` 绑定 host 身份之后，可以在不改变流程状态的情况下检
+视推导出的结果：
 
 ```bash
 bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
   --dispatch <dispatch-id>
 ```
 
-Claude Code and Cursor require matching start and stop events. Codex reports
-`UNAVAILABLE`, so the existing dispatch and identity checks remain authoritative.
+Claude Code 和 Cursor 要求 start 与 stop 事件配对。Codex 报告 `UNAVAILABLE`，因
+此既有的派发与身份检查仍然是权威依据。
 
-A settings file or direct `hook decide` unit test proves only local decision
-logic. Claim automatic blocking only after the actual target host sends a live
-`PreToolUse` payload and the hook blocks the test command. A canary on one host
-does not prove another host.
+一个设置文件或直接的 `hook decide` 单元测试，只能证明本地决策逻辑。只有当实际目
+标 host 发送了实机 `PreToolUse` 载荷、并且 hook 阻塞了测试命令之后，才可以声明自
+动阻塞。在一个 host 上做的 canary 不能证明另一个 host。
 
-Codex live check:
+Codex 实机检查：
 
 ```bash
 bin/formal-gates canary codex-hook --worktree <repo>
 ```
 
-Failure means that client/version did not prove closed-loop automatic
-interception. Explicit `formal-gates workflow ...` commands still remain the
-normal authority for the run.
+失败意味着该客户端/版本没有证明闭环的自动拦截。显式的 `formal-gates workflow ...`
+命令仍然是该 run 的正常权威。
 
-## Candidate Package Checks
+## 候选包检查
 
-When testing a candidate version, install that exact source into the test
-project and record both paths:
+测试候选版本时，把该确切源码安装进测试项目，并记录两个路径：
 
 ```text
 source: <candidate>/formal-gates
 installed: <test-project>/<host-path>/formal-gates
 ```
 
-Do not test a stale global package while reporting the candidate. Package,
-prompt catalog, install, and live-hook claims must all name the copy actually
-used.
+不要一边测试过期的全局包，一边把结果报告成候选版本的结果。包、提示词目录、安装
+和实机 hook 的所有声明，都必须指明实际使用的那份副本。
 
-## Release Boundary
+## Release 边界
 
-The CI workflow builds Windows, macOS, and Linux binaries, portable-canary
-output, and SHA256 checksum files and can attach them to a GitHub Release.
-Checksums show that downloaded bytes match the published CI artifact. They do
-not provide signing, attestation, provenance, a registry, a marketplace, or an
-`npx` distribution path.
+CI 流程构建 Windows、macOS 和 Linux 二进制、portable-canary 输出和 SHA256
+checksum 文件，并可以把它们附加到 GitHub Release。checksum 说明下载到的字节与已
+发布的 CI 产物一致。它们不提供签名、attestation、provenance、registry、
+marketplace 或 `npx` 分发路径。
 
-Repository maintenance commands are in `references/local-validation.md`.
+仓库维护命令在 `references/local-validation.md`。

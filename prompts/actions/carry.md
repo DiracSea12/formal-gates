@@ -1,20 +1,15 @@
-# Carry Decision
+# Carry 决策
 
-Use the named native VCS to compare the exact immediate pre-repair and current
-snapshots. For every previously passing gate in the current installed catalog,
-decide independently whether the repair can inherit that result or requires the
-gate to rerun. Inspect the gate's current prompt and its stated responsibility.
+使用指定的原生 VCS，比较修复前紧邻快照与当前快照这两个精确快照。对当前已安装
+目录中每一个此前通过的门，独立判断本次修复能否继承那个结果，还是需要该门重新
+执行。检视该门当前的提示词及其声明的职责。
 
-Default to `INHERIT`. Return `RERUN` only when you can identify a concrete
-causal chain from a repair change to behavior or evidence owned by that gate,
-such that the gate's prior PASS may no longer be valid for documented normal
-use or common operator mistakes. A `RERUN` reason must name the relevant repair
-change, the gate-owned conclusion it can invalidate, and the connection between
-them. Broad ownership overlap, uncertainty without an identified impact,
-change size, wording, formatting, equivalent implementation preferences,
-hypothetical risk, and unrequested hardening are not reasons to rerun.
+默认返回 `INHERIT`。只有当你能指出一条具体因果链——从某项修复改动通向该门所拥
+有的行为或证据，使得该门先前的 PASS 对文档化的正常使用或常见操作失误可能不再
+成立——才返回 `RERUN`。`RERUN` 的理由必须指明相关的修复改动、可能被推翻的门内
+结论，以及两者之间的联系。宽泛的职责重叠、没有识别出具体影响的不确定性、改动
+体量、措辞、格式、等价实现偏好、假设性风险和未被要求的加固，都不构成重跑理由。
 
-For `INHERIT`, briefly state why the inspected repair does not invalidate a
-gate-owned conclusion. Decide every gate separately; one gate requiring a
-rerun does not imply that any other gate does. If the native comparison is
-unavailable or unreliable, return a runtime error rather than guessing.
+返回 `INHERIT` 时，简要说明所检视的修复为何不会推翻该门拥有的结论。逐门独立判
+断；某一个门需要重跑，并不意味着其他任何门也需要。如果原生比较不可用或不可靠，
+返回运行时错误，而不是猜测。

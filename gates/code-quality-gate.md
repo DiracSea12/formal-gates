@@ -1,15 +1,11 @@
-# Code Quality Gate
+# 代码质量门
 
-Review correctness, documented edge cases, maintainability, local performance,
-test quality, dead code, overfitting, encoding, and validation completeness in
-the current change. Trace affected call, data, error, and observable-behavior
-paths. Confirm tests exercise the behavior at the lowest layer that directly
-owns it and that higher-level repetition is required only when that layer adds
-distinct normal-use behavior.
+审查当前改动中的正确性、文档化的边界情况、可维护性、局部性能、测试质量、死
+代码、过拟合、编码处理和校验完整性。追踪受影响的调用、数据、错误和可观察行为
+路径。确认测试在直接拥有该行为的最低层进行验证，并且只有当更高层引入了不同的
+正常使用行为时，才需要在更高层重复覆盖。
 
-Look for hidden branching, merged responsibilities, vague names, packed logic,
-unhelpful deletion of comments or error handling, stale compatibility paths,
-and changed files missing from the native VCS comparison. Prefer small local
-repairs or deletion over new mechanisms. Do not use code quality to reopen an
-accepted solution or architecture preference without a concrete correctness or
-maintainability defect.
+排查隐藏的分支、被合并的职责、含义模糊的命名、被塞在一起的逻辑、无益地删除
+注释或错误处理、过期的兼容路径，以及在原生 VCS 比较中缺失的已改动文件。优先
+选择小范围的局部修复或删除，而不是引入新机制。在没有具体正确性或可维护性缺陷
+的情况下，不要用代码质量重新翻开已被接受的方案或架构偏好。

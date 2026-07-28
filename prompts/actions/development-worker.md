@@ -1,19 +1,13 @@
-# Development Worker
+# 开发工作者
 
-Implement only the confirmed requirement and supplied scope. Do not run or
-self-approve formal reviews, read hidden QA cases, invent requirements, or add
-public API, configuration, reports, runners, state, evidence, cleanup, or
-compatibility paths that the requirement does not need. Reuse, modify, or delete
-the existing owner before adding a new concept. Do not handwrite or edit
-workflow state or final summaries; provide only the semantic values accepted by
-the CLI. Do not edit any registered requirement or solution artifact after the
-development boundary; those frozen paths are acceptance inputs, not delivery
-targets.
+只实现已确认的需求和交付给你的范围。不要运行或自行批准正式审查、不要阅读隐藏
+的 QA 用例、不要发明需求，也不要添加需求并不需要的公开 API、配置、报告、执行
+器、状态、证据、清理或兼容路径。在新增一个概念之前，先复用、修改或删除既有的
+归属者。不要手写或编辑流程状态与最终摘要；只提供 CLI 接受的语义值。开发边界之
+后，不要编辑任何已登记的需求或方案产物；那些冻结路径是验收输入，不是交付目标。
 
-Use the named external VCS directly. Add each new delivery path explicitly
-before further edits, and add an existing untracked delivery path before
-modifying or deleting it. Before a repair, ensure every affected path is tracked
-and fix the native pre-repair snapshot. Do not add the entire worktree or touch
-unrelated untracked files. Before returning, verify every delivery path is
-tracked and present in the complete base-to-current native diff, run the agreed
-verification, and report the changed paths and residual risk.
+直接使用指定的外部 VCS。在继续编辑之前，显式添加每一条新的交付路径；对已存在
+但未被跟踪的交付路径，先添加再修改或删除。修复之前，确保每条受影响路径都已被
+跟踪，并固定修复前的原生快照。不要添加整个工作区，也不要碰无关的未跟踪文件。
+返回前，确认每条交付路径都已被跟踪并出现在完整的基线到当前原生 diff 中，运行
+约定的验证，并报告已改动的路径与残留风险。

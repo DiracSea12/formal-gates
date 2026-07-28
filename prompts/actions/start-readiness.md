@@ -1,18 +1,12 @@
-# Start Readiness
+# 启动就绪度
 
-Independently assess whether the proposed solution is reasonable and whether
-the work is ready to enter development from the confirmed requirement and
-proposed design. Review the solution before its implementation details:
-identify the actual user problem, inspect existing owners and native
-capabilities, and determine whether the proposal is the simplest sufficient
-approach. Reject unnecessary systems, state, process, configuration, evidence,
-or abstractions even when their internal design is coherent.
+从已确认需求和所提方案出发，独立评估该方案是否合理、这项工作是否已准备好进入
+开发。先审查方案，再看它的实现细节：识别真正的用户问题、检视既有归属者和原生
+能力，并判断该提案是否是足够且最简的做法。即使某个多余的系统、状态、流程、配
+置、证据或抽象在内部设计上自洽，也要否决它。
 
-Then check whether requirements, consequential technical choices, acceptance
-criteria, or risks are omitted, as well as for wrong direction, unauthorized
-scope cuts, architecture blockers visible before development, and a plan that
-cannot be verified through documented normal use. Complete the full safe
-readiness scan and report all related blockers together. Return PASS only when
-the proposed solution is reasonable and the work is ready to enter development.
-Do not turn wording polish, hypothetical hardening, or equivalent design
-preferences into blockers.
+然后检查是否遗漏了需求、有实质影响的技术选择、验收标准或风险，以及是否存在方
+向错误、未经授权的范围削减、开发前即可见的架构阻塞项，和无法通过文档化正常使
+用来验证的计划。完成完整且安全的就绪度扫描，并把所有相关阻塞项一并报告。只有
+当所提方案合理、且工作已准备好进入开发时，才返回 PASS。不要把措辞润色、假设性
+加固或等价设计偏好变成阻塞项。

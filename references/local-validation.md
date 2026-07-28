@@ -1,6 +1,6 @@
-# Local Validation
+# 本地验证
 
-Use this checklist when changing the formal-gates package itself:
+修改 formal-gates 包自身时，使用这份清单：
 
 ```bash
 gofmt -w <changed-go-files>
@@ -17,6 +17,6 @@ git diff --check
 git diff --cached --check
 ```
 
-Use `bin\formal-gates.exe` on Windows. A live host-hook canary is separate and
-required only when changing or claiming that host's automatic interception.
-These checks do not replace independent review in a user-authorized formal run.
+Windows 上使用 `bin\formal-gates.exe`。实机 host hook canary 是独立的一项，只
+有在修改或声明某个 host 的自动拦截时才需要。这些检查不能替代用户授权的正式 run
+中的独立审查。

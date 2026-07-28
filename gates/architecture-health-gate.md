@@ -1,13 +1,9 @@
-# Architecture Health Gate
+# 架构健康门
 
-Review module boundaries, ownership, dependency direction, public surface,
-state and cache lifecycle, failure semantics, performance shape, and coupling
-introduced by the current change. Check that each responsibility has one clear
-owner, dependencies point in the intended direction, state is created and
-retired by the correct owner, and errors preserve the documented behavior.
+审查当前改动引入的模块边界、职责归属、依赖方向、公开面、状态与缓存生命周期、
+失败语义、性能形态和耦合。检查每项职责是否只有一个明确归属者、依赖是否指向
+预期方向、状态是否由正确的归属者创建与退役，以及错误是否保持了文档化行为。
 
-Look for the same capability being maintained in multiple modules, leaked
-internal details, hidden cross-module coordination, incompatible lifecycle
-assumptions, and changes that leave old and new architecture paths active at
-the same time. Do not redo general complexity or code-quality review unless a
-concrete architecture defect depends on it.
+排查同一能力被多个模块重复维护、内部细节外泄、跨模块的隐式协调、互不兼容的
+生命周期假设，以及让新旧两条架构路径同时生效的改动。除非某个具体架构缺陷依
+赖于此，不要重做通用复杂度或代码质量审查。
