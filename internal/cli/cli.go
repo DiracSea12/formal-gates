@@ -47,15 +47,15 @@ func run(program string, args []string, streams IO) (int, error) {
 	case "install":
 		return runInstall(args[1:], streams)
 	case "workflow":
-		return runWorkflow(args[1:], streams)
+		return runWorkflow(program, args[1:], streams)
 	case "hook":
-		return runHook(args[1:], streams)
+		return runHook(program, args[1:], streams)
 	case "lifecycle":
-		return runLifecycle(args[1:], streams)
+		return runLifecycle(program, args[1:], streams)
 	case "canary":
-		return runCanary(args[1:], streams)
+		return runCanary(program, args[1:], streams)
 	case "behavior":
-		return runBehavior(args[1:], streams)
+		return runBehavior(program, args[1:], streams)
 	default:
 		printUsage(streams.Stdout, program)
 		return 1, fmt.Errorf("unknown command: %s", args[0])
@@ -116,9 +116,13 @@ func runInstall(args []string, streams IO) (int, error) {
 	return 0, nil
 }
 
-func runWorkflow(args []string, streams IO) (int, error) {
+func runWorkflow(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
 		return 1, fmt.Errorf("workflow subcommand is required")
+	}
+	if isHelpArg(args[0]) {
+		printUsage(streams.Stdout, program)
+		return 0, nil
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
@@ -416,7 +420,11 @@ func runCarry(args []string, streams IO) (int, error) {
 	return printValue(streams.Stdout, state, err)
 }
 
-func runHook(args []string, streams IO) (int, error) {
+func runHook(program string, args []string, streams IO) (int, error) {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		printUsage(streams.Stdout, program)
+		return 0, nil
+	}
 	if len(args) == 0 || args[0] != "decide" {
 		return 1, fmt.Errorf("hook decide is required")
 	}
@@ -440,9 +448,13 @@ func runHook(args []string, streams IO) (int, error) {
 	return 0, nil
 }
 
-func runLifecycle(args []string, streams IO) (int, error) {
+func runLifecycle(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
 		return 1, fmt.Errorf("lifecycle subcommand is required")
+	}
+	if isHelpArg(args[0]) {
+		printUsage(streams.Stdout, program)
+		return 0, nil
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
@@ -475,7 +487,11 @@ func runLifecycle(args []string, streams IO) (int, error) {
 	}
 }
 
-func runBehavior(args []string, streams IO) (int, error) {
+func runBehavior(program string, args []string, streams IO) (int, error) {
+	if len(args) > 0 && isHelpArg(args[0]) {
+		printUsage(streams.Stdout, program)
+		return 0, nil
+	}
 	if len(args) == 0 || args[0] != "evaluate" {
 		return 1, fmt.Errorf("behavior evaluate is required")
 	}
@@ -494,9 +510,13 @@ func runBehavior(args []string, streams IO) (int, error) {
 	return code, err
 }
 
-func runCanary(args []string, streams IO) (int, error) {
+func runCanary(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
 		return 1, fmt.Errorf("canary subcommand is required")
+	}
+	if isHelpArg(args[0]) {
+		printUsage(streams.Stdout, program)
+		return 0, nil
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
@@ -780,6 +800,9 @@ func printValidationResult(stdout io.Writer, name string, result validate.Result
 		fmt.Fprintf(stdout, "FAIL %s: %s\n", failure.Path, failure.Message)
 	}
 	return 1, fmt.Errorf("formal-gates %s validation failed with %d issue(s)", name, len(result.Failures))
+}
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "--help" || arg == "help"
 }
 func hasHelpArg(args []string) bool {
 	for _, arg := range args {

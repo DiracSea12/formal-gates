@@ -117,6 +117,21 @@ func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
 	}
 }
 
+func TestCLISubcommandHelpPrintsUsage(t *testing.T) {
+	for _, group := range []string{"workflow", "lifecycle", "canary", "hook", "behavior"} {
+		for _, flag := range []string{"-h", "--help", "help"} {
+			var stdout, stderr bytes.Buffer
+			code := Run("formal-gates", []string{group, flag}, IO{Stdout: &stdout, Stderr: &stderr})
+			if code != 0 {
+				t.Fatalf("%s %s code=%d err=%s", group, flag, code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "Usage: formal-gates <command>") {
+				t.Fatalf("%s %s omitted usage: %s", group, flag, stdout.String())
+			}
+		}
+	}
+}
+
 func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.T) {
 	tests := []struct {
 		name       string
