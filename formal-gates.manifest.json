@@ -82,8 +82,7 @@
     "internal/",
     "agents/",
     "prompts/",
-    "gates/",
-    "examples/"
+    "gates/"
   ],
   "examples": [
     {

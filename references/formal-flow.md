@@ -8,7 +8,7 @@
 - [开发之前](#开发之前)
 - [开发与快照](#开发与快照)
 - [开发后审查](#开发后审查)
-- [Carry、修复授权与 Seal](#carry修复授权与-seal)
+- [继承判定、修复授权与 Seal](#继承判定修复授权与-seal)
 
 ## 启动与 run 控制
 
@@ -103,14 +103,14 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
 ```
 
-## Carry、修复授权与 Seal
+## 继承判定、修复授权与 Seal
 
 ```bash
 # 对于有界的修复，不派发任何代理即可继承此前每一个被选中的 PASS。
 formal-gates workflow carry --root <repo> --package-root <package> \
   --run-id <id> --main-agent --main-reason '<reason>'
 
-# 否则，在存在此前通过的门时，准备并记录独立 Carry。
+# 否则，在存在此前通过的门时，准备并记录独立继承判定。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action carry
 formal-gates workflow carry --root <repo> --package-root <package> \
@@ -125,6 +125,6 @@ formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> 
   [--skip <selected-non-passing-gate> ...]
 ```
 
-按需重复 `--case`、`--case-result`、发现项和 Carry 门分组。当某个代理或原生比较无法
+按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法
 运行时，使用命令的 `--runtime-error` 或 `--status RUNTIME_ERROR --message ...` 形
 式；不要伪造语义结果。

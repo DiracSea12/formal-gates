@@ -19,7 +19,7 @@ formal-gates 是一套轻量的 AI 开发审查流程。它把“写代码”和
 - `prompts/reviewer-base.md`：所有独立审查门共用的规则。
 - `gates/*.md`：每个文件就是一道独立审查门，文件名就是门 ID；`qa` 保留给
   内建 QA 流程，不能作为文件 ID。
-- `prompts/actions/*.md`：需求澄清、开发前审查、QA、开发 worker 和 Carry。
+- `prompts/actions/*.md`：需求澄清、开发前审查、QA、开发 worker 和继承判定。
 - `.gates/tmp/<run-id>/state.json`：运行期间唯一的临时状态文件。
 - `.gates/results/<run-id>.json`：封板或中止后唯一保留的结果。
 
@@ -33,19 +33,19 @@ QA Review 通过后才能开发。完整用例集同时包含 STATIC 直接责�
 LIVE 公共入口真实执行；逐用例审查结果会在 Design 返工时保留完全未变的
 PASS，用下一轮只复核失败、新增或已变化的用例，且不占用开发后三轮
 review-wave。开发完成后，QA Execution 和审查门可以在同一批次并行执行。
-每条正式路由都在开发前运行 Start Readiness。准备 development worker 时即
-冻结已登记的需求和方案文档集，将其作为验收输入，并禁止在开发开始后再加入
-QA。开发后提示词把这些冻结路径排除在普通审查目标之外。full 和 custom 还要求
-在开发前用任意稳定文档格式保存完整已确认需求和技术方案，不要求指定插件。
+每条正式路由都在开发前运行开发前需求检查（`start-readiness`）。准备 development
+worker 时即冻结已登记的需求和方案文档集，将其作为验收输入，并禁止在开发开始后
+再加入 QA。开发后提示词把这些冻结路径排除在普通审查目标之外。full 和 custom 还
+要求在开发前用任意稳定文档格式保存完整已确认需求和技术方案，不要求指定插件。
 
 同一次路由选择覆盖后续新增需求和任务切片。新增范围会暂停相关写入，重新澄清
 并确认刷新后的完整摘要，但除非用户要求，不重复询问路由。过大的正式工作按
-依赖、职责、风险和验证边界切分；一个通过 `--retained-overall` 启动的总体 run
-保留原始 base、完整需求和路由。独立切片使用不同 VCS worktree 和正式 run 并
-负责实际开发；合并及解决冲突后，用 `workflow snapshot` 把合并提交直接记入
-保留的总体 run，再由它从原始 base 执行集成审查。集成 finding 返回负责的切片
-run；切片返修通过并重新合并后，总体 run 不准备自己的 development worker，
-而是直接记录新的合并快照。
+依赖、职责、风险和验证边界切分；一个通过 `--retained-overall` 启动的总任务实例
+保留原始基线、完整需求和路由。各子任务实例使用单独的 VCS worktree 并负责实际
+开发；合并及解决冲突后，用 `workflow snapshot` 把合并提交直接记入总任务实例，
+再由它从原始基线执行集成审查。集成 finding 返回负责的子任务实例；子任务返修通过
+并重新合并后，总任务实例不准备自己的 development worker，而是直接记录新的
+合并快照。
 
 需求语义变化后，下一次 QA Design 会为不受影响的需求保留完全未变的 PASS
 用例，并把新增或变化用例标为待复核。正常中断后可以重新生成已准备的
@@ -56,7 +56,7 @@ identity，重试也不复用。
 返修后，主代理检查原生 VCS 的本轮返修 diff。只有能确定返修不会影响任何
 此前已通过的已选验证时，才可执行 `workflow carry --main-agent --main-reason
 '<reason>'`，一次继承包括 QA 在内的所有先前 PASS。涉及共享行为、配置、
-依赖、跨门职责或影响链不确定时，仍按原流程使用独立 Carry，并正常重跑 QA。
+依赖、跨门职责或影响链不确定时，仍按原流程使用独立继承判定，并正常重跑 QA。
 
 ## 安装
 
@@ -158,7 +158,7 @@ formal-gates workflow carry --root <repo> --package-root <package> \
   --run-id <id> --main-agent --main-reason '<bounded repair reason>'
 ```
 
-QA Execution、Carry、额外返修授权和 Seal 的参数以 `formal-gates help` 及
+QA Execution、继承判定、额外返修授权和 Seal 的参数以 `formal-gates help` 及
 `SKILL.md` 为准。需求文件修订变化后，先用 `workflow requirement --meaning
 preserved|changed` 明确语义影响；CLI 自行解析包含该修订的原生 VCS identity，
 但不自行猜测语义影响。
@@ -170,7 +170,7 @@ reviewer 直接运行现场 VCS：
 
 - 总 diff：开发前 base 到当前 snapshot，所有新跑或重跑的门都看它。
 - 本轮返修 diff：返修前 snapshot 到当前 snapshot。主代理只用它判断能否走
-  一次继承全部 PASS 的小返修捷径；否则交给独立 Carry 判断哪些门可以沿用。
+  一次继承全部 PASS 的小返修捷径；否则交给独立继承判定决定哪些门可以沿用。
 - 新建文件或原本未跟踪但属于本次交付的文件，worker 必须先按路径加入 VCS，
   再继续修改；不要执行 `git add .` 或触碰无关未跟踪文件。
 

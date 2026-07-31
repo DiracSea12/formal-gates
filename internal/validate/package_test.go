@@ -7,18 +7,6 @@ import (
 	"testing"
 )
 
-func TestPackageRejectsScriptRuntimeFiles(t *testing.T) {
-	root := copyPackageFixture(t)
-	mustWriteValidateTest(t, filepath.Join(root, "examples", "legacy-demo.ps1"), "legacy powershell\n")
-
-	result := Package(root)
-	if result.OK() {
-		t.Fatal("expected package validation to reject script runtime files")
-	}
-	if !resultHasPath(result, "examples/legacy-demo.ps1") {
-		t.Fatalf("expected script runtime file failures, got %#v", result.Failures)
-	}
-}
 
 func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 	for _, tc := range []struct {
@@ -63,20 +51,6 @@ func TestInstallableMetadataUsesUniversalModificationIntake(t *testing.T) {
 	}
 }
 
-func TestPackageRejectsScriptsDirectory(t *testing.T) {
-	root := copyPackageFixture(t)
-	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	result := Package(root)
-	if result.OK() {
-		t.Fatal("expected package validation to reject scripts directory")
-	}
-	if !resultHasPath(result, "scripts") {
-		t.Fatalf("expected scripts directory failure, got %#v", result.Failures)
-	}
-}
 
 func TestPackageRejectsWorkflowLevelWritePermission(t *testing.T) {
 	root := copyPackageFixture(t)

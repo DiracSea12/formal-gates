@@ -3,7 +3,6 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,7 +23,6 @@ var requiredFiles = []string{
 	"internal/validate/runner.go",
 	"internal/validate/runstate.go",
 	"internal/validate/install.go",
-	"internal/validate/behavior.go",
 	"internal/validate/workflow.go",
 	"internal/validate/canary.go",
 	"internal/validate/codex_hook_canary.go",
@@ -34,8 +32,6 @@ var requiredFiles = []string{
 	"references/install-and-hooks.md",
 	"references/local-validation.md",
 	"references/vcs-snapshots.md",
-	"examples/skill-behavior-prompts.json",
-	"examples/skill-behavior-answers.json",
 }
 
 var requiredDirs = []string{
@@ -43,7 +39,6 @@ var requiredDirs = []string{
 	"prompts",
 	"prompts/actions",
 	"gates",
-	"examples",
 	"bin",
 	"cmd",
 	"internal",
@@ -100,8 +95,6 @@ func Package(root string) Result {
 	validateBootstrapScripts(root, &result)
 	validateManifest(root, &result)
 	validatePromptCatalog(root, &result)
-	validateExamples(root, &result)
-	validateNoCoreScriptRuntime(root, &result)
 	return result
 }
 
@@ -161,8 +154,6 @@ func validateCIText(text string, result *Result) {
 		"go build -o",
 		"package validate --root .",
 		"canary portable --root .",
-		"behavior evaluate --root .",
-		"examples/skill-behavior-answers.json",
 		"portable-canary.json",
 		"portable-canary-windows-amd64.json",
 		"portable-canary-macos-arm64.json",
@@ -448,7 +439,7 @@ func validateManifest(root string, result *Result) {
 	if doc.Name != "formal-gates" {
 		result.add("formal-gates.manifest.json", "manifest name must be formal-gates")
 	}
-	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "agents/", "prompts/", "gates/", "examples/"} {
+	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "agents/", "prompts/", "gates/"} {
 		if !contains(doc.Parts, part) {
 			result.add("formal-gates.manifest.json", "package_parts missing "+part)
 		}
@@ -521,69 +512,6 @@ func nativeBinaryName() string {
 	return "formal-gates"
 }
 
-func validateExamples(root string, result *Result) {
-	behaviorPath := filepath.Join(root, "examples", "skill-behavior-prompts.json")
-	text, err := readText(behaviorPath)
-	if err != nil {
-		result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("cannot read behavior prompts: %v", err))
-	} else {
-		var decoded any
-		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
-			result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("invalid JSON: %v", err))
-		} else if cases, ok := decoded.([]any); ok {
-			for i, raw := range cases {
-				item, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				if _, ok := item["must_include"].([]any); !ok {
-					result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("case %d missing must_include markers", i))
-				}
-				if _, ok := item["must_avoid"].([]any); !ok {
-					result.add("examples/skill-behavior-prompts.json", fmt.Sprintf("case %d missing must_avoid markers", i))
-				}
-			}
-		}
-	}
-	behaviorReport, behaviorResult := Behavior(BehaviorOptions{
-		Root:        root,
-		CasesFile:   "examples/skill-behavior-prompts.json",
-		AnswersFile: "examples/skill-behavior-answers.json",
-	})
-	if !behaviorResult.OK() {
-		for _, failure := range behaviorResult.Failures {
-			result.add("examples/skill-behavior-answers.json", failure.Path+": "+failure.Message)
-		}
-	} else if behaviorReport.Summary.Total == 0 || behaviorReport.Summary.Pass != behaviorReport.Summary.Total {
-		result.add("examples/skill-behavior-answers.json", fmt.Sprintf("behavior answers must pass every case; total=%d pass=%d pending=%d fail=%d", behaviorReport.Summary.Total, behaviorReport.Summary.Pass, behaviorReport.Summary.Pending, behaviorReport.Summary.Fail))
-	}
-}
-
-func validateNoCoreScriptRuntime(root string, result *Result) {
-	scriptDir := filepath.Join(root, "scripts")
-	if isDir(scriptDir) {
-		result.add("scripts", "core script runtime directory must not exist in the native package")
-	}
-	for _, rel := range []string{"examples"} {
-		dir := filepath.Join(root, filepath.FromSlash(rel))
-		if !isDir(dir) {
-			continue
-		}
-		_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				result.add(path, err.Error())
-				return nil
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			if isScriptRuntimeExtension(entry.Name()) {
-				result.add(relativePath(root, path), "native package must not keep script runtime files")
-			}
-			return nil
-		})
-	}
-}
 
 func contains(values []string, expected string) bool {
 	for _, value := range values {

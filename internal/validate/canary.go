@@ -40,12 +40,6 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	}
 	catalog, err := LoadPromptCatalog(root)
 	add("prompt-catalog", err)
-	behavior, behaviorResult := Behavior(BehaviorOptions{Root: root})
-	if behaviorResult.OK() && behavior.Summary.Total > 0 {
-		add("behavior-harness", nil)
-	} else {
-		add("behavior-harness", fmt.Errorf("%s", resultSummary(behaviorResult)))
-	}
 	decision, err := Hook([]byte(`{"command":"pwsh -File ./scripts/gate-workflow.ps1"}`))
 	if err == nil && decision.PermissionDecision != "deny" {
 		err = fmt.Errorf("legacy command was allowed")

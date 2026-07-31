@@ -70,21 +70,11 @@ jobs:
         shell: cmd
         run: |
           bin\formal-gates.exe canary portable --root . --format json > portable-canary.json
-      - name: Validate behavior answer fixture (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          bin\formal-gates.exe behavior evaluate --root . --cases examples\skill-behavior-prompts.json --answers examples\skill-behavior-answers.json
       - name: Run native portable canary (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           bin/formal-gates canary portable --root . --format json > portable-canary.json
-      - name: Validate behavior answer fixture (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          bin/formal-gates behavior evaluate --root . --cases examples/skill-behavior-prompts.json --answers examples/skill-behavior-answers.json
       - name: Prepare release evidence names (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

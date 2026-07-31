@@ -54,8 +54,6 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runLifecycle(program, args[1:], streams)
 	case "canary":
 		return runCanary(program, args[1:], streams)
-	case "behavior":
-		return runBehavior(program, args[1:], streams)
 	default:
 		printUsage(streams.Stdout, program)
 		return 1, fmt.Errorf("unknown command: %s", args[0])
@@ -487,29 +485,6 @@ func runLifecycle(program string, args []string, streams IO) (int, error) {
 	}
 }
 
-func runBehavior(program string, args []string, streams IO) (int, error) {
-	if len(args) > 0 && isHelpArg(args[0]) {
-		printUsage(streams.Stdout, program)
-		return 0, nil
-	}
-	if len(args) == 0 || args[0] != "evaluate" {
-		return 1, fmt.Errorf("behavior evaluate is required")
-	}
-	fs := newFlagSet("behavior evaluate", streams)
-	root := fs.String("root", ".", "package root")
-	cases := fs.String("cases", "examples/skill-behavior-prompts.json", "behavior case file")
-	answers := fs.String("answers", "", "behavior answers file")
-	if code, err, done := parseFlagSet(fs, args[1:], streams.Stdout); done {
-		return code, err
-	}
-	report, result := validate.Behavior(validate.BehaviorOptions{Root: *root, CasesFile: *cases, AnswersFile: *answers})
-	code, err := printJSON(streams.Stdout, report)
-	if !result.OK() {
-		return 1, fmt.Errorf("formal-gates behavior evaluate failed with %d issue(s)", len(result.Failures))
-	}
-	return code, err
-}
-
 func runCanary(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
 		return 1, fmt.Errorf("canary subcommand is required")
@@ -827,5 +802,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n  behavior evaluate\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }

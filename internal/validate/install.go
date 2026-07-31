@@ -48,7 +48,6 @@ var installRuntimeEntries = []string{
 	"agents",
 	"prompts",
 	"gates",
-	"examples",
 	"references",
 }
 
@@ -235,7 +234,11 @@ func copyInstallRuntime(source, target string, force bool) error {
 	for _, entry := range installRuntimeEntries {
 		from := filepath.Join(source, filepath.FromSlash(entry))
 		to := filepath.Join(target, filepath.FromSlash(entry))
-		if err := copyPath(from, to); err != nil {
+		if isLiveEntry(entry) {
+			if err := os.Symlink(from, to); err != nil {
+				return err
+			}
+		} else if err := copyPath(from, to); err != nil {
 			return err
 		}
 	}
@@ -250,6 +253,17 @@ func removeExistingInstallTarget(target string) error {
 		return fmt.Errorf("refusing to replace unexpected target path: %s", target)
 	}
 	return os.RemoveAll(target)
+}
+
+// isLiveEntry reports whether an install entry should be a symlink back to the
+// source rather than a static copy. Live entries contain prompt/gate content
+// that changes without a full reinstall.
+func isLiveEntry(entry string) bool {
+	switch entry {
+	case "gates", "prompts":
+		return true
+	}
+	return false
 }
 
 func copyPath(from, to string) error {

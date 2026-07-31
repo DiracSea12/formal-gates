@@ -118,7 +118,7 @@ func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
 }
 
 func TestCLISubcommandHelpPrintsUsage(t *testing.T) {
-	for _, group := range []string{"workflow", "lifecycle", "canary", "hook", "behavior"} {
+	for _, group := range []string{"workflow", "lifecycle", "canary", "hook"} {
 		for _, flag := range []string{"-h", "--help", "help"} {
 			var stdout, stderr bytes.Buffer
 			code := Run("formal-gates", []string{group, flag}, IO{Stdout: &stdout, Stderr: &stderr})

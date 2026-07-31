@@ -28,7 +28,7 @@ git diff --stat <base-commit> <current-commit> --
 git diff --binary <base-commit> <current-commit> --
 ```
 
-新执行或重跑的门使用基线到当前。只有 Carry 使用修复前紧邻快照到当前。
+新执行或重跑的门使用基线到当前。只有继承判定使用修复前紧邻快照到当前。
 
 ## SVN
 
