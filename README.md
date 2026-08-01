@@ -1,201 +1,199 @@
 # formal-gates
 
-formal-gates 是一套轻量的 AI 开发审查流程。它把“写代码”和“判断是否
-通过”交给不同代理，用项目现有的 Git、SVN 或 P4 提供 diff，最后由 CLI
-保存用户实际选择执行的审查结果。
+**把 AI 实现者和审查者强制分离的轻量开发审查工作流**
 
-每个创建、编辑、移动或删除项目内容的请求都会启用它的 intake，不区分仓库、
-产品、文件类型或预估规模。未要求修改的只读提问、解释、诊断和 review 不会
-自动进入修改 intake，除非用户明确要求正式执行。
+[English](README_EN.md) | [中文](README.md)
 
-任何写入或实现派发前，主代理先自行检查工作区事实，逐个澄清目标和会影响
-公开行为、验收或架构的技术选择，再展示完整需求和技术方案并等待用户明确
-确认。随后根据总规模、耦合、风险和验证复杂度提出建议，并利用无状态候选
-查询只问一次 lightweight、full 或 custom。lightweight 不创建正式 run；full
-选择 QA 和全部动态门；custom 展示完整列表供用户选择非空子集。
+[![CI](https://github.com/DiracSea12/formal-gates/actions/workflows/portable-validation.yml/badge.svg)](https://github.com/DiracSea12/formal-gates/actions/workflows/portable-validation.yml)
+[![Go 1.22+](https://img.shields.io/badge/go-1.22+-blue.svg)](https://golang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## 核心设计
+---
 
-- `prompts/reviewer-base.md`：所有独立审查门共用的规则。
-- `gates/*.md`：每个文件就是一道独立审查门，文件名就是门 ID；`qa` 保留给
-  内建 QA 流程，不能作为文件 ID。
-- `prompts/actions/*.md`：需求澄清、开发前审查、QA、开发 worker 和继承判定。
-- `.gates/tmp/<run-id>/state.json`：运行期间唯一的临时状态文件。
-- `.gates/results/<run-id>.json`：封板或中止后唯一保留的结果。
+同一个 AI 写代码、又审查自己写的代码——结构性盲区，也不留任何台账。
 
-增加或删除审查门只需增加或删除一个有效的 `gates/*.md` 文件并重新安装。
-不需要改 Go 注册表、manifest、YAML、权重、依赖关系或顺序表。需求对齐后，
-用户从“QA 优先、其余门按文件名排序”的列表中一次选择 lightweight、full 或
-custom；只有 full 或 custom 才启动正式工作流状态。
+formal-gates 把实现、QA 和审查放进**相互不可见**的独立 session：审查者只拿需求
+原文和原生 VCS 的 diff（零上下文），无法用写码时的记忆填补审查。CLI 是唯一台账，
+封板时把整轮结论压缩成一份不依赖任何会话记忆的摘要。
 
-QA 不属于提示词门目录。选择 QA 后，QA Design 先产出完整候选用例，独立
-QA Review 通过后才能开发。完整用例集同时包含 STATIC 直接责任层检查和
-LIVE 公共入口真实执行；逐用例审查结果会在 Design 返工时保留完全未变的
-PASS，用下一轮只复核失败、新增或已变化的用例，且不占用开发后三轮
-review-wave。开发完成后，QA Execution 和审查门可以在同一批次并行执行。
-每条正式路由都在开发前运行开发前需求检查（`start-readiness`）。准备 development
-worker 时即冻结已登记的需求和方案文档集，将其作为验收输入，并禁止在开发开始后
-再加入 QA。开发后提示词把这些冻结路径排除在普通审查目标之外。full 和 custom 还
-要求在开发前用任意稳定文档格式保存完整已确认需求和技术方案，不要求指定插件。
+```text
+用户
+  │
+  ▼
+主代理（编排者）──► CLI 台账（.gates/）
+  │
+  ├─► Dev Worker   独立 session · 零上下文 · 只拿需求 + VCS diff
+  ├─► Gate A / B   独立 session · 零上下文 · 只看 VCS diff
+  └─► QA Executor  独立 session · 真实执行已批准用例
+```
 
-同一次路由选择覆盖后续新增需求和任务切片。新增范围会暂停相关写入，重新澄清
-并确认刷新后的完整摘要，但除非用户要求，不重复询问路由。过大的正式工作按
-依赖、职责、风险和验证边界切分；一个通过 `--retained-overall` 启动的总任务实例
-保留原始基线、完整需求和路由。各子任务实例使用单独的 VCS worktree 并负责实际
-开发；合并及解决冲突后，用 `workflow snapshot` 把合并提交直接记入总任务实例，
-再由它从原始基线执行集成审查。集成 finding 返回负责的子任务实例；子任务返修通过
-并重新合并后，总任务实例不准备自己的 development worker，而是直接记录新的
-合并快照。
+一句话：把「写的人」和「审的人」从同一颗脑子里拆开，再把结论写成一份不依赖任何
+会话记忆的台账。
 
-需求语义变化后，下一次 QA Design 会为不受影响的需求保留完全未变的 PASS
-用例，并把新增或变化用例标为待复核。正常中断后可以重新生成已准备的
-development 任务；不可变快照上已记录的语义 PASS 或 FAIL 仍为权威结果。
-每次 QA Review 和 gate 尝试都使用唯一 dispatch 和新认领的零上下文 reviewer
-identity，重试也不复用。
+---
 
-返修后，主代理检查原生 VCS 的本轮返修 diff。只有能确定返修不会影响任何
-此前已通过的已选验证时，才可执行 `workflow carry --main-agent --main-reason
-'<reason>'`，一次继承包括 QA 在内的所有先前 PASS。涉及共享行为、配置、
-依赖、跨门职责或影响链不确定时，仍按原流程使用独立继承判定，并正常重跑 QA。
+## 目录
 
-## 安装
+- [为什么需要它](#为什么需要它)
+- [特性](#特性)
+- [它是怎么工作的](#它是怎么工作的)
+- [示例产物](#示例产物)
+- [安装与卸载](#安装与卸载)
+- [使用方式](#使用方式)
+- [常见问题](#常见问题)
+- [范围与状态](#范围与状态)
+- [本地校验、贡献与许可](#本地校验贡献与许可)
 
-先在源码目录构建本机二进制：
+---
+
+## 为什么需要它
+
+同一个 AI 既写代码、又审查自己写的代码，会带来两个问题：
+
+- **结构性盲区**。审查者和实现者共享同一份记忆与上下文。AI 可以用"我写的时候就是这么想的"来填补审查，而不是只依据变更本身判断——本该被发现的错误，就这样被当成理所当然。
+- **不留台账**。没有独立的审查，也没有可追溯的记录。一个 AI 会话结束，它的实现依据、审查结论和通过理由就全都丢了。
+
+formal-gates 的做法，是把实现、QA 和审查放进**相互不可见**的独立 session。审查者 session 只拿到需求原文和原生 VCS 的 diff（零上下文：看不到实现者的思考过程、对话历史或任何现场状态），它无法用写码时的记忆填补审查，只能像一个陌生人那样面对这份变更。这正是合格审查者该有的状态。
+
+CLI 是唯一的台账：每一步的语义结果——需求确认、路由选择、门结论、QA 用例、快照——都记录在 `.gates/` 下，封板（seal）时压缩成一份摘要。封板的意思是：把本轮结果冻结下来、写一份摘要、清掉临时状态。之后任何人打开仓库，都能看到这一轮到底发生了什么、每道门为什么通过。
+
+一句话：**把"写的人"和"审的人"从同一颗脑子里拆开，再把结论写成一份不依赖任何会话记忆的台账。**
+
+---
+
+## 特性
+
+- **实现与审查强制分离** —— dev worker、审查门、QA 各自运行在相互不可见的独立 session，审查者只拿需求 + VCS diff。体现在：审查结论只基于变更本身，无法被实现时的记忆污染。
+- **CLI 是唯一台账** —— 运行期间只有 `.gates/tmp/<run-id>/state.json` 一份临时状态，封板后只剩 `.gates/results/<run-id>.json` 摘要；CLI 不存 diff、不复制项目文件。体现在：没有第二套版本数据要同步，关掉会话也不丢状态。
+- **审查门即文件，可任意增减** —— 每个 `gates/*.md` 就是一道门，加一个文件就多一道门、删一个文件就少一道，数量不限。体现在：门的集合完全由 `gates/` 目录决定，没有注册表、YAML 或权重表要改。
+- **门与提示词都可自定义** —— 门的审查逻辑在 `gates/*.md`，各动作（需求澄清、QA 设计/审查/执行、开发 worker、继承判定）的提示词在 `prompts/actions/*.md`，都是安装包里的普通 Markdown 文件。体现在：想加一道门就写一个文件，想让某个审查步骤按你的方式表达就改它的提示词，都不用动代码。
+- **QA 先设计、独立评审后才开发** —— 先产出完整候选用例（STATIC 直接检查 + LIVE 真实执行），独立 QA Review 通过后才开始写代码；返工时保留未变 PASS 的用例。体现在：行为预期在写码之前就冻结了，返修不必重测没变的东西。
+- **一次路由** —— 需求对齐后，lightweight / full / custom 只选一次，后续新增需求与任务切片沿用该路由。custom 从 QA 与全部已发现门里自由选择任意非空子集——可以不选 QA，也可以只选 QA。体现在：选一次，整个正式流程的执行范围就确定了。
+- **原生 VCS** —— Git、SVN、P4 直接驱动快照与 diff。体现在：仓库本身就是全部真相，没有中间格式的版本数据。快照（snapshot）就是原生 VCS 里那次语义结果对应的提交身份（git 里就是一个 commit）。
+
+---
+
+## 它是怎么工作的
+
+- **门即文件** —— 每一道独立审查门就是一个 `gates/*.md` 文件，文件名就是门 ID。想看什么就写一个文件，不想看就删掉。QA 是内建流程，不占门目录。
+- **CLI 是唯一台账** —— 所有语义结论都写在 `.gates/` 下的状态里，封板后收敛成一份摘要。它不存 diff、不存证据，快照与 diff 全在仓库自己的 VCS 里。
+- **QA 生命周期** —— 开发之前先把"怎么算对"写清楚：每个要验证的行为拆成候选用例（静态检查 + 真实执行），由独立 QA Review 通过后才动代码；返修只重核失败或变化的用例，没变的 PASS 直接保留。
+- **一次路由** —— 需求确认后从 lightweight、full、custom 里选一次。lightweight 是最轻的流程；full 带完整 QA 和全部门；custom 从 QA 与门目录里自由选任意非空子集，可以不含 QA，也可以只含 QA。
+- **状态与持久化** —— 运行中的 run 只有一份临时状态文件，任何一步中断都能从那里恢复；封板或中止后，这份临时状态被清掉，只留一份不可变摘要。
+- **任务切片与总任务** —— 过大的正式工作按依赖、职责、风险和验证边界切成多个独立子任务，各自在自己的 VCS worktree 里开发；一个总任务实例保留原始基线、完整需求和路由，负责对合并结果做集成审查。
+- **返修与继承** —— 发现项打回后可以返修重跑，已记录在不可变快照上的 PASS / FAIL 仍是权威结论；小范围返修若确定不影响任何已通过的验证，可以一次继承全部此前 PASS（含 QA），大范围或影响不确定时仍走独立继承判定。
+
+---
+
+## 示例产物
+
+**审查门**是 `gates/` 下的一个 Markdown 文件，文件名就是门 ID。加一道门 = 写一个文件、重新安装：
+
+```markdown
+# 命名门（示例）
+
+审查改动中的命名与可读性，只报告含义模糊或误导的标识符。每个发现项给出
+repository 相对位置。P0/P1 阻断 PASS，P2 仅作建议不阻塞。
+```
+
+P0/P1 是会阻断封板的缺陷严重级，P2 是仅建议、不阻断的轻微问题。
+
+**封板后**，这一轮的结论压缩成一份不可变摘要 `.gates/results/<run-id>.json`：哪几道门通过、每条 finding 的严重级与位置、QA 用例的结果。要查的时候打开看就行，不需要记任何字段名。
+
+---
+
+## 安装与卸载
+
+### 从 release 安装（推荐）
+
+不需要 Go 工具链。下载最新 release 的源码包，解压后在包内运行安装脚本（macOS/Linux 用 `install.command`，Windows 用 `install.bat`）。脚本会下载匹配当前平台的正式二进制、canary 与 SHA256 校验和，校验后组装本地包并调用同一个原生安装器：
+
+```bash
+./install.command --host claude --scope global
+# Windows: install.bat
+```
+
+### 从源码构建
+
+在源码目录构建本机二进制，再选择宿主和范围：
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates
-```
 
-然后选择宿主和范围：
-
-```bash
 bin/formal-gates install --source . --host claude --scope global --force
 bin/formal-gates install --source . --host codex --scope project --project <project> --force
 bin/formal-gates install --source . --host cursor --scope project --project <project> --force
 ```
 
-安装默认合并 formal-gates 自己的宿主 hook。只有明确不想改 hook 时才加
-`--skip-hooks`。现有非 formal-gates hook 不会被覆盖。
+Windows 使用 `bin\formal-gates.exe`。
 
-Windows 使用 `bin\formal-gates.exe`。也可以运行 `install.command` 或
-`install.bat` 下载对应 release 产物并调用同一个安装器。
+### 安装位置
 
-## 工作流命令
+| 宿主 | 全局（global） | 项目（project） |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/formal-gates` | 所选项目下的对应目录 |
+| Codex | `~/.codex/skills/formal-gates` | 所选项目下的对应目录 |
+| Cursor | `~/.cursor/formal-gates` | 所选项目下的对应目录 |
 
-下面只展示命令入口；完整顺序由 [SKILL.md](SKILL.md) 唯一维护。
+安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）。已有的非 formal-gates hook 不会被覆盖。
 
-启动 run 之前，可以只读查询当前安装包提供的路由候选；该命令不需要仓库、
-需求、run ID、VCS 快照或工作流状态，也不会创建工作流状态：
+### 手动卸载
 
-```bash
-formal-gates package route-candidates --root <package>
-```
+- 删除对应的 skill 目录（上表中的全局或项目路径）。
+- 清掉 hook 配置里本包写入的条目。
 
-返回的 JSON 数组以 `qa` 开头，后接按文件名 ID 排序的动态审查门。run 启动
-并确认需求后，仍使用下文的 `workflow route-candidates` 查询该 run 绑定的候选。
+### 参数语义
 
-启动和查看：
+- `--force`：目标已存在时替换它。
+- `--skip-hooks`：只安装包，不改宿主 hook 配置（只有当 hook 配置必须逐字节不变时才用）。
 
-```bash
-formal-gates workflow start \
-  --root <repo> --package-root <installed-formal-gates> \
-  --run-id <id> --flow formal --requirement <requirement-file> \
-  [--requirement-artifact <requirement-or-solution-file> ...] \
-  --vcs <git|svn|p4> [--base-snapshot <identity-to-verify>] [--retained-overall]
+---
 
-formal-gates workflow show --root <repo> --run-id <id>
-formal-gates workflow resume --root <repo> --package-root <installed-formal-gates> --run-id <id>
-formal-gates workflow abort --root <repo> --run-id <id>
-```
+## 使用方式
 
-准备 AI 任务时，CLI 把完整提示词写到 stdout。Requirements Clarification
-由主代理直接执行；其余独立 action 和 gate 的 stdout 原样交给对应代理，不要
-追加历史结论或其他门的结果：
+作为人类，你只需要做三件事：
 
-```bash
-formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|qa-review|development-worker|qa-execution|carry>
+1. **安装** —— 按上一节把它装到你的 AI 宿主（claude / codex / cursor）。
+2. **让你的 AI 代理驱动正式流程** —— 安装的 skill（`SKILL.md` 与 `references/`）就是给 AI 代理的操作手册：它读取这些文件，在仓库里为你的需求跑正式流程——澄清需求、选路由、派发独立的 worker 与审查者、记录 QA，直到封板。你不用记住任何命令。
+3. **审阅结果** —— 每轮结果由主代理汇总给你：哪些门通过、哪些 finding 需要处理、封板摘要长什么样。你随时可以打开 `.gates/results/<run-id>.json` 查看这一轮的完整结论。
 
-formal-gates workflow prepare-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <discovered-gate-id>
+`formal-gates workflow ...` 命令由流程驱动者（你的 AI 代理）执行，不是给人手输的。
 
-formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <dispatch-id> --reviewer <reviewer-or-session-id>
-```
+---
 
-记录语义结果：
+## 常见问题
 
-```bash
-formal-gates workflow requirement --root <repo> --package-root <package> \
-  --run-id <id> --source <requirement-file> \
-  [--requirement-artifact <file> ... | --clear-requirement-artifacts] --confirmed
+**和"AI 写完再让 AI 审"的 review bot 有什么区别？**
+review bot 通常运行在生成代码的同一个上下文里，AI 可以用写代码时的记忆填补审查盲区。formal-gates 把实现、QA 和审查放进相互不可见的独立 session，审查者只拿需求 + VCS diff，没有实现记忆可用，只能基于变更本身判断；同时留下一份 CLI 台账。
 
-formal-gates workflow route-candidates --root <repo> --package-root <package> \
-  --run-id <id>
-formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
+**需要什么前置条件？**
+从源码构建需要 Go 1.22+，并选一个宿主（claude / codex / cursor）。正式流程需要一个 Git、SVN 或 P4 仓库；无 VCS 的项目不进入正式流程。
 
-formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action start-readiness --dispatch <dispatch-id> --status PASS
+**如何加一道审查门？**
+新建 `gates/<id>.md` 并重新安装即可。文件名就是门 ID，不需要改注册表、YAML 或权重表。删除文件即移除门，数量不限。
 
-formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
-  --dispatch <dispatch-id> --case '<behavior>' --kind <STATIC|LIVE> \
-  --procedure '<public procedure>' --oracle '<expected result>'
+**自定义路由可以不选 QA 吗？**
+可以。custom 从 QA 和全部已发现门里自由选择任意非空子集：只跑一道门、只跑 QA、QA 加部分门都行。唯一限制是至少选一项，且不能把全部候选都选上（全选用 full）。
 
-formal-gates workflow qa-review --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <dispatch-id> --case CASE-001 \
-  --outcome <PASS|FAIL> [--reason '<required for FAIL>]
+**审查结果一定是最终结论吗？**
+不是。每个独立代理的结果只是候选输入：主代理在记录或展示前必须核对需求匹配、正常使用边界与结果格式；对 FAIL 或 blocker 还会独立复现其文档化路径再作判断。核对不通过就丢弃该结果。
 
-formal-gates workflow record-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <gate-id> --dispatch <dispatch-id> \
-  --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
+**封板后留下什么？**
+该 run 的整个临时目录被删除，只保留一份摘要 `.gates/results/<run-id>.json`。它不保留提示词副本、证据图或详细状态树。
 
-formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <development-or-repair-dispatch-id>
+---
 
-formal-gates workflow carry --root <repo> --package-root <package> \
-  --run-id <id> --main-agent --main-reason '<bounded repair reason>'
-```
+## 范围与状态
 
-QA Execution、继承判定、额外返修授权和 Seal 的参数以 `formal-gates help` 及
-`SKILL.md` 为准。需求文件修订变化后，先用 `workflow requirement --meaning
-preserved|changed` 明确语义影响；CLI 自行解析包含该修订的原生 VCS identity，
-但不自行猜测语义影响。
+**状态声明**：当前为 v0.1.0 prerelease，文档化流程以仓库为准。发布版本见 [GitHub Releases](https://github.com/DiracSea12/formal-gates/releases)。
 
-## Diff 与返修
+**范围**：本项目只保证文档化正常使用和常见操作失误。除非明确要求，恶意篡改内部状态、权限或不可变文件故障注入、攻击式输入，以及其他违反文档化流程的场景，不属于阻断范围，也不催生额外防御系统。
 
-formal-gates 不读取或保存 diff 内容，也不复制项目文件。worker、QA 和
-reviewer 直接运行现场 VCS：
+---
 
-- 总 diff：开发前 base 到当前 snapshot，所有新跑或重跑的门都看它。
-- 本轮返修 diff：返修前 snapshot 到当前 snapshot。主代理只用它判断能否走
-  一次继承全部 PASS 的小返修捷径；否则交给独立继承判定决定哪些门可以沿用。
-- 新建文件或原本未跟踪但属于本次交付的文件，worker 必须先按路径加入 VCS，
-  再继续修改；不要执行 `git add .` 或触碰无关未跟踪文件。
+## 本地校验、贡献与许可
 
-Git、SVN、P4 的命令见
-[references/vcs-snapshots.md](references/vcs-snapshots.md)。无 VCS 项目不进入
-正式流程。
-
-## 结果与中断
-
-每条审查门 finding 都带 P0、P1 或 P2。无 finding 或仅 P2 时为 `PASS`；
-至少一条 P0/P1 时为 `FAIL`；`RUNTIME_ERROR` 不带 finding。已选择的
-`PENDING` 会阻止 Seal；运行错误需要重试或用户明确跳过。QA FAIL 和 P0/P1
-在共享三轮 review-wave 额度耗尽前必须返修，之后才可显式授权跳过。仅 P2
-的建议会保留展示，但不阻止 Seal。
-
-每个独立代理结果都只是候选输入。记录或展示任何 PASS 或 FAIL 前，主代理必须
-明确完成对完整已确认需求、正常使用边界和结果格式的核验。对于 FAIL 或 blocker，
-还必须按保留的工作流状态检查它，独立复现其文档化正常使用公开入口路径，并核实
-证据、范围、严重度和因果关系。任一检查失败就丢弃该 finding，不改变工作流状态、
-需求或实现。
-
-封板成功或显式中止后，CLI 写入一个摘要并删除该 run 的整个临时目录。
-它不会留下提示词副本、分层证据图或详细状态文件。
-
-## 本地校验
+**本地校验**（在仓库根目录运行）：
 
 ```bash
 go test ./...
@@ -206,14 +204,9 @@ bin/formal-gates package validate --root .
 bin/formal-gates canary portable --root . --format json
 ```
 
-宿主 hook 是否真正拦截必须在该宿主上跑 live canary。配置文件存在不等于
-hook 已生效。安装和 canary 细节见
-[references/install-and-hooks.md](references/install-and-hooks.md)。
+**贡献**：
+- 新增或调整审查门：编辑或新建 `gates/*.md`，重新安装后生效。
+- 行为变更请更新 [CHANGELOG.md](CHANGELOG.md)。
+- Bug 或改进建议请通过 GitHub issues 提交。
 
-## 范围
-
-本项目只保证文档化正常使用和常见操作失误。除非需求明确提出，否则恶意
-篡改内部状态、权限故障、不可变文件注入、攻击式输入和其他违反流程的场景
-不属于阻断范围，也不应催生额外防御系统。
-
-许可证：[MIT](LICENSE)。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+**许可**：[MIT](LICENSE)。

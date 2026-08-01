@@ -1,229 +1,202 @@
 # formal-gates
 
-formal-gates is a lightweight AI development review workflow. It separates the
-implementation worker from independent reviewers, uses the project's existing
-Git, SVN, or P4 for diffs, and lets the CLI retain the results of whichever
-reviews the user selected.
+**A lightweight AI development-review workflow that forces the implementer and the reviewer into separate, mutually invisible sessions**
 
-Its intake activates for every request that creates, edits, moves, or deletes
-project content, regardless of repository, product, file type, or estimated
-size. Read-only questions, explanations, diagnostics, and reviews remain outside
-automatic modification intake unless the user explicitly requests formal
-execution.
+[English](README_EN.md) | [中文](README.md)
 
-Before any write or implementation dispatch, the main agent inspects workspace
-facts, clarifies the outcome and consequential technical choices one at a time,
-then presents the complete requirements and solution for explicit confirmation.
-It recommends and asks once for lightweight, full, or custom execution using the
-stateless package route-candidate query. Lightweight creates no formal run;
-full selects QA and every discovered gate; custom shows the complete list for a
-non-empty subset choice.
+[![CI](https://github.com/DiracSea12/formal-gates/actions/workflows/portable-validation.yml/badge.svg)](https://github.com/DiracSea12/formal-gates/actions/workflows/portable-validation.yml)
+[![Go 1.22+](https://img.shields.io/badge/go-1.22+-blue.svg)](https://golang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Design
+---
 
-- `prompts/reviewer-base.md` contains the shared independent-review contract.
-- Each `gates/*.md` file is one independent review gate; its filename is its ID.
-  `qa` is reserved for the built-in QA flow and cannot be a file ID.
-- `prompts/actions/*.md` contains requirements, readiness, QA, worker, and Carry
-  roles.
-- `.gates/tmp/<run-id>/state.json` is the only temporary run-state file.
-- `.gates/results/<run-id>.json` is the only retained seal or abort result.
+The same AI that writes code also reviews its own work — a structural blind spot, and no audit trail.
 
-Adding or removing a valid `gates/*.md` file and reinstalling adds or removes a
-gate. There is no Go registry, gate manifest, YAML front matter, weight,
-dependency graph, or ordering table. After clarification, the user makes one
-lightweight, full, or custom selection from QA followed by the lexical gate
-list. Formal workflow state starts only for full or custom.
+formal-gates puts implementation, QA, and review into **mutually invisible**
+independent sessions: a reviewer gets only the requirement text and the native VCS
+diff (zero context), so it cannot fill gaps with implementation memory. The CLI is
+the only ledger; at seal it collapses the whole round into one summary that depends
+on no session memory.
 
-QA is not part of the prompt-gate catalog. When selected, QA Design first
-returns a complete set containing STATIC direct-owner checks and LIVE public
-execution. An independent QA Review must pass before development. Per-case
-outcomes preserve exact unchanged passing cases across Design rework, while the
-next review receives only failed, new, or changed cases. This loop does not
-consume a post-development review wave. After development, QA Execution and
-review gates may run in one parallel wave.
-Start Readiness runs before development for every formal route. Preparing the
-development worker freezes the registered requirement and solution artifact set
-as acceptance input and prevents QA from being added after development starts.
-Post-development prompts exclude those frozen paths as ordinary review targets.
-Full and custom require the complete confirmed requirements and technical
-solution in any stable available document format; no named plugin is required.
+```text
+User
+  │
+  ▼
+Main agent ──► CLI ledger (.gates/)
+  │
+  ├─► Dev Worker    independent session · zero-context · requirement + VCS diff
+  ├─► Gate A / B    independent session · zero-context · VCS diff
+  └─► QA Executor   independent session · runs approved cases
+```
 
-The chosen route covers later requirements and task slices. Added scope pauses
-related writes for clarification and confirmation of a refreshed complete
-summary, without another route question unless the user requests one. Large
-formal work is split by dependency, ownership, risk, and verification surface.
-One overall run, started with `--retained-overall`, retains the original base,
-complete requirement, and route. Independent slices use separate VCS worktrees
-and formal runs and own implementation. After merge and conflict resolution,
-`workflow snapshot` records the merged commit directly in the retained overall
-run, which reviews it from the original base. Integration findings return to
-their owning slice runs; after sealed slice repairs are merged, the retained
-overall run records the new merged snapshot directly without preparing its own
-development worker.
+In one line: **take the writer and the reviewer out of the same head, and write the
+conclusions into a ledger that depends on no session memory.**
 
-After a meaning-changing requirement revision, the next QA Design retains exact
-passing cases for unaffected requirements and makes new or changed cases
-pending. Prepared development tasks can be recomposed after normal interruption,
-while a recorded semantic PASS or FAIL remains authoritative for its immutable
-snapshot. Every QA Review and gate attempt uses a unique dispatch and newly
-claimed zero-context reviewer identity, including retries.
+---
 
-After repair, the main agent inspects the immediate native repair diff. It may
-use `workflow carry --main-agent --main-reason '<reason>'` only when the repair
-cannot affect any previously passing selected verification; this inherits all
-prior PASS results, including QA. Shared behavior, configuration, dependencies,
-cross-gate ownership, or uncertain impact uses independent Carry as before,
-with QA rerun normally.
+## Table of Contents
 
-## Installation
+- [Why](#why)
+- [Features](#features)
+- [How It Works](#how-it-works)
+- [Example Artifacts](#example-artifacts)
+- [Installation And Uninstall](#installation-and-uninstall)
+- [Usage](#usage)
+- [FAQ](#faq)
+- [Scope And Status](#scope-and-status)
+- [Local Validation, Contributing, And License](#local-validation-contributing-and-license)
 
-Build the native binary in the source checkout:
+---
+
+## Why
+
+An AI agent that implements code and then reviews its own work has two problems:
+
+- **A structural blind spot.** The reviewer and the implementer share one memory and one context. The AI can fill gaps with "I wrote it, so I know what I meant" instead of judging the change on its own — so real defects get rationalized away.
+- **No audit trail.** There is no independent review and nothing traceable. When a session ends, the reasoning behind the implementation, the review, and the approvals is gone.
+
+formal-gates puts implementation, QA, and review into **mutually invisible** independent sessions. A reviewer session receives only the requirement text and the native VCS diff — zero context: no chain of thought, no chat history, no live state from the implementer. It cannot fall back on implementation memory; it faces the change like a stranger would. That is what a reviewer should be.
+
+The CLI is the only ledger. Every semantic result — requirement confirmation, route choice, gate verdicts, QA cases, snapshots — is recorded under `.gates/` and collapses into a single summary at seal. Sealing means: freeze the round's results, write one summary, and clear the temporary state. Anyone can open the repository afterwards and see exactly what happened and why each gate passed.
+
+In one line: **take the writer and the reviewer out of the same head, and write the conclusions into a ledger that depends on no session memory.**
+
+---
+
+## Features
+
+- **Implementation and review are strictly separated** — the dev worker, review gates, and QA each run in mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff. What this gives you: verdicts rest on the change alone and cannot be colored by implementation memory.
+- **The CLI is the only ledger** — during a run there is one temporary state file, `.gates/tmp/<run-id>/state.json`; after seal only the summary `.gates/results/<run-id>.json` remains. The CLI stores no diffs and copies no project files. What this gives you: no second dataset to keep in sync, and no lost state when a session ends.
+- **A gate is just a file; add or remove them freely** — each `gates/*.md` is one review gate; add a file for a new gate, delete one to drop it, with no limit. What this gives you: the gate set is exactly what the `gates/` directory contains — no registry, YAML, or weights table.
+- **Gates and prompts are customizable** — gate review logic lives in `gates/*.md` and each action's prompt (requirements clarification, QA design/review/execution, the development worker, carry) lives in `prompts/actions/*.md`, all plain Markdown files inside the installed package. What this gives you: write a file to add a gate, or reword how a review step is expressed by editing its prompt — no code changes.
+- **QA is designed and independently reviewed before development** — a complete candidate case set (STATIC direct checks plus LIVE real execution) is produced first, and an independent QA Review must pass before any code is written; rework keeps unchanged PASS cases. What this gives you: the behavior contract is frozen before coding, and repairs don't re-test what didn't change.
+- **One route** — lightweight, full, or custom is chosen once after the requirement is aligned; later requirements and task slices keep that route. Custom picks any non-empty subset of QA and the discovered gates — leave QA out, or run QA alone. What this gives you: one decision fixes the shape of the entire formal run.
+- **Native VCS** — Git, SVN, and P4 drive snapshots and diffs directly. What this gives you: the repository itself is the whole truth, with no intermediate version data. A snapshot is the native commit identity of that semantic result (a commit in git).
+
+---
+
+## How It Works
+
+- **A gate is a file** — every independent review gate is a `gates/*.md` file whose filename is its ID. Want a new check? Write a file. Don't want it? Delete it. QA is built in and doesn't occupy the gate directory.
+- **The CLI is the only ledger** — all semantic conclusions live under `.gates/` and collapse into one summary at seal. It stores no diffs and no evidence; snapshots and diffs live in the repository's own VCS.
+- **QA lifecycle** — before development, "what counts as correct" is written down: each behavior to verify becomes candidate cases (static checks plus real execution), and an independent QA Review must pass before code is written. Rework re-checks only failed or changed cases; unchanged PASS cases are kept.
+- **One route** — after the requirement is confirmed, choose once from lightweight, full, or custom. Lightweight is the minimal flow; full adds complete QA and every gate; custom freely picks any non-empty subset of QA and the gates — QA included or not.
+- **State and persistence** — a running run has exactly one temporary state file, and any interruption can be resumed from it; after seal or abort that temporary state is deleted and only an immutable summary remains.
+- **Task slicing and the overall run** — large formal work is split by dependency, ownership, risk, and verification surface into independent slice runs, each developing in its own VCS worktree; one overall run keeps the original base, the complete requirement, and the route, and does the integration review of merged results.
+- **Repairs and inheritance** — findings can be sent back for repair and re-run; a PASS or FAIL already recorded against an immutable snapshot stays authoritative. A bounded repair that provably cannot affect any previously passing verification may inherit all prior PASS results, including QA; otherwise an independent carry decision is used.
+
+---
+
+## Example Artifacts
+
+**A review gate** is a Markdown file under `gates/`; its filename is the gate ID. To add a gate, write a file and reinstall:
+
+```markdown
+# Naming Gate (example)
+
+Review naming and readability in the change; report only identifiers that are
+ambiguous or misleading. Each finding gives a repository-relative location.
+P0/P1 findings block PASS; P2 is advisory only.
+```
+
+P0/P1 are finding severities that block seal; P2 is advisory only and does not block.
+
+**After seal**, the round's conclusions are collapsed into one immutable summary at `.gates/results/<run-id>.json`: which gates passed, each finding's severity and location, and the QA case results. Just open it when you want to look — there is no schema to memorize.
+
+---
+
+## Installation And Uninstall
+
+### Install from a release (recommended)
+
+No Go toolchain needed. Download the latest release source archive, extract it, and run the install script inside it (`install.command` on macOS/Linux, `install.bat` on Windows). The script downloads the matching native binary, canary, and SHA256 checksums, verifies them, assembles a local package, and calls the same native installer:
+
+```bash
+./install.command --host claude --scope global
+# Windows: install.bat
+```
+
+### Build from source
+
+Build the native binary in the source checkout, then pick a host and scope:
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates
-```
 
-Then select a host and scope:
-
-```bash
 bin/formal-gates install --source . --host claude --scope global --force
 bin/formal-gates install --source . --host codex --scope project --project <project> --force
 bin/formal-gates install --source . --host cursor --scope project --project <project> --force
 ```
 
-Installation merges formal-gates' own host hook by default. Add `--skip-hooks`
-only when hook configuration must remain unchanged. Existing unrelated hooks
-are preserved.
+On Windows use `bin\formal-gates.exe`.
 
-Use `bin\formal-gates.exe` on Windows. `install.command` and `install.bat` can
-download matching release assets and invoke the same installer.
+### Where things get installed
 
-## Workflow Commands
+| Host | Global | Project |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/formal-gates` | corresponding directory under the selected project |
+| Codex | `~/.codex/skills/formal-gates` | corresponding directory under the selected project |
+| Cursor | `~/.cursor/formal-gates` | corresponding directory under the selected project |
 
-These examples show command entrypoints only. [SKILL.md](SKILL.md) is the sole
-owner of workflow order.
+Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project). Existing non-formal-gates hooks are preserved.
 
-Before starting a run, query the installed package's route candidates without
-a repository, requirement, run ID, VCS snapshot, or workflow state. This
-read-only command does not create workflow state:
+### Uninstall manually
 
-```bash
-formal-gates package route-candidates --root <package>
-```
+- Delete the skill directory (the global or project path in the table above).
+- Remove the entries this package wrote into the host hook config.
 
-The JSON array starts with `qa`, followed by the dynamically discovered gates
-in filename ID order. After starting a run and confirming its requirement, use
-the run-bound `workflow route-candidates` command shown below instead.
+### Flag semantics
 
-Start and inspect a run:
+- `--force` — replace an existing target.
+- `--skip-hooks` — install the package without touching host hooks (only when the host hook config must stay byte-for-byte unchanged).
 
-```bash
-formal-gates workflow start \
-  --root <repo> --package-root <installed-formal-gates> \
-  --run-id <id> --flow formal --requirement <requirement-file> \
-  [--requirement-artifact <requirement-or-solution-file> ...] \
-  --vcs <git|svn|p4> [--base-snapshot <identity-to-verify>] [--retained-overall]
+---
 
-formal-gates workflow show --root <repo> --run-id <id>
-formal-gates workflow resume --root <repo> --package-root <installed-formal-gates> --run-id <id>
-formal-gates workflow abort --root <repo> --run-id <id>
-```
+## Usage
 
-Prompt preparation writes the complete task to stdout. The main agent follows
-Requirements Clarification itself; send independently dispatched action and gate
-tasks verbatim without appending chat history, prior conclusions, or another
-gate's result:
+As a human you only need to do three things:
 
-```bash
-formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action <requirements-clarification|start-readiness|qa-design|qa-review|development-worker|qa-execution|carry>
+1. **Install** — set it up for one of your AI hosts (claude, codex, or cursor) as described above.
+2. **Let your AI agent drive the formal flow** — the installed skill (`SKILL.md` and `references/`) is the agent's operating manual. It reads those files and runs the formal flow for your requirement: clarify the requirement, pick a route, dispatch the independent worker and reviewers, record QA, and seal. You don't need to remember any commands.
+3. **Review the outcome** — the main agent summarizes each round for you: which gates passed, which findings need action, and what the seal summary looks like. You can always open `.gates/results/<run-id>.json` for the full conclusions.
 
-formal-gates workflow prepare-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <discovered-gate-id>
+The `formal-gates workflow ...` commands are run by the flow driver (your AI agent), not typed by humans.
 
-formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <dispatch-id> --reviewer <reviewer-or-session-id>
-```
+---
 
-Record semantic results:
+## FAQ
 
-```bash
-formal-gates workflow requirement --root <repo> --package-root <package> \
-  --run-id <id> --source <requirement-file> \
-  [--requirement-artifact <file> ... | --clear-requirement-artifacts] --confirmed
+**How is this different from a review bot that has AI review its own work?**
+A review bot typically runs in the same context that produced the code, so the AI can fill gaps from its implementation memory. formal-gates puts implementation, QA, and review into mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff, with no implementation memory to lean on, so they can only judge the change itself. It also leaves a CLI ledger.
 
-formal-gates workflow route-candidates --root <repo> --package-root <package> \
-  --run-id <id>
-formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
+**What are the prerequisites?**
+Building from source needs Go 1.22+ and one host: claude, codex, or cursor. A formal run needs a Git, SVN, or P4 repository; projects without a VCS don't enter the formal flow.
 
-formal-gates workflow record-action --root <repo> --package-root <package> \
-  --run-id <id> --action start-readiness --dispatch <dispatch-id> --status PASS
+**How do I add a review gate?**
+Create `gates/<id>.md` and reinstall. The filename is the gate ID; no registry, YAML, or weights table needs changing. Delete the file to drop the gate; there is no limit.
 
-formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
-  --dispatch <dispatch-id> --case '<behavior>' --kind <STATIC|LIVE> \
-  --procedure '<public procedure>' --oracle '<expected result>'
+**Can a custom route skip QA?**
+Yes. Custom picks any non-empty subset of QA and the discovered gates: one gate only, QA only, or QA plus some gates. The only constraint is that it selects at least one item and not the full set — pick everything with full.
 
-formal-gates workflow qa-review --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <dispatch-id> --case CASE-001 \
-  --outcome <PASS|FAIL> [--reason '<required for FAIL>]
+**Is every review result final?**
+No. Every independent result is candidate input. Before recording or presenting it, the main agent checks requirement fit, the normal-use boundary, and the result contract; a FAIL or blocker is also independently reproduced through its documented public path. A result that fails any check is discarded.
 
-formal-gates workflow record-gate --root <repo> --package-root <package> \
-  --run-id <id> --gate <gate-id> --dispatch <dispatch-id> \
-  --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
+**What is left after seal?**
+The run's entire temporary directory is deleted; only the summary `.gates/results/<run-id>.json` remains. No prompt copies, evidence graphs, or detailed state trees are kept.
 
-formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <development-or-repair-dispatch-id>
+---
 
-formal-gates workflow carry --root <repo> --package-root <package> \
-  --run-id <id> --main-agent --main-reason '<bounded repair reason>'
-```
+## Scope And Status
 
-Use `formal-gates help` and `SKILL.md` for QA Execution, Carry, repair
-authorization, and Seal parameters. A changed requirement revision first needs
-`workflow requirement --meaning preserved|changed`; the CLI resolves the native
-VCS identity containing that revision but does not infer its semantic effect.
+**Status.** This is a v0.1.0 prerelease; the documented workflow is authoritative in this repository. Releases are published on [GitHub Releases](https://github.com/DiracSea12/formal-gates/releases).
 
-## Diffs And Repairs
+**Scope.** This project guarantees documented normal use and common operator mistakes. Unless explicitly required, malicious internal-state edits, permission or immutable-file fault injection, attack-style inputs, and other violations of the documented workflow are out of scope and must not create extra defensive systems.
 
-formal-gates neither reads nor stores diff bytes and never copies project
-files. The worker, QA executor, and reviewers invoke the on-site VCS directly:
+---
 
-- The total diff is base to current. Every fresh or rerun gate reviews it.
-- The repair diff is immediate pre-repair to current. The main agent uses it
-  only for the all-PASS bounded-repair shortcut; otherwise independent Carry
-  decides which prior gate results remain valid.
-- A new delivery file, or an existing untracked delivery file in scope, must be
-  added by explicit path before further edits. Never run `git add .` or touch
-  unrelated untracked files.
+## Local Validation, Contributing, And License
 
-See [references/vcs-snapshots.md](references/vcs-snapshots.md) for Git, SVN, and
-P4 commands. Formal runs do not support a no-VCS worktree.
-
-## Results And Interruption
-
-Every gate finding has P0, P1, or P2 impact. A gate returns `PASS` with no
-findings or P2-only recommendations, `FAIL` with at least one P0/P1 finding,
-or `RUNTIME_ERROR` with no findings. Selected `PENDING` work blocks Seal.
-Runtime errors require retry or explicit skip. QA FAIL and P0/P1 require repair
-until the shared three-review-wave limit is exhausted before Seal skip is
-available. P2-only recommendations remain visible without blocking Seal.
-
-Every independent result is candidate input. Before recording or presenting any
-PASS or FAIL, the main agent explicitly validates it against the complete
-confirmed requirement, normal-use boundary, and result contract. For a FAIL or
-blocker, the main agent also checks retained workflow state, independently
-reproduces its documented normal-use public path, and verifies its evidence,
-scope, severity, and causal claim. A finding that fails any check is discarded
-without changing workflow state, requirements, or implementation.
-
-After successful seal or explicit abort, the CLI writes one summary and removes
-that run's entire temporary directory. It does not retain prompt copies,
-layered evidence graphs, or a detailed state tree.
-
-## Local Validation
+**Local validation** (run from the repository root):
 
 ```bash
 go test ./...
@@ -234,15 +207,9 @@ bin/formal-gates package validate --root .
 bin/formal-gates canary portable --root . --format json
 ```
 
-Hook configuration is not proof that the host invoked it. Claim hook blocking
-only after a live canary on that host. See
-[references/install-and-hooks.md](references/install-and-hooks.md).
+**Contributing**:
+- To add or adjust a review gate, create or edit `gates/*.md`; reinstall to apply.
+- Update [CHANGELOG.md](CHANGELOG.md) for behavior changes.
+- Report bugs and improvement ideas via GitHub issues.
 
-## Scope
-
-This project guarantees documented normal use and common operator mistakes.
-Unless explicitly required, malicious internal-state edits, permission or
-immutable-file fault injection, attack-style inputs, and other workflow
-violations are out of scope and must not create extra defensive systems.
-
-License: [MIT](LICENSE). See [CHANGELOG.md](CHANGELOG.md) for changes.
+**License**: [MIT](LICENSE).
