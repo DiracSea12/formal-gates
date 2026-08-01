@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Require a cheap sanity check (the target project's own documented validation)
   before dispatching gate/QA reviews after repair; obvious failures return to
   repair without subagents.
+- Require the development worker to self-test before delivering, including the
+  target project's own build/test (compilation must pass).
 - Strengthen the implementation-quality gate's performance review for observable
   regressions.
 - Discover independent review gates from package-local `gates/*.md` files.
