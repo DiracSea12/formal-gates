@@ -80,7 +80,11 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if identity == "" && correlation == "" {
 		return result, nil
 	}
-	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation}
+	transcriptPath := ""
+	if adapter.transcriptPath != nil {
+		transcriptPath = adapter.transcriptPath(decoded)
+	}
+	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation, TranscriptPath: transcriptPath}
 	duplicate := true
 	for _, root := range roots {
 		alreadyExists, err := recordEvent(root, record)

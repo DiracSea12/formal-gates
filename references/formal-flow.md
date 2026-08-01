@@ -120,9 +120,11 @@ formal-gates workflow carry --root <repo> --package-root <package> \
 formal-gates workflow authorize-repair --root <repo> --package-root <package> \
   --run-id <id> --cycles 1
 
-# 只有当每个被选中的结果都通过、或已获得允许的授权之后，才 Seal。
+# 只有当每个被选中的结果都通过、或已获得允许的授权之后，才 Seal。FAIL 跳过需要共享
+# 审查轮次上限耗尽；用户主动要求跳过时加 --user-requested，可提前跳过并记录为
+# SEAL-USER 授权。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
-  [--skip <selected-non-passing-gate> ...]
+  [--skip <selected-non-passing-gate> ...] [--user-requested]
 ```
 
 按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法

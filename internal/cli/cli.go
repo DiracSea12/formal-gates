@@ -303,10 +303,11 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		runID := fs.String("run-id", "", "run id")
 		skips := stringListFlag{}
 		fs.Var(&skips, "skip", "selected non-passing gate explicitly authorized to skip")
+		userRequested := fs.Bool("user-requested", false, "user explicitly requests the FAIL skips before the review-wave limit is exhausted")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		summary, err := validate.Seal(*root, *pkg, *runID, skips)
+		summary, err := validate.Seal(*root, *pkg, *runID, skips, *userRequested)
 		return printValue(streams.Stdout, summary, err)
 	default:
 		return 1, fmt.Errorf("unknown workflow subcommand: %s", sub)

@@ -534,6 +534,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 				return err
 			}
 		}
+		backfillDispatchCost(root, state, dispatch)
 		result, err := semanticActionResult(status, message, findings, state)
 		if err != nil {
 			return err
@@ -567,6 +568,7 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message st
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
+		backfillDispatchCost(root, state, dispatch)
 		existing := state.Gates[gateID]
 		if existing.Status == "PASS" && existing.Snapshot != state.CurrentSnapshot {
 			return fmt.Errorf("gate %q requires a Carry decision before rerun", gateID)
@@ -607,6 +609,7 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
+		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(cases) != 0 {
 				return fmt.Errorf("QA Design runtime error cannot include cases")
@@ -711,6 +714,7 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
+		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(decisions) != 0 || len(setFindings) != 0 {
 				return fmt.Errorf("QA Review runtime error cannot include case decisions or findings")
@@ -800,6 +804,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
+		backfillDispatchCost(root, state, dispatch)
 		if semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
 			return fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
 		}
@@ -889,6 +894,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, err
 			if err := requireLifecycleVerification(root, *state, developmentDispatch); err != nil {
 				return err
 			}
+			backfillDispatchCost(root, state, developmentDispatch)
 		}
 		oldSnapshot := state.CurrentSnapshot
 		isRepair := developmentStatus == developmentRepairPrepared ||
@@ -908,7 +914,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, err
 		}
 		state.Carry = map[string]CarryResult{}
 		for id, authorization := range state.SkipAuthorizations {
-			if authorization.Origin == "SEAL" {
+			if isSealScopedAuthorization(authorization) {
 				delete(state.SkipAuthorizations, id)
 			}
 		}
@@ -975,6 +981,7 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 			return err
 		}
+		backfillDispatchCost(root, state, dispatch)
 		eligible := eligibleCarryGates(*state)
 		if len(eligible) == 0 {
 			return fmt.Errorf("no prior passing gates require a Carry decision")
@@ -1084,7 +1091,7 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState
 
 func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runID, "ABORTED") }
 
-func Seal(root, packageRoot, runID string, skips []string) (RunSummary, error) {
+func Seal(root, packageRoot, runID string, skips []string, userRequested bool) (RunSummary, error) {
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -1108,7 +1115,7 @@ func Seal(root, packageRoot, runID string, skips []string) (RunSummary, error) {
 	if before != state.CurrentSnapshot {
 		return RunSummary{}, fmt.Errorf("native VCS identity does not match the current snapshot before aggregation")
 	}
-	if err := authorizeSealSkips(&state, skips); err != nil {
+	if err := authorizeSealSkips(&state, skips, userRequested); err != nil {
 		return RunSummary{}, err
 	}
 	if err := requireTransition(state, "seal", ""); err != nil {
@@ -1514,7 +1521,7 @@ func rebindCurrentSnapshot(state *RunState, snapshot string) {
 		}
 	}
 	for id, authorization := range state.SkipAuthorizations {
-		if authorization.Origin == "SEAL" && authorization.Snapshot == previous {
+		if isSealScopedAuthorization(authorization) && authorization.Snapshot == previous {
 			authorization.Snapshot = snapshot
 			state.SkipAuthorizations[id] = authorization
 		}
@@ -1868,7 +1875,14 @@ func completeReviewWaveIfReady(state *RunState) {
 	state.PreRepairSnapshot = ""
 }
 
-func authorizeSealSkips(state *RunState, skips []string) error {
+// authorizeSealSkips records seal-time skip authorizations for the named
+// non-passing selected gates. FAIL and RUNTIME_ERROR results may be skipped;
+// a FAIL skip is only allowed once the shared review-wave limit is
+// exhausted, unless the user explicitly requested the skip (userRequested),
+// which records a distinguishable SEAL-USER origin. A RUNTIME_ERROR is
+// always manually skippable and keeps the SEAL origin. The authorizations
+// are bound to the current snapshot and cleared by the next repair snapshot.
+func authorizeSealSkips(state *RunState, skips []string, userRequested bool) error {
 	wanted := map[string]bool{}
 	for _, raw := range skips {
 		id := strings.TrimSpace(raw)
@@ -1885,15 +1899,27 @@ func authorizeSealSkips(state *RunState, skips []string) error {
 		if status == "PASS" {
 			return fmt.Errorf("selected gate %q already passed", id)
 		}
-		if status == "FAIL" && state.CompletedReviewWaves < effectiveReviewWaveLimit(*state) {
+		if status == "FAIL" && !userRequested && state.CompletedReviewWaves < effectiveReviewWaveLimit(*state) {
 			return fmt.Errorf("selected gate %q cannot be skipped before the review-wave limit is exhausted", id)
 		}
 		wanted[id] = true
 	}
 	for id := range wanted {
-		state.SkipAuthorizations[id] = SkipAuthorization{Origin: "SEAL", Status: selectedResultStatus(*state, id), Snapshot: state.CurrentSnapshot}
+		origin := "SEAL"
+		if userRequested && selectedResultStatus(*state, id) == "FAIL" {
+			origin = "SEAL-USER"
+		}
+		state.SkipAuthorizations[id] = SkipAuthorization{Origin: origin, Status: selectedResultStatus(*state, id), Snapshot: state.CurrentSnapshot}
 	}
 	return nil
+}
+
+// isSealScopedAuthorization reports whether the authorization is a seal-time
+// skip authorization bound to the current snapshot: SEAL for limit-exhausted
+// and RUNTIME_ERROR skips, SEAL-USER for FAIL skips the user explicitly
+// requested before the limit is exhausted.
+func isSealScopedAuthorization(authorization SkipAuthorization) bool {
+	return authorization.Origin == "SEAL" || authorization.Origin == "SEAL-USER"
 }
 
 func requireSelectedResultsResolved(state RunState) error {
@@ -1913,7 +1939,7 @@ func requireSelectedResultsResolved(state RunState) error {
 			continue
 		}
 		authorization, ok := state.SkipAuthorizations[id]
-		if !ok || authorization.Origin != "SEAL" || authorization.Status != status || authorization.Snapshot != state.CurrentSnapshot {
+		if !ok || !isSealScopedAuthorization(authorization) || authorization.Status != status || authorization.Snapshot != state.CurrentSnapshot {
 			return fmt.Errorf("selected gate %q with status %s requires explicit Seal skip authorization", id, status)
 		}
 	}

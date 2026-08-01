@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/cost"
 )
 
 type RunState struct {
@@ -36,6 +38,7 @@ type RunState struct {
 	Gates                map[string]GateResult        `json:"gates"`
 	Carry                map[string]CarryResult       `json:"carry"`
 	Dispatches           map[string]PreparedDispatch  `json:"dispatches"`
+	Cost                 *cost.RunCost                `json:"cost,omitempty"`
 }
 
 type RequirementArtifact struct {
@@ -138,6 +141,7 @@ type RunSummary struct {
 	ExtraReviewWaves     int                          `json:"extraReviewWaves"`
 	Gates                map[string]GateResult        `json:"gates"`
 	QA                   QAExecutionResult            `json:"qaExecution"`
+	Cost                 *cost.RunCost                `json:"cost,omitempty"`
 }
 
 func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseSnapshot, currentSnapshot, basePromptRevision, catalogRevision string, confirmed bool, gateIDs []string, artifacts []RequirementArtifact) RunState {
@@ -239,7 +243,7 @@ func RunSummaryPath(root, runID string) string {
 }
 
 func runSummary(state RunState) RunSummary {
-	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution}
+	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution, Cost: state.Cost}
 }
 
 func RequirementRevision(path string) (string, error) {

@@ -16,5 +16,8 @@ func codexAdapter() providerAdapter {
 			roots := payloadProjectRoots(payload)
 			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
 		},
+		transcriptPath: func(payload any) string {
+			return payloadScalar(payload, []string{"agent_transcript_path"}, 0)
+		},
 	}
 }

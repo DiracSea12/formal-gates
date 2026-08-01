@@ -25,6 +25,7 @@ type providerAdapter struct {
 	identity       func(string, any) string
 	correlation    func(string, any) string
 	projectRoots   func(any) []string
+	transcriptPath func(any) string
 }
 
 type HookDefinition struct {

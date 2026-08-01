@@ -186,7 +186,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 			return err
 		}
 	}
-	_, err = Seal(root, packageRoot, state.RunID, nil)
+	_, err = Seal(root, packageRoot, state.RunID, nil, false)
 	return err
 }
 

@@ -154,6 +154,59 @@ func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
 	}
 }
 
+func TestLifecycleStopCaptureStoresTranscriptPath(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderCodex)
+	if err := BeginRun(root, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"subagent_id":"agent-1","agent_transcript_path":"/tmp/sessions/agent-1.jsonl"}`)
+	if _, err := Capture(root, ProviderCodex, "SubagentStop", payload); err != nil {
+		t.Fatal(err)
+	}
+	provider, path, err := DispatchTranscriptPath(root, "run-1", "dispatch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider != ProviderCodex || path != "/tmp/sessions/agent-1.jsonl" {
+		t.Fatalf("DispatchTranscriptPath=%q,%q", provider, path)
+	}
+	if _, _, err := DispatchTranscriptPath(root, "run-1", "no-such-dispatch"); err != nil {
+		t.Fatalf("missing binding must not error: %v", err)
+	}
+}
+
+func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderCodex)
+	if err := BeginRun(root, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Capture(root, ProviderCodex, "SubagentStop", []byte(`{"subagent_id":"agent-1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, path, err := DispatchTranscriptPath(root, "run-1", "dispatch-1"); err != nil || path != "" {
+		t.Fatalf("pathless stop reported path %q err %v", path, err)
+	}
+	useProvider(t, ProviderCursor)
+	if err := BindDispatch(root, "run-1", "dispatch-cursor", "cursor-agent"); err != nil {
+		t.Fatal(err)
+	}
+	cursor := []byte(`{"subagent_id":"cursor-agent","agent_transcript_path":"/tmp/sessions/cursor.jsonl","conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared formal-gates dispatch"}`)
+	if _, err := Capture(root, ProviderCursor, "subagentStop", cursor); err != nil {
+		t.Fatal(err)
+	}
+	if _, path, err := DispatchTranscriptPath(root, "run-1", "dispatch-cursor"); err != nil || path != "" {
+		t.Fatalf("Cursor stop stored a transcript path %q err %v", path, err)
+	}
+}
+
 func TestLifecycleCodexIsUnavailable(t *testing.T) {
 	root := t.TempDir()
 	useProvider(t, ProviderCodex)

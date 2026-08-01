@@ -32,6 +32,10 @@ func (stub *workflowLifecycleStub) Verify(_, _, dispatchID string) (lifecycle.Ve
 	return result, nil
 }
 
+func (*workflowLifecycleStub) TranscriptPath(_, _, _ string) (string, string, error) {
+	return "", "", nil
+}
+
 func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifacts", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git"})
@@ -302,7 +306,7 @@ func TestQAExecutionPreservesKindsAndFullRouteSeals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	summary, err := Seal(root, pkg, state.RunID, nil)
+	summary, err := Seal(root, pkg, state.RunID, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +620,7 @@ func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
 	if state.CompletedReviewWaves != 0 {
 		t.Fatalf("runtime-error wave was counted: %#v", state)
 	}
-	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}); err == nil || !strings.Contains(err.Error(), "architecture") {
+	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false); err == nil || !strings.Contains(err.Error(), "architecture") {
 		t.Fatalf("partial Seal authorization lost the other blocker: %v", err)
 	}
 	persisted, err := LoadRunState(root, state.RunID)
@@ -636,6 +640,64 @@ func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
 	}
 	if persisted.CompletedReviewWaves != 0 {
 		t.Fatalf("authorized incomplete wave was counted: %#v", persisted)
+	}
+}
+
+func TestSealUserRequestedFailSkipBypassesWaveLimit(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "seal-user-requested", "custom", []string{"architecture", "quality"})
+	state = recordGateResult(t, root, pkg, state, "architecture", "user-architecture", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "user-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "cannot repair now"}})
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("blocking wave was not completed: %#v", state)
+	}
+	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
+		t.Fatalf("FAIL skip before the wave limit must require exhaustion without --user-requested: %v", err)
+	}
+	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("user-requested seal did not complete: %#v", summary)
+	}
+	authorization := summary.SkipAuthorizations["quality"]
+	if authorization.Origin != "SEAL-USER" || authorization.Status != "FAIL" || authorization.Snapshot != summary.CurrentSnapshot {
+		t.Fatalf("user-requested FAIL skip authorization was not recorded: %#v", authorization)
+	}
+}
+
+func TestSealFailSkipAfterWaveLimitKeepsSealOrigin(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "seal-limit-origin", "custom", []string{"architecture", "quality"})
+	state = recordGateResult(t, root, pkg, state, "architecture", "limit-architecture-1", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "limit-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("completed waves=%d want=1", state.CompletedReviewWaves)
+	}
+	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
+		state = advanceRepair(t, root, pkg, state, fmt.Sprintf("limit-%d", wave))
+		carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
+		var err error
+		state, err = RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "repair is outside architecture ownership"}}, "", false, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("limit-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		if state.CompletedReviewWaves != wave {
+			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
+		}
+	}
+	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("limit-exhausted seal did not complete: %#v", summary)
+	}
+	authorization := summary.SkipAuthorizations["quality"]
+	if authorization.Origin != "SEAL" || authorization.Status != "FAIL" || authorization.Snapshot != summary.CurrentSnapshot {
+		t.Fatalf("limit-exhausted FAIL skip must keep the SEAL origin: %#v", authorization)
 	}
 }
 

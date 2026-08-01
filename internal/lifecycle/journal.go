@@ -10,10 +10,11 @@ import (
 )
 
 type eventRecord struct {
-	Provider    string `json:"provider"`
-	Event       string `json:"event"`
-	Identity    string `json:"identity,omitempty"`
-	Correlation string `json:"correlation,omitempty"`
+	Provider       string `json:"provider"`
+	Event          string `json:"event"`
+	Identity       string `json:"identity,omitempty"`
+	Correlation    string `json:"correlation,omitempty"`
+	TranscriptPath string `json:"transcriptPath,omitempty"`
 }
 
 type bindingRecord struct {
@@ -213,6 +214,27 @@ func readBindingPath(path string) (bindingRecord, error) {
 		return bindingRecord{}, fmt.Errorf("lifecycle dispatch binding is invalid: %w", err)
 	}
 	return record, nil
+}
+
+// DispatchTranscriptPath returns the provider and stored subagent transcript
+// path for a dispatch's stop event. A dispatch without a binding or without
+// a stop event carrying a transcript path yields empty values.
+func DispatchTranscriptPath(root, runID, dispatchID string) (string, string, error) {
+	binding, found, err := readBinding(root, runID, dispatchID)
+	if err != nil || !found {
+		return "", "", err
+	}
+	record, err := readEvent(runEventPath(root, runID, dispatchID, eventStop))
+	if os.IsNotExist(err) {
+		return binding.Provider, "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if record.Provider != binding.Provider {
+		return "", "", fmt.Errorf("lifecycle event journal entry is inconsistent")
+	}
+	return binding.Provider, record.TranscriptPath, nil
 }
 
 func eventExists(root, runID, dispatchID, provider, identity, event string) (bool, error) {
