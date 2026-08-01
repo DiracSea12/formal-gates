@@ -1142,6 +1142,7 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool) (
 	if err := DeleteRun(root, runID); err != nil {
 		return RunSummary{}, err
 	}
+	_, _ = CleanupTempRuns(root) // best-effort sweep of residual terminated runs
 	return summary, nil
 }
 
@@ -1170,6 +1171,7 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 	if err := DeleteRun(root, runID); err != nil {
 		return RunSummary{}, err
 	}
+	_, _ = CleanupTempRuns(root) // best-effort sweep of residual terminated runs
 	return summary, nil
 }
 

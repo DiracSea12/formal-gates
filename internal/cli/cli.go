@@ -285,6 +285,19 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		}
 		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *dispatch)
 		return printValue(streams.Stdout, state, err)
+	case "cleanup":
+		fs := newFlagSet("workflow cleanup", streams)
+		root, _ := rootFlags(fs)
+		runID := fs.String("run", "", "explicitly delete this run's temp directory (terminated or not)")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if *runID != "" {
+			deleted, err := validate.CleanupTempRun(*root, *runID)
+			return printValue(streams.Stdout, map[string]any{"deleted": deleted}, err)
+		}
+		result, err := validate.CleanupTempRuns(*root)
+		return printValue(streams.Stdout, result, err)
 	case "carry":
 		return runCarry(args, streams)
 	case "authorize-repair":
@@ -803,5 +816,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }
