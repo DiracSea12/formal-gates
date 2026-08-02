@@ -181,7 +181,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		if err != nil {
 			return err
 		}
-		state, err = RecordGate(root, packageRoot, state.RunID, gate.ID, dispatchID, "PASS", "", nil)
+		state, err = RecordGate(root, packageRoot, state.RunID, gate.ID, dispatchID, "PASS", "", comparedRange(state), nil)
 		if err != nil {
 			return err
 		}

@@ -182,7 +182,7 @@ func TestSealedSummaryCarriesCostProjection(t *testing.T) {
 	}
 	for index, gate := range []string{"architecture", "quality"} {
 		dispatchID = prepareAndClaim(t, root, pkg, state.RunID, gate, fmt.Sprintf("gate-%d", index+1))
-		state, err = RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", nil)
+		state, err = RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", comparedRange(state), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

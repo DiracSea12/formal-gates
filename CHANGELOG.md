@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Accept an ancestor (or equal) `--base-snapshot` at `workflow start`, making
+  already-committed in-flight work fall inside the base-to-current review diff
+  and enabling a documented takeover path for interrupted runs.
+- Add a takeover flow (cheap build/test sanity check, then re-clarify and
+  persist the aligned requirement, then `workflow start --base-snapshot <B0>`)
+  with `resume` demoted to a backup path; fix the formal step-2 wording so it
+  only registers already-aligned requirements and records PASS.
+- Record per-gate and per-action prompt content hashes in run state at start
+  (old state files without the field load compatibly) and report per-entry
+  catalog deltas on resume instead of killing the run; unselected-only catalog
+  changes do not block, and selected-gate changes are judged per result.
+- Extend `workflow resume --adopt-external --reason` to explicitly rebind the
+  current snapshot to a drifted native head with recorded provenance, leaving
+  unaffected PASS results eligible for a Carry inheritance decision.
+- Allow meaning-preserved requirement rebinding after development starts when
+  the main agent records the unchanged-meaning assertion and the user confirms,
+  retaining unaffected PASS results and rebinding the snapshot.
+- Make Carry the unified inheritance entry: the main-agent `--main-agent
+  --main-reason` decision now records INHERIT/RERUN at any rebinding moment
+  (repair, adoption, catalog-delta acceptance) and accepts the new catalog.
+- Require rerun gate reviews to cover the complete base-to-current delivery,
+  declaring that scope explicitly in the composed prompt, and require every
+  gate review to report the compared snapshot pair in its result contract,
+  discarding mismatched reports.
+- Track the retrospective correction of
+  `prompts/actions/requirements-clarification.md` (its wording conflicts with
+  SKILL and does not enforce persisting aligned conclusions) as a Phase 2
+  delivery in a later run after the Phase 1 catalog-delta tolerance lands.
+- Record adopted external-change provenance in the Carry record instead of a
+  write-only dedicated field, keep a selected gate whose prompt moved
+  re-dispatchable after a main-agent Carry accepts the catalog delta, detect
+  per-gate prompt changes against the shared reviewer base, and retire the
+  production-dead Resume helper in favor of ResumeReport.
 - Require a cheap sanity check (the target project's own documented validation)
   before dispatching gate/QA reviews after repair; obvious failures return to
   repair without subagents.
@@ -75,6 +108,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handoffs, detailed gate-state trees, and their compatibility paths.
 - The duplicate `formal-gates-validate` command, old evidence demos, and the
   standalone prompt-pollution pattern catalog.
+
+### Fixed
+
+- Share one stale-dispatch helper across adoption, requirement invalidation, and
+  snapshot rebinding instead of three byte-identical loops.
+- Resolve an adopted external change that needs no real rerun without counting a
+  new automatic review wave; real reruns after an adoption are still counted.
+- Keep run states loaded without prompt hashes reporting no catalog delta for an
+  unmoved catalog even after their first mutation, instead of mis-reporting every
+  entry after a partial per-gate backfill.
 
 ---
 

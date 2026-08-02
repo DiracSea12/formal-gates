@@ -153,14 +153,24 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		fs := newFlagSet("workflow resume", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
+		adoptExternal := fs.Bool("adopt-external", false, "explicitly rebind the current snapshot to the drifted native head and record the reason")
+		reason := fs.String("reason", "", "main-agent justification when adopting an external change")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, classificationRequired, err := validate.Resume(*root, *pkg, *runID)
+		if *adoptExternal {
+			state, err := validate.AdoptExternalChange(*root, *pkg, *runID, *reason)
+			return printValue(streams.Stdout, state, err)
+		}
+		report, err := validate.ResumeReport(*root, *pkg, *runID)
 		if err != nil {
 			return 1, err
 		}
-		return printJSON(streams.Stdout, map[string]any{"classificationRequired": classificationRequired, "state": state})
+		state, err := validate.LoadRunState(*root, *runID)
+		if err != nil {
+			return 1, err
+		}
+		return printJSON(streams.Stdout, map[string]any{"classificationRequired": report.ClassificationRequired, "catalogDelta": report.CatalogDelta, "nativeDrifted": report.NativeDrifted, "state": state})
 	case "abort":
 		fs := newFlagSet("workflow abort", streams)
 		root := fs.String("root", ".", "repository root")
@@ -351,11 +361,12 @@ func runRecordGate(args []string, streams IO) (int, error) {
 	status := fs.String("status", "", "PASS, FAIL, or RUNTIME_ERROR")
 	message := fs.String("message", "", "runtime or result message")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
+	compared := fs.String("compared", "", "exact snapshot pair the reviewer compared, as <base>..<current>")
 	findings := newFindingFlags(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordGate(*root, *pkg, *runID, *gate, *dispatch, *status, *message, *findings)
+	state, err := validate.RecordGate(*root, *pkg, *runID, *gate, *dispatch, *status, *message, *compared, *findings)
 	return printValue(streams.Stdout, state, err)
 }
 

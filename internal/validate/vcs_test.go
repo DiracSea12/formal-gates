@@ -111,6 +111,39 @@ func TestP4ResolverAcceptsNoOpenedFiles(t *testing.T) {
 	}
 }
 
+func TestNativeVCSResolverAncestorOrEqual(t *testing.T) {
+	gitID := strings.Repeat("a", 40)
+	head := strings.Repeat("b", 40)
+	runner := &scriptedNativeRunner{outputs: []string{gitID}}
+	resolver, err := resolverForVCS("git", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.IsAncestorOrEqual("/repo", gitID, head); err != nil {
+		t.Fatalf("git ancestor was rejected: %v", err)
+	}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], []string{"git", "merge-base", gitID, head}) {
+		t.Fatalf("git ancestry command shape=%v", runner.calls)
+	}
+	nonAncestor := &scriptedNativeRunner{outputs: []string{strings.Repeat("c", 40)}}
+	resolver, _ = resolverForVCS("git", nonAncestor)
+	if err := resolver.IsAncestorOrEqual("/repo", gitID, head); err == nil || !strings.Contains(err.Error(), "not an ancestor") {
+		t.Fatalf("git non-ancestor was accepted: %v", err)
+	}
+	for _, vcs := range []string{"svn", "p4"} {
+		resolver, err := resolverForVCS(vcs, &scriptedNativeRunner{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := resolver.IsAncestorOrEqual("/repo", "123", "456"); err != nil {
+			t.Fatalf("%s earlier revision was rejected as an ancestor: %v", vcs, err)
+		}
+		if err := resolver.IsAncestorOrEqual("/repo", "456", "123"); err == nil || !strings.Contains(err.Error(), "not an ancestor") {
+			t.Fatalf("%s later revision was accepted as an ancestor: %v", vcs, err)
+		}
+	}
+}
+
 func TestNativeVCSResolverPropagatesCommandFailure(t *testing.T) {
 	runner := &scriptedNativeRunner{errors: []error{errors.New("not a working copy")}}
 	resolver, err := resolverForVCS("svn", runner)

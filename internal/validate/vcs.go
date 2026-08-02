@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +34,7 @@ type nativeVCSResolver interface {
 	Resolve(root string) (string, error)
 	Verify(root, identity string) error
 	VerifyReady(root string) error
+	IsAncestorOrEqual(root, ancestor, descendant string) error
 }
 
 type commandVCSResolver struct {
@@ -165,6 +167,34 @@ func (r commandVCSResolver) Verify(root, identity string) error {
 		return fmt.Errorf("%s cannot reproduce snapshot %s", r.name, identity)
 	}
 	return nil
+}
+
+// IsAncestorOrEqual reports whether ancestor is the descendant's ancestor or
+// equal to it. Git uses commit lineage; SVN and P4 revisions are server-wide
+// monotonically increasing numbers, so an earlier verifiable revision is an
+// ancestor-or-equal of a later one on the same workspace line.
+func (r commandVCSResolver) IsAncestorOrEqual(root, ancestor, descendant string) error {
+	switch r.name {
+	case "git":
+		resolved, err := r.runner.Run(root, "git", "merge-base", ancestor, descendant)
+		if err != nil {
+			return fmt.Errorf("cannot resolve %s ancestry of %s: %w", r.name, ancestor, err)
+		}
+		if !strings.EqualFold(strings.TrimSpace(resolved), ancestor) {
+			return fmt.Errorf("%s snapshot %s is not an ancestor of the current snapshot", r.name, ancestor)
+		}
+		return nil
+	default:
+		a, errA := strconv.ParseInt(strings.TrimSpace(ancestor), 10, 64)
+		d, errD := strconv.ParseInt(strings.TrimSpace(descendant), 10, 64)
+		if errA != nil || errD != nil {
+			return fmt.Errorf("%s snapshots %s and %s are not comparable revisions", r.name, ancestor, descendant)
+		}
+		if a > d {
+			return fmt.Errorf("%s snapshot %s is not an ancestor of the current snapshot %s", r.name, ancestor, descendant)
+		}
+		return nil
+	}
 }
 
 func (r commandVCSResolver) verifyRoot(root string) error {

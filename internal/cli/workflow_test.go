@@ -45,7 +45,8 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 
 	gateDispatch := cliPrepareGate(t, root, pkg, state.RunID, "quality")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", gateDispatch, "--reviewer", "gate-session")
-	runCLI(t, "workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "PASS")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	runCLI(t, "workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "PASS", "--compared", state.BaseSnapshot+".."+state.CurrentSnapshot)
 
 	out := runCLI(t, "workflow", "show", "--root", root, "--run-id", state.RunID)
 	if err := json.Unmarshal([]byte(out), &state); err != nil {
@@ -57,6 +58,39 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	summary := runCLI(t, "workflow", "seal", "--root", root, "--package-root", pkg, "--run-id", state.RunID)
 	if !strings.Contains(summary, `"status": "SEALED"`) {
 		t.Fatalf("seal output=%s", summary)
+	}
+}
+
+func TestCLIResumeAdoptsExternalChange(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-adopt")
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality")
+	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	developmentDispatch := cliPrepareAction(t, root, pkg, state.RunID, "development-worker")
+	mustWriteCLI(t, filepath.Join(root, "delivery.txt"), "delivery\n")
+	cliGit(t, root, "add", "--all")
+	cliGit(t, root, "commit", "-m", "delivery")
+	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", developmentDispatch)
+
+	mustWriteCLI(t, filepath.Join(root, "external.txt"), "external\n")
+	cliGit(t, root, "add", "--all")
+	cliGit(t, root, "commit", "-m", "external work")
+	out := runCLI(t, "workflow", "resume", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--adopt-external", "--reason", "adopt unrelated external work")
+	var adopted validate.RunState
+	if err := json.Unmarshal([]byte(out), &adopted); err != nil {
+		t.Fatal(err)
+	}
+	adoptedADOPT := false
+	for _, record := range adopted.Carry {
+		if record.Origin == "ADOPT" {
+			adoptedADOPT = true
+			break
+		}
+	}
+	if adopted.CurrentSnapshot != cliGit(t, root, "rev-parse", "HEAD") || !adoptedADOPT {
+		t.Fatalf("CLI adoption did not rebind with provenance: %s", out)
 	}
 }
 

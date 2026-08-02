@@ -37,7 +37,7 @@ func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) 
 		currentRequirementBlock(route),
 		currentChangeBlock(route, true),
 		dispatchBlock(route),
-		fmt.Sprintf("[Result contract]\nReturn exactly one JSON object matching: {\"dispatchId\":%q,\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. PASS permits no findings or P2-only findings. FAIL requires at least one P0 or P1 finding and may include P2 findings. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Return this dispatch ID unchanged. Do not add fields or Markdown fences.", route.DispatchID),
+		fmt.Sprintf("[Result contract]\nReturn exactly one JSON object matching: {\"dispatchId\":%q,\"compared\":\"base..current\",\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. Report the exact snapshot pair you actually compared in compared (base..current). PASS permits no findings or P2-only findings. FAIL requires at least one P0 or P1 finding and may include P2 findings. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Return this dispatch ID unchanged. Do not add fields or Markdown fences.", route.DispatchID),
 	}
 	return strings.Join(parts, "\n\n") + "\n", nil
 }
@@ -112,6 +112,9 @@ func currentChangeBlock(route PromptRoute, reviewTargets bool) string {
 		lines = append(lines, "Use the named VCS directly to inspect the complete base-to-current comparison.", "Excluded review targets (acceptance inputs only):")
 		for _, artifact := range route.RequirementArtifacts {
 			lines = append(lines, "- "+artifact.Path)
+		}
+		if route.ReviewWave > 1 || route.PreRepairSnapshot != "" {
+			lines = append(lines, fmt.Sprintf("这是返修后第 %d 轮重审；上一轮覆盖 base→pre-repair；你的范围是完整的 base→current（pre-repair 快照 %s 仅供参考，不要只审返修增量）。", route.ReviewWave, route.PreRepairSnapshot))
 		}
 	}
 	return strings.Join(lines, "\n")

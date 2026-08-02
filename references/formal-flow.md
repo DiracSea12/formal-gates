@@ -13,16 +13,25 @@
 ## 启动与 run 控制
 
 ```bash
-# CLI 会把原生的当前标识解析为基线。
+# 不指定 --base-snapshot 时，CLI 会把原生的当前标识解析为基线。
+# 接手中断的 run 时，--base-snapshot 接受当前 HEAD 的任意祖先（或相等），
+# 使已提交的在途工作落在"基线到当前"的审查 diff 内。
 formal-gates workflow start --root <repo> --package-root <package> \
   --run-id <id> --flow formal --requirement <requirement-file> \
   [--requirement-artifact <requirement-or-solution-file> ...] \
-  --vcs <git|svn|p4> [--base-snapshot <identity-to-verify>] [--retained-overall]
+  --vcs <git|svn|p4> [--base-snapshot <ancestor-or-current-identity>] [--retained-overall]
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <package> --run-id <id>
+# 原生 HEAD 已漂移（外部改动）时，显式重绑当前快照并记录原因（需用户确认）。
+formal-gates workflow resume --root <repo> --package-root <package> --run-id <id> \
+  --adopt-external --reason '<reason>'
 formal-gates workflow abort --root <repo> --run-id <id>
 ```
+
+Resume 默认把逐门 catalog delta 报告为 `catalogDelta`；目录变化与需求修订一样是可恢复
+分类，不是新 run 的硬要求。采纳外部改动后用 `workflow carry --main-agent --main-reason
+'<reason>'` 继承不受影响的 PASS，或按需重新派发门。
 
 ## 需求与路线
 
@@ -100,7 +109,10 @@ formal-gates workflow qa-execution --root <repo> --package-root <package> \
 formal-gates workflow record-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id> --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
+  --compared '<base>..<current>' \
   [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
+# --compared 是审查者实际比较的快照对；与指定的基线到当前范围不匹配时结果被丢弃。
+# RUNTIME_ERROR 不要求 --compared。
 ```
 
 ## 继承判定、修复授权与 Seal

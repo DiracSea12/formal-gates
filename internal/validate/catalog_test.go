@@ -140,6 +140,48 @@ func TestGatePromptContainsEachPromptExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestGatePromptDeclaresFullScopeOnRerunRound(t *testing.T) {
+	root := promptPackage(t, map[string]string{"quality": "checks"})
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "base", CurrentSnapshot: "current", DispatchID: "dispatch-test", DispatchAttempt: 1}
+	first, err := ComposeGatePrompt(catalog, "quality", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(first, "重审") {
+		t.Fatalf("first-round gate prompt declared a rerun scope:\n%s", first)
+	}
+	base.ReviewWave = 2
+	base.PreRepairSnapshot = "pre"
+	rerun, err := ComposeGatePrompt(catalog, "quality", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"返修后第 2 轮重审", "你的范围是完整的 base→current", "pre-repair"} {
+		if !strings.Contains(rerun, marker) {
+			t.Fatalf("rerun gate prompt missing full-scope declaration %q:\n%s", marker, rerun)
+		}
+	}
+}
+
+func TestGateResultContractIncludesComparedPair(t *testing.T) {
+	root := promptPackage(t, map[string]string{"quality": "checks"})
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := ComposeGatePrompt(catalog, "quality", PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", DispatchID: "dispatch-test", DispatchAttempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, `"compared":"base..current"`) {
+		t.Fatalf("gate result contract is missing the compared snapshot pair:\n%s", prompt)
+	}
+}
+
 func TestActionPromptsDescribeTheirSemanticReturn(t *testing.T) {
 	root := promptPackage(t, map[string]string{"quality": "checks"})
 	catalog, err := LoadPromptCatalog(root)

@@ -22,6 +22,7 @@ type RunState struct {
 	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
 	BasePromptRevision   string                       `json:"basePromptRevision"`
 	CatalogRevision      string                       `json:"catalogRevision"`
+	PromptHashes         map[string]string            `json:"promptHashes,omitempty"`
 	VCS                  string                       `json:"vcs"`
 	BaseSnapshot         string                       `json:"baseSnapshot"`
 	CurrentSnapshot      string                       `json:"currentSnapshot"`
@@ -101,6 +102,7 @@ type GateResult struct {
 	Status         string    `json:"status"`
 	Snapshot       string    `json:"snapshot,omitempty"`
 	SourceSnapshot string    `json:"sourceSnapshot,omitempty"`
+	Compared       string    `json:"compared,omitempty"`
 	Findings       []Finding `json:"findings,omitempty"`
 	Message        string    `json:"message,omitempty"`
 	DispatchID     string    `json:"dispatchId,omitempty"`

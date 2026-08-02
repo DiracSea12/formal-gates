@@ -37,6 +37,12 @@ const (
 	carryOriginMainShortcut = "MAIN_SHORTCUT"
 )
 
+// carryAdoptKey is the reserved Carry map key recording an adopted external VCS
+// change: Decision ADOPT with Origin ADOPT, SourceSnapshot the pre-adoption
+// snapshot, TargetSnapshot the adopted native head, and Message the main-agent
+// reason. Gate ids cannot collide with it because they match promptIDPattern.
+const carryAdoptKey = "__adopt__"
+
 const formalFlow = "formal"
 const automaticReviewWaveLimit = 3
 
@@ -72,13 +78,15 @@ func Start(options StartOptions) (RunState, error) {
 	if err != nil {
 		return RunState{}, err
 	}
+	baseSnapshot := currentSnapshot
 	if supplied := strings.TrimSpace(options.BaseSnapshot); supplied != "" {
 		if err := resolver.Verify(root, supplied); err != nil {
 			return RunState{}, err
 		}
-		if !strings.EqualFold(supplied, currentSnapshot) {
-			return RunState{}, fmt.Errorf("native current snapshot does not match the requested base snapshot")
+		if err := resolver.IsAncestorOrEqual(root, supplied, currentSnapshot); err != nil {
+			return RunState{}, err
 		}
+		baseSnapshot = strings.ToLower(supplied)
 	}
 	catalog, err := LoadPromptCatalog(options.PackageRoot)
 	if err != nil {
@@ -119,7 +127,8 @@ func Start(options StartOptions) (RunState, error) {
 		_ = os.RemoveAll(RunDir(root, runID))
 		return RunState{}, err
 	}
-	state := NewRunState(runID, strings.TrimSpace(options.Flow), normalizeArtifactPath(root, options.RequirementSource), revision, vcs, currentSnapshot, currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs(), artifacts)
+	state := NewRunState(runID, strings.TrimSpace(options.Flow), normalizeArtifactPath(root, options.RequirementSource), revision, vcs, baseSnapshot, currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs(), artifacts)
+	state.PromptHashes = catalogPromptHashes(catalog)
 	state.RetainedOverall = options.RetainedOverall
 	if err := SaveRunState(root, state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))
@@ -128,19 +137,75 @@ func Start(options StartOptions) (RunState, error) {
 	return state, nil
 }
 
-func Resume(root, packageRoot, runID string) (RunState, bool, error) {
+// ResumeStatus is the recoverable classification reported when resuming an
+// interrupted run: requirement edits need classification, catalog changes are
+// reported per gate/action, and a drifted native snapshot must be adopted.
+type ResumeStatus struct {
+	ClassificationRequired bool     `json:"classificationRequired"`
+	CatalogDelta           []string `json:"catalogDelta,omitempty"`
+	NativeDrifted          bool     `json:"nativeDrifted"`
+}
+
+// ResumeReport classifies everything the main agent must judge before the run
+// can continue without hard failure.
+func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
 	state, err := LoadRunState(root, runID)
 	if err != nil {
-		return RunState{}, false, err
+		return ResumeStatus{}, err
 	}
 	if err := requireActive(state); err != nil {
-		return RunState{}, false, err
+		return ResumeStatus{}, err
 	}
-	if _, err := requireCurrentCatalog(state, packageRoot); err != nil {
-		return RunState{}, false, err
+	catalog, err := LoadPromptCatalog(packageRoot)
+	if err != nil {
+		return ResumeStatus{}, err
 	}
 	changed, err := requirementArtifactsChanged(root, state.RequirementArtifacts)
-	return state, changed, err
+	if err != nil {
+		return ResumeStatus{}, err
+	}
+	native, err := resolveNativeSnapshot(root, state.VCS)
+	if err != nil {
+		return ResumeStatus{}, err
+	}
+	return ResumeStatus{ClassificationRequired: changed, CatalogDelta: catalogDelta(state, catalog), NativeDrifted: native != state.CurrentSnapshot}, nil
+}
+
+// AdoptExternalChange explicitly rebinds the current snapshot to the native
+// head after the workspace drifted outside the run. The previous snapshot
+// becomes the pre-repair boundary so unaffected prior PASS results stay
+// eligible for a Carry inheritance decision, and the main agent's reason is
+// recorded as the adoption provenance under the reserved Carry key.
+func AdoptExternalChange(root, packageRoot, runID, reason string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		current, err := resolveNativeSnapshot(root, state.VCS)
+		if err != nil {
+			return err
+		}
+		if current == state.CurrentSnapshot {
+			return fmt.Errorf("native current snapshot already matches the run current snapshot")
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return fmt.Errorf("adopting an external change requires a reason")
+		}
+		oldSnapshot := state.CurrentSnapshot
+		state.CurrentSnapshot = current
+		state.PreRepairSnapshot = oldSnapshot
+		staleAllDispatches(state)
+		resetSnapshotReviewSurface(state, oldSnapshot, true, true)
+		state.Carry[carryAdoptKey] = CarryResult{Decision: "ADOPT", Origin: "ADOPT", SourceSnapshot: oldSnapshot, TargetSnapshot: current, Message: reason}
+		return nil
+	})
+}
+
+func staleAllDispatches(state *RunState) {
+	for id, dispatch := range state.Dispatches {
+		if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {
+			dispatch.Status = "STALE"
+			state.Dispatches[id] = dispatch
+		}
+	}
 }
 
 func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect string, artifactPaths []string) (RunState, error) {
@@ -177,8 +242,8 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			if err != nil {
 				return err
 			}
-			if developmentStarted(*state) && semanticEffect == "preserved" {
-				return fmt.Errorf("meaning-preserved requirement rebinding is unavailable after development starts")
+			if developmentStarted(*state) && semanticEffect == "preserved" && !confirmed {
+				return fmt.Errorf("meaning-preserved requirement rebinding after development starts requires user confirmation")
 			}
 			state.RequirementSource, state.RequirementRevision, state.RequirementArtifacts = source, revision, artifacts
 			if semanticEffect == "preserved" {
@@ -309,7 +374,7 @@ func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
 		if result.Status == "PASS" && result.Snapshot != state.CurrentSnapshot {
 			return "", fmt.Errorf("gate %q is awaiting a Carry decision", gateID)
 		}
-		if semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) {
+		if semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) && !gatePromptChanged(*state, catalog, gateID) {
 			return "", fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot", gateID, result.Status)
 		}
 		return ComposeGatePrompt(catalog, gateID, route)
@@ -546,7 +611,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 	})
 }
 
-func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message string, findings []FindingInput) (RunState, error) {
+func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared string, findings []FindingInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
@@ -573,8 +638,14 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message st
 		if existing.Status == "PASS" && existing.Snapshot != state.CurrentSnapshot {
 			return fmt.Errorf("gate %q requires a Carry decision before rerun", gateID)
 		}
-		if semanticResultRecorded(existing.Status, existing.Snapshot, state.CurrentSnapshot) {
+		if semanticResultRecorded(existing.Status, existing.Snapshot, state.CurrentSnapshot) && !gatePromptChanged(*state, catalog, gateID) {
 			return fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot", gateID, existing.Status)
+		}
+		if normalized := strings.ToUpper(strings.TrimSpace(status)); normalized != "RUNTIME_ERROR" {
+			want := comparedRange(*state)
+			if !strings.EqualFold(strings.TrimSpace(compared), want) {
+				return fmt.Errorf("gate review reported compared %q but the requested base-to-current range is %q", compared, want)
+			}
 		}
 		result, err := semanticGateResult(status, message, findings, state)
 		if err != nil {
@@ -583,8 +654,16 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message st
 		if err := rejectFrozenArtifactFindings(*state, result.Findings); err != nil {
 			return err
 		}
+		result.Compared = strings.TrimSpace(compared)
 		result.DispatchID = dispatch.ID
 		state.Gates[gateID] = result
+		// Settle the gate's recorded prompt hash only when the run already keeps a
+		// full hash record. A run state loaded without hashes keeps its absent
+		// semantics (nil) so an unmoved catalog still reports no delta instead of
+		// mis-reporting every entry after a partial backfill.
+		if gate, ok := catalog.Gate(gateID); ok && state.PromptHashes != nil {
+			state.PromptHashes["gate:"+gateID] = composedGatePromptHash(catalog, gate.Content)
+		}
 		completeDispatch(state, dispatch.ID)
 		completeReviewWaveIfReady(state)
 		return nil
@@ -909,41 +988,56 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, err
 		} else {
 			state.PreRepairSnapshot = ""
 		}
-		if !isRepair || state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != oldSnapshot {
-			state.QAExecution = QAExecutionResult{Status: "PENDING"}
-		}
-		state.Carry = map[string]CarryResult{}
-		for id, authorization := range state.SkipAuthorizations {
-			if isSealScopedAuthorization(authorization) {
-				delete(state.SkipAuthorizations, id)
-			}
-		}
-		for id, result := range state.Gates {
-			if !isSelected(*state, id) {
-				continue
-			}
-			if result.Status != "PASS" {
-				state.Gates[id] = GateResult{Status: "PENDING"}
-			}
-		}
-		if isRepair && len(eligibleCarryGates(*state)) != 0 {
-			state.Actions["carry"] = ActionResult{Status: "PENDING"}
-		} else {
-			delete(state.Actions, "carry")
-		}
+		resetSnapshotReviewSurface(state, oldSnapshot, isRepair, isRepair)
 		return nil
 	})
 }
 
+// resetSnapshotReviewSurface re-opens the post-snapshot review surface shared
+// by a development snapshot and an adopted external change: QA Execution is
+// kept only when it already passed at the previous snapshot and preserveQA is
+// set, every recorded Carry judgment and seal-scoped skip authorization is
+// dropped, non-PASS selected gates return to PENDING, and the Carry action is
+// re-opened when reopenCarry is set and prior passing gates are eligible.
+func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA, reopenCarry bool) {
+	if !preserveQA || state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != oldSnapshot {
+		state.QAExecution = QAExecutionResult{Status: "PENDING"}
+	}
+	state.Carry = map[string]CarryResult{}
+	for id, authorization := range state.SkipAuthorizations {
+		if isSealScopedAuthorization(authorization) {
+			delete(state.SkipAuthorizations, id)
+		}
+	}
+	for id, result := range state.Gates {
+		if !isSelected(*state, id) {
+			continue
+		}
+		if result.Status != "PASS" {
+			state.Gates[id] = GateResult{Status: "PENDING"}
+		}
+	}
+	if reopenCarry && len(eligibleCarryGates(*state)) != 0 {
+		state.Actions["carry"] = ActionResult{Status: "PENDING"}
+	} else {
+		delete(state.Actions, "carry")
+	}
+}
+
 func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryInput, runtimeError string, mainAgent bool, mainReason string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
 			return err
 		}
 		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
-		if err := requireTransition(*state, "carry", ""); err != nil {
+		if mainAgent {
+			if !hasDevelopmentSnapshot(*state) {
+				return fmt.Errorf("a development snapshot is required before a main-agent Carry")
+			}
+		} else if err := requireTransition(*state, "carry", ""); err != nil {
 			return err
 		}
 		if mainAgent {
@@ -957,18 +1051,30 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 			if reason == "" {
 				return fmt.Errorf("main-agent Carry requires a reason")
 			}
-			if len(state.Carry) != 0 || repairRerunRecorded(*state) {
+			if hasRecordedCarryDecisions(*state) || (state.PreRepairSnapshot != "" && repairRerunRecorded(*state)) {
 				return fmt.Errorf("main-agent Carry must be recorded before independent Carry or repair reruns")
 			}
-			eligible := eligibleMainCarryResults(*state)
-			if len(eligible) == 0 {
+			delta := catalogDelta(*state, catalog)
+			if len(delta) != 0 {
+				state.CatalogRevision = catalog.CatalogRevision
+				state.BasePromptRevision = catalog.BaseRevision
+				acceptCatalogHashes(state, catalog)
+			}
+			eligible := eligibleMainCarryResults(*state, len(delta) != 0)
+			if len(eligible) == 0 && len(delta) == 0 {
 				return fmt.Errorf("no prior passing selected results are eligible for main-agent Carry")
 			}
+			source := state.PreRepairSnapshot
+			if source == "" {
+				source = state.CurrentSnapshot
+			}
 			for _, id := range eligible {
-				inheritCarryResult(state, id, carryOriginMainShortcut, reason)
+				inheritCarryResult(state, id, carryOriginMainShortcut, reason, source)
 			}
 			state.Actions["carry"] = ActionResult{Status: "PASS"}
-			completeReviewWaveIfReady(state)
+			if state.PreRepairSnapshot != "" {
+				resolveCarryBoundary(state)
+			}
 			return nil
 		}
 		if strings.TrimSpace(mainReason) != "" {
@@ -1018,7 +1124,7 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 			}
 			seen[decision.GateID] = true
 			if decision.Decision == "INHERIT" {
-				inheritCarryResult(state, decision.GateID, carryOriginIndependent, strings.TrimSpace(decision.Message))
+				inheritCarryResult(state, decision.GateID, carryOriginIndependent, strings.TrimSpace(decision.Message), state.PreRepairSnapshot)
 			} else {
 				state.Carry[decision.GateID] = CarryResult{Decision: decision.Decision, Origin: carryOriginIndependent, SourceSnapshot: state.PreRepairSnapshot, TargetSnapshot: state.CurrentSnapshot, Message: strings.TrimSpace(decision.Message)}
 				state.Gates[decision.GateID] = GateResult{Status: "PENDING"}
@@ -1026,20 +1132,39 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 		}
 		state.Actions["carry"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
 		completeDispatch(state, dispatch.ID)
-		completeReviewWaveIfReady(state)
+		resolveCarryBoundary(state)
 		return nil
 	})
 }
 
-func eligibleMainCarryResults(state RunState) []string {
-	if state.PreRepairSnapshot == "" {
+// eligibleMainCarryResults lists the selected prior PASS results a main-agent
+// Carry may inherit. In a repair or adoption the previous snapshot is the
+// pre-repair boundary; at a catalog-delta rebinding the PASS results at the
+// current snapshot are the ones whose judgment is being recorded.
+func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
+	if state.PreRepairSnapshot == "" && !catalogChanged {
 		return nil
 	}
 	ids := []string{}
-	if isSelected(state, "qa") && state.QAExecution.Status == "PASS" && state.QAExecution.Snapshot == state.PreRepairSnapshot {
-		ids = append(ids, "qa")
+	if isSelected(state, "qa") && state.QAExecution.Status == "PASS" {
+		if state.PreRepairSnapshot != "" && state.QAExecution.Snapshot == state.PreRepairSnapshot {
+			ids = append(ids, "qa")
+		} else if catalogChanged && state.QAExecution.Snapshot == state.CurrentSnapshot {
+			ids = append(ids, "qa")
+		}
 	}
-	return append(ids, eligibleCarryGates(state)...)
+	for id, result := range state.Gates {
+		if !isSelected(state, id) || result.Status != "PASS" {
+			continue
+		}
+		if state.PreRepairSnapshot != "" && result.Snapshot == state.PreRepairSnapshot {
+			ids = append(ids, id)
+		} else if catalogChanged && result.Snapshot == state.CurrentSnapshot {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func repairRerunRecorded(state RunState) bool {
@@ -1058,16 +1183,57 @@ func repairRerunRecorded(state RunState) bool {
 	return false
 }
 
-func inheritCarryResult(state *RunState, id, origin, reason string) {
-	state.Carry[id] = CarryResult{Decision: "INHERIT", Origin: origin, SourceSnapshot: state.PreRepairSnapshot, TargetSnapshot: state.CurrentSnapshot, Message: reason}
+func inheritCarryResult(state *RunState, id, origin, reason, source string) {
+	state.Carry[id] = CarryResult{Decision: "INHERIT", Origin: origin, SourceSnapshot: source, TargetSnapshot: state.CurrentSnapshot, Message: reason}
 	if id == "qa" {
 		state.QAExecution.Snapshot = state.CurrentSnapshot
 		return
 	}
 	prior := state.Gates[id]
-	prior.SourceSnapshot = state.PreRepairSnapshot
+	prior.SourceSnapshot = source
 	prior.Snapshot = state.CurrentSnapshot
 	state.Gates[id] = prior
+}
+
+// hasRecordedCarryDecisions reports whether any non-adoption Carry judgment has
+// been recorded; an adoption's provenance under the reserved adoption key does
+// not count as a decision, so a main-agent Carry still records the first one.
+func hasRecordedCarryDecisions(state RunState) bool {
+	for id := range state.Carry {
+		if id != carryAdoptKey {
+			return true
+		}
+	}
+	return false
+}
+
+// isAdoptionBoundary reports whether the current pre-repair boundary was created
+// by an adopted external change rather than by a repair snapshot: the reserved
+// adoption key still points its target at the current snapshot. A later repair
+// snapshot drops the adoption provenance through resetSnapshotReviewSurface, so
+// this stays true only while the adoption itself is the boundary being resolved.
+func isAdoptionBoundary(state RunState) bool {
+	adopted, ok := state.Carry[carryAdoptKey]
+	return ok && adopted.TargetSnapshot == state.CurrentSnapshot && state.PreRepairSnapshot != ""
+}
+
+// acceptCatalogHashes records the current per-entry prompt hashes while
+// preserving the recorded hash of every gate whose composed prompt changed, so
+// a selected gate whose prompt moved stays re-dispatchable until a fresh review
+// at the accepted catalog settles it.
+func acceptCatalogHashes(state *RunState, catalog PromptCatalog) {
+	current := catalogPromptHashes(catalog)
+	merged := make(map[string]string, len(current))
+	for id, hash := range current {
+		if strings.HasPrefix(id, "gate:") {
+			if recorded, ok := state.PromptHashes[id]; ok && recorded != hash {
+				merged[id] = recorded
+				continue
+			}
+		}
+		merged[id] = hash
+	}
+	state.PromptHashes = merged
 }
 
 func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState, error) {
@@ -1233,9 +1399,9 @@ func requireCurrentCatalog(state RunState, packageRoot string) (PromptCatalog, e
 	if err != nil {
 		return PromptCatalog{}, err
 	}
-	if state.BasePromptRevision != catalog.BaseRevision || state.CatalogRevision != catalog.CatalogRevision {
-		return PromptCatalog{}, fmt.Errorf("installed prompt catalog changed; start a new run")
-	}
+	// Catalog content changes are a recoverable classification, not a run
+	// killer: the run continues with the live catalog, per-gate/action deltas
+	// are reported, and unaffected results are inherited by a Carry judgment.
 	return catalog, nil
 }
 
@@ -1493,12 +1659,7 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.SkipAuthorizations = routeSkips
 	state.CompletedReviewWaves = 0
 	state.ExtraReviewWaves = 0
-	for id, dispatch := range state.Dispatches {
-		if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {
-			dispatch.Status = "STALE"
-			state.Dispatches[id] = dispatch
-		}
-	}
+	staleAllDispatches(state)
 }
 
 func rebindCurrentSnapshot(state *RunState, snapshot string) {
@@ -1507,12 +1668,7 @@ func rebindCurrentSnapshot(state *RunState, snapshot string) {
 	if previous == snapshot {
 		return
 	}
-	for id, dispatch := range state.Dispatches {
-		if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {
-			dispatch.Status = "STALE"
-			state.Dispatches[id] = dispatch
-		}
-	}
+	staleAllDispatches(state)
 	if state.QAExecution.Snapshot == previous {
 		state.QAExecution.Snapshot = snapshot
 	}
@@ -1726,6 +1882,29 @@ func semanticResultRecorded(status, snapshot, currentSnapshot string) bool {
 	return snapshot == currentSnapshot && (status == "PASS" || status == "FAIL")
 }
 
+// comparedRange is the snapshot pair a gate review must report: every gate
+// review covers the complete base-to-current delivery, including reruns.
+func comparedRange(state RunState) string {
+	return state.BaseSnapshot + ".." + state.CurrentSnapshot
+}
+
+// gatePromptChanged reports whether a gate's composed prompt (the shared
+// reviewer base plus the gate's own content) hash moved since the run started,
+// making a recorded authoritative result a candidate for the main agent's
+// per-gate judgment rather than a fixed conclusion. A base-only change therefore
+// enables per-gate re-dispatch too.
+func gatePromptChanged(state RunState, catalog PromptCatalog, gateID string) bool {
+	recorded, ok := state.PromptHashes["gate:"+gateID]
+	if !ok {
+		return false
+	}
+	gate, ok := catalog.Gate(gateID)
+	if !ok {
+		return false
+	}
+	return recorded != composedGatePromptHash(catalog, gate.Content)
+}
+
 func normalizeSelected(values, candidates []string) ([]string, error) {
 	allowed := map[string]bool{}
 	for _, id := range candidates {
@@ -1859,6 +2038,7 @@ func effectiveReviewWaveLimit(state RunState) int {
 
 func completeReviewWaveIfReady(state *RunState) {
 	if len(state.SelectedGates) == 0 || state.Actions["development-worker"].Status != developmentComplete || !reviewWaveRecorded(*state) {
+		clearResolvedCarryBoundary(state)
 		return
 	}
 	if isSelected(*state, "qa") && state.QAExecution.Status == "RUNTIME_ERROR" {
@@ -1874,6 +2054,34 @@ func completeReviewWaveIfReady(state *RunState) {
 	}
 	state.CompletedReviewWaves++
 	state.Actions["development-worker"] = ActionResult{Status: developmentVerified}
+	state.PreRepairSnapshot = ""
+}
+
+// resolveCarryBoundary closes a carry boundary after a Carry judgment: a repair
+// boundary completes the review wave when every selected result is recorded at
+// the current snapshot, while a boundary created by an adopted external change
+// that needed no real rerun resolves through clearResolvedCarryBoundary without
+// counting a new review wave. Real reruns after an adoption are counted by the
+// review that records them.
+func resolveCarryBoundary(state *RunState) {
+	if isAdoptionBoundary(*state) {
+		clearResolvedCarryBoundary(state)
+		return
+	}
+	completeReviewWaveIfReady(state)
+}
+
+// clearResolvedCarryBoundary drops a carry boundary once every selected result
+// is recorded at the current snapshot and no prior passing gate still awaits a
+// Carry decision. An adopted external change that needs no real rerun resolves
+// this way without counting a new review wave.
+func clearResolvedCarryBoundary(state *RunState) {
+	if state.PreRepairSnapshot == "" || !reviewWaveRecorded(*state) {
+		return
+	}
+	if len(eligibleCarryGates(*state)) != 0 {
+		return
+	}
 	state.PreRepairSnapshot = ""
 }
 

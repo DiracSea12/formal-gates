@@ -3,6 +3,7 @@ package validate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,8 +65,8 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 		t.Fatal("rejected frozen-artifact transition changed state")
 	}
 	commitAll(t, root, "changed requirement")
-	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil); err == nil || !strings.Contains(err.Error(), "unavailable after development") {
-		t.Fatalf("post-development preserved rebind was accepted: %v", err)
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil); err == nil || !strings.Contains(err.Error(), "requires user confirmation") {
+		t.Fatalf("post-development preserved rebind without user confirmation was accepted: %v", err)
 	}
 	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
 	if err != nil {
@@ -165,7 +166,7 @@ func TestWorkflowLifecycleBoundaryKeepsRejectedGatePending(t *testing.T) {
 		t.Fatalf("workflow passed unexpected lifecycle binding fields: %#v", stub.binds)
 	}
 	before := stateBytes(t, root, state.RunID)
-	if _, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil); err == nil || !strings.Contains(err.Error(), "lifecycle verification REJECTED") {
+	if _, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", comparedRange(state), nil); err == nil || !strings.Contains(err.Error(), "lifecycle verification REJECTED") {
 		t.Fatalf("gate result without matching provider events was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
@@ -173,7 +174,7 @@ func TestWorkflowLifecycleBoundaryKeepsRejectedGatePending(t *testing.T) {
 	}
 
 	stub.verification = lifecycle.Verification{Outcome: lifecycle.Verified}
-	state, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil)
+	state, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", comparedRange(state), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +265,7 @@ func TestGatePromptExcludesFrozenArtifactsAndResultUsesDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil)
+	state, err = RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", comparedRange(state), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +281,7 @@ func TestNativeSnapshotMismatchRejectsPreparedResultWithoutMutation(t *testing.T
 	writeTestFile(t, filepath.Join(root, "unrecorded.txt"), "new commit\n")
 	commitAll(t, root, "advance outside workflow")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", nil); err == nil || !strings.Contains(err.Error(), "native VCS identity") {
+	if _, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", comparedRange(state), nil); err == nil || !strings.Contains(err.Error(), "native VCS identity") {
 		t.Fatalf("stale native snapshot result was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
@@ -301,7 +302,7 @@ func TestQAExecutionPreservesKindsAndFullRouteSeals(t *testing.T) {
 	}
 	for index, gate := range []string{"architecture", "quality"} {
 		dispatchID = prepareAndClaim(t, root, pkg, state.RunID, gate, fmt.Sprintf("gate-%d", index+1))
-		state, err = RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", nil)
+		state, err = RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", comparedRange(state), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -325,12 +326,12 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	architecture := prepareAndClaim(t, root, pkg, state.RunID, "architecture", "architecture-initial")
-	state, err = RecordGate(root, pkg, state.RunID, "architecture", architecture, "PASS", "", nil)
+	state, err = RecordGate(root, pkg, state.RunID, "architecture", architecture, "PASS", "", comparedRange(state), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	quality := prepareAndClaim(t, root, pkg, state.RunID, "quality", "quality-initial")
-	state, err = RecordGate(root, pkg, state.RunID, "quality", quality, "FAIL", "", []FindingInput{{Severity: "P1", Message: "normal workflow fails", Locations: []string{"internal/cli/cli.go:1"}}})
+	state, err = RecordGate(root, pkg, state.RunID, "quality", quality, "FAIL", "", comparedRange(state), []FindingInput{{Severity: "P1", Message: "normal workflow fails", Locations: []string{"internal/cli/cli.go:1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +360,7 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	quality = prepareAndClaim(t, root, pkg, state.RunID, "quality", "quality-repair")
-	state, err = RecordGate(root, pkg, state.RunID, "quality", quality, "PASS", "", nil)
+	state, err = RecordGate(root, pkg, state.RunID, "quality", quality, "PASS", "", comparedRange(state), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +374,7 @@ func TestGateFindingCannotTargetFrozenAcceptanceArtifact(t *testing.T) {
 	state := readyDelivery(t, root, pkg, "excluded-finding")
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "excluded-reviewer")
 	before := stateBytes(t, root, state.RunID)
-	_, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "rewrite the requirement", Locations: []string{"requirements.md:1"}}})
+	_, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "FAIL", "", comparedRange(state), []FindingInput{{Severity: "P1", Message: "rewrite the requirement", Locations: []string{"requirements.md:1"}}})
 	if err == nil || !strings.Contains(err.Error(), "not a review target") {
 		t.Fatalf("frozen acceptance artifact finding was accepted: %v", err)
 	}
@@ -467,8 +468,8 @@ func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(root, "design.md"), "changed design\n")
 	commitAll(t, root, "changed retained requirement")
-	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil); err == nil || !strings.Contains(err.Error(), "unavailable after development") {
-		t.Fatalf("retained snapshot allowed meaning-preserved artifact rebinding: %v", err)
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil); err == nil || !strings.Contains(err.Error(), "requires user confirmation") {
+		t.Fatalf("retained snapshot allowed meaning-preserved artifact rebinding without user confirmation: %v", err)
 	}
 }
 
@@ -534,7 +535,7 @@ func TestLateRouteGateRepairStartsAFreshAttemptInTheNextWave(t *testing.T) {
 	if dispatch := state.Dispatches[dispatchID]; dispatch.ReviewWave != 1 || dispatch.Attempt != 1 {
 		t.Fatalf("supplemental review binding=%#v", dispatch)
 	}
-	state, err = RecordGate(root, pkg, state.RunID, "architecture", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state, err = RecordGate(root, pkg, state.RunID, "architecture", dispatchID, "FAIL", "", comparedRange(state), []FindingInput{{Severity: "P1", Message: "repair required"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,7 +715,7 @@ func TestConcurrentSelectedGateRecordingPreservesResults(t *testing.T) {
 		wg.Add(1)
 		go func(gate, dispatchID string) {
 			defer wg.Done()
-			_, err := RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", nil)
+			_, err := RecordGate(root, pkg, state.RunID, gate, dispatchID, "PASS", "", comparedRange(state), nil)
 			errs <- err
 		}(gate, dispatchID)
 	}
@@ -743,14 +744,14 @@ func TestResumeAndAbortNormalLifecycle(t *testing.T) {
 	t.Run("resume", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		state := mustStart(t, root, pkg, "resume")
-		resumed, classificationRequired, err := Resume(root, pkg, state.RunID)
-		if err != nil || classificationRequired || resumed.RunID != state.RunID {
-			t.Fatalf("unchanged run did not resume: state=%#v changed=%v err=%v", resumed, classificationRequired, err)
+		report, err := ResumeReport(root, pkg, state.RunID)
+		if err != nil || report.ClassificationRequired {
+			t.Fatalf("unchanged run did not resume: report=%#v err=%v", report, err)
 		}
 		writeTestFile(t, filepath.Join(root, "requirements.md"), "revised requirement\n")
-		_, classificationRequired, err = Resume(root, pkg, state.RunID)
-		if err != nil || !classificationRequired {
-			t.Fatalf("normal requirement edit was not reported on Resume: changed=%v err=%v", classificationRequired, err)
+		report, err = ResumeReport(root, pkg, state.RunID)
+		if err != nil || !report.ClassificationRequired {
+			t.Fatalf("normal requirement edit was not reported on Resume: report=%#v err=%v", report, err)
 		}
 	})
 	t.Run("abort", func(t *testing.T) {
@@ -770,6 +771,255 @@ func TestResumeAndAbortNormalLifecycle(t *testing.T) {
 			t.Fatalf("abort summary was not retained: %v", err)
 		}
 	})
+}
+
+func TestStartAcceptsAncestorBaseSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	ancestor := gitHead(t, root)
+	writeTestFile(t, filepath.Join(root, "committed.txt"), "in-flight work\n")
+	commitAll(t, root, "in-flight work")
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "ancestor-base", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", BaseSnapshot: ancestor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.BaseSnapshot != ancestor || state.CurrentSnapshot != gitHead(t, root) {
+		t.Fatalf("ancestor base was not adopted: base=%s current=%s", state.BaseSnapshot, state.CurrentSnapshot)
+	}
+}
+
+func TestStartRejectsNonAncestorBaseSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	branch := strings.TrimSpace(runGit(t, root, "branch", "--show-current"))
+	runGit(t, root, "checkout", "-b", "divergent")
+	writeTestFile(t, filepath.Join(root, "divergent.txt"), "divergent\n")
+	commitAll(t, root, "divergent work")
+	divergent := gitHead(t, root)
+	runGit(t, root, "checkout", branch)
+	writeTestFile(t, filepath.Join(root, "mainline.txt"), "mainline\n")
+	commitAll(t, root, "mainline work")
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "non-ancestor", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", BaseSnapshot: divergent}); err == nil || !strings.Contains(err.Error(), "not an ancestor") {
+		t.Fatalf("non-ancestor base snapshot was accepted: %v", err)
+	}
+}
+
+func TestRunStateRecordsPerGateActionPromptHashes(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "prompt-hashes")
+	catalog, err := LoadPromptCatalog(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.PromptHashes["base"] != promptContentHash(catalog.Base) {
+		t.Fatalf("base prompt hash missing: %#v", state.PromptHashes)
+	}
+	for _, gate := range catalog.Gates {
+		if state.PromptHashes["gate:"+gate.ID] != composedGatePromptHash(catalog, gate.Content) {
+			t.Fatalf("gate %s prompt hash missing", gate.ID)
+		}
+	}
+	for _, action := range catalog.Actions {
+		if state.PromptHashes["action:"+action.ID] != promptContentHash(action.Content) {
+			t.Fatalf("action %s prompt hash missing", action.ID)
+		}
+	}
+}
+
+func TestOldRunStateWithoutPromptHashesLoadsCompatible(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "old-state")
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	delete(decoded, "promptHashes")
+	rewritten, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(RunStatePath(root, state.RunID), append(rewritten, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatalf("old state failed to load: %v", err)
+	}
+	if loaded.PromptHashes != nil {
+		t.Fatalf("old state gained hashes: %#v", loaded.PromptHashes)
+	}
+	if _, err := requireCurrentCatalog(loaded, pkg); err != nil {
+		t.Fatalf("old state could not continue: %v", err)
+	}
+}
+
+func TestUnselectedGatePromptChangeDoesNotBlockRun(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "unselected-change"), "custom", []string{"quality"})
+	writeTestFile(t, filepath.Join(pkg, "gates", "architecture.md"), "new architecture checks\n")
+	report, err := ResumeReport(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(report.CatalogDelta, "gate:architecture") || containsString(report.CatalogDelta, "gate:quality") {
+		t.Fatalf("catalog delta misreported the unselected-only change: %v", report.CatalogDelta)
+	}
+	state = recordReadiness(t, root, pkg, state)
+	if state.Actions["start-readiness"].Status != "PASS" {
+		t.Fatalf("unselected catalog change blocked the run: %#v", state.Actions)
+	}
+}
+
+func TestSelectedGatePromptChangeRecordedByMainAgentCarry(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "selected-change", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "selected-change-quality", "PASS", "", nil)
+	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
+	report, err := ResumeReport(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(report.CatalogDelta, "gate:quality") {
+		t.Fatalf("selected gate change was not reported: %v", report.CatalogDelta)
+	}
+	state, err = RecordCarry(root, pkg, state.RunID, "", nil, "", true, "prompt wording only; quality ownership unchanged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := state.Gates["quality"]; result.Status != "PASS" || result.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("inherited gate was not retained: %#v", result)
+	}
+	if record := state.Carry["quality"]; record.Decision != "INHERIT" || !strings.Contains(record.Message, "wording") {
+		t.Fatalf("carry judgment was not recorded: %#v", record)
+	}
+	catalog, err := LoadPromptCatalog(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CatalogRevision != catalog.CatalogRevision {
+		t.Fatalf("catalog was not accepted on judgment: %v != %v", state.CatalogRevision, catalog.CatalogRevision)
+	}
+}
+
+func TestChangedSelectedGateCanBeReDispatched(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "re-dispatch", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "re-dispatch-quality", "PASS", "", nil)
+	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality"); err != nil {
+		t.Fatalf("changed gate could not be re-dispatched: %v", err)
+	}
+}
+
+func TestChangedGateStaysReDispatchableAfterMainAgentCarry(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "carry-then-redispatch", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "carry-then-redispatch-quality", "PASS", "", nil)
+	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
+	state, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "accept catalog; quality needs a fresh review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := LoadPromptCatalog(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CatalogRevision != catalog.CatalogRevision {
+		t.Fatalf("carry did not accept the catalog: %v", state.CatalogRevision)
+	}
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality"); err != nil {
+		t.Fatalf("changed gate was not re-dispatchable after carry accepted the catalog: %v", err)
+	}
+}
+
+func TestBaseOnlyPromptChangeEnablesPerGateReDispatch(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "base-change", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "base-change-quality", "PASS", "", nil)
+	writeTestFile(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "new shared contract\n")
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality"); err != nil {
+		t.Fatalf("base-only change did not enable per-gate re-dispatch: %v", err)
+	}
+}
+
+func TestAdoptExternalChangeRebindsAndCarries(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "adopt", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "adopt-quality", "PASS", "", nil)
+	prior := state.CurrentSnapshot
+	writeTestFile(t, filepath.Join(root, "external.txt"), "external work\n")
+	commitAll(t, root, "external work")
+	head := gitHead(t, root)
+	before := stateBytes(t, root, state.RunID)
+	if _, err := AdoptExternalChange(root, pkg, state.RunID, ""); err == nil || !strings.Contains(err.Error(), "requires a reason") {
+		t.Fatalf("adoption without a reason was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected adoption changed state")
+	}
+	state, err := AdoptExternalChange(root, pkg, state.RunID, "adopt unrelated external commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok := state.Carry[carryAdoptKey]
+	if state.CurrentSnapshot != head || state.PreRepairSnapshot != prior || !ok || record.Origin != "ADOPT" || record.SourceSnapshot != prior || record.TargetSnapshot != head || record.Message != "adopt unrelated external commit" {
+		t.Fatalf("adoption did not rebind with provenance: %#v", state)
+	}
+	if result := state.Gates["quality"]; result.Status != "PASS" || result.Snapshot != prior {
+		t.Fatalf("passing result was not left eligible for carry: %#v", result)
+	}
+	state, err = RecordCarry(root, pkg, state.RunID, "", nil, "", true, "external commit does not affect quality ownership")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Gates["quality"].Snapshot != state.CurrentSnapshot || state.PreRepairSnapshot != "" {
+		t.Fatalf("carried gate was not rebound at the adopted head: %#v", state.Gates["quality"])
+	}
+}
+
+func TestPostDevelopmentPreservedRebindKeepsPass(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "preserved", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "preserved-quality", "PASS", "", nil)
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised meaning-preserved requirement\n")
+	commitAll(t, root, "revised requirement")
+	state, err := UpdateRequirement(root, pkg, state.RunID, "", true, "preserved", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentSnapshot != gitHead(t, root) || !state.RequirementConfirmed {
+		t.Fatalf("preserved rebind did not rebind the snapshot: %#v", state)
+	}
+	if result := state.Gates["quality"]; result.Status != "PASS" || result.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("preserved rebind did not retain PASS at the new snapshot: %#v", result)
+	}
+}
+
+func TestGateReviewComparedRangeIsValidated(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "compared", "custom", []string{"quality"})
+	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "compared-reviewer")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", "pre-repair..current", nil); err == nil || !strings.Contains(err.Error(), "reported compared") {
+		t.Fatalf("mismatched compared pair was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected compared mismatch changed state")
+	}
+	state, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "PASS", "", comparedRange(state), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Gates["quality"].Compared != comparedRange(state) {
+		t.Fatalf("compared pair was not stored: %#v", state.Gates["quality"])
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func mustStart(t *testing.T, root, pkg, id string) RunState {
@@ -860,7 +1110,11 @@ func readyDeliveryForRoute(t *testing.T, root, pkg, id, mode string, selected []
 func recordGateResult(t *testing.T, root, pkg string, state RunState, gate, reviewer, status, message string, findings []FindingInput) RunState {
 	t.Helper()
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, gate, reviewer)
-	state, err := RecordGate(root, pkg, state.RunID, gate, dispatchID, status, message, findings)
+	compared := ""
+	if strings.ToUpper(strings.TrimSpace(status)) != "RUNTIME_ERROR" {
+		compared = comparedRange(state)
+	}
+	state, err := RecordGate(root, pkg, state.RunID, gate, dispatchID, status, message, compared, findings)
 	if err != nil {
 		t.Fatal(err)
 	}
