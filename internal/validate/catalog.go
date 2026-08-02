@@ -224,8 +224,17 @@ func catalogDelta(state RunState, catalog PromptCatalog) []string {
 	}
 	current := catalogPromptHashes(catalog)
 	changed := []string{}
+	seen := map[string]bool{}
 	for id, hash := range current {
+		seen[id] = true
 		if recorded, ok := state.PromptHashes[id]; !ok || recorded != hash {
+			changed = append(changed, id)
+		}
+	}
+	// Report recorded entries removed from the current catalog so a removed
+	// selected gate is a recoverable delta rather than an invisible dead-end.
+	for id := range state.PromptHashes {
+		if !seen[id] {
 			changed = append(changed, id)
 		}
 	}

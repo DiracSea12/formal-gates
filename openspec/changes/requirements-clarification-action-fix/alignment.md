@@ -24,5 +24,5 @@ Status: confirmed
 ## RQ-P4 - 精简克制
 
 本阶段改动 SHALL 限定为 `prompts/actions/requirements-clarification.md`（catalog，经
-B2 目录 delta 容忍）与 CHANGELOG.md（仓库惯例）；不新增文件、不改动其他文件，保持精
-简。
+B2 目录 delta 容忍）、CHANGELOG.md（仓库惯例）与 SKILL.md 第 2 步措辞（与提示词对齐所
+需）；不新增文件、不改动其他文件，保持精简。

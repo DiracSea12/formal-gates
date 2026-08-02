@@ -114,7 +114,11 @@ func currentChangeBlock(route PromptRoute, reviewTargets bool) string {
 			lines = append(lines, "- "+artifact.Path)
 		}
 		if route.ReviewWave > 1 || route.PreRepairSnapshot != "" {
-			lines = append(lines, fmt.Sprintf("这是返修后第 %d 轮重审；上一轮覆盖 base→pre-repair；你的范围是完整的 base→current（pre-repair 快照 %s 仅供参考，不要只审返修增量）。", route.ReviewWave, route.PreRepairSnapshot))
+			if route.PreRepairSnapshot != "" {
+				lines = append(lines, fmt.Sprintf("这是返修后第 %d 轮重审；上一轮覆盖 base→pre-repair；你的范围是完整的 base→current（pre-repair 快照 %s 仅供参考，不要只审返修增量）。", route.ReviewWave, route.PreRepairSnapshot))
+			} else {
+				lines = append(lines, fmt.Sprintf("这是第 %d 轮重审；你的范围是完整的 base→current，不要只审最近改动。", route.ReviewWave))
+			}
 		}
 	}
 	return strings.Join(lines, "\n")

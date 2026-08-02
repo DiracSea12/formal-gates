@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Resume interrupted claimed dispatches through the host's resume mechanism
+  (e.g. Claude Code `SendMessage`) to complete the same dispatch instead of
+  restarting: a CLAIMED dispatch with no recorded result keeps its claim,
+  identity, and one-result mapping across the resume, falling back to the
+  stale-and-redispatch path with a fresh zero-context agent only when resume is
+  unavailable (host does not provide it, recovery fails, or the lifecycle
+  cannot authenticate the resumed completion), and hosts whose lifecycle cannot
+  verify the resume (Codex/Cursor providers) are not documented as
+  resume-enabled.
 - Make `requirements-clarification` the acceptance-phase clarification guide:
   the Q&A runs in the acceptance phase before the formal flow starts (one
   consequential decision at a time, from repository facts, no fixed

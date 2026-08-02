@@ -246,3 +246,26 @@ func writeTestFile(t *testing.T, path, text string) {
 		t.Fatal(err)
 	}
 }
+
+func TestCatalogDeltaReportsRemovedGate(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "removed-gate")
+	if err := os.Remove(filepath.Join(pkg, "gates", "architecture.md")); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := LoadPromptCatalog(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := catalogDelta(state, catalog)
+	found := false
+	for _, id := range delta {
+		if id == "gate:architecture" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("catalogDelta did not report removed gate; got %v", delta)
+	}
+}
