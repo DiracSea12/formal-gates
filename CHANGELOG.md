@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make `requirements-clarification` the acceptance-phase clarification guide:
+  the Q&A runs in the acceptance phase before the formal flow starts (one
+  consequential decision at a time, from repository facts, no fixed
+  questionnaire) and is mandatory unless no decision genuinely affects public
+  behavior, acceptance, or architecture (then record "无剩余缺口"); the main
+  agent presents the complete integrated requirement and technical solution,
+  obtains the user's final confirmation ("确认" = presenting the integrated
+  requirement and solution and receiving the final confirmation), and writes the
+  integrated requirement and decisions to the requirement file in the acceptance
+  phase as the run's acceptance input and source of truth. PASS records only what
+  the user actually confirmed; the prompt names no later flow step and claims no
+  registration or content-checking duties.
 - Accept an ancestor (or equal) `--base-snapshot` at `workflow start`, making
   already-committed in-flight work fall inside the base-to-current review diff
   and enabling a documented takeover path for interrupted runs.
@@ -33,10 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declaring that scope explicitly in the composed prompt, and require every
   gate review to report the compared snapshot pair in its result contract,
   discarding mismatched reports.
-- Track the retrospective correction of
-  `prompts/actions/requirements-clarification.md` (its wording conflicts with
-  SKILL and does not enforce persisting aligned conclusions) as a Phase 2
-  delivery in a later run after the Phase 1 catalog-delta tolerance lands.
 - Record adopted external-change provenance in the Carry record instead of a
   write-only dedicated field, keep a selected gate whose prompt moved
   re-dispatchable after a main-agent Carry accepts the catalog delta, detect
