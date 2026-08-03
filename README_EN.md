@@ -1,6 +1,6 @@
 # formal-gates
 
-**A lightweight development and review workflow built on strict separation of the implementer, reviewer, and tester: from requirements clarification to seal, every step has a standardized process, gates, and records**
+**A lightweight development and review workflow built on strict separation of the implementer, reviewer, and tester: from requirements alignment to seal, every step has a standardized process, gates, and records**
 
 [English](README_EN.md) | [中文](README.md)
 
@@ -10,7 +10,7 @@
 
 ---
 
-formal-gates is a complete AI-assisted development workflow: requirements clarification, route selection, QA design, development, snapshot, QA testing, independent review, rework, and seal — every step has a standardized process, gates, and records.
+formal-gates is a complete AI-assisted development workflow: requirements alignment, route selection, QA design, development, snapshot, QA testing, independent review, rework, and seal — every step has a standardized process, gates, and records.
 
 The review step runs in mutually invisible independent sessions: a reviewer receives only the requirement text and the native VCS diff (zero context), so it cannot fill gaps from implementation memory. The CLI keeps the only record; at seal the whole round collapses into a summary that depends on no session memory.
 
@@ -61,11 +61,11 @@ In one line: **take the writer and the reviewer out of the same head, and write 
 
 ## Features
 
-- **A complete flow** — requirements clarification, route selection, QA design, development, snapshot, independent review, rework, and seal: none skipped, every step recorded.
+- **A complete flow** — requirements alignment, route selection, QA design, development, snapshot, independent review, rework, and seal: none skipped, every step recorded.
 - **Implementation and review are strictly separated** — the dev worker, review gates, and QA each run in mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff. What this gives you: verdicts rest on the change alone and cannot be colored by implementation memory.
 - **The CLI is the only record** — during a run there is one temporary state file, `.gates/tmp/<run-id>/state.json`; after seal only the summary `.gates/results/<run-id>.json` remains. The CLI stores no diffs and copies no project files. What this gives you: no second dataset to keep in sync, and no lost state when a session ends.
 - **A gate is just a file; add or remove them freely** — each `gates/*.md` is one review gate; add a file for a new gate, delete one to drop it, with no limit. What this gives you: the gate set is exactly what the `gates/` directory contains — no registry, YAML, or weights table.
-- **Gates and prompts are customizable** — gate review logic lives in `gates/*.md` and each action's prompt (requirements clarification, QA design/review/execution, the development worker, carry) lives in `prompts/actions/*.md`, all plain Markdown files inside the installed package. What this gives you: write a file to add a gate, or reword how a review step is expressed by editing its prompt — no code changes.
+- **Gates and prompts are customizable** — gate review logic lives in `gates/*.md` and each action's prompt (requirements alignment, QA design/review/execution, the development worker, carry) lives in `prompts/actions/*.md`, all plain Markdown files inside the installed package. What this gives you: write a file to add a gate, or reword how a review step is expressed by editing its prompt — no code changes.
 - **QA is designed and independently reviewed before development** — a complete candidate case set (STATIC direct checks plus LIVE real execution) is produced first, and an independent QA Review must pass before any code is written; rework keeps unchanged PASS cases. What this gives you: the behavior contract is frozen before coding, and repairs don't re-test what didn't change.
 - **One route** — lightweight, full, or custom is chosen once after the requirement is aligned; later requirements and task slices keep that route. Custom picks any non-empty subset of QA and the discovered gates — leave QA out, or run QA alone. What this gives you: one decision fixes the shape of the entire formal run.
 - **Native VCS** — Git, SVN, and P4 drive snapshots and diffs directly. What this gives you: the repository itself is the whole truth, with no intermediate version data. A snapshot is the native commit identity of that semantic result (a commit in git).
@@ -86,10 +86,10 @@ In one line: **take the writer and the reviewer out of the same head, and write 
 
 ## Formal Flow
 
-A formal run advances from requirements clarification to seal in the order below. **The gate set is dynamic**: every file under `gates/*.md` is one gate — add a file for a new gate, delete one to drop it; nothing is hardcoded into the flow.
+A formal run advances from requirements alignment to seal in the order below. **The gate set is dynamic**: every file under `gates/*.md` is one gate — add a file for a new gate, delete one to drop it; nothing is hardcoded into the flow.
 
 1. **Start** — pick the repository's VCS (Git / SVN / P4), freeze the baseline, and register the requirement and its documents.
-2. **Requirements clarification registration** — register the confirmed requirement and solution and record PASS; this is the sole basis for every later judgment.
+2. **Requirements alignment** — after you describe the requirement to the main agent, the main agent aligns the requirement details and the technical approach through a question-and-answer session before development: it asks one consequential decision at a time — a decision that materially changes scope, acceptance, or architecture — explaining each option's consequences and trade-offs in plain language. Once done, it presents the integrated requirement and technical solution and continues only after your explicit confirmation. The aligned requirement is the sole basis for all later judgments.
 3. **Bind the route** — choose once from lightweight / full / custom; custom freely combines QA with any subset of the discovered gates.
 4. **Before development** — write down "what counts as correct" first: produce the full QA candidate case set (STATIC static checks + LIVE real execution), and an independent QA Review must pass before any code is written.
 5. **Development** — the dev worker implements within the confirmed scope in an independent session; new delivery paths are added to the VCS first.
@@ -189,7 +189,7 @@ package containing `references/managed-rules.json`.
 As a user you only need to do three things:
 
 1. **Install** — set it up for one of your AI hosts (claude, codex, or cursor) as described above.
-2. **Let your AI agent drive the formal flow** — the installed skill (`SKILL.md` and `references/`) is the agent's operating manual. It reads those files and runs the formal flow for your requirement: clarify the requirement, pick a route, dispatch the independent worker and reviewers, record QA, and seal. You don't need to remember any commands.
+2. **Let your AI agent drive the formal flow** — the installed skill (`SKILL.md` and `references/`) is the agent's operating manual. It reads those files and runs the formal flow for your requirement: align the requirement, pick a route, dispatch the independent worker and reviewers, record QA, and seal. You don't need to remember any commands.
 3. **Review the outcome** — the main agent summarizes each round for you: which gates passed, which findings need action, and what the seal summary looks like. You can always open `.gates/results/<run-id>.json` for the full conclusions.
 
 The `formal-gates workflow ...` commands are run by the flow driver (your AI agent), not typed by humans.
@@ -199,7 +199,7 @@ The `formal-gates workflow ...` commands are run by the flow driver (your AI age
 ## FAQ
 
 **Why not just open a new window to review — why do I need formal-gates?**
-A new window solves one thing: independent zero-context review. formal-gates provides the complete workflow — requirements clarification, confirmation, QA design, development, snapshot, independent review, rework, and seal — it runs every time, records every step, and rework re-checks only the cases that changed.
+A new window solves one thing: independent zero-context review. formal-gates provides the complete workflow — requirements alignment, confirmation, QA design, development, snapshot, independent review, rework, and seal — it runs every time, records every step, and rework re-checks only the cases that changed.
 
 **How is this different from a review bot that has AI review its own work?**
 A review bot typically runs in the same context that produced the code, so the AI can fill gaps from its implementation memory. formal-gates puts implementation, QA, and review into mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff, with no implementation memory to lean on, so they can only judge the change itself. It also leaves a CLI record.
