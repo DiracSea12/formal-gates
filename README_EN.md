@@ -34,6 +34,7 @@ In one line: **take the writer, the reviewer, and the tester out of the same hea
 - [Why](#why)
 - [Features](#features)
 - [How It Works](#how-it-works)
+- [Formal Flow](#formal-flow)
 - [Example Artifacts](#example-artifacts)
 - [Installation And Uninstall](#installation-and-uninstall)
 - [Usage](#usage)
@@ -80,6 +81,22 @@ In one line: **take the writer and the reviewer out of the same head, and write 
 - **State and persistence** — a running run has exactly one temporary state file, and any interruption can be resumed from it; after seal or abort that temporary state is deleted and only an immutable summary remains.
 - **Task slicing and the overall run** — large formal work is split by dependency, ownership, risk, and verification surface into independent slice runs, each developing in its own VCS worktree; one overall run keeps the original base, the complete requirement, and the route, and does the integration review of merged results.
 - **Repairs and inheritance** — findings can be sent back for repair and re-run; a PASS or FAIL already recorded against an immutable snapshot stays authoritative. A bounded repair that provably cannot affect any previously passing verification may inherit all prior PASS results, including QA; otherwise an independent carry decision is used.
+
+---
+
+## Formal Flow
+
+A formal run advances from requirements clarification to seal in the order below. **The gate set is dynamic**: every file under `gates/*.md` is one gate — add a file for a new gate, delete one to drop it; nothing is hardcoded into the flow.
+
+1. **Start** — pick the repository's VCS (Git / SVN / P4), freeze the baseline, and register the requirement and its documents.
+2. **Requirements clarification registration** — register the confirmed requirement and solution and record PASS; this is the sole basis for every later judgment.
+3. **Bind the route** — choose once from lightweight / full / custom; custom freely combines QA with any subset of the discovered gates.
+4. **Before development** — write down "what counts as correct" first: produce the full QA candidate case set (STATIC static checks + LIVE real execution), and an independent QA Review must pass before any code is written.
+5. **Development** — the dev worker implements within the confirmed scope in an independent session; new delivery paths are added to the VCS first.
+6. **Freeze the snapshot** — create an immutable identity with the VCS; later reviews target only this snapshot.
+7. **Post-development review** — QA execution and every gate review run in parallel; gates are discovered dynamically from `gates/*.md`, and each gate reviews only the complete base-to-current diff.
+8. **Rework** — P0/P1 findings or a QA FAIL send the round back for repair; rework re-checks only failed or changed cases, unchanged PASS results are kept, and a repair whose scope can be determined may inherit prior PASS results directly.
+9. **Seal** — once all required results pass, collapse the round's conclusions into one immutable summary and clear the temporary state.
 
 ---
 
