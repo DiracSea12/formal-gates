@@ -1,0 +1,122 @@
+{
+  "runId": "phase4-seal-20260723-2208",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "383ed64f32f92698514be93ccc65e4efab29ff593d14b1e038d0086673b61f5d",
+  "basePromptRevision": "457157cf803520212b3a4595f015b87a4b3aa963d887f077f2628ae054b4d811",
+  "catalogRevision": "1f2e8d2ad08768a958e037ad1b56abe4f8754314eadceaf8f3a7d6d972dbd6c7",
+  "vcs": "git",
+  "baseSnapshot": "13f0badbd26f1aa3c3898e1cd65ee732a733f992",
+  "currentSnapshot": "f93c6d30d71a755a04c58529a2489f242190873b",
+  "gates": {
+    "architecture-health-gate": {
+      "status": "FAIL",
+      "snapshot": "f93c6d30d71a755a04c58529a2489f242190873b",
+      "findings": [
+        {
+          "message": "workflow seal compares both host-supplied live identities before terminal persistence; a separate tracked edit precisely during finalization is not sampled by the CLI.",
+          "locations": [
+            "SKILL.md:155",
+            "internal/cli/cli.go:218",
+            "internal/validate/workflow.go:515"
+          ]
+        }
+      ],
+      "message": "Reviewer reported a post-aggregation VCS identity timing gap; main-agent adjudication treats the precisely timed cross-process race as advisory under the confirmed host-owned VCS boundary, but preserves the raw reviewer result."
+    },
+    "code-quality-gate": {
+      "status": "FAIL",
+      "snapshot": "f93c6d30d71a755a04c58529a2489f242190873b",
+      "findings": [
+        {
+          "message": "prompts/reviewer-base.md does not state that shared cross-gate rules take precedence over gate-specific prose, although the confirmed gate-file contract requires it. A normally installed custom gate can therefore conflict with the shared contract without a defined precedence rule.",
+          "locations": [
+            "prompts/reviewer-base.md:1"
+          ]
+        }
+      ],
+      "message": "The shared reviewer prompt omits a required precedence rule; all executable checks otherwise passed."
+    },
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "f93c6d30d71a755a04c58529a2489f242190873b",
+      "message": "The complete Phase 4 change is the simplest sufficient solution; it removes the obsolete evidence subsystem, reuses existing owners, and leaves no redundant subsystem, registry, adapter, compatibility path, or unnecessary public surface."
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "f93c6d30d71a755a04c58529a2489f242190873b",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "outcome": "PASS",
+        "procedure": "Installed disposable packages and exercised catalog add, remove, overlay, invalid filename, empty content, and invalid UTF-8.",
+        "observation": "Expected lexical catalog was preserved, reinstall add and remove were exact, overlay was ignored, and invalid gates failed before dispatch.",
+        "oracleResult": "PASS: catalog behavior matched."
+      },
+      {
+        "caseId": "CASE-002",
+        "outcome": "PASS",
+        "procedure": "Prepared the same gate twice and exercised missing or invalid base and gate prompts.",
+        "observation": "Payloads were identical with each prompt once, state stayed PENDING, no override or agent runtime appeared, and invalid inputs produced no payload.",
+        "oracleResult": "PASS: prompt composition matched."
+      },
+      {
+        "caseId": "CASE-003",
+        "outcome": "PASS",
+        "procedure": "Interrupted before recording, resumed and redispatched, concurrently recorded gate results, aborted, and attempted a late write.",
+        "observation": "PENDING was preserved, concurrent writes survived, only state.json existed, abort cleaned the run, and late write failed.",
+        "oracleResult": "PASS: lifecycle matched."
+      },
+      {
+        "caseId": "CASE-004",
+        "outcome": "PASS",
+        "procedure": "Recorded semantic results, changed the requirement, then changed an installed catalog in a separate run and resumed.",
+        "observation": "Requirement change cleared dependent state and catalog change required a new run.",
+        "oracleResult": "PASS: revision bindings matched."
+      },
+      {
+        "caseId": "CASE-005",
+        "outcome": "PASS",
+        "procedure": "Created three cases and recorded PASS, ordinary FAIL, and PASS evidence.",
+        "observation": "All cases executed with complete fields, aggregate became FAIL, and no removed approval artifacts existed.",
+        "oracleResult": "PASS: QA ownership matched."
+      },
+      {
+        "caseId": "CASE-006",
+        "outcome": "PASS",
+        "procedure": "Tracked new files before edits, captured Git trees, compared them, exercised bad identity and no-VCS start.",
+        "observation": "Both files appeared in native diff, state stored identities only, bad identity became runtime error, and no-VCS start failed.",
+        "oracleResult": "PASS: native VCS behavior matched."
+      },
+      {
+        "caseId": "CASE-007",
+        "outcome": "PASS",
+        "procedure": "Prepared QA and all gates concurrently, recorded all results concurrently, and tested targeted and unknown gate selection.",
+        "observation": "Bindings matched, all writes survived, selected output contained one gate, and unknown gate failed before output.",
+        "oracleResult": "PASS: parallel workflow behavior matched."
+      },
+      {
+        "caseId": "CASE-008",
+        "outcome": "PASS",
+        "procedure": "Executed two tracked repair cycles with QA reruns, complete Carry decisions, rerun and inheritance.",
+        "observation": "QA reset each time, Carry covered each prior PASS once, rerun gates were fresh, and inheritance used only the immediate source.",
+        "oracleResult": "PASS: repair behavior matched."
+      },
+      {
+        "caseId": "CASE-009",
+        "outcome": "PASS",
+        "procedure": "Attempted incomplete, supplied-identity-changing, and unchanged-complete seals.",
+        "observation": "Incomplete and differing-identity attempts were rejected; unchanged complete seal retained a summary and cleaned temporary state.",
+        "oracleResult": "PASS: documented seal inputs and cleanup matched."
+      },
+      {
+        "caseId": "CASE-010",
+        "outcome": "PASS",
+        "procedure": "Installed the exact package for Claude, Codex, and Cursor, validated each, ran portable canaries, and checked host paths.",
+        "observation": "Core package hashes matched, host hooks stayed separate, and all validation and canary checks passed.",
+        "oracleResult": "PASS: host installation matched."
+      }
+    ]
+  }
+}

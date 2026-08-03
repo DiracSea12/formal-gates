@@ -102,6 +102,20 @@ P0/P1 是会阻断封板的缺陷严重级，P2 是仅建议、不阻断的轻�
 
 ---
 
+## 自狗粮证据
+
+本项目用自身的正式流程开发自身。`.gates/results/` 是历次正式 run 的真实运行台账：
+10 次 SEALED、8 次 ABORTED，外加 1 次实机 Codex hook canary 的 FAIL 记录。摘要里的
+快照标识对应当前仓库的真实 VCS commit，可以逐一核验；ABORTED 是重开或作废的尝试
+（例如 cost-metering 前四次均中止、第五次才封板），SEALED 是收敛的最终结论。
+
+- `.gates/results/*.json` —— 封板（SEALED）与中止（ABORTED）摘要
+- `.gates/results/codex-hook-canary-20260723.json` —— 实机 Codex hook canary FAIL
+  记录：hook 已触发但未拦住命令，如实标注"Codex hook 阻断在此 host 未证实"，与
+  manifest 的 `not-claimed-without-same-host-canary` 一致
+
+---
+
 ## 安装与卸载
 
 ### 从 release 安装（推荐）

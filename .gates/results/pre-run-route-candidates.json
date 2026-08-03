@@ -1,0 +1,125 @@
+{
+  "runId": "pre-run-route-candidates",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "5f3bc6a5aa2d85c446fcc91bbba7cadfd39536549637ce5a9436b0fe71d8dc2b",
+  "basePromptRevision": "1210da988f7b5ed4f58bdc5a712dc81119b984f843ae662d85fe791792f89ba0",
+  "catalogRevision": "522184e39d2e0f235cf417a48985ea9968d297b0378d5f8d9767c4dac5c6e21b",
+  "vcs": "git",
+  "baseSnapshot": "2c0e1179cd71a8b09b84bbf7c3dc05c23a8c53f6",
+  "currentSnapshot": "f2770c2c7b0975b441b2db48435da55234939ba2",
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "architecture-health-gate",
+    "code-quality-gate",
+    "complexity-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "architecture-health-gate": {
+      "status": "PASS",
+      "snapshot": "f2770c2c7b0975b441b2db48435da55234939ba2"
+    },
+    "code-quality-gate": {
+      "status": "PASS",
+      "snapshot": "f2770c2c7b0975b441b2db48435da55234939ba2"
+    },
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "f2770c2c7b0975b441b2db48435da55234939ba2"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "f2770c2c7b0975b441b2db48435da55234939ba2",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "outcome": "PASS",
+        "procedure": "Copied the package outside VCS, installed valid alpha, middle, and zeta gates, redirected home/cache/temp, ran from a non-repository directory under process-scoped write denial, and compared inventories.",
+        "observation": "Exit 0; stdout parsed as [qa,alpha,middle,zeta]; stderr empty; no write denial; inventories identical.",
+        "oracleResult": "Exact QA-first lexical output, stateless execution, and no filesystem writes."
+      },
+      {
+        "caseId": "CASE-002",
+        "outcome": "PASS",
+        "procedure": "Queried a valid package with no direct Markdown gates.",
+        "observation": "Exit 0; stdout parsed as [qa]; stderr empty.",
+        "oracleResult": "Exact built-in-only candidate list."
+      },
+      {
+        "caseId": "CASE-003",
+        "outcome": "PASS",
+        "procedure": "Created a Git repository and zero-gate package, completed requirements clarification through public commands, confirmed the requirement, captured workflow show, queried run-bound candidates, and captured show again.",
+        "observation": "Routing state reached; query exit 0; stdout [qa]; before/after public state and repository/package inventories identical.",
+        "oracleResult": "Zero-gate workflow catalog accepted without query mutation."
+      },
+      {
+        "caseId": "CASE-004",
+        "outcome": "PASS",
+        "procedure": "Queried gates alpha,gamma, added beta, queried again, removed alpha, and queried a third time without creating a run.",
+        "observation": "All exits 0; outputs were [qa,alpha,gamma], [qa,alpha,beta,gamma], and [qa,beta,gamma].",
+        "oracleResult": "Every invocation reflected current package contents without stale state."
+      },
+      {
+        "caseId": "CASE-005",
+        "outcome": "PASS",
+        "procedure": "Added valid-content gates/qa.md, redirected runtime paths, applied process-scoped write denial, and compared inventories.",
+        "observation": "Exit 1; stdout empty; stderr identified qa as reserved for built-in QA; no write denial; inventories identical.",
+        "oracleResult": "Reserved ID rejected without successful output or writes."
+      },
+      {
+        "caseId": "CASE-006",
+        "outcome": "PASS",
+        "procedure": "Added valid-content gates/bad gate.md and used the same write-constrained observation.",
+        "observation": "Exit 1; stdout empty; stderr identified invalid prompt filename bad gate.md; inventories identical.",
+        "oracleResult": "Invalid gate ID rejected without normalization or writes."
+      },
+      {
+        "caseId": "CASE-007",
+        "outcome": "PASS",
+        "procedure": "Added direct direct-gate.md, direct notes.txt, ordinary nested directory, and nested/nested-gate.md, then queried candidates.",
+        "observation": "Exit 0; stdout parsed as [qa,direct-gate]; stderr empty.",
+        "oracleResult": "Only direct Markdown regular files were discovered."
+      },
+      {
+        "caseId": "CASE-008",
+        "outcome": "PASS",
+        "procedure": "Created direct directory gates/not-a-file.md and used write-constrained observation.",
+        "observation": "Exit 1; stdout empty; stderr reported not-a-file.md is not a direct regular file; inventories identical.",
+        "oracleResult": "Non-regular direct Markdown entry rejected without writes."
+      },
+      {
+        "caseId": "CASE-009",
+        "outcome": "PASS",
+        "procedure": "Built isolated binaries from the base and candidate snapshots; created equivalent confirmed, unrouted runs at the documented normal query state; queried and compared shows.",
+        "observation": "Both returned [qa,architecture-health-gate,code-quality-gate,complexity-gate], exit 0, empty diagnostics, byte-identical pre/post state, and matching normalized base/candidate states.",
+        "oracleResult": "Frozen run-bound query behavior and state preservation retained."
+      },
+      {
+        "caseId": "CASE-010",
+        "outcome": "PASS",
+        "procedure": "Ran paired fresh base/candidate transitions for none, full, custom QA-only, gate-only single/all, mixed QA+gate, documented pre-development and post-development additions, and addition after a completed wave.",
+        "observation": "Every documented successful transition matched exit/status, selected actions, skip authorizations, readiness/QA consequences, preserved results, and normalized shows; deferred readiness and late-gate completed-wave behavior matched.",
+        "oracleResult": "Complete normal routing transition behavior matched the frozen release."
+      },
+      {
+        "caseId": "CASE-011",
+        "outcome": "PASS",
+        "procedure": "Ran paired mistake paths for query or route before confirmation, second initial route, duplicate selection, custom-all misuse, unknown targets, already-selected additions, frozen development/repair states, pending repair verification, and QA after development.",
+        "observation": "Every attempt exited 1 in both binaries with identical diagnostics and unchanged public state.",
+        "oracleResult": "Frozen rejection, deadlines, diagnostics, next state, and state preservation retained."
+      },
+      {
+        "caseId": "CASE-012",
+        "outcome": "PASS",
+        "procedure": "Opened packaged README_EN.md and SKILL.md through their indexes and captured top-level, package-query, and workflow-query help.",
+        "observation": "Documentation presents package route-candidates as read-only and pre-run with only package root, QA-first JSON output, and separately identifies workflow route-candidates as run-bound after confirmation; help arguments match.",
+        "oracleResult": "The stateless and run-bound commands are clearly distinct and non-contradictory."
+      }
+    ]
+  }
+}

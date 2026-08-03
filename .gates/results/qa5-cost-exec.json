@@ -1,0 +1,60 @@
+{
+  "runId": "qa5-cost-exec",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "5e2379034bbed1f8412e81feef296afad2010ed0d7ae0a48528626e8d834bed4",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "275029638f358ede27d3c0aef7461f303f6cc332ea562f7d318c1a2071da24f3",
+  "vcs": "git",
+  "baseSnapshot": "1228d956acd895f192cdf1ae1944b96047c3db67",
+  "currentSnapshot": "1228d956acd895f192cdf1ae1944b96047c3db67",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/cost-metering/design.md",
+      "revision": "c1cbae28fbb3c9c49ff88b1508e45503fb9c602d5e48852c7d69308a93225f23"
+    },
+    {
+      "path": "openspec/changes/cost-metering/proposal.md",
+      "revision": "5e2379034bbed1f8412e81feef296afad2010ed0d7ae0a48528626e8d834bed4"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalTokens": 0,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheCreationTokens": 0,
+    "dispatches": {
+      "dispatch-6f6b32b8296c41a037d38983": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "totalTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

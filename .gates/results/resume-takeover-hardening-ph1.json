@@ -1,0 +1,335 @@
+{
+  "runId": "resume-takeover-hardening-ph1",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "db8bd910f36d0de2df77a206ddc316939d0e4f36f0a3d134428c1e49360e1cf3",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "275029638f358ede27d3c0aef7461f303f6cc332ea562f7d318c1a2071da24f3",
+  "vcs": "git",
+  "baseSnapshot": "330e4e982311e3c61926ea13e14ed3eaa05eb38b",
+  "currentSnapshot": "bd7d3fa817a4ff4abb526611db22190a152bb266",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/resume-takeover-hardening/alignment.md",
+      "revision": "db8bd910f36d0de2df77a206ddc316939d0e4f36f0a3d134428c1e49360e1cf3"
+    },
+    {
+      "path": "openspec/changes/resume-takeover-hardening/design.md",
+      "revision": "35e2d22292945dd93ff977213658d1886ecab44aeebabb8996e662660373fc03"
+    },
+    {
+      "path": "openspec/changes/resume-takeover-hardening/proposal.md",
+      "revision": "4b56ed6e7460ca2b59bda509c1fb9fceb31c47659bdec5f93521d9bc54f64fa3"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 3,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "bd7d3fa817a4ff4abb526611db22190a152bb266",
+      "sourceSnapshot": "87a8972969e2b3a4a0ba34aee4d16ce8336cf665",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "新引入的 staleAllDispatches(workflow.go:202) 与 invalidateRequirementResults(workflow.go:1651) 和 rebindCurrentSnapshot(workflow.go:1665) 中既有内联 STALE 循环逐字相同，改动本可直接复用/合并而非留下第三份拷贝；属同模式重复、可收缩",
+          "locations": [
+            "internal/validate/workflow.go:202"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-0f23a3488794c5580aa6f520"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "bd7d3fa817a4ff4abb526611db22190a152bb266",
+      "sourceSnapshot": "87a8972969e2b3a4a0ba34aee4d16ce8336cf665",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "采纳外部改动经主代理 Carry 继承时调用 completeReviewWaveIfReady 使 CompletedReviewWaves 递增，与 clearResolvedCarryBoundary 注释（采纳无需真实重跑、不计数新轮）矛盾，可能消耗自动审查轮次容量；正常使用可恢复，属建议",
+          "locations": [
+            "internal/validate/workflow.go:1074"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "旧 run 状态无 promptHashes：LoadRunState 保持 nil 时 catalogDelta nil 分支正确无 delta，但首次变更后 SaveRunState 将 nil 归一化为空 map，RecordGate 只回填一个门，下一次 ResumeReport 走逐哈希分支把全部条目报为变更即使目录未动；可恢复，属建议",
+          "locations": [
+            "internal/validate/runstate.go:191"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-e4f084d5116d9cda07d6b420"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "bd7d3fa817a4ff4abb526611db22190a152bb266",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接自动化 base-snapshot 校验：包单元测试 TestStartAcceptsAncestorBaseSnapshot/TestStartRejectsNonAncestorBaseSnapshot + 隔离 git 仓库 CLI 四场景（HEAD 本身/祖先 B0 含在途提交/分叉非祖先/不可验证引用）",
+        "observation": "HEAD 本身接受 BaseSnapshot=HEAD；祖先接受 BaseSnapshot=B0/CurrentSnapshot=HEAD；非祖先拒绝 is not an ancestor of the current snapshot；不可验证引用拒绝；所有拒绝路径无 .gates/tmp/run 残留、无半成品；门审范围保持 base..current",
+        "oracleResult": "匹配：前两类正确创建、后两类可恢复拒绝无残留、base 从不被静默改写、非祖先从不被接受"
+      },
+      {
+        "caseId": "CASE-002",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接自动化：TestRunStateRecordsPerGateActionPromptHashes/TestOldRunStateWithoutPromptHashesLoadsCompatible + 检查新 run 持久化 state.json",
+        "observation": "新 run promptHashes 10 项（base+7 action+2 gate）取值匹配 PromptCatalog；旧格式去掉 promptHashes 无错加载、保持 nil、requireCurrentCatalog 正常继续",
+        "oracleResult": "匹配：逐门/逐 action 哈希正确；旧状态兼容加载继续"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接自动化：TestGateReviewComparedRangeIsValidated/TestGateResultContractIncludesComparedPair + CLI record-gate 三场景（匹配/不匹配/缺省 compared）",
+        "observation": "匹配 compared 接受并存储；不匹配被拒 gate review reported compared pre-repair..current but the requested base-to-current range is ...；缺 compared 被拒且门保持 PENDING；结果契约含 compared:base..current",
+        "oracleResult": "匹配：匹配接受、不匹配/缺省拒绝且失败信号显式、不进入记录"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接自动化：TestGatePromptDeclaresFullScopeOnRerunRound + CLI 走 FAIL→修复→快照循环检查 wave-2 重跑门提示词与 carry 提示词",
+        "observation": "重跑门提示词显式声明返修后第 2 轮重审、范围是完整的 base→current、pre-repair 仅供参考、不要只审返修增量；carry 提示词保持修复前紧邻快照与当前快照比较；两者清晰区分；首轮提示词无重跑声明",
+        "oracleResult": "匹配：重跑提示词显式全量范围无只审返修增量限定；carry 保持 pre-repair→current；范围可区分"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接自动化：5 个目录 delta 相关包测试 + 对比两快照的硬守卫 + CLI 中途 prompt 编辑",
+        "observation": "base 快照含硬守卫 installed prompt catalog changed; start a new run；当前快照 internal/ 无 start a new run 文本；resume 报告逐门/逐 action catalogDelta（仅未选门在 delta → run 继续、已选门结果保持权威；已选门在 delta → 可恢复、主代理 carry 带理由记录继承）；VCS 漂移与需求编辑为可报告分类而非硬失败",
+        "oracleResult": "匹配：未选门变化不阻塞；已选门变化可恢复逐门 delta 逐结果判定；全流程无 start a new run 硬失败"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接自动化：TestAdoptExternalChangeRebindsAndCarries/TestReviewWaveLimitAndCarryScope + CLI 修复边界 carry（独立 INHERIT 无/有理由、独立 RERUN、主代理 carry 无理由）",
+        "observation": "INHERIT 无理由被拒 requires a reason；带理由接受并持久化 Carry{Decision:INHERIT,Origin:INDEPENDENT,SourceSnapshot:pre-repair,TargetSnapshot:current,Message} 且门重绑当前快照；RERUN 持久化并把门置 PENDING 可重派；主代理 carry 无理由被拒；修复/采纳/resume 均走同一 RecordCarry 入口",
+        "oracleResult": "匹配：继承需记录理由否则拒绝；origin+reason 持久化；RERUN 生效；重绑定入口统一"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "包级检查 base→current 文件集（git diff --name-status）+ 代码/文档 diff 内容扫描",
+        "observation": "SKILL.md/references/formal-flow.md/references/vcs-snapshots.md 均为修改非新增；无新增提示词/文档文件（新增仅为 openspec 需求产物）；新增文本克制（SKILL +60/formal-flow +16/vcs-snapshots +4 行）；无框架层、无不受支持平台兼容路径（IsAncestorOrEqual 支持既有 svn/p4/git）、无对抗/不可变/权限故障注入",
+        "oracleResult": "匹配：提示词/文档均为既有文件修改、新增克制、无越界加固/框架/平台路径"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "对 SKILL.md 正式流程第 2 步内容断言",
+        "observation": "第 2 步（需求澄清登记）唯一职责为把受理阶段已对齐需求正式登记入流程并记录 PASS；澄清问答、呈现整合需求、取得最终确认、持久化对齐需求四件事明确归属受理阶段；已无 base 快照中 有剩余缺口就在此补问 措辞",
+        "oracleResult": "匹配：登记与 PASS 为唯一职责、四件事划归受理阶段"
+      },
+      {
+        "caseId": "CASE-009",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "追踪产物内容断言 + catalog 哈希比对",
+        "observation": "proposal/alignment RQ-014/design B2/tasks 均记录 requirements-clarification.md 修正为 Phase 2 后续 run 交付（Phase 1 含 B2 后）；git diff 显示该提示词文件未变且哈希一致",
+        "oracleResult": "匹配：Phase 2 归属与前置记录、本 run 未改 catalog 文件"
+      },
+      {
+        "caseId": "CASE-010",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离 git 仓库走文档化接手入口：B0 基线 + 两个已接受在途提交；先跑目标项目便宜健全性检查（./test.sh）记录输出；重做需求澄清并持久化到 requirements.md（提交）；workflow start --base-snapshot \u003cB0\u003e；再澄清 PASS/确认/路由/开发/快照/门审",
+        "observation": "健全性检查输出 SANITY OK 先于需求登记记录；对齐需求持久化并提交；start 返回 BaseSnapshot=B0/CurrentSnapshot=HEAD；交付快照后 BaseSnapshot 保持 B0、CurrentSnapshot=交付头，在途工作落在 base→current diff；门提示词 base=B0、excluded 验收产物、门 PASS 记录 compared=B0..current；run 状态与健全性日志保留",
+        "oracleResult": "匹配：新 run BaseSnapshot=B0/CurrentSnapshot=HEAD、健全性检查先执行且记录、对齐持久化、门审覆盖整功能 base→current"
+      },
+      {
+        "caseId": "CASE-011",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离环境经公开 CLI：custom 只选 implementation-quality-gate、交付快照、已选门 PASS；修改并提交未选 complexity-gate prompt 观察 resume；再修改并提交已选 implementation-quality-gate prompt 观察 resume + 主代理 carry",
+        "observation": "未选门改动后 resume 报告 catalogDelta=[gate:complexity-gate] 且已选 PASS 保持权威（prepare-gate 返回 already has an authoritative PASS result、状态完整、无重启）；已选门改动后 resume 报告可恢复 delta 无 start a new run 硬失败；主代理 carry 带理由继承 PASS 保留当前快照",
+        "oracleResult": "匹配：未选门不强制重启；已选门可恢复 delta 逐结果判定带记录理由；无自动全量失效与强制重开"
+      },
+      {
+        "caseId": "CASE-012",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离环境经公开 CLI：交付快照 + 已记录 PASS 门；引入外部 git 提交漂移 HEAD；普通 resume、resume --adopt-external 无理由、带理由、再主代理 carry",
+        "observation": "普通 resume 报 nativeDrifted=true 且 CurrentSnapshot 不变（无确认不重绑）；--adopt-external 无理由被拒 adopting an external change requires a reason；带理由重绑 CurrentSnapshot 到新 HEAD、设 PreRepairSnapshot、持久化 Carry{Decision:ADOPT,Origin:ADOPT,SourceSnapshot:old,TargetSnapshot:new,Message:reason}；主代理 carry 带理由继承不受影响 PASS 重绑新快照",
+        "oracleResult": "匹配：确认前不重绑、确认后重绑且 origin+reason 持久化、不受影响结果带理由继承、无静默全量失效"
+      },
+      {
+        "caseId": "CASE-013",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离环境经公开 CLI：开发阶段（交付快照）PASS 门 + 已确认需求；编辑 requirements.md 并提交；workflow requirement --meaning preserved 无 --confirmed、带 --confirmed、再 meaning-changed 编辑 --meaning changed --confirmed",
+        "observation": "preserved 无确认被拒 meaning-preserved requirement rebinding after development starts requires user confirmation；带确认接受、CurrentSnapshot 重绑新 HEAD、requirementConfirmed=true、PASS 门保留新快照；meaning-changed 带确认被拒 a meaning-changing requirement must return to Requirements Clarification（不被误判为 preserved）",
+        "oracleResult": "匹配：无硬禁止、重绑需主代理认定+用户确认、确认后快照重绑且 PASS 保留、语义变化不被静默 preserved 且 PASS 不被静默清除"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-01043ad6e99ecfdc08a35824": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0469365a21e20fd920d80dda": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0a303aec2a90f194a54801dc": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0dc2558fff0b566d4c60497a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0f23a3488794c5580aa6f520": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1c0ac536b593293f9549882e": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-50daa3c1e2cad9052b84b94d": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-57003285bae7571cff3a77ee": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6cfc11352d9a380088e87bf9": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-949992fad8b8970e50e92707": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-999313c779e68e8a76dce9dc": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bf25add42b3a64ce4acd394d": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d2d920a2cb93348f65f2c838": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dead77b5ea8ddd4698b4a3aa": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e4f084d5116d9cda07d6b420": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f2b1c3df3dbe83ead40df504": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

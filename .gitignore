@@ -3,7 +3,7 @@
 contract_review/
 
 # Local gate/review artifacts
-.gates/results/
+# .gates/results/ is the tracked dogfooding ledger (see README "自狗粮证据")
 .gates/tmp/
 gate-artifacts/
 gate-workflow-state/

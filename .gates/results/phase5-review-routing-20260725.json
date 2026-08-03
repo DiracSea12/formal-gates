@@ -1,0 +1,25 @@
+{
+  "runId": "phase5-review-routing-20260725",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "c47258a608ecce17e351c50b7fea2a6e37773c957f13a8e8519f3d5a7cb7609a",
+  "basePromptRevision": "6db7c10fd85fd6acf753b510b4542bfe47222680a86cecbb7a7cf081895dfe2d",
+  "catalogRevision": "8878ccfc1af56478f0a06db077b94c32ec39da3d419eb05b16c8dc8f7b164259",
+  "vcs": "git",
+  "baseSnapshot": "ab1c91f24c6f6aa3fa624e754c2dc4f661a92372",
+  "currentSnapshot": "04020df0f87e331f2621f52806d9a67d8ee08f2b",
+  "gates": {
+    "architecture-health-gate": {
+      "status": "PENDING"
+    },
+    "code-quality-gate": {
+      "status": "PENDING"
+    },
+    "complexity-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  }
+}

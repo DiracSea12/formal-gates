@@ -1,0 +1,41 @@
+{
+  "runId": "resume-takeover-hardening",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "afc2b834d4e0603f4b453a7b0408f0dff63ce06eef5eda7256459b8b822d7477",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "275029638f358ede27d3c0aef7461f303f6cc332ea562f7d318c1a2071da24f3",
+  "vcs": "git",
+  "baseSnapshot": "330e4e982311e3c61926ea13e14ed3eaa05eb38b",
+  "currentSnapshot": "330e4e982311e3c61926ea13e14ed3eaa05eb38b",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/resume-takeover-hardening/alignment.md",
+      "revision": "afc2b834d4e0603f4b453a7b0408f0dff63ce06eef5eda7256459b8b822d7477"
+    },
+    {
+      "path": "openspec/changes/resume-takeover-hardening/design.md",
+      "revision": "667f1be46fa38b3aa686565a2ed85659782a886c3704e150dabcf96063e1cd23"
+    },
+    {
+      "path": "openspec/changes/resume-takeover-hardening/proposal.md",
+      "revision": "a5fc22c86779477b4a9013c8362d4ddda85c76f2d7c826801aebcfcfe2ca673f"
+    }
+  ],
+  "routeMode": "",
+  "selectedGates": [],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  }
+}

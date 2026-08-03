@@ -1,0 +1,90 @@
+{
+  "runId": "cost-metering-3",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "5e2379034bbed1f8412e81feef296afad2010ed0d7ae0a48528626e8d834bed4",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "275029638f358ede27d3c0aef7461f303f6cc332ea562f7d318c1a2071da24f3",
+  "vcs": "git",
+  "baseSnapshot": "201e5c53cf673260052d1f73f1ba84191f375da5",
+  "currentSnapshot": "201e5c53cf673260052d1f73f1ba84191f375da5",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/cost-metering/design.md",
+      "revision": "c1cbae28fbb3c9c49ff88b1508e45503fb9c602d5e48852c7d69308a93225f23"
+    },
+    {
+      "path": "openspec/changes/cost-metering/proposal.md",
+      "revision": "5e2379034bbed1f8412e81feef296afad2010ed0d7ae0a48528626e8d834bed4"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalTokens": 0,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheCreationTokens": 0,
+    "dispatches": {
+      "dispatch-19a05f517b1bb7467949d395": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "totalTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8be0bd3fe9214bcc5ad57b12": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "totalTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eb3d205c823241dc8d986d29": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "totalTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fd218a3dae95fcddbf643e7e": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "totalTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

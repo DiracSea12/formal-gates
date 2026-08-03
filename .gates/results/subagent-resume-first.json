@@ -1,0 +1,232 @@
+{
+  "runId": "subagent-resume-first",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "37156b597dd9c6aafb8bb9d0d54798735dfb29659e23d308223cb110e350d0bc",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "bdc1637b8c6f4e7f7efc5b1dabba56f8b94976a577069c55521ca51a36121fb7",
+  "vcs": "git",
+  "baseSnapshot": "34dcde36b017e874de54f643ef35ab883057f1c4",
+  "currentSnapshot": "f967512bd359eec7203acf2034fa1d3c440b3de4",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/subagent-resume-first/alignment.md",
+      "revision": "37156b597dd9c6aafb8bb9d0d54798735dfb29659e23d308223cb110e350d0bc"
+    },
+    {
+      "path": "openspec/changes/subagent-resume-first/design.md",
+      "revision": "3f80347dd76acb4a7d9d892340b7ede0cfac7a40eab29f98dc93b76a26b07cef"
+    },
+    {
+      "path": "openspec/changes/subagent-resume-first/proposal.md",
+      "revision": "e87026cc639605f84636830686436f402f9c6238f9cfe460e19234aaf47000be"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "f967512bd359eec7203acf2034fa1d3c440b3de4",
+      "compared": "34dcde36b017e874de54f643ef35ab883057f1c4..f967512bd359eec7203acf2034fa1d3c440b3de4",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "tasks.md 追踪项未勾选：SKILL 续用优先与 CHANGELOG 两项已在本次 diff 落地（SKILL.md:162-169、CHANGELOG.md:12-20），tasks.md 对应项仍标未完成，可按完成状态勾选或明确为后续复查",
+          "locations": [
+            "openspec/changes/subagent-resume-first/tasks.md:5"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "SKILL.md 新段落引用内部 Go 辅助函数名 staleOpenDispatches（非公开 CLI 表面），流程文档与实现符号耦合，可改用行为描述（如\"把目标既有 OPEN/CLAIMED 派发标 STALE 的重开路径\"）",
+          "locations": [
+            "SKILL.md:164"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-81d3c8d8dd8eba48475d4127"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "f967512bd359eec7203acf2034fa1d3c440b3de4",
+      "compared": "34dcde36b017e874de54f643ef35ab883057f1c4..f967512bd359eec7203acf2034fa1d3c440b3de4",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "SKILL 每个 host 代理身份只能用一次，不能复用（:160）与新的续用优先段（:162-169，RQ-3-4 保持同一身份）未显式调和；可澄清\"只能用一次\"适用于新的审查实例、中断+已认领派发以已认领身份续用",
+          "locations": [
+            "SKILL.md:160"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "SKILL.md 泄露内部函数名 staleOpenDispatches（:164），建议改为行为级措辞（如\"不首先把派发标 STALE 重开\"）",
+          "locations": [
+            "SKILL.md:164"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-3f12b6ba87fe6f96ff581783"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "f967512bd359eec7203acf2034fa1d3c440b3de4",
+    "cases": [
+      {
+        "caseId": "CASE-007",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接归属者自动化（快照 f967512）：go test internal/validate TestGatePromptExcludesFrozenArtifactsAndResultUsesDispatch/TestWorkflowLifecycleBoundaryKeepsRejectedGatePending + 全套；被中断状态=claim-dispatch 后 CLAIMED 无结果；直接归属规则=对 CLAIMED 派发记录结果完成同一派发、无新派发、无 STALE",
+        "observation": "全部通过：CLAIMED 派发记录结果转 COMPLETED、无新派发、原派发未 STALE、结果 dispatchId 为原派发；全套测试通过",
+        "oracleResult": "匹配：续用路径完成同一派发，无重开、无 STALE → PASS"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "直接归属者自动化：go test internal/validate TestReviewDispatchClaimsAreFreshBoundAndReserved + 全套；构造 CLAIMED 无结果派发，经 prepare 新派发触发回退路径",
+        "observation": "prepare 新派发标原 CLAIMED 为 STALE、新建 attempt+1 派发、原身份保留（新派发须新身份认领）、新派发记录完成；三种不可用条件（宿主无续用/恢复失败/生命周期无法认证）都落到该文档化回退；codex 生命周期 UNAVAILABLE 已验证",
+        "oracleResult": "匹配：回退=STALE+重开新派发+新代理、仅不可用才回退、无挂起/无限重试/报错 → PASS"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "生命周期模块直接归属者自动化：go test internal/lifecycle TestLifecycleCaptureAndVerification/TestLifecycleRequiredProviderRejectsMissingOrMismatchedEvents/TestLifecycleCodexIsUnavailable/TestCursorCorrelatesNormalStopWithoutIdentityAndDerivesDistinctRoots",
+        "observation": "全部通过：首次派发 start + 续用完成 stop 在同一派发身份下成对验证为 VERIFIED；缺失/不匹配事件拒绝；codex UNAVAILABLE；事件与绑定按派发身份键控，续用完成与原 start 配对",
+        "oracleResult": "匹配：start 与 stop 同身份成对可认证、不拒绝续用完成派发 → PASS"
+      },
+      {
+        "caseId": "CASE-009",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "身份/结果映射直接归属者自动化：go test internal/validate TestReviewDispatchClaimsAreFreshBoundAndReserved/TestGatePromptExcludesFrozenArtifactsAndResultUsesDispatch",
+        "observation": "全部通过：claim-dispatch 每派发绑一个身份并保留；同一身份不能认领不同派发（不同派发不共享身份）；续用/已认领派发保持身份、结果映射到同一派发；同一身份不可跨尝试复用",
+        "oracleResult": "匹配：续用保持同一身份与一次结果映射、不同派发不共享、续用不分配新身份 → PASS"
+      },
+      {
+        "caseId": "CASE-010",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离正常使用环境（claude 路径，provider=claude-code）：workflow start→澄清 PASS→--confirmed→route；prepare start-readiness 派发、派发到宿主代理通道、claim、捕获 SubagentStart、留 CLAIMED 无结果；按续用优先恢复原子代理（SendMessage），原代理完成返回，捕获续用完成 SubagentStop；记录结果到同一原派发",
+        "observation": "仅一个 start-readiness 派发：原派发（attempt 1，identity aace8b...）CLAIMED→COMPLETED 从未 STALE；无新派发、无新零上下文代理；结果映射到同一派发（action.dispatchId=dispatch-457d2b...）；生命周期 VERIFIED（startObserved+stopObserved 同 identity）",
+        "oracleResult": "匹配：中断 CLAIMED 派发续用完成同一派发（无重开/无 STALE/无新代理）、结果映射同一身份/派发、生命周期验证通过 → PASS"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离正常使用环境（默认路径 provider=codex，生命周期 UNAVAILABLE=续用不可用）：workflow start→澄清 PASS→--confirmed→route；prepare start-readiness 派发、claim、留 CLAIMED 无结果；按文档化回退（宿主无法认证续用）再次 prepare start-readiness 标 STALE 原派发、新建 attempt 2 派发、派发新零上下文子代理、claim、新代理完成、记录到新派发",
+        "observation": "原派发 STALE（attempt 1，identity a78306...）；新派发（attempt 2，新 identity a01134...）COMPLETED；结果映射到新派发（action.dispatchId=dispatch-32a1b8...）；codex 生命周期 UNAVAILABLE 被接受；流程无挂起/无限重试/报错；仅文档化 stale+重开回退、无额外防御",
+        "oracleResult": "匹配：原 STALE、新派发+新代理完成、结果映射新身份、无挂起/无限重试/报错、无额外防御 → PASS"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-07e692c6df598e10899ce9d4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0fa0cd1f4bd88345f74eb198": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3f12b6ba87fe6f96ff581783": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4b7189059e9dadba328f31c4": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5e07417caa724762969ad58e": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6e0ce01b603165abc6011cc4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-70bd5717e4c7d13026332ec6": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-81d3c8d8dd8eba48475d4127": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e8854530eb3594378ff9af4d": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ff42b319e3bcf755d8853f5f": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

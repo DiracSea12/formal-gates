@@ -1,0 +1,210 @@
+{
+  "runId": "readme-opt",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "6555acd0cbdceabc724aa9787e09887c25b26e0c01e28357d5700a5b847caca3",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "dc634d1da6f1111e355b423c5ae3f376c939c9f1e39391d158081b72b958038d",
+  "vcs": "git",
+  "baseSnapshot": "f6314e1b572a20d82048a422503075460af672ee",
+  "currentSnapshot": "70de35dd342a2d54245180c7e22c83acc3fc6bcb",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/readme-optimization/design.md",
+      "revision": "3a0db9ffb78e4d69706dbae323197dcc4a1c77e9042c4ac56a7823c96680af19"
+    },
+    {
+      "path": "openspec/changes/readme-optimization/spec.md",
+      "revision": "6555acd0cbdceabc724aa9787e09887c25b26e0c01e28357d5700a5b847caca3"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "70de35dd342a2d54245180c7e22c83acc3fc6bcb",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "demo 的 git log --oneline -1 展示 8 位短哈希，scratch 小仓库 git 默认通常输出 7 位；demo 已注明哈希截断，属格式细节。",
+          "locations": [
+            "README.md:50"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "demo 命令使用 --package-root ~/.claude/skills/formal-gates（安装路径）而非 design.md 所述以本仓库作为 package-root；两者均为文档化有效用法，安装路径对 README 人类读者更真实。",
+          "locations": [
+            "README.md:17"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-c9a4d817f16a53204a909f90"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "70de35dd342a2d54245180c7e22c83acc3fc6bcb",
+      "sourceSnapshot": "c6abb3a816c72de7a2712420e708e7b9c2759775",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "demo 图注只声明哈希已截断，未说明非核心字段也被省略。",
+          "locations": [
+            "README.md:55"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-954fb5899b568c8ee07b0fd7"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "70de35dd342a2d54245180c7e22c83acc3fc6bcb",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-002",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-009",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-010",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-011",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-012",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-013",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-014",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-015",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-016",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      },
+      {
+        "caseId": "CASE-017",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "executed per approved case procedure on repair snapshot",
+        "observation": "observed result matches oracle",
+        "oracleResult": "matches"
+      }
+    ]
+  }
+}

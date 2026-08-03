@@ -1,0 +1,41 @@
+{
+  "runId": "cost-metering-l1",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "acc5ae195e104d84af04cbedca3189162294c1705d2eff0a11676553bf4a9ee3",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "c1211944e13a5ad703bdb609c755459c61f86e031daec5b7819ea9fca34a0223",
+  "vcs": "git",
+  "baseSnapshot": "360241f476b96f4ee1927513149fa78eafda60fa",
+  "currentSnapshot": "360241f476b96f4ee1927513149fa78eafda60fa",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/cost-metering-l1/design.md",
+      "revision": "b114f22eb1a99f0a5556d8809113df43aec69303f27e1c4a73da8967e11878e6"
+    },
+    {
+      "path": "openspec/changes/cost-metering-l1/proposal.md",
+      "revision": "acc5ae195e104d84af04cbedca3189162294c1705d2eff0a11676553bf4a9ee3"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  }
+}

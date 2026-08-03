@@ -1,0 +1,115 @@
+{
+  "runId": "qa5-seal-probe",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "5e2379034bbed1f8412e81feef296afad2010ed0d7ae0a48528626e8d834bed4",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "275029638f358ede27d3c0aef7461f303f6cc332ea562f7d318c1a2071da24f3",
+  "vcs": "git",
+  "baseSnapshot": "1228d956acd895f192cdf1ae1944b96047c3db67",
+  "currentSnapshot": "1228d956acd895f192cdf1ae1944b96047c3db67",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/cost-metering/design.md",
+      "revision": "c1cbae28fbb3c9c49ff88b1508e45503fb9c602d5e48852c7d69308a93225f23"
+    },
+    {
+      "path": "openspec/changes/cost-metering/proposal.md",
+      "revision": "5e2379034bbed1f8412e81feef296afad2010ed0d7ae0a48528626e8d834bed4"
+    }
+  ],
+  "routeMode": "custom",
+  "selectedGates": [
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {
+    "implementation-quality-gate": {
+      "origin": "SEAL",
+      "status": "RUNTIME_ERROR",
+      "snapshot": "1228d956acd895f192cdf1ae1944b96047c3db67"
+    },
+    "qa": {
+      "origin": "ROUTE",
+      "status": "UNSELECTED"
+    }
+  },
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "1228d956acd895f192cdf1ae1944b96047c3db67",
+      "message": "复杂度门：指定 base-to-current 比较为空，变更未引入任何新抽象/状态/流程，门失败条件均不触发；PASS",
+      "dispatchId": "dispatch-fd2414dc21c3513eddb7e693"
+    },
+    "implementation-quality-gate": {
+      "status": "RUNTIME_ERROR",
+      "snapshot": "1228d956acd895f192cdf1ae1944b96047c3db67",
+      "message": "审查者报告运行时错误：指定 base-to-current 比较为空（base==current==1228d956），实现质量门无法在变更上执行，按共享审查契约不猜测基线、不伪造判定",
+      "dispatchId": "dispatch-f0dc206966c0fe89655b1c09"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalTokens": 612832,
+    "inputTokens": 512362,
+    "outputTokens": 100470,
+    "cacheReadTokens": 8714624,
+    "cacheCreationTokens": 0,
+    "dispatches": {
+      "dispatch-28542932ad1b518cd4c738e0": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputTokens": 145223,
+        "outputTokens": 23914,
+        "cacheReadTokens": 2955904,
+        "cacheCreationTokens": 0,
+        "totalTokens": 169137,
+        "source": "transcript"
+      },
+      "dispatch-44db46d3d83a2f9a54dd53ac": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputTokens": 140442,
+        "outputTokens": 10737,
+        "cacheReadTokens": 2006016,
+        "cacheCreationTokens": 0,
+        "totalTokens": 151179,
+        "source": "transcript"
+      },
+      "dispatch-e19d63ab73c7b05ad58226b5": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "totalTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f0dc206966c0fe89655b1c09": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputTokens": 95853,
+        "outputTokens": 31648,
+        "cacheReadTokens": 1650688,
+        "cacheCreationTokens": 0,
+        "totalTokens": 127501,
+        "source": "transcript"
+      },
+      "dispatch-fd2414dc21c3513eddb7e693": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputTokens": 130844,
+        "outputTokens": 34171,
+        "cacheReadTokens": 2102016,
+        "cacheCreationTokens": 0,
+        "totalTokens": 165015,
+        "source": "transcript"
+      }
+    }
+  }
+}

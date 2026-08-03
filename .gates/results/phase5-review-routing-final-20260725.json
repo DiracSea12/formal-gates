@@ -1,0 +1,231 @@
+{
+  "runId": "phase5-review-routing-final-20260725",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "5692cd9c0c90c1fb956770d3bb72f120149f715e788b971ff4f09188a7962d52",
+  "basePromptRevision": "1210da988f7b5ed4f58bdc5a712dc81119b984f843ae662d85fe791792f89ba0",
+  "catalogRevision": "522184e39d2e0f235cf417a48985ea9968d297b0378d5f8d9767c4dac5c6e21b",
+  "vcs": "git",
+  "baseSnapshot": "ab1c91f24c6f6aa3fa624e754c2dc4f661a92372",
+  "currentSnapshot": "1a36644f571f690f967df455e0dd857d6463be1c",
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "architecture-health-gate",
+    "code-quality-gate",
+    "complexity-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 3,
+  "extraReviewWaves": 0,
+  "gates": {
+    "architecture-health-gate": {
+      "status": "PASS",
+      "snapshot": "1a36644f571f690f967df455e0dd857d6463be1c"
+    },
+    "code-quality-gate": {
+      "status": "PASS",
+      "snapshot": "1a36644f571f690f967df455e0dd857d6463be1c"
+    },
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "1a36644f571f690f967df455e0dd857d6463be1c",
+      "sourceSnapshot": "48b3eb4106f654e04fbbf11ee6f7424636a214f9"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "1a36644f571f690f967df455e0dd857d6463be1c",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "outcome": "PASS",
+        "procedure": "Exercised clarification ordering guards, behavior fixture FG-BEH-002, and inspected the clarification task.",
+        "observation": "Clarification remained adaptive, consequential, repository-aware, and read-only; premature advancement was rejected.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-002",
+        "outcome": "PASS",
+        "procedure": "Hashed the bound source and exercised stale revision rejection plus generic route discovery.",
+        "observation": "Exact source and revisions were retained; stale inputs failed without mutation and routing stayed path and domain independent.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-003",
+        "outcome": "PASS",
+        "procedure": "Ran dynamic catalog discovery, invalid-entry filtering, route candidates, and none/full/custom routes.",
+        "observation": "QA appeared first, valid direct gates followed lexically, actions were not exposed as gates, and one route decision was accepted.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-004",
+        "outcome": "PASS",
+        "procedure": "Exercised none, full, and custom routing, omission authorization, malformed selections, and a second route attempt.",
+        "observation": "Accepted route semantics and ROUTE skips were exact; malformed and repeated decisions failed without mutation.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-005",
+        "outcome": "PASS",
+        "procedure": "Exercised none, QA-selected, QA-omitting, and full transition paths plus readiness and QA Review outcomes.",
+        "observation": "Selected QA stages and readiness ordering matched the requirement and pre-development outcomes did not consume waves.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-006",
+        "outcome": "PASS",
+        "procedure": "Ran deferred readiness tests for both changed and unchanged development snapshots.",
+        "observation": "Late first-gate addition activated readiness, blocked gate preparation and Seal until PASS, and preserved each immutable snapshot.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-007",
+        "outcome": "PASS",
+        "procedure": "Ran the direct transition matrix across confirmation, routing, readiness, QA, selection, snapshots, waves, Carry, and repair verification.",
+        "observation": "Every premature operation failed without mutation and succeeded after its direct prerequisite was satisfied.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-008",
+        "outcome": "PASS",
+        "procedure": "Exercised development-worker preparation around every prerequisite and inspected role contracts.",
+        "observation": "Development preparation stayed blocked until prerequisites passed and only the separate worker task authorized delivery edits.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-009",
+        "outcome": "PASS",
+        "procedure": "Recorded semantic QA and gate outcomes, repeated prepare and record attempts, then retried PENDING and RUNTIME_ERROR.",
+        "observation": "Semantic results remained authoritative per snapshot and only retryable states could be replaced without duplication.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-010",
+        "outcome": "PASS",
+        "procedure": "Exercised development and repair recomposition, stale-lock Resume, and PENDING review recomposition.",
+        "observation": "Tasks recomposed without moving boundaries or duplicating transitions, results, or wave counts.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-011",
+        "outcome": "PASS",
+        "procedure": "Exercised late gate addition after a counted wave, late runtime error, frozen transitions, QA addition, duplicate addition, rerouting, and post-Seal attempts.",
+        "observation": "Only the named late gate became required on the same snapshot; prior results and wave count stayed unchanged and prohibited additions failed.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-012",
+        "outcome": "PASS",
+        "procedure": "Changed bound requirement text, invoked Resume, and recorded a meaning-preserved classification with a live Git identity.",
+        "observation": "Resume paused without mutation and preserved classification retained route and dependent results while rebinding revision and snapshot.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-013",
+        "outcome": "PASS",
+        "procedure": "Exercised meaning-changed invalidation and inspected bounded and unbounded QA redesign tasks.",
+        "observation": "Dependent work reset, the single route persisted, prior cases became unapproved input, and fresh design plus review was required.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-014",
+        "outcome": "PASS",
+        "procedure": "Attempted QA Review before design, then composed it after a complete case set and inspected the task.",
+        "observation": "Early preparation failed; the valid task contained only the exact requirement and cases with the required review dimensions.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-015",
+        "outcome": "PASS",
+        "procedure": "Exercised QA Review PASS, finding-backed FAIL, RUNTIME_ERROR, PENDING recomposition, rework, and malformed results.",
+        "observation": "PASS unlocked development, FAIL reopened complete-set design, retryable failures stayed in review, and malformed results did not mutate state.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-016",
+        "outcome": "PASS",
+        "procedure": "Exercised severity validation, valid and malformed gate result combinations, and QA failure aggregation.",
+        "observation": "Each gate finding required one impact severity, status combinations were enforced, and QA failure remained blocking and severity-free.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-017",
+        "outcome": "PASS",
+        "procedure": "Composed discovered-gate prompts and exercised behavior fixture FG-BEH-009.",
+        "observation": "The task required complete safe checks and related-chain scanning while omitting downstream policy and remaining-wave information.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-018",
+        "outcome": "PASS",
+        "procedure": "Completed blocking and P2-only result paths and inspected the repair task.",
+        "observation": "Blocking repair input included QA failures and all P0, P1, and P2 findings; P2-only PASS stayed visible and non-blocking.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-019",
+        "outcome": "PASS",
+        "procedure": "Progressively recorded missing, PENDING, RUNTIME_ERROR, PASS, P2-only, QA FAIL, and P0/P1 result sets.",
+        "observation": "Incomplete or runtime sets did not count and every complete semantic set counted once regardless of outcome.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-020",
+        "outcome": "PASS",
+        "procedure": "Recorded QA and multiple gates then repeated aggregation, Resume, and Seal checks.",
+        "observation": "The snapshot received one shared increment and repeated processing did not recount it.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-021",
+        "outcome": "PASS",
+        "procedure": "Drove three blocking waves, tested early skip rejection, authorized one extra repair, and exercised P2 repair routing.",
+        "observation": "The automatic limit was three, one authorization added exactly one cycle, and further repair required further authorization.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-022",
+        "outcome": "PASS",
+        "procedure": "Exercised a mixed repair wave, snapshot advance, Carry composition and recording, and QA reset.",
+        "observation": "QA always reran and Carry included only previously passing selected gates against the immediate repair comparison.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-023",
+        "outcome": "PASS",
+        "procedure": "Attempted Seal with PENDING and RUNTIME_ERROR, retried runtime work, and authorized a named runtime skip.",
+        "observation": "PENDING always blocked and runtime error remained visible and uncounted until retry or matching snapshot authorization.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-024",
+        "outcome": "PASS",
+        "procedure": "Exercised pre-limit blocker skips, three-wave exhaustion, subset persistence, remaining-blocker rejection, full authorization, and P2 recommendations.",
+        "observation": "Blocker skips were unavailable before exhaustion; afterward only named results were waived and P2 remained non-blocking.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-025",
+        "outcome": "PASS",
+        "procedure": "Exercised custom route skips, partial Seal authorization, same-snapshot retry, repair advance, and summary persistence.",
+        "observation": "ROUTE skips persisted across snapshots while SEAL skips persisted only on their snapshot and cleared after repair.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-026",
+        "outcome": "PASS",
+        "procedure": "Ran public CLI workflows, compared public JSON with state.json, and verified all named Git identities.",
+        "observation": "CLI and state agreed on route, actions, results, snapshots, Carry, authorizations, and two prior completed waves with no extra store.",
+        "oracleResult": "Matched the approved oracle."
+      },
+      {
+        "caseId": "CASE-027",
+        "outcome": "PASS",
+        "procedure": "Inspected the complete base-to-current tree, history, and state, catalog, action, gate, Carry, and snapshot changes.",
+        "observation": "Phase 5 extended existing owners; QA Review was the only new runtime prompt and no parallel mechanism or compatibility path was introduced.",
+        "oracleResult": "Matched the approved oracle."
+      }
+    ]
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "runId": "qa6-cost-exec",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "ff8ffffd04a9b4d3f4ff4472a30f86e6a297247d8963756fd3a4ae941b10027b",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "275029638f358ede27d3c0aef7461f303f6cc332ea562f7d318c1a2071da24f3",
+  "vcs": "git",
+  "baseSnapshot": "327ccbb862156d0d693f00365aa81728484fd307",
+  "currentSnapshot": "327ccbb862156d0d693f00365aa81728484fd307",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/cost-metering/design.md",
+      "revision": "f4e86aaeadefc006f5ae5f009201a566ff88aad7679d5baa489d180c65c052da"
+    },
+    {
+      "path": "openspec/changes/cost-metering/proposal.md",
+      "revision": "ff8ffffd04a9b4d3f4ff4472a30f86e6a297247d8963756fd3a4ae941b10027b"
+    }
+  ],
+  "routeMode": "custom",
+  "selectedGates": [
+    "qa"
+  ],
+  "skipAuthorizations": {
+    "complexity-gate": {
+      "origin": "ROUTE",
+      "status": "UNSELECTED"
+    },
+    "implementation-quality-gate": {
+      "origin": "ROUTE",
+      "status": "UNSELECTED"
+    }
+  },
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "327ccbb862156d0d693f00365aa81728484fd307",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "在快照工作区根目录运行 go test ./internal/cost/... 与 go test ./...（STATIC 指定归属者检查），观察测试结果。",
+        "observation": "go test ./internal/cost/... 与 go test ./... 全部通过（internal/cost、internal/validate、internal/lifecycle、internal/cli ok）。",
+        "oracleResult": "构建与测试全部通过，与文档规则相符；oracle 满足。"
+      },
+      {
+        "caseId": "CASE-002",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "在快照工作区根目录运行 go test ./...（回填逻辑归属者检查）；并在正式流程中观察主代理直接执行（无 transcript）的动作记录结果。",
+        "observation": "go test ./... 全部通过；live 观察：requirements-clarification 主代理直接记录 PASS 后，其 cost 条目 source=unavailable、四项令牌均为 0，无捏造数字。",
+        "oracleResult": "缺失路径/解析失败→unavailable 且无捏造数字的规则通过测试且被 live 观察印证；oracle 满足。"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "在快照工作区根目录运行 go test ./...（回填幂等归属者检查）；并在正式流程中对同一派发重复执行文档化记录命令。",
+        "observation": "go test ./... 全部通过；live 观察：对 qa-review 派发重复执行 qa-review 记录命令被拒绝（QA Review already has an authoritative PASS result），对 start-readiness 重复 record-action 被拒绝（cannot record a result）；重复前后派发 cost 数字与 run 级合计完全一致，无累加。",
+        "oracleResult": "重复记录不改变派发条目与运行总量；oracle 满足。"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "在快照工作区根目录运行 go test ./...（状态加载归属者检查），覆盖不含 cost 字段的旧状态文件加载。",
+        "observation": "go test ./... 全部通过；本 run 的 state.json 始终含 cost 投影且加载正常。",
+        "oracleResult": "无 cost 字段的状态文件可加载的规则通过测试；oracle 满足。"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "以当前快照构建并全局安装的二进制，在隔离 run qa6-cost-exec 中按文档化命令序列派发真实审查子代理（start-readiness、qa-design、qa-review、development-worker），claim-dispatch 绑定捕获身份，记录结果后读取 state.json cost 条目，并独立解析各子代理转写对照。",
+        "observation": "四个真实子代理派发均回填 source=transcript 且数字与独立解析的转写一致：start-readiness hit=2112128/miss=171923/output=18225，qa-design hit=269440/miss=31928/output=18181，qa-review hit=175232/miss=30036/output=14887，dev hit=438784/miss=27687/output=6310；totalInputTokens 均等于 hit+miss，output 未计入；运行级合计与各派发之和一致（total=3257158、hit=2995584、miss=261574、output=57603）。",
+        "oracleResult": "cost 条目 source=transcript、真实非负数字、totalInputTokens=hit+miss、output 未计入总量，与转写逐一相符；oracle 满足。"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "在隔离 run 中由主代理直接执行 requirements-clarification 并记录 PASS；读取 state.json 该派发 cost 条目；继续完成其余动作记录直至全部就绪。",
+        "observation": "requirements-clarification 派发条目 source=unavailable、四项令牌均为 0；记录以 PASS 正常落库，后续各记录操作（route、qa-design、qa-review、snapshot、qa-execution）照常完成，成本数据未阻塞任何流转。",
+        "oracleResult": "条目存在且 source=unavailable、无捏造数字、流程未受阻；oracle 满足。"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "完成一轮文档化完整流程（含 seal），读取 .gates/results/qa6-cost-exec.json 摘要中的 cost 投影并与封板前 state.json 对照。",
+        "observation": "seal 正常完成，摘要含 cost 对象（run 级 totalInputTokens/inputCacheHitTokens/inputCacheMissTokens/outputTokens 单独列出真实数字），与封板前 state.json 的 cost 投影一致；无 USD/预算/告警内容；成本数据未阻塞任何判定。",
+        "oracleResult": "摘要含 run 级四项真实数字且与 state.json 一致、seal 正常、成本不阻塞；oracle 满足。"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 3920941,
+    "inputCacheHitTokens": 3601792,
+    "inputCacheMissTokens": 319149,
+    "outputTokens": 66990,
+    "dispatches": {
+      "dispatch-2143926bc1aed2619451ebe5": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 438784,
+        "inputCacheMissTokens": 27687,
+        "outputTokens": 6310,
+        "totalInputTokens": 466471,
+        "source": "transcript"
+      },
+      "dispatch-4a33f7864a96996509d76b89": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 269440,
+        "inputCacheMissTokens": 31928,
+        "outputTokens": 18181,
+        "totalInputTokens": 301368,
+        "source": "transcript"
+      },
+      "dispatch-6bbdd1b8836b7687e66ba723": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 606208,
+        "inputCacheMissTokens": 57575,
+        "outputTokens": 9387,
+        "totalInputTokens": 663783,
+        "source": "transcript"
+      },
+      "dispatch-9490823b6a96a925f12e38eb": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 175232,
+        "inputCacheMissTokens": 30036,
+        "outputTokens": 14887,
+        "totalInputTokens": 205268,
+        "source": "transcript"
+      },
+      "dispatch-95c88fd8e91b7d05184bd5f7": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 2112128,
+        "inputCacheMissTokens": 171923,
+        "outputTokens": 18225,
+        "totalInputTokens": 2284051,
+        "source": "transcript"
+      },
+      "dispatch-a63e78af15701380724d1719": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
