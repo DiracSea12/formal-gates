@@ -112,6 +112,9 @@ func runInstall(args []string, streams IO) (int, error) {
 		if target.HookConfig != "" {
 			fmt.Fprintf(streams.Stdout, "formal-gates hooks configured for %s: %s\n", target.Host, target.HookConfig)
 		}
+		if target.ManagedRulePath != "" {
+			fmt.Fprintf(streams.Stdout, "formal-gates managed rule written for %s: %s\n", target.Host, target.ManagedRulePath)
+		}
 	}
 	return 0, nil
 }
