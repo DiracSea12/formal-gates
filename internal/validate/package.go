@@ -23,6 +23,7 @@ var requiredFiles = []string{
 	"internal/validate/runner.go",
 	"internal/validate/runstate.go",
 	"internal/validate/install.go",
+	"internal/validate/managed_rules.go",
 	"internal/validate/workflow.go",
 	"internal/validate/canary.go",
 	"internal/validate/codex_hook_canary.go",
@@ -30,6 +31,7 @@ var requiredFiles = []string{
 	"agents/openai.yaml",
 	"prompts/reviewer-base.md",
 	"references/install-and-hooks.md",
+	"references/managed-rules.json",
 	"references/local-validation.md",
 	"references/vcs-snapshots.md",
 }
@@ -95,12 +97,19 @@ func Package(root string) Result {
 	validateBootstrapScripts(root, &result)
 	validateManifest(root, &result)
 	validatePromptCatalog(root, &result)
+	validateManagedRuleCatalog(root, &result)
 	return result
 }
 
 func validatePromptCatalog(root string, result *Result) {
 	if _, err := LoadPromptCatalog(root); err != nil {
 		result.add("prompts/gates", err.Error())
+	}
+}
+
+func validateManagedRuleCatalog(root string, result *Result) {
+	if _, err := LoadManagedRules(root); err != nil {
+		result.add(managedRulesRelativePath, err.Error())
 	}
 }
 
@@ -511,7 +520,6 @@ func nativeBinaryName() string {
 	}
 	return "formal-gates"
 }
-
 
 func contains(values []string, expected string) bool {
 	for _, value := range values {

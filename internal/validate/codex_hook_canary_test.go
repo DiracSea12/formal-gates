@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,23 +9,53 @@ import (
 
 func TestCodexHookCanaryFailureReason(t *testing.T) {
 	timedOut := CodexHookCanarySummary{TimedOut: true, TimeoutSeconds: 7}
-	if got := codexHookCanaryFailureReason(timedOut, false); !strings.Contains(got, "7 seconds") {
+	if got := codexHookCanaryFailureReason(timedOut); !strings.Contains(got, "7 seconds") {
 		t.Fatalf("expected timeout reason, got %q", got)
 	}
 
 	noPayload := CodexHookCanarySummary{}
-	if got := codexHookCanaryFailureReason(noPayload, false); !strings.Contains(got, "no PreToolUse") {
+	if got := codexHookCanaryFailureReason(noPayload); !strings.Contains(got, "no PreToolUse") {
 		t.Fatalf("expected payload reason, got %q", got)
 	}
 
 	marker := CodexHookCanarySummary{PreToolUsePayloadCount: 1, MarkerExists: true}
-	if got := codexHookCanaryFailureReason(marker, true); !strings.Contains(got, "marker file") {
+	if got := codexHookCanaryFailureReason(marker); !strings.Contains(got, "marker file") {
 		t.Fatalf("expected marker reason, got %q", got)
 	}
 
 	noDeny := CodexHookCanarySummary{PreToolUsePayloadCount: 1}
-	if got := codexHookCanaryFailureReason(noDeny, false); !strings.Contains(got, "deny decision") {
-		t.Fatalf("expected deny reason, got %q", got)
+	if got := codexHookCanaryFailureReason(noDeny); !strings.Contains(got, "canary did not satisfy") {
+		t.Fatalf("expected proof reason, got %q", got)
+	}
+}
+
+func TestCodexCanaryProfileUsesNativeHookAndPassiveRecorder(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "formal-gates.config.toml")
+	binary := filepath.Join(dir, "formal-gates")
+	payloadDir := filepath.Join(dir, "payloads")
+	if err := writeCodexCanaryProfile(profile, binary, payloadDir); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	preStart := strings.Index(content, "[[hooks.PreToolUse]]")
+	postStart := strings.Index(content, "[[hooks.PostToolUse]]")
+	if preStart < 0 || postStart <= preStart {
+		t.Fatalf("PreToolUse profile section missing: %q", content)
+	}
+	preToolUse := content[preStart:postStart]
+	if strings.Count(preToolUse, "hook decide --provider codex") != 1 {
+		t.Fatalf("expected exactly one native Codex hook command in PreToolUse, profile=%q", content)
+	}
+	if !strings.Contains(preToolUse, "codex-hook-probe") {
+		t.Fatalf("PreToolUse recorder missing: %q", preToolUse)
+	}
+	if strings.Contains(preToolUse, "--formal-hook-output") {
+		t.Fatalf("PreToolUse recorder must not synthesize hook output: %q", preToolUse)
 	}
 }
 

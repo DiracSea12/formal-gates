@@ -35,6 +35,26 @@ func TestHookAllowsBoundPassAndOtherCommands(t *testing.T) {
 	}
 }
 
+func TestHookExitCodeUsesCodexJSONDecisionProtocol(t *testing.T) {
+	decision, err := Hook([]byte(`{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := HookExitCode("", decision); got != 2 {
+		t.Fatalf("generic denied hook should exit 2, got %d", got)
+	}
+	if got := HookExitCode("codex", decision); got != 0 {
+		t.Fatalf("Codex denied hook should exit 0 so its JSON block is consumed, got %d", got)
+	}
+	allowed, err := Hook([]byte(`{"command":"go test ./..."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := HookExitCode("codex", allowed); got != 0 {
+		t.Fatalf("Codex allowed hook should exit 0, got %d", got)
+	}
+}
+
 func TestHookRejectsLegacyScriptCommands(t *testing.T) {
 	for _, command := range []string{"pwsh -File scripts/gate-workflow.ps1", "pwsh -File hooks/capture-subagent-receipt.ps1"} {
 		decision, err := Hook([]byte(`{"input":{"command":"` + command + `"}}`))

@@ -123,6 +123,9 @@ go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates install --source . --host claude --scope global --force
 bin/formal-gates install --source . --host codex --scope project --project <project> --force
 bin/formal-gates install --source . --host cursor --scope project --project <project> --force
+
+bin/formal-gates uninstall --host claude --scope global
+bin/formal-gates uninstall --host codex --scope project --project <project>
 ```
 
 Windows 使用 `bin\formal-gates.exe`。
@@ -137,15 +140,29 @@ Windows 使用 `bin\formal-gates.exe`。
 
 安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）。已有的非 formal-gates hook 不会被覆盖。
 
-### 手动卸载
+安装还会维护受理规则：Claude Code 使用全局 `~/.claude/CLAUDE.md` 或项目
+`CLAUDE.md`，Codex 使用全局 `~/.codex/AGENTS.md` 或项目 `AGENTS.md`，Cursor 项目
+使用 `.cursor/rules/formal-gates.mdc`。Cursor 全局不创建规则文件，只保留现有运行时和
+hook 集成。重复安装会把所有已知旧版本和重复规则收敛为一个最新规则。
 
-- 删除对应的 skill 目录（上表中的全局或项目路径）。
-- 清掉 hook 配置里本包写入的条目。
+### 原生卸载
+
+卸载使用相同的 host、scope 和 project 参数，并清理 formal-gates 运行时、安装器拥有
+的 hook 条目和所有历史受管规则，同时保留其他文档内容与 hook：
+
+```bash
+bin/formal-gates uninstall --host claude --scope global
+bin/formal-gates uninstall --host cursor --scope project --project <project>
+```
+
+如果运行时目录已经不存在，可增加 `--source <formal-gates>` 指向包含
+`references/managed-rules.json` 的包。
 
 ### 参数语义
 
 - `--force`：目标已存在时替换它。
 - `--skip-hooks`：只安装包，不改宿主 hook 配置（只有当 hook 配置必须逐字节不变时才用）。
+- `uninstall --source`：可选的规则目录来源，用于卸载已缺失运行时的目标。
 
 ---
 

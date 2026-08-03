@@ -46,6 +46,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runPackage(args[1:], streams)
 	case "install":
 		return runInstall(args[1:], streams)
+	case "uninstall":
+		return runUninstall(args[1:], streams)
 	case "workflow":
 		return runWorkflow(program, args[1:], streams)
 	case "hook":
@@ -109,6 +111,35 @@ func runInstall(args []string, streams IO) (int, error) {
 		fmt.Fprintf(streams.Stdout, "formal-gates installed for %s: %s\n", target.Host, target.TargetPath)
 		if target.HookConfig != "" {
 			fmt.Fprintf(streams.Stdout, "formal-gates hooks configured for %s: %s\n", target.Host, target.HookConfig)
+		}
+	}
+	return 0, nil
+}
+
+func runUninstall(args []string, streams IO) (int, error) {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	fs.SetOutput(streams.Stderr)
+	source := fs.String("source", "", "optional formal-gates source directory for the managed-rule catalog")
+	host := fs.String("host", "", "target host: claude, codex, cursor, or both")
+	scope := fs.String("scope", "", "uninstall scope: global or project")
+	project := fs.String("project", "", "project path for project uninstalls")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	if fs.NArg() != 0 {
+		return 1, fmt.Errorf("uninstall does not accept positional arguments")
+	}
+	report, err := validate.Uninstall(validate.UninstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project})
+	if err != nil {
+		return 1, err
+	}
+	for _, target := range report.Targets {
+		fmt.Fprintf(streams.Stdout, "formal-gates uninstalled for %s: %s\n", target.Host, target.TargetPath)
+		if target.ManagedRulePath != "" {
+			fmt.Fprintf(streams.Stdout, "formal-gates managed rule cleaned for %s: %s\n", target.Host, target.ManagedRulePath)
+		}
+		if target.HookConfig != "" {
+			fmt.Fprintf(streams.Stdout, "formal-gates hooks cleaned for %s: %s\n", target.Host, target.HookConfig)
 		}
 	}
 	return 0, nil
@@ -452,6 +483,7 @@ func runHook(program string, args []string, streams IO) (int, error) {
 		return 1, fmt.Errorf("hook decide is required")
 	}
 	fs := newFlagSet("hook decide", streams)
+	provider := fs.String("provider", "", "hook host provider; Codex requires a zero exit status for JSON block decisions")
 	if code, err, done := parseFlagSet(fs, args[1:], streams.Stdout); done {
 		return code, err
 	}
@@ -463,12 +495,9 @@ func runHook(program string, args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	data, _ := json.Marshal(decision)
+	data, _ := json.Marshal(validate.HookResponse(*provider, decision))
 	fmt.Fprintln(streams.Stdout, string(data))
-	if decision.PermissionDecision == "deny" {
-		return 2, nil
-	}
-	return 0, nil
+	return validate.HookExitCode(*provider, decision), nil
 }
 
 func runLifecycle(program string, args []string, streams IO) (int, error) {
@@ -563,7 +592,6 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 	case "codex-hook-probe":
 		fs := newFlagSet("canary codex-hook-probe", streams)
 		dir := fs.String("payload-dir", "", "payload directory")
-		output := fs.String("formal-hook-output", "", "decision output file")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -571,12 +599,9 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		probe, result := validate.CodexHookProbe(validate.CodexHookProbeOptions{PayloadDir: *dir, FormalHookOutput: *output, Payload: payload})
+		probe, result := validate.CodexHookProbe(validate.CodexHookProbeOptions{PayloadDir: *dir, Payload: payload})
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "canary codex-hook-probe", result)
-		}
-		if probe.Decision != nil {
-			printJSON(streams.Stdout, probe.Decision)
 		}
 		return probe.ExitCode, nil
 	default:
@@ -827,5 +852,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }

@@ -239,6 +239,25 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		addCheck(tc.name, true, "installed runtime uses native commands")
+		rules, err := LoadManagedRules(root)
+		if err != nil {
+			addCheck(tc.name+"-managed-rule", false, err.Error())
+			continue
+		}
+		if detail := installedManagedRuleDetail(report, rules[len(rules)-1]); detail != "" {
+			addCheck(tc.name+"-managed-rule", false, detail)
+			continue
+		}
+		uninstalled, err := Uninstall(UninstallOptions{Host: tc.host, Scope: "project", Project: project})
+		if err != nil {
+			addCheck(tc.name+"-uninstall", false, err.Error())
+			continue
+		}
+		if detail := uninstalledInstallDetail(uninstalled, rules); detail != "" {
+			addCheck(tc.name+"-uninstall", false, detail)
+			continue
+		}
+		addCheck(tc.name+"-uninstall", true, "runtime, hooks, and managed rules cleaned")
 	}
 }
 
@@ -273,6 +292,51 @@ func installedScriptRuntimeDetail(report InstallReport) string {
 				if strings.Contains(lower, marker) {
 					return "hook config contains script runtime marker " + marker
 				}
+			}
+		}
+	}
+	return ""
+}
+
+func installedManagedRuleDetail(report InstallReport, latest string) string {
+	for _, target := range report.Targets {
+		if strings.TrimSpace(target.ManagedRulePath) == "" {
+			continue
+		}
+		text, err := readText(target.ManagedRulePath)
+		if err != nil {
+			return err.Error()
+		}
+		if strings.Count(text, latest) != 1 {
+			return fmt.Sprintf("managed rule count for %s is %d", target.ManagedRulePath, strings.Count(text, latest))
+		}
+	}
+	return ""
+}
+
+func uninstalledInstallDetail(report UninstallReport, rules []string) string {
+	for _, target := range report.Targets {
+		if exists(target.TargetPath) {
+			return "formal-gates runtime remains at " + target.TargetPath
+		}
+		if target.ManagedRulePath != "" && isFile(target.ManagedRulePath) {
+			text, err := readText(target.ManagedRulePath)
+			if err != nil {
+				return err.Error()
+			}
+			for _, rule := range rules {
+				if strings.Contains(text, rule) {
+					return "managed rule remains in " + target.ManagedRulePath
+				}
+			}
+		}
+		if target.HookConfig != "" && isFile(target.HookConfig) {
+			text, err := readText(target.HookConfig)
+			if err != nil {
+				return err.Error()
+			}
+			if strings.Contains(strings.ToLower(text), "formal-gates") {
+				return "installer-owned hook remains in " + target.HookConfig
 			}
 		}
 	}

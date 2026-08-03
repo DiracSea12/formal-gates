@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Extend native installation with ordered managed intake-rule migration and
+  symmetric uninstall cleanup for runtime directories, hooks, and host guidance
+  files across Claude Code, Codex, and Cursor project installs.
 - Resume interrupted claimed dispatches through the host's resume mechanism
   (e.g. Claude Code `SendMessage`) to complete the same dispatch instead of
   restarting: a CLAIMED dispatch with no recorded result keeps its claim,

@@ -33,11 +33,17 @@ bin/formal-gates install --source <formal-gates> \
 
 bin/formal-gates install --source <formal-gates> \
   --host <claude|codex|cursor> --scope project --project <project> --force
+
+bin/formal-gates uninstall \
+  --host <claude|codex|cursor> --scope global
+
+bin/formal-gates uninstall \
+  --host <claude|codex|cursor> --scope project --project <project>
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
 考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
-关 hook 条目会被保留。只有当 host 的 hook 配置必须逐字节保持不变时，才使用
+关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
 只有带 `--force` 时，安装才会替换一个已存在的 formal-gates 目标。它不得把另一个
@@ -57,8 +63,33 @@ host 的全局安装当作回退。
 项目级安装使用所选项目下的对应目录。当 host 需要时，安装器会把原生二进制的绝对
 路径写入 hook 配置。
 
+安装器维护的规则文件是：
+
+- Claude Code 全局：`~/.claude/CLAUDE.md`；项目：`<project>/CLAUDE.md`
+- Codex 全局：`~/.codex/AGENTS.md`；项目：`<project>/AGENTS.md`
+- Cursor 项目：`<project>/.cursor/rules/formal-gates.mdc`
+
+Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook，不创建全局
+规则文件。重复安装会把 `references/managed-rules.json` 中的旧版本和重复版本收敛
+为一个最新规则。
+
 其他兼容 Agent Skill 的 host 可以手工阅读这些 Markdown，但本包不声明为它们提供
 安装器或 hook 集成。
+
+## 原生卸载
+
+卸载使用与安装相同的 host、scope 和 project 解析：
+
+```bash
+bin/formal-gates uninstall --host claude --scope global
+bin/formal-gates uninstall --host codex --scope project --project <project>
+bin/formal-gates uninstall --host cursor --scope project --project <project>
+```
+
+它会删除所选 host 的 formal-gates 运行时目录，移除安装器拥有的 hook 条目，并从
+上述规则文件中删除所有历史受管规则版本。文件中的其他内容和非 formal-gates hook
+会保留。若运行时目录已经不存在，可用 `--source <formal-gates>` 指定包含
+`references/managed-rules.json` 的包来完成规则清理。
 
 ## Hook 边界
 
@@ -67,6 +98,10 @@ host 的全局安装当作回退。
 ```bash
 bin/formal-gates hook decide
 ```
+
+Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通过 JSON 的
+`decision: "block"` 返回，同时 hook 进程退出码必须为 0；Claude Code 和 Cursor
+继续使用原有的拒绝退出码。
 
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。

@@ -3,7 +3,6 @@ package validate
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -23,30 +22,21 @@ func TestPortableCanaryPassesAgainstRepoRoot(t *testing.T) {
 	}
 }
 
-func TestCodexHookProbeRecordsAndDeniesInvalidPass(t *testing.T) {
+func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
 	dir := t.TempDir()
-	output := filepath.Join(dir, "formal-hook-output.txt")
 	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Shell","input":{"command":"formal-gates workflow record-gate --gate complexity-gate --status PASS --run-id wf"}}`)
 
 	probe, result := CodexHookProbe(CodexHookProbeOptions{
-		PayloadDir:       dir,
-		FormalHookOutput: output,
-		Payload:          payload,
+		PayloadDir: dir,
+		Payload:    payload,
 	})
 	if !result.OK() {
 		t.Fatalf("expected hook probe to pass, got %#v", result.Failures)
 	}
-	if probe.ExitCode != 2 || probe.Decision == nil || probe.Decision.PermissionDecision != "deny" {
-		t.Fatalf("expected denied hook decision, got %#v", probe)
+	if probe.ExitCode != 0 {
+		t.Fatalf("expected passive recorder to exit successfully, got %#v", probe)
 	}
 	if _, err := os.Stat(filepath.FromSlash(probe.PayloadPath)); err != nil {
 		t.Fatalf("expected payload artifact: %v", err)
-	}
-	text, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(text), "exit=2") || !strings.Contains(string(text), `"permissionDecision":"deny"`) {
-		t.Fatalf("unexpected hook output: %q", text)
 	}
 }

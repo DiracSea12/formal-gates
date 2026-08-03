@@ -126,6 +126,9 @@ go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates install --source . --host claude --scope global --force
 bin/formal-gates install --source . --host codex --scope project --project <project> --force
 bin/formal-gates install --source . --host cursor --scope project --project <project> --force
+
+bin/formal-gates uninstall --host claude --scope global
+bin/formal-gates uninstall --host codex --scope project --project <project>
 ```
 
 On Windows use `bin\formal-gates.exe`.
@@ -140,15 +143,31 @@ On Windows use `bin\formal-gates.exe`.
 
 Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project). Existing non-formal-gates hooks are preserved.
 
-### Uninstall manually
+Installation also manages the intake rule: Claude Code uses global `~/.claude/CLAUDE.md` or
+project `CLAUDE.md`, Codex uses global `~/.codex/AGENTS.md` or project `AGENTS.md`, and
+project Cursor uses `.cursor/rules/formal-gates.mdc`. Cursor global installs do not create a
+rules file; they retain the existing runtime and hook integration. Repeated installs collapse
+all known historical and duplicate rules to one latest rule.
 
-- Delete the skill directory (the global or project path in the table above).
-- Remove the entries this package wrote into the host hook config.
+### Native uninstall
+
+Uninstall uses the same host, scope, and project resolution and removes the formal-gates
+runtime, installer-owned hook entries, and every historical managed rule while preserving
+other document content and hooks:
+
+```bash
+bin/formal-gates uninstall --host claude --scope global
+bin/formal-gates uninstall --host cursor --scope project --project <project>
+```
+
+When the runtime directory is already missing, add `--source <formal-gates>` pointing to a
+package containing `references/managed-rules.json`.
 
 ### Flag semantics
 
 - `--force` — replace an existing target.
 - `--skip-hooks` — install the package without touching host hooks (only when the host hook config must stay byte-for-byte unchanged).
+- `uninstall --source` — optional catalog source used when uninstalling a target whose runtime is already missing.
 
 ---
 

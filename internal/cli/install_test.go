@@ -72,12 +72,13 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 		configRel string
 		preEvent  string
 		provider  string
+		hookArgs  string
 		start     string
 		stop      string
 	}{
-		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse", provider: "claude-code", start: "SubagentStart", stop: "SubagentStop"},
-		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", provider: "codex", start: "SubagentStart", stop: "SubagentStop"},
-		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", provider: "cursor", start: "subagentStart", stop: "subagentStop"},
+		{name: "claude", host: "claude", configRel: ".claude/settings.json", preEvent: "PreToolUse", provider: "claude-code", hookArgs: "hook decide", start: "SubagentStart", stop: "SubagentStop"},
+		{name: "codex", host: "codex", configRel: ".codex/hooks.json", preEvent: "PreToolUse", provider: "codex", hookArgs: "hook decide --provider codex", start: "SubagentStart", stop: "SubagentStop"},
+		{name: "cursor", host: "cursor", configRel: ".cursor/hooks.json", preEvent: "preToolUse", provider: "cursor", hookArgs: "hook decide", start: "subagentStart", stop: "subagentStop"},
 	} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(tc.name+"/"+scope, func(t *testing.T) {
@@ -115,13 +116,15 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 					"keep-non-formal-hook",
 					"bin",
 					installTestBinaryName(),
-					"hook decide",
 					"lifecycle capture",
 					tc.provider,
 				} {
 					if !strings.Contains(raw, expected) {
 						t.Fatalf("hook config missing %q: %s", expected, raw)
 					}
+				}
+				if !strings.Contains(raw, tc.hookArgs) {
+					t.Fatalf("hook config missing %q: %s", tc.hookArgs, raw)
 				}
 				if strings.Contains(raw, "receipt capture") {
 					t.Fatalf("hook config still contains removed receipt lifecycle command: %s", raw)
@@ -167,6 +170,109 @@ func TestRunInstallConfiguresEverySelectedHostByDefault(t *testing.T) {
 		if _, err := os.Stat(expected); err != nil {
 			t.Fatalf("expected selected-host hook config %s: %v", expected, err)
 		}
+	}
+}
+
+func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T) {
+	for _, host := range []string{"claude", "codex", "cursor"} {
+		t.Run(host, func(t *testing.T) {
+			source := writeInstallSource(t, "source")
+			project := t.TempDir()
+			config := testHookConfigPath(project, host, "project")
+			writeUserOwnedHookConfig(t, config, host)
+			installArgs := []string{"install", "--source", source, "--host", host, "--scope", "project", "--project", project}
+			uninstallArgs := []string{"uninstall", "--source", source, "--host", host, "--scope", "project", "--project", project}
+
+			var stdout, stderr bytes.Buffer
+			if code := Run("formal-gates", installArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				t.Fatalf("install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if !containsHookCommand(t, config, "echo formal-gates status") {
+				t.Fatalf("install removed the user-owned command: %s", readFile(t, config))
+			}
+
+			stdout.Reset()
+			stderr.Reset()
+			if code := Run("formal-gates", uninstallArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+				t.Fatalf("uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if !containsHookCommand(t, config, "echo formal-gates status") {
+				t.Fatalf("uninstall removed the user-owned command: %s", readFile(t, config))
+			}
+		})
+	}
+}
+
+func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	project := t.TempDir()
+	target := testInstallTargetPath(project, "codex", "project")
+	config := testHookConfigPath(project, "codex", "project")
+	legacyCommand := testNativeHookCommand(target, "hook", "decide")
+	currentCommand := testNativeHookCommand(target, "hook", "decide", "--provider", "codex")
+
+	mustWriteCLI(t, filepath.Join(target, "SKILL.md"), "legacy runtime without catalog\n")
+	writeCodexHookConfig(t, config, legacyCommand, currentCommand, "echo formal-gates status")
+
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--force",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("upgrade failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := countHookCommand(t, config, legacyCommand); got != 0 {
+		t.Fatalf("legacy Codex gate remains after upgrade (%d): %s", got, readFile(t, config))
+	}
+	if got := countHookCommand(t, config, currentCommand); got != 1 {
+		t.Fatalf("current Codex gate count=%d after upgrade, want 1: %s", got, readFile(t, config))
+	}
+	if !containsHookCommand(t, config, "echo formal-gates status") {
+		t.Fatalf("upgrade removed the user-owned similar command: %s", readFile(t, config))
+	}
+
+	writeCodexHookConfig(t, config, legacyCommand, currentCommand, "echo formal-gates status")
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{
+		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := countHookCommand(t, config, legacyCommand); got != 0 {
+		t.Fatalf("legacy Codex gate remains after uninstall (%d): %s", got, readFile(t, config))
+	}
+	if got := countHookCommand(t, config, currentCommand); got != 0 {
+		t.Fatalf("current Codex gate remains after uninstall (%d): %s", got, readFile(t, config))
+	}
+	if !containsHookCommand(t, config, "echo formal-gates status") {
+		t.Fatalf("uninstall removed the user-owned similar command: %s", readFile(t, config))
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("legacy runtime remains after uninstall, err=%v", err)
+	}
+}
+
+func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
+	project := t.TempDir()
+	target := testInstallTargetPath(project, "codex", "project")
+	config := testHookConfigPath(project, "codex", "project")
+	mustWriteCLI(t, filepath.Join(target, "SKILL.md"), "legacy runtime\n")
+	writeUserOwnedHookConfig(t, config, "codex")
+
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{
+		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("legacy runtime uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("legacy runtime remains after uninstall, err=%v", err)
+	}
+	if !containsHookCommand(t, config, "echo formal-gates status") {
+		t.Fatalf("uninstall removed unrelated hook: %s", readFile(t, config))
 	}
 }
 
@@ -313,6 +419,206 @@ func TestRunInstallRequiresBuiltNativeBinary(t *testing.T) {
 	}
 }
 
+func TestRunInstallMigratesManagedRulesAcrossHostsAndScopes(t *testing.T) {
+	for _, host := range []string{"claude", "codex", "cursor"} {
+		for _, scope := range []string{"global", "project"} {
+			t.Run(host+"/"+scope, func(t *testing.T) {
+				source := writeInstallSource(t, "source")
+				root := t.TempDir()
+				args := []string{"install", "--source", source, "--host", host, "--scope", scope, "--force", "--skip-hooks"}
+				if scope == "global" {
+					t.Setenv("HOME", root)
+					t.Setenv("USERPROFILE", root)
+				} else {
+					args = append(args, "--project", root)
+				}
+
+				managed := testManagedRulePath(root, host, scope)
+				if managed != "" {
+					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleOld+"\n"+testManagedRuleLatest+"\n"+testManagedRuleOld+"\n")
+				}
+				var stdout, stderr bytes.Buffer
+				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+					t.Fatalf("install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+				}
+				if managed == "" {
+					if _, err := os.Stat(filepath.Join(root, ".cursor", "rules", "formal-gates.mdc")); !os.IsNotExist(err) {
+						t.Fatalf("Cursor global install created a managed rule location, err=%v", err)
+					}
+					return
+				}
+				assertManagedRuleState(t, managed, true)
+
+				stdout.Reset()
+				stderr.Reset()
+				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+					t.Fatalf("reinstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+				}
+				assertManagedRuleState(t, managed, true)
+			})
+		}
+	}
+}
+
+func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *testing.T) {
+	for _, host := range []string{"claude", "codex", "cursor"} {
+		for _, scope := range []string{"global", "project"} {
+			t.Run(host+"/"+scope, func(t *testing.T) {
+				source := writeInstallSource(t, "source")
+				root := t.TempDir()
+				args := []string{"install", "--source", source, "--host", host, "--scope", scope, "--force"}
+				uninstallArgs := []string{"uninstall", "--host", host, "--scope", scope}
+				if scope == "global" {
+					t.Setenv("HOME", root)
+					t.Setenv("USERPROFILE", root)
+				} else {
+					args = append(args, "--project", root)
+					uninstallArgs = append(uninstallArgs, "--project", root)
+				}
+
+				managed := testManagedRulePath(root, host, scope)
+				if managed != "" {
+					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleOld+"\n"+testManagedRuleLatest+"\n")
+				}
+				config := testHookConfigPath(root, host, scope)
+				writeOldHookConfig(t, config, host)
+
+				var stdout, stderr bytes.Buffer
+				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+					t.Fatalf("install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+				}
+				stdout.Reset()
+				stderr.Reset()
+				if code := Run("formal-gates", uninstallArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+					t.Fatalf("uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+				}
+
+				target := testInstallTargetPath(root, host, scope)
+				if _, err := os.Stat(target); !os.IsNotExist(err) {
+					t.Fatalf("formal-gates runtime remains at %s, err=%v", target, err)
+				}
+				hookText := readFile(t, config)
+				if !strings.Contains(hookText, "keep-non-formal-hook") {
+					t.Fatalf("uninstall removed unrelated hook: %s", hookText)
+				}
+				if strings.Contains(strings.ToLower(hookText), "formal-gates") || strings.Contains(hookText, ".ps1") {
+					t.Fatalf("uninstall left installer-owned hook: %s", hookText)
+				}
+				if managed != "" {
+					text := readFile(t, managed)
+					if text != "unrelated\n" {
+						t.Fatalf("uninstall changed unrelated managed-file content: %q", text)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRunUninstallRequiresSourceWhenRuntimeCatalogIsMissing(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	project := t.TempDir()
+	managed := filepath.Join(project, "AGENTS.md")
+	mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleOld+"\n")
+
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{
+		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code == 0 || !strings.Contains(stderr.String(), "pass --source") {
+		t.Fatalf("expected missing catalog source error, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run("formal-gates", []string{
+		"uninstall", "--source", source, "--host", "codex", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("uninstall with explicit catalog failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := readFile(t, managed); got != "unrelated\n" {
+		t.Fatalf("uninstall changed unrelated content: %q", got)
+	}
+}
+
+func testInstallTargetPath(root, host, scope string) string {
+	base := root
+	if scope == "global" {
+		switch host {
+		case "claude":
+			return filepath.Join(base, ".claude", "skills", "formal-gates")
+		case "codex":
+			return filepath.Join(base, ".codex", "skills", "formal-gates")
+		case "cursor":
+			return filepath.Join(base, ".cursor", "formal-gates")
+		}
+	}
+	switch host {
+	case "claude":
+		return filepath.Join(base, ".claude", "skills", "formal-gates")
+	case "codex":
+		return filepath.Join(base, ".codex", "skills", "formal-gates")
+	default:
+		return filepath.Join(base, ".cursor", "formal-gates")
+	}
+}
+
+func testManagedRulePath(root, host, scope string) string {
+	if host == "claude" {
+		if scope == "global" {
+			return filepath.Join(root, ".claude", "CLAUDE.md")
+		}
+		return filepath.Join(root, "CLAUDE.md")
+	}
+	if host == "codex" {
+		if scope == "global" {
+			return filepath.Join(root, ".codex", "AGENTS.md")
+		}
+		return filepath.Join(root, "AGENTS.md")
+	}
+	if scope == "project" {
+		return filepath.Join(root, ".cursor", "rules", "formal-gates.mdc")
+	}
+	return ""
+}
+
+func testHookConfigPath(root, host, scope string) string {
+	base := root
+	if scope == "global" {
+		switch host {
+		case "claude":
+			return filepath.Join(base, ".claude", "settings.json")
+		case "codex":
+			return filepath.Join(base, ".codex", "hooks.json")
+		default:
+			return filepath.Join(base, ".cursor", "hooks.json")
+		}
+	}
+	switch host {
+	case "claude":
+		return filepath.Join(base, ".claude", "settings.json")
+	case "codex":
+		return filepath.Join(base, ".codex", "hooks.json")
+	default:
+		return filepath.Join(base, ".cursor", "hooks.json")
+	}
+}
+
+func assertManagedRuleState(t *testing.T, path string, preserveUnrelated bool) {
+	t.Helper()
+	text := readFile(t, path)
+	if strings.Count(text, testManagedRuleLatest) != 1 {
+		t.Fatalf("latest managed rule count=%d in %q", strings.Count(text, testManagedRuleLatest), text)
+	}
+	if strings.Contains(text, testManagedRuleOld) {
+		t.Fatalf("old managed rule remains in %q", text)
+	}
+	if preserveUnrelated && !strings.Contains(text, "unrelated") {
+		t.Fatalf("unrelated content was not preserved in %q", text)
+	}
+}
+
 func writeInstallSource(t *testing.T, skillText string) string {
 	t.Helper()
 	source := t.TempDir()
@@ -332,11 +638,21 @@ func writeInstallSource(t *testing.T, skillText string) string {
 		}
 		mustWriteCLI(t, filepath.Join(source, dir, ".keep"), "keep\n")
 	}
+	managedRules, err := json.Marshal([]string{testManagedRuleOld, testManagedRuleLatest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(source, "references", "managed-rules.json"), string(managedRules)+"\n")
 	mustWriteCLI(t, filepath.Join(source, "prompts", "reviewer-base.md"), "reviewer base\n")
 	mustWriteCLI(t, filepath.Join(source, "prompts", "actions", "sample-action.md"), "sample action\n")
 	mustWriteCLI(t, filepath.Join(source, "gates", "sample-gate.md"), "sample gate\n")
 	return source
 }
+
+const (
+	testManagedRuleOld    = "OLD_FORMAL_GATES_RULE"
+	testManagedRuleLatest = "LATEST_FORMAL_GATES_RULE"
+)
 
 func installTestBinaryName() string {
 	if runtime.GOOS == "windows" {
@@ -377,6 +693,74 @@ func writeOldHookConfig(t *testing.T, path, host string) {
 			},
 		},
 	})
+}
+
+func writeUserOwnedHookConfig(t *testing.T, path, host string) {
+	t.Helper()
+	if host == "cursor" {
+		writeJSONFile(t, path, map[string]any{
+			"version": 1,
+			"hooks": map[string]any{
+				"preToolUse": []any{map[string]any{"command": "echo formal-gates status"}},
+			},
+		})
+		return
+	}
+	writeJSONFile(t, path, map[string]any{
+		"hooks": map[string]any{
+			"PreToolUse": []any{
+				map[string]any{
+					"matcher": "*",
+					"hooks":   []any{map[string]any{"type": "command", "command": "echo formal-gates status"}},
+				},
+			},
+		},
+	})
+}
+
+func writeCodexHookConfig(t *testing.T, path string, commands ...string) {
+	t.Helper()
+	nested := make([]any, 0, len(commands))
+	for index, command := range commands {
+		hook := map[string]any{"type": "command", "command": command}
+		if index == 1 {
+			hook["timeout"] = float64(30)
+		}
+		nested = append(nested, hook)
+	}
+	writeJSONFile(t, path, map[string]any{
+		"hooks": map[string]any{
+			"PreToolUse": []any{
+				map[string]any{"matcher": "*", "hooks": nested},
+			},
+		},
+	})
+}
+
+func testNativeHookCommand(target string, args ...string) string {
+	parts := []string{"\"" + filepath.ToSlash(filepath.Join(target, "bin", installTestBinaryName())) + "\""}
+	return strings.Join(append(parts, args...), " ")
+}
+
+func containsHookCommand(t *testing.T, path, want string) bool {
+	t.Helper()
+	for _, command := range hookCommands(readHooksMap(t, path)) {
+		if command == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countHookCommand(t *testing.T, path, want string) int {
+	t.Helper()
+	count := 0
+	for _, command := range hookCommands(readHooksMap(t, path)) {
+		if command == want {
+			count++
+		}
+	}
+	return count
 }
 
 func writeJSONFile(t *testing.T, path string, value any) {

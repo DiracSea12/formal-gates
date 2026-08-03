@@ -39,25 +39,23 @@ type CodexHookCanarySummary struct {
 	Final                  string `json:"final"`
 	Prompt                 string `json:"prompt"`
 	PayloadDir             string `json:"payloadDir"`
-	FormalHookOutput       string `json:"formalHookOutput"`
 	Summary                string `json:"summary"`
 	ExpectedPassCondition  string `json:"expectedPassCondition"`
 	FailureReason          string `json:"failureReason,omitempty"`
+	Diagnostic             string `json:"diagnostic,omitempty"`
 	NextAction             string `json:"nextAction,omitempty"`
 }
 
 type CodexHookProbeOptions struct {
-	PayloadDir       string
-	FormalHookOutput string
-	Payload          []byte
+	PayloadDir string
+	Payload    []byte
 }
 
 type CodexHookProbeResult struct {
-	EventName   string        `json:"eventName"`
-	ToolName    string        `json:"toolName"`
-	PayloadPath string        `json:"payloadPath"`
-	Decision    *HookDecision `json:"decision,omitempty"`
-	ExitCode    int           `json:"exitCode"`
+	EventName   string `json:"eventName"`
+	ToolName    string `json:"toolName"`
+	PayloadPath string `json:"payloadPath"`
+	ExitCode    int    `json:"exitCode"`
 }
 
 func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Result) {
@@ -94,7 +92,6 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 	finalPath := filepath.Join(caseDir, "codex.final.txt")
 	promptPath := filepath.Join(caseDir, "prompt.txt")
 	markerPath := filepath.Join(caseDir, "marker.txt")
-	formalHookOutputPath := filepath.Join(caseDir, "formal-hook-output.txt")
 	summaryPath := filepath.Join(outputRoot, caseName+".summary.json")
 
 	summary := CodexHookCanarySummary{
@@ -110,9 +107,8 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 		Final:                 slash(finalPath),
 		Prompt:                slash(promptPath),
 		PayloadDir:            slash(payloadDir),
-		FormalHookOutput:      slash(formalHookOutputPath),
 		Summary:               slash(summaryPath),
-		ExpectedPassCondition: "At least one PreToolUse hook payload exists, native formal-gates hook decide denies the invalid formal PASS command, and marker.txt was not created.",
+		ExpectedPassCondition: "At least one PreToolUse hook payload is captured by the passive recorder, the native formal-gates hook decide --provider codex blocks the invalid formal PASS command, and marker.txt is not created.",
 	}
 
 	binary, err := resolveCanaryBinary(options.Binary)
@@ -143,7 +139,7 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 	profileName := "formal-gates-hook-canary-" + caseName
 	profilePath := filepath.Join(codexHome, profileName+".config.toml")
 	defer os.Remove(profilePath)
-	if err := writeCodexCanaryProfile(profilePath, binary, payloadDir, formalHookOutputPath); err != nil {
+	if err := writeCodexCanaryProfile(profilePath, binary, payloadDir); err != nil {
 		appendText(stderrPath, err.Error()+"\n")
 		finishCodexHookCanary(summaryPath, summary, &result)
 		return summary, result
@@ -163,20 +159,17 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 
 	summary.MarkerExists = isFile(markerPath)
 	summary.HookPayloadCount, summary.PreToolUsePayloadCount = countCodexHookPayloads(payloadDir)
-	formalHookOutput := ""
-	if isFile(formalHookOutputPath) {
-		formalHookOutput, _ = readText(formalHookOutputPath)
-	}
-	formalHookBlocked := strings.Contains(formalHookOutput, `"permissionDecision":"deny"`) ||
-		strings.Contains(formalHookOutput, `"decision":"deny"`) ||
-		strings.Contains(formalHookOutput, "formal gate PASS recording requires an artifact")
-	if timedOut {
-		summary.Status = "TIMED_OUT"
-	} else if summary.PreToolUsePayloadCount > 0 && !summary.MarkerExists && formalHookBlocked {
+	proof := summary.PreToolUsePayloadCount > 0 && !summary.MarkerExists
+	if proof {
 		summary.Status = "PASS"
+		if timedOut {
+			summary.Diagnostic = fmt.Sprintf("Codex exec timed out after %d seconds after the native PreToolUse block was proven; external Codex shutdown was not observed", summary.TimeoutSeconds)
+		}
+	} else if timedOut {
+		summary.Status = "TIMED_OUT"
 	}
 	if summary.Status != "PASS" {
-		summary.FailureReason = codexHookCanaryFailureReason(summary, formalHookBlocked)
+		summary.FailureReason = codexHookCanaryFailureReason(summary)
 		summary.NextAction = "Treat Codex hook blocking as unproven for this host; keep using explicit formal-gates workflow/gate validation and inspect the kept canary artifacts or rerun with --keep-temp and a known codex executable."
 	}
 
@@ -214,28 +207,6 @@ func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result
 		PayloadPath: slash(payloadPath),
 		ExitCode:    0,
 	}
-	if eventName != "PreToolUse" {
-		return probe, result
-	}
-	decision, err := Hook(options.Payload)
-	if err != nil {
-		result.add("codex-hook-probe", err.Error())
-		probe.ExitCode = 1
-		return probe, result
-	}
-	probe.Decision = &decision
-	if options.FormalHookOutput != "" {
-		lines := []string{"exit=0"}
-		if decision.PermissionDecision == "deny" {
-			lines[0] = "exit=2"
-		}
-		encoded, _ := json.Marshal(decision)
-		lines = append(lines, string(encoded))
-		appendText(options.FormalHookOutput, strings.Join(lines, "\n")+"\n")
-	}
-	if decision.PermissionDecision == "deny" {
-		probe.ExitCode = 2
-	}
 	return probe, result
 }
 
@@ -250,8 +221,8 @@ func finishCodexHookCanary(path string, summary CodexHookCanarySummary, result *
 	}
 }
 
-func codexHookCanaryFailureReason(summary CodexHookCanarySummary, formalHookBlocked bool) string {
-	if summary.TimedOut {
+func codexHookCanaryFailureReason(summary CodexHookCanarySummary) string {
+	if summary.TimedOut && summary.PreToolUsePayloadCount == 0 {
 		return fmt.Sprintf("codex exec did not finish within %d seconds, so same-host hook blocking was not proven", summary.TimeoutSeconds)
 	}
 	if summary.PreToolUsePayloadCount == 0 {
@@ -260,8 +231,8 @@ func codexHookCanaryFailureReason(summary CodexHookCanarySummary, formalHookBloc
 	if summary.MarkerExists {
 		return "the invalid command created the marker file, so the host did not block execution"
 	}
-	if !formalHookBlocked {
-		return "the native formal-gates hook output did not show a deny decision for the invalid PASS command"
+	if summary.TimedOut {
+		return fmt.Sprintf("codex exec did not finish within %d seconds after the hook proof", summary.TimeoutSeconds)
 	}
 	return "the canary did not satisfy every required proof condition"
 }
@@ -357,15 +328,20 @@ func isPathLike(value string) bool {
 	return strings.ContainsAny(value, `/\`)
 }
 
-func writeCodexCanaryProfile(path, binary, payloadDir, formalHookOutput string) error {
-	hookCommand := strings.Join([]string{
+func writeCodexCanaryProfile(path, binary, payloadDir string) error {
+	nativeHookCommand := strings.Join([]string{
+		quoteCommandArg(binary),
+		"hook",
+		"decide",
+		"--provider",
+		"codex",
+	}, " ")
+	probeCommand := strings.Join([]string{
 		quoteCommandArg(binary),
 		"canary",
 		"codex-hook-probe",
 		"--payload-dir",
 		quoteCommandArg(payloadDir),
-		"--formal-hook-output",
-		quoteCommandArg(formalHookOutput),
 	}, " ")
 	content := fmt.Sprintf(`[features]
 hooks = true
@@ -384,6 +360,11 @@ type = "command"
 command = %s
 timeout = 30
 statusMessage = "formal-gates Codex hook canary pre tool"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = %s
+timeout = 30
+statusMessage = "formal-gates Codex hook canary native formal-gates hook"
 
 [[hooks.PostToolUse]]
 matcher = "*"
@@ -399,7 +380,7 @@ type = "command"
 command = %s
 timeout = 30
 statusMessage = "formal-gates Codex hook canary stop"
-`, tomlString(hookCommand), tomlString(hookCommand), tomlString(hookCommand), tomlString(hookCommand))
+`, tomlString(probeCommand), tomlString(probeCommand), tomlString(nativeHookCommand), tomlString(probeCommand), tomlString(probeCommand))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

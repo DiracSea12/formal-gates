@@ -19,20 +19,33 @@ type InstallOptions struct {
 	SkipHooks bool
 }
 
+type UninstallOptions struct {
+	Source  string
+	Host    string
+	Scope   string
+	Project string
+}
+
 type InstallReport struct {
 	Targets []InstallTargetReport `json:"targets"`
 }
 
 type InstallTargetReport struct {
-	Host       string `json:"host"`
-	TargetPath string `json:"targetPath"`
-	HookConfig string `json:"hookConfig,omitempty"`
+	Host            string `json:"host"`
+	TargetPath      string `json:"targetPath"`
+	HookConfig      string `json:"hookConfig,omitempty"`
+	ManagedRulePath string `json:"managedRulePath,omitempty"`
+}
+
+type UninstallReport struct {
+	Targets []InstallTargetReport `json:"targets"`
 }
 
 type installTarget struct {
-	host       string
-	targetPath string
-	hookConfig string
+	host            string
+	targetPath      string
+	hookConfig      string
+	managedRulePath string
 }
 
 var installRuntimeEntries = []string{
@@ -58,31 +71,15 @@ func Install(options InstallOptions) (InstallReport, error) {
 		return InstallReport{}, err
 	}
 	sourceAbs = filepath.Clean(sourceAbs)
-	host, err := normalizeInstallHost(options.Host)
-	if err != nil {
-		return InstallReport{}, err
-	}
-	scope, err := normalizeInstallScope(options.Scope)
-	if err != nil {
-		return InstallReport{}, err
-	}
-	projectAbs := ""
-	if scope == "project" || strings.TrimSpace(options.Project) != "" {
-		if strings.TrimSpace(options.Project) == "" {
-			return InstallReport{}, fmt.Errorf("--project is required when --scope project is used")
-		}
-		projectAbs, err = filepath.Abs(options.Project)
-		if err != nil {
-			return InstallReport{}, err
-		}
-		projectAbs = filepath.Clean(projectAbs)
-	}
-
 	if err := assertInstallSource(sourceAbs); err != nil {
 		return InstallReport{}, err
 	}
+	rules, err := LoadManagedRules(sourceAbs)
+	if err != nil {
+		return InstallReport{}, err
+	}
 
-	targets, err := installTargets(host, scope, projectAbs)
+	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
 	if err != nil {
 		return InstallReport{}, err
 	}
@@ -93,8 +90,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, err
 		}
 		targetReport := InstallTargetReport{
-			Host:       target.host,
-			TargetPath: filepath.ToSlash(target.targetPath),
+			Host:            target.host,
+			TargetPath:      filepath.ToSlash(target.targetPath),
+			ManagedRulePath: filepath.ToSlash(target.managedRulePath),
 		}
 		if !options.SkipHooks {
 			if err := configureInstallHook(target); err != nil {
@@ -102,9 +100,73 @@ func Install(options InstallOptions) (InstallReport, error) {
 			}
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
 		}
+		if target.managedRulePath != "" {
+			if err := manageManagedRuleFile(target.managedRulePath, rules); err != nil {
+				return InstallReport{}, err
+			}
+		}
 		report.Targets = append(report.Targets, targetReport)
 	}
 	return report, nil
+}
+
+func Uninstall(options UninstallOptions) (UninstallReport, error) {
+	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
+	if err != nil {
+		return UninstallReport{}, err
+	}
+	report := UninstallReport{}
+	for _, target := range targets {
+		ruleVersions, err := uninstallRuleCatalog(options.Source, target)
+		if err != nil {
+			return UninstallReport{}, err
+		}
+		if target.managedRulePath != "" {
+			if err := removeManagedRuleFile(target.managedRulePath, ruleVersions, target.host == "cursor"); err != nil {
+				return UninstallReport{}, err
+			}
+		}
+		if err := removeInstallHooks(target); err != nil {
+			return UninstallReport{}, err
+		}
+		if exists(target.targetPath) {
+			if err := removeExistingInstallTarget(target.targetPath); err != nil {
+				return UninstallReport{}, err
+			}
+		}
+		report.Targets = append(report.Targets, installTargetReport(target))
+	}
+	return report, nil
+}
+
+func uninstallRuleCatalog(source string, target installTarget) ([]string, error) {
+	if target.managedRulePath == "" {
+		return nil, nil
+	}
+	source = strings.TrimSpace(source)
+	if source != "" {
+		absolute, err := filepath.Abs(source)
+		if err != nil {
+			return nil, err
+		}
+		return LoadManagedRules(filepath.Clean(absolute))
+	}
+	if exists(target.targetPath) {
+		if rules, err := LoadManagedRules(target.targetPath); err == nil {
+			return rules, nil
+		}
+	}
+	data, err := os.ReadFile(target.managedRulePath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("cannot resolve managed rule catalog for %s; pass --source", target.targetPath)
 }
 
 func normalizeInstallHost(host string) (string, error) {
@@ -163,14 +225,17 @@ func installTargets(host, scope, project string) ([]installTarget, error) {
 	for _, h := range hosts {
 		var base string
 		var hookConfig string
+		var managedRulePath string
 		if scope == "global" {
 			switch h {
 			case "claude":
 				base = filepath.Join(home, ".claude", "skills")
 				hookConfig = filepath.Join(home, ".claude", "settings.json")
+				managedRulePath = filepath.Join(home, ".claude", "CLAUDE.md")
 			case "codex":
 				base = filepath.Join(home, ".codex", "skills")
 				hookConfig = filepath.Join(home, ".codex", "hooks.json")
+				managedRulePath = filepath.Join(home, ".codex", "AGENTS.md")
 			case "cursor":
 				base = filepath.Join(home, ".cursor")
 				hookConfig = filepath.Join(home, ".cursor", "hooks.json")
@@ -180,21 +245,61 @@ func installTargets(host, scope, project string) ([]installTarget, error) {
 			case "claude":
 				base = filepath.Join(project, ".claude", "skills")
 				hookConfig = filepath.Join(project, ".claude", "settings.json")
+				managedRulePath = filepath.Join(project, "CLAUDE.md")
 			case "codex":
 				base = filepath.Join(project, ".codex", "skills")
 				hookConfig = filepath.Join(project, ".codex", "hooks.json")
+				managedRulePath = filepath.Join(project, "AGENTS.md")
 			case "cursor":
 				base = filepath.Join(project, ".cursor")
 				hookConfig = filepath.Join(project, ".cursor", "hooks.json")
+				managedRulePath = filepath.Join(project, ".cursor", "rules", "formal-gates.mdc")
 			}
 		}
+		managedRule := ""
+		if managedRulePath != "" {
+			managedRule = filepath.Clean(managedRulePath)
+		}
 		targets = append(targets, installTarget{
-			host:       h,
-			targetPath: filepath.Clean(filepath.Join(base, "formal-gates")),
-			hookConfig: filepath.Clean(hookConfig),
+			host:            h,
+			targetPath:      filepath.Clean(filepath.Join(base, "formal-gates")),
+			hookConfig:      filepath.Clean(hookConfig),
+			managedRulePath: managedRule,
 		})
 	}
 	return targets, nil
+}
+
+func resolveInstallTargets(host, scope, project string) ([]installTarget, error) {
+	normalizedHost, err := normalizeInstallHost(host)
+	if err != nil {
+		return nil, err
+	}
+	normalizedScope, err := normalizeInstallScope(scope)
+	if err != nil {
+		return nil, err
+	}
+	projectAbs := ""
+	if normalizedScope == "project" || strings.TrimSpace(project) != "" {
+		if strings.TrimSpace(project) == "" {
+			return nil, fmt.Errorf("--project is required when --scope project is used")
+		}
+		projectAbs, err = filepath.Abs(project)
+		if err != nil {
+			return nil, err
+		}
+		projectAbs = filepath.Clean(projectAbs)
+	}
+	return installTargets(normalizedHost, normalizedScope, projectAbs)
+}
+
+func installTargetReport(target installTarget) InstallTargetReport {
+	return InstallTargetReport{
+		Host:            target.host,
+		TargetPath:      filepath.ToSlash(target.targetPath),
+		HookConfig:      filepath.ToSlash(target.hookConfig),
+		ManagedRulePath: filepath.ToSlash(target.managedRulePath),
+	}
 }
 
 func installHomeDir() (string, error) {
@@ -359,7 +464,11 @@ func configureInstallHook(target installTarget) error {
 		return err
 	}
 	hooks := hookObject(config)
-	gateCommand := nativeInstallCommand(target.targetPath, "hook", "decide")
+	gateArgs := []string{"hook", "decide"}
+	if target.host == "codex" {
+		gateArgs = append(gateArgs, "--provider", "codex")
+	}
+	gateCommand := nativeInstallCommand(target.targetPath, gateArgs...)
 	var desired map[string]any
 	shape := "nested"
 	switch target.host {
@@ -388,7 +497,7 @@ func configureInstallHook(target installTarget) error {
 	}
 	for event, entry := range desired {
 		existing, _ := hooks[event].([]any)
-		hooks[event] = append(removeFormalGatesHookEntries(existing, shape), entry)
+		hooks[event] = append(removeFormalGatesHookEntries(existing, target, shape), entry)
 	}
 	for event, value := range hooks {
 		if _, ok := desired[event]; ok {
@@ -398,9 +507,40 @@ func configureInstallHook(target installTarget) error {
 		if !ok {
 			continue
 		}
-		hooks[event] = removeFormalGatesHookEntries(existing, shape)
+		hooks[event] = removeFormalGatesHookEntries(existing, target, shape)
 	}
 	config["hooks"] = hooks
+	return writeHookConfig(target.hookConfig, config)
+}
+
+func removeInstallHooks(target installTarget) error {
+	if !isFile(target.hookConfig) {
+		return nil
+	}
+	config, err := readHookConfig(target.hookConfig)
+	if err != nil {
+		return err
+	}
+	hooks, ok := config["hooks"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	before, _ := json.Marshal(config)
+	shape := "nested"
+	if target.host == "cursor" {
+		shape = "flat"
+	}
+	for event, value := range hooks {
+		existing, ok := value.([]any)
+		if !ok {
+			continue
+		}
+		hooks[event] = removeFormalGatesHookEntries(existing, target, shape)
+	}
+	after, _ := json.Marshal(config)
+	if string(before) == string(after) {
+		return nil
+	}
 	return writeHookConfig(target.hookConfig, config)
 }
 
@@ -473,7 +613,7 @@ func flatHookEntry(command string) map[string]any {
 	}
 }
 
-func removeFormalGatesHookEntries(entries []any, shape string) []any {
+func removeFormalGatesHookEntries(entries []any, target installTarget, shape string) []any {
 	kept := make([]any, 0, len(entries))
 	for _, entry := range entries {
 		entryMap, ok := entry.(map[string]any)
@@ -485,37 +625,120 @@ func removeFormalGatesHookEntries(entries []any, shape string) []any {
 			nested, ok := entryMap["hooks"].([]any)
 			if ok {
 				remaining := make([]any, 0, len(nested))
+				removed := false
 				for _, hook := range nested {
-					if !isFormalGatesHook(hook) {
+					if !isInstallerHookValue(entryMap, hook, target, shape) {
 						remaining = append(remaining, hook)
+					} else {
+						removed = true
 					}
 				}
-				if len(remaining) > 0 {
+				if !removed {
+					kept = append(kept, entryMap)
+				} else if len(remaining) > 0 {
 					entryMap["hooks"] = remaining
 					kept = append(kept, entryMap)
 				}
 				continue
 			}
 		}
-		if !isFormalGatesHook(entryMap) {
+		if !isInstallerHookValue(nil, entryMap, target, shape) {
 			kept = append(kept, entryMap)
 		}
 	}
 	return kept
 }
 
-func isFormalGatesHook(value any) bool {
-	text := strings.ToLower(fmt.Sprint(value))
-	for _, marker := range []string{
-		"formal-gates",
-		"enforce-gate-sequence.ps1",
-		"capture-subagent-receipt.ps1",
-	} {
-		if strings.Contains(text, marker) {
-			return true
+func isInstallerHookValue(parent map[string]any, value any, target installTarget, shape string) bool {
+	command, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	commandText, ok := command["command"].(string)
+	if !ok || !installerHookCommands(target)[commandText] {
+		return false
+	}
+	if shape == "nested" {
+		if !exactObjectKeys(parent, "matcher", "hooks") || parent["matcher"] != "*" {
+			return false
+		}
+		return exactNestedHookShape(command, target.host) ||
+			(exactLegacyNestedHookShape(command) &&
+				(isLegacyInstallerHookCommand(commandText) || isLegacyCodexGateCommand(commandText, target)))
+	}
+	return exactFlatHookShape(command) ||
+		(exactLegacyFlatHookShape(command) && isLegacyInstallerHookCommand(commandText))
+}
+
+func installerHookCommands(target installTarget) map[string]bool {
+	commands := map[string]bool{}
+	gateArgs := []string{"hook", "decide"}
+	if target.host == "codex" {
+		commands[nativeInstallCommand(target.targetPath, "hook", "decide")] = true
+		gateArgs = append(gateArgs, "--provider", "codex")
+	}
+	commands[nativeInstallCommand(target.targetPath, gateArgs...)] = true
+	lifecycleHooks, err := lifecycle.HookDefinitions(target.host)
+	if err == nil {
+		for _, hook := range lifecycleHooks {
+			commands[nativeInstallCommand(target.targetPath, hook.Command...)] = true
 		}
 	}
-	return false
+	for _, command := range []string{
+		"pwsh -File hooks/" + "enforce-" + "gate-sequence.ps1",
+		"pwsh -File hooks/" + "capture-" + "subagent-receipt.ps1",
+	} {
+		commands[command] = true
+	}
+	return commands
+}
+
+func exactNestedHookShape(value map[string]any, host string) bool {
+	if value == nil || value["type"] != "command" {
+		return false
+	}
+	if host == "codex" {
+		return exactObjectKeys(value, "type", "command", "timeout") && value["timeout"] == float64(30)
+	}
+	return exactObjectKeys(value, "type", "command")
+}
+
+func exactFlatHookShape(value map[string]any) bool {
+	return value != nil && exactObjectKeys(value, "command", "timeout", "failClosed") &&
+		value["timeout"] == float64(30) && value["failClosed"] == true
+}
+
+func exactLegacyNestedHookShape(value map[string]any) bool {
+	return value != nil && exactObjectKeys(value, "type", "command") && value["type"] == "command"
+}
+
+func exactLegacyFlatHookShape(value map[string]any) bool {
+	return value != nil && exactObjectKeys(value, "command")
+}
+
+func isLegacyInstallerHookCommand(command string) bool {
+	return command == "pwsh -File hooks/"+"enforce-"+"gate-sequence.ps1" ||
+		command == "pwsh -File hooks/"+"capture-"+"subagent-receipt.ps1"
+}
+
+func isLegacyCodexGateCommand(command string, target installTarget) bool {
+	return target.host == "codex" && command == nativeInstallCommand(target.targetPath, "hook", "decide")
+}
+
+func exactObjectKeys(value map[string]any, expected ...string) bool {
+	if value == nil || len(value) != len(expected) {
+		return false
+	}
+	keys := make(map[string]bool, len(expected))
+	for _, key := range expected {
+		keys[key] = true
+	}
+	for key := range value {
+		if !keys[key] {
+			return false
+		}
+	}
+	return true
 }
 
 func nativeInstallCommand(skillRoot string, args ...string) string {

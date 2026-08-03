@@ -14,6 +14,30 @@ type HookDecision struct {
 	PermissionDecisionReason string `json:"permissionDecisionReason"`
 }
 
+type CodexHookDecision struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
+}
+
+func HookResponse(provider string, decision HookDecision) any {
+	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return CodexHookDecision{Decision: decision.Decision, Reason: decision.Reason}
+	}
+	return decision
+}
+
+// HookExitCode returns the process status expected by the selected host. Codex
+// consumes the JSON block decision only when the hook process itself succeeds.
+func HookExitCode(provider string, decision HookDecision) int {
+	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return 0
+	}
+	if decision.PermissionDecision == "deny" {
+		return 2
+	}
+	return 0
+}
+
 func Hook(payload []byte) (HookDecision, error) {
 	var decoded any
 	if err := json.Unmarshal(trimJSONBOM(payload), &decoded); err != nil {
