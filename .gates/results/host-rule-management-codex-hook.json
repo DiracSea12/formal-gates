@@ -1,0 +1,451 @@
+{
+  "runId": "host-rule-management-codex-hook",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "9ac28d38d0e7822470aeb9c39efcae84464027c94cda9d89082f79c2fa68cd88",
+  "basePromptRevision": "5190cabdfd72e4819ea9b3cbbdd1f341a17a69478b737cd00b80ab1145c86fa4",
+  "catalogRevision": "bdc1637b8c6f4e7f7efc5b1dabba56f8b94976a577069c55521ca51a36121fb7",
+  "vcs": "git",
+  "baseSnapshot": "12bcb2044fb65baae2b61a87e78e6780012ff1a8",
+  "currentSnapshot": "2e8ed2b05a4a502e8115b960710b4d9d6b53d0d8",
+  "requirementArtifacts": [
+    {
+      "path": "SKILL.md",
+      "revision": "b684cb90c7244eb0fa691846e3035ce8102bf3310c6b88f0d6293a1884ce0a5a"
+    },
+    {
+      "path": "openspec/changes/host-rule-management-and-codex-hook/master-requirements.md",
+      "revision": "9ac28d38d0e7822470aeb9c39efcae84464027c94cda9d89082f79c2fa68cd88"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 3,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "2e8ed2b05a4a502e8115b960710b4d9d6b53d0d8",
+      "compared": "12bcb2044fb65baae2b61a87e78e6780012ff1a8..2e8ed2b05a4a502e8115b960710b4d9d6b53d0d8",
+      "dispatchId": "dispatch-6943169db073d35c0ed14b4d"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "2e8ed2b05a4a502e8115b960710b4d9d6b53d0d8",
+      "sourceSnapshot": "cbaafbe95dc485394ee464f3d004b0e7ca288f07",
+      "compared": "12bcb2044fb65baae2b61a87e78e6780012ff1a8..cbaafbe95dc485394ee464f3d004b0e7ca288f07",
+      "dispatchId": "dispatch-e09686ad6e4e8cc90f75509e"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "2e8ed2b05a4a502e8115b960710b4d9d6b53d0d8",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "Read SKILL.md and inspect intake ordering.",
+        "observation": "All five ordering and confirmation conditions match the oracle.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-002",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "Parse managed-rules.json and compare the final rule byte-for-byte.",
+        "observation": "The catalog is valid, unique, complete, and latest text matches.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Run tests, race, vet, build, package validation, portable canary, and git diff check with the required Go toolchain.",
+        "observation": "All commands succeeded.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Exercise Claude, Codex, and Cursor project/global installs in isolated fixtures.",
+        "observation": "Runtime, rules, hooks, Codex provider wiring, unrelated content, and opposite scopes match.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Install Cursor globally and compare the pre-install file snapshot.",
+        "observation": "Runtime/hooks work, existing configuration is preserved, and no global rule file is created.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Install fixtures containing every catalog rule and duplicates across all managed targets.",
+        "observation": "Exactly one latest rule remains and unrelated content/scopes remain.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-014",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Install each host/scope three times and compare guidance and hook bytes.",
+        "observation": "Files are byte-stable, hooks are not duplicated, and Cursor global remains rule-free.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Run LF/CRLF exact matching fixtures through install and uninstall.",
+        "observation": "Only exact rules are changed; near matches, marker-like text, order, and newline style remain.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-015",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Install/uninstall Claude global and project targets with historical rules and duplicates.",
+        "observation": "Managed content/runtime/hooks are removed and unrelated content/scopes remain.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-016",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Install/uninstall Codex global and project targets with historical rules and duplicates.",
+        "observation": "Codex managed content/runtime/hooks are removed and unrelated content remains.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Exercise Cursor project/global install-uninstall including repeated uninstall.",
+        "observation": "Managed-only files are removed, mixed files and unrelated configuration remain, and repeated uninstall is idempotent.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-012",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Send a blocking PreToolUse payload to all provider hook decision commands.",
+        "observation": "Codex emits block and exits 0; Claude/Cursor deny and exit 2.",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-013",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "Run the installed candidate canary with the current Linux host Codex configuration.",
+        "observation": "Codex 0.146.0-alpha.3.1 captured a real PreToolUse payload, blocked the command, left no marker, and source/installed hashes matched.",
+        "oracleResult": "PASS"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-0da6a9a28cfb3231c5d23986": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1084720210cd3c73d71c8d21": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1087b7b0feda7f10cb70b26e": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-15a9d6c1c9728e616c8be93f": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-18deccb2cbf836d19e24c2c2": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1e5ac5c241e6d9012b173a4f": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-28d8ec31f658fdcb72618bea": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2c514da83643fc4630dfce53": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-386bbef77fe1c813f72eda0a": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4816c1a15abda1897c8e4429": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-55b42454288be932f80eed72": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5fb661098a5eee9f5c49edc9": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-627de763b2895808078b71d3": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-685e7233310223bd612df693": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6943169db073d35c0ed14b4d": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-726ee943ecddcb819ea9f168": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-78b5ef8e67be1a1b927c17e9": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-830a9630c9a335481b8226ba": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-86e9e9af77d6498d8141b79d": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-879cdf8e8c7592f2e2d19d62": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-88f45ba9952fcbd0b669bdfc": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-91fea8bee57c0bd5b9901ab4": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-954d5c63194de0ea37d34555": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-991e8f116398f02310696f06": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9a435a48d7a7365bdc0fbed0": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a394813204145d82d45955b5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a6a5df59c872c7c24a7da063": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cd30ef298332074782bad2fb": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e09686ad6e4e8cc90f75509e": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e32a35385f7ef55e1c33b2bc": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eb339a80ce2b3e7baab4a15f": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-efe397c1ef9df836cff1ca38": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
