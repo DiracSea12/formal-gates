@@ -1,6 +1,6 @@
 # formal-gates
 
-**A lightweight AI development-review workflow that forces the implementer and the reviewer into separate, mutually invisible sessions**
+**A lightweight development and review workflow built on strict separation of the implementer, reviewer, and tester: from requirements clarification to seal, every step has a standardized process, gates, and records**
 
 [English](README_EN.md) | [中文](README.md)
 
@@ -10,27 +10,22 @@
 
 ---
 
-The same AI that writes code also reviews its own work — a structural blind spot, and no audit trail.
+formal-gates is a complete AI-assisted development workflow: requirements clarification, route selection, QA design, development, snapshot, QA testing, independent review, rework, and seal — every step has a standardized process, gates, and records.
 
-formal-gates puts implementation, QA, and review into **mutually invisible**
-independent sessions: a reviewer gets only the requirement text and the native VCS
-diff (zero context), so it cannot fill gaps with implementation memory. The CLI is
-the only ledger; at seal it collapses the whole round into one summary that depends
-on no session memory.
+The review step runs in mutually invisible independent sessions: a reviewer receives only the requirement text and the native VCS diff (zero context), so it cannot fill gaps from implementation memory. The CLI keeps the only record; at seal the whole round collapses into a summary that depends on no session memory.
 
 ```text
 User
   │
   ▼
-Main agent ──► CLI ledger (.gates/)
+Main agent ──► CLI record (.gates/)
   │
   ├─► Dev Worker    independent session · zero-context · requirement + VCS diff
   ├─► Gate A / B    independent session · zero-context · VCS diff
   └─► QA Executor   independent session · runs approved cases
 ```
 
-In one line: **take the writer and the reviewer out of the same head, and write the
-conclusions into a ledger that depends on no session memory.**
+In one line: **take the writer, the reviewer, and the tester out of the same head, and write the conclusions into a record that depends on no anchored memory.**
 
 ---
 
@@ -43,30 +38,31 @@ conclusions into a ledger that depends on no session memory.**
 - [Installation And Uninstall](#installation-and-uninstall)
 - [Usage](#usage)
 - [FAQ](#faq)
-- [Scope And Status](#scope-and-status)
+- [Current Status](#current-status)
 - [Local Validation, Contributing, And License](#local-validation-contributing-and-license)
 
 ---
 
 ## Why
 
-An AI agent that implements code and then reviews its own work has two problems:
+An AI agent that implements code and then tests and reviews its own work has two problems:
 
 - **A structural blind spot.** The reviewer and the implementer share one memory and one context. The AI can fill gaps with "I wrote it, so I know what I meant" instead of judging the change on its own — so real defects get rationalized away.
-- **No audit trail.** There is no independent review and nothing traceable. When a session ends, the reasoning behind the implementation, the review, and the approvals is gone.
+- **No records left.** There is no independent review and nothing traceable. When a session ends, the reasoning behind the implementation, the review conclusions, and the approvals are all lost.
 
-formal-gates puts implementation, QA, and review into **mutually invisible** independent sessions. A reviewer session receives only the requirement text and the native VCS diff — zero context: no chain of thought, no chat history, no live state from the implementer. It cannot fall back on implementation memory; it faces the change like a stranger would. That is what a reviewer should be.
+formal-gates provides a complete AI-coding development workflow and puts implementation, QA, and review into **mutually invisible** independent sessions. A reviewer session receives only the requirement text and the native VCS diff — zero context: no chain of thought, opinions, chat history, or live state from the implementer. It cannot fall back on implementation memory; it faces the change like a stranger would. That is what a reviewer should be.
 
-The CLI is the only ledger. Every semantic result — requirement confirmation, route choice, gate verdicts, QA cases, snapshots — is recorded under `.gates/` and collapses into a single summary at seal. Sealing means: freeze the round's results, write one summary, and clear the temporary state. Anyone can open the repository afterwards and see exactly what happened and why each gate passed.
+The CLI keeps the only record. Every semantic result — requirement confirmation, route choice, gate verdicts, QA cases, snapshots — is recorded under `.gates/` and collapses into a single summary at seal. Sealing means: freeze the round's results, write one summary, and clear the temporary state. Anyone can open the repository afterwards and see exactly what happened and why each gate passed.
 
-In one line: **take the writer and the reviewer out of the same head, and write the conclusions into a ledger that depends on no session memory.**
+In one line: **take the writer and the reviewer out of the same head, and write the conclusions into a record that depends on no session memory.**
 
 ---
 
 ## Features
 
+- **A complete flow** — requirements clarification, route selection, QA design, development, snapshot, independent review, rework, and seal: none skipped, every step recorded.
 - **Implementation and review are strictly separated** — the dev worker, review gates, and QA each run in mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff. What this gives you: verdicts rest on the change alone and cannot be colored by implementation memory.
-- **The CLI is the only ledger** — during a run there is one temporary state file, `.gates/tmp/<run-id>/state.json`; after seal only the summary `.gates/results/<run-id>.json` remains. The CLI stores no diffs and copies no project files. What this gives you: no second dataset to keep in sync, and no lost state when a session ends.
+- **The CLI is the only record** — during a run there is one temporary state file, `.gates/tmp/<run-id>/state.json`; after seal only the summary `.gates/results/<run-id>.json` remains. The CLI stores no diffs and copies no project files. What this gives you: no second dataset to keep in sync, and no lost state when a session ends.
 - **A gate is just a file; add or remove them freely** — each `gates/*.md` is one review gate; add a file for a new gate, delete one to drop it, with no limit. What this gives you: the gate set is exactly what the `gates/` directory contains — no registry, YAML, or weights table.
 - **Gates and prompts are customizable** — gate review logic lives in `gates/*.md` and each action's prompt (requirements clarification, QA design/review/execution, the development worker, carry) lives in `prompts/actions/*.md`, all plain Markdown files inside the installed package. What this gives you: write a file to add a gate, or reword how a review step is expressed by editing its prompt — no code changes.
 - **QA is designed and independently reviewed before development** — a complete candidate case set (STATIC direct checks plus LIVE real execution) is produced first, and an independent QA Review must pass before any code is written; rework keeps unchanged PASS cases. What this gives you: the behavior contract is frozen before coding, and repairs don't re-test what didn't change.
@@ -77,8 +73,8 @@ In one line: **take the writer and the reviewer out of the same head, and write 
 
 ## How It Works
 
-- **A gate is a file** — every independent review gate is a `gates/*.md` file whose filename is its ID. Want a new check? Write a file. Don't want it? Delete it. QA is built in and doesn't occupy the gate directory.
-- **The CLI is the only ledger** — all semantic conclusions live under `.gates/` and collapse into one summary at seal. It stores no diffs and no evidence; snapshots and diffs live in the repository's own VCS.
+- **A gate is a file** — every independent review gate is a `gates/*.md` file whose filename is its ID. Want to review something? Write a file. Don't want it? Delete it. Want to change the review logic? Edit the file's prompt. QA is built in and doesn't occupy the gate directory.
+- **The CLI is the only record** — all semantic conclusions live under `.gates/` and collapse into one summary at seal. It stores no diffs and no evidence; snapshots and diffs live in the repository's own VCS.
 - **QA lifecycle** — before development, "what counts as correct" is written down: each behavior to verify becomes candidate cases (static checks plus real execution), and an independent QA Review must pass before code is written. Rework re-checks only failed or changed cases; unchanged PASS cases are kept.
 - **One route** — after the requirement is confirmed, choose once from lightweight, full, or custom. Lightweight is the minimal flow; full adds complete QA and every gate; custom freely picks any non-empty subset of QA and the gates — QA included or not.
 - **State and persistence** — a running run has exactly one temporary state file, and any interruption can be resumed from it; after seal or abort that temporary state is deleted and only an immutable summary remains.
@@ -173,7 +169,7 @@ package containing `references/managed-rules.json`.
 
 ## Usage
 
-As a human you only need to do three things:
+As a user you only need to do three things:
 
 1. **Install** — set it up for one of your AI hosts (claude, codex, or cursor) as described above.
 2. **Let your AI agent drive the formal flow** — the installed skill (`SKILL.md` and `references/`) is the agent's operating manual. It reads those files and runs the formal flow for your requirement: clarify the requirement, pick a route, dispatch the independent worker and reviewers, record QA, and seal. You don't need to remember any commands.
@@ -185,8 +181,11 @@ The `formal-gates workflow ...` commands are run by the flow driver (your AI age
 
 ## FAQ
 
+**Why not just open a new window to review — why do I need formal-gates?**
+A new window solves one thing: independent zero-context review. formal-gates provides the complete workflow — requirements clarification, confirmation, QA design, development, snapshot, independent review, rework, and seal — it runs every time, records every step, and rework re-checks only the cases that changed.
+
 **How is this different from a review bot that has AI review its own work?**
-A review bot typically runs in the same context that produced the code, so the AI can fill gaps from its implementation memory. formal-gates puts implementation, QA, and review into mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff, with no implementation memory to lean on, so they can only judge the change itself. It also leaves a CLI ledger.
+A review bot typically runs in the same context that produced the code, so the AI can fill gaps from its implementation memory. formal-gates puts implementation, QA, and review into mutually invisible independent sessions; reviewers see only the requirement plus the VCS diff, with no implementation memory to lean on, so they can only judge the change itself. It also leaves a CLI record.
 
 **What are the prerequisites?**
 Building from source needs Go 1.22+ and one host: claude, codex, or cursor. A formal run needs a Git, SVN, or P4 repository; projects without a VCS don't enter the formal flow.
@@ -205,11 +204,9 @@ The run's entire temporary directory is deleted; only the summary `.gates/result
 
 ---
 
-## Scope And Status
+## Current Status
 
-**Status.** This is a v0.1.0 prerelease; the documented workflow is authoritative in this repository. Releases are published on [GitHub Releases](https://github.com/DiracSea12/formal-gates/releases).
-
-**Scope.** This project guarantees documented normal use and common operator mistakes. Unless explicitly required, malicious internal-state edits, permission or immutable-file fault injection, attack-style inputs, and other violations of the documented workflow are out of scope and must not create extra defensive systems.
+This is a v0.1.0 prerelease; the documented workflow is authoritative in this repository. Releases are published on [GitHub Releases](https://github.com/DiracSea12/formal-gates/releases).
 
 ---
 
