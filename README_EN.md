@@ -64,7 +64,7 @@ Review runs in mutually invisible independent sessions: a reviewer receives only
 
 - **The complete flow** — requirements confirmation, slicing and route, pre-development review, test design, development, snapshot, independent review, repair, and seal. None skipped, every step recorded.
 - **Requirements are confirmed before any code** — before development the main agent asks about each consequential decision one at a time, then presents the integrated plan for your confirmation; it continues only after you say yes.
-- **Few decisions, made once** — first choose **lightweight** (a normal flow with no formal records) or **formal** (the complete flow); inside the formal flow, choose how complete (full / custom). After that the choices carry forward.
+- **Few decisions, made once** — first choose **lightweight** (plain vibe-coding, no formal flow) or **formal** (the complete flow); inside the formal flow, choose how complete: full or custom. After that the choices carry forward.
 - **"What counts as correct" is fixed before coding** — before development the behaviors to verify are written as cases (real execution), and an independent review must pass before any code is written; later, conclusions that didn't change are kept instead of being re-tested.
 - **Writing, reviewing, and testing are mutually isolated** — the three roles work in invisible independent sessions; reviewers see only the requirement and the change, so they can't be colored by the writer's memory.
 - **A snapshot pins the progress** — when implementation finishes, the VCS gets an immutable marker, and every later review targets only that marker, never the drifting working tree.
@@ -77,13 +77,18 @@ Review runs in mutually invisible independent sessions: a reviewer receives only
 
 ## The Formal Flow: from requirements clarification to seal
 
-Your change request goes through **intake** first, then enters the formal flow. **The formal flow has nine phases** (1–9); intake comes before it. Every phase has a standard procedure, an explicit executor, and a written record. Below, "main agent" means your AI orchestrator.
+Your change request goes through **intake** first, then enters the formal flow. **The formal flow has nine phases** (1–9); intake comes before it.
+
+> **The entire flow runs only when you actively choose the formal flow.** With "lightweight", your AI handles the change directly in a vibe-coding manner, with no gates and no formal records. The nine-phase formal flow is heavier because every step carries gates and records; it need not be entered when those are not required.
+
+Every phase has a standard procedure, an explicit executor, and a written record. Below, "main agent" means your AI orchestrator.
 
 ### Intake: clarify and confirm the requirement (before the formal flow)
 
-**What happens** — every change request starts here. The main agent looks at the current state, then asks about each consequential decision one at a time (in plain language, explaining the consequences of each option), and presents the integrated plan for your explicit confirmation. After confirmation it assesses the workload and asks you to choose **lightweight** (a normal flow, no formal records) or **formal** (the complete flow).
+**What happens** — every change request starts here. The main agent looks at the current state, then asks about each consequential decision one at a time (in plain language, explaining the consequences of each option), and presents the integrated plan for your explicit confirmation. After confirmation it assesses the workload and asks you to **route** this change by selecting the track it will follow: **lightweight** (a normal development flow, relatively fast and light, with no formal records or gates; suitable for small changes and documentation edits) or **formal** (the complete flow, heavier, but with gates and records at every step; choose it when full guarantees are required).
 **Who does it** — the main agent directly; no independent agent is needed.
 **What is recorded** — the confirmed requirement, the basis for every later judgment.
+**In one line** — route first: small changes take the lightweight vibe-coding path, while changes that require gates and records take the formal one; inside the formal flow, full / custom then determines completeness (see phase 3).
 
 ### 1. Start
 
@@ -99,7 +104,7 @@ Your change request goes through **intake** first, then enters the formal flow. 
 
 ### 3. Decide whether to split, and how complete the flow runs
 
-**What happens** — first decide whether the work should be split into independent parts (only very large work needs this; usually it doesn't). Then decide how complete the flow runs: **full** (complete testing + every review gate) or **custom** (pick your own subset — at least one item, not the full set; the full set is full).
+**What happens** — first decide whether to **split** the work (break a large task into independent parts that are developed separately and reviewed together after merging — only very large work needs this; usually it does not). Then decide how complete the flow runs: **full** (complete testing plus every review gate — the most complete, and the heaviest) or **custom** (select your own subset — for example, only testing, or only a few gates; at least one item must be selected, and not the full set; the full set is full). If full is too heavy, custom can trim the scope.
 **Who does it** — the main agent gives a recommendation; you decide.
 **What is recorded** — the slicing decision and choice are written into the flow state and carried forward.
 **In one line** — decide how to split first, then how strictly to review.
@@ -179,7 +184,12 @@ P0/P1 findings block PASS; P2 is advisory only.
 
 Findings are graded by severity: P0/P1 are severe problems that block PASS; P2 is advisory only and does not block.
 
-To see which gates a package ships by default, look at its `gates/` directory — this repository currently ships the complexity gate and the implementation quality gate; the merge gate is attached automatically in sliced runs.
+This repository ships two gates by default (each a file under `gates/`):
+
+- **Complexity gate** — checks whether the implementation is "sufficient and minimal": any new abstraction, file, type, state, or configuration must be attributable to an existing capability; otherwise it constitutes over-engineering.
+- **Implementation quality gate** — reviews implementation quality across three dimensions: whether the requirement is fully covered, whether module boundaries and ownership are sound, and correctness and maintainability (including test quality, dead code, and observable performance regressions).
+
+The **merge gate** is attached automatically in sliced runs (two or more slices) and reviews the merged change (conflict resolution, cross-slice seams) and cross-slice architecture.
 
 **After seal**, the round's conclusions are frozen into one immutable record at `.gates/results/<run-id>.json`: which gates passed, each finding's location and severity, and the test results. Just open it when you want to look — there is no schema to memorize.
 
@@ -281,7 +291,7 @@ A review bot typically runs in the same context that produced the code, so the A
 The intake phase asks you to choose **lightweight** or **formal**: lightweight is a normal development flow with no formal records; formal enters the nine phases above. Note that how complete the formal flow runs (full / custom) is not chosen at intake — it is confirmed inside the formal flow, after the slicing decision.
 
 **Is the formal flow expensive?**
-Yes. A formal run dispatches several independent reviewers and runs real tests, so it costs more time and tokens than ordinary development. Small changes can use the lightweight flow; choose formal when you want the full gates and records.
+Yes. A formal run dispatches several independent reviewers and runs real tests, so it costs more time and tokens than ordinary development. If full is too heavy, choose **custom** inside the formal flow to trim the scope (omit testing, or omit some gates); small changes can go straight to lightweight vibe-coding; very large work can use the **slicing** mode, split into independent parts developed in parallel and reviewed together after merging. Review gates can also be added, removed, and customized freely — if a gate is unsuitable, delete it or change what it checks, which likewise affects the weight.
 
 **What are the prerequisites?**
 Building from source needs Go 1.22+ and one host: claude, codex, or cursor. A formal run needs a Git, SVN, or P4 repository; projects without a VCS don't enter the formal flow.
