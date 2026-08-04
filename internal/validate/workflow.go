@@ -483,7 +483,8 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 // trace. The fast-path (non-high-confidence) decision note may note uncertainty.
 func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note, masterRunID string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
 			return err
 		}
 		if _, err := requireNativeCurrent(root, *state); err != nil {
@@ -498,6 +499,12 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 		}
 		if !state.RequirementConfirmed {
 			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		if state.RetainedOverall && decision == "no-split" {
+			// 保留总任务实例专为拆分而启动，必须记录 split；记录 no-split 会让它
+			// 无法进入开发（prepareDevelopmentAction 拒绝保留总任务实例），只能
+			// abort+restart 恢复，是死端。
+			return fmt.Errorf("a retained-overall run must record a split decision")
 		}
 		if decision == "split" && !state.RetainedOverall {
 			// 切片实例：必须引用其保留总任务 master run，且该 master 的整体级产品
@@ -536,7 +543,18 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			// 走到这里时 decision == "split" 且 state.RetainedOverall 必为 true（顶层
 			// 已处理所有拆分的非保留总任务 run）。分片 >= 2 的保留总任务实例自动
 			// 附加合并门与合并 QA：路线确定为合并路线，不涉常规路线选择，custom
-			// 的省略不延伸到合并验证。
+			// 的省略不延伸到合并验证。先确认合并门在当前目录中已发现，否则后续
+			// prepare-gate 会死端。
+			mergeGateDiscovered := false
+			for _, gate := range catalog.Gates {
+				if gate.ID == mergeGateID {
+					mergeGateDiscovered = true
+					break
+				}
+			}
+			if !mergeGateDiscovered {
+				return fmt.Errorf("merge gate %q is not discovered in the package catalog", mergeGateID)
+			}
 			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel)}
 			state.RouteMode = "merge"
 			state.SelectedGates = []string{mergeQAID, mergeGateID}
@@ -1422,13 +1440,19 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 		eligible := state.PreRepairSnapshot != "" && state.QAExecution.Snapshot == state.PreRepairSnapshot
 		eligible = eligible || (catalogChanged && state.QAExecution.Snapshot == state.CurrentSnapshot)
 		if eligible {
-			// 发出实际选中的 QA 模式 id（blackbox/whitebox/merge-qa，或旧目录的遗留
-			// "qa"），而不是字面 "qa"，使 inheritCarryResult 按 isQAMode 把 QA 结果
-			// 重绑到 QAExecution.Snapshot 而不是写进虚假的 Gates["qa"]。
+			// 发出实际选中的一个 QA 模式 id（blackbox/whitebox/merge-qa，或旧目录的
+			// 遗留 "qa"），使 inheritCarryResult 按 isQAMode 把 QA 结果重绑到
+			// QAExecution.Snapshot 而不是写进虚假的 Gates["qa"]。QAExecution 是单一
+			// 共享结果，只发一个代表性 QA id，避免对同一结果产生重复 carry 条目。
+			var qaModes []string
 			for id := range selectedSet(state) {
 				if isQAMode(id) {
-					ids = append(ids, id)
+					qaModes = append(qaModes, id)
 				}
+			}
+			sort.Strings(qaModes)
+			if len(qaModes) > 0 {
+				ids = append(ids, qaModes[0])
 			}
 		}
 	}

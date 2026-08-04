@@ -648,7 +648,11 @@ func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state = confirmAndRoute(t, root, pkg, state, "custom", []string{"quality"})
+	// 保留总任务实例必须记录 split（自动附加合并门与合并 QA），不设常规路线。
+	state = confirmRequirement(t, root, pkg, state)
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "split")
 	writeTestFile(t, filepath.Join(root, "merged-delivery.txt"), "merged delivery\n")
 	commitAll(t, root, "merged delivery")
 	state, err = AdvanceSnapshot(root, pkg, state.RunID, "")
