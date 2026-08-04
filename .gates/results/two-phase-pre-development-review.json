@@ -1,0 +1,242 @@
+{
+  "runId": "two-phase-pre-development-review",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "94a2314cc73ee7b8c000552f6f53c5294e5910e773f6209464b093cd972dfbae",
+  "basePromptRevision": "07f7b7662269940323142dfd53a03912444067b41b1aa8c0e685d113a3a3f6f4",
+  "catalogRevision": "65b63773be7eaad8bb69253698847e4c8017bec58450821cc6eb65533755fd63",
+  "vcs": "git",
+  "baseSnapshot": "e7fd04cd8284c1325def51dac8e72b1838afe52c",
+  "currentSnapshot": "d9a1f94d1c88297009e0b51d1b597a7916921b63",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/two-phase-pre-development-review/master-requirements.md",
+      "revision": "94a2314cc73ee7b8c000552f6f53c5294e5910e773f6209464b093cd972dfbae"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "d9a1f94d1c88297009e0b51d1b597a7916921b63",
+      "compared": "e7fd04cd8284c1325def51dac8e72b1838afe52c..d9a1f94d1c88297009e0b51d1b597a7916921b63",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "product-review 的 requireTransition case 中 runHasAction(state,\"product-review\") 守卫在 Go map 零值语义下功能冗余（缺失键返回空 Status，直接比较已判 false）；仅表达意图，可收缩且不改变行为。",
+          "locations": [
+            "internal/validate/workflow.go:1754"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-3ce436048196d3571169fbe7"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "d9a1f94d1c88297009e0b51d1b597a7916921b63",
+      "compared": "e7fd04cd8284c1325def51dac8e72b1838afe52c..d9a1f94d1c88297009e0b51d1b597a7916921b63",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "product-review 是已认领的零上下文派发动作（PrepareAction 设 reviewerRequired=true、canary 认领），但 RecordAction 记录路径跳过了 requireLifecycleVerification，与 start-readiness 及其他派发动作/门不一致；SKILL.md 文档化\"记录结果时会在改变状态前先检查生命周期模块\"。影响限于被拒绝的生命周期结果（如必需 provider 下未观察到 start/stop 事件的已认领派发），不影响正常成功 run。建议补上同一生命周期校验以保持一致。",
+          "locations": [
+            "internal/validate/workflow.go:597"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-5265e47d361de91653cf145f"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "d9a1f94d1c88297009e0b51d1b597a7916921b63",
+    "cases": [
+      {
+        "caseId": "CASE-009",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate；bin/formal-gates package validate --root .；检视 prompts/actions/ 与动作集合",
+        "observation": "prompts/actions/ 恰 8 个 .md，与 requiredActionIDs 完全一致；product-review 在 requiredActionIDs 与 RecordAction 允许列表",
+        "oracleResult": "目录校验 PASS，无缺失无多余"
+      },
+      {
+        "caseId": "CASE-010",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate；审读 requireTransition/runHasAction/actionPassedOrAbsent 及专门转换测试",
+        "observation": "product-review 未 PASS 时 start-readiness/qa-design/qa-review/development/snapshot/gate/seal 被拒；两者均 PASS 放行；FAIL→PASS 恢复路径由专门测试覆盖并验证",
+        "oracleResult": "转换规则与需求一致，无越权放行/错误拒绝"
+      },
+      {
+        "caseId": "CASE-011",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "阅读 requirements-clarification.md；扫描 prompts/SKILL.md/references/gates/Go 源码外部产品关键词",
+        "observation": "提示词具备全部拷问纪律要素（逐维拷问/轨迹/放过记录/PASS 自检/一次一问），31 行精简；变更文件外部产品关键词 0 处",
+        "oracleResult": "拷问纪律要素齐备且精简，外部产品关键词 0 处"
+      },
+      {
+        "caseId": "CASE-012",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "阅读 start-readiness.md、product-review.md；git diff --name-status",
+        "observation": "git diff 确认 product-review.md 为唯一新增(A)；start-readiness 已移除产品判据收敛为纯技术；product-review.md 13 行含产品/真实用户问题判据与范围边界",
+        "oracleResult": "start-readiness 纯技术、product-review 承载产品审、唯一新增确认"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "阅读 SKILL.md 第 4 步与 formal-flow.md 开发之前节",
+        "observation": "SKILL.md 第 4 步明确两段式（Part 1 先行、Part 2 与 QA 并行）；formal-flow.md 文档化 product-review prepare/claim/record 与顺序",
+        "oracleResult": "两段式顺序与命令映射均已文档化"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按 references/local-validation.md 清单在当前快照运行全套",
+        "observation": "go test/race/vet/构建/package validate/canary portable/diff check 全部 exit 0；gofmt -l 无输出",
+        "oracleResult": "全套验证退出码 0"
+      },
+      {
+        "caseId": "CASE-013",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离空 git 仓库（gates/ 空）用当前快照二进制按 formal-flow.md 走完整两段式流程到 Seal",
+        "observation": "每步 exit 0；product-review 先于 start-readiness/qa-design 记录且均 PASS；route full 仅选中 qa；seal SEALED；无 PENDING/RUNTIME_ERROR",
+        "oracleResult": "完整流程走到 Seal 成功，两段式顺序成立"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离空 git 仓库：requirements-clarification PASS 后不记录 product-review，依次尝试 start-readiness/qa-design/qa-review，再 product-review PASS 后重试",
+        "observation": "未 PASS 时三动作被拒（清晰错误、无派发记录、state.json 完整）；product-review PASS 后同一 start-readiness 放行",
+        "oracleResult": "未 PASS 拒绝、PASS 后放行，无状态破坏"
+      },
+      {
+        "caseId": "CASE-014",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "阅读 SKILL.md 第 4 步、product-review.md、requirements-clarification.md、formal-flow.md",
+        "observation": "拍板循环全要素文档化（接受→已决策不阻塞、未接受→修订+零上下文重审、用户决策并入需求、不产生终态 FAIL）；实例化先于产品审次序明确；表述精简",
+        "oracleResult": "拍板循环要素与实例化次序均被文档化"
+      },
+      {
+        "caseId": "CASE-015",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离空 git 仓库两条路径各一 run：接受路径 FAIL→重派发 PASS；拒绝路径 FAIL→修订需求→走文档化 resume/requirement 变更→重派发 PASS",
+        "observation": "接受路径：FAIL 后重记录 PASS，start-readiness/qa-design 从被拒转放行；拒绝路径：修订后重派发 PASS，续走至 development-worker PREPARED；无不可恢复终态 FAIL",
+        "oracleResult": "两条路径均可经用户决议解除，开发最终解锁"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-0d4d55a91a061a25e8e7d79b": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-35eaef6845addea7b79c2875": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3ce436048196d3571169fbe7": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5265e47d361de91653cf145f": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6d0b96d90576f13c9fcc86e1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7e01c215470404d236ff980e": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a9923edd8881db1b6438905a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cf64b3fbc848c0be7eccd6e3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ed9a11ea15ff63f8db1b980b": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f6e0c71e1f087996fd960a0d": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
