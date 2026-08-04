@@ -54,7 +54,7 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
 formal-gates workflow slicing --root <repo> --package-root <package> \
   --run-id <id> --decision <split|no-split> [--count <n>] \
   [--slice '<slice-definition>' ...] [--parallel '<parallel-suggestion>'] \
-  [--note '<reason>']
+  [--note '<reason>'] [--master <retained-overall-master-run-id>]
 # 拆分建议对所有正式 run 必填呈现并留痕，含：拆分理由、如何拆、哪些子任务可并行、
 # 以及改拆后果说明（若改拆，黑盒 QA 设计按新拆分拓扑展开、已覆盖用例复用）；仅高置信
 # 要拆时需用户确认拆分方案。分片场景下整体级产品审/技术审足够，切片继承整体审查结果、

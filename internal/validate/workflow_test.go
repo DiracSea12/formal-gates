@@ -458,7 +458,7 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
 		t.Fatalf("start-readiness prepared before product review: %v", err)
 	}
-	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before the slicing decision") {
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason", ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass before the slicing decision") {
 		t.Fatalf("slicing decision recorded before product review: %v", err)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil {
@@ -1233,13 +1233,13 @@ func TestSlicingDecisionRequiresStartReadinessPass(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slicing-timing"))
 	state = recordProductReview(t, root, pkg, state)
-	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason"); err == nil || !strings.Contains(err.Error(), "Start Readiness must pass before the slicing decision") {
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason", ""); err == nil || !strings.Contains(err.Error(), "Start Readiness must pass before the slicing decision") {
 		t.Fatalf("slicing decision recorded before start-readiness: %v", err)
 	}
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 2, nil, "", "re-cut"); err == nil || !strings.Contains(err.Error(), "already recorded") {
+	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 2, nil, "", "re-cut", ""); err == nil || !strings.Contains(err.Error(), "already recorded") {
 		t.Fatalf("slicing decision was re-cut: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
@@ -1254,10 +1254,10 @@ func TestNoSplitDecisionRequiresReasonNote(t *testing.T) {
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slicing-note"))
 	state = recordProductReview(t, root, pkg, state)
 	state = recordReadiness(t, root, pkg, state)
-	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", ""); err == nil || !strings.Contains(err.Error(), "reason note") {
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "", ""); err == nil || !strings.Contains(err.Error(), "reason note") {
 		t.Fatalf("no-split decision without a reason note was accepted: %v", err)
 	}
-	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 1, nil, "", ""); err == nil || !strings.Contains(err.Error(), "at least two slices") {
+	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 1, nil, "", "", ""); err == nil || !strings.Contains(err.Error(), "at least two slices") {
 		t.Fatalf("single-slice split was accepted: %v", err)
 	}
 }
@@ -1274,7 +1274,7 @@ func TestMergeVerificationAutoAttachedForSplitRetainedOverall(t *testing.T) {
 	state = confirmRequirement(t, root, pkg, state)
 	state = recordProductReview(t, root, pkg, state)
 	state = recordReadiness(t, root, pkg, state)
-	state, err = RecordSlicing(root, pkg, state.RunID, "split", 2, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "")
+	state, err = RecordSlicing(root, pkg, state.RunID, "split", 2, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1438,9 +1438,10 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 	}
 
 	split := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "split-path"))
-	split = recordProductReview(t, root, pkg, split)
-	split = recordReadiness(t, root, pkg, split)
-	split = recordSlicing(t, root, pkg, split, "split")
+	// 拆分路径是一个切片实例，记录拆分决定时必须引用已通过整体审查的保留总任务
+	// master，经继承满足整体级审查与 development-worker 门。
+	splitMaster := sliceMaster(t, root, pkg, "split-path-master")
+	split = recordSlicing(t, root, pkg, split, "split", splitMaster)
 	split = setRoute(t, root, pkg, split, "custom", []string{blackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, split.RunID, "qa-design")
 	split, err := RecordQADesign(root, pkg, split.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
@@ -1465,10 +1466,15 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 func TestSplitDecisionAllowsPerSliceRouteConfirmation(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slice-route"))
-	// 切片实例不重跑整体级产品审/技术审：记录继承来源，不再要求切片内重跑。
-	state = recordSlicing(t, root, pkg, state, "split")
+	// 切片实例不重跑整体级产品审/技术审：引用已通过整体审查的保留总任务 master，
+	// 记录继承来源，不再要求切片内重跑。
+	master := sliceMaster(t, root, pkg, "slice-route-master")
+	state = recordSlicing(t, root, pkg, state, "split", master)
 	if state.Slicing == nil || state.Slicing.Decision != "split" || state.Slicing.SplitCount != 2 {
 		t.Fatalf("inherited split decision not recorded: %#v", state.Slicing)
+	}
+	if state.Slicing.MasterRunID != master {
+		t.Fatalf("slice did not record master run id: %#v", state.Slicing)
 	}
 	if !reflect.DeepEqual(state.Slicing.InheritedReviews, []string{"product-review", "start-readiness"}) {
 		t.Fatalf("slice did not record inherited reviews: %#v", state.Slicing)
@@ -1867,18 +1873,38 @@ func setRoute(t *testing.T, root, pkg string, state RunState, mode string, selec
 
 // recordSlicing records the mandatory split decision. The standard test path
 // records a no-split with its reason note; pass "split" to exercise split flows
-// (the helper uses a two-slice split that can run in parallel).
-func recordSlicing(t *testing.T, root, pkg string, state RunState, decision string) RunState {
+// (the helper uses a two-slice split that can run in parallel). Pass a master
+// run id as the variadic argument for a slice-instance split.
+func recordSlicing(t *testing.T, root, pkg string, state RunState, decision string, masters ...string) RunState {
 	t.Helper()
 	count := 0
 	if decision == "split" {
 		count = 2
 	}
-	state, err := RecordSlicing(root, pkg, state.RunID, decision, count, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "single coherent bounded unit")
+	master := ""
+	if len(masters) > 0 {
+		master = masters[0]
+	}
+	state, err := RecordSlicing(root, pkg, state.RunID, decision, count, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "single coherent bounded unit", master)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return state
+}
+
+// sliceMaster creates a retained-overall master run with confirmed requirement
+// and PASS Product Review and Start Readiness, returning its run id. Slice
+// instances reference this master when recording an inherited split decision.
+func sliceMaster(t *testing.T, root, pkg, id string) string {
+	t.Helper()
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = confirmRequirement(t, root, pkg, state)
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	return id
 }
 
 // recordProductReview prepares, claims, and records a PASS Product Review.

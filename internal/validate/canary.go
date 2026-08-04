@@ -124,7 +124,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	}
 	// 拆分决定在 Part 2（start-readiness）完成后记录；此处走快速路径（不拆），
 	// 记录"建议不拆（原因）"后确认路线。
-	state, err = RecordSlicing(root, packageRoot, state.RunID, "no-split", 0, nil, "", "single coherent bounded unit; no split needed")
+	state, err = RecordSlicing(root, packageRoot, state.RunID, "no-split", 0, nil, "", "single coherent bounded unit; no split needed", "")
 	if err != nil {
 		return err
 	}

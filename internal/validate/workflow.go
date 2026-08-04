@@ -481,7 +481,7 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 // verification (the merge route), so it never goes through normal route
 // selection. A no-split decision requires the mandatory "建议不拆（原因）" reason
 // trace. The fast-path (non-high-confidence) decision note may note uncertainty.
-func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note string) (RunState, error) {
+func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note, masterRunID string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
@@ -500,13 +500,27 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			return fmt.Errorf("the current requirement is not confirmed")
 		}
 		if decision == "split" && !state.RetainedOverall {
-			// 切片实例：继承主任务 run 的拆分决定，并继承整体级产品审/技术审（记录
-			// 继承来源），不再要求切片内重跑；development-worker 门对切片实例经继承
-			// 满足。不自动附加合并验证，之后仍走逐切片路线确认与常规开发流程。
+			// 切片实例：必须引用其保留总任务 master run，且该 master 的整体级产品
+			// 审/技术审已 PASS，才继承整体级审查结果（记录继承来源与 master 引用），
+			// 不再要求切片内重跑；development-worker 门对切片实例经继承满足。不自动
+			// 附加合并验证，之后仍走逐切片路线确认与常规开发流程。
 			if splitCount < 2 {
 				return fmt.Errorf("a split requires at least two slices")
 			}
-			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), InheritedReviews: []string{"product-review", "start-readiness"}}
+			if strings.TrimSpace(masterRunID) == "" {
+				return fmt.Errorf("a slice instance must reference its retained-overall master with --master")
+			}
+			master, err := LoadRunState(root, strings.TrimSpace(masterRunID))
+			if err != nil {
+				return fmt.Errorf("slice master run %q is not found: %v", strings.TrimSpace(masterRunID), err)
+			}
+			if master.Actions["product-review"].Status != "PASS" {
+				return fmt.Errorf("slice master %q has not passed Product Review", strings.TrimSpace(masterRunID))
+			}
+			if master.Actions["start-readiness"].Status != "PASS" {
+				return fmt.Errorf("slice master %q has not passed Start Readiness", strings.TrimSpace(masterRunID))
+			}
+			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), MasterRunID: strings.TrimSpace(masterRunID), InheritedReviews: []string{"product-review", "start-readiness"}}
 			return nil
 		}
 		if !actionPassedOrAbsent(*state, "product-review") {
@@ -519,19 +533,15 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			if splitCount < 2 {
 				return fmt.Errorf("a split requires at least two slices")
 			}
-			if state.RetainedOverall {
-				// 分片 >= 2 的保留总任务实例自动附加合并门与合并 QA：路线确定为
-				// 合并路线，不涉常规路线选择，custom 的省略不延伸到合并验证。
-				state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel)}
-				state.RouteMode = "merge"
-				state.SelectedGates = []string{mergeQAID, mergeGateID}
-				state.SkipAuthorizations = map[string]SkipAuthorization{}
-				state.QAExecution = QAExecutionResult{Status: "PENDING"}
-				return nil
-			}
-			// 非保留总任务的 run 记录拆分决定但不自动附加合并验证（此分支保留兜底，
-			// 常规路径已在上方继承分支处理）。
-			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), Note: strings.TrimSpace(note)}
+			// 走到这里时 decision == "split" 且 state.RetainedOverall 必为 true（顶层
+			// 已处理所有拆分的非保留总任务 run）。分片 >= 2 的保留总任务实例自动
+			// 附加合并门与合并 QA：路线确定为合并路线，不涉常规路线选择，custom
+			// 的省略不延伸到合并验证。
+			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel)}
+			state.RouteMode = "merge"
+			state.SelectedGates = []string{mergeQAID, mergeGateID}
+			state.SkipAuthorizations = map[string]SkipAuthorization{}
+			state.QAExecution = QAExecutionResult{Status: "PENDING"}
 			return nil
 		}
 		if strings.TrimSpace(note) == "" {
@@ -2189,6 +2199,9 @@ func requireTransition(state RunState, operation, target string) error {
 		}
 		if state.Actions["qa-design"].Status != "PASS" {
 			return fmt.Errorf("QA Design must pass before QA Execution")
+		}
+		if state.Actions["qa-review"].Status != "PASS" {
+			return fmt.Errorf("QA Review must pass before QA Execution")
 		}
 	case "gate":
 		if !isSelected(state, target) {

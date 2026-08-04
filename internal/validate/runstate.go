@@ -60,6 +60,7 @@ type Slicing struct {
 	Slices           []string `json:"slices,omitempty"`           // 拆分定位：如何拆、子任务边界
 	Parallel         string   `json:"parallel,omitempty"`         // 并行建议：哪些子任务可并行
 	Note             string   `json:"note,omitempty"`             // 原因留痕，no-split 时必填（建议不拆原因）
+	MasterRunID      string   `json:"masterRunID,omitempty"`      // 切片实例引用的保留总任务 run id
 	InheritedReviews []string `json:"inheritedReviews,omitempty"` // 切片实例继承的整体级审查来源（product-review/start-readiness）
 }
 

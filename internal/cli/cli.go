@@ -257,10 +257,11 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		fs.Var(&slices, "slice", "slice definition; repeat as needed")
 		parallel := fs.String("parallel", "", "parallel suggestion (which subtasks may run concurrently)")
 		note := fs.String("note", "", "reason trace; required for no-split (建议不拆原因)")
+		master := fs.String("master", "", "retained-overall master run id for a slice instance split decision")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note)
+		state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master)
 		return printValue(streams.Stdout, state, err)
 	case "settle-findings":
 		fs := newFlagSet("workflow settle-findings", streams)
