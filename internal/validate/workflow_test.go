@@ -1404,6 +1404,14 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	if !isSelected(whitebox, whiteboxQAID) || isSelected(whitebox, blackboxQAID) {
 		t.Fatalf("whitebox-only route: %#v", whitebox.SelectedGates)
 	}
+	// 白盒设计在开发后读实现进行：先完成开发与快照，再设计，结构测试下限才生效。
+	developmentDispatch := prepareDispatch(t, root, pkg, whitebox.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-whitebox-floor.txt"), "delivery\n")
+	commitAll(t, root, "delivery whitebox floor")
+	whitebox, err = AdvanceSnapshot(root, pkg, whitebox.RunID, developmentDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
 	designDispatch = prepareDispatch(t, root, pkg, whitebox.RunID, "qa-design")
 	if _, err := RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run", Oracle: "observe"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one STATIC") {
 		t.Fatalf("whitebox quality floor not enforced: %v", err)
@@ -1450,23 +1458,30 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 }
 
 // TestSplitDecisionAllowsPerSliceRouteConfirmation verifies a slice instance
-// (non-retained run) records the inherited split decision and then confirms its
-// own route per slice, without re-confirming the split itself.
+// (non-retained run) inherits the overall-level product-review/start-readiness
+// (recording the inheritance source, not re-running them), records the inherited
+// split decision, confirms its own route per slice without re-confirming the
+// split, and satisfies the development-worker gate via inheritance.
 func TestSplitDecisionAllowsPerSliceRouteConfirmation(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slice-route"))
-	state = recordProductReview(t, root, pkg, state)
-	state = recordReadiness(t, root, pkg, state)
+	// 切片实例不重跑整体级产品审/技术审：记录继承来源，不再要求切片内重跑。
 	state = recordSlicing(t, root, pkg, state, "split")
 	if state.Slicing == nil || state.Slicing.Decision != "split" || state.Slicing.SplitCount != 2 {
 		t.Fatalf("inherited split decision not recorded: %#v", state.Slicing)
+	}
+	if !reflect.DeepEqual(state.Slicing.InheritedReviews, []string{"product-review", "start-readiness"}) {
+		t.Fatalf("slice did not record inherited reviews: %#v", state.Slicing)
+	}
+	if !actionPassedOrAbsent(state, "product-review") || !actionPassedOrAbsent(state, "start-readiness") {
+		t.Fatalf("slice did not inherit the overall-level reviews: %#v", state.Slicing)
 	}
 	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
 	if !reflect.DeepEqual(state.SelectedGates, []string{"quality"}) {
 		t.Fatalf("per-slice route not bound: %#v", state.SelectedGates)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
-		t.Fatalf("slice development stayed blocked: %v", err)
+		t.Fatalf("slice development stayed blocked despite inherited reviews: %v", err)
 	}
 }
 
@@ -1538,6 +1553,251 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	}
 	if len(state.SettledFindings) != 0 {
 		t.Fatalf("settled findings survived a meaning-changing revision: %#v", state.SettledFindings)
+	}
+}
+
+// TestLegacyQAModeCarryRebindsQAExecution verifies the carry regression fix for
+// runs bound to an old catalog that listed QA as a gate: the legacy "qa" id is
+// recognized as a QA mode, main-agent carry emits the selected QA mode id (here
+// "qa") and rebinds QAExecution.Snapshot instead of writing a spurious
+// Gates["qa"] entry, and QA execution is no longer rejected as "QA is not
+// selected".
+func TestLegacyQAModeCarryRebindsQAExecution(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "legacy-qa", "custom", []string{blackboxQAID, "architecture"})
+	// 模拟旧目录绑定的 run：SelectedGates 仍带遗留 "qa"。
+	state.SelectedGates = []string{legacyQAID, "architecture"}
+	if err := SaveRunState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if !isQAMode(legacyQAID) || !isSelectedQA(state) {
+		t.Fatalf("legacy qa is not recognized as a selected QA mode: %#v", state.SelectedGates)
+	}
+	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	var err error
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordGateResult(t, root, pkg, state, "architecture", "legacy-arch", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = advanceRepair(t, root, pkg, state, "legacy-repair")
+	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{legacyQAID}) {
+		t.Fatalf("eligible carry results=%v want=[qa]", got)
+	}
+	state, err = RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.QAExecution.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("legacy QAExecution.Snapshot=%s want=%s", state.QAExecution.Snapshot, state.CurrentSnapshot)
+	}
+	if _, ok := state.Gates[legacyQAID]; ok {
+		t.Fatalf("spurious Gates[qa] entry written: %#v", state.Gates[legacyQAID])
+	}
+}
+
+// TestWhiteboxQADesignsAndReviewsAfterDevelopment verifies the whitebox-only route
+// designs and reviews its STATIC structure cases after development: development
+// start and the snapshot are not gated on whitebox QA Review, the post-development
+// design reads the implementation, and the run seals.
+func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-post-dev"), "custom", []string{whiteboxQAID})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("whitebox development blocked before QA design: %v", err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-whitebox.txt"), "delivery\n")
+	commitAll(t, root, "delivery whitebox")
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "structure tests", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.QACases), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("whitebox-only run did not seal: %#v", summary)
+	}
+}
+
+// TestFullRouteDesignsWhiteboxAfterDevelopment verifies the full route's two-phase
+// QA: blackbox LIVE cases are designed and approved before development, the
+// whitebox STATIC cases are added after development by re-deriving the complete
+// set (preserving the approved blackbox cases), and the run seals with both
+// floors satisfied.
+func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "full-two-phase"), "full", nil)
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	var err error
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "blackbox-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-full.txt"), "delivery\n")
+	commitAll(t, root, "delivery full")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 开发后白盒设计：在既有黑盒用例上增补 STATIC 结构用例（已覆盖用例保留）。
+	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}, {Kind: "STATIC", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.QACases) != 2 || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PENDING" {
+		t.Fatalf("blackbox approval was not preserved in the whitebox redesign: %#v", state.QACases)
+	}
+	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.QACases), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gate := range []string{"architecture", "quality"} {
+		gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, gate, "two-phase-"+gate)
+		state, err = RecordGate(root, pkg, state.RunID, gate, gateDispatch, "PASS", "", comparedRange(state), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("full two-phase run did not seal: %#v", summary)
+	}
+}
+
+// TestFastPathBlackboxDesignParallelToStartReadiness verifies the fast-path blackbox
+// QA design can start before start-readiness PASS and before the slicing decision
+// and route confirmation (the documented fast-path parallel tradeoff), and that it
+// is kept when the confirmed route includes blackbox QA.
+func TestFastPathBlackboxDesignParallelToStartReadiness(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "fast-design"))
+	state = recordProductReview(t, root, pkg, state)
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one LIVE") {
+		t.Fatalf("fast-path non-blackbox design accepted: %v", err)
+	}
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-design"].Status != "PASS" || len(state.QACases) != 1 {
+		t.Fatalf("fast-path design not recorded: %#v", state.Actions["qa-design"])
+	}
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+	if state.Actions["qa-design"].Status != "PASS" {
+		t.Fatalf("fast-path design lost after route confirmation: %#v", state.Actions["qa-design"])
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "fast-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("fast-path did not unlock development: %v", err)
+	}
+}
+
+// TestFastPathDesignDiscardedWhenRouteOmitsBlackbox verifies the documented
+// fast-path tradeoff: when the confirmed route omits blackbox QA, the speculative
+// parallel design is discarded so it is re-done against the confirmed route.
+func TestFastPathDesignDiscardedWhenRouteOmitsBlackbox(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "fast-discard"))
+	state = recordProductReview(t, root, pkg, state)
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	state = setRoute(t, root, pkg, state, "custom", []string{whiteboxQAID})
+	if state.Actions["qa-design"].Status != "PENDING" || len(state.QACases) != 0 {
+		t.Fatalf("fast-path design not discarded on a route without blackbox QA: %#v", state.Actions["qa-design"])
+	}
+}
+
+// TestPreDevelopmentReviewFindingsRequireSeverity verifies product-review and
+// start-readiness findings must be graded non-empty P0/P1/P2 (requirement 14), so
+// an ungraded finding is rejected instead of slipping through.
+func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "severity-required"))
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+		t.Fatalf("ungraded product-review finding accepted: %v", err)
+	}
+	state = recordProductReview(t, root, pkg, state)
+	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
+	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+		t.Fatalf("ungraded start-readiness finding accepted: %v", err)
+	}
+}
+
+// TestWordingCoversSplitSuggestionAndOverallReviewInheritance checks the
+// user-visible wording required by the acceptance evidence: the split suggestion
+// (including the 改拆后果说明) is mandated in SKILL.md and the product-review
+// prompt, and the overall-level review inheritance is documented in SKILL.md and
+// formal-flow.md.
+func TestWordingCoversSplitSuggestionAndOverallReviewInheritance(t *testing.T) {
+	checks := []struct {
+		path string
+		want []string
+	}{
+		{"SKILL.md", []string{"改拆后果说明", "整体级产品审/技术审足够", "切片继承整体审查结果"}},
+		{"references/formal-flow.md", []string{"改拆后果说明", "整体级产品审/技术审足够", "切片继承整体审查结果"}},
+		{"references/sliced-runs.md", []string{"改拆后果说明"}},
+		{"prompts/actions/product-review.md", []string{"改拆后果说明"}},
+		{"prompts/actions/qa-design.md", []string{"开发前", "开发后"}},
+	}
+	for _, check := range checks {
+		data, err := os.ReadFile(filepath.Join("..", "..", check.path))
+		if err != nil {
+			t.Fatalf("read %s: %v", check.path, err)
+		}
+		content := string(data)
+		for _, want := range check.want {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing %q", check.path, want)
+			}
+		}
 	}
 }
 

@@ -20,12 +20,14 @@ var requiredActionIDs = []string{"carry", "development-worker", "product-review"
 // 内置 QA 模式与合并验证的保留 ID。它们不是门文件，而是 CLI 识别的内置条目：
 // blackbox（黑盒，LIVE 行为执行）与 whitebox（白盒，STATIC 结构测试）是正常路线
 // 的可选 QA 模式；merge-qa 与 merge-gate 是分片 >= 2 的保留总任务实例自动附加的
-// 合并后验证，不进入正常路线选择列表。
+// 合并后验证，不进入正常路线选择列表。legacyQAID 是旧目录把 QA 作为门登记时的保留
+// 名，CLI 把它当作内置 QA 模式识别，使旧目录绑定的 run 在迁移后仍被当作 QA 选中。
 const (
 	blackboxQAID = "blackbox"
 	whiteboxQAID = "whitebox"
 	mergeQAID    = "merge-qa"
 	mergeGateID  = "merge-gate"
+	legacyQAID   = "qa"
 )
 
 type PromptDefinition struct {

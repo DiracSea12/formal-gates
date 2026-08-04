@@ -55,11 +55,12 @@ type RequirementArtifact struct {
 // 原因）"即可。子任务实例继承主任务 run 的拆分决定，本字段只作用于发起的主任务
 // run。
 type Slicing struct {
-	Decision   string   `json:"decision,omitempty"`   // split 或 no-split
-	SplitCount int      `json:"splitCount,omitempty"` // 子任务数，split 时 >= 2
-	Slices     []string `json:"slices,omitempty"`     // 拆分定位：如何拆、子任务边界
-	Parallel   string   `json:"parallel,omitempty"`   // 并行建议：哪些子任务可并行
-	Note       string   `json:"note,omitempty"`       // 原因留痕，no-split 时必填（建议不拆原因）
+	Decision         string   `json:"decision,omitempty"`         // split 或 no-split
+	SplitCount       int      `json:"splitCount,omitempty"`       // 子任务数，split 时 >= 2
+	Slices           []string `json:"slices,omitempty"`           // 拆分定位：如何拆、子任务边界
+	Parallel         string   `json:"parallel,omitempty"`         // 并行建议：哪些子任务可并行
+	Note             string   `json:"note,omitempty"`             // 原因留痕，no-split 时必填（建议不拆原因）
+	InheritedReviews []string `json:"inheritedReviews,omitempty"` // 切片实例继承的整体级审查来源（product-review/start-readiness）
 }
 
 type PreparedDispatch struct {

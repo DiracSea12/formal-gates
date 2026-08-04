@@ -58,9 +58,11 @@ var routeModes = map[string]bool{"full": true, "custom": true}
 
 // isQAMode reports whether the id is a built-in QA mode entry. Blackbox, whitebox,
 // and merge QA share the run's QA case set and QA Execution result; discovered
-// gate entries live in the per-gate result map instead.
+// gate entries live in the per-gate result map instead. The legacy "qa" id is
+// recognized so runs bound to an old catalog that listed QA as a gate still count
+// as QA-selected after migration and share the QA Execution result.
 func isQAMode(id string) bool {
-	return id == blackboxQAID || id == whiteboxQAID || id == mergeQAID
+	return id == blackboxQAID || id == whiteboxQAID || id == mergeQAID || id == legacyQAID
 }
 
 // isSelectedQA reports whether any QA mode is selected for this run.
@@ -99,6 +101,47 @@ func selectedQAModes(state RunState) []string {
 		modes = append(modes, "whitebox: STATIC structure test cases (unit, system, integration)")
 	}
 	return modes
+}
+
+// preDevelopmentQASelected reports whether a QA mode whose design must complete
+// before development is selected: blackbox (behavior design from the confirmed
+// requirement) and the legacy "qa" mode. Whitebox QA designs after development by
+// reading the implementation, so it does not gate the development start.
+func preDevelopmentQASelected(state RunState) bool {
+	return isSelected(state, blackboxQAID) || isSelected(state, legacyQAID)
+}
+
+// blackboxDesignRecorded reports whether the blackbox LIVE behavior design has
+// been recorded (QA Design passed or a LIVE case already exists). A recorded
+// blackbox design lets the full route add whitebox structure cases after
+// development without mistaking that redesign for a missing pre-development
+// blackbox design.
+func blackboxDesignRecorded(state RunState) bool {
+	if state.Actions["qa-design"].Status == "PASS" {
+		return true
+	}
+	for _, testCase := range state.QACases {
+		if testCase.Kind == "LIVE" {
+			return true
+		}
+	}
+	return false
+}
+
+// blackboxReviewRecorded reports whether the blackbox LIVE cases were approved at
+// least once (QA Review passed, or a LIVE case keeps an accepted review status).
+// Whitebox structure cases are reviewed after development, so a previously
+// approved blackbox set must not block that post-development review.
+func blackboxReviewRecorded(state RunState) bool {
+	if state.Actions["qa-review"].Status == "PASS" {
+		return true
+	}
+	for _, testCase := range state.QACases {
+		if testCase.Kind == "LIVE" && testCase.ReviewStatus == "PASS" {
+			return true
+		}
+	}
+	return false
 }
 
 func Start(options StartOptions) (RunState, error) {
@@ -370,8 +413,31 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 				state.SkipAuthorizations[id] = SkipAuthorization{Origin: "ROUTE", Status: "UNSELECTED"}
 			}
 		}
+		discardUnmatchedQADesign(state)
 		return nil
 	})
+}
+
+// discardUnmatchedQADesign reconciles a fast-path speculative QA design recorded
+// before the route was confirmed against the now-confirmed route. The fast-path
+// design is always blackbox (LIVE), so it matches the confirmed route exactly when
+// blackbox QA (or the legacy "qa" mode) is selected; whitebox STATIC cases are
+// designed after development, so their floor does not apply at route
+// confirmation. When the route omits blackbox QA, the parallel design is
+// discarded (the documented fast-path tradeoff: a design for a route that does
+// not include blackbox QA is abandoned) so the design is re-done against the
+// confirmed route. An approved set (QA Review passed) is never discarded here.
+func discardUnmatchedQADesign(state *RunState) {
+	if state.Actions["qa-design"].Status != "PASS" || state.Actions["qa-review"].Status == "PASS" {
+		return
+	}
+	if isSelected(*state, blackboxQAID) || isSelected(*state, legacyQAID) {
+		return
+	}
+	state.QACases = []QACase{}
+	state.QAExecution = QAExecutionResult{Status: "PENDING"}
+	state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
+	state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
 }
 
 func AddRouteGates(root, packageRoot, runID string, additions []string) (RunState, error) {
@@ -433,6 +499,16 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 		if !state.RequirementConfirmed {
 			return fmt.Errorf("the current requirement is not confirmed")
 		}
+		if decision == "split" && !state.RetainedOverall {
+			// 切片实例：继承主任务 run 的拆分决定，并继承整体级产品审/技术审（记录
+			// 继承来源），不再要求切片内重跑；development-worker 门对切片实例经继承
+			// 满足。不自动附加合并验证，之后仍走逐切片路线确认与常规开发流程。
+			if splitCount < 2 {
+				return fmt.Errorf("a split requires at least two slices")
+			}
+			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), InheritedReviews: []string{"product-review", "start-readiness"}}
+			return nil
+		}
 		if !actionPassedOrAbsent(*state, "product-review") {
 			return fmt.Errorf("Product Review must pass before the slicing decision")
 		}
@@ -453,8 +529,8 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 				state.QAExecution = QAExecutionResult{Status: "PENDING"}
 				return nil
 			}
-			// 非保留总任务的 run（子任务实例继承主任务决定）记录拆分决定但不自动
-			// 附加合并验证，之后仍走逐切片路线确认与常规开发流程。
+			// 非保留总任务的 run 记录拆分决定但不自动附加合并验证（此分支保留兜底，
+			// 常规路径已在上方继承分支处理）。
 			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), Note: strings.TrimSpace(note)}
 			return nil
 		}
@@ -573,10 +649,14 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 		var lines []string
 		if isMergeVerification(state) {
 			lines = append(lines, "Merge QA: design cross-slice interaction cases for the merged snapshot. The case set may be empty when the slices are essentially independent (leave a trace noting that instead of forcing cases).")
+		} else if state.RouteMode == "" {
+			// 快速路径：路线未确认时只开始黑盒设计，与 start-readiness 并行，先于拆分
+			// 决定与路线确认；最终路线不含黑盒 QA 时本设计废弃。
+			lines = append(lines, "Fast-path blackbox QA design: from the confirmed requirement, design LIVE behavior execution cases against the built snapshot. The route is not yet confirmed; if it omits blackbox QA this design is discarded.")
 		} else if modes := selectedQAModes(state); len(modes) != 0 {
 			lines = append(lines, "Selected QA modes: "+strings.Join(modes, "; "))
 		}
-		if len(state.QACases) != 0 && state.Actions["qa-design"].Status != "PASS" {
+		if len(state.QACases) != 0 {
 			lines = append(lines, "Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain exact unaffected passing cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed.")
 			if review := state.Actions["qa-review"]; review.Status == "FAIL" {
 				lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
@@ -913,15 +993,20 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			}
 			updated = append(updated, normalized)
 		}
-		// 质量下限随已选 QA 模式而定：黑盒要求至少一个行为执行（LIVE）用例，白盒
-		// 要求至少一个结构测试（STATIC）用例；full（两者都选）要求两者都有。旧的
+		// 质量下限随已选 QA 模式与设计阶段而定：黑盒要求至少一个行为执行（LIVE）用例；
+		// 白盒（STATIC 结构测试）在开发后读实现设计，所以白盒下限只在开发后设计时生效——
+		// full 路线的开发前黑盒设计阶段只含 LIVE，开发后白盒设计阶段补齐 STATIC。旧的
 		// "每集至少一个静态与一个行为用例"下限被逐模式下限取代。合并 QA 不分黑盒/
-		// 白盒，无逐模式下限。
+		// 白盒，无逐模式下限。快速路径（路线未确认）的设计是黑盒（LIVE），同样要求至少
+		// 一个行为执行用例。
 		if !isMergeVerification(*state) {
+			if state.RouteMode == "" && !kinds["LIVE"] {
+				return fmt.Errorf("fast-path QA design requires at least one LIVE behavior execution case")
+			}
 			if isSelected(*state, blackboxQAID) && !kinds["LIVE"] {
 				return fmt.Errorf("blackbox QA requires at least one LIVE behavior execution case")
 			}
-			if isSelected(*state, whiteboxQAID) && !kinds["STATIC"] {
+			if isSelected(*state, whiteboxQAID) && developmentStarted(*state) && !kinds["STATIC"] {
 				return fmt.Errorf("whitebox QA requires at least one STATIC structure test case")
 			}
 		}
@@ -1324,10 +1409,17 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 	}
 	ids := []string{}
 	if isSelectedQA(state) && state.QAExecution.Status == "PASS" {
-		if state.PreRepairSnapshot != "" && state.QAExecution.Snapshot == state.PreRepairSnapshot {
-			ids = append(ids, "qa")
-		} else if catalogChanged && state.QAExecution.Snapshot == state.CurrentSnapshot {
-			ids = append(ids, "qa")
+		eligible := state.PreRepairSnapshot != "" && state.QAExecution.Snapshot == state.PreRepairSnapshot
+		eligible = eligible || (catalogChanged && state.QAExecution.Snapshot == state.CurrentSnapshot)
+		if eligible {
+			// 发出实际选中的 QA 模式 id（blackbox/whitebox/merge-qa，或旧目录的遗留
+			// "qa"），而不是字面 "qa"，使 inheritCarryResult 按 isQAMode 把 QA 结果
+			// 重绑到 QAExecution.Snapshot 而不是写进虚假的 Gates["qa"]。
+			for id := range selectedSet(state) {
+				if isQAMode(id) {
+					ids = append(ids, id)
+				}
+			}
 		}
 	}
 	for id, result := range state.Gates {
@@ -1740,9 +1832,9 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 				hasBlocking = true
 			}
 		} else if actionID == "product-review" || actionID == "start-readiness" {
-			// 产品审与 start-readiness 的发现项分级 P0/P1/P2；仅 P2 时用户处置后
-			// 修订不再复审，存在 P0/P1 时修订后重新审（主代理按此处置）。
-			if severity != "" && severity != "P0" && severity != "P1" && severity != "P2" {
+			// 产品审与 start-readiness 的发现项必须分级 P0/P1/P2（非空）；仅 P2 时用户
+			// 处置后修订不再复审，存在 P0/P1 时修订后重新审（主代理按此处置）。
+			if severity != "P0" && severity != "P1" && severity != "P2" {
 				return "", nil, fmt.Errorf("review finding severity must be P0, P1, or P2")
 			}
 		} else if severity != "" {
@@ -1900,10 +1992,29 @@ func runHasAction(state RunState, actionID string) bool {
 }
 
 // actionPassedOrAbsent reports whether the named pre-development action does
-// not gate this run: it is absent from the run (predating run) or has recorded
-// PASS. Unselected action changes must not block an existing run.
+// not gate this run: it is absent from the run (predating run), has recorded
+// PASS, or the run is a slice instance that inherited the overall-level review.
+// Unselected action changes must not block an existing run.
 func actionPassedOrAbsent(state RunState, actionID string) bool {
-	return !runHasAction(state, actionID) || state.Actions[actionID].Status == "PASS"
+	if !runHasAction(state, actionID) || state.Actions[actionID].Status == "PASS" {
+		return true
+	}
+	return inheritedReview(state, actionID)
+}
+
+// inheritedReview reports whether the run's split record names the action as an
+// overall-level review inherited by a slice instance (product-review /
+// start-readiness from the retained overall run).
+func inheritedReview(state RunState, actionID string) bool {
+	if state.Slicing == nil {
+		return false
+	}
+	for _, id := range state.Slicing.InheritedReviews {
+		if id == actionID {
+			return true
+		}
+	}
+	return false
 }
 
 func requireTransition(state RunState, operation, target string) error {
@@ -1925,9 +2036,10 @@ func requireTransition(state RunState, operation, target string) error {
 		}
 		return nil
 	}
-	// 产品审（Part 1）与 start-readiness（Part 2）在拆分决定与路线确认之前，不受
-	// 路线已确认约束；其余下游操作都需要已确认路线。
-	if operation != "product-review" && operation != "start-readiness" && state.RouteMode == "" {
+	// 产品审（Part 1）、start-readiness（Part 2）与快速路径的黑盒 QA 设计在拆分决定
+	// 与路线确认之前进行，不受路线已确认约束；其余下游操作都需要已确认路线。qa-design
+	// 的快速路径分支自行在 case 内约束（见下）。
+	if operation != "product-review" && operation != "start-readiness" && operation != "qa-design" && state.RouteMode == "" {
 		return fmt.Errorf("the gate route is not confirmed")
 	}
 	switch operation {
@@ -1955,23 +2067,35 @@ func requireTransition(state RunState, operation, target string) error {
 			return fmt.Errorf("Product Review must pass before Start Readiness")
 		}
 	case "qa-design":
+		if state.RouteMode == "" {
+			// 快速路径：黑盒 QA 设计在拆分决定与路线确认前与 start-readiness 并行开始，
+			// 此时路线尚未确认、QA 也未被选中；设计是黑盒（LIVE）且是固有取舍，最终路线
+			// 不含黑盒 QA 时并行设计即废弃。
+			if !actionPassedOrAbsent(state, "product-review") {
+				return fmt.Errorf("Product Review must pass before QA Design")
+			}
+			if developmentStarted(state) {
+				return fmt.Errorf("QA Design must be recorded before development")
+			}
+			return nil
+		}
 		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
-		if developmentStarted(state) {
+		if isSelected(state, blackboxQAID) && developmentStarted(state) && !blackboxDesignRecorded(state) {
 			return fmt.Errorf("QA Design must be recorded before development")
 		}
 		if !actionPassedOrAbsent(state, "product-review") {
 			return fmt.Errorf("Product Review must pass before QA Design")
 		}
-		if state.Actions["qa-design"].Status == "PASS" {
+		if state.Actions["qa-design"].Status == "PASS" && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("the complete QA case set is awaiting QA Review")
 		}
 	case "qa-review":
 		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
-		if developmentStarted(state) {
+		if preDevelopmentQASelected(state) && developmentStarted(state) && !blackboxReviewRecorded(state) {
 			return fmt.Errorf("QA Review must be recorded before development")
 		}
 		if state.Actions["qa-design"].Status != "PASS" || (len(state.QACases) == 0 && !isMergeVerification(state)) {
@@ -1994,7 +2118,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if !slicingRecorded(state) {
 			return fmt.Errorf("the slicing decision must be recorded before development")
 		}
-		if isSelectedQA(state) && state.Actions["qa-review"].Status != "PASS" {
+		if preDevelopmentQASelected(state) && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("QA Review must pass before development starts")
 		}
 		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
@@ -2036,7 +2160,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
-		if isSelectedQA(state) && state.Actions["qa-review"].Status != "PASS" {
+		if preDevelopmentQASelected(state) && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("QA Review must pass before a development snapshot")
 		}
 		if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
