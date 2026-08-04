@@ -79,17 +79,19 @@ func actionResultContract(actionID, dispatchID string) string {
 	}
 	switch actionID {
 	case "qa-design":
-		return prefix + "Return only ordered semantic cases. Each case must contain exactly one kind (STATIC or LIVE), description, procedure, and oracle. Do not assign case IDs; the CLI assigns them."
+		return prefix + "Return only ordered semantic cases. Each case must contain exactly one kind (STATIC or LIVE), description, procedure, and oracle. STATIC covers whitebox structure tests (unit, system, integration); LIVE covers blackbox behavior execution against the built snapshot via a documented public entry. Do not assign case IDs; the CLI assigns them."
 	case "qa-execution":
 		return prefix + "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. Return a runtime error separately if execution could not run."
 	case "qa-review":
-		return prefix + "Return one PASS or FAIL decision for every supplied pending case; each FAIL decision requires a reason. Do not return decisions for accepted cases. Return set-level findings separately for missing or duplicated coverage. The CLI derives the aggregate result. Return a runtime error separately if review could not run."
+		return prefix + "Return one PASS or FAIL decision for every supplied pending case; each FAIL decision requires a reason. Do not return decisions for accepted cases. Return set-level findings separately for missing or duplicated coverage. The CLI derives the aggregate result. For whitebox (STATIC) cases you may read the implementation to judge structure-test sufficiency; blackbox (LIVE) cases stay zero-context. Return a runtime error separately if review could not run."
 	case "carry":
 		return prefix + "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
 	case "development-worker":
 		return "Perform the development action, track every delivery path in the named VCS before fixing the snapshot, and return the immutable current snapshot plus the delivery path names to the host. Do not return QA cases or a gate verdict."
 	case "product-review":
-		return prefix + "Return PASS with no findings, FAIL with one or more findings as candidate inputs for the user's per-item decision, or a separate runtime error message. Each finding contains a message and optional repository-relative locations. The review itself never produces a terminal FAIL; the user decides whether the requirement stands."
+		return prefix + "Return PASS with no findings, FAIL with one or more findings as candidate inputs for the user's per-item decision, or a separate runtime error message. Each finding carries a severity (P0, P1, or P2), a message, and optional repository-relative locations. Do not re-raise findings and decisions the user already settled (listed in the action input); re-raise one only if a requirement revision changed its premise. The review itself never produces a terminal FAIL; the user decides whether the requirement stands."
+	case "start-readiness":
+		return prefix + "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding carries a severity (P0, P1, or P2), a message, and optional repository-relative locations."
 	case "requirements-clarification":
 		return prefix + "Return PASS only after the user confirms the requested outcome and consequential solution choices. Return FAIL with findings for unresolved consequential gaps, or a separate runtime error message."
 	default:

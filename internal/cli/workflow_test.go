@@ -19,10 +19,11 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	state := startCLIWorkflow(t, root, pkg, "cli-run")
 	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
 	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
-	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full")
-	state, _ = validate.LoadRunState(root, state.RunID)
 	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
 	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "single coherent bounded unit")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full")
+	state, _ = validate.LoadRunState(root, state.RunID)
 
 	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
 	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
@@ -67,9 +68,10 @@ func TestCLIResumeAdoptsExternalChange(t *testing.T) {
 	state := startCLIWorkflow(t, root, pkg, "cli-adopt")
 	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
 	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
-	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality")
 	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
 	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "single coherent bounded unit")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality")
 	developmentDispatch := cliPrepareAction(t, root, pkg, state.RunID, "development-worker")
 	mustWriteCLI(t, filepath.Join(root, "delivery.txt"), "delivery\n")
 	cliGit(t, root, "add", "--all")
@@ -139,6 +141,42 @@ func TestCLIGroupedQAReviewFieldsRequireCurrentCase(t *testing.T) {
 	if code := Run("formal-gates", []string{"workflow", "qa-review", "--outcome", "PASS"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "must follow --case") {
 		t.Fatalf("misordered QA Review field accepted: code=%d err=%s", code, stderr.String())
 	}
+}
+
+func TestCLISlicingDecisionGatesDevelopment(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-slicing")
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+
+	// product-review 未 PASS 时不可记录拆分决定；没有拆分决定时路线被拒。
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "reason"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "Product Review must pass before the slicing decision") {
+		t.Fatalf("slicing recorded before product-review: code=%d err=%s", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "slicing decision must be recorded before the route") {
+		t.Fatalf("route accepted before slicing decision: code=%d err=%s", code, stderr.String())
+	}
+
+	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
+	// start-readiness 未 PASS 时不可记录拆分决定。
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "reason"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "Start Readiness must pass") {
+		t.Fatalf("slicing recorded before start-readiness: code=%d err=%s", code, stderr.String())
+	}
+	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "single coherent bounded unit")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality")
+	out := runCLI(t, "workflow", "show", "--root", root, "--run-id", state.RunID)
+	var loaded validate.RunState
+	if err := json.Unmarshal([]byte(out), &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Slicing == nil || loaded.Slicing.Decision != "no-split" || loaded.Slicing.Note == "" {
+		t.Fatalf("CLI slicing decision not recorded: %#v", loaded.Slicing)
+	}
+	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "development-worker")
 }
 
 func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
@@ -212,7 +250,6 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			requirementsDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "requirements-clarification")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", requirementsDispatch, "--status", "PASS")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", runID, "--confirmed")
-			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "quality")
 
 			productDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "product-review")
 			productIdentity := tc.name + "-product-review"
@@ -234,6 +271,8 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 				t.Fatalf("unexpected lifecycle verification: %s", verification)
 			}
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "start-readiness", "--dispatch", dispatchID, "--status", "PASS")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", runID, "--decision", "no-split", "--note", "single coherent bounded unit")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "quality")
 			state := installedWorkflowState(t, binary, root, runID)
 			if state.Actions["start-readiness"].Status != "PASS" {
 				t.Fatalf("verified lifecycle did not permit public workflow recording: %#v", state.Actions["start-readiness"])

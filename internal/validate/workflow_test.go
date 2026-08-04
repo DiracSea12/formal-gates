@@ -50,7 +50,6 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 		t.Fatalf("artifact order=%v", got)
 	}
 	state = confirmAndRoute(t, root, pkg, state, "custom", []string{"quality"})
-	state = recordReadiness(t, root, pkg, state)
 	prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	state, _ = LoadRunState(root, state.RunID)
 	if !developmentStarted(state) {
@@ -188,7 +187,8 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "incremental"), "full", nil)
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "only static", Procedure: "go test", Oracle: "passes"}}, ""); err == nil || !strings.Contains(err.Error(), "STATIC and one LIVE") {
+	// full 路线同时选中黑盒与白盒：黑盒要求至少一个 LIVE 行为执行用例。
+	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "only static", Procedure: "go test", Oracle: "passes"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one LIVE behavior execution case") {
 		t.Fatalf("single-kind QA set was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
@@ -443,7 +443,6 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	if state.Actions["qa-review"].Status != "PASS" {
 		t.Fatalf("set-only QA recheck did not approve the correction: %#v", state.Actions["qa-review"])
 	}
-	state = recordReadiness(t, root, pkg, state)
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
 		t.Fatalf("approved removal-only correction did not unlock development: %v", err)
 	}
@@ -451,24 +450,29 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 
 func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "product-review-gate"), "custom", []string{"quality"})
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "product-review-gate"))
 
-	// 未 PASS：start-readiness 与 development-worker 均被拒绝。
+	// 未 PASS：start-readiness、拆分决定与 development-worker 均被拒绝。路线在拆
+	// 分决定之后确认，而拆分决定在 product-review 之后，所以 development-worker 在
+	// 此时因路线未确认而被拒。
 	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
 		t.Fatalf("start-readiness prepared before product review: %v", err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before development") {
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before the slicing decision") {
+		t.Fatalf("slicing decision recorded before product review: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil {
 		t.Fatalf("development-worker prepared before product review: %v", err)
 	}
 
-	// FAIL 含发现项：仍阻塞，但不构成不可恢复的终态。
+	// FAIL 含发现项（P0/P1/P2 分级）：仍阻塞，但不构成不可恢复的终态。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "requirement does not target a real user problem"}})
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "requirement does not target a real user problem"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["product-review"].Status != "FAIL" || len(state.Actions["product-review"].Findings) != 1 {
-		t.Fatalf("product review FAIL was not recorded: %#v", state.Actions["product-review"])
+	if state.Actions["product-review"].Status != "FAIL" || len(state.Actions["product-review"].Findings) != 1 || state.Actions["product-review"].Findings[0].Severity != "P1" {
+		t.Fatalf("product review FAIL was not recorded with severity: %#v", state.Actions["product-review"])
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
 		t.Fatalf("start-readiness prepared after product review FAIL: %v", err)
@@ -484,6 +488,8 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 		t.Fatalf("product review PASS was not recorded: %#v", state.Actions["product-review"])
 	}
 	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
 		t.Fatalf("development worker stayed blocked after product review PASS: %v", err)
 	}
@@ -493,7 +499,7 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 // PASS 对应的是真跑过审查的子代理派发，生命周期校验因此可过。
 func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "product-review-accept"), "custom", []string{"quality"})
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "product-review-accept"))
 
 	// 未记录（PENDING）：start-readiness 与 development-worker 均被拒绝。
 	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
@@ -515,20 +521,31 @@ func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
 		t.Fatalf("product review PASS was not recorded on the held dispatch: %#v", state.Actions["product-review"])
 	}
 	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
 		t.Fatalf("development worker stayed blocked after product review PASS: %v", err)
 	}
 }
 
-func TestProductReviewRequiredBeforeQADesign(t *testing.T) {
+// TestQADesignRequiresSelectedQA verifies QA Design needs a selected QA mode
+// (blackbox or whitebox); the pre-development reviews are now a strict prefix of
+// the route, so QA selected already implies Product Review passed.
+func TestQADesignRequiresSelectedQA(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "product-review-qa-design"), "full", nil)
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before QA Design") {
-		t.Fatalf("qa-design prepared before product review: %v", err)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-design-requires-qa"), "custom", []string{"quality"})
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err == nil || !strings.Contains(err.Error(), "QA is not selected") {
+		t.Fatalf("qa-design without selected QA mode: %v", err)
 	}
-	state = recordProductReview(t, root, pkg, state)
+	state, err := AddRouteGates(root, pkg, state.RunID, []string{blackboxQAID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isSelected(state, blackboxQAID) {
+		t.Fatalf("blackbox QA was not added to the route: %#v", state.SelectedGates)
+	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err != nil {
-		t.Fatalf("qa-design stayed blocked after product review PASS: %v", err)
+		t.Fatalf("qa-design stayed blocked after blackbox QA was selected: %v", err)
 	}
 }
 
@@ -591,12 +608,14 @@ func TestPredatingRunWithoutPrerequisiteActionCompletesDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			state = confirmAndRouteBase(t, root, pkg, state, "custom", []string{"quality"})
+			state = confirmRequirement(t, root, pkg, state)
 			if removed == "start-readiness" {
 				state = recordProductReview(t, root, pkg, state)
 			} else {
 				state = recordReadiness(t, root, pkg, state)
 			}
+			state = recordSlicing(t, root, pkg, state, "no-split")
+			state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
 			developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 			writeTestFile(t, filepath.Join(root, "delivery.txt"), "delivery\n")
 			commitAll(t, root, "delivery")
@@ -630,7 +649,6 @@ func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = confirmAndRoute(t, root, pkg, state, "custom", []string{"quality"})
-	state = recordReadiness(t, root, pkg, state)
 	writeTestFile(t, filepath.Join(root, "merged-delivery.txt"), "merged delivery\n")
 	commitAll(t, root, "merged delivery")
 	state, err = AdvanceSnapshot(root, pkg, state.RunID, "")
@@ -652,7 +670,6 @@ func TestDevelopmentSnapshotRejectsUncommittedTrackedGitChanges(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "delivery.txt"), "base delivery\n")
 	commitAll(t, root, "tracked delivery")
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "uncommitted-snapshot"), "custom", []string{"quality"})
-	state = recordReadiness(t, root, pkg, state)
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery.txt"), "edited delivery\n")
 	before := stateBytes(t, root, state.RunID)
@@ -810,7 +827,7 @@ func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
 	if _, ok := persisted.SkipAuthorizations["quality"]; ok {
 		t.Fatalf("Seal authorization survived a repair snapshot: %#v", persisted.SkipAuthorizations)
 	}
-	if authorization := persisted.SkipAuthorizations["qa"]; authorization.Origin != "ROUTE" {
+	if authorization := persisted.SkipAuthorizations[blackboxQAID]; authorization.Origin != "ROUTE" {
 		t.Fatalf("route authorization was cleared with snapshot authorization: %#v", persisted.SkipAuthorizations)
 	}
 	if persisted.CompletedReviewWaves != 0 {
@@ -1187,6 +1204,343 @@ func TestGateReviewComparedRangeIsValidated(t *testing.T) {
 	}
 }
 
+// TestDevelopmentPreparationRequiresSlicingDecision verifies the split decision
+// is mandatory for formal runs: without it, route and development preparation
+// are rejected; recording a no-split decision (fast path) unblocks them.
+func TestDevelopmentPreparationRequiresSlicingDecision(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slicing-required"))
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := SetRoute(root, pkg, state.RunID, "custom", []string{"quality"}); err == nil || !strings.Contains(err.Error(), "the slicing decision must be recorded before the route") {
+		t.Fatalf("route accepted before slicing decision: %v", err)
+	}
+	// 路线在拆分决定之后确认，所以未记录拆分决定时开发准备被拒（路线未确认）。
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil {
+		t.Fatalf("development prepared before slicing decision: %v", err)
+	}
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("development stayed blocked after slicing decision: %v", err)
+	}
+}
+
+// TestSlicingDecisionRequiresStartReadinessPass verifies the split decision can
+// only be recorded after Start Readiness (Part 2) passes, and that once recorded
+// it is the binding point and is not re-cut.
+func TestSlicingDecisionRequiresStartReadinessPass(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slicing-timing"))
+	state = recordProductReview(t, root, pkg, state)
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason"); err == nil || !strings.Contains(err.Error(), "Start Readiness must pass before the slicing decision") {
+		t.Fatalf("slicing decision recorded before start-readiness: %v", err)
+	}
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 2, nil, "", "re-cut"); err == nil || !strings.Contains(err.Error(), "already recorded") {
+		t.Fatalf("slicing decision was re-cut: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected re-cut changed state")
+	}
+}
+
+// TestNoSplitDecisionRequiresReasonNote verifies the mandatory "建议不拆（原因）"
+// reason trace for a no-split decision.
+func TestNoSplitDecisionRequiresReasonNote(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slicing-note"))
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", ""); err == nil || !strings.Contains(err.Error(), "reason note") {
+		t.Fatalf("no-split decision without a reason note was accepted: %v", err)
+	}
+	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 1, nil, "", ""); err == nil || !strings.Contains(err.Error(), "at least two slices") {
+		t.Fatalf("single-slice split was accepted: %v", err)
+	}
+}
+
+// TestMergeVerificationAutoAttachedForSplitRetainedOverall verifies a retained
+// overall run with a split decision auto-attaches merge gate and merge QA as its
+// only post-merge verification and does not go through normal route selection.
+func TestMergeVerificationAutoAttachedForSplitRetainedOverall(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "merge-auto", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = confirmRequirement(t, root, pkg, state)
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	state, err = RecordSlicing(root, pkg, state.RunID, "split", 2, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Slicing == nil || state.Slicing.Decision != "split" || state.Slicing.SplitCount != 2 || !strings.Contains(state.Slicing.Parallel, "parallel") {
+		t.Fatalf("split decision not captured: %#v", state.Slicing)
+	}
+	if state.RouteMode != "merge" || !reflect.DeepEqual(state.SelectedGates, []string{mergeQAID, mergeGateID}) {
+		t.Fatalf("split retained overall did not auto-attach merge verification: %#v", state)
+	}
+	// 保留总任务实例不涉常规路线选择。
+	if _, err := SetRoute(root, pkg, state.RunID, "custom", []string{"quality"}); err == nil || !strings.Contains(err.Error(), "already has its one route decision") {
+		t.Fatalf("merge route accepted normal route selection: %v", err)
+	}
+}
+
+// TestMergeVerificationCompletesPostMergeReview runs the full post-merge flow of
+// a split retained overall run: merge QA design/review/execution (with an empty
+// cross-slice interaction set leaving the required trace) and the merge gate.
+func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "merge-flow", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = confirmRequirement(t, root, pkg, state)
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "split")
+
+	// 合并 QA 设计（各分片开发期间并行进行）：跨切片交互用例可为零，此时留痕。
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-design"].Status != "PASS" || !strings.Contains(state.Actions["qa-design"].Message, "切片基本独立") {
+		t.Fatalf("merge QA zero-case design not traced: %#v", state.Actions["qa-design"])
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "merge-qa-review")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 合并后快照。
+	writeTestFile(t, filepath.Join(root, "merged.txt"), "merged\n")
+	commitAll(t, root, "merged slices")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 合并 QA 执行于合并快照（零用例即 PASS，留痕）。
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.QAExecution.Status != "PASS" || !strings.Contains(state.QAExecution.Message, "切片基本独立") {
+		t.Fatalf("merge QA zero-case execution: %#v", state.QAExecution)
+	}
+	// 合并门。
+	gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, mergeGateID, "merge-gate-reviewer")
+	state, err = RecordGate(root, pkg, state.RunID, mergeGateID, gateDispatch, "PASS", "", comparedRange(state), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CompletedReviewWaves != 1 || state.Gates[mergeGateID].Status != "PASS" {
+		t.Fatalf("merge gate review did not complete the wave: %#v", state)
+	}
+	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("merge verification did not seal: %#v", summary)
+	}
+}
+
+// TestMergeGateRegisteredButExcludedFromNormalRouteCandidates verifies the merge
+// gate is registered in the catalog but never appears in the normal route
+// candidates; the normal candidates expose blackbox and whitebox QA modes.
+func TestMergeGateRegisteredButExcludedFromNormalRouteCandidates(t *testing.T) {
+	pkg := promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
+	catalog, err := LoadPromptCatalog(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := catalog.Gate(mergeGateID); !ok {
+		t.Fatal("merge gate is not registered in the catalog")
+	}
+	candidates, err := PackageRouteCandidates(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range candidates {
+		if id == mergeGateID || id == mergeQAID {
+			t.Fatalf("merge verification appeared in normal route candidates: %v", candidates)
+		}
+	}
+	if !containsString(candidates, blackboxQAID) || !containsString(candidates, whiteboxQAID) {
+		t.Fatalf("normal route candidates missing QA modes: %v", candidates)
+	}
+}
+
+// TestBlackboxWhiteboxOptionalityInRoute verifies full selects both QA modes,
+// custom can select each QA mode independently, and the per-mode quality floors
+// are enforced (blackbox requires a LIVE case, whitebox requires a STATIC case).
+func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-blackbox-only"), "custom", []string{blackboxQAID})
+	if !isSelected(state, blackboxQAID) || isSelected(state, whiteboxQAID) {
+		t.Fatalf("blackbox-only route: %#v", state.SelectedGates)
+	}
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one LIVE") {
+		t.Fatalf("blackbox quality floor not enforced: %v", err)
+	}
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-design"].Status != "PASS" {
+		t.Fatalf("blackbox design did not pass: %#v", state.Actions["qa-design"])
+	}
+
+	whitebox := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-whitebox-only"), "custom", []string{whiteboxQAID})
+	if !isSelected(whitebox, whiteboxQAID) || isSelected(whitebox, blackboxQAID) {
+		t.Fatalf("whitebox-only route: %#v", whitebox.SelectedGates)
+	}
+	designDispatch = prepareDispatch(t, root, pkg, whitebox.RunID, "qa-design")
+	if _, err := RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run", Oracle: "observe"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one STATIC") {
+		t.Fatalf("whitebox quality floor not enforced: %v", err)
+	}
+
+	full := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-full"), "full", nil)
+	if !isSelected(full, blackboxQAID) || !isSelected(full, whiteboxQAID) {
+		t.Fatalf("full route must select both QA modes: %#v", full.SelectedGates)
+	}
+}
+
+// TestTwoSpeedSchedulingBothPathsReachDevelopment verifies both scheduling
+// paths: the fast path records a no-split decision and runs as a single run, and
+// the split path records a split decision then confirms the route per slice.
+// Both unlock development after the split decision.
+func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	fast := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "fast-path"), "full", nil)
+	if fast.Slicing == nil || fast.Slicing.Decision != "no-split" || fast.Slicing.Note == "" {
+		t.Fatalf("fast path no-split decision not traced: %#v", fast.Slicing)
+	}
+	if _, err := PrepareAction(root, pkg, fast.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "QA Review must pass") {
+		t.Fatalf("fast path development before QA review: %v", err)
+	}
+
+	split := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "split-path"))
+	split = recordProductReview(t, root, pkg, split)
+	split = recordReadiness(t, root, pkg, split)
+	split = recordSlicing(t, root, pkg, split, "split")
+	split = setRoute(t, root, pkg, split, "custom", []string{blackboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, split.RunID, "qa-design")
+	split, err := RecordQADesign(root, pkg, split.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, split.RunID, "qa-review", "split-qa-reviewer")
+	split, err = RecordQAReview(root, pkg, split.RunID, reviewDispatch, passingReviewDecisions(split), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, split.RunID, "development-worker"); err != nil {
+		t.Fatalf("split path did not unlock development: %v", err)
+	}
+}
+
+// TestSplitDecisionAllowsPerSliceRouteConfirmation verifies a slice instance
+// (non-retained run) records the inherited split decision and then confirms its
+// own route per slice, without re-confirming the split itself.
+func TestSplitDecisionAllowsPerSliceRouteConfirmation(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slice-route"))
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "split")
+	if state.Slicing == nil || state.Slicing.Decision != "split" || state.Slicing.SplitCount != 2 {
+		t.Fatalf("inherited split decision not recorded: %#v", state.Slicing)
+	}
+	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
+	if !reflect.DeepEqual(state.SelectedGates, []string{"quality"}) {
+		t.Fatalf("per-slice route not bound: %#v", state.SelectedGates)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("slice development stayed blocked: %v", err)
+	}
+}
+
+// TestPreDevelopmentReviewFindingsCarrySeverity verifies product-review and
+// start-readiness findings are graded P0/P1/P2 so the main agent can apply the
+// re-review boundary (only P2 -> revise without re-review).
+func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "review-severity"))
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P0", Message: "blocking"}, {Severity: "P2", Message: "minor"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["product-review"].Findings[0].Severity != "P0" || state.Actions["product-review"].Findings[1].Severity != "P2" {
+		t.Fatalf("severity not retained: %#v", state.Actions["product-review"].Findings)
+	}
+	next := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P3", Message: "bad"}}); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+		t.Fatalf("invalid severity accepted: %v", err)
+	}
+	state = recordProductReview(t, root, pkg, state)
+	readiness := recordReadiness(t, root, pkg, state)
+	dispatchID = prepareDispatch(t, root, pkg, readiness.RunID, "start-readiness")
+	if _, err := RecordAction(root, pkg, readiness.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "technical gap"}}); err != nil {
+		t.Fatalf("start-readiness severity rejected: %v", err)
+	}
+}
+
+// TestSettledFindingsAreInjectedAndClearedOnMeaningChange verifies the CLI
+// records the settled findings list, injects it into the next product-review /
+// start-readiness dispatch (reviewer-side enforcement), and clears it on a
+// meaning-changing requirement revision.
+func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "settled-findings"))
+	state, err := RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"settled finding one", "settled finding two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.SettledFindings["product-review"]; len(got) != 2 {
+		t.Fatalf("settled findings not recorded: %#v", state.SettledFindings)
+	}
+	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "settled finding one") || !strings.Contains(prompt, "Do not re-raise") {
+		t.Fatalf("settled findings not injected into product-review prompt: %s", prompt)
+	}
+	state, err = RecordSettledFindings(root, pkg, state.RunID, "start-readiness", []string{"settled technical decision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	prompt, err = PrepareAction(root, pkg, state.RunID, "start-readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "settled technical decision") {
+		t.Fatalf("settled findings not injected into start-readiness prompt: %s", prompt)
+	}
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised requirement\n")
+	commitAll(t, root, "revised requirement")
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.SettledFindings) != 0 {
+		t.Fatalf("settled findings survived a meaning-changing revision: %#v", state.SettledFindings)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -1207,13 +1561,28 @@ func mustStart(t *testing.T, root, pkg, id string) RunState {
 
 func confirmAndRoute(t *testing.T, root, pkg string, state RunState, mode string, selected []string) RunState {
 	t.Helper()
-	state = confirmAndRouteBase(t, root, pkg, state, mode, selected)
-	return recordProductReview(t, root, pkg, state)
+	return confirmAndRouteBase(t, root, pkg, state, mode, selected)
 }
 
-// confirmAndRouteBase confirms the requirement and binds the route without
-// recording Product Review, so tests can exercise the product-review gate.
+// confirmAndRouteBase runs the complete pre-development gating chain in the
+// confirmed order: requirement confirmation, Product Review (Part 1), Start
+// Readiness (Part 2), the mandatory no-split slicing decision with its reason
+// note, and then the route confirmation. The route comes after the split
+// decision, so tests that exercise the pre-development review gates use
+// confirmRequirement instead and record the reviews explicitly.
 func confirmAndRouteBase(t *testing.T, root, pkg string, state RunState, mode string, selected []string) RunState {
+	t.Helper()
+	state = confirmRequirement(t, root, pkg, state)
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	return setRoute(t, root, pkg, state, mode, selected)
+}
+
+// confirmRequirement records Requirements Clarification PASS and confirms the
+// requirement, without touching the pre-development reviews, so tests can
+// exercise the product-review / start-readiness gating.
+func confirmRequirement(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
 	state, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil)
@@ -1224,7 +1593,28 @@ func confirmAndRouteBase(t *testing.T, root, pkg string, state RunState, mode st
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = SetRoute(root, pkg, state.RunID, mode, selected)
+	return state
+}
+
+func setRoute(t *testing.T, root, pkg string, state RunState, mode string, selected []string) RunState {
+	t.Helper()
+	state, err := SetRoute(root, pkg, state.RunID, mode, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// recordSlicing records the mandatory split decision. The standard test path
+// records a no-split with its reason note; pass "split" to exercise split flows
+// (the helper uses a two-slice split that can run in parallel).
+func recordSlicing(t *testing.T, root, pkg string, state RunState, decision string) RunState {
+	t.Helper()
+	count := 0
+	if decision == "split" {
+		count = 2
+	}
+	state, err := RecordSlicing(root, pkg, state.RunID, decision, count, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "single coherent bounded unit")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1256,7 +1646,6 @@ func beginQA(t *testing.T, root, pkg, id string) RunState {
 func readyDelivery(t *testing.T, root, pkg, id string) RunState {
 	t.Helper()
 	state := beginQA(t, root, pkg, id)
-	state = recordReadiness(t, root, pkg, state)
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", id+"-qa-reviewer")
 	var err error
 	state, err = RecordQAReview(root, pkg, state.RunID, dispatchID, passingReviewDecisions(state), "", nil)
@@ -1276,8 +1665,7 @@ func readyDelivery(t *testing.T, root, pkg, id string) RunState {
 func readyDeliveryForRoute(t *testing.T, root, pkg, id, mode string, selected []string) RunState {
 	t.Helper()
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, id), mode, selected)
-	state = recordReadiness(t, root, pkg, state)
-	if isSelected(state, "qa") {
+	if isSelectedQA(state) {
 		designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 		var err error
 		state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), "")
@@ -1339,7 +1727,7 @@ func recordReadiness(t *testing.T, root, pkg string, state RunState) RunState {
 func prepareDispatch(t *testing.T, root, pkg, runID, target string) string {
 	t.Helper()
 	var err error
-	if target == "quality" || target == "architecture" {
+	if target == "quality" || target == "architecture" || target == mergeGateID {
 		_, err = PrepareGate(root, pkg, runID, target)
 	} else {
 		_, err = PrepareAction(root, pkg, runID, target)
@@ -1352,7 +1740,7 @@ func prepareDispatch(t *testing.T, root, pkg, runID, target string) string {
 		t.Fatal(err)
 	}
 	kind := "action"
-	if target == "quality" || target == "architecture" {
+	if target == "quality" || target == "architecture" || target == mergeGateID {
 		kind = "gate"
 	}
 	dispatchID := openDispatchID(state, kind, target)
@@ -1402,7 +1790,7 @@ func workflowFixture(t *testing.T) (string, string) {
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	writeTestFile(t, filepath.Join(root, "design.md"), "design\n")
 	initializeGit(t, root)
-	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks"})
+	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
 }
 
 func initializeGit(t *testing.T, root string) {

@@ -17,6 +17,17 @@ var promptIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 var requiredActionIDs = []string{"carry", "development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "requirements-clarification", "start-readiness"}
 
+// 内置 QA 模式与合并验证的保留 ID。它们不是门文件，而是 CLI 识别的内置条目：
+// blackbox（黑盒，LIVE 行为执行）与 whitebox（白盒，STATIC 结构测试）是正常路线
+// 的可选 QA 模式；merge-qa 与 merge-gate 是分片 >= 2 的保留总任务实例自动附加的
+// 合并后验证，不进入正常路线选择列表。
+const (
+	blackboxQAID = "blackbox"
+	whiteboxQAID = "whitebox"
+	mergeQAID    = "merge-qa"
+	mergeGateID  = "merge-gate"
+)
+
 type PromptDefinition struct {
 	ID      string `json:"id"`
 	Content string `json:"-"`
@@ -41,7 +52,7 @@ func LoadPromptCatalog(root string) (PromptCatalog, error) {
 		return PromptCatalog{}, fmt.Errorf("gate catalog: %w", err)
 	}
 	for _, gate := range gates {
-		if gate.ID == "qa" {
+		if gate.ID == "qa" || gate.ID == blackboxQAID || gate.ID == whiteboxQAID || gate.ID == mergeQAID {
 			return PromptCatalog{}, fmt.Errorf("gate catalog: gate id %q is reserved for built-in QA", gate.ID)
 		}
 	}
@@ -121,8 +132,18 @@ func (catalog PromptCatalog) GateIDs() []string {
 	return ids
 }
 
+// RouteCandidates 返回正常路线的候选项：黑盒 QA、白盒 QA 与除合并门外的全部已
+// 发现门。合并门是条件自动门，只在分片 >= 2 的保留总任务实例中自动附加，不进入
+// 正常选择列表；合并 QA 同理。
 func (catalog PromptCatalog) RouteCandidates() []string {
-	return append([]string{"qa"}, catalog.GateIDs()...)
+	ids := []string{blackboxQAID, whiteboxQAID}
+	for _, gate := range catalog.Gates {
+		if gate.ID == mergeGateID {
+			continue
+		}
+		ids = append(ids, gate.ID)
+	}
+	return ids
 }
 
 func discoverPromptDirectory(dir string) ([]PromptDefinition, error) {

@@ -96,10 +96,6 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	state, err = SetRoute(root, packageRoot, state.RunID, "full", nil)
-	if err != nil {
-		return err
-	}
 	if _, err := PrepareAction(root, packageRoot, state.RunID, "product-review"); err != nil {
 		return err
 	}
@@ -123,6 +119,16 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		return err
 	}
 	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
+	if err != nil {
+		return err
+	}
+	// 拆分决定在 Part 2（start-readiness）完成后记录；此处走快速路径（不拆），
+	// 记录"建议不拆（原因）"后确认路线。
+	state, err = RecordSlicing(root, packageRoot, state.RunID, "no-split", 0, nil, "", "single coherent bounded unit; no split needed")
+	if err != nil {
+		return err
+	}
+	state, err = SetRoute(root, packageRoot, state.RunID, "full", nil)
 	if err != nil {
 		return err
 	}
@@ -185,6 +191,11 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		return err
 	}
 	for index, gate := range catalog.Gates {
+		// 合并门是条件自动门：只在分片 >= 2 的保留总任务实例自动附加，不进入正常
+		// 路线的门审循环。
+		if gate.ID == mergeGateID {
+			continue
+		}
 		if _, err := PrepareGate(root, packageRoot, state.RunID, gate.ID); err != nil {
 			return err
 		}

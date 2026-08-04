@@ -43,7 +43,7 @@ func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := candidates, []string{"qa", "a-first", "z-last"}; !reflect.DeepEqual(got, want) {
+	if got, want := candidates, []string{"blackbox", "whitebox", "a-first", "z-last"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("candidates=%v want=%v", got, want)
 	}
 
@@ -52,7 +52,7 @@ func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := emptyCandidates, []string{"qa"}; !reflect.DeepEqual(got, want) {
+	if got, want := emptyCandidates, []string{"blackbox", "whitebox"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("empty candidates=%v want=%v", got, want)
 	}
 
@@ -96,6 +96,15 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 		}},
 		{"reserved-qa", func(root string) {
 			writeTestFile(t, filepath.Join(root, "gates", "qa.md"), "collides with built-in QA")
+		}},
+		{"reserved-blackbox", func(root string) {
+			writeTestFile(t, filepath.Join(root, "gates", "blackbox.md"), "collides with the blackbox QA mode")
+		}},
+		{"reserved-whitebox", func(root string) {
+			writeTestFile(t, filepath.Join(root, "gates", "whitebox.md"), "collides with the whitebox QA mode")
+		}},
+		{"reserved-merge-qa", func(root string) {
+			writeTestFile(t, filepath.Join(root, "gates", "merge-qa.md"), "collides with the merge QA mode")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

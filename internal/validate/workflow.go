@@ -56,6 +56,51 @@ const (
 
 var routeModes = map[string]bool{"full": true, "custom": true}
 
+// isQAMode reports whether the id is a built-in QA mode entry. Blackbox, whitebox,
+// and merge QA share the run's QA case set and QA Execution result; discovered
+// gate entries live in the per-gate result map instead.
+func isQAMode(id string) bool {
+	return id == blackboxQAID || id == whiteboxQAID || id == mergeQAID
+}
+
+// isSelectedQA reports whether any QA mode is selected for this run.
+func isSelectedQA(state RunState) bool {
+	for id := range selectedSet(state) {
+		if isQAMode(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMergeVerification reports whether this run is a retained overall run whose
+// split decision forces merge gate and merge QA as its only post-merge
+// verification. The route is auto-determined as the merge route when the split
+// decision is recorded, so this run does not go through normal route selection.
+func isMergeVerification(state RunState) bool {
+	return state.RetainedOverall && slicingRecorded(state) && state.Slicing.Decision == "split"
+}
+
+// slicingRecorded reports whether the run's formal split decision has been
+// recorded. The decision is the binding point: once recorded it is not re-cut.
+func slicingRecorded(state RunState) bool {
+	return state.Slicing != nil && strings.TrimSpace(state.Slicing.Decision) != ""
+}
+
+// selectedQAModes lists the normal QA modes selected for the run, used to tell
+// the QA Design agent which modes' cases it must design and which quality floors
+// apply.
+func selectedQAModes(state RunState) []string {
+	var modes []string
+	if isSelected(state, blackboxQAID) {
+		modes = append(modes, "blackbox: LIVE behavior execution cases against the built snapshot")
+	}
+	if isSelected(state, whiteboxQAID) {
+		modes = append(modes, "whitebox: STATIC structure test cases (unit, system, integration)")
+	}
+	return modes
+}
+
 func Start(options StartOptions) (RunState, error) {
 	root := cleanRoot(options.Root)
 	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
@@ -351,13 +396,102 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 			if chosen[id] {
 				return fmt.Errorf("gate %q is already selected", id)
 			}
-			if id == "qa" && developmentStarted(*state) {
+			if isQAMode(id) && developmentStarted(*state) {
 				return fmt.Errorf("QA cannot be added after development begins")
 			}
 			chosen[id] = true
 			delete(state.SkipAuthorizations, id)
 		}
 		state.SelectedGates = orderedSelection(chosen, candidates)
+		return nil
+	})
+}
+
+// RecordSlicing records the run's formal split decision. The decision is binary
+// (split or no-split), can only be recorded after Start Readiness passes, and
+// once recorded is the binding point: it is not re-cut. A split requires at
+// least two slices; when the run is retained overall, recording a split
+// auto-attaches merge gate and merge QA as the run's only post-merge
+// verification (the merge route), so it never goes through normal route
+// selection. A no-split decision requires the mandatory "建议不拆（原因）" reason
+// trace. The fast-path (non-high-confidence) decision note may note uncertainty.
+func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+			return err
+		}
+		if _, err := requireNativeCurrent(root, *state); err != nil {
+			return err
+		}
+		decision = strings.ToLower(strings.TrimSpace(decision))
+		if decision != "split" && decision != "no-split" {
+			return fmt.Errorf("slicing decision must be split or no-split")
+		}
+		if slicingRecorded(*state) {
+			return fmt.Errorf("the slicing decision is already recorded and is the binding point; it is not re-cut")
+		}
+		if !state.RequirementConfirmed {
+			return fmt.Errorf("the current requirement is not confirmed")
+		}
+		if !actionPassedOrAbsent(*state, "product-review") {
+			return fmt.Errorf("Product Review must pass before the slicing decision")
+		}
+		if !actionPassedOrAbsent(*state, "start-readiness") {
+			return fmt.Errorf("Start Readiness must pass before the slicing decision")
+		}
+		if decision == "split" {
+			if splitCount < 2 {
+				return fmt.Errorf("a split requires at least two slices")
+			}
+			if state.RetainedOverall {
+				// 分片 >= 2 的保留总任务实例自动附加合并门与合并 QA：路线确定为
+				// 合并路线，不涉常规路线选择，custom 的省略不延伸到合并验证。
+				state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel)}
+				state.RouteMode = "merge"
+				state.SelectedGates = []string{mergeQAID, mergeGateID}
+				state.SkipAuthorizations = map[string]SkipAuthorization{}
+				state.QAExecution = QAExecutionResult{Status: "PENDING"}
+				return nil
+			}
+			// 非保留总任务的 run（子任务实例继承主任务决定）记录拆分决定但不自动
+			// 附加合并验证，之后仍走逐切片路线确认与常规开发流程。
+			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), Note: strings.TrimSpace(note)}
+			return nil
+		}
+		if strings.TrimSpace(note) == "" {
+			return fmt.Errorf("a no-split decision requires the mandatory reason note (建议不拆原因)")
+		}
+		state.Slicing = &Slicing{Decision: decision, Note: strings.TrimSpace(note)}
+		return nil
+	})
+}
+
+// RecordSettledFindings records findings and decisions the user has already
+// settled for a pre-development review. They are injected into the next
+// product-review / start-readiness dispatch so the reviewer does not re-raise
+// them (reviewer-side enforcement of the double guarantee); the main agent also
+// filters them when relaying. A meaning-changing requirement revision clears the
+// settled list because the revised premise may legitimately re-raise an item.
+func RecordSettledFindings(root, packageRoot, runID, actionID string, findings []string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		if actionID != "product-review" && actionID != "start-readiness" {
+			return fmt.Errorf("settled findings are recorded for product-review or start-readiness only")
+		}
+		added := 0
+		for _, raw := range findings {
+			message := strings.TrimSpace(raw)
+			if message == "" {
+				return fmt.Errorf("settled finding message is required")
+			}
+			if state.SettledFindings == nil {
+				state.SettledFindings = map[string][]string{}
+			}
+			state.SettledFindings[actionID] = append(state.SettledFindings[actionID], message)
+			added++
+		}
+		if added == 0 {
+			return fmt.Errorf("at least one settled finding is required")
+		}
 		return nil
 	})
 }
@@ -435,25 +569,36 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 }
 
 func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) (string, error) {
-	if actionID == "qa-design" && len(state.QACases) != 0 && state.Actions["qa-design"].Status != "PASS" {
-		lines := []string{"Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain exact unaffected passing cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed."}
-		if review := state.Actions["qa-review"]; review.Status == "FAIL" {
-			lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
-			for _, finding := range review.Findings {
-				line := "- " + finding.Message
-				if len(finding.Locations) != 0 {
-					line += " (" + strings.Join(finding.Locations, ", ") + ")"
+	if actionID == "qa-design" {
+		var lines []string
+		if isMergeVerification(state) {
+			lines = append(lines, "Merge QA: design cross-slice interaction cases for the merged snapshot. The case set may be empty when the slices are essentially independent (leave a trace noting that instead of forcing cases).")
+		} else if modes := selectedQAModes(state); len(modes) != 0 {
+			lines = append(lines, "Selected QA modes: "+strings.Join(modes, "; "))
+		}
+		if len(state.QACases) != 0 && state.Actions["qa-design"].Status != "PASS" {
+			lines = append(lines, "Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain exact unaffected passing cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed.")
+			if review := state.Actions["qa-review"]; review.Status == "FAIL" {
+				lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
+				for _, finding := range review.Findings {
+					line := "- " + finding.Message
+					if len(finding.Locations) != 0 {
+						line += " (" + strings.Join(finding.Locations, ", ") + ")"
+					}
+					lines = append(lines, line)
 				}
-				lines = append(lines, line)
+			}
+			for _, testCase := range state.QACases {
+				lines = append(lines, formatQACase(testCase, true))
 			}
 		}
-		for _, testCase := range state.QACases {
-			lines = append(lines, formatQACase(testCase, true))
+		if len(lines) == 0 {
+			return "", nil
 		}
 		return strings.Join(lines, "\n\n"), nil
 	}
 	if actionID == "qa-review" {
-		if len(state.QACases) == 0 {
+		if len(state.QACases) == 0 && !isMergeVerification(state) {
 			return "", fmt.Errorf("QA cases are missing")
 		}
 		accepted := []string{"Accepted coverage context; do not return new decisions for these cases:"}
@@ -475,7 +620,7 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 		return strings.Join(append(accepted, pending...), "\n\n"), nil
 	}
 	if actionID == "qa-execution" {
-		if len(state.QACases) == 0 {
+		if len(state.QACases) == 0 && !isMergeVerification(state) {
 			return "", fmt.Errorf("QA cases are missing")
 		}
 		var lines []string
@@ -495,6 +640,15 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 			lines = append(lines, fmt.Sprintf("\n[Gate: %s]\n%s", id, gate.Content))
 		}
 		return strings.Join(lines, "\n"), nil
+	}
+	if actionID == "product-review" || actionID == "start-readiness" {
+		if settled := state.SettledFindings[actionID]; len(settled) != 0 {
+			lines := []string{"Findings and decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on."}
+			for _, message := range settled {
+				lines = append(lines, "- "+message)
+			}
+			return strings.Join(lines, "\n"), nil
+		}
 	}
 	return "", nil
 }
@@ -600,7 +754,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			}
 		}
 		backfillDispatchCost(root, state, dispatch)
-		result, err := semanticActionResult(status, message, findings, state)
+		result, err := semanticActionResult(actionID, status, message, findings, state)
 		if err != nil {
 			return err
 		}
@@ -699,6 +853,16 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			return nil
 		}
 		if len(cases) == 0 {
+			if isMergeVerification(*state) {
+				// 合并 QA 的用例集可为零/极少：留痕注明"切片基本独立、无跨切片交互
+				// 用例"，不判 PASS 或覆盖不足，直接进入 QA Review（无待定用例）。
+				state.QACases = []QACase{}
+				state.QAExecution = QAExecutionResult{Status: "PENDING"}
+				state.Actions["qa-design"] = ActionResult{Status: "PASS", Message: "切片基本独立、无跨切片交互用例", DispatchID: dispatch.ID}
+				state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
+				completeDispatch(state, dispatch.ID)
+				return nil
+			}
 			return fmt.Errorf("at least one QA case is required")
 		}
 		seen := map[string]bool{}
@@ -749,8 +913,17 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			}
 			updated = append(updated, normalized)
 		}
-		if !kinds["STATIC"] || !kinds["LIVE"] {
-			return fmt.Errorf("complete QA case set requires at least one STATIC and one LIVE case")
+		// 质量下限随已选 QA 模式而定：黑盒要求至少一个行为执行（LIVE）用例，白盒
+		// 要求至少一个结构测试（STATIC）用例；full（两者都选）要求两者都有。旧的
+		// "每集至少一个静态与一个行为用例"下限被逐模式下限取代。合并 QA 不分黑盒/
+		// 白盒，无逐模式下限。
+		if !isMergeVerification(*state) {
+			if isSelected(*state, blackboxQAID) && !kinds["LIVE"] {
+				return fmt.Errorf("blackbox QA requires at least one LIVE behavior execution case")
+			}
+			if isSelected(*state, whiteboxQAID) && !kinds["STATIC"] {
+				return fmt.Errorf("whitebox QA requires at least one STATIC structure test case")
+			}
 		}
 		if state.Actions["qa-review"].Status == "FAIL" {
 			pending := false
@@ -896,7 +1069,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			completeReviewWaveIfReady(state)
 			return nil
 		}
-		if len(state.QACases) == 0 {
+		if len(state.QACases) == 0 && !isMergeVerification(*state) {
 			return fmt.Errorf("approved QA cases are missing")
 		}
 		if len(results) != len(state.QACases) {
@@ -931,7 +1104,11 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			}
 			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Kind: testCase.Kind, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
 		}
-		state.QAExecution = QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings}
+		message := ""
+		if isMergeVerification(*state) && len(state.QACases) == 0 {
+			message = "切片基本独立、无跨切片交互用例"
+		}
+		state.QAExecution = QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings, Message: message}
 		completeDispatch(state, dispatch.ID)
 		completeReviewWaveIfReady(state)
 		return nil
@@ -1146,7 +1323,7 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 		return nil
 	}
 	ids := []string{}
-	if isSelected(state, "qa") && state.QAExecution.Status == "PASS" {
+	if isSelectedQA(state) && state.QAExecution.Status == "PASS" {
 		if state.PreRepairSnapshot != "" && state.QAExecution.Snapshot == state.PreRepairSnapshot {
 			ids = append(ids, "qa")
 		} else if catalogChanged && state.QAExecution.Snapshot == state.CurrentSnapshot {
@@ -1168,11 +1345,11 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 }
 
 func repairRerunRecorded(state RunState) bool {
-	if isSelected(state, "qa") && state.QAExecution.Snapshot == state.CurrentSnapshot && state.QAExecution.Status != "" && state.QAExecution.Status != "PENDING" {
+	if isSelectedQA(state) && state.QAExecution.Snapshot == state.CurrentSnapshot && state.QAExecution.Status != "" && state.QAExecution.Status != "PENDING" {
 		return true
 	}
 	for id := range selectedSet(state) {
-		if id == "qa" {
+		if isQAMode(id) {
 			continue
 		}
 		result := state.Gates[id]
@@ -1185,7 +1362,7 @@ func repairRerunRecorded(state RunState) bool {
 
 func inheritCarryResult(state *RunState, id, origin, reason, source string) {
 	state.Carry[id] = CarryResult{Decision: "INHERIT", Origin: origin, SourceSnapshot: source, TargetSnapshot: state.CurrentSnapshot, Message: reason}
-	if id == "qa" {
+	if isQAMode(id) {
 		state.QAExecution.Snapshot = state.CurrentSnapshot
 		return
 	}
@@ -1506,8 +1683,8 @@ func newDispatchID() (string, error) {
 	return "dispatch-" + hex.EncodeToString(value[:]), nil
 }
 
-func semanticActionResult(status, message string, findings []FindingInput, state *RunState) (ActionResult, error) {
-	normalized, converted, err := validateSemanticResult(status, message, findings, false)
+func semanticActionResult(actionID, status, message string, findings []FindingInput, state *RunState) (ActionResult, error) {
+	normalized, converted, err := validateSemanticResult(actionID, status, message, findings, false)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -1515,14 +1692,14 @@ func semanticActionResult(status, message string, findings []FindingInput, state
 }
 
 func semanticGateResult(status, message string, findings []FindingInput, state *RunState) (GateResult, error) {
-	normalized, converted, err := validateSemanticResult(status, message, findings, true)
+	normalized, converted, err := validateSemanticResult("", status, message, findings, true)
 	if err != nil {
 		return GateResult{}, err
 	}
 	return GateResult{Status: normalized, Message: strings.TrimSpace(message), Snapshot: state.CurrentSnapshot, Findings: converted}, nil
 }
 
-func validateSemanticResult(status, message string, findings []FindingInput, gateResult bool) (string, []Finding, error) {
+func validateSemanticResult(actionID, status, message string, findings []FindingInput, gateResult bool) (string, []Finding, error) {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
 		return "", nil, fmt.Errorf("status must be PASS, FAIL, or RUNTIME_ERROR")
@@ -1562,8 +1739,14 @@ func validateSemanticResult(status, message string, findings []FindingInput, gat
 			if severity == "P0" || severity == "P1" {
 				hasBlocking = true
 			}
+		} else if actionID == "product-review" || actionID == "start-readiness" {
+			// 产品审与 start-readiness 的发现项分级 P0/P1/P2；仅 P2 时用户处置后
+			// 修订不再复审，存在 P0/P1 时修订后重新审（主代理按此处置）。
+			if severity != "" && severity != "P0" && severity != "P1" && severity != "P2" {
+				return "", nil, fmt.Errorf("review finding severity must be P0, P1, or P2")
+			}
 		} else if severity != "" {
-			return "", nil, fmt.Errorf("severity is accepted only for discovered-gate findings")
+			return "", nil, fmt.Errorf("severity is accepted only for discovered-gate findings or product/start-readiness review findings")
 		}
 		converted = append(converted, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
 	}
@@ -1650,6 +1833,8 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.QAExecution = QAExecutionResult{Status: "PENDING"}
 	state.Carry = map[string]CarryResult{}
 	state.PreRepairSnapshot = ""
+	// 语义已变的需求修订改变了原决定的前提，已拍板发现项清单随之清空，允许重新提出。
+	state.SettledFindings = map[string][]string{}
 	state.Gates = map[string]GateResult{}
 	for _, id := range gateIDs {
 		state.Gates[id] = GateResult{Status: "PENDING"}
@@ -1732,12 +1917,17 @@ func requireTransition(state RunState, operation, target string) error {
 		return fmt.Errorf("the current requirement is not confirmed")
 	}
 	if operation == "route" {
+		if !slicingRecorded(state) {
+			return fmt.Errorf("the slicing decision must be recorded before the route")
+		}
 		if state.RouteMode != "" {
 			return fmt.Errorf("the run already has its one route decision")
 		}
 		return nil
 	}
-	if state.RouteMode == "" {
+	// 产品审（Part 1）与 start-readiness（Part 2）在拆分决定与路线确认之前，不受
+	// 路线已确认约束；其余下游操作都需要已确认路线。
+	if operation != "product-review" && operation != "start-readiness" && state.RouteMode == "" {
 		return fmt.Errorf("the gate route is not confirmed")
 	}
 	switch operation {
@@ -1765,7 +1955,7 @@ func requireTransition(state RunState, operation, target string) error {
 			return fmt.Errorf("Product Review must pass before Start Readiness")
 		}
 	case "qa-design":
-		if !isSelected(state, "qa") {
+		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
 		if developmentStarted(state) {
@@ -1778,13 +1968,13 @@ func requireTransition(state RunState, operation, target string) error {
 			return fmt.Errorf("the complete QA case set is awaiting QA Review")
 		}
 	case "qa-review":
-		if !isSelected(state, "qa") {
+		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
 		if developmentStarted(state) {
 			return fmt.Errorf("QA Review must be recorded before development")
 		}
-		if state.Actions["qa-design"].Status != "PASS" || len(state.QACases) == 0 {
+		if state.Actions["qa-design"].Status != "PASS" || (len(state.QACases) == 0 && !isMergeVerification(state)) {
 			return fmt.Errorf("a complete QA case set is required before QA Review")
 		}
 		if status := state.Actions["qa-review"].Status; status == "PASS" || status == "FAIL" {
@@ -1801,7 +1991,10 @@ func requireTransition(state RunState, operation, target string) error {
 		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before development")
 		}
-		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
+		if !slicingRecorded(state) {
+			return fmt.Errorf("the slicing decision must be recorded before development")
+		}
+		if isSelectedQA(state) && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("QA Review must pass before development starts")
 		}
 		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
@@ -1843,7 +2036,7 @@ func requireTransition(state RunState, operation, target string) error {
 		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
-		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
+		if isSelectedQA(state) && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("QA Review must pass before a development snapshot")
 		}
 		if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
@@ -1864,7 +2057,7 @@ func requireTransition(state RunState, operation, target string) error {
 			}
 		}
 	case "qa-execution":
-		if !isSelected(state, "qa") {
+		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
 		if !hasDevelopmentSnapshot(state) {
@@ -1985,11 +2178,11 @@ func selectedSet(state RunState) map[string]bool {
 func isSelected(state RunState, id string) bool { return selectedSet(state)[id] }
 
 func reviewWaveRecorded(state RunState) bool {
-	if isSelected(state, "qa") && (state.QAExecution.Snapshot != state.CurrentSnapshot || state.QAExecution.Status == "PENDING" || state.QAExecution.Status == "") {
+	if isSelectedQA(state) && (state.QAExecution.Snapshot != state.CurrentSnapshot || state.QAExecution.Status == "PENDING" || state.QAExecution.Status == "") {
 		return false
 	}
 	for id := range selectedSet(state) {
-		if id == "qa" {
+		if isQAMode(id) {
 			continue
 		}
 		result := state.Gates[id]
@@ -2001,11 +2194,14 @@ func reviewWaveRecorded(state RunState) bool {
 }
 
 func hasRepairableBlocker(state RunState) bool {
-	if isSelected(state, "qa") && state.QAExecution.Status == "FAIL" && state.QAExecution.Snapshot == state.CurrentSnapshot {
+	if isSelectedQA(state) && state.QAExecution.Status == "FAIL" && state.QAExecution.Snapshot == state.CurrentSnapshot {
 		return true
 	}
 	for id := range selectedSet(state) {
-		if id != "qa" && state.Gates[id].Status == "FAIL" && state.Gates[id].Snapshot == state.CurrentSnapshot {
+		if isQAMode(id) {
+			continue
+		}
+		if state.Gates[id].Status == "FAIL" && state.Gates[id].Snapshot == state.CurrentSnapshot {
 			return true
 		}
 	}
@@ -2014,7 +2210,7 @@ func hasRepairableBlocker(state RunState) bool {
 
 func hasP2Recommendation(state RunState) bool {
 	for id := range selectedSet(state) {
-		if id == "qa" {
+		if isQAMode(id) {
 			continue
 		}
 		result := state.Gates[id]
@@ -2056,13 +2252,13 @@ func runtimeErrorsAuthorizedForRepair(state RunState) bool {
 
 func repairInput(state RunState) string {
 	lines := []string{"Repair the complete recorded wave below. P2 recommendations are included whenever this wave has a blocker or the user explicitly requested their repair."}
-	if isSelected(state, "qa") && state.QAExecution.Status == "FAIL" {
+	if isSelectedQA(state) && state.QAExecution.Status == "FAIL" {
 		for _, finding := range state.QAExecution.Findings {
 			lines = append(lines, "QA FAIL: "+finding.Message)
 		}
 	}
 	for _, id := range state.SelectedGates {
-		if id == "qa" {
+		if isQAMode(id) {
 			continue
 		}
 		for _, finding := range state.Gates[id].Findings {
@@ -2081,11 +2277,14 @@ func completeReviewWaveIfReady(state *RunState) {
 		clearResolvedCarryBoundary(state)
 		return
 	}
-	if isSelected(*state, "qa") && state.QAExecution.Status == "RUNTIME_ERROR" {
+	if isSelectedQA(*state) && state.QAExecution.Status == "RUNTIME_ERROR" {
 		return
 	}
 	for id := range selectedSet(*state) {
-		if id != "qa" && state.Gates[id].Status == "RUNTIME_ERROR" {
+		if isQAMode(id) {
+			continue
+		}
+		if state.Gates[id].Status == "RUNTIME_ERROR" {
 			return
 		}
 	}
@@ -2179,7 +2378,7 @@ func requireSelectedResultsResolved(state RunState) error {
 			return fmt.Errorf("selected gate %q is PENDING", id)
 		}
 		snapshot := state.Gates[id].Snapshot
-		if id == "qa" {
+		if isQAMode(id) {
 			snapshot = state.QAExecution.Snapshot
 		}
 		if snapshot != state.CurrentSnapshot {
@@ -2197,7 +2396,7 @@ func requireSelectedResultsResolved(state RunState) error {
 }
 
 func selectedResultStatus(state RunState, id string) string {
-	if id == "qa" {
+	if isQAMode(id) {
 		return state.QAExecution.Status
 	}
 	return state.Gates[id].Status

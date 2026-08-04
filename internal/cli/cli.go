@@ -247,6 +247,33 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		}
 		candidates, err := validate.RouteCandidates(*root, *pkg, *runID)
 		return printValue(streams.Stdout, candidates, err)
+	case "slicing":
+		fs := newFlagSet("workflow slicing", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		decision := fs.String("decision", "", "split or no-split")
+		count := fs.Int("count", 0, "subtask count for a split decision (>= 2)")
+		slices := stringListFlag{}
+		fs.Var(&slices, "slice", "slice definition; repeat as needed")
+		parallel := fs.String("parallel", "", "parallel suggestion (which subtasks may run concurrently)")
+		note := fs.String("note", "", "reason trace; required for no-split (建议不拆原因)")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note)
+		return printValue(streams.Stdout, state, err)
+	case "settle-findings":
+		fs := newFlagSet("workflow settle-findings", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		action := fs.String("action", "", "product-review or start-readiness")
+		findings := stringListFlag{}
+		fs.Var(&findings, "finding", "settled finding message; repeat as needed")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.RecordSettledFindings(*root, *pkg, *runID, *action, findings)
+		return printValue(streams.Stdout, state, err)
 	case "route":
 		fs := newFlagSet("workflow route", streams)
 		root, pkg := rootFlags(fs)
@@ -855,5 +882,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }

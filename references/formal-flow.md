@@ -33,7 +33,7 @@ Resume 默认把逐门 catalog delta 报告为 `catalogDelta`；目录变化与�
 分类，不是新 run 的硬要求。采纳外部改动后用 `workflow carry --main-agent --main-reason
 '<reason>'` 继承不受影响的 PASS，或按需重新派发门。
 
-## 需求与路线
+## 需求、拆分决定与路线
 
 ```bash
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
@@ -48,6 +48,22 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
 # Resume 报告修订已改变之后，对它的语义影响做分类。
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --meaning <preserved|changed>
+
+# 拆分决定在 Part 2（start-readiness）PASS 后记录，是所有正式 run 的必填留痕；
+# 记录后即为绑定点、不重切。no-split 必须带原因留痕；split 需要分片数 >= 2。
+formal-gates workflow slicing --root <repo> --package-root <package> \
+  --run-id <id> --decision <split|no-split> [--count <n>] \
+  [--slice '<slice-definition>' ...] [--parallel '<parallel-suggestion>'] \
+  [--note '<reason>']
+# 用户已拍板（settled）的发现项清单：注入下一次 product-review / start-readiness
+# 派发，审查者不再重提（需求修订改变前提时例外）。
+formal-gates workflow settle-findings --root <repo> --package-root <package> \
+  --run-id <id> --action <product-review|start-readiness> \
+  --finding '<settled-message>' ...
+
+# 路线在拆分决定之后确认：单一 run 确认一次；拆后逐切片各确认一次（主代理给统一
+# 默认推荐、用户拍板）。full = 黑盒 QA + 白盒 QA + 全部已发现门；custom 可任意组
+# 合黑盒 QA、白盒 QA 与各门，至少选一项。合并门/合并 QA 不进正常选择列表。
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
@@ -58,11 +74,16 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 
 ## 开发之前
 
-开发前检查分两段：先派发 Part 1 产品审（`product-review`），全部通过后再并行推进
-Part 2 技术审（`start-readiness`）与 QA 用例设计/用例审。
+开发前检查分两段：先派发 Part 1 产品审（`product-review`），全部通过后再进入
+Part 2。Part 2 双速调度：高置信要拆 → 呈现拆分建议、用户确认后设置分片，然后确认
+路线（逐切片）；非高置信要拆（高置信不拆或不确定）→ 快速路径，黑盒 QA 设计可与
+`start-readiness` 并行开始，"建议不拆（原因）"必填留痕，按单一 run 进行。路线确认
+在拆分决定之后；QA 模式拆为黑盒（LIVE 行为执行）与白盒（STATIC 结构测试），各自可
+选、均由独立代理设计并经 review 批准。
 
 ```bash
-# Part 1 产品审：审受理阶段已实例化的需求文档，只评产品/策划层面。
+# Part 1 产品审：承接需求细节澄清，审已实例化的需求文档，只评产品/策划层面。
+# 发现项分级 P0/P1/P2；用户已拍板的发现项不再重提（CLI 注入已拍板清单）。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review
 # 每准备一个独立派发的动作或门之后，都重复这条认领命令。
@@ -71,15 +92,20 @@ formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>']
+  [--finding '<message>' --severity <P0|P1|P2>]
 # 产品审的 FAIL 发现项是候选输入，由用户逐项拍板：接受则重新派发并记录 PASS，
-# 未接受则按用户指示修订需求/方案后重审。FAIL 不构成终态。
+# 未接受则按用户指示修订需求/方案后重审。仅 P2 时修订后不再复审，直接进入下一步；
+# 存在 P0/P1 时修订后重新审。FAIL 不构成终态。
 
+# Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --dispatch <dispatch-id> \
-  --status <PASS|FAIL|RUNTIME_ERROR>
+  --status <PASS|FAIL|RUNTIME_ERROR> \
+  [--finding '<message>' --severity <P0|P1|P2>]
+
+# start-readiness PASS 后记录拆分决定，再确认路线（见上节）。
 
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-design
@@ -108,7 +134,7 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 ## 开发后审查
 
 ```bash
-# 并行准备 QA 执行和每一个门。
+# 并行准备 QA 执行和每一个门。开发后阶段并行：黑盒 QA 执行、白盒 QA 与各门。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-execution
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
@@ -127,6 +153,13 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
 # --compared 是审查者实际比较的快照对；与指定的基线到当前范围不匹配时结果被丢弃。
 # RUNTIME_ERROR 不要求 --compared。
 ```
+
+分片 >= 2 时，保留总任务实例在合并后自动附加合并门与合并 QA 作为其合并后验证，只
+跑这两者，不重跑常规门于 base→merged。合并 QA 的跨切片交互用例在各分片开发期间并
+行设计/审（`qa-design`/`qa-review`），合并后用 `workflow snapshot` 记录合并标识，
+再执行（`qa-execution`）并派发合并门（`prepare-gate --gate merge-gate`）。用例集可
+为零，此时留痕注明"切片基本独立、无跨切片交互用例"。合并门与合并 QA 不进正常路线
+选择列表，custom 的省略不延伸到合并验证。
 
 ## 继承判定、修复授权与 Seal
 

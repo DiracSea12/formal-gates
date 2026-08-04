@@ -28,6 +28,8 @@ type RunState struct {
 	CurrentSnapshot      string                       `json:"currentSnapshot"`
 	RetainedOverall      bool                         `json:"retainedOverall,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
+	Slicing              *Slicing                     `json:"slicing,omitempty"`
+	SettledFindings      map[string][]string          `json:"settledFindings,omitempty"`
 	RouteMode            string                       `json:"routeMode,omitempty"`
 	SelectedGates        []string                     `json:"selectedGates"`
 	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
@@ -45,6 +47,19 @@ type RunState struct {
 type RequirementArtifact struct {
 	Path     string `json:"path"`
 	Revision string `json:"revision"`
+}
+
+// Slicing 记录一次正式 run 的拆分决定。决定是二元（split 或 no-split），一旦记录
+// 即为绑定点：确认后不重切，确需调整走既有需求变更流程。拆分建议的呈现与留痕对
+// 所有正式 run 必填；仅高置信要拆时需用户确认拆分方案，其余情形记录"建议不拆（
+// 原因）"即可。子任务实例继承主任务 run 的拆分决定，本字段只作用于发起的主任务
+// run。
+type Slicing struct {
+	Decision   string   `json:"decision,omitempty"`   // split 或 no-split
+	SplitCount int      `json:"splitCount,omitempty"` // 子任务数，split 时 >= 2
+	Slices     []string `json:"slices,omitempty"`     // 拆分定位：如何拆、子任务边界
+	Parallel   string   `json:"parallel,omitempty"`   // 并行建议：哪些子任务可并行
+	Note       string   `json:"note,omitempty"`       // 原因留痕，no-split 时必填（建议不拆原因）
 }
 
 type PreparedDispatch struct {
@@ -136,6 +151,7 @@ type RunSummary struct {
 	BaseSnapshot         string                       `json:"baseSnapshot"`
 	CurrentSnapshot      string                       `json:"currentSnapshot"`
 	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
+	Slicing              *Slicing                     `json:"slicing,omitempty"`
 	RouteMode            string                       `json:"routeMode"`
 	SelectedGates        []string                     `json:"selectedGates"`
 	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
@@ -245,7 +261,7 @@ func RunSummaryPath(root, runID string) string {
 }
 
 func runSummary(state RunState) RunSummary {
-	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution, Cost: state.Cost}
+	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution, Cost: state.Cost}
 }
 
 func RequirementRevision(path string) (string, error) {

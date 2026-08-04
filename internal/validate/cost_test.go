@@ -90,7 +90,7 @@ func TestCostBackfillParsesCapturedTranscript(t *testing.T) {
 
 func TestProductReviewCostBackfillParsesCapturedTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "cost-product-review"), "custom", []string{"quality"})
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "cost-product-review"))
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "product-review", "cost-product-review")
 	fixture := writeCostFixture(t)
 	captureStopWithTranscript(t, root, "cost-product-review", fixture)
