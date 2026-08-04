@@ -1,0 +1,117 @@
+{
+  "runId": "sliced-runs-confirmation",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "7b3c71fcac9eef1d7ceb68d072fc508ae32e5f4fd8aa114c4703323a39413eab",
+  "basePromptRevision": "07f7b7662269940323142dfd53a03912444067b41b1aa8c0e685d113a3a3f6f4",
+  "catalogRevision": "61de7a772a4a7e9bd0fb9ae8848577e031d88fa58b9e29343b1067df19925bbc",
+  "vcs": "git",
+  "baseSnapshot": "f983aaa6fcda55dd468e57e32bc76f7ad0502a65",
+  "currentSnapshot": "f983aaa6fcda55dd468e57e32bc76f7ad0502a65",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/sliced-runs-confirmation/master-requirements.md",
+      "revision": "7b3c71fcac9eef1d7ceb68d072fc508ae32e5f4fd8aa114c4703323a39413eab"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-19854fb8d71411b383c73adf": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4d04b98b3b5089c24e7bd7ee": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-67556dbb23c2262698ac0b84": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-85c6cd396e4e741e39c25126": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8b83cac3aa509e47d0fb3b1d": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-aa508a0e8e09de7571730dd6": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ba0de0414c8f63fb7a503e40": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d9d95ad420b90faf173c7134": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

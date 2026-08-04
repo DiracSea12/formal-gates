@@ -1,0 +1,341 @@
+{
+  "runId": "sliced-runs-confirmation-and-qa-refactor",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "79a21bc3c954f5e2dac39caeb47b9ab64448ada45aa42ee0f117d5d06929a6cd",
+  "basePromptRevision": "07f7b7662269940323142dfd53a03912444067b41b1aa8c0e685d113a3a3f6f4",
+  "catalogRevision": "61de7a772a4a7e9bd0fb9ae8848577e031d88fa58b9e29343b1067df19925bbc",
+  "vcs": "git",
+  "baseSnapshot": "f983aaa6fcda55dd468e57e32bc76f7ad0502a65",
+  "currentSnapshot": "5b5c83c67027d9429dd9ba802f9b3f53827adc57",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/sliced-runs-confirmation-and-qa-refactor/master-requirements.md",
+      "revision": "79a21bc3c954f5e2dac39caeb47b9ab64448ada45aa42ee0f117d5d06929a6cd"
+    }
+  ],
+  "routeMode": "full",
+  "selectedGates": [
+    "qa",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "5b5c83c67027d9429dd9ba802f9b3f53827adc57",
+      "compared": "f983aaa6fcda55dd468e57e32bc76f7ad0502a65..5b5c83c67027d9429dd9ba802f9b3f53827adc57",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "RecordSlicing 存在不可达兜底分支（workflow.go:532-535）：split 非保留总任务情形已在上方继承分支返回，后续 fallback 永不执行，属可收缩逻辑（P2 建议）",
+          "locations": [
+            "internal/validate/workflow.go:532"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-70f083ab546e5fa04ba2877e"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "5b5c83c67027d9429dd9ba802f9b3f53827adc57",
+      "compared": "f983aaa6fcda55dd468e57e32bc76f7ad0502a65..5b5c83c67027d9429dd9ba802f9b3f53827adc57",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "切片继承信任制：非切片 run 记录 split 可跳整体审查（需过程违规，P2 建议）",
+          "locations": [
+            "internal/validate/workflow.go:502"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "空合并用例集时 qa-execution 仅需 qa-design PASS、可跳过 qa-review（文档流程会跑，CLI 未强制，P2 建议）",
+          "locations": [
+            "internal/validate/workflow.go:936"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-e08c0ad06e271c94c394196d"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "5b5c83c67027d9429dd9ba802f9b3f53827adc57",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "go test internal/validate 及 CLI 测试",
+        "observation": "三条规则测试全过",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-002",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "settle-findings 注入测试",
+        "observation": "注入通过",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "合并验证自动附加测试",
+        "observation": "各断言通过",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "路线语义/逐切片路线测试",
+        "observation": "各断言通过，空 custom 拒经 CLI 实机验证",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "内容扫描 SKILL.md 与 prompts/actions/*.md",
+        "observation": "改拆后果说明与整体级切片继承措辞已补齐",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "内容扫描 references/gates/SKILL",
+        "observation": "文档保证成立",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离环境单一 run 全流程",
+        "observation": "各观察符合",
+        "oracleResult": "符合"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离环境拆分 run 全流程",
+        "observation": "各观察符合、子任务继承",
+        "oracleResult": "符合"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-015662c41523b432b5406788": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-246b502adfda15f337181928": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-308c21bfca76e0af31e70f40": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-34473f4b3272eafe4764e75f": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3644623a7a50e09d2c2b111a": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-37f0a37f28c961aa84887437": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4b3b7a70b1bb5261a4cd0e00": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4b7a2b9eec1a20452bc635cb": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-685ef392476780ceb5fb7a62": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6d6b6837e4d32a4a76798592": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-70f083ab546e5fa04ba2877e": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8533be34447d54394019f32f": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-98d02762b0cddd799c480ed1": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b465cb82e6aac6eb2c6aa306": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b8b69d5abaed0d8fc06c416a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c3c84875a2d4f4553a10e96c": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c7dd7e3bdbc373178fefecff": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cb6c13320173befc94fa2504": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d0c406f0de5f8f8a2afbeafb": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e08c0ad06e271c94c394196d": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f4e4b4bbe3588ee8baf1e078": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fc554aa431e74b274ef63fd7": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
