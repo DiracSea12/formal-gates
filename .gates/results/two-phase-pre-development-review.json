@@ -135,9 +135,9 @@
         "caseId": "CASE-015",
         "kind": "LIVE",
         "outcome": "PASS",
-        "procedure": "隔离空 git 仓库两条路径各一 run：接受路径 FAIL→重派发 PASS；拒绝路径 FAIL→修订需求→走文档化 resume/requirement 变更→重派发 PASS",
-        "observation": "接受路径：FAIL 后重记录 PASS，start-readiness/qa-design 从被拒转放行；拒绝路径：修订后重派发 PASS，续走至 development-worker PREPARED；无不可恢复终态 FAIL",
-        "oracleResult": "两条路径均可经用户决议解除，开发最终解锁"
+        "procedure": "隔离空 git 仓库两条路径各一 run：接受路径保持 OPEN→直接在已认领派发上记录 PASS（不新建派发）；拒绝路径 FAIL→修订需求→零上下文重派发 PASS",
+        "observation": "接受路径：保持 OPEN 时 start-readiness/qa-design 被拒，在已认领派发上记录 PASS 后放行，未新建派发；拒绝路径：修订需求后重派发（新派发、新审查者身份）PASS，续走至 development-worker PREPARED；无不可恢复终态 FAIL",
+        "oracleResult": "两条路径均可经用户决议解除，开发最终解锁；接受路径不造新派发"
       }
     ]
   },
