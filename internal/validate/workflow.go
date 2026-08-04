@@ -584,7 +584,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		if _, ok := catalog.Action(actionID); !ok {
 			return fmt.Errorf("unknown action prompt %q", actionID)
 		}
-		if actionID != "requirements-clarification" && actionID != "start-readiness" {
+		if actionID != "requirements-clarification" && actionID != "start-readiness" && actionID != "product-review" {
 			return fmt.Errorf("action %q has a dedicated workflow command and cannot use record-action", actionID)
 		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", actionID)
@@ -594,7 +594,7 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		if err := requireTransition(*state, actionID, ""); err != nil {
 			return err
 		}
-		if actionID == "start-readiness" {
+		if actionID == "start-readiness" || actionID == "product-review" {
 			if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 				return err
 			}
@@ -1706,6 +1706,21 @@ func eligibleCarryGates(state RunState) []string {
 	return ids
 }
 
+// runHasAction reports whether the run's state carries the named action. A run
+// seeds its actions from the catalog at start; a run started before an action
+// was added to the catalog carries no entry for it.
+func runHasAction(state RunState, actionID string) bool {
+	_, ok := state.Actions[actionID]
+	return ok
+}
+
+// actionPassedOrAbsent reports whether the named pre-development action does
+// not gate this run: it is absent from the run (predating run) or has recorded
+// PASS. Unselected action changes must not block an existing run.
+func actionPassedOrAbsent(state RunState, actionID string) bool {
+	return !runHasAction(state, actionID) || state.Actions[actionID].Status == "PASS"
+}
+
 func requireTransition(state RunState, operation, target string) error {
 	if operation == "requirements-clarification" {
 		if state.RequirementConfirmed {
@@ -1735,9 +1750,19 @@ func requireTransition(state RunState, operation, target string) error {
 			return fmt.Errorf("the gate route cannot change while a repair snapshot requires verification")
 		}
 		return nil
+	case "product-review":
+		if state.Actions["product-review"].Status == "PASS" {
+			return fmt.Errorf("Product Review already has an authoritative PASS result")
+		}
+		if developmentStarted(state) {
+			return fmt.Errorf("Product Review must be recorded before development")
+		}
 	case "start-readiness":
 		if developmentStarted(state) {
 			return fmt.Errorf("Start Readiness must be recorded before development")
+		}
+		if !actionPassedOrAbsent(state, "product-review") {
+			return fmt.Errorf("Product Review must pass before Start Readiness")
 		}
 	case "qa-design":
 		if !isSelected(state, "qa") {
@@ -1745,6 +1770,9 @@ func requireTransition(state RunState, operation, target string) error {
 		}
 		if developmentStarted(state) {
 			return fmt.Errorf("QA Design must be recorded before development")
+		}
+		if !actionPassedOrAbsent(state, "product-review") {
+			return fmt.Errorf("Product Review must pass before QA Design")
 		}
 		if state.Actions["qa-design"].Status == "PASS" {
 			return fmt.Errorf("the complete QA case set is awaiting QA Review")
@@ -1767,7 +1795,10 @@ func requireTransition(state RunState, operation, target string) error {
 		if developmentStatus != developmentPending && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared && developmentStatus != developmentComplete && developmentStatus != developmentVerified {
 			return fmt.Errorf("development worker is already prepared")
 		}
-		if state.Actions["start-readiness"].Status != "PASS" {
+		if !actionPassedOrAbsent(state, "product-review") {
+			return fmt.Errorf("Product Review must pass before development")
+		}
+		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before development")
 		}
 		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
@@ -1806,7 +1837,10 @@ func requireTransition(state RunState, operation, target string) error {
 		if !adoptingMergedSlices && !adoptingSliceRepair && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {
 			return fmt.Errorf("development worker must be prepared before a snapshot")
 		}
-		if state.Actions["start-readiness"].Status != "PASS" {
+		if !actionPassedOrAbsent(state, "product-review") {
+			return fmt.Errorf("Product Review must pass before a development snapshot")
+		}
+		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
 		if isSelected(state, "qa") && state.Actions["qa-review"].Status != "PASS" {
@@ -1846,7 +1880,10 @@ func requireTransition(state RunState, operation, target string) error {
 		if !hasDevelopmentSnapshot(state) {
 			return fmt.Errorf("an immutable development snapshot is required before post-development review")
 		}
-		if state.Actions["start-readiness"].Status != "PASS" {
+		if !actionPassedOrAbsent(state, "product-review") {
+			return fmt.Errorf("Product Review must pass before post-development review")
+		}
+		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before post-development review")
 		}
 	case "carry":
@@ -1857,7 +1894,10 @@ func requireTransition(state RunState, operation, target string) error {
 		if !hasDevelopmentSnapshot(state) {
 			return fmt.Errorf("an immutable development snapshot is required before Seal")
 		}
-		if state.Actions["start-readiness"].Status != "PASS" {
+		if !actionPassedOrAbsent(state, "product-review") {
+			return fmt.Errorf("Product Review must pass before Seal")
+		}
+		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before Seal")
 		}
 		if err := requireSelectedResultsResolved(state); err != nil {

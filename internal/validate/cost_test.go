@@ -88,6 +88,26 @@ func TestCostBackfillParsesCapturedTranscript(t *testing.T) {
 	}
 }
 
+func TestProductReviewCostBackfillParsesCapturedTranscript(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "cost-product-review"), "custom", []string{"quality"})
+	dispatchID := prepareClaimedAction(t, root, pkg, state, "product-review", "cost-product-review")
+	fixture := writeCostFixture(t)
+	captureStopWithTranscript(t, root, "cost-product-review", fixture)
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := state.Cost.Dispatches[dispatchID]
+	if !ok {
+		t.Fatalf("dispatch cost entry missing: %#v", state.Cost)
+	}
+	want := cost.DispatchCost{Target: "product-review", Kind: "action", InputCacheHitTokens: 25, InputCacheMissTokens: 225, OutputTokens: 80, TotalInputTokens: 250, Source: cost.SourceTranscript}
+	if entry != want {
+		t.Fatalf("entry=%+v want %+v", entry, want)
+	}
+}
+
 func TestCostBackfillMarksUnavailableWithoutTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-unavailable"), "custom", []string{"quality"})

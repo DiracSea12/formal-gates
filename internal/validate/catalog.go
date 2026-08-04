@@ -15,7 +15,7 @@ import (
 
 var promptIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
-var requiredActionIDs = []string{"carry", "development-worker", "qa-design", "qa-execution", "qa-review", "requirements-clarification", "start-readiness"}
+var requiredActionIDs = []string{"carry", "development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "requirements-clarification", "start-readiness"}
 
 type PromptDefinition struct {
 	ID      string `json:"id"`

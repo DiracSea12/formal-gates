@@ -58,12 +58,25 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 
 ## 开发之前
 
+开发前检查分两段：先派发 Part 1 产品审（`product-review`），全部通过后再并行推进
+Part 2 技术审（`start-readiness`）与 QA 用例设计/用例审。
+
 ```bash
+# Part 1 产品审：审受理阶段已实例化的需求文档，只评产品/策划层面。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action start-readiness
+  --run-id <id> --action product-review
 # 每准备一个独立派发的动作或门之后，都重复这条认领命令。
 formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
   --run-id <id> --dispatch <dispatch-id> --reviewer <host-agent-id>
+formal-gates workflow record-action --root <repo> --package-root <package> \
+  --run-id <id> --action product-review --dispatch <dispatch-id> \
+  --status <PASS|FAIL|RUNTIME_ERROR> \
+  [--finding '<message>']
+# 产品审的 FAIL 发现项是候选输入，由用户逐项拍板：接受则重新派发并记录 PASS，
+# 未接受则按用户指示修订需求/方案后重审。FAIL 不构成终态。
+
+formal-gates workflow prepare-action --root <repo> --package-root <package> \
+  --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR>

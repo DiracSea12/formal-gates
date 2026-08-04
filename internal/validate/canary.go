@@ -100,11 +100,24 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "product-review"); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID := openDispatchID(state, "action", "product-review")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-product-review")
+	if err != nil {
+		return err
+	}
+	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	if err != nil {
+		return err
+	}
 	if _, err := PrepareAction(root, packageRoot, state.RunID, "start-readiness"); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	dispatchID := openDispatchID(state, "action", "start-readiness")
+	dispatchID = openDispatchID(state, "action", "start-readiness")
 	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-start-readiness")
 	if err != nil {
 		return err

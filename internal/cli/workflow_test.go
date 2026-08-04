@@ -21,6 +21,7 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
 	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full")
 	state, _ = validate.LoadRunState(root, state.RunID)
+	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
 	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
 
 	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
@@ -67,6 +68,7 @@ func TestCLIResumeAdoptsExternalChange(t *testing.T) {
 	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
 	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
 	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality")
+	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
 	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
 	developmentDispatch := cliPrepareAction(t, root, pkg, state.RunID, "development-worker")
 	mustWriteCLI(t, filepath.Join(root, "delivery.txt"), "delivery\n")
@@ -194,7 +196,7 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			startEvent: "subagentStart",
 			stopEvent:  "subagentStop",
 			payloads: func(root, alternateRoot, identity string) (string, string, string, []string) {
-				common := fmt.Sprintf(`"conversation_id":"conversation-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":"prepared formal-gates dispatch","workspace_roots":[%q,%q]`, alternateRoot, root)
+				common := fmt.Sprintf(`"conversation_id":"conversation-1","parent_conversation_id":"conversation-1","generation_id":"generation-1","subagent_type":"generalPurpose","task":%q,"workspace_roots":[%q,%q]`, "prepared formal-gates dispatch for "+identity, alternateRoot, root)
 				return fmt.Sprintf(`{"subagent_id":%q,%s}`, identity, common), "{" + common + "}", root, nil
 			},
 		},
@@ -211,6 +213,14 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", requirementsDispatch, "--status", "PASS")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", runID, "--confirmed")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "quality")
+
+			productDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "product-review")
+			productIdentity := tc.name + "-product-review"
+			productStartPayload, productStopPayload, productCaptureDir, productEnvironment := tc.payloads(root, alternateRoot, productIdentity)
+			runInstalledCLI(t, binary, productCaptureDir, productEnvironment, productStartPayload, "lifecycle", "capture", "--provider", tc.provider, "--event", tc.startEvent)
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", runID, "--dispatch", productDispatch, "--reviewer", productIdentity)
+			runInstalledCLI(t, binary, productCaptureDir, productEnvironment, productStopPayload, "lifecycle", "capture", "--provider", tc.provider, "--event", tc.stopEvent)
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "product-review", "--dispatch", productDispatch, "--status", "PASS")
 
 			dispatchID := prepareInstalledAction(t, binary, root, pkg, runID, "start-readiness")
 			identity := tc.name + "-agent"
@@ -369,7 +379,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	cliGit(t, root, "commit", "-m", "base")
 	pkg := t.TempDir()
 	mustWriteCLI(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "shared contract\n")
-	for _, id := range []string{"requirements-clarification", "start-readiness", "qa-design", "qa-review", "qa-execution", "carry", "development-worker"} {
+	for _, id := range []string{"requirements-clarification", "product-review", "start-readiness", "qa-design", "qa-review", "qa-execution", "carry", "development-worker"} {
 		mustWriteCLI(t, filepath.Join(pkg, "prompts", "actions", id+".md"), id+" instructions\n")
 	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")

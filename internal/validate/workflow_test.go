@@ -449,6 +449,180 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	}
 }
 
+func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "product-review-gate"), "custom", []string{"quality"})
+
+	// 未 PASS：start-readiness 与 development-worker 均被拒绝。
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
+		t.Fatalf("start-readiness prepared before product review: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before development") {
+		t.Fatalf("development-worker prepared before product review: %v", err)
+	}
+
+	// FAIL 含发现项：仍阻塞，但不构成不可恢复的终态。
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "requirement does not target a real user problem"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["product-review"].Status != "FAIL" || len(state.Actions["product-review"].Findings) != 1 {
+		t.Fatalf("product review FAIL was not recorded: %#v", state.Actions["product-review"])
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
+		t.Fatalf("start-readiness prepared after product review FAIL: %v", err)
+	}
+
+	// 重新派发并记录 PASS 后下游解锁。
+	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["product-review"].Status != "PASS" {
+		t.Fatalf("product review PASS was not recorded: %#v", state.Actions["product-review"])
+	}
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("development worker stayed blocked after product review PASS: %v", err)
+	}
+}
+
+// 接受路径：审查派发 A 保持 OPEN，用户接受后直接在 A 上记录 PASS，不另造新派发。
+// PASS 对应的是真跑过审查的子代理派发，生命周期校验因此可过。
+func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "product-review-accept"), "custom", []string{"quality"})
+
+	// 未记录（PENDING）：start-readiness 与 development-worker 均被拒绝。
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
+		t.Fatalf("start-readiness prepared before product review: %v", err)
+	}
+
+	// 派发 A 已准备并认领（保持 OPEN，未记录 FAIL）：仍阻塞。
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
+		t.Fatalf("start-readiness prepared while product review held open: %v", err)
+	}
+
+	// 用户接受后，直接在 A 上记录 PASS，下游解锁。
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["product-review"].Status != "PASS" {
+		t.Fatalf("product review PASS was not recorded on the held dispatch: %#v", state.Actions["product-review"])
+	}
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("development worker stayed blocked after product review PASS: %v", err)
+	}
+}
+
+func TestProductReviewRequiredBeforeQADesign(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRouteBase(t, root, pkg, mustStart(t, root, pkg, "product-review-qa-design"), "full", nil)
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before QA Design") {
+		t.Fatalf("qa-design prepared before product review: %v", err)
+	}
+	state = recordProductReview(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err != nil {
+		t.Fatalf("qa-design stayed blocked after product review PASS: %v", err)
+	}
+}
+
+func TestProductReviewRequiredByPostDevelopmentTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		op     string
+		target string
+		setup  func(*RunState)
+		want   string
+	}{
+		{
+			name: "snapshot", op: "snapshot",
+			setup: func(state *RunState) { state.Actions["development-worker"] = ActionResult{Status: developmentPrepared} },
+			want:  "Product Review must pass before a development snapshot",
+		},
+		{
+			name: "gate", op: "gate", target: "quality",
+			setup: func(state *RunState) { state.Actions["development-worker"] = ActionResult{Status: developmentComplete} },
+			want:  "Product Review must pass before post-development review",
+		},
+		{
+			name: "seal", op: "seal",
+			setup: func(state *RunState) {
+				state.Actions["development-worker"] = ActionResult{Status: developmentComplete}
+				state.Gates["quality"] = GateResult{Status: "PASS", Snapshot: state.CurrentSnapshot}
+			},
+			want: "Product Review must pass before Seal",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewRunState("pr-post", "formal", "requirements.md", "rev", "git", "base", "current", "baseprompt", "catalog", true, []string{"quality"}, nil)
+			state.RouteMode = "custom"
+			state.SelectedGates = []string{"quality"}
+			tc.setup(&state)
+			if err := requireTransition(state, tc.op, tc.target); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("requireTransition(%s) err=%v want %q", tc.op, err, tc.want)
+			}
+			state.Actions["product-review"] = ActionResult{Status: "PASS"}
+			if err := requireTransition(state, tc.op, tc.target); err != nil && strings.Contains(err.Error(), "Product Review") {
+				t.Fatalf("requireTransition(%s) still blocked by product review after PASS: %v", tc.op, err)
+			}
+		})
+	}
+}
+
+// TestPredatingRunWithoutPrerequisiteActionCompletesDelivery verifies the
+// generic pre-development gating: a run that does not carry a prerequisite
+// action (a run started before that action existed) is not blocked by its gate
+// and still completes snapshot, gate review, and Seal.
+func TestPredatingRunWithoutPrerequisiteActionCompletesDelivery(t *testing.T) {
+	for _, removed := range []string{"product-review", "start-readiness"} {
+		t.Run(removed, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			state := mustStart(t, root, pkg, "predating")
+			// Drop the entry so the persisted state has no such action, exactly
+			// like a run started before the action was part of the flow.
+			delete(state.Actions, removed)
+			if err := SaveRunState(root, state); err != nil {
+				t.Fatal(err)
+			}
+
+			state = confirmAndRouteBase(t, root, pkg, state, "custom", []string{"quality"})
+			if removed == "start-readiness" {
+				state = recordProductReview(t, root, pkg, state)
+			} else {
+				state = recordReadiness(t, root, pkg, state)
+			}
+			developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+			writeTestFile(t, filepath.Join(root, "delivery.txt"), "delivery\n")
+			commitAll(t, root, "delivery")
+			state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+			if err != nil {
+				t.Fatalf("run without %s blocked at snapshot: %v", removed, err)
+			}
+			gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, "quality", "predating-gate")
+			state, err = RecordGate(root, pkg, state.RunID, "quality", gateDispatch, "PASS", "", comparedRange(state), nil)
+			if err != nil {
+				t.Fatalf("run without %s blocked at gate review: %v", removed, err)
+			}
+			summary, err := Seal(root, pkg, state.RunID, nil, false)
+			if err != nil {
+				t.Fatalf("run without %s blocked at seal: %v", removed, err)
+			}
+			if summary.Status != "SEALED" {
+				t.Fatalf("run without %s did not seal: %#v", removed, summary)
+			}
+			if _, ok := state.Actions[removed]; ok {
+				t.Fatalf("run without %s gained that action: %#v", removed, state.Actions)
+			}
+		})
+	}
+}
+
 func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "retained-freeze", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
@@ -1033,6 +1207,14 @@ func mustStart(t *testing.T, root, pkg, id string) RunState {
 
 func confirmAndRoute(t *testing.T, root, pkg string, state RunState, mode string, selected []string) RunState {
 	t.Helper()
+	state = confirmAndRouteBase(t, root, pkg, state, mode, selected)
+	return recordProductReview(t, root, pkg, state)
+}
+
+// confirmAndRouteBase confirms the requirement and binds the route without
+// recording Product Review, so tests can exercise the product-review gate.
+func confirmAndRouteBase(t *testing.T, root, pkg string, state RunState, mode string, selected []string) RunState {
+	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
 	state, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil)
 	if err != nil {
@@ -1043,6 +1225,17 @@ func confirmAndRoute(t *testing.T, root, pkg string, state RunState, mode string
 		t.Fatal(err)
 	}
 	state, err = SetRoute(root, pkg, state.RunID, mode, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// recordProductReview prepares, claims, and records a PASS Product Review.
+func recordProductReview(t *testing.T, root, pkg string, state RunState) RunState {
+	t.Helper()
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
