@@ -260,10 +260,15 @@ func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
 }
 
 // AdoptExternalChange explicitly rebinds the current snapshot to the native
-// head after the workspace drifted outside the run. The previous snapshot
-// becomes the pre-repair boundary so unaffected prior PASS results stay
-// eligible for a Carry inheritance decision, and the main agent's reason is
-// recorded as the adoption provenance under the reserved Carry key.
+// head after the workspace drifted outside the run. When a development snapshot
+// already exists, the previous snapshot becomes the pre-repair boundary so
+// unaffected prior PASS results stay eligible for a Carry inheritance decision,
+// and the review surface is reset. When the run has not yet produced a
+// development snapshot (dev status is PENDING/PREPARED), there is nothing to
+// inherit, so the adoption only rebinds the current snapshot and records the
+// provenance under the reserved Carry key: no PreRepairSnapshot is set and the
+// review surface is not reset. The main agent's reason is recorded as the
+// adoption provenance under the reserved Carry key.
 func AdoptExternalChange(root, packageRoot, runID, reason string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		current, err := resolveNativeSnapshot(root, state.VCS)
@@ -279,12 +284,27 @@ func AdoptExternalChange(root, packageRoot, runID, reason string) (RunState, err
 		}
 		oldSnapshot := state.CurrentSnapshot
 		state.CurrentSnapshot = current
-		state.PreRepairSnapshot = oldSnapshot
+		// 采纳使派发源快照失效：既有 OPEN/CLAIMED 派发一律标 STALE。
 		staleAllDispatches(state)
-		resetSnapshotReviewSurface(state, oldSnapshot, true, true)
+		if preDevelopment(*state) {
+			// 尚无开发快照：不设置 PreRepairSnapshot、不重置审查面，后续开发不会
+			// 被 "the current repair still requires verification" 挡住。
+		} else {
+			state.PreRepairSnapshot = oldSnapshot
+			resetSnapshotReviewSurface(state, oldSnapshot, true, true)
+		}
 		state.Carry[carryAdoptKey] = CarryResult{Decision: "ADOPT", Origin: "ADOPT", SourceSnapshot: oldSnapshot, TargetSnapshot: current, Message: reason}
 		return nil
 	})
+}
+
+// preDevelopment reports whether the run has not yet produced a development
+// snapshot: the development action status is PENDING or PREPARED. REPAIR_PREPARED
+// sits behind an existing development snapshot and must not be treated as
+// pre-development, so the predicate is not !hasDevelopmentSnapshot.
+func preDevelopment(state RunState) bool {
+	status := state.Actions["development-worker"].Status
+	return status == developmentPending || status == developmentPrepared
 }
 
 func staleAllDispatches(state *RunState) {
@@ -800,9 +820,6 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if _, err := requireNativeCurrent(root, *state); err != nil {
-			return err
-		}
 		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
 		if dispatchID == "" {
 			return fmt.Errorf("dispatch id is required")
@@ -810,6 +827,19 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		dispatch, ok := state.Dispatches[dispatchID]
 		if !ok {
 			return fmt.Errorf("unknown dispatch %q", dispatchID)
+		}
+		if dispatch.TargetKind == "action" && dispatch.Target == "development-worker" {
+			// 开发/修复派发是 reviewer-required；worker 一旦提交，原生 HEAD 就前进到
+			// 派发源快照之后。认领放宽：当前原生 HEAD 是派发源快照的后代（或相等）
+			// 即允许认领（覆盖 worker 已提交的情形），否则 worker 提交后认领必失败，
+			// "会提交的开发 worker"没有可行路径。该检查不验证 HEAD 是否由 worker 产生，
+			// 开发期间无关外部提交落地会被静默吸收进开发快照（文档已注明）。其余派发
+			// （审查、QA 等）仍要求原生 HEAD 精确等于当前快照。
+			if err := requireDevelopmentClaimableHead(root, *state, dispatch); err != nil {
+				return err
+			}
+		} else if _, err := requireNativeCurrent(root, *state); err != nil {
+			return err
 		}
 		if !dispatch.ReviewerRequired {
 			return fmt.Errorf("dispatch %q does not require a reviewer claim", dispatchID)
@@ -1735,6 +1765,25 @@ func requireNativeCurrent(root string, state RunState) (string, error) {
 		return "", fmt.Errorf("native VCS identity does not match the current snapshot")
 	}
 	return current, nil
+}
+
+// requireDevelopmentClaimableHead is the relaxed native identity check used when
+// claiming a development-worker dispatch. The worker's commit advances native
+// HEAD past the dispatch's source snapshot, so any current HEAD that is a
+// descendant (or equal) of the source snapshot is accepted as the claim basis.
+func requireDevelopmentClaimableHead(root string, state RunState, dispatch PreparedDispatch) error {
+	current, err := resolveNativeSnapshot(root, state.VCS)
+	if err != nil {
+		return err
+	}
+	resolver, err := resolverForVCS(state.VCS, nil)
+	if err != nil {
+		return err
+	}
+	if err := resolver.IsAncestorOrEqual(root, dispatch.SourceSnapshot, current); err != nil {
+		return fmt.Errorf("native VCS identity does not match the current snapshot")
+	}
+	return nil
 }
 
 func routeForState(root string, state RunState) PromptRoute {

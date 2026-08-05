@@ -29,12 +29,16 @@ func writeCostFixture(t *testing.T) string {
 	return path
 }
 
-func captureStopWithTranscript(t *testing.T, root string, identity, path string) {
+// stubCodexTranscript replaces the native lifecycle with one that reports the
+// given file as the dispatch's recorded Codex transcript. An uninstalled test
+// binary binds as the lenient default provider (which has no Codex transcript
+// path), so cost tests simulate an installed Codex host through the stub; the
+// real capture→transcript round-trip is owned by the lifecycle package tests.
+func stubCodexTranscript(t *testing.T, transcript string) {
 	t.Helper()
-	payload := []byte(fmt.Sprintf(`{"subagent_id":%q,"agent_transcript_path":%q}`, identity, path))
-	if _, err := lifecycle.Capture(root, lifecycle.ProviderCodex, "SubagentStop", payload); err != nil {
-		t.Fatal(err)
-	}
+	prior := workflowLifecycle
+	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, transcript: transcript}
+	t.Cleanup(func() { workflowLifecycle = prior })
 }
 
 // prepareClaimedAction prepares the action dispatch and claims it under the
@@ -59,8 +63,7 @@ func TestCostBackfillParsesCapturedTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-backfill"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
-	fixture := writeCostFixture(t)
-	captureStopWithTranscript(t, root, "cost-readiness", fixture)
+	stubCodexTranscript(t, writeCostFixture(t))
 	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -92,8 +95,7 @@ func TestProductReviewCostBackfillParsesCapturedTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "cost-product-review"))
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "product-review", "cost-product-review")
-	fixture := writeCostFixture(t)
-	captureStopWithTranscript(t, root, "cost-product-review", fixture)
+	stubCodexTranscript(t, writeCostFixture(t))
 	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +136,7 @@ func TestCostBackfillIgnoresUnparseableTranscript(t *testing.T) {
 	if err := os.WriteFile(fixture, []byte("{\"type\":\"session_meta\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	captureStopWithTranscript(t, root, "cost-readiness", fixture)
+	stubCodexTranscript(t, fixture)
 	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +152,7 @@ func TestCostBackfillIsIdempotentPerDispatch(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-idempotent"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
-	fixture := writeCostFixture(t)
-	captureStopWithTranscript(t, root, "cost-readiness", fixture)
+	stubCodexTranscript(t, writeCostFixture(t))
 	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
 	if err != nil {
 		t.Fatal(err)

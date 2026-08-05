@@ -18,6 +18,7 @@ import (
 type workflowLifecycleStub struct {
 	verification lifecycle.Verification
 	binds        [][4]string
+	transcript   string
 }
 
 func (*workflowLifecycleStub) Begin(string, string) error { return nil }
@@ -33,7 +34,10 @@ func (stub *workflowLifecycleStub) Verify(_, _, dispatchID string) (lifecycle.Ve
 	return result, nil
 }
 
-func (*workflowLifecycleStub) TranscriptPath(_, _, _ string) (string, string, error) {
+func (stub *workflowLifecycleStub) TranscriptPath(_, _, _ string) (string, string, error) {
+	if stub.transcript != "" {
+		return lifecycle.ProviderCodex, stub.transcript, nil
+	}
 	return "", "", nil
 }
 
@@ -1170,6 +1174,135 @@ func TestAdoptExternalChangeRebindsAndCarries(t *testing.T) {
 	}
 }
 
+// TestPreDevelopmentAdoptRebindsWithoutRepairBoundary covers the pre-dev adopt
+// deadlock (requirement 1): adopting an external change before any development
+// snapshot must not set PreRepairSnapshot or reset the review surface, so the
+// subsequent prepare → commit → workflow snapshot path is not blocked by "the
+// current repair still requires verification".
+func TestPreDevelopmentAdoptRebindsWithoutRepairBoundary(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "predev-adopt"), "custom", []string{"quality"})
+	prior := state.CurrentSnapshot
+	writeTestFile(t, filepath.Join(root, "external.txt"), "external work\n")
+	commitAll(t, root, "external work")
+	head := gitHead(t, root)
+	state, err := AdoptExternalChange(root, pkg, state.RunID, "adopt external commit before development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentSnapshot != head || state.PreRepairSnapshot != "" {
+		t.Fatalf("pre-development adoption set an unexpected repair boundary: %#v", state)
+	}
+	if record, ok := state.Carry[carryAdoptKey]; !ok || record.Origin != "ADOPT" || record.TargetSnapshot != head || record.SourceSnapshot != prior {
+		t.Fatalf("pre-development adoption did not record provenance: %#v", state.Carry[carryAdoptKey])
+	}
+	// 采纳不重置审查面：开发前已 PASS 的动作保持 PASS。
+	if state.Actions["product-review"].Status != "PASS" || state.Actions["start-readiness"].Status != "PASS" {
+		t.Fatalf("pre-development adoption reset the review surface: %#v", state.Actions)
+	}
+	// 采纳后直接准备开发并走通首个快照：不被 "the current repair still requires
+	// verification" 挡住。
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-predev.txt"), "delivery\n")
+	commitAll(t, root, "delivery")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	if err != nil {
+		t.Fatalf("pre-development adoption blocked the first development snapshot: %v", err)
+	}
+	if state.Actions["development-worker"].Status != developmentComplete || state.PreRepairSnapshot != "" {
+		t.Fatalf("first development snapshot did not complete cleanly: %#v", state)
+	}
+	// (b) 已存在开发快照、run 已置 REPAIR_PREPARED 时的采纳必须走 post-development
+	// 修复边界路径：把 PreRepairSnapshot 设为旧快照，而不是被 preDevelopment 谓词当作
+	// pre-dev 直接吸收（该谓词只认 PENDING/PREPARED，不认 REPAIR_PREPARED）。先记录
+	// 首个阻塞波（quality FAIL）完成首波审查并把 development-worker 置 REPAIR_PREPARED，
+	// 再提交外部改动后采纳，断言边界被建立。
+	state = recordGateResult(t, root, pkg, state, "quality", "predev-adopt-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker requires repair"}})
+	if state.CompletedReviewWaves != 1 || state.Actions["development-worker"].Status != developmentVerified {
+		t.Fatalf("blocking review wave was not completed: %#v", state)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatalf("repair preparation failed: %v", err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	if state.Actions["development-worker"].Status != developmentRepairPrepared {
+		t.Fatalf("development worker was not repair prepared: %#v", state.Actions["development-worker"])
+	}
+	prior = state.CurrentSnapshot
+	writeTestFile(t, filepath.Join(root, "external-repair.txt"), "external repair work\n")
+	commitAll(t, root, "external repair work")
+	head = gitHead(t, root)
+	state, err = AdoptExternalChange(root, pkg, state.RunID, "adopt external change during repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentSnapshot != head || state.PreRepairSnapshot != prior {
+		t.Fatalf("post-development adoption did not set the pre-repair boundary: %#v", state)
+	}
+}
+
+// TestDevelopmentWorkerClaimAfterCommit covers the post-commit claim deadlock
+// (requirement 2a): a development dispatch is reviewer-required and its worker
+// commits before the main agent claims, so claiming must accept a native HEAD
+// that is a descendant (or equal) of the dispatch source snapshot, and the
+// claimed dispatch must then record its development snapshot successfully.
+func TestDevelopmentWorkerClaimAfterCommit(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := beginQA(t, root, pkg, "claim-after-commit")
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "claim-qa-reviewer")
+	var err error
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID := openDispatchID(state, "action", "development-worker")
+	if dispatchID == "" || state.Dispatches[dispatchID].Status != "OPEN" {
+		t.Fatalf("development dispatch was not prepared open: %#v", state.Dispatches)
+	}
+	// worker 已提交：HEAD 前进到派发源快照之后，此时才拿到身份认领。
+	writeTestFile(t, filepath.Join(root, "delivery-claim.txt"), "delivery\n")
+	commitAll(t, root, "delivery commit")
+	state, err = ClaimDispatch(root, pkg, state.RunID, dispatchID, "dev-worker-identity")
+	if err != nil {
+		t.Fatalf("development dispatch claim after worker commit was rejected: %v", err)
+	}
+	if state.Dispatches[dispatchID].Status != "CLAIMED" || state.Dispatches[dispatchID].ReviewerIdentity != "dev-worker-identity" {
+		t.Fatalf("development dispatch was not claimed: %#v", state.Dispatches[dispatchID])
+	}
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, dispatchID)
+	if err != nil {
+		t.Fatalf("snapshot after post-commit claim failed: %v", err)
+	}
+	if state.Actions["development-worker"].Status != developmentComplete || state.CurrentSnapshot != gitHead(t, root) {
+		t.Fatalf("development snapshot did not complete: %#v", state)
+	}
+	// (b) 非 development-worker 的 reviewer-required 派发（gate）在 OPEN 状态下、原生
+	// HEAD 前进后认领必须被拒绝：原生身份必须精确匹配当前快照，不能沿用 development-worker
+	// 的后代认领放宽；被拒后派发保持 OPEN、状态不被改写。
+	gateDispatch := prepareDispatch(t, root, pkg, state.RunID, "quality")
+	state, _ = LoadRunState(root, state.RunID)
+	if state.Dispatches[gateDispatch].Status != "OPEN" {
+		t.Fatalf("gate dispatch was not prepared open: %#v", state.Dispatches[gateDispatch])
+	}
+	writeTestFile(t, filepath.Join(root, "external-claim.txt"), "external commit\n")
+	commitAll(t, root, "external commit")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := ClaimDispatch(root, pkg, state.RunID, gateDispatch, "late-gate-reviewer"); err == nil || !strings.Contains(err.Error(), "native VCS identity does not match the current snapshot") {
+		t.Fatalf("non-development claim after native commit was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected non-development claim changed state")
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	if state.Dispatches[gateDispatch].Status != "OPEN" {
+		t.Fatalf("rejected non-development claim mutated the dispatch: %#v", state.Dispatches[gateDispatch])
+	}
+}
+
 func TestPostDevelopmentPreservedRebindKeepsPass(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "preserved", "custom", []string{"quality"})
@@ -2079,6 +2212,9 @@ func workflowFixture(t *testing.T) (string, string) {
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	writeTestFile(t, filepath.Join(root, "design.md"), "design\n")
+	// 测试仓库与实际仓库一致地忽略运行期临时状态：否则 .gates/tmp/ 会被误跟踪进
+	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。
+	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n")
 	initializeGit(t, root)
 	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
 }

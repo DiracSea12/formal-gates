@@ -132,8 +132,10 @@ bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
   --dispatch <dispatch-id>
 ```
 
-Claude Code 和 Cursor 要求 start 与 stop 事件配对。Codex 报告 `UNAVAILABLE`，因
-此既有的派发与身份检查仍然是权威依据。
+Claude Code、Cursor 和 Codex 都要求 start 与 stop 事件配对。Codex 派发独立代理
+走原生 `spawn_agent`，用返回的 `agent_id` 认领，claim → lifecycle 配对验证即可通
+过。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的默认
+provider，生命周期验证为 `UNAVAILABLE`，此时既有的派发与身份检查仍是权威依据。
 
 一个设置文件或直接的 `hook decide` 单元测试，只能证明本地决策逻辑。只有当实际目
 标 host 发送了实机 `PreToolUse` 载荷、并且 hook 阻塞了测试命令之后，才可以声明自
@@ -166,5 +168,3 @@ CI 流程构建 Windows、macOS 和 Linux 二进制、portable-canary 输出和 
 checksum 文件，并可以把它们附加到 GitHub Release。checksum 说明下载到的字节与已
 发布的 CI 产物一致。它们不提供签名、attestation、provenance、registry、
 marketplace 或 `npx` 分发路径。
-
-仓库维护命令在 `references/local-validation.md`。

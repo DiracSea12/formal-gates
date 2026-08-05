@@ -1,0 +1,381 @@
+{
+  "runId": "deadlock-recovery-and-codex-lifecycle",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "f91327481824a0ef84e6539de3e065cbad51416eb4ccf5214b44d910e38928c1",
+  "basePromptRevision": "07f7b7662269940323142dfd53a03912444067b41b1aa8c0e685d113a3a3f6f4",
+  "catalogRevision": "4cc68d483556cfcdfde271479cba55f45cf3a04d2ed6b2934f3b9ebe69808cb4",
+  "vcs": "git",
+  "baseSnapshot": "733e83650d1b93e63bdca70b445358f5c4f0ce76",
+  "currentSnapshot": "bc8635b99d5c99137423a6dacc552c39f12c67e0",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/deadlock-recovery-and-codex-lifecycle/master-requirements.md",
+      "revision": "f91327481824a0ef84e6539de3e065cbad51416eb4ccf5214b44d910e38928c1"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "八条共享「让正式流程真实场景可用」主题：{1,2a} 工作流守卫、{2b} 布尔翻转、{4,5} 文档注记、{6,7,8} 文档重构（低风险无行为面）；仅两条最低层测试，拆分会引入多 run/合并门/逐切片路线开销，不成比例"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "bc8635b99d5c99137423a6dacc552c39f12c67e0",
+      "sourceSnapshot": "b41da1a35c51dbb44df170271cc47ce7e3bd8102",
+      "compared": "733e83650d1b93e63bdca70b445358f5c4f0ce76..b41da1a35c51dbb44df170271cc47ce7e3bd8102",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "req 8 language adaptation implementation embedded a language hint without first testing natural adaptation; acceptance met, implementation-path deviation only",
+          "locations": [
+            "SKILL.md:33"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-f1a374bedcb1355a00924774"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "bc8635b99d5c99137423a6dacc552c39f12c67e0",
+      "sourceSnapshot": "b41da1a35c51dbb44df170271cc47ce7e3bd8102",
+      "compared": "733e83650d1b93e63bdca70b445358f5c4f0ce76..b41da1a35c51dbb44df170271cc47ce7e3bd8102",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "requireDevelopmentClaimableHead error message names run snapshot but compares dispatch source snapshot, misleading",
+          "locations": [
+            "internal/validate/workflow.go:1784"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "lifecycle capture help text omits new lenient default provider",
+          "locations": [
+            "internal/cli/cli.go:547"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "version-transition edge: pre-flip bindings in uninstalled contexts verify against now-required codex adapter after binary upgrade",
+          "locations": [
+            "internal/lifecycle/provider.go:97"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-6a3711323284883e9d107113"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "bc8635b99d5c99137423a6dacc552c39f12c67e0",
+    "cases": [
+      {
+        "caseId": "CASE-002",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "隔离仓库走 pre-dev 后外部提交，adopt-external 只重绑不设边界，prepare dev → commit → snapshot",
+        "observation": "adopt 后 preRepairSnapshot 空、carry ADOPT；snapshot 成功",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "dev 派发 prepare 后 worker 提交使 HEAD 为源快照后代，claim 成功，再 snapshot",
+        "observation": "claim CLAIMED；snapshot 成功",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "未安装二进制跑 canary portable + lifecycle verify",
+        "observation": "canary 全 PASS；lifecycle verify UNAVAILABLE（default）",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "安装路径 Codex 二进制，claim 后捕获配对事件，lifecycle verify",
+        "observation": "配对后 VERIFIED；install-and-hooks.md 已改三端配对表述",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "开发后不带/带 --confirmed 做 meaning-preserved 重绑",
+        "observation": "不带被拒、带后成功且重绑",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "同一 action 两次 prepare，show 查状态",
+        "observation": "第二次 attempt+1 新派发、第一次 STALE",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "逐文件检索处置机制关键词",
+        "observation": "处置正文只出现在 formal-flow.md；提示词保留分级/候选/拆分建议",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-009",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "SKILL 与 formal-flow 全文对账",
+        "observation": "SKILL 九步骨架+指引、迁移机制均有对应，无静默丢失",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-010",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "核对 SKILL 受理流程开头",
+        "observation": "含【流程提示】前缀提醒、语言适配；formal-flow 有指引",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-013",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/；读 TestPreDevelopmentAdoptRebindsWithoutRepairBoundary",
+        "observation": "测试含 (a) pre-dev 正常路径 + (b) REPAIR_PREPARED 采纳设置 PreRepairSnapshot 两段断言，全过",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-014",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/；读 TestDevelopmentWorkerClaimAfterCommit",
+        "observation": "测试含 (a) 开发派发提交后认领 + (b) 非开发派发 HEAD 前进后认领被拒两段断言，全过",
+        "oracleResult": "匹配"
+      },
+      {
+        "caseId": "CASE-012",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/lifecycle/ 跑三个 provider 测试",
+        "observation": "三测试全 PASS",
+        "oracleResult": "匹配"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 38469711,
+    "inputCacheHitTokens": 37263872,
+    "inputCacheMissTokens": 1205839,
+    "outputTokens": 505386,
+    "dispatches": {
+      "dispatch-31c37e5d0a279a2a315f6a0f": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-32e574d1510fe70bf0de2048": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3e37a392b431e6ab3ab68eec": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-47509740e69fc57a27c82ac4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4793083edb74cecc8ff6a496": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-56770ff9645b395601e96a2b": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6a3711323284883e9d107113": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6e5b2d81ea335c3843171ca4": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9361997970e4324876810cbd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 9435904,
+        "inputCacheMissTokens": 241713,
+        "outputTokens": 157343,
+        "totalInputTokens": 9677617,
+        "source": "transcript"
+      },
+      "dispatch-aa9a5dd68975a88a5c6f3210": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b34b23fd57544929c33fda1c": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b58ee17de4c25a2811c6747e": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d61caa4d85a90627c0188f2d": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 535296,
+        "inputCacheMissTokens": 89485,
+        "outputTokens": 20497,
+        "totalInputTokens": 624781,
+        "source": "transcript"
+      },
+      "dispatch-dee60f8f810b9ca57faf4949": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-df056132373393e4df328ac4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e7fca423ccd66ccced124d9c": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 7246976,
+        "inputCacheMissTokens": 318705,
+        "outputTokens": 125595,
+        "totalInputTokens": 7565681,
+        "source": "transcript"
+      },
+      "dispatch-f0969c9d141a018602c407a0": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f1a374bedcb1355a00924774": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f37879c4342b212eac20b02a": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 7215488,
+        "inputCacheMissTokens": 259942,
+        "outputTokens": 42047,
+        "totalInputTokens": 7475430,
+        "source": "transcript"
+      },
+      "dispatch-f7dc5f8c7a0ed928cc442c3a": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ffe9f40948ca9f998c77b57b": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 12830208,
+        "inputCacheMissTokens": 295994,
+        "outputTokens": 159904,
+        "totalInputTokens": 13126202,
+        "source": "transcript"
+      }
+    }
+  }
+}

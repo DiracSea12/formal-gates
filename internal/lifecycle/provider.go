@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	ProviderClaude = "claude-code"
-	ProviderCodex  = "codex"
-	ProviderCursor = "cursor"
+	ProviderClaude  = "claude-code"
+	ProviderCodex   = "codex"
+	ProviderCursor  = "cursor"
+	ProviderDefault = "default"
 
 	eventStart = "subagent_start"
 	eventStop  = "subagent_stop"
@@ -41,6 +42,8 @@ func adapterFor(provider string) (providerAdapter, error) {
 		return codexAdapter(), nil
 	case ProviderCursor:
 		return cursorAdapter(), nil
+	case ProviderDefault:
+		return defaultAdapter(), nil
 	default:
 		return providerAdapter{}, fmt.Errorf("unsupported lifecycle provider %q", provider)
 	}
@@ -88,7 +91,10 @@ func providerFromExecutable(path string) string {
 	case strings.Contains(normalized, "/.codex/skills/formal-gates/bin/"):
 		return ProviderCodex
 	default:
-		return ProviderCodex
+		// 未安装二进制（go test、canary portable、本地开发构建）解析为宽松的默认
+		// provider：无生命周期事件时仍走 UNAVAILABLE。只有真实安装的 Codex 二进制
+		// 才解析为 required 的 Codex provider，验证生命周期配对。
+		return ProviderDefault
 	}
 }
 

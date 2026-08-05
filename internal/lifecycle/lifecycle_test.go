@@ -207,9 +207,9 @@ func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) 
 	}
 }
 
-func TestLifecycleCodexIsUnavailable(t *testing.T) {
+func TestLifecycleUninstalledProviderIsUnavailable(t *testing.T) {
 	root := t.TempDir()
-	useProvider(t, ProviderCodex)
+	useProvider(t, ProviderDefault)
 	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -222,12 +222,32 @@ func TestLifecycleCodexIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestLifecycleInstalledCodexRequiresPairedEvents locks in the flip of the
+// installed Codex provider to required: an uninstalled test/canary context stays
+// UNAVAILABLE (see TestLifecycleUninstalledProviderIsUnavailable), while a real
+// Codex install with no paired lifecycle events now REJECTS like Claude and
+// Cursor.
+func TestLifecycleInstalledCodexRequiresPairedEvents(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderCodex)
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Outcome != Rejected || verification.StartObserved || verification.StopObserved {
+		t.Fatalf("expected installed Codex without paired events to reject, got %+v", verification)
+	}
+}
+
 func TestProviderFromExecutable(t *testing.T) {
 	tests := map[string]string{
 		filepath.Join("tmp", ".claude", "skills", "formal-gates", "bin", "formal-gates"): ProviderClaude,
 		filepath.Join("tmp", ".codex", "skills", "formal-gates", "bin", "formal-gates"):  ProviderCodex,
 		filepath.Join("tmp", ".cursor", "formal-gates", "bin", "formal-gates"):           ProviderCursor,
-		filepath.Join("tmp", "source", "formal-gates"):                                   ProviderCodex,
+		filepath.Join("tmp", "source", "formal-gates"):                                   ProviderDefault,
 	}
 	for path, want := range tests {
 		t.Run(fmt.Sprintf("%s", want), func(t *testing.T) {
@@ -339,9 +359,10 @@ func useProvider(t *testing.T, provider string) {
 	t.Helper()
 	prior := executablePath
 	path := map[string]string{
-		ProviderClaude: filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderCodex:  filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderCursor: filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
+		ProviderClaude:  filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderCodex:   filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderCursor:  filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
+		ProviderDefault: filepath.Join(t.TempDir(), "source", "formal-gates"),
 	}[provider]
 	executablePath = func() (string, error) { return path, nil }
 	t.Cleanup(func() { executablePath = prior })
