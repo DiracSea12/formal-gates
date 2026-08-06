@@ -24,7 +24,7 @@ type FindingInput struct {
 	Locations []string
 }
 
-type QACaseInput struct{ Kind, Description, Procedure, Oracle string }
+type QACaseInput struct{ Mode, Description, Procedure, Oracle string }
 
 type QAReviewInput struct{ CaseID, Outcome, Reason string }
 
@@ -90,58 +90,65 @@ func slicingRecorded(state RunState) bool {
 }
 
 // selectedQAModes lists the normal QA modes selected for the run, used to tell
-// the QA Design agent which modes' cases it must design and which quality floors
-// apply.
+// the QA Design agent which modes' cases it must design.
 func selectedQAModes(state RunState) []string {
 	var modes []string
 	if isSelected(state, blackboxQAID) {
-		modes = append(modes, "blackbox: LIVE behavior execution cases against the built snapshot")
+		modes = append(modes, "blackbox: real QA designed from the current confirmed requirement in the QA isolation worktree, executed against the built product on the main worktree after the snapshot")
 	}
 	if isSelected(state, whiteboxQAID) {
-		modes = append(modes, "whitebox: STATIC structure test cases (unit, system, integration)")
+		modes = append(modes, "whitebox: structure test cases designed by reading the implementation after development")
 	}
 	return modes
 }
 
-// preDevelopmentQASelected reports whether a QA mode whose design must complete
-// before development is selected: blackbox (behavior design from the confirmed
-// requirement) and the legacy "qa" mode. Whitebox QA designs after development by
-// reading the implementation, so it does not gate the development start.
-func preDevelopmentQASelected(state RunState) bool {
-	return isSelected(state, blackboxQAID) || isSelected(state, legacyQAID)
-}
-
-// blackboxDesignRecorded reports whether the blackbox LIVE behavior design has
-// been recorded (QA Design passed or a LIVE case already exists). A recorded
-// blackbox design lets the full route add whitebox structure cases after
-// development without mistaking that redesign for a missing pre-development
-// blackbox design.
-func blackboxDesignRecorded(state RunState) bool {
-	if state.Actions["qa-design"].Status == "PASS" {
+// blackboxReviewPassed reports whether the blackbox review gate is satisfied for
+// a snapshot: when blackbox QA is selected, the blackbox review must have
+// approved the set, and the review action itself must not have failed. With
+// blackbox cases present, every blackbox case must be approved (ReviewStatus
+// PASS) by a blackbox review round AND the qa-review action must not be FAIL: a
+// review round can judge every pending case PASS yet still fail the set with a
+// coverage-omission finding (qa-review FAIL, qa-design re-opened), and that FAIL
+// must block the snapshot just like a case-level FAIL. With zero blackbox cases
+// the gate is NOT vacuous: the snapshot is allowed only when the qa-review action
+// itself recorded PASS (the review judged the empty set's coverage sufficient,
+// requirement 4) — a still-pending or FAIL review keeps blocking the snapshot
+// (requirements 1 and 2: snapshot waits until development complete 且 blackbox
+// review PASS). Runs without blackbox QA are vacuously passed. The only bypass is
+// the user-authorized snapshot release (snapshotBlackboxReleased), handled by
+// AdvanceSnapshot.
+func blackboxReviewPassed(state RunState) bool {
+	if !isSelected(state, blackboxQAID) && !isSelected(state, legacyQAID) {
 		return true
 	}
+	hasBlackboxCases := false
 	for _, testCase := range state.QACases {
-		if testCase.Kind == "LIVE" {
-			return true
+		if testCase.Mode != "blackbox" {
+			continue
+		}
+		hasBlackboxCases = true
+		if testCase.ReviewStatus != "PASS" {
+			return false
 		}
 	}
-	return false
+	if !hasBlackboxCases {
+		return state.Actions["qa-review"].Status == "PASS"
+	}
+	// 有黑盒用例时整个审查判定仍须通过：集合层面 P1 覆盖遗漏使审查动作 FAIL 时，即使
+	// 各用例单独均 PASS 也阻挡快照；唯一绕过是用户授权放行（AdvanceSnapshot 处理）。
+	if state.Actions["qa-review"].Status == "FAIL" {
+		return false
+	}
+	return true
 }
 
-// blackboxReviewRecorded reports whether the blackbox LIVE cases were approved at
-// least once (QA Review passed, or a LIVE case keeps an accepted review status).
-// Whitebox structure cases are reviewed after development, so a previously
-// approved blackbox set must not block that post-development review.
-func blackboxReviewRecorded(state RunState) bool {
-	if state.Actions["qa-review"].Status == "PASS" {
-		return true
-	}
-	for _, testCase := range state.QACases {
-		if testCase.Kind == "LIVE" && testCase.ReviewStatus == "PASS" {
-			return true
-		}
-	}
-	return false
+// snapshotBlackboxReleased reports whether the user has explicitly authorized a
+// snapshot while the blackbox review gate is unmet. The authorization persists
+// for the rest of the run (until a requirement invalidation clears it): once the
+// user releases the gate, the unapproved blackbox cases are treated as PASS, so
+// subsequent repair snapshots are not blocked again by the same unapproved cases.
+func snapshotBlackboxReleased(state RunState) bool {
+	return state.SnapshotOverride != nil
 }
 
 func Start(options StartOptions) (RunState, error) {
@@ -227,11 +234,14 @@ func Start(options StartOptions) (RunState, error) {
 
 // ResumeStatus is the recoverable classification reported when resuming an
 // interrupted run: requirement edits need classification, catalog changes are
-// reported per gate/action, and a drifted native snapshot must be adopted.
+// reported per gate/action, a drifted native snapshot must be adopted, and a
+// registered QA isolation worktree that no longer sits at the base snapshot must
+// be confirmed or rebuilt by the user.
 type ResumeStatus struct {
 	ClassificationRequired bool     `json:"classificationRequired"`
 	CatalogDelta           []string `json:"catalogDelta,omitempty"`
 	NativeDrifted          bool     `json:"nativeDrifted"`
+	IsolationDrifted       bool     `json:"isolationDrifted"`
 }
 
 // ResumeReport classifies everything the main agent must judge before the run
@@ -256,7 +266,21 @@ func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
 	if err != nil {
 		return ResumeStatus{}, err
 	}
-	return ResumeStatus{ClassificationRequired: changed, CatalogDelta: catalogDelta(state, catalog), NativeDrifted: native != state.CurrentSnapshot}, nil
+	isolationDrifted := false
+	if strings.TrimSpace(state.QAWorktree) != "" {
+		// 中断续跑时重校验隔离工作区原生标识 == 基线（工作区应停在基线，未漂移即正常；
+		// 仅真实漂移才需用户确认/重建）。
+		resolver, err := resolverForVCS(state.VCS, nil)
+		if err != nil {
+			return ResumeStatus{}, err
+		}
+		resolved, err := resolver.Resolve(cleanWorktree(state.QAWorktree))
+		if err != nil {
+			return ResumeStatus{}, fmt.Errorf("cannot re-verify QA isolation worktree: %w", err)
+		}
+		isolationDrifted = !strings.EqualFold(resolved, state.BaseSnapshot)
+	}
+	return ResumeStatus{ClassificationRequired: changed, CatalogDelta: catalogDelta(state, catalog), NativeDrifted: native != state.CurrentSnapshot, IsolationDrifted: isolationDrifted}, nil
 }
 
 // AdoptExternalChange explicitly rebinds the current snapshot to the native
@@ -440,9 +464,9 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 
 // discardUnmatchedQADesign reconciles a fast-path speculative QA design recorded
 // before the route was confirmed against the now-confirmed route. The fast-path
-// design is always blackbox (LIVE), so it matches the confirmed route exactly when
-// blackbox QA (or the legacy "qa" mode) is selected; whitebox STATIC cases are
-// designed after development, so their floor does not apply at route
+// design is always blackbox behavior design, so it matches the confirmed route
+// exactly when blackbox QA (or the legacy "qa" mode) is selected; whitebox
+// structure cases are designed after development, so they do not apply at route
 // confirmation. When the route omits blackbox QA, the parallel design is
 // discarded (the documented fast-path tradeoff: a design for a route that does
 // not include blackbox QA is abandoned) so the design is re-done against the
@@ -458,6 +482,8 @@ func discardUnmatchedQADesign(state *RunState) {
 	state.QAExecution = QAExecutionResult{Status: "PENDING"}
 	state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
 	state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
+	// 最终路线不含黑盒时设计废弃，黑盒隔离工作区随之移除（清空登记，host 重建时才需要）。
+	state.QAWorktree = ""
 }
 
 func AddRouteGates(root, packageRoot, runID string, additions []string) (RunState, error) {
@@ -590,38 +616,108 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 	})
 }
 
-// RecordSettledFindings records findings and decisions the user has already
-// settled for a pre-development review. They are injected into the next
-// product-review / start-readiness dispatch so the reviewer does not re-raise
-// them (reviewer-side enforcement of the double guarantee); the main agent also
-// filters them when relaying. A meaning-changing requirement revision clears the
-// settled list because the revised premise may legitimately re-raise an item.
-func RecordSettledFindings(root, packageRoot, runID, actionID string, findings []string) (RunState, error) {
+// RecordSettledFindings records the user's per-item disposition of findings from
+// a product-review / start-readiness review. Confirm (确认问题：真问题、需修订) and
+// dismiss (驳回问题：不是问题、作废) are both recorded and injected into the next
+// dispatch so the reviewer does not re-raise them (reviewer-side enforcement of
+// the double guarantee). Confirming a P0/P1 finding sets the "需重审" marker
+// (NeedsReReview): the CLI then refuses to record PASS until a re-review round
+// returns PASS. A dismissed P0/P1 is void and does not block. A meaning-changing
+// requirement revision clears the settled list because the revised premise may
+// legitimately re-raise an item.
+func RecordSettledFindings(root, packageRoot, runID, actionID string, confirm, dismiss []string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if actionID != "product-review" && actionID != "start-readiness" {
 			return fmt.Errorf("settled findings are recorded for product-review or start-readiness only")
 		}
-		added := 0
-		for _, raw := range findings {
-			message := strings.TrimSpace(raw)
+		if len(confirm) == 0 && len(dismiss) == 0 {
+			return fmt.Errorf("at least one settled finding is required")
+		}
+		if state.NeedsReReview == nil {
+			state.NeedsReReview = map[string]string{}
+		}
+		severityByMessage := map[string]string{}
+		for _, finding := range state.Actions[actionID].Findings {
+			if strings.TrimSpace(finding.Message) != "" {
+				severityByMessage[strings.TrimSpace(finding.Message)] = finding.Severity
+			}
+		}
+		settle := func(message, disposition string) error {
+			message = strings.TrimSpace(message)
 			if message == "" {
 				return fmt.Errorf("settled finding message is required")
 			}
-			if state.SettledFindings == nil {
-				state.SettledFindings = map[string][]string{}
+			if severity, ok := severityByMessage[message]; !ok || severity == "" {
+				return fmt.Errorf("finding %q is not in the recorded %s result", message, actionID)
 			}
-			state.SettledFindings[actionID] = append(state.SettledFindings[actionID], message)
-			added++
+			if state.SettledFindings == nil {
+				state.SettledFindings = map[string][]SettledFinding{}
+			}
+			state.SettledFindings[actionID] = append(state.SettledFindings[actionID], SettledFinding{Message: message, Disposition: disposition})
+			// 确认的 P0/P1 置位"需重审"标记；驳回或确认的 P2 不置位。
+			if disposition == "confirm" && (severityByMessage[message] == "P0" || severityByMessage[message] == "P1") {
+				state.NeedsReReview[actionID] = message
+			}
+			return nil
 		}
-		if added == 0 {
-			return fmt.Errorf("at least one settled finding is required")
+		for _, message := range confirm {
+			if err := settle(message, "confirm"); err != nil {
+				return err
+			}
+		}
+		for _, message := range dismiss {
+			if err := settle(message, "dismiss"); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
 }
 
+// RegisterQAWorktree registers the QA isolation worktree for the run. The
+// worktree is created from the base snapshot by the host (Git linked worktree
+// branched from base; SVN workspace checked out at base; P4 client synced to the
+// base changelist) and must resolve its native identity to the base snapshot.
+// Registration also verifies the current requirement document / acceptance
+// artifacts are injected into the worktree with the run's registered revisions
+// (a worktree-state injection, not a drift: git commits / p4 changelists / svn
+// BASE versions ignore it). This is the single home of that hash check
+// (requirement 1's "登记**或**黑盒 prepare 时校验" guard is contracted here):
+// later blackbox prepare/claim/record only re-resolve the native identity (==
+// base) without re-reading or re-hashing the worktree files. Each blackbox
+// design round recreates or reuses this worktree; it never contains development
+// code.
+func RegisterQAWorktree(root, runID, worktree string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		worktree = strings.TrimSpace(worktree)
+		if worktree == "" {
+			return fmt.Errorf("QA isolation worktree path is required")
+		}
+		resolver, err := resolverForVCS(state.VCS, nil)
+		if err != nil {
+			return err
+		}
+		resolved, err := resolver.Resolve(cleanWorktree(worktree))
+		if err != nil {
+			return fmt.Errorf("cannot resolve QA isolation worktree: %w", err)
+		}
+		if !strings.EqualFold(resolved, state.BaseSnapshot) {
+			return fmt.Errorf("QA isolation worktree native identity %s does not match the base snapshot %s", resolved, state.BaseSnapshot)
+		}
+		// 校验隔离工作区内需求文档/验收产物哈希与 run 登记 revision 一致（防 host 遗忘
+		// 刷新注入；需求 1 的"登记**或**黑盒 prepare 校验"单点落在登记处，prepare/claim/
+		// record 不再重复哈希复查）。注入是工作树状态，Git=提交、P4=changelist、SVN=BASE
+		// 版本级身份校验不受影响。
+		if err := verifyIsolatedRequirementRevisions(*state, worktree); err != nil {
+			return err
+		}
+		state.QAWorktree = worktree
+		return nil
+	})
+}
+
 func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", false, "", func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return "", err
 		}
@@ -639,19 +735,38 @@ func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
 	})
 }
 
-func PrepareAction(root, packageRoot, runID, actionID string) (string, error) {
+// PrepareAction prepares an action dispatch. mode is required for qa-design and
+// qa-review (blackbox or whitebox): a blackbox dispatch binds its identity and
+// source to the QA isolation worktree (== base), a whitebox dispatch to the main
+// worktree (== current). userRequested is the explicit user override signal:
+// for product-review / start-readiness it allows re-preparing a review of an
+// already-PASS round (the only-user-can-break-the-rule side-B exception) and the
+// source is recorded in ReviewOverrides.
+func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequested bool, userReason string) (string, error) {
 	if actionID == "development-worker" {
 		return prepareDevelopmentAction(root, packageRoot, runID)
 	}
 	reviewerRequired := actionID != "requirements-clarification"
-	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
-		if err := requireTransition(*state, actionID, ""); err != nil {
-			return "", err
+	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+		overridePassRound := userRequested && (actionID == "product-review" || actionID == "start-readiness") && state.Actions[actionID].Status == "PASS"
+		if !overridePassRound {
+			if err := requireTransition(*state, actionID, ""); err != nil {
+				return "", err
+			}
+		} else if state.ReviewOverrides == nil {
+			state.ReviewOverrides = map[string]string{}
+		}
+		if overridePassRound {
+			reason := strings.TrimSpace(userReason)
+			if reason == "" {
+				reason = "user requested a re-review of an already-passed review round"
+			}
+			state.ReviewOverrides[actionID] = reason
 		}
 		if actionID == "qa-execution" && semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
 			return "", fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
 		}
-		detail, err := actionPromptDetail(*state, catalog, actionID)
+		detail, err := actionPromptDetail(*state, catalog, actionID, mode)
 		if err != nil {
 			return "", err
 		}
@@ -659,14 +774,28 @@ func PrepareAction(root, packageRoot, runID, actionID string) (string, error) {
 	})
 }
 
-func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, compose func(*RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
+// prepareBoundPrompt composes and registers a prepared dispatch. mode selects the
+// QA isolation binding for qa-design/qa-review blackbox dispatches; userRequested
+// carries the explicit user override signal for the review-rule enforcement.
+func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason string, compose func(*RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
 	prompt := ""
 	_, err := mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
 		}
-		if _, err := requireNativeCurrent(root, *state); err != nil {
+		// 开发开始后 qa-design/qa-review 派发 mode 必填：省略 --mode 会静默绑主工作区、
+		// 黑盒代理可读开发代码、隔离被绕过。快速路径（开发尚未开始，路线未确认时的预演
+		// 设计）空 mode 合法，仅开发开始后必填。
+		if (target == "qa-design" || target == "qa-review") && developmentStarted(*state) && mode == "" {
+			return fmt.Errorf("%s dispatch requires --mode blackbox or whitebox after development starts", target)
+		}
+		blackbox := mode == "blackbox" && (target == "qa-design" || target == "qa-review")
+		if blackbox {
+			if err := requireIsolatedCurrent(root, *state); err != nil {
+				return err
+			}
+		} else if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
 		wave := 0
@@ -679,20 +808,80 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 			return err
 		}
 		route := routeForState(root, *state)
+		if blackbox {
+			route.Worktree = absPath(state.QAWorktree)
+			route.CurrentSnapshot = state.BaseSnapshot
+		}
 		route.DispatchID, route.DispatchAttempt, route.ReviewWave = dispatchID, attempt, wave
 		prompt, err = compose(state, catalog, route)
 		if err != nil {
 			return err
 		}
 		staleOpenDispatches(state, targetKind, target)
+		source := state.CurrentSnapshot
+		if blackbox {
+			source = state.BaseSnapshot
+		}
+		// 确认的 P0/P1 待重审时，新派发的 product-review/start-readiness 轮即重审轮，
+		// 记录其派发 id，只有该轮返回 PASS 才算重审完成。
+		if (target == "product-review" || target == "start-readiness") && state.NeedsReReview[target] != "" {
+			if state.ReReviewDispatch == nil {
+				state.ReReviewDispatch = map[string]string{}
+			}
+			state.ReReviewDispatch[target] = dispatchID
+		}
 		sum := sha256.Sum256([]byte(prompt))
-		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: hex.EncodeToString(sum[:]), RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: state.CurrentSnapshot, ReviewerRequired: reviewerRequired, Status: "OPEN"}
+		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: hex.EncodeToString(sum[:]), RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode}
 		return nil
 	})
 	return prompt, err
 }
 
-func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) (string, error) {
+// requireIsolatedCurrent verifies the registered QA isolation worktree sits at
+// the base snapshot (its native identity == base). Blackbox qa-design/qa-review
+// prepare/claim/record all resolve identity against this worktree instead of the
+// main worktree, so the parallel QA never observes development code under normal
+// navigation. The injected requirement-document / acceptance-artifact hash check
+// lives at workflow qa-worktree registration only (requirement 1's "登记或黑盒
+// prepare 时校验" guard is contracted to registration); prepare/claim/record do
+// not re-read or re-hash the worktree files.
+func requireIsolatedCurrent(root string, state RunState) error {
+	if strings.TrimSpace(state.QAWorktree) == "" {
+		return fmt.Errorf("QA isolation worktree is not registered; run workflow qa-worktree first")
+	}
+	resolver, err := resolverForVCS(state.VCS, nil)
+	if err != nil {
+		return err
+	}
+	resolved, err := resolver.Resolve(cleanWorktree(state.QAWorktree))
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(resolved, state.BaseSnapshot) {
+		return fmt.Errorf("QA isolation worktree native identity %s does not match the base snapshot %s", resolved, state.BaseSnapshot)
+	}
+	return nil
+}
+
+// verifyIsolatedRequirementRevisions verifies the requirement document / acceptance
+// artifact hashes inside the QA isolation worktree match the run's registered
+// revisions（防 host 遗忘刷新注入）。注入是工作树状态，原生标识校验（Git=提交、P4=
+// changelist、SVN=BASE 版本级）不受影响。
+func verifyIsolatedRequirementRevisions(state RunState, worktree string) error {
+	for _, artifact := range state.RequirementArtifacts {
+		path := resolveFromRoot(cleanWorktree(worktree), artifact.Path)
+		revision, err := RequirementRevision(path)
+		if err != nil {
+			return fmt.Errorf("QA isolation worktree requirement artifact %s: %w", artifact.Path, err)
+		}
+		if revision != artifact.Revision {
+			return fmt.Errorf("QA isolation worktree requirement artifact %s does not match the run revision %s", artifact.Path, artifact.Revision)
+		}
+	}
+	return nil
+}
+
+func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode string) (string, error) {
 	if actionID == "qa-design" {
 		var lines []string
 		if isMergeVerification(state) {
@@ -700,7 +889,11 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 		} else if state.RouteMode == "" {
 			// 快速路径：路线未确认时只开始黑盒设计，与 start-readiness 并行，先于拆分
 			// 决定与路线确认；最终路线不含黑盒 QA 时本设计废弃。
-			lines = append(lines, "Fast-path blackbox QA design: from the confirmed requirement, design LIVE behavior execution cases against the built snapshot. The route is not yet confirmed; if it omits blackbox QA this design is discarded.")
+			lines = append(lines, "Fast-path blackbox QA design: from the confirmed requirement, design blackbox behavior cases. The route is not yet confirmed; if it omits blackbox QA this design is discarded.")
+		} else if mode == "blackbox" {
+			lines = append(lines, "This is a blackbox QA design round: design real QA behavior cases from the current confirmed requirement document. Work in the QA isolation worktree; the current requirement document (revision registered by the run) is injected there as working-tree state. Base every case on the current requirement document, not on any baseline product documentation. '实际使用产品' is the execution-phase description: after the snapshot you execute cases against the built product on the main worktree. In this design phase, the runnable product is not yet built, so base the cases on the injected current requirement.")
+		} else if mode == "whitebox" {
+			lines = append(lines, "This is a whitebox QA design round: read the implementation on the main worktree and design structure test cases (unit, system, integration) by responsibility.")
 		} else if modes := selectedQAModes(state); len(modes) != 0 {
 			lines = append(lines, "Selected QA modes: "+strings.Join(modes, "; "))
 		}
@@ -726,20 +919,19 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 		return strings.Join(lines, "\n\n"), nil
 	}
 	if actionID == "qa-review" {
-		if len(state.QACases) == 0 && !isMergeVerification(state) {
-			return "", fmt.Errorf("QA cases are missing")
-		}
+		pendingCases := pendingQACases(state.QACases, mode)
 		accepted := []string{"Accepted coverage context; do not return new decisions for these cases:"}
 		pending := []string{"Return one decision for every pending case below:"}
 		for _, testCase := range state.QACases {
 			if testCase.ReviewStatus == "PASS" {
 				accepted = append(accepted, fmt.Sprintf("%s: %s", testCase.ID, testCase.Description))
-			} else {
-				pending = append(pending, formatQACase(testCase, false))
 			}
 		}
+		for _, testCase := range pendingCases {
+			pending = append(pending, formatQACase(testCase, false))
+		}
 		if len(pending) == 1 {
-			accepted = append(accepted, "There are no pending case decisions. Review the corrected complete set for set-level missing or duplicated coverage and return no case decisions.")
+			accepted = append(accepted, "There are no pending case decisions. Review the set for missing or duplicated coverage and return no case decisions. Set-level coverage omission for a selected mode is P1 and blocks; P2 findings are suggestions only.")
 			return strings.Join(accepted, "\n\n"), nil
 		}
 		if len(accepted) == 1 {
@@ -748,11 +940,9 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 		return strings.Join(append(accepted, pending...), "\n\n"), nil
 	}
 	if actionID == "qa-execution" {
-		if len(state.QACases) == 0 && !isMergeVerification(state) {
-			return "", fmt.Errorf("QA cases are missing")
-		}
+		required := qaExecutionRequiredCases(state)
 		var lines []string
-		for _, testCase := range state.QACases {
+		for _, testCase := range required {
 			lines = append(lines, formatQACase(testCase, false))
 		}
 		return strings.Join(lines, "\n\n"), nil
@@ -771,9 +961,9 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 	}
 	if actionID == "product-review" || actionID == "start-readiness" {
 		if settled := state.SettledFindings[actionID]; len(settled) != 0 {
-			lines := []string{"Findings and decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on."}
-			for _, message := range settled {
-				lines = append(lines, "- "+message)
+			lines := []string{"Findings and decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on. Dispositions: 确认问题 (confirm, treated as a real problem being fixed) or 驳回问题 (dismiss, voided)."}
+			for _, item := range settled {
+				lines = append(lines, "- ["+item.Disposition+"] "+item.Message)
 			}
 			return strings.Join(lines, "\n"), nil
 		}
@@ -781,8 +971,42 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID string) 
 	return "", nil
 }
 
+// pendingQACases lists the pending cases (ReviewStatus != PASS) for a review
+// dispatch, filtered to the dispatch's mode when one is set so blackbox and
+// whitebox review rounds stay single-mode and do not decide each other's cases.
+func pendingQACases(cases []QACase, mode string) []QACase {
+	var pending []QACase
+	for _, testCase := range cases {
+		if testCase.ReviewStatus == "PASS" {
+			continue
+		}
+		if mode != "" && testCase.Mode != mode {
+			continue
+		}
+		pending = append(pending, testCase)
+	}
+	return pending
+}
+
+// qaExecutionRequiredCases is the case set QA Execution must cover. Normally the
+// complete approved case set; after a user-authorized snapshot release of the
+// blackbox gate, only the approved cases are executed and the unapproved blackbox
+// cases are treated as PASS (the origin is recorded by the snapshot override).
+func qaExecutionRequiredCases(state RunState) []QACase {
+	if !snapshotBlackboxReleased(state) {
+		return state.QACases
+	}
+	approved := []QACase{}
+	for _, testCase := range state.QACases {
+		if testCase.ReviewStatus == "PASS" {
+			approved = append(approved, testCase)
+		}
+	}
+	return approved
+}
+
 func formatQACase(testCase QACase, includeReview bool) string {
-	value := fmt.Sprintf("%s\nkind: %s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Kind, testCase.Description, testCase.Procedure, testCase.Oracle)
+	value := fmt.Sprintf("%s\nmode: %s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Mode, testCase.Description, testCase.Procedure, testCase.Oracle)
 	if includeReview {
 		value += "\nreview status: " + testCase.ReviewStatus
 	}
@@ -790,7 +1014,7 @@ func formatQACase(testCase QACase, includeReview bool) string {
 }
 
 func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", false, "", func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
@@ -838,6 +1062,11 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 			if err := requireDevelopmentClaimableHead(root, *state, dispatch); err != nil {
 				return err
 			}
+		} else if dispatch.Mode == "blackbox" && (dispatch.Target == "qa-design" || dispatch.Target == "qa-review") {
+			// 黑盒 qa-design/qa-review 派发对 QA 隔离工作区解析原生标识（恒等于基线）。
+			if err := requireIsolatedCurrent(root, *state); err != nil {
+				return err
+			}
 		} else if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
@@ -847,24 +1076,35 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		if dispatch.Status != "OPEN" {
 			return fmt.Errorf("dispatch %q is %s and cannot be claimed", dispatchID, dispatch.Status)
 		}
-		if reviewerIdentity == "" {
-			return fmt.Errorf("reviewer identity is required")
+		// Resolve the effective claim identity: the preferred reviewer
+		// identity wins when it matches a pending subagent start observation;
+		// otherwise a unique pending start observation supplies its own
+		// identity (common operator mistake compatibility), and an ambiguous
+		// or empty resolution is rejected rather than binding the wrong
+		// subagent or silently dropping lifecycle evidence.
+		effective, err := workflowLifecycle.ResolveClaimIdentity(root, state.RunID, reviewerIdentity)
+		if err != nil {
+			return err
 		}
 		for priorID, prior := range state.Dispatches {
-			if prior.ReviewerIdentity == reviewerIdentity {
+			if prior.ReviewerIdentity == effective {
 				return fmt.Errorf("reviewer identity is already reserved by dispatch %s", priorID)
 			}
 		}
-		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, reviewerIdentity); err != nil {
+		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, effective); err != nil {
 			return err
 		}
-		dispatch.ReviewerIdentity, dispatch.Status = reviewerIdentity, "CLAIMED"
+		dispatch.ReviewerIdentity, dispatch.Status = effective, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
 		return nil
 	})
 }
 
-func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput) (RunState, error) {
+// RecordAction records a product-review / start-readiness / requirements-
+// clarification result. userRequested is the explicit user override signal for
+// the review-rule enforcement (only the user can break the rule); its source is
+// recorded in ReviewOverrides.
+func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
@@ -890,6 +1130,9 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 				return err
 			}
+			if err := enforceReviewRule(state, actionID, dispatch.ID, status, findings, userRequested, userReason); err != nil {
+				return err
+			}
 		}
 		backfillDispatchCost(root, state, dispatch)
 		result, err := semanticActionResult(actionID, status, message, findings, state)
@@ -901,6 +1144,81 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		completeDispatch(state, dispatch.ID)
 		return nil
 	})
+}
+
+// enforceReviewRule implements the CLI-forced review rules for product-review
+// and start-readiness (requirement 5):
+//   - 仅 P2 → 该轮记录 PASS，P2 建议随 PASS 可见、不阻塞、不产生 FAIL；
+//   - P0/P1 → 记录 FAIL；用户逐项确认或驳回。驳回的 P0/P1 作废不阻塞（PASS 可携带已
+//     驳回的 P0/P1）；确认的 P0/P1 置位"需重审"标记，CLI 在重审前拒绝记录 PASS；
+//   - 只有用户可破例：任一侧的破例都须 userRequested 显式授权，来源记录到
+//     ReviewOverrides；主代理无破例权。
+func enforceReviewRule(state *RunState, actionID, dispatchID, status string, findings []FindingInput, userRequested bool, userReason string) error {
+	if state.NeedsReReview == nil {
+		state.NeedsReReview = map[string]string{}
+	}
+	if state.ReReviewDispatch == nil {
+		state.ReReviewDispatch = map[string]string{}
+	}
+	status = strings.ToUpper(strings.TrimSpace(status))
+	switch status {
+	case "PASS":
+		dismissed := settledMessagesByDisposition(*state, actionID, "dismiss")
+		for _, finding := range findings {
+			severity := strings.ToUpper(strings.TrimSpace(finding.Severity))
+			if (severity == "P0" || severity == "P1") && !dismissed[strings.TrimSpace(finding.Message)] {
+				if userRequested {
+					recordReviewOverride(state, actionID, userReason)
+					return nil
+				}
+				return fmt.Errorf("P0/P1 finding %q is confirmed or undisposed; record FAIL and re-review after a requirement revision, or dismiss it explicitly", finding.Message)
+			}
+		}
+		if state.NeedsReReview[actionID] != "" && state.ReReviewDispatch[actionID] != dispatchID {
+			if userRequested {
+				recordReviewOverride(state, actionID, userReason)
+				return nil
+			}
+			return fmt.Errorf("confirmed P0/P1 finding %q awaits a re-review; record-action PASS is rejected before the re-review", state.NeedsReReview[actionID])
+		}
+		if state.NeedsReReview[actionID] != "" {
+			delete(state.NeedsReReview, actionID)
+			delete(state.ReReviewDispatch, actionID)
+		}
+	case "FAIL":
+		confirmed := settledMessagesByDisposition(*state, actionID, "confirm")
+		for _, finding := range findings {
+			severity := strings.ToUpper(strings.TrimSpace(finding.Severity))
+			if (severity == "P0" || severity == "P1") && confirmed[strings.TrimSpace(finding.Message)] {
+				state.NeedsReReview[actionID] = strings.TrimSpace(finding.Message)
+				delete(state.ReReviewDispatch, actionID)
+			}
+		}
+	}
+	return nil
+}
+
+func recordReviewOverride(state *RunState, actionID, userReason string) {
+	if state.ReviewOverrides == nil {
+		state.ReviewOverrides = map[string]string{}
+	}
+	reason := strings.TrimSpace(userReason)
+	if reason == "" {
+		reason = "user explicitly requested an override"
+	}
+	state.ReviewOverrides[actionID] = reason
+}
+
+// settledMessagesByDisposition lists the settled finding messages of the action
+// that carry the named disposition (confirm or dismiss).
+func settledMessagesByDisposition(state RunState, actionID, disposition string) map[string]bool {
+	result := map[string]bool{}
+	for _, item := range state.SettledFindings[actionID] {
+		if item.Disposition == disposition {
+			result[item.Message] = true
+		}
+	}
+	return result
 }
 
 func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared string, findings []FindingInput) (RunState, error) {
@@ -967,14 +1285,15 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if _, err := requireNativeCurrent(root, *state); err != nil {
-			return err
-		}
 		if err := requireTransition(*state, "qa-design", ""); err != nil {
 			return err
 		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-design")
 		if err != nil {
+			return err
+		}
+		// 黑盒设计派发对 QA 隔离工作区解析原生标识（== 基线）；白盒/其他对主工作区（== 当前）。
+		if err := requireDispatchNativeCurrent(root, *state, dispatch); err != nil {
 			return err
 		}
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
@@ -990,50 +1309,51 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			completeDispatch(state, dispatch.ID)
 			return nil
 		}
+		// 空用例集不再被拒绝：被选中模式零用例是覆盖缺失，由 qa-review 的 set-level 覆盖
+		// 判定承担（P1、阻塞），不设机械化质量下限。合并 QA 的零用例既有例外保留。空设计
+		// 记录 PASS 后进入 QA Review（无待定用例，只做集合覆盖判定）。
 		if len(cases) == 0 {
+			message := ""
 			if isMergeVerification(*state) {
-				// 合并 QA 的用例集可为零/极少：留痕注明"切片基本独立、无跨切片交互
-				// 用例"，不判 PASS 或覆盖不足，直接进入 QA Review（无待定用例）。
-				state.QACases = []QACase{}
-				state.QAExecution = QAExecutionResult{Status: "PENDING"}
-				state.Actions["qa-design"] = ActionResult{Status: "PASS", Message: "切片基本独立、无跨切片交互用例", DispatchID: dispatch.ID}
-				state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
-				completeDispatch(state, dispatch.ID)
-				return nil
+				// 合并 QA 的用例集可为零/极少：留痕注明"切片基本独立、无跨切片交互用例"。
+				message = "切片基本独立、无跨切片交互用例"
 			}
-			return fmt.Errorf("at least one QA case is required")
+			state.QACases = []QACase{}
+			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			state.Actions["qa-design"] = ActionResult{Status: "PASS", Message: message, DispatchID: dispatch.ID}
+			state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
+			completeDispatch(state, dispatch.ID)
+			return nil
 		}
 		seen := map[string]bool{}
 		priorByKey := map[string]QACase{}
 		usedIDs := map[string]bool{}
 		for _, prior := range state.QACases {
 			usedIDs[prior.ID] = true
-			priorByKey[qaCaseSemanticKey(prior.Kind, prior.Description, prior.Procedure, prior.Oracle)] = prior
+			priorByKey[qaCaseSemanticKey(prior.Mode, prior.Description, prior.Procedure, prior.Oracle)] = prior
 		}
 		nextID := 1
 		updated := make([]QACase, 0, len(cases))
-		kinds := map[string]bool{}
 		for index, item := range cases {
 			normalized := QACase{
-				Kind:        strings.ToUpper(strings.TrimSpace(item.Kind)),
+				Mode:        strings.ToLower(strings.TrimSpace(item.Mode)),
 				Description: strings.TrimSpace(item.Description),
 				Procedure:   strings.TrimSpace(item.Procedure),
 				Oracle:      strings.TrimSpace(item.Oracle),
 			}
-			if normalized.Kind != "STATIC" && normalized.Kind != "LIVE" {
-				return fmt.Errorf("QA case %d kind must be STATIC or LIVE", index+1)
+			if normalized.Mode != "blackbox" && normalized.Mode != "whitebox" {
+				return fmt.Errorf("QA case %d mode must be blackbox or whitebox", index+1)
 			}
 			for name, value := range map[string]string{"description": normalized.Description, "procedure": normalized.Procedure, "oracle": normalized.Oracle} {
 				if value == "" {
 					return fmt.Errorf("QA case %d %s is required", index+1, name)
 				}
 			}
-			key := qaCaseSemanticKey(normalized.Kind, normalized.Description, normalized.Procedure, normalized.Oracle)
+			key := qaCaseSemanticKey(normalized.Mode, normalized.Description, normalized.Procedure, normalized.Oracle)
 			if seen[key] {
 				return fmt.Errorf("duplicate QA case %d", index+1)
 			}
 			seen[key] = true
-			kinds[normalized.Kind] = true
 			if prior, ok := priorByKey[key]; ok {
 				normalized.ID = prior.ID
 				if prior.ReviewStatus == "PASS" {
@@ -1050,23 +1370,6 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				nextID++
 			}
 			updated = append(updated, normalized)
-		}
-		// 质量下限随已选 QA 模式与设计阶段而定：黑盒要求至少一个行为执行（LIVE）用例；
-		// 白盒（STATIC 结构测试）在开发后读实现设计，所以白盒下限只在开发后设计时生效——
-		// full 路线的开发前黑盒设计阶段只含 LIVE，开发后白盒设计阶段补齐 STATIC。旧的
-		// "每集至少一个静态与一个行为用例"下限被逐模式下限取代。合并 QA 不分黑盒/
-		// 白盒，无逐模式下限。快速路径（路线未确认）的设计是黑盒（LIVE），同样要求至少
-		// 一个行为执行用例。
-		if !isMergeVerification(*state) {
-			if state.RouteMode == "" && !kinds["LIVE"] {
-				return fmt.Errorf("fast-path QA design requires at least one LIVE behavior execution case")
-			}
-			if isSelected(*state, blackboxQAID) && !kinds["LIVE"] {
-				return fmt.Errorf("blackbox QA requires at least one LIVE behavior execution case")
-			}
-			if isSelected(*state, whiteboxQAID) && developmentStarted(*state) && !kinds["STATIC"] {
-				return fmt.Errorf("whitebox QA requires at least one STATIC structure test case")
-			}
 		}
 		if state.Actions["qa-review"].Status == "FAIL" {
 			pending := false
@@ -1096,14 +1399,15 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
 		}
-		if _, err := requireNativeCurrent(root, *state); err != nil {
-			return err
-		}
 		if err := requireTransition(*state, "qa-review", ""); err != nil {
 			return err
 		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-review")
 		if err != nil {
+			return err
+		}
+		// 黑盒 review 派发对 QA 隔离工作区解析原生标识（== 基线）；白盒对主工作区（== 当前）。
+		if err := requireDispatchNativeCurrent(root, *state, dispatch); err != nil {
 			return err
 		}
 		if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
@@ -1118,11 +1422,18 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			completeDispatch(state, dispatch.ID)
 			return nil
 		}
+		// 待定用例集按派发 mode 限定：黑盒 review 只决定黑盒待定用例、白盒 review 只决定
+		// 白盒待定用例，各派发为单 mode、不混合。mode 为空（快速路径/合并 QA）时覆盖全部
+		// 待定用例。被选中模式零用例时待定集为空，只做集合覆盖判定。
 		pending := map[string]int{}
 		for index, testCase := range state.QACases {
-			if testCase.ReviewStatus != "PASS" {
-				pending[testCase.ID] = index
+			if testCase.ReviewStatus == "PASS" {
+				continue
 			}
+			if dispatch.Mode != "" && testCase.Mode != dispatch.Mode {
+				continue
+			}
+			pending[testCase.ID] = index
 		}
 		if len(decisions) != len(pending) {
 			return fmt.Errorf("QA Review must decide all %d pending cases", len(pending))
@@ -1154,9 +1465,12 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 				findings = append(findings, Finding{Message: caseID + ": " + reason})
 			}
 		}
+		// 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式）判 P1、
+		// 阻塞、必须补用例；P2 仅为建议、不阻塞、不需处置。P0 不接受（集合层面不判终态致命）。
 		for _, input := range setFindings {
-			if strings.TrimSpace(input.Severity) != "" {
-				return fmt.Errorf("QA Review findings do not accept severity")
+			severity := strings.ToUpper(strings.TrimSpace(input.Severity))
+			if severity != "P1" && severity != "P2" {
+				return fmt.Errorf("QA Review set finding severity must be P1 or P2")
 			}
 			if strings.TrimSpace(input.Message) == "" {
 				return fmt.Errorf("QA Review finding message is required")
@@ -1168,13 +1482,23 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 				}
 				locations = append(locations, strings.TrimSpace(location))
 			}
-			findings = append(findings, Finding{Message: strings.TrimSpace(input.Message), Locations: locations})
-			status = "FAIL"
+			findings = append(findings, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
+			if severity == "P1" {
+				status = "FAIL"
+			}
 		}
 		state.Actions["qa-review"] = ActionResult{Status: status, Findings: findings, DispatchID: dispatch.ID}
 		if status == "FAIL" {
 			state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
 			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			// 黑盒 review 连续 FAIL 计数：PASS 清零、RUNTIME_ERROR 不计入也不打断连续。
+			if dispatch.Mode == "blackbox" {
+				state.BlackboxReviewFails++
+			}
+		} else if dispatch.Mode == "blackbox" {
+			// 黑盒 qa-review PASS 自动清空隔离工作区、清零连续 FAIL 计数。
+			state.QAWorktree = ""
+			state.BlackboxReviewFails = 0
 		}
 		completeDispatch(state, dispatch.ID)
 		return nil
@@ -1212,11 +1536,18 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			completeReviewWaveIfReady(state)
 			return nil
 		}
-		if len(state.QACases) == 0 && !isMergeVerification(*state) {
+		// 需执行集：正常流程为完整用例集；快照黑盒门经用户授权放行后只覆盖已批准用例，
+		// 未批准的（黑盒）用例不计入需执行集、验证状态视为 PASS（授权来源由快照放行记录）。
+		required := qaExecutionRequiredCases(*state)
+		// 空需执行集放行：除合并 QA 零用例既有例外外，qa-review 动作已记录 PASS（空集
+		// review 判定覆盖充分，需求 4，与快照门 blackboxReviewPassed 的空集语义一致）时
+		// 同样放行——零用例场景下 review 判定覆盖充分后 QA 执行对空集直接 PASS，避免 run
+		// 卡死在 QA 执行、无法 seal。review 仍 PENDING 或 FAIL 时空集不被放行。
+		if len(required) == 0 && !isMergeVerification(*state) && !snapshotBlackboxReleased(*state) && state.Actions["qa-review"].Status != "PASS" {
 			return fmt.Errorf("approved QA cases are missing")
 		}
-		if len(results) != len(state.QACases) {
-			return fmt.Errorf("QA execution must cover all %d approved cases", len(state.QACases))
+		if len(results) != len(required) {
+			return fmt.Errorf("QA execution must cover all %d approved cases", len(required))
 		}
 		byID := map[string]QAResultInput{}
 		for _, item := range results {
@@ -1235,8 +1566,8 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		}
 		status := "PASS"
 		findings := []Finding{}
-		recorded := make([]QAResultRecord, 0, len(state.QACases))
-		for _, testCase := range state.QACases {
+		recorded := make([]QAResultRecord, 0, len(required))
+		for _, testCase := range required {
 			item, ok := byID[testCase.ID]
 			if !ok {
 				return fmt.Errorf("QA result is missing for %s", testCase.ID)
@@ -1245,7 +1576,19 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 				status = "FAIL"
 				findings = append(findings, Finding{Message: testCase.ID + ": " + strings.TrimSpace(item.Observation)})
 			}
-			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Kind: testCase.Kind, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
+			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
+		}
+		// 快照放行后未获批准的黑盒用例：经用户授权跳过、验证状态视为 PASS（记录授权来源）。
+		if snapshotBlackboxReleased(*state) {
+			for _, testCase := range state.QACases {
+				if testCase.ReviewStatus == "PASS" {
+					continue
+				}
+				if testCase.Mode != "blackbox" {
+					continue
+				}
+				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "skipped", Observation: "authorized skip (user snapshot release)", OracleResult: "authorized PASS"})
+			}
 		}
 		message := ""
 		if isMergeVerification(*state) && len(state.QACases) == 0 {
@@ -1258,7 +1601,12 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 	})
 }
 
-func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, error) {
+// AdvanceSnapshot records the development or repair snapshot. The snapshot gate
+// requires development complete 且 黑盒 qa-review PASS（两边都完成）；黑盒 review 未
+// PASS 时快照被挡。userRequested 是用户显式的手动放行授权（类比 --user-requested），
+// 记录授权来源到 SnapshotOverride，使黑盒门未通过时带风险继续；未获批准的黑盒用例
+// 验证状态视为 PASS、qa-execution 只覆盖已批准用例。
+func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested bool, reason string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
 			return err
@@ -1271,7 +1619,10 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, err
 			return err
 		}
 		developmentStatus := state.Actions["development-worker"].Status
-		if currentSnapshot == state.CurrentSnapshot && developmentStatus != developmentPrepared {
+		// 快照要求开发侧真正完成：产生开发提交（原生标识前进到派发源快照之后），而非仅
+		// PREPARED 状态。dev worker 已派发但未提交时，快照不得直接把基线记为开发快照
+		// （需求 2 验收"任一未完成时 snapshot 被挡"）。
+		if currentSnapshot == state.CurrentSnapshot {
 			return fmt.Errorf("a new current snapshot is required")
 		}
 		if err := verifyNativeSnapshot(root, state.VCS, state.CurrentSnapshot); err != nil {
@@ -1294,6 +1645,19 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string) (RunState, err
 				return err
 			}
 			backfillDispatchCost(root, state, developmentDispatch)
+		}
+		// 快照黑盒门（等两边都完成）：黑盒 qa-review PASS 且 开发完成才可快照。黑盒
+		// qa-review 未 PASS 且此前没有用户放行时，只有用户显式授权可手动放行并记录授权
+		// 来源；已放行（SnapshotOverride 非空）后未批准的黑盒用例验证状态视为 PASS，
+		// 后续修复快照不再重复被挡。黑盒 review 真正 PASS 时清除放行授权。
+		blackboxSelected := isSelected(*state, blackboxQAID) || isSelected(*state, legacyQAID)
+		if blackboxSelected && !blackboxReviewPassed(*state) && state.SnapshotOverride == nil {
+			if !userRequested {
+				return fmt.Errorf("blackbox QA Review must pass before a development snapshot; development and blackbox QA review both need to complete")
+			}
+			state.SnapshotOverride = &SnapshotOverride{Origin: "USER", Snapshot: currentSnapshot, Message: strings.TrimSpace(reason)}
+		} else if blackboxSelected && blackboxReviewPassed(*state) {
+			state.SnapshotOverride = nil
 		}
 		oldSnapshot := state.CurrentSnapshot
 		isRepair := developmentStatus == developmentRepairPrepared ||
@@ -1590,7 +1954,14 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState
 
 func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runID, "ABORTED") }
 
-func Seal(root, packageRoot, runID string, skips []string, userRequested bool) (RunSummary, error) {
+// Seal aggregates the run. For git runs whose base→current range holds more than
+// one commit, the range is squashed into a single commit (git reset --soft base +
+// a fresh commit with --squash-message) as the last VCS operation, preserving the
+// final tree. The summary's current snapshot records the squashed commit, the base
+// stays unchanged, gate-review compared records keep history, and the squashed
+// message is authored by the main agent (host-provided). Single-commit or empty
+// ranges are not rewritten; SVN/P4 are never squashed.
+func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string) (RunSummary, error) {
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -1629,6 +2000,33 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool) (
 	}
 	if after != state.CurrentSnapshot {
 		return RunSummary{}, fmt.Errorf("native VCS identity does not match the current snapshot after aggregation")
+	}
+	// 压缩提交（仅 Git、自动）：校验通过后、落 summary 前执行，作为 seal 的最后一步
+	// VCS 操作。压缩前确认工作树干净；单条提交或空范围不操作。
+	if state.VCS == "git" {
+		count, err := gitCommitCountInRange(root, state.BaseSnapshot, state.CurrentSnapshot)
+		if err != nil {
+			return RunSummary{}, err
+		}
+		if count > 1 {
+			if err := verifySnapshotReady(root, state.VCS); err != nil {
+				return RunSummary{}, fmt.Errorf("seal git squash requires a clean working tree: %w", err)
+			}
+			message := strings.TrimSpace(squashMessage)
+			if message == "" {
+				return RunSummary{}, fmt.Errorf("seal git squash requires --squash-message for the combined commit")
+			}
+			if err := squashGitRangeToBase(root, state.BaseSnapshot, message); err != nil {
+				return RunSummary{}, err
+			}
+			newSnapshot, err := resolveNativeSnapshot(root, state.VCS)
+			if err != nil {
+				return RunSummary{}, err
+			}
+			// 最终树不变，所有审查结果对最终树仍成立：快照引用重绑到压缩后的提交，
+			// 门审查 compared 记录保持历史（不重写）。
+			rebindCurrentSnapshot(&state, newSnapshot)
+		}
 	}
 	state.Status = "SEALED"
 	if err := SaveRunState(root, state); err != nil {
@@ -1812,10 +2210,34 @@ func requirePreparedDispatch(state RunState, dispatchID, targetKind, target stri
 	if dispatch.Status != wantedStatus {
 		return PreparedDispatch{}, fmt.Errorf("dispatch %q is %s and cannot record a result", dispatchID, dispatch.Status)
 	}
-	if dispatch.RequirementRevision != state.RequirementRevision || dispatch.CatalogRevision != state.CatalogRevision || dispatch.SourceSnapshot != state.CurrentSnapshot {
+	// 派发源绑定的陈旧校验按 mode 分叉：黑盒 qa-design/qa-review 绑基线（隔离工作区），
+	// 其余派发绑当前快照（主工作区）。
+	wantedSource := state.CurrentSnapshot
+	if isBlackboxQADispatch(dispatch) {
+		wantedSource = state.BaseSnapshot
+	}
+	if dispatch.RequirementRevision != state.RequirementRevision || dispatch.CatalogRevision != state.CatalogRevision || dispatch.SourceSnapshot != wantedSource {
 		return PreparedDispatch{}, fmt.Errorf("dispatch %q has stale source bindings", dispatchID)
 	}
 	return dispatch, nil
+}
+
+// isBlackboxQADispatch reports whether the dispatch is a blackbox qa-design or
+// qa-review round whose identity and source bind to the QA isolation worktree
+// (== base) instead of the main worktree (== current).
+func isBlackboxQADispatch(dispatch PreparedDispatch) bool {
+	return dispatch.Mode == "blackbox" && (dispatch.Target == "qa-design" || dispatch.Target == "qa-review")
+}
+
+// requireDispatchNativeCurrent resolves the native identity for a dispatch: a
+// blackbox qa-design/qa-review dispatch against the QA isolation worktree
+// (== base), every other dispatch against the main worktree (== current).
+func requireDispatchNativeCurrent(root string, state RunState, dispatch PreparedDispatch) error {
+	if isBlackboxQADispatch(dispatch) {
+		return requireIsolatedCurrent(root, state)
+	}
+	_, err := requireNativeCurrent(root, state)
+	return err
 }
 
 func completeDispatch(state *RunState, dispatchID string) {
@@ -1879,7 +2301,8 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
 		return "", nil, fmt.Errorf("status must be PASS, FAIL, or RUNTIME_ERROR")
 	}
-	if status == "PASS" && len(findings) != 0 && !gateResult {
+	reviewAction := actionID == "product-review" || actionID == "start-readiness"
+	if status == "PASS" && len(findings) != 0 && !gateResult && !reviewAction {
 		return "", nil, fmt.Errorf("PASS cannot include findings")
 	}
 	if status == "FAIL" && len(findings) == 0 {
@@ -1907,28 +2330,30 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 			locations = append(locations, strings.TrimSpace(location))
 		}
 		severity := strings.ToUpper(strings.TrimSpace(input.Severity))
-		if gateResult {
+		if gateResult || reviewAction {
+			// 门与 product-review / start-readiness 的发现项必须分级 P0/P1/P2（非空）；
+			// 仅 P2 的审查记录 PASS 且 P2 建议可见，存在 P0/P1 时记录 FAIL（驳回的 P0/P1
+			// 由 enforceReviewRule 放行，确认的 P0/P1 置位需重审标记）。
 			if severity != "P0" && severity != "P1" && severity != "P2" {
-				return "", nil, fmt.Errorf("gate finding severity must be P0, P1, or P2")
+				if gateResult {
+					return "", nil, fmt.Errorf("gate finding severity must be P0, P1, or P2")
+				}
+				return "", nil, fmt.Errorf("review finding severity must be P0, P1, or P2")
 			}
 			if severity == "P0" || severity == "P1" {
 				hasBlocking = true
-			}
-		} else if actionID == "product-review" || actionID == "start-readiness" {
-			// 产品审与 start-readiness 的发现项必须分级 P0/P1/P2（非空）；仅 P2 时用户
-			// 处置后修订不再复审，存在 P0/P1 时修订后重新审（主代理按此处置）。
-			if severity != "P0" && severity != "P1" && severity != "P2" {
-				return "", nil, fmt.Errorf("review finding severity must be P0, P1, or P2")
 			}
 		} else if severity != "" {
 			return "", nil, fmt.Errorf("severity is accepted only for discovered-gate findings or product/start-readiness review findings")
 		}
 		converted = append(converted, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
 	}
+	// 门的 PASS 只允许 P2；product-review/start-readiness 的 PASS 允许携带发现项（仅 P2
+	// 或已驳回的 P0/P1，由 enforceReviewRule 逐项判定），FAIL 两者都必须含 P0/P1。
 	if gateResult && status == "PASS" && hasBlocking {
 		return "", nil, fmt.Errorf("PASS can include only P2 findings")
 	}
-	if gateResult && status == "FAIL" && !hasBlocking {
+	if (gateResult || reviewAction) && status == "FAIL" && !hasBlocking {
 		return "", nil, fmt.Errorf("FAIL requires at least one P0 or P1 finding")
 	}
 	return status, converted, nil
@@ -2009,7 +2434,14 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.Carry = map[string]CarryResult{}
 	state.PreRepairSnapshot = ""
 	// 语义已变的需求修订改变了原决定的前提，已拍板发现项清单随之清空，允许重新提出。
-	state.SettledFindings = map[string][]string{}
+	state.SettledFindings = map[string][]SettledFinding{}
+	// 需求作废重置：一并清空黑盒隔离工作区、快照放行授权、连续 FAIL 计数与"需重审"标记。
+	state.QAWorktree = ""
+	state.SnapshotOverride = nil
+	state.BlackboxReviewFails = 0
+	state.NeedsReReview = map[string]string{}
+	state.ReReviewDispatch = map[string]string{}
+	state.ReviewOverrides = map[string]string{}
 	state.Gates = map[string]GateResult{}
 	for _, id := range gateIDs {
 		state.Gates[id] = GateResult{Status: "PENDING"}
@@ -2152,8 +2584,8 @@ func requireTransition(state RunState, operation, target string) error {
 	case "qa-design":
 		if state.RouteMode == "" {
 			// 快速路径：黑盒 QA 设计在拆分决定与路线确认前与 start-readiness 并行开始，
-			// 此时路线尚未确认、QA 也未被选中；设计是黑盒（LIVE）且是固有取舍，最终路线
-			// 不含黑盒 QA 时并行设计即废弃。
+			// 此时路线尚未确认、QA 也未被选中；设计是黑盒且是固有取舍，最终路线不含黑盒
+			// QA 时并行设计即废弃。
 			if !actionPassedOrAbsent(state, "product-review") {
 				return fmt.Errorf("Product Review must pass before QA Design")
 			}
@@ -2165,9 +2597,8 @@ func requireTransition(state RunState, operation, target string) error {
 		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
-		if isSelected(state, blackboxQAID) && developmentStarted(state) && !blackboxDesignRecorded(state) {
-			return fmt.Errorf("QA Design must be recorded before development")
-		}
+		// 黑盒设计不再被"开发已开始"阻止：黑盒 qa-design/qa-review 在 QA 隔离工作区与
+		// 开发并发推进。
 		if !actionPassedOrAbsent(state, "product-review") {
 			return fmt.Errorf("Product Review must pass before QA Design")
 		}
@@ -2178,10 +2609,9 @@ func requireTransition(state RunState, operation, target string) error {
 		if !isSelectedQA(state) {
 			return fmt.Errorf("QA is not selected")
 		}
-		if preDevelopmentQASelected(state) && developmentStarted(state) && !blackboxReviewRecorded(state) {
-			return fmt.Errorf("QA Review must be recorded before development")
-		}
-		if state.Actions["qa-design"].Status != "PASS" || (len(state.QACases) == 0 && !isMergeVerification(state)) {
+		// 黑盒 review 不再被"开发已开始"阻止（与开发并发）；零用例可流到 review 的集合
+		// 覆盖判定（被选中模式零用例是覆盖缺失，判 P1 阻塞）。
+		if state.Actions["qa-design"].Status != "PASS" {
 			return fmt.Errorf("a complete QA case set is required before QA Review")
 		}
 		if status := state.Actions["qa-review"].Status; status == "PASS" || status == "FAIL" {
@@ -2201,9 +2631,8 @@ func requireTransition(state RunState, operation, target string) error {
 		if !slicingRecorded(state) {
 			return fmt.Errorf("the slicing decision must be recorded before development")
 		}
-		if preDevelopmentQASelected(state) && state.Actions["qa-review"].Status != "PASS" {
-			return fmt.Errorf("QA Review must pass before development starts")
-		}
+		// 开发开始不再要求黑盒 qa-review PASS：黑盒 QA 设计/review/返修在 QA 隔离工作区
+		// 与开发并发推进，快照门（需求 2）在两边都完成时才放行。
 		if developmentStatus == developmentPrepared || developmentStatus == developmentRepairPrepared {
 			return nil
 		}
@@ -2243,9 +2672,8 @@ func requireTransition(state RunState, operation, target string) error {
 		if !actionPassedOrAbsent(state, "start-readiness") {
 			return fmt.Errorf("Start Readiness must pass before a development snapshot")
 		}
-		if preDevelopmentQASelected(state) && state.Actions["qa-review"].Status != "PASS" {
-			return fmt.Errorf("QA Review must pass before a development snapshot")
-		}
+		// 快照黑盒门（开发完成 且 黑盒 qa-review PASS）在 AdvanceSnapshot 内强制，
+		// 用户显式授权可手动放行；此处不再重复校验。
 		if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
 			return fmt.Errorf("the current repair still requires verification")
 		}
@@ -2273,7 +2701,9 @@ func requireTransition(state RunState, operation, target string) error {
 		if state.Actions["qa-design"].Status != "PASS" {
 			return fmt.Errorf("QA Design must pass before QA Execution")
 		}
-		if state.Actions["qa-review"].Status != "PASS" {
+		// 黑盒 review 经用户授权放行后，qa-execution 只覆盖已批准用例；未放行时仍要求
+		// qa-review PASS。
+		if state.Actions["qa-review"].Status != "PASS" && !snapshotBlackboxReleased(state) {
 			return fmt.Errorf("QA Review must pass before QA Execution")
 		}
 	case "gate":

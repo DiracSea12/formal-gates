@@ -29,7 +29,7 @@ type RunState struct {
 	RetainedOverall      bool                         `json:"retainedOverall,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
-	SettledFindings      map[string][]string          `json:"settledFindings,omitempty"`
+	SettledFindings      map[string][]SettledFinding  `json:"settledFindings,omitempty"`
 	RouteMode            string                       `json:"routeMode,omitempty"`
 	SelectedGates        []string                     `json:"selectedGates"`
 	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
@@ -42,6 +42,27 @@ type RunState struct {
 	Carry                map[string]CarryResult       `json:"carry"`
 	Dispatches           map[string]PreparedDispatch  `json:"dispatches"`
 	Cost                 *cost.RunCost                `json:"cost,omitempty"`
+	// QAWorktree 是黑盒 QA 的隔离工作区路径（Git 为从基线分支的 linked worktree，
+	// SVN/P4 为签出到基线版本的工作副本/客户端工作区）。它从基线快照创建、恒等于
+	// 基线，始终不含本次开发代码；黑盒 qa-design/qa-review 的原生标识校验与派发源
+	// 绑定都改对这里解析。黑盒 qa-review 记录 PASS 时清空，需求作废重置时一并清空。
+	QAWorktree string `json:"qaWorktree,omitempty"`
+	// BlackboxReviewFails 是黑盒 qa-review 的连续 FAIL 计数：出现 PASS 即清零重算，
+	// RUNTIME_ERROR 不计入也不打断连续。用于展示"长期不过"并交由用户决策处置。
+	BlackboxReviewFails int `json:"blackboxReviewFails,omitempty"`
+	// SnapshotOverride 记录快照黑盒门的手动放行授权：黑盒 qa-review 未 PASS 时经
+	// workflow snapshot --user-requested 显式授权带风险继续，记录授权来源。
+	SnapshotOverride *SnapshotOverride `json:"snapshotOverride,omitempty"`
+	// NeedsReReview 记录"需重审"标记：确认的 P0/P1 发现项（product-review /
+	// start-readiness）未重审时置位；record-action PASS 在该标记置位且未重审时被拒。
+	// 值是被确认的发现项消息。需求语义变更（invalidateRequirementResults）时一并清除。
+	NeedsReReview map[string]string `json:"needsReReview,omitempty"`
+	// ReReviewDispatch 记录每个待重审动作当前已派发的重审轮派发 id：只有该重审轮
+	// 返回 PASS 才算"重审完成"并清除 NeedsReReview；其余派发在标记置位时记 PASS 被拒。
+	ReReviewDispatch map[string]string `json:"reReviewDispatch,omitempty"`
+	// ReviewOverrides 记录用户对 product-review / start-readiness 复审规则的显式破例
+	// 来源（动作 → 用户理由），与 --user-requested 对应；需求语义变更时一并清除。
+	ReviewOverrides map[string]string `json:"reviewOverrides,omitempty"`
 }
 
 type RequirementArtifact struct {
@@ -77,6 +98,10 @@ type PreparedDispatch struct {
 	ReviewerRequired    bool   `json:"reviewerRequired"`
 	ReviewerIdentity    string `json:"reviewerIdentity,omitempty"`
 	Status              string `json:"status"`
+	// Mode 记录 qa-design/qa-review 派发的模式：blackbox 或 whitebox。黑盒派发对
+	// QA 隔离工作区解析原生标识与派发源绑定（绑基线）；白盒派发对主工作区解析
+	// （绑当前快照）。其他派发为空。
+	Mode string `json:"mode,omitempty"`
 }
 
 type ActionResult struct {
@@ -96,7 +121,7 @@ type QAExecutionResult struct {
 
 type QAResultRecord struct {
 	CaseID       string `json:"caseId"`
-	Kind         string `json:"kind"`
+	Mode         string `json:"mode"`
 	Outcome      string `json:"outcome"`
 	Procedure    string `json:"procedure"`
 	Observation  string `json:"observation"`
@@ -113,6 +138,24 @@ type SkipAuthorization struct {
 	Origin   string `json:"origin"`
 	Status   string `json:"status"`
 	Snapshot string `json:"snapshot,omitempty"`
+}
+
+// SnapshotOverride 记录快照黑盒门的手动放行授权。黑盒 qa-review 未 PASS 时用户经
+// workflow snapshot --user-requested 显式授权带风险继续；授权延续到后续修复快照（放行
+// 后未批准黑盒用例验证状态视为 PASS），直到黑盒 review 真正 PASS 或需求作废重置才清除。
+// Snapshot 字段记录授权发放时点的快照（溯源），不用于绑定失效。Origin 固定为 USER。
+type SnapshotOverride struct {
+	Origin   string `json:"origin"`
+	Snapshot string `json:"snapshot"`
+	Message  string `json:"message,omitempty"`
+}
+
+// SettledFinding 记录用户对 pre-development 审查发现项的一次已拍板处置。确认问题
+// （认为是真问题、需修订）或驳回问题（认为不是问题、作废）由 Disposition 区分；
+// 确认的 P0/P1 驱动"需重审"标记，驳回的发现项不阻塞。
+type SettledFinding struct {
+	Message     string `json:"message"`
+	Disposition string `json:"disposition"`
 }
 
 type GateResult struct {
@@ -135,7 +178,7 @@ type CarryResult struct {
 
 type QACase struct {
 	ID           string `json:"id"`
-	Kind         string `json:"kind"`
+	Mode         string `json:"mode"`
 	Description  string `json:"description"`
 	Procedure    string `json:"procedure"`
 	Oracle       string `json:"oracle"`
@@ -169,7 +212,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, SettledFindings: map[string][]SettledFinding{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -214,6 +257,18 @@ func SaveRunState(root string, state RunState) error {
 	}
 	if state.QACases == nil {
 		state.QACases = []QACase{}
+	}
+	if state.NeedsReReview == nil {
+		state.NeedsReReview = map[string]string{}
+	}
+	if state.ReReviewDispatch == nil {
+		state.ReReviewDispatch = map[string]string{}
+	}
+	if state.ReviewOverrides == nil {
+		state.ReviewOverrides = map[string]string{}
+	}
+	if state.SettledFindings == nil {
+		state.SettledFindings = map[string][]SettledFinding{}
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

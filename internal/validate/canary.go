@@ -20,7 +20,32 @@ type PortableCanaryReport struct {
 	Checks        []CanaryCheck `json:"checks"`
 }
 
+// hostProviderEnvKeys are the environment variables the lifecycle host
+// provider reads to detect the driving host. The portable canary is a
+// host-agnostic check: it must observe the lenient default provider even when
+// invoked from inside a real host shell (e.g. `canary portable` from a Claude
+// Code session), so the host environment is neutralized for its duration.
+var hostProviderEnvKeys = []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME"}
+
+// withoutHostEnv clears the host lifecycle environment and returns a restore
+// function. Empty is treated as unset by providerFromEnvironment, so clearing
+// and restoring with empty values is behavior-preserving.
+func withoutHostEnv() func() {
+	prior := map[string]string{}
+	for _, key := range hostProviderEnvKeys {
+		prior[key] = os.Getenv(key)
+		os.Setenv(key, "")
+	}
+	return func() {
+		for key, value := range prior {
+			os.Setenv(key, value)
+		}
+	}
+}
+
 func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result) {
+	restore := withoutHostEnv()
+	defer restore()
 	root := cleanRoot(options.Root)
 	report := PortableCanaryReport{SchemaVersion: 1, Root: slash(absPath(root))}
 	var result Result
@@ -81,14 +106,14 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "requirements-clarification"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "requirements-clarification", "", false, ""); err != nil {
 		return err
 	}
 	state, err = LoadRunState(root, state.RunID)
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil)
+	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "")
 	if err != nil {
 		return err
 	}
@@ -96,7 +121,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "product-review"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "product-review", "", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -105,11 +130,11 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "start-readiness"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "start-readiness", "", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -118,7 +143,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
+	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		return err
 	}
@@ -132,7 +157,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design", "", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -141,11 +166,11 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Kind: "STATIC", Description: "direct behavior", Procedure: "run the direct automated check", Oracle: "the check passes"}, {Kind: "LIVE", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the direct automated check", Oracle: "the check passes"}, {Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -158,7 +183,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker", "", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -173,11 +198,11 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err := commitCanaryGit(root, "delivery"); err != nil {
 		return err
 	}
-	state, err = AdvanceSnapshot(root, packageRoot, state.RunID, dispatchID)
+	state, err = AdvanceSnapshot(root, packageRoot, state.RunID, dispatchID, false, "")
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution"); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution", "", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -210,7 +235,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 			return err
 		}
 	}
-	_, err = Seal(root, packageRoot, state.RunID, nil, false)
+	_, err = Seal(root, packageRoot, state.RunID, nil, false, "")
 	return err
 }
 

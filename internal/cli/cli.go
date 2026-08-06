@@ -204,7 +204,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		return printJSON(streams.Stdout, map[string]any{"classificationRequired": report.ClassificationRequired, "catalogDelta": report.CatalogDelta, "nativeDrifted": report.NativeDrifted, "state": state})
+		return printJSON(streams.Stdout, map[string]any{"classificationRequired": report.ClassificationRequired, "catalogDelta": report.CatalogDelta, "nativeDrifted": report.NativeDrifted, "isolationDrifted": report.IsolationDrifted, "state": state})
 	case "abort":
 		fs := newFlagSet("workflow abort", streams)
 		root := fs.String("root", ".", "repository root")
@@ -268,12 +268,14 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		action := fs.String("action", "", "product-review or start-readiness")
-		findings := stringListFlag{}
-		fs.Var(&findings, "finding", "settled finding message; repeat as needed")
+		confirm := stringListFlag{}
+		fs.Var(&confirm, "confirm", "finding the user confirms as a real problem (需修订); repeat as needed")
+		dismiss := stringListFlag{}
+		fs.Var(&dismiss, "dismiss", "finding the user dismisses as not a problem (作废); repeat as needed")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.RecordSettledFindings(*root, *pkg, *runID, *action, findings)
+		state, err := validate.RecordSettledFindings(*root, *pkg, *runID, *action, confirm, dismiss)
 		return printValue(streams.Stdout, state, err)
 	case "route":
 		fs := newFlagSet("workflow route", streams)
@@ -298,6 +300,16 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		}
 		state, err := validate.AddRouteGates(*root, *pkg, *runID, gates)
 		return printValue(streams.Stdout, state, err)
+	case "qa-worktree":
+		fs := newFlagSet("workflow qa-worktree", streams)
+		root, _ := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		worktree := fs.String("worktree", "", "QA isolation worktree path (created from the base snapshot by the host)")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		state, err := validate.RegisterQAWorktree(*root, *runID, *worktree)
+		return printValue(streams.Stdout, state, err)
 	case "prepare-gate":
 		fs := newFlagSet("workflow prepare-gate", streams)
 		root, pkg := rootFlags(fs)
@@ -317,10 +329,13 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		action := fs.String("action", "", "installed action prompt id")
+		mode := fs.String("mode", "", "blackbox or whitebox for qa-design/qa-review")
+		userRequested := fs.Bool("user-requested", false, "user explicitly requests an override (e.g. re-review an already-passed round)")
+		userReason := fs.String("user-reason", "", "user reason for the override")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		prompt, err := validate.PrepareAction(*root, *pkg, *runID, *action)
+		prompt, err := validate.PrepareAction(*root, *pkg, *runID, *action, *mode, *userRequested, *userReason)
 		if err != nil {
 			return 1, err
 		}
@@ -352,10 +367,12 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		dispatch := fs.String("dispatch", "", "prepared Development or Repair dispatch id")
+		userRequested := fs.Bool("user-requested", false, "user explicitly releases the blackbox QA gate when it has not passed (records the authorization source)")
+		reason := fs.String("reason", "", "user reason for the manual blackbox gate release")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *dispatch)
+		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *dispatch, *userRequested, *reason)
 		return printValue(streams.Stdout, state, err)
 	case "cleanup":
 		fs := newFlagSet("workflow cleanup", streams)
@@ -389,10 +406,11 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		skips := stringListFlag{}
 		fs.Var(&skips, "skip", "selected non-passing gate explicitly authorized to skip")
 		userRequested := fs.Bool("user-requested", false, "user explicitly requests the FAIL skips before the review-wave limit is exhausted")
+		squashMessage := fs.String("squash-message", "", "combined commit message when seal squashes the git base-to-current range")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		summary, err := validate.Seal(*root, *pkg, *runID, skips, *userRequested)
+		summary, err := validate.Seal(*root, *pkg, *runID, skips, *userRequested, *squashMessage)
 		return printValue(streams.Stdout, summary, err)
 	default:
 		return 1, fmt.Errorf("unknown workflow subcommand: %s", sub)
@@ -407,11 +425,13 @@ func runRecordAction(args []string, streams IO) (int, error) {
 	status := fs.String("status", "", "PASS, FAIL, or RUNTIME_ERROR")
 	message := fs.String("message", "", "runtime or result message")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
+	userRequested := fs.Bool("user-requested", false, "user explicitly requests an override of the review rule (records the authorization source)")
+	userReason := fs.String("user-reason", "", "user reason for the override")
 	findings := newFindingFlags(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings)
+	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings, *userRequested, *userReason)
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -440,7 +460,7 @@ func runQADesign(args []string, streams IO) (int, error) {
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	cases := []validate.QACaseInput{}
 	fs.Var(&caseStart{cases: &cases}, "case", "start a QA case with its behavior description")
-	fs.Var(&caseField{cases: &cases, field: "kind"}, "kind", "STATIC or LIVE for the current QA case")
+	fs.Var(&caseField{cases: &cases, field: "mode"}, "mode", "blackbox or whitebox for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "procedure"}, "procedure", "procedure for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "oracle"}, "oracle", "oracle for the current QA case")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -713,8 +733,8 @@ func (f *caseField) Set(v string) error {
 		return fmt.Errorf("duplicate --%s for current QA case", f.field)
 	}
 	p := &(*f.cases)[len(*f.cases)-1]
-	if f.field == "kind" {
-		p.Kind = v
+	if f.field == "mode" {
+		p.Mode = v
 	} else if f.field == "procedure" {
 		p.Procedure = v
 	} else {
@@ -883,5 +903,5 @@ func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, 
 	return 0, nil, false
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }

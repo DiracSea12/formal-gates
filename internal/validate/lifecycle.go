@@ -11,6 +11,7 @@ type workflowLifecycleVerifier interface {
 	Bind(root, runID, dispatchID, identity string) error
 	Verify(root, runID, dispatchID string) (lifecycle.Verification, error)
 	TranscriptPath(root, runID, dispatchID string) (string, string, error)
+	ResolveClaimIdentity(root, runID, preferred string) (string, error)
 }
 
 type nativeWorkflowLifecycle struct{}
@@ -29,6 +30,10 @@ func (nativeWorkflowLifecycle) Verify(root, runID, dispatchID string) (lifecycle
 
 func (nativeWorkflowLifecycle) TranscriptPath(root, runID, dispatchID string) (string, string, error) {
 	return lifecycle.DispatchTranscriptPath(root, runID, dispatchID)
+}
+
+func (nativeWorkflowLifecycle) ResolveClaimIdentity(root, runID, preferred string) (string, error) {
+	return lifecycle.ResolveClaimIdentity(root, runID, preferred)
 }
 
 var workflowLifecycle workflowLifecycleVerifier = nativeWorkflowLifecycle{}

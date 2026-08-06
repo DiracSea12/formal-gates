@@ -71,10 +71,11 @@ formal-gates workflow slicing --root <repo> --package-root <package> \
 # 要拆时需用户确认拆分方案。分片场景下整体级产品审/技术审足够，切片继承整体审查结果、
 # 不单独重跑（切片实例在记录拆分决定时继承整体级 product-review/start-readiness）。
 # 用户已拍板（settled）的发现项清单：注入下一次 product-review / start-readiness
-# 派发，审查者不再重提（需求修订改变前提时例外）。
+# 派发，审查者不再重提（需求修订改变前提时例外）。对每个发现项，用户逐项处置为确认
+# 问题（confirm，认为是真问题、需修订）或驳回问题（dismiss，认为不是问题、作废）。
 formal-gates workflow settle-findings --root <repo> --package-root <package> \
   --run-id <id> --action <product-review|start-readiness> \
-  --finding '<settled-message>' ...
+  [--confirm '<settled-message>' ...] [--dismiss '<settled-message>' ...]
 
 # 路线在拆分决定之后确认（时序见 SKILL.md 正式流程开头）；full = 黑盒 QA + 白盒 QA +
 # 全部已发现门；custom 可任意组合黑盒 QA、白盒 QA 与各门，至少选一项。合并门/合并 QA
@@ -106,8 +107,20 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 Part 2。Part 2 双速调度：高置信要拆 → 呈现拆分建议、用户确认后设置分片，然后确认
 路线（逐切片）；非高置信要拆（高置信不拆或不确定）→ 快速路径，黑盒 QA 设计可与
 `start-readiness` 并行开始，"建议不拆（原因）"必填留痕，按单一 run 进行。QA 模式拆
-为黑盒（LIVE 行为执行）与白盒（STATIC 结构测试），各自可选、均由独立代理设计并经
-review 批准。这个循环不消耗开发后的审查轮次。
+为黑盒（真实 QA）与白盒（结构测试），各自可选、均由独立代理设计并经 review 批准。
+这个循环不消耗开发后的审查轮次。
+
+黑盒 QA 与开发**并行**：路线确认后开发立即开始、不等待黑盒 QA review；黑盒
+qa-design/qa-review/返修在独立的 **QA 隔离工作区**中进行（从基线快照创建、恒等于基
+线、始终不含本次开发代码），黑盒设计/review 派发前先用 `workflow qa-worktree` 登记
+（登记时校验其原生标识 == 基线、且注入的当前需求文档/验收产物 revision 与 run 登记
+一致）。快照要求**开发完成 且 黑盒 qa-review PASS 两边都完成**；黑盒 review PASS 后
+隔离工作区自动清空、待下一设计轮重建。白盒 QA 无此限制（开发后读实现，在主工作区）。
+隔离映射按各 VCS 原生机制由 host 创建：Git 为从基线分支的 linked worktree、SVN 为
+签出到基线版本的工作副本（身份校验取 BASE 版本级，注入产生的 svnversion M 后缀不影
+响）、P4 为同步到基线 changelist 的客户端工作区。`workflow resume` 会重校验隔离工作
+区 == 基线（仅真实漂移才需用户确认/重建）；`workflow abort` 后由 host 移除隔离工作
+区。
 
 ```bash
 # Part 1 产品审：承接需求细节澄清，审已实例化的需求文档，只评产品/策划层面。
@@ -121,42 +134,64 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
   [--finding '<message>' --severity <P0|P1|P2>]
-# 产品审的 FAIL 发现项是候选输入，由用户逐项处置：用户接受（认为不是问题或不需要修改）
-# 则该发现项作废、不阻塞、不改需求；用户认同问题（认为需要修订的真问题）则按指示修订
-# 需求/方案。是否重新产品审：没审出问题 → 直接通过；用户认同的问题里不存在 P0/P1 →
-# 修订后不再重新审，直接进入下一步；用户认同的问题里存在 P0/P1 → 修订后重新审。FAIL
-# 不构成终态。处置由主代理执行，reviewer 子代理只报告分级发现项。
+# 产品审的发现项是候选输入，复审规则由 CLI 强制（仅适用于 product-review 与
+# start-readiness，只有用户可破例）：仅含 P2 → 该轮即记录 PASS 且 P2 建议随 PASS 可见、
+# 不阻塞、无需重审，但 P2 建议仍须由用户逐项处置（确认→并入需求/开发范围；驳回→作废）、
+# 经 settle-findings 登记后才进入下一步；含 P0/P1 → 记录 FAIL，用户对每个 P0/P1 逐项
+# 处置为确认（confirm）或驳回（dismiss）。确认的 P0/P1 → CLI 置位"需重审"，修订需求后
+# 必须派发新审查轮返回 PASS，重审前 record-action PASS 被拒；驳回的 P0/P1 → 作废、不
+# 阻塞。主代理无破例权；任何破例（确认的 P0/P1 未重审前直接 PASS、或要求对已 PASS 轮重
+# 审）都须用户显式授权（record-action/prepare-action --user-requested）并由 CLI 记录来源。
 
-# Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2。
+# Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2，复审规则同产品审。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
   [--finding '<message>' --severity <P0|P1|P2>]
-# 技术审的 FAIL 发现项同样是候选输入，由用户逐项处置：用户接受 → 该发现项作废、不
-# 阻塞、不改需求/方案；用户认同问题 → 按指示修订需求/方案。是否重新技术审：没审出问题
-# → 直接通过；用户认同的问题里不存在 P0/P1 → 修订后不再重新审，直接进入下一步；用户
-# 认同的问题里存在 P0/P1 → 修订后重新审。FAIL 不构成终态。处置由主代理执行，reviewer
-# 子代理只报告分级发现项。
+# 技术审的 FAIL 发现项同样是候选输入，由用户逐项处置：确认问题 → 修订需求/方案后强制
+# 重审；驳回问题 → 作废、不阻塞、不改需求/方案。复审规则与产品审相同。
 
 # start-readiness PASS 后记录拆分决定，再确认路线（见上节）。
 
+# 黑盒设计轮开始前（无论重建或复用）先登记 QA 隔离工作区：host 按各 VCS 原生机制从
+# 基线创建（Git linked worktree / SVN 基线版本工作副本 / P4 基线 changelist 客户端），
+# 并把当前已确认需求文档/验收产物注入其中。登记时 CLI 校验其原生标识 == 基线、且注入
+# 的文档 revision 与 run 登记一致（防 host 遗忘刷新）。黑盒 review PASS 后自动清空、
+# 下一设计轮重建。
+formal-gates workflow qa-worktree --root <repo> --package-root <package> \
+  --run-id <id> --worktree <path>
+
+# qa-design/qa-review 派发按 mode 限定（blackbox|whitebox）：黑盒派发对 QA 隔离工作区
+# 解析原生标识与派发源绑定（绑基线）、提示词的工作区字段指向隔离工作区；白盒派发对主
+# 工作区（绑当前快照）。黑盒设计以注入的当前需求文档为准（不以基线产品文档为准，后者
+# 仍含旧时序与旧表述）；"实际使用产品"是执行阶段描述。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action qa-design
+  --run-id <id> --action qa-design --mode <blackbox|whitebox>
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
-  --dispatch <dispatch-id> --case '<description>' --kind <STATIC|LIVE> \
+  --dispatch <dispatch-id> --case '<description>' --mode <blackbox|whitebox> \
   --procedure '<public procedure>' --oracle '<expected result>'
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
-  --run-id <id> --action qa-review
+  --run-id <id> --action qa-review --mode <blackbox|whitebox>
 formal-gates workflow qa-review --root <repo> --package-root <package> \
   --run-id <id> --dispatch <dispatch-id> \
   --case CASE-001 --outcome <PASS|FAIL> [--reason '<required for FAIL>'] \
-  [--finding '<set-level finding>' --location '<path:line>']
+  [--finding '<set-level finding>' --severity <P1|P2> --location '<path:line>']
+# 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式，含被选中
+# 模式零用例）判 P1、阻塞、必须补用例；P2 仅为建议、不阻塞、不需处置。不设机械化质量
+# 下限，用例集充分性由 qa-review 的 set-level 覆盖判定承担。
 ```
 
-双速调度细节（SKILL 第 4 步的执行机制）：黑盒 QA 用例（LIVE 行为执行）设计后派发独立
-`qa-review` 批准；白盒 QA（STATIC 结构测试）开发后由独立代理读实现设计并执行。
+双速调度细节（SKILL 第 4 步的执行机制）：黑盒 QA 用例在 QA 隔离工作区按当前需求设计
+（路线未确认的快速路径沿用、与 `start-readiness` 并行），设计后派发独立 `qa-review`
+批准；白盒 QA（结构测试）开发后由独立代理读实现设计并执行。黑盒 review 连续 3 次 FAIL
+（出现 PASS 即清零；RUNTIME_ERROR 不计入也不打断）视为"长期不过"，主代理向用户展示
+当前阻塞项并由用户决策处置；选项包括 abort 重建、走需求修订，或经 `workflow snapshot
+--user-requested --reason '<reason>'` 显式授权手动放行（非自动）。放行不限于 3-FAIL
+时点——黑盒 review 长时间未返回或反复 RUNTIME_ERROR 致快照门被挡时也可显式放行。放行
+后未获批准的黑盒用例经用户授权跳过、验证状态视为 PASS（记录授权来源），qa-execution
+只覆盖已批准用例。
 
 ## 开发与快照
 
@@ -164,9 +199,12 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action development-worker
 
-# 记录开发后或修复后的不可变标识。
+# 记录开发后或修复后的不可变标识。快照要求开发完成 且 黑盒 qa-review PASS 两边都完成；
+# 黑盒 review 未 PASS 时快照被挡，只有用户显式授权可手动放行（--user-requested +
+# --reason，记录授权来源，非自动）。
 formal-gates workflow snapshot --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <development-or-repair-dispatch-id>
+  --run-id <id> --dispatch <development-or-repair-dispatch-id> \
+  [--user-requested --reason '<manual blackbox-gate release reason>']
 ```
 
 开发派发认领（问题 2a）：开发/修复派发是 reviewer-required，认领要求原生 HEAD 与当前
@@ -227,8 +265,14 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 # 只有当每个被选中的结果都通过、或已获得允许的授权之后，才 Seal。FAIL 跳过需要共享
 # 审查轮次上限耗尽；用户主动要求跳过时加 --user-requested，可提前跳过并记录为
 # SEAL-USER 授权。
+# Git run 在基线→当前含 >1 条提交时，seal 自动把该范围压缩为单条提交（git reset
+# --soft 基线 + 重新提交，保留最终树），作为 seal 的最后一步 VCS 操作；压缩前要求工作
+# 树干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩后的提交消息由主代理按实际修改
+# 内容编写，经 --squash-message 传入。被压缩的中间提交成为 dangling（接受此审计性影
+# 响）；durable 审计证据为最终树与压缩前一致 + 摘要记录。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
-  [--skip <selected-non-passing-gate> ...] [--user-requested]
+  [--skip <selected-non-passing-gate> ...] [--user-requested] \
+  [--squash-message '<combined commit message>']
 ```
 
 修复流程（SKILL 第 8 步的执行机制）：触发条件（QA FAIL 或 P0/P1 → 整轮退回修复、P2

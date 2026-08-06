@@ -71,7 +71,47 @@ func currentProvider() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return providerFromExecutable(path), nil
+	if provider := providerFromExecutable(path); provider != ProviderDefault {
+		return provider, nil
+	}
+	// A directly built source binary outside a maintained host installation
+	// (go run, a local development build, or an uninstalled copy) resolves to
+	// the lenient default provider from its path. When such a binary is driven
+	// by a real host, its environment is the authoritative signal for the host
+	// provider, so the dispatch binding still matches the host's capture hooks
+	// and the subagent transcript cost is recorded instead of being dropped.
+	if provider := providerFromEnvironment(); provider != "" {
+		return provider, nil
+	}
+	return ProviderDefault, nil
+}
+
+// providerFromEnvironment reports the host that drives the process from its
+// environment. It is consulted only when the executable resolves to the
+// lenient default provider. Each host exports a distinctive environment in its
+// agent shell; AI_AGENT is the host's own declared identity and takes
+// precedence, with host-specific variables as a fallback. Empty when no host
+// environment is detectable, keeping tests, portable canaries, and truly
+// uninstalled contexts on the lenient default provider.
+func providerFromEnvironment() string {
+	agent := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT")))
+	switch {
+	case strings.HasPrefix(agent, "claude-code"):
+		return ProviderClaude
+	case strings.HasPrefix(agent, "codex"):
+		return ProviderCodex
+	case strings.HasPrefix(agent, "cursor"):
+		return ProviderCursor
+	}
+	switch {
+	case os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "":
+		return ProviderClaude
+	case os.Getenv("CODEX_HOME") != "", os.Getenv("CODEX_CLI_PATH") != "":
+		return ProviderCodex
+	case os.Getenv("CURSOR_TRACE_ID") != "", os.Getenv("CURSOR_RUNTIME") != "":
+		return ProviderCursor
+	}
+	return ""
 }
 
 func providerFromExecutable(path string) string {

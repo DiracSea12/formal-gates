@@ -27,8 +27,8 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 
 	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
 	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
-		"--case", "direct rules", "--kind", "STATIC", "--procedure", "go test ./...", "--oracle", "tests pass",
-		"--case", "public workflow", "--kind", "LIVE", "--procedure", "run documented CLI", "--oracle", "observable success")
+		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass",
+		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
 	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch, "--reviewer", "qa-session")
 	runCLI(t, "workflow", "qa-review", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch,
@@ -54,10 +54,10 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.CurrentSnapshot != cliGit(t, root, "rev-parse", "HEAD") || state.QAExecution.Cases[0].Kind != "STATIC" || state.Gates["quality"].DispatchID != gateDispatch {
+	if state.CurrentSnapshot != cliGit(t, root, "rev-parse", "HEAD") || state.QAExecution.Cases[0].Mode != "whitebox" || state.Gates["quality"].DispatchID != gateDispatch {
 		t.Fatalf("CLI state lost native bindings: %s", out)
 	}
-	summary := runCLI(t, "workflow", "seal", "--root", root, "--package-root", pkg, "--run-id", state.RunID)
+	summary := runCLI(t, "workflow", "seal", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--squash-message", "squashed delivery")
 	if !strings.Contains(summary, `"status": "SEALED"`) {
 		t.Fatalf("seal output=%s", summary)
 	}
@@ -329,7 +329,7 @@ func runInstalledCLI(t *testing.T, binary, workdir string, environment []string,
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = workdir
 	cmd.Stdin = strings.NewReader(stdin)
-	cmd.Env = append(os.Environ(), environment...)
+	cmd.Env = hostFilteredEnv(environment)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s failed: %v: %s", binary, strings.Join(args, " "), err, output)
@@ -399,6 +399,7 @@ func cliOpenDispatch(state validate.RunState, kind, target string) string {
 
 func runCLI(t *testing.T, args ...string) string {
 	t.Helper()
+	clearHostEnv(t)
 	var stdout, stderr bytes.Buffer
 	if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("%s failed: %s", strings.Join(args, " "), stderr.String())

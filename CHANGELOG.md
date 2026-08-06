@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Run blackbox QA design/review/repair in a dedicated QA isolation worktree in
+  parallel with development: development start no longer waits for the blackbox
+  QA review, blackbox qa-design/qa-review resolve native identity against the
+  isolation worktree (always the base snapshot, never the development code), the
+  snapshot gate requires development complete 且 blackbox qa-review PASS, the
+  snapshot may be manually released only through an explicit user authorization
+  (recorded with its source; unapproved blackbox cases then count as PASS and
+  qa-execution covers only approved cases), blackbox review PASS clears the
+  worktree, and a 3-consecutive-FAIL recovery path surfaces the blocker for the
+  user's decision. `workflow qa-worktree` registers the worktree (native identity
+  == base, injected requirement revision verified); resume re-verifies it.
+- Squash the git base→current commit range into a single commit at seal when it
+  holds more than one commit (`--squash-message`, preserving the final tree, as
+  the last VCS operation, requiring a clean working tree; single-commit or empty
+  ranges are untouched, SVN/P4 are never squashed).
+- Replace the QA case `kind`(STATIC/LIVE) with `mode`(blackbox/whitebox), route
+  qa-design/qa-review dispatches by mode, drop the mechanical per-mode quality
+  floor (case-set sufficiency is a qa-review set-level coverage judgment; a
+  selected mode with zero cases flows to that review as a P1 coverage omission),
+  and write the severity classification (P2 = suggestion only; coverage omission
+  = P1, blocking) into the QA design/review/execution prompts.
+- Enforce the review rules for product-review and start-readiness in the CLI
+  (only the user can break them): a P2-only round records PASS with the P2
+  suggestions visible; confirmed P0/P1 findings set a needs-re-review marker and
+  record-action PASS is rejected until a re-review round returns PASS, while
+  dismissed P0/P1 findings do not block; user overrides are recorded with their
+  source, and all dispositions are registered through
+  `workflow settle-findings --confirm/--dismiss`.
 - Extend native installation with ordered managed intake-rule migration and
   symmetric uninstall cleanup for runtime directories, hooks, and host guidance
   files across Claude Code, Codex, and Cursor project installs.

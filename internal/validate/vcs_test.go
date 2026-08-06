@@ -144,6 +144,31 @@ func TestNativeVCSResolverAncestorOrEqual(t *testing.T) {
 	}
 }
 
+func TestSVNResolveIgnoresBaseStatusSuffix(t *testing.T) {
+	// 隔离工作区注入当前需求文档后工作树被修改，svnversion 返回 "123M"；身份校验取其
+	// BASE 版本级（123），M 后缀不影响。
+	for _, output := range []string{"123M", "123MS", "123"} {
+		runner := &scriptedNativeRunner{outputs: []string{"/repo", output}}
+		resolver, err := resolverForVCS("svn", runner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity, err := resolver.Resolve("/repo")
+		if err != nil || identity != "123" {
+			t.Fatalf("svnversion %q: identity=%q err=%v", output, identity, err)
+		}
+	}
+	// 混合版本范围仍是非均匀工作区，即便带 M 后缀也被拒绝。
+	runner := &scriptedNativeRunner{outputs: []string{"/repo", "2:3M"}}
+	resolver, err := resolverForVCS("svn", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.Resolve("/repo"); err == nil || !strings.Contains(err.Error(), "not at one uniform revision") {
+		t.Fatalf("mixed svn version range with M suffix was accepted: %v", err)
+	}
+}
+
 func TestNativeVCSResolverPropagatesCommandFailure(t *testing.T) {
 	runner := &scriptedNativeRunner{errors: []error{errors.New("not a working copy")}}
 	resolver, err := resolverForVCS("svn", runner)

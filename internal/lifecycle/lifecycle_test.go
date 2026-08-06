@@ -364,6 +364,11 @@ func useProvider(t *testing.T, provider string) {
 		ProviderCursor:  filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
 		ProviderDefault: filepath.Join(t.TempDir(), "source", "formal-gates"),
 	}[provider]
+	// Neutralize host environment detection so the stubbed executable path is
+	// the only provider signal in these tests.
+	for _, key := range []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME"} {
+		t.Setenv(key, "")
+	}
 	executablePath = func() (string, error) { return path, nil }
 	t.Cleanup(func() { executablePath = prior })
 }

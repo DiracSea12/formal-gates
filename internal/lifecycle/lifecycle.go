@@ -166,6 +166,50 @@ func BindDispatch(root, runID, dispatchID, identity string) error {
 	return writeBinding(root, bindingRecord{RunID: runID, DispatchID: dispatchID, Provider: adapter.name, Identity: identity})
 }
 
+// ResolveClaimIdentity returns the effective identity to bind for a dispatch
+// claim. A preferred identity that matches an observed or pending subagent
+// start observation is authoritative. Otherwise, when the host provider has
+// exactly one pending start observation, that observation's identity is
+// derived automatically so a claim with a missing or mismatched reviewer
+// identity still binds the running subagent (common operator mistake
+// compatibility). Zero pending observations fall back to the preferred
+// identity because events may arrive after the claim; multiple pending
+// observations require the exact preferred identity to avoid binding the
+// wrong subagent.
+func ResolveClaimIdentity(root, runID, preferred string) (string, error) {
+	provider, err := currentProvider()
+	if err != nil {
+		return "", err
+	}
+	preferred = strings.TrimSpace(preferred)
+	records, err := pendingEvents(root, runID, provider)
+	if err != nil {
+		return "", err
+	}
+	starts := []string{}
+	for _, record := range records {
+		if record.Event == eventStart && record.Identity != "" {
+			starts = appendUniqueStrings(starts, record.Identity)
+		}
+	}
+	for _, identity := range starts {
+		if identity == preferred {
+			return preferred, nil
+		}
+	}
+	switch len(starts) {
+	case 0:
+		if preferred != "" {
+			return preferred, nil
+		}
+		return "", fmt.Errorf("reviewer identity is required when no subagent start observation exists")
+	case 1:
+		return starts[0], nil
+	default:
+		return "", fmt.Errorf("multiple pending subagent start observations (%d); claim with the exact reviewer identity", len(starts))
+	}
+}
+
 func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 	runID, dispatchID = strings.TrimSpace(runID), strings.TrimSpace(dispatchID)
 	if runID == "" || dispatchID == "" {

@@ -124,6 +124,12 @@ func (r commandVCSResolver) Resolve(root string) (string, error) {
 		return "", fmt.Errorf("cannot resolve %s snapshot: %w", r.name, err)
 	}
 	identity = strings.TrimSpace(identity)
+	// SVN 工作副本的不可变标识取其 BASE 版本级：隔离工作区内注入的当前需求文档是工作树
+	// 状态，svnversion 的 M（已修改）/S（已切换）/P（稀疏）等状态后缀不影响身份校验，
+	// 剥离后缀后取单一 BASE 版本号；混合版本范围（如 2:3）仍按非均匀工作区拒绝。
+	if r.name == "svn" {
+		identity = strings.TrimRight(identity, "MSP")
+	}
 	if !r.validIdentity(identity) {
 		if r.name == "svn" {
 			return "", fmt.Errorf("svn workspace is not at one uniform revision: %q", identity)
@@ -165,6 +171,37 @@ func (r commandVCSResolver) Verify(root, identity string) error {
 	}
 	if !strings.EqualFold(strings.TrimSpace(resolved), identity) {
 		return fmt.Errorf("%s cannot reproduce snapshot %s", r.name, identity)
+	}
+	return nil
+}
+
+// gitCommitCountInRange counts the commits in base..head (exclusive of base,
+// inclusive of head). It is the squash precondition: only ranges with more than
+// one commit are squashed.
+func gitCommitCountInRange(root, base, head string) (int, error) {
+	output, err := (execNativeCommandRunner{}).Run(root, "git", "rev-list", "--count", base+".."+head)
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list returned a non-numeric count %q", output)
+	}
+	return count, nil
+}
+
+// squashGitRangeToBase rewrites base..HEAD into a single commit while preserving
+// the final tree: git reset --soft <base> stages the whole range's diff onto the
+// base, then a fresh commit with the supplied message reproduces the exact final
+// tree. The intermediate commits become dangling (accepted audit impact); the
+// durable audit evidence is the identical final tree plus the run summary. Only
+// the last VCS operation of seal runs this.
+func squashGitRangeToBase(root, base, message string) error {
+	if _, err := (execNativeCommandRunner{}).Run(root, "git", "reset", "--soft", base); err != nil {
+		return fmt.Errorf("cannot squash: %w", err)
+	}
+	if _, err := (execNativeCommandRunner{}).Run(root, "git", "commit", "-m", message); err != nil {
+		return fmt.Errorf("cannot squash: %w", err)
 	}
 	return nil
 }

@@ -32,6 +32,11 @@ git diff --binary <base-commit> <current-commit> --
 在结果契约里报告它实际比较的快照对（`compared`），报告与指定范围不匹配的结果被丢弃。
 只有继承判定使用修复前紧邻快照到当前，并在提示词里与门重跑范围明确区分。
 
+Seal 时若基线→当前含 >1 条提交，git run 会把该范围压缩为单条提交（`git reset --soft
+<base>` + 以 `--squash-message` 重新提交，保留最终树），作为 seal 的最后一步 VCS 操
+作；压缩前工作树必须干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩后的中间提交成
+为 dangling（接受此审计性影响），durable 审计证据为最终树与压缩前一致 + 摘要记录。
+
 ## SVN
 
 显式添加新路径，把开发或修复提交到其工作分支，并更新到单一版本号：
@@ -43,11 +48,12 @@ svn update
 ```
 
 CLI 用 `svn info --show-item wc-root` 确认工作副本根，并用
-`svnversion <working-copy-root>` 要求整个工作副本处于单一数字版本号。混合版本、
-已修改、已切换或不完整的结果都不是不可变的整工作区标识，会中止该状态转移。它用
-`svn info --show-item revision -r <revision>` 验证版本号。记录快照之前，
-`svn status --quiet <working-copy-root>` 必须报告没有受版本控制的改动。审查者比
-较同一分支或仓库 URL：
+`svnversion <working-copy-root>` 取其 **BASE 版本级**作为不可变标识：工作树修改
+（svnversion 的 M 已修改 / S 已切换 / P 稀疏后缀）不改变 BASE 版本、不影响身份校验
+（QA 隔离工作区注入当前需求文档即属此类）；混合版本范围（如 `2:3`）仍是非均匀工作
+区、会中止该状态转移。它用 `svn info --show-item revision -r <revision>` 验证版本
+号。记录快照之前，`svn status --quiet <working-copy-root>` 必须报告没有受版本控制
+的改动。审查者比较同一分支或仓库 URL：
 
 ```bash
 svn diff --notice-ancestry -r <base-revision>:<current-revision> <working-copy-or-url>

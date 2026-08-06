@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +42,13 @@ func (stub *workflowLifecycleStub) TranscriptPath(_, _, _ string) (string, strin
 	return "", "", nil
 }
 
+func (stub *workflowLifecycleStub) ResolveClaimIdentity(_, _, preferred string) (string, error) {
+	if strings.TrimSpace(preferred) != "" {
+		return strings.TrimSpace(preferred), nil
+	}
+	return "", fmt.Errorf("reviewer identity is required when no subagent start observation exists")
+}
+
 func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifacts", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git"})
@@ -61,7 +69,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	}
 	before := stateBytes(t, root, state.RunID)
 	writeTestFile(t, filepath.Join(root, "design.md"), "changed design\n")
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "frozen requirement artifact") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "frozen requirement artifact") {
 		t.Fatalf("changed frozen artifact was accepted: %v", err)
 	}
 	if after := stateBytes(t, root, state.RunID); after != before {
@@ -99,7 +107,7 @@ func TestRequirementSourceCanPromoteAnAdditionalArtifact(t *testing.T) {
 func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := beginQA(t, root, pkg, "dispatch")
-	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-review")
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +121,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -190,14 +198,7 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "incremental"), "full", nil)
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	before := stateBytes(t, root, state.RunID)
-	// full 路线同时选中黑盒与白盒：黑盒要求至少一个 LIVE 行为执行用例。
-	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "only static", Procedure: "go test", Oracle: "passes"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one LIVE behavior execution case") {
-		t.Fatalf("single-kind QA set was accepted: %v", err)
-	}
-	if stateBytes(t, root, state.RunID) != before {
-		t.Fatal("rejected QA set changed state")
-	}
+	// 不设机械化质量下限：单模式用例集可流到 qa-review 的 set-level 覆盖判定。
 	cases := baselineCases()
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, cases, "")
 	if err != nil {
@@ -211,7 +212,7 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if state.Actions["qa-review"].Status != "FAIL" || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "FAIL" {
 		t.Fatalf("per-case results were not retained: %#v", state.QACases)
 	}
-	designPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-design")
+	designPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revised := []QACaseInput{cases[0], {Kind: "LIVE", Description: "public workflow succeeds", Procedure: "run the public CLI against a built snapshot", Oracle: "observable output matches"}}
+	revised := []QACaseInput{cases[0], {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the public CLI against a built snapshot", Oracle: "observable output matches"}}
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
 		t.Fatal(err)
@@ -232,11 +233,11 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if state.QACases[0].ID != "CASE-001" || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PENDING" {
 		t.Fatalf("exact approval was not preserved: %#v", state.QACases)
 	}
-	reviewPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review")
+	reviewPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reviewPrompt, "Accepted coverage context") || strings.Count(reviewPrompt, "kind: STATIC") != 0 || !strings.Contains(reviewPrompt, "kind: LIVE") {
+	if !strings.Contains(reviewPrompt, "Accepted coverage context") || strings.Count(reviewPrompt, "mode: whitebox") != 0 || !strings.Contains(reviewPrompt, "mode: blackbox") {
 		t.Fatalf("retry prompt did not separate accepted and pending cases: %s", reviewPrompt)
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -301,8 +302,8 @@ func TestQAExecutionPreservesKindsAndFullRouteSeals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.QAExecution.Cases) != 2 || state.QAExecution.Cases[0].Kind != "STATIC" || state.QAExecution.Cases[1].Kind != "LIVE" {
-		t.Fatalf("QA execution lost case kinds: %#v", state.QAExecution.Cases)
+	if len(state.QAExecution.Cases) != 2 || state.QAExecution.Cases[0].Mode != "whitebox" || state.QAExecution.Cases[1].Mode != "blackbox" {
+		t.Fatalf("QA execution lost case modes: %#v", state.QAExecution.Cases)
 	}
 	for index, gate := range []string{"architecture", "quality"} {
 		dispatchID = prepareAndClaim(t, root, pkg, state.RunID, gate, fmt.Sprintf("gate-%d", index+1))
@@ -311,7 +312,7 @@ func TestQAExecutionPreservesKindsAndFullRouteSeals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +347,7 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "repair.txt"), "repair\n")
 	commitAll(t, root, "repair")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +392,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	root, pkg := workflowFixture(t)
 	state := beginQA(t, root, pkg, "set-finding")
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "set-reviewer")
-	state, err := RecordQAReview(root, pkg, state.RunID, dispatchID, passingReviewDecisions(state), "", []FindingInput{{Message: "missing failure-path coverage"}})
+	state, err := RecordQAReview(root, pkg, state.RunID, dispatchID, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "missing failure-path coverage"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 		t.Fatal("rejected QA rework changed state")
 	}
 	revised := baselineCases()
-	revised = append(revised, QACaseInput{Kind: "STATIC", Description: "failure paths are covered", Procedure: "run direct failure-path tests", Oracle: "all failure-path tests pass"})
+	revised = append(revised, QACaseInput{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run direct failure-path tests", Oracle: "all failure-path tests pass"})
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
 		t.Fatal(err)
@@ -417,17 +418,62 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	}
 }
 
+// TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass verifies the
+// snapshot gate looks at the whole review outcome, not just case-level decisions:
+// when a blackbox review round judges every pending case PASS but records a
+// set-level P1 coverage-omission finding (qa-review FAIL, qa-design re-opened,
+// cases still all PASS), the snapshot must be blocked — a case-level-only check
+// would let it through despite the review action failing. The only bypass is the
+// user-authorized snapshot release.
+func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "review-action-fail"), "custom", []string{blackboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 集合层面 P1 覆盖遗漏：各用例判 PASS，但审查动作整体 FAIL（qa-design 重开）。
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "review-action-fail-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "missing failure-path coverage"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-review"].Status != "FAIL" {
+		t.Fatalf("set-level P1 finding did not fail the review action: %#v", state.Actions["qa-review"])
+	}
+	for _, testCase := range state.QACases {
+		if testCase.ReviewStatus != "PASS" {
+			t.Fatalf("set-level finding should not reopen case decisions: %#v", testCase)
+		}
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-review-fail.txt"), "delivery\n")
+	commitAll(t, root, "delivery review fail")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err == nil || !strings.Contains(err.Error(), "blackbox QA Review must pass") {
+		t.Fatalf("snapshot with failing review action was not blocked: %v", err)
+	}
+	// 用户授权放行是唯一绕过：显式 userRequested 记录放行并带风险继续。
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, true, "user releases the failing review")
+	if err != nil {
+		t.Fatalf("user-authorized snapshot after review FAIL was rejected: %v", err)
+	}
+	if state.SnapshotOverride == nil || state.SnapshotOverride.Origin != "USER" {
+		t.Fatalf("user release not recorded: %#v", state.SnapshotOverride)
+	}
+}
+
 func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "remove-duplicate"), "full", nil)
-	cases := append(baselineCases(), QACaseInput{Kind: "STATIC", Description: "duplicate direct coverage", Procedure: "run overlapping direct checks", Oracle: "the same rules pass"})
+	cases := append(baselineCases(), QACaseInput{Mode: "whitebox", Description: "duplicate direct coverage", Procedure: "run overlapping direct checks", Oracle: "the same rules pass"})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, cases, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "duplicate-reviewer")
-	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Message: "remove duplicated direct coverage"}})
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "remove duplicated direct coverage"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +493,7 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	if state.Actions["qa-review"].Status != "PASS" {
 		t.Fatalf("set-only QA recheck did not approve the correction: %#v", state.Actions["qa-review"])
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("approved removal-only correction did not unlock development: %v", err)
 	}
 }
@@ -459,32 +505,32 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 	// 未 PASS：start-readiness、拆分决定与 development-worker 均被拒绝。路线在拆
 	// 分决定之后确认，而拆分决定在 product-review 之后，所以 development-worker 在
 	// 此时因路线未确认而被拒。
-	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
 		t.Fatalf("start-readiness prepared before product review: %v", err)
 	}
 	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason", ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass before the slicing decision") {
 		t.Fatalf("slicing decision recorded before product review: %v", err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil {
 		t.Fatalf("development-worker prepared before product review: %v", err)
 	}
 
 	// FAIL 含发现项（P0/P1/P2 分级）：仍阻塞，但不构成不可恢复的终态。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "requirement does not target a real user problem"}})
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "requirement does not target a real user problem"}}, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.Actions["product-review"].Status != "FAIL" || len(state.Actions["product-review"].Findings) != 1 || state.Actions["product-review"].Findings[0].Severity != "P1" {
 		t.Fatalf("product review FAIL was not recorded with severity: %#v", state.Actions["product-review"])
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
 		t.Fatalf("start-readiness prepared after product review FAIL: %v", err)
 	}
 
 	// 重新派发并记录 PASS 后下游解锁。
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +540,7 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("development worker stayed blocked after product review PASS: %v", err)
 	}
 }
@@ -506,18 +552,18 @@ func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "product-review-accept"))
 
 	// 未记录（PENDING）：start-readiness 与 development-worker 均被拒绝。
-	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
 		t.Fatalf("start-readiness prepared before product review: %v", err)
 	}
 
 	// 派发 A 已准备并认领（保持 OPEN，未记录 FAIL）：仍阻塞。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness"); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass") {
 		t.Fatalf("start-readiness prepared while product review held open: %v", err)
 	}
 
 	// 用户接受后，直接在 A 上记录 PASS，下游解锁。
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +573,7 @@ func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("development worker stayed blocked after product review PASS: %v", err)
 	}
 }
@@ -538,7 +584,7 @@ func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
 func TestQADesignRequiresSelectedQA(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-design-requires-qa"), "custom", []string{"quality"})
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err == nil || !strings.Contains(err.Error(), "QA is not selected") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err == nil || !strings.Contains(err.Error(), "QA is not selected") {
 		t.Fatalf("qa-design without selected QA mode: %v", err)
 	}
 	state, err := AddRouteGates(root, pkg, state.RunID, []string{blackboxQAID})
@@ -548,7 +594,7 @@ func TestQADesignRequiresSelectedQA(t *testing.T) {
 	if !isSelected(state, blackboxQAID) {
 		t.Fatalf("blackbox QA was not added to the route: %#v", state.SelectedGates)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err != nil {
 		t.Fatalf("qa-design stayed blocked after blackbox QA was selected: %v", err)
 	}
 }
@@ -623,7 +669,7 @@ func TestPredatingRunWithoutPrerequisiteActionCompletesDelivery(t *testing.T) {
 			developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 			writeTestFile(t, filepath.Join(root, "delivery.txt"), "delivery\n")
 			commitAll(t, root, "delivery")
-			state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+			state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 			if err != nil {
 				t.Fatalf("run without %s blocked at snapshot: %v", removed, err)
 			}
@@ -632,7 +678,7 @@ func TestPredatingRunWithoutPrerequisiteActionCompletesDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("run without %s blocked at gate review: %v", removed, err)
 			}
-			summary, err := Seal(root, pkg, state.RunID, nil, false)
+			summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery")
 			if err != nil {
 				t.Fatalf("run without %s blocked at seal: %v", removed, err)
 			}
@@ -659,7 +705,7 @@ func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	state = recordSlicing(t, root, pkg, state, "split")
 	writeTestFile(t, filepath.Join(root, "merged-delivery.txt"), "merged delivery\n")
 	commitAll(t, root, "merged delivery")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, "")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,15 +727,33 @@ func TestDevelopmentSnapshotRejectsUncommittedTrackedGitChanges(t *testing.T) {
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery.txt"), "edited delivery\n")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes must be committed") {
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes must be committed") {
 		t.Fatalf("uncommitted tracked delivery was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected uncommitted snapshot changed state")
 	}
 	commitAll(t, root, "commit delivery")
-	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch); err != nil {
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err != nil {
 		t.Fatalf("committed delivery snapshot was rejected: %v", err)
+	}
+}
+
+// TestSnapshotRejectsDevelopmentWithoutCommit verifies requirement 2's acceptance
+// "任一未完成时 snapshot 被挡": a development worker that is prepared but has not
+// committed must not record the base as the development snapshot. The snapshot
+// requires the development side to truly complete (a development commit advancing
+// the native identity), not merely a PREPARED status.
+func TestSnapshotRejectsDevelopmentWithoutCommit(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-no-commit"), "custom", []string{"quality"})
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err == nil || !strings.Contains(err.Error(), "a new current snapshot is required") {
+		t.Fatalf("snapshot without a development commit was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected no-commit snapshot changed state")
 	}
 }
 
@@ -783,7 +847,7 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
 		t.Fatalf("automatic wave limit was not enforced: %v", err)
 	}
 	beforeAuthorization := stateBytes(t, root, state.RunID)
@@ -807,7 +871,7 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 	if stateBytes(t, root, state.RunID) != authorizedState {
 		t.Fatal("rejected stacked authorization changed state")
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("authorized extra repair remained blocked: %v", err)
 	}
 }
@@ -820,7 +884,7 @@ func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
 	if state.CompletedReviewWaves != 0 {
 		t.Fatalf("runtime-error wave was counted: %#v", state)
 	}
-	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false); err == nil || !strings.Contains(err.Error(), "architecture") {
+	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false, "squashed delivery"); err == nil || !strings.Contains(err.Error(), "architecture") {
 		t.Fatalf("partial Seal authorization lost the other blocker: %v", err)
 	}
 	persisted, err := LoadRunState(root, state.RunID)
@@ -851,10 +915,10 @@ func TestSealUserRequestedFailSkipBypassesWaveLimit(t *testing.T) {
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("blocking wave was not completed: %#v", state)
 	}
-	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
+	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false, "squashed delivery"); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
 		t.Fatalf("FAIL skip before the wave limit must require exhaustion without --user-requested: %v", err)
 	}
-	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, true)
+	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, true, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -888,7 +952,7 @@ func TestSealFailSkipAfterWaveLimitKeepsSealOrigin(t *testing.T) {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
 	}
-	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, false)
+	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, false, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1205,7 +1269,7 @@ func TestPreDevelopmentAdoptRebindsWithoutRepairBoundary(t *testing.T) {
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-predev.txt"), "delivery\n")
 	commitAll(t, root, "delivery")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatalf("pre-development adoption blocked the first development snapshot: %v", err)
 	}
@@ -1221,7 +1285,7 @@ func TestPreDevelopmentAdoptRebindsWithoutRepairBoundary(t *testing.T) {
 	if state.CompletedReviewWaves != 1 || state.Actions["development-worker"].Status != developmentVerified {
 		t.Fatalf("blocking review wave was not completed: %#v", state)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("repair preparation failed: %v", err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -1255,7 +1319,7 @@ func TestDevelopmentWorkerClaimAfterCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -1273,7 +1337,7 @@ func TestDevelopmentWorkerClaimAfterCommit(t *testing.T) {
 	if state.Dispatches[dispatchID].Status != "CLAIMED" || state.Dispatches[dispatchID].ReviewerIdentity != "dev-worker-identity" {
 		t.Fatalf("development dispatch was not claimed: %#v", state.Dispatches[dispatchID])
 	}
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, dispatchID)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, dispatchID, false, "")
 	if err != nil {
 		t.Fatalf("snapshot after post-commit claim failed: %v", err)
 	}
@@ -1353,12 +1417,12 @@ func TestDevelopmentPreparationRequiresSlicingDecision(t *testing.T) {
 		t.Fatalf("route accepted before slicing decision: %v", err)
 	}
 	// 路线在拆分决定之后确认，所以未记录拆分决定时开发准备被拒（路线未确认）。
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err == nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil {
 		t.Fatalf("development prepared before slicing decision: %v", err)
 	}
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{"quality"})
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("development stayed blocked after slicing decision: %v", err)
 	}
 }
@@ -1459,7 +1523,7 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	// 合并后快照。
 	writeTestFile(t, filepath.Join(root, "merged.txt"), "merged\n")
 	commitAll(t, root, "merged slices")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, "")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1481,7 +1545,7 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	if state.CompletedReviewWaves != 1 || state.Gates[mergeGateID].Status != "PASS" {
 		t.Fatalf("merge gate review did not complete the wave: %#v", state)
 	}
-	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1517,19 +1581,18 @@ func TestMergeGateRegisteredButExcludedFromNormalRouteCandidates(t *testing.T) {
 }
 
 // TestBlackboxWhiteboxOptionalityInRoute verifies full selects both QA modes,
-// custom can select each QA mode independently, and the per-mode quality floors
-// are enforced (blackbox requires a LIVE case, whitebox requires a STATIC case).
+// custom can select each QA mode independently, and no mechanical per-mode
+// quality floor exists: the case-set sufficiency is left to the qa-review
+// set-level coverage judgment.
 func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-blackbox-only"), "custom", []string{blackboxQAID})
 	if !isSelected(state, blackboxQAID) || isSelected(state, whiteboxQAID) {
 		t.Fatalf("blackbox-only route: %#v", state.SelectedGates)
 	}
+	// 不设机械化质量下限：被选中模式零用例由 qa-review 的 set-level 覆盖判定承担。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one LIVE") {
-		t.Fatalf("blackbox quality floor not enforced: %v", err)
-	}
-	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1541,17 +1604,21 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	if !isSelected(whitebox, whiteboxQAID) || isSelected(whitebox, blackboxQAID) {
 		t.Fatalf("whitebox-only route: %#v", whitebox.SelectedGates)
 	}
-	// 白盒设计在开发后读实现进行：先完成开发与快照，再设计，结构测试下限才生效。
+	// 白盒设计在开发后读实现进行：先完成开发与快照再设计。
 	developmentDispatch := prepareDispatch(t, root, pkg, whitebox.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-whitebox-floor.txt"), "delivery\n")
 	commitAll(t, root, "delivery whitebox floor")
-	whitebox, err = AdvanceSnapshot(root, pkg, whitebox.RunID, developmentDispatch)
+	whitebox, err = AdvanceSnapshot(root, pkg, whitebox.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	designDispatch = prepareDispatch(t, root, pkg, whitebox.RunID, "qa-design")
-	if _, err := RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run", Oracle: "observe"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one STATIC") {
-		t.Fatalf("whitebox quality floor not enforced: %v", err)
+	designDispatch = prepareDispatch(t, root, pkg, whitebox.RunID, "qa-design", "whitebox")
+	whitebox, err = RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	if err != nil {
+		t.Fatalf("whitebox design after development failed: %v", err)
+	}
+	if whitebox.Actions["qa-design"].Status != "PASS" {
+		t.Fatalf("whitebox design did not pass: %#v", whitebox.Actions["qa-design"])
 	}
 
 	full := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-full"), "full", nil)
@@ -1570,8 +1637,10 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 	if fast.Slicing == nil || fast.Slicing.Decision != "no-split" || fast.Slicing.Note == "" {
 		t.Fatalf("fast path no-split decision not traced: %#v", fast.Slicing)
 	}
-	if _, err := PrepareAction(root, pkg, fast.RunID, "development-worker"); err == nil || !strings.Contains(err.Error(), "QA Review must pass") {
-		t.Fatalf("fast path development before QA review: %v", err)
+	// 开发开始不再要求黑盒 qa-review PASS：黑盒 QA 在隔离工作区与开发并发，快照门在
+	// 两边都完成时才放行。
+	if _, err := PrepareAction(root, pkg, fast.RunID, "development-worker", "", false, ""); err != nil {
+		t.Fatalf("fast path did not unlock development after route confirmation: %v", err)
 	}
 
 	split := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "split-path"))
@@ -1581,7 +1650,7 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 	split = recordSlicing(t, root, pkg, split, "split", splitMaster)
 	split = setRoute(t, root, pkg, split, "custom", []string{blackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, split.RunID, "qa-design")
-	split, err := RecordQADesign(root, pkg, split.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	split, err := RecordQADesign(root, pkg, split.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1590,7 +1659,7 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareAction(root, pkg, split.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, split.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("split path did not unlock development: %v", err)
 	}
 }
@@ -1623,7 +1692,7 @@ func TestSplitDecisionAllowsPerSliceRouteConfirmation(t *testing.T) {
 	if !reflect.DeepEqual(state.SelectedGates, []string{"quality"}) {
 		t.Fatalf("per-slice route not bound: %#v", state.SelectedGates)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("slice development stayed blocked despite inherited reviews: %v", err)
 	}
 }
@@ -1635,7 +1704,7 @@ func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "review-severity"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P0", Message: "blocking"}, {Severity: "P2", Message: "minor"}})
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P0", Message: "blocking"}, {Severity: "P2", Message: "minor"}}, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1643,13 +1712,13 @@ func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 		t.Fatalf("severity not retained: %#v", state.Actions["product-review"].Findings)
 	}
 	next := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P3", Message: "bad"}}); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P3", Message: "bad"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
 		t.Fatalf("invalid severity accepted: %v", err)
 	}
 	state = recordProductReview(t, root, pkg, state)
 	readiness := recordReadiness(t, root, pkg, state)
 	dispatchID = prepareDispatch(t, root, pkg, readiness.RunID, "start-readiness")
-	if _, err := RecordAction(root, pkg, readiness.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "technical gap"}}); err != nil {
+	if _, err := RecordAction(root, pkg, readiness.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "technical gap"}}, false, ""); err != nil {
 		t.Fatalf("start-readiness severity rejected: %v", err)
 	}
 }
@@ -1661,27 +1730,40 @@ func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "settled-findings"))
-	state, err := RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"settled finding one", "settled finding two"})
+	// 处置登记引用该动作已记录的审查结果：先记录一次 FAIL（含 P1 与 P2 发现项），再逐项
+	// 驳回。驳回的 P0/P1 不阻塞；确认的 P0/P1 才会置位"需重审"标记。
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "settled finding one"}, {Severity: "P2", Message: "settled finding two"}}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordSettledFindings(root, pkg, state.RunID, "product-review", nil, []string{"settled finding one", "settled finding two"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := state.SettledFindings["product-review"]; len(got) != 2 {
 		t.Fatalf("settled findings not recorded: %#v", state.SettledFindings)
 	}
-	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review")
+	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "settled finding one") || !strings.Contains(prompt, "Do not re-raise") {
 		t.Fatalf("settled findings not injected into product-review prompt: %s", prompt)
 	}
-	state, err = RecordSettledFindings(root, pkg, state.RunID, "start-readiness", []string{"settled technical decision"})
+	// 驳回的 P0/P1 不阻塞：重录一轮 PASS 可直接通过（无未处置的阻塞项）。
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
+	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "settled technical decision"}}, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	state = recordProductReview(t, root, pkg, state)
-	state = recordReadiness(t, root, pkg, state)
-	prompt, err = PrepareAction(root, pkg, state.RunID, "start-readiness")
+	state, err = RecordSettledFindings(root, pkg, state.RunID, "start-readiness", nil, []string{"settled technical decision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err = PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1740,29 +1822,29 @@ func TestLegacyQAModeCarryRebindsQAExecution(t *testing.T) {
 }
 
 // TestWhiteboxQADesignsAndReviewsAfterDevelopment verifies the whitebox-only route
-// designs and reviews its STATIC structure cases after development: development
+// designs and reviews its structure cases after development: development
 // start and the snapshot are not gated on whitebox QA Review, the post-development
 // design reads the implementation, and the run seals.
 func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-post-dev"), "custom", []string{whiteboxQAID})
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("whitebox development blocked before QA design: %v", err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-whitebox.txt"), "delivery\n")
 	commitAll(t, root, "delivery whitebox")
-	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "structure tests", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run unit tests", Oracle: "pass"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer")
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer", "whitebox")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1772,7 +1854,7 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1782,16 +1864,15 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 }
 
 // TestFullRouteDesignsWhiteboxAfterDevelopment verifies the full route's two-phase
-// QA: blackbox LIVE cases are designed and approved before development, the
-// whitebox STATIC cases are added after development by re-deriving the complete
-// set (preserving the approved blackbox cases), and the run seals with both
-// floors satisfied.
+// QA: blackbox cases are designed and approved before development, the
+// whitebox structure cases are added after development by re-deriving the complete
+// set (preserving the approved blackbox cases), and the run seals.
 func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "full-two-phase"), "full", nil)
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	var err error
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1803,20 +1884,20 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-full.txt"), "delivery\n")
 	commitAll(t, root, "delivery full")
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 开发后白盒设计：在既有黑盒用例上增补 STATIC 结构用例（已覆盖用例保留）。
-	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}, {Kind: "STATIC", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	// 开发后白盒设计：在既有黑盒用例上增补白盒结构用例（已覆盖用例保留）。
+	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}, {Mode: "whitebox", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(state.QACases) != 2 || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PENDING" {
 		t.Fatalf("blackbox approval was not preserved in the whitebox redesign: %#v", state.QACases)
 	}
-	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer")
+	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer", "whitebox")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1833,12 +1914,40 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	summary, err := Seal(root, pkg, state.RunID, nil, false)
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if summary.Status != "SEALED" {
 		t.Fatalf("full two-phase run did not seal: %#v", summary)
+	}
+}
+
+// TestQADispatchRequiresModeAfterDevelopment verifies the mode binding guard of
+// requirement 1: after development starts, a qa-design/qa-review dispatch without
+// --mode is rejected (it would silently bind the main worktree, letting blackbox
+// agents read development code and bypassing the isolation), while the fast-path
+// (pre-development) empty mode stays legal.
+func TestQADispatchRequiresModeAfterDevelopment(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "mode-guard"), "full", nil)
+	// 开发开始前空 mode 合法（快速路径）。
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err != nil {
+		t.Fatalf("pre-development qa-design without mode was rejected: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
+		t.Fatalf("development start failed: %v", err)
+	}
+	// 开发开始后 qa-design/qa-review 省略 --mode 被拒。
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err == nil || !strings.Contains(err.Error(), "requires --mode blackbox or whitebox after development starts") {
+		t.Fatalf("post-development qa-design without mode was accepted: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "requires --mode blackbox or whitebox after development starts") {
+		t.Fatalf("post-development qa-review without mode was accepted: %v", err)
+	}
+	// 带上 mode 即可继续派发（白盒绑主工作区，无需隔离工作区）。
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "whitebox", false, ""); err != nil {
+		t.Fatalf("post-development qa-design with mode was rejected: %v", err)
 	}
 }
 
@@ -1851,10 +1960,7 @@ func TestFastPathBlackboxDesignParallelToStartReadiness(t *testing.T) {
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "fast-design"))
 	state = recordProductReview(t, root, pkg, state)
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "STATIC", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, ""); err == nil || !strings.Contains(err.Error(), "at least one LIVE") {
-		t.Fatalf("fast-path non-blackbox design accepted: %v", err)
-	}
-	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1872,7 +1978,7 @@ func TestFastPathBlackboxDesignParallelToStartReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker"); err != nil {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("fast-path did not unlock development: %v", err)
 	}
 }
@@ -1885,7 +1991,7 @@ func TestFastPathDesignDiscardedWhenRouteOmitsBlackbox(t *testing.T) {
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "fast-discard"))
 	state = recordProductReview(t, root, pkg, state)
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Kind: "LIVE", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1904,12 +2010,12 @@ func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "severity-required"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
 		t.Fatalf("ungraded product-review finding accepted: %v", err)
 	}
 	state = recordProductReview(t, root, pkg, state)
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
 		t.Fatalf("ungraded start-readiness finding accepted: %v", err)
 	}
 }
@@ -1988,7 +2094,7 @@ func confirmAndRouteBase(t *testing.T, root, pkg string, state RunState, mode st
 func confirmRequirement(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
-	state, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil)
+	state, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2048,7 +2154,7 @@ func sliceMaster(t *testing.T, root, pkg, id string) string {
 func recordProductReview(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil)
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2078,7 +2184,7 @@ func readyDelivery(t *testing.T, root, pkg, id string) RunState {
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-"+id+".txt"), "delivery\n")
 	commitAll(t, root, "delivery "+id)
-	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2104,7 +2210,7 @@ func readyDeliveryForRoute(t *testing.T, root, pkg, id, mode string, selected []
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-"+id+".txt"), "delivery\n")
 	commitAll(t, root, "delivery "+id)
-	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2130,7 +2236,7 @@ func advanceRepair(t *testing.T, root, pkg string, state RunState, suffix string
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "repair-"+suffix+".txt"), "repair\n")
 	commitAll(t, root, "repair "+suffix)
-	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch)
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2140,20 +2246,24 @@ func advanceRepair(t *testing.T, root, pkg string, state RunState, suffix string
 func recordReadiness(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil)
+	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return state
 }
 
-func prepareDispatch(t *testing.T, root, pkg, runID, target string) string {
+func prepareDispatch(t *testing.T, root, pkg, runID, target string, modes ...string) string {
 	t.Helper()
+	mode := ""
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
 	var err error
 	if target == "quality" || target == "architecture" || target == mergeGateID {
 		_, err = PrepareGate(root, pkg, runID, target)
 	} else {
-		_, err = PrepareAction(root, pkg, runID, target)
+		_, err = PrepareAction(root, pkg, runID, target, mode, false, "")
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -2176,9 +2286,9 @@ func prepareDispatch(t *testing.T, root, pkg, runID, target string) string {
 	return dispatchID
 }
 
-func prepareAndClaim(t *testing.T, root, pkg, runID, target, reviewer string) string {
+func prepareAndClaim(t *testing.T, root, pkg, runID, target, reviewer string, modes ...string) string {
 	t.Helper()
-	dispatchID := prepareDispatch(t, root, pkg, runID, target)
+	dispatchID := prepareDispatch(t, root, pkg, runID, target, modes...)
 	if _, err := ClaimDispatch(root, pkg, runID, dispatchID, reviewer); err != nil {
 		t.Fatal(err)
 	}
@@ -2186,7 +2296,7 @@ func prepareAndClaim(t *testing.T, root, pkg, runID, target, reviewer string) st
 }
 
 func baselineCases() []QACaseInput {
-	return []QACaseInput{{Kind: "STATIC", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"}, {Kind: "LIVE", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"}}
+	return []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"}, {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"}}
 }
 
 func passingReviewDecisions(state RunState) []QAReviewInput {
@@ -2262,4 +2372,507 @@ func stateBytes(t *testing.T, root, runID string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// createQAWorktree adds a detached git worktree at the run's base snapshot and
+// returns its path. The requirement documents are present from the base commit
+// (the injected current-requirement working-tree state); RegisterQAWorktree
+// verifies their revision matches the run registration.
+func createQAWorktree(t *testing.T, root string, state RunState) string {
+	t.Helper()
+	worktree := filepath.Join(t.TempDir(), "qa-worktree")
+	runGit(t, root, "worktree", "add", "--detach", worktree, state.BaseSnapshot)
+	return worktree
+}
+
+// TestBlackboxQADesignsAndReviewsInIsolationWorktree verifies requirement 1:
+// blackbox qa-design/qa-review run in the QA isolation worktree (native identity
+// == base, requirement docs injected), development start is not gated on the
+// blackbox review, and the worktree is cleared automatically when the blackbox
+// review records PASS.
+func TestBlackboxQADesignsAndReviewsInIsolationWorktree(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "blackbox-isolation"), "full", nil)
+	worktree := createQAWorktree(t, root, state)
+	state, err := RegisterQAWorktree(root, state.RunID, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.QAWorktree != worktree {
+		t.Fatalf("QA worktree not registered: %#v", state.QAWorktree)
+	}
+	// 开发开始不再要求黑盒 qa-review PASS。
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
+		t.Fatalf("development start stayed blocked by the parallel blackbox QA: %v", err)
+	}
+	// 黑盒 qa-design 派发绑到隔离工作区（== 基线）。
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "blackbox", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	designDispatch := openDispatchID(state, "action", "qa-design")
+	if state.Dispatches[designDispatch].Mode != "blackbox" || state.Dispatches[designDispatch].SourceSnapshot != state.BaseSnapshot {
+		t.Fatalf("blackbox design dispatch not bound to the isolation base: %#v", state.Dispatches[designDispatch])
+	}
+	if !strings.Contains(prompt, worktree) || !strings.Contains(prompt, "QA isolation worktree") {
+		t.Fatalf("blackbox design prompt does not point at the isolation worktree: %s", prompt)
+	}
+	state, err = ClaimDispatch(root, pkg, state.RunID, designDispatch, "isolation-designer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 开发进行中黑盒 review 仍可在隔离工作区派发并记录（与开发并发）：黑盒派发走
+	// --mode blackbox，绑隔离工作区（== 基线），开发提交不改变它的原生标识。
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-isolation.txt"), "delivery\n")
+	commitAll(t, root, "delivery isolation")
+	reviewPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "blackbox", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reviewPrompt, worktree) {
+		t.Fatalf("blackbox review prompt does not point at the isolation worktree: %s", reviewPrompt)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	reviewDispatch := openDispatchID(state, "action", "qa-review")
+	if state.Dispatches[reviewDispatch].Mode != "blackbox" || state.Dispatches[reviewDispatch].SourceSnapshot != state.BaseSnapshot {
+		t.Fatalf("blackbox review dispatch not bound to the isolation base: %#v", state.Dispatches[reviewDispatch])
+	}
+	state, err = ClaimDispatch(root, pkg, state.RunID, reviewDispatch, "isolation-reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.QAWorktree != "" {
+		t.Fatalf("blackbox review PASS did not clear the isolation worktree: %#v", state.QAWorktree)
+	}
+	// 黑盒 review PASS 后快照成功（开发完成 且 黑盒 review PASS 两边都完成）。
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err != nil {
+		t.Fatalf("snapshot after blackbox review PASS failed: %v", err)
+	}
+}
+
+// TestRegisterQAWorktreeRejectsInjectedRevisionMismatch verifies requirement 1's
+// hash check at qa-worktree registration: registering the QA isolation worktree
+// must reject it when the injected requirement document / acceptance artifact no
+// longer matches the run's registered revision (guarding against a host that
+// forgot to refresh the injection). This is the single home of the "登记**或**
+// prepare 校验" guard — later blackbox prepare/claim/record only re-resolve the
+// native identity (== base) without re-hashing the worktree files.
+func TestRegisterQAWorktreeRejectsInjectedRevisionMismatch(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "isolation-hash"), "full", nil)
+	worktree := createQAWorktree(t, root, state)
+	// 注入文档在隔离工作区内被改写（工作树状态、不影响原生标识校验），登记时被拒。
+	writeTestFile(t, filepath.Join(worktree, "requirements.md"), "stale injected requirement\n")
+	if _, err := RegisterQAWorktree(root, state.RunID, worktree); err == nil || !strings.Contains(err.Error(), "does not match the run revision") {
+		t.Fatalf("qa-worktree registration with stale injected revision was accepted: %v", err)
+	}
+}
+
+// TestSnapshotRequiresBlackboxReviewPassed verifies requirement 2: the snapshot
+// gate requires development complete 且 黑盒 qa-review PASS.
+func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-blackbox-gate"), "custom", []string{blackboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-gate.txt"), "delivery\n")
+	commitAll(t, root, "delivery gate")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err == nil || !strings.Contains(err.Error(), "blackbox QA Review must pass") {
+		t.Fatalf("snapshot before blackbox review PASS was not blocked: %v", err)
+	}
+	// 黑盒 review PASS 后快照放行：黑盒派发走 --mode blackbox、绑隔离工作区（== 基线），
+	// 开发提交后主工作区 HEAD 已前进，但隔离工作区仍停在基线，身份校验不受影响。
+	worktree := createQAWorktree(t, root, state)
+	state, err = RegisterQAWorktree(root, state.RunID, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "blackbox", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	reviewDispatch := openDispatchID(state, "action", "qa-review")
+	state, err = ClaimDispatch(root, pkg, state.RunID, reviewDispatch, "snapshot-gate-reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err != nil {
+		t.Fatalf("snapshot after blackbox review PASS failed: %v", err)
+	}
+}
+
+// TestZeroCaseBlackboxReviewPassAllowsSnapshot verifies requirement 4's tradeoff:
+// a selected blackbox mode with zero cases is judged by the review's set-level
+// coverage finding, not a snapshot-side mechanical floor. An empty-set review PASS
+// (the review judged the set coverage sufficient) lets the snapshot proceed.
+func TestZeroCaseBlackboxReviewPassAllowsSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox"), "custom", []string{blackboxQAID})
+	// 黑盒设计零用例：设计 PASS、待定集为空，进入 review 的集合覆盖判定。
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "zero-blackbox-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-review"].Status != "PASS" {
+		t.Fatalf("empty-set blackbox review did not pass: %#v", state.Actions["qa-review"])
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-zero.txt"), "delivery\n")
+	commitAll(t, root, "delivery zero")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err != nil {
+		t.Fatalf("snapshot with zero blackbox cases was blocked: %v", err)
+	}
+}
+
+// TestZeroCaseBlackboxReviewPassAllowsQAExecution verifies the qa-execution
+// counterpart of TestZeroCaseBlackboxReviewPassAllowsSnapshot: once the qa-review
+// action has recorded PASS on an empty set (the review judged the zero-case
+// coverage sufficient, requirement 4 — the same determination that lets the
+// snapshot gate through), QA Execution accepts the empty required set as PASS.
+// Without this, a zero-case blackbox run that already passed the snapshot gate
+// deadlocks at qa-execution ("approved QA cases are missing"), leaving QAExecution
+// PENDING so the run can never seal.
+func TestZeroCaseBlackboxReviewPassAllowsQAExecution(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox-exec"), "custom", []string{blackboxQAID})
+	// 黑盒设计零用例：设计 PASS、待定集为空，进入 review 的集合覆盖判定。
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "zero-blackbox-exec-reviewer")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-review"].Status != "PASS" {
+		t.Fatalf("empty-set blackbox review did not pass: %#v", state.Actions["qa-review"])
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-zero-exec.txt"), "delivery\n")
+	commitAll(t, root, "delivery zero exec")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err != nil {
+		t.Fatalf("snapshot with zero blackbox cases was blocked: %v", err)
+	}
+	// 空需执行集放行：review 已对空集记录 PASS 后，qa-execution 对空集直接 PASS。
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, nil, "")
+	if err != nil {
+		t.Fatalf("qa-execution with empty set after review PASS was rejected: %v", err)
+	}
+	if state.QAExecution.Status != "PASS" {
+		t.Fatalf("empty-set QA execution did not record PASS: %#v", state.QAExecution)
+	}
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "")
+	if err != nil {
+		t.Fatalf("seal after zero-case review PASS was blocked: %v", err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("zero-case blackbox run did not seal: %#v", summary)
+	}
+}
+
+// TestZeroCaseBlackboxSnapshotBlockedBeforeReviewPass verifies requirement 2 for
+// a selected blackbox mode with zero cases: the snapshot gate is not vacuous.
+// While the qa-review action is still PENDING (no review round recorded), the
+// snapshot is blocked even though the blackbox case set is empty; only a recorded
+// review PASS lets the empty set through (see
+// TestZeroCaseBlackboxReviewPassAllowsSnapshot).
+func TestZeroCaseBlackboxSnapshotBlockedBeforeReviewPass(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "zero-blackbox-blocked"), "custom", []string{blackboxQAID})
+	// 黑盒设计零用例：设计 PASS、待定集为空，但 review 尚未派发/记录（qa-review 仍 PENDING）。
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["qa-review"].Status != "PENDING" {
+		t.Fatalf("qa-review should be PENDING after an empty-set design: %#v", state.Actions["qa-review"])
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-zero-blocked.txt"), "delivery\n")
+	commitAll(t, root, "delivery zero blocked")
+	if _, err := AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, false, ""); err == nil || !strings.Contains(err.Error(), "blackbox QA Review must pass") {
+		t.Fatalf("snapshot with zero blackbox cases before review PASS was not blocked: %v", err)
+	}
+}
+
+// TestSnapshotUserReleaseAllowsWithoutBlackboxReview verifies the manual release
+// entry of requirement 2: the user explicitly authorizes a snapshot while the
+// blackbox review has not passed; the authorization source is recorded and
+// qa-execution covers only approved cases.
+func TestSnapshotUserReleaseAllowsWithoutBlackboxReview(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-user-release"), "custom", []string{blackboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-release.txt"), "delivery\n")
+	commitAll(t, root, "delivery release")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, true, "user releases the blackbox gate")
+	if err != nil {
+		t.Fatalf("user-authorized snapshot was rejected: %v", err)
+	}
+	if state.SnapshotOverride == nil || state.SnapshotOverride.Origin != "USER" || state.SnapshotOverride.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("snapshot override authorization not recorded: %#v", state.SnapshotOverride)
+	}
+	// 放行后 qa-execution 只覆盖已批准用例：此处黑盒用例未获批准，需执行集为空。
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.QAExecution.Status != "PASS" {
+		t.Fatalf("released blackbox cases did not count as PASS: %#v", state.QAExecution)
+	}
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "SEALED" {
+		t.Fatalf("seal after user release did not complete: %#v", summary)
+	}
+}
+
+// TestSnapshotReleasePersistsToRepairSnapshot verifies the manual release carries
+// to later repair snapshots: after an explicit snapshot --user-requested release,
+// the unapproved blackbox cases are treated as PASS, so a subsequent repair
+// snapshot is not blocked again by the same unapproved blackbox cases.
+func TestSnapshotReleasePersistsToRepairSnapshot(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "release-persist"), "custom", []string{blackboxQAID, "quality"})
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-release.txt"), "delivery\n")
+	commitAll(t, root, "delivery release")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, developmentDispatch, true, "user releases the blackbox gate")
+	if err != nil {
+		t.Fatalf("user-authorized snapshot was rejected: %v", err)
+	}
+	if state.SnapshotOverride == nil {
+		t.Fatalf("snapshot override not recorded: %#v", state.SnapshotOverride)
+	}
+	// 放行后 qa-execution 覆盖已批准用例并把未批准黑盒用例视为 PASS。
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 质量门 FAIL 产生阻塞波，进入修复轮。
+	state = recordGateResult(t, root, pkg, state, "quality", "release-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	// 修复快照（非用户放行）：此前放行授权延续，未批准黑盒用例视为 PASS，不再被挡。
+	state = advanceRepair(t, root, pkg, state, "release")
+	if state.CurrentSnapshot == state.BaseSnapshot {
+		t.Fatalf("repair snapshot did not advance: %#v", state)
+	}
+}
+
+// TestSealSquashesGitRangeToSingleCommit verifies requirement 3: a git run whose
+// base→current range holds more than one commit is squashed into a single commit
+// at seal, preserving the final tree; the summary records the squashed commit.
+func TestSealSquashesGitRangeToSingleCommit(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "seal-squash", "custom", []string{"quality"})
+	// 首轮质量门 FAIL（阻塞），使一轮修复合法：修复提交构成基线→当前的第二条提交，
+	// seal 时才触发压缩。
+	state = recordGateResult(t, root, pkg, state, "quality", "squash-quality-fail", "FAIL", "", []FindingInput{{Severity: "P1", Message: "delivery needs repair"}})
+	state = advanceRepair(t, root, pkg, state, "squash")
+	state = recordGateResult(t, root, pkg, state, "quality", "squash-quality-pass", "PASS", "", nil)
+	before := gitHead(t, root)
+	countBefore := commitCount(t, root, state.BaseSnapshot, before)
+	if countBefore <= 1 {
+		t.Fatalf("test setup expected >1 commits in base..head, got %d", countBefore)
+	}
+	summary, err := Seal(root, pkg, state.RunID, nil, false, "squashed combined delivery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := gitHead(t, root)
+	if count := commitCount(t, root, state.BaseSnapshot, after); count != 1 {
+		t.Fatalf("seal did not squash base..current into one commit: %d commits remain", count)
+	}
+	if summary.CurrentSnapshot != after {
+		t.Fatalf("summary current snapshot %s does not match squashed commit %s", summary.CurrentSnapshot, after)
+	}
+	// 最终树不变：squash 前后的树哈希一致。
+	if tree := runGit(t, root, "rev-parse", after+"^{tree}"); tree == "" {
+		t.Fatal("cannot resolve squashed tree")
+	}
+}
+
+// TestReviewRuleOnlyP2RecordsPassWithVisibleFindings verifies requirement 5:
+// a review carrying only P2 findings records PASS with the P2 suggestions visible
+// and does not produce FAIL or require a re-review.
+func TestReviewRuleOnlyP2RecordsPassWithVisibleFindings(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "only-p2"))
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", []FindingInput{{Severity: "P2", Message: "minor wording suggestion"}}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["product-review"].Status != "PASS" || len(state.Actions["product-review"].Findings) != 1 || state.Actions["product-review"].Findings[0].Severity != "P2" {
+		t.Fatalf("P2-only PASS was not recorded with visible findings: %#v", state.Actions["product-review"])
+	}
+}
+
+// TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview verifies requirement 5:
+// confirming a P0/P1 finding sets the needs-re-review marker; record-action PASS
+// for a dispatch that is not the re-review round is rejected until the re-review
+// returns PASS.
+func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "confirm-p01"))
+	first := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{{Severity: "P1", Message: "real user problem"}}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 在确认处置之前派发一轮新 review（该轮不是重审轮）。
+	second := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"real user problem"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NeedsReReview["product-review"] != "real user problem" {
+		t.Fatalf("confirmed P0/P1 did not set the needs-re-review marker: %#v", state.NeedsReReview)
+	}
+	// 该轮在标记置位前派发，不是重审轮：记录 PASS 被拒。
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "awaits a re-review") {
+		t.Fatalf("direct PASS before re-review was accepted: %v", err)
+	}
+	// 修订需求（语义保留）后派发重审轮并返回 PASS：标记清除，PASS 可记录。
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised meaning-preserved requirement\n")
+	commitAll(t, root, "revise requirement (preserved)")
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rereview := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, _ = LoadRunState(root, state.RunID)
+	if state.ReReviewDispatch["product-review"] != rereview {
+		t.Fatalf("re-review dispatch not tagged: %#v", state.ReReviewDispatch)
+	}
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", rereview, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatalf("re-review PASS was rejected: %v", err)
+	}
+	if state.NeedsReReview["product-review"] != "" {
+		t.Fatalf("re-review PASS did not clear the marker: %#v", state.NeedsReReview)
+	}
+}
+
+// TestReviewRuleDismissedP0P1DoesNotBlock verifies requirement 5: a dismissed
+// P0/P1 finding is void and does not block recording PASS.
+func TestReviewRuleDismissedP0P1DoesNotBlock(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "dismiss-p01"))
+	first := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{{Severity: "P0", Message: "voided problem"}}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordSettledFindings(root, pkg, state.RunID, "product-review", nil, []string{"voided problem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NeedsReReview["product-review"] != "" {
+		t.Fatalf("dismissed P0/P1 must not set the marker: %#v", state.NeedsReReview)
+	}
+	// 驳回的 P0/P1 不阻塞：新轮可记录 PASS（即使携带已驳回的 P0/P1 也不阻塞）。
+	next := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", []FindingInput{{Severity: "P0", Message: "voided problem"}}, false, "")
+	if err != nil {
+		t.Fatalf("dismissed P0/P1 blocked PASS: %v", err)
+	}
+	if state.Actions["product-review"].Status != "PASS" {
+		t.Fatalf("review with dismissed P0/P1 did not pass: %#v", state.Actions["product-review"])
+	}
+}
+
+// TestReviewRuleUserOverrideBypassesAndRecordsOrigin verifies requirement 5: only
+// the user can break the review rule; an explicit override allows PASS with a
+// confirmed P0/P1 pending re-review and records the authorization source.
+func TestReviewRuleUserOverrideBypassesAndRecordsOrigin(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "override-p01"))
+	first := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{{Severity: "P1", Message: "confirmed blocker"}}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"confirmed blocker"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, true, "user decides to proceed anyway")
+	if err != nil {
+		t.Fatalf("user-requested override was rejected: %v", err)
+	}
+	if state.ReviewOverrides["product-review"] != "user decides to proceed anyway" {
+		t.Fatalf("override source not recorded: %#v", state.ReviewOverrides)
+	}
+}
+
+// TestPrepareActionReReviewPassedRoundNeedsUserOverride verifies the side-B user
+// exception of requirement 5: re-reviewing an already-PASS round requires the
+// explicit user override, and the source is recorded.
+func TestPrepareActionReReviewPassedRoundNeedsUserOverride(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "rereview-pass"))
+	state = recordProductReview(t, root, pkg, state)
+	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "authoritative PASS") {
+		t.Fatalf("re-preparing a PASS round without override was accepted: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", true, "user demands a re-review"); err != nil {
+		t.Fatalf("user-requested re-review of a PASS round was rejected: %v", err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	if state.ReviewOverrides["product-review"] == "" {
+		t.Fatalf("re-review override source not recorded: %#v", state.ReviewOverrides)
+	}
+}
+
+func commitCount(t *testing.T, root, base, head string) int {
+	t.Helper()
+	value := runGit(t, root, "rev-list", "--count", base+".."+head)
+	count, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

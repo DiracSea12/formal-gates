@@ -79,11 +79,11 @@ func actionResultContract(actionID, dispatchID string) string {
 	}
 	switch actionID {
 	case "qa-design":
-		return prefix + "Return only ordered semantic cases. Each case must contain exactly one kind (STATIC or LIVE), description, procedure, and oracle. STATIC covers whitebox structure tests (unit, system, integration); LIVE covers blackbox behavior execution against the built snapshot via a documented public entry. Do not assign case IDs; the CLI assigns them."
+		return prefix + "Return only ordered semantic cases. Each case must contain exactly one mode (blackbox or whitebox), description, procedure, and oracle. blackbox covers real QA: verify the requirement by actually using the product through a documented public entry at execution time; whitebox covers structure tests (unit, system, integration) whose sufficiency depends on the implementation and is designed after development by reading it. Do not assign case IDs; the CLI assigns them."
 	case "qa-execution":
-		return prefix + "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. Return a runtime error separately if execution could not run."
+		return prefix + "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. blackbox cases run against the built product on the main worktree via a documented public entry; whitebox cases run their direct-owner structure tests. Return a runtime error separately if execution could not run."
 	case "qa-review":
-		return prefix + "Return one PASS or FAIL decision for every supplied pending case; each FAIL decision requires a reason. Do not return decisions for accepted cases. Return set-level findings separately for missing or duplicated coverage. The CLI derives the aggregate result. For whitebox (STATIC) cases you may read the implementation to judge structure-test sufficiency; blackbox (LIVE) cases stay zero-context. Return a runtime error separately if review could not run."
+		return prefix + "Return one PASS or FAIL decision for every supplied pending case; each FAIL decision requires a reason. Do not return decisions for accepted cases. Return set-level findings separately with severity P1 or P2: a selected mode with zero cases or an unmet acceptance point is a P1 coverage omission that blocks; P2 is a suggestion only. The CLI derives the aggregate result. For whitebox cases you may read the implementation to judge structure-test sufficiency; blackbox cases stay zero-context. Return a runtime error separately if review could not run."
 	case "carry":
 		return prefix + "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
 	case "development-worker":
