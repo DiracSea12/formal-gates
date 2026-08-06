@@ -1,0 +1,102 @@
+{
+  "runId": "blackbox-parallel-seal-squash-qa-mode-2",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "253f6b7e9d134232a730ad3f88f3706c04fece0d0ec3adf4e0e192d7d153362d",
+  "basePromptRevision": "13bb6f5f64e74f2fcefcc8387c0e60d4685efed029121a1d13e483e16dcc717e",
+  "catalogRevision": "9f58beb206d1d5dead324b3dfa3cea043b948c29da1da213ab03b98ea737bcc6",
+  "vcs": "git",
+  "baseSnapshot": "2564afb9e93c25dcee731930d4d940fae62805a7",
+  "currentSnapshot": "e7a34b15d371e4f84f0f9946b71c21dd10bb6f17",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md",
+      "revision": "253f6b7e9d134232a730ad3f88f3706c04fece0d0ec3adf4e0e192d7d153362d"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "三项优化（黑盒并行隔离工作区 / Seal 压缩 / 去 static-live）共享同一套 QA 状态机、提示词、守卫与文档面，拆分会造成重叠文件的跨切片协调与中间态；大而连贯的单一 run 是正常做法——产品审与 start-readiness 均建议不拆（高置信不拆）"
+  },
+  "routeMode": "",
+  "selectedGates": [],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-166c455f41ffc85e7da21f9f": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-17ffcc3f1ff7525b5258bbcd": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4ee718c16140b217d5ff9fb1": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5c229975e7b7728eecd30771": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9fc1fafd5f58c6a05986a622": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e4a44b8c18d3ac6df6ad6c51": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "runId": "blackbox-parallel-seal-squash-qa-mode",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "7df30838d4c6ab6e032e4ba64c80211f6e910850537d12ac0de7a5f19c22b2e1",
+  "basePromptRevision": "07f7b7662269940323142dfd53a03912444067b41b1aa8c0e685d113a3a3f6f4",
+  "catalogRevision": "cff38f2982cd5b37b4b235f43d4cd2e873c6afe0c2b32bc046d0a64f536b786f",
+  "vcs": "git",
+  "baseSnapshot": "bc8635b99d5c99137423a6dacc552c39f12c67e0",
+  "currentSnapshot": "ef0696d9144b854f5b76882a4a57785baceb522b",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md",
+      "revision": "7df30838d4c6ab6e032e4ba64c80211f6e910850537d12ac0de7a5f19c22b2e1"
+    }
+  ],
+  "routeMode": "",
+  "selectedGates": [],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-31763bc1e65377623c3af51e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-39f802f0f5f69fe29d1ac32a": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-72df5fd224d7b73ef3bb478e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8c335c798f70007afb47ddea": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9abab28f27337caf051e1aef": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-db0539001461af144f1033f7": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dba56ad51c85b911ae5e6bcc": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eef9018d428d860c179d915d": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

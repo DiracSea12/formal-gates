@@ -1,0 +1,878 @@
+{
+  "runId": "blackbox-parallel-seal-squash-qa-mode-3",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "9eaed17cab9b5e4660841cf475828ff83b80b87d39c0adc507f4a279870e658c",
+  "basePromptRevision": "13bb6f5f64e74f2fcefcc8387c0e60d4685efed029121a1d13e483e16dcc717e",
+  "catalogRevision": "c4f0b27110f9d0490b8fafaa1d6d37f40d48bec80cdfb91cf66a9cb5198b22fa",
+  "vcs": "git",
+  "baseSnapshot": "e7a34b15d371e4f84f0f9946b71c21dd10bb6f17",
+  "currentSnapshot": "69ae123093ea55561b0dd914c55b1bdbcede610b",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md",
+      "revision": "9eaed17cab9b5e4660841cf475828ff83b80b87d39c0adc507f4a279870e658c"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "五项需求（黑盒并行隔离工作区 / 快照双向截止 / Seal 压缩 / 去 static-live / 复审 CLI 强制）共享同一套 QA 状态机、提示词、守卫与文档面，拆分会造成重叠文件的跨切片协调与中间态；大而连贯的单一 run 是正常做法——产品审与 start-readiness 均建议不拆（高置信不拆）"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {
+    "complexity-gate": {
+      "origin": "SEAL-USER",
+      "status": "FAIL",
+      "snapshot": "69ae123093ea55561b0dd914c55b1bdbcede610b"
+    }
+  },
+  "completedReviewWaves": 5,
+  "extraReviewWaves": 2,
+  "gates": {
+    "complexity-gate": {
+      "status": "FAIL",
+      "snapshot": "69ae123093ea55561b0dd914c55b1bdbcede610b",
+      "compared": "e7a34b15d371e4f84f0f9946b71c21dd10bb6f17..69ae123093ea55561b0dd914c55b1bdbcede610b",
+      "findings": [
+        {
+          "severity": "P1",
+          "message": "改动超出已确认需求范围：01c2255 引入 host 环境探测（providerFromEnvironment）、claim 身份自动解析接入 ClaimDispatch、canary/测试环境中和、complexity-gate.md 与 development-worker.md 定义改写——均非五项需求内容、涉及文件清单未含（用户已拍板一起交付、接受该 P1）"
+        }
+      ],
+      "dispatchId": "dispatch-e12b76d782389bc7dca46d14"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "69ae123093ea55561b0dd914c55b1bdbcede610b",
+      "compared": "e7a34b15d371e4f84f0f9946b71c21dd10bb6f17..69ae123093ea55561b0dd914c55b1bdbcede610b",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "--mode 守卫仅在 developmentStarted 后生效：路线确认含黑盒、开发未开始时空 mode 派发静默绑主工作区、提示词仍指隔离工作区，与守卫意图和需求 1 矛盾（仅 P2 建议）"
+        },
+        {
+          "severity": "P2",
+          "message": "同根因：保留总任务合并 run 在合并快照后 dev=PASS，空 mode 合并 qa-design/qa-review 派发被拒，虽合并 QA 显式排除隔离机制（仅 P2 建议）"
+        },
+        {
+          "severity": "P2",
+          "message": "lifecycle 新行为的专属单测只在未跟踪文件（provider_environment_test.go、resolve_claim_test.go），不在提交比较中、seal 压缩会被丢弃（仅 P2 建议）"
+        }
+      ],
+      "dispatchId": "dispatch-89ff4ee4133c25dbbf98ace6"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "69ae123093ea55561b0dd914c55b1bdbcede610b",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-002",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-003",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-004",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-005",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-006",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-007",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-008",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "对修复快照 69ae1230 重验",
+        "observation": "开发未提交时 snapshot 被挡（exit 1 含 a new current snapshot is required）、提交后成功（exit 0）",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-009",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "对修复快照 69ae1230 重验",
+        "observation": "review PENDING 时 snapshot 被挡；各用例 PASS 但审查动作 FAIL（set-level P1）时 snapshot 同样被挡（exit 1 含 blackbox QA Review must pass）；用户 --user-requested 放行成功且记录授权来源",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-010",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-011",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-012",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-013",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-014",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-015",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-016",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "对修复快照 69ae1230 重验",
+        "observation": "零用例设计被接受（qa-design PASS）；qa-review 空待定集 + set-level P1 覆盖发现项 → qa-review FAIL",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-017",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-018",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-019",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-020",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-021",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-022",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-023",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-024",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-025",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-026",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-029",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-027",
+        "kind": "LIVE",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-028",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-030",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-031",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-032",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-033",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-034",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-035",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-036",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-037",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "对修复快照 69ae1230 重验",
+        "observation": "review PENDING（零用例）与空集 review FAIL（P1）时 snapshot 均被挡（exit 1）；空集 review PASS 后 snapshot 成功（exit 0）",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-038",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-039",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-040",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-041",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-042",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-043",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-044",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-045",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-046",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-047",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-048",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-049",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "对修复快照 69ae1230 重验",
+        "observation": "完整零用例链：空设计→review PENDING 时快照被挡→空集 review PASS→snapshot→空集 qa-execution PASS→seal SEALED",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-050",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-051",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-052",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-053",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-057",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-055",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      },
+      {
+        "caseId": "CASE-056",
+        "kind": "STATIC",
+        "outcome": "PASS",
+        "procedure": "按用例文档化公开入口对修复后快照真实执行/结构测试",
+        "observation": "inherited from prior execution; repair did not change tested behavior",
+        "oracleResult": "pass"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-00070a277d3e20f54800b2f8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-11ca4ea457fa9d3bb0c4dec8": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1c3fae37776ec87060ea83e6": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1f43b3ee9b64001e30e3b173": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2551e26a46691ce1557f770c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2930ffee3ba1bb5040ab9062": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2d925b568dc6b8bc89471c23": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-350d0757499a35e578b953f0": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-35e6b7449c1f517922f44e0a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3ba22f694b075bebdf00846c": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3e01946e54744e744a284e50": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-428ee0dfd97bc332c891e5b7": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-48f2b57cae25d9ef4fb599d8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4ee9377b33af838d0b9ac484": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-51db01e2db787116937521ae": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-55a2963b1ba91d5b9404624e": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-63c7dd94a99c3d7c5f97435c": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-675370ba22d613ddea695a85": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-69f1e2a3aa6711a5b868de00": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7159c4c0a755e3230b8748ce": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-89ff4ee4133c25dbbf98ace6": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8f726c517eae0f4948405c69": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-93f6b8cc392c270722f53d0d": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-94420399d0cd862f5d75142f": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-980b4d179d37b07bd6955e7e": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9a9578c824534c16382eca1b": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9c31c482c8a7cb401dd99e67": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b01e61736c91d72c127689a5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bee4da6a87e6629233edf425": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cc23dc985dca1d18bb0ed87a": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d4f3ce8bf8815f9ca1b51b80": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d5d2a475624697edf5079668": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e12b76d782389bc7dca46d14": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e49946e3c923abca65c4a4e2": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ec3034b286a97e02eeaf704f": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eda46d9df17386c3762acdc1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fc235b195f8929e63c387e24": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fd2c088bbb6684f0009fc8fa": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
