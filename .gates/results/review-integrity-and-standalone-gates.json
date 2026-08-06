@@ -1,0 +1,747 @@
+{
+  "runId": "review-integrity-and-standalone-gates",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "59447009b9ec4fa1e36590b2ef68371dfb7503f76be55217548035c3dbd3a989",
+  "basePromptRevision": "1d7414b5745e53e2b04cc75834cd3269e88f46aaae8d2eaa49026bd397e6988f",
+  "catalogRevision": "6eea2c620dfae09c0ecfdb70d6251b50f6ae29f010cb9684ec6a94635355eea0",
+  "vcs": "git",
+  "baseSnapshot": "45e739c714e719a2d114c43a4ff9609feb92138d",
+  "currentSnapshot": "14844b103e3856a4ac1857a0193b7c6cf62383ed",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/review-integrity-and-standalone-gates/alignment.md",
+      "revision": "59447009b9ec4fa1e36590b2ef68371dfb7503f76be55217548035c3dbd3a989"
+    },
+    {
+      "path": "openspec/changes/review-integrity-and-standalone-gates/design.md",
+      "revision": "206d147a64aa8da89171cbe6d71cdc67fbe06b6f7a732a9451d97b3d1ad4de2a"
+    },
+    {
+      "path": "openspec/changes/review-integrity-and-standalone-gates/proposal.md",
+      "revision": "2751bf83c28013915e8d7beb970f7b69e86dbf3de2418c6d395210b1ae62bc90"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "四项同属审查完整性与 CLI 强制主题，共享提示词组装面与 CLI 状态机，RQ-011 把单跑耦合到共享契约；拆开产生重叠 diff 与重复合并成本。产品审/技术审均低置信要拆、建议不拆；用户拍板单 run 交付。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "14844b103e3856a4ac1857a0193b7c6cf62383ed",
+      "sourceSnapshot": "f2773befe49041716cfe5d63384369e7d8010423",
+      "compared": "45e739c714e719a2d114c43a4ff9609feb92138d..ac18265ae5cde5fe94381a935b0f86bda7b62b55",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "parseFlagSetAllowPositional duplicates parseFlagSet help-check and parse-error branches; a shared helper parameterized on positional args would be more concise",
+          "locations": [
+            "internal/cli/cli.go:988"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "Standalone [Result contract] prose in ComposeStandaloneGatePrompt near-copies gate result contract; a single parameterized helper would remove the duplication",
+          "locations": [
+            "internal/validate/runner.go:74"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-c6720375b96285c39044d136"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "14844b103e3856a4ac1857a0193b7c6cf62383ed",
+      "compared": "45e739c714e719a2d114c43a4ff9609feb92138d..0505913bd3ed882f217c512311b7e4b21198821c",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "isObjectiveInterruptionReason 用原始子串匹配 HTTP 码，与 payloadHTTPErrorCode 的独立数字 token 纪律不一致；含码子串的更大 token（如 token budget 50000 exceeded 含 500）会被误分类为客观 API 原因、强制续用。建议同样用独立 token 匹配",
+          "locations": [
+            "internal/validate/workflow.go:3075"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "writeInterruptionReason 只保留首次中断原因（O_EXCL）；中断-续用-再中断不同原因时，旧原因支配后续续用判定。建议较新的 stop 事件覆盖",
+          "locations": [
+            "internal/lifecycle/journal.go:254"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-cf69277dfba5368371232ac4"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "14844b103e3856a4ac1857a0193b7c6cf62383ed",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-033",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-034",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-035",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-036",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-037",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-038",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-039",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-040",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-041",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "TestComposeStandaloneGatePrompt + 真实 gate run：共享契约/门/当前改动块齐全、无需求块、含修复的无需求块说明",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-042",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "TestComposeStandaloneGatePrompt + gate run 错误路径与 --scope：未知门/unsupported VCS/scope 注入",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-043",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "standaloneChangeBlock 三 VCS 指令文本 + git 未跟踪提示 + scope 追加",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-044",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "TestValidateStandaloneGateResult 表格 + gate report：合法规范化、PASS 含 P1/FAIL 仅 P2/RUNTIME 无 message/畸形 JSON 拒绝",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-045",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "TestCLIGateRunAndReportStandalone + 真实 CLI：多门分隔提示词、零 id 报错、无持久化",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-046",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "TestCLIGateRunAndReportStandalone + gate report：标注与结果展示、畸形拒绝、无存档",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-047",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "直接归属者结构测试 + 真实 CLI（受影响重跑）",
+        "observation": "TestResumeGuardForcesResumeOrUserAuthorizationForGates + 真实 CLI：未授权拒绝指示恢复、--user-requested 放行且来源记录",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "scratch 仓库按文档化流程执行（--root /tmp，不碰交付）",
+        "observation": "需求产物变更未分类→prepare 被拒；requirement --meaning preserved --confirmed 后，无记录结果的门放行、已有权威 PASS 的门仍被权威守卫拦下",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-048",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "scratch 仓库按文档化流程执行（--root /tmp，不碰交付）",
+        "observation": "独立 carry 记录 INHERIT→同门仍被权威守卫拦下；RERUN→重置、可重派",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-050",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "scratch 仓库按文档化流程执行（--root /tmp，不碰交付）",
+        "observation": "门提示词中途修改有记录结果→被拒；carry --main-agent 后提示词变化的门可重派、未变化的 action 保持权威拦下",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-049",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "scratch 仓库按文档化流程执行（--root /tmp，不碰交付）",
+        "observation": "门提示词变化无记录结果→放行；需求产物变化无记录结果→仍被冻结守卫拦下；--meaning preserved --confirmed 后放行",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "继承前一波结果，本轮不重跑",
+        "observation": "retained from prior wave PASS",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "scratch 仓库按文档化流程执行（--root /tmp，不碰交付）",
+        "observation": "宿主 SubagentStop 带 HTTP 429→CLI 自动记录中断原因；同目标 re-prepare 被拒并指示恢复原代理",
+        "oracleResult": "PASS"
+      },
+      {
+        "caseId": "CASE-052",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "scratch 仓库按文档化流程执行（--root /tmp，不碰交付）",
+        "observation": "宿主无原因 stop→记录未知；re-prepare 触发强制询问用户分支；--user-requested 放行且来源记录",
+        "oracleResult": "PASS"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 540040281,
+    "inputCacheHitTokens": 535206016,
+    "inputCacheMissTokens": 4834265,
+    "outputTokens": 1776717,
+    "dispatches": {
+      "dispatch-24337303e804128169fe8208": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 2834304,
+        "inputCacheMissTokens": 201205,
+        "outputTokens": 44477,
+        "totalInputTokens": 3035509,
+        "source": "transcript"
+      },
+      "dispatch-26edd6ef7dae8694ecf67983": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 11097088,
+        "inputCacheMissTokens": 159173,
+        "outputTokens": 40607,
+        "totalInputTokens": 11256261,
+        "source": "transcript"
+      },
+      "dispatch-29d43c517eb4835dc0ac3437": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 22902784,
+        "inputCacheMissTokens": 243354,
+        "outputTokens": 57635,
+        "totalInputTokens": 23146138,
+        "source": "transcript"
+      },
+      "dispatch-2e2fcf6d7ab170e4adff3ef1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 2217984,
+        "inputCacheMissTokens": 98560,
+        "outputTokens": 44819,
+        "totalInputTokens": 2316544,
+        "source": "transcript"
+      },
+      "dispatch-319f4d5c6880e1a4f91fa31f": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3ec65f8374931877a593c5ab": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 16999424,
+        "inputCacheMissTokens": 261950,
+        "outputTokens": 65645,
+        "totalInputTokens": 17261374,
+        "source": "transcript"
+      },
+      "dispatch-45db567fa3eb1c7ea37af0cc": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 323456,
+        "inputCacheMissTokens": 57894,
+        "outputTokens": 11881,
+        "totalInputTokens": 381350,
+        "source": "transcript"
+      },
+      "dispatch-4721be2b76a908f51512ae64": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 19456,
+        "inputCacheMissTokens": 53306,
+        "outputTokens": 1080,
+        "totalInputTokens": 72762,
+        "source": "transcript"
+      },
+      "dispatch-4b2e1ec4e656a95802596946": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 16384,
+        "inputCacheMissTokens": 2738,
+        "outputTokens": 143,
+        "totalInputTokens": 19122,
+        "source": "transcript"
+      },
+      "dispatch-4f50d8edf5a476bdba3443f2": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 155302016,
+        "inputCacheMissTokens": 584364,
+        "outputTokens": 301889,
+        "totalInputTokens": 155886380,
+        "source": "transcript"
+      },
+      "dispatch-50bd3c4f24338b803b36fdaf": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 590720,
+        "inputCacheMissTokens": 79427,
+        "outputTokens": 27472,
+        "totalInputTokens": 670147,
+        "source": "transcript"
+      },
+      "dispatch-527fa143d61573b10c436f17": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 4190464,
+        "inputCacheMissTokens": 225532,
+        "outputTokens": 39815,
+        "totalInputTokens": 4415996,
+        "source": "transcript"
+      },
+      "dispatch-56cd619569c1248acbdf2e8e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1867520,
+        "inputCacheMissTokens": 185915,
+        "outputTokens": 32260,
+        "totalInputTokens": 2053435,
+        "source": "transcript"
+      },
+      "dispatch-5db101259e0bb5a9b803b2c6": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 16384,
+        "inputCacheMissTokens": 2742,
+        "outputTokens": 143,
+        "totalInputTokens": 19126,
+        "source": "transcript"
+      },
+      "dispatch-5eaaa791df2e3fff580a852c": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 75224320,
+        "inputCacheMissTokens": 452956,
+        "outputTokens": 218118,
+        "totalInputTokens": 75677276,
+        "source": "transcript"
+      },
+      "dispatch-7cf429ee60f017753b747b28": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 78736768,
+        "inputCacheMissTokens": 354280,
+        "outputTokens": 276512,
+        "totalInputTokens": 79091048,
+        "source": "transcript"
+      },
+      "dispatch-863c08e5b8e8ac7ce3500d14": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 107839104,
+        "inputCacheMissTokens": 423445,
+        "outputTokens": 201677,
+        "totalInputTokens": 108262549,
+        "source": "transcript"
+      },
+      "dispatch-c6720375b96285c39044d136": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 3437952,
+        "inputCacheMissTokens": 176805,
+        "outputTokens": 25774,
+        "totalInputTokens": 3614757,
+        "source": "transcript"
+      },
+      "dispatch-cf69277dfba5368371232ac4": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 8718080,
+        "inputCacheMissTokens": 249114,
+        "outputTokens": 52648,
+        "totalInputTokens": 8967194,
+        "source": "transcript"
+      },
+      "dispatch-d04b1e389eaab424b9f67172": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 24234496,
+        "inputCacheMissTokens": 283972,
+        "outputTokens": 69319,
+        "totalInputTokens": 24518468,
+        "source": "transcript"
+      },
+      "dispatch-dcc04974f39100543107e85e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 360704,
+        "inputCacheMissTokens": 77255,
+        "outputTokens": 32230,
+        "totalInputTokens": 437959,
+        "source": "transcript"
+      },
+      "dispatch-e39d09ee8ff78bffab468c98": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 814080,
+        "inputCacheMissTokens": 85522,
+        "outputTokens": 38004,
+        "totalInputTokens": 899602,
+        "source": "transcript"
+      },
+      "dispatch-f125d7af6e595a5b41d04fb0": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 6843520,
+        "inputCacheMissTokens": 155530,
+        "outputTokens": 46921,
+        "totalInputTokens": 6999050,
+        "source": "transcript"
+      },
+      "dispatch-f3e70ab804bb9018a2ca18e3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 8411904,
+        "inputCacheMissTokens": 229478,
+        "outputTokens": 36848,
+        "totalInputTokens": 8641382,
+        "source": "transcript"
+      },
+      "dispatch-f4945475df2cd81d15489181": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1419136,
+        "inputCacheMissTokens": 93498,
+        "outputTokens": 44588,
+        "totalInputTokens": 1512634,
+        "source": "transcript"
+      },
+      "dispatch-f668aa673a53bfd3cd2eae18": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 515968,
+        "inputCacheMissTokens": 41717,
+        "outputTokens": 48742,
+        "totalInputTokens": 557685,
+        "source": "transcript"
+      },
+      "dispatch-f7d3b2a92a5c8d8d69361665": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 255616,
+        "inputCacheMissTokens": 51791,
+        "outputTokens": 17321,
+        "totalInputTokens": 307407,
+        "source": "transcript"
+      },
+      "dispatch-fa8b78fcbdf79bc2e4ae84c9": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 16384,
+        "inputCacheMissTokens": 2742,
+        "outputTokens": 149,
+        "totalInputTokens": 19126,
+        "source": "transcript"
+      }
+    }
+  }
+}
