@@ -15,6 +15,10 @@ type eventRecord struct {
 	Identity       string `json:"identity,omitempty"`
 	Correlation    string `json:"correlation,omitempty"`
 	TranscriptPath string `json:"transcriptPath,omitempty"`
+	// Reason 是宿主 stop/error 事件携带的中断原因（含 HTTP 错误码 429/503/402 等），
+	// 由 lifecycle capture 在子代理中断时自动提取并记录（RQ-013）；宿主未提供时记
+	// 录"未知"。供续用判定（RQ-007 三分支）与中断派发的生命周期凭证读取。
+	Reason string `json:"reason,omitempty"`
 }
 
 type bindingRecord struct {
@@ -51,6 +55,13 @@ func recordEvent(root string, record eventRecord) (bool, error) {
 	duplicate, err := writeEventAt(runEventPath(root, binding.RunID, binding.DispatchID, record.Event), record)
 	if err != nil {
 		return false, err
+	}
+	// RQ-013：stop 事件带中断原因时写入派发级原因记录，供"start + 已记录中断原因"
+	// 作为被中断派发的中断凭证读取（即使 stop 配对事件缺失也能读到原因）。
+	if record.Event == eventStop && record.Reason != "" {
+		if err := writeInterruptionReason(root, binding.RunID, binding.DispatchID, record.Reason); err != nil {
+			return false, err
+		}
 	}
 	if record.Event == eventStart && record.Correlation != "" {
 		if err := bindPendingStops(root, binding, record.Correlation); err != nil {
@@ -235,6 +246,37 @@ func DispatchTranscriptPath(root, runID, dispatchID string) (string, string, err
 		return "", "", fmt.Errorf("lifecycle event journal entry is inconsistent")
 	}
 	return binding.Provider, record.TranscriptPath, nil
+}
+
+// writeInterruptionReason persists a dispatch-level interruption reason record
+// (RQ-013). The record lives next to the dispatch's event journal so the reason
+// is readable even when the stop event pairing is missing or was cleaned up.
+func writeInterruptionReason(root, runID, dispatchID, reason string) error {
+	data, err := json.MarshalIndent(eventRecord{Reason: reason}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	path := interruptionReasonPath(root, runID, dispatchID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if os.IsExist(err) {
+		return nil // 首个原因已记录，保留最初的客观原因
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func interruptionReasonPath(root, runID, dispatchID string) string {
+	return filepath.Join(runLifecycleRoot(root, runID), "events", digest(dispatchID), "interruption.json")
 }
 
 func eventExists(root, runID, dispatchID, provider, identity, event string) (bool, error) {

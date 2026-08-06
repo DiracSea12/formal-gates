@@ -17,9 +17,10 @@ import (
 )
 
 type workflowLifecycleStub struct {
-	verification lifecycle.Verification
-	binds        [][4]string
-	transcript   string
+	verification       lifecycle.Verification
+	binds              [][4]string
+	transcript         string
+	interruptionReason string
 }
 
 func (*workflowLifecycleStub) Begin(string, string) error { return nil }
@@ -47,6 +48,10 @@ func (stub *workflowLifecycleStub) ResolveClaimIdentity(_, _, preferred string) 
 		return strings.TrimSpace(preferred), nil
 	}
 	return "", fmt.Errorf("reviewer identity is required when no subagent start observation exists")
+}
+
+func (stub *workflowLifecycleStub) InterruptionReason(_, _, _ string) (string, error) {
+	return stub.interruptionReason, nil
 }
 
 func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
@@ -121,15 +126,27 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err != nil {
+	// RQ-007：认领未出结果且快照/任务不变时，CLI 强制续用原代理，拒绝默认重派发。
+	before := stateBytes(t, root, state.RunID)
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "resume the original agent") {
+		t.Fatalf("claimed interrupted dispatch was not forced to resume: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected resume changed state")
+	}
+	// RQ-008：只有用户显式授权（--user-requested）才可放行新派发，来源记入 ReviewOverrides。
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", true, "user reopened the review"); err != nil {
 		t.Fatal(err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
+	if state.ReviewOverrides["qa-review"] == "" {
+		t.Fatalf("user-requested reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
+	}
 	second := openDispatchID(state, "action", "qa-review")
 	if first == second || state.Dispatches[first].Status != "STALE" || state.Dispatches[second].Attempt != 2 {
 		t.Fatalf("retry did not create a fresh stale-bound dispatch: %#v", state.Dispatches)
 	}
-	before := stateBytes(t, root, state.RunID)
+	before = stateBytes(t, root, state.RunID)
 	if _, err := ClaimDispatch(root, pkg, state.RunID, second, "reviewer-one"); err == nil || !strings.Contains(err.Error(), "already reserved") {
 		t.Fatalf("claimed interrupted reviewer was reused: %v", err)
 	}
@@ -255,7 +272,7 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 func TestGatePromptExcludesFrozenArtifactsAndResultUsesDispatch(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "gate-binding")
-	prompt, err := PrepareGate(root, pkg, state.RunID, "quality")
+	prompt, err := PrepareGate(root, pkg, state.RunID, "quality", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,13 +371,14 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 	if state.PreRepairSnapshot != prior || state.CurrentSnapshot != gitHead(t, root) {
 		t.Fatalf("repair boundary was not resolved natively: %#v", state)
 	}
-	qaDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
+	// RQ-005：修复快照后存在旧快照 PASS 待 Carry 决策时，先处置 Carry 才能继续 qa-*。
+	carry := prepareDispatch(t, root, pkg, state.RunID, "carry")
+	state, err = RecordCarry(root, pkg, state.RunID, carry, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "repair does not touch architecture behavior"}}, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	carry := prepareDispatch(t, root, pkg, state.RunID, "carry")
-	state, err = RecordCarry(root, pkg, state.RunID, carry, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "repair does not touch architecture behavior"}}, "", false, "")
+	qaDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,6 +821,13 @@ func TestLateRouteGateRepairStartsAFreshAttemptInTheNextWave(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = advanceRepair(t, root, pkg, state, "late-route")
+	// RQ-005：修复快照后 quality 的旧 PASS 待 Carry 决策，先处置 Carry 才能重派发
+	// 其他门。
+	carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
+	state, err = RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "quality", Decision: "INHERIT", Message: "repair is outside quality ownership"}}, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	dispatchID = prepareAndClaim(t, root, pkg, state.RunID, "architecture", "repaired-architecture")
 	state, err = LoadRunState(root, state.RunID)
@@ -1167,8 +1192,16 @@ func TestChangedSelectedGateCanBeReDispatched(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "re-dispatch", "custom", []string{"quality"})
 	state = recordGateResult(t, root, pkg, state, "quality", "re-dispatch-quality", "PASS", "", nil)
 	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality"); err != nil {
-		t.Fatalf("changed gate could not be re-dispatched: %v", err)
+	// RQ-005：门提示词内容变化且该目标已有记录结果时，先记录主代理 Carry 判定才能重派发。
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "prompt changed") {
+		t.Fatalf("changed gate with a recorded result was re-dispatched before a Carry judgment: %v", err)
+	}
+	state, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "accept catalog; quality needs a fresh review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
+		t.Fatalf("changed gate could not be re-dispatched after the Carry judgment: %v", err)
 	}
 }
 
@@ -1188,8 +1221,37 @@ func TestChangedGateStaysReDispatchableAfterMainAgentCarry(t *testing.T) {
 	if state.CatalogRevision != catalog.CatalogRevision {
 		t.Fatalf("carry did not accept the catalog: %v", state.CatalogRevision)
 	}
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality"); err != nil {
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
 		t.Fatalf("changed gate was not re-dispatchable after carry accepted the catalog: %v", err)
+	}
+}
+
+func TestMidFlightGateChangeDisposableAfterIndependentCarry(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "mid-flight-dispose", "custom", []string{"architecture", "quality"})
+	state = recordGateResult(t, root, pkg, state, "architecture", "mid-architecture-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "mid-quality-1", "PASS", "", nil)
+	state = advanceRepair(t, root, pkg, state, "mid-flight")
+	carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
+	state, err := RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "quality", Decision: "INHERIT", Message: "repair does not touch quality"}}, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordGateResult(t, root, pkg, state, "architecture", "mid-architecture-2", "PASS", "", nil)
+	if state.CompletedReviewWaves != 2 || state.PreRepairSnapshot != "" {
+		t.Fatalf("repair cycle did not complete: %#v", state)
+	}
+	// architecture 未被本次 Carry 判定覆盖，提示词变化使其记录结果成为待判继承。
+	writeTestFile(t, filepath.Join(pkg, "gates", "architecture.md"), "new architecture checks\n")
+	if _, err := PrepareGate(root, pkg, state.RunID, "architecture", false, ""); err == nil || !strings.Contains(err.Error(), "prompt changed") {
+		t.Fatalf("prompt-changed architecture was re-dispatched before a judgment: %v", err)
+	}
+	// 主代理 Carry 处置中途修改（B3）：即使先前已记录独立 Carry 判定，目录变更时仍可用。
+	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "accept catalog; architecture needs a fresh review"); err != nil {
+		t.Fatalf("mid-flight disposal was rejected: %v", err)
+	}
+	if _, err := PrepareGate(root, pkg, state.RunID, "architecture", false, ""); err != nil {
+		t.Fatalf("disposed architecture could not be re-dispatched: %v", err)
 	}
 }
 
@@ -1198,7 +1260,15 @@ func TestBaseOnlyPromptChangeEnablesPerGateReDispatch(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "base-change", "custom", []string{"quality"})
 	state = recordGateResult(t, root, pkg, state, "quality", "base-change-quality", "PASS", "", nil)
 	writeTestFile(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "new shared contract\n")
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality"); err != nil {
+	// RQ-005：共享契约变化同样使门提示词移动，先记录主代理 Carry 判定才能重派发。
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "prompt changed") {
+		t.Fatalf("base-only change was re-dispatched before a Carry judgment: %v", err)
+	}
+	state, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "accept catalog; quality needs a fresh review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
 		t.Fatalf("base-only change did not enable per-gate re-dispatch: %v", err)
 	}
 }
@@ -1715,7 +1785,12 @@ func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P3", Message: "bad"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
 		t.Fatalf("invalid severity accepted: %v", err)
 	}
-	state = recordProductReview(t, root, pkg, state)
+	// P3 的 FAIL 未被记录，next 派发仍认领未出结果；补记合法 PASS 完成它，使 RQ-007
+	// 放行下一次准备（否则强制续用 next）。
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	readiness := recordReadiness(t, root, pkg, state)
 	dispatchID = prepareDispatch(t, root, pkg, readiness.RunID, "start-readiness")
 	if _, err := RecordAction(root, pkg, readiness.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "technical gap"}}, false, ""); err != nil {
@@ -2013,7 +2088,13 @@ func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
 		t.Fatalf("ungraded product-review finding accepted: %v", err)
 	}
-	state = recordProductReview(t, root, pkg, state)
+	// 无严重度的 FAIL 未被记录，dispatchID 派发仍认领未出结果；补记合法 PASS 完成它，
+	// 使 RQ-007 放行下一次准备。
+	var err error
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
 	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
 		t.Fatalf("ungraded start-readiness finding accepted: %v", err)
@@ -2261,7 +2342,7 @@ func prepareDispatch(t *testing.T, root, pkg, runID, target string, modes ...str
 	}
 	var err error
 	if target == "quality" || target == "architecture" || target == mergeGateID {
-		_, err = PrepareGate(root, pkg, runID, target)
+		_, err = PrepareGate(root, pkg, runID, target, false, "")
 	} else {
 		_, err = PrepareAction(root, pkg, runID, target, mode, false, "")
 	}
@@ -2394,7 +2475,7 @@ func TestBlackboxQADesignsAndReviewsInIsolationWorktree(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "blackbox-isolation"), "full", nil)
 	worktree := createQAWorktree(t, root, state)
-	state, err := RegisterQAWorktree(root, state.RunID, worktree)
+	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2473,7 +2554,7 @@ func TestRegisterQAWorktreeRejectsInjectedRevisionMismatch(t *testing.T) {
 	worktree := createQAWorktree(t, root, state)
 	// 注入文档在隔离工作区内被改写（工作树状态、不影响原生标识校验），登记时被拒。
 	writeTestFile(t, filepath.Join(worktree, "requirements.md"), "stale injected requirement\n")
-	if _, err := RegisterQAWorktree(root, state.RunID, worktree); err == nil || !strings.Contains(err.Error(), "does not match the run revision") {
+	if _, err := RegisterQAWorktree(root, pkg, state.RunID, worktree); err == nil || !strings.Contains(err.Error(), "does not match the run revision") {
 		t.Fatalf("qa-worktree registration with stale injected revision was accepted: %v", err)
 	}
 }
@@ -2497,7 +2578,7 @@ func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
 	// 黑盒 review PASS 后快照放行：黑盒派发走 --mode blackbox、绑隔离工作区（== 基线），
 	// 开发提交后主工作区 HEAD 已前进，但隔离工作区仍停在基线，身份校验不受影响。
 	worktree := createQAWorktree(t, root, state)
-	state, err = RegisterQAWorktree(root, state.RunID, worktree)
+	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
 		t.Fatal(err)
 	}

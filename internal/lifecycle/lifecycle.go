@@ -13,6 +13,9 @@ const (
 	Verified    = "VERIFIED"
 	Rejected    = "REJECTED"
 	Unavailable = "UNAVAILABLE"
+	// Interrupted 是被中断派发的中断凭证：宿主只有 start 事件但已记录中断原因时，
+	// 生命周期校验接受该派发为"已中断"而非 REJECTED（RQ-013）。
+	Interrupted = "INTERRUPTED"
 )
 
 type CaptureResult struct {
@@ -84,7 +87,16 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if adapter.transcriptPath != nil {
 		transcriptPath = adapter.transcriptPath(decoded)
 	}
-	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation, TranscriptPath: transcriptPath}
+	// RQ-013：从宿主 stop/error 事件提取中断原因（含 HTTP 错误码）写入事件记录；宿主
+	// 未提供原因时记录"未知"。仅 stop/error 事件承载原因，start 事件不记录。
+	reason := ""
+	if event == eventStop && adapter.reason != nil {
+		reason = adapter.reason(decoded)
+		if reason == "" {
+			reason = "未知"
+		}
+	}
+	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation, TranscriptPath: transcriptPath, Reason: reason}
 	duplicate := true
 	for _, root := range roots {
 		alreadyExists, err := recordEvent(root, record)
@@ -245,6 +257,20 @@ func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 		result.Diagnostic = "matching start and stop events observed"
 		return result, nil
 	}
+	// RQ-013：被中断派发接受"start 事件 + 已记录中断原因"作为中断凭证（而非 REJECTED）。
+	// 子代理被中断（如 API 瞬时 429/503）时宿主可能只有 start 事件 + 中断原因；该派发
+	// 仍须可经生命周期验证继续处置，而不是被当成无配对事件拒绝。
+	if result.StartObserved {
+		reason, reasonErr := DispatchInterruptionReason(root, binding.RunID, binding.DispatchID)
+		if reasonErr != nil {
+			return Verification{}, reasonErr
+		}
+		if strings.TrimSpace(reason) != "" {
+			result.Outcome = Interrupted
+			result.Diagnostic = "start event observed with recorded interruption reason: " + reason
+			return result, nil
+		}
+	}
 	result.Outcome = Rejected
 	missing := []string{}
 	if !result.StartObserved {
@@ -255,4 +281,27 @@ func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 	}
 	result.Diagnostic = "missing matching " + strings.Join(missing, " and ") + " event"
 	return result, nil
+}
+
+// DispatchInterruptionReason returns the recorded interruption reason for a
+// dispatch (RQ-013). The reason is captured from the host stop/error event at
+// capture time and persisted both on the stop event record and in a dedicated
+// dispatch-level reason record. The dedicated record takes precedence so the
+// reason stays readable even when the stop event pairing is missing. A dispatch
+// without a recorded reason yields an empty string.
+func DispatchInterruptionReason(root, runID, dispatchID string) (string, error) {
+	path := interruptionReasonPath(root, runID, dispatchID)
+	if record, err := readEvent(path); err == nil && record.Reason != "" {
+		return record.Reason, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	record, err := readEvent(runEventPath(root, runID, dispatchID, eventStop))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return record.Reason, nil
 }

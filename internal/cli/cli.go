@@ -54,6 +54,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runHook(program, args[1:], streams)
 	case "lifecycle":
 		return runLifecycle(program, args[1:], streams)
+	case "gate":
+		return runGate(program, args[1:], streams)
 	case "canary":
 		return runCanary(program, args[1:], streams)
 	default:
@@ -302,23 +304,25 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		return printValue(streams.Stdout, state, err)
 	case "qa-worktree":
 		fs := newFlagSet("workflow qa-worktree", streams)
-		root, _ := rootFlags(fs)
+		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		worktree := fs.String("worktree", "", "QA isolation worktree path (created from the base snapshot by the host)")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.RegisterQAWorktree(*root, *runID, *worktree)
+		state, err := validate.RegisterQAWorktree(*root, *pkg, *runID, *worktree)
 		return printValue(streams.Stdout, state, err)
 	case "prepare-gate":
 		fs := newFlagSet("workflow prepare-gate", streams)
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		gate := fs.String("gate", "", "discovered gate id")
+		userRequested := fs.Bool("user-requested", false, "user explicitly authorizes a fresh dispatch instead of resuming the interrupted claimed subagent (records the authorization source)")
+		userReason := fs.String("user-reason", "", "user reason for the override")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		prompt, err := validate.PrepareGate(*root, *pkg, *runID, *gate)
+		prompt, err := validate.PrepareGate(*root, *pkg, *runID, *gate, *userRequested, *userReason)
 		if err != nil {
 			return 1, err
 		}
@@ -523,6 +527,81 @@ func runCarry(args []string, streams IO) (int, error) {
 	}
 	state, err := validate.RecordCarry(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *mainAgent, *mainReason)
 	return printValue(streams.Stdout, state, err)
+}
+
+// standalonePromptSeparator visually splits multiple standalone gate prompts
+// printed by gate run so the host can hand each to its own zero-context reviewer.
+const standalonePromptSeparator = "------------------------------------------------"
+
+// runGate handles the standalone gate commands (RQ-010): gate run assembles and
+// prints one detached review prompt per gate id, and gate report validates and
+// displays a reviewer result. Neither touches run state, persists anything, or
+// consumes review-round limits.
+func runGate(program string, args []string, streams IO) (int, error) {
+	if len(args) == 0 {
+		return 1, fmt.Errorf("gate subcommand is required")
+	}
+	if isHelpArg(args[0]) {
+		printUsage(streams.Stdout, program)
+		return 0, nil
+	}
+	sub, args := args[0], args[1:]
+	switch sub {
+	case "run":
+		fs := newFlagSet("gate run", streams)
+		root, pkg := rootFlags(fs)
+		vcs := fs.String("vcs", "git", "external VCS name")
+		scope := fs.String("scope", "", "optional logical review scope")
+		ids, code, err, done := parseFlagSetAllowPositional(fs, args, streams.Stdout)
+		if done {
+			return code, err
+		}
+		if len(ids) == 0 {
+			return 1, fmt.Errorf("gate run requires at least one gate id")
+		}
+		catalog, err := validate.LoadPromptCatalog(*pkg)
+		if err != nil {
+			return 1, err
+		}
+		prompts := make([]string, 0, len(ids))
+		for _, id := range ids {
+			prompt, err := validate.ComposeStandaloneGatePrompt(catalog, id, *root, *vcs, *scope)
+			if err != nil {
+				return 1, err
+			}
+			prompts = append(prompts, prompt)
+		}
+		fmt.Fprint(streams.Stdout, strings.Join(prompts, "\n\n"+standalonePromptSeparator+"\n\n"))
+		return 0, nil
+	case "report":
+		fs := newFlagSet("gate report", streams)
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		payload, err := io.ReadAll(streams.Stdin)
+		if err != nil {
+			return 1, err
+		}
+		result, err := validate.ValidateStandaloneGateResult(payload)
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintln(streams.Stdout, "脱离 run 的快速检查、非正式结论、未持久化。")
+		fmt.Fprintf(streams.Stdout, "status: %s\n", result.Status)
+		if strings.TrimSpace(result.Message) != "" {
+			fmt.Fprintf(streams.Stdout, "message: %s\n", strings.TrimSpace(result.Message))
+		}
+		for _, finding := range result.Findings {
+			line := fmt.Sprintf("- [%s] %s", finding.Severity, strings.TrimSpace(finding.Message))
+			if len(finding.Locations) != 0 {
+				line += " (" + strings.Join(finding.Locations, ", ") + ")"
+			}
+			fmt.Fprintln(streams.Stdout, line)
+		}
+		return 0, nil
+	default:
+		return 1, fmt.Errorf("unknown gate subcommand: %s", sub)
+	}
 }
 
 func runHook(program string, args []string, streams IO) (int, error) {
@@ -888,20 +967,39 @@ func hasHelpArg(args []string) bool {
 	}
 	return false
 }
-func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, bool) {
+// parseFlagSetParsed parses args with the shared help-check and parse-error
+// branches and returns the remaining positional args. parseFlagSet rejects them,
+// while parseFlagSetAllowPositional returns them for commands that accept
+// positional arguments (gate run <ids...>).
+func parseFlagSetParsed(fs *flag.FlagSet, args []string, help io.Writer) ([]string, int, error, bool) {
 	if hasHelpArg(args) {
 		fs.SetOutput(help)
 		fs.Usage()
-		return 0, nil, true
+		return nil, 0, nil, true
 	}
 	if err := fs.Parse(args); err != nil {
-		return 1, err, true
+		return nil, 1, err, true
 	}
-	if fs.NArg() != 0 {
+	return fs.Args(), 0, nil, false
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string, help io.Writer) (int, error, bool) {
+	positional, code, err, done := parseFlagSetParsed(fs, args, help)
+	if done {
+		return code, err, true
+	}
+	if len(positional) != 0 {
 		return 1, fmt.Errorf("%s does not accept positional arguments", fs.Name()), true
 	}
 	return 0, nil, false
 }
+
+// parseFlagSetAllowPositional is parseFlagSet's variant for commands that accept
+// positional arguments (gate run <ids...>); it returns the remaining positional
+// args instead of rejecting them.
+func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer) ([]string, int, error, bool) {
+	return parseFlagSetParsed(fs, args, help)
+}
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }

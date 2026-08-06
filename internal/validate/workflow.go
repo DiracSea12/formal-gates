@@ -687,8 +687,15 @@ func RecordSettledFindings(root, packageRoot, runID, actionID string, confirm, d
 // base) without re-reading or re-hashing the worktree files. Each blackbox
 // design round recreates or reuses this worktree; it never contains development
 // code.
-func RegisterQAWorktree(root, runID, worktree string) (RunState, error) {
+func RegisterQAWorktree(root, packageRoot, runID, worktree string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
+			return err
+		}
 		worktree = strings.TrimSpace(worktree)
 		if worktree == "" {
 			return fmt.Errorf("QA isolation worktree path is required")
@@ -716,8 +723,12 @@ func RegisterQAWorktree(root, runID, worktree string) (RunState, error) {
 	})
 }
 
-func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", false, "", func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+// PrepareGate prepares a gate review dispatch. userRequested is the explicit
+// user override signal for the RQ-008 resume rule: when a claimed, unchanged
+// dispatch for the same gate is interrupted, the CLI forces a resume unless the
+// user authorizes a fresh dispatch (the source is recorded in ReviewOverrides).
+func PrepareGate(root, packageRoot, runID, gateID string, userRequested bool, userReason string) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return "", err
 		}
@@ -725,11 +736,8 @@ func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("gate %q is not in this run's discovered catalog", gateID)
 		}
-		if result.Status == "PASS" && result.Snapshot != state.CurrentSnapshot {
-			return "", fmt.Errorf("gate %q is awaiting a Carry decision", gateID)
-		}
 		if semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) && !gatePromptChanged(*state, catalog, gateID) {
-			return "", fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot", gateID, result.Status)
+			return "", fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot; re-review requires a changed gate prompt or a repair snapshot", gateID, result.Status)
 		}
 		return ComposeGatePrompt(catalog, gateID, route)
 	})
@@ -744,7 +752,7 @@ func PrepareGate(root, packageRoot, runID, gateID string) (string, error) {
 // source is recorded in ReviewOverrides.
 func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequested bool, userReason string) (string, error) {
 	if actionID == "development-worker" {
-		return prepareDevelopmentAction(root, packageRoot, runID)
+		return prepareDevelopmentAction(root, packageRoot, runID, userRequested, userReason)
 	}
 	reviewerRequired := actionID != "requirements-clarification"
 	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
@@ -763,8 +771,10 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 			}
 			state.ReviewOverrides[actionID] = reason
 		}
-		if actionID == "qa-execution" && semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
-			return "", fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
+		// R 修复清单 item 3：黑盒/白盒各自独立派发、并行执行，同一 snapshot 下每个 mode
+		// 的 qa-execution 各记录一次；同 mode 已出权威结果时才挡后续同 mode 派发。
+		if actionID == "qa-execution" && qaExecutionModeResulted(*state, mode) {
+			return "", fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.QAExecution.Status)
 		}
 		detail, err := actionPromptDetail(*state, catalog, actionID, mode)
 		if err != nil {
@@ -783,6 +793,22 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
+		}
+		// RQ-005 硬闸：任何未处理完毕的继承判定未处理完时拒绝继续 / 重跑入口。
+		// carry 是处置命令，准备它的审查派发在待决时放行（否则无法处置、死端）。
+		if !(targetKind == "action" && target == "carry") {
+			if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
+				return err
+			}
+		}
+		// RQ-007 续用强制：同一职责、源快照不变、任务内容不变且未带 --user-requested
+		// 时，拒绝 prepare 同目标新派发，指示恢复原代理继续同一派发；用户显式授权
+		// （RQ-008）时记录来源后放行新派发。
+		if err := requireResumeInterrupted(root, *state, catalog, targetKind, target, mode); err != nil {
+			if !userRequested {
+				return err
+			}
+			recordReviewOverride(state, target, userReason)
 		}
 		// 开发开始后 qa-design/qa-review 派发 mode 必填：省略 --mode 会静默绑主工作区、
 		// 黑盒代理可读开发代码、隔离被绕过。快速路径（开发尚未开始，路线未确认时的预演
@@ -817,7 +843,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if err != nil {
 			return err
 		}
-		staleOpenDispatches(state, targetKind, target)
+		staleOpenDispatches(state, targetKind, target, mode)
 		source := state.CurrentSnapshot
 		if blackbox {
 			source = state.BaseSnapshot
@@ -940,7 +966,8 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		return strings.Join(append(accepted, pending...), "\n\n"), nil
 	}
 	if actionID == "qa-execution" {
-		required := qaExecutionRequiredCases(state)
+		// R 修复清单 item 3：按派发 mode 过滤需执行集，黑盒/白盒各自独立派发、并行执行。
+		required := qaExecutionRequiredCases(state, mode)
 		var lines []string
 		for _, testCase := range required {
 			lines = append(lines, formatQACase(testCase, false))
@@ -992,9 +1019,13 @@ func pendingQACases(cases []QACase, mode string) []QACase {
 // complete approved case set; after a user-authorized snapshot release of the
 // blackbox gate, only the approved cases are executed and the unapproved blackbox
 // cases are treated as PASS (the origin is recorded by the snapshot override).
-func qaExecutionRequiredCases(state RunState) []QACase {
+// When the dispatch carries a mode, the required set is filtered to that mode so
+// blackbox and whitebox execution each dispatch independently and run in parallel
+// (R 修复清单 item 3: 执行按 mode 分流). An empty mode keeps the merged set for
+// existing single-dispatch flows and merge QA.
+func qaExecutionRequiredCases(state RunState, mode string) []QACase {
 	if !snapshotBlackboxReleased(state) {
-		return state.QACases
+		return filterQACasesByMode(state.QACases, mode)
 	}
 	approved := []QACase{}
 	for _, testCase := range state.QACases {
@@ -1002,7 +1033,46 @@ func qaExecutionRequiredCases(state RunState) []QACase {
 			approved = append(approved, testCase)
 		}
 	}
-	return approved
+	return filterQACasesByMode(approved, mode)
+}
+
+// filterQACasesByMode returns only the cases whose mode matches the dispatch mode;
+// an empty mode returns every case unchanged.
+func filterQACasesByMode(cases []QACase, mode string) []QACase {
+	if mode == "" {
+		return cases
+	}
+	filtered := []QACase{}
+	for _, testCase := range cases {
+		if testCase.Mode == mode {
+			filtered = append(filtered, testCase)
+		}
+	}
+	return filtered
+}
+
+// qaExecutionModeResulted reports whether the run already has an authoritative QA
+// Execution result for the dispatch mode at the current snapshot. With R 修复清单
+// item 3's per-mode dispatch, blackbox and whitebox each record independently: a
+// mode-scoped dispatch is authoritative only once that mode has recorded cases
+// (or a RUNTIME_ERROR was recorded); an empty-mode dispatch is authoritative once
+// any PASS/FAIL result exists (the single merged-set flow).
+func qaExecutionModeResulted(state RunState, mode string) bool {
+	if state.QAExecution.Snapshot != state.CurrentSnapshot {
+		return false
+	}
+	if state.QAExecution.Status == "RUNTIME_ERROR" {
+		return true
+	}
+	if mode == "" {
+		return state.QAExecution.Status == "PASS" || state.QAExecution.Status == "FAIL"
+	}
+	for _, record := range state.QAExecution.Cases {
+		if record.Mode == mode {
+			return true
+		}
+	}
+	return false
 }
 
 func formatQACase(testCase QACase, includeReview bool) string {
@@ -1013,8 +1083,8 @@ func formatQACase(testCase QACase, includeReview bool) string {
 	return value
 }
 
-func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", false, "", func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+func prepareDevelopmentAction(root, packageRoot, runID string, userRequested bool, userReason string) (string, error) {
+	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
@@ -1041,7 +1111,8 @@ func prepareDevelopmentAction(root, packageRoot, runID string) (string, error) {
 
 func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
 			return err
 		}
 		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
@@ -1051,6 +1122,12 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		dispatch, ok := state.Dispatches[dispatchID]
 		if !ok {
 			return fmt.Errorf("unknown dispatch %q", dispatchID)
+		}
+		// RQ-005 硬闸：carry 处置派发的认领豁免，其余派发在存在待决继承判定时拒绝认领。
+		if !(dispatch.TargetKind == "action" && dispatch.Target == "carry") {
+			if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
+				return err
+			}
 		}
 		if dispatch.TargetKind == "action" && dispatch.Target == "development-worker" {
 			// 开发/修复派发是 reviewer-required；worker 一旦提交，原生 HEAD 就前进到
@@ -1108,6 +1185,9 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
 		if _, err := requireNativeCurrent(root, *state); err != nil {
@@ -1227,6 +1307,9 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 		if err != nil {
 			return err
 		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
+			return err
+		}
 		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
 		}
@@ -1245,11 +1328,8 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 		}
 		backfillDispatchCost(root, state, dispatch)
 		existing := state.Gates[gateID]
-		if existing.Status == "PASS" && existing.Snapshot != state.CurrentSnapshot {
-			return fmt.Errorf("gate %q requires a Carry decision before rerun", gateID)
-		}
 		if semanticResultRecorded(existing.Status, existing.Snapshot, state.CurrentSnapshot) && !gatePromptChanged(*state, catalog, gateID) {
-			return fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot", gateID, existing.Status)
+			return fmt.Errorf("gate %q already has an authoritative %s result for the current snapshot; re-review requires a changed gate prompt or a repair snapshot", gateID, existing.Status)
 		}
 		if normalized := strings.ToUpper(strings.TrimSpace(status)); normalized != "RUNTIME_ERROR" {
 			want := comparedRange(*state)
@@ -1282,7 +1362,11 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 
 func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseInput, runtimeError string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
 		if err := requireTransition(*state, "qa-design", ""); err != nil {
@@ -1396,7 +1480,11 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 
 func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAReviewInput, runtimeError string, setFindings []FindingInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
 		if err := requireTransition(*state, "qa-review", ""); err != nil {
@@ -1507,7 +1595,11 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 
 func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QAResultInput, runtimeError string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
 		if _, err := requireNativeCurrent(root, *state); err != nil {
@@ -1524,8 +1616,10 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			return err
 		}
 		backfillDispatchCost(root, state, dispatch)
-		if semanticResultRecorded(state.QAExecution.Status, state.QAExecution.Snapshot, state.CurrentSnapshot) {
-			return fmt.Errorf("QA Execution already has an authoritative %s result for the current snapshot", state.QAExecution.Status)
+		// R 修复清单 item 3：按派发 mode 分流，黑盒/白盒各自独立派发、并行执行——同一
+		// snapshot 下每个 mode 各记录一次，同 mode 已出权威结果时才挡后续同 mode 派发。
+		if qaExecutionModeResulted(*state, dispatch.Mode) {
+			return fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.QAExecution.Status)
 		}
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(results) != 0 {
@@ -1538,7 +1632,9 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		}
 		// 需执行集：正常流程为完整用例集；快照黑盒门经用户授权放行后只覆盖已批准用例，
 		// 未批准的（黑盒）用例不计入需执行集、验证状态视为 PASS（授权来源由快照放行记录）。
-		required := qaExecutionRequiredCases(*state)
+		// 按派发 mode 过滤（R 修复清单 item 3）：黑盒/白盒各自独立派发、并行执行时，每次
+		// 记录只覆盖该派发对应 mode 的需执行集。
+		required := qaExecutionRequiredCases(*state, dispatch.Mode)
 		// 空需执行集放行：除合并 QA 零用例既有例外外，qa-review 动作已记录 PASS（空集
 		// review 判定覆盖充分，需求 4，与快照门 blackboxReviewPassed 的空集语义一致）时
 		// 同样放行——零用例场景下 review 判定覆盖充分后 QA 执行对空集直接 PASS，避免 run
@@ -1564,22 +1660,27 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			}
 			byID[item.CaseID] = item
 		}
-		status := "PASS"
-		findings := []Finding{}
+		// 并行 mode 派发时保留其他 mode 已记录的用例结果：黑盒/白盒各自独立派发、各自
+		// 记录，共享的 QAExecution 结果累计两个 mode 的用例（R 修复清单 item 3）。同一
+		// mode 的重复记录由 qaExecutionModeResulted 挡在入口。
 		recorded := make([]QAResultRecord, 0, len(required))
+		if dispatch.Mode != "" && state.QAExecution.Snapshot == state.CurrentSnapshot {
+			for _, existing := range state.QAExecution.Cases {
+				if existing.Mode != dispatch.Mode {
+					recorded = append(recorded, existing)
+				}
+			}
+		}
 		for _, testCase := range required {
 			item, ok := byID[testCase.ID]
 			if !ok {
 				return fmt.Errorf("QA result is missing for %s", testCase.ID)
 			}
-			if item.Outcome == "FAIL" {
-				status = "FAIL"
-				findings = append(findings, Finding{Message: testCase.ID + ": " + strings.TrimSpace(item.Observation)})
-			}
 			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
 		}
 		// 快照放行后未获批准的黑盒用例：经用户授权跳过、验证状态视为 PASS（记录授权来源）。
-		if snapshotBlackboxReleased(*state) {
+		// 仅黑盒或合并（空 mode）派发补记这些跳过；白盒派发不补记黑盒用例。
+		if snapshotBlackboxReleased(*state) && (dispatch.Mode == "" || dispatch.Mode == "blackbox") {
 			for _, testCase := range state.QACases {
 				if testCase.ReviewStatus == "PASS" {
 					continue
@@ -1589,6 +1690,18 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 				}
 				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "skipped", Observation: "authorized skip (user snapshot release)", OracleResult: "authorized PASS"})
 			}
+		}
+		// 累计结果的状态与发现项：任一 mode 的任一用例 FAIL 即整体 FAIL（并行派发时
+		// 两边的结果合并到同一 QAExecution 结果）；发现项从合并后的完整用例集重新生成，
+		// 保证返修输入保留两个 mode 的失败原因。
+		status := "PASS"
+		findings := []Finding{}
+		for _, existing := range recorded {
+			if existing.Outcome != "FAIL" {
+				continue
+			}
+			status = "FAIL"
+			findings = append(findings, Finding{Message: existing.CaseID + ": " + existing.Observation})
 		}
 		message := ""
 		if isMergeVerification(*state) && len(state.QACases) == 0 {
@@ -1608,7 +1721,11 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 // 验证状态视为 PASS、qa-execution 只覆盖已批准用例。
 func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested bool, reason string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
 		currentSnapshot, err := resolveNativeSnapshot(root, state.VCS)
@@ -1735,10 +1852,13 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 			if reason == "" {
 				return fmt.Errorf("main-agent Carry requires a reason")
 			}
-			if hasRecordedCarryDecisions(*state) || (state.PreRepairSnapshot != "" && repairRerunRecorded(*state)) {
+			delta := catalogDelta(*state, catalog)
+			// 存在目录变更（RQ-005 第三类：检测到的中途修改 / 目录接受）时，主代理 Carry
+			// 是既定的处置入口，即使先前已记录过独立 Carry 判定也可用于新变更的处置
+			// （B3：该入口在存在受影响记录结果时可用，含未发生修复的中途修改场景）。
+			if len(delta) == 0 && (hasRecordedCarryDecisions(*state) || (state.PreRepairSnapshot != "" && repairRerunRecorded(*state))) {
 				return fmt.Errorf("main-agent Carry must be recorded before independent Carry or repair reruns")
 			}
-			delta := catalogDelta(*state, catalog)
 			if len(delta) != 0 {
 				state.CatalogRevision = catalog.CatalogRevision
 				state.BasePromptRevision = catalog.BaseRevision
@@ -1935,7 +2055,11 @@ func acceptCatalogHashes(state *RunState, catalog PromptCatalog) {
 
 func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		if _, err := requireCurrentDefinitions(root, *state, packageRoot); err != nil {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
 		if cycles != 1 {
@@ -1975,7 +2099,11 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	if err := requireActive(state); err != nil {
 		return RunSummary{}, err
 	}
-	if _, err := requireCurrentDefinitions(root, state, packageRoot); err != nil {
+	catalog, err := requireCurrentDefinitions(root, state, packageRoot)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	if err := requireNoPendingInheritance(root, state, catalog); err != nil {
 		return RunSummary{}, err
 	}
 	before, err := resolveNativeSnapshot(root, state.VCS)
@@ -2246,12 +2374,21 @@ func completeDispatch(state *RunState, dispatchID string) {
 	state.Dispatches[dispatchID] = dispatch
 }
 
-func staleOpenDispatches(state *RunState, targetKind, target string) {
+// staleOpenDispatches supersedes the prior open dispatches of the same target
+// when a fresh dispatch replaces them. qa-execution dispatches are mode-scoped
+// (R 修复清单 item 3: blackbox and whitebox each dispatch independently and run in
+// parallel): a fresh dispatch stales only the same-mode prior dispatches, and a
+// merged (empty-mode) dispatch stales every mode's prior dispatches.
+func staleOpenDispatches(state *RunState, targetKind, target, mode string) {
 	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind == targetKind && dispatch.Target == target && (dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED") {
-			dispatch.Status = "STALE"
-			state.Dispatches[id] = dispatch
+		if dispatch.TargetKind != targetKind || dispatch.Target != target || (dispatch.Status != "OPEN" && dispatch.Status != "CLAIMED") {
+			continue
 		}
+		if target == "qa-execution" && mode != "" && dispatch.Mode != "" && dispatch.Mode != mode {
+			continue
+		}
+		dispatch.Status = "STALE"
+		state.Dispatches[id] = dispatch
 	}
 }
 
@@ -2778,6 +2915,221 @@ func gatePromptChanged(state RunState, catalog PromptCatalog, gateID string) boo
 	return recorded != composedGatePromptHash(catalog, gate.Content)
 }
 
+// reviewerActionIDs are the reviewer actions whose prompt changes with a
+// recorded result create an inheritance judgment (RQ-005's "动作提示词" scope,
+// mirroring RQ-004's contamination-check coverage). The non-reviewer actions
+// (development worker, qa executor) and the carry disposition command are
+// excluded: their changes are not zero-context review results that a Carry
+// judgment re-decides, and carrying the carry action itself would deadlock (a
+// recorded carry cannot be re-judged by carry --main-agent).
+var reviewerActionIDs = map[string]bool{
+	"requirements-clarification": true,
+	"product-review":             true,
+	"start-readiness":            true,
+	"qa-design":                  true,
+	"qa-review":                  true,
+}
+
+// actionPromptChanged reports whether an action prompt content hash moved since
+// the run recorded it, making a recorded authoritative result a candidate for
+// the main agent's judgment. The action prompt is the action's own content (the
+// shared reviewer base is injected only into gate prompts), so the comparison is
+// the raw content hash.
+func actionPromptChanged(state RunState, catalog PromptCatalog, actionID string) bool {
+	recorded, ok := state.PromptHashes["action:"+actionID]
+	if !ok {
+		return false
+	}
+	action, ok := catalog.Action(actionID)
+	if !ok {
+		return false
+	}
+	return recorded != promptContentHash(action.Content)
+}
+
+// requireNoPendingInheritance is the hard gate behind RQ-005: every continue /
+// rerun entry (prepare / claim / record / snapshot / seal / qa-* /
+// authorize-repair) is rejected until every inheritance judgment is handled. A
+// judgment is pending when an old-snapshot PASS result awaits a Carry decision,
+// or a selected gate / action prompt moved while that target already has a
+// recorded PASS/FAIL result and no main-agent Carry judgment was recorded for it
+// yet (the mid-flight modification category; it only fires when a recorded
+// result exists, so a pre-development run is never blocked by it). The
+// disposition commands (carry / requirement / settle-findings) are exempt and
+// route around this gate; requirement-artifact reclassification is enforced
+// separately by requireCurrentDefinitions, which every entry already calls.
+func requireNoPendingInheritance(root string, state RunState, catalog PromptCatalog) error {
+	// 首个开发快照前没有继承边界：无开发快照时不存在"旧快照结果待判定"，且处置入口
+	// （carry --main-agent 继承判定）依赖开发快照才能记录。首个快照只是记录交付成果、
+	// 不是重跑/继续，跳过硬闸；快照之后（开发快照已存在）硬闸恢复，继承判定可正常记录。
+	if !hasDevelopmentSnapshot(state) {
+		return nil
+	}
+	if len(eligibleCarryGates(state)) != 0 {
+		return fmt.Errorf("prior passing results at the pre-repair snapshot await a Carry decision; dispose them with `workflow carry --main-agent --main-reason '<reason>'` (or an independent carry) before continuing")
+	}
+	for id := range selectedSet(state) {
+		if isQAMode(id) {
+			continue
+		}
+		result := state.Gates[id]
+		if !semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) {
+			continue
+		}
+		if !gatePromptChanged(state, catalog, id) {
+			continue
+		}
+		// FAIL 结果提示词变化时重派即处置（R 修复清单 P1-1）：已记录 FAIL 的门可直接重派、
+		// 重派覆盖旧 FAIL 即完成处置，不进入待决继承，也不需要主代理 Carry 判定；只有已
+		// 记录 PASS 的结果才需要判定保留旧结论（INHERIT）还是重跑（RERUN）。
+		if result.Status == "FAIL" {
+			continue
+		}
+		// 主代理已对这条提示词变更记录过 Carry 判定（INHERIT / RERUN）时不再待决。
+		if state.Carry[id].Decision != "" {
+			continue
+		}
+		return fmt.Errorf("gate %q has a recorded PASS result whose prompt changed; record a main-agent Carry judgment (carry --main-agent) before continuing", id)
+	}
+	for _, action := range catalog.Actions {
+		if !reviewerActionIDs[action.ID] {
+			continue
+		}
+		result := state.Actions[action.ID]
+		if result.Status != "PASS" && result.Status != "FAIL" {
+			continue
+		}
+		if !actionPromptChanged(state, catalog, action.ID) {
+			continue
+		}
+		// 与门一致（P1-1）：已记录 FAIL 的动作提示词变化时重派即处置，不进入待决继承。
+		if result.Status == "FAIL" {
+			continue
+		}
+		return fmt.Errorf("action %q has a recorded PASS result whose prompt changed; record a main-agent Carry judgment (carry --main-agent) before continuing", action.ID)
+	}
+	return nil
+}
+
+// requireResumeInterrupted enforces the RQ-007 three-branch resume rule for a
+// claimed, un-resulted dispatch. When the recorded interruption reason is an
+// objective transient API cause and every judgment condition is unchanged, the
+// CLI forces a resume: it rejects a fresh prepare of the same target and directs
+// the host to restore the original agent. When the conditions are unchanged but
+// no objective reason is recorded (including "未知"), the CLI forces the user to
+// decide (RQ-008: the main agent has no override power). Any change to snapshot,
+// responsibility, task content, requirement, method, or intent — or a recorded
+// non-objective interruption reason — lets the guard pass so a new dispatch is
+// allowed; an explicit --user-requested authorization is handled by the caller.
+func requireResumeInterrupted(root string, state RunState, catalog PromptCatalog, targetKind, target string, mode string) error {
+	for id, dispatch := range state.Dispatches {
+		if dispatch.TargetKind != targetKind || dispatch.Target != target || dispatch.Status != "CLAIMED" {
+			continue
+		}
+		// qa-execution 按 mode 分流（R 修复清单 item 3）：不同 mode 的派发互不拦截，
+		// 黑盒与白盒各自独立派发、并行执行。
+		if target == "qa-execution" && dispatch.Mode != "" && mode != "" && dispatch.Mode != mode {
+			continue
+		}
+		wantedSource := state.CurrentSnapshot
+		if isBlackboxQADispatch(dispatch) {
+			wantedSource = state.BaseSnapshot
+		}
+		if dispatch.SourceSnapshot != wantedSource {
+			continue
+		}
+		unchanged, err := dispatchTaskUnchanged(root, state, catalog, dispatch)
+		if err != nil {
+			// 无法重算任务内容时不强制续用：放行新派发，避免死端。
+			continue
+		}
+		if !unchanged {
+			continue
+		}
+		// RQ-013：读取 CLI 自动记录的中断原因；无 stop 事件或未记录时为空。
+		reason, err := workflowLifecycle.InterruptionReason(root, state.RunID, dispatch.ID)
+		if err != nil {
+			// 无法读取原因时不强制续用：放行新派发，避免死端。
+			continue
+		}
+		// 已记录的非客观原因（如用户主动中断、max_turns 正常结束）按 RQ-008 不受限：
+		// 可开新派发。仅"未知"（宿主未提供原因）视同无原因、落入第三分支。
+		if reason != "" && reason != "未知" && !isObjectiveInterruptionReason(reason) {
+			continue
+		}
+		if isObjectiveInterruptionReason(reason) {
+			// RQ-007 第一分支：客观瞬时原因 + 一切未变 → 必续用。
+			return fmt.Errorf("dispatch %q is claimed and interrupted by an objective transient API cause (recorded reason %q); every resume condition is unchanged, so resume the original agent (identity %q) to continue the same dispatch instead of preparing a new one", id, reason, dispatch.ReviewerIdentity)
+		}
+		// RQ-007 第三分支：一切未变但无客观中断原因（含未记录与"未知"）→ 强制询问用户。
+		return fmt.Errorf("dispatch %q is claimed and interrupted with an unchanged task and snapshot but no recorded objective interruption reason; the user must decide: resume the original agent (identity %q) to continue the same dispatch, or authorize a fresh dispatch with --user-requested", id, dispatch.ReviewerIdentity)
+	}
+	return nil
+}
+
+// isObjectiveInterruptionReason reports whether a recorded interruption reason is
+// an objective transient API cause (RQ-007/013): HTTP error codes such as
+// 429/402/500/502/503/504/529 and transient-overload phrasing. Non-objective
+// reasons (user abort, max turns, normal end) are not objective, so RQ-008 lets
+// a new dispatch open when the reason is recorded and non-objective.
+func isObjectiveInterruptionReason(reason string) bool {
+	lower := strings.ToLower(reason)
+	for _, code := range []string{"429", "402", "500", "502", "503", "504", "529"} {
+		if strings.Contains(lower, code) {
+			return true
+		}
+	}
+	for _, phrase := range []string{"rate limit", "rate_limit", "overloaded", "temporarily unavailable", "timeout", "server error", "too many requests"} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// dispatchTaskUnchanged reports whether the current catalog and state would
+// recompose the dispatch's exact task prompt. The recomposed prompt uses the
+// dispatch's own id / attempt / review wave, so the [Dispatch] block is
+// identical and only the task content (catalog, requirement, snapshot, detail)
+// can move the hash.
+func dispatchTaskUnchanged(root string, state RunState, catalog PromptCatalog, dispatch PreparedDispatch) (bool, error) {
+	route := routeForState(root, state)
+	if isBlackboxQADispatch(dispatch) {
+		route.Worktree = absPath(state.QAWorktree)
+		route.CurrentSnapshot = state.BaseSnapshot
+	}
+	route.DispatchID, route.DispatchAttempt, route.ReviewWave = dispatch.ID, dispatch.Attempt, dispatch.ReviewWave
+	prompt, err := composeDispatchPrompt(state, catalog, route, dispatch)
+	if err != nil {
+		return false, err
+	}
+	sum := sha256.Sum256([]byte(prompt))
+	return hex.EncodeToString(sum[:]) == dispatch.PromptHash, nil
+}
+
+// composeDispatchPrompt recomposes the exact dispatch prompt the prepare flow
+// would produce, mirroring the detail computation of prepareDevelopmentAction
+// and the actionPromptDetail injection of PrepareAction without re-running the
+// transition guards (they are not part of the task text).
+func composeDispatchPrompt(state RunState, catalog PromptCatalog, route PromptRoute, dispatch PreparedDispatch) (string, error) {
+	if dispatch.TargetKind == "gate" {
+		return ComposeGatePrompt(catalog, dispatch.Target, route)
+	}
+	if dispatch.Target == "development-worker" {
+		detail := ""
+		status := state.Actions["development-worker"].Status
+		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
+			detail = repairInput(state)
+		}
+		return ComposeActionPrompt(catalog, "development-worker", route, detail)
+	}
+	detail, err := actionPromptDetail(state, catalog, dispatch.Target, dispatch.Mode)
+	if err != nil {
+		return "", err
+	}
+	return ComposeActionPrompt(catalog, dispatch.Target, route, detail)
+}
+
 func normalizeSelected(values, candidates []string) ([]string, error) {
 	allowed := map[string]bool{}
 	for _, id := range candidates {
@@ -2821,6 +3173,13 @@ func reviewWaveRecorded(state RunState) bool {
 	if isSelectedQA(state) && (state.QAExecution.Snapshot != state.CurrentSnapshot || state.QAExecution.Status == "PENDING" || state.QAExecution.Status == "") {
 		return false
 	}
+	// R 修复清单 item 8：波次完成前按选中 mode 校验各 mode 均已记录执行。qa-execution
+	// 按 mode 分流（item 3）后，黑盒/白盒各自独立派发、各自记录，共享的 QAExecution 只
+	// 有合并状态；若某选中 mode 从未派发记录，其用例与发现项被静默跳过，波次不得视为已
+	// 记录。
+	if !selectedQAModesRecorded(state) {
+		return false
+	}
 	for id := range selectedSet(state) {
 		if isQAMode(id) {
 			continue
@@ -2831,6 +3190,80 @@ func reviewWaveRecorded(state RunState) bool {
 		}
 	}
 	return true
+}
+
+// selectedQAModesRecorded reports whether every selected QA mode has recorded
+// execution at the current snapshot. With per-mode dispatch (R 修复清单 item 3),
+// blackbox and whitebox each dispatch independently into the shared QAExecution
+// result; a wave may only complete (and Seal) once every selected mode has
+// recorded execution, so one mode cannot be silently skipped while the other
+// passes. A mode with zero cases has nothing to execute (the qa-review set-level
+// decision judged the empty set), so it is trivially recorded. Merge QA and the
+// legacy "qa" id use the merged (empty-mode) set, which the shared result covers.
+// A RUNTIME_ERROR result is a recorded outcome and blocks through the existing
+// skip-authorization path, so it is not treated as a missing mode here.
+func selectedQAModesRecorded(state RunState) bool {
+	if !isSelectedQA(state) {
+		return true
+	}
+	if state.QAExecution.Snapshot != state.CurrentSnapshot || state.QAExecution.Status == "PENDING" || state.QAExecution.Status == "" {
+		return false
+	}
+	if state.QAExecution.Status == "RUNTIME_ERROR" {
+		return true
+	}
+	for id := range selectedSet(state) {
+		if !isQAMode(id) {
+			continue
+		}
+		mode := qaDispatchMode(id)
+		if mode == "" {
+			continue // merge-qa / legacy "qa": merged set, shared result covers it
+		}
+		if !qaModeHasRecorded(state, mode) {
+			return false
+		}
+	}
+	return true
+}
+
+// qaDispatchMode maps a selected QA id to its per-mode dispatch mode name.
+// blackbox and whitebox dispatch by their own mode; merge QA and the legacy "qa"
+// id dispatch as a single merged (empty-mode) set.
+func qaDispatchMode(id string) string {
+	switch id {
+	case blackboxQAID:
+		return "blackbox"
+	case whiteboxQAID:
+		return "whitebox"
+	default:
+		return ""
+	}
+}
+
+// qaModeHasRecorded reports whether the given QA dispatch mode has recorded
+// execution at the current snapshot. A mode with no cases in the run's QA case
+// set is trivially recorded: there is nothing to execute, and the qa-review
+// set-level coverage decision already judged the empty set (requirement 4).
+// Otherwise at least one QAResultRecord carrying that mode must be present in the
+// shared result.
+func qaModeHasRecorded(state RunState, mode string) bool {
+	hasCases := false
+	for _, testCase := range state.QACases {
+		if testCase.Mode == mode {
+			hasCases = true
+			break
+		}
+	}
+	if !hasCases {
+		return true
+	}
+	for _, record := range state.QAExecution.Cases {
+		if record.Mode == mode {
+			return true
+		}
+	}
+	return false
 }
 
 func hasRepairableBlocker(state RunState) bool {
@@ -3012,6 +3445,11 @@ func isSealScopedAuthorization(authorization SkipAuthorization) bool {
 }
 
 func requireSelectedResultsResolved(state RunState) error {
+	// R 修复清单 item 8：seal 前按选中 mode 校验各 mode 均已记录执行，避免单个 mode
+	// 记录 PASS 而另一 mode 被静默跳过。
+	if !selectedQAModesRecorded(state) {
+		return fmt.Errorf("QA Execution has not recorded every selected QA mode at the current snapshot")
+	}
 	for id := range selectedSet(state) {
 		status := selectedResultStatus(state, id)
 		if status == "PENDING" || status == "" {

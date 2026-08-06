@@ -22,5 +22,6 @@ func claudeAdapter() providerAdapter {
 		transcriptPath: func(payload any) string {
 			return payloadScalar(payload, []string{"agent_transcript_path"}, 0)
 		},
+		reason: payloadReason,
 	}
 }

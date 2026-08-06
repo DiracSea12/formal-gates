@@ -35,5 +35,6 @@ func cursorAdapter() providerAdapter {
 			roots = appendUniqueStrings(roots, payloadProjectRoots(payload)...)
 			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
 		},
+		reason: payloadReason,
 	}
 }

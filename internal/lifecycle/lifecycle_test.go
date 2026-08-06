@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -204,6 +205,101 @@ func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) 
 	}
 	if _, path, err := DispatchTranscriptPath(root, "run-1", "dispatch-cursor"); err != nil || path != "" {
 		t.Fatalf("Cursor stop stored a transcript path %q err %v", path, err)
+	}
+}
+
+// TestLifecycleStopCaptureStoresInterruptionReason covers RQ-013: lifecycle capture
+// extracts the interruption reason (including HTTP error codes) from host stop
+// events and records it on the stop event; a host without a reason records "未知".
+func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderClaude)
+	if err := BeginRun(root, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Capture(root, ProviderClaude, "SubagentStop", []byte(`{"subagent_id":"agent-1","stop_reason":"HTTP 429 rate limited"}`)); err != nil {
+		t.Fatal(err)
+	}
+	reason, err := DispatchInterruptionReason(root, "run-1", "dispatch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reason, "429") {
+		t.Fatalf("capture did not record the HTTP interruption reason: %q", reason)
+	}
+	// 先绑定再捕获：让 stop 事件直接落到派发记录（含"未知"原因）。
+	if err := BindDispatch(root, "run-1", "dispatch-2", "agent-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Capture(root, ProviderClaude, "SubagentStop", []byte(`{"subagent_id":"agent-2"}`)); err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := DispatchInterruptionReason(root, "run-1", "dispatch-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown != "未知" {
+		t.Fatalf("host without a reason was not recorded as 未知: %q", unknown)
+	}
+}
+
+// TestPayloadHTTPErrorCodeStandaloneToken covers R 修复清单 item 11: payloadHTTPErrorCode
+// only classifies a code when it appears as a standalone numeric token or in a
+// dedicated error-code field — a substring inside a longer number or word must
+// not be misclassified as an objective API interruption reason.
+func TestPayloadHTTPErrorCodeStandaloneToken(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"standalone code in prose", map[string]any{"detail": "request throttled with 429 errors"}, "HTTP 429"},
+		{"dedicated error code field", map[string]any{"status_code": "the http 503 code"}, "HTTP 503"},
+		{"code at string edge", "429", "HTTP 429"},
+		{"substring inside longer number ignored", map[string]any{"detail": "model id 4290 rejected"}, ""},
+		{"substring inside word ignored", map[string]any{"detail": "http429proxy"}, ""},
+		{"code as part of decimal ignored", map[string]any{"detail": "value 3.429 in logs"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := payloadHTTPErrorCode(tc.value); got != tc.want {
+				t.Fatalf("payloadHTTPErrorCode(%v)=%q want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLifecycleInterruptedDispatchVerification covers RQ-013: a dispatch with a
+// start event and a recorded interruption reason but no paired stop is accepted
+// as an interruption credential (Interrupted), not REJECTED.
+func TestLifecycleInterruptedDispatchVerification(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderClaude)
+	if err := BeginRun(root, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindDispatch(root, "run-1", "dispatch-1", "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Capture(root, ProviderClaude, "SubagentStart", []byte(`{"subagent_id":"agent-1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// 写入带原因的 stop 事件后，把 stop 配对事件移除，模拟中断时只有 start + 已记录原因。
+	if _, err := Capture(root, ProviderClaude, "SubagentStop", []byte(`{"subagent_id":"agent-1","stop_reason":"HTTP 503 overloaded"}`)); err != nil {
+		t.Fatal(err)
+	}
+	stopPath := runEventPath(root, "run-1", "dispatch-1", eventStop)
+	if err := os.Remove(stopPath); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := VerifyDispatch(root, "run-1", "dispatch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Outcome != Interrupted || !verification.StartObserved {
+		t.Fatalf("interrupted dispatch was not accepted as Interrupted: %+v", verification)
 	}
 }
 

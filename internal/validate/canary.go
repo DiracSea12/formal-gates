@@ -221,7 +221,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 		if gate.ID == mergeGateID {
 			continue
 		}
-		if _, err := PrepareGate(root, packageRoot, state.RunID, gate.ID); err != nil {
+		if _, err := PrepareGate(root, packageRoot, state.RunID, gate.ID, false, ""); err != nil {
 			return err
 		}
 		state, _ = LoadRunState(root, state.RunID)

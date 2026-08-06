@@ -12,6 +12,8 @@ type workflowLifecycleVerifier interface {
 	Verify(root, runID, dispatchID string) (lifecycle.Verification, error)
 	TranscriptPath(root, runID, dispatchID string) (string, string, error)
 	ResolveClaimIdentity(root, runID, preferred string) (string, error)
+	// InterruptionReason 读取派发已记录的中断原因（RQ-013），供续用判定（RQ-007 三分支）。
+	InterruptionReason(root, runID, dispatchID string) (string, error)
 }
 
 type nativeWorkflowLifecycle struct{}
@@ -36,6 +38,10 @@ func (nativeWorkflowLifecycle) ResolveClaimIdentity(root, runID, preferred strin
 	return lifecycle.ResolveClaimIdentity(root, runID, preferred)
 }
 
+func (nativeWorkflowLifecycle) InterruptionReason(root, runID, dispatchID string) (string, error) {
+	return lifecycle.DispatchInterruptionReason(root, runID, dispatchID)
+}
+
 var workflowLifecycle workflowLifecycleVerifier = nativeWorkflowLifecycle{}
 
 func requireLifecycleVerification(root string, state RunState, dispatch PreparedDispatch) error {
@@ -44,7 +50,7 @@ func requireLifecycleVerification(root string, state RunState, dispatch Prepared
 		return err
 	}
 	switch verification.Outcome {
-	case lifecycle.Verified, lifecycle.Unavailable:
+	case lifecycle.Verified, lifecycle.Unavailable, lifecycle.Interrupted:
 		return nil
 	case lifecycle.Rejected:
 		return fmt.Errorf("lifecycle verification REJECTED for dispatch %s: %s", dispatch.ID, verification.Diagnostic)
