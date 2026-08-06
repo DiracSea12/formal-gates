@@ -321,12 +321,16 @@ func runSummary(state RunState) RunSummary {
 	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution, Cost: state.Cost}
 }
 
+// RequirementRevision 计算需求工件的内容哈希。先规范化行尾（CRLF→LF）再哈希：
+// Windows 上 git 检出会按 core.autocrlf 把工作树行尾转成 CRLF，隔离工作区与主工作
+// 区若行尾不同，注入哈希校验会误报不匹配。规范化后哈希跨平台稳定。
 func RequirementRevision(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(data)
+	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
+	sum := sha256.Sum256([]byte(normalized))
 	return hex.EncodeToString(sum[:]), nil
 }
 

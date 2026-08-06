@@ -256,6 +256,26 @@ func writeTestFile(t *testing.T, path, text string) {
 	}
 }
 
+// TestRequirementRevisionNormalizesCRLF 保证需求工件哈希跨平台稳定：Windows 上 git
+// 检出按 autocrlf 把工作树行尾转 CRLF，隔离工作区与主工作区行尾不一致会导致注入
+// 哈希校验误报。规范化后 CRLF 与 LF 内容哈希一致。
+func TestRequirementRevisionNormalizesCRLF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "design.md")
+	writeTestFile(t, path, "line one\r\nline two\n")
+	crlf, err := RequirementRevision(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, path, "line one\nline two\n")
+	lf, err := RequirementRevision(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crlf != lf {
+		t.Fatalf("CRLF revision %s does not equal LF revision %s", crlf, lf)
+	}
+}
+
 func TestCatalogDeltaReportsRemovedGate(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := mustStart(t, root, pkg, "removed-gate")
