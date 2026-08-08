@@ -143,8 +143,9 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 		t.Fatalf("user-requested reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
 	}
 	second := openDispatchID(state, "action", "qa-review")
-	if first == second || state.Dispatches[first].Status != "STALE" || state.Dispatches[second].Attempt != 2 {
-		t.Fatalf("retry did not create a fresh stale-bound dispatch: %#v", state.Dispatches)
+	// RQ-013：prepare 不再作废——用户授权的重开新派发生成后，旧 CLAIMED 派发仍在途。
+	if first == second || state.Dispatches[first].Status != "CLAIMED" || state.Dispatches[second].Attempt != 2 {
+		t.Fatalf("user-authorized retry did not create a fresh dispatch with the claimed prior still in flight: %#v", state.Dispatches)
 	}
 	before = stateBytes(t, root, state.RunID)
 	if _, err := ClaimDispatch(root, pkg, state.RunID, second, "reviewer-one"); err == nil || !strings.Contains(err.Error(), "already reserved") {
@@ -153,9 +154,17 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if stateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected reviewer reuse changed state")
 	}
+	// 手动终止例外（RQ-013）：前子代理已被终结（生命周期记录中断原因）时，认领同功能新派发
+	// 把前派发标 STALE、允许认领。
+	prior := workflowLifecycle
+	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
+	t.Cleanup(func() { workflowLifecycle = prior })
 	state, err = ClaimDispatch(root, pkg, state.RunID, second, "reviewer-two")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if state.Dispatches[first].Status != "STALE" || state.Dispatches[second].Status != "CLAIMED" {
+		t.Fatalf("manual-terminated claimed dispatch was not staled at claim: %#v", state.Dispatches)
 	}
 	state, err = RecordQAReview(root, pkg, state.RunID, second, passingReviewDecisions(state), "", nil)
 	if err != nil {
@@ -226,8 +235,8 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "FAIL" || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "FAIL" {
-		t.Fatalf("per-case results were not retained: %#v", state.QACases)
+	if state.Actions["qa-review"].Status != "FAIL" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "FAIL" {
+		t.Fatalf("per-case results were not retained: %#v", state.allQACases())
 	}
 	designPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, "")
 	if err != nil {
@@ -247,8 +256,8 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QACases[0].ID != "CASE-001" || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PENDING" {
-		t.Fatalf("exact approval was not preserved: %#v", state.QACases)
+	if state.qaCases("")[0].ID != "CASE-001" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "PENDING" {
+		t.Fatalf("exact approval was not preserved: %#v", state.allQACases())
 	}
 	reviewPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, "")
 	if err != nil {
@@ -263,7 +272,7 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, []QAReviewInput{{CaseID: state.QACases[1].ID, Outcome: "PASS"}}, "", nil)
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, []QAReviewInput{{CaseID: state.qaCases("")[1].ID, Outcome: "PASS"}}, "", nil)
 	if err != nil || state.Actions["qa-review"].Status != "PASS" {
 		t.Fatalf("incremental review did not pass: %v %#v", err, state.Actions["qa-review"])
 	}
@@ -315,12 +324,12 @@ func TestQAExecutionPreservesKindsAndFullRouteSeals(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "seal")
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err := RecordQAExecution(root, pkg, state.RunID, dispatchID, passingExecution(state.QACases), "")
+	state, err := RecordQAExecution(root, pkg, state.RunID, dispatchID, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.QAExecution.Cases) != 2 || state.QAExecution.Cases[0].Mode != "whitebox" || state.QAExecution.Cases[1].Mode != "blackbox" {
-		t.Fatalf("QA execution lost case modes: %#v", state.QAExecution.Cases)
+	if len(state.qaExecution("").Cases) != 2 || state.qaExecution("").Cases[0].Mode != "whitebox" || state.qaExecution("").Cases[1].Mode != "blackbox" {
+		t.Fatalf("QA execution lost case modes: %#v", state.qaExecution("").Cases)
 	}
 	for index, gate := range []string{"architecture", "quality"} {
 		dispatchID = prepareAndClaim(t, root, pkg, state.RunID, gate, fmt.Sprintf("gate-%d", index+1))
@@ -343,7 +352,7 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 	state := readyDelivery(t, root, pkg, "repair")
 	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
 	var err error
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,8 +386,14 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// RQ-002：修复快照推进后旧快照的权威 QA 结果存续，重新派发 qa-execution 属重跑，
+	// 必须已记录覆盖本次重跑的 scope 决策（FULL 全量重跑）才能 prepare。
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	qaDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +429,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "FAIL" || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PASS" {
+	if state.Actions["qa-review"].Status != "FAIL" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "PASS" {
 		t.Fatalf("set-level finding changed valid decisions: %#v", state)
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
@@ -431,7 +446,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" || state.QACases[2].ReviewStatus != "PENDING" {
+	if state.Actions["qa-design"].Status != "PASS" || state.qaCases("")[2].ReviewStatus != "PENDING" {
 		t.Fatalf("corrected QA rework did not reopen review: %#v", state)
 	}
 }
@@ -460,7 +475,7 @@ func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
 	if state.Actions["qa-review"].Status != "FAIL" {
 		t.Fatalf("set-level P1 finding did not fail the review action: %#v", state.Actions["qa-review"])
 	}
-	for _, testCase := range state.QACases {
+	for _, testCase := range state.allQACases() {
 		if testCase.ReviewStatus != "PASS" {
 			t.Fatalf("set-level finding should not reopen case decisions: %#v", testCase)
 		}
@@ -500,7 +515,7 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("removal-only duplicate correction was rejected: %v", err)
 	}
-	if len(state.QACases) != 2 || state.Actions["qa-review"].Status != "PENDING" {
+	if len(state.allQACases()) != 2 || state.Actions["qa-review"].Status != "PENDING" {
 		t.Fatalf("removal-only correction did not retain approvals: %#v", state)
 	}
 	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "duplicate-recheck-reviewer")
@@ -876,13 +891,13 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 		t.Fatalf("automatic wave limit was not enforced: %v", err)
 	}
 	beforeAuthorization := stateBytes(t, root, state.RunID)
-	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 2); err == nil || !strings.Contains(err.Error(), "exactly one review wave") {
+	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 2, nil); err == nil || !strings.Contains(err.Error(), "exactly one review wave") {
 		t.Fatalf("multiple extra waves were authorized at once: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != beforeAuthorization {
 		t.Fatal("rejected multi-wave authorization changed state")
 	}
-	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1)
+	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -890,7 +905,7 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 		t.Fatalf("extra review waves=%d want=1", state.ExtraReviewWaves)
 	}
 	authorizedState := stateBytes(t, root, state.RunID)
-	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1); err == nil || !strings.Contains(err.Error(), "not exhausted") {
+	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, nil); err == nil || !strings.Contains(err.Error(), "not exhausted") {
 		t.Fatalf("another wave was preauthorized before the current one ran: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != authorizedState {
@@ -1603,8 +1618,8 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QAExecution.Status != "PASS" || !strings.Contains(state.QAExecution.Message, "切片基本独立") {
-		t.Fatalf("merge QA zero-case execution: %#v", state.QAExecution)
+	if state.qaExecution("").Status != "PASS" || !strings.Contains(state.qaExecution("").Message, "切片基本独立") {
+		t.Fatalf("merge QA zero-case execution: %#v", state.qaExecution(""))
 	}
 	// 合并门。
 	gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, mergeGateID, "merge-gate-reviewer")
@@ -1875,7 +1890,7 @@ func TestLegacyQAModeCarryRebindsQAExecution(t *testing.T) {
 	}
 	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
 	var err error
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1888,8 +1903,8 @@ func TestLegacyQAModeCarryRebindsQAExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QAExecution.Snapshot != state.CurrentSnapshot {
-		t.Fatalf("legacy QAExecution.Snapshot=%s want=%s", state.QAExecution.Snapshot, state.CurrentSnapshot)
+	if state.qaExecution("").Snapshot != state.CurrentSnapshot {
+		t.Fatalf("legacy QAExecution.Snapshot=%s want=%s", state.qaExecution("").Snapshot, state.CurrentSnapshot)
 	}
 	if _, ok := state.Gates[legacyQAID]; ok {
 		t.Fatalf("spurious Gates[qa] entry written: %#v", state.Gates[legacyQAID])
@@ -1925,7 +1940,7 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 		t.Fatal(err)
 	}
 	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1963,14 +1978,17 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 开发后白盒设计：在既有黑盒用例上增补白盒结构用例（已覆盖用例保留）。
+	// 开发后白盒设计：RQ-012 下白盒设计轮只增补白盒用例（写进白盒自己的列表），既有黑盒
+	// 用例（含 review PASS 状态）在各自列表中原样保留。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}, {Mode: "whitebox", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.QACases) != 2 || state.QACases[0].ReviewStatus != "PASS" || state.QACases[1].ReviewStatus != "PENDING" {
-		t.Fatalf("blackbox approval was not preserved in the whitebox redesign: %#v", state.QACases)
+	blackboxCases := state.qaModeCases("blackbox")
+	whiteboxCases := state.qaModeCases("whitebox")
+	if len(state.allQACases()) != 2 || len(blackboxCases) != 1 || blackboxCases[0].ReviewStatus != "PASS" || len(whiteboxCases) != 1 || whiteboxCases[0].ReviewStatus != "PENDING" {
+		t.Fatalf("blackbox approval was not preserved in the whitebox redesign: %#v", state.allQACases())
 	}
 	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer", "whitebox")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
@@ -1978,7 +1996,7 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 		t.Fatal(err)
 	}
 	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1995,6 +2013,54 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	}
 	if summary.Status != "SEALED" {
 		t.Fatalf("full two-phase run did not seal: %#v", summary)
+	}
+}
+
+// TestQAModeCasesPreferPerModeOverStaleMerged reproduces the RQ-012 storage bug
+// that blocked a live run's snapshot: after a legacy single-list state file
+// migrated its cases into the merged "" key, a per-mode redesign wrote fresh
+// cases to the blackbox/whitebox keys, leaving stale cases (some PENDING) in the
+// "" key. qaModeCases/allQACases must apply per-mode precedence so the stale
+// merged cases are not double-counted and PENDING legacy blackbox cases do not
+// block blackboxReviewPassed.
+func TestQAModeCasesPreferPerModeOverStaleMerged(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "qa-per-mode-precedence", "custom", []string{"blackbox", "whitebox", "quality"})
+	// 注入缺陷布局："" 键残留旧迁移用例（含 PENDING 黑盒用例），同时 per-mode 键已写入新用例。
+	loaded, _ := LoadRunState(root, state.RunID)
+	loaded.QACasesByMode = map[string][]QACase{
+		"": {
+			{ID: "CASE-101", Mode: "blackbox", Description: "stale blackbox", Procedure: "old", Oracle: "old", ReviewStatus: "PENDING"},
+			{ID: "CASE-102", Mode: "whitebox", Description: "stale whitebox", Procedure: "old", Oracle: "old", ReviewStatus: "PASS"},
+		},
+		"blackbox": {
+			{ID: "CASE-001", Mode: "blackbox", Description: "current blackbox", Procedure: "new", Oracle: "new", ReviewStatus: "PASS"},
+		},
+		"whitebox": {
+			{ID: "CASE-002", Mode: "whitebox", Description: "current whitebox", Procedure: "new", Oracle: "new", ReviewStatus: "PASS"},
+		},
+	}
+	if err := SaveRunState(root, loaded); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _ := LoadRunState(root, state.RunID)
+	// 黑盒读取优先 per-mode 键：只看到当前 CASE-001，忽略 "" 键残留的 PENDING CASE-101。
+	blackbox := reloaded.qaModeCases("blackbox")
+	if len(blackbox) != 1 || blackbox[0].ID != "CASE-001" {
+		t.Fatalf("qaModeCases(blackbox) must prefer the per-mode key over stale merged cases: %#v", blackbox)
+	}
+	// 全量视图不得把 "" 键残留用例与 per-mode 用例合并（去重、不双计）。
+	if all := reloaded.allQACases(); len(all) != 2 {
+		t.Fatalf("allQACases must not double-count stale merged cases: %#v", all)
+	}
+	// 快照黑盒门不再被 "" 键残留的 PENDING 黑盒用例挡住。
+	if !blackboxReviewPassed(reloaded) {
+		t.Fatalf("blackboxReviewPassed must not see the stale PENDING merged case: %#v", reloaded.QACasesByMode)
+	}
+	// 合并（空 mode）视图 = 全量当前用例（含 fast-path "" 键幸存用例 + per-mode 新用例）。
+	merged := reloaded.qaModeCases("")
+	if len(merged) != 2 {
+		t.Fatalf("qaModeCases(empty) must be the full current set: %#v", merged)
 	}
 }
 
@@ -2039,7 +2105,7 @@ func TestFastPathBlackboxDesignParallelToStartReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" || len(state.QACases) != 1 {
+	if state.Actions["qa-design"].Status != "PASS" || len(state.allQACases()) != 1 {
 		t.Fatalf("fast-path design not recorded: %#v", state.Actions["qa-design"])
 	}
 	state = recordReadiness(t, root, pkg, state)
@@ -2073,7 +2139,7 @@ func TestFastPathDesignDiscardedWhenRouteOmitsBlackbox(t *testing.T) {
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{whiteboxQAID})
-	if state.Actions["qa-design"].Status != "PENDING" || len(state.QACases) != 0 {
+	if state.Actions["qa-design"].Status != "PENDING" || len(state.allQACases()) != 0 {
 		t.Fatalf("fast-path design not discarded on a route without blackbox QA: %#v", state.Actions["qa-design"])
 	}
 }
@@ -2382,7 +2448,7 @@ func baselineCases() []QACaseInput {
 
 func passingReviewDecisions(state RunState) []QAReviewInput {
 	var decisions []QAReviewInput
-	for _, testCase := range state.QACases {
+	for _, testCase := range state.allQACases() {
 		if testCase.ReviewStatus != "PASS" {
 			decisions = append(decisions, QAReviewInput{CaseID: testCase.ID, Outcome: "PASS"})
 		}
@@ -2564,8 +2630,14 @@ func TestRegisterQAWorktreeRejectsInjectedRevisionMismatch(t *testing.T) {
 func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-blackbox-gate"), "custom", []string{blackboxQAID})
-	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	// 黑盒按 mode 派发的设计轮在 QA 隔离工作区进行，先登记工作区再设计（RQ-012 按 mode 存储）。
+	worktree := createQAWorktree(t, root, state)
+	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "blackbox")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2577,20 +2649,7 @@ func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
 	}
 	// 黑盒 review PASS 后快照放行：黑盒派发走 --mode blackbox、绑隔离工作区（== 基线），
 	// 开发提交后主工作区 HEAD 已前进，但隔离工作区仍停在基线，身份校验不受影响。
-	worktree := createQAWorktree(t, root, state)
-	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "blackbox", false, ""); err != nil {
-		t.Fatal(err)
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	reviewDispatch := openDispatchID(state, "action", "qa-review")
-	state, err = ClaimDispatch(root, pkg, state.RunID, reviewDispatch, "snapshot-gate-reviewer")
-	if err != nil {
-		t.Fatal(err)
-	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "snapshot-gate-reviewer", "blackbox")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2666,8 +2725,8 @@ func TestZeroCaseBlackboxReviewPassAllowsQAExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("qa-execution with empty set after review PASS was rejected: %v", err)
 	}
-	if state.QAExecution.Status != "PASS" {
-		t.Fatalf("empty-set QA execution did not record PASS: %#v", state.QAExecution)
+	if state.qaExecution("").Status != "PASS" {
+		t.Fatalf("empty-set QA execution did not record PASS: %#v", state.qaExecution(""))
 	}
 	summary, err := Seal(root, pkg, state.RunID, nil, false, "")
 	if err != nil {
@@ -2732,8 +2791,8 @@ func TestSnapshotUserReleaseAllowsWithoutBlackboxReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QAExecution.Status != "PASS" {
-		t.Fatalf("released blackbox cases did not count as PASS: %#v", state.QAExecution)
+	if state.qaExecution("").Status != "PASS" {
+		t.Fatalf("released blackbox cases did not count as PASS: %#v", state.qaExecution(""))
 	}
 	summary, err := Seal(root, pkg, state.RunID, nil, false, "")
 	if err != nil {
@@ -2956,4 +3015,542 @@ func commitCount(t *testing.T, root, base, head string) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// executionOutcomes builds a full QA execution result over the run's case set,
+// marking the named cases FAIL and the rest PASS.
+func executionOutcomes(cases []QACase, failing map[string]bool) []QAResultInput {
+	results := make([]QAResultInput, 0, len(cases))
+	for _, testCase := range cases {
+		outcome := "PASS"
+		if failing[testCase.ID] {
+			outcome = "FAIL"
+		}
+		results = append(results, QAResultInput{CaseID: testCase.ID, Outcome: outcome, Procedure: "executed " + testCase.Procedure, Observation: "observed " + outcome, OracleResult: "compared"})
+	}
+	return results
+}
+
+// failingQAExecution records a merged-set QA execution on the run with the named
+// cases FAIL and the rest PASS, then records the architecture PASS and quality FAIL
+// gates so the review wave completes (preparing a repair snapshot). suffix makes
+// reviewer identities unique across waves.
+func failingQAExecution(t *testing.T, root, pkg string, state RunState, failing map[string]bool, suffix string) RunState {
+	t.Helper()
+	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err := RecordQAExecution(root, pkg, state.RunID, qaDispatch, executionOutcomes(state.allQACases(), failing), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordGateResult(t, root, pkg, state, "architecture", "failing-arch-"+suffix, "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "failing-quality-"+suffix, "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if state.CompletedReviewWaves == 0 {
+		t.Fatalf("blocking wave was not completed: %#v", state)
+	}
+	return state
+}
+
+// advanceRepairWithCarry advances a repair snapshot and then disposes the prior
+// passing architecture gate with a Carry INHERIT judgment, which
+// requireNoPendingInheritance demands before any qa-* continue/rerun entry.
+func advanceRepairWithCarry(t *testing.T, root, pkg string, state RunState, suffix string) RunState {
+	t.Helper()
+	state = advanceRepair(t, root, pkg, state, suffix)
+	carry := prepareDispatch(t, root, pkg, state.RunID, "carry")
+	state, err := RecordCarry(root, pkg, state.RunID, carry, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "repair is outside architecture ownership"}}, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// recordModeQA prepares and records one QA execution dispatch for a concrete mode
+// with the given results, returning the updated state.
+func recordModeQA(t *testing.T, root, pkg string, state RunState, mode string, results []QAResultInput) RunState {
+	t.Helper()
+	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", mode)
+	state, err := RecordQAExecution(root, pkg, state.RunID, qaDispatch, results, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// TestQADesignReRecordsBeforeReviewDispatch verifies RQ-011: a QA design can be
+// re-recorded to add/update cases while its qa-review dispatch has not been prepared
+// (design not locked), and is rejected once a review dispatch is prepared.
+func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-rerecord"), "full", nil)
+	// 首次设计只记录部分用例。
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.allQACases()) != 1 || state.qaCases("")[0].ID != "CASE-001" {
+		t.Fatalf("partial design not recorded: %#v", state.allQACases())
+	}
+	// review 派发尚未准备：可继续调用 qa-design 追加/更新用例集（保留既有用例、增量补全）。
+	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
+		{Mode: "whitebox", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"},
+		{Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.allQACases()) != 2 || state.qaCases("")[0].ID != "CASE-001" || state.qaCases("")[1].ID != "CASE-002" {
+		t.Fatalf("incremental completion lost existing cases: %#v", state.allQACases())
+	}
+	// review 派发准备后设计锁定，重记录被拒。
+	prepareDispatch(t, root, pkg, state.RunID, "qa-review")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err == nil || !strings.Contains(err.Error(), "locked for an already-prepared QA Review") {
+		t.Fatalf("re-record after a review dispatch was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected locked design changed state")
+	}
+}
+
+// TestQADesignPerModeDoesNotClearOtherMode verifies RQ-012: blackbox and whitebox
+// QA cases are stored separately per mode, and a design round only touches its own
+// mode's list — designing whitebox must not replace or clear the existing blackbox
+// cases (with their review PASS status preserved), and case IDs stay unique across
+// modes.
+func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-per-mode"), "custom", []string{whiteboxQAID, blackboxQAID})
+	// 黑盒按 mode 派发的设计轮在 QA 隔离工作区进行，先登记工作区。
+	worktree := createQAWorktree(t, root, state)
+	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 先做黑盒设计轮并 review PASS。
+	blackboxDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "blackbox")
+	state, err = RecordQADesign(root, pkg, state.RunID, blackboxDesign, []QACaseInput{{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "blackbox-reviewer", "blackbox")
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blackbox := state.qaCases("blackbox")
+	if len(blackbox) != 1 || blackbox[0].ReviewStatus != "PASS" {
+		t.Fatalf("blackbox case was not approved: %#v", blackbox)
+	}
+	// 白盒设计轮只动白盒列表：黑盒用例（含 review PASS 状态）不得被清掉。
+	whiteboxDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
+	state, err = RecordQADesign(root, pkg, state.RunID, whiteboxDesign, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blackbox = state.qaCases("blackbox")
+	if len(blackbox) != 1 || blackbox[0].ID != "CASE-001" || blackbox[0].ReviewStatus != "PASS" {
+		t.Fatalf("whitebox design cleared the blackbox cases: %#v", blackbox)
+	}
+	whitebox := state.qaCases("whitebox")
+	if len(whitebox) != 1 || whitebox[0].ID != "CASE-002" || whitebox[0].ReviewStatus != "PENDING" {
+		t.Fatalf("whitebox design was not recorded separately with a unique id: %#v", whitebox)
+	}
+	if len(state.allQACases()) != 2 {
+		t.Fatalf("total cases=%d want=2", len(state.allQACases()))
+	}
+}
+
+// TestQAExecutionFirstRunNoScopeAndRerunEnforced verifies RQ-001/002: a first QA
+// execution needs no scope decision, while a rerun (a prior authoritative result at
+// an earlier snapshot survives the repair snapshot advance) is CLI-enforced to carry
+// a scope decision before prepare, and a FULL decision reruns the complete approved set.
+func TestQAExecutionFirstRunNoScopeAndRerunEnforced(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "rerun-enforced")
+	// 首次执行不要求 scope 决策，也不接受 scope 记录（无上一轮权威结果可继承）。
+	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, ""); err == nil || !strings.Contains(err.Error(), "no authoritative QA execution result") {
+		t.Fatalf("first-execution scope recording was accepted: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, ""); err != nil {
+		t.Fatalf("first execution required a scope: %v", err)
+	}
+	// 首次 QA 执行记录 PASS，并完成波次（架构 PASS、质量 FAIL）后可推进修复快照。
+	state = failingQAExecution(t, root, pkg, state, nil, "rerun-enforced")
+	// 修复快照推进：旧快照权威 PASS 存续（QAExecution 保留），重新派发属重跑。
+	state = advanceRepairWithCarry(t, root, pkg, state, "rerun-enforced-repair")
+	// 重跑未记录 scope → prepare 拒绝。
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, ""); err == nil || !strings.Contains(err.Error(), "requires a scope decision") {
+		t.Fatalf("rerun without a scope decision was not rejected: %v", err)
+	}
+	// 记录 FULL scope（BaseSnapshot = 上一轮权威结果快照）后重跑放行，需执行集为全部已批准。
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc := state.ExecutionScopes[""]; sc.Decision != "FULL" || sc.Origin != "USER" || sc.Source != scopeSourcePrepare || sc.BaseSnapshot != state.PreRepairSnapshot {
+		t.Fatalf("recorded FULL scope=%#v", sc)
+	}
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, "")
+	if err != nil {
+		t.Fatalf("FULL scope did not allow the rerun prepare: %v", err)
+	}
+	for _, testCase := range state.allQACases() {
+		if !strings.Contains(prompt, testCase.ID) {
+			t.Fatalf("FULL rerun prompt omitted approved case %s: %s", testCase.ID, prompt)
+		}
+	}
+}
+
+// TestQAExecutionAffectedScopeSubsetValidation verifies RQ-004's mechanical AFFECTED
+// subset checks: the subset must be non-empty, consist of approved cases of the
+// mode, and include every prior FAIL case of the mode.
+func TestQAExecutionAffectedScopeSubsetValidation(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "affected-validate")
+	state = failingQAExecution(t, root, pkg, state, map[string]bool{"CASE-002": true}, "affected-validate")
+	state = advanceRepairWithCarry(t, root, pkg, state, "affected-validate-repair")
+	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "FAIL" {
+		t.Fatalf("prior FAIL was not preserved: %#v", state.priorQAExecution(""))
+	}
+	// 空子集拒绝。
+	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", nil, ""); err == nil || !strings.Contains(err.Error(), "non-empty") {
+		t.Fatalf("empty AFFECTED subset was accepted: %v", err)
+	}
+	// 非已批准用例拒绝。
+	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-999"}, ""); err == nil || !strings.Contains(err.Error(), "not an approved") {
+		t.Fatalf("non-approved AFFECTED case was accepted: %v", err)
+	}
+	// 缺上一轮 FAIL 用例拒绝。
+	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, ""); err == nil || !strings.Contains(err.Error(), "must include the prior FAIL case") {
+		t.Fatalf("AFFECTED subset missing the prior FAIL case was accepted: %v", err)
+	}
+	// 有效子集（含上一轮 FAIL 用例）接受。
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-002"}, "repair only touches the blackbox path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc := state.ExecutionScopes[""]; sc.Decision != "AFFECTED" || len(sc.CaseIDs) != 1 || sc.CaseIDs[0] != "CASE-002" || sc.BaseSnapshot != state.PreRepairSnapshot {
+		t.Fatalf("recorded AFFECTED scope=%#v", sc)
+	}
+}
+
+// TestQAExecutionAffectedInheritance verifies RQ-005: an AFFECTED rerun requires
+// exactly the recorded subset, inherits the untouched approved cases as PASS from
+// the base snapshot, and aggregates FAIL only from executed cases.
+func TestQAExecutionAffectedInheritance(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "affected-inherit")
+	state = failingQAExecution(t, root, pkg, state, map[string]bool{"CASE-002": true}, "affected-inherit")
+	state = advanceRepairWithCarry(t, root, pkg, state, "affected-inherit-repair")
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-002"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseSnapshot := state.PreRepairSnapshot
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "CASE-001") {
+		t.Fatalf("AFFECTED prompt listed the inherited case: %s", prompt)
+	}
+	if !strings.Contains(prompt, "CASE-002") || !strings.Contains(prompt, "AFFECTED rerun") || !strings.Contains(prompt, "inherit their PASS") {
+		t.Fatalf("AFFECTED prompt lost the subset or the inheritance notice: %s", prompt)
+	}
+	// 需执行集恰好是子集：覆盖越界（非子集用例）与覆盖不全（结果数不匹配）都拒绝。
+	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := RecordQAExecution(root, pkg, state.RunID, qaDispatch, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "o", OracleResult: "m"}}, ""); err == nil {
+		t.Fatalf("AFFECTED execution with a non-subset result was accepted: %v", err)
+	}
+	if _, err := RecordQAExecution(root, pkg, state.RunID, qaDispatch, []QAResultInput{
+		{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "o", OracleResult: "m"},
+		{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"},
+	}, ""); err == nil || !strings.Contains(err.Error(), "must cover") {
+		t.Fatalf("AFFECTED execution with an over-wide result was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected AFFECTED coverage changed state")
+	}
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "executed blackbox", Observation: "still broken", OracleResult: "mismatch"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.qaExecution("").Status != "FAIL" {
+		t.Fatalf("executed FAIL did not fail the aggregate: %#v", state.qaExecution(""))
+	}
+	byID := map[string]QAResultRecord{}
+	for _, record := range state.qaExecution("").Cases {
+		byID[record.CaseID] = record
+	}
+	if got := byID["CASE-002"]; got.Origin != "executed" || got.Outcome != "FAIL" {
+		t.Fatalf("executed record=%#v", got)
+	}
+	inherited := byID["CASE-001"]
+	if inherited.Origin != "inherited" || inherited.Outcome != "PASS" || !strings.Contains(inherited.Observation, "inherited PASS from "+baseSnapshot) {
+		t.Fatalf("inherited record=%#v", inherited)
+	}
+}
+
+// TestQAExecutionScopePerModeIndependent verifies RQ-002/003: blackbox and whitebox
+// carry independent scope decisions, and the prepare enforcement is per mode.
+func TestQAExecutionScopePerModeIndependent(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "per-mode-scope")
+	// 分 mode 派发：白盒 PASS、黑盒 FAIL，记录架构 PASS 与质量 FAIL 完成波次。
+	whiteboxDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "whitebox")
+	state, err := RecordQAExecution(root, pkg, state.RunID, whiteboxDispatch, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "o", OracleResult: "m"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blackboxDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
+	state, err = RecordQAExecution(root, pkg, state.RunID, blackboxDispatch, []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = recordGateResult(t, root, pkg, state, "architecture", "per-mode-arch", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "per-mode-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = advanceRepairWithCarry(t, root, pkg, state, "per-mode-repair")
+	// 各自独立：黑盒记录 AFFECTED 只放行黑盒重跑，白盒仍被挡。
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{"CASE-002"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "blackbox", false, ""); err != nil {
+		t.Fatalf("blackbox rerun with its own scope was rejected: %v", err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "whitebox", false, ""); err == nil || !strings.Contains(err.Error(), "requires a scope decision") {
+		t.Fatalf("whitebox rerun without its own scope was accepted: %v", err)
+	}
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "whitebox", "FULL", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "whitebox", false, ""); err != nil {
+		t.Fatalf("whitebox rerun with its own scope was rejected: %v", err)
+	}
+}
+
+// TestAuthorizeRepairBundlesQARerunScope verifies RQ-006/007: after the review-wave
+// limit is exhausted, an authorize-repair for a run whose QA mode has an
+// authoritative FAIL at the current snapshot is refused without a scope decision,
+// and an inline FULL decision is bundled (Source AUTHORIZE_REPAIR) while still
+// granting exactly one extra review wave.
+func TestAuthorizeRepairBundlesQARerunScope(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "auth-bundle")
+	// Wave 1：黑盒 FAIL、白盒 PASS，架构 PASS、质量 FAIL。
+	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}})
+	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "ok", OracleResult: "matched"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "auth-arch-1", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "auth-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("wave 1 count=%d", state.CompletedReviewWaves)
+	}
+	// 自动轮次 2..3：每轮修复后按 mode 重跑 QA（各记录 FULL scope）与质量门，仍 FAIL。
+	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
+		state = advanceRepairWithCarry(t, root, pkg, state, fmt.Sprintf("auth-bundle-%d", wave))
+		state, err := RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err = RecordExecutionScope(root, pkg, state.RunID, "whitebox", "FULL", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "still broken", OracleResult: "mismatch"}})
+		state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "ok", OracleResult: "matched"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("auth-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		if state.CompletedReviewWaves != wave {
+			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
+		}
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
+		t.Fatalf("automatic wave limit was not enforced: %v", err)
+	}
+	// 上限处：黑盒/白盒都在当前快照有权威 FAIL 记录、将重跑，缺任一 scope 决策都被拒。
+	before := stateBytes(t, root, state.RunID)
+	if _, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, nil); err == nil || !strings.Contains(err.Error(), "requires a scope decision") {
+		t.Fatalf("authorize-repair without a rerun scope was accepted: %v", err)
+	}
+	if stateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected authorize-repair changed state")
+	}
+	// 内联 FULL scope（一次交互为两个 mode 一起记录）：Source=AUTHORIZE_REPAIR、
+	// BaseSnapshot=当前 FAIL 快照，并只授权一个额外轮次。
+	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, []QAScopeInput{{Mode: "blackbox", Decision: "FULL"}, {Mode: "whitebox", Decision: "FULL"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExtraReviewWaves != 1 {
+		t.Fatalf("extra waves=%d want=1", state.ExtraReviewWaves)
+	}
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		sc := state.ExecutionScopes[mode]
+		if sc.Decision != "FULL" || sc.Source != scopeSourceAuthorizeRepair || sc.Origin != "USER" || sc.BaseSnapshot != state.CurrentSnapshot {
+			t.Fatalf("bundled %s scope=%#v", mode, sc)
+		}
+	}
+}
+
+// TestAuthorizeRepairCarriesForwardAffected verifies RQ-007/008: at the limit, a
+// mode whose last recorded decision was a user-chosen AFFECTED (Source !=
+// CARRY_FORWARD) is auto-carried as CARRY_FORWARD with the host-judged subset,
+// without asking the user again, and still grants exactly one wave.
+func TestAuthorizeRepairCarriesForwardAffected(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "auth-carry")
+	// Wave 1：黑盒 FAIL、白盒 PASS，架构 PASS、质量 FAIL。
+	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}})
+	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "ok", OracleResult: "matched"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "auth-carry-arch-1", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "auth-carry-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	// 自动轮次 2..3：每轮用户主动选择 AFFECTED（Source=PREPARE）后按 mode 重跑子集。
+	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
+		state = advanceRepairWithCarry(t, root, pkg, state, fmt.Sprintf("auth-carry-%d", wave))
+		var err error
+		state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{"CASE-002"}, "user chose affected for wave "+fmt.Sprint(wave))
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err = RecordExecutionScope(root, pkg, state.RunID, "whitebox", "AFFECTED", []string{"CASE-001"}, "user chose affected for wave "+fmt.Sprint(wave))
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "still broken", OracleResult: "mismatch"}})
+		state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "ok", OracleResult: "matched"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("auth-carry-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		if state.CompletedReviewWaves != wave {
+			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
+		}
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "review-wave limit is exhausted") {
+		t.Fatalf("automatic wave limit was not enforced: %v", err)
+	}
+	// 上限处：最近一次是用户 AFFECTED → 携带 host 判定的子集自动沿用（CARRY_FORWARD），
+	// 不再询问"全量 vs 受影响"；仍只授权一个额外轮次。
+	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, []QAScopeInput{{Mode: "blackbox", CaseIDs: []string{"CASE-002"}}, {Mode: "whitebox", CaseIDs: []string{"CASE-001"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExtraReviewWaves != 1 {
+		t.Fatalf("extra waves=%d want=1", state.ExtraReviewWaves)
+	}
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		sc := state.ExecutionScopes[mode]
+		if sc.Decision != "AFFECTED" || sc.Source != scopeSourceCarryForward || sc.Origin != "USER" || len(sc.CaseIDs) != 1 || sc.BaseSnapshot != state.CurrentSnapshot {
+			t.Fatalf("carried-forward %s scope=%#v", mode, sc)
+		}
+	}
+}
+
+// TestPriorQAExecutionPreservedUntilReplaced verifies RQ-009: an authoritative FAIL
+// result survives a repair snapshot advance into PriorQAExecution (its FAIL case set
+// stays rerun-detectable), a RUNTIME_ERROR is not preserved, a new authoritative
+// record replaces the prior one, and a RUNTIME_ERROR record does not evict it.
+func TestPriorQAExecutionPreservedUntilReplaced(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "prior-preserved")
+	// 权威 FAIL 结果保留到 PriorQAExecution。
+	state = failingQAExecution(t, root, pkg, state, map[string]bool{"CASE-002": true}, "prior-preserved")
+	state = advanceRepairWithCarry(t, root, pkg, state, "prior-preserved-repair")
+	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "FAIL" || state.priorQAExecution("").Snapshot != state.PreRepairSnapshot {
+		t.Fatalf("authoritative FAIL was not preserved: %#v", state.priorQAExecution(""))
+	}
+	if _, ok := qaExecutionPriorResultedBase(state, ""); !ok {
+		t.Fatal("prior FAIL result was not rerun-detectable")
+	}
+	// 新一轮权威记录取代 PriorQAExecution。
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.priorQAExecution("") != nil {
+		t.Fatalf("new authoritative record did not replace PriorQAExecution: %#v", state.priorQAExecution(""))
+	}
+	// 质量门记录在本快照使波次完整，才能推进下一修复快照。
+	state = recordGateResult(t, root, pkg, state, "quality", "prior-preserved-quality-2", "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+	// RUNTIME_ERROR 记录不清空存续的上一轮结果。
+	state = advanceRepairWithCarry(t, root, pkg, state, "prior-preserved-runtime")
+	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "PASS" {
+		t.Fatalf("PASS was not preserved before the runtime record: %#v", state.priorQAExecution(""))
+	}
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	qaDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, nil, "review host crashed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.qaExecution("").Status != "RUNTIME_ERROR" {
+		t.Fatalf("runtime record status=%s", state.qaExecution("").Status)
+	}
+	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "PASS" {
+		t.Fatalf("RUNTIME_ERROR evicted the preserved prior result: %#v", state.priorQAExecution(""))
+	}
+}
+
+// TestResetSnapshotReviewSurfacePreservesAuthoritativeOnly verifies RQ-009 at the
+// reset boundary directly: an authoritative PASS/FAIL result at an old snapshot is
+// preserved to PriorQAExecution when QA Execution is reset, while a RUNTIME_ERROR is
+// reset without preservation (it is not an authoritative result and must not become
+// the rerun base).
+func TestResetSnapshotReviewSurfacePreservesAuthoritativeOnly(t *testing.T) {
+	// 权威 FAIL 保留（含快照与 FAIL 用例集）。
+	state := RunState{CurrentSnapshot: "s2", QAExecutionByMode: map[string]QAExecutionResult{"": {Status: "FAIL", Snapshot: "s1", Cases: []QAResultRecord{{CaseID: "CASE-002", Mode: "blackbox", Outcome: "FAIL"}}}}}
+	resetSnapshotReviewSurface(&state, "s1", true, true)
+	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "FAIL" || state.priorQAExecution("").Snapshot != "s1" || state.qaExecution("").Status != "PENDING" {
+		t.Fatalf("authoritative FAIL was not preserved: %#v", state)
+	}
+	// RUNTIME_ERROR 不保留。
+	state = RunState{CurrentSnapshot: "s2", QAExecutionByMode: map[string]QAExecutionResult{"": {Status: "RUNTIME_ERROR", Snapshot: "s1"}}}
+	resetSnapshotReviewSurface(&state, "s1", true, true)
+	if state.priorQAExecution("") != nil {
+		t.Fatalf("RUNTIME_ERROR was preserved as a prior result: %#v", state.priorQAExecution(""))
+	}
+}
+
+// TestAuthorizeRepairCarryForwardDoesNotGrantWave verifies RQ-006: the CARRY_FORWARD
+// auto-carry at the limit records the scope but never by itself grants a review
+// wave; each authorize-repair call still grants exactly one.
+func TestAuthorizeRepairCarryForwardDoesNotGrantWave(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDelivery(t, root, pkg, "no-auto-wave")
+	// Wave 1：黑盒 FAIL、白盒 PASS，架构 PASS、质量 FAIL。
+	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}})
+	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "ok", OracleResult: "matched"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "no-auto-arch-1", "PASS", "", nil)
+	state = recordGateResult(t, root, pkg, state, "quality", "no-auto-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
+		state = advanceRepairWithCarry(t, root, pkg, state, fmt.Sprintf("no-auto-wave-%d", wave))
+		var err error
+		state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err = RecordExecutionScope(root, pkg, state.RunID, "whitebox", "FULL", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "still broken", OracleResult: "mismatch"}})
+		state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "ok", OracleResult: "matched"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("no-auto-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+	}
+	// 携带 FULL 内联 scope 授权一次：仅增加一个轮次，不会因记录 scope 而自动多授权。
+	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, []QAScopeInput{{Mode: "blackbox", Decision: "FULL"}, {Mode: "whitebox", Decision: "FULL"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExtraReviewWaves != 1 {
+		t.Fatalf("a single authorize-repair granted %d waves", state.ExtraReviewWaves)
+	}
 }

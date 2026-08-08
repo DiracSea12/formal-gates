@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-
 func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -50,7 +49,6 @@ func TestInstallableMetadataUsesUniversalModificationIntake(t *testing.T) {
 		}
 	}
 }
-
 
 func TestPackageRejectsWorkflowLevelWritePermission(t *testing.T) {
 	root := copyPackageFixture(t)

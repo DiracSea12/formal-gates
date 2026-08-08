@@ -17,12 +17,12 @@ func TestReproQACarryRegression(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "repro-qa-carry", "custom", []string{blackboxQAID, "architecture"})
 	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
 	var err error
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QAExecution.Snapshot != state.CurrentSnapshot {
-		t.Fatalf("QA execution snapshot=%s want=%s", state.QAExecution.Snapshot, state.CurrentSnapshot)
+	if state.qaExecution("").Snapshot != state.CurrentSnapshot {
+		t.Fatalf("QA execution snapshot=%s want=%s", state.qaExecution("").Snapshot, state.CurrentSnapshot)
 	}
 	state = recordGateResult(t, root, pkg, state, "architecture", "repro-arch", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
 	state = advanceRepair(t, root, pkg, state, "repro-repair")
@@ -33,8 +33,8 @@ func TestReproQACarryRegression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QAExecution.Snapshot != state.CurrentSnapshot {
-		t.Fatalf("QAExecution.Snapshot=%s want=%s (carry failed to rebind QA snapshot)", state.QAExecution.Snapshot, state.CurrentSnapshot)
+	if state.qaExecution("").Snapshot != state.CurrentSnapshot {
+		t.Fatalf("QAExecution.Snapshot=%s want=%s (carry failed to rebind QA snapshot)", state.qaExecution("").Snapshot, state.CurrentSnapshot)
 	}
 	if _, ok := state.Gates["qa"]; ok {
 		t.Fatalf("spurious Gates[qa] entry written: %#v", state.Gates["qa"])
@@ -122,8 +122,23 @@ func TestReproDevelopmentWorkerUserRequested(t *testing.T) {
 	if state.ReviewOverrides["development-worker"] == "" {
 		t.Fatalf("development reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
 	}
-	if state.Dispatches[dispatchID].Status != "STALE" {
-		t.Fatalf("superseded development dispatch was not staled: %#v", state.Dispatches[dispatchID])
+	// RQ-013：prepare 不再作废——用户授权的开发新派发生成后，旧 CLAIMED 开发派发仍在途。
+	if state.Dispatches[dispatchID].Status != "CLAIMED" {
+		t.Fatalf("prepare must not stale the claimed development dispatch: %#v", state.Dispatches[dispatchID])
+	}
+	fresh := openDispatchID(state, "action", "development-worker")
+	if fresh == "" || fresh == dispatchID {
+		t.Fatalf("fresh development dispatch was not prepared: %#v", state.Dispatches)
+	}
+	prior := workflowLifecycle
+	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
+	t.Cleanup(func() { workflowLifecycle = prior })
+	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "dev-user-requested-repair"); err != nil {
+		t.Fatalf("claim of the fresh development dispatch after manual termination was rejected: %v", err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	if state.Dispatches[dispatchID].Status != "STALE" || state.Dispatches[fresh].Status != "CLAIMED" {
+		t.Fatalf("manual-terminated development dispatch was not staled at claim: %#v", state.Dispatches)
 	}
 }
 
@@ -154,7 +169,7 @@ func TestReproQAExecutionPerModeDispatch(t *testing.T) {
 	if _, err := ClaimDispatch(root, pkg, state.RunID, blackboxDispatch, "blackbox-executor"); err != nil {
 		t.Fatal(err)
 	}
-	blackboxCases := filterQACasesByMode(state.QACases, "blackbox")
+	blackboxCases := state.qaModeCases("blackbox")
 	if _, err := RecordQAExecution(root, pkg, state.RunID, blackboxDispatch, passingExecution(blackboxCases), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -163,13 +178,15 @@ func TestReproQAExecutionPerModeDispatch(t *testing.T) {
 	if _, err := ClaimDispatch(root, pkg, state.RunID, whiteboxDispatch, "whitebox-executor"); err != nil {
 		t.Fatal(err)
 	}
-	whiteboxCases := filterQACasesByMode(state.QACases, "whitebox")
+	whiteboxCases := state.qaModeCases("whitebox")
 	if _, err := RecordQAExecution(root, pkg, state.RunID, whiteboxDispatch, passingExecution(whiteboxCases), ""); err != nil {
 		t.Fatal(err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	if state.QAExecution.Status != "PASS" || len(state.QAExecution.Cases) != len(state.QACases) {
-		t.Fatalf("parallel per-mode execution did not accumulate: %#v", state.QAExecution)
+	blackboxRecorded := state.qaExecution("blackbox")
+	whiteboxRecorded := state.qaExecution("whitebox")
+	if blackboxRecorded.Status != "PASS" || whiteboxRecorded.Status != "PASS" || len(blackboxRecorded.Cases)+len(whiteboxRecorded.Cases) != len(state.allQACases()) {
+		t.Fatalf("parallel per-mode execution did not record both modes: %#v / %#v", blackboxRecorded, whiteboxRecorded)
 	}
 }
 
@@ -201,13 +218,13 @@ func TestReproWaveAndSealRequireEverySelectedMode(t *testing.T) {
 	// 只记录黑盒 mode 的需执行集：合并结果呈 PASS，但白盒 mode 从未派发记录。
 	blackboxDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
 	state, _ = LoadRunState(root, state.RunID)
-	blackboxCases := filterQACasesByMode(state.QACases, "blackbox")
+	blackboxCases := state.qaModeCases("blackbox")
 	state, err := RecordQAExecution(root, pkg, state.RunID, blackboxDispatch, passingExecution(blackboxCases), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.QAExecution.Status != "PASS" || len(state.QAExecution.Cases) != len(blackboxCases) {
-		t.Fatalf("blackbox-only execution not recorded: %#v", state.QAExecution)
+	if state.qaExecution("blackbox").Status != "PASS" || len(state.qaExecution("blackbox").Cases) != len(blackboxCases) {
+		t.Fatalf("blackbox-only execution not recorded: %#v", state.qaExecution("blackbox"))
 	}
 	// 全部门记录 PASS 后波次仍不得完成：另一 mode 未记录执行。
 	for _, gate := range []string{"architecture", "quality"} {
@@ -222,7 +239,7 @@ func TestReproWaveAndSealRequireEverySelectedMode(t *testing.T) {
 	// 白盒 mode 独立派发并记录后，两个 mode 均已记录执行，波次完成、seal 放行。
 	whiteboxDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "whitebox")
 	state, _ = LoadRunState(root, state.RunID)
-	whiteboxCases := filterQACasesByMode(state.QACases, "whitebox")
+	whiteboxCases := state.qaModeCases("whitebox")
 	state, err = RecordQAExecution(root, pkg, state.RunID, whiteboxDispatch, passingExecution(whiteboxCases), "")
 	if err != nil {
 		t.Fatal(err)

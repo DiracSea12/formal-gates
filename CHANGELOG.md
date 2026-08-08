@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Incorporate gate P2 review findings: the RQ-014 parallel reminder shares one
+  emission point (`emitParallelReminder`) across the workflow commands and the
+  lifecycle hook; `RecordQAReview` reads the same case view the review prompt
+  uses (per-mode key with merged-`""` fallback) and writes the decided status back
+  to the same storage key; the inline authorize-repair `--qa-scope`/`--qa-cases`/
+  `--qa-reason` flags accept an empty `<mode>` (`=FULL`) for the merged QA set,
+  and the auto-carried AFFECTED decision at the review limit can be overridden by
+  an explicit host decision (e.g. upgrade to FULL).
+- Fully decouple blackbox and whitebox QA (RQ-012): QA execution results and
+  prior authoritative results are stored per mode (`qaExecutionByMode` /
+  `priorQAExecutionByMode`, empty mode = merged/single-dispatch), so one mode's
+  design/execution/record never clears or affects the other mode's execution
+  result or rerun base; the qa-design review lock is per mode (a blackbox review
+  in flight does not lock the whitebox design and vice versa); and every read
+  (required case set, AFFECTED inheritance, rerun scope enforcement,
+  selectedQAModesRecorded, repair blockers, Seal resolution) is per mode while
+  keeping the merged empty-mode semantics. Legacy single `qaExecution` /
+  `priorQAExecution` state files migrate into the merged key on load.
+- Require an explicit QA execution rerun scope decision: a mode whose QA
+  execution reruns under a new snapshot (a prior authoritative result exists at
+  an earlier snapshot) must record a `workflow qa-execution-scope --mode
+  <blackbox|whitebox|""> --decision FULL|AFFECTED` decision before
+  `prepare-action qa-execution` (CLI-enforced; first execution needs none and
+  defaults to the full set). AFFECTED reruns execute only the host-judged subset
+  (must be a non-empty approved subset including every prior FAIL case), inherit
+  the untouched approved cases as PASS from the base snapshot (marked `inherited`,
+  excluded from FAIL aggregation), and lock the subset before dispatch. The
+  authoritative prior result (with its FAIL case set) survives repair snapshot
+  advances in `PriorQAExecution` until replaced; a RUNTIME_ERROR is never
+  preserved and never evicts it. At the exhausted review-wave limit,
+  `authorize-repair` bundles the rerun scope decision in the same interaction
+  (per selected mode; `--qa-scope/--qa-cases/--qa-reason`, Source
+  AUTHORIZE_REPAIR), auto-carries a prior user-chosen AFFECTED decision as
+  CARRY_FORWARD without re-asking, and still grants exactly one extra wave.
+- Allow `qa-design` re-records to add/update the case set until that mode's
+  `qa-review` dispatch is prepared (design locked once a review dispatch is
+  OPEN/CLAIMED), preserving existing approved cases incrementally.
+- Store QA cases per dispatch mode (`qaCasesByMode`, blackbox/whitebox separate,
+  empty mode for the merged/单派发 flow): a `qa-design` round only replaces its
+  own mode's case list, never touching another mode's existing cases (their
+  review PASS status and recorded execution results are preserved), fixing the
+  data loss where designing whitebox replaced the whole table and cleared
+  blackbox cases. Legacy single-list state files migrate into the merged key on
+  load; case IDs stay unique across modes.
+- Detect parallelism and remind the main agent to fill parallel dispatches
+  (RQ-014): a hard-coded, decoupled "stage → should-parallel task" data table
+  drives the check (post-development = blackbox QA execution + whitebox QA
+  execution + each selected gate; repair rounds re-review gates and QA in
+  parallel; blackbox QA design/review runs in parallel with development; the
+  rules do not depend on whether tasks are prepared). Every state-changing
+  workflow command (prepare-action / prepare-gate / claim-dispatch / record-* /
+  qa-* / snapshot / seal) and the lifecycle hook (subagent start/stop) triggers a
+  cheap, read-only check; when the in-flight claimed dispatch count is below the
+  should-parallel set size the CLI prints a stderr reminder ("可并行 X 项…当前并行
+  Y 项，建议补足") with cooldown/dedup, never polluting stdout machine JSON, and
+  never touching dispatches, lifecycle events, or review results.
 - Run blackbox QA design/review/repair in a dedicated QA isolation worktree in
   parallel with development: development start no longer waits for the blackbox
   QA review, blackbox qa-design/qa-review resolve native identity against the
@@ -159,6 +215,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Apply per-mode precedence when reading QA cases across storage layouts
+  (qaModeCases/allQACases): a concrete mode's own per-mode key, when non-empty,
+  is authoritative and its legacy cases left in the merged "" key are ignored.
+  A run that redesigned per-mode after a legacy single-list migration no longer
+  double-counts the stale merged cases or lets a stale PENDING blackbox case
+  block the snapshot's blackbox QA gate; the merged (empty-mode) view remains
+  the full current set and merged-only runs keep the "" key's cases unchanged.
+- Fix dispatch invalidation (RQ-013): prepare SHALL NOT invalidate any dispatch;
+  the remaining invalidation is mode-scoped across every target (a blackbox
+  dispatch never stales a whitebox dispatch of the same target, fixing the
+  "whitebox review prepare staled the blackbox review" defect). Claiming a fresh
+  same-function dispatch rejects an already-CLAIMED dispatch (no two parallel
+  same-function subagents) unless its subagent was manually terminated by the
+  main agent — the lifecycle stop event / interruption reason marks the prior
+  STALE and allows the claim (the manual-termination exception, no new CLI
+  command) — and automatically stales old OPEN empty tickets (no subagent / no
+  start event) so they never block a claim. A STALE dispatch the reviewer had
+  already claimed can still record its produced result (reviewer identity and
+  content verified, no re-dispatch, lands on the current snapshot) as long as no
+  same-function replacement is in flight (double-record guard); source-binding
+  mismatches from a changed snapshot stay conservatively rejected.
 - Share one stale-dispatch helper across adoption, requirement invalidation, and
   snapshot rebinding instead of three byte-identical loops.
 - Resolve an adopted external change that needs no real rerun without counting a

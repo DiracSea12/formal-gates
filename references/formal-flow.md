@@ -185,7 +185,9 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
 
 双速调度细节（SKILL 第 4 步的执行机制）：黑盒 QA 用例在 QA 隔离工作区按当前需求设计
 （路线未确认的快速路径沿用、与 `start-readiness` 并行），设计后派发独立 `qa-review`
-批准；白盒 QA（结构测试）开发后由独立代理读实现设计并执行。黑盒 review 连续 3 次 FAIL
+批准；白盒 QA（结构测试）开发后由独立代理读实现设计并执行。黑盒与白盒的用例按 mode
+分开存储，`qa-design` 记录轮只新增/更新/删除本派发 mode 的用例，不触碰另一 mode 的
+既有用例（含其 review PASS 状态与已记录执行结果）。黑盒 review 连续 3 次 FAIL
 （出现 PASS 即清零；RUNTIME_ERROR 不计入也不打断）视为"长期不过"，主代理向用户展示
 当前阻塞项并由用户决策处置；选项包括 abort 重建、走需求修订，或经 `workflow snapshot
 --user-requested --reason '<reason>'` 显式授权手动放行（非自动）。放行不限于 3-FAIL
@@ -216,12 +218,31 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 
 ## 开发后审查
 
+**QA 执行重跑先记 scope 决策。** 某 mode 的 QA 执行是**重跑**（该 mode 已存在更早快照的权威
+执行结果，如修复快照推进后上一轮 FAIL 保留、或保留跨门的 PASS）时，host 在进入执行前 SHALL
+询问用户"全量重跑 vs 只跑受影响"并给出推荐；CLI 强制——`prepare-action qa-execution` 前该
+mode 必须已记录覆盖本次重跑的 scope 决策（`BaseSnapshot` 匹配上一轮权威结果快照），否则拒绝
+prepare。首次执行（无更早结果）不要求 scope、默认全量。黑盒/白盒各自独立、按 mode 记录与校验。
+
 ```bash
+# 重跑前记录 scope 决策。FULL 全量重跑该 mode 全部已批准用例；AFFECTED 只重跑 host 综合
+# 判定的受影响子集（上一轮该 mode 的 FAIL 用例 + 受本轮修复连带影响的既往通过用例），
+# 其余已批准用例继承上一轮 PASS。mode 为空串表示合并集（merge/遗留 qa）。
+formal-gates workflow qa-execution-scope --root <repo> --package-root <package> \
+  --run-id <id> --mode <blackbox|whitebox|""> --decision <FULL|AFFECTED> \
+  [--cases <id,...>] [--reason '<reason>']
+
 # 并行准备 QA 执行和每一个门。开发后阶段并行：黑盒 QA 执行、白盒 QA 与各门。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-execution
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
+# 各阶段"应并行集"（RQ-014 规则驱动定义，供 CLI 并行检测提醒）：
+# - 开发后审查阶段：黑盒 QA 执行 + 白盒 QA + 各已选门，全部并行。
+# - 开发前两段式：Part 1 产品审 → Part 2 start-readiness（顺序依赖，不并行）。
+# - 黑盒 QA 设计/review：与开发并行（隔离工作区）。
+# - 修复轮：各门的重审与 QA 执行并行。
+# CLI 以此计算"可并行集合"并对比当前在途并行数，不足时在 stderr 提醒主代理。
 
 # 为每个已批准的 QA 用例和每个被选中的已发现门各记录一组。
 formal-gates workflow qa-execution --root <repo> --package-root <package> \
@@ -260,7 +281,16 @@ formal-gates workflow carry --root <repo> --package-root <package> \
   --gate <gate-id> --decision <INHERIT|RERUN> --reason '<reason>'
 
 formal-gates workflow authorize-repair --root <repo> --package-root <package> \
-  --run-id <id> --cycles 1
+  --run-id <id> --cycles 1 \
+  [--qa-scope <mode>=<FULL|AFFECTED> --qa-cases <mode>=<id,...> --qa-reason <mode>=<reason>]...
+
+# 轮次上限用尽后，额外修复始终需要显式授权；carry-forward 不授予轮次。若某 QA mode 在当前
+# 快照有权威 FAIL 结果（将重跑），scope 决策与"是否授权再来一轮"在同一交互中打包询问/记录：
+# - 该 mode 最近一次 scope 为 FULL 或从未决策 → 一起询问（host 给推荐），可经 --qa-* 内联
+#   记录（Source=AUTHORIZE_REPAIR），或先逐 mode 用 qa-execution-scope 预记录后一次授权；
+# - 该 mode 最近一次为 AFFECTED（用户主动选择）→ 不再询问"全量 vs 受影响"，CLI 自动沿用：
+#   host 综合判定子集后经 --qa-cases 传入，记录 Source=CARRY_FORWARD 的 scope；子集扩展由
+#   host 自行决定、不要求用户确认。多 mode 各需一份、可不同，一次交互可一起记录。
 
 # 只有当每个被选中的结果都通过、或已获得允许的授权之后，才 Seal。FAIL 跳过需要共享
 # 审查轮次上限耗尽；用户主动要求跳过时加 --user-requested，可提前跳过并记录为
@@ -290,6 +320,15 @@ formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> 
 的被选门单独派发继承判定并重跑 QA。涉及共享 API、公开行为、配置、依赖、跨门职责或因
 果不确定的修复，一律用独立继承判定。只重跑标记为 `RERUN` 的门，给它完整的基线到当前
 比较。
+
+QA 重跑 scope 推荐（RQ-008，host 行为）：重跑询问时 host 依据修复 diff 评估影响面并给出
+推荐，且 SHALL **显式提醒**用户"只跑受影响"的含义——包括上一轮**挂掉的**用例 + host（AI）
+判定可能受本轮修复**连带影响**的既往通过用例，子集由 host 综合判定、不要求用户逐项确认。
+推荐由 AI 按实际情况综合判断、**稍保守**（不确定时倾向 FULL），不设机械规则：修复范围窄、
+影响可靠有界、且不涉及共享 API / 公开行为 / 配置 / 依赖 / 跨门职责 → 倾向推荐 AFFECTED
+并展示拟重跑子集；涉及共享面、因果不确定或无法界定 → 倾向推荐 FULL。选择 AFFECTED 时提醒
+用户：名单外（继承）用例本轮不验证，若被修复连带破坏可能漏检，风险由本次选择承担。AFFECTED
+子集在派发前定死，执行者只执行该子集、不得在执行中自行补跑/改判/改选名单外用例（RQ-010）。
 
 Seal 跳过规则（SKILL 第 9 步的执行机制）：
 - PENDING 结果直接阻塞 Seal；RUNTIME_ERROR 需要用户手动跳过；QA FAIL 或 P0/P1 必须先

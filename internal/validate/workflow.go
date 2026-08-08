@@ -30,6 +30,17 @@ type QAReviewInput struct{ CaseID, Outcome, Reason string }
 
 type QAResultInput struct{ CaseID, Outcome, Procedure, Observation, OracleResult string }
 
+// QAScopeInput carries one QA execution rerun scope decision bundled into an
+// authorize-repair call (RQ-007): Mode is the dispatch mode (blackbox / whitebox /
+// empty for the merged set), Decision is FULL or AFFECTED, CaseIDs is the host
+// judged AFFECTED subset, and Reason traces the decision.
+type QAScopeInput struct {
+	Mode     string
+	Decision string
+	CaseIDs  []string
+	Reason   string
+}
+
 type CarryInput struct{ GateID, Decision, Message string }
 
 const (
@@ -45,6 +56,17 @@ const carryAdoptKey = "__adopt__"
 
 const formalFlow = "formal"
 const automaticReviewWaveLimit = 3
+
+// QA execution scope source markers (RQ-003/007): PREPARE for the standalone
+// workflow qa-execution-scope command, AUTHORIZE_REPAIR for a scope recorded inline
+// by an authorize-repair call at the review-wave limit, and CARRY_FORWARD for a
+// scope auto-carried at the limit from a prior user AFFECTED choice without asking
+// again.
+const (
+	scopeSourcePrepare         = "PREPARE"
+	scopeSourceAuthorizeRepair = "AUTHORIZE_REPAIR"
+	scopeSourceCarryForward    = "CARRY_FORWARD"
+)
 
 const (
 	developmentPending        = "PENDING"
@@ -122,10 +144,9 @@ func blackboxReviewPassed(state RunState) bool {
 		return true
 	}
 	hasBlackboxCases := false
-	for _, testCase := range state.QACases {
-		if testCase.Mode != "blackbox" {
-			continue
-		}
+	// RQ-012：黑盒用例按 mode 分开存储；从全量跨 mode 视图按 mode 过滤读取，兼容合并
+	// 存储（用例在 "" 键）与按 mode 存储两种布局。
+	for _, testCase := range state.qaModeCases("blackbox") {
 		hasBlackboxCases = true
 		if testCase.ReviewStatus != "PASS" {
 			return false
@@ -478,8 +499,9 @@ func discardUnmatchedQADesign(state *RunState) {
 	if isSelected(*state, blackboxQAID) || isSelected(*state, legacyQAID) {
 		return
 	}
-	state.QACases = []QACase{}
-	state.QAExecution = QAExecutionResult{Status: "PENDING"}
+	// RQ-012：废弃快速路径的投机黑盒设计时清空全部按 mode 存储的用例与执行结果。
+	state.QACasesByMode = map[string][]QACase{}
+	state.QAExecutionByMode = map[string]QAExecutionResult{}
 	state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
 	state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
 	// 最终路线不含黑盒时设计废弃，黑盒隔离工作区随之移除（清空登记，host 重建时才需要）。
@@ -605,7 +627,7 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			state.RouteMode = "merge"
 			state.SelectedGates = []string{mergeQAID, mergeGateID}
 			state.SkipAuthorizations = map[string]SkipAuthorization{}
-			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			state.QAExecutionByMode = map[string]QAExecutionResult{}
 			return nil
 		}
 		if strings.TrimSpace(note) == "" {
@@ -758,7 +780,12 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		overridePassRound := userRequested && (actionID == "product-review" || actionID == "start-readiness") && state.Actions[actionID].Status == "PASS"
 		if !overridePassRound {
-			if err := requireTransition(*state, actionID, ""); err != nil {
+			// RQ-012：qa-design 的 review 锁按 mode 检查（target 传 mode）。
+			target := ""
+			if actionID == "qa-design" {
+				target = mode
+			}
+			if err := requireTransition(*state, actionID, target); err != nil {
 				return "", err
 			}
 		} else if state.ReviewOverrides == nil {
@@ -774,7 +801,18 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 		// R 修复清单 item 3：黑盒/白盒各自独立派发、并行执行，同一 snapshot 下每个 mode
 		// 的 qa-execution 各记录一次；同 mode 已出权威结果时才挡后续同 mode 派发。
 		if actionID == "qa-execution" && qaExecutionModeResulted(*state, mode) {
-			return "", fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.QAExecution.Status)
+			return "", fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.qaExecution(mode).Status)
+		}
+		// RQ-002：重跑强制 scope 决策（CLI 强制，防主代理遗漏）。该 mode 存在更早快照的
+		// 权威执行结果（即本次是重跑）时，prepare 前必须已记录覆盖本次重跑（BaseSnapshot
+		// 匹配上一轮权威结果快照）的 scope 决策，否则拒绝 prepare。
+		if actionID == "qa-execution" {
+			if base, ok := qaExecutionPriorResultedBase(*state, mode); ok {
+				sc, ok2 := state.ExecutionScopes[mode]
+				if !ok2 || sc.BaseSnapshot != base {
+					return "", fmt.Errorf("QA Execution rerun requires a scope decision: run `workflow qa-execution-scope --mode %s --decision FULL|AFFECTED ...` first", mode)
+				}
+			}
 		}
 		detail, err := actionPromptDetail(*state, catalog, actionID, mode)
 		if err != nil {
@@ -843,7 +881,9 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if err != nil {
 			return err
 		}
-		staleOpenDispatches(state, targetKind, target, mode)
+		// RQ-013：prepare（生成任务票）SHALL NOT 作废任何派发。作废只发生在认领新派发时
+		// （同功能旧 OPEN 空票清理 / CLAIMED 去重与手动终止例外）与全局失效事件（采纳外部
+		// 改动、需求作废、快照重绑），不再在 prepare 时把既有在途派发标 STALE。
 		source := state.CurrentSnapshot
 		if blackbox {
 			source = state.BaseSnapshot
@@ -923,7 +963,9 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		} else if modes := selectedQAModes(state); len(modes) != 0 {
 			lines = append(lines, "Selected QA modes: "+strings.Join(modes, "; "))
 		}
-		if len(state.QACases) != 0 {
+		// RQ-012：设计轮只动本派发 mode 的用例，提示词只列该 mode 的既有用例。
+		modeCases := state.qaModeCases(mode)
+		if len(modeCases) != 0 {
 			lines = append(lines, "Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain exact unaffected passing cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed.")
 			if review := state.Actions["qa-review"]; review.Status == "FAIL" {
 				lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
@@ -935,7 +977,7 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 					lines = append(lines, line)
 				}
 			}
-			for _, testCase := range state.QACases {
+			for _, testCase := range modeCases {
 				lines = append(lines, formatQACase(testCase, true))
 			}
 		}
@@ -945,10 +987,12 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		return strings.Join(lines, "\n\n"), nil
 	}
 	if actionID == "qa-review" {
-		pendingCases := pendingQACases(state.QACases, mode)
+		// RQ-012：按派发 mode 读取该 mode 的用例组装审查输入。
+		modeCases := state.qaModeCases(mode)
+		pendingCases := pendingQACases(modeCases, mode)
 		accepted := []string{"Accepted coverage context; do not return new decisions for these cases:"}
 		pending := []string{"Return one decision for every pending case below:"}
-		for _, testCase := range state.QACases {
+		for _, testCase := range modeCases {
 			if testCase.ReviewStatus == "PASS" {
 				accepted = append(accepted, fmt.Sprintf("%s: %s", testCase.ID, testCase.Description))
 			}
@@ -971,6 +1015,11 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		var lines []string
 		for _, testCase := range required {
 			lines = append(lines, formatQACase(testCase, false))
+		}
+		// RQ-010：AFFECTED 重跑的子集在派发前由 host 综合判定定死，向执行者显式说明
+		// 本次需执行范围与继承范围，禁止执行中自行补跑/改判/改选名单外（继承）用例。
+		if sc, ok := qaExecutionAffectedScope(state, mode); ok {
+			lines = append(lines, fmt.Sprintf("This is an AFFECTED rerun: execute ONLY the affected subset listed above (fixed before dispatch by the host). The other approved cases inherit their PASS from snapshot %s and are NOT part of this execution. Run only this subset; do not self-add, re-judge, or re-select cases outside it, and do not report or change the subset mid-execution.", sc.BaseSnapshot))
 		}
 		return strings.Join(lines, "\n\n"), nil
 	}
@@ -1024,16 +1073,35 @@ func pendingQACases(cases []QACase, mode string) []QACase {
 // (R 修复清单 item 3: 执行按 mode 分流). An empty mode keeps the merged set for
 // existing single-dispatch flows and merge QA.
 func qaExecutionRequiredCases(state RunState, mode string) []QACase {
+	// RQ-002/004：重跑按 scope 决策分流需执行集。AFFECTED（且 BaseSnapshot 匹配本次重跑
+	// 的继承来源，见 B2）时，需执行集 = 记录的受影响子集（派发前由 host 综合判定定死，
+	// 见 RQ-004/010）；否则（FULL / 首次执行）为全部已批准用例（按 mode 过滤，现状不变）。
+	// RQ-012：按 mode 读取该 mode 的需执行用例（从跨 mode 视图按 mode 过滤，兼容合并与
+	// 按 mode 存储两种布局）。
+	modeCases := state.qaModeCases(mode)
+	if sc, ok := qaExecutionAffectedScope(state, mode); ok {
+		inSubset := map[string]bool{}
+		for _, id := range sc.CaseIDs {
+			inSubset[id] = true
+		}
+		subset := []QACase{}
+		for _, testCase := range modeCases {
+			if inSubset[testCase.ID] {
+				subset = append(subset, testCase)
+			}
+		}
+		return subset
+	}
 	if !snapshotBlackboxReleased(state) {
-		return filterQACasesByMode(state.QACases, mode)
+		return modeCases
 	}
 	approved := []QACase{}
-	for _, testCase := range state.QACases {
+	for _, testCase := range modeCases {
 		if testCase.ReviewStatus == "PASS" {
 			approved = append(approved, testCase)
 		}
 	}
-	return filterQACasesByMode(approved, mode)
+	return approved
 }
 
 // filterQACasesByMode returns only the cases whose mode matches the dispatch mode;
@@ -1052,23 +1120,158 @@ func filterQACasesByMode(cases []QACase, mode string) []QACase {
 }
 
 // qaExecutionModeResulted reports whether the run already has an authoritative QA
-// Execution result for the dispatch mode at the current snapshot. With R 修复清单
-// item 3's per-mode dispatch, blackbox and whitebox each record independently: a
-// mode-scoped dispatch is authoritative only once that mode has recorded cases
-// (or a RUNTIME_ERROR was recorded); an empty-mode dispatch is authoritative once
-// any PASS/FAIL result exists (the single merged-set flow).
+// Execution result for the dispatch mode at the current snapshot (RQ-012 full
+// decoupling): blackbox and whitebox each record independently into their own
+// per-mode result, and the merged empty mode holds the single merged-set result.
+// An authoritative result is PASS / FAIL / RUNTIME_ERROR recorded at the current
+// snapshot.
 func qaExecutionModeResulted(state RunState, mode string) bool {
-	if state.QAExecution.Snapshot != state.CurrentSnapshot {
+	result := state.qaExecution(mode)
+	if result.Snapshot != state.CurrentSnapshot {
 		return false
 	}
-	if state.QAExecution.Status == "RUNTIME_ERROR" {
-		return true
-	}
-	if mode == "" {
-		return state.QAExecution.Status == "PASS" || state.QAExecution.Status == "FAIL"
-	}
-	for _, record := range state.QAExecution.Cases {
+	return result.Status == "PASS" || result.Status == "FAIL" || result.Status == "RUNTIME_ERROR"
+}
+
+// qaResultHasMode reports whether the given QA execution result holds at least one
+// case record for the dispatch mode. Every record carries its concrete mode, so the
+// merged (empty) mode never matches a record; callers check the empty mode by the
+// result's authoritative status directly.
+func qaResultHasMode(result QAExecutionResult, mode string) bool {
+	for _, record := range result.Cases {
 		if record.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+// priorAuthoritativeQA returns the dispatch mode's prior authoritative QA execution
+// result (PASS or FAIL) whose snapshot differs from the current one — the result a
+// rerun of that mode inherits from (RQ-002/009, RQ-012 full decoupling). It prefers
+// the mode's preserved current result (e.g. a PASS kept across a repair snapshot
+// advance), then the mode's PriorQAExecutionByMode entry. RUNTIME_ERROR is never
+// authoritative.
+func priorAuthoritativeQA(state RunState, mode string) (QAExecutionResult, bool) {
+	current := state.qaExecution(mode)
+	if (current.Status == "PASS" || current.Status == "FAIL") && current.Snapshot != "" && current.Snapshot != state.CurrentSnapshot {
+		return current, true
+	}
+	if prior := state.priorQAExecution(mode); prior != nil && (prior.Status == "PASS" || prior.Status == "FAIL") {
+		return *prior, true
+	}
+	return QAExecutionResult{}, false
+}
+
+// qaExecutionPriorResultedBase returns the snapshot of the prior authoritative QA
+// execution result a rerun of the mode inherits from — the BaseSnapshot the rerun
+// scope decision must match (RQ-002, B1). ok is false when there is no prior
+// authoritative result: the mode's first execution, which requires no scope.
+func qaExecutionPriorResultedBase(state RunState, mode string) (string, bool) {
+	result, ok := priorAuthoritativeQA(state, mode)
+	if !ok {
+		return "", false
+	}
+	return result.Snapshot, true
+}
+
+// qaExecutionRerunSource returns the authoritative QA execution result a rerun of
+// the mode inherits from, together with its snapshot. For the prepare path this is
+// the prior authoritative result at an earlier snapshot. At the repair-limit path
+// (authorize-repair before the repair snapshot advance) the current authoritative
+// FAIL result at the current snapshot is itself the inheritance source — after the
+// advance it is preserved to the mode's PriorQAExecutionByMode and becomes the
+// "上一轮" (RQ-007).
+func qaExecutionRerunSource(state RunState, mode string) (QAExecutionResult, string, bool) {
+	if prior, ok := priorAuthoritativeQA(state, mode); ok {
+		return prior, prior.Snapshot, true
+	}
+	current := state.qaExecution(mode)
+	if current.Status == "FAIL" && current.Snapshot == state.CurrentSnapshot {
+		return current, state.CurrentSnapshot, true
+	}
+	return QAExecutionResult{}, "", false
+}
+
+// qaOverallResult aggregates the per-mode QA execution results into a single view
+// for display / summary purposes (RQ-012 full decoupling). The merged (empty-mode)
+// result is returned as-is when the run uses merged storage; otherwise the concrete
+// modes' results are combined (union of cases and findings) with FAIL winning over
+// RUNTIME_ERROR over PASS, and the snapshot taken from the recorded modes.
+func qaOverallResult(state RunState) QAExecutionResult {
+	if merged := state.qaExecution(""); merged.Status != "" || merged.Snapshot != "" || len(merged.Cases) != 0 {
+		return merged
+	}
+	var cases []QAResultRecord
+	var findings []Finding
+	status := "PENDING"
+	snapshot := state.CurrentSnapshot
+	haveRecorded := false
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		result := state.qaExecution(mode)
+		if result.Status == "" {
+			continue
+		}
+		haveRecorded = true
+		cases = append(cases, result.Cases...)
+		findings = append(findings, result.Findings...)
+		switch {
+		case result.Status == "FAIL":
+			status = "FAIL"
+		case status != "FAIL" && result.Status == "RUNTIME_ERROR":
+			status = "RUNTIME_ERROR"
+		case status != "FAIL" && status != "RUNTIME_ERROR" && result.Status == "PASS":
+			status = "PASS"
+		}
+		if result.Snapshot != "" {
+			snapshot = result.Snapshot
+		}
+	}
+	if !haveRecorded {
+		return QAExecutionResult{Status: "PENDING"}
+	}
+	return QAExecutionResult{Status: status, Snapshot: snapshot, Cases: cases, Findings: findings}
+}
+
+// qaExecutionAffectedScope returns the recorded AFFECTED scope decision that applies
+// to the current rerun of the mode: Decision AFFECTED and BaseSnapshot matching the
+// prior authoritative result this rerun inherits from (B2). ok is false when the run
+// is not under an AFFECTED rerun scope (FULL decision or first execution).
+func qaExecutionAffectedScope(state RunState, mode string) (QAExecutionScope, bool) {
+	sc, ok := state.ExecutionScopes[mode]
+	if !ok || sc.Decision != "AFFECTED" {
+		return QAExecutionScope{}, false
+	}
+	base, has := qaExecutionPriorResultedBase(state, mode)
+	if !has || sc.BaseSnapshot != base {
+		return QAExecutionScope{}, false
+	}
+	return sc, true
+}
+
+// qaModeLabel renders a dispatch mode for user-facing messages: the merged (empty)
+// mode is shown as "merged".
+func qaModeLabel(mode string) string {
+	if mode == "" {
+		return "merged"
+	}
+	return mode
+}
+
+// qaReviewDispatchPrepared reports whether a qa-review dispatch for the given mode
+// is prepared (OPEN or CLAIMED) and not yet completed — the design lock point
+// (RQ-011, RQ-012 full decoupling): once a review dispatch for a mode is prepared,
+// that mode's QA case set is frozen until the review returns, so further qa-design
+// re-records for that mode are rejected. The lock is per mode: a blackbox review in
+// flight does not lock the whitebox design (and vice versa); an empty mode matches
+// merged / fast-path reviews. After the review records PASS/FAIL (or is still
+// PENDING with no dispatch), the design is unlocked again.
+func qaReviewDispatchPrepared(state RunState, mode string) bool {
+	for _, dispatch := range state.Dispatches {
+		if dispatch.TargetKind != "action" || dispatch.Target != "qa-review" || (dispatch.Status != "OPEN" && dispatch.Status != "CLAIMED") {
+			continue
+		}
+		if dispatch.Mode == mode {
 			return true
 		}
 	}
@@ -1167,6 +1370,12 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 			if prior.ReviewerIdentity == effective {
 				return fmt.Errorf("reviewer identity is already reserved by dispatch %s", priorID)
 			}
+		}
+		// RQ-013 同功能去重：认领新派发时清掉同功能旧 OPEN 空票（无子代理、不挡认领）；已有
+		// CLAIMED 同功能派发默认拒绝并行，除非前子代理已被主代理手动终结（生命周期已捕获其
+		// stop 事件/中断原因 → 把前派发标 STALE、允许认领新派发）。
+		if err := enforceSameFunctionDedup(root, state, dispatch); err != nil {
+			return err
 		}
 		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, effective); err != nil {
 			return err
@@ -1369,11 +1578,12 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
 		}
-		if err := requireTransition(*state, "qa-design", ""); err != nil {
-			return err
-		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, "action", "qa-design")
 		if err != nil {
+			return err
+		}
+		// RQ-012：qa-design 的 review 锁按 dispatch mode 检查（黑盒 review 在飞不锁白盒设计）。
+		if err := requireTransition(*state, "qa-design", dispatch.Mode); err != nil {
 			return err
 		}
 		// 黑盒设计派发对 QA 隔离工作区解析原生标识（== 基线）；白盒/其他对主工作区（== 当前）。
@@ -1388,7 +1598,8 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			if len(cases) != 0 {
 				return fmt.Errorf("QA Design runtime error cannot include cases")
 			}
-			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			// RQ-012：只重置本派发 mode 的执行结果，另一 mode 的执行结果不受影响。
+			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
 			state.Actions["qa-design"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID}
 			completeDispatch(state, dispatch.ID)
 			return nil
@@ -1402,18 +1613,27 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				// 合并 QA 的用例集可为零/极少：留痕注明"切片基本独立、无跨切片交互用例"。
 				message = "切片基本独立、无跨切片交互用例"
 			}
-			state.QACases = []QACase{}
-			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			// RQ-012：只清空本派发 mode 的用例列表与执行结果，不触碰另一 mode 的既有用例/结果。
+			state.setQACases(dispatch.Mode, []QACase{})
+			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
 			state.Actions["qa-design"] = ActionResult{Status: "PASS", Message: message, DispatchID: dispatch.ID}
 			state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
 			completeDispatch(state, dispatch.ID)
 			return nil
 		}
+		// RQ-012：设计轮只对本派发 mode 的用例列表做增量替换——从该 mode 自己的存储列表取
+		// 既有用例（保留已批准用例、增量补全），另一 mode 的列表保持不动。
+		priorCases := state.qaCases(dispatch.Mode)
 		seen := map[string]bool{}
 		priorByKey := map[string]QACase{}
+		// 用例 ID 跨所有 mode 全局唯一（执行记录 / AFFECTED 子集按 ID 索引）：新 ID 生成
+		// 时保留全部 mode 已占用的 ID，避免不同 mode 的用例撞号；priorByKey 只从本 mode
+		// 的既有用例取，保证只复用/保留本 mode 的已批准用例。
 		usedIDs := map[string]bool{}
-		for _, prior := range state.QACases {
+		for _, prior := range state.allQACases() {
 			usedIDs[prior.ID] = true
+		}
+		for _, prior := range priorCases {
 			priorByKey[qaCaseSemanticKey(prior.Mode, prior.Description, prior.Procedure, prior.Oracle)] = prior
 		}
 		nextID := 1
@@ -1427,6 +1647,11 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			}
 			if normalized.Mode != "blackbox" && normalized.Mode != "whitebox" {
 				return fmt.Errorf("QA case %d mode must be blackbox or whitebox", index+1)
+			}
+			// RQ-012：按 mode 派发的设计轮只记录本 mode 的用例，防止把别的 mode 的用例写进
+			// 本 mode 的列表。
+			if dispatch.Mode != "" && normalized.Mode != dispatch.Mode {
+				return fmt.Errorf("QA case %d mode %q does not match the %s design dispatch", index+1, normalized.Mode, dispatch.Mode)
 			}
 			for name, value := range map[string]string{"description": normalized.Description, "procedure": normalized.Procedure, "oracle": normalized.Oracle} {
 				if value == "" {
@@ -1464,13 +1689,14 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				}
 			}
 			if !pending {
-				if len(updated) == len(state.QACases) {
+				if len(updated) == len(priorCases) {
 					return fmt.Errorf("QA Design rework must add or revise a case, or remove an obsolete or duplicated case")
 				}
 			}
 		}
-		state.QACases = updated
-		state.QAExecution = QAExecutionResult{Status: "PENDING"}
+		state.setQACases(dispatch.Mode, updated)
+		// RQ-012：设计轮只重置本派发 mode 的执行结果——白盒设计不清黑盒已记录的执行结果。
+		state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
 		state.Actions["qa-design"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
 		state.Actions["qa-review"] = ActionResult{Status: "PENDING"}
 		completeDispatch(state, dispatch.ID)
@@ -1512,13 +1738,13 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		}
 		// 待定用例集按派发 mode 限定：黑盒 review 只决定黑盒待定用例、白盒 review 只决定
 		// 白盒待定用例，各派发为单 mode、不混合。mode 为空（快速路径/合并 QA）时覆盖全部
-		// 待定用例。被选中模式零用例时待定集为空，只做集合覆盖判定。
+		// 待定用例。被选中模式零用例时待定集为空，只做集合覆盖判定。RQ-012：与提示词组装
+		// 用同一读取视图（per-mode 键非空即用、否则回退合并 "" 键），保证 recorder 的
+		// pending 集与提示词列出的一致；决定后写回同一存储键。
+		storageKey, modeCases := state.qaModeCasesWithKey(dispatch.Mode)
 		pending := map[string]int{}
-		for index, testCase := range state.QACases {
+		for index, testCase := range modeCases {
 			if testCase.ReviewStatus == "PASS" {
-				continue
-			}
-			if dispatch.Mode != "" && testCase.Mode != dispatch.Mode {
 				continue
 			}
 			pending[testCase.ID] = index
@@ -1547,7 +1773,7 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			if outcome == "FAIL" && reason == "" {
 				return fmt.Errorf("QA Review FAIL for %s requires a reason", caseID)
 			}
-			state.QACases[index].ReviewStatus = outcome
+			modeCases[index].ReviewStatus = outcome
 			if outcome == "FAIL" {
 				status = "FAIL"
 				findings = append(findings, Finding{Message: caseID + ": " + reason})
@@ -1578,7 +1804,8 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		state.Actions["qa-review"] = ActionResult{Status: status, Findings: findings, DispatchID: dispatch.ID}
 		if status == "FAIL" {
 			state.Actions["qa-design"] = ActionResult{Status: "PENDING"}
-			state.QAExecution = QAExecutionResult{Status: "PENDING"}
+			// RQ-012：review FAIL 只重置本派发 mode 的执行结果，另一 mode 的结果不受影响。
+			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
 			// 黑盒 review 连续 FAIL 计数：PASS 清零、RUNTIME_ERROR 不计入也不打断连续。
 			if dispatch.Mode == "blackbox" {
 				state.BlackboxReviewFails++
@@ -1588,6 +1815,8 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			state.QAWorktree = ""
 			state.BlackboxReviewFails = 0
 		}
+		// RQ-012：把决定的审查状态写回读取时同一存储键（per-mode 键或合并 "" 回退）。
+		state.setQACasesForReview(dispatch.Mode, storageKey, modeCases)
 		completeDispatch(state, dispatch.ID)
 		return nil
 	})
@@ -1617,15 +1846,19 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		}
 		backfillDispatchCost(root, state, dispatch)
 		// R 修复清单 item 3：按派发 mode 分流，黑盒/白盒各自独立派发、并行执行——同一
-		// snapshot 下每个 mode 各记录一次，同 mode 已出权威结果时才挡后续同 mode 派发。
+		// snapshot 下每个 mode 各记录一次，同 mode 已出权威结果时才挡后续同 mode 派发
+		// （RQ-012：按 mode 独立）。
 		if qaExecutionModeResulted(*state, dispatch.Mode) {
-			return fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.QAExecution.Status)
+			return fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.qaExecution(dispatch.Mode).Status)
 		}
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(results) != 0 {
 				return fmt.Errorf("QA runtime error cannot include case results")
 			}
-			state.QAExecution = QAExecutionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), Snapshot: state.CurrentSnapshot}
+			// RQ-012：按 mode 分开记录，只影响本派发 mode。
+			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), Snapshot: state.CurrentSnapshot})
+			// RUNTIME_ERROR 不是权威结果，不得驱逐存续的上一轮结果（P2-乙确认）：下一轮
+			// 重跑的 base 仍取本 mode 的 PriorQAExecution，所以这里不清空本 mode 的 prior。
 			completeDispatch(state, dispatch.ID)
 			completeReviewWaveIfReady(state)
 			return nil
@@ -1660,54 +1893,63 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			}
 			byID[item.CaseID] = item
 		}
-		// 并行 mode 派发时保留其他 mode 已记录的用例结果：黑盒/白盒各自独立派发、各自
-		// 记录，共享的 QAExecution 结果累计两个 mode 的用例（R 修复清单 item 3）。同一
-		// mode 的重复记录由 qaExecutionModeResulted 挡在入口。
+		// RQ-012：执行结果按 mode 分开存储——每个 mode 的结果只含本 mode 的用例记录，黑盒/
+		// 白盒各自独立、互不累计（另一 mode 的结果在 QAExecutionByModel[otherMode] 原样保持）。
+		// 同一 mode 的重复记录由 qaExecutionModeResulted 挡在入口。
 		recorded := make([]QAResultRecord, 0, len(required))
-		if dispatch.Mode != "" && state.QAExecution.Snapshot == state.CurrentSnapshot {
-			for _, existing := range state.QAExecution.Cases {
-				if existing.Mode != dispatch.Mode {
-					recorded = append(recorded, existing)
-				}
-			}
-		}
 		for _, testCase := range required {
 			item, ok := byID[testCase.ID]
 			if !ok {
 				return fmt.Errorf("QA result is missing for %s", testCase.ID)
 			}
-			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult)})
+			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult), Origin: "executed"})
 		}
 		// 快照放行后未获批准的黑盒用例：经用户授权跳过、验证状态视为 PASS（记录授权来源）。
 		// 仅黑盒或合并（空 mode）派发补记这些跳过；白盒派发不补记黑盒用例。
 		if snapshotBlackboxReleased(*state) && (dispatch.Mode == "" || dispatch.Mode == "blackbox") {
-			for _, testCase := range state.QACases {
+			for _, testCase := range state.qaModeCases("blackbox") {
 				if testCase.ReviewStatus == "PASS" {
 					continue
 				}
-				if testCase.Mode != "blackbox" {
-					continue
-				}
-				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "skipped", Observation: "authorized skip (user snapshot release)", OracleResult: "authorized PASS"})
+				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "skipped", Observation: "authorized skip (user snapshot release)", OracleResult: "authorized PASS", Origin: "executed"})
 			}
 		}
-		// 累计结果的状态与发现项：任一 mode 的任一用例 FAIL 即整体 FAIL（并行派发时
-		// 两边的结果合并到同一 QAExecution 结果）；发现项从合并后的完整用例集重新生成，
-		// 保证返修输入保留两个 mode 的失败原因。
+		// RQ-005：AFFECTED 重跑下未覆盖的已批准用例继承上一轮 PASS——追加 inherited 记录
+		// （恒 PASS、不参与 FAIL 聚合），观察记录继承来源快照，供审计与聚合区分。RQ-012：
+		// 继承范围是该派发 mode 自己的用例。
+		if sc, ok := qaExecutionAffectedScope(*state, dispatch.Mode); ok {
+			covered := map[string]bool{}
+			for _, record := range recorded {
+				covered[record.CaseID] = true
+			}
+			for _, testCase := range state.qaModeCases(dispatch.Mode) {
+				if testCase.ReviewStatus != "PASS" || covered[testCase.ID] {
+					continue
+				}
+				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "inherited", Observation: "inherited PASS from " + sc.BaseSnapshot, OracleResult: "inherited", Origin: "inherited"})
+			}
+		}
+		// 本派发 mode 的状态与发现项：该 mode 任一【经执行】用例 FAIL 即该 mode FAIL（RQ-012
+		// 按 mode 独立）；发现项从本 mode 的用例集重新生成，保证返修输入保留各 mode 的失败
+		// 原因。继承用例恒 PASS、不参与 FAIL 判定（RQ-005）。
 		status := "PASS"
 		findings := []Finding{}
 		for _, existing := range recorded {
-			if existing.Outcome != "FAIL" {
+			if existing.Origin == "inherited" || existing.Outcome != "FAIL" {
 				continue
 			}
 			status = "FAIL"
 			findings = append(findings, Finding{Message: existing.CaseID + ": " + existing.Observation})
 		}
 		message := ""
-		if isMergeVerification(*state) && len(state.QACases) == 0 {
+		if isMergeVerification(*state) && len(state.allQACases()) == 0 {
 			message = "切片基本独立、无跨切片交互用例"
 		}
-		state.QAExecution = QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings, Message: message}
+		state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings, Message: message})
+		// 本轮权威结果（PASS/FAIL）记录时只取代本 mode 存续的上一轮结果（RQ-009 / RQ-012：
+		// 一个 mode 记录 SHALL NOT 清空另一 mode 的 PriorQAExecution）；RUNTIME_ERROR 分支
+		// 在上面提前返回、不清空本 mode 的 prior。
+		state.deletePriorQAExecution(dispatch.Mode)
 		completeDispatch(state, dispatch.ID)
 		completeReviewWaveIfReady(state)
 		return nil
@@ -1801,8 +2043,20 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 // dropped, non-PASS selected gates return to PENDING, and the Carry action is
 // re-opened when reopenCarry is set and prior passing gates are eligible.
 func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA, reopenCarry bool) {
-	if !preserveQA || state.QAExecution.Status != "PASS" || state.QAExecution.Snapshot != oldSnapshot {
-		state.QAExecution = QAExecutionResult{Status: "PENDING"}
+	// RQ-009：修复快照推进不得抹掉上一快照的权威结果（PASS/FAIL，含快照与 FAIL 用例集）。
+	// 在把每个 mode 的 QAExecution 重置为 PENDING 前，若其为权威结果且已落在旧快照，先保留
+	// 到该 mode 的 PriorQAExecutionByMode，供重跑识别（RQ-002）与 AFFECTED 子集判定
+	// （RQ-004）使用；RUNTIME_ERROR 不构成权威结果、直接重置不保留。RQ-012：按 mode 独立
+	// 保留与重置，一个 mode 不触碰另一 mode。被新一轮权威结果取代时由 RecordQAExecution
+	// 只清空该 mode 的 prior。
+	for _, mode := range state.qaExecutionModes() {
+		result := state.qaExecution(mode)
+		if (result.Status == "PASS" || result.Status == "FAIL") && result.Snapshot != "" && result.Snapshot != state.CurrentSnapshot {
+			state.setPriorQAExecution(mode, result)
+		}
+		if !preserveQA || result.Status != "PASS" || result.Snapshot != oldSnapshot {
+			state.setQAExecution(mode, QAExecutionResult{Status: "PENDING"})
+		}
 	}
 	state.Carry = map[string]CarryResult{}
 	for id, authorization := range state.SkipAuthorizations {
@@ -1950,24 +2204,21 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 		return nil
 	}
 	ids := []string{}
-	if isSelectedQA(state) && state.QAExecution.Status == "PASS" {
-		eligible := state.PreRepairSnapshot != "" && state.QAExecution.Snapshot == state.PreRepairSnapshot
-		eligible = eligible || (catalogChanged && state.QAExecution.Snapshot == state.CurrentSnapshot)
+	// RQ-012：按 mode 各自独立判定 QA 结果的 carry 资格；每个 PASS 的选中 QA mode 都是
+	// 独立可继承结果（各自发出一个 QA 模式 id，使 inheritCarryResult 按 isQAMode 把该
+	// mode 的结果快照重绑，而不写进虚假的 Gates["qa"]）。
+	for id := range selectedSet(state) {
+		if !isQAMode(id) {
+			continue
+		}
+		result := qaModeResult(state, qaDispatchMode(id))
+		if result.Status != "PASS" {
+			continue
+		}
+		eligible := state.PreRepairSnapshot != "" && result.Snapshot == state.PreRepairSnapshot
+		eligible = eligible || (catalogChanged && result.Snapshot == state.CurrentSnapshot)
 		if eligible {
-			// 发出实际选中的一个 QA 模式 id（blackbox/whitebox/merge-qa，或旧目录的
-			// 遗留 "qa"），使 inheritCarryResult 按 isQAMode 把 QA 结果重绑到
-			// QAExecution.Snapshot 而不是写进虚假的 Gates["qa"]。QAExecution 是单一
-			// 共享结果，只发一个代表性 QA id，避免对同一结果产生重复 carry 条目。
-			var qaModes []string
-			for id := range selectedSet(state) {
-				if isQAMode(id) {
-					qaModes = append(qaModes, id)
-				}
-			}
-			sort.Strings(qaModes)
-			if len(qaModes) > 0 {
-				ids = append(ids, qaModes[0])
-			}
+			ids = append(ids, id)
 		}
 	}
 	for id, result := range state.Gates {
@@ -1985,8 +2236,16 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 }
 
 func repairRerunRecorded(state RunState) bool {
-	if isSelectedQA(state) && state.QAExecution.Snapshot == state.CurrentSnapshot && state.QAExecution.Status != "" && state.QAExecution.Status != "PENDING" {
-		return true
+	if isSelectedQA(state) {
+		for id := range selectedSet(state) {
+			if !isQAMode(id) {
+				continue
+			}
+			result := qaModeResult(state, qaDispatchMode(id))
+			if result.Snapshot == state.CurrentSnapshot && result.Status != "" && result.Status != "PENDING" {
+				return true
+			}
+		}
 	}
 	for id := range selectedSet(state) {
 		if isQAMode(id) {
@@ -2003,7 +2262,11 @@ func repairRerunRecorded(state RunState) bool {
 func inheritCarryResult(state *RunState, id, origin, reason, source string) {
 	state.Carry[id] = CarryResult{Decision: "INHERIT", Origin: origin, SourceSnapshot: source, TargetSnapshot: state.CurrentSnapshot, Message: reason}
 	if isQAMode(id) {
-		state.QAExecution.Snapshot = state.CurrentSnapshot
+		// RQ-012：只重绑该 QA 模式的有效执行结果快照（per-mode 或合并单派发结果），另一
+		// mode 不受影响。
+		key, result := qaModeResultKey(*state, qaDispatchMode(id))
+		result.Snapshot = state.CurrentSnapshot
+		state.setQAExecution(key, result)
 		return
 	}
 	prior := state.Gates[id]
@@ -2053,7 +2316,7 @@ func acceptCatalogHashes(state *RunState, catalog PromptCatalog) {
 	state.PromptHashes = merged
 }
 
-func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState, error) {
+func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []QAScopeInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
@@ -2071,8 +2334,209 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int) (RunState
 		if !hasRepairableBlocker(*state) && !hasP2Recommendation(*state) {
 			return fmt.Errorf("no recorded result requires another repair")
 		}
+		// RQ-006/007：轮次上限用尽后每一轮额外修复都须显式授权（carry-forward 不授予轮次，
+		// 见 bundleRerunScopes）；QA 被选中且当前快照存在某 mode 的权威 FAIL 结果（该 mode
+		// 将重跑）时，scope 决策在同一个交互中打包询问/记录（多 mode 各自一份、可不同）。
+		if err := bundleRerunScopes(state, scopes); err != nil {
+			return err
+		}
 		state.ExtraReviewWaves += cycles
 		return nil
+	})
+}
+
+// qaRerunModes returns the QA dispatch modes that have an authoritative FAIL result
+// at the current snapshot and will therefore be rerun after the next repair snapshot
+// (RQ-007). Blackbox and whitebox each need their own scope decision; merge QA and
+// the legacy "qa" id use the merged empty mode. A mode with no recorded cases has
+// nothing to rerun and needs no scope decision.
+func qaRerunModes(state RunState) []string {
+	var modes []string
+	if !isSelectedQA(state) {
+		return modes
+	}
+	// RQ-012：合并单派发流程（合并 "" 结果权威）下整个合并集重跑，只需一个合并 scope。
+	if qaUsesMergedExecution(state) {
+		if state.qaExecution("").Status == "FAIL" {
+			return []string{""}
+		}
+		return modes
+	}
+	// RQ-012：任一选中 mode 当前快照有权威 FAIL 结果即触发打包（该 mode 将重跑）；此时
+	// 所有在当前快照有权威结果的选中 mode（FAIL 或 PASS）都会在修复快照推进后重跑（PASS
+	// 结果成为上一轮），因此都需要 scope 决策。
+	anyFail := false
+	for id := range selectedSet(state) {
+		if !isQAMode(id) {
+			continue
+		}
+		if result := state.qaExecution(qaDispatchMode(id)); result.Status == "FAIL" && result.Snapshot == state.CurrentSnapshot {
+			anyFail = true
+			break
+		}
+	}
+	if !anyFail {
+		return modes
+	}
+	seen := map[string]bool{}
+	for id := range selectedSet(state) {
+		if !isQAMode(id) {
+			continue
+		}
+		mode := qaDispatchMode(id)
+		result := state.qaExecution(mode)
+		if result.Snapshot != state.CurrentSnapshot || result.Status == "" || result.Status == "PENDING" {
+			continue
+		}
+		if !seen[mode] {
+			modes = append(modes, mode)
+			seen[mode] = true
+		}
+	}
+	sort.Strings(modes)
+	return modes
+}
+
+// bundleRerunScopes enforces the limit-point scope bundling (RQ-007): when QA is
+// selected and the current snapshot holds an authoritative FAIL result for a
+// dispatch mode (that mode will be rerun), the mode must carry a scope decision
+// covering the current snapshot. A pre-recorded scope wins; otherwise the inline
+// authorize-repair scope input records it with Source AUTHORIZE_REPAIR, or, when the
+// last recorded decision was a user-chosen AFFECTED (Source != CARRY_FORWARD),
+// auto-carries it as CARRY_FORWARD with the host-judged subset without asking the
+// user again (RQ-007/008). Each such authorization still grants exactly one extra
+// review wave.
+func bundleRerunScopes(state *RunState, scopes []QAScopeInput) error {
+	if !isSelectedQA(*state) {
+		return nil
+	}
+	modes := qaRerunModes(*state)
+	if len(modes) == 0 {
+		return nil
+	}
+	byMode := map[string]QAScopeInput{}
+	for _, input := range scopes {
+		mode := strings.TrimSpace(input.Mode)
+		if _, dup := byMode[mode]; dup {
+			return fmt.Errorf("duplicate QA scope for mode %q", qaModeLabel(mode))
+		}
+		byMode[mode] = input
+	}
+	for _, mode := range modes {
+		existing, ok := state.ExecutionScopes[mode]
+		if ok && existing.BaseSnapshot == state.CurrentSnapshot {
+			// 已有一份覆盖当前 FAIL 快照的 scope 决策，无需再记录。
+			continue
+		}
+		input, has := byMode[mode]
+		if !has {
+			return fmt.Errorf("QA Execution rerun requires a scope decision for mode %q: run `workflow qa-execution-scope --mode %s --decision FULL|AFFECTED ...` or pass --qa-scope to this authorize-repair call", qaModeLabel(mode), mode)
+		}
+		source := scopeSourceAuthorizeRepair
+		if ok && existing.Decision == "AFFECTED" && existing.Source != scopeSourceCarryForward && strings.TrimSpace(input.Decision) == "" {
+			// RQ-007：最近一次是用户主动选择 AFFECTED 且 host 未显式改选时自动沿用子集，
+			// 不再询问"全量 vs 受影响"；子集扩展由 host 自行决定、不要求用户确认。产品审
+			// P2：host 若显式给出新的 decision（如 --qa-scope <mode>=FULL 升级为全量），
+			// 则以新 decision 为准，而不是被强制沿用 AFFECTED。
+			source = scopeSourceCarryForward
+			input.Decision = "AFFECTED"
+		}
+		// RQ-012：prior 按 mode 取该 mode 自己的权威结果。
+		if err := recordExecutionScope(state, mode, input.Decision, input.CaseIDs, input.Reason, source, state.CurrentSnapshot, state.qaExecution(mode)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recordExecutionScope validates and records one QA execution scope decision for the
+// mode (RQ-003/004). prior is the authoritative QA execution result this rerun
+// inherits from — its FAIL cases are mandatory members of an AFFECTED subset;
+// baseSnapshot is that result's snapshot. source records how the decision was
+// captured: PREPARE for the standalone workflow qa-execution-scope command,
+// AUTHORIZE_REPAIR or CARRY_FORWARD for the bundled authorize-repair path.
+func recordExecutionScope(state *RunState, mode, decision string, caseIDs []string, reason, source, baseSnapshot string, prior QAExecutionResult) error {
+	mode = strings.TrimSpace(mode)
+	decision = strings.ToUpper(strings.TrimSpace(decision))
+	if mode != "blackbox" && mode != "whitebox" && mode != "" {
+		return fmt.Errorf("invalid QA execution scope mode %q (want blackbox, whitebox, or empty for the merged set)", mode)
+	}
+	if decision != "FULL" && decision != "AFFECTED" {
+		return fmt.Errorf("QA execution scope decision must be FULL or AFFECTED")
+	}
+	normalized := []string{}
+	seen := map[string]bool{}
+	for _, raw := range caseIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if seen[id] {
+			return fmt.Errorf("duplicate case %s in QA execution scope", id)
+		}
+		seen[id] = true
+		normalized = append(normalized, id)
+	}
+	if decision == "AFFECTED" {
+		if len(normalized) == 0 {
+			return fmt.Errorf("AFFECTED QA execution scope requires a non-empty case subset")
+		}
+		// 子集必须是该 mode 已批准用例的子集，且包含继承来源（prior）中该 mode 的全部
+		// FAIL 用例。受连带影响的既往通过用例由 host 综合判定、自行扩展子集，CLI 只做
+		// 机械校验、不要求用户逐项确认（RQ-004/008）。
+		// RQ-012：子集校验按该 mode 自己的用例读取（跨 mode 视图按 mode 过滤）。
+		approved := map[string]bool{}
+		for _, testCase := range state.qaModeCases(mode) {
+			if testCase.ReviewStatus == "PASS" {
+				approved[testCase.ID] = true
+			}
+		}
+		for _, id := range normalized {
+			if !approved[id] {
+				return fmt.Errorf("case %s is not an approved %s QA case", id, qaModeLabel(mode))
+			}
+		}
+		for _, record := range prior.Cases {
+			if mode != "" && record.Mode != mode {
+				continue
+			}
+			if record.Outcome != "FAIL" {
+				continue
+			}
+			if !seen[record.CaseID] {
+				return fmt.Errorf("AFFECTED scope must include the prior FAIL case %s", record.CaseID)
+			}
+		}
+	}
+	if state.ExecutionScopes == nil {
+		state.ExecutionScopes = map[string]QAExecutionScope{}
+	}
+	state.ExecutionScopes[mode] = QAExecutionScope{Decision: decision, Mode: mode, BaseSnapshot: baseSnapshot, CaseIDs: normalized, Reason: strings.TrimSpace(reason), Origin: "USER", Source: source}
+	return nil
+}
+
+// RecordExecutionScope records a QA execution rerun scope decision for the mode via
+// the standalone workflow qa-execution-scope command (RQ-002/003). The mode must
+// have an authoritative QA execution result to rerun (first execution needs no
+// scope); the recorded BaseSnapshot is that result's snapshot. Source is PREPARE.
+func RecordExecutionScope(root, packageRoot, runID, mode, decision string, caseIDs []string, reason string) (RunState, error) {
+	return mutateRun(root, runID, func(state *RunState) error {
+		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
+		if err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
+			return err
+		}
+		if err := requireTransition(*state, "qa-execution", ""); err != nil {
+			return err
+		}
+		mode = strings.TrimSpace(mode)
+		prior, base, ok := qaExecutionRerunSource(*state, mode)
+		if !ok {
+			return fmt.Errorf("this mode has no authoritative QA execution result to rerun, so a scope decision is not required (a first execution defaults to the full approved set)")
+		}
+		return recordExecutionScope(state, mode, decision, caseIDs, reason, scopeSourcePrepare, base, prior)
 	})
 }
 
@@ -2328,14 +2792,25 @@ func requirePreparedDispatch(state RunState, dispatchID, targetKind, target stri
 	if dispatch.TargetKind != targetKind || dispatch.Target != target {
 		return PreparedDispatch{}, fmt.Errorf("dispatch %q does not belong to %s %q", dispatchID, targetKind, target)
 	}
-	wantedStatus := "OPEN"
-	if dispatch.ReviewerRequired {
-		wantedStatus = "CLAIMED"
-		if strings.TrimSpace(dispatch.ReviewerIdentity) == "" {
+	recovery := false
+	switch dispatch.Status {
+	case "CLAIMED":
+		if !dispatch.ReviewerRequired || strings.TrimSpace(dispatch.ReviewerIdentity) == "" {
 			return PreparedDispatch{}, fmt.Errorf("dispatch %q has no claimed reviewer identity", dispatchID)
 		}
-	}
-	if dispatch.Status != wantedStatus {
+	case "OPEN":
+		if dispatch.ReviewerRequired {
+			return PreparedDispatch{}, fmt.Errorf("dispatch %q is %s and cannot record a result", dispatchID, dispatch.Status)
+		}
+	case "STALE":
+		// RQ-013 恢复路径：STALE 但审查者已认领（ReviewerIdentity 已绑定）且已产出结果的
+		// 派发仍可记录（校验身份与结果内容后接受，不重审）。审查阶段快照未变时 source
+		// 绑定匹配、恢复记录落当前快照；非常规快照已变情形由下方 source 绑定校验保守拒绝。
+		if !dispatch.ReviewerRequired || strings.TrimSpace(dispatch.ReviewerIdentity) == "" {
+			return PreparedDispatch{}, fmt.Errorf("dispatch %q is %s and cannot record a result", dispatchID, dispatch.Status)
+		}
+		recovery = true
+	default:
 		return PreparedDispatch{}, fmt.Errorf("dispatch %q is %s and cannot record a result", dispatchID, dispatch.Status)
 	}
 	// 派发源绑定的陈旧校验按 mode 分叉：黑盒 qa-design/qa-review 绑基线（隔离工作区），
@@ -2346,6 +2821,21 @@ func requirePreparedDispatch(state RunState, dispatchID, targetKind, target stri
 	}
 	if dispatch.RequirementRevision != state.RequirementRevision || dispatch.CatalogRevision != state.CatalogRevision || dispatch.SourceSnapshot != wantedSource {
 		return PreparedDispatch{}, fmt.Errorf("dispatch %q has stale source bindings", dispatchID)
+	}
+	if recovery {
+		// 防 STALE 记录与替换派发并行记录双记：同功能替换派发在途（OPEN 空票或 CLAIMED
+		// 子代理）时拒绝 STALE 记录——host 应以替换派发为准，避免同一功能两个记录落盘。
+		for id, candidate := range state.Dispatches {
+			if id == dispatchID {
+				continue
+			}
+			if candidate.TargetKind != targetKind || candidate.Target != target || candidate.Mode != dispatch.Mode {
+				continue
+			}
+			if candidate.Status == "OPEN" || candidate.Status == "CLAIMED" {
+				return PreparedDispatch{}, fmt.Errorf("dispatch %q is STALE and has a same-function replacement dispatch %s in flight; record %s instead", dispatchID, id, id)
+			}
+		}
 	}
 	return dispatch, nil
 }
@@ -2374,22 +2864,64 @@ func completeDispatch(state *RunState, dispatchID string) {
 	state.Dispatches[dispatchID] = dispatch
 }
 
-// staleOpenDispatches supersedes the prior open dispatches of the same target
-// when a fresh dispatch replaces them. qa-execution dispatches are mode-scoped
-// (R 修复清单 item 3: blackbox and whitebox each dispatch independently and run in
-// parallel): a fresh dispatch stales only the same-mode prior dispatches, and a
-// merged (empty-mode) dispatch stales every mode's prior dispatches.
+// staleOpenDispatches supersedes the prior OPEN empty tickets of the same target
+// when a fresh dispatch is claimed (RQ-013). An OPEN dispatch was prepared but
+// never claimed, so no subagent was ever dispatched for it (no start event), and
+// it must not block or shadow the live claim. Staling is mode-scoped across every
+// target (RQ-013): a dispatch whose mode differs from the fresh dispatch's mode
+// is a different function (blackbox vs whitebox qa-review / qa-execution, etc.)
+// and stays untouched — fixing "whitebox review prepare staled the blackbox
+// review". CLAIMED same-function dedup and the manual-termination exception are
+// enforced separately at claim time (see ClaimDispatch); prepare no longer calls
+// this at all.
 func staleOpenDispatches(state *RunState, targetKind, target, mode string) {
 	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind != targetKind || dispatch.Target != target || (dispatch.Status != "OPEN" && dispatch.Status != "CLAIMED") {
+		if dispatch.TargetKind != targetKind || dispatch.Target != target || dispatch.Status != "OPEN" {
 			continue
 		}
-		if target == "qa-execution" && mode != "" && dispatch.Mode != "" && dispatch.Mode != mode {
+		if dispatch.Mode != "" && dispatch.Mode != mode {
 			continue
 		}
 		dispatch.Status = "STALE"
 		state.Dispatches[id] = dispatch
 	}
+}
+
+// enforceSameFunctionDedup implements RQ-013's claim-time parallel-dispatch
+// guard, the default and only guard against two subagents of the same function
+// (same target kind, target, and mode) running at once. Claiming a dispatch is
+// rejected when a same-function dispatch is already CLAIMED and its subagent has
+// not been terminated (no recorded stop event / interruption reason). A claimed
+// dispatch whose subagent was manually terminated (stop event captured) is marked
+// STALE so the fresh claim proceeds. OPEN same-function empty tickets are staled
+// by staleOpenDispatches and never block a claim (deadlock elimination). The
+// staling is transactional: it only persists when the whole claim succeeds.
+func enforceSameFunctionDedup(root string, state *RunState, dispatch PreparedDispatch) error {
+	staleOpenDispatches(state, dispatch.TargetKind, dispatch.Target, dispatch.Mode)
+	for id, prior := range state.Dispatches {
+		if id == dispatch.ID {
+			continue
+		}
+		if prior.TargetKind != dispatch.TargetKind || prior.Target != dispatch.Target || prior.Mode != dispatch.Mode {
+			continue
+		}
+		if prior.Status != "CLAIMED" {
+			continue
+		}
+		// 手动终止例外（RQ-013，不新增 CLI 命令）：主代理直接终结前一个同功能子代理后，
+		// 生命周期已捕获其 stop 事件并记录中断原因；读得中断原因即把前派发标 STALE、允许
+		// 认领该新派发。读不到原因（子代理仍在途）时默认拒绝两个同功能子代理并行。
+		reason, err := workflowLifecycle.InterruptionReason(root, state.RunID, id)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(reason) == "" {
+			return fmt.Errorf("a claimed %s %q dispatch %s is already in flight for the same function; resume the original agent or terminate its subagent (recording the interruption reason) before claiming a fresh dispatch", dispatch.TargetKind, dispatch.Target, id)
+		}
+		prior.Status = "STALE"
+		state.Dispatches[id] = prior
+	}
+	return nil
 }
 
 func nextDispatchAttempt(state RunState, targetKind, target string, wave int) int {
@@ -2567,8 +3099,12 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 		}
 	}
 	state.Actions = pendingRequirementActions()
-	state.QAExecution = QAExecutionResult{Status: "PENDING"}
+	state.QAExecutionByMode = map[string]QAExecutionResult{}
 	state.Carry = map[string]CarryResult{}
+	// 需求作废重置：一并清空 scope 决策与上一轮执行结果（P2-丙确认：两者同属"上一轮/
+	// 历史执行上下文"，随重置对称清除，防止残留决策污染新一轮重跑）。
+	state.ExecutionScopes = map[string]QAExecutionScope{}
+	state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
 	state.PreRepairSnapshot = ""
 	// 语义已变的需求修订改变了原决定的前提，已拍板发现项清单随之清空，允许重新提出。
 	state.SettledFindings = map[string][]SettledFinding{}
@@ -2598,8 +3134,13 @@ func rebindCurrentSnapshot(state *RunState, snapshot string) {
 		return
 	}
 	staleAllDispatches(state)
-	if state.QAExecution.Snapshot == previous {
-		state.QAExecution.Snapshot = snapshot
+	// RQ-012：每个 mode 的执行结果快照各自重绑（合并空 mode 一并处理）。
+	for _, mode := range state.qaExecutionModes() {
+		result := state.qaExecution(mode)
+		if result.Snapshot == previous {
+			result.Snapshot = snapshot
+			state.setQAExecution(mode, result)
+		}
 	}
 	for id, result := range state.Gates {
 		if result.Snapshot == previous {
@@ -2739,8 +3280,12 @@ func requireTransition(state RunState, operation, target string) error {
 		if !actionPassedOrAbsent(state, "product-review") {
 			return fmt.Errorf("Product Review must pass before QA Design")
 		}
-		if state.Actions["qa-design"].Status == "PASS" && state.Actions["qa-review"].Status != "PASS" {
-			return fmt.Errorf("the complete QA case set is awaiting QA Review")
+		// RQ-011：设计记录后、该 mode 的 review 派发尚未准备（无 OPEN/CLAIMED qa-review
+		// 派发）时，允许再次调用 qa-design 追加/更新用例集（保留既有已批准用例、增量补全）；
+		// 只有该 mode 的 review 派发准备后设计才锁定（RQ-012：锁按 mode，黑盒 review 在飞
+		// 不锁白盒 qa-design）。qa-review 为 PENDING（无派发）或 PASS/FAIL 后均允许。
+		if qaReviewDispatchPrepared(state, target) {
+			return fmt.Errorf("the QA case set is locked for an already-prepared QA Review dispatch")
 		}
 	case "qa-review":
 		if !isSelectedQA(state) {
@@ -3170,13 +3715,9 @@ func selectedSet(state RunState) map[string]bool {
 func isSelected(state RunState, id string) bool { return selectedSet(state)[id] }
 
 func reviewWaveRecorded(state RunState) bool {
-	if isSelectedQA(state) && (state.QAExecution.Snapshot != state.CurrentSnapshot || state.QAExecution.Status == "PENDING" || state.QAExecution.Status == "") {
-		return false
-	}
-	// R 修复清单 item 8：波次完成前按选中 mode 校验各 mode 均已记录执行。qa-execution
-	// 按 mode 分流（item 3）后，黑盒/白盒各自独立派发、各自记录，共享的 QAExecution 只
-	// 有合并状态；若某选中 mode 从未派发记录，其用例与发现项被静默跳过，波次不得视为已
-	// 记录。
+	// R 修复清单 item 8 / RQ-012：波次完成前按选中 mode 校验各 mode 均已记录执行——黑盒/
+	// 白盒各自独立派发、各自记录到自己的执行结果；若某选中 mode 从未派发记录，其用例与
+	// 发现项被静默跳过，波次不得视为已记录。
 	if !selectedQAModesRecorded(state) {
 		return false
 	}
@@ -3193,36 +3734,76 @@ func reviewWaveRecorded(state RunState) bool {
 }
 
 // selectedQAModesRecorded reports whether every selected QA mode has recorded
-// execution at the current snapshot. With per-mode dispatch (R 修复清单 item 3),
-// blackbox and whitebox each dispatch independently into the shared QAExecution
-// result; a wave may only complete (and Seal) once every selected mode has
-// recorded execution, so one mode cannot be silently skipped while the other
-// passes. A mode with zero cases has nothing to execute (the qa-review set-level
-// decision judged the empty set), so it is trivially recorded. Merge QA and the
-// legacy "qa" id use the merged (empty-mode) set, which the shared result covers.
+// execution at the current snapshot (RQ-012 per-mode storage): blackbox and
+// whitebox each record their own result, and a wave may only complete (and Seal)
+// once every selected mode has recorded execution, so one mode cannot be silently
+// skipped while the other passes. A mode with zero cases has nothing to execute
+// (the qa-review set-level decision judged the empty set), so it is trivially
+// recorded. Merge QA and the legacy "qa" id use the merged (empty-mode) result.
 // A RUNTIME_ERROR result is a recorded outcome and blocks through the existing
 // skip-authorization path, so it is not treated as a missing mode here.
 func selectedQAModesRecorded(state RunState) bool {
 	if !isSelectedQA(state) {
 		return true
 	}
-	if state.QAExecution.Snapshot != state.CurrentSnapshot || state.QAExecution.Status == "PENDING" || state.QAExecution.Status == "" {
-		return false
-	}
-	if state.QAExecution.Status == "RUNTIME_ERROR" {
-		return true
-	}
 	for id := range selectedSet(state) {
 		if !isQAMode(id) {
 			continue
 		}
-		mode := qaDispatchMode(id)
-		if mode == "" {
-			continue // merge-qa / legacy "qa": merged set, shared result covers it
-		}
-		if !qaModeHasRecorded(state, mode) {
+		if !qaModeRecordedAtCurrent(state, qaDispatchMode(id)) {
 			return false
 		}
+	}
+	return true
+}
+
+// qaModeResultKey returns the storage key that currently holds the effective QA
+// execution result for a dispatch mode, together with that result (RQ-012): the
+// mode's own per-mode key when it holds an authoritative record at the current
+// snapshot, otherwise the merged "" key (the single-dispatch flow that executes
+// all modes together, or a legacy merged execution migrated into the "" key).
+// Aggregate per-mode checks use this so a merged execution in a per-mode-selected
+// run is recognized, without coupling the per-mode results.
+func qaModeResultKey(state RunState, mode string) (string, QAExecutionResult) {
+	if result := state.qaExecution(mode); result.Snapshot == state.CurrentSnapshot && result.Status != "" && result.Status != "PENDING" {
+		return mode, result
+	}
+	return "", state.qaExecution("")
+}
+
+// qaModeResult returns the effective QA execution result for a dispatch mode (see
+// qaModeResultKey).
+func qaModeResult(state RunState, mode string) QAExecutionResult {
+	_, result := qaModeResultKey(state, mode)
+	return result
+}
+
+// qaUsesMergedExecution reports whether the run's QA execution is the merged
+// single-dispatch flow: the merged "" key holds the authoritative result at the
+// current snapshot (a legacy merged execution or the single-dispatch flow), as
+// opposed to per-mode dispatch where each concrete mode records its own result.
+func qaUsesMergedExecution(state RunState) bool {
+	merged := state.qaExecution("")
+	return merged.Snapshot == state.CurrentSnapshot && merged.Status != "" && merged.Status != "PENDING"
+}
+
+// qaModeRecordedAtCurrent reports whether the given QA dispatch mode has recorded
+// execution at the current snapshot (RQ-012 per-mode storage). A mode with no
+// cases in the run's QA case set is trivially recorded: there is nothing to
+// execute, and the qa-review set-level coverage decision already judged the empty
+// set (requirement 4). Otherwise the mode's effective execution result must sit
+// at the current snapshot with a non-PENDING status (PASS / FAIL / RUNTIME_ERROR)
+// — a merged "" result counts only when it truly carries records for the mode.
+func qaModeRecordedAtCurrent(state RunState, mode string) bool {
+	if len(state.qaModeCases(mode)) == 0 {
+		return true
+	}
+	key, result := qaModeResultKey(state, mode)
+	if result.Snapshot != state.CurrentSnapshot || result.Status == "" || result.Status == "PENDING" {
+		return false
+	}
+	if mode != "" && key == "" {
+		return qaResultHasMode(result, mode)
 	}
 	return true
 }
@@ -3242,33 +3823,27 @@ func qaDispatchMode(id string) string {
 }
 
 // qaModeHasRecorded reports whether the given QA dispatch mode has recorded
-// execution at the current snapshot. A mode with no cases in the run's QA case
-// set is trivially recorded: there is nothing to execute, and the qa-review
-// set-level coverage decision already judged the empty set (requirement 4).
-// Otherwise at least one QAResultRecord carrying that mode must be present in the
-// shared result.
+// execution at the current snapshot (RQ-012 per-mode storage): a mode with no
+// cases is trivially recorded, otherwise the mode's effective execution result
+// must sit at the current snapshot with records for the mode (merged "" result
+// counts only when it truly carries the mode's records).
 func qaModeHasRecorded(state RunState, mode string) bool {
-	hasCases := false
-	for _, testCase := range state.QACases {
-		if testCase.Mode == mode {
-			hasCases = true
-			break
-		}
-	}
-	if !hasCases {
-		return true
-	}
-	for _, record := range state.QAExecution.Cases {
-		if record.Mode == mode {
-			return true
-		}
-	}
-	return false
+	return qaModeRecordedAtCurrent(state, mode)
 }
 
 func hasRepairableBlocker(state RunState) bool {
-	if isSelectedQA(state) && state.QAExecution.Status == "FAIL" && state.QAExecution.Snapshot == state.CurrentSnapshot {
-		return true
+	// RQ-012：任一选中 QA mode 当前快照有权威 FAIL 结果即阻塞（黑盒/白盒各自独立，合并
+	// 单派发结果按 mode 生效）。
+	if isSelectedQA(state) {
+		for id := range selectedSet(state) {
+			if !isQAMode(id) {
+				continue
+			}
+			result := qaModeResult(state, qaDispatchMode(id))
+			if result.Status == "FAIL" && result.Snapshot == state.CurrentSnapshot {
+				return true
+			}
+		}
 	}
 	for id := range selectedSet(state) {
 		if isQAMode(id) {
@@ -3325,9 +3900,20 @@ func runtimeErrorsAuthorizedForRepair(state RunState) bool {
 
 func repairInput(state RunState) string {
 	lines := []string{"Repair the complete recorded wave below. P2 recommendations are included whenever this wave has a blocker or the user explicitly requested their repair."}
-	if isSelectedQA(state) && state.QAExecution.Status == "FAIL" {
-		for _, finding := range state.QAExecution.Findings {
-			lines = append(lines, "QA FAIL: "+finding.Message)
+	// RQ-012：收集每个 FAIL 的选中 QA mode 的发现项（黑盒/白盒各自独立，合并单派发按
+	// mode 生效）。
+	if isSelectedQA(state) {
+		for id := range selectedSet(state) {
+			if !isQAMode(id) {
+				continue
+			}
+			result := qaModeResult(state, qaDispatchMode(id))
+			if result.Status != "FAIL" {
+				continue
+			}
+			for _, finding := range result.Findings {
+				lines = append(lines, "QA FAIL: "+finding.Message)
+			}
 		}
 	}
 	for _, id := range state.SelectedGates {
@@ -3350,8 +3936,16 @@ func completeReviewWaveIfReady(state *RunState) {
 		clearResolvedCarryBoundary(state)
 		return
 	}
-	if isSelectedQA(*state) && state.QAExecution.Status == "RUNTIME_ERROR" {
-		return
+	// RQ-012：任一选中 QA mode 为 RUNTIME_ERROR 即不自动完成波次（走既有 skip 授权路径）。
+	if isSelectedQA(*state) {
+		for id := range selectedSet(*state) {
+			if !isQAMode(id) {
+				continue
+			}
+			if qaModeResult(*state, qaDispatchMode(id)).Status == "RUNTIME_ERROR" {
+				return
+			}
+		}
 	}
 	for id := range selectedSet(*state) {
 		if isQAMode(id) {
@@ -3457,7 +4051,8 @@ func requireSelectedResultsResolved(state RunState) error {
 		}
 		snapshot := state.Gates[id].Snapshot
 		if isQAMode(id) {
-			snapshot = state.QAExecution.Snapshot
+			// RQ-012：QA 结果的快照按该 mode 的有效执行结果读取（per-mode 或合并单派发）。
+			snapshot = qaModeResult(state, qaDispatchMode(id)).Snapshot
 		}
 		if snapshot != state.CurrentSnapshot {
 			return fmt.Errorf("selected gate %q has not been verified at the current snapshot", id)
@@ -3475,7 +4070,8 @@ func requireSelectedResultsResolved(state RunState) error {
 
 func selectedResultStatus(state RunState, id string) string {
 	if isQAMode(id) {
-		return state.QAExecution.Status
+		// RQ-012：QA 模式的状态按该 mode 的有效执行结果读取（per-mode 或合并单派发）。
+		return qaModeResult(state, qaDispatchMode(id)).Status
 	}
 	return state.Gates[id].Status
 }

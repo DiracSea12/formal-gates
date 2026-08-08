@@ -106,10 +106,19 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
    必读 `references/formal-flow.md`「开发与快照」。
 7. **开发后审查。** 并行派出黑盒 QA 执行、白盒 QA 与各门审查。QA 只用已批准测试用例；
    每个门只看基线到当前的完整 diff，各自独立评审、互不干扰。审查代理不直接写流程状态，
-   由主代理校验后统一记录。执行本步前必读 `references/formal-flow.md`「开发后审查」；
-   分片 >= 2 时的合并验证细节也见该节。
+   由主代理校验后统一记录。**QA 执行重跑前先记 scope 决策**：某 mode 已存在更早快照的权威
+   执行结果（重跑）时，host 在进入执行前询问用户"全量重跑 vs 只跑受影响"并给推荐，CLI 强制
+   `prepare-action qa-execution` 前该 mode 必须已记录覆盖本次重跑的 scope 决策
+   （`workflow qa-execution-scope --mode <blackbox|whitebox|""> --decision FULL|AFFECTED
+   [--cases ...] [--reason ...]`），否则拒绝 prepare；首次执行不要求、默认全量。黑盒/白盒
+   各自独立。执行本步前必读 `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并
+   验证细节也见该节。
 8. **修复。** 出现 QA FAIL 或 P0/P1 门发现项时，整个轮次退回修复，此时同轮的 P2 一并
-   处理。执行本步前必读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
+   处理。轮次上限用尽后每次额外修复都要 `authorize-repair` 显式授权；若某 QA mode 将重跑，
+   scope 决策在同一个交互打包询问/记录（多 mode 各一份、可不同），最近一次为 AFFECTED 时
+   自动沿用（CARRY_FORWARD）不再重问。重跑推荐由 AI 按实际情况综合判断、稍保守（不确定倾
+   向 FULL），并显式提醒用户"只跑受影响"的含义与漏检风险。执行本步前必读
+   `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 9. **Seal。** 汇总前后各确认一次当前 VCS 标识。Git run 在基线→当前含 >1 条提交时，
    seal 自动把该范围压缩为单条提交（保留最终树，作为 seal 最后一步 VCS 操作，压缩前工
    作树必须干净），压缩消息经 `--squash-message` 传入；单条/空范围不操作、SVN/P4 不压
@@ -150,6 +159,18 @@ seal 后恢复）→ 重走需求澄清（有已确认需求则重确认并登�
 host 启动后，用 `workflow claim-dispatch` 把每个独立派发绑定到 host 身份。记录结果
 或调用 `workflow snapshot --dispatch`（开发/修复用）前会先检查生命周期模块；总任务实
 例的集成快照由主代理操作，不加 `--dispatch`。
+
+`claim-dispatch` 默认拒绝同功能子代理并行：同 target+mode 已有 CLAIMED（在途）派发时，
+再次认领同功能新派发被拒；确需换新子代理时，先直接终结前一个同功能子代理（生命周期会
+捕获其 stop 事件与中断原因），再认领新派发即放行（前派发标 STALE）。认领时会把同功能
+旧 OPEN 空票（未认领、无子代理）自动作废清掉；被作废但审查者已认领/已产出结果的派发
+仍可记录其结果，不重审。
+
+会改变派发状态的 workflow 命令与生命周期 hook（子代理启动/停止）会自动检测并行性：当前
+阶段应并行任务集（开发后 = 黑盒 QA 执行 + 白盒 QA + 各已选门；修复轮 = 各门重审 + QA
+执行；开发中 = 开发子代理 + 黑盒 QA 设计/审查）大于当前在途并行数时，CLI 在 stderr 提
+醒主代理"可并行 X 项（列表），当前并行 Y 项，建议补足"（带冷却去重、不污染 stdout 机
+器 JSON）。
 
 QA 审查和每个门审查必须创建全新的零上下文审查者，记录时原样传回派发 ID；同一流程实
 例中每个 host 身份只能用一次。被中断且已认领、未产出结果的派发，先恢复原代理继续完
@@ -198,6 +219,12 @@ QA 审查者输入 = 已确认需求 + CLI 组装的完整候选用例集，不�
 
 QA 设计、QA 审查、QA 执行、需求澄清、产品审、开发前技术检查、继承判定、开发和 Seal
 都是流程动作，不是门文件。
+
+QA 设计在 review 开始前可反复补全：某 mode 的 `qa-design` 记录后、该 mode 的
+`qa-review` 派发尚未准备时，可再次调用 `qa-design` 追加/更新用例集（保留既有已批准用
+例、增量补全）；只有该 mode 的 `qa-review` 派发准备后设计才锁定、重记录被拒。黑盒与
+白盒的用例按 mode 分开存储，`qa-design` 记录轮只新增/更新/删除本派发 mode 的用例，
+不会替换或清除另一 mode 的既有用例（含其 review PASS 状态与已记录执行结果）。
 
 **状态与 VCS**
 

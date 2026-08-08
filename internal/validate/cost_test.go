@@ -197,7 +197,7 @@ func TestSealedSummaryCarriesCostProjection(t *testing.T) {
 	state := readyDelivery(t, root, pkg, "cost-seal")
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
 	var err error
-	state, err = RecordQAExecution(root, pkg, state.RunID, dispatchID, passingExecution(state.QACases), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, dispatchID, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
 	}

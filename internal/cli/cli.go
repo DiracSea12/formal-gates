@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
@@ -327,6 +328,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		fmt.Fprint(streams.Stdout, prompt)
+		emitParallelReminder(streams, *root, *runID)
 		return 0, nil
 	case "prepare-action":
 		fs := newFlagSet("workflow prepare-action", streams)
@@ -344,6 +346,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		fmt.Fprint(streams.Stdout, prompt)
+		emitParallelReminder(streams, *root, *runID)
 		return 0, nil
 	case "claim-dispatch":
 		fs := newFlagSet("workflow claim-dispatch", streams)
@@ -355,7 +358,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 			return code, err
 		}
 		state, err := validate.ClaimDispatch(*root, *pkg, *runID, *dispatch, *reviewer)
-		return printValue(streams.Stdout, state, err)
+		return workflowResult(streams, *root, *runID, state, err)
 	case "record-action":
 		return runRecordAction(args, streams)
 	case "record-gate":
@@ -366,6 +369,25 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		return runQAReview(args, streams)
 	case "qa-execution":
 		return runQAExecution(args, streams)
+	case "qa-execution-scope":
+		fs := newFlagSet("workflow qa-execution-scope", streams)
+		root, pkg := rootFlags(fs)
+		runID := fs.String("run-id", "", "run id")
+		mode := fs.String("mode", "", "QA dispatch mode: blackbox, whitebox, or empty for the merged set")
+		decision := fs.String("decision", "", "FULL or AFFECTED")
+		cases := fs.String("cases", "", "AFFECTED subset of approved case ids, comma separated")
+		reason := fs.String("reason", "", "scope decision reason")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		var caseIDs []string
+		for _, id := range strings.Split(*cases, ",") {
+			if strings.TrimSpace(id) != "" {
+				caseIDs = append(caseIDs, strings.TrimSpace(id))
+			}
+		}
+		state, err := validate.RecordExecutionScope(*root, *pkg, *runID, *mode, *decision, caseIDs, *reason)
+		return workflowResult(streams, *root, *runID, state, err)
 	case "snapshot":
 		fs := newFlagSet("workflow snapshot", streams)
 		root, pkg := rootFlags(fs)
@@ -377,7 +399,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 			return code, err
 		}
 		state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *dispatch, *userRequested, *reason)
-		return printValue(streams.Stdout, state, err)
+		return workflowResult(streams, *root, *runID, state, err)
 	case "cleanup":
 		fs := newFlagSet("workflow cleanup", streams)
 		root, _ := rootFlags(fs)
@@ -398,11 +420,21 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		root, pkg := rootFlags(fs)
 		runID := fs.String("run-id", "", "run id")
 		cycles := fs.Int("cycles", 1, "must be 1; each invocation authorizes one additional review wave")
+		// RQ-007：轮次上限处与"是否授权再来一轮"同一交互打包 QA 重跑 scope 决策；三个参数
+		// 均可重复、按 mode 分组（如 --qa-scope blackbox=AFFECTED --qa-cases blackbox=CASE-002）。
+		scopeInputs := map[string]*validate.QAScopeInput{}
+		fs.Var(&qaScopeValue{byMode: scopeInputs, field: "scope"}, "qa-scope", "QA rerun scope decision <mode>=<FULL|AFFECTED>; empty <mode> selects the merged QA set; repeat per mode")
+		fs.Var(&qaScopeValue{byMode: scopeInputs, field: "cases"}, "qa-cases", "AFFECTED subset <mode>=<id,...>; empty <mode> selects the merged QA set; repeat per mode")
+		fs.Var(&qaScopeValue{byMode: scopeInputs, field: "reason"}, "qa-reason", "scope decision reason <mode>=<reason>; empty <mode> selects the merged QA set; repeat per mode")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.AuthorizeExtraRepair(*root, *pkg, *runID, *cycles)
-		return printValue(streams.Stdout, state, err)
+		scopes := make([]validate.QAScopeInput, 0, len(scopeInputs))
+		for _, item := range scopeInputs {
+			scopes = append(scopes, *item)
+		}
+		state, err := validate.AuthorizeExtraRepair(*root, *pkg, *runID, *cycles, scopes)
+		return workflowResult(streams, *root, *runID, state, err)
 	case "seal":
 		fs := newFlagSet("workflow seal", streams)
 		root, pkg := rootFlags(fs)
@@ -415,10 +447,36 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 			return code, err
 		}
 		summary, err := validate.Seal(*root, *pkg, *runID, skips, *userRequested, *squashMessage)
-		return printValue(streams.Stdout, summary, err)
+		return workflowResult(streams, *root, *runID, summary, err)
 	default:
 		return 1, fmt.Errorf("unknown workflow subcommand: %s", sub)
 	}
+}
+
+// emitParallelReminder runs the RQ-014 parallel check for a run and prints any
+// reminder to stderr (never stdout, keeping the machine JSON clean). It is the
+// single shared emission point used both after state-changing workflow commands
+// and by the lifecycle capture hook trigger. It is read-only for the workflow: it
+// only reads the run state and a run-scoped cooldown marker, never touching
+// dispatches, lifecycle events, or review results.
+func emitParallelReminder(streams IO, root, runID string) {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(runID) == "" {
+		return
+	}
+	advice, remind := validate.ParallelCheck(root, runID, time.Now())
+	if remind && strings.TrimSpace(advice.Message) != "" {
+		fmt.Fprintln(streams.Stderr, advice.Message)
+	}
+}
+
+// workflowResult wraps printValue for state-changing workflow commands so the
+// RQ-014 parallel reminder is emitted after a successful dispatch-state change
+// (show and other read-only commands do not use it).
+func workflowResult(streams IO, root, runID string, value any, err error) (int, error) {
+	if err == nil {
+		emitParallelReminder(streams, root, runID)
+	}
+	return printValue(streams.Stdout, value, err)
 }
 
 func runRecordAction(args []string, streams IO) (int, error) {
@@ -436,7 +494,7 @@ func runRecordAction(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings, *userRequested, *userReason)
-	return printValue(streams.Stdout, state, err)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 func runRecordGate(args []string, streams IO) (int, error) {
@@ -453,7 +511,7 @@ func runRecordGate(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordGate(*root, *pkg, *runID, *gate, *dispatch, *status, *message, *compared, *findings)
-	return printValue(streams.Stdout, state, err)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 func runQADesign(args []string, streams IO) (int, error) {
@@ -471,7 +529,7 @@ func runQADesign(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError)
-	return printValue(streams.Stdout, state, err)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 func runQAReview(args []string, streams IO) (int, error) {
@@ -489,7 +547,7 @@ func runQAReview(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordQAReview(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *findings)
-	return printValue(streams.Stdout, state, err)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 func runQAExecution(args []string, streams IO) (int, error) {
@@ -507,7 +565,7 @@ func runQAExecution(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordQAExecution(*root, *pkg, *runID, *dispatch, results, *runtimeError)
-	return printValue(streams.Stdout, state, err)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 func runCarry(args []string, streams IO) (int, error) {
@@ -526,7 +584,7 @@ func runCarry(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordCarry(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *mainAgent, *mainReason)
-	return printValue(streams.Stdout, state, err)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 // standalonePromptSeparator visually splits multiple standalone gate prompts
@@ -653,6 +711,19 @@ func runLifecycle(program string, args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		result, err := lifecycle.Capture(*root, *provider, *event, payload)
+		// RQ-014：生命周期 hook（子代理启动/停止）时也触发并行检查——事件落盘后对每个仓库根
+		// 的活动 run 复用公共提醒发射点，提醒写 stderr、不干扰生命周期与派发状态。
+		if err == nil {
+			for _, capturedRoot := range result.Roots {
+				runIDs, runErr := lifecycle.ActiveRunIDs(capturedRoot)
+				if runErr != nil {
+					continue
+				}
+				for _, runID := range runIDs {
+					emitParallelReminder(streams, capturedRoot, runID)
+				}
+			}
+		}
 		return printValue(streams.Stdout, result, err)
 	case "verify":
 		fs := newFlagSet("lifecycle verify", streams)
@@ -779,6 +850,47 @@ func newFindingFlags(fs *flag.FlagSet) *[]validate.FindingInput {
 	fs.Var(&findingSeverity{&items}, "severity", "P0, P1, or P2 for the current gate finding")
 	fs.Var(&findingLocation{&items}, "location", "repository location for the current finding")
 	return &items
+}
+
+// qaScopeValue parses the repeatable authorize-repair QA scope flags
+// "--qa-scope <mode>=<value>" / "--qa-cases ..." / "--qa-reason ..." (RQ-007). All
+// three flags share one map keyed by mode, so a mode's scope decision, cases, and
+// reason can be supplied in any order and grouped per mode. An empty <mode> (a
+// leading '=') selects the merged / single-dispatch QA set.
+type qaScopeValue struct {
+	byMode map[string]*validate.QAScopeInput
+	field  string
+}
+
+func (v *qaScopeValue) String() string { return "" }
+
+func (v *qaScopeValue) Set(raw string) error {
+	mode, value, ok := strings.Cut(raw, "=")
+	if !ok {
+		return fmt.Errorf("--qa-%s must be <mode>=<value> (an empty <mode> selects the merged QA set)", v.field)
+	}
+	mode = strings.TrimSpace(mode)
+	if v.field == "scope" && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("--qa-scope requires a decision value after '='")
+	}
+	item, exists := v.byMode[mode]
+	if !exists {
+		item = &validate.QAScopeInput{Mode: mode}
+		v.byMode[mode] = item
+	}
+	switch v.field {
+	case "scope":
+		item.Decision = value
+	case "cases":
+		for _, id := range strings.Split(value, ",") {
+			if strings.TrimSpace(id) != "" {
+				item.CaseIDs = append(item.CaseIDs, strings.TrimSpace(id))
+			}
+		}
+	case "reason":
+		item.Reason = value
+	}
+	return nil
 }
 
 type stringListFlag []string
@@ -967,6 +1079,7 @@ func hasHelpArg(args []string) bool {
 	}
 	return false
 }
+
 // parseFlagSetParsed parses args with the shared help-check and parse-error
 // branches and returns the remaining positional args. parseFlagSet rejects them,
 // while parseFlagSetAllowPositional returns them for commands that accept
@@ -1001,5 +1114,5 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }

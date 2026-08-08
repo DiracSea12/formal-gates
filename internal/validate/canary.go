@@ -259,8 +259,24 @@ func commitCanaryGit(root, message string) error {
 }
 
 func openDispatchID(state RunState, kind, target string) string {
+	// RQ-013：prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
+	// 存在多张 OPEN 空票；取新派发必须取 Attempt 最大的 OPEN 票（最新准备），无 OPEN 票时
+	// 才回退到 CLAIMED（在途旧票）。
+	bestID := ""
+	bestAttempt := 0
 	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind == kind && dispatch.Target == target && (dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED") {
+		if dispatch.TargetKind != kind || dispatch.Target != target || dispatch.Status != "OPEN" {
+			continue
+		}
+		if dispatch.Attempt >= bestAttempt {
+			bestID, bestAttempt = id, dispatch.Attempt
+		}
+	}
+	if bestID != "" {
+		return bestID
+	}
+	for id, dispatch := range state.Dispatches {
+		if dispatch.TargetKind == kind && dispatch.Target == target && dispatch.Status == "CLAIMED" {
 			return id
 		}
 	}

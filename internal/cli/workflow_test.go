@@ -54,12 +54,86 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.CurrentSnapshot != cliGit(t, root, "rev-parse", "HEAD") || state.QAExecution.Cases[0].Mode != "whitebox" || state.Gates["quality"].DispatchID != gateDispatch {
+	if state.CurrentSnapshot != cliGit(t, root, "rev-parse", "HEAD") || state.QAExecutionByMode[""].Cases[0].Mode != "whitebox" || state.Gates["quality"].DispatchID != gateDispatch {
 		t.Fatalf("CLI state lost native bindings: %s", out)
 	}
 	summary := runCLI(t, "workflow", "seal", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--squash-message", "squashed delivery")
 	if !strings.Contains(summary, `"status": "SEALED"`) {
 		t.Fatalf("seal output=%s", summary)
+	}
+}
+
+// TestCLIQARerunScopeDecision verifies RQ-002/003 through the CLI: a QA execution
+// rerun is refused at prepare-action until a scope decision is recorded with
+// workflow qa-execution-scope, and invalid decisions are rejected.
+func TestCLIQARerunScopeDecision(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-rerun-scope")
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
+	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "single coherent bounded unit")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full")
+	state, _ = validate.LoadRunState(root, state.RunID)
+
+	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
+	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
+		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass",
+		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
+	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review")
+	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch, "--reviewer", "qa-session")
+	runCLI(t, "workflow", "qa-review", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch,
+		"--case", "CASE-001", "--outcome", "PASS", "--case", "CASE-002", "--outcome", "PASS")
+
+	developmentDispatch := cliPrepareAction(t, root, pkg, state.RunID, "development-worker")
+	mustWriteCLI(t, filepath.Join(root, "delivery.txt"), "delivery\n")
+	cliGit(t, root, "add", "--all")
+	cliGit(t, root, "commit", "-m", "delivery")
+	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", developmentDispatch)
+
+	// 首轮：黑盒用例 FAIL → 进入修复。
+	executionDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-execution")
+	runCLI(t, "workflow", "qa-execution", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", executionDispatch,
+		"--case-result", "CASE-001", "--outcome", "PASS", "--procedure", "ran tests", "--observation", "passed", "--oracle-result", "matched",
+		"--case-result", "CASE-002", "--outcome", "FAIL", "--procedure", "ran CLI", "--observation", "output mismatched", "--oracle-result", "expected success")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	gateDispatch := cliPrepareGate(t, root, pkg, state.RunID, "quality")
+	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", gateDispatch, "--reviewer", "gate-quality")
+	runCLI(t, "workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot+".."+state.CurrentSnapshot, "--finding", "normal workflow fails", "--severity", "P1")
+
+	// 修复快照（无先通过的已选门，无需 Carry 处置）。开发/修复派发的认领身份一次性，
+	// 修复派发用独立身份手动准备并认领。
+	prompt := runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "development-worker")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	repairDispatch := cliOpenDispatch(state, "action", "development-worker")
+	if repairDispatch == "" || !strings.Contains(prompt, repairDispatch) {
+		t.Fatalf("repair dispatch not prepared: %s", prompt)
+	}
+	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", repairDispatch, "--reviewer", "cli-rerun-scope-repair")
+	mustWriteCLI(t, filepath.Join(root, "repair.txt"), "repair\n")
+	cliGit(t, root, "add", "--all")
+	cliGit(t, root, "commit", "-m", "repair")
+	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", repairDispatch)
+
+	// 重跑未记录 scope → prepare-action 拒绝。
+	var stderr bytes.Buffer
+	code := Run("formal-gates", []string{"workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution"}, IO{Stderr: &stderr})
+	if code == 0 || !strings.Contains(stderr.String(), "requires a scope decision") {
+		t.Fatalf("rerun without a scope decision was accepted: code=%d err=%s", code, stderr.String())
+	}
+	// 非法的 scope 决策被拒。
+	stderr.Reset()
+	code = Run("formal-gates", []string{"workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "BOGUS"}, IO{Stderr: &stderr})
+	if code == 0 || !strings.Contains(stderr.String(), "must be FULL or AFFECTED") {
+		t.Fatalf("invalid scope decision was accepted: code=%d err=%s", code, stderr.String())
+	}
+	// 记录 FULL scope 后重跑放行。
+	runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "FULL", "--reason", "rerun the complete set")
+	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	if sc := state.ExecutionScopes[""]; sc.Decision != "FULL" || sc.Origin != "USER" || sc.Source != "PREPARE" {
+		t.Fatalf("recorded scope=%#v", sc)
 	}
 }
 
@@ -389,8 +463,24 @@ func cliPrepareGate(t *testing.T, root, pkg, runID, gate string) string {
 }
 
 func cliOpenDispatch(state validate.RunState, kind, target string) string {
+	// RQ-013：prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
+	// 存在多张 OPEN 空票；取新派发必须取 Attempt 最大的 OPEN 票（最新准备），无 OPEN 票时
+	// 才回退到 CLAIMED（在途旧票）。
+	bestID := ""
+	bestAttempt := 0
 	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind == kind && dispatch.Target == target && (dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED") {
+		if dispatch.TargetKind != kind || dispatch.Target != target || dispatch.Status != "OPEN" {
+			continue
+		}
+		if dispatch.Attempt >= bestAttempt {
+			bestID, bestAttempt = id, dispatch.Attempt
+		}
+	}
+	if bestID != "" {
+		return bestID
+	}
+	for id, dispatch := range state.Dispatches {
+		if dispatch.TargetKind == kind && dispatch.Target == target && dispatch.Status == "CLAIMED" {
 			return id
 		}
 	}

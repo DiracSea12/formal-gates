@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/lifecycle"
 )
 
 // TestComposeStandaloneGatePrompt covers RQ-010's detached gate prompt: it reuses
@@ -139,8 +141,24 @@ func TestResumeGuardForcesResumeOrUserAuthorizationForGates(t *testing.T) {
 	if state.ReviewOverrides["quality"] == "" {
 		t.Fatalf("gate reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
 	}
-	if state.Dispatches[dispatchID].Status != "STALE" {
-		t.Fatalf("superseded dispatch was not staled: %#v", state.Dispatches[dispatchID])
+	// RQ-013：prepare SHALL NOT 作废任何派发——用户授权的新派发生成后，旧 CLAIMED 派发仍
+	// 在途；认领新派发时若读得前子代理的 stop 事件（手动终止例外）才把旧派发标 STALE。
+	if state.Dispatches[dispatchID].Status != "CLAIMED" {
+		t.Fatalf("prepare must not stale the claimed dispatch: %#v", state.Dispatches[dispatchID])
+	}
+	fresh := openDispatchID(state, "gate", "quality")
+	if fresh == "" || fresh == dispatchID {
+		t.Fatalf("fresh gate dispatch was not prepared: %#v", state.Dispatches)
+	}
+	prior := workflowLifecycle
+	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
+	t.Cleanup(func() { workflowLifecycle = prior })
+	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "fresh-gate-reviewer"); err != nil {
+		t.Fatalf("claim of the fresh gate dispatch after manual termination was rejected: %v", err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	if state.Dispatches[dispatchID].Status != "STALE" || state.Dispatches[fresh].Status != "CLAIMED" {
+		t.Fatalf("manual-terminated claimed dispatch was not staled at claim: %#v", state.Dispatches)
 	}
 }
 
@@ -159,7 +177,22 @@ func TestResumeGuardAllowsNewDispatchWhenTaskContentMoved(t *testing.T) {
 		t.Fatalf("task-moved dispatch was not allowed a fresh dispatch: %v", err)
 	}
 	state, _ = LoadRunState(root, state.RunID)
-	if state.Dispatches[dispatchID].Status != "STALE" {
-		t.Fatalf("superseded dispatch was not staled: %#v", state.Dispatches[dispatchID])
+	// RQ-013：prepare 不再作废——任务内容移动放行的新派发生成后，旧派发仍 CLAIMED。
+	if state.Dispatches[dispatchID].Status != "CLAIMED" {
+		t.Fatalf("prepare must not stale the claimed dispatch: %#v", state.Dispatches[dispatchID])
+	}
+	fresh := openDispatchID(state, "gate", "quality")
+	if fresh == "" || fresh == dispatchID {
+		t.Fatalf("fresh gate dispatch was not prepared: %#v", state.Dispatches)
+	}
+	prior := workflowLifecycle
+	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
+	t.Cleanup(func() { workflowLifecycle = prior })
+	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "fresh-gate-reviewer"); err != nil {
+		t.Fatalf("claim of the task-moved fresh dispatch was rejected: %v", err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	if state.Dispatches[dispatchID].Status != "STALE" || state.Dispatches[fresh].Status != "CLAIMED" {
+		t.Fatalf("manual-terminated claimed dispatch was not staled at claim: %#v", state.Dispatches)
 	}
 }

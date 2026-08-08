@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"formal-gates/internal/cost"
@@ -36,12 +37,32 @@ type RunState struct {
 	CompletedReviewWaves int                          `json:"completedReviewWaves"`
 	ExtraReviewWaves     int                          `json:"extraReviewWaves"`
 	Actions              map[string]ActionResult      `json:"actions"`
-	QACases              []QACase                     `json:"qaCases"`
-	QAExecution          QAExecutionResult            `json:"qaExecution"`
-	Gates                map[string]GateResult        `json:"gates"`
-	Carry                map[string]CarryResult       `json:"carry"`
-	Dispatches           map[string]PreparedDispatch  `json:"dispatches"`
-	Cost                 *cost.RunCost                `json:"cost,omitempty"`
+	// QACasesByMode 按 QA 派发 mode 分开存储用例（RQ-012）：黑盒/白盒各一条，mode=="" 为
+	// 合并/单派发流程。qa-design 记录轮只对该 mode 的列表做增量替换，另一 mode 的既有用例
+	// （含其 review PASS 状态与已记录执行结果）保持不动，修复"设计白盒时整表替换清掉黑盒
+	// 用例"的数据丢失缺陷。旧状态文件（qaCases 数组）在 LoadRunState 时迁移进 "" 键。
+	QACasesByMode map[string][]QACase `json:"qaCasesByMode,omitempty"`
+	// QAExecutionByMode 按 QA 派发 mode 分开存储执行结果（RQ-012 黑白盒完完全全解耦）：
+	// blackbox / whitebox 各自独立、互不影响，空 mode 键对应合并/单派发流程。一个 mode
+	// 的设计/执行/记录 SHALL NOT 重置或清除另一 mode 的执行结果。旧状态文件的单一
+	// qaExecution 字段在 LoadRunState 时迁移进 "" 键。
+	QAExecutionByMode map[string]QAExecutionResult `json:"qaExecutionByMode,omitempty"`
+	// ExecutionScopes 记录每个 QA 派发 mode（blackbox / whitebox / 合并空 mode）最近一次
+	// 的重跑 scope 决策（RQ-002/003）：FULL 全量重跑，或 AFFECTED 只重跑 host 综合判定
+	// 的受影响子集。按 mode 一条、最新决策覆盖；每条 scope 的 BaseSnapshot 记继承来源
+	// （上一轮权威结果快照）。
+	ExecutionScopes map[string]QAExecutionScope `json:"executionScopes"`
+	// PriorQAExecutionByMode 按 mode 分开保留"上一轮权威执行结果"（PASS/FAIL，含快照与
+	// FAIL 用例集），供重跑识别（RQ-002）与 AFFECTED 子集判定（RQ-004）使用：修复快照
+	// 推进时从被重置的权威结果保留而来，被该 mode 新一轮权威结果记录时只取代本 mode。
+	// 一个 mode 记录新权威结果 SHALL NOT 清空另一 mode 的上一轮权威结果。RUNTIME_ERROR
+	// 不构成权威结果、不保留。旧状态文件的单一 priorQAExecution 在 LoadRunState 时迁移
+	// 进 "" 键。
+	PriorQAExecutionByMode map[string]*QAExecutionResult `json:"priorQAExecutionByMode,omitempty"`
+	Gates                  map[string]GateResult         `json:"gates"`
+	Carry                  map[string]CarryResult        `json:"carry"`
+	Dispatches             map[string]PreparedDispatch   `json:"dispatches"`
+	Cost                   *cost.RunCost                 `json:"cost,omitempty"`
 	// QAWorktree 是黑盒 QA 的隔离工作区路径（Git 为从基线分支的 linked worktree，
 	// SVN/P4 为签出到基线版本的工作副本/客户端工作区）。它从基线快照创建、恒等于
 	// 基线，始终不含本次开发代码；黑盒 qa-design/qa-review 的原生标识校验与派发源
@@ -126,6 +147,24 @@ type QAResultRecord struct {
 	Procedure    string `json:"procedure"`
 	Observation  string `json:"observation"`
 	OracleResult string `json:"oracleResult"`
+	// Origin 标记结果来源（RQ-005）：经执行用例记 "executed"；AFFECTED 下未覆盖的已批准
+	// 用例记 "inherited"（继承上一轮 PASS）。旧状态缺省（空串）按 executed 处理。
+	Origin string `json:"origin,omitempty"`
+}
+
+// QAExecutionScope 记录一次 QA 执行重跑的 scope 决策（RQ-002/003）：重跑时用户选择
+// FULL（全量重跑该 mode 全部已批准用例）或 AFFECTED（只重跑 host 综合判定的受影响
+// 子集，其余已批准用例继承上一轮 PASS）。按 mode 一条、最新决策覆盖；BaseSnapshot 是
+// 本次重跑继承来源的权威结果快照；CaseIDs 是 AFFECTED 子集（FULL 为空）；Origin 固定
+// 为 USER；Source 区分记录来源（PREPARE / AUTHORIZE_REPAIR / CARRY_FORWARD）。
+type QAExecutionScope struct {
+	Decision     string   `json:"decision"`     // "FULL" | "AFFECTED"
+	Mode         string   `json:"mode"`         // blackbox | whitebox | ""
+	BaseSnapshot string   `json:"baseSnapshot"` // 继承来源=上一轮权威结果快照
+	CaseIDs      []string `json:"caseIds"`      // AFFECTED 子集
+	Reason       string   `json:"reason,omitempty"`
+	Origin       string   `json:"origin"` // 固定 "USER"
+	Source       string   `json:"source"` // PREPARE | AUTHORIZE_REPAIR | CARRY_FORWARD
 }
 
 type Finding struct {
@@ -212,7 +251,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACases: []QACase{}, QAExecution: QAExecutionResult{Status: "PENDING"}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, SettledFindings: map[string][]SettledFinding{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, SettledFindings: map[string][]SettledFinding{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -255,8 +294,8 @@ func SaveRunState(root string, state RunState) error {
 	if state.SelectedGates == nil {
 		state.SelectedGates = []string{}
 	}
-	if state.QACases == nil {
-		state.QACases = []QACase{}
+	if state.QACasesByMode == nil {
+		state.QACasesByMode = map[string][]QACase{}
 	}
 	if state.NeedsReReview == nil {
 		state.NeedsReReview = map[string]string{}
@@ -269,6 +308,15 @@ func SaveRunState(root string, state RunState) error {
 	}
 	if state.SettledFindings == nil {
 		state.SettledFindings = map[string][]SettledFinding{}
+	}
+	if state.ExecutionScopes == nil {
+		state.ExecutionScopes = map[string]QAExecutionScope{}
+	}
+	if state.QAExecutionByMode == nil {
+		state.QAExecutionByMode = map[string]QAExecutionResult{}
+	}
+	if state.PriorQAExecutionByMode == nil {
+		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -286,14 +334,217 @@ func LoadRunState(root, runID string) (RunState, error) {
 	if err != nil {
 		return RunState{}, err
 	}
-	var state RunState
-	if err := json.Unmarshal(data, &state); err != nil {
+	// RQ-012 迁移：旧状态文件把用例存成单个 qaCases 数组、执行结果存成单一 qaExecution /
+	// priorQAExecution，新模型按 mode 分开存储。加载时把旧数组迁移进合并键 ""，保证续跑/
+	// 接手旧 run 不丢用例与执行结果。
+	var holder struct {
+		RunState
+		LegacyQACases          []QACase           `json:"qaCases"`
+		LegacyQAExecution      QAExecutionResult  `json:"qaExecution"`
+		LegacyPriorQAExecution *QAExecutionResult `json:"priorQAExecution"`
+	}
+	if err := json.Unmarshal(data, &holder); err != nil {
 		return RunState{}, fmt.Errorf("state JSON is invalid: %w", err)
+	}
+	state := holder.RunState
+	if state.QACasesByMode == nil {
+		state.QACasesByMode = map[string][]QACase{}
+		if len(holder.LegacyQACases) != 0 {
+			state.QACasesByMode[""] = holder.LegacyQACases
+		}
+	}
+	if state.QAExecutionByMode == nil {
+		state.QAExecutionByMode = map[string]QAExecutionResult{}
+		if holder.LegacyQAExecution.Status != "" || holder.LegacyQAExecution.Snapshot != "" || len(holder.LegacyQAExecution.Cases) != 0 {
+			state.QAExecutionByMode[""] = holder.LegacyQAExecution
+		}
+	}
+	if state.PriorQAExecutionByMode == nil {
+		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
+		if holder.LegacyPriorQAExecution != nil {
+			state.PriorQAExecutionByMode[""] = holder.LegacyPriorQAExecution
+		}
 	}
 	if state.RunID != runID {
 		return RunState{}, fmt.Errorf("state run id does not match %q", runID)
 	}
 	return state, nil
+}
+
+// qaCases returns the QA case list stored for the dispatch mode's own key
+// (RQ-012): the merged (empty) mode holds the merged/single-dispatch set, and
+// concrete modes hold their own per-mode sets. Returns nil when that mode has no
+// stored list. Reads here return the map's backing slice; use setQACases to write.
+func (state RunState) qaCases(mode string) []QACase {
+	if state.QACasesByMode == nil {
+		return nil
+	}
+	return state.QACasesByMode[mode]
+}
+
+// setQACases replaces the QA case list for the dispatch mode only, leaving every
+// other mode's cases (and their review status and recorded execution results)
+// untouched (RQ-012).
+func (state *RunState) setQACases(mode string, cases []QACase) {
+	if state.QACasesByMode == nil {
+		state.QACasesByMode = map[string][]QACase{}
+	}
+	state.QACasesByMode[mode] = cases
+}
+
+// qaExecution returns the QA execution result stored for the dispatch mode
+// (RQ-012 full decoupling): blackbox/whitebox each hold their own result, and the
+// merged empty mode holds the merged/single-dispatch result. A missing result
+// reads as PENDING (zero value).
+func (state RunState) qaExecution(mode string) QAExecutionResult {
+	if state.QAExecutionByMode == nil {
+		return QAExecutionResult{}
+	}
+	return state.QAExecutionByMode[mode]
+}
+
+// setQAExecution replaces the QA execution result for the dispatch mode only,
+// leaving every other mode's result untouched (RQ-012 full decoupling).
+func (state *RunState) setQAExecution(mode string, result QAExecutionResult) {
+	if state.QAExecutionByMode == nil {
+		state.QAExecutionByMode = map[string]QAExecutionResult{}
+	}
+	state.QAExecutionByMode[mode] = result
+}
+
+// deleteQAExecution clears the dispatch mode's execution result (used on
+// requirement invalidation / snapshot rebinding).
+func (state *RunState) deleteQAExecution(mode string) {
+	if state.QAExecutionByMode != nil {
+		delete(state.QAExecutionByMode, mode)
+	}
+}
+
+// priorQAExecution returns the dispatch mode's preserved prior authoritative
+// execution result, or nil when the mode has none (RQ-012 full decoupling).
+func (state RunState) priorQAExecution(mode string) *QAExecutionResult {
+	if state.PriorQAExecutionByMode == nil {
+		return nil
+	}
+	return state.PriorQAExecutionByMode[mode]
+}
+
+// setPriorQAExecution preserves the dispatch mode's prior authoritative execution
+// result, leaving every other mode's prior untouched (RQ-012 full decoupling).
+func (state *RunState) setPriorQAExecution(mode string, result QAExecutionResult) {
+	if state.PriorQAExecutionByMode == nil {
+		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
+	}
+	prior := result
+	state.PriorQAExecutionByMode[mode] = &prior
+}
+
+// deletePriorQAExecution clears the dispatch mode's preserved prior authoritative
+// execution result only (an authoritative result record replaces its own mode's
+// prior; other modes' priors stay).
+func (state *RunState) deletePriorQAExecution(mode string) {
+	if state.PriorQAExecutionByMode != nil {
+		delete(state.PriorQAExecutionByMode, mode)
+	}
+}
+
+// qaExecutionModes returns the dispatch modes that hold a stored QA execution
+// result (RQ-012), including the merged "" key when present, in stable order.
+func (state RunState) qaExecutionModes() []string {
+	if state.QAExecutionByMode == nil {
+		return nil
+	}
+	modes := make([]string, 0, len(state.QAExecutionByMode))
+	for mode := range state.QAExecutionByMode {
+		modes = append(modes, mode)
+	}
+	sort.Strings(modes)
+	return modes
+}
+
+// allQACases returns the run's complete QA case set across every storage layout
+// (RQ-012), used for merged-set operations and overall checks. It applies
+// per-mode precedence per mode: a mode's own per-mode key, when non-empty,
+// replaces that mode's cases in the merged "" key (which then only holds
+// legacy-migrated or fast-path merged cases that a per-mode redesign superseded),
+// so stale merged cases are never double-counted. A merged-only run (no per-mode
+// key) keeps the "" key's cases in their original order.
+func (state RunState) allQACases() []QACase {
+	var all []QACase
+	for _, testCase := range state.qaCases("") {
+		if testCase.Mode == "blackbox" || testCase.Mode == "whitebox" {
+			if len(state.qaCases(testCase.Mode)) != 0 {
+				continue // 该 mode 已被 per-mode 存储取代
+			}
+		}
+		all = append(all, testCase)
+	}
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		all = append(all, state.qaCases(mode)...)
+	}
+	return all
+}
+
+// qaModeCases returns the dispatch mode's QA cases across every storage layout
+// (RQ-012). Per-mode precedence per mode (fix): a concrete mode's own per-mode
+// key is authoritative — when it is non-empty, exactly those cases are returned
+// and any cases migrated into the merged "" key are ignored (a run that designed
+// per-mode after a legacy migration would otherwise double-count and see stale
+// PENDING cases, e.g. blocking blackboxReviewPassed). Only when the per-mode key
+// is empty do reads fall back to the merged "" key (legacy / fast-path merged
+// storage). The empty mode is an alias for allQACases — the merged/single-dispatch
+// view is exactly the full current set across every storage layout (per-mode
+// precedence), so the "" branch delegates to it instead of duplicating the merge.
+// Returns a copy for concrete modes; use setQACases to mutate a mode's stored list.
+func (state RunState) qaModeCases(mode string) []QACase {
+	if mode != "" {
+		if perMode := state.qaCases(mode); len(perMode) != 0 {
+			return append([]QACase{}, perMode...)
+		}
+		return filterQACasesByMode(state.qaCases(""), mode)
+	}
+	return state.allQACases()
+}
+
+// qaModeCasesWithKey returns the dispatch mode's QA cases using the same read
+// view the review prompt assembly uses (qaModeCases: a concrete mode's own
+// per-mode key when non-empty, else the merged "" fallback; empty mode = the full
+// current set), together with the storage key those cases were read from. A review
+// records its decisions with setQACasesForReview against that key, so the recorder
+// and the prompt always see the same pending set (RQ-012 alignment).
+func (state RunState) qaModeCasesWithKey(mode string) (string, []QACase) {
+	if mode != "" {
+		if perMode := state.qaCases(mode); len(perMode) != 0 {
+			return mode, append([]QACase{}, perMode...)
+		}
+		return "", filterQACasesByMode(state.qaCases(""), mode)
+	}
+	return "", state.allQACases()
+}
+
+// setQACasesForReview persists a review's decided case set back into the storage
+// key it was read from (see qaModeCasesWithKey). When a concrete mode's cases were
+// read from the merged "" fallback, only that mode's cases are replaced there,
+// preserving the other modes' cases in the "" key (RQ-012). The empty mode replaces
+// the whole merged list (the single-dispatch flow).
+func (state *RunState) setQACasesForReview(mode, key string, updated []QACase) {
+	if key == "" && mode != "" {
+		replaced := map[string]bool{}
+		for _, testCase := range updated {
+			replaced[testCase.ID] = true
+		}
+		merged := make([]QACase, 0, len(state.qaCases(""))+len(updated))
+		for _, existing := range state.qaCases("") {
+			if replaced[existing.ID] {
+				continue
+			}
+			merged = append(merged, existing)
+		}
+		merged = append(merged, updated...)
+		state.setQACases("", merged)
+		return
+	}
+	state.setQACases(key, updated)
 }
 
 func DeleteRun(root, runID string) error {
@@ -318,7 +569,7 @@ func RunSummaryPath(root, runID string) string {
 }
 
 func runSummary(state RunState) RunSummary {
-	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: state.QAExecution, Cost: state.Cost}
+	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost}
 }
 
 // RequirementRevision 计算需求工件的内容哈希。先规范化行尾（CRLF→LF）再哈希：

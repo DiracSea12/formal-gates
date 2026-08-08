@@ -23,6 +23,9 @@ type CaptureResult struct {
 	Event     string `json:"event"`
 	Identity  string `json:"identity"`
 	Duplicate bool   `json:"duplicate"`
+	// Roots 是本次事件实际落盘的仓库根路径（宿主载荷派生的 project roots 或显式 --root），
+	// 供 RQ-014 生命周期触发面定位活动 run 以运行并行检查。
+	Roots []string `json:"roots,omitempty"`
 }
 
 type Verification struct {
@@ -79,7 +82,7 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if event == eventStop && identity == "" && correlation == "" && adapter.required {
 		return CaptureResult{}, fmt.Errorf("%s %s payload cannot be correlated to a host agent", adapter.name, eventName)
 	}
-	result := CaptureResult{Provider: adapter.name, Event: event, Identity: identity}
+	result := CaptureResult{Provider: adapter.name, Event: event, Identity: identity, Roots: roots}
 	if identity == "" && correlation == "" {
 		return result, nil
 	}
@@ -155,6 +158,13 @@ func activeRunRoot(candidate string) (string, bool, error) {
 		}
 		root = parent
 	}
+}
+
+// ActiveRunIDs returns the ids of runs currently active at root (those whose
+// lifecycle active marker exists). Used by the RQ-014 parallel-check trigger on
+// the lifecycle hook path to locate the run state to read.
+func ActiveRunIDs(root string) ([]string, error) {
+	return activeRuns(root)
 }
 
 func BindDispatch(root, runID, dispatchID, identity string) error {
