@@ -52,13 +52,13 @@ func gateResultContract(dispatchID string) string {
 	if dispatchID != "" {
 		contract += fmt.Sprintf("\"dispatchId\":%q,\"compared\":\"base..current\",", dispatchID)
 	}
-	contract += "\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. "
+	contract += "\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. "
 	if dispatchID != "" {
 		contract += "Report the exact snapshot pair you actually compared in compared (base..current). "
 	}
-	contract += "PASS permits no findings or P2-only findings. FAIL requires at least one P0 or P1 finding"
+	contract += "PASS permits no findings or P2/P3-only findings. FAIL requires at least one P0 or P1 finding"
 	if dispatchID != "" {
-		contract += " and may include P2 findings"
+		contract += " and may include P2/P3 findings"
 	}
 	contract += ". RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. "
 	if dispatchID != "" {
@@ -212,9 +212,9 @@ func actionResultContract(actionID, dispatchID string) string {
 	case "development-worker":
 		return "Perform the development action, track every delivery path in the named VCS before fixing the snapshot, and return the immutable current snapshot plus the delivery path names to the host. Do not return QA cases or a gate verdict."
 	case "product-review":
-		return prefix + "Return PASS with no findings, FAIL with one or more findings as candidate inputs for the user's per-item decision, or a separate runtime error message. Each finding carries a severity (P0, P1, or P2), a message, and optional repository-relative locations. Do not re-raise findings and decisions the user already settled (listed in the action input); re-raise one only if a requirement revision changed its premise. The review itself never produces a terminal FAIL; the user decides whether the requirement stands."
+		return prefix + "Return PASS with no findings, FAIL with one or more findings as candidate inputs for the user's per-item decision, or a separate runtime error message. Each finding carries a severity (P0, P1, P2, or P3), a message, and optional repository-relative locations. Do not re-raise findings and decisions the user already settled (listed in the action input); re-raise one only if a requirement revision changed its premise. The review itself never produces a terminal FAIL; the user decides whether the requirement stands."
 	case "start-readiness":
-		return prefix + "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding carries a severity (P0, P1, or P2), a message, and optional repository-relative locations."
+		return prefix + "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding carries a severity (P0, P1, P2, or P3), a message, and optional repository-relative locations."
 	case "requirements-clarification":
 		return prefix + "Return PASS only after the user confirms the requested outcome and consequential solution choices. Return FAIL with findings for unresolved consequential gaps, or a separate runtime error message."
 	default:

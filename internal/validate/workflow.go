@@ -707,7 +707,7 @@ func RecordSettledFindings(root, packageRoot, runID, actionID string, confirm, d
 				state.SettledFindings = map[string][]SettledFinding{}
 			}
 			state.SettledFindings[actionID] = append(state.SettledFindings[actionID], SettledFinding{Message: message, Disposition: disposition})
-			// 确认的 P0/P1 置位"需重审"标记；驳回或确认的 P2 不置位。
+			// 确认的 P0/P1 置位"需重审"标记；驳回或确认的 P2/P3 不置位。
 			if disposition == "confirm" && (severityByMessage[message] == "P0" || severityByMessage[message] == "P1") {
 				state.NeedsReReview[actionID] = message
 			}
@@ -1594,7 +1594,7 @@ func recordReviewItems(state *RunState, actionID, dispatchID string, items []Rev
 
 // enforceReviewRule implements the CLI-forced review rules for product-review
 // and start-readiness (requirement 5):
-//   - 仅 P2 → 该轮记录 PASS，P2 建议随 PASS 可见、不阻塞、不产生 FAIL；
+//   - 仅 P2/P3 → 该轮记录 PASS，P2/P3 建议随 PASS 可见、不阻塞、不产生 FAIL；
 //   - P0/P1 → 记录 FAIL；用户逐项确认或驳回。驳回的 P0/P1 作废不阻塞（PASS 可携带已
 //     驳回的 P0/P1）；确认的 P0/P1 置位"需重审"标记，CLI 在重审前拒绝记录 PASS；
 //   - 只有用户可破例：任一侧的破例都须 userRequested 显式授权，来源记录到
@@ -2531,7 +2531,7 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []
 		if state.CompletedReviewWaves < effectiveReviewWaveLimit(*state) {
 			return fmt.Errorf("automatic review waves are not exhausted")
 		}
-		if !hasRepairableBlocker(*state) && !hasP2Recommendation(*state) {
+		if !hasRepairableBlocker(*state) && !hasSuggestionRecommendation(*state) {
 			return fmt.Errorf("no recorded result requires another repair")
 		}
 		// RQ-006/007：轮次上限用尽后每一轮额外修复都须显式授权（carry-forward 不授予轮次，
@@ -3201,14 +3201,14 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 		}
 		severity := strings.ToUpper(strings.TrimSpace(input.Severity))
 		if gateResult || reviewAction {
-			// 门与 product-review / start-readiness 的发现项必须分级 P0/P1/P2（非空）；
-			// 仅 P2 的审查记录 PASS 且 P2 建议可见，存在 P0/P1 时记录 FAIL（驳回的 P0/P1
-			// 由 enforceReviewRule 放行，确认的 P0/P1 置位需重审标记）。
-			if severity != "P0" && severity != "P1" && severity != "P2" {
+			// 门与 product-review / start-readiness 的发现项必须分级 P0/P1/P2/P3（非空）；
+			// 仅 P2/P3 的审查记录 PASS 且 P2/P3 建议可见，存在 P0/P1 时记录 FAIL（驳回的
+			// P0/P1 由 enforceReviewRule 放行，确认的 P0/P1 置位需重审标记）。
+			if severity != "P0" && severity != "P1" && severity != "P2" && severity != "P3" {
 				if gateResult {
-					return "", nil, fmt.Errorf("gate finding severity must be P0, P1, or P2")
+					return "", nil, fmt.Errorf("gate finding severity must be P0, P1, P2, or P3")
 				}
-				return "", nil, fmt.Errorf("review finding severity must be P0, P1, or P2")
+				return "", nil, fmt.Errorf("review finding severity must be P0, P1, P2, or P3")
 			}
 			if severity == "P0" || severity == "P1" {
 				hasBlocking = true
@@ -3218,10 +3218,10 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 		}
 		converted = append(converted, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
 	}
-	// 门的 PASS 只允许 P2；product-review/start-readiness 的 PASS 允许携带发现项（仅 P2
-	// 或已驳回的 P0/P1，由 enforceReviewRule 逐项判定），FAIL 两者都必须含 P0/P1。
+	// 门的 PASS 只允许 P2/P3；product-review/start-readiness 的 PASS 允许携带发现项（仅
+	// P2/P3 或已驳回的 P0/P1，由 enforceReviewRule 逐项判定），FAIL 两者都必须含 P0/P1。
 	if gateResult && status == "PASS" && hasBlocking {
-		return "", nil, fmt.Errorf("PASS can include only P2 findings")
+		return "", nil, fmt.Errorf("PASS can include only P2/P3 findings")
 	}
 	if (gateResult || reviewAction) && status == "FAIL" && !hasBlocking {
 		return "", nil, fmt.Errorf("FAIL requires at least one P0 or P1 finding")
@@ -3548,7 +3548,7 @@ func requireTransition(state RunState, operation, target string) error {
 				}
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
-			if !hasRepairableBlocker(state) && !hasP2Recommendation(state) {
+			if !hasRepairableBlocker(state) && !hasSuggestionRecommendation(state) {
 				if state.PreRepairSnapshot != "" {
 					return fmt.Errorf("the current repair still requires verification")
 				}
@@ -3586,7 +3586,7 @@ func requireTransition(state RunState, operation, target string) error {
 			if !reviewWaveRecorded(state) {
 				return fmt.Errorf("all selected review results must be recorded before repair")
 			}
-			if !hasRepairableBlocker(state) && !hasP2Recommendation(state) {
+			if !hasRepairableBlocker(state) && !hasSuggestionRecommendation(state) {
 				return fmt.Errorf("no recorded result requires repair")
 			}
 			if adoptingSliceRepair && (developmentStatus != developmentVerified || hasSelectedRuntimeError(state)) && !runtimeErrorsAuthorizedForRepair(state) {
@@ -4108,7 +4108,7 @@ func hasRepairableBlocker(state RunState) bool {
 	return false
 }
 
-func hasP2Recommendation(state RunState) bool {
+func hasSuggestionRecommendation(state RunState) bool {
 	for id := range selectedSet(state) {
 		if isQAMode(id) {
 			continue
@@ -4118,7 +4118,7 @@ func hasP2Recommendation(state RunState) bool {
 			continue
 		}
 		for _, finding := range result.Findings {
-			if finding.Severity == "P2" {
+			if finding.Severity == "P2" || finding.Severity == "P3" {
 				return true
 			}
 		}
@@ -4151,7 +4151,7 @@ func runtimeErrorsAuthorizedForRepair(state RunState) bool {
 }
 
 func repairInput(state RunState) string {
-	lines := []string{"Repair the complete recorded wave below. P2 recommendations are included whenever this wave has a blocker or the user explicitly requested their repair."}
+	lines := []string{"Repair the complete recorded wave below. P2/P3 recommendations are included whenever this wave has a blocker or the user explicitly requested their repair."}
 	// RQ-012：收集每个 FAIL 的选中 QA mode 的发现项（黑盒/白盒各自独立，合并单派发按
 	// mode 生效）。
 	if isSelectedQA(state) {

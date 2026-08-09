@@ -68,6 +68,7 @@ func TestValidateStandaloneGateResult(t *testing.T) {
 	}{
 		{name: "pass", raw: `{"status":"PASS","findings":[]}`},
 		{name: "p2 pass", raw: `{"status":"PASS","findings":[{"severity":"P2","message":"suggestion"}]}`},
+		{name: "p3 pass", raw: `{"status":"PASS","findings":[{"severity":"P3","message":"suggestion"}]}`},
 		{name: "fail", raw: `{"status":"FAIL","findings":[{"severity":"P1","message":"blocker"}]}`},
 		{name: "runtime", raw: `{"status":"RUNTIME_ERROR","message":"VCS unavailable"}`},
 		{name: "pass with p1", raw: `{"status":"PASS","findings":[{"severity":"P1","message":"blocker"}]}`, wantErr: "P2"},

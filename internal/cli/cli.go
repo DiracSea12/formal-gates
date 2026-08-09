@@ -855,7 +855,7 @@ func (f *findingSeverity) Set(v string) error {
 func newFindingFlags(fs *flag.FlagSet) *[]validate.FindingInput {
 	items := []validate.FindingInput{}
 	fs.Var(&findingStart{&items}, "finding", "start a finding with its message")
-	fs.Var(&findingSeverity{&items}, "severity", "P0, P1, or P2 for the current gate finding")
+	fs.Var(&findingSeverity{&items}, "severity", "P0, P1, P2, or P3 for the current gate finding")
 	fs.Var(&findingLocation{&items}, "location", "repository location for the current finding")
 	return &items
 }

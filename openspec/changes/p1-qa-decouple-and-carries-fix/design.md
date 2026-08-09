@@ -145,7 +145,7 @@ eligible = eligible || (catalogChanged && result.Snapshot == state.CurrentSnapsh
 - **复审规则唯一持有处在 formal-flow**（deadlock 需求 6）：formal-flow 保留
   复审规则全文；SKILL.md 第 4 步收敛为**可执行摘要 + 指针**，删除重复的机制全文。
 - SKILL.md 第 4 步保留的**可执行摘要**（决策级铁律，直接写主文档、非纯指针）：
-  ① 复审结果按 P0/P1/P2 分级；② 仅含 P2 可记录 PASS、含 P0/P1 记录 FAIL；
+  ① 复审结果按 P0/P1/P2/P3 分级；② 仅含 P2/P3 可记录 PASS、含 P0/P1 记录 FAIL；
   ③ 用户逐项处置，确认→需重审、驳回→作废；④ 主代理无破例权。细节在 formal-flow，
   SKILL 用一行指针指向它。收敛目标是同一条规则全仓只在一个权威位置写一次。
 - formal-flow.md：其余机制重述（快照要求行 117 与 204 合并、squash、QA scope、

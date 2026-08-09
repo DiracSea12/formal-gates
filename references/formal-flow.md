@@ -117,7 +117,7 @@ qa-design/qa-review/返修在独立的 **QA 隔离工作区**（从基线快照�
 
 ```bash
 # Part 1 产品审：承接需求细节澄清，审已实例化的需求文档，只评产品/策划层面。
-# 发现项分级 P0/P1/P2；用户已拍板的发现项不再重提（CLI 注入已拍板清单）。
+# 发现项分级 P0/P1/P2/P3；用户已拍板的发现项不再重提（CLI 注入已拍板清单）。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review
 # 每准备一个独立派发的动作或门之后，都重复这条认领命令。
@@ -126,23 +126,23 @@ formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2>]
+  [--finding '<message>' --severity <P0|P1|P2|P3>]
 # 产品审的发现项是候选输入，复审规则由 CLI 强制（仅适用于 product-review 与
-# start-readiness，只有用户可破例）：仅含 P2 → 该轮即记录 PASS 且 P2 建议随 PASS 可见、
-# 不阻塞、无需重审，但 P2 建议仍须由用户逐项处置（确认→并入需求/开发范围；驳回→作废）、
+# start-readiness，只有用户可破例）：仅含 P2/P3 → 该轮即记录 PASS 且 P2/P3 建议随 PASS
+# 可见、不阻塞、无需重审，但 P2/P3 建议仍须由用户逐项处置（确认→并入需求/开发范围；驳回→作废）、
 # 经 settle-findings 登记后才进入下一步；含 P0/P1 → 记录 FAIL，用户对每个 P0/P1 逐项
 # 处置为确认（confirm）或驳回（dismiss）。确认的 P0/P1 → CLI 置位"需重审"，修订需求后
 # 必须派发新审查轮返回 PASS，重审前 record-action PASS 被拒；驳回的 P0/P1 → 作废、不
 # 阻塞。主代理无破例权；任何破例（确认的 P0/P1 未重审前直接 PASS、或要求对已 PASS 轮重
 # 审）都须用户显式授权（record-action/prepare-action --user-requested）并由 CLI 记录来源。
 
-# Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2，复审规则同产品审。
+# Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2/P3，复审规则同产品审。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2>]
+  [--finding '<message>' --severity <P0|P1|P2|P3>]
 # 技术审的 FAIL 发现项同样是候选输入，由用户逐项处置：确认问题 → 修订需求/方案后强制
 # 重审；驳回问题 → 作废、不阻塞、不改需求/方案。复审规则与产品审相同。
 
@@ -247,7 +247,7 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id> --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
   --compared '<base>..<current>' \
-  [--finding '<message>' --severity <P0|P1|P2> --location '<path:line>']
+  [--finding '<message>' --severity <P0|P1|P2|P3> --location '<path:line>']
 # --compared 是审查者实际比较的快照对；与指定的基线到当前范围不匹配时结果被丢弃。
 # RUNTIME_ERROR 不要求 --compared。
 ```
@@ -298,8 +298,8 @@ formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> 
   [--squash-message '<combined commit message>']
 ```
 
-修复流程（SKILL 第 8 步的执行机制）：触发条件（QA FAIL 或 P0/P1 → 整轮退回修复、P2
-一并处理）见 SKILL.md 第 8 步；下面只列命令形式与其余机制。
+修复流程（SKILL 第 8 步的执行机制）：触发条件（QA FAIL 或 P0/P1 → 整轮退回修复、
+P2/P3 一并处理）见 SKILL.md 第 8 步；下面只列命令形式与其余机制。
 - 开始编辑前先冻结当前 VCS 标识。
 - 总任务实例把集成发现项分发给各子任务实例，收到各子任务已 Seal 的修复后直接调用
   `workflow snapshot`；其他子任务实例准备并派发开发工作者，完成后冻结新标识并调用
@@ -324,7 +324,7 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
   修复，直到共享审查轮次上限耗尽或用户主动要求才可授权跳过。
 - 路线跳过和 Seal 跳过都会记录在摘要里。
 - 已授权的 Seal 跳过在当前快照仍被其他结果阻塞时继续有效，但不延续到后续修复快照。
-- 只有 P2 的 PASS 建议保持可见，不阻塞 Seal。
+- 只有 P2/P3 的 PASS 建议保持可见，不阻塞 Seal。
 
 按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法
 运行时，使用命令的 `--runtime-error` 或 `--status RUNTIME_ERROR --message ...` 形

@@ -137,7 +137,7 @@ Every phase has a standard procedure, an explicit executor, and a written record
 
 ### 8. Repair
 
-**What happens** — a test failure or a P0/P1 finding (a severe problem that must be fixed) sends the whole round back for repair (the round's P2 minor suggestions are handled together). PASS conclusions that the repair can't affect are inherited directly; any gate that is re-run always sees the **complete change** (the full start-to-current delivery, never just the small repair delta), and testing re-runs all approved cases on the new snapshot. At most three automatic review rounds; after that every repair needs your explicit authorization.
+**What happens** — a test failure or a P0/P1 finding (a severe problem that must be fixed) sends the whole round back for repair (the round's P2/P3 minor suggestions are handled together). PASS conclusions that the repair can't affect are inherited directly; any gate that is re-run always sees the **complete change** (the full start-to-current delivery, never just the small repair delta), and testing re-runs all approved cases on the new snapshot. At most three automatic review rounds; after that every repair needs your explicit authorization.
 **Who does it** — the main agent pins the pre-repair marker, dispatches a dev agent to repair, then re-snapshots and re-reviews.
 **What is recorded** — the repair change and a new snapshot; the pre-repair version is kept as the basis for inheritance decisions.
 **In one line** — small repairs don't re-test what didn't change; big ones go through an independent judgment.
@@ -179,10 +179,10 @@ Suppose you want the AI to add a "retry login failures automatically" feature:
 
 Review naming and readability in the change; report only identifiers that are
 ambiguous or misleading. Each finding gives a repository-relative location.
-P0/P1 findings block PASS; P2 is advisory only.
+P0/P1 findings block PASS; P2/P3 are advisory only.
 ```
 
-Findings are graded by severity: P0/P1 are severe problems that block PASS; P2 is advisory only and does not block.
+Findings are graded by severity: P0/P1 are severe problems that block PASS; P2/P3 are advisory only and do not block.
 
 This repository ships two gates by default (each a file under `gates/`):
 

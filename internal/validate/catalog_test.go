@@ -136,7 +136,7 @@ func TestGatePromptContainsEachPromptExactlyOnce(t *testing.T) {
 	if !strings.Contains(prompt, `"status":"PASS|FAIL|RUNTIME_ERROR"`) || !strings.Contains(prompt, "RUNTIME_ERROR requires a non-empty message") {
 		t.Fatalf("gate prompt is missing its runtime-error result contract:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, `"severity":"P0|P1|P2"`) || !strings.Contains(prompt, "PASS permits no findings or P2-only findings") {
+	if !strings.Contains(prompt, `"severity":"P0|P1|P2|P3"`) || !strings.Contains(prompt, "PASS permits no findings or P2/P3-only findings") {
 		t.Fatalf("gate prompt is missing its severity contract:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "catalog revision: "+catalog.CatalogRevision) {

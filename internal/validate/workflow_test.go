@@ -548,7 +548,7 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 		t.Fatalf("development-worker prepared before product review: %v", err)
 	}
 
-	// FAIL 含发现项（P0/P1/P2 分级）：仍阻塞，但不构成不可恢复的终态。
+	// FAIL 含发现项（P0/P1/P2/P3 分级）：仍阻塞，但不构成不可恢复的终态。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
 	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "requirement does not target a real user problem"}}, false, "")
 	if err != nil {
@@ -1793,24 +1793,24 @@ func TestSplitDecisionAllowsPerSliceRouteConfirmation(t *testing.T) {
 }
 
 // TestPreDevelopmentReviewFindingsCarrySeverity verifies product-review and
-// start-readiness findings are graded P0/P1/P2 so the main agent can apply the
-// re-review boundary (only P2 -> revise without re-review).
+// start-readiness findings are graded P0/P1/P2/P3 so the main agent can apply
+// the re-review boundary (only P2/P3 -> revise without re-review).
 func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "review-severity"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P0", Message: "blocking"}, {Severity: "P2", Message: "minor"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P0", Message: "blocking"}, {Severity: "P2", Message: "minor"}, {Severity: "P3", Message: "trivial"}}, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["product-review"].Findings[0].Severity != "P0" || state.Actions["product-review"].Findings[1].Severity != "P2" {
+	if state.Actions["product-review"].Findings[0].Severity != "P0" || state.Actions["product-review"].Findings[1].Severity != "P2" || state.Actions["product-review"].Findings[2].Severity != "P3" {
 		t.Fatalf("severity not retained: %#v", state.Actions["product-review"].Findings)
 	}
 	next := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P3", Message: "bad"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P4", Message: "bad"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("invalid severity accepted: %v", err)
 	}
-	// P3 的 FAIL 未被记录，next 派发仍认领未出结果；补记合法 PASS 完成它，使 RQ-007
+	// P4 的 FAIL 未被记录，next 派发仍认领未出结果；补记合法 PASS 完成它，使 RQ-007
 	// 放行下一次准备（否则强制续用 next）。
 	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", nil, false, "")
 	if err != nil {
@@ -2157,13 +2157,13 @@ func TestFastPathDesignDiscardedWhenRouteOmitsBlackbox(t *testing.T) {
 }
 
 // TestPreDevelopmentReviewFindingsRequireSeverity verifies product-review and
-// start-readiness findings must be graded non-empty P0/P1/P2 (requirement 14), so
-// an ungraded finding is rejected instead of slipping through.
+// start-readiness findings must be graded non-empty P0/P1/P2/P3 (requirement 14),
+// so an ungraded finding is rejected instead of slipping through.
 func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "severity-required"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("ungraded product-review finding accepted: %v", err)
 	}
 	// 无严重度的 FAIL 未被记录，dispatchID 派发仍认领未出结果；补记合法 PASS 完成它，
@@ -2174,7 +2174,7 @@ func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 		t.Fatal(err)
 	}
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, or P2") {
+	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("ungraded start-readiness finding accepted: %v", err)
 	}
 }
@@ -2888,19 +2888,19 @@ func TestSealSquashesGitRangeToSingleCommit(t *testing.T) {
 	}
 }
 
-// TestReviewRuleOnlyP2RecordsPassWithVisibleFindings verifies requirement 5:
-// a review carrying only P2 findings records PASS with the P2 suggestions visible
+// TestReviewRuleOnlyP2P3RecordsPassWithVisibleFindings verifies requirement 5:
+// a review carrying only P2/P3 findings records PASS with the suggestions visible
 // and does not produce FAIL or require a re-review.
-func TestReviewRuleOnlyP2RecordsPassWithVisibleFindings(t *testing.T) {
+func TestReviewRuleOnlyP2P3RecordsPassWithVisibleFindings(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "only-p2"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", []FindingInput{{Severity: "P2", Message: "minor wording suggestion"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", []FindingInput{{Severity: "P2", Message: "minor wording suggestion"}, {Severity: "P3", Message: "trivial style note"}}, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["product-review"].Status != "PASS" || len(state.Actions["product-review"].Findings) != 1 || state.Actions["product-review"].Findings[0].Severity != "P2" {
-		t.Fatalf("P2-only PASS was not recorded with visible findings: %#v", state.Actions["product-review"])
+	if state.Actions["product-review"].Status != "PASS" || len(state.Actions["product-review"].Findings) != 2 || state.Actions["product-review"].Findings[0].Severity != "P2" || state.Actions["product-review"].Findings[1].Severity != "P3" {
+		t.Fatalf("P2/P3-only PASS was not recorded with visible findings: %#v", state.Actions["product-review"])
 	}
 }
 

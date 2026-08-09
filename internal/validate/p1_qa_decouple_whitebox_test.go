@@ -220,16 +220,16 @@ func TestBacklogAndKnowledgeDocsIgnored(t *testing.T) {
 }
 
 // TestReviewRuleSingleHomeInFormalFlow 覆盖 RQ-004 的去重结构：复审机制全文唯一持有在
-// references/formal-flow.md；SKILL.md 第 4 步保留可执行摘要（决策级铁律：P0/P1/P2 分级、
-// 仅含 P2 可 PASS、确认→重审/驳回→作废、主代理无破例权）并一行指针指向 formal-flow，
-// 不再重复机制全文。
+// references/formal-flow.md；SKILL.md 第 4 步保留可执行摘要（决策级铁律：
+// P0/P1/P2/P3 分级、仅含 P2/P3 可 PASS、确认→重审/驳回→作废、主代理无破例权）并一行
+// 指针指向 formal-flow，不再重复机制全文。
 func TestReviewRuleSingleHomeInFormalFlow(t *testing.T) {
 	root := repoRootForCanaryTest(t)
 	formalFlow, err := os.ReadFile(filepath.Join(root, "references", "formal-flow.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{"仅含 P2 → 该轮即记录 PASS", "含 P0/P1 → 记录 FAIL", "主代理无破例权", "需重审"} {
+	for _, marker := range []string{"仅含 P2/P3 → 该轮即记录 PASS", "含 P0/P1 → 记录 FAIL", "主代理无破例权", "需重审"} {
 		if !strings.Contains(string(formalFlow), marker) {
 			t.Fatalf("references/formal-flow.md missing the full review-rule marker %q (single home)", marker)
 		}
@@ -238,7 +238,7 @@ func TestReviewRuleSingleHomeInFormalFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{"P0/P1/P2 分级", "仅含 P2 可记录 PASS、含 P0/P1 记录 FAIL", "驳回→作废", "主代理无破例权", "references/formal-flow.md"} {
+	for _, marker := range []string{"P0/P1/P2/P3 分级", "仅含 P2/P3 可记录 PASS、含 P0/P1 记录 FAIL", "驳回→作废", "主代理无破例权", "references/formal-flow.md"} {
 		if !strings.Contains(string(skill), marker) {
 			t.Fatalf("SKILL.md missing the step-4 review-rule summary marker %q", marker)
 		}
