@@ -1,0 +1,75 @@
+{
+  "runId": "p1-qa-decouple-carry-r2",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "9db8818560a5fb91f5d8d3f4123680006d13080932fd4275a493e12bd3e305f9",
+  "basePromptRevision": "1d7414b5745e53e2b04cc75834cd3269e88f46aaae8d2eaa49026bd397e6988f",
+  "catalogRevision": "736ace76f5537906008cfcceb0117ab1ad4500dd9cb00627c0fb7e01d0526f8f",
+  "vcs": "git",
+  "baseSnapshot": "7872dfb87adef388424b963917f3bf2dfde0dde5",
+  "currentSnapshot": "8d9b19ac44f97c6343f30cdbfb958712e00f198b",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/p1-qa-decouple-and-carries-fix/design.md",
+      "revision": "a0bad7b5c70b6cc26a30fbec5a995f2bf03be2ca0a559f78a8f9628436d8a762"
+    },
+    {
+      "path": "openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md",
+      "revision": "9db8818560a5fb91f5d8d3f4123680006d13080932fd4275a493e12bd3e305f9"
+    }
+  ],
+  "routeMode": "",
+  "selectedGates": [],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-3be47f85c0c4bdf8b7183c5e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3dd8bdf4495eb14eb9247688": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-595c633b251c025c12c78e5e": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

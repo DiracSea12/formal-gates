@@ -1,0 +1,517 @@
+{
+  "runId": "p1-qa-decouple-r3",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "f55dcff82cbf067483a4d917700b91f5f56a776637aae73360dedaeea558de85",
+  "basePromptRevision": "1d7414b5745e53e2b04cc75834cd3269e88f46aaae8d2eaa49026bd397e6988f",
+  "catalogRevision": "20aff7878922b3f86714d3361c4a2556dfd1e648bf5c999afa11e1542d0b905f",
+  "vcs": "git",
+  "baseSnapshot": "b4407a6483cbb531afc8a2031c4925eda1cdf922",
+  "currentSnapshot": "62057e651467dd6ffa56dd4729eff3ac940fc5aa",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/p1-qa-decouple-and-carries-fix/design.md",
+      "revision": "86225739e954b5c367c6235e0cf0af72c0be5f81aa45684e02e1cd3dabe03f7c"
+    },
+    {
+      "path": "openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md",
+      "revision": "f55dcff82cbf067483a4d917700b91f5f56a776637aae73360dedaeea558de85"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "RQ-001~013 为同一审计确认的 P1 修复+加固+接手参数连贯单元，各 RQ 共享同一基础设施（RunState per-mode 状态、workflow.go/runner.go、提示词、formal-flow）且互相咬合：RQ-013 定义 qa-design 写者角色→决定 RQ-011 放行清单与 RQ-003 注入排除；RQ-001 与 RQ-008 同属 per-mode 状态；RQ-003/004 依赖角色定义。拆分会引入多 run 流程开销、收益低——两轮产品审与技术审均推荐不拆"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "62057e651467dd6ffa56dd4729eff3ac940fc5aa",
+      "sourceSnapshot": "341efbf5b010e4a1142748bb94c9a5ba864bd481",
+      "compared": "b4407a6483cbb531afc8a2031c4925eda1cdf922..341efbf5b010e4a1142748bb94c9a5ba864bd481",
+      "dispatchId": "dispatch-440acd01e3c7b647f999c167"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "62057e651467dd6ffa56dd4729eff3ac940fc5aa",
+      "compared": "b4407a6483cbb531afc8a2031c4925eda1cdf922..2685e20afca71dc18e4e8850caae57df7520d9c1",
+      "dispatchId": "dispatch-8b707d99f4d846dbebc94d8c"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "62057e651467dd6ffa56dd4729eff3ac940fc5aa",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "黑盒 qa-review FAIL 后查状态并尝试白盒 review",
+        "observation": "黑盒 qa-design=PENDING、白盒=PASS；白盒 review 直接记录 PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "两 mode 设计后先后记录 review 正反两种顺序",
+        "observation": "两顺序均两 mode review PASS，无跨 mode 拒绝/死锁",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "合并/单派发 run 设计+review+snapshot",
+        "observation": "合并态 PASS 被识别，snapshot 成功",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "替换 state.json 为旧格式/错类型后 show",
+        "observation": "缺 per-mode 字段→exit 1 报缺失；错类型→exit 1 反序列化错；无静默降级",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "S1 全 PASS→修复 S2→carry --main-agent",
+        "observation": "carry 记录 INHERIT sourceSnapshot=S1，黑盒执行保持 PASS 重绑 S2",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "S2 后无 scope prepare 被拒→AFFECTED 子集→重跑",
+        "observation": "无 scope prepare qa-execution 被拒；AFFECTED 只重跑 CASE-002，CASE-001 继承 PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "依次 prepare 8 动作捕获任务文本",
+        "observation": "三审查动作含契约；五非审查动作（含 qa-design/requirements-clarification）不含",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "prepare 5 动作计数完整性检查块+检查 5 提示词文件",
+        "observation": "三审查动作恰 1 块、qa-design/requirements-clarification 0 块、文件无内联副本",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "读 SKILL 第4步与 formal-flow",
+        "observation": "SKILL 第4步=四条铁律+指针，机制全文仅在 formal-flow",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "读 formal-flow 检索机制重述与内部编号",
+        "observation": "formal-flow 仅命令形式+指针，无内部编号残留",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "检查 P2-BACKLOG.md 存在/忽略/内容",
+        "observation": "存在、git check-ignore 通过、未跟踪、含 P2 位置+建议",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "检查知识库文件存在/忽略/主题/来源",
+        "observation": "存在、忽略、未跟踪、5 大通用主题+来源标注、非项目特定",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "requirement --meaning changed 后 show+snapshot",
+        "observation": "per-mode review/design 清空、用例 reviewStatus PENDING、snapshot 被挡",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "手改 state.json 后 show；构造旧 state",
+        "observation": "值改动→exit 1 state modified outside the CLI；旧 state 正常加载",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "--current-snapshot 祖先 A start",
+        "observation": "currentSnapshot=A 而非 HEAD；默认取 HEAD",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "非祖先/外来值 start --current-snapshot",
+        "observation": "exit 1 明确报 not an ancestor or equal of the native head",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "hook decide 构造 5 角色载荷",
+        "observation": "主线程写源码 deny、qa-review deny、dev allow、qa-design 测试 allow、主线程登记文档 allow",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "无活动 run 构造主线程写代码载荷",
+        "observation": "判 allow",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "product-review --scope 增量+对 PASS 重判+FAIL 无 finding",
+        "observation": "新项 PENDING 判定 PASS、旧 PASS 重判被拒、FAIL 无 finding 被拒",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "meaning-preserved/changed 后查表",
+        "observation": "preserved 保表、changed 清空",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "whitebox --test 真实/不存在函数名",
+        "observation": "真实名接受且用例文档存绑定；不存在名被拒",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "白盒 review FAIL→重设计→重 review",
+        "observation": "FAIL 后设计可重记、review 重跑到 PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "白盒执行绑定测试+实现/测试缺陷返修",
+        "observation": "执行跑设计者测试；实现缺陷走 dev、测试缺陷走设计；修复后 PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestWhiteboxBindingRejectsMissingTest 实跑",
+        "observation": "缺 --test 记录被拒 requires a --test，无状态变更",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestWhiteboxBindingRejectsUnknownFunction 实跑",
+        "observation": "不存在测试名被拒 was not found in the whitebox designer's delivered test code",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestWhiteboxTestFunctionExistsResolution 实跑",
+        "observation": "已声明命中、空/未声明 false、不可解析无匹配",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestDesignRuntimeErrorPerModeIndependent 实跑",
+        "observation": "黑盒 RUNTIME_ERROR、白盒 PASS 保持、黑盒执行重置、白盒执行未触碰",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestQAModeReviewDesignMergedFallback 实跑",
+        "observation": "per-mode 优先、空状态回退合并键、读写同键",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestCarryReadsPriorWhenResultResetToPending 实跑",
+        "observation": "PENDING 回退 prior(PASS,s1)、无记录空、per-mode 权威优先",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestSealedStateRetainsIntegrity 实跑",
+        "observation": "SEALED 往返加载成功、integrity 保留、字段在场",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestBacklogAndKnowledgeDocsIgnored 实跑+独立核验",
+        "observation": "两文件存在且 check-ignore 通过、未跟踪",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "TestReviewRuleSingleHomeInFormalFlow 实跑+独立核验",
+        "observation": "formal-flow 全文机制、SKILL 摘要+指针",
+        "oracleResult": "满足",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 444244867,
+    "inputCacheHitTokens": 438421248,
+    "inputCacheMissTokens": 5823619,
+    "outputTokens": 1659250,
+    "dispatches": {
+      "dispatch-03a4ec7466165aab5ecd2593": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 3425792,
+        "inputCacheMissTokens": 136698,
+        "outputTokens": 28933,
+        "totalInputTokens": 3562490,
+        "source": "transcript"
+      },
+      "dispatch-04675b6b2ea67e31db5927f0": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 878080,
+        "inputCacheMissTokens": 124318,
+        "outputTokens": 45212,
+        "totalInputTokens": 1002398,
+        "source": "transcript"
+      },
+      "dispatch-1862d97b04e41d802fd44fa0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 11853184,
+        "inputCacheMissTokens": 273770,
+        "outputTokens": 34583,
+        "totalInputTokens": 12126954,
+        "source": "transcript"
+      },
+      "dispatch-25d3b7944fe22ae31174d0e7": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 16234240,
+        "inputCacheMissTokens": 259264,
+        "outputTokens": 83117,
+        "totalInputTokens": 16493504,
+        "source": "transcript"
+      },
+      "dispatch-440acd01e3c7b647f999c167": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 3610752,
+        "inputCacheMissTokens": 252952,
+        "outputTokens": 17835,
+        "totalInputTokens": 3863704,
+        "source": "transcript"
+      },
+      "dispatch-44d782b3885d6086f67ba8ec": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2095104,
+        "inputCacheMissTokens": 134106,
+        "outputTokens": 76848,
+        "totalInputTokens": 2229210,
+        "source": "transcript"
+      },
+      "dispatch-54c05c205238d144d906cba4": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 89357824,
+        "inputCacheMissTokens": 333199,
+        "outputTokens": 128090,
+        "totalInputTokens": 89691023,
+        "source": "transcript"
+      },
+      "dispatch-7890b7ac54b068e1e83530fe": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 1507200,
+        "inputCacheMissTokens": 100208,
+        "outputTokens": 22123,
+        "totalInputTokens": 1607408,
+        "source": "transcript"
+      },
+      "dispatch-8b707d99f4d846dbebc94d8c": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 49496320,
+        "inputCacheMissTokens": 435667,
+        "outputTokens": 395855,
+        "totalInputTokens": 49931987,
+        "source": "transcript"
+      },
+      "dispatch-91c1b15a536ac6ffed5b3102": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 24488320,
+        "inputCacheMissTokens": 415235,
+        "outputTokens": 218170,
+        "totalInputTokens": 24903555,
+        "source": "transcript"
+      },
+      "dispatch-c2f822525f9ce4866ed87228": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 167040,
+        "inputCacheMissTokens": 67060,
+        "outputTokens": 23593,
+        "totalInputTokens": 234100,
+        "source": "transcript"
+      },
+      "dispatch-c7d806af6e8c0429a9611903": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 632448,
+        "inputCacheMissTokens": 110983,
+        "outputTokens": 36300,
+        "totalInputTokens": 743431,
+        "source": "transcript"
+      },
+      "dispatch-d63e102e4cd0ef5b3552e266": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d71fd69a4194e7b3c9a07e9a": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 13740160,
+        "inputCacheMissTokens": 251042,
+        "outputTokens": 214089,
+        "totalInputTokens": 13991202,
+        "source": "transcript"
+      },
+      "dispatch-d9e5f2cf664bf9b70b363fc2": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 1380608,
+        "inputCacheMissTokens": 94515,
+        "outputTokens": 21022,
+        "totalInputTokens": 1475123,
+        "source": "transcript"
+      },
+      "dispatch-dad2865fb08c0cededd79156": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 206616320,
+        "inputCacheMissTokens": 2417161,
+        "outputTokens": 242773,
+        "totalInputTokens": 209033481,
+        "source": "transcript"
+      },
+      "dispatch-db3bdd493722f3f35a12b4f7": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 9165952,
+        "inputCacheMissTokens": 246550,
+        "outputTokens": 46702,
+        "totalInputTokens": 9412502,
+        "source": "transcript"
+      },
+      "dispatch-f22cf45306e8dbd18852c2b5": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 3771904,
+        "inputCacheMissTokens": 170891,
+        "outputTokens": 24005,
+        "totalInputTokens": 3942795,
+        "source": "transcript"
+      }
+    }
+  }
+}

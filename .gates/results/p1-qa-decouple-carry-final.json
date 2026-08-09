@@ -1,0 +1,364 @@
+{
+  "runId": "p1-qa-decouple-carry-final",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "fa877402f56e0e1252d22952debfbc88394e6f2fcb20a13ce975a4e66db64cca",
+  "basePromptRevision": "1d7414b5745e53e2b04cc75834cd3269e88f46aaae8d2eaa49026bd397e6988f",
+  "catalogRevision": "736ace76f5537906008cfcceb0117ab1ad4500dd9cb00627c0fb7e01d0526f8f",
+  "vcs": "git",
+  "baseSnapshot": "7872dfb87adef388424b963917f3bf2dfde0dde5",
+  "currentSnapshot": "547aee0b332b5a5c59d091b89e44227718750d30",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/p1-qa-decouple-and-carries-fix/design.md",
+      "revision": "adf5ab65caa4ed77c28978f4c5f6578966a920a542d7ca1ce02c9bd49017bf35"
+    },
+    {
+      "path": "openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md",
+      "revision": "fa877402f56e0e1252d22952debfbc88394e6f2fcb20a13ce975a4e66db64cca"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "RQ-001~010 为同一审计确认的 P1 修复+加固+接手参数连贯单元，拆分会引入多 run 流程开销、收益低（产品审/技术审均推荐不拆）"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "547aee0b332b5a5c59d091b89e44227718750d30",
+      "compared": "7872dfb87adef388424b963917f3bf2dfde0dde5..547aee0b332b5a5c59d091b89e44227718750d30",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "P2: composedActionPromptHash 与 composedGatePromptHash 结构重复，可抽共享 composedContentHash",
+          "locations": [
+            "internal/validate/catalog.go:224"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "P2: invalidateRequirementResults 按 mode 置 PENDING 循环是死代码（QAExecutionByMode 已清空，循环不执行）；RQ-008 重置由空 map 替换完成，应删除循环",
+          "locations": [
+            "internal/validate/workflow.go:3147"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-b6a0f37c1692bfe3a053ea39"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "547aee0b332b5a5c59d091b89e44227718750d30",
+      "compared": "7872dfb87adef388424b963917f3bf2dfde0dde5..547aee0b332b5a5c59d091b89e44227718750d30",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "P2: RQ-008 per-mode PENDING 重置循环是死代码（QAExecutionByMode 先清空再遍历空集）；空 map 读值等价 PENDING 故功能达成，但循环与注释误导",
+          "locations": [
+            "internal/validate/workflow.go:3147"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "P2: RQ-010 start --current-snapshot 无测试（设计要求但缺失）",
+          "locations": [
+            "internal/validate/workflow.go:206"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "P2: RQ-007 兼容接受路径无测试（仅拒读路径有测试）",
+          "locations": [
+            "internal/validate/runstate.go:400"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "P2: Start 把 base-snapshot 校验目标从 currentSnapshot 静默放宽为 headSnapshot，RQ-010 未要求",
+          "locations": [
+            "internal/validate/workflow.go:220"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-a8a84533e03a7b8ffc239839"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "547aee0b332b5a5c59d091b89e44227718750d30",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "full路线两模design后黑盒review FAIL、白盒review PASS",
+        "observation": "qaReviewByMode.blackbox=FAIL、白盒独立PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "黑盒review FAIL后查qaDesignByMode",
+        "observation": "blackbox=PENDING、whitebox=PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "四种方式破坏state.json后show",
+        "observation": "均报格式错exit 1、合法state正常",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "S1两模exec PASS→门FAIL→S2→carry --main-agent",
+        "observation": "两模INHERIT、快照重绑S2",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "S1黑盒FAIL→S2→scope AFFECTED CASE-002",
+        "observation": "只重跑CASE-002、其余inherited PASS",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "捕获各prepare提示词grep共享契约",
+        "observation": "四审查动作有、非审查无",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "文档核对复审规则唯一持有",
+        "observation": "formal-flow唯一、SKILL摘要+指针",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "文件/git检查P2-BACKLOG",
+        "observation": "存在、被忽略、含位置建议",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "文件/git/内容检查知识库",
+        "observation": "存在、被忽略、通用+来源标注",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "旧schema本run兼容加载+变异保存",
+        "observation": "per-mode补空、可读写",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "其他run-id旧schema show",
+        "observation": "被拒读格式错exit 1",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "兼容接口seal前删除（交付CLI严格拒读）",
+        "observation": "兼容仅本run-id、seal前待删",
+        "oracleResult": "满足（待seal删）",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "meaning changed后查per-mode",
+        "observation": "review/design清空、exec清空、confirmed=false",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "手改state不改integrity→show",
+        "observation": "报state modified outside CLI exit 1",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "start --current-snapshot开发前祖先",
+        "observation": "currentSnapshot=祖先非HEAD",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "非祖先/外来提交值报错",
+        "observation": "均报错exit 1",
+        "oracleResult": "满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "不传--current-snapshot start",
+        "observation": "current=HEAD默认不变",
+        "oracleResult": "满足",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-38c2c652da89b3e4f0ac5521": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-54f91a8dc7ffa4ad0320e9b8": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-58b1b0d8ed28ce23ced5f799": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6a405290bdbea39b463268f1": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a8a84533e03a7b8ffc239839": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b6a0f37c1692bfe3a053ea39": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cad0e88e5798fe23391cbc42": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f6aeb7e4aa0627a9ccff58e4": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fc0e6ddef0f7c26c73064338": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fd347f5296fe0a1fabc2eb87": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fe9cd8c7fe5521071cc57b44": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
