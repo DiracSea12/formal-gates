@@ -532,7 +532,7 @@ func runQADesign(args []string, streams IO) (int, error) {
 	fs.Var(&caseField{cases: &cases, field: "mode"}, "mode", "blackbox or whitebox for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "procedure"}, "procedure", "procedure for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "oracle"}, "oracle", "oracle for the current QA case")
-	fs.Var(&caseField{cases: &cases, field: "test"}, "test", "whitebox test interface name implementing the current QA case (RQ-013 binding; required for whitebox cases)")
+	fs.Var(&caseField{cases: &cases, field: "test"}, "test", "whitebox test reference <file>::<function> locating the delivered test implementing the current QA case (RQ-013 binding; required for whitebox cases, unique per case)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}

@@ -36,7 +36,7 @@ func perModeReadyDelivery(t *testing.T, root, pkg, id string) RunState {
 	}
 	// 白盒设计 + 审查 PASS。
 	wbDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
 	// 白盒设计轮（改写白盒用例）：不得清除黑盒执行结果。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
 	var err error
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure revised", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructureRevised"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure revised", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructureRevised"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestDualModeReviewDesignFullyDecoupled(t *testing.T) {
 		t.Fatal(err)
 	}
 	wbDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

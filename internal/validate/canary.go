@@ -175,12 +175,13 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	// RQ-013：白盒设计者交付的结构测试代码——canary 仓库带一个测试文件，使白盒用例的
-	// Test 绑定（CLI 校验测试存在）可被真实解析命中。
+	// RQ-013：白盒设计者交付的结构测试代码——canary 仓库带一个测试文件，作为白盒用例测试
+	// 引用的定位目标（<文件>::<函数>）；CLI 记录时只校验引用非空/1:1，存在性由 qa-review
+	// 读代码核对、qa-execution 实际运行验证。
 	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
 		return err
 	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectBehavior"}, {Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, {Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
 	if err != nil {
 		return err
 	}

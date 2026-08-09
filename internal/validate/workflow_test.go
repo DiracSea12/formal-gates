@@ -441,7 +441,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 		t.Fatal("rejected QA rework changed state")
 	}
 	revised := baselineCases()
-	revised = append(revised, QACaseInput{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run the delivered failure-path test", Oracle: "the test passes", Test: "TestWhiteboxFailurePaths"})
+	revised = append(revised, QACaseInput{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run the delivered failure-path test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxFailurePaths"})
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +499,7 @@ func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
 func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "remove-duplicate"), "full", nil)
-	cases := append(baselineCases(), QACaseInput{Mode: "whitebox", Description: "duplicate direct coverage", Procedure: "run the delivered duplicate test", Oracle: "the test passes", Test: "TestWhiteboxDuplicate"})
+	cases := append(baselineCases(), QACaseInput{Mode: "whitebox", Description: "duplicate direct coverage", Procedure: "run the delivered duplicate test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDuplicate"})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, cases, "")
 	if err != nil {
@@ -1708,7 +1708,7 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	designDispatch = prepareDispatch(t, root, pkg, whitebox.RunID, "qa-design", "whitebox")
-	whitebox, err = RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
+	whitebox, err = RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatalf("whitebox design after development failed: %v", err)
 	}
@@ -1940,7 +1940,7 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 		t.Fatal(err)
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1993,7 +1993,7 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	// 开发后白盒设计：RQ-012 下白盒设计轮只增补白盒用例（写进白盒自己的列表），既有黑盒
 	// 用例（含 review PASS 状态）在各自列表中原样保留。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2455,7 +2455,7 @@ func prepareAndClaim(t *testing.T, root, pkg, runID, target, reviewer string, mo
 }
 
 func baselineCases() []QACaseInput {
-	return []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}, {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"}}
+	return []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"}, {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"}}
 }
 
 func passingReviewDecisions(state RunState) []QAReviewInput {
@@ -2484,9 +2484,8 @@ func workflowFixture(t *testing.T) (string, string) {
 	// 测试仓库与实际仓库一致地忽略运行期临时状态：否则 .gates/tmp/ 会被误跟踪进
 	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。
 	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n")
-	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，使白盒用例的
-	// Test 绑定（CLI 校验测试存在）可被真实解析命中。见 whiteboxDeliveredTestCode
-	//（whitebox_binding.go）。
+	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
+	// 引用（<文件>::<函数>）的定位目标。见 whiteboxDeliveredTestCode（whitebox_binding.go）。
 	writeTestFile(t, filepath.Join(root, "whitebox_delivered_test.go"), whiteboxDeliveredTestCode)
 	initializeGit(t, root)
 	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
@@ -3100,7 +3099,7 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-rerecord"), "full", nil)
 	// 首次设计只记录部分用例。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3110,7 +3109,7 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 	// review 派发尚未准备：可继续调用 qa-design 追加/更新用例集（保留既有用例、增量补全）。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
-		{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"},
+		{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"},
 		{Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"},
 	}, "")
 	if err != nil {
@@ -3161,7 +3160,7 @@ func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
 	}
 	// 白盒设计轮只动白盒列表：黑盒用例（含 review PASS 状态）不得被清掉。
 	whiteboxDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, whiteboxDesign, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, whiteboxDesign, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

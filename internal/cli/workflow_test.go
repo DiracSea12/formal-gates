@@ -27,7 +27,7 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 
 	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
 	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
-		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "TestWhiteboxDirectRules",
+		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "whitebox_delivered_test.go::TestWhiteboxDirectRules",
 		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
 	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch, "--reviewer", "qa-session")
@@ -79,7 +79,7 @@ func TestCLIQARerunScopeDecision(t *testing.T) {
 
 	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
 	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
-		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "TestWhiteboxDirectRules",
+		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "whitebox_delivered_test.go::TestWhiteboxDirectRules",
 		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
 	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch, "--reviewer", "qa-session")
@@ -502,9 +502,9 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	root := t.TempDir()
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	mustWriteCLI(t, filepath.Join(root, "design.md"), "design\n")
-	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，使白盒用例的
-	// Test 绑定（CLI 校验测试存在）可被真实解析命中。与 internal/validate 的
-	// whiteboxDeliveredTestCode 同源。
+	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
+	// 引用（<文件>::<函数>）的定位目标。与 internal/validate 的 whiteboxDeliveredTestCode
+	// 同源。
 	mustWriteCLI(t, filepath.Join(root, "whitebox_delivered_test.go"), "package whiteboxfixture\n\nimport \"testing\"\n\nfunc TestWhiteboxDirectRules(t *testing.T) {}\n\nfunc TestWhiteboxStructure(t *testing.T) {}\n\nfunc TestWhiteboxDirectBehavior(t *testing.T) {}\n")
 	cliGit(t, root, "init")
 	cliGit(t, root, "config", "user.email", "tests@example.invalid")

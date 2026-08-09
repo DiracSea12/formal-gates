@@ -164,7 +164,8 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-design --mode <blackbox|whitebox>
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
   --dispatch <dispatch-id> --case '<description>' --mode <blackbox|whitebox> \
-  --procedure '<public procedure>' --oracle '<expected result>'
+  --procedure '<public procedure>' --oracle '<expected result>' \
+  [--test '<file>::<function>']   # 白盒用例必填：文件定位的测试引用，唯一、不被两用例共用
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-review --mode <blackbox|whitebox>
 formal-gates workflow qa-review --root <repo> --package-root <package> \

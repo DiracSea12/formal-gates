@@ -29,8 +29,11 @@ type FindingInput struct {
 }
 
 // QACaseInput 是一次 qa-design 记录轮输入的用例。Test（RQ-013）是白盒用例对应的测试
-// 接口名：白盒设计者独立编写结构测试代码，并在 CLI 记录用例时用 --test 指定；CLI 校验
-// 该测试存在（解析/编译检查）且与该用例对应，不满足即拒绝记录。黑盒用例不需要 Test。
+// 引用 = "<文件路径>::<函数名>"：文件路径定位到交付测试代码所在文件、函数名定位到该文件
+// 里的测试，两者都是不透明字符串、CLI 不解析代码内容。白盒设计者独立编写结构测试代码，
+// 并在 CLI 记录用例时用 --test 指定；CLI 记录时只校验引用非空、且同一引用不被两条白盒
+// 用例共用（一个测试实现一个用例），存在性与对应性由 qa-review（读代码核对）与
+// qa-execution（实际运行）验证，不满足即拒绝记录。黑盒用例不需要 Test。
 type QACaseInput struct{ Mode, Description, Procedure, Oracle, Test string }
 
 // ReviewItemInput 是 record-action 对 product-review / start-readiness 逐项下发的
@@ -1010,7 +1013,7 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		} else if mode == "blackbox" {
 			lines = append(lines, "This is a blackbox QA design round: design real QA behavior cases from the current confirmed requirement document. Work in the QA isolation worktree; the current requirement document (revision registered by the run) is injected there as working-tree state. Base every case on the current requirement document, not on any baseline product documentation. '实际使用产品' is the execution-phase description: after the snapshot you execute cases against the built product on the main worktree. In this design phase, the runnable product is not yet built, so base the cases on the injected current requirement.")
 		} else if mode == "whitebox" {
-			lines = append(lines, "This is a whitebox QA design round: read the implementation on the main worktree, independently design structure test cases (unit, system, integration) by responsibility, and directly write the structural test code you deliver. Every whitebox case must bind the exact test interface (test function) implementing it: the CLI records the binding with --test and rejects the case if the named test is not present in your delivered test code, so the case ID and the executed test are truly bound.")
+			lines = append(lines, "This is a whitebox QA design round: read the implementation on the main worktree, independently design structure test cases (unit, system, integration) by responsibility, and directly write the structural test code you deliver. Every whitebox case must bind the test implementing it with a --test \"<file>::<function>\" reference (file path locating the delivered test code file, function name locating the test inside it; both opaque strings, the CLI does not parse code): the CLI records the reference and requires it non-empty and unique per case (one test implements one case). Test existence and correspondence are verified by QA Review (reading your delivered code) and QA Execution (running the tests), so the case ID and the executed test are truly bound.")
 		} else if modes := selectedQAModes(state); len(modes) != 0 {
 			lines = append(lines, "Selected QA modes: "+strings.Join(modes, "; "))
 		}
@@ -1365,7 +1368,8 @@ func qaReviewDispatchPrepared(state RunState, mode string) bool {
 
 func formatQACase(testCase QACase, includeReview bool) string {
 	value := fmt.Sprintf("%s\nmode: %s\ndescription: %s\nprocedure: %s\noracle: %s", testCase.ID, testCase.Mode, testCase.Description, testCase.Procedure, testCase.Oracle)
-	// RQ-013：白盒用例带测试接口名绑定，展示给审查/执行代理，使执行按用例对应的测试跑。
+	// RQ-013：白盒用例带测试引用（<文件>::<函数>）绑定，展示给审查/执行代理，使执行按用例
+	// 对应的测试跑；文档自包含——读文档即知该测试在哪个文件、叫什么。
 	if strings.TrimSpace(testCase.Test) != "" {
 		value += "\ntest: " + testCase.Test
 	}
@@ -1815,15 +1819,14 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 					return fmt.Errorf("QA case %d %s is required", index+1, name)
 				}
 			}
-			// RQ-013 caseId↔测试绑定：白盒用例必须写明实现该用例的测试接口名（Test 字段），
-			// CLI 校验该测试存在（解析/编译检查）且与该用例对应——"测 A 的测试给 B 用例标
-			// PASS"可被发现；黑盒用例无结构测试绑定、不要求 Test。不满足即拒绝记录。
+			// RQ-013 caseId↔测试绑定：白盒用例必须写明实现该用例的测试引用（Test 字段 =
+			// "<文件路径>::<函数名>"，两个不透明字符串，CLI 不解析代码内容）。CLI 记录时只做
+			// 最小校验：引用非空、且同一引用不被两条白盒用例共用（一个测试实现一个用例）；
+			// 存在性与对应性由 qa-review（读代码核对）与 qa-execution（实际运行）验证。
+			// 黑盒用例无结构测试绑定、不要求 Test。不满足即拒绝记录。
 			if normalized.Mode == "whitebox" {
 				if normalized.Test == "" {
-					return fmt.Errorf("QA case %d (whitebox) requires a --test <name> binding to the whitebox designer's delivered test function", index+1)
-				}
-				if !whiteboxTestFunctionExists(root, normalized.Test) {
-					return fmt.Errorf("QA case %d (whitebox) test %q was not found in the whitebox designer's delivered test code; record the exact test function the designer wrote", index+1, normalized.Test)
+					return fmt.Errorf("QA case %d (whitebox) requires a --test <file>::<function> reference locating the whitebox designer's delivered test", index+1)
 				}
 			}
 			key := qaCaseSemanticKeyWithTest(normalized.Mode, normalized.Description, normalized.Procedure, normalized.Oracle, normalized.Test)
@@ -1847,6 +1850,23 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				nextID++
 			}
 			updated = append(updated, normalized)
+		}
+		// RQ-013 1:1：同一测试引用（<文件>::<函数>）不能被两条白盒用例共用——一个测试实现
+		// 一个用例。对本次记录后的完整用例集检查（含保留的既有用例），撞引用即拒绝记录。
+		// 黑盒用例无测试引用，不参与。
+		refOwner := map[string]string{}
+		for _, testCase := range updated {
+			if testCase.Mode != "whitebox" {
+				continue
+			}
+			ref := strings.TrimSpace(testCase.Test)
+			if ref == "" {
+				continue
+			}
+			if owner, dup := refOwner[ref]; dup {
+				return fmt.Errorf("QA whitebox test reference %q is shared by case %s and case %s; one test implements one case", ref, owner, testCase.ID)
+			}
+			refOwner[ref] = testCase.ID
 		}
 		// RQ-001：返工约束只按本派发 mode 的 review FAIL 检查，不读另一 mode 的 review 判定。
 		if state.qaReview(dispatch.Mode).Status == "FAIL" {
@@ -4434,10 +4454,11 @@ func qaCaseSemanticKey(kind, description, procedure, oracle string) string {
 }
 
 // qaCaseSemanticKeyWithTest is the incremental-design identity of a whitebox case:
-// it includes the Test binding (RQ-013) so that changing a case's test function
-// produces a new case identity (re-review) instead of silently retaining the prior
-// case's PASS for a case whose executed test changed. Blackbox cases carry an empty
-// test, so the key reduces to the four-field identity.
+// it includes the Test binding (RQ-013, the "<file>::<function>" test reference) so
+// that changing a case's test reference produces a new case identity (re-review)
+// instead of silently retaining the prior case's PASS for a case whose executed test
+// changed. Blackbox cases carry an empty test, so the key reduces to the four-field
+// identity.
 func qaCaseSemanticKeyWithTest(kind, description, procedure, oracle, test string) string {
 	return qaCaseSemanticKey(kind, description, procedure, oracle) + "\x00" + strings.TrimSpace(test)
 }

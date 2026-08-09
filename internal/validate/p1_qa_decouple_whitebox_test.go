@@ -2,7 +2,9 @@ package validate
 
 // 白盒结构测试（RQ-013 白盒设计者交付）：本文件由白盒 QA 设计者在开发后独立设计并编写，
 // 覆盖 P1 QA 彻底解耦与 Carry 继承修复（RQ-001~013）的关键确定性规则。每条白盒用例的
-// Test 绑定 = 本文件中的测试函数名，CLI 记录用例时校验该测试存在且与该用例对应。
+// Test 绑定 = 文件定位的测试引用 "<文件路径>::<函数名>"（如
+// "whitebox_delivered_test.go::TestWhiteboxDirectRules"），CLI 记录时只校验引用非空、
+// 且同一引用不被两条白盒用例共用；存在性与对应性由 qa-review 与 qa-execution 验证。
 
 import (
 	"encoding/json"
@@ -13,8 +15,8 @@ import (
 )
 
 // TestWhiteboxBindingRejectsMissingTest 覆盖 RQ-013 的 caseId↔测试绑定：白盒用例必须写明
-// 实现该用例的测试接口名（--test），缺 Test 字段的记录被 CLI 拒绝——"测 A 的测试给 B 用例
-// 标 PASS"必须可被发现，不能只做文本非空校验。
+// 实现该用例的测试引用（--test <文件>::<函数>），缺 Test 字段的记录被 CLI 拒绝——"测 A 的
+// 测试给 B 用例标 PASS"必须可被发现，不能只做任意文本非空校验。
 func TestWhiteboxBindingRejectsMissingTest(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-missing"), "custom", []string{whiteboxQAID})
@@ -25,40 +27,36 @@ func TestWhiteboxBindingRejectsMissingTest(t *testing.T) {
 	}
 }
 
-// TestWhiteboxBindingRejectsUnknownFunction 覆盖 RQ-013 的测试存在性校验：白盒用例的 Test
-// 必须指向白盒设计者交付测试代码中真实存在的测试函数；指向不存在函数的记录被 CLI 拒绝
-// （解析/编译检查命中，不满足即拒绝记录）。
-func TestWhiteboxBindingRejectsUnknownFunction(t *testing.T) {
+// TestWhiteboxBindingRejectsSharedReference 覆盖 RQ-013 的 1:1 校验：同一个测试引用
+// （<文件>::<函数>）不能被两条白盒用例共用——一个测试实现一个用例；本次记录内撞引用即
+// 拒绝记录（与既有用例撞引用同理）。
+func TestWhiteboxBindingRejectsSharedReference(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-unknown"), "custom", []string{whiteboxQAID})
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-shared"), "custom", []string{whiteboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	_, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxNeverDelivered"}}, "")
-	if err == nil || !strings.Contains(err.Error(), "was not found in the whitebox designer's delivered test code") {
-		t.Fatalf("whitebox case with an unknown test function was accepted: %v", err)
+	_, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
+		{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"},
+		{Mode: "whitebox", Description: "duplicate direct coverage", Procedure: "run the delivered duplicate test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"},
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "one test implements one case") {
+		t.Fatalf("whitebox cases sharing a test reference were accepted: %v", err)
 	}
 }
 
-// TestWhiteboxTestFunctionExistsResolution 覆盖 RQ-013 的测试存在性解析（最低层）：白盒设计
-// 者交付测试代码中的已声明测试函数可被解析命中；空名、未声明名解析为不存在；不可解析的
-// .go 文件（非正常交付形态）不贡献匹配。
-func TestWhiteboxTestFunctionExistsResolution(t *testing.T) {
-	root, _ := workflowFixture(t)
-	// workflowFixture 的 whitebox_delivered_test.go 声明 whiteboxDeliveredTestCode 中的函数。
-	if !whiteboxTestFunctionExists(root, "TestWhiteboxDirectRules") {
-		t.Fatal("delivered test function was not resolved")
+// TestWhiteboxBindingDefersExistence 覆盖 RQ-013 的存在性由 review/execution 验证：CLI 记录
+// 时只校验引用非空/1:1，不解析代码、不校验引用指向的测试是否已交付——格式合法的引用（哪怕
+// 指向尚未交付的文件/函数）即可记录，存在性与对应性留给 qa-review 读代码核对、qa-execution
+// 实际运行验证。
+func TestWhiteboxBindingDefersExistence(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-binding-deferred"), "custom", []string{whiteboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "not_delivered_test.go::TestNotDeliveredYet"}}, "")
+	if err != nil {
+		t.Fatalf("a well-formed but not-yet-delivered test reference was rejected by the CLI: %v", err)
 	}
-	if whiteboxTestFunctionExists(root, "") {
-		t.Fatal("blank test name resolved as existing")
-	}
-	if whiteboxTestFunctionExists(root, "TestWhiteboxNeverDelivered") {
-		t.Fatal("undeclared test function resolved as existing")
-	}
-	unparseable := filepath.Join(root, "broken_test.go")
-	if err := os.WriteFile(unparseable, []byte("package validate\nfunc Broken("), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if goFileDeclaresFunction(unparseable, "Broken") {
-		t.Fatal("unparseable file contributed a function match")
+	if got := state.qaCases("whitebox"); len(got) != 1 || got[0].Test != "not_delivered_test.go::TestNotDeliveredYet" {
+		t.Fatalf("recorded whitebox case reference mismatch: %#v", got)
 	}
 }
 
@@ -80,7 +78,7 @@ func TestDesignRuntimeErrorPerModeIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	wbDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
