@@ -91,35 +91,59 @@ func TestValidateStandaloneGateResult(t *testing.T) {
 	}
 }
 
-// TestContaminationCheckCoversReviewersButNotExecutors covers RQ-004's scope: the
-// first-step contamination check is required in the shared contract and every
-// reviewer action prompt, and is absent from the development worker and QA
-// executor (non-zero-context). The reviewer action set is derived from the
-// reviewerActionIDs single source (workflow.go), which mirrors RQ-004, so the
-// prompt files and the inheritance gate stay in sync with the contamination
-// scope.
+// TestContaminationCheckCoversReviewersButNotExecutors verifies the RQ-003
+// contamination-check scope: the first-step 任务完整性检查 block lives once in
+// reviewer-base.md (single home), and ComposeActionPrompt injects the shared
+// reviewer contract (which carries it) into the three zero-context reviewer
+// actions — product-review、qa-review、start-readiness — while the non-reviewer
+// actions（development-worker、carry、qa-execution、requirements-clarification、
+// qa-design）do not get the injection and their prompt files no longer inline the
+// block. qa-design is excluded because it is now a design-writer (whitebox writes
+// test code, blackbox writes case documents, RQ-011/RQ-013), so a
+// "don't edit repository files" contract would contradict its write role.
 func TestContaminationCheckCoversReviewersButNotExecutors(t *testing.T) {
-	included := []string{"prompts/reviewer-base.md"}
-	for id := range reviewerActionIDs {
-		included = append(included, "prompts/actions/"+id+".md")
+	// 单一事实源：任务完整性检查只写在 reviewer-base.md。
+	data, err := os.ReadFile(filepath.Join("..", "..", "prompts", "reviewer-base.md"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	excluded := []string{"prompts/actions/development-worker.md", "prompts/actions/qa-execution.md"}
-	for _, path := range included {
-		data, err := os.ReadFile(filepath.Join("..", "..", path))
+	if !strings.Contains(string(data), "任务完整性检查") {
+		t.Fatalf("prompts/reviewer-base.md missing the first-step contamination check")
+	}
+	// 所有动作提示词文件不再内联该块（注入由 ComposeActionPrompt 对审查动作统一完成）。
+	for _, id := range requiredActionIDs {
+		actionData, err := os.ReadFile(filepath.Join("..", "..", "prompts", "actions", id+".md"))
 		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
+			t.Fatalf("read prompts/actions/%s.md: %v", id, err)
 		}
-		if !strings.Contains(string(data), "任务完整性检查") {
-			t.Fatalf("%s missing the first-step contamination check", path)
+		if strings.Contains(string(actionData), "任务完整性检查") {
+			t.Fatalf("prompts/actions/%s.md must not inline the contamination check (single home is reviewer-base.md)", id)
 		}
 	}
-	for _, path := range excluded {
-		data, err := os.ReadFile(filepath.Join("..", "..", path))
+	// 组装层面：审查动作注入共享契约、非审查动作不注入。
+	root := promptPackage(t, map[string]string{"quality": "checks"})
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", PreRepairSnapshot: "old"}
+	reviewerActions := []string{"product-review", "qa-review", "start-readiness"}
+	for _, id := range reviewerActions {
+		prompt, err := ComposeActionPrompt(catalog, id, route, "input")
 		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
+			t.Fatal(err)
 		}
-		if strings.Contains(string(data), "任务完整性检查") {
-			t.Fatalf("%s must not carry the reviewer contamination check", path)
+		if !strings.HasPrefix(prompt, "[Shared reviewer contract]\nshared contract\n") {
+			t.Fatalf("%s prompt did not inject the shared reviewer contract:\n%s", id, prompt)
+		}
+	}
+	for _, id := range []string{"requirements-clarification", "development-worker", "qa-execution", "carry", "qa-design"} {
+		prompt, err := ComposeActionPrompt(catalog, id, route, "input")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(prompt, "[Shared reviewer contract]") {
+			t.Fatalf("%s (non-reviewer) prompt wrongly injected the shared reviewer contract:\n%s", id, prompt)
 		}
 	}
 }

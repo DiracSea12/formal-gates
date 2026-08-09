@@ -44,13 +44,17 @@
 ### RQ-003：「任务完整性检查」块去重（P1-C）
 
 - `ComposeActionPrompt` 注入 `[Shared reviewer contract]` + reviewer-base 契约，
-  **仅限审查类动作**：product-review、qa-design、qa-review、start-readiness 四个
-  零上下文审查者动作注入；非审查动作（development-worker、carry、qa-execution、
+  **仅限零上下文审查者动作**：product-review、qa-review、start-readiness 三个动作
+  注入；非审查动作（development-worker、carry、qa-execution、
   requirements-clarification）**不注入**，避免"你是独立审查者、不要编辑仓库文件"
-  的契约段落出现在开发工/执行动作中造成语义矛盾。注入顺序：`[Shared reviewer
-  contract]` 头部在前、action 块随后，与 `ComposeGatePrompt` 块序一致。
-- 从上述四个审查动作提示词删除内联的「任务完整性检查」重复块，reviewer-base 为
-  唯一本体。
+  的契约段落出现在开发工/执行动作中造成语义矛盾。**qa-design 也不注入**——它已不是
+  零上下文审查者，而是设计写者（白盒写测试代码、黑盒写用例文档，见 RQ-011/RQ-013），
+  收到"不要编辑仓库文件"契约（且共享规则优先于动作说明）会与写角色直接矛盾。
+  注入顺序：`[Shared reviewer contract]` 头部在前、action 块随后，与
+  `ComposeGatePrompt` 块序一致。
+- 从 product-review、qa-design、qa-review、start-readiness 四个动作提示词删除内联
+  的「任务完整性检查」重复块（qa-design 虽不注入契约，作为设计写者也不该残留审查者
+  专用块），reviewer-base 为唯一本体。
 - `requirements-clarification` 由主代理交互执行、不是独立审查者，不注入、单独斟酌。
 
 ### RQ-004：formal-flow 与 SKILL 机制重述去重（P1-D）
@@ -158,9 +162,12 @@ qa-execution 跑 development-worker 交付的已有测试，但 caseId 与测试
 
 - **白盒设计阶段独立设计并写测试代码**：白盒设计者从需求+实现独立设计用例，并
   **直接编写结构测试代码**（区别于/不依赖 development-worker 交付的已有测试）。
-  用例文档（四字段：mode/description/procedure/oracle）仍要有，用来**解释用例并
-  作为标 PASS 的依据**——即 caseId 与设计者写的测试之间建立真实对应，执行按用例
-  对应的测试跑。
+  用例文档仍要有（mode/description/procedure/oracle），用来**解释用例并作为标
+  PASS 的依据**——即 caseId 与设计者写的测试之间建立真实对应，执行按用例对应的
+  测试跑。
+- **caseId↔测试绑定（可验证，产品审 P2 处置）**：每条用例文档在对应用例下**写明
+  实现该用例的测试接口名**（白盒设计者写的测试函数），使 CLI 能校验该测试存在且
+  与该用例对应——"测 A 的测试给 B 用例标 PASS"可被发现，验收可观察。
 - **白盒 review 审用例本身的问题 → 给设计代理返工**：review 审查设计出的用例与
   测试是否充分、是否覆盖需求；审出用例本身的问题（覆盖缺失/测试不足/描述不清），
   **返工给白盒设计代理**修订用例/测试，不是直接判死。
@@ -169,11 +176,12 @@ qa-execution 跑 development-worker 交付的已有测试，但 caseId 与测试
   实现；用例/测试本身的问题 → 返工给白盒设计代理。
 
 **核心变化**：白盒 QA 的测试代码由**白盒设计者**编写（而非 development-worker
-交付、白盒只跑）；caseId 与测试建立真实绑定；review 返工给设计、执行返工按问题
-归属（实现→dev、用例/测试→设计）。
+交付、白盒只跑）；caseId 与测试建立真实绑定（用例文档按用例写测试接口名，CLI 可
+验证）；review 返工给设计、执行返工按问题归属（实现→dev、用例/测试→设计）。
 
 ## 非目标
 
 - 不修复任何 P2 项（仅文档化）。
 - 不做旧 run 状态兼容迁移。
-- 不引入新的 QA mode、门或机制。
+- 不引入新的 QA mode 或门（RQ-009/011/012/013 引入的 sha256 完整性、写阻断 hook、
+  增量审查、白盒 QA 新机制为用户明确追加的需求，属范围扩展，不是新增 QA mode/门）。

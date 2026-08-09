@@ -22,3 +22,7 @@ examples/package-validation-demo-output.txt
 
 # Local native CLI build output
 bin/
+
+# Untracked knowledge/backlog files (session-local, not committed)
+P2-BACKLOG.md
+PROMPT-ENGINEERING-KNOWLEDGE.md

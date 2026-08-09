@@ -80,15 +80,12 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
    `references/formal-flow.md`「需求、拆分决定与路线」；完整拆分流程见
    `references/sliced-runs.md`。
 4. **正式开发之前（两段式）。** 先派发 Part 1 产品审（`product-review`），用独立零上
-   下文审查者审已实例化并确认的需求文档：需求本身及其细节是否合理。发现项分级
-   P0/P1/P2。复审规则由 CLI 强制（仅 product-review 与 start-readiness、只有用户可破
-   例）：仅含 P2 → 该轮记录 PASS 且 P2 建议随 PASS 可见、不阻塞，但 P2 建议仍须由用户
-   逐项处置（确认→并入需求/开发范围；驳回→作废）并经 `settle-findings --confirm/
-   --dismiss` 登记后才进入下一步；含 P0/P1 → 记录 FAIL，用户逐项处置，确认的 P0/P1 置
-   位"需重审"、修订需求后必须派发新审查轮返回 PASS（重审前 record-action PASS 被拒），
-   驳回的 P0/P1 作废不阻塞。主代理无破例权；任何破例都须用户显式授权并由 CLI 记录来源。
-   Part 1 全部通过后进入 Part 2，双速调度细节见 `references/formal-flow.md`「开发之
-   前」。用户已拍板的发现项不再重提。产品审不产生终态 FAIL，需求是否成立由用户决定。
+   下文审查者审已实例化并确认的需求文档：需求本身及其细节是否合理。复审规则由 CLI
+   强制、唯一持有在 `references/formal-flow.md`「开发之前」；决策级铁律：①发现项按
+   P0/P1/P2 分级；②仅含 P2 可记录 PASS、含 P0/P1 记录 FAIL；③用户逐项处置，确认→需
+   重审、驳回→作废；④主代理无破例权。Part 1 全部通过后进入 Part 2，双速调度细节见
+   `references/formal-flow.md`「开发之前」。用户已拍板的发现项不再重提。产品审不产生
+   终态 FAIL，需求是否成立由用户决定。
 5. **开发。** 运行 `development-worker` 准备命令，记录开发开始并锁定路线。黑盒 QA 与
    开发并行：开发开始不再要求黑盒 qa-review PASS，黑盒 qa-design/qa-review/返修在独立
    QA 隔离工作区（从基线创建、恒等于基线、不含本次开发代码）中与开发并发推进；每个黑

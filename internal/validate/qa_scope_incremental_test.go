@@ -240,7 +240,7 @@ func TestReviewCompletionAllowsDesignReRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("design re-record after review completion was rejected: %v", err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" {
-		t.Fatalf("design re-record did not pass: %#v", state.Actions["qa-design"])
+	if state.qaDesign("").Status != "PASS" {
+		t.Fatalf("design re-record did not pass: %#v", state.qaDesign(""))
 	}
 }

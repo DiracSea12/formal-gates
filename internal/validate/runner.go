@@ -143,6 +143,21 @@ func ValidateStandaloneGateResult(raw []byte) (StandaloneGateResult, error) {
 	return result, nil
 }
 
+// isReviewerAction reports whether an action is a zero-context reviewer action
+// whose composed prompt carries the shared reviewer contract (RQ-003):
+// product-review、qa-review、start-readiness 三个零上下文审查者动作注入；非审查动作
+// （development-worker、carry、qa-execution、requirements-clarification）不注入，
+// 避免"你是独立审查者、不要编辑仓库文件"的契约段落出现在开发工/执行动作中。
+// qa-design 也不注入：它已是设计写者（白盒写测试代码、黑盒写用例文档，RQ-011/RQ-013），
+// 收到"不要编辑仓库文件"契约会与写角色直接矛盾。
+func isReviewerAction(actionID string) bool {
+	switch actionID {
+	case "product-review", "qa-review", "start-readiness":
+		return true
+	}
+	return false
+}
+
 func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRoute, detail string) (string, error) {
 	action, ok := catalog.Action(actionID)
 	if !ok {
@@ -151,17 +166,24 @@ func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRou
 	if err := validateRoute(route, actionID == "carry"); err != nil {
 		return "", err
 	}
-	parts := []string{
-		fmt.Sprintf("[Action: %s]\n%s", action.ID, action.Content),
-		currentRequirementBlock(route),
+	parts := []string{}
+	// RQ-003：审查类动作注入共享审查者契约，块序与门提示词一致（[Shared reviewer
+	// contract] 头部在前、action 块随后）；其余动作不注入。
+	if isReviewerAction(actionID) {
+		parts = append(parts, "[Shared reviewer contract]\n"+catalog.Base)
 	}
+	parts = append(parts, fmt.Sprintf("[Action: %s]\n%s", action.ID, action.Content))
+	requirement := currentRequirementBlock(route)
 	if actionID == "qa-review" {
-		parts[1] += "\nworktree: " + route.Worktree
-	} else {
-		parts = append(parts, currentChangeBlock(route, actionID == "qa-execution"))
+		requirement += "\nworktree: " + route.Worktree
+	}
+	parts = append(parts, requirement)
+	if actionID != "qa-review" {
+		change := currentChangeBlock(route, actionID == "qa-execution")
 		if route.PreRepairSnapshot != "" {
-			parts[2] += "\npre-repair snapshot: " + route.PreRepairSnapshot
+			change += "\npre-repair snapshot: " + route.PreRepairSnapshot
 		}
+		parts = append(parts, change)
 	}
 	if strings.TrimSpace(detail) != "" {
 		parts = append(parts, "[Action input]\n"+strings.TrimSpace(detail))
@@ -180,7 +202,7 @@ func actionResultContract(actionID, dispatchID string) string {
 	}
 	switch actionID {
 	case "qa-design":
-		return prefix + "Return only ordered semantic cases. Each case must contain exactly one mode (blackbox or whitebox), description, procedure, and oracle. blackbox covers real QA: verify the requirement by actually using the product through a documented public entry at execution time; whitebox covers structure tests (unit, system, integration) whose sufficiency depends on the implementation and is designed after development by reading it. Do not assign case IDs; the CLI assigns them."
+		return prefix + "Return only ordered semantic cases. Each case must contain exactly one mode (blackbox or whitebox), description, procedure, and oracle. blackbox covers real QA: verify the requirement by actually using the product through a documented public entry at execution time; whitebox covers structure tests (unit, system, integration) whose sufficiency depends on the implementation and is designed after development by reading it. For every whitebox case, independently design and write the structural test code you deliver, and name the exact test interface (test function) implementing that case: the CLI records it with --test and rejects the case if the named test is not present in your delivered test code, so the case ID and the executed test are truly bound. Do not assign case IDs; the CLI assigns them."
 	case "qa-execution":
 		return prefix + "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. blackbox cases run against the built product on the main worktree via a documented public entry; whitebox cases run their direct-owner structure tests. Return a runtime error separately if execution could not run."
 	case "qa-review":

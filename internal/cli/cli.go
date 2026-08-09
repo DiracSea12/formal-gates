@@ -169,13 +169,14 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		req := fs.String("requirement", "", "requirement source path")
 		vcs := fs.String("vcs", "", "external VCS name")
 		base := fs.String("base-snapshot", "", "optional native base identity to verify")
+		currentSnapshot := fs.String("current-snapshot", "", "explicit native identity to adopt as the current snapshot (must be an ancestor or equal of the native head); defaults to the native head (RQ-010)")
 		artifacts := stringListFlag{}
 		fs.Var(&artifacts, "requirement-artifact", "additional requirement or solution document; repeat as needed")
 		retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, RetainedOverall: *retainedOverall})
+		state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall})
 		return printValue(streams.Stdout, state, err)
 	case "show":
 		fs := newFlagSet("workflow show", streams)
@@ -338,10 +339,12 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		mode := fs.String("mode", "", "blackbox or whitebox for qa-design/qa-review")
 		userRequested := fs.Bool("user-requested", false, "user explicitly requests an override (e.g. re-review an already-passed round)")
 		userReason := fs.String("user-reason", "", "user reason for the override")
+		var scope stringListFlag
+		fs.Var(&scope, "scope", "requirement item to include in an incremental product-review / start-readiness; repeat as needed (RQ-012)")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		prompt, err := validate.PrepareAction(*root, *pkg, *runID, *action, *mode, *userRequested, *userReason)
+		prompt, err := validate.PrepareAction(*root, *pkg, *runID, *action, *mode, *userRequested, *userReason, scope...)
 		if err != nil {
 			return 1, err
 		}
@@ -490,10 +493,14 @@ func runRecordAction(args []string, streams IO) (int, error) {
 	userRequested := fs.Bool("user-requested", false, "user explicitly requests an override of the review rule (records the authorization source)")
 	userReason := fs.String("user-reason", "", "user reason for the override")
 	findings := newFindingFlags(fs)
+	items := []validate.ReviewItemInput{}
+	fs.Var(&reviewItemStart{items: &items}, "item", "start a requirement item decision for the incremental review (RQ-012)")
+	fs.Var(&reviewItemField{items: &items, field: "item-status"}, "item-status", "PASS or FAIL for the current review item")
+	fs.Var(&reviewItemField{items: &items, field: "item-reason"}, "item-reason", "required finding reason for a FAIL item")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings, *userRequested, *userReason)
+	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings, *userRequested, *userReason, items...)
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -525,6 +532,7 @@ func runQADesign(args []string, streams IO) (int, error) {
 	fs.Var(&caseField{cases: &cases, field: "mode"}, "mode", "blackbox or whitebox for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "procedure"}, "procedure", "procedure for the current QA case")
 	fs.Var(&caseField{cases: &cases, field: "oracle"}, "oracle", "oracle for the current QA case")
+	fs.Var(&caseField{cases: &cases, field: "test"}, "test", "whitebox test interface name implementing the current QA case (RQ-013 binding; required for whitebox cases)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -924,11 +932,14 @@ func (f *caseField) Set(v string) error {
 		return fmt.Errorf("duplicate --%s for current QA case", f.field)
 	}
 	p := &(*f.cases)[len(*f.cases)-1]
-	if f.field == "mode" {
+	switch f.field {
+	case "mode":
 		p.Mode = v
-	} else if f.field == "procedure" {
+	case "procedure":
 		p.Procedure = v
-	} else {
+	case "test":
+		p.Test = v
+	default:
 		p.Oracle = v
 	}
 	f.assignedGroup = len(*f.cases)
@@ -1001,6 +1012,38 @@ func (f *qaResultField) Set(v string) error {
 		p.OracleResult = v
 	}
 	f.assignedGroup = len(*f.results)
+	return nil
+}
+
+type reviewItemStart struct{ items *[]validate.ReviewItemInput }
+
+func (f *reviewItemStart) String() string { return "" }
+func (f *reviewItemStart) Set(v string) error {
+	*f.items = append(*f.items, validate.ReviewItemInput{Key: v})
+	return nil
+}
+
+type reviewItemField struct {
+	items         *[]validate.ReviewItemInput
+	field         string
+	assignedGroup int
+}
+
+func (f *reviewItemField) String() string { return "" }
+func (f *reviewItemField) Set(v string) error {
+	if len(*f.items) == 0 {
+		return fmt.Errorf("review item field must follow --item")
+	}
+	if f.assignedGroup == len(*f.items) {
+		return fmt.Errorf("duplicate --%s for current review item", f.field)
+	}
+	p := &(*f.items)[len(*f.items)-1]
+	if f.field == "item-status" {
+		p.Status = v
+	} else {
+		p.Reason = v
+	}
+	f.assignedGroup = len(*f.items)
 	return nil
 }
 

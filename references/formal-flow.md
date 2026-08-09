@@ -98,8 +98,8 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 - 后续新增需要用户明确指示；开发开始之后不能再加入 QA。
 - 分片 >= 2 时保留总任务实例自动附加合并门与合并 QA，不涉常规路线选择。
 
-重复 prepare（问题 6）：对同一 action/gate 重复 prepare 会生成 attempt+1 的新派发，
-旧的 OPEN/CLAIMED 派发静默标 STALE（源快照失效），以当前返回的派发 ID 为准。
+重复 prepare：对同一 action/gate 重复 prepare 会生成 attempt+1 的新派发，旧的
+OPEN/CLAIMED 派发静默标 STALE（源快照失效），以当前返回的派发 ID 为准。
 
 ## 开发之前
 
@@ -111,16 +111,9 @@ Part 2。Part 2 双速调度：高置信要拆 → 呈现拆分建议、用户�
 这个循环不消耗开发后的审查轮次。
 
 黑盒 QA 与开发**并行**：路线确认后开发立即开始、不等待黑盒 QA review；黑盒
-qa-design/qa-review/返修在独立的 **QA 隔离工作区**中进行（从基线快照创建、恒等于基
-线、始终不含本次开发代码），黑盒设计/review 派发前先用 `workflow qa-worktree` 登记
-（登记时校验其原生标识 == 基线、且注入的当前需求文档/验收产物 revision 与 run 登记
-一致）。快照要求**开发完成 且 黑盒 qa-review PASS 两边都完成**；黑盒 review PASS 后
-隔离工作区自动清空、待下一设计轮重建。白盒 QA 无此限制（开发后读实现，在主工作区）。
-隔离映射按各 VCS 原生机制由 host 创建：Git 为从基线分支的 linked worktree、SVN 为
-签出到基线版本的工作副本（身份校验取 BASE 版本级，注入产生的 svnversion M 后缀不影
-响）、P4 为同步到基线 changelist 的客户端工作区。`workflow resume` 会重校验隔离工作
-区 == 基线（仅真实漂移才需用户确认/重建）；`workflow abort` 后由 host 移除隔离工作
-区。
+qa-design/qa-review/返修在独立的 **QA 隔离工作区**（从基线快照创建、恒等于基线、始终
+不含本次开发代码）中推进，快照要求**开发完成 且 黑盒 qa-review PASS 两边都完成**。
+隔离工作区机制本体（创建/登记/校验/清空/重建）见 SKILL 第 5-6 步，本段只列命令形式。
 
 ```bash
 # Part 1 产品审：承接需求细节澄清，审已实例化的需求文档，只评产品/策划层面。
@@ -159,7 +152,7 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 基线创建（Git linked worktree / SVN 基线版本工作副本 / P4 基线 changelist 客户端），
 # 并把当前已确认需求文档/验收产物注入其中。登记时 CLI 校验其原生标识 == 基线、且注入
 # 的文档 revision 与 run 登记一致（防 host 遗忘刷新）。黑盒 review PASS 后自动清空、
-# 下一设计轮重建。
+# 下一设计轮重建（决策本体见 SKILL 第 5 步）。
 formal-gates workflow qa-worktree --root <repo> --package-root <package> \
   --run-id <id> --worktree <path>
 
@@ -201,15 +194,15 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action development-worker
 
-# 记录开发后或修复后的不可变标识。快照要求开发完成 且 黑盒 qa-review PASS 两边都完成；
-# 黑盒 review 未 PASS 时快照被挡，只有用户显式授权可手动放行（--user-requested +
-# --reason，记录授权来源，非自动）。
+# 记录开发后或修复后的不可变标识。快照门（开发完成 且 黑盒 qa-review PASS 两边都完成）
+# 机制本体见 SKILL 第 6 步；黑盒 review 未 PASS 时快照被挡，只有用户显式授权可手动放行
+# （--user-requested + --reason，记录授权来源，非自动）。
 formal-gates workflow snapshot --root <repo> --package-root <package> \
   --run-id <id> --dispatch <development-or-repair-dispatch-id> \
   [--user-requested --reason '<manual blackbox-gate release reason>']
 ```
 
-开发派发认领（问题 2a）：开发/修复派发是 reviewer-required，认领要求原生 HEAD 与当前
+开发派发认领：开发/修复派发是 reviewer-required，认领要求原生 HEAD 与当前
 快照一致；worker 一旦提交 HEAD 即前进，所以 `workflow claim-dispatch` 对
 `development-worker` 派发放宽——当前原生 HEAD 是派发源快照的后代（或相等）即允许认领
 （覆盖 worker 已提交的情形），随后 `workflow snapshot` 成功。其余派发（审查、QA 等）
@@ -218,11 +211,11 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 
 ## 开发后审查
 
-**QA 执行重跑先记 scope 决策。** 某 mode 的 QA 执行是**重跑**（该 mode 已存在更早快照的权威
-执行结果，如修复快照推进后上一轮 FAIL 保留、或保留跨门的 PASS）时，host 在进入执行前 SHALL
-询问用户"全量重跑 vs 只跑受影响"并给出推荐；CLI 强制——`prepare-action qa-execution` 前该
-mode 必须已记录覆盖本次重跑的 scope 决策（`BaseSnapshot` 匹配上一轮权威结果快照），否则拒绝
-prepare。首次执行（无更早结果）不要求 scope、默认全量。黑盒/白盒各自独立、按 mode 记录与校验。
+**QA 执行重跑先记 scope 决策。** 某 mode 的 QA 执行是**重跑**（该 mode 已存在更早快照的
+权威执行结果）时，host 在进入执行前询问"全量重跑 vs 只跑受影响"并给出推荐；CLI 强制
+`prepare-action qa-execution` 前该 mode 必须已记录覆盖本次重跑的 scope 决策，否则拒绝
+prepare；首次执行不要求、默认全量。黑盒/白盒各自独立、按 mode 记录与校验。scope 决策
+机制本体（推荐、AFFECTED 子集判定与 CARRY_FORWARD 沿用）见 SKILL 第 7-8 步。
 
 ```bash
 # 重跑前记录 scope 决策。FULL 全量重跑该 mode 全部已批准用例；AFFECTED 只重跑 host 综合
@@ -237,7 +230,7 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-execution
 formal-gates workflow prepare-gate --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
-# 各阶段"应并行集"（RQ-014 规则驱动定义，供 CLI 并行检测提醒）：
+# 各阶段"应并行集"（规则驱动定义，供 CLI 并行检测提醒）：
 # - 开发后审查阶段：黑盒 QA 执行 + 白盒 QA + 各已选门，全部并行。
 # - 开发前两段式：Part 1 产品审 → Part 2 start-readiness（顺序依赖，不并行）。
 # - 黑盒 QA 设计/review：与开发并行（隔离工作区）。
@@ -297,9 +290,8 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 # SEAL-USER 授权。
 # Git run 在基线→当前含 >1 条提交时，seal 自动把该范围压缩为单条提交（git reset
 # --soft 基线 + 重新提交，保留最终树），作为 seal 的最后一步 VCS 操作；压缩前要求工作
-# 树干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩后的提交消息由主代理按实际修改
-# 内容编写，经 --squash-message 传入。被压缩的中间提交成为 dangling（接受此审计性影
-# 响）；durable 审计证据为最终树与压缩前一致 + 摘要记录。
+# 树干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩消息由主代理经 --squash-message
+# 传入（机制本体见 SKILL 第 9 步）。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
   [--skip <selected-non-passing-gate> ...] [--user-requested] \
   [--squash-message '<combined commit message>']
@@ -321,14 +313,10 @@ formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> 
 果不确定的修复，一律用独立继承判定。只重跑标记为 `RERUN` 的门，给它完整的基线到当前
 比较。
 
-QA 重跑 scope 推荐（RQ-008，host 行为）：重跑询问时 host 依据修复 diff 评估影响面并给出
-推荐，且 SHALL **显式提醒**用户"只跑受影响"的含义——包括上一轮**挂掉的**用例 + host（AI）
-判定可能受本轮修复**连带影响**的既往通过用例，子集由 host 综合判定、不要求用户逐项确认。
-推荐由 AI 按实际情况综合判断、**稍保守**（不确定时倾向 FULL），不设机械规则：修复范围窄、
-影响可靠有界、且不涉及共享 API / 公开行为 / 配置 / 依赖 / 跨门职责 → 倾向推荐 AFFECTED
-并展示拟重跑子集；涉及共享面、因果不确定或无法界定 → 倾向推荐 FULL。选择 AFFECTED 时提醒
-用户：名单外（继承）用例本轮不验证，若被修复连带破坏可能漏检，风险由本次选择承担。AFFECTED
-子集在派发前定死，执行者只执行该子集、不得在执行中自行补跑/改判/改选名单外用例（RQ-010）。
+QA 重跑 scope 推荐（host 行为）：重跑询问时 host 依据修复 diff 综合判断影响面、**稍保守**
+地给出推荐，并 SHALL 显式提醒"只跑受影响"的含义（上一轮挂掉用例 + 可能受本轮连带影响的
+既往通过用例）与漏检风险；AFFECTED 子集在派发前定死，执行者只执行该子集、不得在执行中
+自行补跑/改判/改选名单外用例。推荐机制本体见 SKILL 第 8 步。
 
 Seal 跳过规则（SKILL 第 9 步的执行机制）：
 - PENDING 结果直接阻塞 Seal；RUNTIME_ERROR 需要用户手动跳过；QA FAIL 或 P0/P1 必须先

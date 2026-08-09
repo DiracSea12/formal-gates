@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -35,7 +36,7 @@ func perModeReadyDelivery(t *testing.T, root, pkg, id string) RunState {
 	}
 	// 白盒设计 + 审查 PASS。
 	wbDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "go test ./...", Oracle: "pass"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +81,9 @@ func TestLegacyQAExecutionAndPriorMigrateToMergedKey(t *testing.T) {
 	}
 	legacy.QAExecutionByMode = nil
 	legacy.PriorQAExecutionByMode = nil
+	// RQ-009：旧状态文件（无 stateIntegrity 字段）跳过完整性校验；模拟旧格式时一并清空该
+	// 字段，使文件以合法旧形态加载，而不是被当作 CLI 写入后被手工改写拒绝。
+	legacy.StateIntegrity = ""
 	data, err := json.MarshalIndent(legacy, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +117,7 @@ func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
 	// 白盒设计轮（改写白盒用例）：不得清除黑盒执行结果。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
 	var err error
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure revised", Procedure: "go test ./...", Oracle: "pass"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure revised", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructureRevised"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,5 +228,143 @@ func TestPerModeIndependentBlockerAndSealParsing(t *testing.T) {
 	// 白盒 PASS 独立存续：黑盒 FAIL 记录不清白盒结果，返修输入仍含黑盒失败原因。
 	if !strings.Contains(repairInput(state), "QA FAIL") {
 		t.Fatalf("repair input lost the blackbox FAIL finding: %s", repairInput(state))
+	}
+}
+
+// TestDualModeReviewDesignFullyDecoupled covers RQ-001: blackbox qa-review FAIL
+// resets only the blackbox qa-design to PENDING and never touches the whitebox
+// design/review; the whitebox review can still be prepared and recorded
+// independently (each mode's review/design authoritative results are stored and
+// judged per mode).
+func TestDualModeReviewDesignFullyDecoupled(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "dual-mode-decoupled"), "custom", []string{blackboxQAID, whiteboxQAID, "quality"})
+	worktree := createQAWorktree(t, root, state)
+	var err error
+	state, err = RegisterQAWorktree(root, pkg, state.RunID, worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 黑盒设计 PASS、白盒设计 PASS。
+	bbDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "blackbox")
+	state, err = RecordQADesign(root, pkg, state.RunID, bbDesign, []QACaseInput{{Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the public CLI", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wbDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
+	state, err = RecordQADesign(root, pkg, state.RunID, wbDesign, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.qaDesign("blackbox").Status != "PASS" || state.qaDesign("whitebox").Status != "PASS" {
+		t.Fatalf("per-mode designs not recorded: blackbox=%#v whitebox=%#v", state.qaDesign("blackbox"), state.qaDesign("whitebox"))
+	}
+	// 黑盒 review FAIL：只重置黑盒设计为 PENDING，白盒设计/审查判定不受影响。
+	bbReview := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "bb-decoupled-reviewer", "blackbox")
+	state, err = RecordQAReview(root, pkg, state.RunID, bbReview, []QAReviewInput{{CaseID: state.qaModeCases("blackbox")[0].ID, Outcome: "FAIL", Reason: "coverage gap"}}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.qaReview("blackbox").Status != "FAIL" || state.qaDesign("blackbox").Status != "PENDING" {
+		t.Fatalf("blackbox FAIL did not reset only the blackbox design: review=%#v design=%#v", state.qaReview("blackbox"), state.qaDesign("blackbox"))
+	}
+	if state.qaDesign("whitebox").Status != "PASS" {
+		t.Fatalf("blackbox FAIL reset the whitebox design: %#v", state.qaDesign("whitebox"))
+	}
+	if state.qaReview("whitebox").Status != "" && state.qaReview("whitebox").Status != "PENDING" {
+		t.Fatalf("blackbox FAIL touched the whitebox review: %#v", state.qaReview("whitebox"))
+	}
+	// 白盒 review 仍可独立准备并记录 PASS（RQ-001：任一 mode 的 prepare-action
+	// qa-review 只受本 mode 的 review/design 状态约束）。
+	wbReview := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "wb-decoupled-reviewer", "whitebox")
+	wbDecisions := make([]QAReviewInput, 0, 1)
+	for _, testCase := range state.qaModeCases("whitebox") {
+		wbDecisions = append(wbDecisions, QAReviewInput{CaseID: testCase.ID, Outcome: "PASS"})
+	}
+	state, err = RecordQAReview(root, pkg, state.RunID, wbReview, wbDecisions, "", nil)
+	if err != nil {
+		t.Fatalf("whitebox review blocked after blackbox FAIL (RQ-001): %v", err)
+	}
+	if state.qaReview("whitebox").Status != "PASS" || state.qaDesign("whitebox").Status != "PASS" {
+		t.Fatalf("whitebox review did not pass independently: review=%#v design=%#v", state.qaReview("whitebox"), state.qaDesign("whitebox"))
+	}
+}
+
+// TestPerModeCarryInheritsPreRepairPASS covers RQ-002: after a repair snapshot,
+// main-agent carry inherits every selected QA mode whose pre-repair execution
+// PASS is preserved (direct per-mode read, not current-snapshot-gated), rebinding
+// each mode's result snapshot to the current snapshot.
+func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := perModeReadyDelivery(t, root, pkg, "per-mode-carry")
+	bbCases := state.qaModeCases("blackbox")
+	wbCases := state.qaModeCases("whitebox")
+	// 两个 mode 均 PASS 执行 + 一个门 FAIL → 波次完成 → 修复快照。
+	state = recordModeQA(t, root, pkg, state, "blackbox", passingExecution(bbCases))
+	state = recordModeQA(t, root, pkg, state, "whitebox", passingExecution(wbCases))
+	state = recordGateResult(t, root, pkg, state, "quality", "pm-carry-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	if state.CompletedReviewWaves != 1 {
+		t.Fatalf("wave 1 count=%d", state.CompletedReviewWaves)
+	}
+	state = advanceRepair(t, root, pkg, state, "pm-carry-repair")
+	if state.PreRepairSnapshot == "" {
+		t.Fatalf("repair did not set the pre-repair snapshot")
+	}
+	// 修复快照推进后，两个 mode 的 PASS 都保留在各自 mode 键（Snapshot == PreRepairSnapshot），
+	// 均可被 main-agent Carry 继承（RQ-002 直取该 mode，不要求 current snapshot）。
+	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{blackboxQAID, whiteboxQAID}) {
+		t.Fatalf("eligible carry results=%v want=[blackbox whitebox]", got)
+	}
+	state, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.qaExecution("blackbox").Status != "PASS" || state.qaExecution("whitebox").Status != "PASS" {
+		t.Fatalf("carry lost per-mode PASS status: blackbox=%#v whitebox=%#v", state.qaExecution("blackbox"), state.qaExecution("whitebox"))
+	}
+	if state.qaExecution("blackbox").Snapshot != state.CurrentSnapshot || state.qaExecution("whitebox").Snapshot != state.CurrentSnapshot {
+		t.Fatalf("carry did not rebind per-mode QA snapshots: blackbox=%#v whitebox=%#v", state.qaExecution("blackbox"), state.qaExecution("whitebox"))
+	}
+}
+
+// TestLegacyStateWithoutPerModeReviewDesignFieldsErrors covers RQ-001: a run
+// state file that lacks the per-mode qaReviewByMode / qaDesignByMode fields (the
+// old format, or any schema mismatch) fails to load with a clear format error
+// instead of silently degrading to empty/default state.
+func TestLegacyStateWithoutPerModeReviewDesignFieldsErrors(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "old-format-error")
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	delete(decoded, "qaReviewByMode")
+	delete(decoded, "qaDesignByMode")
+	rewritten, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(RunStatePath(root, state.RunID), append(rewritten, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRunState(root, state.RunID); err == nil || !strings.Contains(err.Error(), "does not match the current schema") {
+		t.Fatalf("legacy state without per-mode review/design fields did not error clearly: %v", err)
+	}
+	// 顺带验证严格解码拒绝未知字段（任何 schema 不符均报错）。
+	state2 := mustStart(t, root, pkg, "unknown-field-error")
+	var decoded2 map[string]any
+	if err := json.Unmarshal([]byte(stateBytes(t, root, state2.RunID)), &decoded2); err != nil {
+		t.Fatal(err)
+	}
+	decoded2["someUnknownField"] = "x"
+	rewritten2, err := json.Marshal(decoded2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(RunStatePath(root, state2.RunID), append(rewritten2, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRunState(root, state2.RunID); err == nil || !strings.Contains(err.Error(), "does not match the current schema") {
+		t.Fatalf("state with an unknown field did not error clearly: %v", err)
 	}
 }

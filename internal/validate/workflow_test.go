@@ -170,7 +170,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "PASS" || state.Dispatches[second].Status != "COMPLETED" {
+	if state.qaReview("").Status != "PASS" || state.Dispatches[second].Status != "COMPLETED" {
 		t.Fatalf("review result was not derived and completed: %#v", state)
 	}
 	if _, err := RecordQAReview(root, pkg, state.RunID, second, nil, "", nil); err == nil {
@@ -235,7 +235,7 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "FAIL" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "FAIL" {
+	if state.qaReview("").Status != "FAIL" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "FAIL" {
 		t.Fatalf("per-case results were not retained: %#v", state.allQACases())
 	}
 	designPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, "")
@@ -273,8 +273,8 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, []QAReviewInput{{CaseID: state.qaCases("")[1].ID, Outcome: "PASS"}}, "", nil)
-	if err != nil || state.Actions["qa-review"].Status != "PASS" {
-		t.Fatalf("incremental review did not pass: %v %#v", err, state.Actions["qa-review"])
+	if err != nil || state.qaReview("").Status != "PASS" {
+		t.Fatalf("incremental review did not pass: %v %#v", err, state.qaReview(""))
 	}
 }
 
@@ -429,7 +429,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "FAIL" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "PASS" {
+	if state.qaReview("").Status != "FAIL" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "PASS" {
 		t.Fatalf("set-level finding changed valid decisions: %#v", state)
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
@@ -441,12 +441,12 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 		t.Fatal("rejected QA rework changed state")
 	}
 	revised := baselineCases()
-	revised = append(revised, QACaseInput{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run direct failure-path tests", Oracle: "all failure-path tests pass"})
+	revised = append(revised, QACaseInput{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run the delivered failure-path test", Oracle: "the test passes", Test: "TestWhiteboxFailurePaths"})
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" || state.qaCases("")[2].ReviewStatus != "PENDING" {
+	if state.qaDesign("").Status != "PASS" || state.qaCases("")[2].ReviewStatus != "PENDING" {
 		t.Fatalf("corrected QA rework did not reopen review: %#v", state)
 	}
 }
@@ -472,8 +472,8 @@ func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "FAIL" {
-		t.Fatalf("set-level P1 finding did not fail the review action: %#v", state.Actions["qa-review"])
+	if state.qaReview("").Status != "FAIL" {
+		t.Fatalf("set-level P1 finding did not fail the review action: %#v", state.qaReview(""))
 	}
 	for _, testCase := range state.allQACases() {
 		if testCase.ReviewStatus != "PASS" {
@@ -499,7 +499,7 @@ func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
 func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "remove-duplicate"), "full", nil)
-	cases := append(baselineCases(), QACaseInput{Mode: "whitebox", Description: "duplicate direct coverage", Procedure: "run overlapping direct checks", Oracle: "the same rules pass"})
+	cases := append(baselineCases(), QACaseInput{Mode: "whitebox", Description: "duplicate direct coverage", Procedure: "run the delivered duplicate test", Oracle: "the test passes", Test: "TestWhiteboxDuplicate"})
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, cases, "")
 	if err != nil {
@@ -515,7 +515,7 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("removal-only duplicate correction was rejected: %v", err)
 	}
-	if len(state.allQACases()) != 2 || state.Actions["qa-review"].Status != "PENDING" {
+	if len(state.allQACases()) != 2 || state.qaReview("").Status != "PENDING" {
 		t.Fatalf("removal-only correction did not retain approvals: %#v", state)
 	}
 	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "duplicate-recheck-reviewer")
@@ -523,8 +523,8 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("set-only QA recheck was rejected: %v", err)
 	}
-	if state.Actions["qa-review"].Status != "PASS" {
-		t.Fatalf("set-only QA recheck did not approve the correction: %#v", state.Actions["qa-review"])
+	if state.qaReview("").Status != "PASS" {
+		t.Fatalf("set-only QA recheck did not approve the correction: %#v", state.qaReview(""))
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatalf("approved removal-only correction did not unlock development: %v", err)
@@ -1121,7 +1121,13 @@ func TestRunStateRecordsPerGateActionPromptHashes(t *testing.T) {
 		}
 	}
 	for _, action := range catalog.Actions {
-		if state.PromptHashes["action:"+action.ID] != promptContentHash(action.Content) {
+		// RQ-003：注入审查者动作的组装提示词含共享契约（base），其哈希与门对称地计入 base；
+		// 非审查动作只哈希自身内容。
+		want := promptContentHash(action.Content)
+		if isReviewerAction(action.ID) {
+			want = composedActionPromptHash(catalog, action)
+		}
+		if state.PromptHashes["action:"+action.ID] != want {
 			t.Fatalf("action %s prompt hash missing", action.ID)
 		}
 	}
@@ -1134,7 +1140,11 @@ func TestOldRunStateWithoutPromptHashesLoadsCompatible(t *testing.T) {
 	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
 		t.Fatal(err)
 	}
+	// 模拟旧状态：无 promptHashes（运行期哈希记录出现之前的格式）。RQ-009 规定旧状态文件
+	// （无 stateIntegrity 字段）跳过完整性校验，故一并去掉该字段，使旧状态以"无校验字段"的
+	// 合法旧形态加载，而不是被当作"CLI 写入后被手工改写"拒绝。
 	delete(decoded, "promptHashes")
+	delete(decoded, "stateIntegrity")
 	rewritten, err := json.Marshal(decoded)
 	if err != nil {
 		t.Fatal(err)
@@ -1596,8 +1606,8 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" || !strings.Contains(state.Actions["qa-design"].Message, "切片基本独立") {
-		t.Fatalf("merge QA zero-case design not traced: %#v", state.Actions["qa-design"])
+	if state.qaDesign("").Status != "PASS" || !strings.Contains(state.qaDesign("").Message, "切片基本独立") {
+		t.Fatalf("merge QA zero-case design not traced: %#v", state.qaDesign(""))
 	}
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "merge-qa-review")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, nil, "", nil)
@@ -1681,8 +1691,8 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" {
-		t.Fatalf("blackbox design did not pass: %#v", state.Actions["qa-design"])
+	if state.qaDesign("").Status != "PASS" {
+		t.Fatalf("blackbox design did not pass: %#v", state.qaDesign(""))
 	}
 
 	whitebox := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-whitebox-only"), "custom", []string{whiteboxQAID})
@@ -1698,12 +1708,12 @@ func TestBlackboxWhiteboxOptionalityInRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	designDispatch = prepareDispatch(t, root, pkg, whitebox.RunID, "qa-design", "whitebox")
-	whitebox, err = RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	whitebox, err = RecordQADesign(root, pkg, whitebox.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatalf("whitebox design after development failed: %v", err)
 	}
-	if whitebox.Actions["qa-design"].Status != "PASS" {
-		t.Fatalf("whitebox design did not pass: %#v", whitebox.Actions["qa-design"])
+	if whitebox.qaDesign("whitebox").Status != "PASS" {
+		t.Fatalf("whitebox design did not pass: %#v", whitebox.qaDesign("whitebox"))
 	}
 
 	full := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "qa-full"), "full", nil)
@@ -1930,7 +1940,7 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 		t.Fatal(err)
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1939,7 +1949,9 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	// RQ-001：单模式白盒 run 的 design/review 存于 whitebox mode 键，qa-execution 按同
+	// mode 派发。
+	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "whitebox")
 	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.allQACases()), "")
 	if err != nil {
 		t.Fatal(err)
@@ -1981,7 +1993,7 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	// 开发后白盒设计：RQ-012 下白盒设计轮只增补白盒用例（写进白盒自己的列表），既有黑盒
 	// 用例（含 review PASS 状态）在各自列表中原样保留。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2105,14 +2117,14 @@ func TestFastPathBlackboxDesignParallelToStartReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-design"].Status != "PASS" || len(state.allQACases()) != 1 {
-		t.Fatalf("fast-path design not recorded: %#v", state.Actions["qa-design"])
+	if state.qaDesign("").Status != "PASS" || len(state.allQACases()) != 1 {
+		t.Fatalf("fast-path design not recorded: %#v", state.qaDesign(""))
 	}
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
-	if state.Actions["qa-design"].Status != "PASS" {
-		t.Fatalf("fast-path design lost after route confirmation: %#v", state.Actions["qa-design"])
+	if state.qaDesign("").Status != "PASS" {
+		t.Fatalf("fast-path design lost after route confirmation: %#v", state.qaDesign(""))
 	}
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "fast-reviewer")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
@@ -2139,8 +2151,8 @@ func TestFastPathDesignDiscardedWhenRouteOmitsBlackbox(t *testing.T) {
 	state = recordReadiness(t, root, pkg, state)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{whiteboxQAID})
-	if state.Actions["qa-design"].Status != "PENDING" || len(state.allQACases()) != 0 {
-		t.Fatalf("fast-path design not discarded on a route without blackbox QA: %#v", state.Actions["qa-design"])
+	if state.qaDesign("").Status != "PENDING" || len(state.allQACases()) != 0 {
+		t.Fatalf("fast-path design not discarded on a route without blackbox QA: %#v", state.qaDesign(""))
 	}
 }
 
@@ -2443,7 +2455,7 @@ func prepareAndClaim(t *testing.T, root, pkg, runID, target, reviewer string, mo
 }
 
 func baselineCases() []QACaseInput {
-	return []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"}, {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"}}
+	return []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}, {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"}}
 }
 
 func passingReviewDecisions(state RunState) []QAReviewInput {
@@ -2472,6 +2484,10 @@ func workflowFixture(t *testing.T) (string, string) {
 	// 测试仓库与实际仓库一致地忽略运行期临时状态：否则 .gates/tmp/ 会被误跟踪进
 	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。
 	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n")
+	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，使白盒用例的
+	// Test 绑定（CLI 校验测试存在）可被真实解析命中。见 whiteboxDeliveredTestCode
+	//（whitebox_binding.go）。
+	writeTestFile(t, filepath.Join(root, "whitebox_delivered_test.go"), whiteboxDeliveredTestCode)
 	initializeGit(t, root)
 	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
 }
@@ -2677,8 +2693,8 @@ func TestZeroCaseBlackboxReviewPassAllowsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "PASS" {
-		t.Fatalf("empty-set blackbox review did not pass: %#v", state.Actions["qa-review"])
+	if state.qaReview("").Status != "PASS" {
+		t.Fatalf("empty-set blackbox review did not pass: %#v", state.qaReview(""))
 	}
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-zero.txt"), "delivery\n")
@@ -2710,8 +2726,8 @@ func TestZeroCaseBlackboxReviewPassAllowsQAExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "PASS" {
-		t.Fatalf("empty-set blackbox review did not pass: %#v", state.Actions["qa-review"])
+	if state.qaReview("").Status != "PASS" {
+		t.Fatalf("empty-set blackbox review did not pass: %#v", state.qaReview(""))
 	}
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-zero-exec.txt"), "delivery\n")
@@ -2752,8 +2768,8 @@ func TestZeroCaseBlackboxSnapshotBlockedBeforeReviewPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Actions["qa-review"].Status != "PENDING" {
-		t.Fatalf("qa-review should be PENDING after an empty-set design: %#v", state.Actions["qa-review"])
+	if state.qaReview("").Status != "PENDING" {
+		t.Fatalf("qa-review should be PENDING after an empty-set design: %#v", state.qaReview(""))
 	}
 	developmentDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	writeTestFile(t, filepath.Join(root, "delivery-zero-blocked.txt"), "delivery\n")
@@ -3084,7 +3100,7 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "design-rerecord"), "full", nil)
 	// 首次设计只记录部分用例。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"}}, "")
+	state, err := RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3094,7 +3110,7 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 	// review 派发尚未准备：可继续调用 qa-design 追加/更新用例集（保留既有用例、增量补全）。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
-		{Mode: "whitebox", Description: "direct rules pass", Procedure: "run direct-owner automated checks", Oracle: "all checks pass"},
+		{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectRules"},
 		{Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"},
 	}, "")
 	if err != nil {
@@ -3145,7 +3161,7 @@ func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
 	}
 	// 白盒设计轮只动白盒列表：黑盒用例（含 review PASS 状态）不得被清掉。
 	whiteboxDesign := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, whiteboxDesign, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run unit tests", Oracle: "pass"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, whiteboxDesign, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

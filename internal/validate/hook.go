@@ -44,6 +44,13 @@ func Hook(payload []byte) (HookDecision, error) {
 		return HookDecision{}, err
 	}
 
+	// RQ-011 主代理/审查类代理写阻断：对代码与 run 状态的直接写入（Edit/Write/MultiEdit、
+	// git commit、写文件 Bash）在活动正式 run 下按调用者身份阻断；formal-gates CLI 命令
+	// 与只读命令放行，交由既有命令级校验继续处理。
+	if decision, handled := decideWriteBlockValue(decoded); handled {
+		return decision, nil
+	}
+
 	command := hookCommand(decoded)
 	if strings.TrimSpace(command) == "" {
 		return allowHook("no command-like field found"), nil

@@ -111,11 +111,14 @@ eligible = eligible || (catalogChanged && result.Snapshot == state.CurrentSnapsh
 ## P1-C：共享契约注入（限定审查类动作）
 
 - `runner.go:ComposeActionPrompt`（:146）加 `isReviewerAction(actionID)` 判断，
-  仅对 product-review、qa-design、qa-review、start-readiness 注入
+  仅对 product-review、qa-review、start-readiness 注入
   `[Shared reviewer contract]\n` + `catalog.Base`（注入顺序：契约头部在前、
   action 块随后，与 `ComposeGatePrompt` 块序一致）。
 - development-worker、carry、qa-execution、requirements-clarification **不注入**，
   避免"你是独立审查者、不要编辑仓库文件"段落污染非审查动作语义。
+- **qa-design 也不注入**（产品审 P1 处置）：qa-design 已是设计写者（白盒写测试、
+  黑盒写用例文档，RQ-011/RQ-013），收到"不要编辑仓库文件"契约（共享规则优先）
+  会与写角色矛盾；`isReviewerAction` 排除 qa-design。
 - 实现选判断分支（非函数解耦）：`ComposeActionPrompt` 调用点共有 4 处
   （workflow.go:821 prepareBoundPrompt、:1302、:3669、composeDispatchPrompt
   :3675），注入写在 ComposeActionPrompt 内部统一生效，其余调用者用非审查
@@ -180,7 +183,8 @@ eligible = eligible || (catalogChanged && result.Snapshot == state.CurrentSnapsh
 - **各 mode 用例 `ReviewStatus` 置回 PENDING**（关键：`blackboxReviewPassed` 在有
   用例时要求用例全 PASS 且 review 非 FAIL，若仅清 review/design 权威结果而用例仍
   PASS，快照黑盒门仍放行——CASE-036 缺陷）
-- 删死循环（QAExecutionByMode 先清空再遍历空集）
+- QAExecutionByMode 以空 map 替换重置（start-readiness P2 更正：当前代码无
+  "先清空再遍历空集"的死循环，重置即空 map 替换）
 
 ### RQ-009：sha256 状态完整性硬阻止
 
@@ -201,7 +205,12 @@ currentSnapshot，默认 HEAD。`cli.go` start 加 `--current-snapshot` flag 接
 
 **核心语义（用户 2026-08-09 明确）**：**正式流程进入开发阶段后，主代理与全部
 审查类代理不得写代码或直接改 run 状态；其余代理不阻断。** 判定按调用者身份，
-不按文件路径（无文件白名单，千项目通用）。
+不按文件路径（无静态文件白名单，千项目通用）。
+
+**登记文档豁免的识别（start-readiness P2 澄清）**：主代理对"已登记需求/设计文档"
+的编辑豁免，按 run 状态 `RequirementArtifacts` **动态识别**（每 run 的登记集，
+`workflow show` 可查）——不是静态白名单，与"无文件白名单"不矛盾：豁免范围是流程
+确认的动态登记集，hook 读该集比对被编辑路径。
 
 **阻断（deny）**：
 - 主代理（主线程，payload 无 `agent_id`/`agent_type`）与审查类代理——
@@ -254,9 +263,18 @@ currentSnapshot，默认 HEAD。`cli.go` start 加 `--current-snapshot` flag 接
 1. **白盒设计者独立设计并写测试代码**：设计者从需求+实现独立设计用例，并直接编写
    结构测试代码（区别于 dev 交付的已有测试）。用例四字段文档仍要有，用于解释用例
    并作标 PASS 依据。caseId 与设计者写的测试建立真实对应。
-2. **白盒 review 审用例本身 → 返工给设计**：review 审查用例/测试充分性与覆盖，审出
+2. **caseId↔测试绑定（可验证，产品审 P2 + start-readiness P1 处置）**：每条用例
+   文档在对应用例下**写明实现该用例的测试接口名**（白盒设计者写的测试函数）；
+   CLI 校验该测试存在且与该用例对应（不再只做文本非空校验），使"测 A 的测试给 B
+   用例标 PASS"可被发现。**实现**：
+   - `QACaseInput`/`QACase` 增加 `Test` 字段（测试接口名）；
+   - `qa-design` CLI 增加 `--test <name>` flag 记录该用例对应的测试接口名；
+   - 校验算法：白盒记录用例时，CLI 校验 `Test` 非空、且白盒设计者交付的测试代码
+     中存在对应测试函数（解析/编译检查），与该用例对应；不满足即拒绝记录。
+   - 验证策略补一条：白盒绑定用例（Test 字段非空、存在对应测试函数）。
+3. **白盒 review 审用例本身 → 返工给设计**：review 审查用例/测试充分性与覆盖，审出
    用例本身问题（覆盖缺失/测试不足/描述不清）→ 返工给白盒设计代理修订。
-3. **白盒执行运行这些测试 → 按归属返修**：qa-execution 运行白盒设计者写的测试；
+4. **白盒执行运行这些测试 → 按归属返修**：qa-execution 运行白盒设计者写的测试；
    实现缺陷 → 返工给 development-worker；用例/测试问题 → 返工给白盒设计。
 
 **对 RQ-011 阻断清单的影响**：白盒设计者（qa-design whitebox）现在**写测试代码**，

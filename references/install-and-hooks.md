@@ -106,6 +106,13 @@ Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通�
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
 
+进入正式开发后，hook 还承担 RQ-011 主代理/审查类代理写阻断：PreToolUse 对代码与
+run 状态的直接写入（Edit/Write/MultiEdit、git commit、写文件 Bash）在活动正式 run
+下按调用者身份阻断——主线程（payload 无 agent 身份）与审查类代理被阻断，formal-gates
+CLI 命令、只读命令、development-worker、qa-design 与主代理对已登记需求/设计文档的
+编辑放行；无活动 run 放行、不干扰普通项目。判定按身份（`agent_type`）不按文件路径，
+代理类型定义见 `agents/agent-types.md`。实机阻断仍须在同一 host 上经 live canary 验证。
+
 安装器还会为 Claude Code 和 Codex 配置 `SubagentStart` 与 `SubagentStop`，为
 Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷经 stdin 发
 送给已安装的原生二进制：

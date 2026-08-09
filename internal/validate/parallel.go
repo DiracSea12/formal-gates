@@ -63,7 +63,8 @@ var parallelStageTable = []parallelStage{
 			if state.Actions["development-worker"].Status == developmentPrepared {
 				tasks = append(tasks, parallelTask{name: "开发子代理", match: matchDispatch("action", "development-worker", "")})
 			}
-			if isSelected(state, blackboxQAID) && state.Actions["qa-review"].Status != "PASS" {
+			// RQ-001：并行提示按 blackbox mode 读黑盒 review 权威结果。
+			if isSelected(state, blackboxQAID) && state.qaReview("blackbox").Status != "PASS" {
 				tasks = append(tasks, parallelTask{name: "黑盒 QA 设计/审查", match: func(d PreparedDispatch) bool {
 					return d.TargetKind == "action" && d.Mode == "blackbox" && (d.Target == "qa-design" || d.Target == "qa-review")
 				}})

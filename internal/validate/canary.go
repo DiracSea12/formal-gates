@@ -86,6 +86,15 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			}
 		})
 	}
+	// RQ-011 写阻断 canary：在有活动正式 run 的仓库根上，验证主线程阻断、development-worker
+	// 放行、审查类代理阻断、登记文档豁免、无 run 放行的判定矩阵。
+	writeBlockRoot, err := os.MkdirTemp("", "formal-gates-writeblock-canary-")
+	if err != nil {
+		add("write-block-hook", err)
+	} else {
+		defer os.RemoveAll(writeBlockRoot)
+		add("write-block-hook", runWriteBlockCanary(writeBlockRoot))
+	}
 	return report, result
 }
 
@@ -166,7 +175,12 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the direct automated check", Oracle: "the check passes"}, {Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
+	// RQ-013：白盒设计者交付的结构测试代码——canary 仓库带一个测试文件，使白盒用例的
+	// Test 绑定（CLI 校验测试存在）可被真实解析命中。
+	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
+		return err
+	}
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "TestWhiteboxDirectBehavior"}, {Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
 	if err != nil {
 		return err
 	}
@@ -421,4 +435,86 @@ func resultSummary(result Result) string {
 		messages = append(messages, failure.Path+": "+failure.Message)
 	}
 	return strings.Join(messages, "; ")
+}
+
+// runWriteBlockCanary verifies the RQ-011 write-block hook decision matrix against
+// a temp repo that carries an active formal run: the main thread (no agent
+// identity) and reviewer-class agents are blocked from direct code/run-state
+// writes; development-worker and qa-design are allowed; the main agent editing a
+// registered requirement/design document is allowed; and with no active run the
+// same write is allowed. It drives the real Hook entry so the canary exercises
+// the same decision the host would receive.
+func runWriteBlockCanary(root string) error {
+	// 一个活动 run 的状态文件：status ACTIVE、登记 requirements.md 与 design.md。
+	runDir := filepath.Join(root, ".gates", "tmp", "write-block-canary")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		return err
+	}
+	state := map[string]any{
+		"status":   "ACTIVE",
+		"runId":    "write-block-canary",
+		"flow":     "formal",
+		"actions":  map[string]any{},
+		"gates":    map[string]any{},
+		"carry":    map[string]any{},
+		"dispatches": map[string]any{},
+		"skipAuthorizations": map[string]any{},
+		"selectedGates": []string{},
+		"requirementArtifacts": []map[string]string{
+			{"path": "requirements.md", "revision": "r1"},
+			{"path": "design.md", "revision": "r2"},
+		},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "state.json"), append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	cwdPayload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, filepath.Join(root, "internal", "code.go"))
+	// 1. 主线程（无 agent 身份）写代码 → 阻断。
+	if decision, err := Hook([]byte(cwdPayload)); err != nil || decision.PermissionDecision != "deny" {
+		return fmt.Errorf("main-thread code write was not blocked: %#v %v", decision, err)
+	}
+	// 2. development-worker 写代码 → 放行。
+	devPayload := `{"cwd":` + string(mustJSONString(root)) + `,"tool_name":"Write","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(root, "internal", "code.go")) + `"},"agent_type":"development-worker"}`
+	if decision, err := Hook([]byte(devPayload)); err != nil || decision.PermissionDecision != "allow" {
+		return fmt.Errorf("development-worker write was not allowed: %#v %v", decision, err)
+	}
+	// 3. qa-design 写测试代码 → 放行。
+	qaDesignPayload := `{"cwd":` + string(mustJSONString(root)) + `,"tool_name":"Write","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(root, "internal", "code_test.go")) + `"},"agent_type":"qa-design"}`
+	if decision, err := Hook([]byte(qaDesignPayload)); err != nil || decision.PermissionDecision != "allow" {
+		return fmt.Errorf("qa-design write was not allowed: %#v %v", decision, err)
+	}
+	// 4. 审查类代理（product-review）写代码 → 阻断。
+	reviewerPayload := `{"cwd":` + string(mustJSONString(root)) + `,"tool_name":"Write","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(root, "internal", "code.go")) + `"},"agent_type":"product-review"}`
+	if decision, err := Hook([]byte(reviewerPayload)); err != nil || decision.PermissionDecision != "deny" {
+		return fmt.Errorf("reviewer-class write was not blocked: %#v %v", decision, err)
+	}
+	// 5. 主线程编辑已登记需求文档 → 放行（需求更改流程）。
+	docPayload := `{"cwd":` + string(mustJSONString(root)) + `,"tool_name":"Write","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(root, "requirements.md")) + `"}}`
+	if decision, err := Hook([]byte(docPayload)); err != nil || decision.PermissionDecision != "allow" {
+		return fmt.Errorf("main-agent registered-doc edit was not allowed: %#v %v", decision, err)
+	}
+	// 6. 无活动 run 的普通仓库：主线程写代码 → 放行（不干扰普通项目）。普通仓库必须放在
+	// 活动 run 仓库根之外，否则向上查找会命中 root 下的活动 run。
+	plainRoot, err := os.MkdirTemp("", "formal-gates-plain-repo-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(plainRoot)
+	plainPayload := `{"cwd":` + string(mustJSONString(plainRoot)) + `,"tool_name":"Write","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(plainRoot, "main.go")) + `"}}`
+	if decision, err := Hook([]byte(plainPayload)); err != nil || decision.PermissionDecision != "allow" {
+		return fmt.Errorf("write without an active run was blocked: %#v %v", decision, err)
+	}
+	return nil
+}
+
+func mustJSONString(value string) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }

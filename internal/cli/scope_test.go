@@ -85,7 +85,7 @@ func TestCLIAuthorizeRepairInlineQAScope(t *testing.T) {
 
 	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
 	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
-		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass",
+		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "TestWhiteboxDirectRules",
 		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
 	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch, "--reviewer", "qa-session")

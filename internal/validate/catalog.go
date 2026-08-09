@@ -215,6 +215,22 @@ func composedGatePromptHash(catalog PromptCatalog, content string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// composedActionPromptHash is the content hash of the catalog-dependent portion
+// of a composed action prompt. Injected reviewer actions (RQ-003) carry the
+// shared reviewer base, so their hash includes the base — a base-only change
+// moves every injected reviewer action's hash and enables the inheritance
+// judgment, symmetric with the gate path; non-reviewer actions keep the plain
+// content hash (their composed prompt is their own content only).
+func composedActionPromptHash(catalog PromptCatalog, action PromptDefinition) string {
+	if !isReviewerAction(action.ID) {
+		return promptContentHash(action.Content)
+	}
+	h := sha256.New()
+	hashPart(h, "base", catalog.Base)
+	hashPart(h, "action", action.Content)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // catalogPromptHashes returns one content hash per catalog entry, keyed by
 // qualified id ("base", "gate:<id>", "action:<id>") so that deltas can be
 // computed per gate and per action. Gate entries hash the composed gate prompt
@@ -225,7 +241,7 @@ func catalogPromptHashes(catalog PromptCatalog) map[string]string {
 		hashes["gate:"+gate.ID] = composedGatePromptHash(catalog, gate.Content)
 	}
 	for _, action := range catalog.Actions {
-		hashes["action:"+action.ID] = promptContentHash(action.Content)
+		hashes["action:"+action.ID] = composedActionPromptHash(catalog, action)
 	}
 	return hashes
 }
