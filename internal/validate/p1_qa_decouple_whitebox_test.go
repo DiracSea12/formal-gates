@@ -204,14 +204,11 @@ func TestSealedStateRetainsIntegrity(t *testing.T) {
 }
 
 // TestBacklogAndKnowledgeDocsIgnored 覆盖 RQ-005/RQ-006 的验收：P2-BACKLOG.md 与
-// PROMPT-ENGINEERING-KNOWLEDGE.md 存在于仓库根目录且被 .gitignore 忽略（git check-ignore
-// 通过），记录范围外、不跟踪。
+// PROMPT-ENGINEERING-KNOWLEDGE.md 被 .gitignore 忽略（git check-ignore 通过），记录范围外、
+// 不跟踪。文件存在是本地交付事实、CI 干净检出时并不存在，因此这里只验证忽略规则。
 func TestBacklogAndKnowledgeDocsIgnored(t *testing.T) {
 	root := repoRootForCanaryTest(t)
 	for _, name := range []string{"P2-BACKLOG.md", "PROMPT-ENGINEERING-KNOWLEDGE.md"} {
-		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
-			t.Fatalf("%s missing at the repo root: %v", name, err)
-		}
 		out, err := (execNativeCommandRunner{}).Run(root, "git", "check-ignore", name)
 		if err != nil || !strings.Contains(out, name) {
 			t.Fatalf("git check-ignore %s failed: out=%q err=%v", name, out, err)
