@@ -737,6 +737,45 @@ func RunSummaryPath(root, runID string) string {
 	return filepath.Join(lifecycle.CleanRoot(root), ".gates", "results", runID+".json")
 }
 
+// SliceCostRecord persists a slice instance's cost projection for its
+// retained-overall master to fold into the master's final seal ledger. A
+// slice seals without writing its own ledger file (封板文件); this cost
+// sidecar lives under the master's temp run dir (gitignored, so it never
+// enters a delivery diff) and the master's seal consumes and removes it
+// after folding the numbers in.
+type SliceCostRecord struct {
+	RunID string        `json:"runId"`
+	Cost  *cost.RunCost `json:"cost,omitempty"`
+}
+
+// SliceCostDir returns the directory a slice instance writes its cost sidecar
+// into, scoped under the retained-overall master's temp run dir so the master
+// scans only its own slices and the sidecars are auto-cleaned with the master
+// run. .gates/tmp is gitignored, so slice cost sidecars are never staged into
+// a delivery commit.
+func SliceCostDir(root, masterRunID string) string {
+	return filepath.Join(RunDir(root, masterRunID), "slice-costs")
+}
+
+// SliceCostPath returns the sidecar path for one sealed slice instance under
+// its retained-overall master's temp run dir.
+func SliceCostPath(root, masterRunID, sliceRunID string) string {
+	return filepath.Join(SliceCostDir(root, masterRunID), sliceRunID+".cost.json")
+}
+
+// SaveSliceCost atomically writes a slice instance's cost sidecar under its
+// retained-overall master's temp run dir.
+func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(SliceCostDir(root, masterRunID), 0o700); err != nil {
+		return err
+	}
+	return writeAtomic(SliceCostPath(root, masterRunID, record.RunID), append(data, '\n'), 0o600)
+}
+
 func runSummary(state RunState) RunSummary {
 	return RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost}
 }

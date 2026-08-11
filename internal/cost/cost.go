@@ -68,3 +68,32 @@ func Record(run *RunCost, dispatchID string, entry DispatchCost) {
 	run.OutputTokens += entry.OutputTokens
 	run.TotalInputTokens += entry.TotalInputTokens
 }
+
+// Merge folds another run's cost ledger into this one, namespacing the
+// incoming dispatch entries under "<ns>/<dispatch-id>" so dispatch ids from
+// different runs never collide. Totals are accumulated per entry; an entry
+// already merged under the same namespaced key is not re-added (idempotent),
+// so re-merging a run never double-counts. It is used to fold sealed slice
+// instances' costs into their retained-overall master's final seal ledger.
+func Merge(run *RunCost, ns string, other *RunCost) {
+	if run == nil || other == nil {
+		return
+	}
+	if run.Dispatches == nil {
+		run.Dispatches = map[string]DispatchCost{}
+	}
+	for id, entry := range other.Dispatches {
+		key := id
+		if ns != "" {
+			key = ns + "/" + id
+		}
+		if _, recorded := run.Dispatches[key]; recorded {
+			continue
+		}
+		run.Dispatches[key] = entry
+		run.InputCacheHitTokens += entry.InputCacheHitTokens
+		run.InputCacheMissTokens += entry.InputCacheMissTokens
+		run.OutputTokens += entry.OutputTokens
+		run.TotalInputTokens += entry.TotalInputTokens
+	}
+}

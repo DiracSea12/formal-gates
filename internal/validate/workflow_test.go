@@ -1649,6 +1649,198 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	}
 }
 
+// TestSliceSealWritesNoLedgerAndMasterMergesCost verifies 分片封板: a slice
+// instance's seal writes no independent ledger file (封板文件) and leaves only
+// a cost sidecar under its retained-overall master's temp run dir; the master's
+// final seal folds the slice's cost into its own ledger and consumes the
+// sidecar. Non-slice seals keep writing their ledger as before.
+func TestSliceSealWritesNoLedgerAndMasterMergesCost(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	var err error
+
+	// 主干（保留总任务实例）：确认需求 + 整体级审查 + 拆分决定（自动附加合并验证）。
+	master := confirmRequirement(t, root, pkg, mustStartRetained(t, root, pkg, "slice-cost-master"))
+	master = recordProductReview(t, root, pkg, master)
+	master = recordReadiness(t, root, pkg, master)
+	master = recordSlicing(t, root, pkg, master, "split")
+
+	// 记录派发时以 stub 转写计量真实用量，使成本并入主干后可断言数值。
+	stubCodexTranscript(t, writeCostFixture(t))
+
+	// 合并 QA 设计/审查在分片开发期间并行推进：此刻原生 HEAD 仍停在基线，
+	// 主干当前快照与之一致；若放到切片提交之后再准备会因快照漂移被拒。
+	mergeDesign := prepareDispatch(t, root, pkg, master.RunID, "qa-design")
+	master, err = RecordQADesign(root, pkg, master.RunID, mergeDesign, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeReview := prepareAndClaim(t, root, pkg, master.RunID, "qa-review", "slice-cost-merge-reviewer")
+	master, err = RecordQAReview(root, pkg, master.RunID, mergeReview, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 切片实例：钉死主干、继承整体级审查，走黑盒 QA + 开发 + 快照 + 执行。
+	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "slice-cost", master.RunID))
+	slice = recordSlicing(t, root, pkg, slice, "split", master.RunID)
+	slice = setRoute(t, root, pkg, slice, "custom", []string{blackboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, slice.RunID, "qa-design")
+	slice, err = RecordQADesign(root, pkg, slice.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewDispatch := prepareAndClaim(t, root, pkg, slice.RunID, "qa-review", "slice-cost-reviewer")
+	slice, err = RecordQAReview(root, pkg, slice.RunID, reviewDispatch, passingReviewDecisions(slice), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	developmentDispatch := prepareDispatch(t, root, pkg, slice.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "slice-cost.txt"), "slice\n")
+	commitAll(t, root, "slice cost delivery")
+	slice, err = AdvanceSnapshot(root, pkg, slice.RunID, developmentDispatch, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionDispatch := prepareDispatch(t, root, pkg, slice.RunID, "qa-execution")
+	slice, err = RecordQAExecution(root, pkg, slice.RunID, executionDispatch, passingExecution(slice.allQACases()), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slice.Cost == nil || slice.Cost.TotalInputTokens == 0 {
+		t.Fatalf("slice recorded no cost projection: %#v", slice.Cost)
+	}
+	sliceOwn := slice.Cost.TotalInputTokens
+
+	// 切片封板：不产出独立封板文件，只留成本 sidecar。
+	sliceSummary, err := Seal(root, pkg, slice.RunID, nil, false, "squashed slice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sliceSummary.Status != "SEALED" {
+		t.Fatalf("slice did not seal: %#v", sliceSummary)
+	}
+	if _, statErr := os.Stat(RunSummaryPath(root, slice.RunID)); !os.IsNotExist(statErr) {
+		t.Fatalf("slice seal must not write an independent ledger file (封板文件)")
+	}
+	sidecarData, err := os.ReadFile(SliceCostPath(root, master.RunID, slice.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sidecar SliceCostRecord
+	if err := json.Unmarshal(sidecarData, &sidecar); err != nil {
+		t.Fatal(err)
+	}
+	if sidecar.RunID != slice.RunID || sidecar.Cost == nil || sidecar.Cost.TotalInputTokens != sliceOwn {
+		t.Fatalf("slice cost sidecar malformed: %#v", sidecar)
+	}
+
+	// 主干合并验证后封板：切片成本并入主干最终封板文件，sidecar 被消费清除。
+	writeTestFile(t, filepath.Join(root, "merged-cost.txt"), "merged\n")
+	commitAll(t, root, "merged slices cost")
+	master, err = AdvanceSnapshot(root, pkg, master.RunID, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeExec := prepareDispatch(t, root, pkg, master.RunID, "qa-execution")
+	master, err = RecordQAExecution(root, pkg, master.RunID, mergeExec, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeGateDispatch := prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "slice-cost-merge-gate")
+	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, mergeGateDispatch, "PASS", "", comparedRange(master), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if master.Cost == nil {
+		t.Fatalf("master recorded no cost projection")
+	}
+	masterOwn := master.Cost.TotalInputTokens
+
+	masterSummary, err := Seal(root, pkg, master.RunID, nil, false, "squashed delivery with slices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masterSummary.Cost == nil {
+		t.Fatalf("master seal summary lost the cost projection")
+	}
+	if masterSummary.Cost.TotalInputTokens != masterOwn+sliceOwn {
+		t.Fatalf("master totals did not fold slice cost: got %d, want %d", masterSummary.Cost.TotalInputTokens, masterOwn+sliceOwn)
+	}
+	for id := range sidecar.Cost.Dispatches {
+		if _, ok := masterSummary.Cost.Dispatches[slice.RunID+"/"+id]; !ok {
+			t.Fatalf("master summary missing namespaced slice dispatch %q", id)
+		}
+	}
+	if _, statErr := os.Stat(SliceCostPath(root, master.RunID, slice.RunID)); !os.IsNotExist(statErr) {
+		t.Fatalf("master seal must consume the slice cost sidecar")
+	}
+	data, err := os.ReadFile(RunSummaryPath(root, master.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"cost"`) {
+		t.Fatalf("master seal ledger lacks cost")
+	}
+}
+
+// TestSliceAbortWritesNoLedgerAndSidecarKeepsCost verifies a slice instance's
+// abort mirrors its seal: no independent ledger file (封板文件), while its
+// recorded cost projection goes to the master's sidecar so the master's final
+// seal still folds in the tokens actually spent by the aborted slice.
+func TestSliceAbortWritesNoLedgerAndSidecarKeepsCost(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	var err error
+
+	// 主干（保留总任务实例）：确认需求 + 整体级审查 + 拆分决定。
+	master := confirmRequirement(t, root, pkg, mustStartRetained(t, root, pkg, "slice-abort-master"))
+	master = recordProductReview(t, root, pkg, master)
+	master = recordReadiness(t, root, pkg, master)
+	master = recordSlicing(t, root, pkg, master, "split")
+
+	// 记录派发时以 stub 转写计量真实用量，使成本写入 sidecar 后可断言数值。
+	stubCodexTranscript(t, writeCostFixture(t))
+
+	// 切片实例：确认需求、记录一次派发产生成本投影，然后中止。
+	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "slice-abort", master.RunID))
+	slice = recordSlicing(t, root, pkg, slice, "split", master.RunID)
+	slice = setRoute(t, root, pkg, slice, "custom", []string{blackboxQAID})
+	designDispatch := prepareDispatch(t, root, pkg, slice.RunID, "qa-design")
+	slice, err = RecordQADesign(root, pkg, slice.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "behavior", Procedure: "run the public command", Oracle: "observable success"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slice.Cost == nil || slice.Cost.TotalInputTokens == 0 {
+		t.Fatalf("slice recorded no cost projection: %#v", slice.Cost)
+	}
+	sliceOwn := slice.Cost.TotalInputTokens
+
+	// 分片中止：不产出独立封板文件，只留成本 sidecar；run 目录照常清除。
+	summary, err := Abort(root, pkg, slice.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "ABORTED" {
+		t.Fatalf("slice abort summary=%#v", summary)
+	}
+	if _, statErr := os.Stat(RunSummaryPath(root, slice.RunID)); !os.IsNotExist(statErr) {
+		t.Fatalf("slice abort must not write an independent ledger file (封板文件)")
+	}
+	sidecarData, err := os.ReadFile(SliceCostPath(root, master.RunID, slice.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sidecar SliceCostRecord
+	if err := json.Unmarshal(sidecarData, &sidecar); err != nil {
+		t.Fatal(err)
+	}
+	if sidecar.RunID != slice.RunID || sidecar.Cost == nil || sidecar.Cost.TotalInputTokens != sliceOwn {
+		t.Fatalf("aborted slice cost sidecar malformed: %#v", sidecar)
+	}
+	if _, statErr := os.Stat(RunDir(root, slice.RunID)); !os.IsNotExist(statErr) {
+		t.Fatalf("aborted slice run directory remained: %v", statErr)
+	}
+}
+
 // TestMergeGateRegisteredButExcludedFromNormalRouteCandidates verifies the merge
 // gate is registered in the catalog but never appears in the normal route
 // candidates; the normal candidates expose blackbox and whitebox QA modes.

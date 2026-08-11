@@ -145,6 +145,35 @@ func TestRecordIsIdempotentPerDispatch(t *testing.T) {
 	}
 }
 
+func TestMergeNamespacesAndIsIdempotent(t *testing.T) {
+	run := &RunCost{TotalInputTokens: 10, InputCacheHitTokens: 2, InputCacheMissTokens: 8, OutputTokens: 5, Dispatches: map[string]DispatchCost{"master-1": {Target: "quality", Kind: "gate", TotalInputTokens: 10, InputCacheHitTokens: 2, InputCacheMissTokens: 8, OutputTokens: 5, Source: SourceTranscript}}}
+	other := &RunCost{TotalInputTokens: 30, InputCacheHitTokens: 3, InputCacheMissTokens: 27, OutputTokens: 15, Dispatches: map[string]DispatchCost{"slice-1": {Target: "qa-design", Kind: "action", TotalInputTokens: 30, InputCacheHitTokens: 3, InputCacheMissTokens: 27, OutputTokens: 15, Source: SourceTranscript}}}
+	// Namespace prefixes the incoming dispatch ids so a master and its slices
+	// never collide.
+	Merge(run, "slice-a", other)
+	if run.TotalInputTokens != 40 || run.InputCacheHitTokens != 5 || run.InputCacheMissTokens != 35 || run.OutputTokens != 20 {
+		t.Fatalf("merged totals=%+v", run)
+	}
+	if _, ok := run.Dispatches["slice-a/slice-1"]; !ok {
+		t.Fatalf("incoming dispatch was not namespaced: %+v", run.Dispatches)
+	}
+	if _, ok := run.Dispatches["slice-1"]; ok {
+		t.Fatalf("incoming dispatch leaked an unnamespaced key: %+v", run.Dispatches)
+	}
+	// Re-merging the same run is a no-op (idempotent), never double-counting.
+	before := *run
+	Merge(run, "slice-a", other)
+	if !reflect.DeepEqual(*run, before) {
+		t.Fatalf("re-merge re-added numbers: %+v", *run)
+	}
+	// Nil receiver/source are no-ops.
+	Merge(nil, "ns", other)
+	Merge(run, "ns", nil)
+	if !reflect.DeepEqual(*run, before) {
+		t.Fatalf("nil merge mutated the run: %+v", *run)
+	}
+}
+
 func TestRunCostJSONRoundTripAndOmission(t *testing.T) {
 	run := &RunCost{TotalInputTokens: 13, InputCacheHitTokens: 3, InputCacheMissTokens: 10, OutputTokens: 9, Dispatches: map[string]DispatchCost{"d": {Target: "quality", Kind: "gate", TotalInputTokens: 13, Source: SourceTranscript}}}
 	data, err := json.Marshal(run)

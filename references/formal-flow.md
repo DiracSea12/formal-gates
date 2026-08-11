@@ -3,8 +3,7 @@
 流程顺序只由 `SKILL.md` 拥有。这份参考只提供每一步的确切命令形式与步骤级执行机制。
 使用已安装的 `formal-gates` 二进制。示例只省略重复的发现项或用例分组。
 
-会话级「不走流程」声明见 `SKILL.md` 开发受理流程；已有正式 run 进行中时声明的行为见
-`references/example-run.md` §1。
+已有正式 run 进行中时用户声明「不走流程」的行为见 `references/example-run.md` §1。
 
 - [启动与 run 控制](#启动与-run-控制)
 - [需求、拆分决定与路线](#需求拆分决定与路线)
@@ -12,6 +11,7 @@
 - [开发与快照](#开发与快照)
 - [开发后审查](#开发后审查)
 - [继承判定、修复授权与 Seal](#继承判定修复授权与-seal)
+- [成本计量](#成本计量)
 
 ## 启动与 run 控制
 
@@ -93,7 +93,7 @@ formal-gates workflow settle-findings --root <repo> --package-root <package> \
   --run-id <id> --action <product-review|start-readiness> \
   [--confirm '<settled-message>' ...] [--dismiss '<settled-message>' ...]
 
-# 路线在拆分决定之后确认（时序见 SKILL.md 正式流程开头）；full = 黑盒 QA + 白盒 QA +
+# 路线在拆分决定之后确认；full = 黑盒 QA + 白盒 QA +
 # 全部已发现门；custom 可任意组合黑盒 QA、白盒 QA 与各门，至少选一项。合并门/合并 QA
 # 不进正常选择列表。
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
@@ -104,7 +104,10 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
 ```
 
-需求修订（SKILL 第 2 步的执行机制；三分支决策本体见 SKILL 第 2 步）：
+需求修订（SKILL 第 2 步的执行机制）——三分支决策：meaning-preserved → 保留既有 PASS、
+快照重绑新修订（开发开始后需同时传 `--confirmed`）；meaning changed → 作废全部结果、回需
+求澄清重新登记；需求修订或 start-readiness FAIL 时，黑盒 QA 用例增量修订——只增删改确实受
+影响的用例（未受影响保持 PASS）：
 - 开发开始后做 meaning-preserved 需求重绑时，CLI 要求用户确认信号：`workflow
   requirement` 必须**同时传 `--confirmed`**，否则被拒。
 - 需求文档被改动导致 revision 漂移后，第一个依赖需求修订的流程命令即被拒，提示先
@@ -143,7 +146,7 @@ Part 2。Part 2 双速调度：高置信要拆 → 呈现拆分建议、用户�
 黑盒 QA 与开发**并行**：路线确认后开发立即开始、不等待黑盒 QA review；黑盒
 qa-design/qa-review/返修在独立的 **QA 隔离工作区**（从基线快照创建、恒等于基线、始终
 不含本次开发代码）中推进，快照要求**开发完成 且 黑盒 qa-review PASS 两边都完成**。
-隔离工作区机制本体（创建/登记/校验/清空/重建）见 SKILL 第 5-6 步，本段只列命令形式。
+QA 隔离工作区的创建/登记/校验/清空/重建机制见下方 `qa-worktree` 命令注释。
 
 ```bash
 # Part 1 产品审：承接需求细节澄清，审已实例化的需求文档，只评产品/策划层面。
@@ -182,7 +185,7 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 基线创建（Git linked worktree / SVN 基线版本工作副本 / P4 基线 changelist 客户端），
 # 并把当前已确认需求文档/验收产物注入其中。登记时 CLI 校验其原生标识 == 基线、且注入
 # 的文档 revision 与 run 登记一致（防 host 遗忘刷新）。黑盒 review PASS 后自动清空、
-# 下一设计轮重建（决策本体见 SKILL 第 5 步）。
+# 下一设计轮重建。
 formal-gates workflow qa-worktree --root <repo> --package-root <package> \
   --run-id <id> --worktree <path>
 
@@ -225,9 +228,9 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action development-worker
 
-# 记录开发后或修复后的不可变标识。快照门（开发完成 且 黑盒 qa-review PASS 两边都完成）
-# 机制本体见 SKILL 第 6 步；黑盒 review 未 PASS 时快照被挡，只有用户显式授权可手动放行
-# （--user-requested + --reason，记录授权来源，非自动）。
+# 记录开发后或修复后的不可变标识。快照门：开发完成 且 黑盒 qa-review PASS 两边都
+# 完成才允许固定快照，任一边未完成快照被挡；黑盒 review 未 PASS 时只有用户显式授权可手动
+# 放行（--user-requested + --reason，记录授权来源，非自动）。
 formal-gates workflow snapshot --root <repo> --package-root <package> \
   --run-id <id> --dispatch <development-or-repair-dispatch-id> \
   [--user-requested --reason '<manual blackbox-gate release reason>']
@@ -246,7 +249,7 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 权威执行结果）时，host 在进入执行前询问"全量重跑 vs 只跑受影响"并给出推荐；CLI 强制
 `prepare-action qa-execution` 前该 mode 必须已记录覆盖本次重跑的 scope 决策，否则拒绝
 prepare；首次执行不要求、默认全量。黑盒/白盒各自独立、按 mode 记录与校验。scope 决策
-机制本体（推荐、AFFECTED 子集判定与 CARRY_FORWARD 沿用）见 SKILL 第 7-8 步。
+机制（推荐、AFFECTED 子集判定与 CARRY_FORWARD 沿用）见「继承判定、修复授权与 Seal」。
 
 ```bash
 # 重跑前记录 scope 决策。FULL 全量重跑该 mode 全部已批准用例；AFFECTED 只重跑 host 综合
@@ -322,14 +325,14 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 # Git run 在基线→当前含 >1 条提交时，seal 自动把该范围压缩为单条提交（git reset
 # --soft 基线 + 重新提交，保留最终树），作为 seal 的最后一步 VCS 操作；压缩前要求工作
 # 树干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩消息由主代理经 --squash-message
-# 传入（机制本体见 SKILL 第 9 步）。
+# 传入。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
   [--skip <selected-non-passing-gate> ...] [--user-requested] \
   [--squash-message '<combined commit message>']
 ```
 
-修复流程（SKILL 第 8 步的执行机制）：触发条件（QA FAIL 或 P0/P1 → 整轮退回修复、
-P2/P3 一并处理）见 SKILL.md 第 8 步；下面只列命令形式与其余机制。
+修复流程（SKILL 第 8 步的执行机制）：触发条件——QA FAIL 或 P0/P1 → 整轮退回修复、
+P2/P3 一并处理；下面只列命令形式与其余机制。
 - 开始编辑前先冻结当前 VCS 标识。
 - 总任务实例把集成发现项分发给各子任务实例，收到各子任务已 Seal 的修复后直接调用
   `workflow snapshot`；其他子任务实例准备并派发开发工作者，完成后冻结新标识并调用
@@ -347,7 +350,7 @@ P2/P3 一并处理）见 SKILL.md 第 8 步；下面只列命令形式与其余�
 QA 重跑 scope 推荐（host 行为）：重跑询问时 host 依据修复 diff 综合判断影响面、**稍保守**
 地给出推荐，并 SHALL 显式提醒"只跑受影响"的含义（上一轮挂掉用例 + 可能受本轮连带影响的
 既往通过用例）与漏检风险；AFFECTED 子集在派发前定死，执行者只执行该子集、不得在执行中
-自行补跑/改判/改选名单外用例。推荐机制本体见 SKILL 第 8 步。
+自行补跑/改判/改选名单外用例。
 
 Seal 跳过规则（SKILL 第 9 步的执行机制）：
 - PENDING 结果直接阻塞 Seal；RUNTIME_ERROR 需要用户手动跳过；QA FAIL 或 P0/P1 必须先
@@ -356,13 +359,19 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
 - 已授权的 Seal 跳过在当前快照仍被其他结果阻塞时继续有效，但不延续到后续修复快照。
 - 只有 P2/P3 的 PASS 建议保持可见，不阻塞 Seal。
 
-成本计量（机制本体见 SKILL「成本计量」）：run 状态的单一 `cost` 投影
-（`RunState.Cost` / 摘要 `cost` 字段，实现见 `internal/cost/`）在结果记录时为每条独立
-派发（门或动作）按其 host 转写文件精确计量 token 用量：run 合计 + 每条派发一项。数字只
-来自 host 转写解析（claude/codex 适配器），无转写或解析失败的派发记为 unavailable、不
-捏造数值；分类为输入缓存命中/未命中与输出，`totalInputTokens` 只统计输入侧、输出单独记
-录不计入合计。成本数据仅展示、不影响任何判定或记录结果。`workflow seal`/`show` 的输出携
-带该投影（`cost` 字段）。
+## 成本计量
+
+run 状态的单一 `cost` 投影（`RunState.Cost` / 摘要 `cost` 字段，实现见 `internal/cost/`）
+在结果记录时为每条独立派发（门或动作）按其 host 转写文件精确计量 token 用量：run 合计 +
+每条派发一项。数字只来自 host 转写解析（claude/codex 适配器），无转写或解析失败的派发记
+为 unavailable、不捏造数值；分类为输入缓存命中/未命中与输出，`totalInputTokens` 只统计输
+入侧、输出单独记录不计入合计。成本数据仅展示、不影响任何判定或记录结果。`workflow
+seal`/`show` 的输出携带该投影（`cost` 字段）。
+
+分片场景下，切片实例的封板不产出独立封板文件，成本投影写入主干 temp run 下的 sidecar
+（`.gates/tmp/<主干run-id>/slice-costs/`，gitignored、不入交付 diff），主干（保留总任务
+实例）最终封板时把各切片成本并入主干封板文件（派发条目以 `<切片run-id>/<派发id>` 命名
+空间并入）后消费清除。非分片 run 的封板行为不变。
 
 按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法
 运行时，使用命令的 `--runtime-error` 或 `--status RUNTIME_ERROR --message ...` 形

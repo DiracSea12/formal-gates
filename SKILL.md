@@ -69,12 +69,11 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
    `no` 时禁止后续记录拆分；未声明拒绝启动。不支持无 VCS 的正式开发流程。执行本步前必读
    `references/formal-flow.md`「启动与 run 控制」。
 2. **需求澄清登记。** 只登记受理阶段已对齐的需求并记录 PASS（`requirement --confirmed`
-   绑定）；澄清问答、呈现、确认、写需求文件都在受理阶段完成。需求修订三分支：
-   meaning-preserved → 保留既有 PASS、快照重绑新修订（开发开始后需同时传
-   `--confirmed`）；meaning changed → 作废全部结果、回需求澄清重新登记；需求修订**或
-   start-readiness FAIL 时**，黑盒 QA 用例增量修订——只增删改确实受影响的用例（**未
-   受影响保持 PASS**）。执行本步前必读 `references/formal-flow.md`「需求、拆分决定与
-   路线」。
+   绑定）；澄清问答、呈现、确认、写需求文件都在受理阶段完成。需求修订按三分支决策：
+   meaning-preserved → 保留既有 PASS、快照重绑新修订；meaning changed → 作废全部结果、
+   回需求澄清重新登记；需求修订或 start-readiness FAIL 时，黑盒 QA 用例增量修订（只增删
+   改确实受影响的用例、未受影响保持 PASS）。三分支决策与 CLI 强制机制全文见
+   `references/formal-flow.md`「需求、拆分决定与路线」；执行本步前必读该节。
 3. **拆分决定与绑定路线。** 在 start-readiness PASS 后记录拆分决定（`workflow
    slicing`），然后确认路线（`workflow route`；主代理给统一默认推荐、用户拍板）。拆
    分建议对所有正式 run 必填呈现并留痕（理由、如何拆、可并行子任务、改拆后果说明）；仅
@@ -94,12 +93,12 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
    否成立由用户决定。
 5. **开发。** 运行 `development-worker` 准备命令，记录开发开始并锁定路线。黑盒 QA 与
    开发并行：开发开始不再要求黑盒 qa-review PASS，黑盒 qa-design/qa-review/返修在独立
-   QA 隔离工作区（从基线创建、恒等于基线、不含本次开发代码）中与开发并发推进；每个黑
-   盒设计轮开始前先 `workflow qa-worktree` 登记（host 创建隔离工作区并注入当前需求文
-   档）。中断后可继续同一个 PREPARED 任务，只重新组装提示词，开始边界不变。开发子代理
-   与审查者完全隔离，任务内容见『独立派发』；子代理只做已确认范围内的工作——新增或跟
-   踪每条交付路径时先加入 VCS，返回前核查基线到当前的完整 diff。执行本步前必读
-   `references/formal-flow.md`「开发与快照」。
+   QA 隔离工作区（恒等于基线、不含本次开发代码）中与开发并发推进；工作区创建/登记/校
+   验/清空/重建机制见 `references/formal-flow.md`「开发之前」。中断后可继续同一个
+   PREPARED 任务，只重新组装提示词，开始边界不变。开发子代理与审查者完全隔离，任务内
+   容见『独立派发』；子代理只做已确认范围内的工作——新增或跟踪每条交付路径时先加入
+   VCS，返回前核查基线到当前的完整 diff。执行本步前必读 `references/formal-flow.md`
+   「开发与快照」。
 6. **固定当前快照。** 实现完成后用原生 VCS 创建不可变标识，运行 `workflow snapshot`
    记录它；后续审查只能用这个快照，不能用工作树的当前状态。快照门机制（**开发完成 且
    黑盒 qa-review PASS 两边都完成**、`--user-requested` 手动放行、开发/修复派发认领放
@@ -124,7 +123,9 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
 9. **Seal。** 汇总前后各确认一次当前 VCS 标识。Git run 在基线→当前含 >1 条提交时，
    seal 自动把该范围压缩为单条提交（保留最终树，作为 seal 最后一步 VCS 操作，压缩前工
    作树必须干净），压缩消息经 `--squash-message` 传入；单条/空范围不操作、SVN/P4 不压
-   缩。执行本步前必读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
+   缩。分片实例的封板不产出独立封板文件，成本投影并入主干最终封板（机制见
+   `references/formal-flow.md`「成本计量」）。执行本步前必读
+   `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 
 - `workflow show`：查看当前流程状态。
 - `workflow resume`：从中断处继续（备用路径）；中断的派发保持 `PENDING`，已完成结果
@@ -252,9 +253,6 @@ CLI 用启动时选定的 Git/SVN/P4 原生命令解析和验证快照标识；h
 
 ## 成本计量
 
-每次独立派发（门或动作）的 token 用量在结果记录时按其 host 转写文件精确计量，写入 run
-状态的单一 `cost` 投影（`RunState.Cost`，实现见 `internal/cost/`）：run 合计 + 每条派发
-一项。数字只来自 host 转写解析（claude/codex 适配器），无转写或解析失败的派发记为
-unavailable、不捏造数值；分类为输入缓存命中/未命中与输出，`totalInputTokens` 只统计输
-入侧、输出单独记录不计入合计。成本数据仅展示、不影响任何判定。`workflow seal`/`show`
-的输出携带该投影（`cost` 字段），可据此核对本轮 token 开销。
+每次独立派发的 token 用量按其 host 转写文件精确计量，写入 run 状态的单一 `cost` 投影；
+成本数据仅展示、不影响任何判定，`workflow seal`/`show` 的输出携带该投影（`cost` 字段）。
+计量机制全文见 `references/formal-flow.md`「成本计量」。

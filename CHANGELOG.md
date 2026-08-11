@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 分片封板：切片实例的 `workflow seal`/`abort` 都不再产出独立封板文件
+  （`.gates/results/<run-id>.json`），成本投影写入主干 temp run 下的 sidecar
+  （`.gates/tmp/<主干run-id>/slice-costs/`，gitignored、不入交付 diff），主干（保留
+  总任务实例）最终封板时把各切片成本并入主干封板文件（派发条目以 `<切片run-id>/<派发id>`
+  命名空间并入）后消费清除；非分片 run 的封板行为不变。
 - Add a user-gated flow reset (`workflow reset --user-approve`): it only
   resets a run's `.gates` flow state (requirement re-registered and unconfirmed,
   overall reviews / gates reopened, stuck dispatches cleared) and never touches

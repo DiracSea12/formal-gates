@@ -1,9 +1,14 @@
 package validate
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+
+	"formal-gates/internal/cost"
 )
 
 type CarryInput struct{ GateID, Decision, Message string }
@@ -326,11 +331,30 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 		}
 	}
 	state.Status = "SEALED"
+	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
+	if sliceInstance {
+		// 分片实例：封板不产出独立封板文件；成本投影写入 sidecar，供主干
+		// （保留总任务实例）最终封板时并入主干封板文件。成本为空（从未记录派发
+		// 用量）时不写 sidecar，主干无从并入、也无须清理。
+		if state.Cost != nil {
+			if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
+				return RunSummary{}, err
+			}
+		}
+	} else {
+		// 主干（保留总任务实例）/单 run：把已封板切片的成本并入最终封板文件。
+		// 单 run 无切片，扫描不到引用本 run 的 sidecar，自然为空操作。
+		if err := mergeSliceCosts(root, &state); err != nil {
+			return RunSummary{}, err
+		}
+	}
 	if err := SaveRunState(root, state); err != nil {
 		return RunSummary{}, err
 	}
-	if err := SaveRunSummary(root, state); err != nil {
-		return RunSummary{}, err
+	if !sliceInstance {
+		if err := SaveRunSummary(root, state); err != nil {
+			return RunSummary{}, err
+		}
 	}
 	summary := runSummary(state)
 	if err := DeleteRun(root, runID); err != nil {
@@ -338,6 +362,48 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	}
 	_, _ = CleanupTempRuns(root, packageRoot) // best-effort sweep of residual terminated runs
 	return summary, nil
+}
+
+// mergeSliceCosts folds the sealed slice instances' cost sidecars into the
+// run's cost projection and removes the merged sidecars. It scans this run's
+// own slice-costs dir (scoped under its temp run dir, so only its own slices
+// are consumed). A missing/unparseable sidecar is skipped best-effort — cost
+// data is display-only and never blocks a seal.
+func mergeSliceCosts(root string, state *RunState) error {
+	dir := SliceCostDir(root, state.RunID)
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".cost.json") {
+			continue
+		}
+		sliceRunID := strings.TrimSuffix(name, ".cost.json")
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		var record SliceCostRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			continue // 成本仅展示，解析失败不阻塞封板
+		}
+		if record.Cost == nil {
+			continue
+		}
+		if state.Cost == nil {
+			state.Cost = &cost.RunCost{}
+		}
+		cost.Merge(state.Cost, sliceRunID, record.Cost)
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func finishRun(root, packageRoot, runID, status string) (RunSummary, error) {
@@ -355,11 +421,21 @@ func finishRun(root, packageRoot, runID, status string) (RunSummary, error) {
 		return RunSummary{}, err
 	}
 	state.Status = status
+	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
+	if sliceInstance && state.Cost != nil {
+		// 分片实例：中止同样不产出独立封板文件；已记录的成本投影写入 sidecar，
+		// 供主干最终封板并入（被中止切片的 token 用量仍计入整体交付成本）。
+		if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
+			return RunSummary{}, err
+		}
+	}
 	if err := SaveRunState(root, state); err != nil {
 		return RunSummary{}, err
 	}
-	if err := SaveRunSummary(root, state); err != nil {
-		return RunSummary{}, err
+	if !sliceInstance {
+		if err := SaveRunSummary(root, state); err != nil {
+			return RunSummary{}, err
+		}
 	}
 	summary := runSummary(state)
 	if err := DeleteRun(root, runID); err != nil {
