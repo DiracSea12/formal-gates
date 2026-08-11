@@ -128,30 +128,46 @@ func TestLifecycleUnclaimedObservationsRetireWithRun(t *testing.T) {
 }
 
 func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
-	tests := map[string][]HookDefinition{
-		"claude": {
-			{Event: "SubagentStart", Command: []string{"lifecycle", "capture", "--provider", ProviderClaude, "--event", "SubagentStart"}},
-			{Event: "SubagentStop", Command: []string{"lifecycle", "capture", "--provider", ProviderClaude, "--event", "SubagentStop"}},
-		},
-		"codex": {
-			{Event: "SubagentStart", Command: []string{"lifecycle", "capture", "--provider", ProviderCodex, "--event", "SubagentStart"}},
-			{Event: "SubagentStop", Command: []string{"lifecycle", "capture", "--provider", ProviderCodex, "--event", "SubagentStop"}},
-		},
-		"cursor": {
-			{Event: "subagentStart", Command: []string{"lifecycle", "capture", "--provider", ProviderCursor, "--event", "subagentStart"}},
-			{Event: "subagentStop", Command: []string{"lifecycle", "capture", "--provider", ProviderCursor, "--event", "subagentStop"}},
-		},
+	// 独立期望：每个宿主定义且只定义其 start/stop 两个捕获 hook 事件。
+	wantEvents := map[string][]string{
+		ProviderClaude: {"SubagentStart", "SubagentStop"},
+		ProviderCodex:  {"SubagentStart", "SubagentStop"},
+		ProviderCursor: {"subagentStart", "subagentStop"},
 	}
-	for host, want := range tests {
+	for _, host := range []string{ProviderClaude, ProviderCodex, ProviderCursor} {
 		t.Run(host, func(t *testing.T) {
-			got, err := HookDefinitions(host)
+			// 对照实际定义来源：宿主适配器持有 hook 事件集合，定义须一一对应。
+			adapter, err := adapterFor(host)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("HookDefinitions(%q)=%#v want %#v", host, got, want)
+			hooks, err := HookDefinitions(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(hooks) != len(adapter.hookEvents) {
+				t.Fatalf("HookDefinitions(%q) produced %d definitions, want one per adapter event (%d)", host, len(hooks), len(adapter.hookEvents))
+			}
+			gotEvents := make([]string, 0, len(hooks))
+			for index, hook := range hooks {
+				if hook.Event != adapter.hookEvents[index] {
+					t.Fatalf("HookDefinitions(%q)[%d].Event=%q want %q", host, index, hook.Event, adapter.hookEvents[index])
+				}
+				gotEvents = append(gotEvents, hook.Event)
+				// 命令形状为独立期望：capture 子命令携带宿主与事件，命令尾参即定义事件。
+				wantCommand := []string{"lifecycle", "capture", "--provider", host, "--event", hook.Event}
+				if !reflect.DeepEqual(hook.Command, wantCommand) {
+					t.Fatalf("HookDefinitions(%q)[%d].Command=%#v want %#v", host, index, hook.Command, wantCommand)
+				}
+			}
+			if !reflect.DeepEqual(gotEvents, wantEvents[host]) {
+				t.Fatalf("HookDefinitions(%q) events=%v want %v", host, gotEvents, wantEvents[host])
 			}
 		})
+	}
+	// 未支持宿主拒绝。
+	if _, err := HookDefinitions("unsupported-host"); err == nil {
+		t.Fatal("unsupported lifecycle host was accepted")
 	}
 }
 
@@ -208,7 +224,7 @@ func TestLifecycleCursorAndPathlessStopsStayWithoutTranscriptPath(t *testing.T) 
 	}
 }
 
-// TestLifecycleStopCaptureStoresInterruptionReason covers RQ-013: lifecycle capture
+// TestLifecycleStopCaptureStoresInterruptionReason covers lifecycle capture
 // extracts the interruption reason (including HTTP error codes) from host stop
 // events and records it on the stop event; a host without a reason records "未知".
 func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
@@ -246,7 +262,7 @@ func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
 	}
 }
 
-// TestPayloadHTTPErrorCodeStandaloneToken covers R 修复清单 item 11: payloadHTTPErrorCode
+// TestPayloadHTTPErrorCodeStandaloneToken covers payloadHTTPErrorCode
 // only classifies a code when it appears as a standalone numeric token or in a
 // dedicated error-code field — a substring inside a longer number or word must
 // not be misclassified as an objective API interruption reason.
@@ -271,7 +287,7 @@ func TestPayloadHTTPErrorCodeStandaloneToken(t *testing.T) {
 	}
 }
 
-// TestLifecycleInterruptedDispatchVerification covers RQ-013: a dispatch with a
+// TestLifecycleInterruptedDispatchVerification covers a dispatch with a
 // start event and a recorded interruption reason but no paired stop is accepted
 // as an interruption credential (Interrupted), not REJECTED.
 func TestLifecycleInterruptedDispatchVerification(t *testing.T) {

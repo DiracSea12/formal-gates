@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// RQ-011 主代理与审查类代理写阻断（PreToolUse hook）。
+// 主代理与审查类代理写阻断（PreToolUse hook）。
 //
 // 正式流程进入开发阶段后，主代理（主线程，payload 无 agent_id/agent_type）与全部审查类
 // 代理不得写代码或直接改 run 状态；run 状态只能经 CLI 写入，代码与执行文件只能经
@@ -139,7 +139,7 @@ func jsonString(value any) string {
 }
 
 // isWriteTool reports whether a PreToolUse tool is a code/run-state write the
-// RQ-011 guard must adjudicate: file-edit tools and Bash that commits or writes
+// guard must adjudicate: file-edit tools and Bash that commits or writes
 // files. Read-only tools and non-write tools are not adjudicated here.
 func isWriteTool(toolName, command string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
@@ -152,7 +152,7 @@ func isWriteTool(toolName, command string) bool {
 }
 
 // commandWritesFiles reports whether a Bash/shell command writes to the VCS or to
-// files (git commit 与写文件 Bash），从而纳入 RQ-011 阻断判定。只读命令不命中：输出
+// files (git commit 与写文件 Bash），从而纳入阻断判定。只读命令不命中：输出
 // 重定向到 /dev/null（丢弃输出）与 2>&1（stderr 合并）等只读惯用法不视为写文件，由
 // redirectWriteTargets 正确解析重定向目标、不靠朴素子串匹配（"2>&1 命中 2>"、
 // "> /dev/null 命中 > " 的误判在此被修正）。
@@ -353,7 +353,7 @@ func registeredHookArtifacts(statePath string) []string {
 	return paths
 }
 
-// decideWriteBlockValue 对 PreToolUse 载荷执行 RQ-011 写阻断判定。返回
+// decideWriteBlockValue 对 PreToolUse 载荷执行写阻断判定。返回
 // (decision, true) 表示本载荷属于需要判定的代码/run 状态写入；返回
 // (HookDecision{}, false) 表示非写入（只读）、formal-gates CLI 命令或不属于本判定范围，
 // 交由既有 hook 逻辑处理。从载荷 cwd 定位活动 run；找不到活动 run 时放行（不干扰普通项目）。
@@ -390,7 +390,7 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 		return allowHook(input.agentType + " is allowed to write code and test/design documents"), true
 	}
 
-	// 主代理（无 agent 身份）：RQ-011 的阻断范围是"代码与 run 状态"（用户 2026-08-09
+	// 主代理（无 agent 身份）：阻断范围是"代码与 run 状态"（用户 2026-08-09
 	// 明确）。已登记需求/设计文档的编辑（需求更改流程的一部分）放行；非代码、非 run 状态
 	// 文件（P2-BACKLOG.md 等文档）的写入放行；对代码与 run 状态的直接写入阻断。
 	if input.agentType == "" {
@@ -462,7 +462,7 @@ func isPathWithinRoot(path, repoRoot string) bool {
 }
 
 // mainAgentWriteBlocked reports whether the main thread's write targets code or run
-// state — the only writes RQ-011 blocks for the main agent（P2-2 处置，收窄阻断范围）。
+// state — the only writes blocks for the main agent（P2-2 处置，收窄阻断范围）。
 // Edit/Write 按目标路径判定（isCodeOrRunStatePath）；Bash 按命令判定
 // （bashWriteTargetsCodeOrState）。
 func mainAgentWriteBlocked(input writeBlockPayload, command string) bool {
@@ -472,7 +472,7 @@ func mainAgentWriteBlocked(input writeBlockPayload, command string) bool {
 	return bashWriteTargetsCodeOrState(command)
 }
 
-// codeFileExtensions 是常见代码 / 脚本 / 构建清单文件扩展名（小写）。RQ-011 对主线程的
+// codeFileExtensions 是常见代码 / 脚本 / 构建清单文件扩展名（小写）。 对主线程的
 // 写阻断只覆盖"代码与 run 状态"：非代码、非状态文件（P2-BACKLOG.md、README 等文档）
 // 放行。此判定是扩展名级通用启发式（千项目通用），不做项目静态路径白名单。
 var codeFileExtensions = map[string]bool{
@@ -491,7 +491,7 @@ var codeFileExtensions = map[string]bool{
 }
 
 // isCodeOrRunStatePath reports whether a file path is code or run state — the only
-// things RQ-011 blocks for the main thread. 非代码、非状态文件（文档 / 数据 / 配置）不
+// things blocks for the main thread. 非代码、非状态文件（文档 / 数据 / 配置）不
 // 命中。run 状态指任何 .gates 路径；代码按扩展名识别。
 func isCodeOrRunStatePath(path string) bool {
 	lower := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
@@ -506,7 +506,7 @@ func isCodeOrRunStatePath(path string) bool {
 }
 
 // bashWriteTargetsCodeOrState reports whether a Bash write command targets code or
-// run state — the only writes RQ-011 blocks for the main agent. git / VCS 状态写入
+// run state — the only writes blocks for the main agent. git / VCS 状态写入
 // （commit / push / merge / reset / checkout -- / clean / add）与 .gates（run 状态）一律
 // 命中；输出重定向按目标路径判定（> notes.md 不命中、> main.go 命中）；其余文件变更
 // 工具（tee / touch / mkdir / rm / mv / cp / sed -i / install）目标难以可靠解析，保守命中

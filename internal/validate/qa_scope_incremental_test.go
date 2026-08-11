@@ -223,7 +223,7 @@ func TestNoRepairableBlockerWhenNothingFailed(t *testing.T) {
 	}
 }
 
-// TestReviewCompletionAllowsDesignReRecord asserts RQ-011: after a qa-review round
+// TestReviewCompletionAllowsDesignReRecord asserts after a qa-review round
 // completes (PASS), re-recording qa-design for the same mode is allowed (the design
 // is unlocked once no review dispatch is in flight).
 func TestReviewCompletionAllowsDesignReRecord(t *testing.T) {

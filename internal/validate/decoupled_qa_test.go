@@ -10,7 +10,7 @@ import (
 )
 
 // perModeReadyDelivery builds a run with blackbox and whitebox QA fully decoupled
-// (RQ-012): each mode is designed and reviewed PASS through its own per-mode
+// each mode is designed and reviewed PASS through its own per-mode
 // dispatch, then a development snapshot is taken. The route selects blackbox,
 // whitebox, and the quality gate. Case IDs: blackbox CASE-001, whitebox CASE-002.
 func perModeReadyDelivery(t *testing.T, root, pkg, id string) RunState {
@@ -56,7 +56,7 @@ func perModeReadyDelivery(t *testing.T, root, pkg, id string) RunState {
 	return state
 }
 
-// TestLegacyQAExecutionAndPriorMigrateToMergedKey verifies the RQ-012 migration: an
+// TestLegacyQAExecutionAndPriorMigrateToMergedKey verifies the migration: an
 // old state.json with the single qaExecution / priorQAExecution fields loads into
 // the per-mode storage under the merged "" key, so legacy runs keep their recorded
 // execution results and rerun-recognition base.
@@ -81,7 +81,7 @@ func TestLegacyQAExecutionAndPriorMigrateToMergedKey(t *testing.T) {
 	}
 	legacy.QAExecutionByMode = nil
 	legacy.PriorQAExecutionByMode = nil
-	// RQ-009：旧状态文件（无 stateIntegrity 字段）跳过完整性校验；模拟旧格式时一并清空该
+	// 旧状态文件（无 stateIntegrity 字段）跳过完整性校验；模拟旧格式时一并清空该
 	// 字段，使文件以合法旧形态加载，而不是被当作 CLI 写入后被手工改写拒绝。
 	legacy.StateIntegrity = ""
 	data, err := json.MarshalIndent(legacy, "", "  ")
@@ -103,7 +103,7 @@ func TestLegacyQAExecutionAndPriorMigrateToMergedKey(t *testing.T) {
 	}
 }
 
-// TestWhiteboxDesignDoesNotClearBlackboxExecution covers RQ-012: a whitebox
+// TestWhiteboxDesignDoesNotClearBlackboxExecution covers a whitebox
 // qa-design round must reset only its own mode's execution result, never the
 // blackbox result already recorded (workflow.go RecordQADesign defect).
 func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
@@ -129,7 +129,7 @@ func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
 	}
 }
 
-// TestPerModePriorSurvivesOtherModeRecord covers RQ-012: recording one mode's new
+// TestPerModePriorSurvivesOtherModeRecord covers recording one mode's new
 // authoritative result must clear only that mode's prior authoritative result, never
 // the other mode's (workflow.go RecordQAExecution defect) — the other mode's rerun
 // recognition stays intact.
@@ -169,7 +169,7 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 	}
 }
 
-// TestBlackboxReviewInFlightDoesNotLockWhiteboxDesign covers RQ-012: the QA design
+// TestBlackboxReviewInFlightDoesNotLockWhiteboxDesign covers the QA design
 // lock is per mode — a blackbox qa-review dispatch in flight locks the blackbox
 // design but must not lock the whitebox design (workflow.go qaReviewDispatchPrepared
 // defect).
@@ -193,7 +193,7 @@ func TestBlackboxReviewInFlightDoesNotLockWhiteboxDesign(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "blackbox", false, ""); err == nil || !strings.Contains(err.Error(), "locked") {
 		t.Fatalf("blackbox design was not locked by the in-flight blackbox review: %v", err)
 	}
-	// RQ-012：黑盒 review 在飞不锁白盒 qa-design。
+	// 黑盒 review 在飞不锁白盒 qa-design。
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "whitebox", false, ""); err != nil {
 		t.Fatalf("in-flight blackbox review locked the whitebox design: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestBlackboxReviewInFlightDoesNotLockWhiteboxDesign(t *testing.T) {
 	}
 }
 
-// TestPerModeIndependentBlockerAndSealParsing covers RQ-012: blocker detection and
+// TestPerModeIndependentBlockerAndSealParsing covers blocker detection and
 // Seal resolution treat each QA mode's result independently — a blackbox FAIL blocks
 // (and blocks Seal) while the whitebox PASS result is independently preserved.
 func TestPerModeIndependentBlockerAndSealParsing(t *testing.T) {
@@ -231,7 +231,7 @@ func TestPerModeIndependentBlockerAndSealParsing(t *testing.T) {
 	}
 }
 
-// TestDualModeReviewDesignFullyDecoupled covers RQ-001: blackbox qa-review FAIL
+// TestDualModeReviewDesignFullyDecoupled covers blackbox qa-review FAIL
 // resets only the blackbox qa-design to PENDING and never touches the whitebox
 // design/review; the whitebox review can still be prepared and recorded
 // independently (each mode's review/design authoritative results are stored and
@@ -274,7 +274,7 @@ func TestDualModeReviewDesignFullyDecoupled(t *testing.T) {
 	if state.qaReview("whitebox").Status != "" && state.qaReview("whitebox").Status != "PENDING" {
 		t.Fatalf("blackbox FAIL touched the whitebox review: %#v", state.qaReview("whitebox"))
 	}
-	// 白盒 review 仍可独立准备并记录 PASS（RQ-001：任一 mode 的 prepare-action
+	// 白盒 review 仍可独立准备并记录 PASS（任一 mode 的 prepare-action
 	// qa-review 只受本 mode 的 review/design 状态约束）。
 	wbReview := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "wb-decoupled-reviewer", "whitebox")
 	wbDecisions := make([]QAReviewInput, 0, 1)
@@ -290,7 +290,7 @@ func TestDualModeReviewDesignFullyDecoupled(t *testing.T) {
 	}
 }
 
-// TestPerModeCarryInheritsPreRepairPASS covers RQ-002: after a repair snapshot,
+// TestPerModeCarryInheritsPreRepairPASS covers after a repair snapshot,
 // main-agent carry inherits every selected QA mode whose pre-repair execution
 // PASS is preserved (direct per-mode read, not current-snapshot-gated), rebinding
 // each mode's result snapshot to the current snapshot.
@@ -311,7 +311,7 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 		t.Fatalf("repair did not set the pre-repair snapshot")
 	}
 	// 修复快照推进后，两个 mode 的 PASS 都保留在各自 mode 键（Snapshot == PreRepairSnapshot），
-	// 均可被 main-agent Carry 继承（RQ-002 直取该 mode，不要求 current snapshot）。
+	// 均可被 main-agent Carry 继承（直取该 mode，不要求 current snapshot）。
 	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{blackboxQAID, whiteboxQAID}) {
 		t.Fatalf("eligible carry results=%v want=[blackbox whitebox]", got)
 	}
@@ -327,7 +327,7 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 	}
 }
 
-// TestLegacyStateWithoutPerModeReviewDesignFieldsErrors covers RQ-001: a run
+// TestLegacyStateWithoutPerModeReviewDesignFieldsErrors covers a run
 // state file that lacks the per-mode qaReviewByMode / qaDesignByMode fields (the
 // old format, or any schema mismatch) fails to load with a clear format error
 // instead of silently degrading to empty/default state.

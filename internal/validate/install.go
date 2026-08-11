@@ -65,7 +65,10 @@ var installRuntimeEntries = []string{
 }
 
 func Install(options InstallOptions) (InstallReport, error) {
-	source := cleanRoot(options.Source)
+	if strings.TrimSpace(options.Source) == "" {
+		return InstallReport{}, fmt.Errorf("formal-gates source is required (--source); it must point at the package directory to install")
+	}
+	source := lifecycle.CleanRoot(options.Source)
 	sourceAbs, err := filepath.Abs(source)
 	if err != nil {
 		return InstallReport{}, err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type eventRecord struct {
@@ -16,8 +17,8 @@ type eventRecord struct {
 	Correlation    string `json:"correlation,omitempty"`
 	TranscriptPath string `json:"transcriptPath,omitempty"`
 	// Reason 是宿主 stop/error 事件携带的中断原因（含 HTTP 错误码 429/503/402 等），
-	// 由 lifecycle capture 在子代理中断时自动提取并记录（RQ-013）；宿主未提供时记
-	// 录"未知"。供续用判定（RQ-007 三分支）与中断派发的生命周期凭证读取。
+	// 由 lifecycle capture 在子代理中断时自动提取并记录；宿主未提供时记
+	// 录"未知"。供续用判定（三分支）与中断派发的生命周期凭证读取。
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -56,7 +57,7 @@ func recordEvent(root string, record eventRecord) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// RQ-013：stop 事件带中断原因时写入派发级原因记录，供"start + 已记录中断原因"
+	// stop 事件带中断原因时写入派发级原因记录，供"start + 已记录中断原因"
 	// 作为被中断派发的中断凭证读取（即使 stop 配对事件缺失也能读到原因）。
 	if record.Event == eventStop && record.Reason != "" {
 		if err := writeInterruptionReason(root, binding.RunID, binding.DispatchID, record.Reason); err != nil {
@@ -172,7 +173,7 @@ func bindPendingStops(root string, binding bindingRecord, correlation string) er
 }
 
 func matchingBindings(root string, record eventRecord) ([]bindingRecord, error) {
-	paths, err := filepath.Glob(filepath.Join(cleanRoot(root), ".gates", "tmp", "*", "lifecycle", "*.json"))
+	paths, err := filepath.Glob(filepath.Join(CleanRoot(root), ".gates", "tmp", "*", "lifecycle", "*.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +250,7 @@ func DispatchTranscriptPath(root, runID, dispatchID string) (string, string, err
 }
 
 // writeInterruptionReason persists a dispatch-level interruption reason record
-// (RQ-013). The record lives next to the dispatch's event journal so the reason
+// The record lives next to the dispatch's event journal so the reason
 // is readable even when the stop event pairing is missing or was cleaned up.
 func writeInterruptionReason(root, runID, dispatchID, reason string) error {
 	data, err := json.MarshalIndent(eventRecord{Reason: reason}, "", "  ")
@@ -369,7 +370,7 @@ func pendingRoot(root, runID string) string {
 }
 
 func activeRuns(root string) ([]string, error) {
-	paths, err := filepath.Glob(filepath.Join(cleanRoot(root), ".gates", "tmp", "*", "lifecycle", "active"))
+	paths, err := filepath.Glob(filepath.Join(CleanRoot(root), ".gates", "tmp", "*", "lifecycle", "active"))
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +382,7 @@ func activeRuns(root string) ([]string, error) {
 }
 
 func runLifecycleRoot(root, runID string) string {
-	return filepath.Join(cleanRoot(root), ".gates", "tmp", runID, "lifecycle")
+	return filepath.Join(CleanRoot(root), ".gates", "tmp", runID, "lifecycle")
 }
 
 func runEventPath(root, runID, dispatchID, event string) string {
@@ -397,9 +398,9 @@ func digest(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func cleanRoot(root string) string {
-	if root == "" {
+func CleanRoot(root string) string {
+	if strings.TrimSpace(root) == "" {
 		return "."
 	}
-	return filepath.Clean(root)
+	return root
 }

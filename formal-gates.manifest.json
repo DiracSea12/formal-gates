@@ -84,14 +84,6 @@
     "prompts/",
     "gates/"
   ],
-  "examples": [
-    {
-      "path": "examples/skill-behavior-prompts.json",
-      "type": "read-only skill behavior checks",
-      "purpose": "Sample prompts for human or automated skill behavior review.",
-      "not_a_gate": true
-    }
-  ],
   "install_commands": [
     "bin\\formal-gates.exe install --source . --host claude --scope global --force",
     "bin/formal-gates install --source . --host claude --scope global --force",

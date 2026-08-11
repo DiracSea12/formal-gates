@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"formal-gates/internal/lifecycle"
 )
 
 var promptIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -45,7 +47,7 @@ type PromptCatalog struct {
 }
 
 func LoadPromptCatalog(root string) (PromptCatalog, error) {
-	root = cleanRoot(root)
+	root = lifecycle.CleanRoot(root)
 	base, err := readPromptFile(filepath.Join(root, "prompts", "reviewer-base.md"))
 	if err != nil {
 		return PromptCatalog{}, fmt.Errorf("reviewer base: %w", err)
@@ -216,7 +218,7 @@ func composedGatePromptHash(catalog PromptCatalog, content string) string {
 }
 
 // composedActionPromptHash is the content hash of the catalog-dependent portion
-// of a composed action prompt. Injected reviewer actions (RQ-003) carry the
+// of a composed action prompt. Injected reviewer actions carry the
 // shared reviewer base, so their hash includes the base — a base-only change
 // moves every injected reviewer action's hash and enables the inheritance
 // judgment, symmetric with the gate path; non-reviewer actions keep the plain

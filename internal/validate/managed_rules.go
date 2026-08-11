@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/lifecycle"
 )
 
 const managedRulesRelativePath = "references/managed-rules.json"
@@ -13,7 +15,7 @@ const managedRulesRelativePath = "references/managed-rules.json"
 // LoadManagedRules reads the ordered ownership record used by both install and
 // uninstall.
 func LoadManagedRules(root string) ([]string, error) {
-	path := filepath.Join(cleanRoot(root), filepath.FromSlash(managedRulesRelativePath))
+	path := filepath.Join(lifecycle.CleanRoot(root), filepath.FromSlash(managedRulesRelativePath))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("managed rule catalog: %w", err)

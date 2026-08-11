@@ -68,8 +68,15 @@ func TestCodexHookCanaryUsesUniqueCaseIDs(t *testing.T) {
 		KeepTemp:     true,
 	}
 
-	first, _ := CodexHookCanary(options)
-	second, _ := CodexHookCanary(options)
+	// 缺失 codex 可执行文件：两次 canary 都必须失败（错误被记录），而不是被丢弃。
+	first, firstResult := CodexHookCanary(options)
+	if firstResult.OK() {
+		t.Fatalf("canary with a missing codex command must fail: %#v", firstResult.Failures)
+	}
+	second, secondResult := CodexHookCanary(options)
+	if secondResult.OK() {
+		t.Fatalf("canary with a missing codex command must fail: %#v", secondResult.Failures)
+	}
 	if first.Case == "" || second.Case == "" || first.Case == second.Case {
 		t.Fatalf("canary case IDs must be unique: first=%q second=%q", first.Case, second.Case)
 	}

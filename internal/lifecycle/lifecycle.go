@@ -14,7 +14,7 @@ const (
 	Rejected    = "REJECTED"
 	Unavailable = "UNAVAILABLE"
 	// Interrupted 是被中断派发的中断凭证：宿主只有 start 事件但已记录中断原因时，
-	// 生命周期校验接受该派发为"已中断"而非 REJECTED（RQ-013）。
+	// 生命周期校验接受该派发为"已中断"而非 REJECTED。
 	Interrupted = "INTERRUPTED"
 )
 
@@ -24,7 +24,7 @@ type CaptureResult struct {
 	Identity  string `json:"identity"`
 	Duplicate bool   `json:"duplicate"`
 	// Roots 是本次事件实际落盘的仓库根路径（宿主载荷派生的 project roots 或显式 --root），
-	// 供 RQ-014 生命周期触发面定位活动 run 以运行并行检查。
+	// 供生命周期触发面定位活动 run 以运行并行检查。
 	Roots []string `json:"roots,omitempty"`
 }
 
@@ -90,7 +90,7 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if adapter.transcriptPath != nil {
 		transcriptPath = adapter.transcriptPath(decoded)
 	}
-	// RQ-013：从宿主 stop/error 事件提取中断原因（含 HTTP 错误码）写入事件记录；宿主
+	// 从宿主 stop/error 事件提取中断原因（含 HTTP 错误码）写入事件记录；宿主
 	// 未提供原因时记录"未知"。仅 stop/error 事件承载原因，start 事件不记录。
 	reason := ""
 	if event == eventStop && adapter.reason != nil {
@@ -161,7 +161,7 @@ func activeRunRoot(candidate string) (string, bool, error) {
 }
 
 // ActiveRunIDs returns the ids of runs currently active at root (those whose
-// lifecycle active marker exists). Used by the RQ-014 parallel-check trigger on
+// lifecycle active marker exists). Used by the parallel-check trigger on
 // the lifecycle hook path to locate the run state to read.
 func ActiveRunIDs(root string) ([]string, error) {
 	return activeRuns(root)
@@ -267,7 +267,7 @@ func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 		result.Diagnostic = "matching start and stop events observed"
 		return result, nil
 	}
-	// RQ-013：被中断派发接受"start 事件 + 已记录中断原因"作为中断凭证（而非 REJECTED）。
+	// 被中断派发接受"start 事件 + 已记录中断原因"作为中断凭证（而非 REJECTED）。
 	// 子代理被中断（如 API 瞬时 429/503）时宿主可能只有 start 事件 + 中断原因；该派发
 	// 仍须可经生命周期验证继续处置，而不是被当成无配对事件拒绝。
 	if result.StartObserved {
@@ -294,7 +294,7 @@ func VerifyDispatch(root, runID, dispatchID string) (Verification, error) {
 }
 
 // DispatchInterruptionReason returns the recorded interruption reason for a
-// dispatch (RQ-013). The reason is captured from the host stop/error event at
+// dispatch. The reason is captured from the host stop/error event at
 // capture time and persisted both on the stop event record and in a dedicated
 // dispatch-level reason record. The dedicated record takes precedence so the
 // reason stays readable even when the stop event pairing is missing. A dispatch

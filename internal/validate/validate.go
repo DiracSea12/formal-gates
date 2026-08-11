@@ -2,11 +2,11 @@ package validate
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
+
+	"formal-gates/internal/lifecycle"
 )
 
 type Failure struct {
@@ -56,28 +56,6 @@ func slash(path string) string {
 	return filepath.ToSlash(path)
 }
 
-func cleanRoot(root string) string {
-	if strings.TrimSpace(root) == "" {
-		return "."
-	}
-	return root
-}
-
-func resolvePath(root, value string) string {
-	if filepath.IsAbs(value) {
-		return filepath.Clean(value)
-	}
-	return filepath.Join(root, filepath.FromSlash(value))
-}
-
-func relativePath(root, path string) string {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return slash(path)
-	}
-	return slash(rel)
-}
-
 func samePath(a, b string) bool {
 	a, b = absPath(a), absPath(b)
 	if resolved, err := filepath.EvalSymlinks(a); err == nil {
@@ -92,30 +70,7 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-func cleanWorktree(worktree string) string { return absPath(cleanRoot(worktree)) }
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func scalarString(value any) string {
-	switch v := value.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case float64, bool:
-		return strings.TrimSpace(fmt.Sprint(v))
-	}
-	rv := reflect.ValueOf(value)
-	if rv.IsValid() && rv.Kind() >= reflect.Int && rv.Kind() <= reflect.Uint64 {
-		return strings.TrimSpace(fmt.Sprint(value))
-	}
-	return ""
-}
+func cleanWorktree(worktree string) string { return absPath(lifecycle.CleanRoot(worktree)) }
 
 func writeJSON(path string, value any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

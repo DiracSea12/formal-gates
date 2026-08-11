@@ -11,7 +11,7 @@ import (
 )
 
 // TestQAScopeValueParsing verifies the inline authorize-repair --qa-scope /
-// --qa-cases / --qa-reason <mode>=<value> parsing (RQ-007, 产品审 P2): an empty
+// --qa-cases / --qa-reason <mode>=<value> parsing (产品审 P2): an empty
 // <mode> (a leading '=') selects the merged / single-dispatch QA set, values group
 // per mode, and malformed input is rejected.
 func TestQAScopeValueParsing(t *testing.T) {
@@ -68,7 +68,7 @@ func cliRepairDispatch(t *testing.T, root, pkg, runID, suffix string) {
 }
 
 // TestCLIAuthorizeRepairInlineQAScope verifies the end-to-end CLI wiring of the
-// inline authorize-repair QA scope flags (RQ-007, 产品审 P2): after the shared
+// inline authorize-repair QA scope flags (产品审 P2): after the shared
 // review-wave limit is exhausted with a merged QA FAIL, authorize-repair without a
 // scope is rejected, and `--qa-scope =FULL` (empty <mode> = the merged set) records
 // the scope with Source AUTHORIZE_REPAIR and grants exactly one extra wave.

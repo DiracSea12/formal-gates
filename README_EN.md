@@ -221,7 +221,7 @@ bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host codex --scope project --project <project>
 ```
 
-On Windows use `bin\formal-gates.exe`.
+On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only asset: do not try to run it on macOS/Linux (it fails with `exec format error`); use that platform's `bin/formal-gates` instead.
 
 ### Where things get installed
 

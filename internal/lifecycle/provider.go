@@ -27,7 +27,7 @@ type providerAdapter struct {
 	correlation    func(string, any) string
 	projectRoots   func(any) []string
 	transcriptPath func(any) string
-	// reason 从宿主 stop/error 事件提取中断原因（含 HTTP 错误码），供 RQ-013 自动记录。
+	// reason 从宿主 stop/error 事件提取中断原因（含 HTTP 错误码），供自动记录。
 	reason func(any) string
 }
 
@@ -156,7 +156,7 @@ func payloadIdentity(value any, names []string) string {
 }
 
 // payloadReason extracts an interruption reason from a host stop/error event
-// payload (RQ-013). It reads the reason-shaped fields first (stop_reason,
+// payload. It reads the reason-shaped fields first (stop_reason,
 // reason, error, message, status), then falls back to any embedded HTTP error
 // code (429/502/503/504/402/529 etc.) found in the payload text. Empty when the
 // payload carries no discernible reason; Capture then records "未知".
@@ -174,7 +174,7 @@ func payloadReason(value any) string {
 
 // payloadHTTPErrorCode scans every scalar string in the payload for a common
 // transient HTTP error code and returns the first match as "HTTP <code>". To
-// avoid misclassifying non-HTTP text (R 修复清单 item 11), a code only matches
+// avoid misclassifying non-HTTP text, a code only matches
 // as a standalone numeric token — a whole number bounded by non-digit characters
 // or the string edge — or when it appears in a dedicated error-code field name.
 // The scan is bounded by the same depth limit as payloadScalar so a large payload
@@ -284,10 +284,10 @@ func payloadStrings(value any, names []string, depth int) []string {
 			}
 			if values, ok := raw.([]any); ok {
 				for _, value := range values {
-					results = appendUniqueStrings(results, scalarString(value))
+					results = appendUniqueStrings(results, ScalarString(value))
 				}
 			} else {
-				results = appendUniqueStrings(results, scalarString(raw))
+				results = appendUniqueStrings(results, ScalarString(raw))
 			}
 		}
 	}
@@ -309,7 +309,7 @@ func payloadScalar(value any, names []string, depth int) string {
 		for _, name := range names {
 			for key, raw := range object {
 				if strings.EqualFold(key, name) {
-					if scalar := scalarString(raw); scalar != "" {
+					if scalar := ScalarString(raw); scalar != "" {
 						return scalar
 					}
 				}
@@ -328,7 +328,7 @@ func payloadScalar(value any, names []string, depth int) string {
 	return ""
 }
 
-func scalarString(value any) string {
+func ScalarString(value any) string {
 	switch typed := value.(type) {
 	case string:
 		return strings.TrimSpace(typed)

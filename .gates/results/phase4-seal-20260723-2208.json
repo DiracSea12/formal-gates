@@ -19,7 +19,8 @@
             "SKILL.md:155",
             "internal/cli/cli.go:218",
             "internal/validate/workflow.go:515"
-          ]
+          ],
+          "severity": "P1"
         }
       ],
       "message": "Reviewer reported a post-aggregation VCS identity timing gap; main-agent adjudication treats the precisely timed cross-process race as advisory under the confirmed host-owned VCS boundary, but preserves the raw reviewer result."
@@ -32,7 +33,8 @@
           "message": "prompts/reviewer-base.md does not state that shared cross-gate rules take precedence over gate-specific prose, although the confirmed gate-file contract requires it. A normally installed custom gate can therefore conflict with the shared contract without a defined precedence rule.",
           "locations": [
             "prompts/reviewer-base.md:1"
-          ]
+          ],
+          "severity": "P1"
         }
       ],
       "message": "The shared reviewer prompt omits a required precedence rule; all executable checks otherwise passed."

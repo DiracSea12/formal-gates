@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-// TestInvalidateResetsPerModeReviewDesignAndCaseStatus covers RQ-008: a
+// TestInvalidateResetsPerModeReviewDesignAndCaseStatus covers a
 // meaning-changed requirement invalidation must void the per-mode review/design
 // authoritative results AND reset every mode's case ReviewStatus back to PENDING,
 // so the snapshot blackbox gate does not read a stale per-mode PASS and release
-// (the defect RQ-008 fixes — invalidate only reset Actions, which no longer carry
-// qa-review/qa-design after RQ-001).
+// (the defect fixes — invalidate only reset Actions, which no longer carry
+// qa-review/qa-design after).
 func TestInvalidateResetsPerModeReviewDesignAndCaseStatus(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := perModeReadyDelivery(t, root, pkg, "invalidate-per-mode")
@@ -56,7 +56,7 @@ func TestInvalidateResetsPerModeReviewDesignAndCaseStatus(t *testing.T) {
 	}
 }
 
-// TestStateIntegrityRoundTripRejectsHandEditAndSkipsLegacy covers RQ-009: the run
+// TestStateIntegrityRoundTripRejectsHandEditAndSkipsLegacy covers the run
 // state file carries a sha256 StateIntegrity that SaveRunState writes and
 // LoadRunState verifies — a hand-edit outside the CLI is rejected with the hard
 // message, an untouched round-trip loads, and a legacy state (no field) skips the
@@ -105,7 +105,7 @@ func TestStateIntegrityRoundTripRejectsHandEditAndSkipsLegacy(t *testing.T) {
 	}
 }
 
-// TestStateIntegrityWriteIsFast covers RQ-009's <5ms hashing budget: the sha256
+// TestStateIntegrityWriteIsFast covers <5ms hashing budget: the sha256
 // computation over the normalized state must stay cheap. The full write also
 // includes fsync + atomic replace, which is dominated by the filesystem, so the
 // bound is measured on the hash path rather than the disk write.
@@ -137,7 +137,7 @@ func stateIntegrityHashBytes(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestStartCurrentSnapshotAdoptsAncestor covers RQ-010: start --current-snapshot
+// TestStartCurrentSnapshotAdoptsAncestor covers start --current-snapshot
 // pins the current snapshot to a native ancestor (equal or ancestor of HEAD)
 // instead of HEAD, so already-committed development work becomes a pending
 // snapshot. A non-ancestor identity is rejected.
@@ -148,7 +148,7 @@ func TestStartCurrentSnapshotAdoptsAncestor(t *testing.T) {
 	commitAll(t, root, "development commit")
 	head := gitHead(t, root)
 	parent := runGit(t, root, "rev-parse", head+"^")
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "current-snapshot", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", CurrentSnapshot: parent})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "current-snapshot", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", CurrentSnapshot: parent, Split: "no"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,12 +156,12 @@ func TestStartCurrentSnapshotAdoptsAncestor(t *testing.T) {
 		t.Fatalf("current snapshot not pinned to the ancestor: current=%s base=%s want=%s", state.CurrentSnapshot, state.BaseSnapshot, parent)
 	}
 	// 非祖先身份被拒。
-	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "current-snapshot-bad", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", CurrentSnapshot: "0000000000000000000000000000000000000000"}); err == nil {
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "current-snapshot-bad", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", CurrentSnapshot: "0000000000000000000000000000000000000000", Split: "no"}); err == nil {
 		t.Fatal("non-ancestor current snapshot was accepted")
 	}
 }
 
-// TestIncrementalReviewScopedItemsJudgedAndAcceptedProtected covers RQ-012:
+// TestIncrementalReviewScopedItemsJudgedAndAcceptedProtected covers
 // prepare-action --scope declares the review items (PENDING, must be judged);
 // record-action judges every pending item; a PASS item cannot be re-judged; a
 // FAIL item requires a finding; meaning-preserved rebinding keeps the table while
@@ -223,7 +223,7 @@ func TestIncrementalReviewScopedItemsJudgedAndAcceptedProtected(t *testing.T) {
 	}
 }
 
-// TestIncrementalReviewAllPassedTableAllowsEmptyDecision covers the RQ-012 dead-end
+// TestIncrementalReviewAllPassedTableAllowsEmptyDecision covers the dead-end
 // fix (P2-1): when the item table is non-empty but every item is already PASS, a
 // re-review prepare without --scope generates the "no pending items" prompt, and
 // record-action with no --item decisions must be accepted rather than rejected —
@@ -275,7 +275,7 @@ func TestIncrementalReviewAllPassedTableAllowsEmptyDecision(t *testing.T) {
 	}
 }
 
-// TestIncrementalReviewMeaningChangedClearsTable covers RQ-012: meaning-preserved
+// TestIncrementalReviewMeaningChangedClearsTable covers meaning-preserved
 // rebinding keeps the item table, while meaning-changed invalidation clears it
 // (full re-review).
 func TestIncrementalReviewMeaningChangedClearsTable(t *testing.T) {

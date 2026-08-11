@@ -9,7 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Incorporate gate P2 review findings: the RQ-014 parallel reminder shares one
+- Add a user-gated flow reset (`workflow reset --user-approve`): it only
+  resets a run's `.gates` flow state (requirement re-registered and unconfirmed,
+  overall reviews / gates reopened, stuck dispatches cleared) and never touches
+  the developed content (working tree, committed code, requirement/solution
+  documents) or the recorded development snapshot; its output lists what was
+  kept and what was reset. `workflow abort` now requires a user-level
+  `--user-confirm` before it executes.
+- Hard-block mechanically detectable misoperations at their earliest point:
+  any flow command that depends on the requirement revision rejects as soon as
+  the requirement document content hash drifts from the run's registered
+  revision, directing `workflow requirement --meaning preserved|changed`
+  (a bare `--confirmed` cannot update a changed revision); recording an in-flight
+  dispatch's result is exempt from that drift block because the result belongs to
+  the old registered revision, so the "record the in-flight result, then rebind"
+  recovery stays executable instead of deadlocking against the in-flight guard;
+  `prepare-action` / `prepare-gate` write the dispatch's full prompt to the run's
+  canonical prompt file (`.gates/tmp/<run-id>/prompts/<dispatch-id>.md`) and
+  record its hash and path in the dispatch state, verify the file at write time,
+  and re-verify it at claim (dispatch) time so a hand-written or tampered prompt
+  is judged unusable; and `workflow requirement` rebinding is refused while an
+  in-flight review dispatch (claimed, result not yet recorded via
+  record-action/record-gate) has an unrecorded result.
+- runWorkflow 拆为子命令表驱动 runner，flag 类型族收敛为泛型模板（片2 item 6/7，本次补齐交付）。
+
+- Incorporate gate P2 review findings: the parallel reminder shares one
   emission point (`emitParallelReminder`) across the workflow commands and the
   lifecycle hook; `RecordQAReview` reads the same case view the review prompt
   uses (per-mode key with merged-`""` fallback) and writes the decided status back
@@ -17,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--qa-reason` flags accept an empty `<mode>` (`=FULL`) for the merged QA set,
   and the auto-carried AFFECTED decision at the review limit can be overridden by
   an explicit host decision (e.g. upgrade to FULL).
-- Fully decouple blackbox and whitebox QA (RQ-012): QA execution results and
+- Fully decouple blackbox and whitebox QA: QA execution results and
   prior authoritative results are stored per mode (`qaExecutionByMode` /
   `priorQAExecutionByMode`, empty mode = merged/single-dispatch), so one mode's
   design/execution/record never clears or affects the other mode's execution
@@ -53,8 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data loss where designing whitebox replaced the whole table and cleared
   blackbox cases. Legacy single-list state files migrate into the merged key on
   load; case IDs stay unique across modes.
-- Detect parallelism and remind the main agent to fill parallel dispatches
-  (RQ-014): a hard-coded, decoupled "stage → should-parallel task" data table
+- Detect parallelism and remind the main agent to fill parallel dispatches:
+  a hard-coded, decoupled "stage → should-parallel task" data table
   drives the check (post-development = blackbox QA execution + whitebox QA
   execution + each selected gate; repair rounds re-review gates and QA in
   parallel; blackbox QA design/review runs in parallel with development; the
@@ -222,7 +246,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   double-counts the stale merged cases or lets a stale PENDING blackbox case
   block the snapshot's blackbox QA gate; the merged (empty-mode) view remains
   the full current set and merged-only runs keep the "" key's cases unchanged.
-- Fix dispatch invalidation (RQ-013): prepare SHALL NOT invalidate any dispatch;
+- Fix dispatch invalidation: prepare SHALL NOT invalidate any dispatch;
   the remaining invalidation is mode-scoped across every target (a blackbox
   dispatch never stales a whitebox dispatch of the same target, fixing the
   "whitebox review prepare staled the blackbox review" defect). Claiming a fresh

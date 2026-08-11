@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"formal-gates/internal/lifecycle"
 )
 
 type CodexHookCanaryOptions struct {
@@ -52,10 +54,11 @@ type CodexHookProbeOptions struct {
 }
 
 type CodexHookProbeResult struct {
-	EventName   string `json:"eventName"`
-	ToolName    string `json:"toolName"`
-	PayloadPath string `json:"payloadPath"`
-	ExitCode    int    `json:"exitCode"`
+	EventName    string `json:"eventName"`
+	ToolName     string `json:"toolName"`
+	PayloadPath  string `json:"payloadPath"`
+	PayloadBytes int    `json:"payloadBytes"`
+	ExitCode     int    `json:"exitCode"`
 }
 
 func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Result) {
@@ -180,10 +183,6 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 	return summary, result
 }
 
-func CodexHookCanaryJSON(summary CodexHookCanarySummary) ([]byte, error) {
-	return json.MarshalIndent(summary, "", "  ")
-}
-
 func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result) {
 	var result Result
 	if strings.TrimSpace(options.PayloadDir) == "" {
@@ -202,10 +201,11 @@ func CodexHookProbe(options CodexHookProbeOptions) (CodexHookProbeResult, Result
 		return CodexHookProbeResult{ExitCode: 1}, result
 	}
 	probe := CodexHookProbeResult{
-		EventName:   eventName,
-		ToolName:    toolName,
-		PayloadPath: slash(payloadPath),
-		ExitCode:    0,
+		EventName:    eventName,
+		ToolName:     toolName,
+		PayloadPath:  slash(payloadPath),
+		PayloadBytes: len(options.Payload),
+		ExitCode:     0,
 	}
 	return probe, result
 }
@@ -496,10 +496,10 @@ func hookPayloadNames(payload []byte) (string, string) {
 	toolName := "unknown"
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err == nil {
-		if value := scalarString(decoded["hook_event_name"]); value != "" {
+		if value := lifecycle.ScalarString(decoded["hook_event_name"]); value != "" {
 			eventName = value
 		}
-		if value := scalarString(decoded["tool_name"]); value != "" {
+		if value := lifecycle.ScalarString(decoded["tool_name"]); value != "" {
 			toolName = value
 		}
 	}

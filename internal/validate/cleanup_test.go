@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"formal-gates/internal/lifecycle"
 )
 
 func TestCleanupTempRunsSweepsTerminatedOnly(t *testing.T) {
@@ -11,11 +13,11 @@ func TestCleanupTempRunsSweepsTerminatedOnly(t *testing.T) {
 	makeTempRun(t, root, "sealed-run", "SEALED")
 	makeTempRun(t, root, "aborted-run", "ABORTED")
 	makeTempRun(t, root, "active-run", "ACTIVE")
-	if err := os.MkdirAll(filepath.Join(cleanRoot(root), ".gates", "tmp", "no-state-run"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(lifecycle.CleanRoot(root), ".gates", "tmp", "no-state-run"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := CleanupTempRuns(root)
+	result, err := CleanupTempRuns(root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +46,7 @@ func TestCleanupTempRunExplicitDeletesActive(t *testing.T) {
 	root := t.TempDir()
 	makeTempRun(t, root, "abandoned-run", "ACTIVE")
 
-	deleted, err := CleanupTempRun(root, "abandoned-run")
+	deleted, err := CleanupTempRun(root, "", "abandoned-run")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestCleanupTempRunExplicitDeletesActive(t *testing.T) {
 func TestCleanupTempRunRejectsUnsafeNames(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"", ".", "..", "a/b", "a\\b", "../escape"} {
-		if _, err := CleanupTempRun(root, id); err == nil {
+		if _, err := CleanupTempRun(root, "", id); err == nil {
 			t.Fatalf("unsafe run id %q must be rejected", id)
 		}
 	}
@@ -67,7 +69,7 @@ func TestCleanupTempRunRejectsUnsafeNames(t *testing.T) {
 
 func TestCleanupTempRunMissingIsNotError(t *testing.T) {
 	root := t.TempDir()
-	deleted, err := CleanupTempRun(root, "never-existed")
+	deleted, err := CleanupTempRun(root, "", "never-existed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +81,7 @@ func TestCleanupTempRunMissingIsNotError(t *testing.T) {
 func TestCleanupNeverTouchesResults(t *testing.T) {
 	root := t.TempDir()
 	makeTempRun(t, root, "sealed-run", "SEALED")
-	results := filepath.Join(cleanRoot(root), ".gates", "results")
+	results := filepath.Join(lifecycle.CleanRoot(root), ".gates", "results")
 	if err := os.MkdirAll(results, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestCleanupNeverTouchesResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := CleanupTempRuns(root); err != nil {
+	if _, err := CleanupTempRuns(root, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(summary); err != nil {

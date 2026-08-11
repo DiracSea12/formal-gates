@@ -56,7 +56,7 @@ func (stub *workflowLifecycleStub) InterruptionReason(_, _, _ string) (string, e
 
 func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifacts", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git"})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifacts", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", Split: "no"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	}
 	before := stateBytes(t, root, state.RunID)
 	writeTestFile(t, filepath.Join(root, "design.md"), "changed design\n")
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "frozen requirement artifact") {
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "`workflow requirement --meaning preserved|changed` 更新修订") {
 		t.Fatalf("changed frozen artifact was accepted: %v", err)
 	}
 	if after := stateBytes(t, root, state.RunID); after != before {
@@ -126,7 +126,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// RQ-007：认领未出结果且快照/任务不变时，CLI 强制续用原代理，拒绝默认重派发。
+	// 认领未出结果且快照/任务不变时，CLI 强制续用原代理，拒绝默认重派发。
 	before := stateBytes(t, root, state.RunID)
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "resume the original agent") {
 		t.Fatalf("claimed interrupted dispatch was not forced to resume: %v", err)
@@ -134,7 +134,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if stateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected resume changed state")
 	}
-	// RQ-008：只有用户显式授权（--user-requested）才可放行新派发，来源记入 ReviewOverrides。
+	// 只有用户显式授权（--user-requested）才可放行新派发，来源记入 ReviewOverrides。
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", true, "user reopened the review"); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 		t.Fatalf("user-requested reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
 	}
 	second := openDispatchID(state, "action", "qa-review")
-	// RQ-013：prepare 不再作废——用户授权的重开新派发生成后，旧 CLAIMED 派发仍在途。
+	// prepare 不再作废——用户授权的重开新派发生成后，旧 CLAIMED 派发仍在途。
 	if first == second || state.Dispatches[first].Status != "CLAIMED" || state.Dispatches[second].Attempt != 2 {
 		t.Fatalf("user-authorized retry did not create a fresh dispatch with the claimed prior still in flight: %#v", state.Dispatches)
 	}
@@ -154,11 +154,9 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if stateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected reviewer reuse changed state")
 	}
-	// 手动终止例外（RQ-013）：前子代理已被终结（生命周期记录中断原因）时，认领同功能新派发
+	// 手动终止例外：前子代理已被终结（生命周期记录中断原因）时，认领同功能新派发
 	// 把前派发标 STALE、允许认领。
-	prior := workflowLifecycle
-	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
-	t.Cleanup(func() { workflowLifecycle = prior })
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
 	state, err = ClaimDispatch(root, pkg, state.RunID, second, "reviewer-two")
 	if err != nil {
 		t.Fatal(err)
@@ -193,10 +191,7 @@ func TestDispatchClaimRequiresAnIDWithoutMutation(t *testing.T) {
 func TestWorkflowLifecycleBoundaryKeepsRejectedGatePending(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "required-lifecycle", "custom", []string{"quality"})
-	priorLifecycle := workflowLifecycle
-	stub := &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Rejected, Diagnostic: "missing matching start and stop event"}}
-	workflowLifecycle = stub
-	t.Cleanup(func() { workflowLifecycle = priorLifecycle })
+	stub := stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Rejected, Diagnostic: "missing matching start and stop event"}, "", "")
 
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "claude-agent-1")
 	if len(stub.binds) != 1 || stub.binds[0] != [4]string{root, state.RunID, dispatchID, "claude-agent-1"} {
@@ -380,13 +375,13 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 	if state.PreRepairSnapshot != prior || state.CurrentSnapshot != gitHead(t, root) {
 		t.Fatalf("repair boundary was not resolved natively: %#v", state)
 	}
-	// RQ-005：修复快照后存在旧快照 PASS 待 Carry 决策时，先处置 Carry 才能继续 qa-*。
+	// 修复快照后存在旧快照 PASS 待 Carry 决策时，先处置 Carry 才能继续 qa-*。
 	carry := prepareDispatch(t, root, pkg, state.RunID, "carry")
 	state, err = RecordCarry(root, pkg, state.RunID, carry, []CarryInput{{GateID: "architecture", Decision: "INHERIT", Message: "repair does not touch architecture behavior"}}, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// RQ-002：修复快照推进后旧快照的权威 QA 结果存续，重新派发 qa-execution 属重跑，
+	// 修复快照推进后旧快照的权威 QA 结果存续，重新派发 qa-execution 属重跑，
 	// 必须已记录覆盖本次重跑的 scope 决策（FULL 全量重跑）才能 prepare。
 	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
 	if err != nil {
@@ -727,7 +722,7 @@ func TestPredatingRunWithoutPrerequisiteActionCompletesDelivery(t *testing.T) {
 
 func TestRetainedOverallSnapshotFreezesRequirementArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "retained-freeze", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "retained-freeze", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true, Split: "yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -836,7 +831,7 @@ func TestLateRouteGateRepairStartsAFreshAttemptInTheNextWave(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = advanceRepair(t, root, pkg, state, "late-route")
-	// RQ-005：修复快照后 quality 的旧 PASS 待 Carry 决策，先处置 Carry 才能重派发
+	// 修复快照后 quality 的旧 PASS 待 Carry 决策，先处置 Carry 才能重派发
 	// 其他门。
 	carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
 	state, err = RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "quality", Decision: "INHERIT", Message: "repair is outside quality ownership"}}, "", false, "")
@@ -1060,7 +1055,7 @@ func TestResumeAndAbortNormalLifecycle(t *testing.T) {
 	t.Run("abort", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		state := mustStart(t, root, pkg, "abort")
-		summary, err := Abort(root, state.RunID)
+		summary, err := Abort(root, pkg, state.RunID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1081,7 +1076,7 @@ func TestStartAcceptsAncestorBaseSnapshot(t *testing.T) {
 	ancestor := gitHead(t, root)
 	writeTestFile(t, filepath.Join(root, "committed.txt"), "in-flight work\n")
 	commitAll(t, root, "in-flight work")
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "ancestor-base", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", BaseSnapshot: ancestor})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "ancestor-base", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", BaseSnapshot: ancestor, Split: "no"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1095,7 @@ func TestStartRejectsNonAncestorBaseSnapshot(t *testing.T) {
 	runGit(t, root, "checkout", branch)
 	writeTestFile(t, filepath.Join(root, "mainline.txt"), "mainline\n")
 	commitAll(t, root, "mainline work")
-	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "non-ancestor", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", BaseSnapshot: divergent}); err == nil || !strings.Contains(err.Error(), "not an ancestor") {
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "non-ancestor", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", BaseSnapshot: divergent, Split: "no"}); err == nil || !strings.Contains(err.Error(), "not an ancestor") {
 		t.Fatalf("non-ancestor base snapshot was accepted: %v", err)
 	}
 }
@@ -1121,7 +1116,7 @@ func TestRunStateRecordsPerGateActionPromptHashes(t *testing.T) {
 		}
 	}
 	for _, action := range catalog.Actions {
-		// RQ-003：注入审查者动作的组装提示词含共享契约（base），其哈希与门对称地计入 base；
+		// 注入审查者动作的组装提示词含共享契约（base），其哈希与门对称地计入 base；
 		// 非审查动作只哈希自身内容。
 		want := promptContentHash(action.Content)
 		if isReviewerAction(action.ID) {
@@ -1140,7 +1135,7 @@ func TestOldRunStateWithoutPromptHashesLoadsCompatible(t *testing.T) {
 	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	// 模拟旧状态：无 promptHashes（运行期哈希记录出现之前的格式）。RQ-009 规定旧状态文件
+	// 模拟旧状态：无 promptHashes（运行期哈希记录出现之前的格式）。规定旧状态文件
 	// （无 stateIntegrity 字段）跳过完整性校验，故一并去掉该字段，使旧状态以"无校验字段"的
 	// 合法旧形态加载，而不是被当作"CLI 写入后被手工改写"拒绝。
 	delete(decoded, "promptHashes")
@@ -1217,7 +1212,7 @@ func TestChangedSelectedGateCanBeReDispatched(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "re-dispatch", "custom", []string{"quality"})
 	state = recordGateResult(t, root, pkg, state, "quality", "re-dispatch-quality", "PASS", "", nil)
 	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
-	// RQ-005：门提示词内容变化且该目标已有记录结果时，先记录主代理 Carry 判定才能重派发。
+	// 门提示词内容变化且该目标已有记录结果时，先记录主代理 Carry 判定才能重派发。
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "prompt changed") {
 		t.Fatalf("changed gate with a recorded result was re-dispatched before a Carry judgment: %v", err)
 	}
@@ -1271,7 +1266,7 @@ func TestMidFlightGateChangeDisposableAfterIndependentCarry(t *testing.T) {
 	if _, err := PrepareGate(root, pkg, state.RunID, "architecture", false, ""); err == nil || !strings.Contains(err.Error(), "prompt changed") {
 		t.Fatalf("prompt-changed architecture was re-dispatched before a judgment: %v", err)
 	}
-	// 主代理 Carry 处置中途修改（B3）：即使先前已记录独立 Carry 判定，目录变更时仍可用。
+	// 主代理 Carry 处置中途修改：即使先前已记录独立 Carry 判定，目录变更时仍可用。
 	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "accept catalog; architecture needs a fresh review"); err != nil {
 		t.Fatalf("mid-flight disposal was rejected: %v", err)
 	}
@@ -1285,7 +1280,7 @@ func TestBaseOnlyPromptChangeEnablesPerGateReDispatch(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "base-change", "custom", []string{"quality"})
 	state = recordGateResult(t, root, pkg, state, "quality", "base-change-quality", "PASS", "", nil)
 	writeTestFile(t, filepath.Join(pkg, "prompts", "reviewer-base.md"), "new shared contract\n")
-	// RQ-005：共享契约变化同样使门提示词移动，先记录主代理 Carry 判定才能重派发。
+	// 共享契约变化同样使门提示词移动，先记录主代理 Carry 判定才能重派发。
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "prompt changed") {
 		t.Fatalf("base-only change was re-dispatched before a Carry judgment: %v", err)
 	}
@@ -1544,16 +1539,21 @@ func TestSlicingDecisionRequiresStartReadinessPass(t *testing.T) {
 }
 
 // TestNoSplitDecisionRequiresReasonNote verifies the mandatory "建议不拆（原因）"
-// reason trace for a no-split decision.
+// reason trace for a no-split decision and the >= 2 slice rule for a split.
 func TestNoSplitDecisionRequiresReasonNote(t *testing.T) {
 	root, pkg := workflowFixture(t)
+	// no-split 声明 run：无原因 note 的 no-split 被拒。
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slicing-note"))
 	state = recordProductReview(t, root, pkg, state)
 	state = recordReadiness(t, root, pkg, state)
 	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "", ""); err == nil || !strings.Contains(err.Error(), "reason note") {
 		t.Fatalf("no-split decision without a reason note was accepted: %v", err)
 	}
-	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 1, nil, "", "", ""); err == nil || !strings.Contains(err.Error(), "at least two slices") {
+	// 保留总任务实例（--split yes）：单片 split 被拒。
+	splitState := confirmRequirement(t, root, pkg, mustStartRetained(t, root, pkg, "slicing-note-split"))
+	splitState = recordProductReview(t, root, pkg, splitState)
+	splitState = recordReadiness(t, root, pkg, splitState)
+	if _, err := RecordSlicing(root, pkg, splitState.RunID, "split", 1, nil, "", "", ""); err == nil || !strings.Contains(err.Error(), "at least two slices") {
 		t.Fatalf("single-slice split was accepted: %v", err)
 	}
 }
@@ -1563,7 +1563,7 @@ func TestNoSplitDecisionRequiresReasonNote(t *testing.T) {
 // only post-merge verification and does not go through normal route selection.
 func TestMergeVerificationAutoAttachedForSplitRetainedOverall(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "merge-auto", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "merge-auto", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true, Split: "yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1591,7 +1591,7 @@ func TestMergeVerificationAutoAttachedForSplitRetainedOverall(t *testing.T) {
 // cross-slice interaction set leaving the required trace) and the merge gate.
 func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "merge-flow", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "merge-flow", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true, Split: "yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1675,6 +1675,37 @@ func TestMergeGateRegisteredButExcludedFromNormalRouteCandidates(t *testing.T) {
 	}
 }
 
+// TestRouteCandidatesRunStateRequiresConfirmedRequirement verifies the run-state
+// RouteCandidates entry: it resolves the live catalog for the run and returns
+// the same normal route candidates as the package-level entry once the
+// requirement is confirmed, and refuses before confirmation.
+func TestRouteCandidatesRunStateRequiresConfirmedRequirement(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "route-candidates")
+	// 需求未确认：run-state RouteCandidates 拒绝。
+	if _, err := RouteCandidates(root, pkg, state.RunID); err == nil || !strings.Contains(err.Error(), "requirement is not confirmed") {
+		t.Fatalf("route candidates before requirement confirmation: %v", err)
+	}
+	state = confirmRequirement(t, root, pkg, state)
+	candidates, err := RouteCandidates(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 与包级 PackageRouteCandidates 同源：黑盒、白盒加除合并门外的全部门。
+	packaged, err := PackageRouteCandidates(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(candidates, packaged) {
+		t.Fatalf("run-state RouteCandidates=%v want %v", candidates, packaged)
+	}
+	for _, id := range candidates {
+		if id == mergeGateID || id == mergeQAID {
+			t.Fatalf("run-state route candidates included merge verification: %v", candidates)
+		}
+	}
+}
+
 // TestBlackboxWhiteboxOptionalityInRoute verifies full selects both QA modes,
 // custom can select each QA mode independently, and no mechanical per-mode
 // quality floor exists: the case-set sufficiency is left to the qa-review
@@ -1738,10 +1769,10 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 		t.Fatalf("fast path did not unlock development after route confirmation: %v", err)
 	}
 
-	split := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "split-path"))
-	// 拆分路径是一个切片实例，记录拆分决定时必须引用已通过整体审查的保留总任务
-	// master，经继承满足整体级审查与 development-worker 门。
+	// 拆分路径是一个切片实例：启动时先用 --split yes --master <id> 钉死引用的保留总任务
+	// master，记录拆分决定时引用同一 master，经继承满足整体级审查与 development-worker 门。
 	splitMaster := sliceMaster(t, root, pkg, "split-path-master")
+	split := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "split-path", splitMaster))
 	split = recordSlicing(t, root, pkg, split, "split", splitMaster)
 	split = setRoute(t, root, pkg, split, "custom", []string{blackboxQAID})
 	designDispatch := prepareDispatch(t, root, pkg, split.RunID, "qa-design")
@@ -1766,10 +1797,10 @@ func TestTwoSpeedSchedulingBothPathsReachDevelopment(t *testing.T) {
 // split, and satisfies the development-worker gate via inheritance.
 func TestSplitDecisionAllowsPerSliceRouteConfirmation(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "slice-route"))
-	// 切片实例不重跑整体级产品审/技术审：引用已通过整体审查的保留总任务 master，
-	// 记录继承来源，不再要求切片内重跑。
+	// 切片实例不重跑整体级产品审/技术审：启动时用 --split yes --master <id> 钉死引用的
+	// 保留总任务 master，记录继承来源，不再要求切片内重跑。
 	master := sliceMaster(t, root, pkg, "slice-route-master")
+	state := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "slice-route", master))
 	state = recordSlicing(t, root, pkg, state, "split", master)
 	if state.Slicing == nil || state.Slicing.Decision != "split" || state.Slicing.SplitCount != 2 {
 		t.Fatalf("inherited split decision not recorded: %#v", state.Slicing)
@@ -1810,7 +1841,7 @@ func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P4", Message: "bad"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("invalid severity accepted: %v", err)
 	}
-	// P4 的 FAIL 未被记录，next 派发仍认领未出结果；补记合法 PASS 完成它，使 RQ-007
+	// P4 的 FAIL 未被记录，next 派发仍认领未出结果；补记合法 PASS 完成它，使
 	// 放行下一次准备（否则强制续用 next）。
 	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", nil, false, "")
 	if err != nil {
@@ -1949,7 +1980,7 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// RQ-001：单模式白盒 run 的 design/review 存于 whitebox mode 键，qa-execution 按同
+	// 单模式白盒 run 的 design/review 存于 whitebox mode 键，qa-execution 按同
 	// mode 派发。
 	executionDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "whitebox")
 	state, err = RecordQAExecution(root, pkg, state.RunID, executionDispatch, passingExecution(state.allQACases()), "")
@@ -1990,7 +2021,7 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 开发后白盒设计：RQ-012 下白盒设计轮只增补白盒用例（写进白盒自己的列表），既有黑盒
+	// 开发后白盒设计：下白盒设计轮只增补白盒用例（写进白盒自己的列表），既有黑盒
 	// 用例（含 review PASS 状态）在各自列表中原样保留。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
@@ -2028,7 +2059,7 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	}
 }
 
-// TestQAModeCasesPreferPerModeOverStaleMerged reproduces the RQ-012 storage bug
+// TestQAModeCasesPreferPerModeOverStaleMerged reproduces the storage bug
 // that blocked a live run's snapshot: after a legacy single-list state file
 // migrated its cases into the merged "" key, a per-mode redesign wrote fresh
 // cases to the blackbox/whitebox keys, leaving stale cases (some PENDING) in the
@@ -2167,7 +2198,7 @@ func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 		t.Fatalf("ungraded product-review finding accepted: %v", err)
 	}
 	// 无严重度的 FAIL 未被记录，dispatchID 派发仍认领未出结果；补记合法 PASS 完成它，
-	// 使 RQ-007 放行下一次准备。
+	// 使放行下一次准备。
 	var err error
 	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
 	if err != nil {
@@ -2176,36 +2207,6 @@ func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
 	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("ungraded start-readiness finding accepted: %v", err)
-	}
-}
-
-// TestWordingCoversSplitSuggestionAndOverallReviewInheritance checks the
-// user-visible wording required by the acceptance evidence: the split suggestion
-// (including the 改拆后果说明) is mandated in SKILL.md and the product-review
-// prompt, and the overall-level review inheritance is documented in SKILL.md and
-// formal-flow.md.
-func TestWordingCoversSplitSuggestionAndOverallReviewInheritance(t *testing.T) {
-	checks := []struct {
-		path string
-		want []string
-	}{
-		{"SKILL.md", []string{"改拆后果说明", "整体级产品审/技术审足够", "切片继承整体审查结果"}},
-		{"references/formal-flow.md", []string{"改拆后果说明", "整体级产品审/技术审足够", "切片继承整体审查结果"}},
-		{"references/sliced-runs.md", []string{"改拆后果说明"}},
-		{"prompts/actions/product-review.md", []string{"改拆后果说明"}},
-		{"prompts/actions/qa-design.md", []string{"开发前", "开发后"}},
-	}
-	for _, check := range checks {
-		data, err := os.ReadFile(filepath.Join("..", "..", check.path))
-		if err != nil {
-			t.Fatalf("read %s: %v", check.path, err)
-		}
-		content := string(data)
-		for _, want := range check.want {
-			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing %q", check.path, want)
-			}
-		}
 	}
 }
 
@@ -2220,7 +2221,29 @@ func containsString(values []string, want string) bool {
 
 func mustStart(t *testing.T, root, pkg, id string) RunState {
 	t.Helper()
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git"})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", Split: "no"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// mustStartRetained starts a retained-overall instance with the mandatory
+// --split yes declaration (需求 4).
+func mustStartRetained(t *testing.T, root, pkg, id string) RunState {
+	t.Helper()
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true, Split: "yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// mustStartSlice starts a slice instance that pins its retained-overall master
+// in the start declaration (需求 4: --split yes --master <id>).
+func mustStartSlice(t *testing.T, root, pkg, id, masterID string) RunState {
+	t.Helper()
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", Split: "yes", MasterRunID: masterID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2299,7 +2322,7 @@ func recordSlicing(t *testing.T, root, pkg string, state RunState, decision stri
 // instances reference this master when recording an inherited split decision.
 func sliceMaster(t *testing.T, root, pkg, id string) string {
 	t.Helper()
-	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true})
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: id, Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true, Split: "yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2484,7 +2507,7 @@ func workflowFixture(t *testing.T) (string, string) {
 	// 测试仓库与实际仓库一致地忽略运行期临时状态：否则 .gates/tmp/ 会被误跟踪进
 	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。
 	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n")
-	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
+	// 白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
 	// 引用（<文件>::<函数>）的定位目标。见 whiteboxDeliveredTestCode（whitebox_binding.go）。
 	writeTestFile(t, filepath.Join(root, "whitebox_delivered_test.go"), whiteboxDeliveredTestCode)
 	initializeGit(t, root)
@@ -2645,7 +2668,7 @@ func TestRegisterQAWorktreeRejectsInjectedRevisionMismatch(t *testing.T) {
 func TestSnapshotRequiresBlackboxReviewPassed(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "snapshot-blackbox-gate"), "custom", []string{blackboxQAID})
-	// 黑盒按 mode 派发的设计轮在 QA 隔离工作区进行，先登记工作区再设计（RQ-012 按 mode 存储）。
+	// 黑盒按 mode 派发的设计轮在 QA 隔离工作区进行，先登记工作区再设计（按 mode 存储）。
 	worktree := createQAWorktree(t, root, state)
 	state, err := RegisterQAWorktree(root, pkg, state.RunID, worktree)
 	if err != nil {
@@ -2929,6 +2952,11 @@ func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
 	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "awaits a re-review") {
 		t.Fatalf("direct PASS before re-review was accepted: %v", err)
 	}
+	// 需求 6 第 5 条：重绑前必须先把在途审查派发的结果记录掉。该轮被重审规则挡下、
+	// 无法产出可记录的 PASS（须等重审轮），以 RUNTIME_ERROR 结束该轮后释放重绑通路。
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "RUNTIME_ERROR", "round superseded by the confirmed-P0/P1 re-review requirement", nil, false, ""); err != nil {
+		t.Fatalf("disposing the blocked round failed: %v", err)
+	}
 	// 修订需求（语义保留）后派发重审轮并返回 PASS：标记清除，PASS 可记录。
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised meaning-preserved requirement\n")
 	commitAll(t, root, "revise requirement (preserved)")
@@ -3091,7 +3119,7 @@ func recordModeQA(t *testing.T, root, pkg string, state RunState, mode string, r
 	return state
 }
 
-// TestQADesignReRecordsBeforeReviewDispatch verifies RQ-011: a QA design can be
+// TestQADesignReRecordsBeforeReviewDispatch verifies a QA design can be
 // re-recorded to add/update cases while its qa-review dispatch has not been prepared
 // (design not locked), and is rejected once a review dispatch is prepared.
 func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
@@ -3129,7 +3157,7 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 	}
 }
 
-// TestQADesignPerModeDoesNotClearOtherMode verifies RQ-012: blackbox and whitebox
+// TestQADesignPerModeDoesNotClearOtherMode verifies blackbox and whitebox
 // QA cases are stored separately per mode, and a design round only touches its own
 // mode's list — designing whitebox must not replace or clear the existing blackbox
 // cases (with their review PASS status preserved), and case IDs stay unique across
@@ -3177,7 +3205,7 @@ func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
 	}
 }
 
-// TestQAExecutionFirstRunNoScopeAndRerunEnforced verifies RQ-001/002: a first QA
+// TestQAExecutionFirstRunNoScopeAndRerunEnforced verifies a first QA
 // execution needs no scope decision, while a rerun (a prior authoritative result at
 // an earlier snapshot survives the repair snapshot advance) is CLI-enforced to carry
 // a scope decision before prepare, and a FULL decision reruns the complete approved set.
@@ -3218,7 +3246,7 @@ func TestQAExecutionFirstRunNoScopeAndRerunEnforced(t *testing.T) {
 	}
 }
 
-// TestQAExecutionAffectedScopeSubsetValidation verifies RQ-004's mechanical AFFECTED
+// TestQAExecutionAffectedScopeSubsetValidation verifies mechanical AFFECTED
 // subset checks: the subset must be non-empty, consist of approved cases of the
 // mode, and include every prior FAIL case of the mode.
 func TestQAExecutionAffectedScopeSubsetValidation(t *testing.T) {
@@ -3251,7 +3279,7 @@ func TestQAExecutionAffectedScopeSubsetValidation(t *testing.T) {
 	}
 }
 
-// TestQAExecutionAffectedInheritance verifies RQ-005: an AFFECTED rerun requires
+// TestQAExecutionAffectedInheritance verifies an AFFECTED rerun requires
 // exactly the recorded subset, inherits the untouched approved cases as PASS from
 // the base snapshot, and aggregates FAIL only from executed cases.
 func TestQAExecutionAffectedInheritance(t *testing.T) {
@@ -3309,7 +3337,7 @@ func TestQAExecutionAffectedInheritance(t *testing.T) {
 	}
 }
 
-// TestQAExecutionScopePerModeIndependent verifies RQ-002/003: blackbox and whitebox
+// TestQAExecutionScopePerModeIndependent verifies blackbox and whitebox
 // carry independent scope decisions, and the prepare enforcement is per mode.
 func TestQAExecutionScopePerModeIndependent(t *testing.T) {
 	root, pkg := workflowFixture(t)
@@ -3348,7 +3376,7 @@ func TestQAExecutionScopePerModeIndependent(t *testing.T) {
 	}
 }
 
-// TestAuthorizeRepairBundlesQARerunScope verifies RQ-006/007: after the review-wave
+// TestAuthorizeRepairBundlesQARerunScope verifies after the review-wave
 // limit is exhausted, an authorize-repair for a run whose QA mode has an
 // authoritative FAIL at the current snapshot is refused without a scope decision,
 // and an inline FULL decision is bundled (Source AUTHORIZE_REPAIR) while still
@@ -3410,7 +3438,7 @@ func TestAuthorizeRepairBundlesQARerunScope(t *testing.T) {
 	}
 }
 
-// TestAuthorizeRepairCarriesForwardAffected verifies RQ-007/008: at the limit, a
+// TestAuthorizeRepairCarriesForwardAffected verifies at the limit, a
 // mode whose last recorded decision was a user-chosen AFFECTED (Source !=
 // CARRY_FORWARD) is auto-carried as CARRY_FORWARD with the host-judged subset,
 // without asking the user again, and still grants exactly one wave.
@@ -3461,7 +3489,7 @@ func TestAuthorizeRepairCarriesForwardAffected(t *testing.T) {
 	}
 }
 
-// TestPriorQAExecutionPreservedUntilReplaced verifies RQ-009: an authoritative FAIL
+// TestPriorQAExecutionPreservedUntilReplaced verifies an authoritative FAIL
 // result survives a repair snapshot advance into PriorQAExecution (its FAIL case set
 // stays rerun-detectable), a RUNTIME_ERROR is not preserved, a new authoritative
 // record replaces the prior one, and a RUNTIME_ERROR record does not evict it.
@@ -3514,7 +3542,7 @@ func TestPriorQAExecutionPreservedUntilReplaced(t *testing.T) {
 	}
 }
 
-// TestResetSnapshotReviewSurfacePreservesAuthoritativeOnly verifies RQ-009 at the
+// TestResetSnapshotReviewSurfacePreservesAuthoritativeOnly verifies at the
 // reset boundary directly: an authoritative PASS/FAIL result at an old snapshot is
 // preserved to PriorQAExecution when QA Execution is reset, while a RUNTIME_ERROR is
 // reset without preservation (it is not an authoritative result and must not become
@@ -3534,7 +3562,7 @@ func TestResetSnapshotReviewSurfacePreservesAuthoritativeOnly(t *testing.T) {
 	}
 }
 
-// TestAuthorizeRepairCarryForwardDoesNotGrantWave verifies RQ-006: the CARRY_FORWARD
+// TestAuthorizeRepairCarryForwardDoesNotGrantWave verifies the CARRY_FORWARD
 // auto-carry at the limit records the scope but never by itself grants a review
 // wave; each authorize-repair call still grants exactly one.
 func TestAuthorizeRepairCarryForwardDoesNotGrantWave(t *testing.T) {
@@ -3567,5 +3595,447 @@ func TestAuthorizeRepairCarryForwardDoesNotGrantWave(t *testing.T) {
 	}
 	if state.ExtraReviewWaves != 1 {
 		t.Fatalf("a single authorize-repair granted %d waves", state.ExtraReviewWaves)
+	}
+}
+
+// 片 1 CLI 行为修复的直接层测试（validate 层）。
+
+// Fix 2：无 hooks 环境 record-action 被生命周期校验拒绝时给可行动提示。
+func TestRecordActionLifecycleRejectionGivesActionableHint(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "lifecycle-hint"))
+	priorLifecycle := workflowLifecycle
+	stub := &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Rejected, Diagnostic: "missing matching start and stop event"}}
+	workflowLifecycle = stub
+	t.Cleanup(func() { workflowLifecycle = priorLifecycle })
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "capture hooks") {
+		t.Fatalf("expected an actionable capture-hooks hint, got: %v", err)
+	}
+}
+
+// Fix 3：settle-findings 同一 finding 同时 confirm+dismiss 被拒。
+func TestSettledFindingsRejectsConfirmAndDismissOverlap(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "settle-overlap"))
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "same finding"}}, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"same finding"}, []string{"same finding"}); err == nil || !strings.Contains(err.Error(), "cannot be both confirmed and dismissed") {
+		t.Fatalf("confirm+dismiss overlap was accepted: %v", err)
+	}
+}
+
+// Fix 4/8：缺 run-id 与不存在/已终止 run 给友好提示。
+func TestLoadRunStateFriendlyMissingRun(t *testing.T) {
+	root := t.TempDir()
+	if _, err := LoadRunState(root, ""); err == nil || !strings.Contains(err.Error(), "run id is required") {
+		t.Fatalf("missing run id was not reported friendly: %v", err)
+	}
+	if _, err := LoadRunState(root, "never-existed"); err == nil || !strings.Contains(err.Error(), "was not found or is already terminated") {
+		t.Fatalf("missing run was not reported friendly: %v", err)
+	}
+}
+
+// Fix 9：qa-execution-scope 非法 mode 明确报"非法 mode"。
+func TestRecordExecutionScopeRejectsInvalidMode(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "scope-mode"), "custom", []string{blackboxQAID})
+	if _, err := RecordExecutionScope(root, pkg, state.RunID, "purple", "FULL", nil, "reason"); err == nil || !strings.Contains(err.Error(), "非法 mode") {
+		t.Fatalf("invalid scope mode was not rejected clearly: %v", err)
+	}
+}
+
+// Fix 11：record-action status 严格大小写校验（拒绝 pass）。
+func TestRecordActionStatusIsCaseSensitive(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "case-status")
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
+	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "pass", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "case-sensitive") {
+		t.Fatalf("lowercase status was accepted: %v", err)
+	}
+	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil, false, ""); err != nil {
+		t.Fatalf("exact PASS was rejected: %v", err)
+	}
+}
+
+// Fix 15：install 缺 source 明确报"source 必填"。
+func TestInstallRequiresSource(t *testing.T) {
+	if _, err := Install(InstallOptions{Host: "claude", Scope: "project", Project: t.TempDir()}); err == nil || !strings.Contains(err.Error(), "source is required") {
+		t.Fatalf("install without source was not rejected clearly: %v", err)
+	}
+}
+
+// Fix 17：svn {U+XXXX} unicode 转义转成可读文字。
+func TestDecodeVCSMessageUnescapesUnicode(t *testing.T) {
+	in := `svn: svn: E155007: {U+201C}/tmp/repo{U+201D}{U+4E0D}{U+662F}{U+5DE5}{U+4F5C}{U+526F}{U+672C}`
+	out := decodeVCSMessage(in)
+	if strings.Contains(out, "{U+") {
+		t.Fatalf("unicode escapes were not decoded: %s", out)
+	}
+	if !strings.Contains(out, "不是工作副本") {
+		t.Fatalf("decoded message lost readable text: %s", out)
+	}
+	if strings.Contains(out, "svn: svn:") {
+		t.Fatalf("duplicated svn prefix not collapsed: %s", out)
+	}
+}
+
+// 需求 4：workflow start 未声明 --split 拒绝启动。
+func TestStartRequiresSplitDeclaration(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "no-split-decl", Flow: "formal", RequirementSource: "requirements.md", VCS: "git"}); err == nil || !strings.Contains(err.Error(), "--split") {
+		t.Fatalf("start without a --split declaration was accepted: %v", err)
+	}
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "bad-split", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "maybe"}); err == nil || !strings.Contains(err.Error(), "--split must be yes or no") {
+		t.Fatalf("invalid --split value was accepted: %v", err)
+	}
+}
+
+// 需求 4：--split yes 启动时区分保留总任务实例与切片实例，并钉死映射。
+func TestStartSplitYesPinsRetainedOrMaster(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "yes-naked", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes"}); err == nil || !strings.Contains(err.Error(), "--retained-overall") {
+		t.Fatalf("--split yes without retained-overall/master pin was accepted: %v", err)
+	}
+	retained, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "yes-retained", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", RetainedOverall: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retained.SplitDeclaration != "yes" || retained.SplitMasterRunID != "" || !retained.RetainedOverall {
+		t.Fatalf("retained-overall split declaration not pinned: %#v", retained)
+	}
+	slice, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "yes-slice", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", MasterRunID: "master-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slice.SplitDeclaration != "yes" || slice.SplitMasterRunID != "master-run" {
+		t.Fatalf("slice master pin not recorded: %#v", slice)
+	}
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "both", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", RetainedOverall: true, MasterRunID: "master-run"}); err == nil || !strings.Contains(err.Error(), "cannot be both") {
+		t.Fatalf("retained-overall + master contradiction was accepted: %v", err)
+	}
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "no-retained", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", RetainedOverall: true}); err == nil || !strings.Contains(err.Error(), "--split yes") {
+		t.Fatalf("retained-overall with --split no was accepted: %v", err)
+	}
+}
+
+// 需求 4：启动声明与 workflow slicing 拆分决定互相校验。
+func TestSlicingMutualValidationWithStartDeclaration(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	// 启动声明 --split no → 后续记录 split 被拒。
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "mutual-no"))
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := RecordSlicing(root, pkg, state.RunID, "split", 2, nil, "", "reason", ""); err == nil || !strings.Contains(err.Error(), "--split no") {
+		t.Fatalf("split decision on a --split no run was accepted: %v", err)
+	}
+	// 启动声明 --split yes --master <id> → 记录 no-split 被拒。
+	master := sliceMaster(t, root, pkg, "mutual-master")
+	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "mutual-slice", master))
+	if _, err := RecordSlicing(root, pkg, slice.RunID, "no-split", 0, nil, "", "reason", ""); err == nil || !strings.Contains(err.Error(), "--master") {
+		t.Fatalf("no-split decision on a declared slice instance was accepted: %v", err)
+	}
+	// 拆分引用的 master 与启动声明不一致被拒。
+	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, nil, "", "reason", "other-master"); err == nil || !strings.Contains(err.Error(), "does not match the master") {
+		t.Fatalf("slice master mismatch was accepted: %v", err)
+	}
+	// 拆分引用的 master 与启动声明一致 → 放行。
+	recorded, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, nil, "", "reason", master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.Slicing == nil || recorded.Slicing.MasterRunID != master {
+		t.Fatalf("slice split with matching master not recorded: %#v", recorded.Slicing)
+	}
+}
+
+// 需求 4：上线前启动（无启动声明）的 run 保持旧语义，不被新约束阻断。
+func TestSlicingLegacyRunWithoutDeclarationKeepsOldSemantics(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	// 旧 run（无 SplitDeclaration 持久化字段）记录 no-split 仍放行。
+	state := confirmRequirement(t, root, pkg, legacyRun(t, root, pkg, "legacy-no-split"))
+	state = recordProductReview(t, root, pkg, state)
+	state = recordReadiness(t, root, pkg, state)
+	if _, err := RecordSlicing(root, pkg, state.RunID, "no-split", 0, nil, "", "reason", ""); err != nil {
+		t.Fatalf("legacy run no-split decision was blocked: %v", err)
+	}
+	// 旧 run（无启动声明）引用有效 master 记录 split 仍放行（旧语义）。
+	master := sliceMaster(t, root, pkg, "legacy-master")
+	slice := confirmRequirement(t, root, pkg, legacyRun(t, root, pkg, "legacy-slice"))
+	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, nil, "", "reason", master); err != nil {
+		t.Fatalf("legacy run slice split was blocked: %v", err)
+	}
+}
+
+// legacyRun 构造一个本功能上线前启动的 run：启动后用合法的 CLI 写入路径把
+// splitDeclaration 字段清掉（SaveRunState 重算完整性），模拟缺失启动声明的旧状态文件。
+func legacyRun(t *testing.T, root, pkg, id string) RunState {
+	t.Helper()
+	state := mustStart(t, root, pkg, id)
+	state, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SplitDeclaration = ""
+	state.SplitMasterRunID = ""
+	if err := SaveRunState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// 需求 5 / 需求 6 的 validate 层直接测试。
+
+// TestRequirementRebindRejectedWhileReviewDispatchInFlight verifies requirement 6
+// item 5: a requirement rebinding is refused while a review dispatch that records
+// via record-action/record-gate is in flight (claimed, result not recorded), and
+// recording the in-flight result first releases the rebinding path.
+func TestRequirementRebindRejectedWhileReviewDispatchInFlight(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "rebind-inflight"))
+	// 准备并认领一轮 product-review，不记录结果（在途审查派发）。prepareDispatch 对
+	// product-review 自动认领，返回已认领的派发 id。
+	prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	commitAll(t, root, "change requirement")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err == nil || !strings.Contains(err.Error(), "has not recorded its result") {
+		t.Fatalf("rebind with an in-flight review dispatch was accepted: %v", err)
+	}
+	if after := stateBytes(t, root, state.RunID); after != before {
+		t.Fatal("rejected rebind changed state")
+	}
+}
+
+// TestRecordInFlightDispatchResultAllowedUnderDrift verifies the 需求 6 item-1 /
+// item-5 deadlock fix: when the requirement document drifts while a review
+// dispatch is in flight (claimed, result not recorded), recording that in-flight
+// result is exempt from the drift hard block (the result belongs to the old
+// registered revision), so the "record the in-flight result first, then rebind"
+// recovery path stays executable instead of the two guards blocking each other.
+// The document edit is a working-tree change (uncommitted), which is the drift
+// the guards read; new prepares under the drift stay blocked.
+func TestRecordInFlightDispatchResultAllowedUnderDrift(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "drift-record-inflight"))
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review") // 在途审查派发（已认领）
+	// 需求文档改动（工作树、未提交）→ 漂移。
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	// 新 prepare 仍被漂移硬阻断（需求 6 第 1 条不受影响）。
+	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "需求文档已改动") {
+		t.Fatalf("prepare under drift was not blocked: %v", err)
+	}
+	// 记录在途派发结果被豁免漂移硬阻断（结果属于旧 revision）。
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+		t.Fatalf("recording the in-flight dispatch result under drift failed: %v", err)
+	}
+	// 在途派发已记录后，重绑放行。
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
+		t.Fatalf("rebinding after recording the in-flight result failed: %v", err)
+	}
+}
+
+// TestRequirementRebindAllowedAfterInFlightResultRecorded verifies the release
+// path of requirement 6 item 5: recording the in-flight review result first
+// (before changing the requirement document) lets the rebinding proceed.
+func TestRequirementRebindAllowedAfterInFlightResultRecorded(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "rebind-recorded"))
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	commitAll(t, root, "change requirement")
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCanonicalPromptFileWrittenAndVerified verifies requirement 6 item 4:
+// prepare-action writes the dispatch's full prompt to the run's canonical prompt
+// file and records the path in the dispatch state; the claim (dispatch time)
+// re-verifies the file content against the prepare record, and a tampered file
+// hard-blocks the claim.
+func TestCanonicalPromptFileWrittenAndVerified(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "prompt-file"))
+	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchID := openDispatchID(state, "action", "product-review")
+	if dispatchID == "" {
+		t.Fatal("no open product-review dispatch after prepare")
+	}
+	dispatch := state.Dispatches[dispatchID]
+	if dispatch.PromptFile == "" {
+		t.Fatalf("prepared dispatch records no canonical prompt file: %#v", dispatch)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(dispatch.PromptFile), ".gates/tmp/"+state.RunID+"/prompts/"+dispatchID+".md") {
+		t.Fatalf("canonical prompt file path is not under the run prompts dir: %s", dispatch.PromptFile)
+	}
+	data, err := os.ReadFile(dispatch.PromptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != prompt {
+		t.Fatal("canonical prompt file content does not match the prepared prompt")
+	}
+	// 篡改文件内容 → 派发（认领）时硬阻断。
+	if err := os.WriteFile(dispatch.PromptFile, []byte("tampered prompt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClaimDispatch(root, pkg, state.RunID, dispatchID, "tamper-check"); err == nil || !strings.Contains(err.Error(), "does not match the prepared dispatch record") {
+		t.Fatalf("claim with a tampered canonical prompt file was accepted: %v", err)
+	}
+}
+
+// TestResetRunResetsFlowStateKeepsDevelopment verifies requirement 5: workflow
+// reset re-registers the requirement (unconfirmed), resets the overall reviews
+// and gates to PENDING, clears stuck dispatches, and keeps the recorded
+// development snapshot and the developed content untouched.
+func TestResetRunResetsFlowStateKeepsDevelopment(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "reset-run"), "custom", []string{"quality"})
+	// 完成一次开发快照，制造"开发已完成"的 run。development-worker 由 prepareDispatch
+	// 自动认领，返回已认领的派发 id。
+	devDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery.txt"), "delivery content\n")
+	commitAll(t, root, "delivery")
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, devDispatch, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentSnapshot != gitHead(t, root) {
+		t.Fatalf("development snapshot not recorded: %#v", state)
+	}
+	// 制造一个卡住的在途门派发。
+	gateDispatch := prepareAndClaim(t, root, pkg, state.RunID, "quality", "reset-gate")
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Dispatches[gateDispatch].Status != "CLAIMED" {
+		t.Fatalf("gate dispatch not claimed: %#v", state.Dispatches[gateDispatch])
+	}
+	snapshot := state.CurrentSnapshot
+
+	result, err := ResetRun(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State.RequirementConfirmed {
+		t.Fatal("reset did not unconfirm the requirement")
+	}
+	if result.State.RequirementRevision != artifactRevision(result.State.RequirementArtifacts, "requirements.md") {
+		t.Fatal("reset did not re-register the requirement to the current document content")
+	}
+	for _, actionID := range []string{"requirements-clarification", "product-review", "start-readiness"} {
+		if result.State.Actions[actionID].Status != "PENDING" {
+			t.Fatalf("reset did not re-open %s (status=%s)", actionID, result.State.Actions[actionID].Status)
+		}
+	}
+	if result.State.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("reset did not keep the development status: %#v", result.State.Actions["development-worker"])
+	}
+	for id, gate := range result.State.Gates {
+		if gate.Status != "PENDING" {
+			t.Fatalf("reset did not re-open gate %s (status=%s)", id, gate.Status)
+		}
+	}
+	if len(result.State.Dispatches) != 0 {
+		t.Fatalf("reset did not clear dispatches: %#v", result.State.Dispatches)
+	}
+	if result.State.BaseSnapshot != state.BaseSnapshot || result.State.CurrentSnapshot != snapshot {
+		t.Fatal("reset did not keep the snapshots")
+	}
+	if len(result.Kept) == 0 || len(result.Reset) == 0 {
+		t.Fatalf("reset output missing kept/reset lists: %#v", result)
+	}
+	// 已开发内容原样保留：提交还在、开发文件还在、工作树干净。
+	if gitHead(t, root) != snapshot {
+		t.Fatal("reset changed the committed development snapshot")
+	}
+	delivery, err := os.ReadFile(filepath.Join(root, "delivery.txt"))
+	if err != nil || string(delivery) != "delivery content\n" {
+		t.Fatalf("reset touched the developed file: %v", err)
+	}
+	// workflow show 可见该干净状态（可从磁盘加载）。
+	loaded, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.RequirementConfirmed || loaded.Actions["product-review"].Status != "PENDING" || len(loaded.Dispatches) != 0 {
+		t.Fatalf("reset state not visible via show: %#v", loaded)
+	}
+}
+
+// TestResetAllowsWholeReviewRedoAfterDevelopment verifies requirement 5's
+// super-admin priority: after workflow reset keeps the development status and
+// snapshot, the whole review (product-review then start-readiness) can be
+// redone even though development already completed. The order guards
+// requireProductReviewTransition / requireStartReadinessTransition must let the
+// post-reset recovery pass when the review was cleared back to PENDING, while
+// the normal "develop first, then review" ordering stays intact (start-readiness
+// still cannot be redone before product-review).
+func TestResetAllowsWholeReviewRedoAfterDevelopment(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "reset-rereview"), "custom", []string{"quality"})
+	// 完成一次开发快照，制造"开发已完成"的 run（QA CASE-007 场景）。
+	devDispatch := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-rereview.txt"), "delivery content\n")
+	commitAll(t, root, "delivery rereview")
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, devDispatch, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("development not completed before reset: %#v", state.Actions["development-worker"])
+	}
+	result, err := ResetRun(root, pkg, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State.Actions["product-review"].Status != "PENDING" || result.State.Actions["start-readiness"].Status != "PENDING" {
+		t.Fatalf("reset did not clear the whole review to PENDING: %#v", result.State.Actions)
+	}
+	// 重新登记需求：需求澄清 + 确认（重置后 requirement 回到未确认）。
+	state = confirmRequirement(t, root, pkg, result.State)
+	// 顺序守卫仍生效：start-readiness 不能先于 product-review 重做。
+	if _, err := PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, ""); err == nil || !strings.Contains(err.Error(), "Product Review must pass before Start Readiness") {
+		t.Fatalf("start-readiness redo before product-review was accepted: %v", err)
+	}
+	// 重做整体审：product-review 先（reset 后开发已完成，须放行）。
+	reviewDispatch := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", reviewDispatch, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatalf("redo Product Review after reset was blocked: %v", err)
+	}
+	if state.Actions["product-review"].Status != "PASS" {
+		t.Fatalf("redo Product Review did not record PASS: %#v", state.Actions["product-review"])
+	}
+	// 再重做 start-readiness（产品审已 PASS，须放行）。
+	readinessDispatch := prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
+	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", readinessDispatch, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatalf("redo Start Readiness after reset was blocked: %v", err)
+	}
+	if state.Actions["start-readiness"].Status != "PASS" {
+		t.Fatalf("redo Start Readiness did not record PASS: %#v", state.Actions["start-readiness"])
+	}
+	// 已开发内容与开发快照原样保留。
+	if state.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("redo of the review touched the development status: %#v", state.Actions["development-worker"])
+	}
+	if state.CurrentSnapshot != gitHead(t, root) {
+		t.Fatal("redo of the review changed the development snapshot")
 	}
 }

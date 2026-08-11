@@ -111,4 +111,3 @@ fi
 
 echo "Installed package to $install_root"
 echo "Native binary symlink: $home/.local/bin/formal-gates"
-echo "Release canary: $tmp/$canary"

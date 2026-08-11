@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestCLIGateRunAndReportStandalone covers RQ-010's detached CLI commands: gate
+// TestCLIGateRunAndReportStandalone covers detached CLI commands: gate
 // run assembles the standalone prompt (no requirement or dispatch block) and gate
 // report validates and displays a reviewer result without persisting anything.
 func TestCLIGateRunAndReportStandalone(t *testing.T) {

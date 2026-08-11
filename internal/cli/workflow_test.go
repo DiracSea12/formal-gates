@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	}
 }
 
-// TestCLIQARerunScopeDecision verifies RQ-002/003 through the CLI: a QA execution
+// TestCLIQARerunScopeDecision verifies through the CLI: a QA execution
 // rerun is refused at prepare-action until a scope decision is recorded with
 // workflow qa-execution-scope, and invalid decisions are rejected.
 func TestCLIQARerunScopeDecision(t *testing.T) {
@@ -197,7 +198,7 @@ func TestCLIRequirementArtifactsAreRegisteredAndSorted(t *testing.T) {
 	cliGit(t, root, "add", "--all")
 	cliGit(t, root, "commit", "-m", "solution")
 	var stdout, stderr bytes.Buffer
-	code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "artifact-cli", "--requirement", "requirements.md", "--requirement-artifact", "z-solution.md", "--vcs", "git"}, IO{Stdout: &stdout, Stderr: &stderr})
+	code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "artifact-cli", "--requirement", "requirements.md", "--requirement-artifact", "z-solution.md", "--vcs", "git", "--split", "no"}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
 		t.Fatalf("start failed: %s", stderr.String())
 	}
@@ -253,6 +254,36 @@ func TestCLISlicingDecisionGatesDevelopment(t *testing.T) {
 	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "development-worker")
 }
 
+// TestCLIRouteCandidatesReportsConfirmedRunCandidates verifies the workflow
+// route-candidates CLI command: it is refused before requirement confirmation
+// and prints the live catalog's normal route candidates after confirmation.
+func TestCLIRouteCandidatesReportsConfirmedRunCandidates(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-route-candidates")
+
+	// 需求未确认：route-candidates 拒绝。
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "route-candidates", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requirement is not confirmed") {
+		t.Fatalf("route-candidates before requirement confirmation: code=%d err=%s", code, stderr.String())
+	}
+
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+
+	out := runCLI(t, "workflow", "route-candidates", "--root", root, "--package-root", pkg, "--run-id", state.RunID)
+	var got []string
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("route-candidates output=%s err=%v", out, err)
+	}
+	want, err := validate.PackageRouteCandidates(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("route-candidates=%v want %v", got, want)
+	}
+}
+
 func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
 	var stdout bytes.Buffer
 	if code := Run("formal-gates", []string{"--help"}, IO{Stdout: &stdout}); code != 0 {
@@ -266,6 +297,7 @@ func TestCLIHelpListsDispatchAndQAReviewCommands(t *testing.T) {
 }
 
 func TestCLISubcommandHelpPrintsUsage(t *testing.T) {
+	// 二层 --help 粒度统一：每个组的 --help 打印该组自己的 usage，而非顶层清单。
 	for _, group := range []string{"workflow", "lifecycle", "canary", "hook"} {
 		for _, flag := range []string{"-h", "--help", "help"} {
 			var stdout, stderr bytes.Buffer
@@ -273,8 +305,14 @@ func TestCLISubcommandHelpPrintsUsage(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("%s %s code=%d err=%s", group, flag, code, stderr.String())
 			}
-			if !strings.Contains(stdout.String(), "Usage: formal-gates <command>") {
-				t.Fatalf("%s %s omitted usage: %s", group, flag, stdout.String())
+			want := map[string]string{
+				"workflow":  "Usage: formal-gates workflow <subcommand>",
+				"lifecycle": "Usage: formal-gates lifecycle <subcommand>",
+				"canary":    "Usage: formal-gates canary <subcommand>",
+				"hook":      "Usage: formal-gates hook decide",
+			}[group]
+			if !strings.Contains(stdout.String(), want) {
+				t.Fatalf("%s %s omitted group usage (%s): %s", group, flag, want, stdout.String())
 			}
 		}
 	}
@@ -319,7 +357,7 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			alternateRoot := t.TempDir()
 			binary := buildInstalledHostCLI(t, tc.provider)
 			runID := strings.ReplaceAll(tc.name, "_", "-")
-			runInstalledCLI(t, binary, root, nil, "", "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", runID, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", runID, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git", "--split", "no")
 
 			requirementsDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "requirements-clarification")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", requirementsDispatch, "--status", "PASS")
@@ -413,7 +451,7 @@ func runInstalledCLI(t *testing.T, binary, workdir string, environment []string,
 
 func startCLIWorkflow(t *testing.T, root, pkg, id string) validate.RunState {
 	t.Helper()
-	out := runCLI(t, "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", id, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git")
+	out := runCLI(t, "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", id, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git", "--split", "no")
 	var state validate.RunState
 	if err := json.Unmarshal([]byte(out), &state); err != nil {
 		t.Fatal(err)
@@ -463,7 +501,7 @@ func cliPrepareGate(t *testing.T, root, pkg, runID, gate string) string {
 }
 
 func cliOpenDispatch(state validate.RunState, kind, target string) string {
-	// RQ-013：prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
+	// prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
 	// 存在多张 OPEN 空票；取新派发必须取 Attempt 最大的 OPEN 票（最新准备），无 OPEN 票时
 	// 才回退到 CLAIMED（在途旧票）。
 	bestID := ""
@@ -502,7 +540,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	root := t.TempDir()
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	mustWriteCLI(t, filepath.Join(root, "design.md"), "design\n")
-	// RQ-013：白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
+	// 白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
 	// 引用（<文件>::<函数>）的定位目标。与 internal/validate 的 whiteboxDeliveredTestCode
 	// 同源。
 	mustWriteCLI(t, filepath.Join(root, "whitebox_delivered_test.go"), "package whiteboxfixture\n\nimport \"testing\"\n\nfunc TestWhiteboxDirectRules(t *testing.T) {}\n\nfunc TestWhiteboxStructure(t *testing.T) {}\n\nfunc TestWhiteboxDirectBehavior(t *testing.T) {}\n")
@@ -538,4 +576,201 @@ func cliStateBytes(t *testing.T, root, runID string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// 片 1 CLI 行为修复的 CLI 层直接测试。
+
+// Fix 1：show/abort/cleanup 接受 --package-root（参数面与其余子命令一致；cleanup
+// 不再静默忽略，值传递到 validate）。
+func TestCLIWorkflowSurfaceAcceptsPackageRoot(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "pkg-surface")
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "show", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stderr: &stderr}); code != 0 {
+		t.Fatalf("show rejected --package-root: code=%d err=%s", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--user-confirm"}, IO{Stderr: &stderr}); code != 0 {
+		t.Fatalf("abort rejected --package-root: code=%d err=%s", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "cleanup", "--root", root, "--package-root", pkg}, IO{Stderr: &stderr}); code != 0 {
+		t.Fatalf("cleanup rejected --package-root: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 4：show 对已终止/不存在的 run 给友好提示（而非裸 open state.json）。
+func TestCLIShowMissingRunFriendly(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "show", "--root", t.TempDir(), "--run-id", "never-existed"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "was not found or is already terminated") {
+		t.Fatalf("show missing run did not hint: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 5：workflow 无子命令紧跟 flags 时提示子命令必填。
+func TestCLIWorkflowFlagsWithoutSubcommandHintsRequired(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "--root", "."}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "workflow subcommand is required") {
+		t.Fatalf("workflow --root accepted without a subcommand: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 7a：authorize-repair --qa-scope blackbox=（空决策）给明确错误。
+func TestCLIAuthorizeRepairRejectsEmptyScopeDecision(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "authorize-repair", "--qa-scope", "blackbox="}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires a decision value") {
+		t.Fatalf("empty qa-scope decision was not rejected clearly: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 8：缺 run-id 时友好提示（不裸报 state.json.lock）。
+func TestCLIShowMissingRunIDFriendly(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "show", "--root", t.TempDir()}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "run id is required") {
+		t.Fatalf("show without run-id did not hint: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 10：gate run 位置参数在 flags 前时提示 flag 前置。
+func TestCLIGateRunFlagsAfterIDsHintsFlagFirst(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"gate", "run", "quality", "--scope", "s"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "flags must precede") {
+		t.Fatalf("gate run flag-after-id did not hint flag-first: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 12：hook decide --provider 非 codex 等非法值报错。
+func TestCLIHookDecideRejectsInvalidProvider(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"hook", "decide", "--provider", "banana"}, IO{Stdin: strings.NewReader(`{"command":"x"}`), Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "unsupported hook provider") {
+		t.Fatalf("invalid hook provider was accepted: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 13：canary portable --format 非 text/json 报错。
+func TestCLICanaryPortableRejectsInvalidFormat(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"canary", "portable", "--format", "xml", "--root", t.TempDir()}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "must be text or json") {
+		t.Fatalf("invalid portable format was accepted: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 14：canary codex-hook-probe 成功时输出载荷文件路径/字节数。
+func TestCLICodexHookProbePrintsPayloadInfo(t *testing.T) {
+	var stdout bytes.Buffer
+	code := Run("formal-gates", []string{"canary", "codex-hook-probe", "--payload-dir", t.TempDir()}, IO{Stdin: strings.NewReader(`{"event":"PreToolUse","tool_name":"x"}`), Stdout: &stdout})
+	if code != 0 {
+		t.Fatalf("codex-hook-probe failed: code=%d out=%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "codex-hook-probe: wrote") || !strings.Contains(stdout.String(), "payload to") {
+		t.Fatalf("codex-hook-probe did not print payload info: %q", stdout.String())
+	}
+}
+
+// Fix 18：hook decide 空 stdin 给友好错误。
+func TestCLIHookDecideEmptyStdinFriendly(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"hook", "decide"}, IO{Stdin: strings.NewReader(""), Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires a JSON decision payload") {
+		t.Fatalf("empty hook stdin did not hint: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// Fix 18：--version 给出可用提示而非 unknown command。
+func TestCLIVersionFlagPrintsVersionHint(t *testing.T) {
+	var stdout bytes.Buffer
+	if code := Run("formal-gates", []string{"--version"}, IO{Stdout: &stdout}); code != 0 || !strings.Contains(stdout.String(), "development build") {
+		t.Fatalf("--version did not print a version hint: code=%d out=%s", code, stdout.String())
+	}
+}
+
+// 需求 4：workflow start 未声明 --split 拒绝启动；--split yes 需钉死 retained-overall 或
+// master。
+func TestCLIStartRequiresSplitDeclaration(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "no-split", "--requirement", "requirements.md", "--vcs", "git"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "--split") {
+		t.Fatalf("start without --split was accepted: code=%d err=%s", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "yes-naked", "--requirement", "requirements.md", "--vcs", "git", "--split", "yes"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "--retained-overall") {
+		t.Fatalf("start --split yes without a pin was accepted: code=%d err=%s", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "split-yes", "--requirement", "requirements.md", "--vcs", "git", "--split", "yes", "--retained-overall"}, IO{Stderr: &stderr}); code != 0 {
+		t.Fatalf("start --split yes --retained-overall failed: code=%d err=%s", code, stderr.String())
+	}
+}
+
+// 需求 5 / 需求 6 的 CLI 层直接测试。
+
+// TestCLIAbortRequiresUserConfirm verifies requirement 6 item 2: workflow abort
+// is refused without the user-level --user-confirm signal, nothing is recorded on
+// rejection, and only a user-confirmed abort terminates the run.
+func TestCLIAbortRequiresUserConfirm(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-abort-confirm")
+	before := cliStateBytes(t, root, state.RunID)
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires --user-confirm") {
+		t.Fatalf("abort without user confirm was accepted: code=%d err=%s", code, stderr.String())
+	}
+	if cliStateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected abort changed state")
+	}
+	out := runCLI(t, "workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--user-confirm")
+	if !strings.Contains(out, `"status": "ABORTED"`) {
+		t.Fatalf("user-confirmed abort did not terminate the run: %s", out)
+	}
+}
+
+// TestCLIResetRequiresUserApprove verifies requirement 5: workflow reset is
+// refused without the user-level --user-approve authorization, nothing is
+// recorded on rejection, and an approved reset returns a clean re-registrable
+// state whose output explains what was kept and what was reset.
+func TestCLIResetRequiresUserApprove(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-reset-approve")
+	before := cliStateBytes(t, root, state.RunID)
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "reset", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires --user-approve") {
+		t.Fatalf("reset without user approval was accepted: code=%d err=%s", code, stderr.String())
+	}
+	if cliStateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected reset changed state")
+	}
+	out := runCLI(t, "workflow", "reset", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--user-approve")
+	var result validate.ResetResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("reset output=%s err=%v", out, err)
+	}
+	if result.State.RequirementConfirmed || result.State.Actions["product-review"].Status != "PENDING" || len(result.State.Dispatches) != 0 {
+		t.Fatalf("approved reset did not reach a clean re-registrable state: %s", out)
+	}
+	if len(result.Kept) == 0 || len(result.Reset) == 0 {
+		t.Fatalf("reset output missing kept/reset lists: %s", out)
+	}
+}
+
+// TestCLIRequirementRebindRejectedWithInFlightDispatch verifies requirement 6
+// item 5 through the CLI: workflow requirement --meaning is refused while a
+// review dispatch is in flight (claimed, result not recorded).
+func TestCLIRequirementRebindRejectedWithInFlightDispatch(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-rebind-inflight")
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+	// 准备并认领一轮 product-review，不记录结果。
+	dispatchID := cliPrepareAction(t, root, pkg, state.RunID, "product-review")
+	if _, err := validate.LoadRunState(root, state.RunID); err != nil {
+		t.Fatal(err)
+	}
+	_ = dispatchID
+	// 需求文档已改动，但存在在途审查派发 → 重绑被拒。
+	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	cliGit(t, root, "add", "--all")
+	cliGit(t, root, "commit", "-m", "change requirement")
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--meaning", "changed"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "has not recorded its result") {
+		t.Fatalf("requirement rebind with an in-flight review dispatch was accepted: code=%d err=%s", code, stderr.String())
+	}
 }

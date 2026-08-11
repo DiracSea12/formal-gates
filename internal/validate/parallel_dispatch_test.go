@@ -9,7 +9,7 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-// TestPrepareDoesNotStaleAnyDispatch covers RQ-013 item 1: prepare SHALL NOT
+// TestPrepareDoesNotStaleAnyDispatch covers prepare SHALL NOT
 // invalidate any dispatch. Re-preparing the same function leaves the prior
 // ticket untouched (staling now happens at claim time).
 func TestPrepareDoesNotStaleAnyDispatch(t *testing.T) {
@@ -30,15 +30,15 @@ func TestPrepareDoesNotStaleAnyDispatch(t *testing.T) {
 	}
 }
 
-// TestClaimModeScopedCleanupAndWhiteboxPrepareDoesNotStaleBlackbox covers RQ-013
-// items 1 & 2 & 4: prepare never stales, and the claim-time OPEN cleanup is
+// TestClaimModeScopedCleanupAndWhiteboxPrepareDoesNotStaleBlackbox covers
+// prepare never stales, and the claim-time OPEN cleanup is
 // mode-scoped across every target — claiming the blackbox dispatch leaves the
 // whitebox OPEN ticket of the same target untouched (fixes "whitebox review
 // prepare staled the blackbox review").
 func TestClaimModeScopedCleanupAndWhiteboxPrepareDoesNotStaleBlackbox(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "mode-scoped")
-	// 黑盒与白盒各自独立派发、并行执行（R 修复清单 item 3）。
+	// 黑盒与白盒各自独立派发、并行执行。
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "blackbox", false, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -51,11 +51,11 @@ func TestClaimModeScopedCleanupAndWhiteboxPrepareDoesNotStaleBlackbox(t *testing
 	if blackbox == "" || whitebox == "" || blackbox == whitebox {
 		t.Fatalf("per-mode dispatches were not prepared: %#v", loaded.Dispatches)
 	}
-	// RQ-013 item 1：prepare 不作废——两个 mode 的票都保持 OPEN。
+	// prepare 不作废——两个 mode 的票都保持 OPEN。
 	if loaded.Dispatches[blackbox].Status != "OPEN" || loaded.Dispatches[whitebox].Status != "OPEN" {
 		t.Fatalf("prepare must not stale another mode's dispatch: %#v", loaded.Dispatches)
 	}
-	// RQ-013 items 2/4：认领黑盒时只清理同 mode 的 OPEN 空票，白盒 OPEN 票不被作废。
+	// 认领黑盒时只清理同 mode 的 OPEN 空票，白盒 OPEN 票不被作废。
 	if _, err := ClaimDispatch(root, pkg, state.RunID, blackbox, "blackbox-executor"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestClaimModeScopedCleanupAndWhiteboxPrepareDoesNotStaleBlackbox(t *testing
 	}
 }
 
-// TestClaimRejectsParallelSameFunction covers RQ-013 item 3: claiming a fresh
+// TestClaimRejectsParallelSameFunction covers claiming a fresh
 // dispatch is rejected while a same-function dispatch is already CLAIMED and its
 // subagent has not been terminated (no recorded stop event).
 func TestClaimRejectsParallelSameFunction(t *testing.T) {
@@ -90,7 +90,7 @@ func TestClaimRejectsParallelSameFunction(t *testing.T) {
 	}
 }
 
-// TestClaimCleansUpOldOpenEmptyTickets covers RQ-013 item 4: claiming a fresh
+// TestClaimCleansUpOldOpenEmptyTickets covers claiming a fresh
 // dispatch automatically stales old OPEN empty tickets of the same function (no
 // subagent / no start event) so they never block a claim.
 func TestClaimCleansUpOldOpenEmptyTickets(t *testing.T) {
@@ -121,7 +121,7 @@ func TestClaimCleansUpOldOpenEmptyTickets(t *testing.T) {
 	}
 }
 
-// TestClaimAfterManualTerminationAllowsFresh covers RQ-013 item 5: after the main
+// TestClaimAfterManualTerminationAllowsFresh covers after the main
 // agent directly terminates the prior same-function subagent (lifecycle records
 // its stop event / interruption reason), claiming the same-function fresh
 // dispatch marks the prior STALE and proceeds. Without the termination evidence
@@ -129,9 +129,7 @@ func TestClaimCleansUpOldOpenEmptyTickets(t *testing.T) {
 func TestClaimAfterManualTerminationAllowsFresh(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "manual-terminate", "custom", []string{"quality"})
-	prior := workflowLifecycle
-	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
-	t.Cleanup(func() { workflowLifecycle = prior })
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
 	first := prepareAndClaim(t, root, pkg, state.RunID, "quality", "gate-reviewer-one")
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", true, "user reopened the gate"); err != nil {
 		t.Fatal(err)
@@ -151,16 +149,14 @@ func TestClaimAfterManualTerminationAllowsFresh(t *testing.T) {
 	}
 }
 
-// TestStaleClaimedDispatchResultCanBeRecorded covers RQ-013 item 6 (恢复路径): a
+// TestStaleClaimedDispatchResultCanBeRecorded covers (恢复路径): a
 // dispatch the reviewer had already claimed, whose results were produced, can
 // still be recorded when it has been staled — no re-dispatch, identity and
 // source bindings verified, record lands on the current snapshot.
 func TestStaleClaimedDispatchResultCanBeRecorded(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "stale-record", "custom", []string{"quality"})
-	prior := workflowLifecycle
-	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}}
-	t.Cleanup(func() { workflowLifecycle = prior })
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "")
 	a := prepareAndClaim(t, root, pkg, state.RunID, "quality", "stale-reviewer")
 	// 构造"审查者已认领但派发被作废"（快照未变、source 绑定仍匹配）的状态。
 	loaded, _ := LoadRunState(root, state.RunID)
@@ -179,16 +175,14 @@ func TestStaleClaimedDispatchResultCanBeRecorded(t *testing.T) {
 	}
 }
 
-// TestStaleRecordRejectedWhenReplacementInFlight covers RQ-013 item 6's
+// TestStaleRecordRejectedWhenReplacementInFlight covers
 // double-record guard: a STALE dispatch result is rejected while a same-function
 // replacement dispatch is in flight (OPEN or CLAIMED), so the stale record and
 // the replacement cannot both land.
 func TestStaleRecordRejectedWhenReplacementInFlight(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "stale-double", "custom", []string{"quality"})
-	prior := workflowLifecycle
-	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
-	t.Cleanup(func() { workflowLifecycle = prior })
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
 	a := prepareAndClaim(t, root, pkg, state.RunID, "quality", "stale-reviewer")
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", true, "user reopened the gate"); err != nil {
 		t.Fatal(err)
@@ -212,7 +206,7 @@ func TestStaleRecordRejectedWhenReplacementInFlight(t *testing.T) {
 	}
 }
 
-// TestParallelAdvicePostSnapshot covers RQ-014's stage→should-parallel rule for
+// TestParallelAdvicePostSnapshot covers stage→should-parallel rule for
 // the post-development stage: blackbox QA execution + whitebox QA execution +
 // each selected gate, all parallel.
 func TestParallelAdvicePostSnapshot(t *testing.T) {
@@ -237,7 +231,7 @@ func TestParallelAdvicePostSnapshot(t *testing.T) {
 	}
 }
 
-// TestParallelReminderInsufficientParallelism covers RQ-014: ParallelCheck
+// TestParallelReminderInsufficientParallelism covers ParallelCheck
 // reports a stderr reminder when the should-parallel set is non-empty and fewer
 // tasks are in flight than should be.
 func TestParallelReminderInsufficientParallelism(t *testing.T) {
@@ -246,8 +240,7 @@ func TestParallelReminderInsufficientParallelism(t *testing.T) {
 	// 只并行了 1 个（黑盒 QA 执行已在途），其余 2 个未派发 → 提醒。
 	prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
 	now := time.Now()
-	parallelCooldown = 0
-	t.Cleanup(func() { parallelCooldown = 60 * time.Second })
+	stubParallelCooldown(t, 0)
 	advice, remind := ParallelCheck(root, state.RunID, now)
 	if !remind {
 		t.Fatalf("insufficient parallelism was not reminded: %#v", advice)
@@ -257,7 +250,7 @@ func TestParallelReminderInsufficientParallelism(t *testing.T) {
 	}
 }
 
-// TestParallelNoReminderWhenSufficient covers RQ-014: no reminder when every
+// TestParallelNoReminderWhenSufficient covers no reminder when every
 // should-parallel task is already in flight.
 func TestParallelNoReminderWhenSufficient(t *testing.T) {
 	root, pkg := workflowFixture(t)
@@ -269,14 +262,13 @@ func TestParallelNoReminderWhenSufficient(t *testing.T) {
 	if _, err := ClaimDispatch(root, pkg, state.RunID, quality, "quality-reviewer"); err != nil {
 		t.Fatal(err)
 	}
-	parallelCooldown = 0
-	t.Cleanup(func() { parallelCooldown = 60 * time.Second })
+	stubParallelCooldown(t, 0)
 	if _, remind := ParallelCheck(root, state.RunID, time.Now()); remind {
 		t.Fatalf("full parallelism was still reminded")
 	}
 }
 
-// TestParallelCheckIsReadOnly covers RQ-014's lifecycle-safety requirement: the
+// TestParallelCheckIsReadOnly covers lifecycle-safety requirement: the
 // parallel check is read-only for the workflow — it never disturbs in-flight
 // (CLAIMED) dispatches or other run state (the only write is the independent
 // cooldown marker file).
@@ -285,8 +277,7 @@ func TestParallelCheckIsReadOnly(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "parallel-readonly", "custom", []string{"blackbox", "whitebox", "quality"})
 	blackbox := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
 	before, _ := LoadRunState(root, state.RunID)
-	parallelCooldown = 0
-	t.Cleanup(func() { parallelCooldown = 60 * time.Second })
+	stubParallelCooldown(t, 0)
 	if _, remind := ParallelCheck(root, state.RunID, time.Now()); !remind {
 		t.Fatalf("insufficient parallelism was not reminded")
 	}
@@ -299,14 +290,13 @@ func TestParallelCheckIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestParallelCooldownDedup covers RQ-014's cooldown/dedup: the same-signature
+// TestParallelCooldownDedup covers cooldown/dedup: the same-signature
 // reminder is not repeated within the cooldown window, but fires again after the
 // window elapses.
 func TestParallelCooldownDedup(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "parallel-cooldown", "custom", []string{"blackbox", "whitebox", "quality"})
-	parallelCooldown = time.Hour
-	t.Cleanup(func() { parallelCooldown = 60 * time.Second })
+	stubParallelCooldown(t, time.Hour)
 	now := time.Now()
 	if _, remind := ParallelCheck(root, state.RunID, now); !remind {
 		t.Fatalf("first reminder was suppressed")

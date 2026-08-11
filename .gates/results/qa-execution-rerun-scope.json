@@ -1,0 +1,54 @@
+{
+  "runId": "qa-execution-rerun-scope",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "c3879ac4d3878a1e9a284f7bd4a3fa226e6be7367781095445cda84db2555224",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "eec04f6727ca5b3fff6d1624922224940b735a4842212de32c864b70bf6a34fe",
+  "vcs": "git",
+  "baseSnapshot": "29a3eb8f44cbcec110ee438946684127c6198077",
+  "currentSnapshot": "b5bab383b70c5da6d022eebeb3aecbdd34865d1a",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/qa-execution-rerun-scope/master-requirements.md",
+      "revision": "c3879ac4d3878a1e9a284f7bd4a3fa226e6be7367781095445cda84db2555224"
+    },
+    {
+      "path": "openspec/changes/qa-execution-rerun-scope/design.md",
+      "revision": "bbebac0b159a8e8505e1e96bba80a83e1cb6dbb8b5754eb679ebad30a5e6fb6c"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "RQ-13/14（QA 执行重跑 scope 决策与 per-mode QA 解耦）为单一连贯单元，共享状态迁移与 QA 执行面；拆分会引入多 run 流程开销、收益低，单 run 交付。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "b5bab383b70c5da6d022eebeb3aecbdd34865d1a",
+      "compared": "29a3eb8f44cbcec110ee438946684127c6198077..b5bab383b70c5da6d022eebeb3aecbdd34865d1a",
+      "findings": []
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "b5bab383b70c5da6d022eebeb3aecbdd34865d1a",
+      "compared": "29a3eb8f44cbcec110ee438946684127c6198077..b5bab383b70c5da6d022eebeb3aecbdd34865d1a",
+      "findings": []
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "b5bab383b70c5da6d022eebeb3aecbdd34865d1a",
+    "cases": []
+  }
+}

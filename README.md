@@ -220,7 +220,9 @@ bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host codex --scope project --project <project>
 ```
 
-Windows 使用 `bin\formal-gates.exe`。
+Windows 使用 `bin\formal-gates.exe`。`bin\formal-gates.exe` 是 Windows 资产：在
+macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用各自平台的
+`bin/formal-gates`。
 
 ### 安装位置
 

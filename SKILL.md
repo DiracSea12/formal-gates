@@ -17,6 +17,10 @@ description: 用于每一次涉及项目内容的创建、编辑、移动或删�
 所有创建、编辑、移动或删除项目内容的请求都走本受理流程；不涉及修改的需求不进入，除
 非用户明确要求走正式流程。
 
+主代理高置信度判断当前请求应走轻量、或根本不涉及项目内容修改时，跳过整个受理流程
+（含需求澄清、确认与路线提问），按常规方式直接处理；拿不准、或用户明确要求走正式流
+程时，仍走完整受理流程。本条优先于本段其余默认声明。
+
 正式流程首次被触发时（本会话第一个内容修改请求），主代理需显式提醒用户本会话已触发
 formal-gates正式开发流程，可声明本会话范围内不适用本流程——受理澄清与开发流程一并跳过，
 后续内容修改按常规方式直接处理。未声明前，默认按正式流程执行。该声明可随时提出或撤销。默
@@ -60,7 +64,9 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
 读 `references/example-run.md` 完整走查一遍。
 
 1. **启动。** 选一个项目的外部 VCS，冻结原生基线标识，运行 `workflow start`，登记主
-   需求和对应的需求/方案文档。不支持无 VCS 的正式开发流程。执行本步前必读
+   需求和对应的需求/方案文档。启动必须显式声明 `--split yes|no`（需求 4）：`yes` 时本
+   run 必须是保留总任务实例（`--retained-overall`）或切片实例（`--master <主实例 id>`），
+   `no` 时禁止后续记录拆分；未声明拒绝启动。不支持无 VCS 的正式开发流程。执行本步前必读
    `references/formal-flow.md`「启动与 run 控制」。
 2. **需求澄清登记。** 只登记受理阶段已对齐的需求并记录 PASS（`requirement --confirmed`
    绑定）；澄清问答、呈现、确认、写需求文件都在受理阶段完成。需求修订三分支：
@@ -80,12 +86,12 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
    `references/formal-flow.md`「需求、拆分决定与路线」；完整拆分流程见
    `references/sliced-runs.md`。
 4. **正式开发之前（两段式）。** 先派发 Part 1 产品审（`product-review`），用独立零上
-   下文审查者审已实例化并确认的需求文档：需求本身及其细节是否合理。复审规则由 CLI
-   强制、唯一持有在 `references/formal-flow.md`「开发之前」；决策级铁律：①发现项按
-   P0/P1/P2/P3 分级；②仅含 P2/P3 可记录 PASS、含 P0/P1 记录 FAIL；③用户逐项处置，确认→需
-   重审、驳回→作废；④主代理无破例权。Part 1 全部通过后进入 Part 2，双速调度细节见
-   `references/formal-flow.md`「开发之前」。用户已拍板的发现项不再重提。产品审不产生
-   终态 FAIL，需求是否成立由用户决定。
+   下文审查者审已实例化并确认的需求文档：需求本身及其细节是否合理。复审规则（决策级铁
+   律：P0/P1/P2/P3 分级；仅含 P2/P3 可记录 PASS、含 P0/P1 记录 FAIL；用户逐项处置，确认
+   →需重审、驳回→作废；主代理无破例权）由 CLI 强制、完整机制唯一持有在
+   `references/formal-flow.md`「开发之前」；执行本步前必读该节（含双速调度细节）。Part
+   1 全部通过后进入 Part 2。用户已拍板的发现项不再重提。产品审不产生终态 FAIL，需求是
+   否成立由用户决定。
 5. **开发。** 运行 `development-worker` 准备命令，记录开发开始并锁定路线。黑盒 QA 与
    开发并行：开发开始不再要求黑盒 qa-review PASS，黑盒 qa-design/qa-review/返修在独立
    QA 隔离工作区（从基线创建、恒等于基线、不含本次开发代码）中与开发并发推进；每个黑
@@ -95,27 +101,26 @@ formal-gates正式开发流程，可声明本会话范围内不适用本流程�
    踪每条交付路径时先加入 VCS，返回前核查基线到当前的完整 diff。执行本步前必读
    `references/formal-flow.md`「开发与快照」。
 6. **固定当前快照。** 实现完成后用原生 VCS 创建不可变标识，运行 `workflow snapshot`
-   记录它；后续审查只能用这个快照，不能用工作树的当前状态。快照要求**开发完成 且 黑盒
-   qa-review PASS 两边都完成**；黑盒 review 未 PASS 时快照被挡，只有用户经
-   `--user-requested` 显式授权可手动放行（记录授权来源、非自动；放行后未获批准的黑盒
-   用例验证状态视为 PASS、qa-execution 只覆盖已批准用例）。开发/修复派发认领放宽：当
-   前原生 HEAD 是派发源快照的后代或相等即允许认领，其余派发仍要求精确匹配。执行本步前
-   必读 `references/formal-flow.md`「开发与快照」。
+   记录它；后续审查只能用这个快照，不能用工作树的当前状态。快照门机制（**开发完成 且
+   黑盒 qa-review PASS 两边都完成**、`--user-requested` 手动放行、开发/修复派发认领放
+   宽）统一持有在 `references/formal-flow.md`「开发与快照」；执行本步前必读该节。
 7. **开发后审查。** 并行派出黑盒 QA 执行、白盒 QA 与各门审查。QA 只用已批准测试用例；
    每个门只看基线到当前的完整 diff，各自独立评审、互不干扰。审查代理不直接写流程状态，
    由主代理校验后统一记录。**QA 执行重跑前先记 scope 决策**：某 mode 已存在更早快照的权威
-   执行结果（重跑）时，host 在进入执行前询问用户"全量重跑 vs 只跑受影响"并给推荐，CLI 强制
-   `prepare-action qa-execution` 前该 mode 必须已记录覆盖本次重跑的 scope 决策
-   （`workflow qa-execution-scope --mode <blackbox|whitebox|""> --decision FULL|AFFECTED
-   [--cases ...] [--reason ...]`），否则拒绝 prepare；首次执行不要求、默认全量。黑盒/白盒
-   各自独立。执行本步前必读 `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并
-   验证细节也见该节。
+   执行结果（重跑）时，host 在进入执行前询问用户"全量重跑 vs 只跑受影响"并给推荐，scope
+   决策命令形式（`qa-execution-scope` 与 FULL/AFFECTED 记录）由 CLI 强制、唯一持有在
+   `references/formal-flow.md`「开发后审查」；首次执行不要求、默认全量。黑盒/白盒各自独
+   立。执行本步前必读 `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并验证
+   细节也见该节。
 8. **修复。** 出现 QA FAIL 或 P0/P1 门发现项时，整个轮次退回修复，此时同轮的 P2/P3 一并
    处理。轮次上限用尽后每次额外修复都要 `authorize-repair` 显式授权；若某 QA mode 将重跑，
-   scope 决策在同一个交互打包询问/记录（多 mode 各一份、可不同），最近一次为 AFFECTED 时
-   自动沿用（CARRY_FORWARD）不再重问。重跑推荐由 AI 按实际情况综合判断、稍保守（不确定倾
-   向 FULL），并显式提醒用户"只跑受影响"的含义与漏检风险。执行本步前必读
-   `references/formal-flow.md`「继承判定、修复授权与 Seal」。
+   scope 决策在同一个交互打包询问/记录（多 mode 各一份、可不同）。**CARRY_FORWARD 触发
+   条件**：只有当 host 只传 `--qa-cases`/`--qa-reason` 而不传 `--qa-scope`（未给出新的显式
+   决策）、且该 mode 最近一次记录的是用户主动选择的 AFFECTED 时，才自动沿用该子集
+   （Source=CARRY_FORWARD）不再重问；host 显式给出新的 `--qa-scope <mode>=FULL|AFFECTED`
+   时以新决策为准，不会被强制沿用。`--qa-scope <mode>=` 空决策被拒绝。重跑推荐由 AI 按实
+   际情况综合判断、稍保守（不确定倾向 FULL），并显式提醒用户"只跑受影响"的含义与漏检风
+   险。执行本步前必读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 9. **Seal。** 汇总前后各确认一次当前 VCS 标识。Git run 在基线→当前含 >1 条提交时，
    seal 自动把该范围压缩为单条提交（保留最终树，作为 seal 最后一步 VCS 操作，压缩前工
    作树必须干净），压缩消息经 `--squash-message` 传入；单条/空范围不操作、SVN/P4 不压
@@ -149,9 +154,13 @@ seal 后恢复）→ 重走需求澄清（有已确认需求则重确认并登�
 出。开发任务只发给开发工作者，任务内容固定为「已确认范围 + 实现任务」；聊天历史、发
 现项、修复说明、其他审查者结论、预期判定一律留在编排层。
 
-派发即原样转发：任务消息就是 `prepare-action` / `prepare-gate` 的输出本身，主代理不得
-附加评论、解释、先前结论、期望判定、修复说明或关注点；任何附加文本都不是任务的一部
-分。
+派发提示词以 CLI 写出的规范文件为唯一权威源：`prepare-action` / `prepare-gate` 把完整
+提示词内容写入本 run 规范提示词文件（`.gates/tmp/<run-id>/prompts/<dispatch-id>.md`，
+含 dispatch id、需求 revision、base/current 快照等关键字段），主代理只发指向该文件的薄
+启动消息（如「读取 <文件路径> 执行派发」）、**不得手写/凭记忆拼写提示词内容**，子代理
+读文件执行；派发即消费该规范文件，主代理不得附加评论、解释、先前结论、期望判定、修复
+说明或关注点。`claim-dispatch` 认领时会兜底校验文件内容与 prepare 记录一致，不一致即硬
+阻断、该派发判定为不可用。
 
 host 启动后，用 `workflow claim-dispatch` 把每个独立派发绑定到 host 身份。记录结果
 或调用 `workflow snapshot --dispatch`（开发/修复用）前会先检查生命周期模块；总任务实
@@ -240,3 +249,12 @@ CLI 用启动时选定的 Git/SVN/P4 原生命令解析和验证快照标识；h
 处理安装、host hook、canary、打包或发布检查时，再读 `references/install-and-hooks.md`；
 维护本仓库时再读 `references/local-validation.md`。hook 配置不等于 hook 已运行，须在同
 一个 host 上经实机 canary 验证才能认定阻塞生效。
+
+## 成本计量
+
+每次独立派发（门或动作）的 token 用量在结果记录时按其 host 转写文件精确计量，写入 run
+状态的单一 `cost` 投影（`RunState.Cost`，实现见 `internal/cost/`）：run 合计 + 每条派发
+一项。数字只来自 host 转写解析（claude/codex 适配器），无转写或解析失败的派发记为
+unavailable、不捏造数值；分类为输入缓存命中/未命中与输出，`totalInputTokens` 只统计输
+入侧、输出单独记录不计入合计。成本数据仅展示、不影响任何判定。`workflow seal`/`show`
+的输出携带该投影（`cost` 字段），可据此核对本轮 token 开销。

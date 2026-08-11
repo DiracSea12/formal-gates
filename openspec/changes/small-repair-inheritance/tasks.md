@@ -9,4 +9,4 @@
 - [x] Update skill, prompt-adjacent documentation, README files, and behavior
   examples for the shortcut and fallback rule.
 - [x] Add lowest-owner state tests and unique CLI parsing coverage.
-- [ ] Run the complete package validation checklist and selected formal gates.
+- [x] Run the complete package validation checklist and selected formal gates.

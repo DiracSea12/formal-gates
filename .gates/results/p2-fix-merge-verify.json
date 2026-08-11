@@ -1,0 +1,119 @@
+{
+  "runId": "p2-fix-merge-verify",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "b879761c776c4d71d215455a481bc7a22551c350a9baf792b68ec71a93ca6dbb",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "a7d6aa0be7f85bfe00c2dee17a77f228efa45c1ef2c52f62fa2fc378e310995b",
+  "vcs": "git",
+  "baseSnapshot": "49857ef877fa50d2a95a079f16037c208b4897c4",
+  "currentSnapshot": "8ce64351c04da837410d2b2f5a31be42b96bc786",
+  "requirementArtifacts": [
+    {
+      "path": "P2-FIX-REQUIREMENT.md",
+      "revision": "b879761c776c4d71d215455a481bc7a22551c350a9baf792b68ec71a93ca6dbb"
+    }
+  ],
+  "slicing": {
+    "decision": "split",
+    "splitCount": 8
+  },
+  "routeMode": "merge",
+  "selectedGates": [
+    "merge-qa",
+    "merge-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PASS",
+      "snapshot": "8ce64351c04da837410d2b2f5a31be42b96bc786",
+      "compared": "49857ef877fa50d2a95a079f16037c208b4897c4..8ce64351c04da837410d2b2f5a31be42b96bc786",
+      "dispatchId": "dispatch-fc4596f35869ed4ef6f49ca6"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "message": "切片基本独立、无跨切片交互用例",
+    "snapshot": "8ce64351c04da837410d2b2f5a31be42b96bc786"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-3d411fcbab854031506d5652": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5376a313c9df31416c33ee11": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-571d61efc1f8ff95dfaac9b4": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7adb525c3d174c2848ee9f34": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c2d7078f282d9ddea41e5cb1": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d2d41eef7a84c0cd5bf40bec": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fc4596f35869ed4ef6f49ca6": {
+        "target": "merge-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

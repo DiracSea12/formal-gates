@@ -36,9 +36,7 @@ func writeCostFixture(t *testing.T) string {
 // real capture→transcript round-trip is owned by the lifecycle package tests.
 func stubCodexTranscript(t *testing.T, transcript string) {
 	t.Helper()
-	prior := workflowLifecycle
-	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, transcript: transcript}
-	t.Cleanup(func() { workflowLifecycle = prior })
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, transcript, "")
 }
 
 // prepareClaimedAction prepares the action dispatch and claims it under the

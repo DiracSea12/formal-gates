@@ -41,7 +41,7 @@ func TestReproQACarryRegression(t *testing.T) {
 	}
 }
 
-// TestReproFAILResultPromptChangeReDispatches locks in R 修复清单 P1-1: a recorded
+// TestReproFAILResultPromptChangeReDispatches locks in a recorded
 // FAIL gate/action result whose prompt changed must be directly re-dispatchable
 // (re-dispatch is the disposal), not deadlocked behind carry --main-agent, which
 // only inherits PASS results.
@@ -61,7 +61,7 @@ func TestReproFAILResultPromptChangeReDispatches(t *testing.T) {
 	}
 }
 
-// TestReproResumeThreeBranch covers RQ-007/013 at the gate prepare path: an
+// TestReproResumeThreeBranch covers the gate prepare path: an
 // objective transient API interruption reason forces a resume with the explicit
 // cause in the message, a recorded non-objective reason opens a fresh dispatch,
 // and a missing/unknown reason forces the user decision branch.
@@ -69,9 +69,7 @@ func TestReproResumeThreeBranch(t *testing.T) {
 	t.Run("objective reason forces resume", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		state := readyDeliveryForRoute(t, root, pkg, "resume-objective", "custom", []string{"quality"})
-		prior := workflowLifecycle
-		workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "HTTP 429"}
-		t.Cleanup(func() { workflowLifecycle = prior })
+		stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "HTTP 429")
 		prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
 		if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "objective transient API cause") || !strings.Contains(err.Error(), "resume the original agent") {
 			t.Fatalf("objective interruption reason did not force resume with the cause: %v", err)
@@ -80,9 +78,7 @@ func TestReproResumeThreeBranch(t *testing.T) {
 	t.Run("non-objective reason opens fresh dispatch", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		state := readyDeliveryForRoute(t, root, pkg, "resume-user-abort", "custom", []string{"quality"})
-		prior := workflowLifecycle
-		workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
-		t.Cleanup(func() { workflowLifecycle = prior })
+		stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
 		prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
 		if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
 			t.Fatalf("non-objective interruption reason was still forced to resume: %v", err)
@@ -91,9 +87,7 @@ func TestReproResumeThreeBranch(t *testing.T) {
 	t.Run("unknown reason forces user decision", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		state := readyDeliveryForRoute(t, root, pkg, "resume-unknown", "custom", []string{"quality"})
-		prior := workflowLifecycle
-		workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "未知"}
-		t.Cleanup(func() { workflowLifecycle = prior })
+		stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "未知")
 		prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
 		if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "the user must decide") {
 			t.Fatalf("unknown interruption reason did not force the user decision branch: %v", err)
@@ -101,7 +95,7 @@ func TestReproResumeThreeBranch(t *testing.T) {
 	})
 }
 
-// TestReproDevelopmentWorkerUserRequested covers R 修复清单 P1-2: prepare
+// TestReproDevelopmentWorkerUserRequested covers prepare
 // development-worker must pass the CLI's --user-requested through to the shared
 // prepareBoundPrompt so a user-authorized fresh development/repair dispatch can
 // reopen an interrupted claimed dispatch.
@@ -122,7 +116,7 @@ func TestReproDevelopmentWorkerUserRequested(t *testing.T) {
 	if state.ReviewOverrides["development-worker"] == "" {
 		t.Fatalf("development reopen was not recorded in ReviewOverrides: %#v", state.ReviewOverrides)
 	}
-	// RQ-013：prepare 不再作废——用户授权的开发新派发生成后，旧 CLAIMED 开发派发仍在途。
+	// prepare 不再作废——用户授权的开发新派发生成后，旧 CLAIMED 开发派发仍在途。
 	if state.Dispatches[dispatchID].Status != "CLAIMED" {
 		t.Fatalf("prepare must not stale the claimed development dispatch: %#v", state.Dispatches[dispatchID])
 	}
@@ -130,9 +124,7 @@ func TestReproDevelopmentWorkerUserRequested(t *testing.T) {
 	if fresh == "" || fresh == dispatchID {
 		t.Fatalf("fresh development dispatch was not prepared: %#v", state.Dispatches)
 	}
-	prior := workflowLifecycle
-	workflowLifecycle = &workflowLifecycleStub{verification: lifecycle.Verification{Outcome: lifecycle.Verified}, interruptionReason: "user abort"}
-	t.Cleanup(func() { workflowLifecycle = prior })
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
 	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "dev-user-requested-repair"); err != nil {
 		t.Fatalf("claim of the fresh development dispatch after manual termination was rejected: %v", err)
 	}
@@ -142,7 +134,7 @@ func TestReproDevelopmentWorkerUserRequested(t *testing.T) {
 	}
 }
 
-// TestReproQAExecutionPerModeDispatch covers R 修复清单 item 3: qa-execution filters
+// TestReproQAExecutionPerModeDispatch covers qa-execution filters
 // the required set by the dispatch mode so blackbox and whitebox each dispatch
 // independently and can record in parallel into the shared QAExecution result.
 func TestReproQAExecutionPerModeDispatch(t *testing.T) {
@@ -191,7 +183,7 @@ func TestReproQAExecutionPerModeDispatch(t *testing.T) {
 }
 
 // qaExecutionDispatchByMode returns the OPEN qa-execution dispatch id with the
-// given mode (R 修复清单 item 3 per-mode dispatch).
+// given mode (per-mode dispatch).
 func qaExecutionDispatchByMode(t *testing.T, root, runID, mode string) string {
 	t.Helper()
 	state, err := LoadRunState(root, runID)
@@ -207,8 +199,8 @@ func qaExecutionDispatchByMode(t *testing.T, root, runID, mode string) string {
 	return ""
 }
 
-// TestReproWaveAndSealRequireEverySelectedMode covers R 修复清单 item 8: after
-// qa-execution is split by mode (item 3), wave completion and Seal must require
+// TestReproWaveAndSealRequireEverySelectedMode covers after
+// qa-execution is split by mode, wave completion and Seal must require
 // every selected mode to have recorded execution. A single mode recording PASS
 // with all gates recorded must not complete the wave nor allow Seal while the
 // other selected mode is silently skipped.
@@ -256,7 +248,7 @@ func TestReproWaveAndSealRequireEverySelectedMode(t *testing.T) {
 	}
 }
 
-// TestReproINHERITKeepsAuthoritativeGuard locks in R 修复清单 item 9's corrected
+// TestReproINHERITKeepsAuthoritativeGuard locks in corrected
 // oracle for the carry cases: INHERIT (keep the old conclusion) makes the result
 // authoritative at the current snapshot, so a fresh prepare of the same target
 // (unchanged prompt) is still blocked by the authoritative-result guard — the
@@ -282,7 +274,7 @@ func TestReproINHERITKeepsAuthoritativeGuard(t *testing.T) {
 	}
 }
 
-// TestReproRERUNResetsForReDispatch locks in R 修复清单 item 9's corrected oracle
+// TestReproRERUNResetsForReDispatch locks in corrected oracle
 // for RERUN: the decision resets the recorded result to PENDING, so the same
 // target becomes re-dispatchable (RERUN → 重置、可重派).
 func TestReproRERUNResetsForReDispatch(t *testing.T) {

@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+> **历史记录注记：此 `specs/` 子目录为历史记录，非活 spec。** 当前机制见对应
+> `../../alignment.md`（phase4-lightweight-gates/alignment.md 为本 change 的活需求文档）；
+> 本目录下的 spec 不再单独维护。
+
 ### Requirement: Gate files are the sole independent-review gate source
 
 The implementation SHALL discover every valid direct regular child of the

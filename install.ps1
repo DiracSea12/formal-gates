@@ -1,3 +1,12 @@
+# Windows installer for formal-gates.
+#
+# Prerequisite: this script creates a SymbolicLink (New-Item -ItemType
+# SymbolicLink) for the "current" release directory and the
+# bin\formal-gates.exe entry. Creating symbolic links on Windows requires
+# either an elevated (Administrator) PowerShell session or Developer Mode
+# enabled (Settings > Update & Security > For developers). Run this script
+# under one of those conditions, otherwise the SymbolicLink calls fail.
+
 param(
   [string]$Version = $env:FORMAL_GATES_VERSION,
   [ValidateSet("claude","codex","cursor","both")]

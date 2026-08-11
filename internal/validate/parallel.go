@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// parallelStage 定义"阶段 → 应并行任务"的一条规则（RQ-014）。规则集在 Go 内硬编码为一张
+// parallelStage 定义"阶段 → 应并行任务"的一条规则。规则集在 Go 内硬编码为一张
 // 解耦可扩展的数据表，独立于流程逻辑：流程/规则经常修改（SKILL.md / formal-flow.md 仅为
 // 参考）时，只改这张表即可；规则集不依赖是否已 prepare——只要当前处于该阶段、对应任务尚
 // 未出结果，就应当并行派发。
@@ -31,7 +31,7 @@ type parallelTask struct {
 	match func(PreparedDispatch) bool
 }
 
-// parallelStageTable 是"阶段 → 应并行任务"的硬编码数据表（RQ-014）。按优先级从上到下取
+// parallelStageTable 是"阶段 → 应并行任务"的硬编码数据表。按优先级从上到下取
 // 第一个命中的阶段：
 //   - 修复轮：修复快照推进后各门的重审与 QA 执行并行；
 //   - 开发后审查：首个开发快照后黑盒 QA 执行 + 白盒 QA + 各已选门全部并行；
@@ -63,7 +63,7 @@ var parallelStageTable = []parallelStage{
 			if state.Actions["development-worker"].Status == developmentPrepared {
 				tasks = append(tasks, parallelTask{name: "开发子代理", match: matchDispatch("action", "development-worker", "")})
 			}
-			// RQ-001：并行提示按 blackbox mode 读黑盒 review 权威结果。
+			// 并行提示按 blackbox mode 读黑盒 review 权威结果。
 			if isSelected(state, blackboxQAID) && state.qaReview("blackbox").Status != "PASS" {
 				tasks = append(tasks, parallelTask{name: "黑盒 QA 设计/审查", match: func(d PreparedDispatch) bool {
 					return d.TargetKind == "action" && d.Mode == "blackbox" && (d.Target == "qa-design" || d.Target == "qa-review")
@@ -122,7 +122,7 @@ func inFlightParallelCount(state RunState, tasks []parallelTask) int {
 	return count
 }
 
-// ParallelAdvice 是一次 RQ-014 并行性检查的结果。
+// ParallelAdvice 是一次并行性检查的结果。
 type ParallelAdvice struct {
 	// Stage 是命中的阶段名。
 	Stage string `json:"stage"`
@@ -136,7 +136,7 @@ type ParallelAdvice struct {
 	Message string `json:"message,omitempty"`
 }
 
-// ParallelAdviceFor 按流程阶段数据表计算并行性建议（RQ-014）。纯内存计算、只读，不依赖
+// ParallelAdviceFor 按流程阶段数据表计算并行性建议。纯内存计算、只读，不依赖
 // 是否已 prepare。规则集不命中任何阶段、或应并行任务集为空时返回空建议（不提醒）。
 func ParallelAdviceFor(state RunState) ParallelAdvice {
 	for _, stage := range parallelStageTable {
@@ -162,7 +162,7 @@ func ParallelAdviceFor(state RunState) ParallelAdvice {
 	return ParallelAdvice{}
 }
 
-// parallelCooldown 是同签名提醒的最小间隔（RQ-014 冷却/去重，避免连发刷屏）。测试可覆盖。
+// parallelCooldown 是同签名提醒的最小间隔（冷却/去重，避免连发刷屏）。测试可覆盖。
 var parallelCooldown = 60 * time.Second
 
 // parallelMarker 是 run 作用域的提醒冷却标记，记录上一次提醒的签名与时间。
@@ -171,7 +171,7 @@ type parallelMarker struct {
 	Unix      int64  `json:"unix"`
 }
 
-// ParallelCheck 读取 run 状态、计算 RQ-014 并行建议并应用冷却/去重，返回是否应在 stderr
+// ParallelCheck 读取 run 状态、计算并行建议并应用冷却/去重，返回是否应在 stderr
 // 提醒。实现保持便宜（只读一份小状态文件 + 一个冷却标记文件）且生命周期安全（不写派发、
 // 生命周期事件或审查结果；冷却标记是独立的无副作用文件）。读不到 run 状态（如非 workflow
 // 触发面）时静默返回不提醒。

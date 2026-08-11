@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestWriteBlockDecisionMatrix covers the RQ-011 write-block decision matrix via
+// TestWriteBlockDecisionMatrix covers the write-block decision matrix via
 // the real Hook entry: with an active formal run, the main thread and
 // reviewer-class agents are blocked from direct code/run-state writes;
 // development-worker and qa-design are allowed; the main agent editing a
@@ -46,7 +46,7 @@ func TestWriteBlockDecisionMatrix(t *testing.T) {
 	}
 }
 
-// TestWriteBlockNoActiveRunAllows covers RQ-011's scope boundary: without an
+// TestWriteBlockNoActiveRunAllows covers scope boundary: without an
 // active formal run the same main-thread code write is allowed (the hook must
 // not interfere with ordinary projects).
 func TestWriteBlockNoActiveRunAllows(t *testing.T) {
@@ -61,7 +61,7 @@ func TestWriteBlockNoActiveRunAllows(t *testing.T) {
 	}
 }
 
-// TestWriteBlockGitCommitCoversBashWrites verifies the RQ-011 write detection
+// TestWriteBlockGitCommitCoversBashWrites verifies the write detection
 // covers Bash git commits by a main-thread agent while an active run exists.
 func TestWriteBlockGitCommitCoversBashWrites(t *testing.T) {
 	root := t.TempDir()
@@ -135,7 +135,7 @@ func TestCommandWritesFilesReadOnlyIdioms(t *testing.T) {
 	}
 }
 
-// TestWriteBlockReadOnlyBashAllowed covers RQ-011's read-only Bash allow path with
+// TestWriteBlockReadOnlyBashAllowed covers read-only Bash allow path with
 // an active run (P1 fix): read-only idioms such as stderr merge (2>&1) and output
 // discard (> /dev/null) must not be misjudged as writes, so the main thread and
 // reviewer-class agents (e.g. qa-execution running tests, per its documented role)
@@ -167,7 +167,7 @@ func TestWriteBlockReadOnlyBashAllowed(t *testing.T) {
 	}
 }
 
-// TestWriteBlockMainThreadNonCodeAllowed covers the RQ-011 P2-2 scope narrowing:
+// TestWriteBlockMainThreadNonCodeAllowed covers the P2-2 scope narrowing:
 // the main thread may write non-code, non-run-state files (P2-BACKLOG.md etc.),
 // while code and run-state writes stay blocked.
 func TestWriteBlockMainThreadNonCodeAllowed(t *testing.T) {

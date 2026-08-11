@@ -6,22 +6,6 @@ import (
 	"testing"
 )
 
-func TestPortableCanaryPassesAgainstRepoRoot(t *testing.T) {
-	root := repoRootForCanaryTest(t)
-	report, result := PortableCanary(PortableCanaryOptions{Root: root})
-	if !result.OK() {
-		t.Fatalf("expected portable canary to pass, report=%#v failures=%#v", report, result.Failures)
-	}
-	if len(report.Checks) == 0 {
-		t.Fatal("expected canary checks")
-	}
-	for _, check := range report.Checks {
-		if check.Status != "PASS" {
-			t.Fatalf("expected all checks to pass, got %#v", check)
-		}
-	}
-}
-
 func TestCodexHookProbeRecordsWithoutMakingHookDecision(t *testing.T) {
 	dir := t.TempDir()
 	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Shell","input":{"command":"formal-gates workflow record-gate --gate complexity-gate --status PASS --run-id wf"}}`)

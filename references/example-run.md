@@ -83,7 +83,7 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
    ```bash
    formal-gates workflow start --root <tdo 仓库> --package-root <formal-gates 包> \
      --run-id tdo-archive-001 --flow formal --requirement <需求文件> \
-     [--requirement-artifact <方案文档> ...] --vcs git
+     [--requirement-artifact <方案文档> ...] --vcs git --split no
    ```
    登记主需求和所有对应的需求/方案文档。不支持无 VCS 的正式开发流程。
 4. 生命周期检查点：`workflow show` 确认 run 已启动、需求已登记、状态为预期初始值。
@@ -153,25 +153,21 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
 
 ## 10. 开发（Step 5）
 
-1. 先读 `references/formal-flow.md`「开发与快照」。
+1. 先读 `references/formal-flow.md`「开发与快照」，拿到 `prepare-action
+   development-worker` 的确切命令形式、认领放宽与快照门机制。
 2. 运行 `workflow prepare-action --action development-worker`，把输出作为完整任务发给
-   独立开发工作者代理。任务内容固定为「已确认范围 + 实现任务」；聊天历史、发现项、
-   修复说明、其他审查者结论、预期判定一律留在编排层。派发即原样转发，任务前后不加
-   任何附加文本。
-3. 认领时机：worker 启动后 `workflow claim-dispatch`。开发/修复派发认领放宽——当前
-   原生 HEAD 是派发源快照的后代或相等即允许认领（覆盖 worker 已提交的情形）。
-4. worker 只做已确认范围内的工作：新增或跟踪每条交付路径时先加入 Git，返回前核查基
-   线到当前的完整 diff。
-5. 任务中断后可用 `workflow resume` 继续同一个 PREPARED 任务，只重新组装提示词，已
-   记录的开发开始边界不变；续用被中断派发时先恢复原代理，宿主无法恢复才重开新派发
-   + 新零上下文代理。
+   独立开发工作者代理；任务内容与「派发即原样转发」等派发规则见 SKILL.md「独立派
+   发」。
+3. worker 启动后 `workflow claim-dispatch` 认领（生命周期检查点）。
+4. 任务中断后可用 `workflow resume` 继续同一个 PREPARED 任务，只重新组装提示词，已
+   记录的开发开始边界不变。
 
 ## 11. 固定当前快照（Step 6）
 
-1. 实现完成后用 Git 创建不可变标识，运行
-   `workflow snapshot --dispatch <development-dispatch-id>` 记录它。
-2. 后续审查只能用这个快照，不能用工作树的当前状态。worker 已提交 HEAD 时，claim 放
-   宽让 snapshot 成功。
+1. 先读 `references/formal-flow.md`「开发与快照」。
+2. 实现完成后用 Git 创建不可变标识，运行
+   `workflow snapshot --dispatch <development-dispatch-id>` 记录它；快照门机制与
+   worker 已提交 HEAD 时认领放宽容纳该情形的细节见该节。
 3. 生命周期检查点：snapshot 会先检查生命周期模块（claim 与 stop 已配对），通过后才
    改变状态。
 
@@ -181,44 +177,32 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
    节（本示例不分片）。
 2. 并行准备：`workflow prepare-action --action qa-execution` 和对每个已发现门
    `prepare-gate --gate <id>`。开发后阶段并行推进黑盒 QA 执行、白盒 QA 与各门审查。
-3. 每个门都用全新零上下文审查者，`claim-dispatch` 认领。门任务 = `prompts/reviewer-base.md`
-   + `gates/<id>.md` + 需求路线 + VCS 路线 + 结果契约，由 CLI 组装；提示词缺失即运行
-   时错误中止派发。
-4. QA 只用已批准用例。黑盒 QA 在 QA 隔离工作区按当前需求设计、经 `qa-review` 批准
-   （与开发并行，快照要求黑盒 review PASS）；白盒 QA 开发后由独立代理读实现设计并执
-   行。QA 审查者输入 = 已确认需求 + CLI 组装的完整候选用例集，不含生产代码、diff、测
-   试、开发者解释、其他审查者结论。
-5. 每个门只看基线到当前的完整 diff，各自独立评审、互不干扰。审查者报告 `compared`
-   快照对，不匹配即丢弃。审查代理不直接写流程状态，由主代理校验后统一记录。
-6. 记录：`workflow qa-execution --case-result ...` 与
+3. 每个门都用全新零上下文审查者，`claim-dispatch` 认领（生命周期检查点）。门任务组
+   装、QA 审查者输入、`compared` 快照对校验等规则见 SKILL.md「独立派发」「结果校验
+   与修复上限」与 formal-flow「开发后审查」。
+4. 记录：`workflow qa-execution --case-result ...` 与
    `workflow record-gate --gate <id> --status PASS --compared <base>..<current>`。
-7. 状态询问只能询问进度，并明确告知审查者继续直到所有分配检查完成。运行时错误不是
-   审查发现项，保持可见、需要重试或用户授权跳过。
+5. 状态询问只能询问进度，并明确告知审查者继续直到所有分配检查完成。
 
 ## 13. 修复与继承判定（Step 8）
 
 1. 先读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
-2. 出现 QA FAIL 或 P0/P1 门发现项时，整个轮次退回修复，此时同轮的 P2/P3 一并处理。QA
-   与所有已选门共享最多三次自动审查轮次（整个交付尝试内），用尽后每次额外修复前先
-   向用户展示当前阻塞项并请求授权，每次授权只允许一轮修复/审查。
+2. 出现 QA FAIL 或 P0/P1 门发现项时，整个轮次退回修复，此时同轮的 P2/P3 一并处理；
+   轮次上限、授权与修复规则见 SKILL.md「结果校验与修复上限」及第 8 步。
 3. 派发独立门审/QA 前，先用目标项目自己的构建/测试做便宜健全性检查，明显失败如编译
    不过直接退回修复、不派发子代理；无校验入口则跳过。
-4. 修复继承判定：修复范围不影响任何此前已通过的被选验证 → 主代理直接做继承判定
-   （`workflow carry --main-agent --main-reason '<原因>'`），写明理由，继承所有此前
-   PASS（含 QA）；否则对每个此前通过的被选门单独派发继承判定
-   （`prepare-action --action carry`），只重跑标记为 `RERUN` 的门、给它完整基线到当
-   前比较。涉及共享 API、公开行为、配置、依赖、跨门职责或因果不确定的修复，一律用
-   独立继承判定。
+4. 修复继承判定按 `references/formal-flow.md`「继承判定、修复授权与 Seal」判定：修复
+   范围不影响任何此前已通过的被选验证 → 主代理直接做继承判定
+   （`workflow carry --main-agent --main-reason '<原因>'`）；否则对每个此前通过的被选
+   门单独派发继承判定（`prepare-action --action carry`）。
 5. 修复完成后重新冻结快照并重跑审查，进入下一轮；继承判定与修复本身同样走认领与生
    命周期检查点。
 
 ## 14. Seal（Step 9）
 
-1. 汇总前后各确认一次当前 VCS 标识，再
-   `workflow seal --run-id tdo-archive-001`。只有当每个被选中的结果都通过、或已获得允
-   许的授权之后才 Seal。
-2. PENDING 直接阻塞 Seal；RUNTIME_ERROR 需要用户手动跳过；QA FAIL 或 P0/P1 必须先修
-   复，直到共享审查轮次上限耗尽或用户主动要求才可授权跳过（用户主动要求时加
-   `--user-requested`）。只有 P2/P3 的 PASS 建议保持可见、不阻塞 Seal。
+1. 先读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
+2. 汇总前后各确认一次当前 VCS 标识，再 `workflow seal --run-id tdo-archive-001`；只有
+   当每个被选中的结果都通过、或已获得允许的授权之后才 Seal。Seal 跳过与跳过授权规
+   则见该节与 SKILL.md 第 9 步。
 3. Seal 后该快照的结论即最终。中断的 run 用 `workflow resume` 继续；需要作废则
    `workflow abort`。

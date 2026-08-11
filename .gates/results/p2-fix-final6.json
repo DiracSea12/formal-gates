@@ -1,0 +1,231 @@
+{
+  "runId": "p2-fix-final6",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "b879761c776c4d71d215455a481bc7a22551c350a9baf792b68ec71a93ca6dbb",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "a7d6aa0be7f85bfe00c2dee17a77f228efa45c1ef2c52f62fa2fc378e310995b",
+  "vcs": "git",
+  "baseSnapshot": "050c17a2cf76c0764430c0d8acddf2debd7c8279",
+  "currentSnapshot": "79cadc82ff8f70eb5ac44fe32b0d3e65f6bbb56b",
+  "requirementArtifacts": [
+    {
+      "path": "P2-FIX-REQUIREMENT.md",
+      "revision": "b879761c776c4d71d215455a481bc7a22551c350a9baf792b68ec71a93ca6dbb"
+    }
+  ],
+  "slicing": {
+    "decision": "split",
+    "splitCount": 8,
+    "slices": [
+      "CLI行为: 片1 类别三 19项 + 需求4",
+      "架构: 片2 类别一 7项",
+      "提示词+规则: 片3 类别二 5项 + 需求2",
+      "测试工程: 片4 类别四 5项",
+      "openspec: 片5 类别五 5项",
+      "CI/脚本: 片6 类别六 6项",
+      "ledger: 片7 类别七 3项",
+      "注释清理: 片8 需求3"
+    ],
+    "parallel": "代码片1/2/4 重叠同一批 Go 文件需串行；文档片3/5/6/7 可并行；片8 动全部 .go 文件最后做"
+  },
+  "routeMode": "merge",
+  "selectedGates": [
+    "merge-qa",
+    "merge-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PASS",
+      "snapshot": "79cadc82ff8f70eb5ac44fe32b0d3e65f6bbb56b",
+      "compared": "050c17a2cf76c0764430c0d8acddf2debd7c8279..c5c5ddbe6ef9ce22b37846c556ae2efd330426b7",
+      "message": "merge-gate 审查 PASS：检查 base..current 全部 6 个 merge 提交，冲突解析正确、无冲突标记；跨分片接缝完整（workflow 领域拆分保留全部函数、openDispatchRecord 共享前序应用于全部 8 个 Record*、runWorkflow 表驱动重构无重复符号）；import 边 validate→lifecycle→cost→cli 无环；6 条需求均有实现与测试覆盖，无过度设计；go build/vet/test ./... 全部通过。范围内无 P0/P1 缺陷，无发现项",
+      "dispatchId": "dispatch-c268ecf5a38eff8c0ac35407"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "79cadc82ff8f70eb5ac44fe32b0d3e65f6bbb56b",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "start 正常 run 后记录 show 基线，执行 workflow reset 不带 --user-approve，再 show 核对",
+        "observation": "reset RC=1 报 'workflow reset requires --user-approve (用户显式授权): resetting a run's flow state is destructive and the main agent cannot trigger it alone'；show 前后逐字段一致（ACTIVE/四动作 PENDING/未确认/快照不变）",
+        "oracleResult": "RC=1 要求显式授权、主代理无权单独触发、状态零变化——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "run 推进到 dev 快照已记，记录 HEAD/需求哈希/工作树后执行 reset --user-approve，重读核对并 show",
+        "observation": "reset RC=0；报告 kept 列出工作树与已提交代码/需求与方案文档/base与current快照/拆分声明与绑定/开发状态/路线决定，reset 列出需求登记/整体审/门与QA结果/carry/派发等；重置前后 HEAD、需求哈希(仍 b87976…)、工作树与 git status 一致，show 见三动作 PENDING、需求未确认、dev=PASS 快照保留",
+        "oracleResult": "RC=0、kept/reset 清单齐全、已开发内容零触碰、干净可重登记态可见——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "需求确认后改动需求文档追加一行，立即执行 prepare-action product-review，show 核对，git restore 恢复",
+        "observation": "prepare-action RC=1 报『需求文档已改动，先 workflow requirement --meaning preserved|changed 更新修订』；无新派发、product-review 仍 PENDING、requirementRevision 未变；恢复后需求哈希回到 b87976…",
+        "oracleResult": "最早执行点拦截、run 状态零写入、报错提示更新修订——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "prepare product-review 留存 promptFile/promptHash，改写规范提示词文件后 claim，重 prepare 再 claim",
+        "observation": "prepare RC=0 写入规范文件且 on-disk hash 与记录一致；改写后 claim RC=1 报 'canonical prompt file ... content does not match the prepared dispatch record (content hash mismatch): the dispatch is unusable; re-prepare it instead of writing or hand-editing the prompt'；重 prepare 后 claim RC=0、新 hash 匹配、CLAIMED",
+        "oracleResult": "写入规范文件+hash、篡改后 claim 硬阻断须重 prepare、重 prepare 后 claim 正常——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "dev=PASS 后不 reset 重做 product-review，reset --user-approve 后重登记并重做 product-review→start-readiness，show 核对",
+        "observation": "未 reset 重做 RC=1 报 'Product Review already has an authoritative PASS result'；reset RC=0 后三动作 PENDING、dev=PASS、快照保留；重登记成功；start-readiness 先于 product-review RC=1 报 'Product Review must pass before Start Readiness'；重做两者均 RC=0 PASS；最终 dev=PASS、快照不变",
+        "oracleResult": "未 reset 守卫拒绝、reset 后放行且 dev/快照保留、先产品审后 readiness 顺序——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "start 后记录基线，执行 workflow abort 不带 --user-confirm，再 show 核对",
+        "observation": "abort RC=1 报 'workflow abort requires --user-confirm (用户级确认): aborting a run is a destructive flow-state action the main agent cannot trigger alone'；show 前后一致、run 仍 ACTIVE",
+        "oracleResult": "RC=1 要求用户级确认、主代理不能单独中止、run 保持 ACTIVE 状态不变——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "dev=PASS 后 reset --user-approve，show 核对三动作 PENDING 需求未确认快照保留，重登记后重做 product-review/start-readiness，再 reset 后校验顺序",
+        "observation": "reset 后三动作 PENDING、需求未确认、dev=PASS、base/current 保留；重登记不被漂移拦；重做 product-review/start-readiness 均 RC=0 不被既有结果阻塞；二次 reset 后 start-readiness 先于 product-review RC=1 报顺序错误",
+        "oracleResult": "三动作PENDING/需求未确认/快照保留、重登记不被拦、重做不被既有结果阻塞、顺序强制——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "对四种 start 快照组合逐一执行并检查 run 目录：不存在对象/非 HEAD 祖先 current/current 祖先 base=HEAD/合法组合",
+        "observation": "(a) RC=1 'cannot verify git snapshot ...: git: fatal: Needed a single revision' 无 run 目录；(b) RC=1 'current snapshot ... is not an ancestor or equal of the native head' 无 run 目录；(c) RC=1 'git snapshot ... is not an ancestor of the current snapshot' 无 run 目录；(d) RC=0 启动成功、base=祖先/current=HEAD 正确写入",
+        "oracleResult": "非法组合 RC=1 拒绝启动不写坏快照、合法组合 RC=0 快照字段正确——与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "三段子场景：在途 requirements-clarification 未记录时 requirement --meaning changed 被拒；record-action PASS 豁免漂移后重绑成功；漂移下 prepare product-review 被拦；已 CLAIMED complexity-gate record-gate 豁免",
+        "observation": "重绑在途未记录 RC=1 报 'cannot rebind the requirement while dispatch ... has not recorded its result; record the in-flight dispatch result before rebinding the requirement'；record-action PASS RC=0 豁免漂移；再 --meaning changed RC=0；漂移下 prepare product-review RC=1 报漂移消息（非记录命令不豁免）；已 CLAIMED 门派发 record-gate PASS RC=0 仍豁免；需求文档各段后均精确恢复",
+        "oracleResult": "在途派发先记录后重绑、记录豁免、skipDrift 收窄到记录命令未回归——与 oracle 一致",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 83874797,
+    "inputCacheHitTokens": 82487040,
+    "inputCacheMissTokens": 1387757,
+    "outputTokens": 322227,
+    "dispatches": {
+      "dispatch-0fcdf7caea48d6f389c8a96a": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 9142016,
+        "inputCacheMissTokens": 187709,
+        "outputTokens": 45360,
+        "totalInputTokens": 9329725,
+        "source": "transcript"
+      },
+      "dispatch-1bc626fd577b34abef3aa7e9": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 26523776,
+        "inputCacheMissTokens": 220674,
+        "outputTokens": 62772,
+        "totalInputTokens": 26744450,
+        "source": "transcript"
+      },
+      "dispatch-7d46d5aa20403ecbb4dfaa84": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 1929856,
+        "inputCacheMissTokens": 302380,
+        "outputTokens": 30578,
+        "totalInputTokens": 2232236,
+        "source": "transcript"
+      },
+      "dispatch-87d2077f0bdfa2b451bca1e9": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 6628992,
+        "inputCacheMissTokens": 184241,
+        "outputTokens": 57288,
+        "totalInputTokens": 6813233,
+        "source": "transcript"
+      },
+      "dispatch-ae6d7e7909cca313d67ba2d8": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1029504,
+        "inputCacheMissTokens": 64922,
+        "outputTokens": 28570,
+        "totalInputTokens": 1094426,
+        "source": "transcript"
+      },
+      "dispatch-b0f5f65cf78708514ba81520": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c268ecf5a38eff8c0ac35407": {
+        "target": "merge-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 36238720,
+        "inputCacheMissTokens": 359703,
+        "outputTokens": 66441,
+        "totalInputTokens": 36598423,
+        "source": "transcript"
+      },
+      "dispatch-cd0d59eed173bceeb3151f6c": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ee8aab25ebafaf674429fc7c": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 994176,
+        "inputCacheMissTokens": 68128,
+        "outputTokens": 31218,
+        "totalInputTokens": 1062304,
+        "source": "transcript"
+      }
+    }
+  }
+}

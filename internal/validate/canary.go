@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/lifecycle"
 )
 
 type PortableCanaryOptions struct{ Root string }
@@ -46,7 +48,7 @@ func withoutHostEnv() func() {
 func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result) {
 	restore := withoutHostEnv()
 	defer restore()
-	root := cleanRoot(options.Root)
+	root := lifecycle.CleanRoot(options.Root)
 	report := PortableCanaryReport{SchemaVersion: 1, Root: slash(absPath(root))}
 	var result Result
 	add := func(name string, err error) {
@@ -86,7 +88,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			}
 		})
 	}
-	// RQ-011 写阻断 canary：在有活动正式 run 的仓库根上，验证主线程阻断、development-worker
+	// 写阻断 canary：在有活动正式 run 的仓库根上，验证主线程阻断、development-worker
 	// 放行、审查类代理阻断、登记文档豁免、无 run 放行的判定矩阵。
 	writeBlockRoot, err := os.MkdirTemp("", "formal-gates-writeblock-canary-")
 	if err != nil {
@@ -111,7 +113,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err := initializeCanaryGit(root); err != nil {
 		return err
 	}
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", VCS: "git"})
+	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", VCS: "git", Split: "no"})
 	if err != nil {
 		return err
 	}
@@ -175,7 +177,7 @@ func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
 	if err != nil {
 		return err
 	}
-	// RQ-013：白盒设计者交付的结构测试代码——canary 仓库带一个测试文件，作为白盒用例测试
+	// 白盒设计者交付的结构测试代码——canary 仓库带一个测试文件，作为白盒用例测试
 	// 引用的定位目标（<文件>::<函数>）；CLI 记录时只校验引用非空/1:1，存在性由 qa-review
 	// 读代码核对、qa-execution 实际运行验证。
 	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
@@ -274,7 +276,7 @@ func commitCanaryGit(root, message string) error {
 }
 
 func openDispatchID(state RunState, kind, target string) string {
-	// RQ-013：prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
+	// prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
 	// 存在多张 OPEN 空票；取新派发必须取 Attempt 最大的 OPEN 票（最新准备），无 OPEN 票时
 	// 才回退到 CLAIMED（在途旧票）。
 	bestID := ""
@@ -296,10 +298,6 @@ func openDispatchID(state RunState, kind, target string) string {
 		}
 	}
 	return ""
-}
-
-func PortableCanaryJSON(report PortableCanaryReport) ([]byte, error) {
-	return json.MarshalIndent(report, "", "  ")
 }
 
 func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) {
@@ -438,7 +436,7 @@ func resultSummary(result Result) string {
 	return strings.Join(messages, "; ")
 }
 
-// runWriteBlockCanary verifies the RQ-011 write-block hook decision matrix against
+// runWriteBlockCanary verifies the write-block hook decision matrix against
 // a temp repo that carries an active formal run: the main thread (no agent
 // identity) and reviewer-class agents are blocked from direct code/run-state
 // writes; development-worker and qa-design are allowed; the main agent editing a

@@ -44,6 +44,34 @@ type commandVCSResolver struct {
 
 var gitIdentityPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 var numericIdentityPattern = regexp.MustCompile(`^[0-9]+$`)
+var vcsUnicodeEscape = regexp.MustCompile(`\{U\+([0-9A-Fa-f]{1,6})\}`)
+
+// decodeVCSMessage converts {U+XXXX} unicode escapes that some VCS tools (svn)
+// emit for non-ASCII characters back into readable runes, and collapses
+// duplicated prefixes (e.g. "svn: svn:") so the message stays legible.
+func decodeVCSMessage(message string) string {
+	decoded := vcsUnicodeEscape.ReplaceAllStringFunc(message, func(match string) string {
+		hex := vcsUnicodeEscape.FindStringSubmatch(match)
+		if len(hex) == 2 {
+			if value, err := strconv.ParseUint(hex[1], 16, 32); err == nil {
+				return string(rune(value))
+			}
+		}
+		return match
+	})
+	fields := strings.Fields(decoded)
+	seen := map[string]bool{}
+	kept := make([]string, 0, len(fields))
+	for _, field := range fields {
+		key := strings.TrimSuffix(field, ":")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " ")
+}
 
 func resolverForVCS(name string, runner nativeCommandRunner) (nativeVCSResolver, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
@@ -246,7 +274,9 @@ func (r commandVCSResolver) verifyRoot(root string) error {
 		resolved, err = r.runner.Run(root, "p4", "-d", root, "-ztag", "-F", "%clientRoot%", "info")
 	}
 	if err != nil {
-		return fmt.Errorf("cannot resolve %s working root: %w", r.name, err)
+		// 外部 VCS 的 stderr 可能携带 {U+XXXX} unicode 转义（如非 UTF-8 环境下的 svn），
+		// 转义成可读文字，并提示 vcs 与仓库可能不匹配（最常见于 --vcs 选错）。
+		return fmt.Errorf("cannot resolve %s working root (the repository may not be a %s working copy, or --vcs does not match the repository): %s", r.name, r.name, decodeVCSMessage(err.Error()))
 	}
 	if !samePath(resolved, root) {
 		return fmt.Errorf("%s working root %q does not match repository root %q", r.name, resolved, root)

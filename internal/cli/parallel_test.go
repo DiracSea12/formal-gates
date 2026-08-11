@@ -12,7 +12,7 @@ import (
 
 // buildCLIPostSnapshot drives the full CLI flow to the post-development
 // snapshot with a full route (blackbox + whitebox QA + the quality gate), where
-// the RQ-014 post-development stage expects parallel dispatch.
+// the post-development stage expects parallel dispatch.
 func buildCLIPostSnapshot(t *testing.T, root, pkg, id string) validate.RunState {
 	t.Helper()
 	state := startCLIWorkflow(t, root, pkg, id)
@@ -42,7 +42,7 @@ func buildCLIPostSnapshot(t *testing.T, root, pkg, id string) validate.RunState 
 	return state
 }
 
-// TestCLIParallelReminderGoesToStderr covers RQ-014's reminder channel: a
+// TestCLIParallelReminderGoesToStderr covers reminder channel: a
 // state-changing workflow command in an under-parallelized stage emits the
 // parallel reminder on stderr only, never polluting stdout's machine JSON.
 func TestCLIParallelReminderGoesToStderr(t *testing.T) {

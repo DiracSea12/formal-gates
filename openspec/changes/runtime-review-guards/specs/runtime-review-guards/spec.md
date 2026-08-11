@@ -1,5 +1,15 @@
 ## ADDED Requirements
 
+> **Superseded note:** This spec records the runtime-review-guards change as delivered.
+> Its `STATIC`/`LIVE` QA case-kind mechanism (the "QA combines static checks and real
+> execution" requirement below) was later replaced by the `blackbox`/`whitebox` QA mode
+> split — see the CHANGELOG ("Replace the QA case `kind`(STATIC/LIVE) with
+> `mode`(blackbox/whitebox)") and `openspec/changes/blackbox-parallel-seal-squash-qa-mode/`.
+> The remaining requirements here are still in force: review results bind to one fresh
+> independent dispatch, the selected native VCS supplies immutable identities,
+> requirement artifacts freeze before development, and QA Review preserves unchanged
+> case approvals.
+
 ### Requirement: Review results bind to one fresh independent dispatch
 
 QA Review and every post-development gate review SHALL have one unique prepared
@@ -69,6 +79,12 @@ reject ordinary post-development work when any frozen file changes.
   before a new development boundary can be established
 
 ### Requirement: QA combines static checks and real execution
+
+> **SUPERSEDED:** This requirement's `STATIC`/`LIVE` case-kind mechanism was replaced by
+> the `blackbox`/`whitebox` QA mode split. QA cases now carry a `mode` instead of a
+> `kind`, and the mechanical requirement that every complete set contain both kinds is
+> dropped (case-set sufficiency is now a qa-review set-level coverage judgment). See the
+> CHANGELOG and `openspec/changes/blackbox-parallel-seal-squash-qa-mode/`.
 
 Every complete formal QA case set SHALL contain `STATIC` and `LIVE` cases.
 Static cases SHALL exercise fast direct-owner checks. Live cases SHALL actually

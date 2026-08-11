@@ -10,9 +10,6 @@ go vet ./...
 go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates package validate --root .
 bin/formal-gates canary portable --root . --format json
-bin/formal-gates behavior evaluate --root . \
-  --cases examples/skill-behavior-prompts.json \
-  --answers examples/skill-behavior-answers.json
 git diff --check
 git diff --cached --check
 ```

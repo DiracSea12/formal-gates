@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"formal-gates/internal/lifecycle"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,7 +76,7 @@ type manifestHost struct {
 }
 
 func Package(root string) Result {
-	root = cleanRoot(root)
+	root = lifecycle.CleanRoot(root)
 	var result Result
 
 	for _, dir := range requiredDirs {

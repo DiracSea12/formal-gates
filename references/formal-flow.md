@@ -22,14 +22,30 @@
 formal-gates workflow start --root <repo> --package-root <package> \
   --run-id <id> --flow formal --requirement <requirement-file> \
   [--requirement-artifact <requirement-or-solution-file> ...] \
-  --vcs <git|svn|p4> [--base-snapshot <ancestor-or-current-identity>] [--retained-overall]
+  --vcs <git|svn|p4> [--base-snapshot <ancestor-or-current-identity>] \
+  --split <yes|no> [--retained-overall] [--master <master-run-id>]
+
+# --split 是强制声明（需求 4）：启动时必须显式预判本次 run 是否拆分/并行。
+#   --split yes：本 run 必须是保留总任务实例（--retained-overall）或切片实例
+#     （--master <保留总任务 run id>）；启动即钉死归属，忘带 retained-overall 在
+#     启动时就报错，而不是拖到拆分决定。
+#   --split no：本 run 不拆分，后续 slicing 禁止记录 split。
+# 未声明 --split 拒绝启动。
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <package> --run-id <id>
 # 原生 HEAD 已漂移（外部改动）时，显式重绑当前快照并记录原因（需用户确认）。
 formal-gates workflow resume --root <repo> --package-root <package> --run-id <id> \
   --adopt-external --reason '<reason>'
-formal-gates workflow abort --root <repo> --run-id <id>
+# abort 未经用户级确认（--user-confirm）不执行、不落任何状态；主代理无权单独中止 run
+# （需求 6 误操作硬阻断）。
+formal-gates workflow abort --root <repo> --run-id <id> --user-confirm
+
+# 流程重置（需求 5）：只重置 run 的 .gates 流程状态、绝不触碰已开发内容（工作树/已提交
+# 代码/需求与方案文档）。必须用户显式授权（--user-approve）才执行；重置后 run 回到可重新
+# 登记的干净状态（需求可重新登记、整体审可重做、开发快照保留）。输出说明保留了什么、重置
+# 了什么。
+formal-gates workflow reset --root <repo> --package-root <package> --run-id <id> --user-approve
 ```
 
 Resume 默认把逐门 catalog delta 报告为 `catalogDelta`；目录变化与需求修订一样是可恢复
@@ -91,6 +107,11 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 需求修订（SKILL 第 2 步的执行机制；三分支决策本体见 SKILL 第 2 步）：
 - 开发开始后做 meaning-preserved 需求重绑时，CLI 要求用户确认信号：`workflow
   requirement` 必须**同时传 `--confirmed`**，否则被拒。
+- 需求文档被改动导致 revision 漂移后，第一个依赖需求修订的流程命令即被拒，提示先
+  `workflow requirement --meaning preserved|changed` 更新修订（仅 `--confirmed` 无法
+  更新已变更的 revision）。**记录在途派发结果**（该派发按旧 revision prepare、结果属
+  旧 revision）豁免该漂移硬阻断：先记录在途审查/门派发结果、再重绑，恢复路径可执行
+  （避免漂移硬阻断与在途派发重绑守卫互锁成死锁）。
 
 拆分与路线细节（SKILL 第 3 步的执行机制）：
 - 路线跳过授权：custom 未选中的部分获得路线跳过授权（`ROUTE` 来源），Seal 期间不会
@@ -100,6 +121,15 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 
 重复 prepare：对同一 action/gate 重复 prepare 会生成 attempt+1 的新派发，旧的
 OPEN/CLAIMED 派发静默标 STALE（源快照失效），以当前返回的派发 ID 为准。
+
+**派发提示词以 CLI 写出的规范文件为唯一权威源**（需求 6 硬阻断）：`prepare-action` /
+`prepare-gate` 生成提示词时，把完整提示词内容（含 dispatch id、需求 revision、
+base/current 快照等关键字段）写入本 run 规范提示词文件
+`.gates/tmp/<run-id>/prompts/<dispatch-id>.md`，并把内容 hash 与文件路径作为派发状态
+的一部分记录。写入时（第一时间）立即校验内容 hash == 记录值；派发（`claim-dispatch`）
+时兜底再次校验文件内容/关键字段与 prepare 记录一致，不一致即硬阻断、该派发判定为
+不可用。派发只消费该规范文件——主代理只发指向该文件的薄启动消息、**不得手写/凭记忆
+拼写提示词内容**，子代理读文件执行。
 
 ## 开发之前
 
@@ -325,6 +355,14 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
 - 路线跳过和 Seal 跳过都会记录在摘要里。
 - 已授权的 Seal 跳过在当前快照仍被其他结果阻塞时继续有效，但不延续到后续修复快照。
 - 只有 P2/P3 的 PASS 建议保持可见，不阻塞 Seal。
+
+成本计量（机制本体见 SKILL「成本计量」）：run 状态的单一 `cost` 投影
+（`RunState.Cost` / 摘要 `cost` 字段，实现见 `internal/cost/`）在结果记录时为每条独立
+派发（门或动作）按其 host 转写文件精确计量 token 用量：run 合计 + 每条派发一项。数字只
+来自 host 转写解析（claude/codex 适配器），无转写或解析失败的派发记为 unavailable、不
+捏造数值；分类为输入缓存命中/未命中与输出，`totalInputTokens` 只统计输入侧、输出单独记
+录不计入合计。成本数据仅展示、不影响任何判定或记录结果。`workflow seal`/`show` 的输出携
+带该投影（`cost` 字段）。
 
 按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法
 运行时，使用命令的 `--runtime-error` 或 `--status RUNTIME_ERROR --message ...` 形

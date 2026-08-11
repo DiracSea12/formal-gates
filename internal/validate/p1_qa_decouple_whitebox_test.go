@@ -1,7 +1,7 @@
 package validate
 
-// 白盒结构测试（RQ-013 白盒设计者交付）：本文件由白盒 QA 设计者在开发后独立设计并编写，
-// 覆盖 P1 QA 彻底解耦与 Carry 继承修复（RQ-001~013）的关键确定性规则。每条白盒用例的
+// 白盒结构测试（白盒设计者交付）：本文件由白盒 QA 设计者在开发后独立设计并编写，
+// 覆盖 P1 QA 彻底解耦与 Carry 继承修复的关键确定性规则。每条白盒用例的
 // Test 绑定 = 文件定位的测试引用 "<文件路径>::<函数名>"（如
 // "whitebox_delivered_test.go::TestWhiteboxDirectRules"），CLI 记录时只校验引用非空、
 // 且同一引用不被两条白盒用例共用；存在性与对应性由 qa-review 与 qa-execution 验证。
@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// TestWhiteboxBindingRejectsMissingTest 覆盖 RQ-013 的 caseId↔测试绑定：白盒用例必须写明
+// TestWhiteboxBindingRejectsMissingTest 覆盖 caseId↔测试绑定：白盒用例必须写明
 // 实现该用例的测试引用（--test <文件>::<函数>），缺 Test 字段的记录被 CLI 拒绝——"测 A 的
 // 测试给 B 用例标 PASS"必须可被发现，不能只做任意文本非空校验。
 func TestWhiteboxBindingRejectsMissingTest(t *testing.T) {
@@ -27,7 +27,7 @@ func TestWhiteboxBindingRejectsMissingTest(t *testing.T) {
 	}
 }
 
-// TestWhiteboxBindingRejectsSharedReference 覆盖 RQ-013 的 1:1 校验：同一个测试引用
+// TestWhiteboxBindingRejectsSharedReference 覆盖 1:1 校验：同一个测试引用
 // （<文件>::<函数>）不能被两条白盒用例共用——一个测试实现一个用例；本次记录内撞引用即
 // 拒绝记录（与既有用例撞引用同理）。
 func TestWhiteboxBindingRejectsSharedReference(t *testing.T) {
@@ -43,7 +43,7 @@ func TestWhiteboxBindingRejectsSharedReference(t *testing.T) {
 	}
 }
 
-// TestWhiteboxBindingDefersExistence 覆盖 RQ-013 的存在性由 review/execution 验证：CLI 记录
+// TestWhiteboxBindingDefersExistence 覆盖存在性由 review/execution 验证：CLI 记录
 // 时只校验引用非空/1:1，不解析代码、不校验引用指向的测试是否已交付——格式合法的引用（哪怕
 // 指向尚未交付的文件/函数）即可记录，存在性与对应性留给 qa-review 读代码核对、qa-execution
 // 实际运行验证。
@@ -60,7 +60,7 @@ func TestWhiteboxBindingDefersExistence(t *testing.T) {
 	}
 }
 
-// TestDesignRuntimeErrorPerModeIndependent 覆盖 RQ-001 的 qa-design 权威结果按 mode 独立：
+// TestDesignRuntimeErrorPerModeIndependent 覆盖 qa-design 权威结果按 mode 独立：
 // 黑盒设计轮 RUNTIME_ERROR 只把黑盒 mode 的设计结果记为 RUNTIME_ERROR、只重置黑盒执行结果，
 // 白盒设计权威结果与白盒执行结果不受影响（黑盒失败不得把白盒设计重置为 PENDING）。
 func TestDesignRuntimeErrorPerModeIndependent(t *testing.T) {
@@ -104,7 +104,7 @@ func TestDesignRuntimeErrorPerModeIndependent(t *testing.T) {
 	}
 }
 
-// TestQAModeReviewDesignMergedFallback 覆盖 RQ-001 的读取回退语义（最低层）：qaReview/qaDesign
+// TestQAModeReviewDesignMergedFallback 覆盖读取回退语义（最低层）：qaReview/qaDesign
 // 的 per-mode 键非空即用、否则回退合并 "" 键（单派发/legacy 合并形态）；空状态键（Status==""）
 // 不遮蔽回退。recorder 写回与读取用同一存储键。
 func TestQAModeReviewDesignMergedFallback(t *testing.T) {
@@ -144,7 +144,7 @@ func TestQAModeReviewDesignMergedFallback(t *testing.T) {
 	}
 }
 
-// TestCarryReadsPriorWhenResultResetToPending 覆盖 RQ-002 的 priorQAExecution 回退路径：修复
+// TestCarryReadsPriorWhenResultResetToPending 覆盖 priorQAExecution 回退路径：修复
 // 快照/重设计把 per-mode 执行结果重置为 PENDING 后，main-agent Carry 直取该 mode 时回退到
 // 保留的上一轮权威结果（任意快照读取，不要求 current snapshot）；per-mode 权威结果优先于
 // prior；无记录时回退合并 "" 键。
@@ -178,7 +178,7 @@ func TestCarryReadsPriorWhenResultResetToPending(t *testing.T) {
 	}
 }
 
-// TestSealedStateRetainsIntegrity 覆盖 RQ-009 的"随 Seal 保留"：SEALED run 状态文件仍携带
+// TestSealedStateRetainsIntegrity 覆盖 "随 Seal 保留"：SEALED run 状态文件仍携带
 // StateIntegrity，保存后原样加载成功、JSON 内字段在场（完整性校验对封存状态同样生效）。
 func TestSealedStateRetainsIntegrity(t *testing.T) {
 	root, pkg := workflowFixture(t)
@@ -203,7 +203,7 @@ func TestSealedStateRetainsIntegrity(t *testing.T) {
 	}
 }
 
-// TestBacklogAndKnowledgeDocsIgnored 覆盖 RQ-005/RQ-006 的验收：P2-BACKLOG.md 与
+// TestBacklogAndKnowledgeDocsIgnored 覆盖验收：P2-BACKLOG.md 与
 // PROMPT-ENGINEERING-KNOWLEDGE.md 被 .gitignore 忽略（git check-ignore 通过），记录范围外、
 // 不跟踪。文件存在是本地交付事实、CI 干净检出时并不存在，因此这里只验证忽略规则。
 func TestBacklogAndKnowledgeDocsIgnored(t *testing.T) {
@@ -216,7 +216,7 @@ func TestBacklogAndKnowledgeDocsIgnored(t *testing.T) {
 	}
 }
 
-// TestReviewRuleSingleHomeInFormalFlow 覆盖 RQ-004 的去重结构：复审机制全文唯一持有在
+// TestReviewRuleSingleHomeInFormalFlow 覆盖去重结构：复审机制全文唯一持有在
 // references/formal-flow.md；SKILL.md 第 4 步保留可执行摘要（决策级铁律：
 // P0/P1/P2/P3 分级、仅含 P2/P3 可 PASS、确认→重审/驳回→作废、主代理无破例权）并一行
 // 指针指向 formal-flow，不再重复机制全文。

@@ -66,6 +66,19 @@ rules.
 
 ### RQ-005 Use provider-owned capability policy
 
+> **SUPERSEDED note (the "Codex as `UNAVAILABLE`" part):** The statement below that
+> Codex SHALL be treated as `UNAVAILABLE` for lifecycle enforcement was overturned by
+> the deadlock-recovery and Codex lifecycle change (fix 2b; see
+> `openspec/changes/deadlock-recovery-and-codex-lifecycle/master-requirements.md`).
+> Current behavior lives in `internal/lifecycle/provider_codex.go`: the installed Codex
+> adapter (`codexAdapter`) is now `required=true`, so an actually installed Codex binary
+> with missing or unpaired start/stop events returns `REJECTED` instead of downgrading
+> to `UNAVAILABLE`. Only the lenient default provider (`defaultAdapter`, resolved when
+> the Codex binary is not installed beneath a host skills path — `go test`, the portable
+> canary, and local development builds) still returns `UNAVAILABLE`. The rest of RQ-005
+> (capability is not inferred from waiting for an event; a required provider never
+> silently downgrades) remains current.
+
 Capability shall not be inferred from waiting for an event. Codex shall be
 treated as `UNAVAILABLE` for lifecycle enforcement while still receiving the
 installed lifecycle hook entries. Claude Code and Cursor shall require their

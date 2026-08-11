@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/cost"
+	"formal-gates/internal/lifecycle"
 )
 
 type RunState struct {
@@ -28,13 +29,20 @@ type RunState struct {
 	VCS                  string                       `json:"vcs"`
 	BaseSnapshot         string                       `json:"baseSnapshot"`
 	CurrentSnapshot      string                       `json:"currentSnapshot"`
-	// StateIntegrity 是 run 状态的完整性校验（RQ-009）：SaveRunState 写盘前先置空本字段、
+	// StateIntegrity 是 run 状态的完整性校验：SaveRunState 写盘前先置空本字段、
 	// 以 json.MarshalIndent 规范化序列化、对规范化内容计算 sha256 回填后写盘；LoadRunState
 	// 校验非空的本字段：置空后按同样方式重算比对，不匹配即硬拒绝 "state was modified outside
 	// the CLI"。run 状态只能由 CLI 写入，任何人（含 host/主代理）不得手工改写。旧状态文件
 	// 无本字段，跳过校验。随 Seal 保留（写入后随状态文件持久化）。
 	StateIntegrity       string                       `json:"stateIntegrity,omitempty"`
 	RetainedOverall      bool                         `json:"retainedOverall,omitempty"`
+	// SplitDeclaration 记录 workflow start 时强制声明的拆分意向（需求 4）：yes 表示本 run 是
+	// 保留总任务实例或切片实例、no 表示不拆分。旧 run（本功能上线前启动）缺失本字段，按旧
+	// 语义处理：保留总任务实例仍可记录 split，其余 run 不受额外限制。
+	SplitDeclaration     string                       `json:"splitDeclaration,omitempty"`
+	// SplitMasterRunID 记录切片实例在启动声明中钉死的保留总任务 master run id（--split yes
+	// --master <id>）；workflow slicing 记录 split 时引用的 master 必须与之一致。
+	SplitMasterRunID     string                       `json:"splitMasterRunID,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
 	SettledFindings      map[string][]SettledFinding  `json:"settledFindings,omitempty"`
@@ -44,35 +52,35 @@ type RunState struct {
 	CompletedReviewWaves int                          `json:"completedReviewWaves"`
 	ExtraReviewWaves     int                          `json:"extraReviewWaves"`
 	Actions              map[string]ActionResult      `json:"actions"`
-	// QACasesByMode 按 QA 派发 mode 分开存储用例（RQ-012）：黑盒/白盒各一条，mode=="" 为
+	// QACasesByMode 按 QA 派发 mode 分开存储用例：黑盒/白盒各一条，mode=="" 为
 	// 合并/单派发流程。qa-design 记录轮只对该 mode 的列表做增量替换，另一 mode 的既有用例
 	// （含其 review PASS 状态与已记录执行结果）保持不动，修复"设计白盒时整表替换清掉黑盒
 	// 用例"的数据丢失缺陷。旧状态文件（qaCases 数组）在 LoadRunState 时迁移进 "" 键。
 	QACasesByMode map[string][]QACase `json:"qaCasesByMode,omitempty"`
-	// QAExecutionByMode 按 QA 派发 mode 分开存储执行结果（RQ-012 黑白盒完完全全解耦）：
+	// QAExecutionByMode 按 QA 派发 mode 分开存储执行结果（黑白盒完完全全解耦）：
 	// blackbox / whitebox 各自独立、互不影响，空 mode 键对应合并/单派发流程。一个 mode
 	// 的设计/执行/记录 SHALL NOT 重置或清除另一 mode 的执行结果。旧状态文件的单一
 	// qaExecution 字段在 LoadRunState 时迁移进 "" 键。
 	QAExecutionByMode map[string]QAExecutionResult `json:"qaExecutionByMode,omitempty"`
 	// ExecutionScopes 记录每个 QA 派发 mode（blackbox / whitebox / 合并空 mode）最近一次
-	// 的重跑 scope 决策（RQ-002/003）：FULL 全量重跑，或 AFFECTED 只重跑 host 综合判定
+	// 的重跑 scope 决策：FULL 全量重跑，或 AFFECTED 只重跑 host 综合判定
 	// 的受影响子集。按 mode 一条、最新决策覆盖；每条 scope 的 BaseSnapshot 记继承来源
 	// （上一轮权威结果快照）。
 	ExecutionScopes map[string]QAExecutionScope `json:"executionScopes"`
 	// PriorQAExecutionByMode 按 mode 分开保留"上一轮权威执行结果"（PASS/FAIL，含快照与
-	// FAIL 用例集），供重跑识别（RQ-002）与 AFFECTED 子集判定（RQ-004）使用：修复快照
+	// FAIL 用例集），供重跑识别与 AFFECTED 子集判定使用：修复快照
 	// 推进时从被重置的权威结果保留而来，被该 mode 新一轮权威结果记录时只取代本 mode。
 	// 一个 mode 记录新权威结果 SHALL NOT 清空另一 mode 的上一轮权威结果。RUNTIME_ERROR
 	// 不构成权威结果、不保留。旧状态文件的单一 priorQAExecution 在 LoadRunState 时迁移
 	// 进 "" 键。
 	PriorQAExecutionByMode map[string]*QAExecutionResult `json:"priorQAExecutionByMode,omitempty"`
-	// QAReviewByMode 按 QA 派发 mode 分开存储 qa-review 权威结果（RQ-001 完完全全解耦）：
+	// QAReviewByMode 按 QA 派发 mode 分开存储 qa-review 权威结果（完完全全解耦）：
 	// blackbox / whitebox 各自独立，一个 mode 记录 review 结果 SHALL NOT 影响另一 mode 的
 	// review 判定；空 mode 键对应合并/单派发流程。旧状态文件的单一 Actions["qa-review"] 不再
 	// 适配：本字段不标 omitempty、恒在场（新 run 序列化为 {}），LoadRunState 缺它即报格式
 	// 不符。对本新字段不做 nil 容忍迁移；既有字段的迁移逻辑保持不动。
 	QAReviewByMode map[string]ActionResult `json:"qaReviewByMode"`
-	// QADesignByMode 按 QA 派发 mode 分开存储 qa-design 权威结果（RQ-001）：语义与
+	// QADesignByMode 按 QA 派发 mode 分开存储 qa-design 权威结果：语义与
 	// QAReviewByMode 一致，一个 mode 的 review FAIL 重置设计 SHALL NOT 把另一 mode 的
 	// 设计重置为 PENDING。
 	QADesignByMode map[string]ActionResult `json:"qaDesignByMode"`
@@ -101,7 +109,7 @@ type RunState struct {
 	// ReviewOverrides 记录用户对 product-review / start-readiness 复审规则的显式破例
 	// 来源（动作 → 用户理由），与 --user-requested 对应；需求语义变更时一并清除。
 	ReviewOverrides map[string]string `json:"reviewOverrides,omitempty"`
-	// ReviewItemsByAction 按动作逐项存储需求项的审查结论（RQ-012 增量审查，格式无关）：
+	// ReviewItemsByAction 按动作逐项存储需求项的审查结论（增量审查，格式无关）：
 	// action（product-review / start-readiness）→ 需求项键 → ReviewItem{Status}。动作级
 	// Actions[actionID] 保留为聚合结果（下游判断不变）。增量判定沿 meaning-preserved 修订
 	// 的记录：主代理在 prepare-action 显式传 --scope <item>... 声明本次审查范围，声明项置
@@ -112,7 +120,7 @@ type RunState struct {
 }
 
 // ReviewItem 记录某个需求项（需求修订中新增/变更的需求项或验收点）在增量审查中的
-// 逐项结论（RQ-012）。Status 为 PASS | FAIL | PENDING；DispatchID 是产出该结论的审查
+// 逐项结论。Status 为 PASS | FAIL | PENDING；DispatchID 是产出该结论的审查
 // 派发；Message 记录 FAIL 的 finding。格式无关：增量判定不依赖需求文档结构（openspec/
 // PRD 或其它格式统一按"需求修订中新增/变更的需求项或验收点"识别，主代理在 --scope 声明）。
 type ReviewItem struct {
@@ -158,6 +166,12 @@ type PreparedDispatch struct {
 	// QA 隔离工作区解析原生标识与派发源绑定（绑基线）；白盒派发对主工作区解析
 	// （绑当前快照）。其他派发为空。
 	Mode string `json:"mode,omitempty"`
+	// PromptFile 是 prepare 写出的本 run 规范提示词文件路径
+	// （.gates/tmp/<run-id>/prompts/<dispatch-id>.md）。派发只消费该规范文件——
+	// 主代理只发指向文件的薄启动消息、不得手写/凭记忆拼写提示词内容。写入时立即
+	// 校验内容 hash == PromptHash；认领（派发）时兜底再次校验文件内容与 prepare
+	// 记录一致，不一致即硬阻断。旧派发（本功能上线前准备）无本字段，不强制。
+	PromptFile string `json:"promptFile,omitempty"`
 }
 
 type ActionResult struct {
@@ -182,12 +196,12 @@ type QAResultRecord struct {
 	Procedure    string `json:"procedure"`
 	Observation  string `json:"observation"`
 	OracleResult string `json:"oracleResult"`
-	// Origin 标记结果来源（RQ-005）：经执行用例记 "executed"；AFFECTED 下未覆盖的已批准
+	// Origin 标记结果来源：经执行用例记 "executed"；AFFECTED 下未覆盖的已批准
 	// 用例记 "inherited"（继承上一轮 PASS）。旧状态缺省（空串）按 executed 处理。
 	Origin string `json:"origin,omitempty"`
 }
 
-// QAExecutionScope 记录一次 QA 执行重跑的 scope 决策（RQ-002/003）：重跑时用户选择
+// QAExecutionScope 记录一次 QA 执行重跑的 scope 决策：重跑时用户选择
 // FULL（全量重跑该 mode 全部已批准用例）或 AFFECTED（只重跑 host 综合判定的受影响
 // 子集，其余已批准用例继承上一轮 PASS）。按 mode 一条、最新决策覆盖；BaseSnapshot 是
 // 本次重跑继承来源的权威结果快照；CaseIDs 是 AFFECTED 子集（FULL 为空）；Origin 固定
@@ -256,7 +270,7 @@ type QACase struct {
 	Description  string `json:"description"`
 	Procedure    string `json:"procedure"`
 	Oracle       string `json:"oracle"`
-	// Test 是白盒用例对应的测试引用（RQ-013）= "<文件路径>::<函数名>"：文件路径定位到
+	// Test 是白盒用例对应的测试引用 = "<文件路径>::<函数名>"：文件路径定位到
 	// 交付测试代码所在文件、函数名定位到该文件里的测试，两者都是不透明字符串、CLI 不解析
 	// 代码内容。用例文档自包含——读文档即知该测试在哪个文件、叫什么。CLI 记录时只校验引用
 	// 非空、且同一引用不被两条白盒用例共用（一个测试实现一个用例）；存在性与对应性由
@@ -297,13 +311,13 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 }
 
 func pendingRequirementActions() map[string]ActionResult {
-	// RQ-001：qa-design / qa-review 的权威结果改由按 mode 的 QAReviewByMode / QADesignByMode
+	// qa-design / qa-review 的权威结果改由按 mode 的 QAReviewByMode / QADesignByMode
 	// 承载，不再初始化共享的 Actions["qa-design"] / Actions["qa-review"] 占位。
 	return map[string]ActionResult{"requirements-clarification": {Status: "PENDING"}, "product-review": {Status: "PENDING"}, "start-readiness": {Status: "PENDING"}, "development-worker": {Status: "PENDING"}}
 }
 
 func RunDir(root, runID string) string {
-	return filepath.Join(cleanRoot(root), ".gates", "tmp", runID)
+	return filepath.Join(lifecycle.CleanRoot(root), ".gates", "tmp", runID)
 }
 
 func RunStatePath(root, runID string) string {
@@ -371,7 +385,7 @@ func SaveRunState(root string, state RunState) error {
 	if state.QADesignByMode == nil {
 		state.QADesignByMode = map[string]ActionResult{}
 	}
-	// RQ-009：写盘前先置空自身、以 json.MarshalIndent 规范化序列化、对规范化内容计算 sha256，
+	// 写盘前先置空自身、以 json.MarshalIndent 规范化序列化、对规范化内容计算 sha256，
 	// 回填 StateIntegrity 后再写盘。LoadRunState 校验时按同样方式置空重算比对，任何非 CLI
 	// 的手工改写都会破坏一致性而硬拒绝。
 	state.StateIntegrity = ""
@@ -393,11 +407,18 @@ func SaveRunState(root string, state RunState) error {
 }
 
 func LoadRunState(root, runID string) (RunState, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return RunState{}, fmt.Errorf("run id is required (--run-id)")
+	}
 	data, err := os.ReadFile(RunStatePath(root, runID))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return RunState{}, fmt.Errorf("run %q was not found or is already terminated (aborted/sealed); no state file at %s", runID, RunStatePath(root, runID))
+		}
 		return RunState{}, err
 	}
-	// RQ-001 格式校验：读取任何 run 状态文件时，若其结构与当前 CLI 期望的 schema 不符
+	// 格式校验：读取任何 run 状态文件时，若其结构与当前 CLI 期望的 schema 不符
 	// （含旧格式的 Actions["qa-review"]/["qa-design"] 字段缺失、未知的必需字段缺失或字段
 	// 类型不匹配），CLI SHALL 返回清晰错误（指出格式不匹配），不得静默降级为空/默认状态
 	// 继续执行。两个按 mode 存储的 QA review/design 字段恒在场（新 run 序列化为 {}），文件
@@ -411,7 +432,7 @@ func LoadRunState(root, runID string) (RunState, error) {
 			return RunState{}, fmt.Errorf("run state format does not match the current schema: missing required field %q (a run state without the per-mode QA review/design fields is not supported)", required)
 		}
 	}
-	// RQ-012 迁移：旧状态文件把用例存成单个 qaCases 数组、执行结果存成单一 qaExecution /
+	// 迁移：旧状态文件把用例存成单个 qaCases 数组、执行结果存成单一 qaExecution /
 	// priorQAExecution，新模型按 mode 分开存储。加载时把旧数组迁移进合并键 ""，保证续跑/
 	// 接手旧 run 不丢用例与执行结果。本 change 对上述两个新字段不做 nil 容忍；既有字段的
 	// 迁移逻辑保持不动。
@@ -448,7 +469,7 @@ func LoadRunState(root, runID string) (RunState, error) {
 	if state.RunID != runID {
 		return RunState{}, fmt.Errorf("state run id does not match %q", runID)
 	}
-	// RQ-009：完整性校验。非空 StateIntegrity（新格式状态文件）时置空后按与 SaveRunState
+	// 完整性校验。非空 StateIntegrity（新格式状态文件）时置空后按与 SaveRunState
 	// 相同的 json.MarshalIndent 规范化重算 sha256 比对；不匹配即硬拒绝，任何人（含 host/
 	// 主代理）手工改写 run 状态都会被检测。旧状态文件无本字段，跳过校验。校验通过后把
 	// 字段值复原，使内存中的状态与文件一致（随 Seal 保留）。
@@ -469,7 +490,7 @@ func LoadRunState(root, runID string) (RunState, error) {
 }
 
 // qaCases returns the QA case list stored for the dispatch mode's own key
-// (RQ-012): the merged (empty) mode holds the merged/single-dispatch set, and
+// the merged (empty) mode holds the merged/single-dispatch set, and
 // concrete modes hold their own per-mode sets. Returns nil when that mode has no
 // stored list. Reads here return the map's backing slice; use setQACases to write.
 func (state RunState) qaCases(mode string) []QACase {
@@ -481,7 +502,7 @@ func (state RunState) qaCases(mode string) []QACase {
 
 // setQACases replaces the QA case list for the dispatch mode only, leaving every
 // other mode's cases (and their review status and recorded execution results)
-// untouched (RQ-012).
+// untouched.
 func (state *RunState) setQACases(mode string, cases []QACase) {
 	if state.QACasesByMode == nil {
 		state.QACasesByMode = map[string][]QACase{}
@@ -490,7 +511,7 @@ func (state *RunState) setQACases(mode string, cases []QACase) {
 }
 
 // qaExecution returns the QA execution result stored for the dispatch mode
-// (RQ-012 full decoupling): blackbox/whitebox each hold their own result, and the
+// (full decoupling): blackbox/whitebox each hold their own result, and the
 // merged empty mode holds the merged/single-dispatch result. A missing result
 // reads as PENDING (zero value).
 func (state RunState) qaExecution(mode string) QAExecutionResult {
@@ -501,7 +522,7 @@ func (state RunState) qaExecution(mode string) QAExecutionResult {
 }
 
 // setQAExecution replaces the QA execution result for the dispatch mode only,
-// leaving every other mode's result untouched (RQ-012 full decoupling).
+// leaving every other mode's result untouched (full decoupling).
 func (state *RunState) setQAExecution(mode string, result QAExecutionResult) {
 	if state.QAExecutionByMode == nil {
 		state.QAExecutionByMode = map[string]QAExecutionResult{}
@@ -518,7 +539,7 @@ func (state *RunState) deleteQAExecution(mode string) {
 }
 
 // priorQAExecution returns the dispatch mode's preserved prior authoritative
-// execution result, or nil when the mode has none (RQ-012 full decoupling).
+// execution result, or nil when the mode has none (full decoupling).
 func (state RunState) priorQAExecution(mode string) *QAExecutionResult {
 	if state.PriorQAExecutionByMode == nil {
 		return nil
@@ -527,7 +548,7 @@ func (state RunState) priorQAExecution(mode string) *QAExecutionResult {
 }
 
 // setPriorQAExecution preserves the dispatch mode's prior authoritative execution
-// result, leaving every other mode's prior untouched (RQ-012 full decoupling).
+// result, leaving every other mode's prior untouched (full decoupling).
 func (state *RunState) setPriorQAExecution(mode string, result QAExecutionResult) {
 	if state.PriorQAExecutionByMode == nil {
 		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
@@ -546,7 +567,7 @@ func (state *RunState) deletePriorQAExecution(mode string) {
 }
 
 // qaExecutionModes returns the dispatch modes that hold a stored QA execution
-// result (RQ-012), including the merged "" key when present, in stable order.
+// result, including the merged "" key when present, in stable order.
 func (state RunState) qaExecutionModes() []string {
 	if state.QAExecutionByMode == nil {
 		return nil
@@ -560,7 +581,7 @@ func (state RunState) qaExecutionModes() []string {
 }
 
 // allQACases returns the run's complete QA case set across every storage layout
-// (RQ-012), used for merged-set operations and overall checks. It applies
+// used for merged-set operations and overall checks. It applies
 // per-mode precedence per mode: a mode's own per-mode key, when non-empty,
 // replaces that mode's cases in the merged "" key (which then only holds
 // legacy-migrated or fast-path merged cases that a per-mode redesign superseded),
@@ -583,7 +604,7 @@ func (state RunState) allQACases() []QACase {
 }
 
 // qaModeCases returns the dispatch mode's QA cases across every storage layout
-// (RQ-012). Per-mode precedence per mode (fix): a concrete mode's own per-mode
+// Per-mode precedence per mode (fix): a concrete mode's own per-mode
 // key is authoritative — when it is non-empty, exactly those cases are returned
 // and any cases migrated into the merged "" key are ignored (a run that designed
 // per-mode after a legacy migration would otherwise double-count and see stale
@@ -608,7 +629,7 @@ func (state RunState) qaModeCases(mode string) []QACase {
 // per-mode key when non-empty, else the merged "" fallback; empty mode = the full
 // current set), together with the storage key those cases were read from. A review
 // records its decisions with setQACasesForReview against that key, so the recorder
-// and the prompt always see the same pending set (RQ-012 alignment).
+// and the prompt always see the same pending set (alignment).
 func (state RunState) qaModeCasesWithKey(mode string) (string, []QACase) {
 	if mode != "" {
 		if perMode := state.qaCases(mode); len(perMode) != 0 {
@@ -622,7 +643,7 @@ func (state RunState) qaModeCasesWithKey(mode string) (string, []QACase) {
 // setQACasesForReview persists a review's decided case set back into the storage
 // key it was read from (see qaModeCasesWithKey). When a concrete mode's cases were
 // read from the merged "" fallback, only that mode's cases are replaced there,
-// preserving the other modes' cases in the "" key (RQ-012). The empty mode replaces
+// preserving the other modes' cases in the "" key. The empty mode replaces
 // the whole merged list (the single-dispatch flow).
 func (state *RunState) setQACasesForReview(mode, key string, updated []QACase) {
 	if key == "" && mode != "" {
@@ -645,7 +666,7 @@ func (state *RunState) setQACasesForReview(mode, key string, updated []QACase) {
 }
 
 // qaReview returns the authoritative qa-review result for the dispatch mode
-// (RQ-001 完完全全解耦): the mode's own per-mode key when it holds a recorded
+// (完完全全解耦): the mode's own per-mode key when it holds a recorded
 // result, else the merged "" key (single-dispatch / legacy merged storage). An
 // empty mode reads the merged key directly. Reads here mirror the recorder's
 // write key (setQAReview), so the two always see the same stored result.
@@ -662,7 +683,7 @@ func (state RunState) qaReview(mode string) ActionResult {
 }
 
 // setQAReview records the authoritative qa-review result for the dispatch mode
-// only (RQ-001), leaving every other mode's review result untouched. The empty
+// only, leaving every other mode's review result untouched. The empty
 // mode is the merged/single-dispatch flow.
 func (state *RunState) setQAReview(mode string, result ActionResult) {
 	if state.QAReviewByMode == nil {
@@ -672,7 +693,7 @@ func (state *RunState) setQAReview(mode string, result ActionResult) {
 }
 
 // qaDesign returns the authoritative qa-design result for the dispatch mode
-// (RQ-001 完完全全解耦); read semantics mirror qaReview (per-mode key first,
+// (完完全全解耦); read semantics mirror qaReview (per-mode key first,
 // merged "" fallback).
 func (state RunState) qaDesign(mode string) ActionResult {
 	if state.QADesignByMode == nil {
@@ -687,7 +708,7 @@ func (state RunState) qaDesign(mode string) ActionResult {
 }
 
 // setQADesign records the authoritative qa-design result for the dispatch mode
-// only (RQ-001), leaving every other mode's design result untouched.
+// only, leaving every other mode's design result untouched.
 func (state *RunState) setQADesign(mode string, result ActionResult) {
 	if state.QADesignByMode == nil {
 		state.QADesignByMode = map[string]ActionResult{}
@@ -705,7 +726,7 @@ func SaveRunSummary(root string, state RunState) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(cleanRoot(root), ".gates", "results")
+	dir := filepath.Join(lifecycle.CleanRoot(root), ".gates", "results")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -713,7 +734,7 @@ func SaveRunSummary(root string, state RunState) error {
 }
 
 func RunSummaryPath(root, runID string) string {
-	return filepath.Join(cleanRoot(root), ".gates", "results", runID+".json")
+	return filepath.Join(lifecycle.CleanRoot(root), ".gates", "results", runID+".json")
 }
 
 func runSummary(state RunState) RunSummary {

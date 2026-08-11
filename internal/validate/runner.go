@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"formal-gates/internal/lifecycle"
 )
 
 type PromptRoute struct {
@@ -44,7 +46,7 @@ func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) 
 }
 
 // gateResultContract renders the [Result contract] block shared by the run-bound
-// gate review and the standalone gate review (RQ-010). dispatchID selects the
+// gate review and the standalone gate review. dispatchID selects the
 // run-bound form (adds the dispatch id and compared snapshot pair fields and
 // instructions); an empty dispatchID renders the standalone form.
 func gateResultContract(dispatchID string) string {
@@ -68,7 +70,7 @@ func gateResultContract(dispatchID string) string {
 }
 
 // ComposeStandaloneGatePrompt assembles a standalone gate review prompt that
-// runs completely outside any run state (RQ-010): it reviews the full working
+// runs completely outside any run state: it reviews the full working
 // tree vs the native head, requires no requirement document, reuses the shared
 // reviewer contract (so the first-step contamination check applies), and carries
 // no dispatch binding. base = native head, current = the working tree's
@@ -81,7 +83,7 @@ func ComposeStandaloneGatePrompt(catalog PromptCatalog, gateID, root, vcs, scope
 	if !ok {
 		return "", fmt.Errorf("unknown discovered gate %q", gateID)
 	}
-	root = cleanRoot(root)
+	root = lifecycle.CleanRoot(root)
 	vcs = strings.ToLower(strings.TrimSpace(vcs))
 	resolver, err := resolverForVCS(vcs, nil)
 	if err != nil {
@@ -113,7 +115,7 @@ func standaloneChangeBlock(root, vcs, base, scope string) string {
 	if scope = strings.TrimSpace(scope); scope != "" {
 		lines = append(lines, "Review scope (user-specified): "+scope)
 	}
-	// R 修复清单 item 10：单跑（RQ-010）脱离 run、无需需求文档，故本提示词不含需求
+	// 单跑脱离 run、无需需求文档，故本提示词不含需求
 	// 块。这是设计意图，零上下文审查者不应因缺需求块而报 RUNTIME_ERROR。
 	lines = append(lines, "This standalone gate run intentionally has no requirement block: it reviews the working tree vs HEAD without a requirement document. A missing requirement block is by design and must not be reported as RUNTIME_ERROR.")
 	return strings.Join(lines, "\n")
@@ -129,7 +131,7 @@ type StandaloneGateResult struct {
 // ValidateStandaloneGateResult validates a standalone gate review result against
 // the same semantic contract as a gate result and returns the normalized status.
 // It performs no run-state writes: standalone results are displayed only and
-// never persisted (RQ-010).
+// never persisted.
 func ValidateStandaloneGateResult(raw []byte) (StandaloneGateResult, error) {
 	var result StandaloneGateResult
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -144,11 +146,11 @@ func ValidateStandaloneGateResult(raw []byte) (StandaloneGateResult, error) {
 }
 
 // isReviewerAction reports whether an action is a zero-context reviewer action
-// whose composed prompt carries the shared reviewer contract (RQ-003):
+// whose composed prompt carries the shared reviewer contract:
 // product-review、qa-review、start-readiness 三个零上下文审查者动作注入；非审查动作
 // （development-worker、carry、qa-execution、requirements-clarification）不注入，
 // 避免"你是独立审查者、不要编辑仓库文件"的契约段落出现在开发工/执行动作中。
-// qa-design 也不注入：它已是设计写者（白盒写测试代码、黑盒写用例文档，RQ-011/RQ-013），
+// qa-design 也不注入：它已是设计写者（白盒写测试代码、黑盒写用例文档），
 // 收到"不要编辑仓库文件"契约会与写角色直接矛盾。
 func isReviewerAction(actionID string) bool {
 	switch actionID {
@@ -167,7 +169,7 @@ func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRou
 		return "", err
 	}
 	parts := []string{}
-	// RQ-003：审查类动作注入共享审查者契约，块序与门提示词一致（[Shared reviewer
+	// 审查类动作注入共享审查者契约，块序与门提示词一致（[Shared reviewer
 	// contract] 头部在前、action 块随后）；其余动作不注入。
 	if isReviewerAction(actionID) {
 		parts = append(parts, "[Shared reviewer contract]\n"+catalog.Base)
