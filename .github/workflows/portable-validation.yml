@@ -55,6 +55,8 @@ jobs:
           go build -o bin/formal-gates ./cmd/formal-gates
       - name: Run Go tests
         run: go test ./...
+      - name: Run Go integration tests
+        run: go test -tags=integration ./internal/validate
       - name: Run go vet
         run: go vet ./...
       - name: Run Go race tests (Unix)

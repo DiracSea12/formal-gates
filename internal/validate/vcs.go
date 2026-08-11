@@ -47,8 +47,9 @@ var numericIdentityPattern = regexp.MustCompile(`^[0-9]+$`)
 var vcsUnicodeEscape = regexp.MustCompile(`\{U\+([0-9A-Fa-f]{1,6})\}`)
 
 // decodeVCSMessage converts {U+XXXX} unicode escapes that some VCS tools (svn)
-// emit for non-ASCII characters back into readable runes, and collapses
-// duplicated prefixes (e.g. "svn: svn:") so the message stays legible.
+// emit for non-ASCII characters back into readable runes, and collapses a
+// duplicated leading VCS prefix (e.g. "svn: svn:") so the message stays
+// legible without removing repeated words from the message body.
 func decodeVCSMessage(message string) string {
 	decoded := vcsUnicodeEscape.ReplaceAllStringFunc(message, func(match string) string {
 		hex := vcsUnicodeEscape.FindStringSubmatch(match)
@@ -60,17 +61,23 @@ func decodeVCSMessage(message string) string {
 		return match
 	})
 	fields := strings.Fields(decoded)
-	seen := map[string]bool{}
-	kept := make([]string, 0, len(fields))
-	for _, field := range fields {
-		key := strings.TrimSuffix(field, ":")
-		if seen[key] {
-			continue
+	if len(fields) > 1 && isVCSMessagePrefix(fields[0]) {
+		firstBodyField := 1
+		for firstBodyField < len(fields) && strings.EqualFold(fields[firstBodyField], fields[0]) {
+			firstBodyField++
 		}
-		seen[key] = true
-		kept = append(kept, field)
+		fields = append(fields[:1], fields[firstBodyField:]...)
 	}
-	return strings.Join(kept, " ")
+	return strings.Join(fields, " ")
+}
+
+func isVCSMessagePrefix(field string) bool {
+	switch strings.ToLower(field) {
+	case "git:", "svn:", "p4:":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolverForVCS(name string, runner nativeCommandRunner) (nativeVCSResolver, error) {

@@ -112,6 +112,18 @@ func Start(options StartOptions) (RunState, error) {
 	default:
 		return RunState{}, fmt.Errorf("--split must be yes or no")
 	}
+	if master != "" {
+		if !promptIDPattern.MatchString(master) {
+			return RunState{}, fmt.Errorf("master run id must match [a-z0-9]+(?:-[a-z0-9]+)*")
+		}
+		masterState, err := LoadRunState(root, master)
+		if err != nil {
+			return RunState{}, fmt.Errorf("slice master run %q is not found: %v", master, err)
+		}
+		if err := requireRetainedSplitMaster(masterState); err != nil {
+			return RunState{}, fmt.Errorf("slice master %q is invalid: %w", master, err)
+		}
+	}
 	vcs := strings.ToLower(strings.TrimSpace(options.VCS))
 	resolver, err := resolverForVCS(vcs, nil)
 	if err != nil {
@@ -309,9 +321,8 @@ func staleAllDispatches(state *RunState) {
 // make their results impossible to record, forcing a re-run; the CLI forces
 // recording the in-flight result first instead (需求 6 第 5 条）。判定只依赖既有
 // 派发状态，不新增 returned 状态：
-//   - 已认领（CLAIMED）的审查动作/门派发——子代理在途、结果待记录——一律计入；
-//   - 已准备（OPEN）且不要求审查者认领的派发（如 requirements-clarification）
-//     可直接记录，也计入；已准备但要求认领的审查派发无法直接记录（死端），不计入；
+//   - 已准备（OPEN）或已认领（CLAIMED）的审查动作/门派发一律计入；
+//     OPEN 且要求审查者的派发可在需求漂移后继续认领并记录旧 revision 的结果；
 //   - 开发派发（快照记录）与 QA 派发（qa-* 命令记录）不经过 record-action/
 //     record-gate，不计入。
 func requireNoUnrecordedInFlightDispatch(state RunState) error {
@@ -320,7 +331,7 @@ func requireNoUnrecordedInFlightDispatch(state RunState) error {
 		if !dispatchRecordsViaRecordCommand(dispatch) {
 			continue
 		}
-		if dispatch.Status == "CLAIMED" || (dispatch.Status == "OPEN" && !dispatch.ReviewerRequired) {
+		if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {
 			ids = append(ids, id)
 		}
 	}
@@ -679,13 +690,35 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			if err != nil {
 				return fmt.Errorf("slice master run %q is not found: %v", strings.TrimSpace(masterRunID), err)
 			}
+			if err := requireRetainedSplitMaster(master); err != nil {
+				return fmt.Errorf("slice master %q is invalid: %w", strings.TrimSpace(masterRunID), err)
+			}
+			if master.Slicing == nil || master.Slicing.Decision != "split" {
+				return fmt.Errorf("slice master %q has not recorded its split decision", strings.TrimSpace(masterRunID))
+			}
 			if master.Actions["product-review"].Status != "PASS" {
 				return fmt.Errorf("slice master %q has not passed Product Review", strings.TrimSpace(masterRunID))
 			}
 			if master.Actions["start-readiness"].Status != "PASS" {
 				return fmt.Errorf("slice master %q has not passed Start Readiness", strings.TrimSpace(masterRunID))
 			}
-			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), MasterRunID: strings.TrimSpace(masterRunID), InheritedReviews: []string{"product-review", "start-readiness"}}
+			if err := requireMatchingInheritedReviewInputs(*state, master); err != nil {
+				return fmt.Errorf("slice review inputs do not match master %q: %w", strings.TrimSpace(masterRunID), err)
+			}
+			if state.VCS != master.VCS || state.BaseSnapshot != master.BaseSnapshot {
+				return fmt.Errorf("slice VCS/base snapshot does not match master %q", strings.TrimSpace(masterRunID))
+			}
+			if splitCount != master.Slicing.SplitCount || !sameOrderedStrings(slices, master.Slicing.Slices) || strings.TrimSpace(parallel) != master.Slicing.Parallel {
+				return fmt.Errorf("slice split topology does not match master %q", strings.TrimSpace(masterRunID))
+			}
+			state.Slicing = &Slicing{
+				Decision:         master.Slicing.Decision,
+				SplitCount:       master.Slicing.SplitCount,
+				Slices:           append([]string{}, master.Slicing.Slices...),
+				Parallel:         master.Slicing.Parallel,
+				MasterRunID:      strings.TrimSpace(masterRunID),
+				InheritedReviews: []string{"product-review", "start-readiness"},
+			}
 			return nil
 		}
 		if !actionPassedOrAbsent(*state, "product-review") {
@@ -726,6 +759,46 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 		state.Slicing = &Slicing{Decision: decision, Note: strings.TrimSpace(note)}
 		return nil
 	})
+}
+
+func requireRetainedSplitMaster(master RunState) error {
+	if master.Status != "ACTIVE" {
+		return fmt.Errorf("run is %s, not ACTIVE", master.Status)
+	}
+	if !master.RetainedOverall || master.SplitDeclaration != "yes" || master.SplitMasterRunID != "" {
+		return fmt.Errorf("run is not a retained-overall --split yes instance")
+	}
+	return nil
+}
+
+func requireMatchingInheritedReviewInputs(slice, master RunState) error {
+	if slice.RequirementSource != master.RequirementSource || slice.RequirementRevision != master.RequirementRevision || !sameArtifactSet(slice.RequirementArtifacts, master.RequirementArtifacts) {
+		return fmt.Errorf("requirement source or artifact set differs")
+	}
+	if slice.BasePromptRevision != master.BasePromptRevision || slice.CatalogRevision != master.CatalogRevision {
+		return fmt.Errorf("review catalog differs")
+	}
+	for _, actionID := range []string{"product-review", "start-readiness"} {
+		key := "action:" + actionID
+		sliceHash, sliceOK := slice.PromptHashes[key]
+		masterHash, masterOK := master.PromptHashes[key]
+		if !sliceOK || !masterOK || sliceHash == "" || sliceHash != masterHash {
+			return fmt.Errorf("%s prompt differs", actionID)
+		}
+	}
+	return nil
+}
+
+func sameOrderedStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // RecordSettledFindings records the user's per-item disposition of findings from
@@ -845,10 +918,6 @@ func RegisterQAWorktree(root, packageRoot, runID, worktree string) (RunState, er
 
 func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
-		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
-		if err != nil {
-			return err
-		}
 		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
 		if dispatchID == "" {
 			return fmt.Errorf("dispatch id is required")
@@ -856,6 +925,24 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		dispatch, ok := state.Dispatches[dispatchID]
 		if !ok {
 			return fmt.Errorf("unknown dispatch %q", dispatchID)
+		}
+		requirementDrifted, err := requirementArtifactsChanged(root, state.RequirementArtifacts)
+		if err != nil {
+			return err
+		}
+		recordRecovery := dispatch.Status == "OPEN" && dispatchRecordsViaRecordCommand(dispatch) && requirementDrifted
+		// A prepared record-action/record-gate dispatch remains bound to the old
+		// requirement revision. Let it be claimed after document drift so its
+		// result can be recorded before requirement rebinding; all other claims
+		// retain the normal live-revision check.
+		var catalog PromptCatalog
+		if recordRecovery {
+			catalog, err = requireCurrentCatalog(*state, packageRoot)
+		} else {
+			catalog, err = requireCurrentDefinitions(root, *state, packageRoot)
+		}
+		if err != nil {
+			return err
 		}
 		// 硬闸：carry 处置派发的认领豁免，其余派发在存在待决继承判定时拒绝认领。
 		if !(dispatch.TargetKind == "action" && dispatch.Target == "carry") {
@@ -870,7 +957,14 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 			// "会提交的开发 worker"没有可行路径。该检查不验证 HEAD 是否由 worker 产生，
 			// 开发期间无关外部提交落地会被静默吸收进开发快照（文档已注明）。其余派发
 			// （审查、QA 等）仍要求原生 HEAD 精确等于当前快照。
-			if err := requireDevelopmentClaimableHead(root, *state, dispatch); err != nil {
+			if err := requireDispatchSourceAncestorOfHead(root, *state, dispatch); err != nil {
+				return err
+			}
+		} else if recordRecovery {
+			// A committed requirement edit advances HEAD after prepare. The old
+			// review remains reproducible from its immutable source snapshot, so
+			// permit descendants while preserving the dispatch's old bindings.
+			if err := requireDispatchSourceAncestorOfHead(root, *state, dispatch); err != nil {
 				return err
 			}
 		} else if dispatch.Mode == "blackbox" && (dispatch.Target == "qa-design" || dispatch.Target == "qa-review") {
@@ -957,8 +1051,7 @@ func openRecord(root, packageRoot, runID string, checkPending, skipDrift bool, c
 // recordDispatchOptions carries the per-record entry checks for a dispatch-bound
 // Record* write: the prepared dispatch binding, the transition rule, whether the
 // native snapshot is verified on the main worktree or the QA isolation worktree,
-// and an optional catalog-membership check that must run before dispatch
-// resolution.
+// and an optional target/catalog check that runs after dispatch resolution.
 type recordDispatchOptions struct {
 	targetKind             string                        // dispatch target kind: "action" or "gate"
 	target                 string                        // dispatch target id
@@ -980,8 +1073,20 @@ type recordDispatchOptions struct {
 // record-specific write.
 func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts recordDispatchOptions, change func(*RunState, PromptCatalog, PreparedDispatch) error) (RunState, error) {
 	return openRecord(root, packageRoot, runID, true, targetRecordsViaRecordCommand(opts.targetKind, opts.target), func(state *RunState, catalog PromptCatalog) error {
+		dispatch, err := requirePreparedDispatch(*state, dispatchID, opts.targetKind, opts.target)
+		if err != nil {
+			return err
+		}
 		if opts.requireMainNative {
-			if _, err := requireNativeCurrent(root, *state); err != nil {
+			requirementDrifted, err := requirementArtifactsChanged(root, state.RequirementArtifacts)
+			if err != nil {
+				return err
+			}
+			if requirementDrifted && dispatchRecordsViaRecordCommand(dispatch) {
+				if err := requireDispatchSourceAncestorOfHead(root, *state, dispatch); err != nil {
+					return err
+				}
+			} else if _, err := requireNativeCurrent(root, *state); err != nil {
 				return err
 			}
 		}
@@ -989,10 +1094,6 @@ func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts record
 			if err := opts.preCheck(state, catalog); err != nil {
 				return err
 			}
-		}
-		dispatch, err := requirePreparedDispatch(*state, dispatchID, opts.targetKind, opts.target)
-		if err != nil {
-			return err
 		}
 		if err := requireTransition(*state, opts.transitionOp, opts.transitionTarget(dispatch)); err != nil {
 			return err
@@ -1507,11 +1608,11 @@ func requireNativeCurrent(root string, state RunState) (string, error) {
 	return current, nil
 }
 
-// requireDevelopmentClaimableHead is the relaxed native identity check used when
-// claiming a development-worker dispatch. The worker's commit advances native
-// HEAD past the dispatch's source snapshot, so any current HEAD that is a
-// descendant (or equal) of the source snapshot is accepted as the claim basis.
-func requireDevelopmentClaimableHead(root string, state RunState, dispatch PreparedDispatch) error {
+// requireDispatchSourceAncestorOfHead is the relaxed native identity check for
+// a dispatch whose documented recovery path permits HEAD to advance after
+// prepare. The dispatch source must remain an ancestor (or equal), so unrelated
+// history cannot replace its immutable comparison basis.
+func requireDispatchSourceAncestorOfHead(root string, state RunState, dispatch PreparedDispatch) error {
 	current, err := resolveNativeSnapshot(root, state.VCS)
 	if err != nil {
 		return err

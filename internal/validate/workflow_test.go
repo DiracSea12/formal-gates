@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"formal-gates/internal/cost"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -1055,7 +1056,7 @@ func TestResumeAndAbortNormalLifecycle(t *testing.T) {
 	t.Run("abort", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		state := mustStart(t, root, pkg, "abort")
-		summary, err := Abort(root, pkg, state.RunID)
+		summary, err := Abort(root, state.RunID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1649,6 +1650,43 @@ func TestMergeVerificationCompletesPostMergeReview(t *testing.T) {
 	}
 }
 
+func TestMergeSliceCostsRetainsSidecarUntilDurableRunCleanup(t *testing.T) {
+	root := t.TempDir()
+	state := NewRunState("cost-master", "formal", "requirements.md", "revision", "git", "base", "current", "base-prompt", "catalog", true, nil, nil)
+	sliceCost := &cost.RunCost{
+		TotalInputTokens: 7,
+		Dispatches: map[string]cost.DispatchCost{
+			"review": {Target: "quality", Kind: "gate", TotalInputTokens: 7, Source: cost.SourceTranscript},
+		},
+	}
+	if err := SaveSliceCost(root, state.RunID, SliceCostRecord{RunID: "slice-one", Cost: sliceCost}); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := SliceCostPath(root, state.RunID, "slice-one")
+	if err := mergeSliceCosts(root, &state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sidecar); err != nil {
+		t.Fatalf("sidecar was removed before merged state was durable: %v", err)
+	}
+	if err := SaveRunState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Cost == nil || persisted.Cost.TotalInputTokens != sliceCost.TotalInputTokens {
+		t.Fatalf("persisted state lost merged slice cost: %#v", persisted.Cost)
+	}
+	if err := DeleteRun(root, state.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("completed run cleanup left the sidecar behind: %v", err)
+	}
+}
+
 // TestSliceSealWritesNoLedgerAndMasterMergesCost verifies 分片封板: a slice
 // instance's seal writes no independent ledger file (封板文件) and leaves only
 // a cost sidecar under its retained-overall master's temp run dir; the master's
@@ -1756,6 +1794,38 @@ func TestSliceSealWritesNoLedgerAndMasterMergesCost(t *testing.T) {
 	}
 	masterOwn := master.Cost.TotalInputTokens
 
+	// A summary write failure must leave a terminal, retryable checkpoint with
+	// the merged costs and sidecar intact. Other mutations stay blocked, while a
+	// repeated Seal resumes summary persistence without repeating the VCS work.
+	resultsPath := filepath.Join(lifecycle.CleanRoot(root), ".gates", "results")
+	if err := os.WriteFile(resultsPath, []byte("blocks results directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Seal(root, pkg, master.RunID, nil, false, "squashed delivery with slices"); err == nil {
+		t.Fatal("seal unexpectedly succeeded while the results path was not a directory")
+	}
+	checkpoint, err := LoadRunState(root, master.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Status != "SEALED" || checkpoint.Cost == nil || checkpoint.Cost.TotalInputTokens != masterOwn+sliceOwn {
+		t.Fatalf("failed seal did not retain a retryable merged checkpoint: %#v", checkpoint)
+	}
+	if _, err := os.Stat(SliceCostPath(root, master.RunID, slice.RunID)); err != nil {
+		t.Fatalf("failed summary persistence consumed the slice sidecar: %v", err)
+	}
+	if _, err := UpdateRequirement(root, pkg, master.RunID, "", true, "", nil); err == nil || !strings.Contains(err.Error(), "SEALED") {
+		t.Fatalf("terminal checkpoint allowed a normal workflow mutation: %v", err)
+	}
+	if _, err := CleanupTempRuns(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(SliceCostPath(root, master.RunID, slice.RunID)); err != nil {
+		t.Fatalf("cleanup consumed the retryable slice sidecar: %v", err)
+	}
+	if err := os.Remove(resultsPath); err != nil {
+		t.Fatal(err)
+	}
 	masterSummary, err := Seal(root, pkg, master.RunID, nil, false, "squashed delivery with slices")
 	if err != nil {
 		t.Fatal(err)
@@ -1815,7 +1885,7 @@ func TestSliceAbortWritesNoLedgerAndSidecarKeepsCost(t *testing.T) {
 	sliceOwn := slice.Cost.TotalInputTokens
 
 	// 分片中止：不产出独立封板文件，只留成本 sidecar；run 目录照常清除。
-	summary, err := Abort(root, pkg, slice.RunID)
+	summary, err := Abort(root, slice.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1838,6 +1908,21 @@ func TestSliceAbortWritesNoLedgerAndSidecarKeepsCost(t *testing.T) {
 	}
 	if _, statErr := os.Stat(RunDir(root, slice.RunID)); !os.IsNotExist(statErr) {
 		t.Fatalf("aborted slice run directory remained: %v", statErr)
+	}
+	masterSummary, err := Abort(root, master.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masterSummary.Status != "ABORTED" || masterSummary.Cost == nil || masterSummary.Cost.TotalInputTokens != sliceOwn {
+		t.Fatalf("master abort did not retain the aborted slice cost: %#v", masterSummary)
+	}
+	for id := range sidecar.Cost.Dispatches {
+		if _, ok := masterSummary.Cost.Dispatches[slice.RunID+"/"+id]; !ok {
+			t.Fatalf("master abort summary missing namespaced slice dispatch %q", id)
+		}
+	}
+	if _, statErr := os.Stat(SliceCostPath(root, master.RunID, slice.RunID)); !os.IsNotExist(statErr) {
+		t.Fatalf("master abort must consume the merged slice cost sidecar")
 	}
 }
 
@@ -2092,6 +2177,19 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "settled technical decision") {
 		t.Fatalf("settled findings not injected into start-readiness prompt: %s", prompt)
+	}
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchID = openDispatchID(state, "action", "start-readiness")
+	state, err = ClaimDispatch(root, pkg, state.RunID, dispatchID, "settled-readiness-reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised requirement\n")
 	commitAll(t, root, "revised requirement")
@@ -2521,6 +2619,7 @@ func sliceMaster(t *testing.T, root, pkg, id string) string {
 	state = confirmRequirement(t, root, pkg, state)
 	state = recordProductReview(t, root, pkg, state)
 	state = recordReadiness(t, root, pkg, state)
+	recordSlicing(t, root, pkg, state, "split")
 	return id
 }
 
@@ -3875,6 +3974,14 @@ func TestDecodeVCSMessageUnescapesUnicode(t *testing.T) {
 	}
 }
 
+func TestDecodeVCSMessagePreservesRepeatedBodyWords(t *testing.T) {
+	in := "svn: svn: warning: retry retry E155007: E155007: path path"
+	want := "svn: warning: retry retry E155007: E155007: path path"
+	if got := decodeVCSMessage(in); got != want {
+		t.Fatalf("decodeVCSMessage() = %q, want %q", got, want)
+	}
+}
+
 // 需求 4：workflow start 未声明 --split 拒绝启动。
 func TestStartRequiresSplitDeclaration(t *testing.T) {
 	root, pkg := workflowFixture(t)
@@ -3899,12 +4006,19 @@ func TestStartSplitYesPinsRetainedOrMaster(t *testing.T) {
 	if retained.SplitDeclaration != "yes" || retained.SplitMasterRunID != "" || !retained.RetainedOverall {
 		t.Fatalf("retained-overall split declaration not pinned: %#v", retained)
 	}
-	slice, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "yes-slice", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", MasterRunID: "master-run"})
+	slice, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "yes-slice", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", MasterRunID: retained.RunID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slice.SplitDeclaration != "yes" || slice.SplitMasterRunID != "master-run" {
+	if slice.SplitDeclaration != "yes" || slice.SplitMasterRunID != retained.RunID {
 		t.Fatalf("slice master pin not recorded: %#v", slice)
+	}
+	ordinary := mustStart(t, root, pkg, "ordinary-master")
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "ordinary-child", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", MasterRunID: ordinary.RunID}); err == nil || !strings.Contains(err.Error(), "not a retained-overall") {
+		t.Fatalf("ordinary run was accepted as a slice master: %v", err)
+	}
+	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "unsafe-master", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", MasterRunID: "../escape"}); err == nil || !strings.Contains(err.Error(), "master run id must match") {
+		t.Fatalf("unsafe master run id was accepted: %v", err)
 	}
 	if _, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "both", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "yes", RetainedOverall: true, MasterRunID: "master-run"}); err == nil || !strings.Contains(err.Error(), "cannot be both") {
 		t.Fatalf("retained-overall + master contradiction was accepted: %v", err)
@@ -3935,7 +4049,7 @@ func TestSlicingMutualValidationWithStartDeclaration(t *testing.T) {
 		t.Fatalf("slice master mismatch was accepted: %v", err)
 	}
 	// 拆分引用的 master 与启动声明一致 → 放行。
-	recorded, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, nil, "", "reason", master)
+	recorded, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "reason", master)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3957,8 +4071,40 @@ func TestSlicingLegacyRunWithoutDeclarationKeepsOldSemantics(t *testing.T) {
 	// 旧 run（无启动声明）引用有效 master 记录 split 仍放行（旧语义）。
 	master := sliceMaster(t, root, pkg, "legacy-master")
 	slice := confirmRequirement(t, root, pkg, legacyRun(t, root, pkg, "legacy-slice"))
-	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, nil, "", "reason", master); err != nil {
+	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, []string{"slice-a", "slice-b"}, "slice-a and slice-b can run in parallel", "reason", master); err != nil {
 		t.Fatalf("legacy run slice split was blocked: %v", err)
+	}
+}
+
+func TestSliceRequiresRecordedMatchingMasterDecision(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	master := mustStartRetained(t, root, pkg, "unready-split-master")
+	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "unready-slice", master.RunID))
+	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", 2, []string{"slice-a", "slice-b"}, "parallel", "", master.RunID); err == nil || !strings.Contains(err.Error(), "has not recorded its split decision") {
+		t.Fatalf("slice inherited from a master without a split decision: %v", err)
+	}
+
+	readyMaster := sliceMaster(t, root, pkg, "matching-split-master")
+	matchingSlice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "mismatched-topology-slice", readyMaster))
+	if _, err := RecordSlicing(root, pkg, matchingSlice.RunID, "split", 2, []string{"different-a", "different-b"}, "parallel", "", readyMaster); err == nil || !strings.Contains(err.Error(), "topology does not match") {
+		t.Fatalf("slice recorded topology different from its master: %v", err)
+	}
+}
+
+func TestSliceReviewInheritanceRequiresMatchingArtifacts(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	master, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifact-master", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", RetainedOverall: true, Split: "yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	master = confirmRequirement(t, root, pkg, master)
+	master = recordProductReview(t, root, pkg, master)
+	master = recordReadiness(t, root, pkg, master)
+	master = recordSlicing(t, root, pkg, master, "split")
+
+	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "artifact-slice", master.RunID))
+	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", master.Slicing.SplitCount, master.Slicing.Slices, master.Slicing.Parallel, "", master.RunID); err == nil || !strings.Contains(err.Error(), "artifact set differs") {
+		t.Fatalf("slice inherited reviews for a different artifact set: %v", err)
 	}
 }
 
@@ -3999,6 +4145,44 @@ func TestRequirementRebindRejectedWhileReviewDispatchInFlight(t *testing.T) {
 	}
 	if after := stateBytes(t, root, state.RunID); after != before {
 		t.Fatal("rejected rebind changed state")
+	}
+}
+
+// TestRequirementRebindRejectedWhileReviewDispatchOpen verifies that a
+// reviewer-required dispatch blocks rebinding from the moment it is prepared,
+// before a reviewer claims it. Under requirement drift the old dispatch can
+// still be claimed and recorded, which releases the rebind without a deadlock.
+func TestRequirementRebindRejectedWhileReviewDispatchOpen(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "rebind-open"))
+	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchID := openDispatchID(state, "action", "product-review")
+	if dispatch := state.Dispatches[dispatchID]; dispatch.Status != "OPEN" || !dispatch.ReviewerRequired {
+		t.Fatalf("expected an OPEN reviewer dispatch, got %#v", dispatch)
+	}
+	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	commitAll(t, root, "commit requirement drift while review is open")
+	before := stateBytes(t, root, state.RunID)
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err == nil || !strings.Contains(err.Error(), "has not recorded its result") {
+		t.Fatalf("rebind with an OPEN review dispatch was accepted: %v", err)
+	}
+	if after := stateBytes(t, root, state.RunID); after != before {
+		t.Fatal("rejected rebind changed state")
+	}
+	if _, err := ClaimDispatch(root, pkg, state.RunID, dispatchID, "rebind-open-reviewer"); err != nil {
+		t.Fatalf("claiming the old revision dispatch under drift failed: %v", err)
+	}
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+		t.Fatalf("recording the old revision dispatch under drift failed: %v", err)
+	}
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
+		t.Fatalf("rebinding after recording the OPEN dispatch failed: %v", err)
 	}
 }
 

@@ -580,22 +580,21 @@ func cliStateBytes(t *testing.T, root, runID string) string {
 
 // 片 1 CLI 行为修复的 CLI 层直接测试。
 
-// Fix 1：show/abort/cleanup 接受 --package-root（参数面与其余子命令一致；cleanup
-// 不再静默忽略，值传递到 validate）。
-func TestCLIWorkflowSurfaceAcceptsPackageRoot(t *testing.T) {
+// State-only commands do not read the installed prompt/gate package and must
+// not advertise or silently accept a meaningless --package-root option.
+func TestCLIStateOnlyWorkflowCommandsRejectPackageRoot(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
 	state := startCLIWorkflow(t, root, pkg, "pkg-surface")
-	var stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "show", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stderr: &stderr}); code != 0 {
-		t.Fatalf("show rejected --package-root: code=%d err=%s", code, stderr.String())
+	commands := [][]string{
+		{"workflow", "show", "--root", root, "--package-root", pkg, "--run-id", state.RunID},
+		{"workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--user-confirm"},
+		{"workflow", "cleanup", "--root", root, "--package-root", pkg},
 	}
-	stderr.Reset()
-	if code := Run("formal-gates", []string{"workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--user-confirm"}, IO{Stderr: &stderr}); code != 0 {
-		t.Fatalf("abort rejected --package-root: code=%d err=%s", code, stderr.String())
-	}
-	stderr.Reset()
-	if code := Run("formal-gates", []string{"workflow", "cleanup", "--root", root, "--package-root", pkg}, IO{Stderr: &stderr}); code != 0 {
-		t.Fatalf("cleanup rejected --package-root: code=%d err=%s", code, stderr.String())
+	for _, args := range commands {
+		var stderr bytes.Buffer
+		if code := Run("formal-gates", args, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "flag provided but not defined: -package-root") {
+			t.Fatalf("%v accepted --package-root: code=%d err=%s", args[:2], code, stderr.String())
+		}
 	}
 }
 
@@ -711,13 +710,13 @@ func TestCLIAbortRequiresUserConfirm(t *testing.T) {
 	state := startCLIWorkflow(t, root, pkg, "cli-abort-confirm")
 	before := cliStateBytes(t, root, state.RunID)
 	var stderr bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires --user-confirm") {
+	if code := Run("formal-gates", []string{"workflow", "abort", "--root", root, "--run-id", state.RunID}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires --user-confirm") {
 		t.Fatalf("abort without user confirm was accepted: code=%d err=%s", code, stderr.String())
 	}
 	if cliStateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected abort changed state")
 	}
-	out := runCLI(t, "workflow", "abort", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--user-confirm")
+	out := runCLI(t, "workflow", "abort", "--root", root, "--run-id", state.RunID, "--user-confirm")
 	if !strings.Contains(out, `"status": "ABORTED"`) {
 		t.Fatalf("user-confirmed abort did not terminate the run: %s", out)
 	}

@@ -250,7 +250,7 @@ func acceptCatalogHashes(state *RunState, catalog PromptCatalog) {
 	state.PromptHashes = merged
 }
 
-func Abort(root, packageRoot, runID string) (RunSummary, error) { return finishRun(root, packageRoot, runID, "ABORTED") }
+func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runID, "ABORTED") }
 
 // Seal aggregates the run. For git runs whose base→current range holds more than
 // one commit, the range is squashed into a single commit (git reset --soft base +
@@ -269,6 +269,9 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	state, err := LoadRunState(root, runID)
 	if err != nil {
 		return RunSummary{}, err
+	}
+	if state.Status == "SEALED" {
+		return completeTerminalRun(root, state)
 	}
 	if err := requireActive(state); err != nil {
 		return RunSummary{}, err
@@ -330,7 +333,6 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			rebindCurrentSnapshot(&state, newSnapshot)
 		}
 	}
-	state.Status = "SEALED"
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance {
 		// 分片实例：封板不产出独立封板文件；成本投影写入 sidecar，供主干
@@ -348,27 +350,24 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			return RunSummary{}, err
 		}
 	}
+	// Persist the post-squash snapshot and merged cost projection while the run
+	// is still ACTIVE, then make the terminal state durable before its summary.
+	// A summary failure can be resumed without reopening normal mutations.
 	if err := SaveRunState(root, state); err != nil {
 		return RunSummary{}, err
 	}
-	if !sliceInstance {
-		if err := SaveRunSummary(root, state); err != nil {
-			return RunSummary{}, err
-		}
-	}
-	summary := runSummary(state)
-	if err := DeleteRun(root, runID); err != nil {
+	state.Status = "SEALED"
+	if err := SaveRunState(root, state); err != nil {
 		return RunSummary{}, err
 	}
-	_, _ = CleanupTempRuns(root, packageRoot) // best-effort sweep of residual terminated runs
-	return summary, nil
+	return completeTerminalRun(root, state)
 }
 
 // mergeSliceCosts folds the sealed slice instances' cost sidecars into the
-// run's cost projection and removes the merged sidecars. It scans this run's
-// own slice-costs dir (scoped under its temp run dir, so only its own slices
-// are consumed). A missing/unparseable sidecar is skipped best-effort — cost
-// data is display-only and never blocks a seal.
+// run's cost projection. It leaves sidecars in the temp run directory until
+// the merged state and summary are durable; DeleteRun then removes them with
+// the rest of the completed run. A missing/unparseable sidecar is skipped
+// best-effort because cost data is display-only and never blocks a seal.
 func mergeSliceCosts(root string, state *RunState) error {
 	dir := SliceCostDir(root, state.RunID)
 	entries, err := os.ReadDir(dir)
@@ -399,14 +398,11 @@ func mergeSliceCosts(root string, state *RunState) error {
 			state.Cost = &cost.RunCost{}
 		}
 		cost.Merge(state.Cost, sliceRunID, record.Cost)
-		if err := os.Remove(filepath.Join(dir, name)); err != nil {
-			return err
-		}
 	}
 	return nil
 }
 
-func finishRun(root, packageRoot, runID, status string) (RunSummary, error) {
+func finishRun(root, runID, status string) (RunSummary, error) {
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -417,10 +413,12 @@ func finishRun(root, packageRoot, runID, status string) (RunSummary, error) {
 	if err != nil {
 		return RunSummary{}, err
 	}
+	if state.Status == status {
+		return completeTerminalRun(root, state)
+	}
 	if err := requireActive(state); err != nil {
 		return RunSummary{}, err
 	}
-	state.Status = status
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance && state.Cost != nil {
 		// 分片实例：中止同样不产出独立封板文件；已记录的成本投影写入 sidecar，
@@ -429,19 +427,34 @@ func finishRun(root, packageRoot, runID, status string) (RunSummary, error) {
 			return RunSummary{}, err
 		}
 	}
+	if state.RetainedOverall {
+		if err := mergeSliceCosts(root, &state); err != nil {
+			return RunSummary{}, err
+		}
+	}
+	state.Status = status
 	if err := SaveRunState(root, state); err != nil {
 		return RunSummary{}, err
 	}
+	return completeTerminalRun(root, state)
+}
+
+// completeTerminalRun persists the retained summary after terminal state is
+// durable, then removes the temporary run. If summary persistence fails, the
+// terminal state and any cost sidecars remain; repeating the same Seal or Abort
+// call resumes here without reopening the workflow to other mutations.
+func completeTerminalRun(root string, state RunState) (RunSummary, error) {
+	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if !sliceInstance {
 		if err := SaveRunSummary(root, state); err != nil {
 			return RunSummary{}, err
 		}
 	}
 	summary := runSummary(state)
-	if err := DeleteRun(root, runID); err != nil {
+	if err := DeleteRun(root, state.RunID); err != nil {
 		return RunSummary{}, err
 	}
-	_, _ = CleanupTempRuns(root, packageRoot) // best-effort sweep of residual terminated runs
+	_, _ = CleanupTempRuns(root) // best-effort sweep of residual terminated runs
 	return summary, nil
 }
 

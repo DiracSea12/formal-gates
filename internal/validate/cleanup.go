@@ -24,10 +24,7 @@ type TempRunCleanup struct {
 // events for hours while waiting on reviewers, and deleting it would destroy
 // resumable flow state. Directories without a readable state ledger
 // (corrupted or foreign state) are listed and left alone.
-// packageRoot is accepted so the workflow command surface stays uniform (every
-// workflow subcommand carries --package-root); the temp sweep is scoped to root
-// only, so packageRoot is not consulted here.
-func CleanupTempRuns(root, packageRoot string) (TempRunCleanup, error) {
+func CleanupTempRuns(root string) (TempRunCleanup, error) {
 	result := TempRunCleanup{}
 	dirs, err := os.ReadDir(filepath.Join(lifecycle.CleanRoot(root), ".gates", "tmp"))
 	if os.IsNotExist(err) {
@@ -41,11 +38,20 @@ func CleanupTempRuns(root, packageRoot string) (TempRunCleanup, error) {
 			continue
 		}
 		runID := dir.Name()
-		status, err := readTempRunStatus(root, runID)
+		state, err := LoadRunState(root, runID)
 		switch {
 		case err != nil:
 			result.Unknown = append(result.Unknown, runID)
-		case status == "SEALED" || status == "ABORTED":
+		case state.Status == "SEALED" || state.Status == "ABORTED":
+			// Non-slice terminal runs are disposable only after their retained
+			// summary exists. A missing summary means finalization failed after a
+			// terminal state write; preserve the run and any slice-cost sidecars.
+			if strings.TrimSpace(state.SplitMasterRunID) == "" {
+				if _, err := os.Stat(RunSummaryPath(root, runID)); err != nil {
+					result.Unknown = append(result.Unknown, runID)
+					continue
+				}
+			}
 			if err := os.RemoveAll(RunDir(root, runID)); err != nil {
 				return result, fmt.Errorf("cleanup %s: %w", runID, err)
 			}
@@ -60,9 +66,8 @@ func CleanupTempRuns(root, packageRoot string) (TempRunCleanup, error) {
 // CleanupTempRun deletes one named run temp directory, terminated or not.
 // This is the explicit escape hatch for abandoned active runs; it never
 // touches .gates/results. Unsafe names (path separators, "." and "..",
-// empty) are rejected. packageRoot is accepted for the uniform workflow
-// command surface; the single-run temp deletion is scoped to root only.
-func CleanupTempRun(root, packageRoot, runID string) (bool, error) {
+// empty) are rejected.
+func CleanupTempRun(root, runID string) (bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || runID == "." || runID == ".." ||
 		strings.ContainsAny(runID, `/\`) {
@@ -78,12 +83,4 @@ func CleanupTempRun(root, packageRoot, runID string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-func readTempRunStatus(root, runID string) (string, error) {
-	state, err := LoadRunState(root, runID)
-	if err != nil {
-		return "", err
-	}
-	return state.Status, nil
 }

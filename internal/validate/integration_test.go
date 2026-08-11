@@ -34,14 +34,12 @@ func TestPortableCanaryPassesAgainstRepoRoot(t *testing.T) {
 }
 
 // buildRepoRootBinary builds the native CLI into the repository root's bin/
-// directory so package validation and source-install checks pass. bin/ is
-// gitignored, so the build does not dirty the working tree.
+// directory so package validation and source-install checks always exercise
+// current source rather than a stale ignored binary. bin/ is gitignored, so the
+// build does not dirty the working tree.
 func buildRepoRootBinary(t *testing.T, root string) {
 	t.Helper()
 	binPath := filepath.Join(root, "bin", nativeBinaryName())
-	if isFile(binPath) {
-		return
-	}
 	if err := os.MkdirAll(filepath.Dir(binPath), 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -286,9 +286,18 @@ func TestIncrementalReviewMeaningChangedClearsTable(t *testing.T) {
 	if state.ReviewItemsByAction["product-review"]["item-A"].Status != "PENDING" {
 		t.Fatalf("scoped item not recorded: %#v", state.ReviewItemsByAction)
 	}
+	dispatchID := openDispatchID(state, "action", "product-review")
+	state, err := ClaimDispatch(root, pkg, state.RunID, dispatchID, "incremental-clear-reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", ReviewItemInput{Key: "item-A", Status: "PASS"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
 	commitAll(t, root, "change requirement")
-	state, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
