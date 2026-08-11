@@ -31,19 +31,19 @@ func TestPackageRejectsInvalidGatePrompt(t *testing.T) {
 	}
 }
 
-func TestInstallableMetadataUsesUniversalModificationIntake(t *testing.T) {
+func TestInstallableMetadataNoAutoIntake(t *testing.T) {
 	root := copyPackageFixture(t)
 	data, err := os.ReadFile(filepath.Join(root, "agents", "openai.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, obsolete := range []string{"GateWorkflow", "formal handoff"} {
+	for _, obsolete := range []string{"GateWorkflow", "formal handoff", "lightweight", "every project-content modification"} {
 		if strings.Contains(text, obsolete) {
 			t.Fatalf("installable metadata retains obsolete %q instruction", obsolete)
 		}
 	}
-	for _, current := range []string{"every project-content modification", "before writes", "lightweight, full, or custom"} {
+	for _, current := range []string{"by default", "before writes", "only on explicit user request"} {
 		if !strings.Contains(text, current) {
 			t.Fatalf("installable metadata is missing current %q instruction", current)
 		}

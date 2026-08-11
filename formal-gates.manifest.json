@@ -1,6 +1,6 @@
 {
   "name": "formal-gates",
-  "description": "Agent Skill compatible universal modification intake and AI code quality gate package. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, and Cursor. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible on-request formal workflow and AI code quality gate package. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, and Cursor. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Claude Code",
