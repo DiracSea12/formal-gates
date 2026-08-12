@@ -168,10 +168,9 @@ func commandWritesFiles(command string) bool {
 			return true
 		}
 	}
-	// run 状态直接写入：任何 .gates 下的写入路径。
-	if strings.Contains(lower, ".gates") {
-		return true
-	}
+	// 按真实写目标判定（改动 3）：不再以命令文本是否含 .gates 子串判写入——只读命令
+	// （grep/ls/cat/find/python3 读、只读 git 查询等）即使提到 .gates 也放行；真写 .gates
+	// 由下面的文件变更工具与输出重定向按目标路径判定命中。
 	// 文件写入工具与文件系统变更命令（非重定向的写文件写法）。
 	for _, marker := range []string{"tee ", "sed -i", "install ", "git add", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
 		if strings.Contains(lower, marker) {
@@ -513,10 +512,10 @@ func isCodeOrRunStatePath(path string) bool {
 // ——主线程在活动 run 下不应以 Bash 进行无法归类的文件变更。
 func bashWriteTargetsCodeOrState(command string) bool {
 	lower := strings.ToLower(command)
-	// run 状态：任何 .gates 路径。
-	if strings.Contains(lower, ".gates") {
-		return true
-	}
+	// 按真实写目标判定（改动 3）：不以命令文本是否含 .gates 子串判写入——只读命令
+	// （grep/ls/cat/find/python3 读、只读 git 查询）即使提到 .gates 也放行；真写 .gates
+	// 由 VCS 写入标记、输出重定向目标（isCodeOrRunStatePath 识别 .gates 路径）与文件变更
+	// 工具标记命中。
 	// VCS 状态写入。
 	for _, marker := range []string{"git commit", "git push", "git merge", "git rebase", "git reset --hard", "git checkout --", "git clean", "git add"} {
 		if strings.Contains(lower, marker) {

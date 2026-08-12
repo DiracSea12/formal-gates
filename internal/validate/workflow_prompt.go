@@ -88,8 +88,12 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 		}
 		// 黑盒/白盒各自独立派发、并行执行，同一 snapshot 下每个 mode
 		// 的 qa-execution 各记录一次；同 mode 已出权威结果时才挡后续同 mode 派发。
+		// --user-requested 显式授权时放行（recordReviewOverride 记录授权来源），否则照旧拒绝。
 		if actionID == "qa-execution" && qaExecutionModeResulted(*state, mode) {
-			return "", fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.qaExecution(mode).Status)
+			if !userRequested {
+				return "", fmt.Errorf("QA Execution already has an authoritative %s result for this mode", state.qaExecution(mode).Status)
+			}
+			recordReviewOverride(state, actionID, userReason)
 		}
 		// 重跑强制 scope 决策（CLI 强制，防主代理遗漏）。该 mode 存在更早快照的
 		// 权威执行结果（即本次是重跑）时，prepare 前必须已记录覆盖本次重跑（BaseSnapshot
@@ -264,10 +268,13 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		// 设计轮只动本派发 mode 的用例，提示词只列该 mode 的既有用例。
 		modeCases := state.qaModeCases(mode)
 		if len(modeCases) != 0 {
-			lines = append(lines, "Review the complete current requirement and every prior case below. Return the complete resulting case set. Retain exact unaffected passing cases and add, modify, or remove only affected cases when impact is reliably bounded; replace the complete set when it is not or the overall workflow changed.")
+			// 增量契约（改动 2）：qa-design 只返回变更——新增用例不带 id（CLI 分配）、修改
+			// 用例用 --case-id 引用既有 id、删除用例用 --remove-case 列出 id；未提及用例及
+			// 其 PASS 状态自动保留、不再清除。整体替换（--replace-all）只用于整体工作流变更。
+			lines = append(lines, "Review the complete current requirement and every prior case below. Return only your changes: new cases need no id (the CLI assigns one), modified cases must reference their existing CASE id with --case-id, and removed cases must be listed with --remove-case. Unmentioned prior cases and their PASS status are retained automatically; an omitted case is never cleared. Use --replace-all only when the whole case set must change (e.g. the overall workflow changed).")
 			// 设计轮只列出本派发 mode 的 review FAIL 发现项，不混入另一 mode。
 			if review := state.qaReview(mode); review.Status == "FAIL" {
-				lines = append(lines, "Address these QA Review findings while redesigning the complete case set:")
+				lines = append(lines, "Address these QA Review findings while redesigning the affected cases:")
 				for _, finding := range review.Findings {
 					line := "- " + finding.Message
 					if len(finding.Locations) != 0 {
@@ -291,6 +298,28 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		pendingCases := pendingQACases(modeCases, mode)
 		accepted := []string{"Accepted coverage context; do not return new decisions for these cases:"}
 		pending := []string{"Return one decision for every pending case below:"}
+		// 增量契约上下文（改动 2）：向审查者注入本设计轮的变更清单，让它聚焦本轮
+		// 新增/修改/删除的用例；存量 PASS 用例只在上面作为上下文列出、不得重判。
+		if change, ok := state.QADesignChangesByMode[mode]; ok {
+			var parts []string
+			if len(change.Added) != 0 {
+				parts = append(parts, "added "+strings.Join(change.Added, ", "))
+			}
+			if len(change.Modified) != 0 {
+				parts = append(parts, "modified "+strings.Join(change.Modified, ", "))
+			}
+			if len(change.Removed) != 0 {
+				parts = append(parts, "removed "+strings.Join(change.Removed, ", "))
+			}
+			if len(parts) != 0 {
+				accepted = append(accepted, "This design round changed: "+strings.Join(parts, "; ")+". Review focuses on these changes and their coverage; unmentioned prior cases keep their status.")
+			}
+		}
+		// 黑盒（改动 1）：用例镜像文件落在 QA isolation worktree 的 .gates/cases/blackbox.md，
+		// 指向该文件，让审查者基于镜像审阅并对照主工作区当前确认的需求。
+		if mode == "blackbox" && strings.TrimSpace(state.QAWorktree) != "" {
+			accepted = append(accepted, "Blackbox cases are mirrored to the QA isolation worktree: "+filepath.Join(cleanWorktree(state.QAWorktree), ".gates", "cases", "blackbox.md"))
+		}
 		for _, testCase := range modeCases {
 			if testCase.ReviewStatus == "PASS" {
 				accepted = append(accepted, fmt.Sprintf("%s: %s", testCase.ID, testCase.Description))

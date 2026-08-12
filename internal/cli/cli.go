@@ -620,14 +620,22 @@ func runQADesign(args []string, streams IO) (int, error) {
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	cases := []validate.QACaseInput{}
 	newQACaseStart(fs, &cases)
+	// --case-id 是增量契约的修改引用：给当前用例标一个既有 CASE id，表示本轮修改该用例
+	// （id 必须已存在且属于本派发 mode）。不带 --case-id 的用例是新增（CLI 分配全局唯一 id）。
+	newQACaseField(fs, "case-id", "existing CASE id this design round modifies (incremental contract; the id must already exist in this mode)", "case-id", &cases)
 	newQACaseField(fs, "mode", "blackbox or whitebox for the current QA case", "mode", &cases)
 	newQACaseField(fs, "procedure", "procedure for the current QA case", "procedure", &cases)
 	newQACaseField(fs, "oracle", "oracle for the current QA case", "oracle", &cases)
 	newQACaseField(fs, "test", "whitebox test reference <file>::<function> locating the delivered test implementing the current QA case (RQ-013 binding; required for whitebox cases, unique per case)", "test", &cases)
+	// --remove-case / --replace-all 是增量记录之外的显式操作：前者按 id 删除（可重复），
+	// 后者整体替换本 mode 用例集（替换空集即清空该 mode），二者互斥。
+	removeCases := stringListFlag{}
+	fs.Var(&removeCases, "remove-case", "remove an existing CASE id from this mode (repeatable; the id must exist)")
+	replaceAll := fs.Bool("replace-all", false, "replace this mode's whole QA case set with the submitted cases (an empty submission clears the mode)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError)
+	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{RemoveCases: removeCases, ReplaceAll: *replaceAll})
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -1088,6 +1096,8 @@ func newQACaseStart(fs *flag.FlagSet, cases *[]validate.QACaseInput) {
 func newQACaseField(fs *flag.FlagSet, name, usage, field string, cases *[]validate.QACaseInput) {
 	newItemFieldFlag(fs, name, usage, cases, field, "case", "case field", "QA case", func(p *validate.QACaseInput, v string) {
 		switch field {
+		case "case-id":
+			p.CaseID = v
 		case "mode":
 			p.Mode = v
 		case "procedure":

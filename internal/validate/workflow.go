@@ -1885,6 +1885,8 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	// 各 mode 用例的 ReviewStatus 置回 PENDING，使门读到旧 PASS 不放行、须对新需求重新设计/重审。
 	state.QAReviewByMode = map[string]ActionResult{}
 	state.QADesignByMode = map[string]ActionResult{}
+	// 需求作废重置：一并清空按 mode 的增量变更留痕（本轮新增/修改/删除列表随结果作废）。
+	state.QADesignChangesByMode = map[string]QADesignChange{}
 	if len(state.QACasesByMode) != 0 {
 		reset := map[string][]QACase{}
 		for mode, cases := range state.QACasesByMode {

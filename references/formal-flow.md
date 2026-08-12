@@ -204,6 +204,17 @@ formal-gates workflow qa-design --root <repo> --package-root <package> --run-id 
   --dispatch <dispatch-id> --case '<description>' --mode <blackbox|whitebox> \
   --procedure '<public procedure>' --oracle '<expected result>' \
   [--test '<file>::<function>']   # 白盒用例必填：文件定位的测试引用，唯一、不被两用例共用
+# 增量语义：只返回本轮变更——新增用例不带 id（CLI 分配）；修改既有用例须带既有 id：
+formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
+  --dispatch <dispatch-id> --case '<新描述>' --case-id <CASE-id> --mode <blackbox|whitebox> \
+  --procedure '<procedure>' --oracle '<expected result>' [--test '<file>::<function>']
+formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
+  --dispatch <dispatch-id> --remove-case <CASE-id>   # 删除既有用例
+formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
+  --dispatch <dispatch-id> --replace-all [--case ...]
+#  --case-id/--remove-case 引用的 id 必须存在于同 mode，否则报错；--replace-all 替换整个用
+#  例集（空集即清空该 mode）；三者不能同轮混用。未提及的既有用例及其 review PASS 状态自动
+#  保留、遗漏绝不清除。语义重复（同 mode 同描述/过程/预期）的无 id 提交报错并提示改用修改。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-review --mode <blackbox|whitebox>
 formal-gates workflow qa-review --root <repo> --package-root <package> \
@@ -213,13 +224,19 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
 # 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式，含被选中
 # 模式零用例）判 P1、阻塞、必须补用例；P2 仅为建议、不阻塞、不需处置。不设机械化质量
 # 下限，用例集充分性由 qa-review 的 set-level 覆盖判定承担。
+# qa-review 审查完整合并集（未提及的既有用例自动保留在集中）；提示词注入本轮变更清单
+# （Added/Modified/Removed）。黑盒 qa-review 的提示词工作区指向隔离工作区，用例文件在
+# 隔离期间只存在于 `.gates/cases/blackbox.md`（run-state 派生 mirror，主工作区不可见）。
 ```
 
 双速调度细节（SKILL 第 4 步的执行机制）：黑盒 QA 用例在 QA 隔离工作区按当前需求设计
 （路线未确认的快速路径沿用、与 `start-readiness` 并行），设计后派发独立 `qa-review`
 批准；白盒 QA（结构测试）开发后由独立代理读实现设计并执行。黑盒与白盒的用例按 mode
 分开存储，`qa-design` 记录轮只新增/更新/删除本派发 mode 的用例，不触碰另一 mode 的
-既有用例（含其 review PASS 状态与已记录执行结果）。黑盒 review 连续 3 次 FAIL
+既有用例（含其 review PASS 状态与已记录执行结果）。黑盒用例每次 `qa-design` 记录时镜像
+到隔离工作区的 `.gates/cases/blackbox.md`（派生视图，git/svn/p4 统一）；seal 时把已批准
+黑盒用例落盘合并回主干 `.gates/results/<run-id>.blackbox-cases.md` 作为交付物（只主干
+seal，分片实例不落盘，成本并入主干封板）。黑盒 review 连续 3 次 FAIL
 （出现 PASS 即清零；RUNTIME_ERROR 不计入也不打断）视为"长期不过"，主代理向用户展示
 当前阻塞项并由用户决策处置；选项包括 abort 重建、走需求修订，或经 `workflow snapshot
 --user-requested --reason '<reason>'` 显式授权手动放行（非自动）。放行不限于 3-FAIL
@@ -330,7 +347,9 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 # Git run 在基线→当前含 >1 条提交时，seal 自动把该范围压缩为单条提交（git reset
 # --soft 基线 + 重新提交，保留最终树），作为 seal 的最后一步 VCS 操作；压缩前要求工作
 # 树干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩消息由主代理经 --squash-message
-# 传入。
+# 传入。Seal 同时把已批准黑盒用例从隔离工作区落盘合并回主干
+# `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一写主干），作为本 run 的
+# 黑盒用例交付物；分片实例不落盘。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
   [--skip <selected-non-passing-gate> ...] [--user-requested] \
   [--squash-message '<combined commit message>']

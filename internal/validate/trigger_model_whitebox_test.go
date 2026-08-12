@@ -85,7 +85,7 @@ func TestSkillDescriptionDeclaresV2TriggerModel(t *testing.T) {
 	desc := skillDescription(t, readWorktreeFile(t, "SKILL.md"))
 	assertHasText(t, desc, "默认提醒一次")
 	assertHasText(t, desc, "若需走 formal-gates 流程，可直接提出")
-	assertHasText(t, desc, "大/复杂需求在默认提醒之外额外强调一次")
+	assertHasText(t, desc, "大/复杂需求在需求与方案确认、准备开做时再额外强调一次")
 	assertHasText(t, desc, "用户明确要求走正式流程时才进入完整受理流程")
 	assertHasText(t, desc, "轻量路线")
 	assertLacksText(t, desc, "不要求回应")
@@ -94,15 +94,16 @@ func TestSkillDescriptionDeclaresV2TriggerModel(t *testing.T) {
 // Case: the SKILL.md intake body must encode the V2 default-remind rule: the
 // default reminder uses the conditional copy「若需走 formal-gates 流程，可直接
 // 提出」, large/complex requests get the advisory copy「检测到复杂需求，建议走
-// formal-gates 流程」, the two structured mentions are the design upper bound,
+// formal-gates 流程」at the confirmation-to-start point, the body no longer
+// carries the V1「两次结构化提及是设计上限/反复催促或追问」wording,
 // non-modification requests do not trigger, the copy never writes「不要求回应」
 // explicitly, and the full intake runs only on the user's explicit request.
 func TestSkillIntakeBodyDeclaresDefaultRemindOnce(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
 	assertHasText(t, skill, "默认提醒一次：若需走 formal-gates 流程，可直接提出")
 	assertHasText(t, skill, "检测到复杂需求，建议走 formal-gates 流程")
-	assertHasText(t, skill, "两次结构化提及是设计上限")
-	assertHasText(t, skill, "反复催促或追问")
+	assertHasText(t, skill, "在需求澄清与方案确认完毕、准备开做之际再额外强调一次")
+	assertLacksText(t, skill, "反复催促或追问")
 	assertHasText(t, skill, "不得自行触发")
 	assertHasText(t, skill, "非修改性的提问、解释、诊断和 review 不触发")
 	assertHasText(t, skill, "用户明确要求走正式流程（或明确要求触发 formal-gates）时，才进入完整受理流程")
@@ -188,7 +189,7 @@ func TestExampleRunStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, example, "默认提醒分支")
 	assertHasText(t, example, "若需走 formal-gates 流程，可直接提出")
 	assertHasText(t, example, "检测到复杂需求，建议走 formal-gates 流程")
-	assertHasText(t, example, "两次结构化提及是设计上限")
+	assertHasText(t, example, "在需求澄清与方案确认完毕、准备开做之际再额外强调一次")
 	assertHasText(t, example, "询问用户是否进入正式流程（是 / 否）")
 	assertHasText(t, example, "3. 是否进入正式流程")
 	assertHasText(t, example, "轻量选项在受理阶段不出现")
@@ -224,7 +225,7 @@ func TestManagedRulesJsonDeclaresV2Intake(t *testing.T) {
 	assertHasText(t, rule, "默认提醒一次")
 	assertHasText(t, rule, "若需走 formal-gates 流程，可直接提出")
 	assertHasText(t, rule, "检测到复杂需求，建议走 formal-gates 流程")
-	assertHasText(t, rule, "两次结构化提及是设计上限")
+	assertHasText(t, rule, "在需求澄清与方案确认完毕、准备开做之际再额外强调一次")
 	assertHasText(t, rule, "用户明确要求走正式流程（或明确要求触发 formal-gates）时")
 	assertHasText(t, rule, "受理阶段只决定是否进入正式流程（是/否），不决定路线")
 	assertLacksText(t, rule, "不要求回应")

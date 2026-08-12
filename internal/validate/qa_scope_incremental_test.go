@@ -236,7 +236,9 @@ func TestReviewCompletionAllowsDesignReRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), "")
+	// 增量契约：重记录提交新增用例（既有两个用例未提及自动保留）；若原样重提
+	// baselineCases() 会被语义重复检查拒绝。
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "additional coverage", Procedure: "run the delivered additional test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxAdditional"}}, "")
 	if err != nil {
 		t.Fatalf("design re-record after review completion was rejected: %v", err)
 	}

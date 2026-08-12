@@ -805,3 +805,76 @@ func TestCLIRequirementRebindRejectedWithInFlightDispatch(t *testing.T) {
 		t.Fatalf("requirement rebind with an in-flight review dispatch was accepted: code=%d err=%s", code, stderr.String())
 	}
 }
+
+// TestCLIQADesignIncrementalFlags verifies through the CLI the incremental QA
+// design contract (改动 2): a second qa-design round returns only changes —
+// --case-id modifies an existing case (id must exist), a bare --case adds a new
+// one, --remove-case deletes by id — and unmentioned cases with their PASS status
+// are retained automatically. Unknown --case-id is rejected.
+func TestCLIQADesignIncrementalFlags(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	state := startCLIWorkflow(t, root, pkg, "cli-incremental-flags")
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
+	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "single coherent bounded unit")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full")
+	state, _ = validate.LoadRunState(root, state.RunID)
+
+	// 首次设计 2 个用例。
+	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
+	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
+		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "whitebox_delivered_test.go::TestWhiteboxDirectRules",
+		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	if len(state.QACasesByMode[""]) != 2 {
+		t.Fatalf("first design not recorded: %#v", state.QACasesByMode[""])
+	}
+
+	// 第二轮：修改 CASE-001（--case-id）、新增一个用例、删除 CASE-002（--remove-case）。
+	// 用不同 reviewer 认领，避免与首轮设计的 reviewer 身份冲突。
+	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-design")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	designDispatch = cliOpenDispatch(state, "action", "qa-design")
+	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch, "--reviewer", "incremental-round-2")
+	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
+		"--case", "direct rules v2", "--mode", "whitebox", "--procedure", "go test -run TestDirect ./...", "--oracle", "tests pass", "--test", "whitebox_delivered_test.go::TestWhiteboxDirectRules", "--case-id", "CASE-001",
+		"--case", "recovery workflow", "--mode", "blackbox", "--procedure", "trigger recovery", "--oracle", "state restored",
+		"--remove-case", "CASE-002")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	if len(state.QACasesByMode[""]) != 2 {
+		t.Fatalf("incremental merge did not retain exactly the expected set: %#v", state.QACasesByMode[""])
+	}
+	cases := state.QACasesByMode[""]
+	byID := map[string]validate.QACase{}
+	for _, testCase := range cases {
+		byID[testCase.ID] = testCase
+	}
+	first, ok := byID["CASE-001"]
+	if !ok || first.Description != "direct rules v2" || first.ReviewStatus != "PENDING" {
+		t.Fatalf("--case-id modify not applied: %#v", cases)
+	}
+	if _, leaked := byID["CASE-002"]; leaked {
+		t.Fatalf("--remove-case did not delete CASE-002: %#v", cases)
+	}
+	added, ok := byID["CASE-003"]
+	if !ok || added.Mode != "blackbox" || added.ReviewStatus != "PENDING" {
+		t.Fatalf("new case not added: %#v", cases)
+	}
+
+	// 引用不存在的 id 被拒：--case-id CASE-999 报错，状态不变。
+	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-design")
+	state, _ = validate.LoadRunState(root, state.RunID)
+	designDispatch = cliOpenDispatch(state, "action", "qa-design")
+	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch, "--reviewer", "incremental-round-3")
+	before := cliStateBytes(t, root, state.RunID)
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
+		"--case", "x", "--mode", "blackbox", "--procedure", "y", "--oracle", "z", "--case-id", "CASE-999"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "references unknown id") {
+		t.Fatalf("unknown --case-id was accepted: code=%d err=%s", code, stderr.String())
+	}
+	if cliStateBytes(t, root, state.RunID) != before {
+		t.Fatal("rejected unknown --case-id changed state")
+	}
+}

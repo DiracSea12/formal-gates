@@ -206,6 +206,111 @@ func TestWriteBlockMainThreadNonCodeAllowed(t *testing.T) {
 	}
 }
 
+// TestWriteBlockGatesReadOnlyMentionAllowed covers 改动 3（RQ-011 实现偏差修正）：
+// 命令文本提到 .gates 但只是只读查询（grep/ls/cat/find/python3 读、只读 git 查询）不再被
+// 拦——审查类代理与主线程的活动 run 下都放行。
+func TestWriteBlockGatesReadOnlyMentionAllowed(t *testing.T) {
+	root := t.TempDir()
+	writeActiveRunState(t, root)
+	for _, tc := range []struct {
+		name    string
+		command string
+		agent   string
+	}{
+		{name: "reviewer grep mentions gates", command: "grep -rn gates .gates/results/", agent: "qa-review"},
+		{name: "reviewer cat gates file", command: "cat .gates/cases/blackbox.md", agent: "product-review"},
+		{name: "reviewer ls gates dir", command: "ls -la .gates/", agent: "start-readiness"},
+		{name: "reviewer git log over gates path", command: "git log --oneline -- .gates/results/", agent: "carry"},
+		{name: "main thread python3 read gates", command: "python3 read.py .gates/cases/blackbox.md"},
+		{name: "main thread find in gates", command: "find .gates -name '*.md'"},
+		{name: "main thread read-only git status", command: "git status --short .gates/"},
+	} {
+		agentPart := ""
+		if tc.agent != "" {
+			agentPart = fmt.Sprintf(`,"agent_type":%q`, tc.agent)
+		}
+		payload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Bash","tool_input":{"command":%q}%s}`, root, tc.command, agentPart)
+		decision, err := Hook([]byte(payload))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if decision.PermissionDecision != "allow" {
+			t.Fatalf("%s: read-only command mentioning .gates was blocked: %#v", tc.name, decision)
+		}
+	}
+}
+
+// TestWriteBlockGatesRealWritesStillDenied covers 改动 3 的真写仍拦：git add/commit、
+// 输出重定向到 .gates、tee 指向 .gates 等真实写入在活动 run 下仍被拦（审查类与主线程
+// 都是）。
+func TestWriteBlockGatesRealWritesStillDenied(t *testing.T) {
+	root := t.TempDir()
+	writeActiveRunState(t, root)
+	for _, tc := range []struct {
+		name    string
+		command string
+		agent   string
+	}{
+		{name: "main thread git add gates", command: "git add .gates/results/x.json"},
+		{name: "main thread redirect to gates", command: "echo x > .gates/cases/blackbox.md"},
+		{name: "main thread append to gates", command: "echo x >> .gates/tmp/state.json"},
+		{name: "main thread tee to gates", command: "tee .gates/results/x.md"},
+		{name: "main thread git commit", command: "git commit -m 'delivery'"},
+		{name: "reviewer redirect to gates", command: "echo x > .gates/results/x.md", agent: "qa-review"},
+		{name: "reviewer tee to code file", command: "tee internal/code.go", agent: "product-review"},
+	} {
+		agentPart := ""
+		if tc.agent != "" {
+			agentPart = fmt.Sprintf(`,"agent_type":%q`, tc.agent)
+		}
+		payload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Bash","tool_input":{"command":%q}%s}`, root, tc.command, agentPart)
+		decision, err := Hook([]byte(payload))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if decision.PermissionDecision != "deny" {
+			t.Fatalf("%s: real write to .gates/code was allowed: %#v", tc.name, decision)
+		}
+	}
+}
+
+// TestGatesMentionNotTreatedAsWrite covers 改动 3 的最低层：commandWritesFiles 与
+// bashWriteTargetsCodeOrState 不再以命令文本含 .gates 子串判写入——只读查询（提 .gates）
+// 不算写，真实写目标（git/tee/重定向到 .gates）仍算写。
+func TestGatesMentionNotTreatedAsWrite(t *testing.T) {
+	readOnly := []string{
+		"grep -rn gates .gates/",
+		"ls -la .gates/",
+		"cat .gates/cases/blackbox.md",
+		"git log --oneline -- .gates/results/",
+		"find .gates -name '*.md'",
+		"python3 read.py .gates/cases/blackbox.md",
+	}
+	for _, cmd := range readOnly {
+		if commandWritesFiles(cmd) {
+			t.Fatalf("read-only command mentioning .gates misjudged as a write: %q", cmd)
+		}
+		if bashWriteTargetsCodeOrState(cmd) {
+			t.Fatalf("read-only command mentioning .gates misjudged as a code/state write: %q", cmd)
+		}
+	}
+	writing := []string{
+		"git add .gates/results/x.json",
+		"git commit -m x",
+		"echo x > .gates/cases/blackbox.md",
+		"tee .gates/results/x.md",
+		"echo x > internal/code.go",
+	}
+	for _, cmd := range writing {
+		if !commandWritesFiles(cmd) {
+			t.Fatalf("real write to .gates/code not detected: %q", cmd)
+		}
+		if !bashWriteTargetsCodeOrState(cmd) {
+			t.Fatalf("real write to .gates/code not detected by main-thread judge: %q", cmd)
+		}
+	}
+}
+
 // writeActiveRunState writes a minimal active run state carrying a registered
 // requirement artifact set (requirements.md, design.md) at root, matching the
 // shape the hook probes.

@@ -179,14 +179,19 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
 
 1. 先读 `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并验证细节也见该
    节（本示例不分片）。
-2. 并行准备：`workflow prepare-action --action qa-execution` 和对每个已发现门
+2. 黑盒 QA 用例在隔离工作区按**增量**设计：`qa-design` 只返回变更（新增不带 id、修改
+   用 `--case-id`、删除用 `--remove-case`、整体替换用 `--replace-all`），未提及的既有
+   用例与其 PASS 状态自动保留；每轮记录后用例镜像到隔离工作区
+   `.gates/cases/blackbox.md`（主干封板前不可见）。`qa-review` 审查完整合并集（提示词
+   注入本轮变更清单）。
+3. 并行准备：`workflow prepare-action --action qa-execution` 和对每个已发现门
    `prepare-gate --gate <id>`。开发后阶段并行推进黑盒 QA 执行、白盒 QA 与各门审查。
-3. 每个门都用全新零上下文审查者，`claim-dispatch` 认领（生命周期检查点）。门任务组
+4. 每个门都用全新零上下文审查者，`claim-dispatch` 认领（生命周期检查点）。门任务组
    装、QA 审查者输入、`compared` 快照对校验等规则见 SKILL.md「独立派发」「结果校验
    与修复上限」与 formal-flow「开发后审查」。
-4. 记录：`workflow qa-execution --case-result ...` 与
+5. 记录：`workflow qa-execution --case-result ...` 与
    `workflow record-gate --gate <id> --status PASS --compared <base>..<current>`。
-5. 状态询问只能询问进度，并明确告知审查者继续直到所有分配检查完成。
+6. 状态询问只能询问进度，并明确告知审查者继续直到所有分配检查完成。
 
 ## 13. 修复与继承判定（Step 8）
 
@@ -207,6 +212,7 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
 1. 先读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 2. 汇总前后各确认一次当前 VCS 标识，再 `workflow seal --run-id tdo-archive-001`；只有
    当每个被选中的结果都通过、或已获得允许的授权之后才 Seal。Seal 跳过与跳过授权规
-   则见该节与 SKILL.md 第 9 步。
+   则见该节与 SKILL.md 第 9 步。Seal 同时把已批准黑盒用例从隔离工作区落盘合并回主干
+   `.gates/results/tdo-archive-001.blackbox-cases.md`（本 run 的黑盒用例交付物）。
 3. Seal 后该快照的结论即最终。中断的 run 用 `workflow resume` 继续；需要作废则
    `workflow abort`。

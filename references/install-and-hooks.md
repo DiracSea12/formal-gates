@@ -111,7 +111,11 @@ run 状态的直接写入（Edit/Write/MultiEdit、git commit、写文件 Bash�
 下按调用者身份阻断——主线程（payload 无 agent 身份）与审查类代理被阻断，formal-gates
 CLI 命令、只读命令、development-worker、qa-design 与主代理对已登记需求/设计文档的
 编辑放行；无活动 run 放行、不干扰普通项目。判定按身份（`agent_type`）不按文件路径，
-代理类型定义见 `agents/agent-types.md`。实机阻断仍须在同一 host 上经 live canary 验证。
+代理类型定义见 `agents/agent-types.md`。Bash 写入判定只看**真实写目标**：命令文本只是
+提到 `.gates` 但只读（grep/ls/cat/find/python3 读、只读 git 查询如 `git status`
+`git log -- <path>`）一律放行；真实写（`git add`/`git commit`、`> .gates/...`、
+`tee .gates/...`）仍阻断，主线程与审查类代理一致。实机阻断仍须在同一 host 上经 live
+canary 验证。
 
 安装器还会为 Claude Code 和 Codex 配置 `SubagentStart` 与 `SubagentStop`，为
 Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷经 stdin 发

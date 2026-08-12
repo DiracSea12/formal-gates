@@ -84,6 +84,10 @@ type RunState struct {
 	// QAReviewByMode 一致，一个 mode 的 review FAIL 重置设计 SHALL NOT 把另一 mode 的
 	// 设计重置为 PENDING。
 	QADesignByMode map[string]ActionResult `json:"qaDesignByMode"`
+	// QADesignChangesByMode 记录每个 QA 派发 mode 最近一轮 qa-design 增量记录的变更
+	// （新增/修改/删除的用例 id），供 qa-review 提示词注入"本轮变更"上下文。设计轮记录
+	// 时写入，需求作废/路线不含黑盒时清空。
+	QADesignChangesByMode map[string]QADesignChange `json:"qaDesignChangesByMode,omitempty"`
 	Gates          map[string]GateResult   `json:"gates"`
 	Carry                  map[string]CarryResult        `json:"carry"`
 	Dispatches             map[string]PreparedDispatch   `json:"dispatches"`
@@ -280,6 +284,15 @@ type QACase struct {
 	ReviewStatus string `json:"reviewStatus"`
 }
 
+// QADesignChange 记录一轮 qa-design 增量记录对本 mode 用例集的变更：Added/Modified/
+// Removed 分别是本轮新增、修改、删除的用例 id。qa-review 提示词把它注入"本轮变更"上下文，
+// 使审查看到本轮的变更（新增/修改/删除）而不必靠对比两份完整集合。
+type QADesignChange struct {
+	Added    []string `json:"added,omitempty"`
+	Modified []string `json:"modified,omitempty"`
+	Removed  []string `json:"removed,omitempty"`
+}
+
 type RunSummary struct {
 	RunID                string                       `json:"runId"`
 	Flow                 string                       `json:"flow"`
@@ -311,7 +324,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -388,6 +401,9 @@ func SaveRunState(root string, state RunState) error {
 	}
 	if state.QADesignByMode == nil {
 		state.QADesignByMode = map[string]ActionResult{}
+	}
+	if state.QADesignChangesByMode == nil {
+		state.QADesignChangesByMode = map[string]QADesignChange{}
 	}
 	// 写盘前先置空自身、以 json.MarshalIndent 规范化序列化、对规范化内容计算 sha256，
 	// 回填 StateIntegrity 后再写盘。LoadRunState 校验时按同样方式置空重算比对，任何非 CLI

@@ -246,12 +246,14 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revised := []QACaseInput{cases[0], {Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the public CLI against a built snapshot", Oracle: "observable output matches"}}
+	// 增量契约：只返回变更。CASE-001（已 PASS）不提及即自动保留，只有被 FAIL 的
+	// CASE-002 用 --case-id 引用、修改其规格以回应 review 发现（id 必须已存在且同 mode）。
+	revised := []QACaseInput{{CaseID: "CASE-002", Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the public CLI against a built snapshot", Oracle: "observable output matches"}}
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.qaCases("")[0].ID != "CASE-001" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ReviewStatus != "PENDING" {
+	if state.qaCases("")[0].ID != "CASE-001" || state.qaCases("")[0].ReviewStatus != "PASS" || state.qaCases("")[1].ID != "CASE-002" || state.qaCases("")[1].ReviewStatus != "PENDING" {
 		t.Fatalf("exact approval was not preserved: %#v", state.allQACases())
 	}
 	reviewPrompt, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, "")
@@ -429,14 +431,16 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	before := stateBytes(t, root, state.RunID)
-	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), ""); err == nil || !strings.Contains(err.Error(), "add or revise a case") {
+	// 增量契约：已存在的用例不带 id 重提被判语义重复，拒绝并提示用 --case-id 修改——
+	// 未变更的 all-PASS 返工同样被拒绝（两个已存在的用例都被判重复）。
+	if _, err := RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), ""); err == nil || !strings.Contains(err.Error(), "duplicates existing case") {
 		t.Fatalf("unchanged all-PASS QA rework was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
 		t.Fatal("rejected QA rework changed state")
 	}
-	revised := baselineCases()
-	revised = append(revised, QACaseInput{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run the delivered failure-path test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxFailurePaths"})
+	// 增量契约：只提交新增用例，既有两个用例未提及自动保留。
+	revised := []QACaseInput{{Mode: "whitebox", Description: "failure paths are covered", Procedure: "run the delivered failure-path test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxFailurePaths"}}
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, revised, "")
 	if err != nil {
 		t.Fatal(err)
@@ -506,7 +510,9 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 		t.Fatal(err)
 	}
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, baselineCases(), "")
+	// 增量契约：只删除被指为重复的 CASE-003（--remove-case 引用既有 id），其余用例未提及
+	// 自动保留（含已批准状态）。
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, nil, "", QADesignRecordOptions{RemoveCases: []string{"CASE-003"}})
 	if err != nil {
 		t.Fatalf("removal-only duplicate correction was rejected: %v", err)
 	}
@@ -3346,10 +3352,10 @@ func TestQADesignReRecordsBeforeReviewDispatch(t *testing.T) {
 	if len(state.allQACases()) != 1 || state.qaCases("")[0].ID != "CASE-001" {
 		t.Fatalf("partial design not recorded: %#v", state.allQACases())
 	}
-	// review 派发尚未准备：可继续调用 qa-design 追加/更新用例集（保留既有用例、增量补全）。
+	// review 派发尚未准备：可继续调用 qa-design 追加用例（既有 CASE-001 未提及自动保留，
+	// 只新增黑盒用例）。
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
-		{Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"},
 		{Mode: "blackbox", Description: "public workflow succeeds", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"},
 	}, "")
 	if err != nil {

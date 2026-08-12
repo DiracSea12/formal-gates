@@ -94,7 +94,9 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
 5. **开发。** 运行 `development-worker` 准备命令，记录开发开始并锁定路线。黑盒 QA 与
    开发并行：开发开始不再要求黑盒 qa-review PASS，黑盒 qa-design/qa-review/返修在独立
    QA 隔离工作区（恒等于基线、不含本次开发代码）中与开发并发推进；工作区创建/登记/校
-   验/清空/重建机制见 `references/formal-flow.md`「开发之前」。中断后可继续同一个
+   验/清空/重建机制见 `references/formal-flow.md`「开发之前」。黑盒 QA 用例文件在隔离
+   期间只存在于隔离工作区的 `.gates/cases/blackbox.md`（run-state 的派生 mirror，主干不
+   可见），seal 时再合回主干（见第 9 步）。中断后可继续同一个
    PREPARED 任务，只重新组装提示词，开始边界不变。开发子代理与审查者完全隔离，任务内
    容见『独立派发』；子代理只做已确认范围内的工作——新增或跟踪每条交付路径时先加入
    VCS，返回前核查基线到当前的完整 diff。执行本步前必读 `references/formal-flow.md`
@@ -104,8 +106,12 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
    黑盒 qa-review PASS 两边都完成**、`--user-requested` 手动放行、开发/修复派发认领放
    宽）统一持有在 `references/formal-flow.md`「开发与快照」；执行本步前必读该节。
 7. **开发后审查。** 并行派出黑盒 QA 执行、白盒 QA 与各门审查。QA 只用已批准测试用例；
-   每个门只看基线到当前的完整 diff，各自独立评审、互不干扰。审查代理不直接写流程状态，
-   由主代理校验后统一记录。**QA 执行重跑前先记 scope 决策**：某 mode 已存在更早快照的权威
+   QA 设计为**增量**：`qa-design` 只返回变更（新增用例不带 id、修改用 `--case-id`、删除
+   用 `--remove-case`、整体替换用 `--replace-all`），未提及用例及其 PASS 状态自动保留；
+   `qa-review` 审查完整合并集（提示词注入本轮变更清单）。黑盒 qa-review 读取隔离工作区
+   的用例文件（`.gates/cases/blackbox.md`）审查。每个门只看基线到当前的完整 diff，各自
+   独立评审、互不干扰。审查代理不直接写流程状态，由主代理校验后统一记录。**QA 执行重跑
+   前先记 scope 决策**：某 mode 已存在更早快照的权威
    执行结果（重跑）时，host 在进入执行前询问用户"全量重跑 vs 只跑受影响"并给推荐，scope
    决策命令形式（`qa-execution-scope` 与 FULL/AFFECTED 记录）由 CLI 强制、唯一持有在
    `references/formal-flow.md`「开发后审查」；首次执行不要求、默认全量。黑盒/白盒各自独
@@ -123,9 +129,11 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
 9. **Seal。** 汇总前后各确认一次当前 VCS 标识。Git run 在基线→当前含 >1 条提交时，
    seal 自动把该范围压缩为单条提交（保留最终树，作为 seal 最后一步 VCS 操作，压缩前工
    作树必须干净），压缩消息经 `--squash-message` 传入；单条/空范围不操作、SVN/P4 不压
-   缩。分片实例的封板不产出独立封板文件，成本投影并入主干最终封板（机制见
-   `references/formal-flow.md`「成本计量」）。执行本步前必读
-   `references/formal-flow.md`「继承判定、修复授权与 Seal」。
+   缩。黑盒已批准用例在 seal 时**落盘合并回主干**：`qa-design` 期间只镜像在隔离工作区
+   （`.gates/cases/blackbox.md`），封板时写出到主干
+   `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一）作为交付物；分片实例不
+   落盘、成本投影并入主干最终封板（机制见 `references/formal-flow.md`「成本计量」）。执
+   行本步前必读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 
 - `workflow show`：查看当前流程状态。
 - `workflow resume`：从中断处继续（备用路径）；中断的派发保持 `PENDING`，已完成结果
@@ -238,11 +246,18 @@ QA 审查者输入 = 已确认需求 + CLI 组装的完整候选用例集，不�
 QA 设计、QA 审查、QA 执行、需求澄清、产品审、开发前技术检查、继承判定、开发和 Seal
 都是流程动作，不是门文件。
 
-QA 设计在 review 开始前可反复补全：某 mode 的 `qa-design` 记录后、该 mode 的
-`qa-review` 派发尚未准备时，可再次调用 `qa-design` 追加/更新用例集（保留既有已批准用
-例、增量补全）；只有该 mode 的 `qa-review` 派发准备后设计才锁定、重记录被拒。黑盒与
-白盒的用例按 mode 分开存储，`qa-design` 记录轮只新增/更新/删除本派发 mode 的用例，
-不会替换或清除另一 mode 的既有用例（含其 review PASS 状态与已记录执行结果）。
+QA 设计为**真增量**：`qa-design` 只返回本轮变更——新增用例不带 id（CLI 分配）、修改既有
+用例用 `--case-id <id>`（id 必须存在于同 mode，否则报错）、删除用 `--remove-case <id>`
+（id 必须存在）、整体替换用 `--replace-all`（替换整个用例集；传空集即清空该 mode 的用
+例）。未提及的既有用例与其 review PASS 状态**自动保留，遗漏绝不清除**；`--case-id` 与
+`--remove-case` 不能与 `--replace-all` 同轮混用。语义重复（同 mode 同描述/过程/预期）的
+无 id 提交报错并提示改用修改语义。`qa-review` 审查的是完整合并集（提示词注入本轮变更清
+单：新增/修改/删除）。某 mode 的 `qa-design` 记录后、该 mode 的 `qa-review` 派发尚未准
+备时，可再次调用 `qa-design` 增量补全；只有该 mode 的 `qa-review` 派发准备后设计才锁
+定、重记录被拒。黑盒与白盒的用例按 mode 分开存储，`qa-design` 记录轮只新增/更新/删除
+本派发 mode 的用例，不会替换或清除另一 mode 的既有用例（含其 review PASS 状态与已记录
+执行结果）。黑盒用例同时镜像到隔离工作区 `.gates/cases/blackbox.md`（主工作区在封板前
+不可见），seal 时落盘回主干 `.gates/results/<run-id>.blackbox-cases.md`。
 
 **状态与 VCS**
 

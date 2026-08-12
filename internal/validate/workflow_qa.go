@@ -2,17 +2,40 @@ package validate
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
 
-// QACaseInput 是一次 qa-design 记录轮输入的用例。Test 是白盒用例对应的测试
+// QACaseInput 是一次 qa-design 记录轮输入的用例。CaseID 是增量契约的引用键：
+// 空串表示新增用例（由 CLI 分配全局唯一 id）；非空表示修改既有用例（id 必须已存在且属于
+// 本派发 mode，否则 CLI 拒绝并报错，不静默当新用例造成重复）。无 id 提交的规格与既有用例
+// 语义重复（description+procedure+oracle 一致）时同样报错拒绝并提示改用修改语义。删除
+// 用例走 --remove-case，不做删除语义重载。Test 是白盒用例对应的测试
 // 引用 = "<文件路径>::<函数名>"：文件路径定位到交付测试代码所在文件、函数名定位到该文件
 // 里的测试，两者都是不透明字符串、CLI 不解析代码内容。白盒设计者独立编写结构测试代码，
 // 并在 CLI 记录用例时用 --test 指定；CLI 记录时只校验引用非空、且同一引用不被两条白盒
 // 用例共用（一个测试实现一个用例），存在性与对应性由 qa-review（读代码核对）与
 // qa-execution（实际运行）验证，不满足即拒绝记录。黑盒用例不需要 Test。
-type QACaseInput struct{ Mode, Description, Procedure, Oracle, Test string }
+type QACaseInput struct {
+	CaseID      string
+	Mode        string
+	Description string
+	Procedure   string
+	Oracle      string
+	Test        string
+}
+
+// QADesignRecordOptions 是一次 qa-design 增量记录的显式操作选项。缺省（零值）为纯增量：
+// 只合并提交的变更，未提及用例及其 PASS 状态自动保留、不再清除。RemoveCases 显式删除
+// 指定用例 id（每个 id 必须存在，否则 CLI 拒绝并报错）；ReplaceAll 整体替换本 mode 用例集
+// （替换空集即清空该 mode，对应"整体工作流变更时换整套"的显式逃生门），与 RemoveCases
+// 互斥。
+type QADesignRecordOptions struct {
+	RemoveCases []string
+	ReplaceAll  bool
+}
 
 type QAReviewInput struct{ CaseID, Outcome, Reason string }
 
@@ -142,9 +165,11 @@ func discardUnmatchedQADesign(state *RunState) {
 	if isSelected(*state, blackboxQAID) || isSelected(*state, legacyQAID) {
 		return
 	}
-	// 废弃快速路径的投机黑盒设计时清空全部按 mode 存储的用例与执行结果。
+	// 废弃快速路径的投机黑盒设计时清空全部按 mode 存储的用例、执行结果与增量变更留痕
+	// （路线不含黑盒后，本轮变更列表对后续 review 无意义、一并清空）。
 	state.QACasesByMode = map[string][]QACase{}
 	state.QAExecutionByMode = map[string]QAExecutionResult{}
+	state.QADesignChangesByMode = map[string]QADesignChange{}
 	state.setQADesign("", ActionResult{Status: "PENDING"})
 	state.setQAReview("", ActionResult{Status: "PENDING"})
 	// 最终路线不含黑盒时设计废弃，黑盒隔离工作区随之移除（清空登记，host 重建时才需要）。
@@ -395,7 +420,49 @@ func formatQACase(testCase QACase, includeReview bool) string {
 	return value
 }
 
-func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseInput, runtimeError string) (RunState, error) {
+// blackboxCaseMirrorPath returns the QA isolation worktree's blackbox case mirror
+// file path — the derived view of the run-state's blackbox cases the blackbox
+// qa-review reads for review during isolation (需求 1：文件在隔离区里、黑盒阶段主干上
+// 看不到，seal 时再物化合回主干）。
+func blackboxCaseMirrorPath(worktree string) string {
+	return filepath.Join(cleanWorktree(worktree), ".gates", "cases", "blackbox.md")
+}
+
+// blackboxCasesMarkdown renders a blackbox case set as a self-contained markdown
+// document (a derived view of the run state). The same renderer is used for the
+// isolation worktree mirror (blackbox qa-review reads it) and the seal-time
+// materialization in .gates/results/, keeping the two views byte-identical.
+func blackboxCasesMarkdown(runID string, cases []QACase) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Blackbox QA cases (run: %s)\n\n", runID)
+	b.WriteString("Derived from the run state at qa-design record time. Review these cases against the current confirmed requirement.\n\n")
+	for _, testCase := range cases {
+		b.WriteString(formatQACase(testCase, true))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+// writeBlackboxCaseMirror derives the blackbox cases from the run state and writes
+// them as the isolation worktree's case file (single source, no dual drift).
+// RecordQADesign calls it after every blackbox design round so the mirror always
+// reflects the current run-state cases; each round rewrites the file. The file is
+// derived working-tree state in the isolation worktree only — the main worktree
+// never sees it during the blackbox phase.
+func writeBlackboxCaseMirror(state RunState) error {
+	path := blackboxCaseMirrorPath(state.QAWorktree)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	content := blackboxCasesMarkdown(state.RunID, state.qaModeCases("blackbox"))
+	return writeAtomic(path, []byte(content), 0o600)
+}
+
+func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseInput, runtimeError string, opts ...QADesignRecordOptions) (RunState, error) {
+	options := QADesignRecordOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
 	return openDispatchRecord(root, packageRoot, runID, dispatchID, recordDispatchOptions{
 		targetKind:             "action",
 		target:                 "qa-design",
@@ -406,7 +473,7 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
 		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
-			if len(cases) != 0 {
+			if len(cases) != 0 || len(options.RemoveCases) != 0 || options.ReplaceAll {
 				return fmt.Errorf("QA Design runtime error cannot include cases")
 			}
 			// 只重置本派发 mode 的执行结果，另一 mode 的执行结果不受影响。
@@ -416,42 +483,67 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			completeDispatch(state, dispatch.ID)
 			return nil
 		}
-		// 空用例集不再被拒绝：被选中模式零用例是覆盖缺失，由 qa-review 的 set-level 覆盖
-		// 判定承担（P1、阻塞），不设机械化质量下限。合并 QA 的零用例既有例外保留。空设计
-		// 记录 PASS 后进入 QA Review（无待定用例，只做集合覆盖判定）。
-		if len(cases) == 0 {
-			message := ""
-			if isMergeVerification(*state) {
-				// 合并 QA 的用例集可为零/极少：留痕注明"切片基本独立、无跨切片交互用例"。
-				message = "切片基本独立、无跨切片交互用例"
-			}
-			// 只清空本派发 mode 的用例列表与执行结果，不触碰另一 mode 的既有用例/结果。
-			state.setQACases(dispatch.Mode, []QACase{})
-			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
-			// 设计 PASS 记录到本 mode，并把本 mode 的 review 重置为 PENDING（不触碰
-			// 另一 mode 的 review 判定）。
-			state.setQADesign(dispatch.Mode, ActionResult{Status: "PASS", Message: message, DispatchID: dispatch.ID})
-			state.setQAReview(dispatch.Mode, ActionResult{Status: "PENDING"})
-			completeDispatch(state, dispatch.ID)
-			return nil
+		// 显式操作互斥：整体替换与按 id 删除语义冲突，不能同时给出。
+		if options.ReplaceAll && len(options.RemoveCases) != 0 {
+			return fmt.Errorf("--replace-all cannot be combined with --remove-case")
 		}
-		// 设计轮只对本派发 mode 的用例列表做增量替换——从该 mode 自己的存储列表取
-		// 既有用例（保留已批准用例、增量补全），另一 mode 的列表保持不动。
+		// 设计轮只对本派发 mode 的用例列表做增量合并——从该 mode 自己的存储列表取
+		// 既有用例（未提及即保留、含已批准用例），另一 mode 的列表保持不动。
 		priorCases := state.qaCases(dispatch.Mode)
-		seen := map[string]bool{}
-		priorByKey := map[string]QACase{}
 		// 用例 ID 跨所有 mode 全局唯一（执行记录 / AFFECTED 子集按 ID 索引）：新 ID 生成
-		// 时保留全部 mode 已占用的 ID，避免不同 mode 的用例撞号；priorByKey 只从本 mode
-		// 的既有用例取，保证只复用/保留本 mode 的已批准用例。
+		// 时保留全部 mode 已占用的 ID，避免不同 mode 的用例撞号。
 		usedIDs := map[string]bool{}
 		for _, prior := range state.allQACases() {
 			usedIDs[prior.ID] = true
 		}
-		for _, prior := range priorCases {
-			priorByKey[qaCaseSemanticKeyWithTest(prior.Mode, prior.Description, prior.Procedure, prior.Oracle, prior.Test)] = prior
+		// --remove-case 校验：每个 id 必须存在于本派发 mode 的既有用例，不存在即报错。
+		removed := map[string]bool{}
+		for _, raw := range options.RemoveCases {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			exists := false
+			for _, testCase := range priorCases {
+				if testCase.ID == id {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				return fmt.Errorf("--remove-case %s does not exist in this mode's QA cases", id)
+			}
+			removed[id] = true
+		}
+		// 基础集：增量 = 既有用例减去显式删除（顺序保留）；整体替换 = 从空集重建
+		// （替换空集即清空该 mode，显式逃生门）。
+		base := make([]QACase, 0, len(priorCases))
+		removedAny := false
+		for _, testCase := range priorCases {
+			if removed[testCase.ID] {
+				removedAny = true
+				continue
+			}
+			base = append(base, testCase)
+		}
+		if options.ReplaceAll {
+			base = nil
+			removedAny = true // 整体替换本身即实质变更
+		}
+		// 语义重复键：无 id 提交的规格与既有用例 description+procedure+oracle 一致即判重复，
+		// 拒绝并提示改用修改语义（增量契约的 id 失配行为定死，不分配新 id 造成重复）。
+		existingKeys := map[string]string{}
+		byID := map[string]int{}
+		for index, testCase := range base {
+			existingKeys[qaCaseSemanticKey(testCase.Mode, testCase.Description, testCase.Procedure, testCase.Oracle)] = testCase.ID
+			byID[testCase.ID] = index
 		}
 		nextID := 1
-		updated := make([]QACase, 0, len(cases))
+		seen := map[string]bool{}
+		// substantiveRevised 标记本轮是否有把规格实质改掉的 --case-id 修改（内容与修改前
+		// 不同才算实质修订）；仅重交相同规格不算实质变更，在 review FAIL 的返工约束下仍被拒。
+		substantiveRevised := false
+		var addedIDs, modifiedIDs []string
 		for index, item := range cases {
 			normalized := QACase{
 				Mode:        strings.ToLower(strings.TrimSpace(item.Mode)),
@@ -478,33 +570,56 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			// 最小校验：引用非空、且同一引用不被两条白盒用例共用（一个测试实现一个用例）；
 			// 存在性与对应性由 qa-review（读代码核对）与 qa-execution（实际运行）验证。
 			// 黑盒用例无结构测试绑定、不要求 Test。不满足即拒绝记录。
-			if normalized.Mode == "whitebox" {
-				if normalized.Test == "" {
-					return fmt.Errorf("QA case %d (whitebox) requires a --test <file>::<function> reference locating the whitebox designer's delivered test", index+1)
-				}
+			if normalized.Mode == "whitebox" && normalized.Test == "" {
+				return fmt.Errorf("QA case %d (whitebox) requires a --test <file>::<function> reference locating the whitebox designer's delivered test", index+1)
 			}
-			key := qaCaseSemanticKeyWithTest(normalized.Mode, normalized.Description, normalized.Procedure, normalized.Oracle, normalized.Test)
+			caseID := strings.TrimSpace(item.CaseID)
+			if caseID != "" {
+				// 修改既有用例：id 必须已存在且属于本派发 mode，否则拒绝并报错（不静默
+				// 当新用例）。修改的用例必须重新审查（ReviewStatus 置回 PENDING）。
+				idx, ok := byID[caseID]
+				if !ok {
+					return fmt.Errorf("QA case %d references unknown id %s; modified or removed cases must reference an existing CASE id in this mode", index+1, caseID)
+				}
+				if normalized.Mode != base[idx].Mode {
+					return fmt.Errorf("QA case %d mode %q does not match case %s's mode %q", index+1, normalized.Mode, caseID, base[idx].Mode)
+				}
+				if seen[caseID] {
+					return fmt.Errorf("duplicate modification of QA case %s", caseID)
+				}
+				seen[caseID] = true
+				// 实质修订判定：--case-id 修改把规格（description/procedure/oracle，白盒
+				// 含 test 绑定）改成与修改前不同才计为实质修订；内容相同的重交不是实质变更，
+				// 在 review FAIL 的返工约束下仍被拒绝。
+				if normalized.Description != base[idx].Description || normalized.Procedure != base[idx].Procedure || normalized.Oracle != base[idx].Oracle || normalized.Test != base[idx].Test {
+					substantiveRevised = true
+				}
+				base[idx].Description, base[idx].Procedure, base[idx].Oracle, base[idx].Test = normalized.Description, normalized.Procedure, normalized.Oracle, normalized.Test
+				base[idx].ReviewStatus = "PENDING"
+				modifiedIDs = append(modifiedIDs, caseID)
+				continue
+			}
+			// 新增用例：无 id、由 CLI 分配全局唯一 id；语义重复检查命中即拒绝。
+			key := qaCaseSemanticKey(normalized.Mode, normalized.Description, normalized.Procedure, normalized.Oracle)
+			if dupID, dup := existingKeys[key]; dup {
+				return fmt.Errorf("QA case %d duplicates existing case %s (identical description, procedure and oracle); use --case-id %s to modify it instead of resubmitting it as a new case", index+1, dupID, dupID)
+			}
 			if seen[key] {
 				return fmt.Errorf("duplicate QA case %d", index+1)
 			}
 			seen[key] = true
-			if prior, ok := priorByKey[key]; ok {
-				normalized.ID = prior.ID
-				if prior.ReviewStatus == "PASS" {
-					normalized.ReviewStatus = "PASS"
-				} else {
-					normalized.ReviewStatus = "PENDING"
-				}
-			} else {
-				for usedIDs[fmt.Sprintf("CASE-%03d", nextID)] {
-					nextID++
-				}
-				normalized.ID, normalized.ReviewStatus = fmt.Sprintf("CASE-%03d", nextID), "PENDING"
-				usedIDs[normalized.ID] = true
+			for usedIDs[fmt.Sprintf("CASE-%03d", nextID)] {
 				nextID++
 			}
-			updated = append(updated, normalized)
+			normalized.ID, normalized.ReviewStatus = fmt.Sprintf("CASE-%03d", nextID), "PENDING"
+			usedIDs[normalized.ID] = true
+			nextID++
+			byID[normalized.ID] = len(base)
+			existingKeys[key] = normalized.ID
+			base = append(base, normalized)
+			addedIDs = append(addedIDs, normalized.ID)
 		}
+		updated := base
 		// 1:1：同一测试引用（<文件>::<函数>）不能被两条白盒用例共用——一个测试实现
 		// 一个用例。对本次记录后的完整用例集检查（含保留的既有用例），撞引用即拒绝记录。
 		// 黑盒用例无测试引用，不参与。
@@ -523,26 +638,47 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			refOwner[ref] = testCase.ID
 		}
 		// 返工约束只按本派发 mode 的 review FAIL 检查，不读另一 mode 的 review 判定。
+		// review FAIL（用例级 FAIL——至少一条用例被判 FAIL；或集合级 FAIL——各用例仍
+		// PASS 但审查动作整体 FAIL）时，无实质变更（无新增、无实质修订、无删除、非整体
+		// 替换）的 qa-design 记录被拒绝，必须新增或实质修订用例、或显式
+		// --remove-case/--replace-all。用例级 FAIL 时被 FAIL 用例的 ReviewStatus 已置为
+		// FAIL，不能以"还有未 PASS 用例"作为放行理由——那正是返工必须改动的信号。
 		if state.qaReview(dispatch.Mode).Status == "FAIL" {
-			pending := false
-			for _, testCase := range updated {
-				if testCase.ReviewStatus != "PASS" {
-					pending = true
-					break
-				}
-			}
-			if !pending {
-				if len(updated) == len(priorCases) {
-					return fmt.Errorf("QA Design rework must add or revise a case, or remove an obsolete or duplicated case")
-				}
+			if len(addedIDs) == 0 && !substantiveRevised && !removedAny {
+				return fmt.Errorf("QA Design rework must add or revise a case, or remove an obsolete or duplicated case")
 			}
 		}
 		state.setQACases(dispatch.Mode, updated)
 		// 设计轮只重置本派发 mode 的执行结果——白盒设计不清黑盒已记录的执行结果。
 		state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
+		// 空增量记录（合并 QA 的零用例既有例外）：留痕注明"切片基本独立、无跨切片交互用例"。
+		message := ""
+		if isMergeVerification(*state) && len(updated) == 0 && !removedAny {
+			message = "切片基本独立、无跨切片交互用例"
+		}
 		// 设计 PASS 记录到本 mode、本 mode 的 review 重置为 PENDING，另一 mode 不动。
-		state.setQADesign(dispatch.Mode, ActionResult{Status: "PASS", DispatchID: dispatch.ID})
+		state.setQADesign(dispatch.Mode, ActionResult{Status: "PASS", Message: message, DispatchID: dispatch.ID})
 		state.setQAReview(dispatch.Mode, ActionResult{Status: "PENDING"})
+		// 记录本轮增量变更（新增/修改/删除的用例 id），供 qa-review 提示词注入"本轮变更"
+		// 上下文，使审查保持对完整合并集的感知。
+		if state.QADesignChangesByMode == nil {
+			state.QADesignChangesByMode = map[string]QADesignChange{}
+		}
+		removedIDs := make([]string, 0, len(removed))
+		for id := range removed {
+			removedIDs = append(removedIDs, id)
+		}
+		sort.Strings(removedIDs)
+		state.QADesignChangesByMode[dispatch.Mode] = QADesignChange{Added: addedIDs, Modified: modifiedIDs, Removed: removedIDs}
+		// 黑盒设计轮：把 run-state 的黑盒用例 mirror 写入隔离工作区的用例文件
+		// （.gates/cases/blackbox.md），供黑盒 qa-review 读取审查。仅 blackbox mode、仅
+		// 隔离工作区已登记时写入；mirror 是 run-state 的派生视图（单一来源），每轮设计
+		// 重写，seal 时由 CLI 物化合回主干、不依赖工作区残留。
+		if dispatch.Mode == "blackbox" && strings.TrimSpace(state.QAWorktree) != "" {
+			if err := writeBlackboxCaseMirror(*state); err != nil {
+				return err
+			}
+		}
 		completeDispatch(state, dispatch.ID)
 		return nil
 	})

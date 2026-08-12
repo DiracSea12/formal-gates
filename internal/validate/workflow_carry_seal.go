@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"formal-gates/internal/cost"
+	"formal-gates/internal/lifecycle"
 )
 
 type CarryInput struct{ GateID, Decision, Message string }
@@ -355,6 +356,13 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 		if err := SaveRunSummary(root, state); err != nil {
 			return RunSummary{}, err
 		}
+		// 黑盒用例 seal 物化（需求 1）：已批准 blackbox 用例从 run-state 物化到主工作区
+		// .gates/results/<run-id>.blackbox-cases.md，与 seal ledger 同目录、同交付行为
+		// （三 VCS 一致）。分片实例封板不产独立 ledger 文件、不物化。物化读 run-state
+		// （单一来源），不依赖隔离工作区残留；CLI 完成、不经 agent 手动合回。
+		if err := materializeBlackboxCases(root, state); err != nil {
+			return RunSummary{}, err
+		}
 	}
 	summary := runSummary(state)
 	if err := DeleteRun(root, runID); err != nil {
@@ -404,6 +412,31 @@ func mergeSliceCosts(root string, state *RunState) error {
 		}
 	}
 	return nil
+}
+
+// materializeBlackboxCases writes the run's approved blackbox QA cases to the
+// main worktree's .gates/results/ ledger directory as <run-id>.blackbox-cases.md
+// at seal time (需求 1 的合回时点：黑盒用例执行结束才回主干). The file is derived from
+// the run state (single source), so it survives the isolation worktree being
+// cleared after a PASSing blackbox review. It lives next to the seal ledger
+// (.gates/results/<run-id>.json) with the same delivery behavior across
+// git/svn/p4. Slice instances do not materialize (only the non-slice Seal branch
+// calls this); a run with no approved blackbox cases writes nothing.
+func materializeBlackboxCases(root string, state RunState) error {
+	var approved []QACase
+	for _, testCase := range state.qaModeCases("blackbox") {
+		if testCase.ReviewStatus == "PASS" {
+			approved = append(approved, testCase)
+		}
+	}
+	if len(approved) == 0 {
+		return nil
+	}
+	path := filepath.Join(lifecycle.CleanRoot(root), ".gates", "results", state.RunID+".blackbox-cases.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeAtomic(path, []byte(blackboxCasesMarkdown(state.RunID, approved)), 0o600)
 }
 
 func finishRun(root, packageRoot, runID, status string) (RunSummary, error) {
