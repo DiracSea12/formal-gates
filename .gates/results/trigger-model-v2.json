@@ -1,0 +1,517 @@
+{
+  "runId": "trigger-model-v2",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "f2c2a8f5fdde7bd192f5cac72ba59b218ab8fb4e13368974ae29048a6be11338",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "84562a6981775ab062a6ad88458f15904c091211b62ae53925145a5eaa5fcf72",
+  "vcs": "git",
+  "baseSnapshot": "4f65512001fd800718dbc2542090c6db6c97bad6",
+  "currentSnapshot": "f140dce7c1b1bbcf4501164a51e4ab34269722f9",
+  "requirementArtifacts": [
+    {
+      "path": "TRIGGER-MODEL-V2-REQUIREMENT.md",
+      "revision": "f2c2a8f5fdde7bd192f5cac72ba59b218ab8fb4e13368974ae29048a6be11338"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "产品审重审两轮均建议不拆分：trigger-model-v2 是单一语义变更（触发模型改写 + 轻量路线回归），文档文案、CLI routeModes/迁移门豁免、两处改名、白盒断言强耦合，逐片无法独立验收；无值得并行的可独立验收子任务。当前按单一 run 推进。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "f140dce7c1b1bbcf4501164a51e4ab34269722f9",
+      "sourceSnapshot": "0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+      "compared": "4f65512001fd800718dbc2542090c6db6c97bad6..0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+      "message": "实现与已确认需求完全对齐，无需求外内容、无多余抽象、无重复/残留/死代码，可复用归属者均被复用。每个新概念都能在需求落地位置逐项找到归属。构建/vet/相关测试套件全部通过。",
+      "dispatchId": "dispatch-a0f22266768b8f42c38e5eac"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "f140dce7c1b1bbcf4501164a51e4ab34269722f9",
+      "sourceSnapshot": "0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+      "compared": "4f65512001fd800718dbc2542090c6db6c97bad6..0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "On a lightweight run (declared at start via --route lightweight), invoking workflow route hits requireTransition's route branch and returns 'the slicing decision must be recorded before the route' (workflow_transition.go:21-22) instead of signaling the route is already decided at start. The command is nevertheless correctly refused; cosmetic wording only.",
+          "locations": [
+            "internal/validate/workflow_transition.go:21",
+            "internal/validate/workflow.go:218"
+          ]
+        }
+      ],
+      "message": "所有已确认需求均有实现路径（触发模型 V2、轻量路线 start→需求登记→Seal 三步封板、routeModes 恢复、迁移门豁免、canary/澄清改名）。构建编译通过，validate+cli 测试套件全绿。仅 1 条 P3 措辞建议。",
+      "dispatchId": "dispatch-8f99c7f18dfe0d77f4c3b052"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "f140dce7c1b1bbcf4501164a51e4ab34269722f9",
+    "cases": [
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "读取工作区 + 三份安装副本的 prompts/actions/requirements-clarification.md（三份副本 prompts 均为指向工作区 prompts/ 的符号链接），记录含澄清/兜底字样行原文",
+        "observation": "工作区第 6 行含「快速澄清兜底」，grep 轻量澄清兜底 NOT FOUND；三副本内容与工作区一致",
+        "oracleResult": "matched: 用「快速澄清兜底」、不出现「轻量澄清兜底」",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "对三份安装副本逐一读取除 SKILL.md 外七文件（README/README_EN/manifest/openai.yaml/formal-flow/example-run/managed-rules），核对触发模型表述并搜索旧模型残留",
+        "observation": "三副本触发模型表述全部新模型（默认提醒一次条件式+大需求额外强调建议式+不要求回应+明确要求才完整受理）；旧模型残留零命中；~/.claude 七文件与当前构建逐字节一致",
+        "oracleResult": "matched: 三副本各文件无旧模型残留，触发表述与新模型一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "inherited",
+        "observation": "inherited PASS from 0c5f5d3d6d1fb10f154feb3814af712c8937cc6d",
+        "oracleResult": "inherited",
+        "origin": "inherited"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestStartRouteDeclarationAcceptsOnlyLightweightOrEmpty -count=1",
+        "observation": "PASS (0.21s)",
+        "oracleResult": "matched: route 非法值被拒/两种大小写 lightweight 成功/空 route 无 split 报错/空 route 带 split no 成功",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestStartLightweightRejectsSplitDeclarations -count=1",
+        "observation": "PASS (0.13s)",
+        "oracleResult": "matched: --split yes/--retained-overall/--master 被拒；--split no 成功且 SplitDeclaration 清空",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestSetRouteLightweightSelectsZeroGates -count=1",
+        "observation": "PASS (0.92s)",
+        "oracleResult": "matched: RouteMode=lightweight/SelectedGates 空/四候选 ROUTE/UNSELECTED；带 --gate 被拒",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestRouteModesRestoreAndInvalidModeMessage -count=1",
+        "observation": "PASS (0.51s)",
+        "oracleResult": "matched: routeModes 恰含 lightweight/full/custom；bogus 报 route mode must be lightweight, full, or custom",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestLightweightRunWaivesSealTransitionGates -count=1",
+        "observation": "PASS (0.23s)",
+        "oracleResult": "matched: 轻量 run 两封板检查均 nil；full 缺状态被拒；isLightweight 只识别 lightweight",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestRunSummaryMarksLightweightUnverifiedOnly -count=1",
+        "observation": "PASS (0.00s)",
+        "oracleResult": "matched: 轻量摘要含 unverified 标注且 JSON 含字段；full 摘要无该字段",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestSealPersistsLightweightUnverifiedRecord -count=1",
+        "observation": "PASS (0.32s)",
+        "oracleResult": "matched: Seal 成功/routeMode lightweight/持久化记录含 SEALED+unverified",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate/ -run TestQuickE2ECanaryRunsFullVerifiedRoute -count=1",
+        "observation": "PASS (1.51s)",
+        "oracleResult": "matched: runQuickE2ECanary 返回 nil，完整验证路线可封板",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 158194001,
+    "inputCacheHitTokens": 153908864,
+    "inputCacheMissTokens": 4285137,
+    "outputTokens": 908450,
+    "dispatches": {
+      "dispatch-04c09eb89de193da43dfd725": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 921216,
+        "inputCacheMissTokens": 151960,
+        "outputTokens": 29079,
+        "totalInputTokens": 1073176,
+        "source": "transcript"
+      },
+      "dispatch-1c1fc2f65f345eda97df9c25": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 8900480,
+        "inputCacheMissTokens": 413791,
+        "outputTokens": 75826,
+        "totalInputTokens": 9314271,
+        "source": "transcript"
+      },
+      "dispatch-382afc9904f2ad94f416b033": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 11204608,
+        "inputCacheMissTokens": 181417,
+        "outputTokens": 48506,
+        "totalInputTokens": 11386025,
+        "source": "transcript"
+      },
+      "dispatch-395fbb0aff3e08b8ef49c1da": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2935680,
+        "inputCacheMissTokens": 126482,
+        "outputTokens": 20688,
+        "totalInputTokens": 3062162,
+        "source": "transcript"
+      },
+      "dispatch-5890d6eef1b83b011afab2a7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 2598528,
+        "inputCacheMissTokens": 258303,
+        "outputTokens": 32419,
+        "totalInputTokens": 2856831,
+        "source": "transcript"
+      },
+      "dispatch-6134bb53a01ff24beaf6c529": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 220032,
+        "inputCacheMissTokens": 35968,
+        "outputTokens": 36317,
+        "totalInputTokens": 256000,
+        "source": "transcript"
+      },
+      "dispatch-69cc022401bf472eafe2d6ba": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1723904,
+        "inputCacheMissTokens": 74000,
+        "outputTokens": 35060,
+        "totalInputTokens": 1797904,
+        "source": "transcript"
+      },
+      "dispatch-7486ed3d66065b7953e774f6": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 70576512,
+        "inputCacheMissTokens": 1134075,
+        "outputTokens": 150835,
+        "totalInputTokens": 71710587,
+        "source": "transcript"
+      },
+      "dispatch-74c0c8f1c695c7445b01b463": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7b097e79c41f159c914cce9a": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8f99c7f18dfe0d77f4c3b052": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 4995456,
+        "inputCacheMissTokens": 211237,
+        "outputTokens": 30563,
+        "totalInputTokens": 5206693,
+        "source": "transcript"
+      },
+      "dispatch-948a5bbae6a96fa8ad6fdc1c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 2188032,
+        "inputCacheMissTokens": 91738,
+        "outputTokens": 34359,
+        "totalInputTokens": 2279770,
+        "source": "transcript"
+      },
+      "dispatch-9825f2f76ef46774e4a9047b": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9baf63b64ade6d75eca41935": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 7636224,
+        "inputCacheMissTokens": 297162,
+        "outputTokens": 104250,
+        "totalInputTokens": 7933386,
+        "source": "transcript"
+      },
+      "dispatch-9cd88c79f9cbb2e3a3bb046c": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 22385280,
+        "inputCacheMissTokens": 314480,
+        "outputTokens": 97584,
+        "totalInputTokens": 22699760,
+        "source": "transcript"
+      },
+      "dispatch-a0f22266768b8f42c38e5eac": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 3473152,
+        "inputCacheMissTokens": 161770,
+        "outputTokens": 20258,
+        "totalInputTokens": 3634922,
+        "source": "transcript"
+      },
+      "dispatch-b45f4702c7481b3804c57759": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 625152,
+        "inputCacheMissTokens": 77167,
+        "outputTokens": 39074,
+        "totalInputTokens": 702319,
+        "source": "transcript"
+      },
+      "dispatch-c2ce6d269f1563cfb27e80ad": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 384512,
+        "inputCacheMissTokens": 47591,
+        "outputTokens": 3607,
+        "totalInputTokens": 432103,
+        "source": "transcript"
+      },
+      "dispatch-c421b5f0c63aad57b3c27201": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 997632,
+        "inputCacheMissTokens": 129444,
+        "outputTokens": 24304,
+        "totalInputTokens": 1127076,
+        "source": "transcript"
+      },
+      "dispatch-cae6f3ca7bc4d7e4fc1bebae": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 1455744,
+        "inputCacheMissTokens": 96008,
+        "outputTokens": 18087,
+        "totalInputTokens": 1551752,
+        "source": "transcript"
+      },
+      "dispatch-cbdcd22854e4f3b3410376e9": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 182272,
+        "inputCacheMissTokens": 38963,
+        "outputTokens": 12014,
+        "totalInputTokens": 221235,
+        "source": "transcript"
+      },
+      "dispatch-d096d8e03987ed52cc4c279f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1301504,
+        "inputCacheMissTokens": 124152,
+        "outputTokens": 49502,
+        "totalInputTokens": 1425656,
+        "source": "transcript"
+      },
+      "dispatch-d62c7b5b5adb925117ec62d7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 81920,
+        "inputCacheMissTokens": 33492,
+        "outputTokens": 13043,
+        "totalInputTokens": 115412,
+        "source": "transcript"
+      },
+      "dispatch-f386036d8c4c3e97502e4c7e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 9121024,
+        "inputCacheMissTokens": 285937,
+        "outputTokens": 33075,
+        "totalInputTokens": 9406961,
+        "source": "transcript"
+      },
+      "dispatch-f8f00c7f690360f02f9b6a48": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

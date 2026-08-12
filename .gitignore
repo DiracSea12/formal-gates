@@ -5,6 +5,9 @@ contract_review/
 # Local gate/review artifacts
 # .gates/results/ is the tracked dogfooding ledger (see README "自狗粮证据")
 .gates/tmp/
+# Per-run isolation worktrees (full repo copies, session-local)
+.gates/qa-isolation/
+.gates/slices/
 gate-artifacts/
 gate-workflow-state/
 review_scratch/

@@ -1,0 +1,388 @@
+{
+  "runId": "trigger-model-removal",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "df9d170d409f0590a3b3a8591bc967f19ed1998e62ede0567d0de9a4c2fe9fd2",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "a7d6aa0be7f85bfe00c2dee17a77f228efa45c1ef2c52f62fa2fc378e310995b",
+  "vcs": "git",
+  "baseSnapshot": "daf0f39aed0281d9be8363b18a2dbad056ab56be",
+  "currentSnapshot": "4f65512001fd800718dbc2542090c6db6c97bad6",
+  "requirementArtifacts": [
+    {
+      "path": "TRIGGER-MODEL-REQUIREMENT.md",
+      "revision": "df9d170d409f0590a3b3a8591bc967f19ed1998e62ede0567d0de9a4c2fe9fd2"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "改动是单一内聚整体：同一触发模型决策横跨宿主全局指令/SKILL.md 四版本/README 八副本/references/agents-manifest-测试联动，各位置同因同果、须同步封板；A-F 按位置逐一处理无实质并行收益（四位置版本内容不同、无法同一补丁批量套用）。验收（四位置 grep 无残留、package_test 通过、10+ 假对话）横跨全部位置、无法逐片独立判定。产品审与 start-readiness 两轮审查均高置信不拆。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "4f65512001fd800718dbc2542090c6db6c97bad6",
+      "compared": "daf0f39aed0281d9be8363b18a2dbad056ab56be..4f65512001fd800718dbc2542090c6db6c97bad6",
+      "message": "复杂度门通过：改动为纯削减/替换，未新增任何抽象、文件、配置或机制，严格覆盖已确认需求范围内的工作区文件（SKILL.md、README/README_EN、references/example-run+formal-flow+managed-rules、agents/openai.yaml、manifest、package_test.go）。轻量路线、会话级不走流程声明、高置信跳过受理、自动受理等表述已从当前生效规则文件中完整移除，无残留矛盾或悬空引用；manifest 描述措辞对齐为需求明示许可；linked 测试（internal/validate）通过。",
+      "dispatchId": "dispatch-d597d5fce76dbc7b6fd2e76d"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "4f65512001fd800718dbc2542090c6db6c97bad6",
+      "compared": "daf0f39aed0281d9be8363b18a2dbad056ab56be..4f65512001fd800718dbc2542090c6db6c97bad6",
+      "message": "改动忠实实现已确认的按需触发模型与轻量流程整体移除，覆盖范围内全部位置。需求覆盖完整（9 个改动文件均映射到已确认条目；宿主全局 CLAUDE.md/AGENTS.md 与三份已安装副本一致、无旧表述残留；明确不动项 canary lightweight-workflow 与轻量澄清兜底保留）。无语义偏离（受理 step 4 正确收窄为是否进入正式流程的是/否问题；会话声明与高置信跳过完整移除；formal-flow.md/example-run.md 无悬空引用）。架构/质量干净：internal/validate 全量套件通过、构建正常、metadata 断言与新 openai.yaml 一致、repo 跟踪文档零 轻量/lightweight/自动受理 残留。注：internal/validate/trigger_model_whitebox_test.go 为白盒 QA 产物、快照后创建（非 base..current 改动）。",
+      "dispatchId": "dispatch-47850337a768b2b7d8518adf"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "4f65512001fd800718dbc2542090c6db6c97bad6",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "新开普通会话，依次发出 6 个普通内容修改假任务（改错别字/新建文档/删示例/移动/多文件编辑/重命名），逐条观察主代理首个行为并全程记录提及与 .gates 状态创建；以磁盘当前生效规则（~/.claude/CLAUDE.md + 工作区 SKILL.md，均为新版）为行为基线。",
+        "observation": "6/6 普通任务均直接处理；无受理澄清链、无完整方案确认请求、无路线选择、无【流程提示】/会话级声明、未运行任何 CLI、未产生任何 .gates/tmp/\u003crun-id\u003e。附带观察（P3 类、不阻塞）：请求 1、2 回复开头各出现一处叙述性提及（'handle it directly without the formal-gates flow'/'no formal-gates'），为对'按新规则直接处理'的自我叙述、非触发/提醒/路线/确认请求，结合其明确以新版规则为基线且零 run/零受理/零提醒行为，判定为 QA 记录伪迹而非新模型违规。",
+        "oracleResult": "匹配：普通请求不自动触发、直接处理、全程不提及 formal-gates、无 run 状态创建；仅两处叙述性 P3 伪迹，不构成范围内阻塞。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "新开会话提出大而复杂的假任务（docs/qa-big 28 文件、286 处 DataPort→FlowPort 术语族迁移），观察是否出现一次性非阻塞提醒、用户不回应后是否自行触发/反复提及/建 run；以小任务作对照。",
+        "observation": "模拟器判定规模大/机械，仅给一次非阻塞提醒（任务末尾：'若你希望这类大规模改动走正式流程随时可要求'），未自行触发、未建 run、无路线选择、无反复提及；小任务对照正确得到零提醒。提醒出现在任务末尾而非开头——新模型只要求提醒一次、不要求回应、未规定时点，记录为时序观察。",
+        "oracleResult": "匹配：大需求仅提醒一次、不要求回应、不自行触发、不反复提及、无 run 创建；小需求零提醒。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "用户明确要求走正式流程（docs/qa-c3/feature.md 追加'## 设置'小节），观察完整受理流程顺序（澄清→完整方案→单独确认→评估工作量）、受理阶段是否出现轻量选项、路线确认时点、run 创建。",
+        "observation": "完整受理顺序逐一验证通过：需求澄清→呈现完整方案→单独请求确认→评估工作量→正式决策；受理阶段全程未出现轻量/正式二选一或「轻量（不创建正式流程）」选项；no-split 之后才确认 full 路线；产生正式 run .gates/tmp/qa-c3-settings/（ACTIVE，routeMode=full）。",
+        "oracleResult": "匹配：用户明确要求后走完整受理流程、无轻量选项、full 路线在拆分决定后确认、产生正式 run。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "大需求提醒后用户自行提出要触发 formal-gates（docs/qa-c4-big 32 文件、294 处 AppNode→ServiceNode），观察完整受理流程、轻量选项缺失、路线确认时点、run 创建与封板。",
+        "observation": "用户明确触发后走完整受理：澄清（正式审查基线采用'重建迁移前状态'方案）→呈现完整方案→单独确认→评估工作量→创建正式 run；受理阶段无轻量选项；路线 custom（blackbox+complexity-gate+implementation-quality-gate）在记录 no-split 之后才确认。run qa-c4-big-term-migration 完整走完并 SEALED（判定 PASS）：base=迁移前基线提交、current=迁移后快照（真实 before→after diff），产品审/技术审 PASS，QA 6 个 LIVE 用例 6/6 PASS，两门均 PASS，封板 .gates/results/qa-c4-big-term-migration.json（status SEALED）。",
+        "oracleResult": "匹配：提醒后用户明确触发即走完整受理流程、无轻量选项、custom 路线在拆分决定后确认、产生并封板正式 run。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "逐项阅读四位置（工作区+~/.claude+~/.codex+~/.cursor）的 SKILL.md/README 中英/openai.yaml/manifest/managed-rules/formal-flow/example-run/宿主全局指令，记录旧表述残留与新模型表述就位。",
+        "observation": "四位置生效规则均已更新为新触发模型（默认直接处理/仅大需求提醒一次/用户明确要求才走完整受理流程/轻量流程整体移除），旧表述（轻量流程路线、自动受理、会话级「不走流程」声明、【流程提示】、高置信跳过受理等）全部清除。残留命中全部为豁免项：canary.go lightweight-workflow 标识符、requirements-clarification.md 轻量澄清兜底、CLI full/custom 路线参数、~/.formal-gates/releases/。",
+        "oracleResult": "匹配：四位置旧表述清除（仅豁免项残留）、新触发模型表述就位、README 与新模型一致。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "同一会话内依次执行：普通编辑→大任务（docs/qa-c6-big 20 文件、175 处 HubTerm→GatewayTerm）→提醒后普通创建→明确触发（step d）→触发 run 后普通任务（step e），全程记录提及次数、提醒次数、run 创建与污染情况。",
+        "observation": "会话流：普通任务直接处理零提及→大任务给一次非阻塞提醒→提醒后普通创建直接处理零提及→明确触发走完整受理（澄清首问三条用法内容→完整方案→单独确认→评估工作量→正式 run qa-c6-note-d-usage；无轻量选项；no-split 后确认 custom 路线）→run 完整走完并 SEALED（开发将 note-d.md 精确改到已确认目标、QA 4 个 LIVE 用例 4/4 PASS、两门 PASS）→step e 普通任务直接处理（模拟器自述'handled directly, no formal-gates'），未产生新 run、无提醒、无污染。全程仅一次提醒、无会话级声明、无反复提及。",
+        "oracleResult": "匹配：普通请求全程不提及、大需求仅提醒一次且不要求回应、用户明确要求才启动完整受理流程并产生正式 run、run 后普通请求无污染、无【流程提示】/会话级声明。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestSkillDescriptionDeclaresOnRequestTriggerModel（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：SKILL.md frontmatter description 含不自动触发/提醒一次/用户明确要求走正式流程时才进入完整受理流程，且不含用于每一次涉及项目内容的创建、编辑、移动或删除请求。",
+        "oracleResult": "匹配：全部必需短语在、旧短语缺。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestSkillIntakeBodyDeclaresDefaultDirectHandling（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：受理正文五条行为短语全部在（默认直接处理不自动触发、一次性提及不要求回应、不回应即继续直接处理、不得自触发不反复提及、明确要求才完整受理）。",
+        "oracleResult": "匹配：五条必需短语全部在。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestSkillStepFourAsksEnterFormalFlowOnly（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：是/否询问、full/custom 拆分后确认、询问不构成需求确认在；轻量与路线选择本身不构成需求确认缺。",
+        "oracleResult": "匹配：必需在、两个禁用缺。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestSkillDropsSessionDeclarationAndHighConfidenceSkip（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：流程提示/会话级/不走流程/高置信度判断/跳过整个受理流程全部缺；高置信要拆时需用户确认拆分方案、受理阶段只决定是否进入正式流程（是/否）不决定路线在。",
+        "oracleResult": "匹配：全部禁用缺、外科手术式保留短语在。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestReadmeCnDropsLightweightAndStatesTriggerModel（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：轻量与轻量和 formal 是什么关系缺；只在需要时触发/不自动触发/提醒一次你可选择触发/你明确要求时才进入正式流程/formal-gates 什么时候会被触发在。",
+        "oracleResult": "匹配：全部必需在、两个禁用缺。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestReadmeEnDropsLightweightAndStatesTriggerModel（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：lightweight 与 What is the relationship between lightweight and formal 缺；Triggered only when you ask/never auto-triggers/mentions once/When is formal-gates triggered? 在。",
+        "oracleResult": "匹配：全部必需在、两个禁用缺。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestExampleRunDropsLightweightChoiceAndNoFlowBranch（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：选择轻量/轻量正式/不走流程缺；默认直接处理分支/一次性提及不要求回应不得反复提及不得自行触发/询问用户是否进入正式流程（是/否）/3. 是否进入正式流程在。",
+        "oracleResult": "匹配：全部禁用缺、全部必需在。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestFormalFlowDropsSessionDeclarationDanglingReference（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：example-run/不走流程/会话声明缺；流程顺序只由 SKILL.md 拥有在。",
+        "oracleResult": "匹配：三个禁用引用缺、拥有权行在。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestManagedRulesJsonDeclaresNonAutoIntake（结构测试，直接归属者，LoadManagedRules 加载托管规则）。",
+        "observation": "go test 通过（--- PASS）：LoadManagedRules 返回恰好 1 条规则，含默认按常规方式直接处理/不自动触发/提醒一次/用户明确要求走正式流程时，且不含必须先执行 formal-gates 受理流程。",
+        "oracleResult": "匹配：恰好一条规则、新模型短语在、强制受理短语缺。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestOpenAIDefaultPromptSequencesIntakeYesNo（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：default_prompt 含全部四条时序短语（mention once/do not auto-trigger/ask whether to enter the formal flow/route full/custom is confirmed after the slicing decision）。",
+        "oracleResult": "匹配：四条时序短语全部在。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestManifestDescriptionDropsUniversalModificationIntake（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：manifest description 含 on-request formal workflow，不含 universal modification intake。",
+        "oracleResult": "匹配：按需措辞在、通用受理措辞缺。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestInstallReproducesNewTriggerModelAtTarget（结构测试，直接归属者，Install 到临时项目）。",
+        "observation": "go test 通过（--- PASS）：Install(claude, project, Force) 报告恰好 1 个目标；已安装 SKILL.md/README.md 携带新模型无轻量；agents/openai.yaml 含 do not auto-trigger；manifest 含 on-request formal workflow；宿主规则文件含不自动触发、不含必须先执行 formal-gates 受理流程。",
+        "oracleResult": "匹配：恰好一个目标、所有已安装副本携带新模型/缺禁用短语。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "运行 TestLightweightExceptionsPreserved（结构测试，直接归属者）。",
+        "observation": "go test 通过（--- PASS）：canary.go 仍注册 add(\"lightweight-workflow\"、prompts/actions/requirements-clarification.md 仍含轻量澄清兜底。",
+        "oracleResult": "匹配：两个明确不动轻量提及均存活。",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 107267693,
+    "inputCacheHitTokens": 104257920,
+    "inputCacheMissTokens": 3009773,
+    "outputTokens": 648552,
+    "dispatches": {
+      "dispatch-085ee59d81aefa4e7e7f6460": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-29ad61a07be05cf6039d07ef": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 8984576,
+        "inputCacheMissTokens": 188325,
+        "outputTokens": 105354,
+        "totalInputTokens": 9172901,
+        "source": "transcript"
+      },
+      "dispatch-35b4088deede746aea31dded": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 1167360,
+        "inputCacheMissTokens": 87105,
+        "outputTokens": 10948,
+        "totalInputTokens": 1254465,
+        "source": "transcript"
+      },
+      "dispatch-387f1298e2abeace8fd5fbed": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 26264832,
+        "inputCacheMissTokens": 445869,
+        "outputTokens": 99685,
+        "totalInputTokens": 26710701,
+        "source": "transcript"
+      },
+      "dispatch-46b3319b45dd04f8fe55af9d": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2363392,
+        "inputCacheMissTokens": 154318,
+        "outputTokens": 40224,
+        "totalInputTokens": 2517710,
+        "source": "transcript"
+      },
+      "dispatch-47850337a768b2b7d8518adf": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 4626304,
+        "inputCacheMissTokens": 129044,
+        "outputTokens": 30482,
+        "totalInputTokens": 4755348,
+        "source": "transcript"
+      },
+      "dispatch-5732d0e743ff1e28657d04c2": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 996992,
+        "inputCacheMissTokens": 86463,
+        "outputTokens": 18950,
+        "totalInputTokens": 1083455,
+        "source": "transcript"
+      },
+      "dispatch-57c0172b34c21c257ea597d7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 4902912,
+        "inputCacheMissTokens": 183005,
+        "outputTokens": 41510,
+        "totalInputTokens": 5085917,
+        "source": "transcript"
+      },
+      "dispatch-6e99dc12e2766bae0f747256": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-83f4dad0553f3a2916653c14": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 966528,
+        "inputCacheMissTokens": 60116,
+        "outputTokens": 22051,
+        "totalInputTokens": 1026644,
+        "source": "transcript"
+      },
+      "dispatch-a6d0a22f1ba57bb7e4d5694a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 211328,
+        "inputCacheMissTokens": 32447,
+        "outputTokens": 24028,
+        "totalInputTokens": 243775,
+        "source": "transcript"
+      },
+      "dispatch-aa05394a57a008cf2af50d8d": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-abf008b44d85413f67bd56fa": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 1197056,
+        "inputCacheMissTokens": 124971,
+        "outputTokens": 34944,
+        "totalInputTokens": 1322027,
+        "source": "transcript"
+      },
+      "dispatch-ba47206138adad5af1b6cd8f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 186112,
+        "inputCacheMissTokens": 32454,
+        "outputTokens": 22004,
+        "totalInputTokens": 218566,
+        "source": "transcript"
+      },
+      "dispatch-bbf806fe5eac963746748c04": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 49077376,
+        "inputCacheMissTokens": 1231464,
+        "outputTokens": 163857,
+        "totalInputTokens": 50308840,
+        "source": "transcript"
+      },
+      "dispatch-cf01a9f01a2ad4044a5c1f03": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2148736,
+        "inputCacheMissTokens": 156916,
+        "outputTokens": 19902,
+        "totalInputTokens": 2305652,
+        "source": "transcript"
+      },
+      "dispatch-d597d5fce76dbc7b6fd2e76d": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 1164416,
+        "inputCacheMissTokens": 97276,
+        "outputTokens": 14613,
+        "totalInputTokens": 1261692,
+        "source": "transcript"
+      }
+    }
+  }
+}
