@@ -23,10 +23,16 @@ type StartOptions struct {
 	RequirementConfirmed, RetainedOverall bool
 	// Split 是 workflow start 的强制拆分声明（需求 4）：yes 或 no。yes 时本 run 必须是
 	// 保留总任务实例（RetainedOverall）或切片实例（MasterRunID 引用主实例）；no 时禁止
-	// 后续记录 split。缺失声明拒绝启动。
+	// 后续记录 split。缺失声明拒绝启动。轻量路线（Route == "lightweight"）不做拆分决定，
+	// 免去本声明。
 	Split string
 	// MasterRunID 是切片实例启动时声明的保留总任务 master run id（--split yes --master）。
 	MasterRunID string
+	// Route 是 workflow start 的轻量路线声明：Route == "lightweight" 时本 run 从 start
+	// 即走轻量路线——不拆分、不选 QA/门路线、不快照、不做任何验证，只留记录，三步直达
+	// （start → 需求登记 → Seal）。轻量 start 免去强制 --split 声明（不接受 --split yes /
+	// --retained-overall / --master）。留空走常规受理，full/custom 路线在拆分决定之后确认。
+	Route string
 }
 
 type FindingInput struct {
@@ -73,7 +79,10 @@ const (
 	developmentVerified       = "VERIFIED"
 )
 
-var routeModes = map[string]bool{"full": true, "custom": true}
+// routeModes 是 workflow route 与 start --route 可接受的路线模式集合。lightweight
+// 是正式流程内的轻量路线（创建 run 但跳过全部验证、只留记录，三步直达 Seal），在 start
+// 时显式声明，route 时经 SetRoute 也可选中零门。
+var routeModes = map[string]bool{"lightweight": true, "full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
 	root := lifecycle.CleanRoot(options.Root)
@@ -90,27 +99,43 @@ func Start(options StartOptions) (RunState, error) {
 	}
 	// 需求 4：启动时强制显式声明拆分意向，并把"保留总任务实例 vs 切片实例"的映射钉死在
 	// 启动声明中，使"忘带 retained-overall"在启动时就暴露，而不是拖到拆分决定才被拒。
+	// 轻量路线（--route lightweight）不做拆分决定，免去拆分声明：start 即声明轻量，之后
+	// start → 需求登记 → Seal 三步直达，跳过拆分、路线确认、开发快照与全部验证。
 	split := strings.ToLower(strings.TrimSpace(options.Split))
 	master := strings.TrimSpace(options.MasterRunID)
-	switch split {
-	case "yes":
-		if options.RetainedOverall && master != "" {
-			return RunState{}, fmt.Errorf("a run cannot be both a retained-overall instance and a slice instance; use --retained-overall or --master, not both")
+	route := strings.ToLower(strings.TrimSpace(options.Route))
+	if route != "" && route != "lightweight" {
+		return RunState{}, fmt.Errorf("--route must be lightweight or empty")
+	}
+	isLightweight := route == "lightweight"
+	if isLightweight {
+		if split == "yes" {
+			return RunState{}, fmt.Errorf("a lightweight route does not split; --split yes is not valid with --route lightweight")
 		}
-		if !options.RetainedOverall && master == "" {
-			return RunState{}, fmt.Errorf("workflow start --split yes requires --retained-overall (保留总任务实例) or --master <run-id> (切片实例) to pin the split intent at start")
+		if options.RetainedOverall || master != "" {
+			return RunState{}, fmt.Errorf("a lightweight route does not retain overall or act as a slice; --retained-overall and --master are not valid with --route lightweight")
 		}
-	case "no":
-		if options.RetainedOverall {
-			return RunState{}, fmt.Errorf("a retained-overall run exists to integrate split slices, so it must declare --split yes")
+	} else {
+		switch split {
+		case "yes":
+			if options.RetainedOverall && master != "" {
+				return RunState{}, fmt.Errorf("a run cannot be both a retained-overall instance and a slice instance; use --retained-overall or --master, not both")
+			}
+			if !options.RetainedOverall && master == "" {
+				return RunState{}, fmt.Errorf("workflow start --split yes requires --retained-overall (保留总任务实例) or --master <run-id> (切片实例) to pin the split intent at start")
+			}
+		case "no":
+			if options.RetainedOverall {
+				return RunState{}, fmt.Errorf("a retained-overall run exists to integrate split slices, so it must declare --split yes")
+			}
+			if master != "" {
+				return RunState{}, fmt.Errorf("--master is only valid with --split yes")
+			}
+		case "":
+			return RunState{}, fmt.Errorf("workflow start requires an explicit --split yes|no declaration; a run refuses to start without a pinned split intent")
+		default:
+			return RunState{}, fmt.Errorf("--split must be yes or no")
 		}
-		if master != "" {
-			return RunState{}, fmt.Errorf("--master is only valid with --split yes")
-		}
-	case "":
-		return RunState{}, fmt.Errorf("workflow start requires an explicit --split yes|no declaration; a run refuses to start without a pinned split intent")
-	default:
-		return RunState{}, fmt.Errorf("--split must be yes or no")
 	}
 	vcs := strings.ToLower(strings.TrimSpace(options.VCS))
 	resolver, err := resolverForVCS(vcs, nil)
@@ -188,6 +213,12 @@ func Start(options StartOptions) (RunState, error) {
 	state.RetainedOverall = options.RetainedOverall
 	state.SplitDeclaration = split
 	state.SplitMasterRunID = master
+	// 轻量路线在 start 即声明：routeMode 置 lightweight（免拆分决定、免路线确认、
+	// 免开发快照直达 Seal），不记录拆分声明。
+	if isLightweight {
+		state.RouteMode = "lightweight"
+		state.SplitDeclaration = ""
+	}
 	if err := SaveRunState(root, state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))
 		return RunState{}, err
@@ -554,7 +585,7 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 		}
 		mode = strings.ToLower(strings.TrimSpace(mode))
 		if !routeModes[mode] {
-			return fmt.Errorf("route mode must be full or custom")
+			return fmt.Errorf("route mode must be lightweight, full, or custom")
 		}
 		candidates := catalog.RouteCandidates()
 		if mode == "full" {
@@ -562,6 +593,12 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 				return fmt.Errorf("full route selects the complete discovered list without --gate")
 			}
 			selected = candidates
+		} else if mode == "lightweight" {
+			// 轻量路线选中零门：不选 QA、不选门，跳过全部验证只留记录。
+			if len(selected) != 0 {
+				return fmt.Errorf("lightweight route selects zero gates without --gate")
+			}
+			selected = []string{}
 		} else {
 			var err error
 			selected, err = normalizeSelected(selected, candidates)

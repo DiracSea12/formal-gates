@@ -18,6 +18,11 @@ func requireTransition(state RunState, operation, target string) error {
 		return fmt.Errorf("the current requirement is not confirmed")
 	}
 	if operation == "route" {
+		// 轻量路线在 start 即声明，路线已决定：route 操作既不要求拆分决定（轻量免拆分），
+		// 也不能再做路线确认，直接提示轻量路线已在 start 决定，而不是误报缺拆分决定。
+		if isLightweight(state) {
+			return fmt.Errorf("the lightweight route was already decided at start")
+		}
 		if !slicingRecorded(state) {
 			return fmt.Errorf("the slicing decision must be recorded before the route")
 		}
@@ -277,6 +282,11 @@ func requireCarryTransition(state RunState) error {
 }
 
 func requireSealTransition(state RunState) error {
+	// 轻量路线整体豁免 seal 门：轻量 run 从 start 即声明，不做拆分决定、不选路线、
+	// 不快照、不做任何验证，start → 需求登记 → Seal 三步直达，只留记录。
+	if isLightweight(state) {
+		return nil
+	}
 	if !hasDevelopmentSnapshot(state) {
 		return fmt.Errorf("an immutable development snapshot is required before Seal")
 	}
@@ -291,6 +301,16 @@ func requireSealTransition(state RunState) error {
 
 func developmentStarted(state RunState) bool {
 	return state.Actions["development-worker"].Status != developmentPending
+}
+
+// isLightweight reports whether the run is on the lightweight route, declared at
+// start via --route lightweight. Lightweight runs create the formal run record but
+// perform no verification: no slicing decision, no QA/route selection, no snapshot,
+// start → 需求登记 → Seal. The migration gates (route-before-split,
+// routeRequiresConfirmation, development snapshot, product-review /
+// start-readiness PASS at seal) are waived for lightweight runs.
+func isLightweight(state RunState) bool {
+	return state.RouteMode == "lightweight"
 }
 
 func hasDevelopmentSnapshot(state RunState) bool {

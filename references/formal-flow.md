@@ -21,7 +21,8 @@ formal-gates workflow start --root <repo> --package-root <package> \
   --run-id <id> --flow formal --requirement <requirement-file> \
   [--requirement-artifact <requirement-or-solution-file> ...] \
   --vcs <git|svn|p4> [--base-snapshot <ancestor-or-current-identity>] \
-  --split <yes|no> [--retained-overall] [--master <master-run-id>]
+  --split <yes|no> [--retained-overall] [--master <master-run-id>] \
+  [--route lightweight]
 
 # --split 是强制声明（需求 4）：启动时必须显式预判本次 run 是否拆分/并行。
 #   --split yes：本 run 必须是保留总任务实例（--retained-overall）或切片实例
@@ -29,6 +30,11 @@ formal-gates workflow start --root <repo> --package-root <package> \
 #     启动时就报错，而不是拖到拆分决定。
 #   --split no：本 run 不拆分，后续 slicing 禁止记录 split。
 # 未声明 --split 拒绝启动。
+
+# --route lightweight：轻量路线（非受理阶段选项）。创建正式 run 但跳过全部验证、只留
+# 记录：免拆分声明与拆分决定、免路线确认、免开发快照，start → 需求登记 → Seal 三步直达，
+# 跳过 start-readiness、黑盒 QA、白盒 QA、全部门；封板摘要/记录显式标注「本 run 未经任何
+# 验证」。轻量 start 不接受 --split yes / --retained-overall / --master。
 
 formal-gates workflow show --root <repo> --run-id <id>
 formal-gates workflow resume --root <repo> --package-root <package> --run-id <id>
@@ -92,12 +98,13 @@ formal-gates workflow settle-findings --root <repo> --package-root <package> \
   [--confirm '<settled-message>' ...] [--dismiss '<settled-message>' ...]
 
 # 路线在拆分决定之后确认；full = 黑盒 QA + 白盒 QA +
-# 全部已发现门；custom 可任意组合黑盒 QA、白盒 QA 与各门，至少选一项。合并门/合并 QA
-# 不进正常选择列表。
+# 全部已发现门；custom 可任意组合黑盒 QA、白盒 QA 与各门，至少选一项；lightweight 选中
+# 零门（不选 QA、不选门，只留记录，通常由 start --route lightweight 声明）。合并门/合并
+# QA 不进正常选择列表。
 formal-gates workflow route-candidates --root <repo> --package-root <package> \
   --run-id <id>
 formal-gates workflow route --root <repo> --package-root <package> \
-  --run-id <id> --mode <full|custom> [--gate <gate-id> ...]
+  --run-id <id> --mode <lightweight|full|custom> [--gate <gate-id> ...]
 formal-gates workflow route-add --root <repo> --package-root <package> \
   --run-id <id> --gate <gate-id>
 ```
@@ -327,6 +334,10 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
   [--skip <selected-non-passing-gate> ...] [--user-requested] \
   [--squash-message '<combined commit message>']
+
+# 轻量路线（--route lightweight 启动）的封板：跳过全部验证门（无开发快照、无
+# product-review / start-readiness PASS 要求、无路线确认、无拆分决定），封板摘要/记录
+# 显式标注「本 run 未经任何验证」（summary.unverified 字段），与完整验证封板区分。
 ```
 
 修复流程（SKILL 第 8 步的执行机制）：触发条件——QA FAIL 或 P0/P1 → 整轮退回修复、

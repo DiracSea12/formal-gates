@@ -701,6 +701,37 @@ func TestCLIStartRequiresSplitDeclaration(t *testing.T) {
 	}
 }
 
+// 轻量路线（V2）：start --route lightweight 免拆分声明与拆分决定，需求登记后 Seal 三步
+// 直达，跳过全部验证；封板摘要标注「本 run 未经任何验证」。--route lightweight 与
+// --split yes 组合被拒。
+func TestCLILightweightRouteStartToSeal(t *testing.T) {
+	root, pkg := cliWorkflowFixture(t)
+	out := runCLI(t, "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "lightweight-cli", "--requirement", "requirements.md", "--vcs", "git", "--route", "lightweight")
+	var state validate.RunState
+	if err := json.Unmarshal([]byte(out), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.RouteMode != "lightweight" {
+		t.Fatalf("expected lightweight route mode, got %q", state.RouteMode)
+	}
+	if state.SplitDeclaration != "" {
+		t.Fatalf("lightweight start must not record a split declaration, got %q", state.SplitDeclaration)
+	}
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "lightweight-bad", "--requirement", "requirements.md", "--vcs", "git", "--route", "lightweight", "--split", "yes"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "--route lightweight") {
+		t.Fatalf("start --route lightweight --split yes was accepted: code=%d err=%s", code, stderr.String())
+	}
+	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+	runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed")
+	summary := runCLI(t, "workflow", "seal", "--root", root, "--package-root", pkg, "--run-id", state.RunID)
+	if !strings.Contains(summary, `"status": "SEALED"`) {
+		t.Fatalf("lightweight seal output=%s", summary)
+	}
+	if !strings.Contains(summary, "本 run 未经任何验证") {
+		t.Fatalf("lightweight seal summary must be marked unverified: %s", summary)
+	}
+}
+
 // 需求 5 / 需求 6 的 CLI 层直接测试。
 
 // TestCLIAbortRequiresUserConfirm verifies requirement 6 item 2: workflow abort

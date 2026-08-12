@@ -1586,6 +1586,26 @@ func TestMergeVerificationAutoAttachedForSplitRetainedOverall(t *testing.T) {
 	}
 }
 
+// TestLightweightRouteDecidedAtStart verifies that invoking the route operation
+// on a lightweight run (declared at start via --route lightweight) is refused
+// with a message signaling the route was already decided at start, instead of
+// demanding the slicing decision the lightweight route is exempt from. The
+// command is still correctly refused, so this only locks the cosmetic wording.
+func TestLightweightRouteDecidedAtStart(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "lw-route-decided", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RouteMode != "lightweight" {
+		t.Fatalf("expected lightweight route mode, got %q", state.RouteMode)
+	}
+	state = confirmRequirement(t, root, pkg, state)
+	if _, err := SetRoute(root, pkg, state.RunID, "lightweight", nil); err == nil || !strings.Contains(err.Error(), "was already decided at start") {
+		t.Fatalf("lightweight route re-confirmation must report the route was decided at start, got %v", err)
+	}
+}
+
 // TestMergeVerificationCompletesPostMergeReview runs the full post-merge flow of
 // a split retained overall run: merge QA design/review/execution (with an empty
 // cross-slice interaction set leaving the required trace) and the merge gate.

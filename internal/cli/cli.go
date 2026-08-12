@@ -217,12 +217,13 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	artifacts := stringListFlag{}
 	fs.Var(&artifacts, "requirement-artifact", "additional requirement or solution document; repeat as needed")
 	retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
-	split := fs.String("split", "", "required split intent: yes or no; yes requires --retained-overall (保留总任务实例) or --master (切片实例)")
+	split := fs.String("split", "", "required split intent: yes or no; yes requires --retained-overall (保留总任务实例) or --master (切片实例); skipped for --route lightweight")
 	master := fs.String("master", "", "retained-overall master run id for a slice instance start (with --split yes)")
+	route := fs.String("route", "", "lightweight route declaration: --route lightweight creates the run but performs no verification (start → 需求登记 → Seal 三步直达, 只留记录); empty starts the regular intake")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master})
+	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -370,7 +371,7 @@ func runWorkflowRoute(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow route", streams)
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
-	mode := fs.String("mode", "", "full or custom")
+	mode := fs.String("mode", "", "lightweight, full, or custom")
 	gates := stringListFlag{}
 	fs.Var(&gates, "gate", "selected gate id; repeat for custom route")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {

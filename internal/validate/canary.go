@@ -73,7 +73,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	}
 	add("hook-blocks-legacy-command", err)
 	if len(catalog.Gates) > 0 {
-		add("lightweight-workflow", runLightweightCanary(root, catalog))
+		add("quick-e2e-workflow", runQuickE2ECanary(root, catalog))
 	}
 	tempRoot, err := os.MkdirTemp("", "formal-gates-install-canary-")
 	if err != nil {
@@ -100,7 +100,10 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	return report, result
 }
 
-func runLightweightCanary(packageRoot string, catalog PromptCatalog) error {
+// runQuickE2ECanary exercises the quick end-to-end formal workflow (full route)
+// against a temp git repo, from start through requirement registration, slicing,
+// route confirmation, QA design/review/execution, snapshot, gate review and Seal.
+func runQuickE2ECanary(packageRoot string, catalog PromptCatalog) error {
 	root, err := os.MkdirTemp("", "formal-gates-workflow-canary-")
 	if err != nil {
 		return err

@@ -12,10 +12,10 @@ import (
 
 // TestPortableCanaryPassesAgainstRepoRoot runs the full portable canary against
 // the real repository root. It exercises package validation, installs, hook
-// decisions, and a lightweight end-to-end workflow against the working checkout,
-// so it is an integration check — it lives here, behind the integration build
-// tag, outside the unit suite (`go test ./...`). CI runs the same canary as a
-// separate CLI step (`canary portable --root .`) after building the native CLI.
+// decisions, and a quick end-to-end workflow against the working checkout, so it
+// is an integration check — it lives here, behind the integration build tag,
+// outside the unit suite (`go test ./...`). CI runs the same canary as a separate
+// CLI step (`canary portable --root .`) after building the native CLI.
 func TestPortableCanaryPassesAgainstRepoRoot(t *testing.T) {
 	root := repoRootForCanaryTest(t)
 	buildRepoRootBinary(t, root)
