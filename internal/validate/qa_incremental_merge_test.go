@@ -316,7 +316,7 @@ func TestAbortDoesNotMaterializeBlackboxCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Abort(root, pkg, state.RunID); err != nil {
+	if _, err := Abort(root, state.RunID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".gates", "results", state.RunID+".blackbox-cases.md")); !os.IsNotExist(err) {

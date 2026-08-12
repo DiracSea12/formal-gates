@@ -229,7 +229,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 
 func runWorkflowShow(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow show", streams)
-	root, _ := rootFlags(fs)
+	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "run id")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
@@ -264,7 +264,7 @@ func runWorkflowResume(args []string, streams IO) (int, error) {
 
 func runWorkflowAbort(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow abort", streams)
-	root, pkg := rootFlags(fs)
+	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "run id")
 	userConfirm := fs.Bool("user-confirm", false, "user-level confirmation required to abort this run; the main agent cannot trigger abort alone")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -275,7 +275,7 @@ func runWorkflowAbort(args []string, streams IO) (int, error) {
 	if !*userConfirm {
 		return 1, fmt.Errorf("workflow abort requires --user-confirm (用户级确认): aborting a run is a destructive flow-state action the main agent cannot trigger alone")
 	}
-	summary, err := validate.Abort(*root, *pkg, *runID)
+	summary, err := validate.Abort(*root, *runID)
 	return printValue(streams.Stdout, summary, err)
 }
 
@@ -497,16 +497,16 @@ func runWorkflowSnapshot(args []string, streams IO) (int, error) {
 
 func runWorkflowCleanup(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow cleanup", streams)
-	root, pkg := rootFlags(fs)
+	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run", "", "explicitly delete this run's temp directory (terminated or not)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
 	if *runID != "" {
-		deleted, err := validate.CleanupTempRun(*root, *pkg, *runID)
+		deleted, err := validate.CleanupTempRun(*root, *runID)
 		return printValue(streams.Stdout, map[string]any{"deleted": deleted}, err)
 	}
-	result, err := validate.CleanupTempRuns(*root, *pkg)
+	result, err := validate.CleanupTempRuns(*root)
 	return printValue(streams.Stdout, result, err)
 }
 

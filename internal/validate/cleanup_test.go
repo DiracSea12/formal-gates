@@ -17,7 +17,7 @@ func TestCleanupTempRunsSweepsTerminatedOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := CleanupTempRuns(root, "")
+	result, err := CleanupTempRuns(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestCleanupTempRunExplicitDeletesActive(t *testing.T) {
 	root := t.TempDir()
 	makeTempRun(t, root, "abandoned-run", "ACTIVE")
 
-	deleted, err := CleanupTempRun(root, "", "abandoned-run")
+	deleted, err := CleanupTempRun(root, "abandoned-run")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestCleanupTempRunExplicitDeletesActive(t *testing.T) {
 func TestCleanupTempRunRejectsUnsafeNames(t *testing.T) {
 	root := t.TempDir()
 	for _, id := range []string{"", ".", "..", "a/b", "a\\b", "../escape"} {
-		if _, err := CleanupTempRun(root, "", id); err == nil {
+		if _, err := CleanupTempRun(root, id); err == nil {
 			t.Fatalf("unsafe run id %q must be rejected", id)
 		}
 	}
@@ -69,7 +69,7 @@ func TestCleanupTempRunRejectsUnsafeNames(t *testing.T) {
 
 func TestCleanupTempRunMissingIsNotError(t *testing.T) {
 	root := t.TempDir()
-	deleted, err := CleanupTempRun(root, "", "never-existed")
+	deleted, err := CleanupTempRun(root, "never-existed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,11 +90,33 @@ func TestCleanupNeverTouchesResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := CleanupTempRuns(root, ""); err != nil {
+	if _, err := CleanupTempRuns(root); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(summary); err != nil {
 		t.Fatalf("results summary must survive cleanup: %v", err)
+	}
+}
+
+func TestCleanupPreservesTerminalRunWithoutSummary(t *testing.T) {
+	root := t.TempDir()
+	state := NewRunState("incomplete-seal", "formal", "req.md", "rev", "git", "base", "cur", "baseprompt", "cat", true, nil, nil)
+	state.Status = "SEALED"
+	if err := SaveRunState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSliceCost(root, state.RunID, SliceCostRecord{RunID: "slice-one"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := CleanupTempRuns(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(result.Unknown, state.RunID) {
+		t.Fatalf("terminal run without a summary was not preserved as unknown: %#v", result)
+	}
+	if _, err := os.Stat(SliceCostPath(root, state.RunID, "slice-one")); err != nil {
+		t.Fatalf("cleanup removed a sidecar before summary persistence: %v", err)
 	}
 }
 
@@ -104,5 +126,10 @@ func makeTempRun(t *testing.T, root, runID, status string) {
 	state.Status = status
 	if err := SaveRunState(root, state); err != nil {
 		t.Fatal(err)
+	}
+	if status == "SEALED" || status == "ABORTED" {
+		if err := SaveRunSummary(root, state); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
