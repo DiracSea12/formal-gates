@@ -320,12 +320,12 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		addCheck(tc.name, true, "installed runtime uses native commands")
-		rules, err := LoadManagedRules(root)
+		rule, err := LoadManagedRule(root)
 		if err != nil {
 			addCheck(tc.name+"-managed-rule", false, err.Error())
 			continue
 		}
-		if detail := installedManagedRuleDetail(report, rules[len(rules)-1]); detail != "" {
+		if detail := installedManagedRuleDetail(report, rule); detail != "" {
 			addCheck(tc.name+"-managed-rule", false, detail)
 			continue
 		}
@@ -334,7 +334,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name+"-uninstall", false, err.Error())
 			continue
 		}
-		if detail := uninstalledInstallDetail(uninstalled, rules); detail != "" {
+		if detail := uninstalledInstallDetail(uninstalled); detail != "" {
 			addCheck(tc.name+"-uninstall", false, detail)
 			continue
 		}
@@ -391,11 +391,14 @@ func installedManagedRuleDetail(report InstallReport, latest string) string {
 		if strings.Count(text, latest) != 1 {
 			return fmt.Sprintf("managed rule count for %s is %d", target.ManagedRulePath, strings.Count(text, latest))
 		}
+		if strings.Count(text, hostInstructionsStartMarker) != 1 || strings.Count(text, hostInstructionsEndMarker) != 1 {
+			return "managed rule markers did not converge in " + target.ManagedRulePath
+		}
 	}
 	return ""
 }
 
-func uninstalledInstallDetail(report UninstallReport, rules []string) string {
+func uninstalledInstallDetail(report UninstallReport) string {
 	for _, target := range report.Targets {
 		if exists(target.TargetPath) {
 			return "formal-gates runtime remains at " + target.TargetPath
@@ -405,10 +408,8 @@ func uninstalledInstallDetail(report UninstallReport, rules []string) string {
 			if err != nil {
 				return err.Error()
 			}
-			for _, rule := range rules {
-				if strings.Contains(text, rule) {
-					return "managed rule remains in " + target.ManagedRulePath
-				}
+			if strings.Contains(text, hostInstructionsStartMarker) || strings.Contains(text, hostInstructionsEndMarker) {
+				return "managed rule markers remain in " + target.ManagedRulePath
 			}
 		}
 		if target.HookConfig != "" && isFile(target.HookConfig) {
@@ -453,15 +454,15 @@ func runWriteBlockCanary(root string) error {
 		return err
 	}
 	state := map[string]any{
-		"status":   "ACTIVE",
-		"runId":    "write-block-canary",
-		"flow":     "formal",
-		"actions":  map[string]any{},
-		"gates":    map[string]any{},
-		"carry":    map[string]any{},
-		"dispatches": map[string]any{},
+		"status":             "ACTIVE",
+		"runId":              "write-block-canary",
+		"flow":               "formal",
+		"actions":            map[string]any{},
+		"gates":              map[string]any{},
+		"carry":              map[string]any{},
+		"dispatches":         map[string]any{},
 		"skipAuthorizations": map[string]any{},
-		"selectedGates": []string{},
+		"selectedGates":      []string{},
 		"requirementArtifacts": []map[string]string{
 			{"path": "requirements.md", "revision": "r1"},
 			{"path": "design.md", "revision": "r2"},

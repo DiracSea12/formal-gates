@@ -1,81 +1,130 @@
 package validate
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestLoadManagedRulesRequiresOrderedUniqueCompleteVersions(t *testing.T) {
+func TestLoadManagedRuleRequiresSingleCurrentRule(t *testing.T) {
 	root := t.TempDir()
-	catalogPath := filepath.Join(root, filepath.FromSlash(managedRulesRelativePath))
+	skillPath := filepath.Join(root, filepath.FromSlash(managedRuleSourceRelativePath))
 
-	valid := []string{"old rule", "new rule"}
-	writeManagedRulesTestFile(t, catalogPath, valid)
-	got, err := LoadManagedRules(root)
+	writeManagedRuleTestFile(t, skillPath, "current rule")
+	got, err := LoadManagedRule(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(got, "\x00") != strings.Join(valid, "\x00") {
-		t.Fatalf("managed rules=%v want=%v", got, valid)
+	if got != "current rule" {
+		t.Fatalf("managed rule=%q want=%q", got, "current rule")
 	}
 
-	for _, invalid := range [][]string{
-		nil,
-		{"same", "same"},
-		{" "},
-		{"\nleading"},
-		{"trailing\n"},
+	for _, invalid := range []string{
+		"",
+		" ",
+		"\nleading",
+		"trailing\n",
+		hostInstructionsStartMarker,
+		hostInstructionsEndMarker,
 	} {
-		t.Run(strings.ReplaceAll(strings.Join(invalid, ","), "\n", "\\n"), func(t *testing.T) {
-			writeManagedRulesTestFile(t, catalogPath, invalid)
-			if _, err := LoadManagedRules(root); err == nil {
-				t.Fatalf("invalid managed rule catalog %v was accepted", invalid)
+		t.Run(strings.ReplaceAll(invalid, "\n", "\\n"), func(t *testing.T) {
+			writeManagedRuleTestFile(t, skillPath, invalid)
+			if _, err := LoadManagedRule(root); err == nil {
+				t.Fatalf("invalid managed rule %q was accepted", invalid)
 			}
 		})
 	}
-	os.WriteFile(catalogPath, []byte(`{"versions":["rule"]}`), 0o600)
-	if _, err := LoadManagedRules(root); err == nil {
-		t.Fatal("managed rule catalog object format was accepted")
+	if err := os.WriteFile(skillPath, []byte("# Skill without markers\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadManagedRule(root); err == nil {
+		t.Fatal("SKILL.md without managed rule markers was accepted")
+	}
+	duplicate := hostInstructionsStartMarker + "\none\n" + hostInstructionsEndMarker + "\n" +
+		hostInstructionsStartMarker + "\ntwo\n" + hostInstructionsEndMarker + "\n"
+	if err := os.WriteFile(skillPath, []byte(duplicate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadManagedRule(root); err == nil {
+		t.Fatal("SKILL.md with duplicate managed rule blocks was accepted")
 	}
 }
 
-func TestManagedRuleBlocksMigrateExactDuplicatesAndPreserveNewlineStyle(t *testing.T) {
-	versions := []string{"OLD_RULE", "NEW_RULE"}
-	original := "before\r\nOLD_RULE\r\nkeep OLD_RULE embedded\r\nNEW_RULE\r\nOLD_RULE\r\nafter\r\n"
-	updated, err := replaceManagedRuleBlocks(original, versions, versions[len(versions)-1])
+func TestManagedRuleMarkersCollapseDuplicatesAndPreserveNewlineStyle(t *testing.T) {
+	original := "before\r\n" +
+		hostInstructionsStartMarker + "\r\nOLD\r\n" + hostInstructionsEndMarker + "\r\n" +
+		"keep\r\n" +
+		hostInstructionsStartMarker + "\r\nSTALE\r\n" + hostInstructionsEndMarker + "\r\n" +
+		"after\r\n"
+	updated, err := replaceManagedRuleBlock(original, "CURRENT")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "before\r\nkeep OLD_RULE embedded\r\nafter\r\nNEW_RULE\r\n"
+	want := "before\r\n" +
+		hostInstructionsStartMarker + "\r\nCURRENT\r\n" + hostInstructionsEndMarker + "\r\n" +
+		"keep\r\nafter\r\n"
 	if updated != want {
-		t.Fatalf("migrated managed rules=%q want=%q", updated, want)
+		t.Fatalf("managed marker migration=%q want=%q", updated, want)
 	}
-	if strings.Count(updated, "NEW_RULE") != 1 {
-		t.Fatalf("latest rule count=%d in %q", strings.Count(updated, "NEW_RULE"), updated)
+	if strings.Count(updated, hostInstructionsStartMarker) != 1 ||
+		strings.Count(updated, hostInstructionsEndMarker) != 1 ||
+		strings.Count(updated, "CURRENT") != 1 {
+		t.Fatalf("managed block did not converge: %q", updated)
 	}
 }
 
-func TestRemoveManagedRuleBlocksPreservesUnrelatedContent(t *testing.T) {
-	versions := []string{"OLD_LINE", "NEW_LINE\nSECOND_LINE"}
-	original := "unrelated\nOLD_LINE\nNEW_LINE\nSECOND_LINE\nend\n"
-	updated, removed := removeManagedRuleBlocks(original, versions)
+func TestManagedRuleMarkersMigrateExactUnmarkedCurrentRule(t *testing.T) {
+	original := "before\nCURRENT\nkeep CURRENT embedded\nafter\n"
+	updated, err := replaceManagedRuleBlock(original, "CURRENT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "before\n" +
+		hostInstructionsStartMarker + "\nCURRENT\n" + hostInstructionsEndMarker + "\n" +
+		"keep CURRENT embedded\nafter\n"
+	if updated != want {
+		t.Fatalf("unmarked migration=%q want=%q", updated, want)
+	}
+}
+
+func TestRemoveManagedRuleMarkersPreservesUnrelatedContent(t *testing.T) {
+	original := "unrelated\n" +
+		hostInstructionsStartMarker + "\nCURRENT\n" + hostInstructionsEndMarker + "\n" +
+		"end\n"
+	updated, removed, err := removeManagedRuleBlocks(original)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !removed {
-		t.Fatal("expected managed blocks to be removed")
+		t.Fatal("expected managed marker block to be removed")
 	}
 	if want := "unrelated\nend\n"; updated != want {
-		t.Fatalf("uninstalled managed rules=%q want=%q", updated, want)
+		t.Fatalf("uninstalled managed block=%q want=%q", updated, want)
+	}
+}
+
+func TestManagedRuleMarkersRejectMalformedBlocks(t *testing.T) {
+	for name, input := range map[string]string{
+		"missing-end":   hostInstructionsStartMarker + "\nCURRENT\n",
+		"missing-start": hostInstructionsEndMarker + "\n",
+		"nested":        hostInstructionsStartMarker + "\n" + hostInstructionsStartMarker + "\n" + hostInstructionsEndMarker + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := replaceManagedRuleBlock(input, "CURRENT"); err == nil {
+				t.Fatalf("malformed marker block %q was accepted", input)
+			}
+		})
 	}
 }
 
 func TestRemoveManagedRuleFileCanRemoveEmptyCursorRuleFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "formal-gates.mdc")
-	if err := os.WriteFile(path, []byte("ONLY_RULE\n"), 0o600); err != nil {
+	text := hostInstructionsStartMarker + "\nCURRENT\n" + hostInstructionsEndMarker + "\n"
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedRuleFile(path, []string{"ONLY_RULE"}, true); err != nil {
+	if err := removeManagedRuleFile(path, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -83,16 +132,13 @@ func TestRemoveManagedRuleFileCanRemoveEmptyCursorRuleFile(t *testing.T) {
 	}
 }
 
-func writeManagedRulesTestFile(t *testing.T, path string, versions []string) {
+func writeManagedRuleTestFile(t *testing.T, path, current string) {
 	t.Helper()
-	data, err := json.Marshal(versions)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	data := "# Skill\n" + hostInstructionsStartMarker + "\n" + current + "\n" + hostInstructionsEndMarker + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

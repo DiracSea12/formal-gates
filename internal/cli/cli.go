@@ -129,7 +129,7 @@ func runInstall(args []string, streams IO) (int, error) {
 func runUninstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
-	source := fs.String("source", "", "optional formal-gates source directory for the managed-rule catalog")
+	source := fs.String("source", "", "deprecated compatibility flag; marker-based uninstall does not need a source directory")
 	host := fs.String("host", "", "target host: claude, codex, cursor, or both")
 	scope := fs.String("scope", "", "uninstall scope: global or project")
 	project := fs.String("project", "", "project path for project uninstalls")

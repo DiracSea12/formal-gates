@@ -70,8 +70,13 @@ host 的全局安装当作回退。
 - Cursor 项目：`<project>/.cursor/rules/formal-gates.mdc`
 
 Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook，不创建全局
-规则文件。重复安装会把 `references/managed-rules.json` 中的旧版本和重复版本收敛
-为一个最新规则。
+规则文件。当前规则直接取自 `SKILL.md` 中
+`<formal-gates:host-instructions:start>` 与 `<formal-gates:host-instructions:end>` 之间的
+唯一宿主指令区块；安装器把同一区块写入宿主指令文件。重复安装会替换区块内容并把
+重复区块收敛为一个，同时保留区块外内容。
+
+从旧版（包括使用旧 marker 的版本）升级时，先用旧版本二进制执行一次 `uninstall`，再安装
+本版本；之后可直接重复覆盖安装，不再依赖任何历史规则全文。
 
 其他兼容 Agent Skill 的 host 可以手工阅读这些 Markdown，但本包不声明为它们提供
 安装器或 hook 集成。
@@ -86,10 +91,10 @@ bin/formal-gates uninstall --host codex --scope project --project <project>
 bin/formal-gates uninstall --host cursor --scope project --project <project>
 ```
 
-它会删除所选 host 的 formal-gates 运行时目录，移除安装器拥有的 hook 条目，并从
-上述规则文件中删除所有历史受管规则版本。文件中的其他内容和非 formal-gates hook
-会保留。若运行时目录已经不存在，可用 `--source <formal-gates>` 指定包含
-`references/managed-rules.json` 的包来完成规则清理。
+它会删除所选 host 的 formal-gates 运行时目录、安装器拥有的 hook 条目和完整 marker
+规则区块，同时保留规则区块外内容与非 formal-gates hook。规则清理由 marker 独立完成，
+即使运行时目录已经不存在也不需要规则源码。`uninstall --source` 仅作为兼容参数保留，
+不再参与规则清理。
 
 ## Hook 边界
 

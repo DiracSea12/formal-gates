@@ -1,7 +1,6 @@
 package validate
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,46 +9,78 @@ import (
 	"formal-gates/internal/lifecycle"
 )
 
-const managedRulesRelativePath = "references/managed-rules.json"
+const managedRuleSourceRelativePath = "SKILL.md"
+const hostInstructionsStartMarker = "<formal-gates:host-instructions:start>"
+const hostInstructionsEndMarker = "<formal-gates:host-instructions:end>"
 
-// LoadManagedRules reads the ordered ownership record used by both install and
-// uninstall.
-func LoadManagedRules(root string) ([]string, error) {
-	path := filepath.Join(lifecycle.CleanRoot(root), filepath.FromSlash(managedRulesRelativePath))
+// LoadManagedRule extracts the single canonical marker block from SKILL.md.
+// Uninstall only needs the marker pair and therefore does not depend on source.
+func LoadManagedRule(root string) (string, error) {
+	path := filepath.Join(lifecycle.CleanRoot(root), filepath.FromSlash(managedRuleSourceRelativePath))
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("managed rule catalog: %w", err)
+		return "", fmt.Errorf("managed rule source: %w", err)
 	}
-
-	var versions []string
-	if err := json.Unmarshal(data, &versions); err != nil {
-		return nil, fmt.Errorf("managed rule catalog is invalid JSON: %w", err)
-	}
-	if err := validateManagedRuleVersions(versions); err != nil {
-		return nil, fmt.Errorf("managed rule catalog: %w", err)
-	}
-	return versions, nil
+	return extractManagedRule(string(data))
 }
 
-func validateManagedRuleVersions(versions []string) error {
-	if len(versions) == 0 {
-		return fmt.Errorf("must contain at least one rule version")
+func extractManagedRule(text string) (string, error) {
+	lines := splitManagedFileLines(text)
+	start := -1
+	end := -1
+	for index, line := range lines {
+		switch line.content {
+		case hostInstructionsStartMarker:
+			if start >= 0 {
+				return "", fmt.Errorf("SKILL.md contains more than one managed rule start marker")
+			}
+			if end >= 0 {
+				return "", fmt.Errorf("SKILL.md contains a managed rule start marker after the end marker")
+			}
+			start = index
+		case hostInstructionsEndMarker:
+			if start < 0 {
+				return "", fmt.Errorf("SKILL.md managed rule end marker has no matching start marker")
+			}
+			if end >= 0 {
+				return "", fmt.Errorf("SKILL.md contains more than one managed rule end marker")
+			}
+			end = index
+		}
 	}
-	seen := make(map[string]struct{}, len(versions))
-	for index, version := range versions {
-		if strings.TrimSpace(version) == "" {
-			return fmt.Errorf("version %d is empty", index+1)
-		}
-		if version != strings.TrimSpace(version) {
-			return fmt.Errorf("version %d is not a complete rule block", index+1)
-		}
-		if strings.Contains(version, "\r") {
-			return fmt.Errorf("version %d must use LF line endings", index+1)
-		}
-		if _, ok := seen[version]; ok {
-			return fmt.Errorf("version %d duplicates an earlier rule", index+1)
-		}
-		seen[version] = struct{}{}
+	if start < 0 {
+		return "", fmt.Errorf("SKILL.md managed rule start marker is missing")
+	}
+	if end < 0 {
+		return "", fmt.Errorf("SKILL.md managed rule end marker is missing")
+	}
+	if end <= start+1 {
+		return "", fmt.Errorf("SKILL.md managed rule block is empty")
+	}
+
+	content := make([]string, 0, end-start-1)
+	for _, line := range lines[start+1 : end] {
+		content = append(content, line.content)
+	}
+	rule := strings.Join(content, "\n")
+	if err := validateManagedRule(rule); err != nil {
+		return "", fmt.Errorf("SKILL.md managed rule block: %w", err)
+	}
+	return rule, nil
+}
+
+func validateManagedRule(rule string) error {
+	if strings.TrimSpace(rule) == "" {
+		return fmt.Errorf("current rule is empty")
+	}
+	if rule != strings.TrimSpace(rule) {
+		return fmt.Errorf("current rule must not have leading or trailing whitespace")
+	}
+	if strings.Contains(rule, "\r") {
+		return fmt.Errorf("current rule must use LF line endings")
+	}
+	if strings.Contains(rule, hostInstructionsStartMarker) || strings.Contains(rule, hostInstructionsEndMarker) {
+		return fmt.Errorf("current rule must not contain managed rule markers")
 	}
 	return nil
 }
@@ -59,53 +90,93 @@ type managedFileLine struct {
 	raw     string
 }
 
-func replaceManagedRuleBlocks(text string, versions []string, latest string) (string, error) {
-	if err := validateManagedRuleVersions(versions); err != nil {
+func replaceManagedRuleBlock(text, rule string) (string, error) {
+	if err := validateManagedRule(rule); err != nil {
 		return "", err
 	}
-	if latest != versions[len(versions)-1] {
-		return "", fmt.Errorf("latest managed rule must be the newest catalog entry")
+	updated, found, err := rewriteManagedRuleBlocks(text, rule, true)
+	if err != nil {
+		return "", err
 	}
-	cleaned, _ := removeManagedRuleBlocks(text, versions)
-	return appendManagedRuleBlock(cleaned, latest), nil
+	if found {
+		return updated, nil
+	}
+	return appendManagedRuleBlock(updated, rule), nil
 }
 
-func removeManagedRuleBlocks(text string, versions []string) (string, bool) {
+func removeManagedRuleBlocks(text string) (string, bool, error) {
+	return rewriteManagedRuleBlocks(text, "", false)
+}
+
+func rewriteManagedRuleBlocks(text, rule string, install bool) (string, bool, error) {
 	lines := splitManagedFileLines(text)
-	patterns := make([][]string, 0, len(versions))
-	for _, version := range versions {
-		patterns = append(patterns, managedRuleLines(version))
+	var ruleLines []string
+	if install {
+		ruleLines = managedRuleLines(rule)
 	}
 
 	var builder strings.Builder
-	removed := false
+	found := false
+	wroteReplacement := false
 	for index := 0; index < len(lines); {
-		matchLength := 0
-		for _, pattern := range patterns {
-			if len(pattern) <= matchLength || !managedBlockMatches(lines, index, pattern) {
-				continue
+		switch lines[index].content {
+		case hostInstructionsStartMarker:
+			end := -1
+			for candidate := index + 1; candidate < len(lines); candidate++ {
+				switch lines[candidate].content {
+				case hostInstructionsStartMarker:
+					return "", false, fmt.Errorf("managed rule block has a nested start marker at line %d", candidate+1)
+				case hostInstructionsEndMarker:
+					end = candidate
+				}
+				if end >= 0 {
+					break
+				}
 			}
-			matchLength = len(pattern)
+			if end < 0 {
+				return "", false, fmt.Errorf("managed rule block start marker at line %d has no matching end marker", index+1)
+			}
+			found = true
+			if install && !wroteReplacement {
+				builder.WriteString(formatManagedRuleBlock(rule, managedFileNewline(text)))
+				wroteReplacement = true
+			}
+			index = end + 1
+			continue
+		case hostInstructionsEndMarker:
+			return "", false, fmt.Errorf("managed rule block end marker at line %d has no matching start marker", index+1)
 		}
-		if matchLength > 0 {
-			index += matchLength
-			removed = true
+
+		// Migrate an unmarked copy of the current rule when switching to the
+		// marker format. Other text is never guessed to be installer-owned.
+		if install && managedBlockMatches(lines, index, ruleLines) {
+			found = true
+			if !wroteReplacement {
+				builder.WriteString(formatManagedRuleBlock(rule, managedFileNewline(text)))
+				wroteReplacement = true
+			}
+			index += len(ruleLines)
 			continue
 		}
+
 		builder.WriteString(lines[index].raw)
 		index++
 	}
-	return builder.String(), removed
+	return builder.String(), found, nil
 }
 
 func appendManagedRuleBlock(text, rule string) string {
 	separator := managedFileNewline(text)
-	rule = strings.ReplaceAll(rule, "\r\n", "\n")
-	rule = strings.ReplaceAll(rule, "\n", separator)
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += separator
 	}
-	return text + rule + separator
+	return text + formatManagedRuleBlock(rule, separator)
+}
+
+func formatManagedRuleBlock(rule, separator string) string {
+	rule = strings.ReplaceAll(rule, "\r\n", "\n")
+	rule = strings.ReplaceAll(rule, "\n", separator)
+	return hostInstructionsStartMarker + separator + rule + separator + hostInstructionsEndMarker + separator
 }
 
 func splitManagedFileLines(text string) []managedFileLine {
@@ -157,17 +228,14 @@ func managedFileNewline(text string) string {
 	return "\n"
 }
 
-func manageManagedRuleFile(path string, versions []string) error {
-	if len(versions) == 0 {
-		return fmt.Errorf("managed rule catalog is empty")
-	}
+func manageManagedRuleFile(path, rule string) error {
 	data, err := os.ReadFile(path)
 	existsAlready := err == nil
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	current := string(data)
-	updated, err := replaceManagedRuleBlocks(current, versions, versions[len(versions)-1])
+	updated, err := replaceManagedRuleBlock(current, rule)
 	if err != nil {
 		return err
 	}
@@ -180,7 +248,7 @@ func manageManagedRuleFile(path string, versions []string) error {
 	return os.WriteFile(path, []byte(updated), 0o600)
 }
 
-func removeManagedRuleFile(path string, versions []string, removeEmpty bool) error {
+func removeManagedRuleFile(path string, removeEmpty bool) error {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil
@@ -188,7 +256,10 @@ func removeManagedRuleFile(path string, versions []string, removeEmpty bool) err
 	if err != nil {
 		return err
 	}
-	updated, removed := removeManagedRuleBlocks(string(data), versions)
+	updated, removed, err := removeManagedRuleBlocks(string(data))
+	if err != nil {
+		return err
+	}
 	if !removed {
 		return nil
 	}

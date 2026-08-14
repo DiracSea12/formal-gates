@@ -32,7 +32,6 @@ var requiredFiles = []string{
 	"agents/openai.yaml",
 	"prompts/reviewer-base.md",
 	"references/install-and-hooks.md",
-	"references/managed-rules.json",
 	"references/local-validation.md",
 	"references/vcs-snapshots.md",
 }
@@ -98,7 +97,7 @@ func Package(root string) Result {
 	validateBootstrapScripts(root, &result)
 	validateManifest(root, &result)
 	validatePromptCatalog(root, &result)
-	validateManagedRuleCatalog(root, &result)
+	validateManagedRuleSource(root, &result)
 	return result
 }
 
@@ -108,9 +107,9 @@ func validatePromptCatalog(root string, result *Result) {
 	}
 }
 
-func validateManagedRuleCatalog(root string, result *Result) {
-	if _, err := LoadManagedRules(root); err != nil {
-		result.add(managedRulesRelativePath, err.Error())
+func validateManagedRuleSource(root string, result *Result) {
+	if _, err := LoadManagedRule(root); err != nil {
+		result.add(managedRuleSourceRelativePath, err.Error())
 	}
 }
 

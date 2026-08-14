@@ -236,28 +236,31 @@ Installation merges formal-gates' own host hooks into the host config: Claude Co
 Installation also manages the intake rule: Claude Code uses global `~/.claude/CLAUDE.md` or project
 `CLAUDE.md`, Codex uses global `~/.codex/AGENTS.md` or project `AGENTS.md`, and project Cursor
 uses `.cursor/rules/formal-gates.mdc`. Cursor global installs do not create a rules file; they
-retain the existing runtime and hook integration. Repeated installs collapse all known historical
-and duplicate rules to one latest rule.
+retain the existing runtime and hook integration. The current rule is enclosed by the host
+instructions block `<formal-gates:host-instructions:start>` and
+`<formal-gates:host-instructions:end>`; repeated installs replace the block content and collapse
+duplicate blocks to one.
+When upgrading from an older release, including one using the previous marker, uninstall once with
+the old binary before installing this release. Later releases can be installed in place.
 
 ### Native uninstall
 
 Uninstall uses the same host, scope, and project resolution and removes the formal-gates
-runtime, installer-owned hook entries, and every historical managed rule while preserving
-other document content and hooks:
+runtime, installer-owned hook entries, and the complete marker-delimited rule block while
+preserving content outside the block and other hooks:
 
 ```bash
 bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host cursor --scope project --project <project>
 ```
 
-When the runtime directory is already missing, add `--source <formal-gates>` pointing to a
-package containing `references/managed-rules.json`.
+Marker-based rule cleanup does not need the runtime or a rule source directory.
 
 ### Flag semantics
 
 - `--force` — replace an existing target.
 - `--skip-hooks` — install the package without touching host hooks (only when the host hook config must stay byte-for-byte unchanged).
-- `uninstall --source` — optional catalog source used when uninstalling a target whose runtime is already missing.
+- `uninstall --source` — retained for compatibility with older calls; unused by marker-based cleanup.
 
 ---
 

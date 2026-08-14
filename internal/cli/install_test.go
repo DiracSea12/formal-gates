@@ -424,7 +424,7 @@ func TestRunInstallRequiresBuiltNativeBinary(t *testing.T) {
 	}
 }
 
-func TestRunInstallMigratesManagedRulesAcrossHostsAndScopes(t *testing.T) {
+func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T) {
 	for _, host := range []string{"claude", "codex", "cursor"} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(host+"/"+scope, func(t *testing.T) {
@@ -440,7 +440,7 @@ func TestRunInstallMigratesManagedRulesAcrossHostsAndScopes(t *testing.T) {
 
 				managed := testManagedRulePath(root, host, scope)
 				if managed != "" {
-					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleOld+"\n"+testManagedRuleLatest+"\n"+testManagedRuleOld+"\n")
+					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleOld)+testManagedRuleBlock("STALE_FORMAL_GATES_RULE"))
 				}
 				var stdout, stderr bytes.Buffer
 				if code := Run("formal-gates", args, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
@@ -483,7 +483,7 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 
 				managed := testManagedRulePath(root, host, scope)
 				if managed != "" {
-					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleOld+"\n"+testManagedRuleLatest+"\n")
+					mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleOld))
 				}
 				config := testHookConfigPath(root, host, scope)
 				writeOldHookConfig(t, config, host)
@@ -520,27 +520,17 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 	}
 }
 
-func TestRunUninstallRequiresSourceWhenRuntimeCatalogIsMissing(t *testing.T) {
-	source := writeInstallSource(t, "source")
+func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
 	project := t.TempDir()
 	managed := filepath.Join(project, "AGENTS.md")
-	mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleOld+"\n")
+	mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleLatest))
 
 	var stdout, stderr bytes.Buffer
 	code := Run("formal-gates", []string{
 		"uninstall", "--host", "codex", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
-	if code == 0 || !strings.Contains(stderr.String(), "pass --source") {
-		t.Fatalf("expected missing catalog source error, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = Run("formal-gates", []string{
-		"uninstall", "--source", source, "--host", "codex", "--scope", "project", "--project", project,
-	}, IO{Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
-		t.Fatalf("uninstall with explicit catalog failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		t.Fatalf("marker-only uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if got := readFile(t, managed); got != "unrelated\n" {
 		t.Fatalf("uninstall changed unrelated content: %q", got)
@@ -619,6 +609,9 @@ func assertManagedRuleState(t *testing.T, path string, preserveUnrelated bool) {
 	if strings.Contains(text, testManagedRuleOld) {
 		t.Fatalf("old managed rule remains in %q", text)
 	}
+	if strings.Count(text, testManagedRulesStartMarker) != 1 || strings.Count(text, testManagedRulesEndMarker) != 1 {
+		t.Fatalf("managed rule markers did not converge in %q", text)
+	}
 	if preserveUnrelated && !strings.Contains(text, "unrelated") {
 		t.Fatalf("unrelated content was not preserved in %q", text)
 	}
@@ -627,7 +620,7 @@ func assertManagedRuleState(t *testing.T, path string, preserveUnrelated bool) {
 func writeInstallSource(t *testing.T, skillText string) string {
 	t.Helper()
 	source := t.TempDir()
-	mustWriteCLI(t, filepath.Join(source, "SKILL.md"), skillText+"\n")
+	mustWriteCLI(t, filepath.Join(source, "SKILL.md"), skillText+"\n"+testManagedRuleBlock(testManagedRuleLatest))
 	mustWriteCLI(t, filepath.Join(source, "README.md"), "readme\n")
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
 	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates"}`+"\n")
@@ -643,11 +636,6 @@ func writeInstallSource(t *testing.T, skillText string) string {
 		}
 		mustWriteCLI(t, filepath.Join(source, dir, ".keep"), "keep\n")
 	}
-	managedRules, err := json.Marshal([]string{testManagedRuleOld, testManagedRuleLatest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustWriteCLI(t, filepath.Join(source, "references", "managed-rules.json"), string(managedRules)+"\n")
 	mustWriteCLI(t, filepath.Join(source, "prompts", "reviewer-base.md"), "reviewer base\n")
 	mustWriteCLI(t, filepath.Join(source, "prompts", "actions", "sample-action.md"), "sample action\n")
 	mustWriteCLI(t, filepath.Join(source, "gates", "sample-gate.md"), "sample gate\n")
@@ -655,9 +643,15 @@ func writeInstallSource(t *testing.T, skillText string) string {
 }
 
 const (
-	testManagedRuleOld    = "OLD_FORMAL_GATES_RULE"
-	testManagedRuleLatest = "LATEST_FORMAL_GATES_RULE"
+	testManagedRuleOld          = "OLD_FORMAL_GATES_RULE"
+	testManagedRuleLatest       = "LATEST_FORMAL_GATES_RULE"
+	testManagedRulesStartMarker = "<formal-gates:host-instructions:start>"
+	testManagedRulesEndMarker   = "<formal-gates:host-instructions:end>"
 )
+
+func testManagedRuleBlock(rule string) string {
+	return testManagedRulesStartMarker + "\n" + rule + "\n" + testManagedRulesEndMarker + "\n"
+}
 
 func installTestBinaryName() string {
 	if runtime.GOOS == "windows" {

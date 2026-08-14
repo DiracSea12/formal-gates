@@ -237,26 +237,28 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 安装还会维护受理规则：Claude Code 使用全局 `~/.claude/CLAUDE.md` 或项目
 `CLAUDE.md`，Codex 使用全局 `~/.codex/AGENTS.md` 或项目 `AGENTS.md`，Cursor 项目
 使用 `.cursor/rules/formal-gates.mdc`。Cursor 全局不创建规则文件，只保留现有运行时和
-hook 集成。重复安装会把所有已知旧版本和重复规则收敛为一个最新规则。
+hook 集成。当前规则写在宿主指令区块 `<formal-gates:host-instructions:start>` 与
+`<formal-gates:host-instructions:end>` 之间；重复安装会替换区块内容并把重复区块收敛为一个。
+从旧版（包括使用旧 marker 的版本）升级时，先用旧版本二进制卸载，再安装本版本；此后可直接
+覆盖安装。
 
 ### 原生卸载
 
 卸载使用相同的 host、scope 和 project 参数，并清理 formal-gates 运行时、安装器拥有
-的 hook 条目和所有历史受管规则，同时保留其他文档内容与 hook：
+的 hook 条目和完整 marker 规则区块，同时保留区块外文档内容与其他 hook：
 
 ```bash
 bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host cursor --scope project --project <project>
 ```
 
-如果运行时目录已经不存在，可增加 `--source <formal-gates>` 指向包含
-`references/managed-rules.json` 的包。
+规则区块按 marker 删除，即使运行时目录已经不存在也不需要规则源码。
 
 ### 参数语义
 
 - `--force`：目标已存在时替换它。
 - `--skip-hooks`：只安装包，不改宿主 hook 配置（只有当 hook 配置必须逐字节不变时才用）。
-- `uninstall --source`：可选的规则目录来源，用于卸载已缺失运行时的目标。
+- `uninstall --source`：兼容旧调用保留；marker 模式下不再使用该参数。
 
 ---
 

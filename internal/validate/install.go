@@ -73,7 +73,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err := assertInstallSource(sourceAbs); err != nil {
 		return InstallReport{}, err
 	}
-	rules, err := LoadManagedRules(sourceAbs)
+	rule, err := LoadManagedRule(sourceAbs)
 	if err != nil {
 		return InstallReport{}, err
 	}
@@ -100,7 +100,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
 		}
 		if target.managedRulePath != "" {
-			if err := manageManagedRuleFile(target.managedRulePath, rules); err != nil {
+			if err := manageManagedRuleFile(target.managedRulePath, rule); err != nil {
 				return InstallReport{}, err
 			}
 		}
@@ -116,12 +116,8 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	}
 	report := UninstallReport{}
 	for _, target := range targets {
-		ruleVersions, err := uninstallRuleCatalog(options.Source, target)
-		if err != nil {
-			return UninstallReport{}, err
-		}
 		if target.managedRulePath != "" {
-			if err := removeManagedRuleFile(target.managedRulePath, ruleVersions, target.host == "cursor"); err != nil {
+			if err := removeManagedRuleFile(target.managedRulePath, target.host == "cursor"); err != nil {
 				return UninstallReport{}, err
 			}
 		}
@@ -136,36 +132,6 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		report.Targets = append(report.Targets, installTargetReport(target))
 	}
 	return report, nil
-}
-
-func uninstallRuleCatalog(source string, target installTarget) ([]string, error) {
-	if target.managedRulePath == "" {
-		return nil, nil
-	}
-	source = strings.TrimSpace(source)
-	if source != "" {
-		absolute, err := filepath.Abs(source)
-		if err != nil {
-			return nil, err
-		}
-		return LoadManagedRules(filepath.Clean(absolute))
-	}
-	if exists(target.targetPath) {
-		if rules, err := LoadManagedRules(target.targetPath); err == nil {
-			return rules, nil
-		}
-	}
-	data, err := os.ReadFile(target.managedRulePath)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(string(data)) == "" {
-		return nil, nil
-	}
-	return nil, fmt.Errorf("cannot resolve managed rule catalog for %s; pass --source", target.targetPath)
 }
 
 func normalizeInstallHost(host string) (string, error) {

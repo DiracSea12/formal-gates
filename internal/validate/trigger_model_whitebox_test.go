@@ -209,19 +209,15 @@ func TestFormalFlowDeclaresLightweightRoute(t *testing.T) {
 	assertLacksText(t, flow, "会话声明")
 }
 
-// Case: references/managed-rules.json must declare the V2 managed rule (default
+// Case: the marker block in SKILL.md must declare the V2 managed rule (default
 // remind once, large/complex extra emphasis, full intake only on explicit
 // request) and must not write「不要求回应」explicitly nor retain the forced-intake
 // phrasing.
-func TestManagedRulesJsonDeclaresV2Intake(t *testing.T) {
-	rules, err := LoadManagedRules(repoRootValidateTest(t))
+func TestSkillManagedRuleBlockDeclaresV2Intake(t *testing.T) {
+	rule, err := LoadManagedRule(repoRootValidateTest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 1 {
-		t.Fatalf("expected exactly one managed rule version, got %d", len(rules))
-	}
-	rule := rules[0]
 	assertHasText(t, rule, "默认提醒一次")
 	assertHasText(t, rule, "若需走 formal-gates 流程，可直接提出")
 	assertHasText(t, rule, "检测到复杂需求，建议走 formal-gates 流程")
@@ -318,6 +314,8 @@ func TestInstallReproducesV2ModelAtTarget(t *testing.T) {
 	}
 	assertHasText(t, string(managed), "默认提醒一次")
 	assertHasText(t, string(managed), "若需走 formal-gates 流程，可直接提出")
+	assertHasText(t, string(managed), hostInstructionsStartMarker)
+	assertHasText(t, string(managed), hostInstructionsEndMarker)
 	assertLacksText(t, string(managed), "不要求回应")
 	assertLacksText(t, string(managed), "必须先执行 formal-gates 受理流程")
 }
