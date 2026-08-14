@@ -2269,7 +2269,7 @@ func repairInput(state RunState) string {
 	// 收集每个 FAIL 的选中 QA mode 的发现项（黑盒/白盒各自独立，合并单派发按
 	// mode 生效）。
 	if isSelectedQA(state) {
-		for id := range selectedSet(state) {
+		for _, id := range state.SelectedGates {
 			if !isQAMode(id) {
 				continue
 			}
