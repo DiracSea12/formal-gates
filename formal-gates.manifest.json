@@ -105,7 +105,7 @@
     "GateRunner loads the shared reviewer base and every valid package-local gate prompt from the prompt catalog without a per-gate manifest or Go registry.",
     "Native workflow commands resolve and verify immutable identities through the selected Git, SVN, or P4 command while reviewers inspect native comparisons directly.",
     "Native install copies the verifiable installable package subset, including prompts and gates, without PS1/Python script runtime files and writes each selected host's native hook configuration.",
-    "Native install and uninstall use the single marker-delimited current rule in SKILL.md for the applicable Claude Code, Codex, and Cursor project guidance files; Cursor global has no managed rules location.",
+    "Native install and uninstall use the single marker-delimited host-instruction block from SKILL.md for the applicable Claude Code, Codex, and Cursor project guidance files; Cursor global has no host-instruction file.",
     "Source checkout development tests may use go run ./cmd/formal-gates, but installed hook and validation paths must use bin/formal-gates(.exe).",
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root."

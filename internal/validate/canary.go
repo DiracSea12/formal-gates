@@ -322,11 +322,11 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		addCheck(tc.name, true, "installed runtime uses native commands")
 		rule, err := LoadManagedRule(root)
 		if err != nil {
-			addCheck(tc.name+"-managed-rule", false, err.Error())
+			addCheck(tc.name+"-host-instructions", false, err.Error())
 			continue
 		}
 		if detail := installedManagedRuleDetail(report, rule); detail != "" {
-			addCheck(tc.name+"-managed-rule", false, detail)
+			addCheck(tc.name+"-host-instructions", false, detail)
 			continue
 		}
 		uninstalled, err := Uninstall(UninstallOptions{Host: tc.host, Scope: "project", Project: project})
@@ -338,7 +338,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name+"-uninstall", false, detail)
 			continue
 		}
-		addCheck(tc.name+"-uninstall", true, "runtime, hooks, and managed rules cleaned")
+		addCheck(tc.name+"-uninstall", true, "runtime, hooks, and host instruction blocks cleaned")
 	}
 }
 
@@ -389,10 +389,10 @@ func installedManagedRuleDetail(report InstallReport, latest string) string {
 			return err.Error()
 		}
 		if strings.Count(text, latest) != 1 {
-			return fmt.Sprintf("managed rule count for %s is %d", target.ManagedRulePath, strings.Count(text, latest))
+			return fmt.Sprintf("host instruction rule count for %s is %d", target.ManagedRulePath, strings.Count(text, latest))
 		}
 		if strings.Count(text, hostInstructionsStartMarker) != 1 || strings.Count(text, hostInstructionsEndMarker) != 1 {
-			return "managed rule markers did not converge in " + target.ManagedRulePath
+			return "host instruction markers did not converge in " + target.ManagedRulePath
 		}
 	}
 	return ""
@@ -409,7 +409,7 @@ func uninstalledInstallDetail(report UninstallReport) string {
 				return err.Error()
 			}
 			if strings.Contains(text, hostInstructionsStartMarker) || strings.Contains(text, hostInstructionsEndMarker) {
-				return "managed rule markers remain in " + target.ManagedRulePath
+				return "host instruction markers remain in " + target.ManagedRulePath
 			}
 		}
 		if target.HookConfig != "" && isFile(target.HookConfig) {

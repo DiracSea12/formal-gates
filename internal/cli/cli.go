@@ -120,7 +120,7 @@ func runInstall(args []string, streams IO) (int, error) {
 			fmt.Fprintf(streams.Stdout, "formal-gates hooks configured for %s: %s\n", target.Host, target.HookConfig)
 		}
 		if target.ManagedRulePath != "" {
-			fmt.Fprintf(streams.Stdout, "formal-gates managed rule written for %s: %s\n", target.Host, target.ManagedRulePath)
+			fmt.Fprintf(streams.Stdout, "formal-gates host instruction block written for %s: %s\n", target.Host, target.ManagedRulePath)
 		}
 	}
 	return 0, nil
@@ -146,7 +146,7 @@ func runUninstall(args []string, streams IO) (int, error) {
 	for _, target := range report.Targets {
 		fmt.Fprintf(streams.Stdout, "formal-gates uninstalled for %s: %s\n", target.Host, target.TargetPath)
 		if target.ManagedRulePath != "" {
-			fmt.Fprintf(streams.Stdout, "formal-gates managed rule cleaned for %s: %s\n", target.Host, target.ManagedRulePath)
+			fmt.Fprintf(streams.Stdout, "formal-gates host instruction block cleaned for %s: %s\n", target.Host, target.ManagedRulePath)
 		}
 		if target.HookConfig != "" {
 			fmt.Fprintf(streams.Stdout, "formal-gates hooks cleaned for %s: %s\n", target.Host, target.HookConfig)
