@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 
 export const name = 'formal-gates-dsh'
 
@@ -123,7 +124,13 @@ export function apply(ctx, config = {}) {
   const warn = typeof ctx.logger && typeof ctx.logger.warn === 'function'
     ? (message) => ctx.logger.warn(message)
     : () => {}
-  const binary = typeof config.binary === 'string' && config.binary.trim() !== '' ? config.binary : ''
+  // 优先显式 binary（本地手工配置）；安装器生成的 patch 只给 skillRoot，由插件按
+  // 当前平台选择 formal-gates(.exe)，使 cordis.patch.yml 可跨机器/跨系统复用。
+  const binary = typeof config.binary === 'string' && config.binary.trim() !== ''
+    ? config.binary
+    : typeof config.skillRoot === 'string' && config.skillRoot.trim() !== ''
+      ? join(config.skillRoot, 'bin', process.platform === 'win32' ? 'formal-gates.exe' : 'formal-gates')
+      : ''
   const timeoutMs = Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS
   const dshHome = typeof config.dshHome === 'string' && config.dshHome.trim() !== '' ? config.dshHome : undefined
   if (!binary) {

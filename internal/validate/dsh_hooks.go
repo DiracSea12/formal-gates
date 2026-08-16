@@ -16,8 +16,9 @@ import (
 // subagent/start、subagent/end 转发给 `formal-gates lifecycle capture`。
 // 插件文件写在已安装的 skill 目录内，home 级 `cordis.patch.yml` 用相对 specifier
 // 引用它。DSH 的 home patch 会以所选 profile 目录（`$DSH_HOME/profiles/<name>`）
-// 为解析基准，所以写 `../skills/...`：任何机器、任何 profile 都会解析回
-// `$DSH_HOME/skills/...`，不携带用户名或盘符。
+// 为解析基准，所以写 `../../skills/...`：任何机器、任何 profile 都会解析回
+// `$DSH_HOME/skills/...`，不携带用户名或盘符。二进制与 home 路径同样通过 DSH
+// 的 `!!js dshHomePath(...)` 在启动时求值，patch 文件不落任何绝对路径。
 //
 // DSH 的 cordis.patch.yml 是机器级（home 级）补丁层，项目目录下的
 // cordis.patch.yml 不会被 DSH 自动加载。因此 `--host dsh --scope project`
@@ -88,7 +89,6 @@ func configureDshHook(target installTarget) error {
 	// `- insert:` 下，否则会被当作"找不到目标 id 的 patch"跳过。这里同时收敛
 	// 旧版/重复条目，并保留用户已有的其他 patch。id 是安装器自有行，重复安装
 	// 直接替换该行（含旧版相对路径 specifier 的迁移）。
-	dshHome := dshHomeFromHookConfig(target)
 	kept := make([]*yaml.Node, 0, len(seq.Content)+1)
 	wrote := false
 	for _, item := range seq.Content {
@@ -103,7 +103,7 @@ func configureDshHook(target installTarget) error {
 					if wrote {
 						continue
 					}
-					rows = append(rows, newDshPluginEntry(binary, dshHome))
+					rows = append(rows, newDshPluginEntry())
 					wrote = true
 					continue
 				}
@@ -121,14 +121,14 @@ func configureDshHook(target installTarget) error {
 			if wrote {
 				continue
 			}
-			kept = append(kept, newDshInsertPatch(binary, dshHome))
+			kept = append(kept, newDshInsertPatch())
 			wrote = true
 			continue
 		}
 		kept = append(kept, item)
 	}
 	if !wrote {
-		kept = append(kept, newDshInsertPatch(binary, dshHome))
+		kept = append(kept, newDshInsertPatch())
 	}
 	seq.Content = kept
 	return writeDshPatch(target.hookConfig, doc)
@@ -274,10 +274,15 @@ func dshPluginRowIdentity(row *yaml.Node) (id, name string) {
 	return dshMappingValue(row, "id"), dshMappingValue(row, "name")
 }
 
-func newDshPluginEntry(binary, dshHome string) *yaml.Node {
+func newDshPluginEntry() *yaml.Node {
 	config := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	config.Content = yamlPairs("binary", binary, "provider", "deepseek-harness", "dshHome", dshHome)
 	config.Content = append(config.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skillRoot"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!js", Value: "dshHomePath('skills', 'formal-gates')"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "dshHome"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!js", Value: "dshHomePath()"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "provider"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "deepseek-harness"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "timeoutMs"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: "30000"})
 	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
@@ -286,16 +291,12 @@ func newDshPluginEntry(binary, dshHome string) *yaml.Node {
 	return entry
 }
 
-func newDshInsertPatch(binary, dshHome string) *yaml.Node {
+func newDshInsertPatch() *yaml.Node {
 	insert := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	insert.Content = []*yaml.Node{newDshPluginEntry(binary, dshHome)}
+	insert.Content = []*yaml.Node{newDshPluginEntry()}
 	patch := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	patch.Content = append(patch.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "insert"}, insert)
 	return patch
-}
-
-func dshHomeFromHookConfig(target installTarget) string {
-	return filepath.Dir(target.hookConfig)
 }
 
 func yamlPairs(pairs ...string) []*yaml.Node {

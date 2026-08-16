@@ -20,6 +20,8 @@ func TestDshPluginSourceOwnsRequiredInterceptionSurface(t *testing.T) {
 		"['hook', 'decide']",
 		"['lifecycle', 'capture', '--provider', PROVIDER, '--event', event]",
 		"normalizeArguments",
+		"config.skillRoot",
+		"process.platform",
 		"permissionDecision",
 	} {
 		if !strings.Contains(source, required) {
