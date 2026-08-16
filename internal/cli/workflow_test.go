@@ -544,6 +544,10 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	// 引用（<文件>::<函数>）的定位目标。与 internal/validate 的 whiteboxDeliveredTestCode
 	// 同源。
 	mustWriteCLI(t, filepath.Join(root, "whitebox_delivered_test.go"), "package whiteboxfixture\n\nimport \"testing\"\n\nfunc TestWhiteboxDirectRules(t *testing.T) {}\n\nfunc TestWhiteboxStructure(t *testing.T) {}\n\nfunc TestWhiteboxDirectBehavior(t *testing.T) {}\n")
+	// 与 internal/validate fixture 一致地忽略运行期临时状态，使快照就绪脏检查
+	// （检测未跟踪且未忽略文件）不把 .gates/tmp/ 运行状态与 .gates/results seal 产物
+	// 误判为未提交变更。
+	mustWriteCLI(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results\n")
 	cliGit(t, root, "init")
 	cliGit(t, root, "config", "user.email", "tests@example.invalid")
 	cliGit(t, root, "config", "user.name", "Formal Gates CLI Tests")

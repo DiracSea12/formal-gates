@@ -75,8 +75,8 @@ var parallelStageTable = []parallelStage{
 }
 
 // pendingReviewParallelTasks 返回快照后 / 修复轮应当并行的任务：每个仍需结果的已选门 +
-// 每个仍待执行的已选 QA 派发 mode（黑盒/白盒各自独立派发、并行执行）。合并 QA（merge-qa /
-// 旧 "qa"）是单派发合并集，不拆并行。
+// 每个仍待执行的已选 QA 派发 mode（黑盒/白盒各自独立派发、并行执行）。合并 QA
+// （merge-qa）是单派发合并集，不拆并行。
 func pendingReviewParallelTasks(state RunState) []parallelTask {
 	var tasks []parallelTask
 	for id := range selectedSet(state) {
@@ -84,7 +84,7 @@ func pendingReviewParallelTasks(state RunState) []parallelTask {
 		case isQAMode(id):
 			mode := qaDispatchMode(id)
 			if mode == "" {
-				continue // merge-qa / legacy "qa"：合并单派发，无并行拆分
+				continue // merge-qa：合并单派发，无并行拆分
 			}
 			if !qaModeHasRecorded(state, mode) {
 				tasks = append(tasks, parallelTask{name: "QA 执行（" + mode + "）", match: matchDispatch("action", "qa-execution", mode)})

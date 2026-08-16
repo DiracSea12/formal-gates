@@ -206,6 +206,12 @@ func requireDevelopmentTransition(state RunState) error {
 
 func requireSnapshotTransition(state RunState) error {
 	developmentStatus := state.Actions["development-worker"].Status
+	// 白盒测试代码推进路径（方案 A）：开发已完成、白盒 QA 已选中且白盒设计已记录时，
+	// host 提交白盒设计者交付的测试代码后推进快照到含测试代码的新提交。此路径无开发
+	// 工作者派发可引用，直接放行（product-review / start-readiness 已由开发快照保证）。
+	if whiteboxTestCodeAdvancement(state) {
+		return nil
+	}
 	adoptingMergedSlices := state.RetainedOverall && developmentStatus == developmentPending
 	adoptingSliceRepair := state.RetainedOverall && (developmentStatus == developmentComplete || developmentStatus == developmentVerified)
 	if !adoptingMergedSlices && !adoptingSliceRepair && developmentStatus != developmentPrepared && developmentStatus != developmentRepairPrepared {

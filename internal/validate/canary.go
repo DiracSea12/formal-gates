@@ -266,6 +266,11 @@ func initializeCanaryGit(root string) error {
 			return err
 		}
 	}
+	// 与实际仓库 / 测试 fixture 一致地忽略运行期临时状态：否则 .gates/tmp/ 会被快照
+	// 就绪脏检查（检测未跟踪且未忽略文件）拦下。
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gates/tmp/\n"), 0o600); err != nil {
+		return err
+	}
 	return commitCanaryGit(root, "base")
 }
 

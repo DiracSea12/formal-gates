@@ -123,7 +123,15 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 	var err error
 	switch r.name {
 	case "git":
-		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1", "--untracked-files=no")
+		// 默认 --untracked-files=normal：报告未跟踪且未忽略的文件，使「新增交付文件漏了
+		// git add」在快照前就暴露、而不是作为幽灵文件静默丢失。formal-gates 自身的
+		// 运行期目录（.gates/tmp、QA 隔离工作区等）在宿主仓库未必已写进 .gitignore，
+		// 因此只剔除这些保留目录的未跟踪输出，不把它们误判为未提交交付文件；其它未跟踪
+		// 文件仍照常拦截。
+		pending, err = r.runner.Run(root, "git", "status", "--porcelain=v1")
+		if err == nil {
+			pending = excludeRuntimeUntrackedGitStatus(pending)
+		}
 	case "svn":
 		pending, err = r.runner.Run(root, "svn", "status", "--quiet", root)
 	case "p4":
@@ -136,9 +144,36 @@ func (r commandVCSResolver) VerifyReady(root string) error {
 		return fmt.Errorf("cannot inspect unsubmitted %s changes: %w", r.name, err)
 	}
 	if strings.TrimSpace(pending) != "" {
-		return fmt.Errorf("unsubmitted %s changes must be committed before recording a snapshot", r.name)
+		return fmt.Errorf("unsubmitted %s changes must be committed before recording a snapshot (including any untracked files that must be added)", r.name)
 	}
 	return nil
+}
+
+// excludeRuntimeUntrackedGitStatus removes porcelain "?? <path>" lines that sit
+// under formal-gates 的保留运行期目录。这些目录由 CLI 自身创建/维护，不是交付文件；
+// 宿主仓库未必预先 gitignore 它们。若这些路径被跟踪后出现修改（非 "?? " 行），仍照常
+// 作为未提交变更拦截——只豁免未跟踪的运行期产物。
+func excludeRuntimeUntrackedGitStatus(status string) string {
+	lines := strings.Split(status, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(line, "?? ") && isRuntimeGitStatusPath(strings.TrimSpace(line[3:])) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func isRuntimeGitStatusPath(path string) bool {
+	path = strings.Trim(path, `"`)
+	path = strings.ReplaceAll(path, `\`, "/")
+	for _, dir := range []string{".gates/tmp/", ".gates/qa-isolation/", ".gates/slices/", ".gates/results/"} {
+		if path == strings.TrimSuffix(dir, "/") || strings.HasPrefix(path, dir) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r commandVCSResolver) Resolve(root string) (string, error) {

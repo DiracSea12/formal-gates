@@ -1417,6 +1417,15 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		if err := requireTransition(*state, "snapshot", ""); err != nil {
 			return err
 		}
+		// 白盒测试代码推进路径（方案 A）：host 已提交白盒设计者交付的结构测试代码，
+		// 把快照推进到包含该测试代码的新提交，供 qa-review / qa-execution 在其上派发、
+		// Seal 后交付物包含测试代码。该路径不引用 development-worker 派发（白盒设计
+		// 阶段无开发工作者派发），也不重置审查面、不改动开发状态（开发已由上一快照完成，
+		// 白盒审查/执行/门审尚未开始）。
+		if whiteboxTestCodeAdvancement(*state) {
+			state.CurrentSnapshot = currentSnapshot
+			return nil
+		}
 		var developmentDispatch PreparedDispatch
 		if state.RetainedOverall {
 			if strings.TrimSpace(dispatchID) != "" {
@@ -1436,7 +1445,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		// qa-review 未 PASS 且此前没有用户放行时，只有用户显式授权可手动放行并记录授权
 		// 来源；已放行（SnapshotOverride 非空）后未批准的黑盒用例验证状态视为 PASS，
 		// 后续修复快照不再重复被挡。黑盒 review 真正 PASS 时清除放行授权。
-		blackboxSelected := isSelected(*state, blackboxQAID) || isSelected(*state, legacyQAID)
+		blackboxSelected := isSelected(*state, blackboxQAID)
 		if blackboxSelected && !blackboxReviewPassed(*state) && state.SnapshotOverride == nil {
 			if !userRequested {
 				return fmt.Errorf("blackbox QA Review must pass before a development snapshot; development and blackbox QA review both need to complete")
@@ -2179,8 +2188,8 @@ func reviewWaveRecorded(state RunState) bool {
 // once every selected mode has recorded execution, so one mode cannot be silently
 // skipped while the other passes. A mode with zero cases has nothing to execute
 // (the qa-review set-level decision judged the empty set), so it is trivially
-// recorded. Merge QA and the legacy "qa" id use the merged (empty-mode) result.
-// A RUNTIME_ERROR result is a recorded outcome and blocks through the existing
+// recorded. Merge QA uses the merged (empty-mode) result. A RUNTIME_ERROR result
+// is a recorded outcome and blocks through the existing
 // skip-authorization path, so it is not treated as a missing mode here.
 func selectedQAModesRecorded(state RunState) bool {
 	if !isSelectedQA(state) {

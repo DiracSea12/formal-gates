@@ -25,7 +25,7 @@ func TestNativeVCSResolverCommandShapes(t *testing.T) {
 		identity string
 		want     [][]string
 	}{
-		{name: "git", identity: gitID, want: [][]string{{"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "HEAD"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "--verify", gitID + "^{commit}"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "status", "--porcelain=v1", "--untracked-files=no"}}},
+		{name: "git", identity: gitID, want: [][]string{{"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "HEAD"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "rev-parse", "--verify", gitID + "^{commit}"}, {"git", "rev-parse", "--show-toplevel"}, {"git", "status", "--porcelain=v1"}}},
 		{name: "svn", identity: "123", want: [][]string{{"svn", "info", "--show-item", "wc-root", "/repo"}, {"svnversion", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "info", "--show-item", "revision", "-r", "123", "/repo"}, {"svn", "info", "--show-item", "wc-root", "/repo"}, {"svn", "status", "--quiet", "/repo"}}},
 		{name: "p4", identity: "456", want: [][]string{{"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...#have"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "sync", "-n", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%change%", "changes", "-m", "1", "...@456"}, {"p4", "-d", "/repo", "-ztag", "-F", "%clientRoot%", "info"}, {"p4", "-d", "/repo", "-ztag", "-F", "%depotFile%", "opened", "..."}}},
 	} {
@@ -97,6 +97,63 @@ func TestNativeVCSResolverRejectsUnsubmittedChanges(t *testing.T) {
 				t.Fatalf("pending changes were accepted: %v", err)
 			}
 		})
+	}
+}
+
+// TestNativeVCSResolverRejectsUntrackedFiles verifies 缺陷 4：快照脏检查必须检测
+// 未跟踪且未忽略的新交付文件（漏了 git add），存在时明确报错，不让新交付文件静默丢失。
+func TestNativeVCSResolverRejectsUntrackedFiles(t *testing.T) {
+	// git status --porcelain 对未跟踪文件输出 "?? <path>"；脏检查必须把它当作未提交变更拒绝。
+	runner := &scriptedNativeRunner{outputs: []string{"/repo", "?? delivery-new.txt"}}
+	resolver, err := resolverForVCS("git", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err == nil || !strings.Contains(err.Error(), "unsubmitted git changes") || !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("untracked non-ignored file was accepted by the snapshot dirty check: %v", err)
+	}
+	// 干净工作区（无输出）仍放行。
+	clean := &scriptedNativeRunner{outputs: []string{"/repo", ""}}
+	resolver, err = resolverForVCS("git", clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err != nil {
+		t.Fatalf("clean worktree was rejected: %v", err)
+	}
+}
+
+// TestNativeVCSResolverIgnoresUntrackedRuntimeDirectories verifies the dirty check
+// still catches delivery files while not treating formal-gates' own runtime
+// directories as uncommitted delivery: a host repo may not pre-gitignore
+// .gates/tmp or the QA isolation worktree, yet a snapshot must not be blocked by
+// the CLI's own untracked working state.
+func TestNativeVCSResolverIgnoresUntrackedRuntimeDirectories(t *testing.T) {
+	runtimeOnly := &scriptedNativeRunner{outputs: []string{"/repo", "?? .gates/tmp/run-1/state.json\n?? .gates/qa-isolation/run-1/\n?? .gates/slices/run-1/\n?? .gates/results/old-run.json"}}
+	resolver, err := resolverForVCS("git", runtimeOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err != nil {
+		t.Fatalf("untracked formal-gates runtime directories blocked a snapshot: %v", err)
+	}
+
+	mixed := &scriptedNativeRunner{outputs: []string{"/repo", "?? .gates/tmp/run-1/state.json\n?? delivery-new.txt"}}
+	resolver, err = resolverForVCS("git", mixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err == nil || !strings.Contains(err.Error(), "untracked") {
+		t.Fatalf("untracked delivery file was accepted alongside runtime directories: %v", err)
+	}
+
+	trackedRuntime := &scriptedNativeRunner{outputs: []string{"/repo", " M .gates/tmp/run-1/state.json"}}
+	resolver, err = resolverForVCS("git", trackedRuntime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.VerifyReady("/repo"); err == nil {
+		t.Fatalf("tracked modification under a runtime directory was accepted: %v", err)
 	}
 }
 

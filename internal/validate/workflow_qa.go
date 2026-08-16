@@ -54,11 +54,41 @@ type QAScopeInput struct {
 
 // isQAMode reports whether the id is a built-in QA mode entry. Blackbox, whitebox,
 // and merge QA share the run's QA case set and QA Execution result; discovered
-// gate entries live in the per-gate result map instead. The legacy "qa" id is
-// recognized so runs bound to an old catalog that listed QA as a gate still count
-// as QA-selected after migration and share the QA Execution result.
+// gate entries live in the per-gate result map instead.
 func isQAMode(id string) bool {
-	return id == blackboxQAID || id == whiteboxQAID || id == mergeQAID || id == legacyQAID
+	return id == blackboxQAID || id == whiteboxQAID || id == mergeQAID
+}
+
+// whiteboxTestCodeAdvancement reports whether a snapshot advancement is the
+// whitebox test code path (方案 A：提交后快照推进): development is already
+// complete, whitebox QA is selected, and the whitebox design has recorded its
+// structure cases, so the host may commit the whitebox designer's delivered
+// structural test code and advance the snapshot to the new commit that includes
+// it. This path has no development-worker dispatch to reference (the whitebox
+// design runs after development), so it is recognized purely from the run state;
+// qa-review / qa-execution then dispatch on the advanced snapshot and Seal
+// delivers the test code.
+//
+// The design must be the whitebox per-mode record, not the merged "" fallback:
+// a full-route run still carries its pre-development blackbox design under the
+// merged key, and reading that fallback would open the exception before the
+// whitebox design exists. The exception is also one-shot: it only fires while
+// the whitebox design dispatch was prepared against the current snapshot, so a
+// second commit cannot be advanced again through this path without a fresh
+// whitebox design round (repair snapshots go through the normal repair gates).
+func whiteboxTestCodeAdvancement(state RunState) bool {
+	if state.Actions["development-worker"].Status != developmentComplete || !isSelected(state, whiteboxQAID) {
+		return false
+	}
+	design, ok := state.QADesignByMode[whiteboxQAID]
+	if !ok || design.Status != "PASS" || design.DispatchID == "" {
+		return false
+	}
+	dispatch, ok := state.Dispatches[design.DispatchID]
+	if !ok || dispatch.Target != "qa-design" || dispatch.Mode != whiteboxQAID {
+		return false
+	}
+	return dispatch.SourceSnapshot != "" && dispatch.SourceSnapshot == state.CurrentSnapshot
 }
 
 // isSelectedQA reports whether any QA mode is selected for this run.
@@ -115,7 +145,7 @@ func selectedQAModes(state RunState) []string {
 // (snapshotBlackboxReleased), handled by AdvanceSnapshot. 黑盒门的
 // review 结果按 blackbox mode 独立读取，不读取另一 mode 的 review 判定。
 func blackboxReviewPassed(state RunState) bool {
-	if !isSelected(state, blackboxQAID) && !isSelected(state, legacyQAID) {
+	if !isSelected(state, blackboxQAID) {
 		return true
 	}
 	hasBlackboxCases := false
@@ -128,7 +158,7 @@ func blackboxReviewPassed(state RunState) bool {
 		}
 	}
 	if !hasBlackboxCases {
-		// 黑盒门读黑盒 mode 的 review 权威结果；legacy "qa" 合并态经回退取 "" 键。
+		// 黑盒门读黑盒 mode 的 review 权威结果（合并存储时经回退取 "" 键）。
 		return state.qaReview("blackbox").Status == "PASS"
 	}
 	// 有黑盒用例时整个审查判定仍须通过：集合层面 P1 覆盖遗漏使审查动作 FAIL 时，即使
@@ -151,18 +181,18 @@ func snapshotBlackboxReleased(state RunState) bool {
 // discardUnmatchedQADesign reconciles a fast-path speculative QA design recorded
 // before the route was confirmed against the now-confirmed route. The fast-path
 // design is always blackbox behavior design, so it matches the confirmed route
-// exactly when blackbox QA (or the legacy "qa" mode) is selected; whitebox
-// structure cases are designed after development, so they do not apply at route
-// confirmation. When the route omits blackbox QA, the parallel design is
-// discarded (the documented fast-path tradeoff: a design for a route that does
-// not include blackbox QA is abandoned) so the design is re-done against the
-// confirmed route. An approved set (QA Review passed) is never discarded here.
+// exactly when blackbox QA is selected; whitebox structure cases are designed
+// after development, so they do not apply at route confirmation. When the route
+// omits blackbox QA, the parallel design is discarded (the documented fast-path
+// tradeoff: a design for a route that does not include blackbox QA is abandoned)
+// so the design is re-done against the confirmed route. An approved set (QA
+// Review passed) is never discarded here.
 func discardUnmatchedQADesign(state *RunState) {
 	// 快速路径设计存于合并 "" 键，按 mode 读取与重置。
 	if state.qaDesign("").Status != "PASS" || state.qaReview("").Status == "PASS" {
 		return
 	}
-	if isSelected(*state, blackboxQAID) || isSelected(*state, legacyQAID) {
+	if isSelected(*state, blackboxQAID) {
 		return
 	}
 	// 废弃快速路径的投机黑盒设计时清空全部按 mode 存储的用例、执行结果与增量变更留痕
@@ -915,9 +945,9 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 
 // qaRerunModes returns the QA dispatch modes that have an authoritative FAIL result
 // at the current snapshot and will therefore be rerun after the next repair snapshot
-// Blackbox and whitebox each need their own scope decision; merge QA and
-// the legacy "qa" id use the merged empty mode. A mode with no recorded cases has
-// nothing to rerun and needs no scope decision.
+// Blackbox and whitebox each need their own scope decision; merge QA uses the
+// merged empty mode. A mode with no recorded cases has nothing to rerun and needs
+// no scope decision.
 func qaRerunModes(state RunState) []string {
 	var modes []string
 	if !isSelectedQA(state) {
@@ -1190,8 +1220,8 @@ func qaModeRecordedAtCurrent(state RunState, mode string) bool {
 }
 
 // qaDispatchMode maps a selected QA id to its per-mode dispatch mode name.
-// blackbox and whitebox dispatch by their own mode; merge QA and the legacy "qa"
-// id dispatch as a single merged (empty-mode) set.
+// blackbox and whitebox dispatch by their own mode; merge QA dispatches as a
+// single merged (empty-mode) set.
 func qaDispatchMode(id string) string {
 	switch id {
 	case blackboxQAID:

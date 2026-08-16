@@ -2228,50 +2228,12 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	}
 }
 
-// TestLegacyQAModeCarryRebindsQAExecution verifies the carry regression fix for
-// runs bound to an old catalog that listed QA as a gate: the legacy "qa" id is
-// recognized as a QA mode, main-agent carry emits the selected QA mode id (here
-// "qa") and rebinds QAExecution.Snapshot instead of writing a spurious
-// Gates["qa"] entry, and QA execution is no longer rejected as "QA is not
-// selected".
-func TestLegacyQAModeCarryRebindsQAExecution(t *testing.T) {
-	root, pkg := workflowFixture(t)
-	state := readyDeliveryForRoute(t, root, pkg, "legacy-qa", "custom", []string{blackboxQAID, "architecture"})
-	// 模拟旧目录绑定的 run：SelectedGates 仍带遗留 "qa"。
-	state.SelectedGates = []string{legacyQAID, "architecture"}
-	if err := SaveRunState(root, state); err != nil {
-		t.Fatal(err)
-	}
-	if !isQAMode(legacyQAID) || !isSelectedQA(state) {
-		t.Fatalf("legacy qa is not recognized as a selected QA mode: %#v", state.SelectedGates)
-	}
-	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	var err error
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	state = recordGateResult(t, root, pkg, state, "architecture", "legacy-arch", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
-	state = advanceRepair(t, root, pkg, state, "legacy-repair")
-	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{legacyQAID}) {
-		t.Fatalf("eligible carry results=%v want=[qa]", got)
-	}
-	state, err = RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.qaExecution("").Snapshot != state.CurrentSnapshot {
-		t.Fatalf("legacy QAExecution.Snapshot=%s want=%s", state.qaExecution("").Snapshot, state.CurrentSnapshot)
-	}
-	if _, ok := state.Gates[legacyQAID]; ok {
-		t.Fatalf("spurious Gates[qa] entry written: %#v", state.Gates[legacyQAID])
-	}
-}
-
 // TestWhiteboxQADesignsAndReviewsAfterDevelopment verifies the whitebox-only route
 // designs and reviews its structure cases after development: development
 // start and the snapshot are not gated on whitebox QA Review, the post-development
-// design reads the implementation, and the run seals.
+// design reads the implementation, the whitebox designer's delivered structural
+// test code is committed by the host and advanced into the snapshot, and the run
+// seals with that test code in the delivered snapshot.
 func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "whitebox-post-dev"), "custom", []string{whiteboxQAID})
@@ -2286,10 +2248,25 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 白盒设计者在开发后主工作区独立编写结构测试代码（此时未提交），并记录 qa-design。
+	const whiteboxTestFile = "whitebox_delivered_test.go"
+	writeTestFile(t, filepath.Join(root, whiteboxTestFile), whiteboxDeliveredTestCode)
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure tests", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: whiteboxTestFile + "::TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// host 提交白盒测试代码，并把快照推进到包含测试代码的新快照（无 development-worker
+	// 派发：白盒设计阶段没有可引用的开发工作者派发）。
+	commitAll(t, root, "whitebox structure tests")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 路径是一次性的：推进后必须关闭，后续提交必须走正常修复门，否则任意提交都能
+	// 绕过 review 波次再次推进快照。
+	if whiteboxTestCodeAdvancement(state) {
+		t.Fatalf("whitebox test-code path remained open after the snapshot advanced: %#v", state)
 	}
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer", "whitebox")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
@@ -2310,6 +2287,8 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	if summary.Status != "SEALED" {
 		t.Fatalf("whitebox-only run did not seal: %#v", summary)
 	}
+	// 白盒核心交付物（结构测试代码）必须进入最终交付快照。
+	runGit(t, root, "cat-file", "-e", "HEAD:"+whiteboxTestFile)
 }
 
 // TestFullRouteDesignsWhiteboxAfterDevelopment verifies the full route's two-phase
@@ -2337,10 +2316,19 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 白盒推进路径只能由白盒自己的 per-mode 设计打开：full 路线在开发前已把黑盒设计
+	// 记入合并 "" 键，若按合并键回退读取会误判为白盒设计已就绪、让任意提交绕过修复门
+	// 推进快照。
+	if whiteboxTestCodeAdvancement(state) {
+		t.Fatalf("whitebox test-code path opened before the whitebox design was recorded: %#v", state.qaDesign("whitebox"))
+	}
 	// 开发后白盒设计：下白盒设计轮只增补白盒用例（写进白盒自己的列表），既有黑盒
-	// 用例（含 review PASS 状态）在各自列表中原样保留。
+	// 用例（含 review PASS 状态）在各自列表中原样保留。白盒设计者独立编写结构测试代码
+	// （此时未提交），并记录 qa-design。
+	const whiteboxTestFile = "whitebox_delivered_test.go"
+	writeTestFile(t, filepath.Join(root, whiteboxTestFile), whiteboxDeliveredTestCode)
 	designDispatch = prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructure"}}, "")
+	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: whiteboxTestFile + "::TestWhiteboxStructure"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2348,6 +2336,17 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	whiteboxCases := state.qaModeCases("whitebox")
 	if len(state.allQACases()) != 2 || len(blackboxCases) != 1 || blackboxCases[0].ReviewStatus != "PASS" || len(whiteboxCases) != 1 || whiteboxCases[0].ReviewStatus != "PENDING" {
 		t.Fatalf("blackbox approval was not preserved in the whitebox redesign: %#v", state.allQACases())
+	}
+	// host 提交白盒测试代码并推进快照到包含测试代码的新快照（无 development-worker 派发）。
+	commitAll(t, root, "whitebox structure tests")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 路径是一次性的：推进后必须关闭，后续提交必须走正常修复门，否则任意提交都能
+	// 绕过 review 波次再次推进快照。
+	if whiteboxTestCodeAdvancement(state) {
+		t.Fatalf("whitebox test-code path remained open after the snapshot advanced: %#v", state)
 	}
 	reviewDispatch = prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "whitebox-reviewer", "whitebox")
 	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", nil)
@@ -2373,6 +2372,8 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 	if summary.Status != "SEALED" {
 		t.Fatalf("full two-phase run did not seal: %#v", summary)
 	}
+	// 白盒核心交付物（结构测试代码）必须进入最终交付快照。
+	runGit(t, root, "cat-file", "-e", "HEAD:"+whiteboxTestFile)
 }
 
 // TestQAModeCasesPreferPerModeOverStaleMerged reproduces the storage bug
@@ -2822,11 +2823,14 @@ func workflowFixture(t *testing.T) (string, string) {
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	writeTestFile(t, filepath.Join(root, "design.md"), "design\n")
 	// 测试仓库与实际仓库一致地忽略运行期临时状态：否则 .gates/tmp/ 会被误跟踪进
-	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。
-	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n")
-	// 白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
-	// 引用（<文件>::<函数>）的定位目标。见 whiteboxDeliveredTestCode（whitebox_binding.go）。
-	writeTestFile(t, filepath.Join(root, "whitebox_delivered_test.go"), whiteboxDeliveredTestCode)
+	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。.gates/results 是 seal
+	// 运行期产物（物化用例 / 封板 ledger），在测试里不提交，忽略它以免缺陷 4 落地后
+	// 快照就绪脏检查（检测未跟踪文件）把上一次 seal 的产物误判为未提交变更。
+	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results\n")
+	// 白盒设计者交付的结构测试代码不在 baseline 里：它由白盒设计者在开发后主工作区
+	// 编写、host 提交后经白盒测试代码推进路径进入快照（见 whiteboxDeliveredTestCode
+	// 与测试 TestWhiteboxTestCodeCommitsIntoSnapshot）。把测试文件写进 baseline 会掩盖
+	// 真实写入路径、让白盒核心交付物静默丢失的缺陷通过测试。
 	initializeGit(t, root)
 	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
 }
