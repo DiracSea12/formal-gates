@@ -51,6 +51,7 @@ var requiredHosts = []string{
 	"Claude Code",
 	"Codex",
 	"Cursor",
+	"DeepSeek Harness",
 	"Gemini",
 	"OpenCode",
 	"Windsurf",

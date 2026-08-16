@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	ProviderClaude  = "claude-code"
-	ProviderCodex   = "codex"
-	ProviderCursor  = "cursor"
-	ProviderDefault = "default"
+	ProviderClaude   = "claude-code"
+	ProviderCodex    = "codex"
+	ProviderCursor   = "cursor"
+	ProviderDeepSeek = "deepseek-harness"
+	ProviderDefault  = "default"
 
 	eventStart = "subagent_start"
 	eventStop  = "subagent_stop"
@@ -44,6 +45,8 @@ func adapterFor(provider string) (providerAdapter, error) {
 		return codexAdapter(), nil
 	case ProviderCursor:
 		return cursorAdapter(), nil
+	case ProviderDeepSeek, "dsh", "deepseek", "deepseek harness":
+		return deepseekAdapter(), nil
 	case ProviderDefault:
 		return defaultAdapter(), nil
 	default:
@@ -76,6 +79,12 @@ func currentProvider() (string, error) {
 	if provider := providerFromExecutable(path); provider != ProviderDefault {
 		return provider, nil
 	}
+	// A project-local DSH skill has no active lifecycle bridge (DSH auto-loads
+	// no project-level cordis.patch.yml), so it stays on the lenient default
+	// provider even when the driving DSH process exports DSH_HOME.
+	if isProjectDshInstall(path) {
+		return ProviderDefault, nil
+	}
 	// A directly built source binary outside a maintained host installation
 	// (go run, a local development build, or an uninstalled copy) resolves to
 	// the lenient default provider from its path. When such a binary is driven
@@ -104,6 +113,8 @@ func providerFromEnvironment() string {
 		return ProviderCodex
 	case strings.HasPrefix(agent, "cursor"):
 		return ProviderCursor
+	case strings.HasPrefix(agent, "deepseek"), strings.HasPrefix(agent, "dsh"):
+		return ProviderDeepSeek
 	}
 	switch {
 	case os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "":
@@ -112,6 +123,8 @@ func providerFromEnvironment() string {
 		return ProviderCodex
 	case os.Getenv("CURSOR_TRACE_ID") != "", os.Getenv("CURSOR_RUNTIME") != "":
 		return ProviderCursor
+	case os.Getenv("DSH_HOME") != "", os.Getenv("DSH_PROJECT_DIR") != "":
+		return ProviderDeepSeek
 	}
 	return ""
 }
@@ -125,6 +138,7 @@ func providerFromExecutable(path string) string {
 		path = absolute
 	}
 	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	dshPrefix := deepseekGlobalInstallPrefix()
 	switch {
 	case strings.Contains(normalized, "/.claude/skills/formal-gates/bin/"):
 		return ProviderClaude
@@ -132,10 +146,12 @@ func providerFromExecutable(path string) string {
 		return ProviderCursor
 	case strings.Contains(normalized, "/.codex/skills/formal-gates/bin/"):
 		return ProviderCodex
+	case dshPrefix != "" && strings.HasPrefix(normalized, dshPrefix):
+		return ProviderDeepSeek
 	default:
 		// 未安装二进制（go test、canary portable、本地开发构建）解析为宽松的默认
-		// provider：无生命周期事件时仍走 UNAVAILABLE。只有真实安装的 Codex 二进制
-		// 才解析为 required 的 Codex provider，验证生命周期配对。
+		// provider：无生命周期事件时仍走 UNAVAILABLE。只有真实安装的 Codex /
+		// global DSH 二进制才解析为 required provider，验证生命周期配对。
 		return ProviderDefault
 	}
 }

@@ -142,10 +142,12 @@ func normalizeInstallHost(host string) (string, error) {
 		return "codex", nil
 	case "cursor":
 		return "cursor", nil
+	case "dsh", "deepseek", "deepseek-harness":
+		return "dsh", nil
 	case "both":
 		return "both", nil
 	default:
-		return "", fmt.Errorf("unsupported --host %q (want claude, codex, cursor, or both)", host)
+		return "", fmt.Errorf("unsupported --host %q (want claude, codex, cursor, dsh, or both)", host)
 	}
 }
 
@@ -204,6 +206,12 @@ func installTargets(host, scope, project string) ([]installTarget, error) {
 			case "cursor":
 				base = filepath.Join(home, ".cursor")
 				hookConfig = filepath.Join(home, ".cursor", "hooks.json")
+			case "dsh":
+				var err error
+				base, hookConfig, managedRulePath, err = dshInstallTargetPaths(home, "", scope)
+				if err != nil {
+					return nil, err
+				}
 			}
 		} else {
 			switch h {
@@ -219,16 +227,26 @@ func installTargets(host, scope, project string) ([]installTarget, error) {
 				base = filepath.Join(project, ".cursor")
 				hookConfig = filepath.Join(project, ".cursor", "hooks.json")
 				managedRulePath = filepath.Join(project, ".cursor", "rules", "formal-gates.mdc")
+			case "dsh":
+				var err error
+				base, hookConfig, managedRulePath, err = dshInstallTargetPaths("", project, scope)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		managedRule := ""
 		if managedRulePath != "" {
 			managedRule = filepath.Clean(managedRulePath)
 		}
+		hookConfigPath := ""
+		if hookConfig != "" {
+			hookConfigPath = filepath.Clean(hookConfig)
+		}
 		targets = append(targets, installTarget{
 			host:            h,
 			targetPath:      filepath.Clean(filepath.Join(base, "formal-gates")),
-			hookConfig:      filepath.Clean(hookConfig),
+			hookConfig:      hookConfigPath,
 			managedRulePath: managedRule,
 		})
 	}
@@ -420,6 +438,12 @@ func removePycache(root string) error {
 }
 
 func configureInstallHook(target installTarget) error {
+	if strings.TrimSpace(target.hookConfig) == "" {
+		return nil
+	}
+	if target.host == "dsh" {
+		return configureDshHook(target)
+	}
 	config, err := readHookConfig(target.hookConfig)
 	if err != nil {
 		return err
@@ -479,6 +503,12 @@ func configureInstallHook(target installTarget) error {
 }
 
 func removeInstallHooks(target installTarget) error {
+	if strings.TrimSpace(target.hookConfig) == "" {
+		return nil
+	}
+	if target.host == "dsh" {
+		return removeDshHook(target)
+	}
 	if !isFile(target.hookConfig) {
 		return nil
 	}

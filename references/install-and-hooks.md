@@ -29,16 +29,16 @@ Windows 上构建并调用 `bin\formal-gates.exe`。
 
 ```bash
 bin/formal-gates install --source <formal-gates> \
-  --host <claude|codex|cursor> --scope global --force
+  --host <claude|codex|cursor|dsh> --scope global --force
 
 bin/formal-gates install --source <formal-gates> \
-  --host <claude|codex|cursor> --scope project --project <project> --force
+  --host <claude|codex|cursor|dsh> --scope project --project <project> --force
 
 bin/formal-gates uninstall \
-  --host <claude|codex|cursor> --scope global
+  --host <claude|codex|cursor|dsh> --scope global
 
 bin/formal-gates uninstall \
-  --host <claude|codex|cursor> --scope project --project <project>
+  --host <claude|codex|cursor|dsh> --scope project --project <project>
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
@@ -59,6 +59,7 @@ host 的全局安装当作回退。
 - Claude Code：`~/.claude/skills/formal-gates`
 - Codex：`~/.codex/skills/formal-gates`
 - Cursor：`~/.cursor/formal-gates`
+- DeepSeek Harness：`$DSH_HOME/skills/formal-gates`（默认 `~/.dsh`）
 
 项目级安装使用所选项目下的对应目录。当 host 需要时，安装器会把原生二进制的绝对
 路径写入 hook 配置。
@@ -68,6 +69,7 @@ host 的全局安装当作回退。
 - Claude Code 全局：`~/.claude/CLAUDE.md`；项目：`<project>/CLAUDE.md`
 - Codex 全局：`~/.codex/AGENTS.md`；项目：`<project>/AGENTS.md`
 - Cursor 项目：`<project>/.cursor/rules/formal-gates.mdc`
+- DeepSeek Harness 全局：`$DSH_HOME/AGENTS.md`；项目：`<project>/AGENTS.md`
 
 Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook，不创建全局
 规则文件。当前规则直接取自 `SKILL.md` 中
@@ -78,6 +80,10 @@ Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook�
 从旧版（包括使用旧 marker 的版本）升级时，先用旧版本二进制执行一次 `uninstall`，再安装
 本版本；之后可直接重复覆盖安装，不再依赖任何历史规则全文。
 
+DeepSeek Harness 的 hook 补丁是 home 级 `cordis.patch.yml`；DSH 不自动加载项目目录
+下的补丁文件，所以 `--host dsh --scope project` 只安装 skill 与 `AGENTS.md` 指令，不
+写 hook 补丁，需要 hook 集成时使用 global。项目级 DSH 二进制因此保持宽松默认
+provider，lifecycle verify 为 `UNAVAILABLE`，既有派发与身份检查仍是权威依据。
 其他兼容 Agent Skill 的 host 可以手工阅读这些 Markdown，但本包不声明为它们提供
 安装器或 hook 集成。
 
@@ -89,6 +95,8 @@ Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook�
 bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host codex --scope project --project <project>
 bin/formal-gates uninstall --host cursor --scope project --project <project>
+bin/formal-gates uninstall --host dsh --scope global
+bin/formal-gates uninstall --host dsh --scope project --project <project>
 ```
 
 它会删除所选 host 的 formal-gates 运行时目录、安装器拥有的 hook 条目和完整 marker
@@ -105,8 +113,8 @@ bin/formal-gates hook decide
 ```
 
 Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通过 JSON 的
-`decision: "block"` 返回，同时 hook 进程退出码必须为 0；Claude Code 和 Cursor
-继续使用原有的拒绝退出码。
+`decision: "block"` 返回，同时 hook 进程退出码必须为 0；Claude Code、Cursor 和
+DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON 决策。
 
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
@@ -139,7 +147,7 @@ Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷�
 
 ```bash
 bin/formal-gates lifecycle capture \
-  --provider <claude-code|codex|cursor> --event <provider-event-name>
+  --provider <claude-code|codex|cursor|deepseek-harness> --event <provider-event-name>
 ```
 
 capture 命令从正常的 host 载荷推导项目根（必要时使用 host 的项目目录环境变量），
@@ -159,10 +167,11 @@ bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
   --dispatch <dispatch-id>
 ```
 
-Claude Code、Cursor 和 Codex 都要求 start 与 stop 事件配对。Codex 派发独立代理
-走原生 `spawn_agent`，用返回的 `agent_id` 认领，claim → lifecycle 配对验证即可通
-过。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的默认
-provider，生命周期验证为 `UNAVAILABLE`，此时既有的派发与身份检查仍是权威依据。
+Claude Code、Cursor、Codex 和 DeepSeek Harness 都要求 start 与 stop 事件配对。Codex
+派发独立代理走原生 `spawn_agent`，用返回的 `agent_id` 认领；DeepSeek Harness 的
+Cordis 插件把 `subagent/start`/`subagent/end` 转成同一身份对，claim → lifecycle 配对
+验证即可通过。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的
+默认 provider，生命周期验证为 `UNAVAILABLE`，此时既有的派发与身份检查仍是权威依据。
 
 一个设置文件或直接的 `hook decide` 单元测试，只能证明本地决策逻辑。只有当实际目
 标 host 发送了实机 `PreToolUse` 载荷、并且 hook 阻塞了测试命令之后，才可以声明自

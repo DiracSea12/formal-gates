@@ -48,14 +48,14 @@ var writeAllowedAgentTypes = map[string]bool{
 // writeBlockPayload 是 hook 判定所需的最小结构化输入，由 decideWriteBlockValue 从
 // PreToolUse 载荷提取。agentType 为空串表示主线程（主代理）。
 type writeBlockPayload struct {
-	filePath     string        // Edit/Write/MultiEdit 的目标路径
-	agentType    string        // 调用者 agent_type；"" = 主线程
-	hasActiveRun bool          // cwd（或其祖先）下存在活动正式 run
-	artifacts    []string      // 活动 run 的 RequirementArtifacts 路径（相对 repo 根）
-	repoRoot     string        // 检测到活动 run 的仓库根
-	cwd          string        // host 窗口工作目录，用于解析相对写目标
+	filePath     string          // Edit/Write/MultiEdit 的目标路径
+	agentType    string          // 调用者 agent_type；"" = 主线程
+	hasActiveRun bool            // cwd（或其祖先）下存在活动正式 run
+	artifacts    []string        // 活动 run 的 RequirementArtifacts 路径（相对 repo 根）
+	repoRoot     string          // 检测到活动 run 的仓库根
+	cwd          string          // host 窗口工作目录，用于解析相对写目标
 	owners       []ownerIdentity // 所有活动 run 的 owner（启动对话 transcript/session）
-	toolName     string        // PreToolUse 工具名，用于 apply_patch 这类无目标写工具的保守拦截
+	toolName     string          // PreToolUse 工具名，用于 apply_patch 这类无目标写工具的保守拦截
 }
 
 // hookToolName 从 payload 提取 PreToolUse 的 tool_name。Codex / Claude Code /
@@ -363,6 +363,76 @@ func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []str
 	return "", nil, nil, false
 }
 
+// hookBoundAgentType resolves a subagent id to its formal-gates dispatch target
+// using the lifecycle claim bindings under an active, development-started run.
+// DSH (and any host that cannot stamp agent_type into PreToolUse) uses this to
+// preserve the write wall's role decision for reviewer/development workers.
+func hookBoundAgentType(repoRoot, identity string) string {
+	identity = strings.TrimSpace(identity)
+	if repoRoot == "" || identity == "" {
+		return ""
+	}
+	statePaths, _ := filepath.Glob(filepath.Join(repoRoot, ".gates", "tmp", "*", "state.json"))
+	for _, statePath := range statePaths {
+		active, started, err := readHookRunWritePhase(statePath)
+		if err != nil || !active || !started {
+			continue
+		}
+		bindingPaths, _ := filepath.Glob(filepath.Join(filepath.Dir(statePath), "lifecycle", "*.json"))
+		for _, bindingPath := range bindingPaths {
+			data, err := os.ReadFile(bindingPath)
+			if err != nil {
+				continue
+			}
+			var binding struct {
+				DispatchID string `json:"dispatchId"`
+				Identity   string `json:"identity"`
+			}
+			if err := json.Unmarshal(data, &binding); err != nil {
+				continue
+			}
+			if strings.TrimSpace(binding.Identity) != identity {
+				continue
+			}
+			if target := hookDispatchTarget(statePath, binding.DispatchID); target != "" {
+				return target
+			}
+		}
+	}
+	return ""
+}
+
+// hookDispatchTarget maps a binding's dispatch id to its write-wall agent type.
+// Gate reviews use the shared reviewer bucket so dynamically added gate ids are
+// all treated as reviewer-class agents.
+func hookDispatchTarget(statePath, dispatchID string) string {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return ""
+	}
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return ""
+	}
+	var probe struct {
+		Dispatches map[string]struct {
+			Target     string `json:"target"`
+			TargetKind string `json:"targetKind"`
+		} `json:"dispatches"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return ""
+	}
+	dispatch, ok := probe.Dispatches[dispatchID]
+	if !ok {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(dispatch.TargetKind), "gate") {
+		return "gate-review"
+	}
+	return strings.TrimSpace(dispatch.Target)
+}
+
 // readHookRunWritePhase 读取 hook 判定所需的最小阶段字段（不触发完整性校验——hook 只做
 // 粗粒度阶段判断，不替代 CLI 的严格加载）。development-worker 的 PREPARED 是开发开始
 // 边界，与 workflow_transition.go 的 developmentStarted 保持一致。
@@ -435,6 +505,17 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 	// 尚未进入开发阶段或无活动正式 run：放行，不干扰开发前文档修订或普通项目。
 	if !input.hasActiveRun {
 		return allowHook("no active formal run has entered development; write allowed"), true
+	}
+
+	// DeepSeek Harness 的子代理载荷只有 agent id，没有 agent_type；host 也无法在
+	// subagent 事件中注入类型。这里用 lifecycle claim 绑定（identity → dispatch id）
+	// 反查派发目标，把 unknown id 归一化成 development-worker/qa-design/各审查类型。
+	// 已经自带 agent_type 的宿主（Claude Code/Codex/Cursor）也会命中同一绑定并得到
+	// 相同目标，不会改变既有判定。
+	if input.agentType != "" {
+		if bound := hookBoundAgentType(input.repoRoot, input.agentType); bound != "" {
+			input.agentType = bound
+		}
 	}
 	// 写墙只保护承载当前活动 run 的仓库根。一个窗口即使 cwd 位于该仓库内，也不得让
 	// 这里的活动 run 扩张成全局文件锁：Edit/Write 的明确仓库外目标，以及能完整解析且

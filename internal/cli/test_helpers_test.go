@@ -11,7 +11,7 @@ import (
 // to detect the driving host. CLI tests clear them so the CLI under test
 // observes the lenient default provider instead of the host shell that happens
 // to run `go test`.
-var hostEnvKeys = []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME"}
+var hostEnvKeys = []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME", "DSH_HOME", "DSH_PROJECT_DIR"}
 
 func clearHostEnv(t *testing.T) {
 	t.Helper()

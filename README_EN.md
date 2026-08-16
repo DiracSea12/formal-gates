@@ -216,9 +216,12 @@ go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates install --source . --host claude --scope global --force
 bin/formal-gates install --source . --host codex --scope project --project <project> --force
 bin/formal-gates install --source . --host cursor --scope project --project <project> --force
+bin/formal-gates install --source . --host dsh --scope global --force
+bin/formal-gates install --source . --host dsh --scope project --project <project> --force
 
 bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host codex --scope project --project <project>
+bin/formal-gates uninstall --host dsh --scope global
 ```
 
 On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only asset: do not try to run it on macOS/Linux (it fails with `exec format error`); use that platform's `bin/formal-gates` instead.
@@ -230,12 +233,14 @@ On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only 
 | Claude Code | `~/.claude/skills/formal-gates` | corresponding directory under the selected project |
 | Codex | `~/.codex/skills/formal-gates` | corresponding directory under the selected project |
 | Cursor | `~/.cursor/formal-gates` | corresponding directory under the selected project |
+| DeepSeek Harness | `~/.dsh/skills/formal-gates` (under `$DSH_HOME`) | `.dsh/skills/formal-gates` under the selected project |
 
-Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project). Existing non-formal-gates hooks are preserved.
+Installation merges formal-gates' own host hooks into the host config: Claude Code's `~/.claude/settings.json`, Codex's `~/.codex/hooks.json`, and Cursor's `~/.cursor/hooks.json` (project-level installs write the corresponding files under the selected project); a DeepSeek Harness global install writes `$DSH_HOME/cordis.patch.yml` and mounts the bundled minimal Cordis plugin, while a project install writes only the skill and `AGENTS.md` instructions (DSH auto-loads only the home-level patch). Existing non-formal-gates hooks and plugin rows are preserved.
 
 Installation also manages the intake rule: Claude Code uses global `~/.claude/CLAUDE.md` or project
-`CLAUDE.md`, Codex uses global `~/.codex/AGENTS.md` or project `AGENTS.md`, and project Cursor
-uses `.cursor/rules/formal-gates.mdc`. Cursor global installs do not create a rules file; they
+`CLAUDE.md`, Codex uses global `~/.codex/AGENTS.md` or project `AGENTS.md`, project Cursor
+uses `.cursor/rules/formal-gates.mdc`, and DeepSeek Harness uses `$DSH_HOME/AGENTS.md` or project
+`AGENTS.md`. Cursor global installs do not create a rules file; they
 retain the existing runtime and hook integration. The current rule is enclosed by the host
 instructions block `<formal-gates:host-instructions:start>` and
 `<formal-gates:host-instructions:end>`; repeated installs replace the block content and collapse
@@ -252,6 +257,8 @@ preserving content outside the block and other hooks:
 ```bash
 bin/formal-gates uninstall --host claude --scope global
 bin/formal-gates uninstall --host cursor --scope project --project <project>
+bin/formal-gates uninstall --host dsh --scope global
+bin/formal-gates uninstall --host dsh --scope project --project <project>
 ```
 
 Marker-based rule cleanup does not need the runtime or a rule source directory.
@@ -268,7 +275,7 @@ Marker-based rule cleanup does not need the runtime or a rule source directory.
 
 As a user you only need to do three things:
 
-1. **Install** — set it up for one of your AI hosts (claude, codex, or cursor) as described above.
+1. **Install** — set it up for one of your AI hosts (claude, codex, cursor, or dsh) as described above.
 2. **Let your AI walk you through the whole flow** — after installing, tell your AI "help me handle this change with formal-gates" and it will guide you: ask about your requirement, present the plan for confirmation, execute, and report the result. You don't need to remember any commands or understand the terms in this document first.
 3. **Review the outcome** — the main agent summarizes each round for you: which gates passed, which findings need action, and what the seal record looks like. You can always open `.gates/results/<run-id>.json` for the full conclusions.
 
@@ -297,7 +304,7 @@ The main agent never self-triggers: on content-modification requests it reminds 
 Yes. A formal run dispatches several independent reviewers and runs real tests, so it costs more time and tokens than ordinary development. If full is too heavy, choose **custom** inside the formal flow to trim the scope (omit testing, or omit some gates); record-only tasks can take the **lightweight** route (`workflow start --route lightweight` → register requirement → Seal, no verification, seal record marked "本 run 未经任何验证"); very large work can use the **slicing** mode, split into independent parts developed in parallel and reviewed together after merging. Review gates can also be added, removed, and customized freely — if a gate is unsuitable, delete it or change what it checks, which likewise affects the weight.
 
 **What are the prerequisites?**
-Building from source needs Go 1.22+ and one host: claude, codex, or cursor. A formal run needs a Git, SVN, or P4 repository; projects without a VCS don't enter the formal flow.
+Building from source needs Go 1.22+ and one host: claude, codex, cursor, or dsh. A formal run needs a Git, SVN, or P4 repository; projects without a VCS don't enter the formal flow.
 
 **How do I add or remove a review gate?**
 Create or delete `gates/<id>.md` and reinstall. The filename is the gate ID; no config table needs changing. Delete the file to drop the gate; there is no limit.

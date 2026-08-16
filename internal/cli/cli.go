@@ -99,7 +99,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
 	source := fs.String("source", "", "formal-gates source directory")
-	host := fs.String("host", "", "target host: claude, codex, cursor, or both")
+	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
 	scope := fs.String("scope", "", "install scope: global or project")
 	project := fs.String("project", "", "project path for project installs")
 	force := fs.Bool("force", false, "replace an existing target")
@@ -130,7 +130,7 @@ func runUninstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
 	source := fs.String("source", "", "deprecated compatibility flag; marker-based uninstall does not need a source directory")
-	host := fs.String("host", "", "target host: claude, codex, cursor, or both")
+	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
 	scope := fs.String("scope", "", "uninstall scope: global or project")
 	project := fs.String("project", "", "project path for project uninstalls")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -786,7 +786,7 @@ func runHook(program string, args []string, streams IO) (int, error) {
 		return 1, fmt.Errorf("hook decide is required")
 	}
 	fs := newFlagSet("hook decide", streams)
-	provider := fs.String("provider", "", "hook host provider: codex, claude-code, cursor, or empty for the generic protocol")
+	provider := fs.String("provider", "", "hook host provider: codex, claude-code, cursor, deepseek-harness, or empty for the generic protocol")
 	if code, err, done := parseFlagSet(fs, args[1:], streams.Stdout); done {
 		return code, err
 	}
@@ -827,7 +827,7 @@ func runLifecycle(program string, args []string, streams IO) (int, error) {
 	case "capture":
 		fs := newFlagSet("lifecycle capture", streams)
 		root := fs.String("root", "", "repository root override (normally derived from the host payload)")
-		provider := fs.String("provider", "", "host provider: claude-code, codex, or cursor")
+		provider := fs.String("provider", "", "host provider: claude-code, codex, cursor, or deepseek-harness")
 		event := fs.String("event", "", "provider lifecycle event name")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
@@ -1273,7 +1273,7 @@ func printGateUsage(w io.Writer, program string) {
 }
 
 func printHookUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s hook decide\n\nHook decision CLI: reads the host hook JSON payload from stdin and prints the JSON decision.\nFlags:\n  --provider <codex|claude-code|cursor|''>  hook host provider (codex uses the Codex JSON block protocol)\n", program)
+	fmt.Fprintf(w, "Usage: %s hook decide\n\nHook decision CLI: reads the host hook JSON payload from stdin and prints the JSON decision.\nFlags:\n  --provider <codex|claude-code|cursor|deepseek-harness|''>  hook host provider (codex uses the Codex JSON block protocol)\n", program)
 }
 
 func printLifecycleUsage(w io.Writer, program string) {
@@ -1295,9 +1295,9 @@ func printVersion(w io.Writer, program string) {
 // anything else instead of silently treating it as the generic default.
 func validateHookProvider(provider string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "", "codex", "claude", "claude-code", "claude code", "cursor":
+	case "", "codex", "claude", "claude-code", "claude code", "cursor", "dsh", "deepseek", "deepseek-harness":
 		return nil
 	default:
-		return fmt.Errorf("unsupported hook provider %q (want codex, claude-code, cursor, or empty for the generic protocol)", provider)
+		return fmt.Errorf("unsupported hook provider %q (want codex, claude-code, cursor, deepseek-harness, or empty for the generic protocol)", provider)
 	}
 }

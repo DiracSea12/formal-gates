@@ -9,7 +9,7 @@
 
 param(
   [string]$Version = $env:FORMAL_GATES_VERSION,
-  [ValidateSet("claude","codex","cursor","both")]
+  [ValidateSet("claude","codex","cursor","dsh","both")]
   [Alias("Host")]
   [string]$TargetHost = "claude",
   [ValidateSet("global","project")]

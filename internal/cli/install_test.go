@@ -50,6 +50,7 @@ func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
 		{host: "claude", targetRel: ".claude/skills/formal-gates"},
 		{host: "codex", targetRel: ".codex/skills/formal-gates"},
 		{host: "cursor", targetRel: ".cursor/formal-gates"},
+		{host: "dsh", targetRel: ".dsh/skills/formal-gates"},
 	} {
 		t.Run(tc.host, func(t *testing.T) {
 			source := writeInstallSource(t, "source")
@@ -153,6 +154,121 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRunInstallDshProjectInstallsSkillAndRuleWithoutHookPatch(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	project := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "dsh", "--scope", "project", "--project", project, "--force",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("expected dsh project install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	target := filepath.Join(project, ".dsh", "skills", "formal-gates")
+	assertFileContains(t, filepath.Join(target, "SKILL.md"), "source")
+	assertFileContains(t, filepath.Join(project, "AGENTS.md"), testManagedRuleLatest)
+	if strings.Contains(stdout.String(), "hooks configured") {
+		t.Fatalf("dsh project install must not claim hook configuration: %q", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(project, ".dsh", "cordis.patch.yml")); !os.IsNotExist(err) {
+		t.Fatalf("dsh project install must not create an inactive patch file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "plugin", "formal-gates.mjs")); !os.IsNotExist(err) {
+		t.Fatalf("dsh project install must not install the inactive hook plugin: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{
+		"uninstall", "--host", "dsh", "--scope", "project", "--project", project,
+	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("expected dsh project uninstall to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dsh project runtime remains after uninstall: %v", err)
+	}
+	if got := readFile(t, filepath.Join(project, "AGENTS.md")); strings.Contains(got, testManagedRulesStartMarker) {
+		t.Fatalf("dsh project managed rule markers remain after uninstall: %q", got)
+	}
+}
+
+func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("DSH_HOME", "")
+	t.Setenv("DSH_PROJECT_DIR", "")
+	patchPath := filepath.Join(home, ".dsh", "cordis.patch.yml")
+	mustWriteCLI(t, patchPath, `# user-owned rows survive
+- insert:
+    - id: user-plugin
+      name: ./other.mjs
+      disabled: !!js process.platform === 'win32'
+`)
+	var stdout, stderr bytes.Buffer
+
+	code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "dsh", "--scope", "global", "--force",
+	}, IO{Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("expected dsh global install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	target := filepath.Join(home, ".dsh", "skills", "formal-gates")
+	plugin := filepath.Join(target, "plugin", "formal-gates.mjs")
+	assertFileContains(t, plugin, "export const name = 'formal-gates-dsh'")
+	assertFileContains(t, plugin, "tools/pre-execute")
+	patchText := readFile(t, patchPath)
+	for _, expected := range []string{
+		"insert:",
+		"id: formal-gates-dsh",
+		"name: ./skills/formal-gates/plugin/formal-gates.mjs",
+		"provider: deepseek-harness",
+		"dshHome:",
+		"binary:",
+		"user-plugin",
+	} {
+		if !strings.Contains(patchText, expected) {
+			t.Fatalf("dsh patch missing %q: %s", expected, patchText)
+		}
+	}
+	assertFileContains(t, filepath.Join(home, ".dsh", "AGENTS.md"), testManagedRuleLatest)
+
+	// 重复安装收敛为一条，不再叠加。
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{
+		"install", "--source", source, "--host", "dsh", "--scope", "global", "--force",
+	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("expected reinstall to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := strings.Count(readFile(t, patchPath), "formal-gates-dsh"); got != 1 {
+		t.Fatalf("dsh patch entry count=%d, want 1: %s", got, readFile(t, patchPath))
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{
+		"uninstall", "--host", "dsh", "--scope", "global",
+	}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("expected dsh uninstall to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("dsh runtime remains after uninstall: %v", err)
+	}
+	patchText = readFile(t, patchPath)
+	if strings.Contains(patchText, "formal-gates-dsh") || strings.Contains(patchText, "formal-gates.mjs") {
+		t.Fatalf("dsh patch row remains after uninstall: %s", patchText)
+	}
+	if !strings.Contains(patchText, "user-plugin") || !strings.Contains(patchText, "!!js process.platform") {
+		t.Fatalf("uninstall changed user-owned patch row: %s", patchText)
+	}
+	agentsText := readFile(t, filepath.Join(home, ".dsh", "AGENTS.md"))
+	if strings.Contains(agentsText, testManagedRulesStartMarker) || strings.Contains(agentsText, testManagedRulesEndMarker) {
+		t.Fatalf("dsh managed rule markers remain after uninstall: %q", agentsText)
 	}
 }
 
@@ -425,7 +541,7 @@ func TestRunInstallRequiresBuiltNativeBinary(t *testing.T) {
 }
 
 func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T) {
-	for _, host := range []string{"claude", "codex", "cursor"} {
+	for _, host := range []string{"claude", "codex", "cursor", "dsh"} {
 		for _, scope := range []string{"global", "project"} {
 			t.Run(host+"/"+scope, func(t *testing.T) {
 				source := writeInstallSource(t, "source")
@@ -434,6 +550,8 @@ func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T
 				if scope == "global" {
 					t.Setenv("HOME", root)
 					t.Setenv("USERPROFILE", root)
+					t.Setenv("DSH_HOME", "")
+					t.Setenv("DSH_PROJECT_DIR", "")
 				} else {
 					args = append(args, "--project", root)
 				}
@@ -538,6 +656,9 @@ func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
 }
 
 func testInstallTargetPath(root, host, scope string) string {
+	if host == "dsh" {
+		return filepath.Join(root, ".dsh", "skills", "formal-gates")
+	}
 	base := root
 	if scope == "global" {
 		switch host {
@@ -572,6 +693,12 @@ func testManagedRulePath(root, host, scope string) string {
 		}
 		return filepath.Join(root, "AGENTS.md")
 	}
+	if host == "dsh" {
+		if scope == "global" {
+			return filepath.Join(root, ".dsh", "AGENTS.md")
+		}
+		return filepath.Join(root, "AGENTS.md")
+	}
 	if scope == "project" {
 		return filepath.Join(root, ".cursor", "rules", "formal-gates.mdc")
 	}
@@ -579,6 +706,12 @@ func testManagedRulePath(root, host, scope string) string {
 }
 
 func testHookConfigPath(root, host, scope string) string {
+	if host == "dsh" {
+		if scope == "global" {
+			return filepath.Join(root, ".dsh", "cordis.patch.yml")
+		}
+		return ""
+	}
 	base := root
 	if scope == "global" {
 		switch host {

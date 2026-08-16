@@ -27,7 +27,7 @@ type PortableCanaryReport struct {
 // host-agnostic check: it must observe the lenient default provider even when
 // invoked from inside a real host shell (e.g. `canary portable` from a Claude
 // Code session), so the host environment is neutralized for its duration.
-var hostProviderEnvKeys = []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME"}
+var hostProviderEnvKeys = []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME", "DSH_HOME", "DSH_PROJECT_DIR"}
 
 // withoutHostEnv clears the host lifecycle environment and returns a restore
 // function. Empty is treated as unset by providerFromEnvironment, so clearing
@@ -309,7 +309,7 @@ func openDispatchID(state RunState, kind, target string) string {
 }
 
 func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) {
-	for _, tc := range []struct{ name, host string }{{"install-claude-codex-native-runtime", "both"}, {"install-cursor-native-runtime", "cursor"}} {
+	for _, tc := range []struct{ name, host string }{{"install-claude-codex-native-runtime", "both"}, {"install-cursor-native-runtime", "cursor"}, {"install-dsh-project-runtime", "dsh"}} {
 		project := filepath.Join(tempRoot, tc.name)
 		if err := os.MkdirAll(project, 0o700); err != nil {
 			addCheck(tc.name, false, err.Error())

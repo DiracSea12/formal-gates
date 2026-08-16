@@ -11,7 +11,7 @@ skip_hooks=false
 
 usage() {
   cat <<'EOF'
-Usage: install.command [--version vX.Y.Z] [--host claude|codex|cursor|both] [--scope global|project] [--project PATH] [--force] [--skip-hooks]
+Usage: install.command [--version vX.Y.Z] [--host claude|codex|cursor|dsh|both] [--scope global|project] [--project PATH] [--force] [--skip-hooks]
 
 Downloads the release source snapshot and the matching native binary for the current platform,
 assembles a local package copy, and runs formal-gates install against the selected target host.

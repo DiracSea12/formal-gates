@@ -32,6 +32,15 @@ development-worker 派发写入，白盒测试代码/黑盒用例文档由 qa-de
 | `carry` | 继承判定 |
 | `gate-review` / 各门审查类型 | 开发后门审查 |
 
+## DeepSeek Harness 适配
+
+DeepSeek Harness 的 subagent 事件只有 run/child id，没有按类型注入 `agent_type`
+的宿主字段。DSH 的 PreToolUse 载荷保留子代理 id；hook 在活动 run 已进入开发后，用
+lifecycle claim 绑定（identity → dispatch id）反查该派发目标：
+`development-worker`/`qa-design` 放行，gate 派发归一化为 `gate-review`，其余审查
+动作按原 action id 判定。因此 DSH 子代理仍应在开始工作前执行
+`workflow claim-dispatch`，否则在绑定建立前无法按角色识别，会按"其余代理"处理。
+
 ## 主代理（主线程）
 
 主线程载荷无 `agent_id`/`agent_type`，判定为"主代理（主线程）"。进入开发后不得直接

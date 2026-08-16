@@ -130,11 +130,12 @@ func TestLifecycleUnclaimedObservationsRetireWithRun(t *testing.T) {
 func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
 	// 独立期望：每个宿主定义且只定义其 start/stop 两个捕获 hook 事件。
 	wantEvents := map[string][]string{
-		ProviderClaude: {"SubagentStart", "SubagentStop"},
-		ProviderCodex:  {"SubagentStart", "SubagentStop"},
-		ProviderCursor: {"subagentStart", "subagentStop"},
+		ProviderClaude:   {"SubagentStart", "SubagentStop"},
+		ProviderCodex:    {"SubagentStart", "SubagentStop"},
+		ProviderCursor:   {"subagentStart", "subagentStop"},
+		ProviderDeepSeek: {"SubagentStart", "SubagentStop"},
 	}
-	for _, host := range []string{ProviderClaude, ProviderCodex, ProviderCursor} {
+	for _, host := range []string{ProviderClaude, ProviderCodex, ProviderCursor, ProviderDeepSeek} {
 		t.Run(host, func(t *testing.T) {
 			// 对照实际定义来源：宿主适配器持有 hook 事件集合，定义须一一对应。
 			adapter, err := adapterFor(host)
@@ -470,16 +471,21 @@ func assertRunOwnedEvents(t *testing.T, root, runID, dispatchID string) {
 func useProvider(t *testing.T, provider string) {
 	t.Helper()
 	prior := executablePath
+	deepseekHome := t.TempDir()
 	path := map[string]string{
-		ProviderClaude:  filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderCodex:   filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
-		ProviderCursor:  filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
-		ProviderDefault: filepath.Join(t.TempDir(), "source", "formal-gates"),
+		ProviderClaude:   filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderCodex:    filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderCursor:   filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
+		ProviderDeepSeek: filepath.Join(deepseekHome, "skills", "formal-gates", "bin", "formal-gates"),
+		ProviderDefault:  filepath.Join(t.TempDir(), "source", "formal-gates"),
 	}[provider]
 	// Neutralize host environment detection so the stubbed executable path is
 	// the only provider signal in these tests.
-	for _, key := range []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME"} {
+	for _, key := range []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME", "DSH_HOME", "DSH_PROJECT_DIR"} {
 		t.Setenv(key, "")
+	}
+	if provider == ProviderDeepSeek {
+		t.Setenv("DSH_HOME", deepseekHome)
 	}
 	executablePath = func() (string, error) { return path, nil }
 	t.Cleanup(func() { executablePath = prior })
