@@ -179,24 +179,13 @@ func requireDevelopmentTransition(state RunState) error {
 		return nil
 	}
 	if developmentStatus == developmentComplete || developmentStatus == developmentVerified {
-		if !reviewWaveRecorded(state) {
-			if state.PreRepairSnapshot != "" {
-				return fmt.Errorf("the current repair still requires verification")
-			}
-			return fmt.Errorf("all selected review results must be recorded before repair")
-		}
+		// 连续修复（如补前一轮未解决的 LLM 兜底）允许在 review 波次未闭环时继续派发下一轮，
+		// 不再要求 reviewWaveRecorded 或 PreRepairSnapshot 先验证。
 		if !hasRepairableBlocker(state) && !hasSuggestionRecommendation(state) {
-			if state.PreRepairSnapshot != "" {
-				return fmt.Errorf("the current repair still requires verification")
-			}
 			return fmt.Errorf("no recorded result requires repair")
 		}
-		// 环境性执行失败（RUNTIME_ERROR，如 API 额度耗尽）不阻塞修复触发：它可经修复后重试、
-		// 与实现缺陷的修复彼此独立。VERIFIED 只在无 RUNTIME_ERROR 时才会达成，故这里不再单独
-		// 要求 VERIFIED 或 runtime-error 授权。仅当修复前快照仍待验证时要求先验证。
-		if state.PreRepairSnapshot != "" {
-			return fmt.Errorf("the current repair still requires verification")
-		}
+		// 环境性执行失败（RUNTIME_ERROR）不阻塞修复触发；且连续修复（如补前一轮未解决的
+		// LLM 兜底）允许在上一快照未重审前继续派发下一轮，不再要求 PreRepairSnapshot 先验证。
 		if state.CompletedReviewWaves >= effectiveReviewWaveLimit(state) {
 			return fmt.Errorf("review-wave limit is exhausted; explicit additional repair authorization is required")
 		}
@@ -225,13 +214,11 @@ func requireSnapshotTransition(state RunState) error {
 	}
 	// 快照黑盒门（开发完成 且 黑盒 qa-review PASS）在 AdvanceSnapshot 内强制，
 	// 用户显式授权可手动放行；此处不再重复校验。
-	if state.PreRepairSnapshot != "" && !runtimeErrorsAuthorizedForRepair(state) {
-		return fmt.Errorf("the current repair still requires verification")
-	}
+	// 连续修复允许在上一快照未重审前继续记录快照，不再要求 PreRepairSnapshot 先验证。
 	if developmentStatus == developmentRepairPrepared || adoptingSliceRepair {
-		if !reviewWaveRecorded(state) {
-			return fmt.Errorf("all selected review results must be recorded before repair")
-		}
+		// 修复提交后 snapshot 推进到新快照，QA 重审/重跑在新快照上进行；上一快照的
+		// review 记录未闭环（如修测试代码后白盒 review/execution 待重跑）不在此处拦截，
+		// 改由新快照的 reviewWaveRecorded 把关。
 		if !hasRepairableBlocker(state) && !hasSuggestionRecommendation(state) {
 			return fmt.Errorf("no recorded result requires repair")
 		}
