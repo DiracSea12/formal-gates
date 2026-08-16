@@ -1,0 +1,255 @@
+{
+  "runId": "fix-existing-defects",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "030d4bac018e61ca39f9b6ce3633668372db58ff39908e92bcc38cdf3c683c6e",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "84562a6981775ab062a6ad88458f15904c091211b62ae53925145a5eaa5fcf72",
+  "vcs": "git",
+  "baseSnapshot": "c61b7513e88783267e31033675c3123ae2a036d8",
+  "currentSnapshot": "0fe1633830c52c9f4b4c42f67295dd747e1a6e1a",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/fix-existing-defects/master-requirements.md",
+      "revision": "030d4bac018e61ca39f9b6ce3633668372db58ff39908e92bcc38cdf3c683c6e"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "三项缺陷同属快照/QA 完整性主题、同处 internal/validate 包、改动量小，构成连贯有界的单 run 交付单元；拆分引入多次快照/封板/Seal 开销远大于收益，故不拆。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "FAIL",
+      "snapshot": "0fe1633830c52c9f4b4c42f67295dd747e1a6e1a",
+      "compared": "c61b7513e88783267e31033675c3123ae2a036d8..0fe1633830c52c9f4b4c42f67295dd747e1a6e1a",
+      "findings": [
+        {
+          "severity": "P1",
+          "message": "写阻断边界重定义属需求之外内容。已确认需求只修三项存量缺陷（白盒测试代码进快照、未跟踪文件检测、删除 legacy qa），涉及文件清单不含 write_block.go。本次改动额外把写阻断 hook 从「任意 ACTIVE run 即阻断」改为「development-worker 离开 PENDING 才阻断」，并新增「仅拦截仓库根内写入、放行仓库外写入」的空间边界，引入一整套路径包含判定 + shell 写目标解析子机制（writePathWithinRoot / explicitBashWriteTargets / Windows 跨卷处理，约 100 行）及配套测试、canary 与文档。白盒测试代码提交路径仍由 git commit 阻断，这两处改动与白盒路径无关；最简且足够的回应是删去这些写墙改动、把 diff 限定在三项缺陷的文件。",
+          "locations": [
+            "internal/validate/write_block.go:298",
+            "internal/validate/write_block.go:438",
+            "internal/validate/write_block.go:462",
+            "internal/validate/write_block.go:500"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "qa-review.md 新增「覆盖充分性判定（逐验收点）」规则、formal-flow.md 新增 PASS+P2/P3 处理流程，均不在三项确认缺陷范围内，也非三项修复所需，属需求之外的额外规则/流程。",
+          "locations": [
+            "prompts/actions/qa-review.md:15",
+            "references/formal-flow.md:176"
+          ]
+        }
+      ],
+      "message": "改动超出已确认的三项缺陷范围，额外重定义写阻断边界并新增 qa-review / formal-flow 规则，属需求之外内容（过度设计）。",
+      "dispatchId": "dispatch-0cf7ebbd064f927397c1f78f"
+    },
+    "implementation-quality-gate": {
+      "status": "FAIL",
+      "snapshot": "0fe1633830c52c9f4b4c42f67295dd747e1a6e1a",
+      "compared": "c61b7513e88783267e31033675c3123ae2a036d8..0fe1633830c52c9f4b4c42f67295dd747e1a6e1a",
+      "findings": [
+        {
+          "severity": "P1",
+          "message": "写墙的仓库外写入豁免（writeTargetsOutsideActiveRoot）对 cp/install 存在解析缺陷：explicitBashWriteTargets 收集命令参数时只跳过 \u003e 与 \u003e\u003e 令牌、不跳过其后的重定向目标字符串，而 cp/install 取 args 的最后一个元素作为写入目的地，导致尾随输出重定向（如 \u003e /dev/null、\u003e /tmp/log）被误当作 cp/install 的目的地。以 cp internal/code.go internal/out.go \u003e /dev/null 为例，真实写入目标是仓库内的 internal/out.go，但解析结果 destination 为 /dev/null（仓库外），被 writeTargetsOutsideActiveRoot 判为仓库外写入而放行，主线程与审查类代理均可借此绕过 RQ-011 写墙，在活动 run 仓库内写代码。",
+          "locations": [
+            "internal/validate/write_block.go:520",
+            "internal/validate/write_block.go:529"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "缺陷1 的实现取向「测试代码由 host 提交」与写墙冲突：写墙在 development-worker 状态 != PENDING 时（含白盒推进阶段的 developmentComplete=PASS）阻断主线程（agent_type 为空）的 git add / git commit，而本改动未为白盒测试代码提交新增任何豁免；当前 writeAllowedAgentTypes 只放行 development-worker 与 qa-design 子代理提交，与需求「host 提交」的取向不一致。Go 引擎状态迁移（whiteboxTestCodeAdvancement + AdvanceSnapshot）本身正确、测试用 commitAll 直接提交绕过 hook，未覆盖该 hook 交互。",
+          "locations": [
+            "internal/validate/write_block.go:408",
+            "internal/validate/write_block.go:642"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "当前改动越出确认需求范围：需求仅登记缺陷1/3/4 三项修复，且非目标明确「除上述三项修复外不改动其它快照 / QA / 门逻辑」。但 diff 额外改动了 prompts/actions/qa-review.md（重写覆盖充分性判定为逐验收点 P1 阻塞，属 QA 审查语义变更）、references/formal-flow.md 与重构方案（新增 PASS+P2/P3 Advisory/Seal 处理语义），并将写墙激活窗口从「任意 ACTIVE run」收窄为「ACTIVE 且 development-worker != PENDING」（write_block.go / canary.go / agents/agent-types.md / references/install-and-hooks.md）。这些改动未经本需求确认，其中 QA 审查语义与 Seal/门语义变更直接违反需求非目标。",
+          "locations": [
+            "prompts/actions/qa-review.md:9",
+            "references/formal-flow.md:173",
+            "internal/validate/write_block.go:294"
+          ]
+        }
+      ],
+      "message": "实现质量门审查：三项确认需求（缺陷1/3/4）均有实现路径且新增测试通过，但发现 1 个 P1 写墙绕过缺陷与 2 个 P2 偏差。",
+      "dispatchId": "dispatch-48ec8c091d3d493b09c9facb"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "0fe1633830c52c9f4b4c42f67295dd747e1a6e1a",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "git run 启动（start --split no）+ 需求登记确认 + 产品审/start-readiness PASS + slicing no-split + route 含 whitebox；开发提交 → snapshot --dispatch 到 S1；白盒设计者写 structural_test.go（未提交）并记录 whitebox qa-design（--test 引用）；host git add+commit；snapshot（无派发）推进到 S2；记录 whitebox qa-review/qa-execution PASS；seal。",
+        "observation": "无派发 snapshot 经白盒测试代码推进路径把 currentSnapshot 从 S1 推进到不同的 S2（无 development-worker 派发）；git show S2:structural_test.go 返回文件内容；qa-execution prepare 报告 current snapshot=S2；seal exit=0 并把 base→current 的 2 条提交压缩为单条、最终树含 structural_test.go。",
+        "oracleResult": "符合：快照无派发推进到 S2、S2 树含测试代码、qa-review/qa-execution 在 S2 派发、seal 交付含测试代码（无静默丢失）。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "同一套流程推进到开发提交后，新增未跟踪且未忽略的 new-deliverable.txt（不 git add）跑 snapshot；随后 git add+commit 再跑 snapshot。",
+        "observation": "带未跟踪文件时 snapshot exit=1、报错明确为 unsubmitted git changes must be committed before recording a snapshot (including any untracked files that must be added)，currentSnapshot 不变，且报错先于任何 QA/门快照条件出现；gitignored 的 .gates/tmp/ 不触发；commit 后 snapshot exit=0 并推进。",
+        "oracleResult": "符合：明确指向未提交/未跟踪、不静默 PASS/不推进、.gates/tmp 不触发。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "构建独立包副本（prompts/+gates/），新增 gates/qa.md 跑 start --split no；删除 qa.md 后重跑 start；确认需求后跑 route-candidates。",
+        "observation": "带 qa.md 时 start exit=1 报 gate catalog: gate id \"qa\" is reserved for built-in QA；删除后 start exit=0；route-candidates 返回 [blackbox,whitebox,complexity-gate,implementation-quality-gate]，不含 qa 与 merge-gate。",
+        "oracleResult": "符合：保留名 qa 被拒、删除后正常加载、候选不含 qa。",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 76065386,
+    "inputCacheHitTokens": 73957120,
+    "inputCacheMissTokens": 2108266,
+    "outputTokens": 382481,
+    "dispatches": {
+      "dispatch-0cf7ebbd064f927397c1f78f": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 953088,
+        "inputCacheMissTokens": 138917,
+        "outputTokens": 27129,
+        "totalInputTokens": 1092005,
+        "source": "transcript"
+      },
+      "dispatch-30a5ad2ae48d7bb07d746f4d": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-35f7e9172a64cd60358a79fd": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 358528,
+        "inputCacheMissTokens": 73064,
+        "outputTokens": 23776,
+        "totalInputTokens": 431592,
+        "source": "transcript"
+      },
+      "dispatch-41703652a1c1008992002ddd": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 92672,
+        "inputCacheMissTokens": 26642,
+        "outputTokens": 14618,
+        "totalInputTokens": 119314,
+        "source": "transcript"
+      },
+      "dispatch-48ec8c091d3d493b09c9facb": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 2717312,
+        "inputCacheMissTokens": 136465,
+        "outputTokens": 44709,
+        "totalInputTokens": 2853777,
+        "source": "transcript"
+      },
+      "dispatch-630a85a2b6a90697f604aa17": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 825600,
+        "inputCacheMissTokens": 183873,
+        "outputTokens": 15817,
+        "totalInputTokens": 1009473,
+        "source": "transcript"
+      },
+      "dispatch-aa794b34f2d4068fb124037e": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 15261184,
+        "inputCacheMissTokens": 270889,
+        "outputTokens": 62026,
+        "totalInputTokens": 15532073,
+        "source": "transcript"
+      },
+      "dispatch-b2030f7b93b052dab211e1c0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 65280,
+        "inputCacheMissTokens": 14928,
+        "outputTokens": 12517,
+        "totalInputTokens": 80208,
+        "source": "transcript"
+      },
+      "dispatch-b29e34071596aeea54538ded": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 4644864,
+        "inputCacheMissTokens": 222527,
+        "outputTokens": 30457,
+        "totalInputTokens": 4867391,
+        "source": "transcript"
+      },
+      "dispatch-b93fb9cfbe554dc2c22464b3": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 296576,
+        "inputCacheMissTokens": 31687,
+        "outputTokens": 17617,
+        "totalInputTokens": 328263,
+        "source": "transcript"
+      },
+      "dispatch-c74ddfc3a28cf09d77f10b57": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 2760192,
+        "inputCacheMissTokens": 251467,
+        "outputTokens": 21571,
+        "totalInputTokens": 3011659,
+        "source": "transcript"
+      },
+      "dispatch-f2396a6a8296aabe402132c5": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 1786496,
+        "inputCacheMissTokens": 160692,
+        "outputTokens": 19127,
+        "totalInputTokens": 1947188,
+        "source": "transcript"
+      },
+      "dispatch-f6aeb64ecb5cf29f1ceb8ae3": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 44195328,
+        "inputCacheMissTokens": 597115,
+        "outputTokens": 93117,
+        "totalInputTokens": 44792443,
+        "source": "transcript"
+      }
+    }
+  }
+}
