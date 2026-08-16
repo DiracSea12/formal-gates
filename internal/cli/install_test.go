@@ -225,7 +225,8 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 	for _, expected := range []string{
 		"insert:",
 		"id: formal-gates-dsh",
-		"name: ./skills/formal-gates/plugin/formal-gates.mjs",
+		"name: file:///",
+		"plugin/formal-gates.mjs",
 		"provider: deepseek-harness",
 		"dshHome:",
 		"binary:",
