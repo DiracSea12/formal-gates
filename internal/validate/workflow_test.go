@@ -2829,7 +2829,8 @@ func workflowFixture(t *testing.T) (string, string) {
 	writeTestFile(t, filepath.Join(root, ".gitignore"), ".gates/tmp/\n.gates/results\n")
 	// 白盒设计者交付的结构测试代码不在 baseline 里：它由白盒设计者在开发后主工作区
 	// 编写、host 提交后经白盒测试代码推进路径进入快照（见 whiteboxDeliveredTestCode
-	// 与测试 TestWhiteboxTestCodeCommitsIntoSnapshot）。把测试文件写进 baseline 会掩盖
+	// 与测试 TestWhiteboxQADesignsAndReviewsAfterDevelopment /
+	// TestFullRouteDesignsWhiteboxAfterDevelopment）。把测试文件写进 baseline 会掩盖
 	// 真实写入路径、让白盒核心交付物静默丢失的缺陷通过测试。
 	initializeGit(t, root)
 	return root, promptPackage(t, map[string]string{"quality": "quality checks", "architecture": "architecture checks", "merge-gate": "merge checks"})
