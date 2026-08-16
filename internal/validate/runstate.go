@@ -43,6 +43,11 @@ type RunState struct {
 	// SplitMasterRunID 记录切片实例在启动声明中钉死的保留总任务 master run id（--split yes
 	// --master <id>）；workflow slicing 记录 split 时引用的 master 必须与之一致。
 	SplitMasterRunID     string                       `json:"splitMasterRunID,omitempty"`
+	// OwnerTranscript / OwnerSession 记录启动本 run 的对话身份（PreToolUse hook 在
+	// workflow start 时捕获、经 sidecar 桥接由 Start 写入）。写墙只对身份匹配的对话生效，
+	// 其它对话放行。transcript_path 为主键，session_id 兜底。旧 run 缺失时为空。
+	OwnerTranscript      string                       `json:"ownerTranscript,omitempty"`
+	OwnerSession         string                       `json:"ownerSession,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
 	SettledFindings      map[string][]SettledFinding  `json:"settledFindings,omitempty"`

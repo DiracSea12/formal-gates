@@ -18,11 +18,16 @@ func TestRunHookUsesCodexJSONDecisionProtocol(t *testing.T) {
 	if codexCode != 0 {
 		t.Fatalf("Codex denied hook should exit 0, code=%d stdout=%q stderr=%q", codexCode, codexOut.String(), codexErr.String())
 	}
-	if !strings.Contains(codexOut.String(), `"decision":"block"`) {
-		t.Fatalf("Codex hook did not emit a block decision: %q", codexOut.String())
+	// Codex 的 PreToolUse 响应是 hookSpecificOutput.permissionDecision（deny），
+	// 不是旧式 decision:"block"。
+	if !strings.Contains(codexOut.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("Codex hook did not emit permissionDecision:deny: %q", codexOut.String())
 	}
-	if strings.Contains(codexOut.String(), "permissionDecision") {
-		t.Fatalf("Codex hook emitted non-Codex response fields: %q", codexOut.String())
+	if !strings.Contains(codexOut.String(), `"hookSpecificOutput"`) {
+		t.Fatalf("Codex hook did not wrap in hookSpecificOutput: %q", codexOut.String())
+	}
+	if strings.Contains(codexOut.String(), `"decision":"`) {
+		t.Fatalf("Codex hook emitted legacy decision field: %q", codexOut.String())
 	}
 
 	var genericOut, genericErr bytes.Buffer

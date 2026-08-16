@@ -737,7 +737,7 @@ func writeCodexHookConfig(t *testing.T, path string, commands ...string) {
 }
 
 func testNativeHookCommand(target string, args ...string) string {
-	parts := []string{"\"" + filepath.ToSlash(filepath.Join(target, "bin", installTestBinaryName())) + "\""}
+	parts := []string{filepath.ToSlash(filepath.Join(target, "bin", installTestBinaryName()))}
 	return strings.Join(append(parts, args...), " ")
 }
 

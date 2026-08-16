@@ -443,7 +443,7 @@ func configureInstallHook(target installTarget) error {
 		}
 	case "codex":
 		desired = map[string]any{
-			"PreToolUse": nestedHookEntry("*", gateCommand, true),
+			"PreToolUse": nestedHookEntry(hostMatcher("codex"), gateCommand, true),
 		}
 	case "cursor":
 		shape = "flat"
@@ -457,7 +457,7 @@ func configureInstallHook(target installTarget) error {
 		if shape == "flat" {
 			desired[hook.Event] = flatHookEntry(command)
 		} else {
-			desired[hook.Event] = nestedHookEntry("*", command, target.host == "codex")
+			desired[hook.Event] = nestedHookEntry(hostMatcher(target.host), command, target.host == "codex")
 		}
 	}
 	for event, entry := range desired {
@@ -556,6 +556,16 @@ func hookObject(config map[string]any) map[string]any {
 	return hooks
 }
 
+// hostMatcher returns the tool-name matcher for a host: Claude Code uses the glob
+// "*" (matches every tool), Codex uses the regex ".*" — Codex's matcher is a regex,
+// so the glob "*" is an invalid pattern that matches nothing and the hook never fires.
+func hostMatcher(host string) string {
+	if host == "codex" {
+		return ".*"
+	}
+	return "*"
+}
+
 func nestedHookEntry(matcher, command string, timeout bool) map[string]any {
 	hook := map[string]any{
 		"type":    "command",
@@ -620,11 +630,13 @@ func isInstallerHookValue(parent map[string]any, value any, target installTarget
 		return false
 	}
 	commandText, ok := command["command"].(string)
-	if !ok || !installerHookCommands(target)[commandText] {
+	if !ok || !installerHookCommands(target)[normalizeHookCommand(commandText)] {
 		return false
 	}
 	if shape == "nested" {
-		if !exactObjectKeys(parent, "matcher", "hooks") || parent["matcher"] != "*" {
+		// matcher 接受 "*"（Claude Code 与 legacy hook）或 ".*"（Codex 正则），
+		// 其余值视为非 formal-gates 安装的 hook。
+		if !exactObjectKeys(parent, "matcher", "hooks") || (parent["matcher"] != "*" && parent["matcher"] != ".*") {
 			return false
 		}
 		return exactNestedHookShape(command, target.host) ||
@@ -637,16 +649,19 @@ func isInstallerHookValue(parent map[string]any, value any, target installTarget
 
 func installerHookCommands(target installTarget) map[string]bool {
 	commands := map[string]bool{}
+	add := func(args ...string) {
+		commands[normalizeHookCommand(nativeInstallCommand(target.targetPath, args...))] = true
+	}
 	gateArgs := []string{"hook", "decide"}
 	if target.host == "codex" {
-		commands[nativeInstallCommand(target.targetPath, "hook", "decide")] = true
+		add("hook", "decide")
 		gateArgs = append(gateArgs, "--provider", "codex")
 	}
-	commands[nativeInstallCommand(target.targetPath, gateArgs...)] = true
+	add(gateArgs...)
 	lifecycleHooks, err := lifecycle.HookDefinitions(target.host)
 	if err == nil {
 		for _, hook := range lifecycleHooks {
-			commands[nativeInstallCommand(target.targetPath, hook.Command...)] = true
+			add(hook.Command...)
 		}
 	}
 	for _, command := range []string{
@@ -687,7 +702,10 @@ func isLegacyInstallerHookCommand(command string) bool {
 }
 
 func isLegacyCodexGateCommand(command string, target installTarget) bool {
-	return target.host == "codex" && command == nativeInstallCommand(target.targetPath, "hook", "decide")
+	if target.host != "codex" {
+		return false
+	}
+	return normalizeHookCommand(command) == normalizeHookCommand(nativeInstallCommand(target.targetPath, "hook", "decide"))
 }
 
 func exactObjectKeys(value map[string]any, expected ...string) bool {
@@ -718,9 +736,31 @@ func nativeInstallCommand(skillRoot string, args ...string) string {
 	return strings.Join(parts, " ")
 }
 
+// normalizeHookCommand 去掉命令字符串里的双引号，用于卸载/升级时识别新旧两种 install
+// 格式：旧版无条件给 exe 路径加引号、新版仅在需要时加引号，归一化后相同。
+func normalizeHookCommand(command string) string {
+	return strings.ReplaceAll(command, `"`, "")
+}
+
 func quoteCommandArg(value string) string {
 	value = slashCommandPath(value)
+	if !requiresShellQuoting(value) {
+		return value
+	}
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+}
+
+// requiresShellQuoting 只在值含空白或 shell 元字符时才需要引号。无空格/特殊字符的路径
+// 不加引号：Codex 0.146 会把带引号的 exe 路径当成命令的一部分执行失败，导致 hook 被判
+// Failed 后 fail-open 放行。
+func requiresShellQuoting(value string) bool {
+	for _, r := range value {
+		switch r {
+		case ' ', '\t', '"', '\'', '&', '|', ';', '<', '>', '(', ')', '^', '`':
+			return true
+		}
+	}
+	return false
 }
 
 func slashCommandPath(value string) string {

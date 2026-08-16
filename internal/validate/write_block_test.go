@@ -443,3 +443,87 @@ func writeRunStateForWriteBlock(t *testing.T, root, runStatus, developmentStatus
 		t.Fatal(err)
 	}
 }
+
+// TestExplicitBashWriteTargetsSkipsRedirectTargets covers the P1 fix: 重定向目标
+// 不能被当成 cp/install/mv/tee/touch/mkdir/rm 的实参。cp internal/code.go
+// internal/out.go > /dev/null 的真目标必须是 internal/out.go，而不是重定向目标
+// /dev/null（read-only 重定向已由 redirectWriteTargets 排除，token 循环不得再捡回）。
+func TestExplicitBashWriteTargetsSkipsRedirectTargets(t *testing.T) {
+	for _, tc := range []struct {
+		command  string
+		want     []string
+		complete bool
+	}{
+		{"cp internal/code.go internal/out.go > /dev/null", []string{"internal/out.go"}, true},
+		{"cp a.go b.go 2> /dev/null", []string{"b.go"}, true},
+		{"cp a.go b.go 2>/dev/null", []string{"b.go"}, true},
+		{"install src.c internal/out.c > /dev/null", []string{"internal/out.c"}, true},
+		{"tee .gates/x > /dev/null", []string{".gates/x"}, true},
+		{"touch a > NUL", []string{"a"}, true},
+	} {
+		got, complete := explicitBashWriteTargets(tc.command)
+		if complete != tc.complete {
+			t.Fatalf("%q: complete=%v, want %v", tc.command, complete, tc.complete)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("%q: targets=%v, want %v", tc.command, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%q: targets=%v, want %v", tc.command, got, tc.want)
+			}
+		}
+	}
+}
+
+// TestVCSWriteMarkersCoverGitSvnP4 verifies the write-wall treats all three VCS
+// backends (git / svn / p4) as VCS state writes, not just git.
+func TestVCSWriteMarkersCoverGitSvnP4(t *testing.T) {
+	writeCommands := []string{
+		"git commit -m x",
+		"svn commit -m x",
+		"svn ci -m x",
+		"p4 submit -d x",
+		"svn add foo.txt",
+		"p4 add foo.txt",
+		"p4 edit foo.txt",
+		"svn delete foo.txt",
+		"p4 delete foo.txt",
+		"svn move a.txt b.txt",
+		"p4 move a.txt b.txt",
+		"svn copy a.txt b.txt",
+		"p4 copy a.txt b.txt",
+		"svn merge x",
+		"p4 integrate x",
+		"svn revert foo.txt",
+		"p4 revert foo.txt",
+		"p4 shelve -c 123",
+		"svn import foo.txt",
+		"svn propset svn:keywords foo.txt",
+	}
+	for _, cmd := range writeCommands {
+		if !isVCSWriteCommand(cmd) {
+			t.Errorf("VCS write not detected: %q", cmd)
+		}
+		if !commandWritesFiles(cmd) {
+			t.Errorf("commandWritesFiles missed VCS write: %q", cmd)
+		}
+		if !bashWriteTargetsCodeOrState(cmd) {
+			t.Errorf("bashWriteTargetsCodeOrState missed VCS write: %q", cmd)
+		}
+	}
+	readOnly := []string{
+		"git status --short",
+		"git log --oneline -3",
+		"svn status",
+		"svn log -l 3",
+		"p4 changes -m 3",
+		"p4 files //depot/...",
+		"git diff HEAD",
+	}
+	for _, cmd := range readOnly {
+		if isVCSWriteCommand(cmd) {
+			t.Errorf("read-only VCS query misjudged as write: %q", cmd)
+		}
+	}
+}

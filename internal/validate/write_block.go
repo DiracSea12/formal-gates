@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -47,12 +48,14 @@ var writeAllowedAgentTypes = map[string]bool{
 // writeBlockPayload 是 hook 判定所需的最小结构化输入，由 decideWriteBlockValue 从
 // PreToolUse 载荷提取。agentType 为空串表示主线程（主代理）。
 type writeBlockPayload struct {
-	filePath     string   // Edit/Write/MultiEdit 的目标路径
-	agentType    string   // 调用者 agent_type；"" = 主线程
-	hasActiveRun bool     // cwd（或其祖先）下存在活动正式 run
-	artifacts    []string // 活动 run 的 RequirementArtifacts 路径（相对 repo 根）
-	repoRoot     string   // 检测到活动 run 的仓库根
-	cwd          string   // host 窗口工作目录，用于解析相对写目标
+	filePath     string        // Edit/Write/MultiEdit 的目标路径
+	agentType    string        // 调用者 agent_type；"" = 主线程
+	hasActiveRun bool          // cwd（或其祖先）下存在活动正式 run
+	artifacts    []string      // 活动 run 的 RequirementArtifacts 路径（相对 repo 根）
+	repoRoot     string        // 检测到活动 run 的仓库根
+	cwd          string        // host 窗口工作目录，用于解析相对写目标
+	owners       []ownerIdentity // 所有活动 run 的 owner（启动对话 transcript/session）
+	toolName     string        // PreToolUse 工具名，用于 apply_patch 这类无目标写工具的保守拦截
 }
 
 // hookToolName 从 payload 提取 PreToolUse 的 tool_name。Codex / Claude Code /
@@ -146,10 +149,45 @@ func jsonString(value any) string {
 // files. Read-only tools and non-write tools are not adjudicated here.
 func isWriteTool(toolName, command string) bool {
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "write", "edit", "multiedit", "notebookedit", "multi_edit", "notebook_edit":
+	case "write", "edit", "multiedit", "notebookedit", "multi_edit", "notebook_edit",
+		"applypatch", "apply_patch":
 		return true
-	case "bash", "shell", "cmd", "powershell", "pwsh":
+	}
+	// 其余工具（bash/shell/exec 或任何未知工具名）：只要载荷里能提取到 command，就按
+	// shell 命令判定写目标，避免漏掉未知工具名导致写墙失效。
+	if strings.TrimSpace(command) != "" {
 		return commandWritesFiles(command)
+	}
+	return false
+}
+
+// vcsWriteMarkers 是写墙要拦截的 VCS 状态写入命令关键词：git / svn / p4 三套后端
+// 的提交、推送、合并、重置、丢弃、暂存、删除/移动/复制等会变更仓库或工作区状态的
+// 命令。formal-gates 声明支持这三种 VCS，写墙必须对它们一视同仁，不能只拦 git 而
+// 漏掉 svn / p4。
+var vcsWriteMarkers = []string{
+	// git
+	"git commit", "git push", "git merge", "git rebase", "git reset --hard",
+	"git checkout --", "git clean", "git add",
+	// svn
+	"svn commit", "svn ci", "svn add", "svn delete", "svn del", "svn remove",
+	"svn rm", "svn move", "svn mv", "svn rename", "svn copy", "svn cp",
+	"svn merge", "svn import", "svn revert", "svn propset", "svn propedit",
+	"svn propdel",
+	// p4
+	"p4 submit", "p4 add", "p4 edit", "p4 delete", "p4 del", "p4 move",
+	"p4 mv", "p4 copy", "p4 integrate", "p4 integ", "p4 revert", "p4 shelve",
+	"p4 reconcile",
+}
+
+// isVCSWriteCommand reports whether a command carries a VCS state-write marker
+// (git / svn / p4 的提交类或变更工作区状态的命令)。
+func isVCSWriteCommand(command string) bool {
+	lower := strings.ToLower(command)
+	for _, marker := range vcsWriteMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
 	}
 	return false
 }
@@ -165,17 +203,15 @@ func commandWritesFiles(command string) bool {
 		return false
 	}
 	lower := strings.ToLower(command)
-	// VCS 写入：提交 / 推送 / 合并 / 重置 变更仓库状态。
-	for _, marker := range []string{"git commit", "git push", "git merge", "git rebase", "git reset --hard", "git checkout --", "git clean"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
+	// VCS 状态写入（git / svn / p4）：提交 / 推送 / 合并 / 重置 / 丢弃 / 暂存等。
+	if isVCSWriteCommand(command) {
+		return true
 	}
 	// 按真实写目标判定（改动 3）：不再以命令文本是否含 .gates 子串判写入——只读命令
 	// （grep/ls/cat/find/python3 读、只读 git 查询等）即使提到 .gates 也放行；真写 .gates
 	// 由下面的文件变更工具与输出重定向按目标路径判定命中。
 	// 文件写入工具与文件系统变更命令（非重定向的写文件写法）。
-	for _, marker := range []string{"tee ", "sed -i", "install ", "git add", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
+	for _, marker := range []string{"tee ", "sed -i", "install ", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
@@ -292,13 +328,13 @@ func isFormalGatesCLICommand(command string) bool {
 }
 
 // activeDevelopmentRunArtifacts 在 cwd（或其祖先）下查找已经进入开发阶段的活动正式
-// run，返回这些 run 登记的需求/设计文档路径（RequirementArtifacts，相对 repo 根）与
-// 仓库根。只有 ACTIVE 且 development-worker 已离开 PENDING 的 run 才启用写阻断；产品审、
-// 技术审等开发前阶段返回 ok=false。
-func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []string, ok bool) {
+// run，返回这些 run 登记的需求/设计文档路径（RequirementArtifacts，相对 repo 根）、仓库
+// 根与 owner 身份。只有 ACTIVE 且 development-worker 已离开 PENDING 的 run 才启用写阻断；
+// 产品审、技术审等开发前阶段返回 ok=false。
+func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []string, owners []ownerIdentity, ok bool) {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
-		return "", nil, false
+		return "", nil, nil, false
 	}
 	root := cwd
 	for depth := 0; depth < 16; depth++ {
@@ -310,10 +346,12 @@ func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []str
 					continue
 				}
 				artifacts = append(artifacts, registeredHookArtifacts(statePath)...)
+				t, s := readRunOwner(statePath)
+				owners = append(owners, ownerIdentity{transcript: t, session: s})
 				ok = true
 			}
 			if ok {
-				return root, artifacts, true
+				return root, artifacts, owners, true
 			}
 		}
 		parent := filepath.Dir(root)
@@ -322,7 +360,7 @@ func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []str
 		}
 		root = parent
 	}
-	return "", nil, false
+	return "", nil, nil, false
 }
 
 // readHookRunWritePhase 读取 hook 判定所需的最小阶段字段（不触发完整性校验——hook 只做
@@ -386,11 +424,13 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 		filePath:  hookToolInputFilePath(decoded),
 		agentType: hookAgentType(decoded),
 		cwd:       hookPayloadCwd(decoded),
+		toolName:  toolName,
 	}
-	repoRoot, artifacts, ok := activeDevelopmentRunArtifacts(input.cwd)
+	repoRoot, artifacts, owners, ok := activeDevelopmentRunArtifacts(input.cwd)
 	input.hasActiveRun = ok
 	input.artifacts = artifacts
 	input.repoRoot = repoRoot
+	input.owners = owners
 
 	// 尚未进入开发阶段或无活动正式 run：放行，不干扰开发前文档修订或普通项目。
 	if !input.hasActiveRun {
@@ -413,6 +453,12 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 	// 明确）。已登记需求/设计文档的编辑（需求更改流程的一部分）放行；非代码、非 run 状态
 	// 文件（P2-BACKLOG.md 等文档）的写入放行；对代码与 run 状态的直接写入阻断。
 	if input.agentType == "" {
+		// owner 作用域收窄：只有启动本 run 的对话才拦，其它对话直接放行。owner 未知时
+		// known=false，保守走下面的既有拦截。
+		payloadTranscript, payloadSession := hookOwnerIdentity(decoded)
+		if known, same := sameOwnerIdentity(input.owners, payloadTranscript, payloadSession); known && !same {
+			return allowHook("different conversation from the run owner; write allowed"), true
+		}
 		if input.filePath != "" && isRegisteredArtifact(input.filePath, input.repoRoot, input.artifacts) {
 			return allowHook("main agent editing a registered requirement/design document"), true
 		}
@@ -456,6 +502,19 @@ func writeTargetsOutsideActiveRoot(input writeBlockPayload, command string) bool
 	return true
 }
 
+// normalizeHostPath 在 Windows 上把 POSIX 风格绝对路径（/c/Users/...）归一化成盘符
+// 路径（C:/Users/...）：filepath.IsAbs 在 Windows 上不认 /c/ 前缀，会把它当相对路径
+// 误判成仓库内。非 Windows 或不是 POSIX 盘符形态则原样返回。
+func normalizeHostPath(path string) string {
+	if runtime.GOOS != "windows" || len(path) < 3 || path[0] != '/' || path[2] != '/' {
+		return path
+	}
+	if c := path[1]; (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+		return string(c) + ":" + path[2:]
+	}
+	return path
+}
+
 // writePathWithinRoot resolves a tool/shell path against the host cwd and checks
 // containment in repoRoot. Dynamic shell paths are deliberately unknown rather
 // than guessed; the project boundary only promises common normal operations.
@@ -464,6 +523,7 @@ func writePathWithinRoot(path, cwd, repoRoot string) (inside bool, known bool) {
 	if path == "" || strings.ContainsAny(path, "$`*?[]{}") {
 		return false, false
 	}
+	path = normalizeHostPath(path)
 	rootAbs, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return false, false
@@ -493,16 +553,34 @@ func writePathWithinRoot(path, cwd, repoRoot string) (inside bool, known bool) {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), true
 }
 
+// redirectOperatorStart returns the index of the '>' that begins a shell output
+// redirection in a token, or -1 if the token is not a redirection. It skips an
+// optional fd prefix (digits or &), so ">", ">>", "2>", "2>/dev/null", "&>file"
+// are detected, while ordinary path tokens like "out.go" are not.
+func redirectOperatorStart(token string) int {
+	i := 0
+	if i < len(token) && token[i] == '&' {
+		i++
+	} else {
+		for i < len(token) && token[i] >= '0' && token[i] <= '9' {
+			i++
+		}
+	}
+	if i < len(token) && token[i] == '>' {
+		return i
+	}
+	return -1
+}
+
 // explicitBashWriteTargets extracts targets only for the simple, common shell
 // writes whose destination semantics are unambiguous. VCS writes, sed -i, shell
 // pipelines/conditionals and other compound forms return complete=false and keep
 // the existing conservative block behavior.
 func explicitBashWriteTargets(command string) ([]string, bool) {
 	lower := strings.ToLower(command)
-	for _, marker := range []string{"git commit", "git push", "git merge", "git rebase", "git reset --hard", "git checkout --", "git clean", "git add", "sed -i"} {
-		if strings.Contains(lower, marker) {
-			return nil, false
-		}
+	// VCS 状态写入（git / svn / p4）与 sed -i 目标无法可靠解析，保留保守行为。
+	if isVCSWriteCommand(command) || strings.Contains(lower, "sed -i") {
+		return nil, false
 	}
 	if strings.Contains(command, "&&") || strings.Contains(command, "||") || strings.ContainsAny(command, ";|") {
 		return nil, false
@@ -515,9 +593,26 @@ func explicitBashWriteTargets(command string) ([]string, bool) {
 			continue
 		}
 		var args []string
+		skipNextTarget := false
 		for _, candidate := range tokens[index+1:] {
 			candidate = strings.TrimSpace(candidate)
-			if candidate == "" || strings.HasPrefix(candidate, "-") || candidate == ">" || candidate == ">>" {
+			if skipNextTarget {
+				skipNextTarget = false
+				continue
+			}
+			if candidate == "" || strings.HasPrefix(candidate, "-") {
+				continue
+			}
+			if op := redirectOperatorStart(candidate); op >= 0 {
+				// 跳过重定向算符；目标粘连在本 token（2>/dev/null、>file）时整个 token 跳过，
+				// 纯算符（> / >> / 2>）时还要跳过下一个 token（分离的重定向目标）。
+				j := op
+				for j < len(candidate) && candidate[j] == '>' {
+					j++
+				}
+				if j >= len(candidate) {
+					skipNextTarget = true
+				}
 				continue
 			}
 			args = append(args, candidate)
@@ -597,6 +692,11 @@ func mainAgentWriteBlocked(input writeBlockPayload, command string) bool {
 	if input.filePath != "" {
 		return isCodeOrRunStatePath(input.filePath)
 	}
+	// apply_patch 这类补丁写工具：写代码但目标文件不可从载荷提取（无 file_path/command），
+	// 保守拦截，避免被误判成「非代码文件」放行。
+	if input.toolName == "apply_patch" || input.toolName == "applypatch" {
+		return true
+	}
 	return bashWriteTargetsCodeOrState(command)
 }
 
@@ -634,22 +734,16 @@ func isCodeOrRunStatePath(path string) bool {
 }
 
 // bashWriteTargetsCodeOrState reports whether a Bash write command targets code or
-// run state — the only writes blocks for the main agent. git / VCS 状态写入
-// （commit / push / merge / reset / checkout -- / clean / add）与 .gates（run 状态）一律
-// 命中；输出重定向按目标路径判定（> notes.md 不命中、> main.go 命中）；其余文件变更
-// 工具（tee / touch / mkdir / rm / mv / cp / sed -i / install）目标难以可靠解析，保守命中
-// ——主线程在活动 run 下不应以 Bash 进行无法归类的文件变更。
+// run state — the only writes blocks for the main agent. git / svn / p4 的 VCS 状态
+// 写入（提交 / 推送 / 合并 / 重置 / 丢弃 / 暂存等）一律命中；输出重定向按目标路径
+// 判定（> notes.md 不命中、> main.go 命中）；文件变更工具（tee / touch / mkdir /
+// rm / mv / cp / sed -i / install）按位置参数的真实目标判定，只在目标指向代码或
+// run 状态（.gates / 代码扩展名）时命中——npm install -g（写到项目外）、
+// touch notes.md（非代码）不再被保守误拦。
 func bashWriteTargetsCodeOrState(command string) bool {
-	lower := strings.ToLower(command)
-	// 按真实写目标判定（改动 3）：不以命令文本是否含 .gates 子串判写入——只读命令
-	// （grep/ls/cat/find/python3 读、只读 git 查询）即使提到 .gates 也放行；真写 .gates
-	// 由 VCS 写入标记、输出重定向目标（isCodeOrRunStatePath 识别 .gates 路径）与文件变更
-	// 工具标记命中。
-	// VCS 状态写入。
-	for _, marker := range []string{"git commit", "git push", "git merge", "git rebase", "git reset --hard", "git checkout --", "git clean", "git add"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
+	// VCS 状态写入（git / svn / p4）。
+	if isVCSWriteCommand(command) {
+		return true
 	}
 	// 输出重定向到代码 / run 状态文件。
 	for _, target := range redirectWriteTargets(command) {
@@ -657,11 +751,34 @@ func bashWriteTargetsCodeOrState(command string) bool {
 			return true
 		}
 	}
-	// 其余文件变更工具：目标难以可靠解析，保守命中。
-	for _, marker := range []string{"tee ", "sed -i", "install ", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
-		if strings.Contains(lower, marker) {
-			return true
+	// 文件变更工具按真实目标判定。
+	return fileChangeTargetsCodeOrRunState(command)
+}
+
+// fileChangeTargetsCodeOrRunState reports whether a file-change command (tee /
+// touch / mkdir / rm / mv / cp / sed -i / install) carries a positional path
+// argument naming a code or run-state path. 只检查非 flag 的位置参数（跳过 -x /
+// --x），按 isCodeOrRunStatePath 判定；命令首 token 不是这些工具时返回 false——npm /
+// pip / go install 等首 token 是包管理器，不是文件变更工具，直接放行。
+func fileChangeTargetsCodeOrRunState(command string) bool {
+	tokens := splitCommand(command)
+	for index, token := range tokens {
+		// 用 filepath.Base 归一，兼容全路径（/usr/bin/cp）与带前缀（sudo/env/command cp）
+		// 的写法，避免只认裸首 token 而漏拦。
+		switch strings.ToLower(filepath.Base(token)) {
+		case "tee", "touch", "mkdir", "rm", "mv", "cp", "install", "sed":
+		default:
+			continue
 		}
+		for _, arg := range tokens[index+1:] {
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			if isCodeOrRunStatePath(arg) {
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }

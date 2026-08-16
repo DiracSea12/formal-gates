@@ -86,6 +86,7 @@ var routeModes = map[string]bool{"lightweight": true, "full": true, "custom": tr
 
 func Start(options StartOptions) (RunState, error) {
 	root := lifecycle.CleanRoot(options.Root)
+	ownerTranscript, ownerSession := consumeStartOwner(root)
 	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
 		if strings.TrimSpace(value) == "" {
 			return RunState{}, fmt.Errorf("%s is required", name)
@@ -225,6 +226,8 @@ func Start(options StartOptions) (RunState, error) {
 	state.RetainedOverall = options.RetainedOverall
 	state.SplitDeclaration = split
 	state.SplitMasterRunID = master
+	state.OwnerTranscript = ownerTranscript
+	state.OwnerSession = ownerSession
 	// 轻量路线在 start 即声明：routeMode 置 lightweight（免拆分决定、免路线确认、
 	// 免开发快照直达 Seal），不记录拆分声明。
 	if isLightweight {

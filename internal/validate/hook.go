@@ -15,13 +15,31 @@ type HookDecision struct {
 }
 
 type CodexHookDecision struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
+	HookSpecificOutput CodexHookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type CodexHookSpecificOutput struct {
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 }
 
 func HookResponse(provider string, decision HookDecision) any {
 	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
-		return CodexHookDecision{Decision: decision.Decision, Reason: decision.Reason}
+		// Codex 的 PreToolUse hook 契约：allow 是 no-op（输出空、exit 0），deny 输出
+		// hookSpecificOutput.permissionDecision:"deny"。control-capable hook 返回
+		// permissionDecision:"allow" 却不带 updatedInput 会被判 error；旧式
+		// decision:"approve" 也会被判 unsupported decision——两者都 fail-open 放行。
+		if decision.PermissionDecision != "deny" {
+			return nil
+		}
+		return CodexHookDecision{
+			HookSpecificOutput: CodexHookSpecificOutput{
+				HookEventName:            "PreToolUse",
+				PermissionDecision:       "deny",
+				PermissionDecisionReason: decision.PermissionDecisionReason,
+			},
+		}
 	}
 	return decision
 }
@@ -43,6 +61,9 @@ func Hook(payload []byte) (HookDecision, error) {
 	if err := json.Unmarshal(trimJSONBOM(payload), &decoded); err != nil {
 		return HookDecision{}, err
 	}
+
+	// 捕获 workflow start 的发起对话身份（owner 作用域），先于一切判定。
+	captureStartOwner(decoded)
 
 	// 主代理/审查类代理写阻断：对代码与 run 状态的直接写入（Edit/Write/MultiEdit、
 	// git commit、写文件 Bash）在活动正式 run 下按调用者身份阻断；formal-gates CLI 命令
@@ -202,6 +223,11 @@ func hookCommand(value any) string {
 			return command
 		}
 		if input, ok := typed["tool_input"]; ok {
+			if command := hookCommand(input); command != "" {
+				return command
+			}
+		}
+		if input, ok := typed["shell_command"]; ok {
 			if command := hookCommand(input); command != "" {
 				return command
 			}

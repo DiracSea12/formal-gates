@@ -804,8 +804,10 @@ func runHook(program string, args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	data, _ := json.Marshal(validate.HookResponse(*provider, decision))
-	fmt.Fprintln(streams.Stdout, string(data))
+	if resp := validate.HookResponse(*provider, decision); resp != nil {
+		data, _ := json.Marshal(resp)
+		fmt.Fprintln(streams.Stdout, string(data))
+	}
 	return validate.HookExitCode(*provider, decision), nil
 }
 

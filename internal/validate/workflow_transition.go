@@ -191,11 +191,11 @@ func requireDevelopmentTransition(state RunState) error {
 			}
 			return fmt.Errorf("no recorded result requires repair")
 		}
-		if (developmentStatus != developmentVerified || hasSelectedRuntimeError(state)) && !runtimeErrorsAuthorizedForRepair(state) {
-			if state.PreRepairSnapshot != "" {
-				return fmt.Errorf("the current repair still requires verification")
-			}
-			return fmt.Errorf("the current review wave is not complete")
+		// 环境性执行失败（RUNTIME_ERROR，如 API 额度耗尽）不阻塞修复触发：它可经修复后重试、
+		// 与实现缺陷的修复彼此独立。VERIFIED 只在无 RUNTIME_ERROR 时才会达成，故这里不再单独
+		// 要求 VERIFIED 或 runtime-error 授权。仅当修复前快照仍待验证时要求先验证。
+		if state.PreRepairSnapshot != "" {
+			return fmt.Errorf("the current repair still requires verification")
 		}
 		if state.CompletedReviewWaves >= effectiveReviewWaveLimit(state) {
 			return fmt.Errorf("review-wave limit is exhausted; explicit additional repair authorization is required")
