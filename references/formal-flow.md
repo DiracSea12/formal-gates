@@ -173,6 +173,13 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 必须派发新审查轮返回 PASS，重审前 record-action PASS 被拒；驳回的 P0/P1 → 作废、不
 # 阻塞。主代理无破例权；任何破例（确认的 P0/P1 未重审前直接 PASS、或要求对已 PASS 轮重
 # 审）都须用户显式授权（record-action/prepare-action --user-requested）并由 CLI 记录来源。
+# 自动化控制器接纳 `PASS + P2/P3` 时先把 PASS 记为权威结果，再把 P2/P3 规范化为
+# Advisory obligation；不得自动改判 FAIL、自动修复或静默丢弃。product-review /
+# start-readiness 的 Advisory 合并成一次类型化 Ask，逐项只允许 confirm / dismiss；全部
+# 处置并由 settle-findings 记录后才推进。确认 P2/P3 本身不置 `NeedsReReview`；若确认后修改
+# 需求并造成语义变化，再由需求修订规则决定重审。开发后 gate 的 `PASS + P2/P3` 只保留在
+# 状态和 Seal 摘要中、默认继续推进；同轮另有 QA FAIL 或 P0/P1 时随整轮一并修复，只有建议
+# 时仅在用户明确要求后才创建修复义务。
 
 # Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2/P3，复审规则同产品审。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \

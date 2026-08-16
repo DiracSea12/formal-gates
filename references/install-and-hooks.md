@@ -111,16 +111,27 @@ Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通�
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
 
-进入正式开发后，hook 还承担 RQ-011 主代理/审查类代理写阻断：PreToolUse 对代码与
-run 状态的直接写入（Edit/Write/MultiEdit、git commit、写文件 Bash）在活动正式 run
-下按调用者身份阻断——主线程（payload 无 agent 身份）与审查类代理被阻断，formal-gates
-CLI 命令、只读命令、development-worker、qa-design 与主代理对已登记需求/设计文档的
-编辑放行；无活动 run 放行、不干扰普通项目。判定按身份（`agent_type`）不按文件路径，
-代理类型定义见 `agents/agent-types.md`。Bash 写入判定只看**真实写目标**：命令文本只是
+进入正式开发后，hook 还承担 RQ-011 主代理/审查类代理写阻断：以
+`development-worker` 从 `PENDING` 进入 `PREPARED` 为开发开始边界；在此之前的产品审、
+技术审及文档修订阶段不启用写阻断。开发开始后，PreToolUse 对代码与 run 状态的直接写入
+（Edit/Write/MultiEdit、git commit、写文件 Bash）按调用者身份阻断——主线程（payload
+无 agent 身份）与审查类代理被阻断，formal-gates CLI 命令、只读命令、development-worker、
+qa-design 与主代理对已登记需求/设计文档的编辑放行；未进入开发的活动 run 与无活动 run
+均放行。写墙只在 `status=ACTIVE && development-worker.status!=PENDING` 的区间内生效；
+Seal / Abort 先持久化 `SEALED` / `ABORTED` 再收尾删除临时状态，因此即使收尾失败留下终态
+文件，也会立即解除写阻断，不会永久锁住仓库。角色权限按身份（`agent_type`）而非静态
+文件白名单判定；路径只用于限定活动仓库根的空间边界。代理类型定义见
+`agents/agent-types.md`。Bash 写入判定只看**真实写目标**：命令文本只是
 提到 `.gates` 但只读（grep/ls/cat/find/python3 读、只读 git 查询如 `git status`
 `git log -- <path>`）一律放行；真实写（`git add`/`git commit`、`> .gates/...`、
 `tee .gates/...`）仍阻断，主线程与审查类代理一致。实机阻断仍须在同一 host 上经 live
 canary 验证。
+
+写墙的空间范围只覆盖承载该活动 run 的仓库根，不是进程级或全局文件锁。即使窗口 cwd
+仍位于活动仓库，Edit/Write/MultiEdit 的目标明确位于仓库外时也直接放行；简单 Bash 写入
+（重定向、tee、touch、mkdir、rm、mv、cp、install）在全部目标都能解析且均位于仓库外时
+同样放行。包含仓库内目标或无法可靠归类的复合 Bash 写入继续按角色墙处理，避免一条命令
+同时修改仓库内外时绕过保护。
 
 安装器还会为 Claude Code 和 Codex 配置 `SubagentStart` 与 `SubagentStop`，为
 Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷经 stdin 发

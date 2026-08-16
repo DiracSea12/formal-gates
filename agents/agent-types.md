@@ -1,10 +1,15 @@
 # 代理类型定义（RQ-011 写阻断）
 
 本文件定义 formal-gates 的代理类型（`agent_type`）。RQ-011 的 PreToolUse 写阻断按
-调用者身份（`agent_type`）判定：进入正式开发后，主代理（主线程，payload 无
+调用者身份（`agent_type`）判定：以 `development-worker` 从 `PENDING` 进入 `PREPARED`
+为正式开发开始边界。边界之前的产品审、技术审和文档修订不启用写阻断；边界之后，主代理（主线程，payload 无
 `agent_id`/`agent_type`）与全部审查类代理不得写代码或直接改 run 状态；写代码只经
 development-worker 派发写入，白盒测试代码/黑盒用例文档由 qa-design 写入。判定按身份、
-不按文件路径（无静态文件白名单，千项目通用）。
+不使用静态文件白名单（千项目通用）；路径只用于限定活动仓库根的空间边界。写墙只在 run
+同时满足 `status=ACTIVE` 且 `development-worker.status!=PENDING` 时生效；Seal / Abort
+进入终态后立即解除。
+它的空间范围仅限承载该 run 的仓库根；窗口 cwd 在活动仓库内、但明确写向仓库外路径时
+放行，不影响其他目录或窗口的文件修改。
 
 派发子代理时，host 应把下列 `agent_type` 写入 PreToolUse 载荷，使 hook 能识别调用者
 身份；主线程（主代理）的载荷不含 agent 身份字段。

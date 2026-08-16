@@ -446,7 +446,7 @@ func resultSummary(result Result) string {
 }
 
 // runWriteBlockCanary verifies the write-block hook decision matrix against
-// a temp repo that carries an active formal run: the main thread (no agent
+// a temp repo that carries an active formal run in development: the main thread (no agent
 // identity) and reviewer-class agents are blocked from direct code/run-state
 // writes; development-worker and qa-design are allowed; the main agent editing a
 // registered requirement/design document is allowed; and with no active run the
@@ -459,10 +459,12 @@ func runWriteBlockCanary(root string) error {
 		return err
 	}
 	state := map[string]any{
-		"status":             "ACTIVE",
-		"runId":              "write-block-canary",
-		"flow":               "formal",
-		"actions":            map[string]any{},
+		"status": "ACTIVE",
+		"runId":  "write-block-canary",
+		"flow":   "formal",
+		"actions": map[string]any{
+			"development-worker": map[string]any{"status": developmentPrepared},
+		},
 		"gates":              map[string]any{},
 		"carry":              map[string]any{},
 		"dispatches":         map[string]any{},
@@ -515,6 +517,13 @@ func runWriteBlockCanary(root string) error {
 	plainPayload := `{"cwd":` + string(mustJSONString(plainRoot)) + `,"tool_name":"Write","tool_input":{"file_path":"` + filepath.ToSlash(filepath.Join(plainRoot, "main.go")) + `"}}`
 	if decision, err := Hook([]byte(plainPayload)); err != nil || decision.PermissionDecision != "allow" {
 		return fmt.Errorf("write without an active run was blocked: %#v %v", decision, err)
+	}
+	// 7. cwd 仍在活动 run 仓库内，但目标明确位于仓库外：当前 run 的写墙不得扩张成
+	// 全局文件锁，另一个目录/窗口的写入应放行。
+	outsidePath := filepath.Join(plainRoot, "outside.go")
+	outsidePayload := `{"cwd":` + string(mustJSONString(root)) + `,"tool_name":"Write","tool_input":{"file_path":` + string(mustJSONString(outsidePath)) + `}}`
+	if decision, err := Hook([]byte(outsidePayload)); err != nil || decision.PermissionDecision != "allow" {
+		return fmt.Errorf("write outside the active run root was blocked: %#v %v", decision, err)
 	}
 	return nil
 }

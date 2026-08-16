@@ -12,8 +12,10 @@ import (
 // 正式流程进入开发阶段后，主代理（主线程，payload 无 agent_id/agent_type）与全部审查类
 // 代理不得写代码或直接改 run 状态；run 状态只能经 CLI 写入，代码与执行文件只能经
 // development-worker 派发写入。判定按调用者身份（agent_type 匹配）、不按文件路径
-// （无静态文件白名单，千项目通用）。存在活动正式 run 时生效；无活动 run 放行，不干扰
-// 普通项目。
+// （无静态文件白名单，千项目通用）。只有活动正式 run 的 development-worker 状态离开
+// PENDING（即进入 PREPARED / REPAIR_PREPARED / PASS / VERIFIED）后才生效；开发前与无活动
+// run 均放行，不妨碍产品审、技术审及其文档修订。Seal / Abort 把 run 置为非 ACTIVE 后
+// 立即解除，即使终态临时文件因收尾重试而暂时保留，也不会造成永久阻断。
 //
 // 阻断：主代理与审查类代理对代码与 run 状态的直接写入（Edit/Write/MultiEdit、
 // git commit、写文件 Bash）。
@@ -24,14 +26,14 @@ import (
 // reviewerAgentTypes 是审查类代理的 agent_type：product-review、start-readiness、
 // qa-review、qa-execution、carry 继承判定、各门审查。这些代理不得写代码或 run 状态。
 var reviewerAgentTypes = map[string]bool{
-	"product-review":   true,
-	"start-readiness":  true,
-	"qa-review":        true,
-	"qa-execution":     true,
-	"carry":            true,
-	"gate-review":      true,
-	"merge-review":     true,
-	"complexity-gate":  true,
+	"product-review":              true,
+	"start-readiness":             true,
+	"qa-review":                   true,
+	"qa-execution":                true,
+	"carry":                       true,
+	"gate-review":                 true,
+	"merge-review":                true,
+	"complexity-gate":             true,
 	"implementation-quality-gate": true,
 }
 
@@ -50,6 +52,7 @@ type writeBlockPayload struct {
 	hasActiveRun bool     // cwd（或其祖先）下存在活动正式 run
 	artifacts    []string // 活动 run 的 RequirementArtifacts 路径（相对 repo 根）
 	repoRoot     string   // 检测到活动 run 的仓库根
+	cwd          string   // host 窗口工作目录，用于解析相对写目标
 }
 
 // hookToolName 从 payload 提取 PreToolUse 的 tool_name。Codex / Claude Code /
@@ -288,9 +291,11 @@ func isFormalGatesCLICommand(command string) bool {
 	return false
 }
 
-// activeFormalRunArtifacts 在 cwd（或其祖先）下查找活动正式 run，返回其登记的需求/
-// 设计文档路径（RequirementArtifacts，相对 repo 根）与仓库根。无活动 run 返回 ok=false。
-func activeFormalRunArtifacts(cwd string) (repoRoot string, artifacts []string, ok bool) {
+// activeDevelopmentRunArtifacts 在 cwd（或其祖先）下查找已经进入开发阶段的活动正式
+// run，返回这些 run 登记的需求/设计文档路径（RequirementArtifacts，相对 repo 根）与
+// 仓库根。只有 ACTIVE 且 development-worker 已离开 PENDING 的 run 才启用写阻断；产品审、
+// 技术审等开发前阶段返回 ok=false。
+func activeDevelopmentRunArtifacts(cwd string) (repoRoot string, artifacts []string, ok bool) {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
 		return "", nil, false
@@ -300,12 +305,15 @@ func activeFormalRunArtifacts(cwd string) (repoRoot string, artifacts []string, 
 		paths, err := filepath.Glob(filepath.Join(root, ".gates", "tmp", "*", "state.json"))
 		if err == nil {
 			for _, statePath := range paths {
-				st, err := readHookRunStatus(statePath)
-				if err != nil || st != "ACTIVE" {
+				active, started, err := readHookRunWritePhase(statePath)
+				if err != nil || !active || !started {
 					continue
 				}
-				paths := registeredHookArtifacts(statePath)
-				return root, paths, true
+				artifacts = append(artifacts, registeredHookArtifacts(statePath)...)
+				ok = true
+			}
+			if ok {
+				return root, artifacts, true
 			}
 		}
 		parent := filepath.Dir(root)
@@ -317,20 +325,23 @@ func activeFormalRunArtifacts(cwd string) (repoRoot string, artifacts []string, 
 	return "", nil, false
 }
 
-// readHookRunStatus 读取 run 状态文件的 status 字段（不触发完整性校验——hook 只做
-// 粗粒度存在性判断，不替代 CLI 的严格加载）。
-func readHookRunStatus(statePath string) (string, error) {
+// readHookRunWritePhase 读取 hook 判定所需的最小阶段字段（不触发完整性校验——hook 只做
+// 粗粒度阶段判断，不替代 CLI 的严格加载）。development-worker 的 PREPARED 是开发开始
+// 边界，与 workflow_transition.go 的 developmentStarted 保持一致。
+func readHookRunWritePhase(statePath string) (active bool, started bool, err error) {
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		return "", err
+		return false, false, err
 	}
 	var probe struct {
-		Status string `json:"status"`
+		Status  string                  `json:"status"`
+		Actions map[string]ActionResult `json:"actions"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", err
+		return false, false, err
 	}
-	return probe.Status, nil
+	developmentStatus := strings.TrimSpace(probe.Actions["development-worker"].Status)
+	return probe.Status == "ACTIVE", developmentStatus != "" && developmentStatus != developmentPending, nil
 }
 
 // registeredHookArtifacts 读取 run 状态文件的 RequirementArtifacts 路径。
@@ -355,7 +366,8 @@ func registeredHookArtifacts(statePath string) []string {
 // decideWriteBlockValue 对 PreToolUse 载荷执行写阻断判定。返回
 // (decision, true) 表示本载荷属于需要判定的代码/run 状态写入；返回
 // (HookDecision{}, false) 表示非写入（只读）、formal-gates CLI 命令或不属于本判定范围，
-// 交由既有 hook 逻辑处理。从载荷 cwd 定位活动 run；找不到活动 run 时放行（不干扰普通项目）。
+// 交由既有 hook 逻辑处理。从载荷 cwd 定位已进入开发阶段的活动 run；找不到时放行（包括
+// 产品审、技术审等开发前阶段与无活动 run，不干扰文档修订或普通项目）。
 func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 	toolName := hookToolName(decoded)
 	if toolName == "" {
@@ -373,15 +385,23 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 	input := writeBlockPayload{
 		filePath:  hookToolInputFilePath(decoded),
 		agentType: hookAgentType(decoded),
+		cwd:       hookPayloadCwd(decoded),
 	}
-	repoRoot, artifacts, ok := activeFormalRunArtifacts(hookPayloadCwd(decoded))
+	repoRoot, artifacts, ok := activeDevelopmentRunArtifacts(input.cwd)
 	input.hasActiveRun = ok
 	input.artifacts = artifacts
 	input.repoRoot = repoRoot
 
-	// 无活动正式 run：放行，不干扰普通项目。
+	// 尚未进入开发阶段或无活动正式 run：放行，不干扰开发前文档修订或普通项目。
 	if !input.hasActiveRun {
-		return allowHook("no active formal run; write allowed"), true
+		return allowHook("no active formal run has entered development; write allowed"), true
+	}
+	// 写墙只保护承载当前活动 run 的仓库根。一个窗口即使 cwd 位于该仓库内，也不得让
+	// 这里的活动 run 扩张成全局文件锁：Edit/Write 的明确仓库外目标，以及能完整解析且
+	// 全部位于仓库外的简单 Bash 写目标，直接放行。无法可靠解析的复合 Bash 写入仍按原
+	// 边界保守处理，避免把同时修改仓库内外的命令误判为仓库外写入。
+	if writeTargetsOutsideActiveRoot(input, command) {
+		return allowHook("write target is outside the active formal run root"), true
 	}
 
 	// 写代码/测试/用例文档的代理：development-worker、qa-design 放行。
@@ -409,6 +429,115 @@ func decideWriteBlockValue(decoded any) (HookDecision, bool) {
 
 	// 其余代理不阻断。
 	return allowHook(input.agentType + " is not a reviewer-class agent; write allowed"), true
+}
+
+// writeTargetsOutsideActiveRoot reports whether every confidently resolved write
+// target is outside the repository root that owns the active run. It returns true
+// only when scope is unambiguous; unknown/compound writes remain in the normal
+// role decision path.
+func writeTargetsOutsideActiveRoot(input writeBlockPayload, command string) bool {
+	if input.repoRoot == "" {
+		return false
+	}
+	if input.filePath != "" {
+		inside, known := writePathWithinRoot(input.filePath, input.cwd, input.repoRoot)
+		return known && !inside
+	}
+	targets, complete := explicitBashWriteTargets(command)
+	if !complete || len(targets) == 0 {
+		return false
+	}
+	for _, target := range targets {
+		inside, known := writePathWithinRoot(target, input.cwd, input.repoRoot)
+		if !known || inside {
+			return false
+		}
+	}
+	return true
+}
+
+// writePathWithinRoot resolves a tool/shell path against the host cwd and checks
+// containment in repoRoot. Dynamic shell paths are deliberately unknown rather
+// than guessed; the project boundary only promises common normal operations.
+func writePathWithinRoot(path, cwd, repoRoot string) (inside bool, known bool) {
+	path = strings.Trim(strings.TrimSpace(path), `"'`)
+	if path == "" || strings.ContainsAny(path, "$`*?[]{}") {
+		return false, false
+	}
+	rootAbs, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return false, false
+	}
+	target := path
+	if !filepath.IsAbs(target) {
+		base := strings.TrimSpace(cwd)
+		if base == "" {
+			base = rootAbs
+		}
+		target = filepath.Join(base, target)
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false, false
+	}
+	// Windows 跨卷路径（例如 C:\repo 下写 D:\outside）无法用 filepath.Rel 比较，
+	// 但卷名不同即可确定目标在活动仓库根之外；不要把明确的仓库外写入保守成阻断。
+	rootVolume, targetVolume := filepath.VolumeName(rootAbs), filepath.VolumeName(targetAbs)
+	if rootVolume != "" && targetVolume != "" && !strings.EqualFold(rootVolume, targetVolume) {
+		return false, true
+	}
+	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(targetAbs))
+	if err != nil {
+		return false, false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), true
+}
+
+// explicitBashWriteTargets extracts targets only for the simple, common shell
+// writes whose destination semantics are unambiguous. VCS writes, sed -i, shell
+// pipelines/conditionals and other compound forms return complete=false and keep
+// the existing conservative block behavior.
+func explicitBashWriteTargets(command string) ([]string, bool) {
+	lower := strings.ToLower(command)
+	for _, marker := range []string{"git commit", "git push", "git merge", "git rebase", "git reset --hard", "git checkout --", "git clean", "git add", "sed -i"} {
+		if strings.Contains(lower, marker) {
+			return nil, false
+		}
+	}
+	if strings.Contains(command, "&&") || strings.Contains(command, "||") || strings.ContainsAny(command, ";|") {
+		return nil, false
+	}
+	targets := redirectWriteTargets(command)
+	tokens := splitCommand(command)
+	for index, token := range tokens {
+		name := strings.ToLower(filepath.Base(token))
+		if name != "tee" && name != "touch" && name != "mkdir" && name != "rm" && name != "mv" && name != "cp" && name != "install" {
+			continue
+		}
+		var args []string
+		for _, candidate := range tokens[index+1:] {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" || strings.HasPrefix(candidate, "-") || candidate == ">" || candidate == ">>" {
+				continue
+			}
+			args = append(args, candidate)
+		}
+		if len(args) == 0 {
+			return nil, false
+		}
+		switch name {
+		case "cp", "install":
+			targets = append(targets, args[len(args)-1])
+		case "mv":
+			// mv removes its sources as well as writing its destination, so every
+			// operand is a write target for containment purposes.
+			targets = append(targets, args...)
+		default:
+			targets = append(targets, args...)
+		}
+		return targets, true
+	}
+	return targets, len(targets) != 0
 }
 
 func denyWrite(reason string) HookDecision {

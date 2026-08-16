@@ -9,7 +9,7 @@ import (
 )
 
 // TestWriteBlockDecisionMatrix covers the write-block decision matrix via
-// the real Hook entry: with an active formal run, the main thread and
+// the real Hook entry: after an active formal run enters development, the main thread and
 // reviewer-class agents are blocked from direct code/run-state writes;
 // development-worker and qa-design are allowed; the main agent editing a
 // registered requirement/design document is allowed; and with no active run the
@@ -21,9 +21,9 @@ func TestWriteBlockDecisionMatrix(t *testing.T) {
 	docPath := filepath.ToSlash(filepath.Join(root, "requirements.md"))
 
 	for _, tc := range []struct {
-		name      string
-		payload   string
-		wantDeny  bool
+		name     string
+		payload  string
+		wantDeny bool
 	}{
 		{name: "main thread code write blocked", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, codePath), wantDeny: true},
 		{name: "reviewer product-review blocked", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q},"agent_type":"product-review"}`, root, codePath), wantDeny: true},
@@ -58,6 +58,97 @@ func TestWriteBlockNoActiveRunAllows(t *testing.T) {
 	}
 	if decision.PermissionDecision != "allow" {
 		t.Fatalf("write without an active run was blocked: %#v", decision)
+	}
+}
+
+// TestWriteBlockPreDevelopmentAllows verifies the phase boundary: merely creating
+// an ACTIVE run must not enable the role write wall. Product Review / Start
+// Readiness and their document revisions happen while development-worker is still
+// PENDING, so writes by the main thread and reviewer-class agents are not
+// adjudicated by this guard until development is prepared.
+func TestWriteBlockPreDevelopmentAllows(t *testing.T) {
+	root := t.TempDir()
+	writePreDevelopmentRunState(t, root)
+	codePath := filepath.ToSlash(filepath.Join(root, "internal", "code.go"))
+	for _, tc := range []struct {
+		name  string
+		agent string
+	}{
+		{name: "main thread"},
+		{name: "product review", agent: "product-review"},
+		{name: "start readiness", agent: "start-readiness"},
+	} {
+		payload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q},"agent_type":%q}`, root, codePath, tc.agent)
+		decision, err := Hook([]byte(payload))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if decision.PermissionDecision != "allow" {
+			t.Fatalf("%s write was blocked before development: %#v", tc.name, decision)
+		}
+	}
+}
+
+// TestWriteBlockTerminalRunAllows verifies the other side of the interval:
+// once a run is SEALED or ABORTED, a leftover terminal state file must not keep
+// the repository write-blocked while terminal cleanup is pending or retrying.
+func TestWriteBlockTerminalRunAllows(t *testing.T) {
+	for _, status := range []string{"SEALED", "ABORTED"} {
+		t.Run(status, func(t *testing.T) {
+			root := t.TempDir()
+			writeRunStateForWriteBlock(t, root, status, developmentVerified)
+			payload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, filepath.ToSlash(filepath.Join(root, "internal", "code.go")))
+			decision, err := Hook([]byte(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.PermissionDecision != "allow" {
+				t.Fatalf("terminal %s run kept the repository write-blocked: %#v", status, decision)
+			}
+		})
+	}
+}
+
+// TestWriteBlockOutsideRepoAllowed verifies that an active development run is a
+// repository-local write wall, not a global lock for another file/window. Both
+// file tools and common simple Bash writes to explicit outside paths are allowed;
+// an absolute path inside the active root remains blocked.
+func TestWriteBlockOutsideRepoAllowed(t *testing.T) {
+	root := t.TempDir()
+	writeActiveRunState(t, root)
+	outside := t.TempDir()
+	outsideCode := filepath.ToSlash(filepath.Join(outside, "other.go"))
+	relativeOutside, err := filepath.Rel(root, outsideCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		payload string
+	}{
+		{name: "main thread file tool absolute outside", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, outsideCode)},
+		{name: "reviewer file tool relative outside", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Edit","tool_input":{"file_path":%q},"agent_type":"qa-review"}`, root, filepath.ToSlash(relativeOutside))},
+		{name: "main thread redirect outside", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Bash","tool_input":{"command":%q}}`, root, "echo x > "+outsideCode)},
+		{name: "reviewer touch outside", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Bash","tool_input":{"command":%q},"agent_type":"product-review"}`, root, "touch "+outsideCode)},
+		{name: "main thread copy to outside", payload: fmt.Sprintf(`{"cwd":%q,"tool_name":"Bash","tool_input":{"command":%q}}`, root, "cp internal/code.go "+outsideCode)},
+	} {
+		decision, err := Hook([]byte(tc.payload))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if decision.PermissionDecision != "allow" {
+			t.Fatalf("%s was blocked by an unrelated active root: %#v", tc.name, decision)
+		}
+	}
+
+	insideCode := filepath.ToSlash(filepath.Join(root, "internal", "code.go"))
+	payload := fmt.Sprintf(`{"cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, insideCode)
+	decision, err := Hook([]byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.PermissionDecision != "deny" {
+		t.Fatalf("absolute path inside active root escaped the write wall: %#v", decision)
 	}
 }
 
@@ -315,18 +406,28 @@ func TestGatesMentionNotTreatedAsWrite(t *testing.T) {
 // requirement artifact set (requirements.md, design.md) at root, matching the
 // shape the hook probes.
 func writeActiveRunState(t *testing.T, root string) {
+	writeRunStateForWriteBlock(t, root, "ACTIVE", developmentPrepared)
+}
+
+func writePreDevelopmentRunState(t *testing.T, root string) {
+	writeRunStateForWriteBlock(t, root, "ACTIVE", developmentPending)
+}
+
+func writeRunStateForWriteBlock(t *testing.T, root, runStatus, developmentStatus string) {
 	t.Helper()
 	runDir := filepath.Join(root, ".gates", "tmp", "wb-test")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	state := map[string]any{
-		"status":     "ACTIVE",
-		"runId":      "wb-test",
-		"actions":    map[string]any{},
-		"gates":      map[string]any{},
-		"carry":      map[string]any{},
-		"dispatches": map[string]any{},
+		"status": runStatus,
+		"runId":  "wb-test",
+		"actions": map[string]any{
+			"development-worker": map[string]any{"status": developmentStatus},
+		},
+		"gates":              map[string]any{},
+		"carry":              map[string]any{},
+		"dispatches":         map[string]any{},
 		"skipAuthorizations": map[string]any{},
 		"selectedGates":      []string{},
 		"requirementArtifacts": []map[string]string{
