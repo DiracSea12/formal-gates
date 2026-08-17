@@ -1146,7 +1146,7 @@ func isBlackboxQADispatch(dispatch PreparedDispatch) bool {
 // execution result for a dispatch mode, together with that result: the
 // mode's own per-mode key when it holds an authoritative record at the current
 // snapshot, otherwise the merged "" key (the single-dispatch flow that executes
-// all modes together, or a legacy merged execution migrated into the "" key).
+// all modes together, or a merged execution from the fast path).
 // Aggregate per-mode checks use this so a merged execution in a per-mode-selected
 // run is recognized, without coupling the per-mode results.
 func qaModeResultKey(state RunState, mode string) (string, QAExecutionResult) {
@@ -1167,7 +1167,7 @@ func qaModeResult(state RunState, mode string) QAExecutionResult {
 // for a dispatch mode, at ANY snapshot: the mode's own per-mode key when
 // it holds a non-PENDING record, else the mode's preserved prior authoritative
 // result (a result reset to PENDING after a re-design or an earlier repair round),
-// else the merged "" key (single-dispatch / legacy merged storage). Unlike
+// else the merged "" key (single-dispatch / merged storage). Unlike
 // qaModeResultKey it does not require the result to sit at the current snapshot,
 // so a pre-repair PASS preserved across a repair snapshot is still visible to
 // main-agent carry inheritance.
@@ -1191,7 +1191,7 @@ func qaModeCarryResultKey(state RunState, mode string) (string, QAExecutionResul
 
 // qaUsesMergedExecution reports whether the run's QA execution is the merged
 // single-dispatch flow: the merged "" key holds the authoritative result at the
-// current snapshot (a legacy merged execution or the single-dispatch flow), as
+// current snapshot (a fast-path merged execution or the single-dispatch flow), as
 // opposed to per-mode dispatch where each concrete mode records its own result.
 func qaUsesMergedExecution(state RunState) bool {
 	merged := state.qaExecution("")

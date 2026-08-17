@@ -56,50 +56,54 @@ func perModeReadyDelivery(t *testing.T, root, pkg, id string) RunState {
 	return state
 }
 
-// TestLegacyQAExecutionAndPriorMigrateToMergedKey verifies the migration: an
-// old state.json with the single qaExecution / priorQAExecution fields loads into
-// the per-mode storage under the merged "" key, so legacy runs keep their recorded
-// execution results and rerun-recognition base.
-func TestLegacyQAExecutionAndPriorMigrateToMergedKey(t *testing.T) {
+// TestLegacyQAModeAndStorageAreRejected verifies that old merged QA state is
+// not migrated or resumed: both the legacy qa mode and the single-list result
+// fields are rejected as unsupported run state.
+func TestLegacyQAModeAndStorageAreRejected(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := readyDelivery(t, root, pkg, "legacy-migrate")
-	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	var err error
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
-	if err != nil {
+	state := mustStart(t, root, pkg, "legacy-qa-rejected")
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	prior := QAExecutionResult{Status: "FAIL", Snapshot: "s-old", Cases: []QAResultRecord{{CaseID: "CASE-002", Mode: "blackbox", Outcome: "FAIL"}}}
-	legacy := struct {
-		RunState
-		LegacyQAExecution      QAExecutionResult  `json:"qaExecution"`
-		LegacyPriorQAExecution *QAExecutionResult `json:"priorQAExecution"`
-	}{
-		RunState:               state,
-		LegacyQAExecution:      state.qaExecution(""),
-		LegacyPriorQAExecution: &prior,
-	}
-	legacy.QAExecutionByMode = nil
-	legacy.PriorQAExecutionByMode = nil
-	// 旧状态文件（无 stateIntegrity 字段）跳过完整性校验；模拟旧格式时一并清空该
-	// 字段，使文件以合法旧形态加载，而不是被当作 CLI 写入后被手工改写拒绝。
-	legacy.StateIntegrity = ""
-	data, err := json.MarshalIndent(legacy, "", "  ")
+	decoded["selectedGates"] = []string{"qa"}
+	decoded["qaCases"] = []any{}
+	decoded["qaExecution"] = map[string]any{"status": "PASS"}
+	decoded["priorQAExecution"] = map[string]any{"status": "FAIL"}
+	delete(decoded, "stateIntegrity")
+	data, err := json.MarshalIndent(decoded, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(RunStatePath(root, state.RunID), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := LoadRunState(root, state.RunID)
+	if _, err := LoadRunState(root, state.RunID); err == nil || !strings.Contains(err.Error(), "unsupported legacy run state") {
+		t.Fatalf("legacy merged QA state was not rejected: %v", err)
+	}
+}
+
+// TestLegacyQAModeWithCurrentStorageIsRejected verifies that even a state using
+// the current per-mode storage schema cannot resume the removed merged "qa"
+// selection.
+func TestLegacyQAModeWithCurrentStorageIsRejected(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := mustStart(t, root, pkg, "legacy-qa-mode-rejected")
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(stateBytes(t, root, state.RunID)), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	decoded["selectedGates"] = []string{"qa"}
+	delete(decoded, "stateIntegrity")
+	data, err := json.MarshalIndent(decoded, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.qaExecution("").Snapshot != state.CurrentSnapshot || len(loaded.qaExecution("").Cases) == 0 {
-		t.Fatalf("legacy QAExecution did not migrate to the merged key: %#v", loaded.qaExecution(""))
+	if err := os.WriteFile(RunStatePath(root, state.RunID), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if loaded.priorQAExecution("") == nil || loaded.priorQAExecution("").Status != "FAIL" || loaded.priorQAExecution("").Snapshot != "s-old" {
-		t.Fatalf("legacy PriorQAExecution did not migrate to the merged key: %#v", loaded.PriorQAExecutionByMode)
+	if _, err := LoadRunState(root, state.RunID); err == nil || !strings.Contains(err.Error(), "selected QA mode") {
+		t.Fatalf("legacy qa mode with current storage was not rejected: %v", err)
 	}
 }
 

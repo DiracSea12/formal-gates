@@ -60,12 +60,12 @@ type RunState struct {
 	// QACasesByMode 按 QA 派发 mode 分开存储用例：黑盒/白盒各一条，mode=="" 为
 	// 合并/单派发流程。qa-design 记录轮只对该 mode 的列表做增量替换，另一 mode 的既有用例
 	// （含其 review PASS 状态与已记录执行结果）保持不动，修复"设计白盒时整表替换清掉黑盒
-	// 用例"的数据丢失缺陷。旧状态文件（qaCases 数组）在 LoadRunState 时迁移进 "" 键。
+	// 用例"的数据丢失缺陷。旧状态文件的单列表格式不再兼容读取。
 	QACasesByMode map[string][]QACase `json:"qaCasesByMode,omitempty"`
 	// QAExecutionByMode 按 QA 派发 mode 分开存储执行结果（黑白盒完完全全解耦）：
 	// blackbox / whitebox 各自独立、互不影响，空 mode 键对应合并/单派发流程。一个 mode
 	// 的设计/执行/记录 SHALL NOT 重置或清除另一 mode 的执行结果。旧状态文件的单一
-	// qaExecution 字段在 LoadRunState 时迁移进 "" 键。
+	// qaExecution 字段不再兼容读取。
 	QAExecutionByMode map[string]QAExecutionResult `json:"qaExecutionByMode,omitempty"`
 	// ExecutionScopes 记录每个 QA 派发 mode（blackbox / whitebox / 合并空 mode）最近一次
 	// 的重跑 scope 决策：FULL 全量重跑，或 AFFECTED 只重跑 host 综合判定
@@ -76,14 +76,13 @@ type RunState struct {
 	// FAIL 用例集），供重跑识别与 AFFECTED 子集判定使用：修复快照
 	// 推进时从被重置的权威结果保留而来，被该 mode 新一轮权威结果记录时只取代本 mode。
 	// 一个 mode 记录新权威结果 SHALL NOT 清空另一 mode 的上一轮权威结果。RUNTIME_ERROR
-	// 不构成权威结果、不保留。旧状态文件的单一 priorQAExecution 在 LoadRunState 时迁移
-	// 进 "" 键。
+	// 不构成权威结果、不保留。旧状态文件的单一 priorQAExecution 字段不再兼容读取。
 	PriorQAExecutionByMode map[string]*QAExecutionResult `json:"priorQAExecutionByMode,omitempty"`
 	// QAReviewByMode 按 QA 派发 mode 分开存储 qa-review 权威结果（完完全全解耦）：
 	// blackbox / whitebox 各自独立，一个 mode 记录 review 结果 SHALL NOT 影响另一 mode 的
 	// review 判定；空 mode 键对应合并/单派发流程。旧状态文件的单一 Actions["qa-review"] 不再
 	// 适配：本字段不标 omitempty、恒在场（新 run 序列化为 {}），LoadRunState 缺它即报格式
-	// 不符。对本新字段不做 nil 容忍迁移；既有字段的迁移逻辑保持不动。
+	// 不符。对本新字段不做 nil 容忍迁移；旧状态的单列表字段也不再迁移或读取。
 	QAReviewByMode map[string]ActionResult `json:"qaReviewByMode"`
 	// QADesignByMode 按 QA 派发 mode 分开存储 qa-design 权威结果：语义与
 	// QAReviewByMode 一致，一个 mode 的 review FAIL 重置设计 SHALL NOT 把另一 mode 的
@@ -457,15 +456,13 @@ func LoadRunState(root, runID string) (RunState, error) {
 			return RunState{}, fmt.Errorf("run state format does not match the current schema: missing required field %q (a run state without the per-mode QA review/design fields is not supported)", required)
 		}
 	}
-	// 迁移：旧状态文件把用例存成单个 qaCases 数组、执行结果存成单一 qaExecution /
-	// priorQAExecution，新模型按 mode 分开存储。加载时把旧数组迁移进合并键 ""，保证续跑/
-	// 接手旧 run 不丢用例与执行结果。本 change 对上述两个新字段不做 nil 容忍；既有字段的
-	// 迁移逻辑保持不动。
+	for _, legacyField := range []string{"qaCases", "qaExecution", "priorQAExecution"} {
+		if _, ok := fields[legacyField]; ok {
+			return RunState{}, fmt.Errorf("unsupported legacy run state: field %q is no longer accepted; start a new run", legacyField)
+		}
+	}
 	var holder struct {
 		RunState
-		LegacyQACases          []QACase           `json:"qaCases"`
-		LegacyQAExecution      QAExecutionResult  `json:"qaExecution"`
-		LegacyPriorQAExecution *QAExecutionResult `json:"priorQAExecution"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -473,22 +470,9 @@ func LoadRunState(root, runID string) (RunState, error) {
 		return RunState{}, fmt.Errorf("state JSON is invalid or does not match the current schema: %w", err)
 	}
 	state := holder.RunState
-	if state.QACasesByMode == nil {
-		state.QACasesByMode = map[string][]QACase{}
-		if len(holder.LegacyQACases) != 0 {
-			state.QACasesByMode[""] = holder.LegacyQACases
-		}
-	}
-	if state.QAExecutionByMode == nil {
-		state.QAExecutionByMode = map[string]QAExecutionResult{}
-		if holder.LegacyQAExecution.Status != "" || holder.LegacyQAExecution.Snapshot != "" || len(holder.LegacyQAExecution.Cases) != 0 {
-			state.QAExecutionByMode[""] = holder.LegacyQAExecution
-		}
-	}
-	if state.PriorQAExecutionByMode == nil {
-		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
-		if holder.LegacyPriorQAExecution != nil {
-			state.PriorQAExecutionByMode[""] = holder.LegacyPriorQAExecution
+	for _, selected := range state.SelectedGates {
+		if selected == "qa" {
+			return RunState{}, fmt.Errorf("unsupported legacy run state: selected QA mode %q is no longer supported; start a new run", selected)
 		}
 	}
 	if state.RunID != runID {
@@ -609,7 +593,7 @@ func (state RunState) qaExecutionModes() []string {
 // used for merged-set operations and overall checks. It applies
 // per-mode precedence per mode: a mode's own per-mode key, when non-empty,
 // replaces that mode's cases in the merged "" key (which then only holds
-// legacy-migrated or fast-path merged cases that a per-mode redesign superseded),
+// fast-path merged cases that a per-mode redesign superseded),
 // so stale merged cases are never double-counted. A merged-only run (no per-mode
 // key) keeps the "" key's cases in their original order.
 func (state RunState) allQACases() []QACase {
@@ -631,11 +615,10 @@ func (state RunState) allQACases() []QACase {
 // qaModeCases returns the dispatch mode's QA cases across every storage layout
 // Per-mode precedence per mode (fix): a concrete mode's own per-mode
 // key is authoritative — when it is non-empty, exactly those cases are returned
-// and any cases migrated into the merged "" key are ignored (a run that designed
-// per-mode after a legacy migration would otherwise double-count and see stale
-// PENDING cases, e.g. blocking blackboxReviewPassed). Only when the per-mode key
-// is empty do reads fall back to the merged "" key (legacy / fast-path merged
-// storage). The empty mode is an alias for allQACases — the merged/single-dispatch
+// and stale cases in the merged "" key are ignored (a per-mode redesign would
+// otherwise double-count and see stale PENDING cases, e.g. blocking blackboxReviewPassed).
+// Only when the per-mode key is empty do reads fall back to the merged "" key
+// (fast-path merged storage). The empty mode is an alias for allQACases — the merged/single-dispatch
 // view is exactly the full current set across every storage layout (per-mode
 // precedence), so the "" branch delegates to it instead of duplicating the merge.
 // Returns a copy for concrete modes; use setQACases to mutate a mode's stored list.
@@ -692,7 +675,7 @@ func (state *RunState) setQACasesForReview(mode, key string, updated []QACase) {
 
 // qaReview returns the authoritative qa-review result for the dispatch mode
 // (完完全全解耦): the mode's own per-mode key when it holds a recorded
-// result, else the merged "" key (single-dispatch / legacy merged storage). An
+// result, else the merged "" key (single-dispatch / merged storage). An
 // empty mode reads the merged key directly. Reads here mirror the recorder's
 // write key (setQAReview), so the two always see the same stored result.
 func (state RunState) qaReview(mode string) ActionResult {
