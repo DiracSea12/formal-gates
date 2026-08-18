@@ -7,7 +7,7 @@ Route: (formal 流程内确认)
 ## 背景
 
 formal-gates「编排流水线化」重构审查时，审查者在审视现状过程中顺带发现 4 个现有实现缺陷
-（见 `重构方案/现有实现缺陷交接单.md`）。主代理已逐条对照源码核实，判定其中 1 个属有意设计、
+（见 `refactor-plan/existing-defects-handoff.md`）。主代理已逐条对照源码核实，判定其中 1 个属有意设计、
 不修（缺陷 2），其余 3 个属实、需修（缺陷 1 / 3 / 4）。改动触及 formal-gates 自身的核心快照
 与 QA 逻辑，经用户确认走 formal-gates 正式流程。
 
@@ -71,5 +71,5 @@ formal-gates「编排流水线化」重构审查时，审查者在审视现状�
 ## 前置处置（本仓库自身未跟踪文件）
 
 本仓库当前工作树存在未跟踪文件（`TRIGGER-MODEL-REQUIREMENT.md`、`TRIGGER-MODEL-V2-REQUIREMENT.md`、
-`重构方案/` 目录），缺陷 4 落地后 formal-gates 跑自身快照 / 封板的脏检查会撞上这些文件。启动正式
+`refactor-plan/` 目录），缺陷 4 落地后 formal-gates 跑自身快照 / 封板的脏检查会撞上这些文件。启动正式
 流程前须先处置：提交或加入 gitignore，使工作树在需要干净检查时不含未跟踪且未忽略的文件。
