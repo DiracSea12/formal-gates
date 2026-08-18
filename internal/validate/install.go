@@ -11,12 +11,17 @@ import (
 )
 
 type InstallOptions struct {
-	Source    string
-	Host      string
-	Scope     string
-	Project   string
-	Force     bool
-	SkipHooks bool
+	Source  string
+	Host    string
+	Scope   string
+	Project string
+	// ReleaseRoot and BinaryTarget are used by the bootstrap scripts. When
+	// provided, the native installer owns release copy, backup, and executable
+	// replacement in the same transaction as host installation.
+	ReleaseRoot  string
+	BinaryTarget string
+	Force        bool
+	SkipHooks    bool
 }
 
 type UninstallOptions struct {
@@ -73,9 +78,17 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err := assertInstallSource(sourceAbs); err != nil {
 		return InstallReport{}, err
 	}
+	if _, err := PackageReceipt(sourceAbs); err != nil {
+		return InstallReport{}, fmt.Errorf("formal-gates source failed immutable package validation: %w", err)
+	}
 	rule, err := LoadManagedRule(sourceAbs)
 	if err != nil {
 		return InstallReport{}, err
+	}
+	if strings.TrimSpace(options.ReleaseRoot) != "" {
+		if err := installReleaseTransaction(sourceAbs, options.ReleaseRoot, options.BinaryTarget, options.Force); err != nil {
+			return InstallReport{}, err
+		}
 	}
 
 	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
@@ -85,7 +98,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 
 	report := InstallReport{}
 	for _, target := range targets {
-		if err := copyInstallRuntime(sourceAbs, target.targetPath, options.Force); err != nil {
+		if err := executeInstallTransaction(sourceAbs, target, options.Force, options.SkipHooks, rule); err != nil {
 			return InstallReport{}, err
 		}
 		targetReport := InstallTargetReport{
@@ -94,15 +107,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			ManagedRulePath: filepath.ToSlash(target.managedRulePath),
 		}
 		if !options.SkipHooks {
-			if err := configureInstallHook(target); err != nil {
-				return InstallReport{}, err
-			}
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
-		}
-		if target.managedRulePath != "" {
-			if err := manageManagedRuleFile(target.managedRulePath, rule); err != nil {
-				return InstallReport{}, err
-			}
 		}
 		report.Targets = append(report.Targets, targetReport)
 	}
@@ -116,18 +121,8 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	}
 	report := UninstallReport{}
 	for _, target := range targets {
-		if target.managedRulePath != "" {
-			if err := removeManagedRuleFile(target.managedRulePath, target.host == "cursor"); err != nil {
-				return UninstallReport{}, err
-			}
-		}
-		if err := removeInstallHooks(target); err != nil {
+		if err := executeUninstallTransaction(target); err != nil {
 			return UninstallReport{}, err
-		}
-		if exists(target.targetPath) {
-			if err := removeExistingInstallTarget(target.targetPath); err != nil {
-				return UninstallReport{}, err
-			}
 		}
 		report.Targets = append(report.Targets, installTargetReport(target))
 	}
@@ -322,11 +317,7 @@ func copyInstallRuntime(source, target string, force bool) error {
 	for _, entry := range installRuntimeEntries {
 		from := filepath.Join(source, filepath.FromSlash(entry))
 		to := filepath.Join(target, filepath.FromSlash(entry))
-		if isLiveEntry(entry) {
-			if err := os.Symlink(from, to); err != nil {
-				return err
-			}
-		} else if err := copyPath(from, to); err != nil {
+		if err := copyPath(from, to); err != nil {
 			return err
 		}
 	}
@@ -343,14 +334,10 @@ func removeExistingInstallTarget(target string) error {
 	return os.RemoveAll(target)
 }
 
-// isLiveEntry reports whether an install entry should be a symlink back to the
-// source rather than a static copy. Live entries contain prompt/gate content
-// that changes without a full reinstall.
+// isLiveEntry is retained as a compatibility helper for callers that used the
+// old package copier. Stage 0 packages are immutable: no runtime entry may be
+// a live symlink back to the source worktree.
 func isLiveEntry(entry string) bool {
-	switch entry {
-	case "gates", "prompts":
-		return true
-	}
 	return false
 }
 

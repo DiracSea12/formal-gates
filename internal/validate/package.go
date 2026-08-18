@@ -78,6 +78,12 @@ type manifestHost struct {
 func Package(root string) Result {
 	root = lifecycle.CleanRoot(root)
 	var result Result
+	// A package is an immutable input to installation.  Walk it with Lstat and
+	// reject symlink entries before any normal content checks so prompts/gates
+	// cannot silently point back to a mutable development worktree.
+	if _, err := PackageReceipt(root); err != nil {
+		result.add("package", fmt.Sprintf("immutable package validation failed: %v", err))
+	}
 
 	for _, dir := range requiredDirs {
 		path := filepath.Join(root, filepath.FromSlash(dir))
@@ -270,6 +276,8 @@ func validateBootstrapScripts(root string, result *Result) {
 			`binary="formal-gates-${suffix}"`,
 			`canary="portable-canary-${suffix}.json"`,
 			`checksums="SHA256SUMS-${suffix}.txt"`,
+			`--release-root "$install_root"`,
+			`--binary-target "$binary_target"`,
 		} {
 			if !strings.Contains(bash, required) {
 				result.add("install.command", "bootstrap script is not bound to release asset contract: "+required)
@@ -278,6 +286,11 @@ func validateBootstrapScripts(root string, result *Result) {
 		for _, forbidden := range []string{`os="darwin"`, "linux-arm64", "windows-arm64"} {
 			if strings.Contains(bash, forbidden) {
 				result.add("install.command", "bootstrap script references unpublished release suffix: "+forbidden)
+			}
+		}
+		for _, forbidden := range []string{"ln -s", "ln -sf", "rm -rf \"$install_root\"", "rm -rf \"$release"} {
+			if strings.Contains(bash, forbidden) {
+				result.add("install.command", "bootstrap script must not mutate a live release pointer directly: "+forbidden)
 			}
 		}
 	}
@@ -293,6 +306,8 @@ func validateBootstrapScripts(root string, result *Result) {
 			`$checksums = "SHA256SUMS-$suffix.txt"`,
 			`foreach ($file in @($asset, $canary))`,
 			`throw "checksum validation failed: $file"`,
+			`"--release-root", $installRoot`,
+			`"--binary-target", $formalBinary`,
 		} {
 			if !strings.Contains(powershell, required) {
 				result.add("install.ps1", "bootstrap script is not bound to release asset contract: "+required)
@@ -301,6 +316,11 @@ func validateBootstrapScripts(root string, result *Result) {
 		for _, forbidden := range []string{"windows-arm64", "linux-arm64", "darwin"} {
 			if strings.Contains(strings.ToLower(powershell), forbidden) {
 				result.add("install.ps1", "bootstrap script references unpublished release suffix: "+forbidden)
+			}
+		}
+		for _, forbidden := range []string{"SymbolicLink", "Remove-Item $installRoot", "Remove-Item $current"} {
+			if strings.Contains(powershell, forbidden) {
+				result.add("install.ps1", "bootstrap script must not mutate a live release pointer directly: "+forbidden)
 			}
 		}
 	}

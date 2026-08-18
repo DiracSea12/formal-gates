@@ -49,6 +49,8 @@ func run(program string, args []string, streams IO) (int, error) {
 	switch args[0] {
 	case "package":
 		return runPackage(args[1:], streams)
+	case "registry":
+		return runRegistry(args[1:], streams)
 	case "install":
 		return runInstall(args[1:], streams)
 	case "uninstall":
@@ -90,9 +92,124 @@ func runPackage(args []string, streams IO) (int, error) {
 		}
 		candidates, err := validate.PackageRouteCandidates(*root)
 		return printValue(streams.Stdout, candidates, err)
+	case "baseline":
+		fs := newFlagSet("package baseline", streams)
+		root := fs.String("root", ".", "package root")
+		installed := fs.String("installed-target", "", "installed target root to digest")
+		vcs := fs.String("vcs-identity", "", "immutable VCS identity")
+		output := fs.String("output", "", "baseline receipt output path")
+		pathFlags := stringListFlag{}
+		fs.Var(&pathFlags, "path", "canonical path as name=PATH; repeat as needed")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*vcs) == "" || strings.TrimSpace(*output) == "" {
+			return 1, fmt.Errorf("package baseline requires --vcs-identity and --output")
+		}
+		canonical := map[string]string{}
+		for _, item := range pathFlags {
+			parts := strings.SplitN(item, "=", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+				return 1, fmt.Errorf("--path must use name=PATH")
+			}
+			canonical[parts[0]] = parts[1]
+		}
+		receipt, err := validate.BuildBaselineReceipt(*vcs, *root, *installed, canonical)
+		if err == nil {
+			err = validate.WriteBaselineReceipt(*output, receipt)
+		}
+		return printValue(streams.Stdout, receipt, err)
 	default:
 		return 1, fmt.Errorf("unknown package subcommand: %s", subcommand)
 	}
+}
+
+func runRegistry(args []string, streams IO) (int, error) {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		printRegistryUsage(streams.Stdout, "formal-gates")
+		return 0, nil
+	}
+	subcommand, args := args[0], args[1:]
+	switch subcommand {
+	case "bootstrap":
+		fs := newFlagSet("registry bootstrap", streams)
+		path := fs.String("path", "", "registry JSON path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" {
+			return 1, fmt.Errorf("registry bootstrap requires --path")
+		}
+		doc, err := validate.BootstrapRegistry(*path, nil)
+		return printValue(streams.Stdout, doc, err)
+	case "register":
+		fs := newFlagSet("registry register", streams)
+		path := fs.String("path", "", "registry JSON path")
+		record := registryRecordFlags(fs)
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" || strings.TrimSpace(*record.id) == "" {
+			return 1, fmt.Errorf("registry register requires --path and --id")
+		}
+		doc, err := validate.RegisterRegistryRecord(*path, record.value())
+		return printValue(streams.Stdout, doc, err)
+	case "admit":
+		fs := newFlagSet("registry admit", streams)
+		path := fs.String("path", "", "registry JSON path")
+		recordID := fs.String("record-id", "", "registry record id")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" || strings.TrimSpace(*recordID) == "" {
+			return 1, fmt.Errorf("registry admit requires --path and --record-id")
+		}
+		receipt, err := validate.AdmitRegistry(*path, *recordID)
+		if printCode, printErr := printValue(streams.Stdout, receipt, err); printErr != nil {
+			return printCode, printErr
+		}
+		if !receipt.Accepted {
+			return 1, fmt.Errorf("%s: %s", receipt.Code, receipt.Reason)
+		}
+		return 0, nil
+	case "show":
+		fs := newFlagSet("registry show", streams)
+		path := fs.String("path", "", "registry JSON path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		doc, err := validate.LoadRegistry(*path)
+		return printValue(streams.Stdout, doc, err)
+	default:
+		return 1, fmt.Errorf("unknown registry subcommand: %s", subcommand)
+	}
+}
+
+type registryRecordInput struct {
+	id, target, scope, host, projectRoot, stateRoot, resourceRoot, runtimeSibling *string
+}
+
+func registryRecordFlags(fs *flag.FlagSet) registryRecordInput {
+	return registryRecordInput{
+		id:             fs.String("id", "", "stable registry record id"),
+		target:         fs.String("target", "", "documented install target"),
+		scope:          fs.String("scope", "", "global or project"),
+		host:           fs.String("host", "", "host provider"),
+		projectRoot:    fs.String("project-root", "", "project root"),
+		stateRoot:      fs.String("state-root", "", "state root"),
+		resourceRoot:   fs.String("resource-root", "", "resource root"),
+		runtimeSibling: fs.String("runtime-sibling", "", "immutable runtime sibling"),
+	}
+}
+
+func (record registryRecordInput) value() validate.RegistryRecord {
+	paths := map[string]string{}
+	for name, value := range map[string]*string{"projectRoot": record.projectRoot, "stateRoot": record.stateRoot, "resourceRoot": record.resourceRoot, "runtimeSibling": record.runtimeSibling} {
+		if strings.TrimSpace(*value) != "" {
+			paths[name] = *value
+		}
+	}
+	return validate.RegistryRecord{ID: *record.id, Target: *record.target, Scope: *record.scope, Host: *record.host, ProjectRoot: *record.projectRoot, StateRoot: *record.stateRoot, ResourceRoot: *record.resourceRoot, RuntimeSibling: *record.runtimeSibling, CanonicalPaths: paths}
 }
 
 func runInstall(args []string, streams IO) (int, error) {
@@ -102,6 +219,8 @@ func runInstall(args []string, streams IO) (int, error) {
 	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
 	scope := fs.String("scope", "", "install scope: global or project")
 	project := fs.String("project", "", "project path for project installs")
+	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
+	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -110,7 +229,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, Force: *force, SkipHooks: *skipHooks})
+	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Force: *force, SkipHooks: *skipHooks})
 	if err != nil {
 		return 1, err
 	}
@@ -179,6 +298,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 var workflowSubcommands = map[string]func(args []string, streams IO) (int, error){
 	"start":              runWorkflowStart,
 	"show":               runWorkflowShow,
+	"diagnose":           runWorkflowDiagnose,
 	"resume":             runWorkflowResume,
 	"abort":              runWorkflowAbort,
 	"reset":              runWorkflowReset,
@@ -214,6 +334,8 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	vcs := fs.String("vcs", "", "external VCS name")
 	base := fs.String("base-snapshot", "", "optional native base identity to verify")
 	currentSnapshot := fs.String("current-snapshot", "", "explicit native identity to adopt as the current snapshot (must be an ancestor or equal of the native head); defaults to the native head (RQ-010)")
+	registry := fs.String("registry", "", "optional stage-0 admission registry path")
+	registryRecord := fs.String("registry-record", "", "registry record id required with --registry")
 	artifacts := stringListFlag{}
 	fs.Var(&artifacts, "requirement-artifact", "additional requirement or solution document; repeat as needed")
 	retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
@@ -223,7 +345,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route})
+	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, AdmissionRegistry: *registry, AdmissionRecordID: *registryRecord, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -236,6 +358,25 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	}
 	state, err := validate.LoadRunState(*root, *runID)
 	return printValue(streams.Stdout, state, err)
+}
+
+func runWorkflowDiagnose(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow diagnose", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "run id whose raw state should be diagnosed")
+	path := fs.String("path", "", "raw state or terminal summary path")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	statePath := strings.TrimSpace(*path)
+	if statePath == "" {
+		if strings.TrimSpace(*runID) == "" {
+			return 1, fmt.Errorf("workflow diagnose requires --path or --run-id")
+		}
+		statePath = validate.RunStatePath(*root, *runID)
+	}
+	report, err := validate.DiagnoseState(statePath)
+	return printValue(streams.Stdout, report, err)
 }
 
 func runWorkflowResume(args []string, streams IO) (int, error) {
@@ -1258,14 +1399,18 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry bootstrap|register|admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+}
+
+func printRegistryUsage(w io.Writer, program string) {
+	fmt.Fprintf(w, "Usage: %s registry <subcommand>\n\nSubcommands:\n  bootstrap --path PATH\n  register --path PATH --id ID [--target PATH --scope global|project --host HOST]\n  admit --path PATH --record-id ID\n  show --path PATH\n", program)
 }
 
 // 二层 --help 粒度统一：workflow/gate/hook/lifecycle/canary 各自打印本组的子命令清单，
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printGateUsage(w io.Writer, program string) {

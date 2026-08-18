@@ -126,7 +126,9 @@
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root.",
     "Native install also writes the DeepSeek Harness skill under .dsh/skills and mounts the bundled minimal Cordis hook plugin through the DSH home cordis.patch.yml; project-scope DSH installs skills and AGENTS.md instructions only because DSH loads only the home-level patch layer.",
-    "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking."
+    "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking.",
+    "Stage-0 native installation owns the immutable release copy, cross-process lock, recovery journal, backup, and atomic executable replacement; shell and PowerShell bootstrap entries only download inputs and invoke that owner.",
+    "Stage-0 package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
   ],
   "support_caveats": [
     "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, Cursor, and DeepSeek Harness have bundled installer/hook target entries.",

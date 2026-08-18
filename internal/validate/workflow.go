@@ -15,6 +15,12 @@ import (
 
 type StartOptions struct {
 	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot string
+	// AdmissionRegistry and AdmissionRecordID opt a versioned/candidate
+	// launcher into the stage-0 registry bridge. Empty values preserve the
+	// stable driver's legacy start semantics; when supplied, admission is
+	// checked before the run directory or state file is created.
+	AdmissionRegistry string
+	AdmissionRecordID string
 	// CurrentSnapshot 显式指定当前快照停在某祖先：默认不传时取原生 HEAD；
 	// 传入值必须是原生 HEAD 的祖先或相等，用于接手"开发已提交"的 run 时让 current 停在
 	// 开发前、已有开发提交作为待登记快照。
@@ -210,6 +216,19 @@ func Start(options StartOptions) (RunState, error) {
 		return RunState{}, fmt.Errorf("run %q already has a retained result", runID)
 	} else if !os.IsNotExist(err) {
 		return RunState{}, err
+	}
+	if registryPath := strings.TrimSpace(options.AdmissionRegistry); registryPath != "" {
+		recordID := strings.TrimSpace(options.AdmissionRecordID)
+		if recordID == "" {
+			return RunState{}, fmt.Errorf("admission record id is required when --registry is supplied")
+		}
+		receipt, err := AdmitRegistry(registryPath, recordID)
+		if err != nil {
+			return RunState{}, err
+		}
+		if !receipt.Accepted {
+			return RunState{}, fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, recordID)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(RunDir(root, runID)), 0o700); err != nil {
 		return RunState{}, err

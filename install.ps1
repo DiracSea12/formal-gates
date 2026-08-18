@@ -1,11 +1,7 @@
 # Windows installer for formal-gates.
 #
-# Prerequisite: this script creates a SymbolicLink (New-Item -ItemType
-# SymbolicLink) for the "current" release directory and the
-# bin\formal-gates.exe entry. Creating symbolic links on Windows requires
-# either an elevated (Administrator) PowerShell session or Developer Mode
-# enabled (Settings > Update & Security > For developers). Run this script
-# under one of those conditions, otherwise the SymbolicLink calls fail.
+# The bootstrap keeps installed releases and the native executable as regular
+# copied files. No elevated symbolic-link privilege or Developer Mode is needed.
 
 param(
   [string]$Version = $env:FORMAL_GATES_VERSION,
@@ -60,31 +56,19 @@ try {
   New-Item -ItemType Directory -Force -Path (Join-Path $sourceDir.FullName "bin") | Out-Null
   Copy-Item (Join-Path $tmp $asset) (Join-Path $sourceDir.FullName "bin\formal-gates.exe") -Force
 
-  $installRoot = Join-Path $env:LOCALAPPDATA "formal-gates\releases\$($Version.TrimStart('v'))-$suffix"
-  if (Test-Path $installRoot) { Remove-Item $installRoot -Recurse -Force }
-  Copy-Item $sourceDir.FullName $installRoot -Recurse -Force
-
-  $current = Join-Path $env:LOCALAPPDATA "formal-gates\current"
-  New-Item -ItemType Directory -Force -Path (Split-Path $current) | Out-Null
-  if (Test-Path $current) { Remove-Item $current -Recurse -Force }
-  New-Item -ItemType SymbolicLink -Path $current -Target $installRoot | Out-Null
-
-  $binDir = Join-Path $env:LOCALAPPDATA "formal-gates\bin"
-  New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-  $formalBinary = Join-Path $binDir "formal-gates.exe"
-  if (Test-Path $formalBinary) { Remove-Item $formalBinary -Force }
-  New-Item -ItemType SymbolicLink -Path $formalBinary -Target (Join-Path $current "bin\formal-gates.exe") | Out-Null
+$installRoot = Join-Path $env:LOCALAPPDATA "formal-gates\releases\$($Version.TrimStart('v'))-$suffix"
+$formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
 
   if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-  $args = @("install", "--source", $installRoot, "--host", $TargetHost, "--scope", $Scope)
+  $args = @("install", "--source", $sourceDir.FullName, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
-  & $formalBinary @args
+  & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @args
   if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
 
   Write-Host "Installed formal-gates to $installRoot"
-  Write-Host "Binary symlink: $formalBinary"
+  Write-Host "Native binary: $formalBinary"
 }
 finally {
   Remove-Item $tmp -Recurse -Force

@@ -90,14 +90,8 @@ print(pathlib.Path.home())
 PY
 )}"
 install_root="$home/.formal-gates/releases/${tag#v}-${suffix}"
-mkdir -p "$(dirname "$install_root")"
-rm -rf "$install_root"
-cp -R "$source_root" "$install_root"
-
-mkdir -p "$home/.local/bin"
-ln -sfn "$install_root/bin/formal-gates" "$home/.local/bin/formal-gates"
-
-cmd=("$home/.local/bin/formal-gates" install --source "$install_root" --host "$host" --scope "$scope")
+binary_target="$home/.local/bin/formal-gates"
+cmd=("$source_root/bin/formal-gates" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   cmd+=(--project "$project")
 fi
@@ -110,4 +104,4 @@ fi
 "${cmd[@]}"
 
 echo "Installed package to $install_root"
-echo "Native binary symlink: $home/.local/bin/formal-gates"
+echo "Native binary: $binary_target"
