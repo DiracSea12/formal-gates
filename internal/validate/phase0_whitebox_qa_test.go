@@ -776,6 +776,14 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 			t.Fatalf("candidate transaction artifact remained after failed smoke: %v", matches)
 		}
 	}
+	var receipt installRecoveryReceipt
+	failurePath := journal + ".failure.json"
+	if err := json.Unmarshal([]byte(phase0ReadFile(t, failurePath)), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Operation != "release-install" || receipt.Target != release || receipt.Phase != "switched" || receipt.Recovered || receipt.ObservedAt == "" {
+		t.Fatalf("release smoke failure receipt does not describe the observed boundary and rollback: %+v", receipt)
+	}
 }
 
 func TestWhiteboxPhase0BootstrapScriptsDelegateToNativeTransactionOwner(t *testing.T) {
