@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"formal-gates/internal/lifecycle"
 )
@@ -21,6 +22,7 @@ type InstallOptions struct {
 	ReleaseRoot  string
 	BinaryTarget string
 	RegistryPath string
+	Bootstrap    bool
 	Force        bool
 	SkipHooks    bool
 }
@@ -33,10 +35,11 @@ type UninstallOptions struct {
 }
 
 type InstallReport struct {
-	Targets     []InstallTargetReport `json:"targets"`
-	GeneratedAt string                `json:"generatedAt,omitempty"`
-	Registry    string                `json:"registry,omitempty"`
-	ReceiptPath string                `json:"receiptPath,omitempty"`
+	Targets              []InstallTargetReport `json:"targets"`
+	GeneratedAt          string                `json:"generatedAt,omitempty"`
+	Registry             string                `json:"registry,omitempty"`
+	ReceiptPath          string                `json:"receiptPath,omitempty"`
+	BootstrapReceiptPath string                `json:"bootstrapReceiptPath,omitempty"`
 }
 
 type InstallTargetReport struct {
@@ -90,10 +93,23 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err := assertInstallSource(sourceAbs); err != nil {
 		return InstallReport{}, err
 	}
+	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
+	if err != nil {
+		return InstallReport{}, err
+	}
+	for _, target := range targets {
+		if pathOverlaps(sourceAbs, target.targetPath) {
+			return InstallReport{}, fmt.Errorf("install source %s overlaps target %s", sourceAbs, target.targetPath)
+		}
+	}
+	if strings.TrimSpace(options.ReleaseRoot) != "" && pathOverlaps(sourceAbs, options.ReleaseRoot) {
+		return InstallReport{}, fmt.Errorf("install source %s overlaps release root %s", sourceAbs, options.ReleaseRoot)
+	}
 	sourcePackage, err := PackageReceipt(sourceAbs)
 	if err != nil {
 		return InstallReport{}, fmt.Errorf("formal-gates source failed immutable package validation: %w", err)
 	}
+	registryPath := installRegistryPath(options)
 	// A source checkout/release must pass the complete package contract.  The
 	// documented runtime-only install fixture intentionally omits development
 	// sources, so it still receives strict manifest validation without being
@@ -122,42 +138,107 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, fmt.Errorf("formal-gates package digest mismatch: expected %s, got sha256:%s", expected, sourcePackage.Digest)
 		}
 	}
+	if options.Bootstrap {
+		return bootstrapInstall(options, targets, sourcePackage, registryPath)
+	}
 	rule, err := LoadManagedRule(sourceAbs)
 	if err != nil {
 		return InstallReport{}, err
 	}
-	if strings.TrimSpace(options.ReleaseRoot) != "" {
-		if err := installReleaseTransaction(sourceAbs, options.ReleaseRoot, options.BinaryTarget, options.Force); err != nil {
-			return InstallReport{}, err
-		}
-	}
-
-	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
-	if err != nil {
-		return InstallReport{}, err
-	}
-
 	report := InstallReport{GeneratedAt: "sha256:" + sourcePackage.Digest}
-	registryPath := strings.TrimSpace(options.RegistryPath)
-	if registryPath == "" {
-		if strings.EqualFold(options.Scope, "project") && strings.TrimSpace(options.Project) != "" {
-			registryPath = filepath.Join(options.Project, ".gates", "registry.json")
-		} else if strings.EqualFold(options.Scope, "global") {
-			if home, homeErr := installHomeDir(); homeErr == nil {
-				registryPath = filepath.Join(home, ".formal-gates", "registry.json")
-			}
-		}
-	}
 	report.Registry = filepath.ToSlash(registryPath)
 	if registryPath != "" {
 		report.ReceiptPath = filepath.ToSlash(registryPath + ".install.json")
 	}
+	var installUnlock func()
+	var registryUnlock func()
+	var registryBefore installFileBackup
+	if registryPath != "" {
+		installUnlock, err = acquireInstallLock(registryPath)
+		if err != nil {
+			return InstallReport{}, err
+		}
+		defer installUnlock()
+		registryUnlock, err = acquireRegistryLock(registryPath)
+		if err != nil {
+			return InstallReport{}, err
+		}
+		defer registryUnlock()
+		// Validate the existing bridge before changing any host target.  A
+		// malformed registry is an unregistered install, not a reason to leave
+		// a partially installed runtime behind.
+		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
+			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
+		}
+		registryBefore, err = snapshotInstallFile(registryPath)
+		if err != nil {
+			return InstallReport{}, err
+		}
+		if faultErr := installFault("registry"); faultErr != nil {
+			return InstallReport{}, recordInstallFailure(installJournalPath(filepath.FromSlash(report.Registry)), installJournal{Operation: "install", Target: registryPath, Phase: "intent", CreatedAt: nowReceiptTime()}, faultErr)
+		}
+	}
+
+	transactionParent := filepath.Dir(targets[0].targetPath)
+	for !exists(transactionParent) {
+		parent := filepath.Dir(transactionParent)
+		if parent == transactionParent {
+			break
+		}
+		transactionParent = parent
+	}
+	transactionRoot, err := os.MkdirTemp(transactionParent, ".formal-gates-transaction-")
+	if err != nil {
+		return InstallReport{}, err
+	}
+	defer os.RemoveAll(transactionRoot)
+	targetBackups := make([]installTargetBackup, 0, len(targets))
+	for index, target := range targets {
+		backup, backupErr := snapshotInstallTarget(target, filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index)))
+		if backupErr != nil {
+			return InstallReport{}, backupErr
+		}
+		targetBackups = append(targetBackups, backup)
+	}
+	var releaseBackup installTreeBackup
+	var binaryBackup installFileBackup
+	if strings.TrimSpace(options.ReleaseRoot) != "" {
+		releaseBackup, err = snapshotInstallTree(options.ReleaseRoot, filepath.Join(transactionRoot, "release"))
+		if err != nil {
+			return InstallReport{}, err
+		}
+		binaryBackup, err = snapshotInstallFile(options.BinaryTarget)
+		if err != nil {
+			return InstallReport{}, err
+		}
+	}
+	rollbackAll := func() {
+		for index := len(targetBackups) - 1; index >= 0; index-- {
+			_ = restoreInstallTarget(targetBackups[index])
+		}
+		if strings.TrimSpace(options.ReleaseRoot) != "" {
+			_ = restoreInstallTree(releaseBackup)
+			_ = restoreInstallFile(binaryBackup)
+		}
+		if registryPath != "" {
+			_ = restoreInstallFile(registryBefore)
+		}
+	}
+	if strings.TrimSpace(options.ReleaseRoot) != "" {
+		if err := installReleaseTransaction(sourceAbs, options.ReleaseRoot, options.BinaryTarget, options.Force); err != nil {
+			rollbackAll()
+			return InstallReport{}, err
+		}
+	}
+	records := make([]RegistryRecord, 0, len(targets))
 	for _, target := range targets {
 		if err := executeInstallTransaction(sourceAbs, target, options.Force, options.SkipHooks, rule); err != nil {
+			rollbackAll()
 			return InstallReport{}, err
 		}
 		installedReceipt, receiptErr := PackageReceipt(target.targetPath)
 		if receiptErr != nil {
+			rollbackAll()
 			return InstallReport{}, fmt.Errorf("installed target receipt failed: %w", receiptErr)
 		}
 		targetReport := InstallTargetReport{
@@ -182,22 +263,22 @@ func Install(options InstallOptions) (InstallReport, error) {
 		}
 		report.Targets = append(report.Targets, targetReport)
 		if registryPath != "" {
-			recordID := fmt.Sprintf("%s-%s", target.host, strings.ToLower(options.Scope))
-			projectRoot := options.Project
-			if strings.EqualFold(options.Scope, "global") {
-				projectRoot, _ = installHomeDir()
-			}
-			projectRoot = absPath(projectRoot)
-			stateRoot := filepath.Join(projectRoot, ".gates")
-			resourceRoot := filepath.Join(projectRoot, ".formal-gates-resources")
-			record := RegistryRecord{ID: recordID, Target: target.targetPath, Scope: strings.ToLower(options.Scope), Host: target.host, ProjectRoot: projectRoot, StateRoot: stateRoot, ResourceRoot: resourceRoot, RuntimeSibling: filepath.Dir(target.targetPath), Status: "active", CanonicalPaths: map[string]string{"target": target.targetPath, "projectRoot": projectRoot, "stateRoot": stateRoot, "resourceRoot": resourceRoot, "runtimeSibling": filepath.Dir(target.targetPath)}}
-			if _, regErr := RegisterRegistryRecord(registryPath, record); regErr != nil {
-				return InstallReport{}, fmt.Errorf("installation succeeded but registry admission bridge failed: %w", regErr)
-			}
+			records = append(records, installRegistryRecord(target, options))
+		}
+	}
+	if registryPath != "" {
+		if faultErr := installFault("registry-commit"); faultErr != nil {
+			rollbackAll()
+			return InstallReport{}, recordInstallFailure(installJournalPath(filepath.FromSlash(report.Registry)), installJournal{Operation: "install", Target: registryPath, Phase: "switched", CreatedAt: nowReceiptTime()}, faultErr)
+		}
+		if err := commitRegistryRecords(registryPath, records); err != nil {
+			rollbackAll()
+			return InstallReport{}, fmt.Errorf("installation registry admission bridge commit failed: %w", err)
 		}
 	}
 	if report.ReceiptPath != "" {
 		if writeErr := writeJSONAtomically(filepath.FromSlash(report.ReceiptPath), report); writeErr != nil {
+			rollbackAll()
 			return InstallReport{}, fmt.Errorf("failed to persist install receipt: %w", writeErr)
 		}
 	}
@@ -209,35 +290,319 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	if err != nil {
 		return UninstallReport{}, err
 	}
+	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project})
+	var unlock func()
+	var registryBefore installFileBackup
+	if registryPath != "" {
+		unlock, err = acquireInstallLock(registryPath)
+		if err != nil {
+			return UninstallReport{}, err
+		}
+		defer unlock()
+		unlock, err = acquireRegistryLock(registryPath)
+		if err != nil {
+			return UninstallReport{}, err
+		}
+		defer unlock()
+		registryBefore, err = snapshotInstallFile(registryPath)
+		if err != nil {
+			return UninstallReport{}, err
+		}
+	}
+	transactionParent := filepath.Dir(targets[0].targetPath)
+	for !exists(transactionParent) {
+		parent := filepath.Dir(transactionParent)
+		if parent == transactionParent {
+			break
+		}
+		transactionParent = parent
+	}
+	transactionRoot, err := os.MkdirTemp(transactionParent, ".formal-gates-uninstall-")
+	if err != nil {
+		return UninstallReport{}, err
+	}
+	defer os.RemoveAll(transactionRoot)
+	backups := make([]installTargetBackup, 0, len(targets))
+	for index, target := range targets {
+		backup, backupErr := snapshotInstallTarget(target, filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index)))
+		if backupErr != nil {
+			return UninstallReport{}, backupErr
+		}
+		backups = append(backups, backup)
+	}
+	rollback := func() {
+		for index := len(backups) - 1; index >= 0; index-- {
+			_ = restoreInstallTarget(backups[index])
+		}
+		if registryPath != "" {
+			_ = restoreInstallFile(registryBefore)
+		}
+	}
 	report := UninstallReport{}
 	for _, target := range targets {
 		if err := executeUninstallTransaction(target); err != nil {
+			rollback()
 			return UninstallReport{}, err
-		}
-		registryPath := ""
-		if strings.EqualFold(options.Scope, "project") && strings.TrimSpace(options.Project) != "" {
-			registryPath = filepath.Join(options.Project, ".gates", "registry.json")
-		} else if strings.EqualFold(options.Scope, "global") {
-			if home, homeErr := installHomeDir(); homeErr == nil {
-				registryPath = filepath.Join(home, ".formal-gates", "registry.json")
-			}
-		}
-		if registryPath != "" {
-			if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
-				for _, record := range doc.Records {
-					if filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
-						continue
-					}
-					record.Status = "disabled"
-					if _, registerErr := RegisterRegistryRecord(registryPath, record); registerErr != nil {
-						return UninstallReport{}, fmt.Errorf("uninstall completed but registry bridge update failed: %w", registerErr)
-					}
-				}
-			}
 		}
 		report.Targets = append(report.Targets, installTargetReport(target))
 	}
+	if registryPath != "" {
+		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			for index := range doc.Records {
+				for _, target := range targets {
+					if filepath.Clean(doc.Records[index].Target) == filepath.Clean(target.targetPath) {
+						doc.Records[index].Status = "disabled"
+					}
+				}
+			}
+			doc.Epoch++
+			if err := writeJSONAtomically(registryPath, doc); err != nil {
+				rollback()
+				return UninstallReport{}, fmt.Errorf("uninstall registry bridge update failed: %w", err)
+			}
+		} else if !os.IsNotExist(loadErr) {
+			rollback()
+			return UninstallReport{}, fmt.Errorf("uninstall registry bridge unavailable: %w", loadErr)
+		}
+	}
 	return report, nil
+}
+
+// installTreeBackup is the outer install transaction's undo record.  The
+// per-target native transaction protects one target; this record lets the
+// owner undo already completed targets when a later host, release, registry,
+// or receipt commit fails.
+type installTreeBackup struct {
+	path    string
+	backup  string
+	existed bool
+}
+
+type installTargetBackup struct {
+	target installTarget
+	tree   installTreeBackup
+	hook   installFileBackup
+	rule   installFileBackup
+}
+
+func snapshotInstallTree(path, backup string) (installTreeBackup, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return installTreeBackup{}, err
+	}
+	state := installTreeBackup{path: filepath.Clean(path), backup: filepath.Clean(backup)}
+	info, err := os.Lstat(state.path)
+	if os.IsNotExist(err) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return state, fmt.Errorf("cannot back up non-directory install target: %s", state.path)
+	}
+	state.existed = true
+	if err := copyTreeImmutable(state.path, state.backup); err != nil {
+		return installTreeBackup{}, err
+	}
+	return state, nil
+}
+
+func restoreInstallTree(state installTreeBackup) error {
+	if strings.TrimSpace(state.path) == "" {
+		return nil
+	}
+	if err := os.RemoveAll(state.path); err != nil {
+		return err
+	}
+	if !state.existed {
+		return nil
+	}
+	return copyTreeImmutable(state.backup, state.path)
+}
+
+func snapshotInstallTarget(target installTarget, backup string) (installTargetBackup, error) {
+	tree, err := snapshotInstallTree(target.targetPath, backup)
+	if err != nil {
+		return installTargetBackup{}, err
+	}
+	hook, err := snapshotInstallFile(target.hookConfig)
+	if err != nil {
+		return installTargetBackup{}, err
+	}
+	rule, err := snapshotInstallFile(target.managedRulePath)
+	if err != nil {
+		return installTargetBackup{}, err
+	}
+	return installTargetBackup{target: target, tree: tree, hook: hook, rule: rule}, nil
+}
+
+func restoreInstallTarget(state installTargetBackup) error {
+	if err := restoreInstallTree(state.tree); err != nil {
+		return err
+	}
+	if err := restoreInstallFile(state.hook); err != nil {
+		return err
+	}
+	return restoreInstallFile(state.rule)
+}
+
+func installRegistryRecord(target installTarget, options InstallOptions) RegistryRecord {
+	projectRoot := options.Project
+	if strings.EqualFold(options.Scope, "global") {
+		projectRoot, _ = installHomeDir()
+	}
+	projectRoot = absPath(projectRoot)
+	stateRoot := filepath.Join(projectRoot, ".gates")
+	resourceRoot := filepath.Join(projectRoot, ".formal-gates-resources")
+	canonical := map[string]string{
+		"target":         canonicalPath(target.targetPath),
+		"projectRoot":    canonicalPath(projectRoot),
+		"stateRoot":      canonicalPath(stateRoot),
+		"resourceRoot":   canonicalPath(resourceRoot),
+		"runtimeSibling": canonicalPath(filepath.Dir(target.targetPath)),
+	}
+	if target.hookConfig != "" {
+		canonical["hookConfig"] = canonicalPath(target.hookConfig)
+	}
+	return RegistryRecord{
+		ID:             fmt.Sprintf("%s-%s", target.host, strings.ToLower(options.Scope)),
+		Target:         target.targetPath,
+		Scope:          strings.ToLower(options.Scope),
+		Host:           target.host,
+		HookConfig:     target.hookConfig,
+		ProjectRoot:    projectRoot,
+		StateRoot:      stateRoot,
+		ResourceRoot:   resourceRoot,
+		RuntimeSibling: filepath.Dir(target.targetPath),
+		CanonicalPaths: canonical,
+		Status:         "active",
+	}
+}
+
+func installRegistryPath(options InstallOptions) string {
+	if path := strings.TrimSpace(options.RegistryPath); path != "" {
+		return absPath(path)
+	}
+	if strings.EqualFold(options.Scope, "project") && strings.TrimSpace(options.Project) != "" {
+		return filepath.Join(absPath(options.Project), ".gates", "registry.json")
+	}
+	if strings.EqualFold(options.Scope, "global") {
+		if home, err := installHomeDir(); err == nil {
+			return filepath.Join(home, ".formal-gates", "registry.json")
+		}
+	}
+	return ""
+}
+
+func bootstrapInstall(options InstallOptions, targets []installTarget, source PackageReceiptReport, registryPath string) (InstallReport, error) {
+	if registryPath == "" {
+		return InstallReport{}, fmt.Errorf("bootstrap requires a registry path for the selected scope")
+	}
+	installUnlock, err := acquireInstallLock(registryPath)
+	if err != nil {
+		return InstallReport{}, err
+	}
+	defer installUnlock()
+	unlock, err := acquireRegistryLock(registryPath)
+	if err != nil {
+		return InstallReport{}, err
+	}
+	defer unlock()
+	journalPath := installJournalPath(registryPath)
+	journal := installJournal{Operation: "bootstrap", Target: registryPath, Phase: "intent", CreatedAt: nowReceiptTime()}
+	receiptPath := registryPath + ".bootstrap.json"
+	registryBefore, err := snapshotInstallFile(registryPath)
+	if err != nil {
+		return InstallReport{}, err
+	}
+	receiptBefore, err := snapshotInstallFile(receiptPath)
+	if err != nil {
+		return InstallReport{}, err
+	}
+	rollback := func(cause error) error {
+		_ = restoreInstallFile(registryBefore)
+		_ = restoreInstallFile(receiptBefore)
+		return recordInstallFailure(journalPath, journal, cause)
+	}
+	if err := writeJSONAtomically(journalPath, journal); err != nil {
+		return InstallReport{}, err
+	}
+	defer func() {
+		_ = os.Remove(journalPath)
+	}()
+	if faultErr := installFault("registry"); faultErr != nil {
+		return InstallReport{}, recordInstallFailure(journalPath, journal, faultErr)
+	}
+	if existing, loadErr := LoadRegistry(registryPath); loadErr == nil {
+		for _, record := range existing.Records {
+			for _, target := range targets {
+				if record.ID == installRegistryRecord(target, options).ID && filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
+					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
+					_ = writeAdmissionReceipt(registryPath, receipt)
+					return InstallReport{}, fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target conflicts with registry record %q", record.ID)
+				}
+			}
+		}
+	} else if !os.IsNotExist(loadErr) {
+		return InstallReport{}, fmt.Errorf("registry bootstrap cannot read existing registry: %w", loadErr)
+	}
+	records := make([]RegistryRecord, 0, len(targets))
+	for _, target := range targets {
+		records = append(records, installRegistryRecord(target, options))
+	}
+	if err := commitRegistryRecords(registryPath, records); err != nil {
+		return InstallReport{}, rollback(err)
+	}
+	journal.Phase = "committed"
+	if err := writeJSONAtomically(journalPath, journal); err != nil {
+		return InstallReport{}, rollback(err)
+	}
+	receipt := map[string]any{
+		"operation":     "bootstrap",
+		"registry":      filepath.Clean(registryPath),
+		"packageDigest": source.Digest,
+		"records":       records,
+		"stateCreated":  false,
+		"observedAt":    nowReceiptTime(),
+	}
+	if err := writeJSONAtomically(receiptPath, receipt); err != nil {
+		return InstallReport{}, rollback(err)
+	}
+	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath)}, nil
+}
+
+func commitRegistryRecords(path string, records []RegistryRecord) error {
+	doc, err := LoadRegistry(path)
+	if os.IsNotExist(err) {
+		doc = RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1}
+	} else if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	doc.Epoch++
+	for index := range records {
+		normalizeRegistryRecord(&records[index], doc.Epoch)
+		record := records[index]
+		replaced := false
+		for index := range doc.Records {
+			if doc.Records[index].ID == record.ID {
+				doc.Records[index] = record
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			doc.Records = append(doc.Records, record)
+		}
+	}
+	return writeJSONAtomically(path, doc)
+}
+
+func nowReceiptTime() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 func normalizeInstallHost(host string) (string, error) {

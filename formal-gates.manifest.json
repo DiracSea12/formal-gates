@@ -98,6 +98,7 @@
   "install_commands": [
     "bin\\formal-gates.exe install --source . --host claude --scope global --force",
     "bin/formal-gates install --source . --host claude --scope global --force",
+    "bin/formal-gates install --bootstrap --source . --host claude --scope global",
     "bin/formal-gates install --source . --host codex --scope project --project <project> --force",
     "bin/formal-gates install --source . --host cursor --scope project --project <project> --force",
     "bin/formal-gates uninstall --host claude --scope global",

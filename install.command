@@ -101,6 +101,11 @@ fi
 if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
+bootstrap_cmd=("$source_root/bin/formal-gates" install --bootstrap --source "$source_root" --host "$host" --scope "$scope")
+if [ -n "$project" ]; then
+  bootstrap_cmd+=(--project "$project")
+fi
+"${bootstrap_cmd[@]}"
 "${cmd[@]}"
 
 echo "Installed package to $install_root"

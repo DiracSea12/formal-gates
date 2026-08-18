@@ -232,6 +232,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
 	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
 	registryPath := fs.String("registry", "", "registry JSON path (defaults to the project/global admission bridge)")
+	bootstrap := fs.Bool("bootstrap", false, "register the selected target in the stage-0 admission bridge without installing runtime files")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -240,7 +241,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, RegistryPath: *registryPath, Force: *force, SkipHooks: *skipHooks})
+	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, RegistryPath: *registryPath, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks})
 	if err != nil {
 		return 1, err
 	}

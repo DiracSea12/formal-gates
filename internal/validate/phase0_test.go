@@ -12,7 +12,7 @@ func TestValidateVersionEnvelopeUsesExactWriteBarrier(t *testing.T) {
 	valid := VersionEnvelope{
 		Writer: "engine", StateSchemaVersion: CurrentStateSchemaVersion,
 		WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
-		DefinitionSource:          "fixture", DefinitionDigest: "sha256:fixture",
+		DefinitionSource:          CurrentWorkflowDefinitionSource, DefinitionDigest: CurrentWorkflowDefinitionDigest,
 	}
 	if err := ValidateVersionEnvelope(valid); err != nil {
 		t.Fatal(err)
@@ -34,6 +34,38 @@ func TestValidateVersionEnvelopeUsesExactWriteBarrier(t *testing.T) {
 				t.Fatalf("expected unsupported-version error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestWriteVersionedStateOwnsIdentityFieldsAndRejectsBeforeCreate(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state.json")
+	valid := VersionEnvelope{
+		Writer:                    "engine",
+		StateSchemaVersion:        CurrentStateSchemaVersion,
+		WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
+		DefinitionSource:          CurrentWorkflowDefinitionSource,
+		DefinitionDigest:          CurrentWorkflowDefinitionDigest,
+		PackageDigest:             "sha256:package",
+	}
+	if err := WriteVersionedState(path, valid, map[string]any{"writer": "legacy", "status": "ACTIVE"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"writer": "engine"`) || strings.Contains(string(data), `"writer": "legacy"`) {
+		t.Fatalf("payload overrode the validated writer identity: %s", data)
+	}
+	invalid := valid
+	invalid.DefinitionDigest = "sha256:stale"
+	invalidPath := filepath.Join(root, "invalid.json")
+	if err := WriteVersionedState(invalidPath, invalid, map[string]any{"status": "ACTIVE"}); err == nil {
+		t.Fatal("unsupported version envelope was written")
+	}
+	if _, err := os.Stat(invalidPath); !os.IsNotExist(err) {
+		t.Fatalf("write barrier created an invalid state file: %v", err)
 	}
 }
 

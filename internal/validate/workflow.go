@@ -256,6 +256,12 @@ func Start(options StartOptions) (RunState, error) {
 	}
 	state := NewRunState(runID, strings.TrimSpace(options.Flow), normalizeArtifactPath(root, options.RequirementSource), revision, vcs, baseSnapshot, currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs(), artifacts)
 	state.PromptHashes = catalogPromptHashes(catalog)
+	// Preserve the admission binding in the run envelope so every later
+	// SaveRunState call re-admits the same target before writing state.
+	state.AdmissionRegistry = registryPath
+	state.AdmissionRecordID = registryRecordID
+	state.AdmissionRoot = root
+	state.AdmissionTarget = options.PackageRoot
 	state.RetainedOverall = options.RetainedOverall
 	state.SplitDeclaration = split
 	state.SplitMasterRunID = master
@@ -308,10 +314,10 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		if err != nil {
 			return err
 		}
-		if expected := filepath.Clean(record.CanonicalPaths["projectRoot"]); expected != "" && expected != filepath.Clean(canonicalRoot) {
+		if expected := canonicalPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalPath(canonicalRoot) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
 		}
-		if expected := filepath.Clean(record.CanonicalPaths["target"]); expected != "" && expected != filepath.Clean(canonicalPackage) {
+		if expected := canonicalPath(record.CanonicalPaths["target"]); expected != "." && expected != canonicalPath(canonicalPackage) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
 		}
 		return nil

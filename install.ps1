@@ -64,6 +64,10 @@ $formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
+  $bootstrapArgs = @("install", "--bootstrap", "--source", $sourceDir.FullName, "--host", $TargetHost, "--scope", $Scope)
+  if ($Project) { $bootstrapArgs += @("--project", $Project) }
+  & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @bootstrapArgs
+  if ($LASTEXITCODE -ne 0) { throw "formal-gates bootstrap failed with exit code $LASTEXITCODE" }
   & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @args
   if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
 

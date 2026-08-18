@@ -77,11 +77,11 @@ func ValidateVersionEnvelope(envelope VersionEnvelope) error {
 	if strings.TrimSpace(envelope.DefinitionSource) == "" || strings.TrimSpace(envelope.DefinitionDigest) == "" {
 		return &UnsupportedRunVersionError{Field: "definition", Expected: "source and digest", Observed: "missing"}
 	}
-	// Definition source and digest form one immutable identity.  The fixture
-	// pair is retained for the package contract tests; all other candidates must
-	// use the canonical production pair.
-	if !((envelope.DefinitionSource == CurrentWorkflowDefinitionSource && envelope.DefinitionDigest == CurrentWorkflowDefinitionDigest) ||
-		(envelope.DefinitionSource == "fixture" && envelope.DefinitionDigest == "sha256:fixture")) {
+	// Definition source and digest form one immutable identity.  Candidate
+	// writers must use the exact pair from the currently installed definition;
+	// accepting a merely non-empty pair would allow a stale definition to write
+	// a state file that the current reader cannot interpret.
+	if envelope.DefinitionSource != CurrentWorkflowDefinitionSource || envelope.DefinitionDigest != CurrentWorkflowDefinitionDigest {
 		return &UnsupportedRunVersionError{Field: "definition", Expected: CurrentWorkflowDefinitionSource + " @ " + CurrentWorkflowDefinitionDigest, Observed: envelope.DefinitionSource + " @ " + envelope.DefinitionDigest}
 	}
 	return nil
@@ -90,6 +90,36 @@ func ValidateVersionEnvelope(envelope VersionEnvelope) error {
 func IsUnsupportedRunVersion(err error) bool {
 	var target *UnsupportedRunVersionError
 	return errors.As(err, &target)
+}
+
+// WriteVersionedState is the future engine/candidate write entrypoint.  The
+// envelope is validated before the destination is opened, so an unsupported
+// writer cannot create or truncate a state file.  Legacy workflow state does
+// not call this helper and therefore keeps its existing format unchanged.
+func WriteVersionedState(path string, envelope VersionEnvelope, value any) error {
+	if err := ValidateVersionEnvelope(envelope); err != nil {
+		return err
+	}
+	document := map[string]any{}
+	if envelope.PackageDigest != "" {
+		document["packageDigest"] = envelope.PackageDigest
+	}
+	if fields, ok := value.(map[string]any); ok {
+		for key, item := range fields {
+			document[key] = item
+		}
+	} else if value != nil {
+		document["payload"] = value
+	}
+	// Identity fields are owned by the validated envelope.  Applying them last
+	// prevents a caller's payload map from silently downgrading the writer or
+	// definition after the write barrier has passed.
+	document["writer"] = envelope.Writer
+	document["stateSchemaVersion"] = envelope.StateSchemaVersion
+	document["workflowDefinitionVersion"] = envelope.WorkflowDefinitionVersion
+	document["definitionSource"] = envelope.DefinitionSource
+	document["definitionDigest"] = envelope.DefinitionDigest
+	return writeJSONAtomically(path, document)
 }
 
 type DiagnoseReport struct {
@@ -137,6 +167,19 @@ func DiagnoseState(path string) (DiagnoseReport, error) {
 			report.DetectedVersions[key] = value
 		}
 	}
+	if _, writerOK := raw["writer"]; writerOK {
+		envelope := VersionEnvelope{
+			Writer:                    rawString(raw, "writer"),
+			StateSchemaVersion:        rawString(raw, "stateSchemaVersion"),
+			WorkflowDefinitionVersion: rawString(raw, "workflowDefinitionVersion"),
+			DefinitionSource:          rawString(raw, "definitionSource"),
+			DefinitionDigest:          rawString(raw, "definitionDigest"),
+			PackageDigest:             rawString(raw, "packageDigest"),
+		}
+		if err := ValidateVersionEnvelope(envelope); err != nil {
+			report.Recommendation = err.Error() + "; rebuild it with the owning writer"
+		}
+	}
 	if summary, ok := raw["summary"].(map[string]any); ok {
 		report.Summary = summary
 	} else if status, ok := raw["status"]; ok {
@@ -147,9 +190,16 @@ func DiagnoseState(path string) (DiagnoseReport, error) {
 		}
 	}
 	if report.Summary == nil {
-		report.Recommendation = "inspect the owning writer before attempting a write"
+		if report.Recommendation == "" {
+			report.Recommendation = "inspect the owning writer before attempting a write"
+		}
 	}
 	return report, nil
+}
+
+func rawString(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
 }
 
 type PackageReceiptReport struct {
@@ -228,10 +278,22 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		}
 		receipt.CanonicalPaths[name] = filepath.Clean(realPath)
 		if strings.EqualFold(name, "hookConfig") || strings.EqualFold(name, "config") || strings.EqualFold(name, "hook") {
-			receipt.HookConfigDigest, _ = fileDigest(realPath)
+			if !isFile(realPath) {
+				return BaselineReceipt{}, fmt.Errorf("hook/config identity is not a regular file: %s", path)
+			}
+			receipt.HookConfigDigest, err = fileDigest(realPath)
+			if err != nil {
+				return BaselineReceipt{}, err
+			}
 		}
 		if strings.EqualFold(name, "managedRule") || strings.EqualFold(name, "rule") {
-			receipt.ManagedRuleDigest, _ = fileDigest(realPath)
+			if !isFile(realPath) {
+				return BaselineReceipt{}, fmt.Errorf("managed-rule identity is not a regular file: %s", path)
+			}
+			receipt.ManagedRuleDigest, err = fileDigest(realPath)
+			if err != nil {
+				return BaselineReceipt{}, err
+			}
 		}
 	}
 	// Identity receipts must be repeatable for unchanged inputs.  A wall-clock
@@ -259,11 +321,15 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		return PackageReceiptReport{}, err
 	}
 	root = filepath.Clean(root)
-	if info, err := os.Lstat(root); err != nil || !info.IsDir() {
-		if err == nil {
-			err = fmt.Errorf("package root is not a directory")
-		}
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
 		return PackageReceiptReport{}, err
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return PackageReceiptReport{}, fmt.Errorf("package root %s is a symlink; immutable packages require a real directory", root)
+	}
+	if !rootInfo.IsDir() {
+		return PackageReceiptReport{}, fmt.Errorf("package root is not a directory")
 	}
 	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -373,12 +439,16 @@ type RegistryRecord struct {
 	Target         string            `json:"target"`
 	Scope          string            `json:"scope"`
 	Host           string            `json:"host"`
+	HookConfig     string            `json:"hookConfig,omitempty"`
 	ProjectRoot    string            `json:"projectRoot"`
 	StateRoot      string            `json:"stateRoot"`
 	ResourceRoot   string            `json:"resourceRoot"`
 	RuntimeSibling string            `json:"runtimeSibling"`
 	CanonicalPaths map[string]string `json:"canonicalPaths"`
 	Status         string            `json:"status"`
+	Generation     uint64            `json:"generation,omitempty"`
+	Lease          string            `json:"lease,omitempty"`
+	Token          string            `json:"token,omitempty"`
 }
 
 type RegistryDocument struct {
@@ -398,6 +468,11 @@ type AdmissionReceipt struct {
 
 func BootstrapRegistry(path string, records []RegistryRecord) (RegistryDocument, error) {
 	path = filepath.Clean(path)
+	unlock, err := acquireRegistryLock(path)
+	if err != nil {
+		return RegistryDocument{}, err
+	}
+	defer unlock()
 	doc := RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1, Records: make([]RegistryRecord, 0, len(records))}
 	for i, record := range records {
 		if strings.TrimSpace(record.ID) == "" {
@@ -409,6 +484,7 @@ func BootstrapRegistry(path string, records []RegistryRecord) (RegistryDocument,
 		if record.CanonicalPaths == nil {
 			record.CanonicalPaths = map[string]string{}
 		}
+		normalizeRegistryRecord(&record, doc.Epoch)
 		doc.Records = append(doc.Records, record)
 	}
 	if err := writeJSONAtomically(path, doc); err != nil {
@@ -436,6 +512,16 @@ func LoadRegistry(path string) (RegistryDocument, error) {
 // the registry epoch. It is the idempotent bootstrap/admission bridge entry
 // used by installers and launchers; workflow state is never written here.
 func RegisterRegistryRecord(path string, record RegistryRecord) (RegistryDocument, error) {
+	path = filepath.Clean(path)
+	unlock, err := acquireRegistryLock(path)
+	if err != nil {
+		return RegistryDocument{}, err
+	}
+	defer unlock()
+	return registerRegistryRecordUnlocked(path, record)
+}
+
+func registerRegistryRecordUnlocked(path string, record RegistryRecord) (RegistryDocument, error) {
 	doc, err := LoadRegistry(path)
 	if os.IsNotExist(err) {
 		doc = RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1}
@@ -451,6 +537,7 @@ func RegisterRegistryRecord(path string, record RegistryRecord) (RegistryDocumen
 	if record.CanonicalPaths == nil {
 		record.CanonicalPaths = map[string]string{}
 	}
+	normalizeRegistryRecord(&record, doc.Epoch+1)
 	replaced := false
 	for index := range doc.Records {
 		if doc.Records[index].ID == record.ID {
@@ -467,6 +554,12 @@ func RegisterRegistryRecord(path string, record RegistryRecord) (RegistryDocumen
 }
 
 func AdmitRegistry(path, recordID string) (AdmissionReceipt, error) {
+	path = filepath.Clean(path)
+	unlock, err := acquireRegistryLock(path)
+	if err != nil {
+		return AdmissionReceipt{Registry: path, RecordID: recordID, Code: "UNREGISTERED_INSTALL", Reason: err.Error(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}, err
+	}
+	defer unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	receipt := AdmissionReceipt{Registry: filepath.Clean(path), RecordID: recordID, CreatedAt: now}
 	doc, err := LoadRegistry(path)
@@ -494,6 +587,32 @@ func AdmitRegistry(path, recordID string) (AdmissionReceipt, error) {
 	return receipt, writeAdmissionReceipt(path, receipt)
 }
 
+func normalizeRegistryRecord(record *RegistryRecord, generation uint64) {
+	if generation == 0 {
+		generation = 1
+	}
+	if record.Generation == 0 {
+		record.Generation = generation
+	}
+	if strings.TrimSpace(record.Lease) == "" {
+		record.Lease = fmt.Sprintf("lease-%d", record.Generation)
+	}
+	if strings.TrimSpace(record.Token) == "" {
+		record.Token = fmt.Sprintf("token-%d", time.Now().UnixNano())
+	}
+	if record.HookConfig == "" {
+		record.HookConfig = record.CanonicalPaths["hookConfig"]
+	}
+	if record.CanonicalPaths == nil {
+		record.CanonicalPaths = map[string]string{}
+	}
+	for key, value := range record.CanonicalPaths {
+		if strings.TrimSpace(value) != "" {
+			record.CanonicalPaths[key] = canonicalPath(value)
+		}
+	}
+}
+
 func validRegistryRecord(record RegistryRecord) bool {
 	for _, value := range []string{record.ID, record.Target, record.Scope, record.Host, record.ProjectRoot, record.StateRoot, record.ResourceRoot, record.RuntimeSibling} {
 		if strings.TrimSpace(value) == "" {
@@ -512,9 +631,8 @@ func validRegistryRecord(record RegistryRecord) bool {
 			if value == "" || !filepath.IsAbs(value) {
 				return false
 			}
-			if field := map[string]string{"target": record.Target, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling}[key]; field != "" {
-				fieldAbs, err := filepath.Abs(field)
-				if err != nil || filepath.Clean(value) != filepath.Clean(fieldAbs) {
+			if field := map[string]string{"target": record.Target, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling, "hookConfig": record.HookConfig}[key]; field != "" {
+				if filepath.Clean(value) != canonicalPath(field) {
 					return false
 				}
 			}
@@ -525,6 +643,39 @@ func validRegistryRecord(record RegistryRecord) bool {
 
 func writeAdmissionReceipt(registryPath string, receipt AdmissionReceipt) error {
 	return writeJSONAtomically(registryPath+".admission.json", receipt)
+}
+
+func registryLockPath(path string) string {
+	return filepath.Clean(path) + ".lock"
+}
+
+func acquireRegistryLock(path string) (func(), error) {
+	lockPath := registryLockPath(path)
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
+				if removeErr := os.Remove(lockPath); removeErr == nil {
+					return acquireRegistryLock(path)
+				}
+			}
+			return nil, fmt.Errorf("registry lock is held: %s", lockPath)
+		}
+		return nil, err
+	}
+	if _, err := file.WriteString(fmt.Sprintf("pid=%d\n", os.Getpid())); err != nil {
+		_ = file.Close()
+		_ = os.Remove(lockPath)
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(lockPath)
+		return nil, err
+	}
+	return func() { _ = os.Remove(lockPath) }, nil
 }
 
 func writeJSONAtomically(path string, value any) error {

@@ -59,7 +59,8 @@ func installReleaseTransaction(source, releaseRoot, binaryTarget string, force b
 	if err := copyTreeImmutable(source, temp); err != nil {
 		return err
 	}
-	if _, err := PackageReceipt(temp, source); err != nil {
+	preparedReceipt, err := PackageReceipt(temp, source)
+	if err != nil {
 		return fmt.Errorf("release package validation failed: %w", err)
 	}
 	journal.Phase = "prepared"
@@ -86,6 +87,15 @@ func installReleaseTransaction(source, releaseRoot, binaryTarget string, force b
 	if err := installFault("switched"); err != nil {
 		rollbackRelease()
 		return recordInstallFailure(journalPath, journal, err)
+	}
+	installedReceipt, err := PackageReceipt(releaseRoot)
+	if err != nil {
+		rollbackRelease()
+		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed release package validation failed: %w", err))
+	}
+	if installedReceipt.Digest != preparedReceipt.Digest {
+		rollbackRelease()
+		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed release package digest mismatch: prepared %s, installed %s", preparedReceipt.Digest, installedReceipt.Digest))
 	}
 	if strings.TrimSpace(binaryTarget) != "" {
 		if err := atomicCopyFile(filepath.Join(releaseRoot, "bin", nativeBinaryName()), binaryTarget); err != nil {
@@ -203,6 +213,9 @@ type installRecoveryReceipt struct {
 	Phase        string `json:"interruptedPhase"`
 	Recovered    bool   `json:"recovered"`
 	Outcome      string `json:"outcome,omitempty"`
+	ObservedFact string `json:"observedFact,omitempty"`
+	Reconcile    string `json:"reconcileAction,omitempty"`
+	StableDigest string `json:"stableDigest,omitempty"`
 	BinaryTarget string `json:"binaryTarget,omitempty"`
 	HookConfig   string `json:"hookConfig,omitempty"`
 	ManagedRule  string `json:"managedRule,omitempty"`
@@ -270,7 +283,8 @@ func executeInstallTransaction(source string, target installTarget, force, skipH
 		rollback()
 		return err
 	}
-	if _, err := PackageReceipt(temp, source); err != nil {
+	preparedReceipt, err := PackageReceipt(temp, source)
+	if err != nil {
 		rollback()
 		return fmt.Errorf("installed package validation failed: %w", err)
 	}
@@ -303,6 +317,15 @@ func executeInstallTransaction(source string, target installTarget, force, skipH
 	if err := installFault("switched"); err != nil {
 		rollback()
 		return recordInstallFailure(journalPath, journal, err)
+	}
+	installedReceipt, err := PackageReceipt(target.targetPath)
+	if err != nil {
+		rollback()
+		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed package validation failed after switch: %w", err))
+	}
+	if installedReceipt.Digest != preparedReceipt.Digest {
+		rollback()
+		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed package digest mismatch: prepared %s, installed %s", preparedReceipt.Digest, installedReceipt.Digest))
 	}
 	if !skipHooks {
 		if err := installFault("hook"); err != nil {
@@ -457,7 +480,10 @@ func runInstalledBinarySmoke(path string) error {
 }
 
 func recordInstallFailure(path string, journal installJournal, err error) error {
-	receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.Target, Phase: journal.Phase, Recovered: false, Outcome: "ROLLED_BACK", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.Target, Phase: journal.Phase, Recovered: false, Outcome: "ROLLED_BACK", ObservedFact: err.Error(), Reconcile: "rollback old stable runtime and configuration", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if digest, digestErr := PackageDigest(journal.Target); digestErr == nil {
+		receipt.StableDigest = digest
+	}
 	if receiptErr := writeJSONAtomically(path+".failure.json", receipt); receiptErr != nil {
 		return fmt.Errorf("%w (failed to write failure receipt: %v)", err, receiptErr)
 	}
@@ -526,7 +552,10 @@ func reconcileInstallJournal(target string) error {
 		}
 	}
 	if journal.Phase != "committed" {
-		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: target, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: target, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", Reconcile: "restore backup and clear temporary paths", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		if digest, digestErr := PackageDigest(target); digestErr == nil {
+			receipt.StableDigest = digest
+		}
 		if err := writeJSONAtomically(path+".receipt.json", receipt); err != nil {
 			return err
 		}

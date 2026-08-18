@@ -419,6 +419,51 @@ func TestWhiteboxPhase0RegistryBootstrapAndIdempotentRegistration(t *testing.T) 
 	}
 }
 
+func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *testing.T) {
+	source := phase0InstallSource(t)
+	project := t.TempDir()
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	report, err := Install(InstallOptions{
+		Source:       source,
+		Host:         "claude",
+		Scope:        "project",
+		Project:      project,
+		RegistryPath: registry,
+		Bootstrap:    true,
+	})
+	if err != nil {
+		t.Fatalf("native bootstrap failed: %v", err)
+	}
+	if report.BootstrapReceiptPath != registry+".bootstrap.json" || report.ReceiptPath != report.BootstrapReceiptPath {
+		t.Fatalf("bootstrap report did not expose its durable receipt: %+v", report)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".claude", "skills", "formal-gates")); !os.IsNotExist(err) {
+		t.Fatalf("bootstrap created runtime files instead of only registry metadata: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".gates")); !os.IsNotExist(err) {
+		t.Fatalf("bootstrap created workflow state root: %v", err)
+	}
+	doc, err := LoadRegistry(registry)
+	if err != nil || len(doc.Records) != 1 {
+		t.Fatalf("bootstrap registry record missing: doc=%+v err=%v", doc, err)
+	}
+	record := doc.Records[0]
+	if record.Generation == 0 || record.Lease == "" || record.Token == "" || record.HookConfig == "" || !validRegistryRecord(record) {
+		t.Fatalf("bootstrap registry identity is incomplete: %+v", record)
+	}
+	var receipt struct {
+		PackageDigest string           `json:"packageDigest"`
+		Records       []RegistryRecord `json:"records"`
+		StateCreated  bool             `json:"stateCreated"`
+	}
+	if err := json.Unmarshal([]byte(phase0ReadFile(t, report.BootstrapReceiptPath)), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.PackageDigest == "" || len(receipt.Records) != 1 || receipt.Records[0].Generation == 0 || receipt.Records[0].Lease == "" || receipt.Records[0].Token == "" || receipt.StateCreated {
+		t.Fatalf("bootstrap receipt lost identity or state boundary: %+v", receipt)
+	}
+}
+
 func TestWhiteboxPhase0AdmissionRejectsIncompleteDisabledAndMissingRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	records := []RegistryRecord{
