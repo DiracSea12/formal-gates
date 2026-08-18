@@ -28,7 +28,7 @@ Go installer、Shell 和 PowerShell 必须共享 install/uninstall lock、recove
 
 ## RQ-0-07 版本与诊断
 
-必须固定 `stateSchemaVersion`、`workflowDefinitionVersion`、来源、definition digest 和 bump 规则；正常写入对缺失/不匹配返回 `UNSUPPORTED_RUN_VERSION`，`diagnose` 仅 raw/envelope 只读并提供 terminal summary fallback。
+必须为未来版本化 engine/candidate surface 固定 `stateSchemaVersion`、`workflowDefinitionVersion`、来源、definition digest 和 bump 规则；该 surface 对缺失/不匹配在写前返回 `UNSUPPORTED_RUN_VERSION`。阶段 0 的 stable driver 与既有 legacy run 继续使用当前 state 格式和写入语义，不迁移或回写旧状态；`diagnose` 仅 raw/envelope 只读并提供 terminal summary fallback。
 
 ## RQ-0-08 候选验证
 
@@ -37,6 +37,10 @@ Go installer、Shell 和 PowerShell 必须共享 install/uninstall lock、recove
 ## RQ-0-09 文档与证据优先级
 
 必须建立 requirements-precedence/supersession 清单，标记当前权威、正交、superseded 与 historical 文档；本阶段不得把未实现的 `drive/submit` 语义写入 stable SKILL、README 或 prompts。
+
+## RQ-0-10 计划与方案一致性审查
+
+开发前必须由独立审查者从零比对增量 Seal 计划、详细实施方案、本阶段 requirements/solution 和 OpenSpec，覆盖阶段范围、版本边界、stable/legacy 与 engine/candidate 适用面、证据和退出条件。审查提示词不得携带主代理解释、既有 finding、修复说明或预期结论；不一致只能作为候选 finding 留痕，由用户逐项确认或驳回。
 
 ## 非目标
 

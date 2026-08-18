@@ -13,6 +13,7 @@
 | RQ-0-07 版本/diagnose | `incremental-seal-plan.md` §2.3、§3 阶段 0 | §10、§12 | unsupported-version fixtures、raw diagnose read-only proof |
 | RQ-0-08 候选验证 | `incremental-seal-plan.md` §2.1、§2.2 | §12.3 | actual installed binary and isolated namespace evidence |
 | RQ-0-09 文档/证据 | `incremental-seal-plan.md` §3 阶段 0、§7 | §11 | precedence/supersession list、package/candidate receipt format |
+| RQ-0-10 计划/方案一致性审查 | `incremental-seal-plan.md` §3 阶段 0、§7 | §11 | zero-context side-by-side review receipt and candidate findings |
 
 ## 范围边界
 

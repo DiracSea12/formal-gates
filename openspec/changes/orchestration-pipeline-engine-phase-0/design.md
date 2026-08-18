@@ -27,7 +27,11 @@ Shell/PowerShell 入口只解析参数并调用 native owner，不得自行删�
 
 ## 4. Version envelope 与 diagnose
 
-阶段固定 `stateSchemaVersion`、`workflowDefinitionVersion`、definition digest 和 bump 规则。正常 loader 要求精确匹配；缺失/不匹配只返回 `UNSUPPORTED_RUN_VERSION`，不迁移、不写回。diagnose 只读取原始 bytes，报告 path、JSON readable、发现的版本、当前支持版本、summary、可安全判断的完整性和重建建议。
+未来版本化 engine/candidate surface 固定 `stateSchemaVersion`、`workflowDefinitionVersion`、definition digest 和 bump 规则。该 surface 的正常 loader 要求精确匹配；缺失/不匹配只返回 `UNSUPPORTED_RUN_VERSION`，不迁移、不写回。阶段 0 的 stable driver 与既有 legacy run 继续按当前 state 格式和写入语义运行。diagnose 只读取原始 bytes，报告 path、JSON readable、发现的版本、当前支持版本、summary、可安全判断的完整性和重建建议。
+
+## 4.1 计划/方案一致性审查
+
+产品审与 start-readiness 必须在零上下文条件下逐份比对增量计划、详细实施方案、阶段需求/方案和 OpenSpec，至少核对范围、版本适用面、稳定/legacy 与候选/engine 边界、证据和退出条件。提示词不得注入主代理解释、已有 finding 或预期结果；冲突作为候选 finding 交由用户处置。
 
 ## 5. 故障注入与证据
 

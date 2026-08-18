@@ -22,7 +22,7 @@
 5. 让 Go installer、`install.command`、`install.ps1` 共享 install/uninstall lock、recovery journal、临时 sibling、备份、manifest 校验、安装后 smoke 和原子 pointer/config 提交；复制、hook、managed-rule、pointer 或 smoke 失败必须可恢复旧稳定包。
 6. 对 intent 前后、替换/删除前后、hook JSON 解析失败、managed-rule 写失败、pointer 换位失败、崩溃重启和 post-switch smoke 失败建立确定性 fault injection 与 recovery receipt。
 7. 建立 requirements-precedence/supersession 清单，标记当前权威、正交、superseded 与历史文档；本阶段不把尚未实现的 `drive/submit` 语义写入 stable `SKILL.md`、README 或 prompts。
-8. 固定 `stateSchemaVersion`、`workflowDefinitionVersion`、来源、definition digest 和 bump 规则；缺失/不匹配时正常写入路径返回 `UNSUPPORTED_RUN_VERSION`；`diagnose` 只读 raw/envelope parser 并保留 terminal summary fallback。
+8. 为未来版本化 engine/candidate surface 固定 `stateSchemaVersion`、`workflowDefinitionVersion`、来源、definition digest 和 bump 规则；该 surface 缺失/不匹配时写前返回 `UNSUPPORTED_RUN_VERSION`。阶段 0 的 stable driver 与既有 legacy run 继续使用当前 state 格式和写入语义，不迁移或回写旧状态；`diagnose` 只读 raw/envelope parser 并保留 terminal summary fallback。
 
 ## 非目标
 
@@ -37,6 +37,12 @@
 - 固定 stable driver 驱动本 run；阶段候选只能在独立安装、测试项目、host/config、state/resource 和 registry namespace 中作为被测对象运行。
 - 候选 binary 不得驱动本 run、写稳定 registry 或签发权威 Seal；所有正式 run 的权威状态由 stable driver 写出。
 - 需求、方案、开发快照、审查、QA、候选和 Seal 证据必须绑定同一 run 的 VCS identity 与 package/candidate identity。
+
+## 一致性审查要求
+
+- 开发前独立审查必须从零对照 `refactor-plan/incremental-seal-plan.md`、`refactor-plan/final-implementation-draft.md`、本阶段 requirements/solution 和 OpenSpec 文件，检查阶段范围、版本边界、stable/legacy 与 engine/candidate 适用面、证据和退出条件是否一致。
+- 审查提示词不得注入主代理的解释、既有 finding、修复说明或预期结论；审查者只能依据本次登记文档形成发现项。
+- 发现不一致时必须作为候选 finding 留痕，由用户逐项确认或驳回；不得由主代理静默替审查者对齐。
 
 ## 阶段退出条件
 

@@ -81,7 +81,7 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 过渡期间虽然 legacy runtime 与 engine runtime 同时存在于代码库，但同一个 run 只能有一个权威写入者：
 
 1. façade 只能在 `workflow start` 或最小读取版本 envelope 时选择整条 runtime。
-2. run 创建后永久绑定 writer、`stateSchemaVersion` 和 `workflowDefinitionVersion`。
+2. 新建的版本化 engine/candidate run 创建后永久绑定 writer、`stateSchemaVersion` 和 `workflowDefinitionVersion`；阶段 0 的 stable driver 与既有 legacy run 继续使用当前 state 格式和写入语义。
 3. 禁止同一 run 按子命令在 legacy 与 engine 之间回退、翻译或双写。
 4. engine run 不由 legacy 命令续跑；legacy run 不由 engine 改写。
 5. 过渡 façade 只是开发期脚手架，最终阶段必须删除。
@@ -147,7 +147,7 @@ SWITCHING(E+1, candidate)
 - 建立阶段候选目录、测试项目、状态/证据目录和包摘要记录格式。
 - 建立 requirements-precedence/supersession 清单，扫描所有旧 OpenSpec/root requirements 和 plan 文档，标记当前权威、正交、已 supersede 与历史项；本阶段不删除历史文件，但不允许旧公共入口文档继续冒充本重构的当前契约。
 - 最终公共契约只冻结在设计文档和 fixtures；本阶段不提前把运行时 `SKILL.md`、README 或 prompts 改成尚未实现的 `drive/submit` 语义。
-- 固定 schema/definition 版本常量、来源、definition digest 和 bump 规则，建立缺失/不匹配时写前返回 `UNSUPPORTED_RUN_VERSION` 的 fixtures；同时固定 `diagnose` 的最小 envelope/raw parser、terminal summary 版本回落和只读边界。
+- 固定未来版本化 engine/candidate surface 的 schema/definition 版本常量、来源、definition digest 和 bump 规则，建立该 surface 在缺失/不匹配时写前返回 `UNSUPPORTED_RUN_VERSION` 的 fixtures；阶段 0 的 stable driver 与既有 legacy run 不因缺少新字段而拒绝正常写入，也不迁移或回写旧状态。与此同时固定 `diagnose` 的最小 envelope/raw parser、terminal summary 版本回落和只读边界。
 
 Seal 后状态：插件公开行为仍是当前 legacy，固定稳定驱动环境与开发 worktree 已经真正隔离，安装失败可回到旧稳定包，后续阶段可安全修改 prompts、gates 和安装内容。
 

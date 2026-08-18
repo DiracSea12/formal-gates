@@ -16,9 +16,10 @@
 ## 版本与证据
 
 - [ ] 固定 schema/definition version、来源、definition digest 和 bump rules。
-- [ ] 验证缺失/不匹配版本在写前返回 `UNSUPPORTED_RUN_VERSION`，diagnose 只读且 terminal summary 可回落。
+- [ ] 为未来版本化 engine/candidate surface 验证缺失/不匹配版本在写前返回 `UNSUPPORTED_RUN_VERSION`；确认 stable driver 与既有 legacy run 继续按当前格式写入；diagnose 只读且 terminal summary 可回落。
 - [ ] 从实际 installed candidate binary 执行 legacy regression、portable canary、安装 smoke 和 fault matrix。
 - [ ] 建立 precedence/supersession 清单，确认 stable 文档不提前声明阶段 1 engine/Shadow 语义。
+- [ ] 由无上下文独立审查者逐份比对增量计划、详细实施方案、阶段 requirements/solution 和 OpenSpec；记录一致性结论与所有候选冲突，不复述主代理预期。
 
 ## 退出
 
