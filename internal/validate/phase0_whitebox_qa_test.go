@@ -541,6 +541,52 @@ func TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation(t *testing.T) {
 	}
 }
 
+func TestWhiteboxPhase0GlobalAdmissionAllowsProjectsOutsideHostNamespace(t *testing.T) {
+	root, packageRoot := phase0StartFixture(t)
+	hostRoot := t.TempDir()
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	stateRoot := filepath.Join(hostRoot, ".gates")
+	resourceRoot := filepath.Join(hostRoot, ".formal-gates-resources")
+	if canonicalPath(root) == canonicalPath(hostRoot) {
+		t.Fatal("fixture did not create distinct project and host namespaces")
+	}
+	record := RegistryRecord{
+		ID:             "global-stable",
+		Target:         packageRoot,
+		Scope:          "global",
+		Host:           "codex",
+		ProjectRoot:    hostRoot,
+		StateRoot:      stateRoot,
+		ResourceRoot:   resourceRoot,
+		RuntimeSibling: filepath.Dir(packageRoot),
+		Status:         "active",
+		CanonicalPaths: map[string]string{
+			"target":         packageRoot,
+			"projectRoot":    hostRoot,
+			"stateRoot":      stateRoot,
+			"resourceRoot":   resourceRoot,
+			"runtimeSibling": filepath.Dir(packageRoot),
+		},
+	}
+	if _, err := BootstrapRegistry(registry, []RegistryRecord{record}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Start(StartOptions{
+		Root: root, PackageRoot: packageRoot, RunID: "phase0-global-admission", Flow: "formal",
+		RequirementSource: "requirements.md", VCS: "git", Split: "no",
+		AdmissionRegistry: registry, AdmissionRecordID: record.ID,
+	})
+	if err != nil {
+		t.Fatalf("global stable driver was rejected for a project outside its host namespace: %v", err)
+	}
+	if state.AdmissionRoot != root || state.AdmissionTarget != packageRoot {
+		t.Fatalf("global admission did not persist the invoking root and installed target: %+v", state)
+	}
+	if err := SaveRunState(root, state); err != nil {
+		t.Fatalf("later state write did not re-admit the same global target: %v", err)
+	}
+}
+
 func TestWhiteboxPhase0LegacyWorkflowRemainsEnvelopeFree(t *testing.T) {
 	root, packageRoot := phase0StartFixture(t)
 	state, err := Start(StartOptions{
