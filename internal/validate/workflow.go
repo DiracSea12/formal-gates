@@ -314,8 +314,14 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		if err != nil {
 			return err
 		}
-		if expected := canonicalPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalPath(canonicalRoot) {
-			return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
+		// A project-scope record is bound to one repository root.  A global
+		// installation is intentionally reusable across projects, so its
+		// projectRoot records the host-level installation namespace rather than
+		// the arbitrary repository that is invoking the stable driver.
+		if record.Scope == "project" {
+			if expected := canonicalPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalPath(canonicalRoot) {
+				return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
+			}
 		}
 		if expected := canonicalPath(record.CanonicalPaths["target"]); expected != "." && expected != canonicalPath(canonicalPackage) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
