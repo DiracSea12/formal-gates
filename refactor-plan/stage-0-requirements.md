@@ -41,7 +41,7 @@
 ## 一致性审查要求
 
 - 开发前独立审查必须从零对照 `refactor-plan/incremental-seal-plan.md`、`refactor-plan/final-implementation-draft.md`、本阶段 requirements/solution 和 OpenSpec 文件，检查阶段范围、版本边界、stable/legacy 与 engine/candidate 适用面、证据和退出条件是否一致。
-- 审查提示词不得注入主代理的解释、既有 finding、修复说明或预期结论；审查者只能依据本次登记文档形成发现项。
+- 审查提示词不得注入主代理的解释、未解决的既有 finding、修复说明或预期结论；CLI 合法注入的已拍板 settled finding 及其 ID/digest 属于 `[Action input]`，不算锚定，只用于避免已处置问题原样重提；审查者仍只能依据本次登记文档形成新的发现项。
 - 发现不一致时必须作为候选 finding 留痕，由用户逐项确认或驳回；不得由主代理静默替审查者对齐。
 
 ## 阶段退出条件

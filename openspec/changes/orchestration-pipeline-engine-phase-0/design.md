@@ -31,7 +31,7 @@ Shell/PowerShell 入口只解析参数并调用 native owner，不得自行删�
 
 ## 4.1 计划/方案一致性审查
 
-产品审与 start-readiness 必须在零上下文条件下逐份比对增量计划、详细实施方案、阶段需求/方案和 OpenSpec，至少核对范围、版本适用面、稳定/legacy 与候选/engine 边界、证据和退出条件。提示词不得注入主代理解释、已有 finding 或预期结果；冲突作为候选 finding 交由用户处置。
+产品审与 start-readiness 必须在零上下文条件下逐份比对增量计划、详细实施方案、阶段需求/方案和 OpenSpec，至少核对范围、版本适用面、稳定/legacy 与候选/engine 边界、证据和退出条件。提示词不得注入主代理解释、未解决的既有 finding、修复说明或预期结果；CLI 合法注入的已拍板 settled finding 及其 ID/digest 属于 `[Action input]`，不算锚定，仅用于防止已处置问题原样重提；冲突作为候选 finding 交由用户处置。
 
 ## 5. 故障注入与证据
 

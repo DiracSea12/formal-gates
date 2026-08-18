@@ -38,7 +38,7 @@ admission/lock
 ## 验证安排
 
 - stable driver 先启动本阶段正式 run；候选在独立 test project 中验证新增分发能力，候选 run 只写候选 namespace。
-- 开发前进行产品审与 start-readiness/技术审；两者都必须独立比对登记的计划文件、详细方案文件、阶段 OpenSpec 与本阶段需求，且不使用既有 finding 或主代理解释形成锚定；开发后独立 QA 和选定 gate 审查完整 base→current diff。
+- 开发前进行产品审与 start-readiness/技术审；两者都必须独立比对登记的计划文件、详细方案文件、阶段 OpenSpec 与本阶段需求，且不得使用主代理解释、未解决的既有 finding、修复说明或预期结论形成锚定。CLI 合法注入的已拍板 settled finding 及其 ID/digest 仅用于避免已处置问题原样重提，不作为本轮结论依据；开发后独立 QA 和选定 gate 审查完整 base→current diff。
 - Seal 前复核 VCS identity、package/installed digest、registry/bootstrap receipt、fault-injection receipt、候选 path disjoint proof、QA 结果和无残留证明。
 
 ## 约束

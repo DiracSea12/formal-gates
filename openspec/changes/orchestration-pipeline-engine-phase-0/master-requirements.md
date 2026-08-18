@@ -40,7 +40,7 @@ Go installer、Shell 和 PowerShell 必须共享 install/uninstall lock、recove
 
 ## RQ-0-10 计划与方案一致性审查
 
-开发前必须由独立审查者从零比对增量 Seal 计划、详细实施方案、本阶段 requirements/solution 和 OpenSpec，覆盖阶段范围、版本边界、stable/legacy 与 engine/candidate 适用面、证据和退出条件。审查提示词不得携带主代理解释、既有 finding、修复说明或预期结论；不一致只能作为候选 finding 留痕，由用户逐项确认或驳回。
+开发前必须由独立审查者从零比对增量 Seal 计划、详细实施方案、本阶段 requirements/solution 和 OpenSpec，覆盖阶段范围、版本边界、stable/legacy 与 engine/candidate 适用面、证据和退出条件。审查提示词不得携带主代理解释、未解决的既有 finding、修复说明或预期结论；CLI 合法注入的已拍板 settled finding 及其 ID/digest 属于 `[Action input]`，不算锚定，仅用于防止已处置问题原样重提；不一致只能作为候选 finding 留痕，由用户逐项确认或驳回。
 
 ## 非目标
 
