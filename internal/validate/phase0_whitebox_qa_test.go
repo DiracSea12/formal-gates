@@ -94,6 +94,46 @@ func phase0AssertOldInstallRestored(t *testing.T, target installTarget, hookBefo
 	}
 }
 
+func phase0InstallLockChild(t *testing.T) bool {
+	t.Helper()
+	mode := os.Getenv("PHASE0_INSTALL_LOCK_CHILD")
+	if mode == "" {
+		return false
+	}
+	target := os.Getenv("PHASE0_INSTALL_LOCK_TARGET")
+	unlock, err := acquireInstallLock(target)
+	switch mode {
+	case "held":
+		if err == nil {
+			unlock()
+			fmt.Fprint(os.Stdout, "unexpected-acquire")
+			return true
+		}
+		fmt.Fprintf(os.Stdout, "held-error:%v", err)
+	case "free":
+		if err != nil {
+			fmt.Fprintf(os.Stdout, "free-error:%v", err)
+			return true
+		}
+		unlock()
+		fmt.Fprint(os.Stdout, "free-acquired")
+	default:
+		fmt.Fprintf(os.Stdout, "unknown-mode:%s", mode)
+	}
+	return true
+}
+
+func phase0RunInstallLockChild(t *testing.T, target, mode string) string {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run", "^TestWhiteboxPhase0InstallLockSerializesInstallAndUninstall$", "-test.v")
+	command.Env = append(os.Environ(), "PHASE0_INSTALL_LOCK_CHILD="+mode, "PHASE0_INSTALL_LOCK_TARGET="+target)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lock child %s failed: %v\n%s", mode, err, output)
+	}
+	return string(output)
+}
+
 func TestWhiteboxPhase0VersionEnvelopeExactBarrier(t *testing.T) {
 	valid := VersionEnvelope{
 		Writer:                    "engine",
@@ -108,16 +148,20 @@ func TestWhiteboxPhase0VersionEnvelopeExactBarrier(t *testing.T) {
 	}
 
 	mutations := map[string]func(*VersionEnvelope){
-		"missing writer":             func(value *VersionEnvelope) { value.Writer = "" },
-		"legacy writer":              func(value *VersionEnvelope) { value.Writer = "legacy" },
-		"missing schema":             func(value *VersionEnvelope) { value.StateSchemaVersion = "" },
-		"older schema":               func(value *VersionEnvelope) { value.StateSchemaVersion = "0" },
-		"newer schema":               func(value *VersionEnvelope) { value.StateSchemaVersion = "2" },
-		"missing definition version": func(value *VersionEnvelope) { value.WorkflowDefinitionVersion = "" },
-		"older definition version":   func(value *VersionEnvelope) { value.WorkflowDefinitionVersion = "0" },
-		"newer definition version":   func(value *VersionEnvelope) { value.WorkflowDefinitionVersion = "2" },
-		"missing definition source":  func(value *VersionEnvelope) { value.DefinitionSource = "" },
-		"missing definition digest":  func(value *VersionEnvelope) { value.DefinitionDigest = "" },
+		"missing writer":              func(value *VersionEnvelope) { value.Writer = "" },
+		"legacy writer":               func(value *VersionEnvelope) { value.Writer = "legacy" },
+		"missing schema":              func(value *VersionEnvelope) { value.StateSchemaVersion = "" },
+		"older schema":                func(value *VersionEnvelope) { value.StateSchemaVersion = "0" },
+		"newer schema":                func(value *VersionEnvelope) { value.StateSchemaVersion = "2" },
+		"missing definition version":  func(value *VersionEnvelope) { value.WorkflowDefinitionVersion = "" },
+		"older definition version":    func(value *VersionEnvelope) { value.WorkflowDefinitionVersion = "0" },
+		"newer definition version":    func(value *VersionEnvelope) { value.WorkflowDefinitionVersion = "2" },
+		"missing definition source":   func(value *VersionEnvelope) { value.DefinitionSource = "" },
+		"missing definition digest":   func(value *VersionEnvelope) { value.DefinitionDigest = "" },
+		"stale definition source":     func(value *VersionEnvelope) { value.DefinitionSource = "definitions/old-workflow.json" },
+		"incorrect definition source": func(value *VersionEnvelope) { value.DefinitionSource = "definitions/other-workflow.json" },
+		"stale definition digest":     func(value *VersionEnvelope) { value.DefinitionDigest = "sha256:stale-definition" },
+		"incorrect definition digest": func(value *VersionEnvelope) { value.DefinitionDigest = "sha256:incorrect-definition" },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
@@ -162,13 +206,17 @@ func TestWhiteboxPhase0DiagnoseRawReadOnlyFallback(t *testing.T) {
 	}
 
 	legacyPath := filepath.Join(root, "terminal.json")
-	legacy := `{"writer":"future-engine","stateSchemaVersion":"9","workflowDefinitionVersion":"8","definitionDigest":"sha256:old","packageDigest":"sha256:pkg","status":"SEALED","runId":"legacy-run"}`
+	legacy := `{"writer":"future-engine","stateSchemaVersion":"9","workflowDefinitionVersion":"8","definitionSource":"definitions/future.json","definitionDigest":"sha256:old","packageDigest":"sha256:pkg","status":"SEALED","runId":"legacy-run"}`
 	phase0WriteFile(t, legacyPath, legacy, 0o600)
+	futureBefore, err := os.Stat(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	report, err = DiagnoseState(legacyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.JSONReadable || report.Integrity != "readable" || report.DetectedVersions["stateSchemaVersion"] != "9" {
+	if !report.JSONReadable || report.Integrity != "readable" || report.DetectedVersions["writer"] != "future-engine" || report.DetectedVersions["stateSchemaVersion"] != "9" || report.DetectedVersions["workflowDefinitionVersion"] != "8" || report.DetectedVersions["definitionSource"] != "definitions/future.json" || report.DetectedVersions["definitionDigest"] != "sha256:old" || report.DetectedVersions["packageDigest"] != "sha256:pkg" {
 		t.Fatalf("raw envelope fields were not reported: %+v", report)
 	}
 	if report.Summary["status"] != "SEALED" || report.Summary["runId"] != "legacy-run" {
@@ -176,6 +224,13 @@ func TestWhiteboxPhase0DiagnoseRawReadOnlyFallback(t *testing.T) {
 	}
 	if got := phase0ReadFile(t, legacyPath); got != legacy {
 		t.Fatal("diagnose rewrote an unsupported terminal state")
+	}
+	futureAfter, err := os.Stat(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !futureBefore.ModTime().Equal(futureAfter.ModTime()) || futureBefore.Size() != futureAfter.Size() {
+		t.Fatalf("diagnose changed future-state metadata: before=%+v after=%+v", futureBefore, futureAfter)
 	}
 }
 
@@ -272,11 +327,34 @@ func TestWhiteboxPhase0BaselineReceiptBindsAllIdentities(t *testing.T) {
 	if err := json.Unmarshal([]byte(phase0ReadFile(t, output)), &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.VCSIdentity != receipt.VCSIdentity || persisted.InstalledTargetDigest != receipt.InstalledTargetDigest {
+	if persisted.VCSIdentity != receipt.VCSIdentity || persisted.SourceRoot != receipt.SourceRoot || persisted.PackageDigest != receipt.PackageDigest || persisted.InstalledTarget != receipt.InstalledTarget || persisted.InstalledTargetDigest != receipt.InstalledTargetDigest || len(persisted.CanonicalPaths) != len(receipt.CanonicalPaths) || persisted.CanonicalPaths["hostConfig"] != receipt.CanonicalPaths["hostConfig"] || persisted.GeneratedAt != receipt.GeneratedAt {
 		t.Fatalf("persisted baseline lost identities: %+v", persisted)
+	}
+	data := phase0ReadFile(t, output)
+	if !strings.HasPrefix(data, "{") || !strings.HasSuffix(data, "}\n") {
+		t.Fatalf("baseline receipt was not persisted as one complete JSON document: %q", data)
+	}
+	entries, err := os.ReadDir(filepath.Dir(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".phase0-") {
+			t.Fatalf("atomic baseline write left a temporary file: %s", entry.Name())
+		}
 	}
 	if err := WriteBaselineReceipt(filepath.Join(t.TempDir(), "invalid.json"), BaselineReceipt{}); err == nil {
 		t.Fatal("baseline receipt without VCS/package identity was persisted")
+	}
+	invalidVCS := receipt
+	invalidVCS.VCSIdentity = ""
+	if err := WriteBaselineReceipt(filepath.Join(t.TempDir(), "invalid-vcs.json"), invalidVCS); err == nil {
+		t.Fatal("baseline receipt without VCS identity was persisted")
+	}
+	invalidPackage := receipt
+	invalidPackage.PackageDigest = ""
+	if err := WriteBaselineReceipt(filepath.Join(t.TempDir(), "invalid-package.json"), invalidPackage); err == nil {
+		t.Fatal("baseline receipt without package identity was persisted")
 	}
 }
 
@@ -285,7 +363,7 @@ func TestWhiteboxPhase0RegistryBootstrapAndIdempotentRegistration(t *testing.T) 
 	initial := RegistryRecord{
 		Target: "/install/stable", Scope: "global", Host: "codex",
 		ProjectRoot: "/project", StateRoot: "/state", ResourceRoot: "/resources",
-		RuntimeSibling: "/runtime/stable",
+		RuntimeSibling: "/runtime/stable", CanonicalPaths: map[string]string{"target": "/install/stable"},
 	}
 	doc, err := BootstrapRegistry(path, []RegistryRecord{initial})
 	if err != nil {
@@ -294,7 +372,7 @@ func TestWhiteboxPhase0RegistryBootstrapAndIdempotentRegistration(t *testing.T) 
 	if doc.SchemaVersion != RegistrySchemaVersion || doc.Epoch != 1 || len(doc.Records) != 1 {
 		t.Fatalf("bootstrap document is incomplete: %+v", doc)
 	}
-	if doc.Records[0].ID != "target-1" || doc.Records[0].Status != "active" || doc.Records[0].CanonicalPaths == nil {
+	if doc.Records[0].ID != "target-1" || doc.Records[0].Status != "active" || len(doc.Records[0].CanonicalPaths) == 0 || doc.Records[0].CanonicalPaths["target"] != "/install/stable" {
 		t.Fatalf("bootstrap defaults were not materialized: %+v", doc.Records[0])
 	}
 
@@ -306,7 +384,7 @@ func TestWhiteboxPhase0RegistryBootstrapAndIdempotentRegistration(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if doc.Epoch != 2 || len(doc.Records) != 1 || doc.Records[0].RuntimeSibling != replacement.RuntimeSibling {
+	if doc.Epoch != 2 || len(doc.Records) != 1 || doc.Records[0].ID != replacement.ID || doc.Records[0].Status != replacement.Status || doc.Records[0].Target != replacement.Target || doc.Records[0].RuntimeSibling != replacement.RuntimeSibling || len(doc.Records[0].CanonicalPaths) == 0 || doc.Records[0].CanonicalPaths["target"] != replacement.CanonicalPaths["target"] {
 		t.Fatalf("same-id registration appended or lost the epoch: %+v", doc)
 	}
 
@@ -322,6 +400,22 @@ func TestWhiteboxPhase0RegistryBootstrapAndIdempotentRegistration(t *testing.T) 
 	}
 	if doc.Epoch != 3 || loaded.Epoch != doc.Epoch || len(loaded.Records) != 2 {
 		t.Fatalf("new registration was not durably appended: doc=%+v loaded=%+v", doc, loaded)
+	}
+	var replacementLoaded, secondLoaded *RegistryRecord
+	for index := range loaded.Records {
+		record := &loaded.Records[index]
+		switch record.ID {
+		case replacement.ID:
+			replacementLoaded = record
+		case second.ID:
+			secondLoaded = record
+		}
+	}
+	if replacementLoaded == nil || replacementLoaded.Target != replacement.Target || replacementLoaded.Scope != replacement.Scope || replacementLoaded.Host != replacement.Host || replacementLoaded.ProjectRoot != replacement.ProjectRoot || replacementLoaded.StateRoot != replacement.StateRoot || replacementLoaded.ResourceRoot != replacement.ResourceRoot || replacementLoaded.Status != replacement.Status || replacementLoaded.RuntimeSibling != replacement.RuntimeSibling || len(replacementLoaded.CanonicalPaths) == 0 || replacementLoaded.CanonicalPaths["target"] != replacement.CanonicalPaths["target"] {
+		t.Fatalf("replacement fields were not persisted on reload: %+v", loaded)
+	}
+	if secondLoaded == nil || secondLoaded.Target != second.Target || secondLoaded.Scope != second.Scope || secondLoaded.Host != second.Host || secondLoaded.ProjectRoot != second.ProjectRoot || secondLoaded.StateRoot != second.StateRoot || secondLoaded.ResourceRoot != second.ResourceRoot || secondLoaded.RuntimeSibling != second.RuntimeSibling || !strings.EqualFold(secondLoaded.Status, "active") || len(secondLoaded.CanonicalPaths) == 0 || secondLoaded.CanonicalPaths["target"] != second.CanonicalPaths["target"] {
+		t.Fatalf("new record fields were not persisted on reload: %+v", loaded)
 	}
 }
 
@@ -423,14 +517,18 @@ func TestWhiteboxPhase0LegacyWorkflowRemainsEnvelopeFree(t *testing.T) {
 }
 
 func TestWhiteboxPhase0InstallLockSerializesInstallAndUninstall(t *testing.T) {
+	if phase0InstallLockChild(t) {
+		return
+	}
 	target := filepath.Join(t.TempDir(), "skills", "formal-gates")
 	unlock, err := acquireInstallLock(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := acquireInstallLock(target); err == nil || !strings.Contains(err.Error(), "lock is held") {
+	childOutput := phase0RunInstallLockChild(t, target, "held")
+	if !strings.Contains(childOutput, "held-error:") || !strings.Contains(childOutput, "lock is held") {
 		unlock()
-		t.Fatalf("concurrent install/uninstall acquired the same lock: %v", err)
+		t.Fatalf("cross-process install/uninstall acquired the same lock: %s", childOutput)
 	}
 	lockPath := installLockPath(target)
 	if data := phase0ReadFile(t, lockPath); !strings.Contains(data, fmt.Sprintf("pid=%d", os.Getpid())) {
@@ -441,11 +539,10 @@ func TestWhiteboxPhase0InstallLockSerializesInstallAndUninstall(t *testing.T) {
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Fatalf("unlock did not remove the lock: %v", err)
 	}
-	unlockAgain, err := acquireInstallLock(target)
-	if err != nil {
-		t.Fatalf("lock could not be acquired after release: %v", err)
+	childOutput = phase0RunInstallLockChild(t, target, "free")
+	if !strings.Contains(childOutput, "free-acquired") {
+		t.Fatalf("lock could not be acquired by a second process after release: %s", childOutput)
 	}
-	unlockAgain()
 }
 
 func TestWhiteboxPhase0InstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {
@@ -626,13 +723,9 @@ func TestWhiteboxPhase0InstallValidatesManifestBeforeTargetWrite(t *testing.T) {
 
 func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T) {
 	source := phase0InstallSource(t)
-	programDir := filepath.Join(source, "smoke-fixture")
-	phase0WriteFile(t, filepath.Join(programDir, "main.go"), "package main\n\nimport \"os\"\n\nfunc main() { os.Exit(23) }\n", 0o600)
 	binarySource := filepath.Join(source, "bin", nativeBinaryName())
-	if err := os.Remove(binarySource); err != nil {
-		t.Fatal(err)
-	}
-	phase0Run(t, programDir, "go", "build", "-o", binarySource, "main.go")
+	phase0WriteFile(t, binarySource, "#!/bin/sh\nexit 23\n", 0o700)
+	phase0WriteFile(t, filepath.Join(source, "candidate-only.txt"), "candidate\n", 0o600)
 	root := t.TempDir()
 	release := filepath.Join(root, "releases", "candidate")
 	binary := filepath.Join(root, "bin", nativeBinaryName())
@@ -640,14 +733,26 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 	phase0WriteFile(t, binary, "stable executable\n", 0o700)
 
 	err := installReleaseTransaction(source, release, binary, true)
-	if err == nil {
-		t.Fatal("release committed even though the installed binary smoke exits non-zero")
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "installed-binary smoke") {
+		t.Fatalf("release transaction did not fail because installed-binary smoke exited non-zero: %v", err)
 	}
 	if got := phase0ReadFile(t, filepath.Join(release, "stable.txt")); got != "stable\n" {
 		t.Fatalf("failed smoke did not restore stable release: %q", got)
 	}
 	if got := phase0ReadFile(t, binary); got != "stable executable\n" {
 		t.Fatalf("failed smoke did not restore stable executable: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(release, "candidate-only.txt")); !os.IsNotExist(err) {
+		t.Fatalf("candidate-only release content remained after failed smoke: %v", err)
+	}
+	for _, entry := range []string{".formal-gates-release-", ".formal-gates-release-backup-"} {
+		matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(release), entry+"*"))
+		if globErr != nil {
+			t.Fatal(globErr)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("candidate transaction artifact remained after failed smoke: %v", matches)
+		}
 	}
 }
 
