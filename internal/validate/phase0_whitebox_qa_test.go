@@ -543,6 +543,9 @@ func TestWhiteboxPhase0InstallLockSerializesInstallAndUninstall(t *testing.T) {
 	if !strings.Contains(childOutput, "free-acquired") {
 		t.Fatalf("lock could not be acquired by a second process after release: %s", childOutput)
 	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("free child did not release the lock file: %v", err)
+	}
 }
 
 func TestWhiteboxPhase0InstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {
@@ -724,17 +727,36 @@ func TestWhiteboxPhase0InstallValidatesManifestBeforeTargetWrite(t *testing.T) {
 func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T) {
 	source := phase0InstallSource(t)
 	binarySource := filepath.Join(source, "bin", nativeBinaryName())
-	phase0WriteFile(t, binarySource, "#!/bin/sh\nexit 23\n", 0o700)
-	phase0WriteFile(t, filepath.Join(source, "candidate-only.txt"), "candidate\n", 0o600)
+	marker := filepath.Join(t.TempDir(), "candidate-execution.marker")
 	root := t.TempDir()
 	release := filepath.Join(root, "releases", "candidate")
 	binary := filepath.Join(root, "bin", nativeBinaryName())
+	journal := installJournalPath(release)
+	// The candidate writes evidence only when the installed executable is
+	// actually launched. It also observes the transaction journal while it is
+	// running: smoke must happen after the switch, but before the journal moves
+	// to committed.
+	phase0WriteFile(t, binarySource, fmt.Sprintf("#!/bin/sh\nset -eu\nprintf 'phase0-candidate-smoke-ran\\n' > %q\nprintf 'exec-path=%%s\\n' \"$0\" >> %q\nprintf 'journal-phase=%%s\\n' \"$(awk -F'\\\"' '/\\\"phase\\\"/ {print $4; exit}' %q)\" >> %q\nexit 23\n", marker, marker, journal, marker), 0o700)
+	phase0WriteFile(t, filepath.Join(source, "candidate-only.txt"), "candidate\n", 0o600)
 	phase0WriteFile(t, filepath.Join(release, "stable.txt"), "stable\n", 0o600)
 	phase0WriteFile(t, binary, "stable executable\n", 0o700)
 
 	err := installReleaseTransaction(source, release, binary, true)
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "installed-binary smoke") {
-		t.Fatalf("release transaction did not fail because installed-binary smoke exited non-zero: %v", err)
+	if err == nil {
+		t.Fatalf("release transaction did not fail because the candidate installed-binary smoke exited non-zero")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "smoke") {
+		t.Fatalf("release transaction returned a non-smoke error for the candidate failure: %v", err)
+	}
+	markerData := phase0ReadFile(t, marker)
+	if !strings.Contains(markerData, "phase0-candidate-smoke-ran") {
+		t.Fatalf("candidate installed binary did not leave its execution marker: %q", markerData)
+	}
+	if !strings.Contains(markerData, "exec-path="+binary) {
+		t.Fatalf("smoke marker does not prove the installed binary path ran: %q", markerData)
+	}
+	if !strings.Contains(markerData, "journal-phase=switched") {
+		t.Fatalf("candidate smoke did not observe the pre-commit switched phase: %q", markerData)
 	}
 	if got := phase0ReadFile(t, filepath.Join(release, "stable.txt")); got != "stable\n" {
 		t.Fatalf("failed smoke did not restore stable release: %q", got)
