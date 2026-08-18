@@ -198,10 +198,37 @@ installed: <test-project>/<host-path>/formal-gates
 不要一边测试过期的全局包，一边把结果报告成候选版本的结果。包、提示词目录、安装
 和实机 hook 的所有声明，都必须指明实际使用的那份副本。
 
-安装事务会在每个非幂等边界持久化 journal，并把完整机器 receipt 写入 registry
-旁的 `<registry>.install.json`。receipt 至少包含 source/package 与 installed digest、
-逐输入 `Lstat`/realpath manifest、hook/config 与 managed-rule 路径和 digest、事务 smoke
-结果以及 registry/state/resource canonical paths。故障矩阵可用同一原生入口复现：
+首次使用固定 stable driver 时，先从冻结的已安装 artifact 调用受支持的
+`install --bootstrap` 维护入口。bootstrap 只登记 target、host、project/state/resource
+root、runtime sibling、epoch/generation 和 lease/token，并写 bootstrap receipt；它不创建
+workflow state。registry 不存在时允许这一次创建，已有记录缺失、冲突或无法对账时只留下
+disabled/`UNREGISTERED_INSTALL` receipt 并停止。bootstrap receipt 提交后，stable launcher
+才允许第一次 `workflow start`；候选 binary 和裸旧绝对 binary 都不能执行 bootstrap 或写
+stable registry。
+
+安装事务会在每个非幂等边界持久化同一份 journal，并把完整机器 receipt 写入 registry
+旁的 `<registry>.install.json`。Go installer、admission bridge、Shell 和 PowerShell
+共享 native owner、install/uninstall lock、registry lock、generation/token 和 recovery
+receipt schema。事务的可观察顺序固定为：
+
+```text
+lock(admission/install -> registry)
+  -> journal intent(old/new runtime, pointer/config, registry digests)
+  -> temp + backups
+  -> copy + manifest/Lstat/realpath/digest validation
+  -> switch release/installed target (journal=switched; old registry remains authoritative)
+  -> installed-binary package validation + post-switch/pre-commit smoke
+  -> atomic current/pointer/config + registry record commit
+  -> journal committed + install receipt
+```
+
+这里的 post-switch 指 release/installed target 已切换但公共 pointer/config 和 registry 尚未
+提交；smoke 必须从实际 installed binary path 启动。只有 smoke 通过后才共同提交 runtime
+和 registry；任一 runtime、pointer/config 或 registry 提交失败，都由同一 owner
+observe/reconcile 恢复旧 runtime/config/registry bytes，再写 recovery receipt。receipt 至少
+包含 source/package 与 installed digest、逐输入 `Lstat`/realpath manifest、hook/config 与
+managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resource canonical paths。
+故障矩阵可用同一原生入口复现：
 
 ```bash
 FORMAL_GATES_INSTALL_FAULT=intent|prepared|switched|hook|managed-rule|post-switch-smoke \
@@ -209,11 +236,12 @@ FORMAL_GATES_INSTALL_FAULT=intent|prepared|switched|hook|managed-rule|post-switc
   --project <project> --force
 ```
 
-真实 hook JSON、managed-rule、pointer/config 和 post-switch installed-binary smoke
-失败也会回滚到旧 runtime/config，并在目标父目录留下
+真实 hook JSON、managed-rule、pointer/config、registry 和 post-switch/pre-commit
+installed-binary smoke 失败也会回滚到旧 runtime/config/registry，并在目标父目录留下
 `.formal-gates-recovery.json.failure.json`；崩溃后下次 install/uninstall 会对账 journal，
-清理临时/备份路径并写 `.formal-gates-recovery.json.receipt.json`。提交前 smoke 必须从
-实际 installed binary path 启动，失败时 journal 仍处于 `switched`，不会伪装成 committed。
+清理临时/备份路径并写 `.formal-gates-recovery.json.receipt.json`。smoke 失败时 journal
+仍处于 `switched`，不会伪装成 committed；脚本不得自行删除 release、切换 pointer 或写
+registry。
 
 ## Release 边界
 

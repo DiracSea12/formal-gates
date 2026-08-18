@@ -6,24 +6,25 @@
 
 ## 2. Registry 与 admission bridge
 
-registry 是跨 global/project scope 共用的用户级登记根，不使用某个项目的 `.gates/tmp` 代替。每条 record 固定 target、scope、host、project root、state/resource root、runtime sibling 和 canonical paths。bridge 在任何 workflow state 写入前取得 admission lock、校验 epoch/lease 和 record；无法登记或发现 `UNREGISTERED_INSTALL` 时硬拒绝。旧 target 要么迁移到 bridge 管理的 launcher，要么保留 disabled receipt。
+registry 是跨 global/project scope 共用的用户级登记根，不使用某个项目的 `.gates/tmp` 代替。每条 record 固定 target、scope、host、project root、state/resource root、runtime sibling 和 canonical paths。首次 bootstrap 由冻结 stable driver 从已安装 artifact 调用受支持的 `install --bootstrap` 维护入口：它只创建/登记 registry record、epoch/generation、lease/token 和 bootstrap receipt，不创建 workflow state；bootstrap receipt 提交成功后，stable launcher 才允许第一次 `workflow start`。registry 已存在但 record 缺失、冲突或无法对账时只留下 disabled/`UNREGISTERED_INSTALL` receipt 并停止，不能先创建 `.gates/tmp`。之后 bridge 在任何 workflow state 写入前取得 admission lock、校验 epoch/lease、record 与实际 root/target binding；无法登记或发现 `UNREGISTERED_INSTALL` 时硬拒绝。旧 target 要么迁移到 bridge 管理的 launcher，要么保留 disabled receipt；候选 binary 不得执行 bootstrap、驱动本 run 或写 stable registry。
 
 ## 3. 安装事务
 
-Go native installer 是 transaction owner。事务顺序固定为：
+Go native installer、registry bridge、Shell 和 PowerShell 共享同一 transaction owner、锁顺序和 journal/recovery receipt schema。owner 先取得 install/uninstall lock，再取得 registry lock；bootstrap、install、uninstall 和 registry admission 的 staged record 都由这一个 owner 对账。事务顺序固定为：
 
 ```text
-admission/lock
+admission/install lock + registry lock
   -> recovery journal intent
-  -> sibling temp + old pointer/config backup
+  -> sibling temp + old runtime/pointer/config/registry backup
   -> copy runtime/prompts/gates/hooks/rules
   -> manifest, realpath and digest verification
-  -> installed-binary package validation and post-switch smoke
-  -> atomic current/pointer/config commit
+  -> switch release/installed target (journal: switched; old registry remains authoritative)
+  -> installed-binary package validation and post-switch/pre-commit smoke
+  -> atomic current/pointer/config + registry record commit
   -> journal committed receipt
 ```
 
-Shell/PowerShell 入口只解析参数并调用 native owner，不得自行删除 release、切换 pointer 或绕过 journal。任何中间失败在 observe/reconcile 后恢复旧 pointer/config/release；旧 stable binary 的正常 smoke 是回退证明。
+这里的 `switched` 只表示候选 release/installed target 已切换到临时可见状态，不表示公共 pointer/config 或 registry 已提交。post-switch smoke 必须从实际 installed path 启动且发生在共同 commit 之前；smoke 失败时 journal 保持 `switched`，owner 先恢复旧 runtime、pointer/config 和 registry bytes，再写 failure/recovery receipt。只有 smoke 和所有 manifest/identity 校验通过，才由同一 owner 原子提交 current/pointer/config 与 registry record。Shell/PowerShell 入口只解析参数并调用 native owner，不得自行删除 release、切换 pointer、写 registry 或绕过 journal。任何中间失败在 observe/reconcile 后恢复旧稳定 identity；旧 stable binary 的正常 smoke 是回退证明。
 
 ## 4. Version envelope 与 diagnose
 

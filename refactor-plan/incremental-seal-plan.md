@@ -98,9 +98,9 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 
 固定稳定插件跨阶段继续驱动 formal-gates，因此最终切换不是单个测试项目的局部操作。每次候选升级或最终全局切换前，必须从登记的所有项目 root、host home、state/resource root 和安装 scope 建立可复核的活动 run inventory；不能只扫描当前候选项目的 `.gates/tmp`。
 
-registry 不是某个项目的 `.gates/tmp`，而是由安装清单钉死的、跨 global/project scope 共用的用户级 registry root；候选验证通过显式配置使用完全不同的 registry namespace。每个安装 target、host hook、项目 root、state/resource root 和 runtime identity 都必须有 registry record，record 的 canonical paths 与 scope 是可机械校验的。阶段 0 必须先交付 admission bridge/launcher：所有文档化的 global/project 安装 target 和 host hook 都指向该 launcher，真实 immutable runtime 放在 launcher 管理的 sibling 路径，不能再暴露未登记的绝对旧 binary。
+registry 不是某个项目的 `.gates/tmp`，而是由安装清单钉死的、跨 global/project scope 共用的用户级 registry root；候选验证通过显式配置使用完全不同的 registry namespace。每个安装 target、host hook、项目 root、state/resource root 和 runtime identity 都必须有 registry record，record 的 canonical paths 与 scope 是可机械校验的。阶段 0 必须先交付 admission bridge/launcher：所有文档化的 global/project 安装 target 和 host hook 都指向该 launcher，真实 immutable runtime 放在 launcher 管理的 sibling 路径，不能再暴露未登记的绝对旧 binary。首次 bootstrap 的公开入口固定为冻结 stable driver 提供的 `install --bootstrap` 维护动作；它只建立 registry/launcher record 和 bootstrap receipt，不创建 workflow state。
 
-bootstrap/migration 必须覆盖现有 global 安装和受支持的 project roots：安装时原子登记 root/scope/host/runtime，`workflow start` 在创建 `.gates/tmp` 前再次原子登记或校验 root；无法登记、registry 不可达或发现 `UNREGISTERED_INSTALL` 时在写入前硬拒绝。已有 project-scope target 必须迁移到 launcher 或留下可审计的 disabled/待处理 receipt；最终切换遇到任何未登记 target、root、旧 launcher lease 或未知 scope 都只能 Operator/Wait。legacy launcher 为固定稳定驱动取得覆盖整个进程调用的 invocation lease，并在入口检查 admission epoch；engine 则在每个 intent/receipt/commit/cleanup 使用 per-operation fencing token。两者都不能通过直达 runtime sibling 绕过 registry。
+bootstrap/migration 必须覆盖现有 global 安装和受支持的 project roots：冻结 stable driver 先取得 install/uninstall lock，再取得 registry lock，写入 bootstrap intent，逐项登记 root/scope/host/runtime、epoch/generation、lease/token 和 canonical-path receipt；所有 record 提交成功后才允许第一次 `workflow start`。registry 不存在时允许这一次 bootstrap 创建；已有 record 缺失、冲突、registry 不可达或无法对账时，只留下可审计的 disabled/`UNREGISTERED_INSTALL` receipt 并停止，不得先创建 `.gates/tmp`。之后 `workflow start` 在创建 `.gates/tmp` 前再次 admission/校验 root；无法登记或发现 `UNREGISTERED_INSTALL` 时在写入前硬拒绝。已有 project-scope target 必须迁移到 launcher 或留下可审计的 disabled/待处理 receipt；最终切换遇到任何未登记 target、root、旧 launcher lease 或未知 scope 都只能 Operator/Wait。legacy launcher 为固定稳定驱动取得覆盖整个进程调用的 invocation lease，并在入口检查 admission epoch；engine 则在每个 intent/receipt/commit/cleanup 使用 per-operation fencing token。两者都不能通过直达 runtime sibling 绕过 registry。
 
 切换协议是显式的、只前进的 generation 状态机（`authority` 为 stable 或 candidate）：
 
@@ -111,7 +111,7 @@ OPEN(E, stable)
   -> OPEN(E+2, candidate)
 ```
 
-候选安装、pointer/hook/config/rule 提交和 post-switch smoke 都在 `SWITCHING` 下由带 cutover token 的 owner 执行；普通 stable/candidate `start` 一律拒绝。失败回退不能恢复任何旧 generation，而是继续前进：
+候选安装、pointer/hook/config/rule/registry staged record 提交和 post-switch/pre-commit smoke 都在 `SWITCHING` 下由带 cutover token 的同一 owner 执行；普通 stable/candidate `start` 一律拒绝。`post-switch` 特指 release/installed target 已切换而公共 pointer/config/registry 尚未提交，smoke 必须从实际 installed path 启动；只有 smoke 通过后才共同提交 runtime 与 registry。失败回退不能恢复任何旧 generation，而是继续前进：
 
 ```text
 SWITCHING(E+1, candidate)
@@ -141,9 +141,9 @@ SWITCHING(E+1, candidate)
 - 建立 legacy 正常行为 characterization、package validation、portable canary 和安装 smoke 基线。
 - 在任何阶段 worktree 创建前记录初始 Git commit、SVN revision 或 P4 changelist，以及固定稳定 binary/package/installed-target digest、host hook/config 和 managed-rule canonical paths；这组 identity 是阶段 0 的不可变起点。
 - 把当前稳定驱动插件冻结成不可变复制品，取消稳定安装中 `prompts/`、`gates/` 对开发工作区的 live symlink；`package validation` 增加 `Lstat`/realpath 和 digest 检查，不能用会跟随 symlink 的 `os.Stat` 代替。
-- 在复制稳定驱动的同时完成一次性 registry bootstrap：从冻结的已安装 artifact（而不是当前 worktree）启动 admission bridge，登记所有已知 global/project target、host hook、root、state/resource root 和 runtime sibling；现有 target 要么迁移为 launcher 管理的 target，要么留下 machine-readable disabled/`UNREGISTERED_INSTALL` receipt，不能以人工“已检查”替代。之后所有文档化入口都必须经过 bridge；固定稳定驱动的用户语义不变，但未包装的旧绝对 binary 不再是受支持入口。
-- 把 runtime、prompts、gates、host hook/config、managed rule、release/current pointer 纳入同一安装事务：先获取跨进程 install/uninstall lock，写入持久 recovery journal，准备 sibling 临时目录和备份，复制并校验完整 manifest，执行安装后 smoke，再原子提交 pointer/config；任一复制、hook、rule、pointer 或 post-switch smoke 失败都恢复旧安装和旧配置。
-- 对每个 intent 前后、删除/替换前后、hook JSON 解析失败、managed-rule 写失败、pointer 换位失败、进程崩溃重启和 post-switch smoke 失败注入故障，证明旧稳定包仍可运行；`install.command`、`install.ps1` 和 Go installer 必须遵循同一事务协议并能从 journal 恢复。bridge、Go installer、shell/PowerShell 脚本共享同一 lock/journal/commit owner，脚本不得先于 native installer 删除 release 或切换 pointer。
+- 在复制稳定驱动的同时由冻结 stable driver 调用一次性 `install --bootstrap`：从冻结的已安装 artifact（而不是当前 worktree）登记所有已知 global/project target、host hook、root、state/resource root 和 runtime sibling，提交 bootstrap receipt 后才允许首个 workflow state 写入；现有 target 要么迁移为 launcher 管理的 target，要么留下 machine-readable disabled/`UNREGISTERED_INSTALL` receipt，不能以人工“已检查”替代。之后所有文档化入口都必须经过 bridge；固定稳定驱动的用户语义不变，但未包装的旧绝对 binary 不再是受支持入口，候选不得执行 bootstrap 或写 stable registry。
+- 把 runtime、prompts、gates、host hook/config、managed rule、release/current pointer 和 registry record 纳入同一安装事务：同一 native owner 先获取 install/uninstall lock，再获取 registry lock，写入包含旧/新 runtime、pointer/config、registry digest、generation/token 的持久 recovery journal，准备 sibling 临时目录和备份，复制并校验完整 manifest，切换 release/installed target（journal=`switched`），从实际 installed path 执行 post-switch/pre-commit smoke，最后原子提交 pointer/config 与 registry；任一复制、hook、rule、pointer、registry 或 smoke 失败都恢复旧安装、旧配置和旧 registry。
+- 对每个 intent 前后、删除/替换前后、hook JSON 解析失败、managed-rule 写失败、pointer/registry 换位失败、进程崩溃重启和 post-switch/pre-commit smoke 失败注入故障，证明旧稳定包和旧 registry 仍可用；`install.command`、`install.ps1`、Go installer 和 admission bridge 必须遵循同一事务协议并能从 journal 恢复。脚本不得先于 native owner 删除 release、切换 pointer 或写 registry，失败必须留下可关联的 failure/recovery receipt。
 - 建立阶段候选目录、测试项目、状态/证据目录和包摘要记录格式。
 - 建立 requirements-precedence/supersession 清单，扫描所有旧 OpenSpec/root requirements 和 plan 文档，标记当前权威、正交、已 supersede 与历史项；本阶段不删除历史文件，但不允许旧公共入口文档继续冒充本重构的当前契约。
 - 最终公共契约只冻结在设计文档和 fixtures；本阶段不提前把运行时 `SKILL.md`、README 或 prompts 改成尚未实现的 `drive/submit` 语义。
