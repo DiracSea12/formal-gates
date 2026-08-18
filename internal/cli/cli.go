@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -83,7 +84,16 @@ func runPackage(args []string, streams IO) (int, error) {
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		return printValidationResult(streams.Stdout, "package", validate.Package(*root))
+		result := validate.Package(*root)
+		code, err := printValidationResult(streams.Stdout, "package", result)
+		if code != 0 || err != nil {
+			return code, err
+		}
+		receipt, receiptErr := validate.PackageReceipt(*root)
+		if receiptErr != nil {
+			return 1, receiptErr
+		}
+		return printJSON(streams.Stdout, receipt)
 	case "route-candidates":
 		fs := newFlagSet("package route-candidates", streams)
 		root := fs.String("root", ".", "formal-gates package root")
@@ -221,6 +231,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	project := fs.String("project", "", "project path for project installs")
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
 	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
+	registryPath := fs.String("registry", "", "registry JSON path (defaults to the project/global admission bridge)")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -229,7 +240,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Force: *force, SkipHooks: *skipHooks})
+	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, RegistryPath: *registryPath, Force: *force, SkipHooks: *skipHooks})
 	if err != nil {
 		return 1, err
 	}
@@ -241,6 +252,12 @@ func runInstall(args []string, streams IO) (int, error) {
 		if target.ManagedRulePath != "" {
 			fmt.Fprintf(streams.Stdout, "formal-gates host instruction block written for %s: %s\n", target.Host, target.ManagedRulePath)
 		}
+	}
+	// Keep the friendly lines above for interactive bootstrap users, and also
+	// emit the complete immutable receipt so callers can bind source/installed
+	// digests, manifests and hook/rule paths without scraping prose.
+	if _, printErr := printJSON(streams.Stdout, report); printErr != nil {
+		return 1, printErr
 	}
 	return 0, nil
 }
@@ -374,6 +391,11 @@ func runWorkflowDiagnose(args []string, streams IO) (int, error) {
 			return 1, fmt.Errorf("workflow diagnose requires --path or --run-id")
 		}
 		statePath = validate.RunStatePath(*root, *runID)
+		if _, statErr := os.Stat(statePath); os.IsNotExist(statErr) {
+			// Terminal runs intentionally remove .gates/tmp/<run-id>/state.json;
+			// diagnose --run-id must fall back to the retained summary.
+			statePath = validate.RunSummaryPath(*root, *runID)
+		}
 	}
 	report, err := validate.DiagnoseState(statePath)
 	return printValue(streams.Stdout, report, err)

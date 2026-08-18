@@ -198,6 +198,23 @@ installed: <test-project>/<host-path>/formal-gates
 不要一边测试过期的全局包，一边把结果报告成候选版本的结果。包、提示词目录、安装
 和实机 hook 的所有声明，都必须指明实际使用的那份副本。
 
+安装事务会在每个非幂等边界持久化 journal，并把完整机器 receipt 写入 registry
+旁的 `<registry>.install.json`。receipt 至少包含 source/package 与 installed digest、
+逐输入 `Lstat`/realpath manifest、hook/config 与 managed-rule 路径和 digest、事务 smoke
+结果以及 registry/state/resource canonical paths。故障矩阵可用同一原生入口复现：
+
+```bash
+FORMAL_GATES_INSTALL_FAULT=intent|prepared|switched|hook|managed-rule|post-switch-smoke \
+  bin/formal-gates install --source <candidate> --host claude --scope project \
+  --project <project> --force
+```
+
+真实 hook JSON、managed-rule、pointer/config 和 post-switch installed-binary smoke
+失败也会回滚到旧 runtime/config，并在目标父目录留下
+`.formal-gates-recovery.json.failure.json`；崩溃后下次 install/uninstall 会对账 journal，
+清理临时/备份路径并写 `.formal-gates-recovery.json.receipt.json`。提交前 smoke 必须从
+实际 installed binary path 启动，失败时 journal 仍处于 `switched`，不会伪装成 committed。
+
 ## Release 边界
 
 CI 流程构建 Windows、macOS 和 Linux 二进制、portable-canary 输出和 SHA256

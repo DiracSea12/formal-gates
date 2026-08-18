@@ -217,8 +217,19 @@ func Start(options StartOptions) (RunState, error) {
 	} else if !os.IsNotExist(err) {
 		return RunState{}, err
 	}
-	if registryPath := strings.TrimSpace(options.AdmissionRegistry); registryPath != "" {
-		recordID := strings.TrimSpace(options.AdmissionRecordID)
+	registryPath := strings.TrimSpace(options.AdmissionRegistry)
+	registryRecordID := strings.TrimSpace(options.AdmissionRecordID)
+	if registryPath == "" {
+		candidateRegistry := filepath.Join(root, ".gates", "registry.json")
+		if isFile(candidateRegistry) {
+			registryPath = candidateRegistry
+			if record, recordErr := findRegistryRecordForTarget(candidateRegistry, options.PackageRoot); recordErr == nil {
+				registryRecordID = record.ID
+			}
+		}
+	}
+	if registryPath != "" {
+		recordID := registryRecordID
 		if recordID == "" {
 			return RunState{}, fmt.Errorf("admission record id is required when --registry is supplied")
 		}
@@ -228,6 +239,9 @@ func Start(options StartOptions) (RunState, error) {
 		}
 		if !receipt.Accepted {
 			return RunState{}, fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, recordID)
+		}
+		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
+			return RunState{}, bindingErr
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(RunDir(root, runID)), 0o700); err != nil {
@@ -258,6 +272,51 @@ func Start(options StartOptions) (RunState, error) {
 		return RunState{}, err
 	}
 	return state, nil
+}
+
+func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, error) {
+	doc, err := LoadRegistry(path)
+	if err != nil {
+		return RegistryRecord{}, err
+	}
+	want, err := filepath.Abs(packageRoot)
+	if err != nil {
+		return RegistryRecord{}, err
+	}
+	for _, record := range doc.Records {
+		if filepath.Clean(record.Target) == filepath.Clean(want) || filepath.Clean(record.CanonicalPaths["target"]) == filepath.Clean(want) {
+			return record, nil
+		}
+	}
+	return RegistryRecord{}, fmt.Errorf("no registry record matches package root %s", packageRoot)
+}
+
+func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) error {
+	doc, err := LoadRegistry(registryPath)
+	if err != nil {
+		return err
+	}
+	for _, record := range doc.Records {
+		if record.ID != recordID || len(record.CanonicalPaths) == 0 {
+			continue
+		}
+		canonicalRoot, err := filepath.Abs(root)
+		if err != nil {
+			return err
+		}
+		canonicalPackage, err := filepath.Abs(packageRoot)
+		if err != nil {
+			return err
+		}
+		if expected := filepath.Clean(record.CanonicalPaths["projectRoot"]); expected != "" && expected != filepath.Clean(canonicalRoot) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
+		}
+		if expected := filepath.Clean(record.CanonicalPaths["target"]); expected != "" && expected != filepath.Clean(canonicalPackage) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
+		}
+		return nil
+	}
+	return nil
 }
 
 // ResumeStatus is the recoverable classification reported when resuming an

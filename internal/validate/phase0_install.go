@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ func installReleaseTransaction(source, releaseRoot, binaryTarget string, force b
 	temp := filepath.Join(parent, ".formal-gates-release-"+token)
 	backup := filepath.Join(parent, ".formal-gates-release-backup-"+token)
 	journalPath := installJournalPath(releaseRoot)
-	journal := installJournal{Operation: "release-install", Target: releaseRoot, Temp: temp, Backup: backup, Phase: "intent", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	journal := installJournal{Operation: "release-install", Target: releaseRoot, Temp: temp, Backup: backup, Phase: "intent", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), BinaryTarget: filepath.Clean(binaryTarget)}
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
 		return err
 	}
@@ -91,6 +92,17 @@ func installReleaseTransaction(source, releaseRoot, binaryTarget string, force b
 			rollbackRelease()
 			return err
 		}
+	}
+	// The candidate must execute from the switched installed path before the
+	// journal is committed.  This catches a bad binary while rollback still has
+	// the stable release and executable available.
+	smokePath := binaryTarget
+	if strings.TrimSpace(smokePath) == "" {
+		smokePath = filepath.Join(releaseRoot, "bin", nativeBinaryName())
+	}
+	if err := runInstalledBinarySmoke(smokePath); err != nil {
+		rollbackRelease()
+		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed binary smoke failed: %w", err))
 	}
 	journal.Phase = "committed"
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
@@ -172,20 +184,30 @@ func atomicCopyFile(source, target string) error {
 // information for a subsequent install/uninstall invocation to observe an
 // interrupted rename and restore the previous target before doing new work.
 type installJournal struct {
-	Operation string `json:"operation"`
-	Target    string `json:"target"`
-	Temp      string `json:"temp,omitempty"`
-	Backup    string `json:"backup,omitempty"`
-	Phase     string `json:"phase"`
-	CreatedAt string `json:"createdAt"`
+	Operation         string `json:"operation"`
+	Target            string `json:"target"`
+	Temp              string `json:"temp,omitempty"`
+	Backup            string `json:"backup,omitempty"`
+	Phase             string `json:"phase"`
+	CreatedAt         string `json:"createdAt"`
+	BinaryTarget      string `json:"binaryTarget,omitempty"`
+	HookConfig        string `json:"hookConfig,omitempty"`
+	HookBackup        string `json:"hookBackup,omitempty"`
+	ManagedRule       string `json:"managedRule,omitempty"`
+	ManagedRuleBackup string `json:"managedRuleBackup,omitempty"`
 }
 
 type installRecoveryReceipt struct {
-	Operation  string `json:"operation"`
-	Target     string `json:"target"`
-	Phase      string `json:"interruptedPhase"`
-	Recovered  bool   `json:"recovered"`
-	ObservedAt string `json:"observedAt"`
+	Operation    string `json:"operation"`
+	Target       string `json:"target"`
+	Phase        string `json:"interruptedPhase"`
+	Recovered    bool   `json:"recovered"`
+	Outcome      string `json:"outcome,omitempty"`
+	BinaryTarget string `json:"binaryTarget,omitempty"`
+	HookConfig   string `json:"hookConfig,omitempty"`
+	ManagedRule  string `json:"managedRule,omitempty"`
+	Backup       string `json:"backup,omitempty"`
+	ObservedAt   string `json:"observedAt"`
 }
 
 type installFileBackup struct {
@@ -209,7 +231,7 @@ func executeInstallTransaction(source string, target installTarget, force, skipH
 	temp := filepath.Join(parent, ".formal-gates.tmp-"+token)
 	backup := filepath.Join(parent, ".formal-gates.backup-"+token)
 	journalPath := installJournalPath(target.targetPath)
-	journal := installJournal{Operation: "install", Target: target.targetPath, Temp: temp, Backup: backup, Phase: "intent", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	journal := installJournal{Operation: "install", Target: target.targetPath, Temp: temp, Backup: backup, Phase: "intent", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), HookConfig: target.hookConfig, HookBackup: target.hookConfig + ".bak", ManagedRule: target.managedRulePath, ManagedRuleBackup: target.managedRulePath + ".bak", BinaryTarget: filepath.Join(target.targetPath, "bin", nativeBinaryName())}
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
 		return err
 	}
@@ -289,7 +311,7 @@ func executeInstallTransaction(source string, target installTarget, force, skipH
 		}
 		if err := configureInstallHook(target); err != nil {
 			rollback()
-			return err
+			return recordInstallFailure(journalPath, journal, err)
 		}
 	}
 	if target.managedRulePath != "" {
@@ -299,8 +321,12 @@ func executeInstallTransaction(source string, target installTarget, force, skipH
 		}
 		if err := manageManagedRuleFile(target.managedRulePath, rule); err != nil {
 			rollback()
-			return err
+			return recordInstallFailure(journalPath, journal, err)
 		}
+	}
+	if err := runInstalledBinarySmoke(filepath.Join(target.targetPath, "bin", nativeBinaryName())); err != nil {
+		rollback()
+		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed binary smoke failed: %w", err))
 	}
 	journal.Phase = "committed"
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
@@ -399,8 +425,39 @@ func installFault(phase string) error {
 	return nil
 }
 
+func runInstalledBinarySmoke(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("installed binary smoke path is empty")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("installed binary smoke path is not a regular file: %s", path)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return readErr
+	}
+	// Runtime-only package fixtures carry a placeholder payload rather than a
+	// platform executable.  Real release candidates are ELF/Mach-O/PE files or
+	// a shebang wrapper; only those formats are meaningful smoke targets.
+	if len(data) < 4 && !strings.HasPrefix(string(data), "#!") {
+		return nil
+	}
+	if !strings.HasPrefix(string(data), "#!") && string(data[:4]) != "\x7fELF" && !(len(data) >= 2 && (string(data[:2]) == "MZ" || string(data[:2]) == "\xcf\xfa" || string(data[:2]) == "\xfe\xed")) {
+		return nil
+	}
+	command := exec.Command(path, "--version")
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w (%s)", path, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func recordInstallFailure(path string, journal installJournal, err error) error {
-	receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.Target, Phase: journal.Phase, Recovered: false, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.Target, Phase: journal.Phase, Recovered: false, Outcome: "ROLLED_BACK", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if receiptErr := writeJSONAtomically(path+".failure.json", receipt); receiptErr != nil {
 		return fmt.Errorf("%w (failed to write failure receipt: %v)", err, receiptErr)
 	}
@@ -469,7 +526,7 @@ func reconcileInstallJournal(target string) error {
 		}
 	}
 	if journal.Phase != "committed" {
-		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: target, Phase: journal.Phase, Recovered: true, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: target, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		if err := writeJSONAtomically(path+".receipt.json", receipt); err != nil {
 			return err
 		}
@@ -523,5 +580,5 @@ func restoreInstallFile(backup installFileBackup) error {
 	if mode == 0 {
 		mode = 0o600
 	}
-	return os.WriteFile(backup.path, backup.data, mode)
+	return writeAtomic(backup.path, backup.data, mode)
 }

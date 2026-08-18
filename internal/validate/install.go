@@ -20,6 +20,7 @@ type InstallOptions struct {
 	// replacement in the same transaction as host installation.
 	ReleaseRoot  string
 	BinaryTarget string
+	RegistryPath string
 	Force        bool
 	SkipHooks    bool
 }
@@ -32,14 +33,25 @@ type UninstallOptions struct {
 }
 
 type InstallReport struct {
-	Targets []InstallTargetReport `json:"targets"`
+	Targets     []InstallTargetReport `json:"targets"`
+	GeneratedAt string                `json:"generatedAt,omitempty"`
+	Registry    string                `json:"registry,omitempty"`
+	ReceiptPath string                `json:"receiptPath,omitempty"`
 }
 
 type InstallTargetReport struct {
-	Host            string `json:"host"`
-	TargetPath      string `json:"targetPath"`
-	HookConfig      string `json:"hookConfig,omitempty"`
-	ManagedRulePath string `json:"managedRulePath,omitempty"`
+	Host              string            `json:"host"`
+	TargetPath        string            `json:"targetPath"`
+	HookConfig        string            `json:"hookConfig,omitempty"`
+	ManagedRulePath   string            `json:"managedRulePath,omitempty"`
+	SourceRoot        string            `json:"sourceRoot,omitempty"`
+	SourceDigest      string            `json:"sourceDigest,omitempty"`
+	InstalledDigest   string            `json:"installedDigest,omitempty"`
+	HookDigest        string            `json:"hookDigest,omitempty"`
+	ManagedRuleDigest string            `json:"managedRuleDigest,omitempty"`
+	Manifest          []PackageEntry    `json:"manifest,omitempty"`
+	CanonicalPaths    map[string]string `json:"canonicalPaths,omitempty"`
+	Smoke             string            `json:"smoke,omitempty"`
 }
 
 type UninstallReport struct {
@@ -78,8 +90,37 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err := assertInstallSource(sourceAbs); err != nil {
 		return InstallReport{}, err
 	}
-	if _, err := PackageReceipt(sourceAbs); err != nil {
+	sourcePackage, err := PackageReceipt(sourceAbs)
+	if err != nil {
 		return InstallReport{}, fmt.Errorf("formal-gates source failed immutable package validation: %w", err)
+	}
+	// A source checkout/release must pass the complete package contract.  The
+	// documented runtime-only install fixture intentionally omits development
+	// sources, so it still receives strict manifest validation without being
+	// rejected for files that are not part of the copied runtime subset.
+	if isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go")) {
+		if packageResult := Package(sourceAbs); !packageResult.OK() {
+			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %s", resultSummary(packageResult))
+		}
+	} else {
+		manifestData, readErr := os.ReadFile(filepath.Join(sourceAbs, "formal-gates.manifest.json"))
+		if readErr != nil {
+			return InstallReport{}, fmt.Errorf("formal-gates manifest cannot be read: %w", readErr)
+		}
+		var manifestShape map[string]any
+		if unmarshalErr := json.Unmarshal(manifestData, &manifestShape); unmarshalErr != nil {
+			return InstallReport{}, fmt.Errorf("formal-gates manifest JSON is invalid: %w", unmarshalErr)
+		}
+		if name, _ := manifestShape["name"].(string); name != "formal-gates" {
+			return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
+		}
+		expected, _ := manifestShape["package_digest"].(string)
+		if strings.TrimSpace(expected) == "" {
+			expected, _ = manifestShape["packageDigest"].(string)
+		}
+		if strings.TrimSpace(expected) != "" && !digestMatches(expected, sourcePackage.Digest) {
+			return InstallReport{}, fmt.Errorf("formal-gates package digest mismatch: expected %s, got sha256:%s", expected, sourcePackage.Digest)
+		}
 	}
 	rule, err := LoadManagedRule(sourceAbs)
 	if err != nil {
@@ -96,20 +137,69 @@ func Install(options InstallOptions) (InstallReport, error) {
 		return InstallReport{}, err
 	}
 
-	report := InstallReport{}
+	report := InstallReport{GeneratedAt: "sha256:" + sourcePackage.Digest}
+	registryPath := strings.TrimSpace(options.RegistryPath)
+	if registryPath == "" {
+		if strings.EqualFold(options.Scope, "project") && strings.TrimSpace(options.Project) != "" {
+			registryPath = filepath.Join(options.Project, ".gates", "registry.json")
+		} else if strings.EqualFold(options.Scope, "global") {
+			if home, homeErr := installHomeDir(); homeErr == nil {
+				registryPath = filepath.Join(home, ".formal-gates", "registry.json")
+			}
+		}
+	}
+	report.Registry = filepath.ToSlash(registryPath)
+	if registryPath != "" {
+		report.ReceiptPath = filepath.ToSlash(registryPath + ".install.json")
+	}
 	for _, target := range targets {
 		if err := executeInstallTransaction(sourceAbs, target, options.Force, options.SkipHooks, rule); err != nil {
 			return InstallReport{}, err
+		}
+		installedReceipt, receiptErr := PackageReceipt(target.targetPath)
+		if receiptErr != nil {
+			return InstallReport{}, fmt.Errorf("installed target receipt failed: %w", receiptErr)
 		}
 		targetReport := InstallTargetReport{
 			Host:            target.host,
 			TargetPath:      filepath.ToSlash(target.targetPath),
 			ManagedRulePath: filepath.ToSlash(target.managedRulePath),
+			SourceRoot:      filepath.ToSlash(sourceAbs),
+			SourceDigest:    sourcePackage.Digest,
+			InstalledDigest: installedReceipt.Digest,
+			Manifest:        sourcePackage.Entries,
+			CanonicalPaths:  map[string]string{"sourceRoot": canonicalPath(sourceAbs), "target": canonicalPath(target.targetPath)},
+			Smoke:           "PASS",
 		}
 		if !options.SkipHooks {
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
+			targetReport.HookDigest, _ = fileDigest(target.hookConfig)
+			targetReport.CanonicalPaths["hookConfig"] = canonicalPath(target.hookConfig)
+		}
+		targetReport.ManagedRuleDigest, _ = fileDigest(target.managedRulePath)
+		if target.managedRulePath != "" {
+			targetReport.CanonicalPaths["managedRule"] = canonicalPath(target.managedRulePath)
 		}
 		report.Targets = append(report.Targets, targetReport)
+		if registryPath != "" {
+			recordID := fmt.Sprintf("%s-%s", target.host, strings.ToLower(options.Scope))
+			projectRoot := options.Project
+			if strings.EqualFold(options.Scope, "global") {
+				projectRoot, _ = installHomeDir()
+			}
+			projectRoot = absPath(projectRoot)
+			stateRoot := filepath.Join(projectRoot, ".gates")
+			resourceRoot := filepath.Join(projectRoot, ".formal-gates-resources")
+			record := RegistryRecord{ID: recordID, Target: target.targetPath, Scope: strings.ToLower(options.Scope), Host: target.host, ProjectRoot: projectRoot, StateRoot: stateRoot, ResourceRoot: resourceRoot, RuntimeSibling: filepath.Dir(target.targetPath), Status: "active", CanonicalPaths: map[string]string{"target": target.targetPath, "projectRoot": projectRoot, "stateRoot": stateRoot, "resourceRoot": resourceRoot, "runtimeSibling": filepath.Dir(target.targetPath)}}
+			if _, regErr := RegisterRegistryRecord(registryPath, record); regErr != nil {
+				return InstallReport{}, fmt.Errorf("installation succeeded but registry admission bridge failed: %w", regErr)
+			}
+		}
+	}
+	if report.ReceiptPath != "" {
+		if writeErr := writeJSONAtomically(filepath.FromSlash(report.ReceiptPath), report); writeErr != nil {
+			return InstallReport{}, fmt.Errorf("failed to persist install receipt: %w", writeErr)
+		}
 	}
 	return report, nil
 }
@@ -123,6 +213,27 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	for _, target := range targets {
 		if err := executeUninstallTransaction(target); err != nil {
 			return UninstallReport{}, err
+		}
+		registryPath := ""
+		if strings.EqualFold(options.Scope, "project") && strings.TrimSpace(options.Project) != "" {
+			registryPath = filepath.Join(options.Project, ".gates", "registry.json")
+		} else if strings.EqualFold(options.Scope, "global") {
+			if home, homeErr := installHomeDir(); homeErr == nil {
+				registryPath = filepath.Join(home, ".formal-gates", "registry.json")
+			}
+		}
+		if registryPath != "" {
+			if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+				for _, record := range doc.Records {
+					if filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
+						continue
+					}
+					record.Status = "disabled"
+					if _, registerErr := RegisterRegistryRecord(registryPath, record); registerErr != nil {
+						return UninstallReport{}, fmt.Errorf("uninstall completed but registry bridge update failed: %w", registerErr)
+					}
+				}
+			}
 		}
 		report.Targets = append(report.Targets, installTargetReport(target))
 	}
@@ -280,6 +391,13 @@ func installTargetReport(target installTarget) InstallTargetReport {
 	}
 }
 
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
+}
+
 func installHomeDir() (string, error) {
 	for _, name := range []string{"HOME", "USERPROFILE"} {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
@@ -405,6 +523,11 @@ func copyFile(from, to string, mode os.FileMode) error {
 	}
 	if mode == 0 {
 		mode = 0o600
+	}
+	if filepath.Base(to) == nativeBinaryName() {
+		// A package fixture may have been copied with a non-executable mode;
+		// installed native binaries must still be runnable by the smoke gate.
+		mode |= 0o111
 	}
 	return os.WriteFile(to, data, mode.Perm())
 }
@@ -562,7 +685,7 @@ func writeHookConfig(path string, config map[string]any) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+	return writeAtomic(path, data, 0o600)
 }
 
 func hookObject(config map[string]any) map[string]any {

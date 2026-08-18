@@ -245,7 +245,7 @@ func manageManagedRuleFile(path, rule string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(updated), 0o600)
+	return writeAtomic(path, []byte(updated), 0o600)
 }
 
 func removeManagedRuleFile(path string, removeEmpty bool) error {
@@ -266,5 +266,5 @@ func removeManagedRuleFile(path string, removeEmpty bool) error {
 	if removeEmpty && strings.TrimSpace(updated) == "" {
 		return os.Remove(path)
 	}
-	return os.WriteFile(path, []byte(updated), 0o600)
+	return writeAtomic(path, []byte(updated), 0o600)
 }

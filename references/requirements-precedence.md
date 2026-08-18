@@ -12,6 +12,7 @@ traceable without treating their retired command names as a current contract.
 | current-authority | `openspec/changes/orchestration-pipeline-engine-phase-0/` | Stage-0 requirements, alignment, design, and task evidence. |
 | reference | `refactor-plan/final-implementation-draft.md` | Target architecture; later-stage behavior does not flow backward into stage 0. |
 | orthogonal | Other `openspec/changes/**/master-requirements.md` files | Continue to apply only to their own named feature or defect scope. |
+| superseded | Retired universal-intake and future engine command proposals | Kept for traceability only; their public commands and precedence are explicitly superseded by the stage-0 authorities above. |
 | historical | `CHANGELOG.md`, archived gate results, and superseded plan prose | Traceability and prior behavior only; not a source for new public semantics. |
 
 The stage-0 implementation must not add future `drive`/`submit` behavior to the

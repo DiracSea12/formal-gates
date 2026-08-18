@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -318,6 +319,17 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		report, err := Install(InstallOptions{Source: root, Host: tc.host, Scope: "project", Project: project, Force: true})
 		if err != nil {
 			addCheck(tc.name, false, err.Error())
+			continue
+		}
+		for _, target := range report.Targets {
+			installedBinary := filepath.Join(target.TargetPath, "bin", nativeBinaryName())
+			if output, smokeErr := exec.Command(installedBinary, "--version").CombinedOutput(); smokeErr != nil {
+				addCheck(tc.name+"-installed-binary-smoke", false, fmt.Sprintf("%s: %v (%s)", installedBinary, smokeErr, strings.TrimSpace(string(output))))
+				continue
+			}
+		}
+		if report.Registry == "" || !isFile(filepath.FromSlash(report.Registry)) {
+			addCheck(tc.name+"-registry-admission", false, "install did not persist a registry admission bridge receipt")
 			continue
 		}
 		if detail := installedScriptRuntimeDetail(report); detail != "" {

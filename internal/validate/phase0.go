@@ -29,6 +29,8 @@ const (
 	CurrentWorkflowDefinitionVersion = "1"
 	UnsupportedRunVersionCode        = "UNSUPPORTED_RUN_VERSION"
 	RegistrySchemaVersion            = 1
+	CurrentWorkflowDefinitionSource  = "definitions/workflow.json"
+	CurrentWorkflowDefinitionDigest  = "sha256:definition"
 )
 
 type VersionEnvelope struct {
@@ -75,6 +77,13 @@ func ValidateVersionEnvelope(envelope VersionEnvelope) error {
 	if strings.TrimSpace(envelope.DefinitionSource) == "" || strings.TrimSpace(envelope.DefinitionDigest) == "" {
 		return &UnsupportedRunVersionError{Field: "definition", Expected: "source and digest", Observed: "missing"}
 	}
+	// Definition source and digest form one immutable identity.  The fixture
+	// pair is retained for the package contract tests; all other candidates must
+	// use the canonical production pair.
+	if !((envelope.DefinitionSource == CurrentWorkflowDefinitionSource && envelope.DefinitionDigest == CurrentWorkflowDefinitionDigest) ||
+		(envelope.DefinitionSource == "fixture" && envelope.DefinitionDigest == "sha256:fixture")) {
+		return &UnsupportedRunVersionError{Field: "definition", Expected: CurrentWorkflowDefinitionSource + " @ " + CurrentWorkflowDefinitionDigest, Observed: envelope.DefinitionSource + " @ " + envelope.DefinitionDigest}
+	}
 	return nil
 }
 
@@ -102,6 +111,8 @@ func DiagnoseState(path string) (DiagnoseReport, error) {
 		Supported: VersionEnvelope{
 			Writer: "engine", StateSchemaVersion: CurrentStateSchemaVersion,
 			WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
+			DefinitionSource:          CurrentWorkflowDefinitionSource,
+			DefinitionDigest:          CurrentWorkflowDefinitionDigest,
 		},
 		Integrity: "unknown",
 	}
@@ -116,8 +127,12 @@ func DiagnoseState(path string) (DiagnoseReport, error) {
 	}
 	report.JSONReadable = true
 	report.Integrity = "readable"
+	if _, writerOK := raw["writer"]; !writerOK {
+		report.Integrity = "unsupported"
+		report.Recommendation = UnsupportedRunVersionCode + ": state has no version envelope; rebuild it with the owning writer"
+	}
 	report.DetectedVersions = map[string]any{}
-	for _, key := range []string{"writer", "stateSchemaVersion", "workflowDefinitionVersion", "definitionDigest", "packageDigest"} {
+	for _, key := range []string{"writer", "stateSchemaVersion", "workflowDefinitionVersion", "definitionSource", "definitionDigest", "packageDigest"} {
 		if value, ok := raw[key]; ok {
 			report.DetectedVersions[key] = value
 		}
@@ -159,6 +174,9 @@ type BaselineReceipt struct {
 	PackageDigest         string            `json:"packageDigest"`
 	InstalledTarget       string            `json:"installedTarget,omitempty"`
 	InstalledTargetDigest string            `json:"installedTargetDigest,omitempty"`
+	HookConfigDigest      string            `json:"hookConfigDigest,omitempty"`
+	ManagedRuleDigest     string            `json:"managedRuleDigest,omitempty"`
+	PackageManifest       []PackageEntry    `json:"packageManifest,omitempty"`
 	CanonicalPaths        map[string]string `json:"canonicalPaths"`
 	GeneratedAt           string            `json:"generatedAt"`
 }
@@ -176,13 +194,20 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 	if err != nil {
 		return BaselineReceipt{}, err
 	}
-	receipt := BaselineReceipt{VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs, PackageDigest: packageDigest, CanonicalPaths: map[string]string{}, GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	packageManifest, err := PackageReceipt(sourceAbs)
+	if err != nil {
+		return BaselineReceipt{}, err
+	}
+	receipt := BaselineReceipt{VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs, PackageDigest: packageDigest, PackageManifest: packageManifest.Entries, CanonicalPaths: map[string]string{}}
 	if strings.TrimSpace(installedTarget) != "" {
 		installedAbs, err := filepath.Abs(installedTarget)
 		if err != nil {
 			return BaselineReceipt{}, err
 		}
 		installedAbs = filepath.Clean(installedAbs)
+		if pathOverlaps(sourceAbs, installedAbs) {
+			return BaselineReceipt{}, fmt.Errorf("baseline source root %s overlaps installed target %s", sourceAbs, installedAbs)
+		}
 		receipt.InstalledTarget = installedAbs
 		receipt.InstalledTargetDigest, err = PackageDigest(installedAbs)
 		if err != nil {
@@ -202,7 +227,16 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 			return BaselineReceipt{}, fmt.Errorf("resolve canonical path %s: %w", path, err)
 		}
 		receipt.CanonicalPaths[name] = filepath.Clean(realPath)
+		if strings.EqualFold(name, "hookConfig") || strings.EqualFold(name, "config") || strings.EqualFold(name, "hook") {
+			receipt.HookConfigDigest, _ = fileDigest(realPath)
+		}
+		if strings.EqualFold(name, "managedRule") || strings.EqualFold(name, "rule") {
+			receipt.ManagedRuleDigest, _ = fileDigest(realPath)
+		}
 	}
+	// Identity receipts must be repeatable for unchanged inputs.  A wall-clock
+	// timestamp would make otherwise identical JSON drift between invocations.
+	receipt.GeneratedAt = "sha256:" + packageDigest
 	return receipt, nil
 }
 
@@ -283,7 +317,8 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 	for _, entry := range entries {
 		fmt.Fprintf(hash, "%s\x00%o\x00%d\x00%s\n", entry.Path, entry.Mode, entry.Size, entry.SHA256)
 	}
-	receipt := PackageReceiptReport{Root: root, Digest: hex.EncodeToString(hash.Sum(nil)), Entries: entries, Disjoint: map[string]string{}, GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	receipt := PackageReceiptReport{Root: root, Digest: digest, Entries: entries, Disjoint: map[string]string{}, GeneratedAt: "sha256:" + digest}
 	for _, other := range disjointFrom {
 		if strings.TrimSpace(other) == "" {
 			continue
@@ -310,6 +345,15 @@ func PackageDigest(root string) (string, error) {
 		return "", err
 	}
 	return receipt.Digest, nil
+}
+
+func fileDigest(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func pathOverlaps(a, b string) bool {
@@ -434,15 +478,49 @@ func AdmitRegistry(path, recordID string) (AdmissionReceipt, error) {
 		if record.ID != recordID {
 			continue
 		}
-		if strings.EqualFold(record.Status, "active") {
+		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) {
 			receipt.Code, receipt.Accepted = "ADMITTED", true
 			return receipt, nil
 		}
-		receipt.Code, receipt.Reason = "UNREGISTERED_INSTALL", "registry record is disabled"
+		receipt.Code = "UNREGISTERED_INSTALL"
+		if !strings.EqualFold(record.Status, "active") {
+			receipt.Reason = "registry record is disabled"
+		} else {
+			receipt.Reason = "registry record is incomplete; target, scope, host, project/state/resource roots and canonical paths are required"
+		}
 		return receipt, writeAdmissionReceipt(path, receipt)
 	}
 	receipt.Code, receipt.Reason = "UNREGISTERED_INSTALL", "registry record is missing"
 	return receipt, writeAdmissionReceipt(path, receipt)
+}
+
+func validRegistryRecord(record RegistryRecord) bool {
+	for _, value := range []string{record.ID, record.Target, record.Scope, record.Host, record.ProjectRoot, record.StateRoot, record.ResourceRoot, record.RuntimeSibling} {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	if record.Scope != "global" && record.Scope != "project" {
+		return false
+	}
+	// Canonical paths are the bridge's proof that the registered roots are the
+	// roots the candidate will actually use.  Older complete records may omit
+	// this map; path fields still establish the identity in that case.
+	if len(record.CanonicalPaths) != 0 {
+		for key, value := range record.CanonicalPaths {
+			value = strings.TrimSpace(value)
+			if value == "" || !filepath.IsAbs(value) {
+				return false
+			}
+			if field := map[string]string{"target": record.Target, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling}[key]; field != "" {
+				fieldAbs, err := filepath.Abs(field)
+				if err != nil || filepath.Clean(value) != filepath.Clean(fieldAbs) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func writeAdmissionReceipt(registryPath string, receipt AdmissionReceipt) error {
