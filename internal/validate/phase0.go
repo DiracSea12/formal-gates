@@ -348,6 +348,8 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		return PackageReceiptReport{}, err
 	}
 	entries := make([]PackageEntry, 0)
+	digestOverrides := map[string]string{}
+	digestOverrideSizes := map[string]int64{}
 	err = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -391,6 +393,12 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		}
 		sum := sha256.Sum256(data)
 		entries = append(entries, PackageEntry{Path: filepath.ToSlash(rel), Mode: uint32(info.Mode().Perm()), Size: info.Size(), SHA256: hex.EncodeToString(sum[:]), RealPath: filepath.Clean(realPath)})
+		if filepath.ToSlash(rel) == "formal-gates.manifest.json" {
+			if digest, size, ok := canonicalManifestPackageDigest(data); ok {
+				digestOverrides[filepath.ToSlash(rel)] = digest
+				digestOverrideSizes[filepath.ToSlash(rel)] = size
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -399,7 +407,15 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	hash := sha256.New()
 	for _, entry := range entries {
-		fmt.Fprintf(hash, "%s\x00%o\x00%d\x00%s\n", entry.Path, entry.Mode, entry.Size, entry.SHA256)
+		digest := entry.SHA256
+		if override, ok := digestOverrides[entry.Path]; ok {
+			digest = override
+		}
+		size := entry.Size
+		if overrideSize, ok := digestOverrideSizes[entry.Path]; ok {
+			size = overrideSize
+		}
+		fmt.Fprintf(hash, "%s\x00%o\x00%d\x00%s\n", entry.Path, entry.Mode, size, digest)
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
 	receipt := PackageReceiptReport{Root: root, Digest: digest, Entries: entries, Disjoint: map[string]string{}, GeneratedAt: "sha256:" + digest}
@@ -421,6 +437,25 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		receipt.Disjoint[filepath.Clean(otherAbs)] = filepath.Clean(otherReal)
 	}
 	return receipt, nil
+}
+
+// canonicalManifestPackageDigest removes the self-referential package digest
+// fields before hashing the manifest as part of the package digest. Release
+// packaging can therefore write the resulting digest into the manifest, while
+// later validation still detects every substantive manifest edit.
+func canonicalManifestPackageDigest(data []byte) (string, int64, bool) {
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		return "", 0, false
+	}
+	delete(document, "package_digest")
+	delete(document, "packageDigest")
+	canonical, err := json.Marshal(document)
+	if err != nil {
+		return "", 0, false
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:]), int64(len(canonical)), true
 }
 
 func PackageDigest(root string) (string, error) {
