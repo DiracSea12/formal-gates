@@ -15,8 +15,9 @@ func TestWhiteboxPhase0Round7ProviderSelectionUsesSpecificRegistryBinding(t *tes
 	home := t.TempDir()
 	globalRoot := filepath.Join(home, "workspace")
 	projectRoot := filepath.Join(globalRoot, "project")
+	nestedRoot := filepath.Join(projectRoot, "nested")
 	outsideRoot := filepath.Join(globalRoot, "other")
-	if err := os.MkdirAll(projectRoot, 0o700); err != nil {
+	if err := os.MkdirAll(nestedRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(outsideRoot, 0o700); err != nil {
@@ -44,7 +45,7 @@ func TestWhiteboxPhase0Round7ProviderSelectionUsesSpecificRegistryBinding(t *tes
 		{LauncherPath: launcher, Host: "codex", ProjectRoot: globalRoot, Status: "active", Canonical: map[string]string{"launcher": launcher, "projectRoot": globalRoot}},
 		{LauncherPath: launcher, Host: "claude", ProjectRoot: projectRoot, Status: "active", Canonical: map[string]string{"launcher": launcher, "projectRoot": projectRoot}},
 		// A disabled, more-specific record must never override an active one.
-		{LauncherPath: launcher, Host: "cursor", ProjectRoot: filepath.Join(projectRoot, "nested"), Status: "disabled", Canonical: map[string]string{"launcher": launcher, "projectRoot": filepath.Join(projectRoot, "nested")}},
+		{LauncherPath: launcher, Host: "cursor", ProjectRoot: nestedRoot, Status: "disabled", Canonical: map[string]string{"launcher": launcher, "projectRoot": nestedRoot}},
 	}}
 	data, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
@@ -73,7 +74,7 @@ func TestWhiteboxPhase0Round7ProviderSelectionUsesSpecificRegistryBinding(t *tes
 	t.Setenv("AI_AGENT", "codex-cli")
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 
-	if err := os.Chdir(projectRoot); err != nil {
+	if err := os.Chdir(nestedRoot); err != nil {
 		t.Fatal(err)
 	}
 	provider, err := currentProvider()

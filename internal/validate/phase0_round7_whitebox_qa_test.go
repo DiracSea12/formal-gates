@@ -82,7 +82,7 @@ func round7LauncherDiscoveryChild(t *testing.T) bool {
 	root := os.Getenv("PHASE0_ROUND7_WORKFLOW_ROOT")
 	packageRoot := os.Getenv("PHASE0_ROUND7_PACKAGE_ROOT")
 	runID := "round7-" + mode
-	state, err := Start(StartOptions{
+	_, err := Start(StartOptions{
 		Root: root, PackageRoot: packageRoot, RunID: runID, Flow: "formal",
 		RequirementSource: "requirements.md", VCS: "git", Split: "no",
 	})
@@ -90,10 +90,16 @@ func round7LauncherDiscoveryChild(t *testing.T) bool {
 		if err != nil {
 			t.Fatalf("fixed launcher did not discover its admission binding: %v", err)
 		}
-		if state.AdmissionRegistry == "" || state.AdmissionRecordID != "round7-project" ||
-			state.AdmissionEpoch != 7 || state.AdmissionGeneration != 7 ||
-			state.AdmissionLease != "round7-lease" || state.AdmissionToken != "round7-token" {
-			t.Fatalf("started run lost the discovered admission identity: %+v", state)
+		persisted, loadErr := LoadRunState(root, runID)
+		if loadErr != nil {
+			t.Fatalf("started run could not be reloaded from persisted state: %v", loadErr)
+		}
+		expectedRegistry := filepath.Join(os.Getenv("HOME"), ".formal-gates", "registry.json")
+		if persisted.AdmissionRegistry != expectedRegistry || persisted.AdmissionRecordID != "round7-project" ||
+			persisted.AdmissionRoot != root || persisted.AdmissionTarget != packageRoot ||
+			persisted.AdmissionEpoch != 7 || persisted.AdmissionGeneration != 7 ||
+			persisted.AdmissionLease != "round7-lease" || persisted.AdmissionToken != "round7-token" {
+			t.Fatalf("persisted run lost the exact admission identity: %+v", persisted)
 		}
 		return true
 	}
