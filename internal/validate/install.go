@@ -152,7 +152,6 @@ func Install(options InstallOptions) (InstallReport, error) {
 	}
 	var installUnlock func()
 	var registryUnlock func()
-	var registryBefore installFileBackup
 	if registryPath != "" {
 		installUnlock, err = acquireInstallLock(registryPath)
 		if err != nil {
@@ -164,22 +163,28 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, err
 		}
 		defer registryUnlock()
+		// Recover an interrupted multi-target transaction before validating the
+		// bridge or touching a new target.  The outer journal owns all runtime,
+		// host-config and registry snapshots, so host-both cannot resume in a
+		// mixed state after a process crash.
+		if err := reconcileOuterInstallJournal(registryPath); err != nil {
+			return InstallReport{}, err
+		}
 		// Validate the existing bridge before changing any host target.  A
 		// malformed registry is an unregistered install, not a reason to leave
 		// a partially installed runtime behind.
 		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
-		registryBefore, err = snapshotInstallFile(registryPath)
-		if err != nil {
-			return InstallReport{}, err
-		}
 		if faultErr := installFault("registry"); faultErr != nil {
 			return InstallReport{}, recordInstallFailure(installJournalPath(filepath.FromSlash(report.Registry)), installJournal{Operation: "install", Target: registryPath, Phase: "intent", CreatedAt: nowReceiptTime()}, faultErr)
 		}
 	}
 
-	transactionParent := filepath.Dir(targets[0].targetPath)
+	transactionParent := filepath.Dir(registryPath)
+	if transactionParent == "." || transactionParent == "" {
+		transactionParent = filepath.Dir(targets[0].targetPath)
+	}
 	for !exists(transactionParent) {
 		parent := filepath.Dir(transactionParent)
 		if parent == transactionParent {
@@ -192,37 +197,49 @@ func Install(options InstallOptions) (InstallReport, error) {
 		return InstallReport{}, err
 	}
 	defer os.RemoveAll(transactionRoot)
-	targetBackups := make([]installTargetBackup, 0, len(targets))
+	outerPath := installOuterJournalPath(registryPath)
+	outer := outerInstallJournal{Operation: "install", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	outer.Registry, err = snapshotOuterFile(registryPath, filepath.Join(transactionRoot, "registry.before"))
+	if err != nil {
+		return InstallReport{}, err
+	}
+	outer.Receipt, err = snapshotOuterFile(filepath.FromSlash(report.ReceiptPath), filepath.Join(transactionRoot, "install-receipt.before"))
+	if err != nil {
+		return InstallReport{}, err
+	}
 	for index, target := range targets {
-		backup, backupErr := snapshotInstallTarget(target, filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index)))
+		backupRoot := filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index))
+		tree, backupErr := snapshotInstallTree(target.targetPath, filepath.Join(backupRoot, "runtime"))
 		if backupErr != nil {
 			return InstallReport{}, backupErr
 		}
-		targetBackups = append(targetBackups, backup)
+		hook, backupErr := snapshotOuterFile(target.hookConfig, filepath.Join(backupRoot, "hook.before"))
+		if backupErr != nil {
+			return InstallReport{}, backupErr
+		}
+		rule, backupErr := snapshotOuterFile(target.managedRulePath, filepath.Join(backupRoot, "rule.before"))
+		if backupErr != nil {
+			return InstallReport{}, backupErr
+		}
+		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, Rule: rule})
 	}
 	var releaseBackup installTreeBackup
-	var binaryBackup installFileBackup
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
 		releaseBackup, err = snapshotInstallTree(options.ReleaseRoot, filepath.Join(transactionRoot, "release"))
 		if err != nil {
 			return InstallReport{}, err
 		}
-		binaryBackup, err = snapshotInstallFile(options.BinaryTarget)
+		outer.Release = outerTreeFromBackup(releaseBackup)
+		outer.Binary, err = snapshotOuterFile(options.BinaryTarget, filepath.Join(transactionRoot, "binary.before"))
 		if err != nil {
 			return InstallReport{}, err
 		}
 	}
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		return InstallReport{}, err
+	}
 	rollbackAll := func() {
-		for index := len(targetBackups) - 1; index >= 0; index-- {
-			_ = restoreInstallTarget(targetBackups[index])
-		}
-		if strings.TrimSpace(options.ReleaseRoot) != "" {
-			_ = restoreInstallTree(releaseBackup)
-			_ = restoreInstallFile(binaryBackup)
-		}
-		if registryPath != "" {
-			_ = restoreInstallFile(registryBefore)
-		}
+		_ = restoreOuterJournal(outerPath, outer, false)
 	}
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
 		if err := installReleaseTransaction(sourceAbs, options.ReleaseRoot, options.BinaryTarget, options.Force); err != nil {
@@ -266,6 +283,11 @@ func Install(options InstallOptions) (InstallReport, error) {
 			records = append(records, installRegistryRecord(target, options))
 		}
 	}
+	outer.Phase = "switched"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		rollbackAll()
+		return InstallReport{}, err
+	}
 	if registryPath != "" {
 		if faultErr := installFault("registry-commit"); faultErr != nil {
 			rollbackAll()
@@ -276,12 +298,24 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, fmt.Errorf("installation registry admission bridge commit failed: %w", err)
 		}
 	}
+	outer.Phase = "registry-committed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		rollbackAll()
+		return InstallReport{}, err
+	}
 	if report.ReceiptPath != "" {
 		if writeErr := writeJSONAtomically(filepath.FromSlash(report.ReceiptPath), report); writeErr != nil {
 			rollbackAll()
 			return InstallReport{}, fmt.Errorf("failed to persist install receipt: %w", writeErr)
 		}
 	}
+	outer.Phase = "committed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		rollbackAll()
+		return InstallReport{}, err
+	}
+	_ = os.RemoveAll(outer.TransactionRoot)
+	_ = os.Remove(outerPath)
 	return report, nil
 }
 
@@ -292,7 +326,6 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	}
 	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project})
 	var unlock func()
-	var registryBefore installFileBackup
 	if registryPath != "" {
 		unlock, err = acquireInstallLock(registryPath)
 		if err != nil {
@@ -304,12 +337,14 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			return UninstallReport{}, err
 		}
 		defer unlock()
-		registryBefore, err = snapshotInstallFile(registryPath)
-		if err != nil {
+		if err := reconcileOuterInstallJournal(registryPath); err != nil {
 			return UninstallReport{}, err
 		}
 	}
-	transactionParent := filepath.Dir(targets[0].targetPath)
+	transactionParent := filepath.Dir(registryPath)
+	if transactionParent == "." || transactionParent == "" {
+		transactionParent = filepath.Dir(targets[0].targetPath)
+	}
 	for !exists(transactionParent) {
 		parent := filepath.Dir(transactionParent)
 		if parent == transactionParent {
@@ -322,21 +357,33 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		return UninstallReport{}, err
 	}
 	defer os.RemoveAll(transactionRoot)
-	backups := make([]installTargetBackup, 0, len(targets))
+	outerPath := installOuterJournalPath(registryPath)
+	outer := outerInstallJournal{Operation: "uninstall", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	outer.Registry, err = snapshotOuterFile(registryPath, filepath.Join(transactionRoot, "registry.before"))
+	if err != nil {
+		return UninstallReport{}, err
+	}
 	for index, target := range targets {
-		backup, backupErr := snapshotInstallTarget(target, filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index)))
+		backupRoot := filepath.Join(transactionRoot, fmt.Sprintf("target-%d", index))
+		tree, backupErr := snapshotInstallTree(target.targetPath, filepath.Join(backupRoot, "runtime"))
 		if backupErr != nil {
 			return UninstallReport{}, backupErr
 		}
-		backups = append(backups, backup)
+		hook, backupErr := snapshotOuterFile(target.hookConfig, filepath.Join(backupRoot, "hook.before"))
+		if backupErr != nil {
+			return UninstallReport{}, backupErr
+		}
+		rule, backupErr := snapshotOuterFile(target.managedRulePath, filepath.Join(backupRoot, "rule.before"))
+		if backupErr != nil {
+			return UninstallReport{}, backupErr
+		}
+		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, Rule: rule})
+	}
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		return UninstallReport{}, err
 	}
 	rollback := func() {
-		for index := len(backups) - 1; index >= 0; index-- {
-			_ = restoreInstallTarget(backups[index])
-		}
-		if registryPath != "" {
-			_ = restoreInstallFile(registryBefore)
-		}
+		_ = restoreOuterJournal(outerPath, outer, false)
 	}
 	report := UninstallReport{}
 	for _, target := range targets {
@@ -345,6 +392,11 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			return UninstallReport{}, err
 		}
 		report.Targets = append(report.Targets, installTargetReport(target))
+	}
+	outer.Phase = "switched"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		rollback()
+		return UninstallReport{}, err
 	}
 	if registryPath != "" {
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
@@ -365,6 +417,18 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			return UninstallReport{}, fmt.Errorf("uninstall registry bridge unavailable: %w", loadErr)
 		}
 	}
+	outer.Phase = "registry-committed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		rollback()
+		return UninstallReport{}, err
+	}
+	outer.Phase = "committed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		rollback()
+		return UninstallReport{}, err
+	}
+	_ = os.RemoveAll(outer.TransactionRoot)
+	_ = os.Remove(outerPath)
 	return report, nil
 }
 
@@ -509,30 +573,34 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		return InstallReport{}, err
 	}
 	defer unlock()
-	journalPath := installJournalPath(registryPath)
-	journal := installJournal{Operation: "bootstrap", Target: registryPath, Phase: "intent", CreatedAt: nowReceiptTime()}
+	if err := reconcileOuterInstallJournal(registryPath); err != nil {
+		return InstallReport{}, err
+	}
 	receiptPath := registryPath + ".bootstrap.json"
-	registryBefore, err := snapshotInstallFile(registryPath)
+	transactionRoot, err := os.MkdirTemp(filepath.Dir(registryPath), ".formal-gates-bootstrap-")
 	if err != nil {
 		return InstallReport{}, err
 	}
-	receiptBefore, err := snapshotInstallFile(receiptPath)
+	defer os.RemoveAll(transactionRoot)
+	outerPath := installOuterJournalPath(registryPath)
+	outer := outerInstallJournal{Operation: "bootstrap", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	outer.Registry, err = snapshotOuterFile(registryPath, filepath.Join(transactionRoot, "registry.before"))
 	if err != nil {
+		return InstallReport{}, err
+	}
+	outer.Receipt, err = snapshotOuterFile(receiptPath, filepath.Join(transactionRoot, "bootstrap-receipt.before"))
+	if err != nil {
+		return InstallReport{}, err
+	}
+	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, err
 	}
 	rollback := func(cause error) error {
-		_ = restoreInstallFile(registryBefore)
-		_ = restoreInstallFile(receiptBefore)
-		return recordInstallFailure(journalPath, journal, cause)
+		_ = restoreOuterJournal(outerPath, outer, false)
+		return outerJournalFailure(outerPath, outer, cause)
 	}
-	if err := writeJSONAtomically(journalPath, journal); err != nil {
-		return InstallReport{}, err
-	}
-	defer func() {
-		_ = os.Remove(journalPath)
-	}()
 	if faultErr := installFault("registry"); faultErr != nil {
-		return InstallReport{}, recordInstallFailure(journalPath, journal, faultErr)
+		return InstallReport{}, rollback(faultErr)
 	}
 	if existing, loadErr := LoadRegistry(registryPath); loadErr == nil {
 		for _, record := range existing.Records {
@@ -540,7 +608,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 				if record.ID == installRegistryRecord(target, options).ID && filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
 					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
 					_ = writeAdmissionReceipt(registryPath, receipt)
-					return InstallReport{}, fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target conflicts with registry record %q", record.ID)
+					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target conflicts with registry record %q", record.ID))
 				}
 			}
 		}
@@ -554,51 +622,41 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	if err := commitRegistryRecords(registryPath, records); err != nil {
 		return InstallReport{}, rollback(err)
 	}
-	journal.Phase = "committed"
-	if err := writeJSONAtomically(journalPath, journal); err != nil {
+	committedRegistry, err := LoadRegistry(registryPath)
+	if err != nil {
+		return InstallReport{}, rollback(err)
+	}
+	outer.Phase = "registry-committed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, rollback(err)
 	}
 	receipt := map[string]any{
 		"operation":     "bootstrap",
 		"registry":      filepath.Clean(registryPath),
 		"packageDigest": source.Digest,
-		"records":       records,
+		"records":       committedRegistry.Records,
 		"stateCreated":  false,
 		"observedAt":    nowReceiptTime(),
 	}
 	if err := writeJSONAtomically(receiptPath, receipt); err != nil {
 		return InstallReport{}, rollback(err)
 	}
+	outer.Phase = "committed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		return InstallReport{}, rollback(err)
+	}
+	_ = os.RemoveAll(outer.TransactionRoot)
+	_ = os.Remove(outerPath)
 	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath)}, nil
 }
 
 func commitRegistryRecords(path string, records []RegistryRecord) error {
-	doc, err := LoadRegistry(path)
-	if os.IsNotExist(err) {
-		doc = RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1}
-	} else if err != nil {
+	doc, err := loadRegistryForCommit(path)
+	if err != nil {
 		return err
 	}
-	if len(records) == 0 {
-		return nil
-	}
-	doc.Epoch++
-	for index := range records {
-		normalizeRegistryRecord(&records[index], doc.Epoch)
-		record := records[index]
-		replaced := false
-		for index := range doc.Records {
-			if doc.Records[index].ID == record.ID {
-				doc.Records[index] = record
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			doc.Records = append(doc.Records, record)
-		}
-	}
-	return writeJSONAtomically(path, doc)
+	_, err = commitRegistryRecordsUnlocked(path, doc, records)
+	return err
 }
 
 func nowReceiptTime() string {

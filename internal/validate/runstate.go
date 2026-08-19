@@ -359,11 +359,21 @@ func SaveRunState(root string, state RunState) error {
 	if state.Status != "ACTIVE" && state.Status != "SEALED" && state.Status != "ABORTED" {
 		return fmt.Errorf("invalid run status %q", state.Status)
 	}
+	var admissionUnlock func()
 	if strings.TrimSpace(state.AdmissionRegistry) != "" || strings.TrimSpace(state.AdmissionRecordID) != "" {
 		if strings.TrimSpace(state.AdmissionRegistry) == "" || strings.TrimSpace(state.AdmissionRecordID) == "" {
 			return fmt.Errorf("admission registry and record id must be supplied together")
 		}
-		receipt, err := AdmitRegistry(state.AdmissionRegistry, state.AdmissionRecordID)
+		// Hold the registry lock through the state write.  A separate Admit call
+		// followed by an unlocked write permits uninstall/disable to win between
+		// the two operations, leaving an active run bound to a disabled target.
+		var err error
+		admissionUnlock, err = acquireRegistryLock(state.AdmissionRegistry)
+		if err != nil {
+			return err
+		}
+		defer admissionUnlock()
+		receipt, err := admitRegistryUnlocked(filepath.Clean(state.AdmissionRegistry), state.AdmissionRecordID)
 		if err != nil {
 			return err
 		}

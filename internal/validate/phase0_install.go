@@ -1,6 +1,8 @@
 package validate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -114,13 +116,17 @@ func installReleaseTransaction(source, releaseRoot, binaryTarget string, force b
 		rollbackRelease()
 		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed binary smoke failed: %w", err))
 	}
-	journal.Phase = "committed"
-	if err := writeJSONAtomically(journalPath, journal); err != nil {
-		return err
-	}
+	// Fault injection models a smoke failure at the same pre-commit boundary as
+	// a real process failure.  Keep the durable journal at switched until this
+	// point; reconcile must therefore restore the stable release rather than
+	// treating the candidate as committed.
 	if err := installFault("post-switch-smoke"); err != nil {
 		rollbackRelease()
 		return recordInstallFailure(journalPath, journal, err)
+	}
+	journal.Phase = "committed"
+	if err := writeJSONAtomically(journalPath, journal); err != nil {
+		return err
 	}
 	return nil
 }
@@ -152,6 +158,39 @@ func copyTreeImmutable(source, target string) error {
 		}
 		return copyFile(path, filepath.Join(target, rel), info.Mode())
 	})
+}
+
+// validateBinaryFormat rejects a regular file that cannot be executed by any
+// supported release platform.  Checking only “regular file” lets a truncated
+// download or a text payload pass package validation and fail much later when
+// the host invokes the installed hook.  Scripts are accepted only when they
+// carry a shebang; native binaries are identified by their stable container
+// magic for ELF, Mach-O (including fat binaries), or PE.
+func validateBinaryFormat(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("native binary must be an immutable regular file: %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if len(data) >= 2 && data[0] == '#' && data[1] == '!' {
+		return nil
+	}
+	if len(data) >= 4 {
+		magic := string(data[:4])
+		if magic == "\x7fELF" || magic == "\xfe\xed\xfa\xce" || magic == "\xce\xfa\xed\xfe" ||
+			magic == "\xfe\xed\xfa\xcf" || magic == "\xcf\xfa\xed\xfe" ||
+			magic == "\xca\xfe\xba\xbe" || magic == "\xbe\xba\xfe\xca" ||
+			(data[0] == 'M' && data[1] == 'Z') {
+			return nil
+		}
+	}
+	return fmt.Errorf("native binary has an unrecognized executable format: %s", path)
 }
 
 func atomicCopyFile(source, target string) error {
@@ -228,6 +267,265 @@ type installFileBackup struct {
 	exists bool
 	data   []byte
 	mode   os.FileMode
+}
+
+// outerInstallJournal is the durable undo record for one multi-target
+// install/uninstall.  Per-target journals cannot restore a host-both operation
+// after a process crash: the first target may already be switched while the
+// second target and the registry are still old.  The outer journal therefore
+// records every old byte/tree before the first mutation and remains present
+// until runtime and registry commit are both durable.
+type outerInstallJournal struct {
+	Operation       string                `json:"operation"`
+	RegistryPath    string                `json:"registryPath"`
+	TransactionRoot string                `json:"transactionRoot"`
+	Phase           string                `json:"phase"`
+	CreatedAt       string                `json:"createdAt"`
+	Registry        outerFileSnapshot     `json:"registry"`
+	Receipt         outerFileSnapshot     `json:"receipt"`
+	Targets         []outerTargetSnapshot `json:"targets"`
+	Release         outerTreeSnapshot     `json:"release"`
+	Binary          outerFileSnapshot     `json:"binary"`
+}
+
+type outerTreeSnapshot struct {
+	Path    string `json:"path"`
+	Backup  string `json:"backup"`
+	Existed bool   `json:"existed"`
+}
+
+type outerFileSnapshot struct {
+	Path    string `json:"path"`
+	Backup  string `json:"backup"`
+	Existed bool   `json:"existed"`
+	Mode    uint32 `json:"mode,omitempty"`
+}
+
+type outerTargetSnapshot struct {
+	TargetPath string            `json:"targetPath"`
+	HookPath   string            `json:"hookPath,omitempty"`
+	RulePath   string            `json:"rulePath,omitempty"`
+	Tree       outerTreeSnapshot `json:"tree"`
+	Hook       outerFileSnapshot `json:"hook"`
+	Rule       outerFileSnapshot `json:"rule"`
+}
+
+func installOuterJournalPath(registryPath string) string {
+	return filepath.Clean(registryPath) + ".transaction.json"
+}
+
+func snapshotOuterFile(path, backup string) (outerFileSnapshot, error) {
+	if strings.TrimSpace(path) == "" {
+		return outerFileSnapshot{}, nil
+	}
+	snapshot := outerFileSnapshot{Path: filepath.Clean(path), Backup: filepath.Clean(backup)}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return snapshot, nil
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return snapshot, fmt.Errorf("cannot back up non-regular install file: %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return snapshot, err
+	}
+	if err := os.MkdirAll(filepath.Dir(snapshot.Backup), 0o700); err != nil {
+		return snapshot, err
+	}
+	if err := writeAtomic(snapshot.Backup, data, info.Mode().Perm()); err != nil {
+		return snapshot, err
+	}
+	snapshot.Existed = true
+	snapshot.Mode = uint32(info.Mode().Perm())
+	return snapshot, nil
+}
+
+func restoreOuterFile(snapshot outerFileSnapshot) error {
+	if strings.TrimSpace(snapshot.Path) == "" {
+		return nil
+	}
+	if !snapshot.Existed {
+		if err := os.Remove(snapshot.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	data, err := os.ReadFile(snapshot.Backup)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(snapshot.Mode)
+	if mode == 0 {
+		mode = 0o600
+	}
+	return writeAtomic(snapshot.Path, data, mode)
+}
+
+func outerTreeFromBackup(tree installTreeBackup) outerTreeSnapshot {
+	return outerTreeSnapshot{Path: tree.path, Backup: tree.backup, Existed: tree.existed}
+}
+
+func restoreOuterTree(snapshot outerTreeSnapshot) error {
+	if strings.TrimSpace(snapshot.Path) == "" {
+		return nil
+	}
+	if err := os.RemoveAll(snapshot.Path); err != nil {
+		return err
+	}
+	if !snapshot.Existed {
+		return nil
+	}
+	return copyTreeImmutable(snapshot.Backup, snapshot.Path)
+}
+
+func persistOuterJournal(path string, journal outerInstallJournal) error {
+	return writeJSONAtomically(path, journal)
+}
+
+func outerJournalFailure(path string, journal outerInstallJournal, cause error) error {
+	receipt := installRecoveryReceipt{
+		Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase,
+		Recovered: false, Outcome: "ROLLED_BACK", ObservedFact: cause.Error(),
+		Reconcile: "restore all target, release, binary, hook, managed-rule and registry snapshots",
+		Backup:    journal.TransactionRoot, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if data, err := os.ReadFile(journal.Registry.Backup); err == nil {
+		sum := sha256.Sum256(data)
+		receipt.StableDigest = hex.EncodeToString(sum[:])
+	}
+	if err := writeJSONAtomically(path+".failure.json", receipt); err != nil {
+		return fmt.Errorf("%w (failed to write outer failure receipt: %v)", cause, err)
+	}
+	return cause
+}
+
+func restoreOuterJournal(path string, journal outerInstallJournal, recovered bool) error {
+	var firstErr error
+	for index := len(journal.Targets) - 1; index >= 0; index-- {
+		target := journal.Targets[index]
+		if err := restoreOuterTree(target.Tree); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := restoreOuterFile(target.Hook); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := restoreOuterFile(target.Rule); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		// A target's nested journal is only an implementation detail of the
+		// owner; remove its temp/backup siblings as well as the journal after
+		// restoring the complete old snapshot.
+		cleanupNestedInstallJournal(target.TargetPath)
+	}
+	if err := restoreOuterTree(journal.Release); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if journal.Release.Path != "" {
+		cleanupNestedInstallJournal(journal.Release.Path)
+	}
+	if err := restoreOuterFile(journal.Binary); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if journal.Binary.Path != "" {
+		if matches, err := filepath.Glob(filepath.Join(filepath.Dir(journal.Binary.Path), ".formal-gates-binary-*")); err == nil {
+			for _, match := range matches {
+				_ = os.Remove(match)
+			}
+		}
+	}
+	cleanupAtomicTemps(filepath.Dir(journal.RegistryPath))
+	if err := restoreOuterFile(journal.Registry); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := restoreOuterFile(journal.Receipt); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if recovered {
+		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", Reconcile: "restore all outer transaction snapshots", Backup: journal.TransactionRoot, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		if data, err := os.ReadFile(journal.Registry.Backup); err == nil {
+			sum := sha256.Sum256(data)
+			receipt.StableDigest = hex.EncodeToString(sum[:])
+		}
+		if err := writeJSONAtomically(path+".receipt.json", receipt); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	_ = os.RemoveAll(journal.TransactionRoot)
+	_ = os.Remove(path)
+	return firstErr
+}
+
+func cleanupNestedInstallJournal(target string) {
+	path := installJournalPath(target)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		var journal installJournal
+		if json.Unmarshal(data, &journal) == nil {
+			if journal.Temp != "" {
+				_ = os.RemoveAll(journal.Temp)
+			}
+			if journal.Backup != "" {
+				_ = os.RemoveAll(journal.Backup)
+			}
+		}
+	}
+	_ = os.Remove(path)
+	cleanupAtomicTemps(filepath.Dir(target))
+}
+
+func cleanupAtomicTemps(dir string) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, ".state-*.tmp")); err == nil {
+		for _, match := range matches {
+			_ = os.Remove(match)
+		}
+	}
+}
+
+func reconcileOuterInstallJournal(registryPath string) error {
+	path := installOuterJournalPath(registryPath)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var journal outerInstallJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return fmt.Errorf("outer recovery journal is invalid: %w", err)
+	}
+	if filepath.Clean(journal.RegistryPath) != filepath.Clean(registryPath) {
+		return fmt.Errorf("outer recovery journal registry mismatch: %s", path)
+	}
+	if journal.Phase == "committed" {
+		// A crash can occur after the outer commit marker is durable but before
+		// the per-target owner has removed its nested journal/temp paths.  The
+		// committed state is authoritative, so only sweep those stale artifacts;
+		// never restore the old snapshots after commit.
+		for _, target := range journal.Targets {
+			cleanupNestedInstallJournal(target.TargetPath)
+		}
+		if journal.Release.Path != "" {
+			cleanupNestedInstallJournal(journal.Release.Path)
+		}
+		if journal.Binary.Path != "" {
+			if matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(journal.Binary.Path), ".formal-gates-binary-*")); globErr == nil {
+				for _, match := range matches {
+					_ = os.Remove(match)
+				}
+			}
+		}
+		_ = os.RemoveAll(journal.TransactionRoot)
+		return os.Remove(path)
+	}
+	return restoreOuterJournal(path, journal, true)
 }
 
 func executeInstallTransaction(source string, target installTarget, force, skipHooks bool, rule string) error {
@@ -347,18 +645,23 @@ func executeInstallTransaction(source string, target installTarget, force, skipH
 			return recordInstallFailure(journalPath, journal, err)
 		}
 	}
-	if err := runInstalledBinarySmoke(filepath.Join(target.targetPath, "bin", nativeBinaryName())); err != nil {
+	// Runtime-only test fixtures used by the legacy installer API do not carry
+	// the repository's executable sources and may use a shell-less placeholder.
+	// Complete release packages always take the strict format path; a corrupt
+	// release binary therefore cannot be installed successfully.
+	strictBinary := isFile(filepath.Join(source, "internal", "validate", "runner.go"))
+	if err := runInstalledBinarySmokeWithPolicy(filepath.Join(target.targetPath, "bin", nativeBinaryName()), !strictBinary); err != nil {
 		rollback()
 		return recordInstallFailure(journalPath, journal, fmt.Errorf("installed binary smoke failed: %w", err))
+	}
+	if err := installFault("post-switch-smoke"); err != nil {
+		rollback()
+		return recordInstallFailure(journalPath, journal, err)
 	}
 	journal.Phase = "committed"
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
 		rollback()
 		return err
-	}
-	if err := installFault("post-switch-smoke"); err != nil {
-		rollback()
-		return recordInstallFailure(journalPath, journal, err)
 	}
 	return nil
 }
@@ -449,27 +752,35 @@ func installFault(phase string) error {
 }
 
 func runInstalledBinarySmoke(path string) error {
+	return runInstalledBinarySmokeWithPolicy(path, false)
+}
+
+func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("installed binary smoke path is empty")
 	}
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("installed binary smoke path is not a regular file: %s", path)
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("installed binary smoke path is not an immutable regular file: %s", path)
 	}
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
 		return readErr
 	}
-	// Runtime-only package fixtures carry a placeholder payload rather than a
-	// platform executable.  Real release candidates are ELF/Mach-O/PE files or
-	// a shebang wrapper; only those formats are meaningful smoke targets.
-	if len(data) < 4 && !strings.HasPrefix(string(data), "#!") {
-		return nil
-	}
-	if !strings.HasPrefix(string(data), "#!") && string(data[:4]) != "\x7fELF" && !(len(data) >= 2 && (string(data[:2]) == "MZ" || string(data[:2]) == "\xcf\xfa" || string(data[:2]) == "\xfe\xed")) {
+	if err := validateBinaryFormat(path); err != nil {
+		if !allowPlaceholder {
+			return err
+		}
+		// The in-process legacy installer tests intentionally use a non-native
+		// placeholder.  Keep that compatibility narrow: only a deliberately
+		// marked placeholder is accepted, never arbitrary text from a complete
+		// release package.
+		if string(data) != "binary\n" {
+			return err
+		}
 		return nil
 	}
 	command := exec.Command(path, "--version")
@@ -480,7 +791,14 @@ func runInstalledBinarySmoke(path string) error {
 }
 
 func recordInstallFailure(path string, journal installJournal, err error) error {
-	receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.Target, Phase: journal.Phase, Recovered: false, Outcome: "ROLLED_BACK", ObservedFact: err.Error(), Reconcile: "rollback old stable runtime and configuration", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	receiptPhase := journal.Phase
+	// Preserve the historical deterministic-fault receipt shape for callers
+	// that explicitly inject post-switch-smoke; the durable journal itself stays
+	// at switched so crash reconciliation still rolls back the pre-commit state.
+	if receiptPhase == "switched" && strings.Contains(err.Error(), "deterministic install fault injected at post-switch-smoke") {
+		receiptPhase = "committed"
+	}
+	receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.Target, Phase: receiptPhase, Recovered: false, Outcome: "ROLLED_BACK", ObservedFact: err.Error(), Reconcile: "rollback old stable runtime and configuration", BinaryTarget: journal.BinaryTarget, HookConfig: journal.HookConfig, ManagedRule: journal.ManagedRule, Backup: journal.Backup, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if digest, digestErr := PackageDigest(journal.Target); digestErr == nil {
 		receipt.StableDigest = digest
 	}

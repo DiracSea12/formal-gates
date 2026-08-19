@@ -473,6 +473,14 @@ func BootstrapRegistry(path string, records []RegistryRecord) (RegistryDocument,
 		return RegistryDocument{}, err
 	}
 	defer unlock()
+	return bootstrapRegistryRecordsUnlocked(path, records)
+}
+
+// bootstrapRegistryRecordsUnlocked is the one native owner for creating a
+// registry document.  Public maintenance commands and the installer all use
+// the same normalization and atomic commit path; they differ only in whether
+// bootstrap replaces the initial document or registration merges records.
+func bootstrapRegistryRecordsUnlocked(path string, records []RegistryRecord) (RegistryDocument, error) {
 	doc := RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1, Records: make([]RegistryRecord, 0, len(records))}
 	for i, record := range records {
 		if strings.TrimSpace(record.ID) == "" {
@@ -522,10 +530,8 @@ func RegisterRegistryRecord(path string, record RegistryRecord) (RegistryDocumen
 }
 
 func registerRegistryRecordUnlocked(path string, record RegistryRecord) (RegistryDocument, error) {
-	doc, err := LoadRegistry(path)
-	if os.IsNotExist(err) {
-		doc = RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1}
-	} else if err != nil {
+	doc, err := loadRegistryForCommit(path)
+	if err != nil {
 		return RegistryDocument{}, err
 	}
 	if strings.TrimSpace(record.ID) == "" {
@@ -537,20 +543,57 @@ func registerRegistryRecordUnlocked(path string, record RegistryRecord) (Registr
 	if record.CanonicalPaths == nil {
 		record.CanonicalPaths = map[string]string{}
 	}
-	normalizeRegistryRecord(&record, doc.Epoch+1)
-	replaced := false
-	for index := range doc.Records {
-		if doc.Records[index].ID == record.ID {
-			doc.Records[index] = record
-			replaced = true
-			break
-		}
+	return commitRegistryRecordsUnlocked(path, doc, []RegistryRecord{record})
+}
+
+func loadRegistryForCommit(path string) (RegistryDocument, error) {
+	doc, err := LoadRegistry(path)
+	if os.IsNotExist(err) {
+		return RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1}, nil
 	}
-	if !replaced {
-		doc.Records = append(doc.Records, record)
+	if err != nil {
+		return RegistryDocument{}, err
+	}
+	return doc, nil
+}
+
+// commitRegistryRecordsUnlocked is shared by bootstrap-admission and the
+// install transaction.  The caller owns registry locking.  A single function
+// owns epoch advancement, record normalization and replacement semantics so
+// registry CLI calls cannot diverge from installer commits.
+func commitRegistryRecordsUnlocked(path string, doc RegistryDocument, records []RegistryRecord) (RegistryDocument, error) {
+	if len(records) == 0 {
+		return doc, nil
 	}
 	doc.Epoch++
-	return doc, writeJSONAtomically(path, doc)
+	for index := range records {
+		record := records[index]
+		if strings.TrimSpace(record.ID) == "" {
+			return RegistryDocument{}, fmt.Errorf("registry record id is required")
+		}
+		if record.Status == "" {
+			record.Status = "active"
+		}
+		if record.CanonicalPaths == nil {
+			record.CanonicalPaths = map[string]string{}
+		}
+		normalizeRegistryRecord(&record, doc.Epoch)
+		replaced := false
+		for existing := range doc.Records {
+			if doc.Records[existing].ID == record.ID {
+				doc.Records[existing] = record
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			doc.Records = append(doc.Records, record)
+		}
+	}
+	if err := writeJSONAtomically(path, doc); err != nil {
+		return RegistryDocument{}, err
+	}
+	return doc, nil
 }
 
 func AdmitRegistry(path, recordID string) (AdmissionReceipt, error) {
@@ -560,6 +603,10 @@ func AdmitRegistry(path, recordID string) (AdmissionReceipt, error) {
 		return AdmissionReceipt{Registry: path, RecordID: recordID, Code: "UNREGISTERED_INSTALL", Reason: err.Error(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}, err
 	}
 	defer unlock()
+	return admitRegistryUnlocked(path, recordID)
+}
+
+func admitRegistryUnlocked(path, recordID string) (AdmissionReceipt, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	receipt := AdmissionReceipt{Registry: filepath.Clean(path), RecordID: recordID, CreatedAt: now}
 	doc, err := LoadRegistry(path)

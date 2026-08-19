@@ -217,16 +217,9 @@ func Start(options StartOptions) (RunState, error) {
 	} else if !os.IsNotExist(err) {
 		return RunState{}, err
 	}
-	registryPath := strings.TrimSpace(options.AdmissionRegistry)
-	registryRecordID := strings.TrimSpace(options.AdmissionRecordID)
-	if registryPath == "" {
-		candidateRegistry := filepath.Join(root, ".gates", "registry.json")
-		if isFile(candidateRegistry) {
-			registryPath = candidateRegistry
-			if record, recordErr := findRegistryRecordForTarget(candidateRegistry, options.PackageRoot); recordErr == nil {
-				registryRecordID = record.ID
-			}
-		}
+	registryPath, registryRecordID, discoveryErr := discoverAdmissionBinding(root, options.PackageRoot, options.AdmissionRegistry, options.AdmissionRecordID)
+	if discoveryErr != nil {
+		return RunState{}, discoveryErr
 	}
 	if registryPath != "" {
 		recordID := registryRecordID
@@ -278,6 +271,45 @@ func Start(options StartOptions) (RunState, error) {
 		return RunState{}, err
 	}
 	return state, nil
+}
+
+// discoverAdmissionBinding resolves both project-scoped and user-global
+// registries before Start creates .gates/tmp.  A present registry is an
+// admission boundary: if it cannot account for the installed package, start
+// fails with UNREGISTERED_INSTALL instead of silently falling back to a direct
+// state writer.  A missing registry remains the legacy source-tree path for
+// pre-stage-0 runs, which intentionally have no admission envelope.
+func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID string) (string, string, error) {
+	registryPath := strings.TrimSpace(requestedPath)
+	registryRecordID := strings.TrimSpace(requestedID)
+	if registryPath != "" {
+		if registryRecordID == "" {
+			return "", "", fmt.Errorf("admission record id is required when --registry is supplied")
+		}
+		return filepath.Clean(registryPath), registryRecordID, nil
+	}
+	candidates := []string{filepath.Join(root, ".gates", "registry.json")}
+	if home, err := installHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".formal-gates", "registry.json"))
+	}
+	for _, candidate := range candidates {
+		if !isFile(candidate) {
+			continue
+		}
+		record, err := findRegistryRecordForTarget(candidate, packageRoot)
+		if err != nil {
+			return "", "", fmt.Errorf("UNREGISTERED_INSTALL: registry admission bridge cannot bind %s: %w", packageRoot, err)
+		}
+		return filepath.Clean(candidate), record.ID, nil
+	}
+	// A copied/installed package has no VCS metadata and therefore must be
+	// launched through the registered bridge.  Only a repository checkout keeps
+	// the legacy source-tree path used by pre-stage-0 runs; it cannot be used to
+	// masquerade as an installed runtime.
+	if isFile(filepath.Join(packageRoot, "bin", nativeBinaryName())) && !exists(filepath.Join(packageRoot, ".git")) {
+		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: no global or project admission registry is registered for installed package %s", packageRoot)
+	}
+	return "", "", nil
 }
 
 func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, error) {

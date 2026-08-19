@@ -128,8 +128,13 @@ func validateManagedRuleSource(root string, result *Result) {
 
 func validateNativeBinary(root string, result *Result) {
 	rel := filepath.ToSlash(filepath.Join("bin", nativeBinaryName()))
-	if !isFile(filepath.Join(root, filepath.FromSlash(rel))) {
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if !isFile(path) {
 		result.add(rel, "built native CLI binary is missing; build ./cmd/formal-gates before package validation")
+		return
+	}
+	if err := validateBinaryFormat(path); err != nil {
+		result.add(rel, err.Error())
 	}
 }
 
@@ -559,7 +564,18 @@ func validateUnknownPackageEntries(root string, result *Result) {
 	// fixture used for installation has no .git, so reject unlisted regular
 	// top-level files there instead of silently shipping an unknown payload.
 	repositoryRoot := exists(filepath.Join(root, ".git"))
-	allowed := map[string]bool{"SKILL.md": true, "README.md": true, "README_EN.md": true, "formal-gates.manifest.json": true, "go.mod": true, "go.sum": true, "install.command": true, "install.ps1": true, "install.bat": true}
+	// GitHub source archives intentionally omit .git, but retain the ordinary
+	// top-level release documentation that is tracked in the repository.  Keep
+	// this allow-list explicit so an accidental payload (for example evil.txt)
+	// is still rejected instead of making “no .git” mean “accept everything”.
+	allowed := map[string]bool{
+		"AGENTS.md": true, "CHANGELOG.md": true, "CLAUDE.md": true, "LICENSE": true,
+		"P2-FIX-REQUIREMENT.md": true, "QA-INCREMENTAL-ISOLATION-REQUIREMENT.md": true,
+		"README.md": true, "README_EN.md": true, "SKILL.md": true,
+		"TRIGGER-MODEL-REQUIREMENT.md": true, "TRIGGER-MODEL-V2-REQUIREMENT.md": true,
+		"formal-gates.manifest.json": true, "go.mod": true, "go.sum": true,
+		"install.command": true, "install.ps1": true, "install.bat": true,
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
