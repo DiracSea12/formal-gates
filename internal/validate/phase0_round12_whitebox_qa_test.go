@@ -48,10 +48,31 @@ func round12Run(t *testing.T, dir, name string, args ...string) string {
 func round12RepoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("could not locate the whitebox test source")
+	if !ok || !filepath.IsAbs(file) {
+		t.Fatal("could not locate the whitebox test source as an absolute path")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+}
+
+func round12RawRecordByID(t *testing.T, data []byte, id string) []byte {
+	t.Helper()
+	var envelope struct {
+		Records []json.RawMessage `json:"records"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range envelope.Records {
+		var record RegistryRecord
+		if err := json.Unmarshal(raw, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.ID == id {
+			return append([]byte(nil), raw...)
+		}
+	}
+	t.Fatalf("registry record %q was not found in raw document", id)
+	return nil
 }
 
 func round12GitProject(t *testing.T) string {
@@ -191,8 +212,15 @@ func TestWhiteboxPhase0Round12PackageReceiptBindsStableAndInstalledIdentities(t 
 		t.Fatalf("source and installed fixtures did not establish distinct package identity: source=%+v installed=%+v", first, installedReceipt)
 	}
 	for _, entry := range first.Entries {
-		if !round12PathWithin(source, entry.RealPath) {
-			t.Fatalf("package entry escaped source identity: %+v", entry)
+		expected := filepath.Join(source, filepath.FromSlash(entry.Path))
+		if !round12PathWithin(source, entry.RealPath) || entry.RealPath != canonicalRegistryPath(expected) {
+			t.Fatalf("package entry did not resolve within source identity: entry=%+v expected=%s", entry, canonicalRegistryPath(expected))
+		}
+	}
+	for _, entry := range installedReceipt.Entries {
+		expected := filepath.Join(installed, filepath.FromSlash(entry.Path))
+		if !round12PathWithin(installed, entry.RealPath) || entry.RealPath != canonicalRegistryPath(expected) {
+			t.Fatalf("installed package entry did not resolve within installed identity: entry=%+v expected=%s", entry, canonicalRegistryPath(expected))
 		}
 	}
 	baseline, err := BuildBaselineReceipt("git:"+vcsIdentity, source, installed, map[string]string{"hostConfig": hostConfig})
@@ -324,6 +352,7 @@ func TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUnins
 	}
 	claudeHook := round12ReadFile(t, claudeTarget[0].hookConfig)
 	claudeRule := round12ReadFile(t, claudeTarget[0].managedRulePath)
+	claudeRawBeforeSecond := round12RawRecordByID(t, round12ReadFile(t, registry), claudeBefore.ID)
 
 	if _, err := Install(InstallOptions{Source: source, Host: "codex", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}); err != nil {
 		t.Fatal(err)
@@ -344,6 +373,9 @@ func TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUnins
 	}
 	if got, err := PackageDigest(claudeTarget[0].targetPath); err != nil || got != claudeDigest {
 		t.Fatalf("second install changed the existing runtime: before=%s after=%s err=%v", claudeDigest, got, err)
+	}
+	if got := round12RawRecordByID(t, round12ReadFile(t, registry), claudeBefore.ID); !bytes.Equal(got, claudeRawBeforeSecond) {
+		t.Fatalf("second host install changed the original record bytes: before=%q after=%q", claudeRawBeforeSecond, got)
 	}
 	if !bytes.Equal(round12ReadFile(t, claudeTarget[0].hookConfig), claudeHook) || !bytes.Equal(round12ReadFile(t, claudeTarget[0].managedRulePath), claudeRule) {
 		t.Fatal("second host transaction changed the first host configuration")
@@ -368,8 +400,14 @@ func TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUnins
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(thirdDocument.Records) != 2 {
+		t.Fatalf("uninstall changed registry record cardinality: got=%d records=%+v", len(thirdDocument.Records), thirdDocument.Records)
+	}
 	if thirdDocument.Epoch <= secondDocument.Epoch {
 		t.Fatalf("uninstall registry epoch regressed: before=%d after=%d", secondDocument.Epoch, thirdDocument.Epoch)
+	}
+	if got := round12RawRecordByID(t, round12ReadFile(t, registry), claudeBefore.ID); !bytes.Equal(got, claudeRawBeforeSecond) {
+		t.Fatalf("uninstall changed the unrelated record bytes: before=%q after=%q", claudeRawBeforeSecond, got)
 	}
 	if got := round12RecordByID(t, thirdDocument, claudeBefore.ID); !reflect.DeepEqual(got, claudeBefore) {
 		t.Fatalf("uninstall changed the unrelated record: before=%+v after=%+v", claudeBefore, got)
@@ -628,7 +666,7 @@ func TestWhiteboxPhase0Round12InstallAndUninstallUseTheSameLockOwner(t *testing.
 }
 
 func TestWhiteboxPhase0Round12InstallFaultsRestoreRegistryIdentityAndCleanup(t *testing.T) {
-	for _, fault := range []string{"intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "verify-stage:installed-target"} {
+	for _, fault := range []string{"journal-boundary", "intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "verify-stage:installed-target"} {
 		t.Run(fault, func(t *testing.T) {
 			source := round12InstallSource(t)
 			project := t.TempDir()
@@ -903,10 +941,8 @@ func TestWhiteboxPhase0Round12ManifestRejectsBeforeAnyTargetOrReceiptWrite(t *te
 func TestWhiteboxPhase0Round12RelativeReleaseOverlapRejectsWithoutNamespaceWrites(t *testing.T) {
 	source := round12InstallSource(t)
 	releaseInsideSource := filepath.Join(source, "nested-release")
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
+	workingDirectory := t.TempDir()
+	useTestWorkingDirectory(t, workingDirectory)
 	relativeRelease, err := filepath.Rel(workingDirectory, releaseInsideSource)
 	if err != nil {
 		t.Fatal(err)
@@ -1058,6 +1094,9 @@ func TestWhiteboxPhase0Round12InstallReceiptCoversMultiHostScopeRootsAndMismatch
 		} else if record.Scope == "global" {
 			if record.ProjectRoot != filepath.Clean(home) || record.CanonicalPaths["projectRoot"] != canonicalRegistryPath(home) {
 				t.Fatalf("global record lost its canonical host root: %+v", record)
+			}
+			if err := verifyRegistryBinding(registry, record.ID, project, filepath.Join(home, "wrong-package")); err == nil {
+				t.Fatalf("mismatched package identity was accepted for global record %s", record.ID)
 			}
 		}
 	}
@@ -1260,6 +1299,38 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		{[]string{"package", "route-candidates", "--help"}, "package route-candidates"},
 		{[]string{"package", "baseline", "--help"}, "package baseline"},
 		{[]string{"workflow", "--help"}, "subcommands:"},
+		{[]string{"workflow", "start", "--help"}, "workflow start"},
+		{[]string{"workflow", "show", "--help"}, "workflow show"},
+		{[]string{"workflow", "diagnose", "--help"}, "workflow diagnose"},
+		{[]string{"workflow", "resume", "--help"}, "workflow resume"},
+		{[]string{"workflow", "abort", "--help"}, "workflow abort"},
+		{[]string{"workflow", "reset", "--help"}, "workflow reset"},
+		{[]string{"workflow", "requirement", "--help"}, "workflow requirement"},
+		{[]string{"workflow", "route-candidates", "--help"}, "workflow route-candidates"},
+		{[]string{"workflow", "route", "--help"}, "workflow route"},
+		{[]string{"workflow", "route-add", "--help"}, "workflow route-add"},
+		{[]string{"workflow", "slicing", "--help"}, "workflow slicing"},
+		{[]string{"workflow", "settle-findings", "--help"}, "workflow settle-findings"},
+		{[]string{"workflow", "qa-worktree", "--help"}, "workflow qa-worktree"},
+		{[]string{"workflow", "prepare-gate", "--help"}, "workflow prepare-gate"},
+		{[]string{"workflow", "prepare-action", "--help"}, "workflow prepare-action"},
+		{[]string{"workflow", "claim-dispatch", "--help"}, "workflow claim-dispatch"},
+		{[]string{"workflow", "record-action", "--help"}, "workflow record-action"},
+		{[]string{"workflow", "record-gate", "--help"}, "workflow record-gate"},
+		{[]string{"workflow", "qa-design", "--help"}, "workflow qa-design"},
+		{[]string{"workflow", "qa-review", "--help"}, "workflow qa-review"},
+		{[]string{"workflow", "qa-execution", "--help"}, "workflow qa-execution"},
+		{[]string{"workflow", "qa-execution-scope", "--help"}, "workflow qa-execution-scope"},
+		{[]string{"workflow", "snapshot", "--help"}, "workflow snapshot"},
+		{[]string{"workflow", "cleanup", "--help"}, "workflow cleanup"},
+		{[]string{"workflow", "future", "--help"}, "workflow future"},
+		{[]string{"workflow", "future", "generate", "--help"}, "workflow future generate"},
+		{[]string{"workflow", "future", "view", "--help"}, "workflow future view"},
+		{[]string{"workflow", "carry", "--help"}, "workflow carry"},
+		{[]string{"workflow", "authorize-repair", "--help"}, "workflow authorize-repair"},
+		{[]string{"workflow", "seal", "--help"}, "workflow seal"},
+		{[]string{"registry", "admit", "--help"}, "registry admit"},
+		{[]string{"registry", "show", "--help"}, "registry show"},
 		{[]string{"registry", "--help"}, "subcommands:"},
 		{[]string{"install", "--help"}, "usage of install"},
 		{[]string{"uninstall", "--help"}, "usage of uninstall"},
@@ -1272,6 +1343,10 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		{[]string{"lifecycle", "capture", "--help"}, "lifecycle capture"},
 		{[]string{"lifecycle", "verify", "--help"}, "lifecycle verify"},
 		{[]string{"canary", "--help"}, "subcommands:"},
+		{[]string{"canary", "portable", "--help"}, "canary portable"},
+		{[]string{"canary", "fault-matrix", "--help"}, "canary fault-matrix"},
+		{[]string{"canary", "codex-hook", "--help"}, "canary codex-hook"},
+		{[]string{"canary", "codex-hook-probe", "--help"}, "canary codex-hook-probe"},
 	} {
 		output := round12Run(t, root, "go", append([]string{"run", "./cmd/formal-gates"}, surface.args...)...)
 		if !strings.Contains(strings.ToLower(output), strings.ToLower(surface.marker)) {

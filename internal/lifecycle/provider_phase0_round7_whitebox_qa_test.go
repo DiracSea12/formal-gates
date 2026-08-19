@@ -26,11 +26,10 @@ func TestWhiteboxPhase0Round7ProviderSelectionUsesSpecificRegistryBinding(t *tes
 	launcher := filepath.Join(home, ".local", "bin", "formal-gates")
 	registry := filepath.Join(home, ".formal-gates", "registry.json")
 	canonical := func(path string) string {
-		value, err := filepath.Abs(path)
-		if err != nil {
-			t.Fatal(err)
+		if !filepath.IsAbs(path) {
+			t.Fatalf("fixture path is not absolute: %q", path)
 		}
-		return filepath.Clean(value)
+		return filepath.Clean(path)
 	}
 	type record struct {
 		LauncherPath string            `json:"launcherPath"`
@@ -59,13 +58,14 @@ func TestWhiteboxPhase0Round7ProviderSelectionUsesSpecificRegistryBinding(t *tes
 	}
 
 	previousExecutable := executablePath
-	previousDirectory, err := os.Getwd()
+	previousDirectory, err := os.Open(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		executablePath = previousExecutable
-		_ = os.Chdir(previousDirectory)
+		_ = previousDirectory.Chdir()
+		_ = previousDirectory.Close()
 	})
 	executablePath = func() (string, error) { return launcher, nil }
 	t.Setenv("HOME", home)

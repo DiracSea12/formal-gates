@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -48,6 +49,15 @@ func phase0Run(t *testing.T, dir, name string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
+func phase0RepoRoot(t *testing.T) string {
+	t.Helper()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(sourceFile) {
+		t.Fatal("could not locate the whitebox test source as an absolute path")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+}
+
 func phase0StartFixture(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -57,11 +67,7 @@ func phase0StartFixture(t *testing.T) (string, string) {
 	phase0Run(t, root, "git", "config", "user.name", "Phase0 Whitebox")
 	phase0Run(t, root, "git", "add", "requirements.md")
 	phase0Run(t, root, "git", "commit", "-m", "baseline")
-	packageRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root, packageRoot
+	return root, phase0RepoRoot(t)
 }
 
 func phase0InstallSource(t *testing.T) string {
@@ -977,10 +983,8 @@ func TestWhiteboxPhase0InstallValidatesManifestBeforeTargetWrite(t *testing.T) {
 func TestWhiteboxPhase0RelativeReleaseRootCannotOverlapSource(t *testing.T) {
 	source := phase0InstallSource(t)
 	releaseInsideSource := filepath.Join(source, "nested-release")
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
+	workingDirectory := t.TempDir()
+	useTestWorkingDirectory(t, workingDirectory)
 	relativeRelease, err := filepath.Rel(workingDirectory, releaseInsideSource)
 	if err != nil {
 		t.Fatal(err)
@@ -1089,10 +1093,7 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 }
 
 func TestWhiteboxPhase0BootstrapScriptsDelegateToNativeTransactionOwner(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := phase0RepoRoot(t)
 	shell := phase0ReadFile(t, filepath.Join(root, "install.command"))
 	powershell := phase0ReadFile(t, filepath.Join(root, "install.ps1"))
 	for name, script := range map[string]string{"install.command": shell, "install.ps1": powershell} {
@@ -1116,10 +1117,7 @@ func TestWhiteboxPhase0BootstrapScriptsDelegateToNativeTransactionOwner(t *testi
 }
 
 func TestWhiteboxPhase0PrecedenceInventoryAndStableDocsStayStageZero(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := phase0RepoRoot(t)
 	inventory := phase0ReadFile(t, filepath.Join(root, "references", "requirements-precedence.md"))
 	for _, required := range []string{"current-authority", "orthogonal", "historical", "superseded", "orchestration-pipeline-engine", "stage-0"} {
 		if !strings.Contains(inventory, required) {

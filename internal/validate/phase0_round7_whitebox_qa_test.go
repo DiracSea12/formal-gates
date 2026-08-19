@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -51,6 +52,15 @@ func round7CopyExecutable(t *testing.T, source, destination string) {
 		t.Fatal(err)
 	}
 	round7WriteFile(t, destination, string(data), 0o700)
+}
+
+func round7RepoRoot(t *testing.T) string {
+	t.Helper()
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(sourceFile) {
+		t.Fatal("could not locate the whitebox test source as an absolute path")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
 }
 
 func round7ChildEnvironment(overrides map[string]string) []string {
@@ -124,10 +134,7 @@ func TestWhiteboxPhase0Round7StableLauncherDiscoveryFencesCandidateWrites(t *tes
 	round7Run(t, root, "git", "add", "requirements.md")
 	round7Run(t, root, "git", "commit", "-m", "baseline")
 
-	packageRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	packageRoot := round7RepoRoot(t)
 	home := t.TempDir()
 	launcher := filepath.Join(home, ".local", "bin", nativeBinaryName())
 	candidate := filepath.Join(home, "candidate", nativeBinaryName())

@@ -6,6 +6,7 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,8 @@ func TestWhiteboxPhase0Round7RegistryMutationSurfaceOwnedByInstaller(t *testing.
 	for _, subcommand := range []string{"bootstrap", "register"} {
 		t.Run(subcommand, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := Run("formal-gates", []string{"registry", subcommand, "--path", "/tmp/round7-registry.json"}, IO{Stdout: &stdout, Stderr: &stderr})
+			registryPath := filepath.Join(t.TempDir(), "round7-registry.json")
+			code := Run("formal-gates", []string{"registry", subcommand, "--path", registryPath}, IO{Stdout: &stdout, Stderr: &stderr})
 			if code == 0 || !strings.Contains(stderr.String(), "unknown registry subcommand") {
 				t.Fatalf("removed registry writer %q was still callable: code=%d stdout=%s stderr=%s", subcommand, code, stdout.String(), stderr.String())
 			}

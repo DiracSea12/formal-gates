@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -395,10 +396,11 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 
 func installHostCLI(t *testing.T, provider, project string) (string, string) {
 	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(sourceFile) {
+		t.Fatal("could not locate the CLI test source as an absolute path")
 	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
 	sourceBinary := filepath.Join(repoRoot, "bin", installTestBinaryName())
 	if err := os.MkdirAll(filepath.Dir(sourceBinary), 0o700); err != nil {
 		t.Fatal(err)

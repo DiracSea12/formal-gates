@@ -3,6 +3,7 @@ package validate
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -23,11 +24,31 @@ func TestMain(m *testing.M) {
 
 func repoRootForCanaryTest(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(sourceFile) {
+		t.Fatal("could not locate the test helper source as an absolute path")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+}
+
+func useTestWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	original, err := os.Open(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return root
+	if err := os.Chdir(directory); err != nil {
+		_ = original.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := original.Chdir(); err != nil {
+			t.Errorf("restore test working directory: %v", err)
+		}
+		if err := original.Close(); err != nil {
+			t.Errorf("close saved test working directory: %v", err)
+		}
+	})
 }
 
 // stubLifecycle replaces the global workflowLifecycle verifier with an isolated
