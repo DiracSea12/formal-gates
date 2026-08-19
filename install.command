@@ -55,10 +55,15 @@ checksums="SHA256SUMS-${suffix}.txt"
 
 tmp="$(mktemp -d)"
 staged_launcher=""
+launcher_backup=""
 install_succeeded=false
 cleanup() {
-  if [ -n "$staged_launcher" ] && [ "$install_succeeded" != true ]; then
-    rm -f "$staged_launcher"
+  if [ "$install_succeeded" != true ]; then
+    if [ -n "$launcher_backup" ]; then
+      cp "$launcher_backup" "$binary_target"
+    elif [ -n "$staged_launcher" ]; then
+      rm -f "$staged_launcher"
+    fi
   fi
   rm -rf "$tmp"
 }
@@ -104,11 +109,17 @@ if [ -e "$binary_target" ] && [ ! -x "$binary_target" ]; then
   echo "stable launcher exists but is not executable: $binary_target" >&2
   exit 1
 fi
-if [ ! -e "$binary_target" ]; then
-  cp "$source_root/bin/formal-gates" "$binary_target"
-  chmod +x "$binary_target"
+if [ -e "$binary_target" ]; then
+  launcher_backup="$tmp/launcher.before"
+  cp "$binary_target" "$launcher_backup"
+else
   staged_launcher="$binary_target"
 fi
+# A pre-stage launcher may not understand the transaction-owner arguments. The
+# checksum-verified candidate replaces its executable bytes before the owner is
+# invoked, so upgrades use the same native transaction as fresh installs.
+cp "$source_root/bin/formal-gates" "$binary_target"
+chmod +x "$binary_target"
 cmd=("$binary_target" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   cmd+=(--project "$project")

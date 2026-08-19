@@ -410,8 +410,11 @@ func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	configPath := filepath.Join(project, ".codex", "hooks.json")
+	managedPath := filepath.Join(project, "AGENTS.md")
 	original := "{\n  \"custom\": \"unchanged\"\n}\n"
+	originalRule := "external rule\n"
 	mustWriteCLI(t, configPath, original)
+	mustWriteCLI(t, managedPath, originalRule)
 	var stdout, stderr bytes.Buffer
 
 	code := Run("formal-gates", []string{
@@ -424,6 +427,9 @@ func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
 	assertFileContains(t, filepath.Join(project, ".codex", "skills", "formal-gates", "SKILL.md"), "source")
 	if got := readFile(t, configPath); got != original {
 		t.Fatalf("--skip-hooks changed hook config: got %q want %q", got, original)
+	}
+	if got := readFile(t, managedPath); got != originalRule {
+		t.Fatalf("--skip-hooks changed managed rule: got %q want %q", got, originalRule)
 	}
 	if strings.Contains(stdout.String(), "hooks configured") {
 		t.Fatalf("--skip-hooks reported hook configuration success: %q", stdout.String())
@@ -555,7 +561,7 @@ func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T
 			t.Run(host+"/"+scope, func(t *testing.T) {
 				source := writeInstallSource(t, "source")
 				root := t.TempDir()
-				args := []string{"install", "--source", source, "--host", host, "--scope", scope, "--force", "--skip-hooks"}
+				args := []string{"install", "--source", source, "--host", host, "--scope", scope, "--force"}
 				if scope == "global" {
 					t.Setenv("HOME", root)
 					t.Setenv("USERPROFILE", root)

@@ -228,6 +228,7 @@ type BaselineReceipt struct {
 	PackageDigest         string            `json:"packageDigest"`
 	InstalledTarget       string            `json:"installedTarget,omitempty"`
 	InstalledTargetDigest string            `json:"installedTargetDigest,omitempty"`
+	Disjoint              map[string]string `json:"disjoint,omitempty"`
 	HookConfigDigest      string            `json:"hookConfigDigest,omitempty"`
 	ManagedRuleDigest     string            `json:"managedRuleDigest,omitempty"`
 	PackageManifest       []PackageEntry    `json:"packageManifest,omitempty"`
@@ -252,7 +253,7 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 	if err != nil {
 		return BaselineReceipt{}, err
 	}
-	receipt := BaselineReceipt{VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs, PackageDigest: packageDigest, PackageManifest: packageManifest.Entries, CanonicalPaths: map[string]string{}}
+	receipt := BaselineReceipt{VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs, PackageDigest: packageDigest, PackageManifest: packageManifest.Entries, CanonicalPaths: map[string]string{"sourceRoot": sourceAbs}, Disjoint: map[string]string{}}
 	canonicalSeen := map[string]string{"sourceRoot": sourceAbs}
 	if strings.TrimSpace(installedTarget) != "" {
 		installedAbs, err := filepath.Abs(installedTarget)
@@ -264,10 +265,13 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 			return BaselineReceipt{}, fmt.Errorf("baseline source root %s overlaps installed target %s", sourceAbs, installedAbs)
 		}
 		receipt.InstalledTarget = installedAbs
-		receipt.InstalledTargetDigest, err = PackageDigest(installedAbs)
-		if err != nil {
-			return BaselineReceipt{}, err
+		installedPackage, packageErr := PackageReceipt(installedAbs, sourceAbs)
+		if packageErr != nil {
+			return BaselineReceipt{}, packageErr
 		}
+		receipt.InstalledTargetDigest = installedPackage.Digest
+		receipt.Disjoint = installedPackage.Disjoint
+		receipt.CanonicalPaths["installedTarget"] = installedAbs
 		canonicalSeen["installedTarget"] = installedAbs
 	}
 	for name, path := range paths {
@@ -283,11 +287,10 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 			return BaselineReceipt{}, fmt.Errorf("resolve canonical path %s: %w", path, err)
 		}
 		for existingName, existingPath := range canonicalSeen {
-			if pathOverlaps(realPath, existingPath) {
+			if (existingName == "sourceRoot" || existingName == "installedTarget") && pathOverlaps(realPath, existingPath) {
 				return BaselineReceipt{}, fmt.Errorf("baseline canonical path %s overlaps %s (%s)", name, existingName, realPath)
 			}
 		}
-		canonicalSeen[name] = realPath
 		receipt.CanonicalPaths[name] = realPath
 		if strings.EqualFold(name, "hookConfig") || strings.EqualFold(name, "config") || strings.EqualFold(name, "hook") {
 			if !isFile(realPath) {
@@ -736,32 +739,7 @@ func registryLockPath(path string) string {
 }
 
 func acquireRegistryLock(path string) (func(), error) {
-	lockPath := registryLockPath(path)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
-				if removeErr := os.Remove(lockPath); removeErr == nil {
-					return acquireRegistryLock(path)
-				}
-			}
-			return nil, fmt.Errorf("registry lock is held: %s", lockPath)
-		}
-		return nil, err
-	}
-	if _, err := file.WriteString(fmt.Sprintf("pid=%d\n", os.Getpid())); err != nil {
-		_ = file.Close()
-		_ = os.Remove(lockPath)
-		return nil, err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(lockPath)
-		return nil, err
-	}
-	return func() { _ = os.Remove(lockPath) }, nil
+	return acquirePhase0Lock(registryLockPath(path), "registry")
 }
 
 func writeJSONAtomically(path string, value any) error {

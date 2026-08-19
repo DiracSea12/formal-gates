@@ -1,8 +1,8 @@
 package validate
 
-// This file is the public candidate/future envelope surface.  It is separate
-// from the stable RunState writer: a candidate must identify the immutable
-// workflow definition it was built from before it can create or bump state.
+// This file owns the read-only candidate/future envelope surface. It is
+// separate from the stable RunState writer: a candidate must identify the
+// immutable workflow definition it was built from before it can be inspected.
 
 import (
 	"crypto/sha256"
@@ -51,9 +51,19 @@ func LoadFutureDefinition(root string) (FutureDefinition, error) {
 		return FutureDefinition{}, fmt.Errorf("workflow definition %s is missing stateSchemaVersion or version", source)
 	}
 	sum := sha256.Sum256(data)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	if stateVersion != CurrentStateSchemaVersion {
+		return FutureDefinition{}, &UnsupportedRunVersionError{Field: "stateSchemaVersion", Expected: CurrentStateSchemaVersion, Observed: stateVersion}
+	}
+	if workflowVersion != CurrentWorkflowDefinitionVersion {
+		return FutureDefinition{}, &UnsupportedRunVersionError{Field: "workflowDefinitionVersion", Expected: CurrentWorkflowDefinitionVersion, Observed: workflowVersion}
+	}
+	if digest != CurrentWorkflowDefinitionDigest {
+		return FutureDefinition{}, &UnsupportedRunVersionError{Field: "definitionDigest", Expected: CurrentWorkflowDefinitionDigest, Observed: digest}
+	}
 	return FutureDefinition{
 		Source:          CurrentWorkflowDefinitionSource,
-		Digest:          "sha256:" + hex.EncodeToString(sum[:]),
+		Digest:          digest,
 		SchemaVersion:   stateVersion,
 		WorkflowVersion: workflowVersion,
 	}, nil
@@ -114,15 +124,6 @@ func WriteFutureEnvelope(root, path string, envelope VersionEnvelope) error {
 	return writeJSONAtomically(path, envelope)
 }
 
-func WriteFutureVersionedState(root, path string, envelope VersionEnvelope, value any) error {
-	if err := ValidateFutureEnvelope(root, envelope); err != nil {
-		return err
-	}
-	return withFutureAdmission(root, func() error {
-		return writeVersionedStateDocument(path, envelope, value)
-	})
-}
-
 func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
 	report, err := DiagnoseState(path)
 	if err != nil {
@@ -130,6 +131,10 @@ func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
 	}
 	definition, definitionErr := LoadFutureDefinition(root)
 	if definitionErr != nil {
+		if IsUnsupportedRunVersion(definitionErr) {
+			report.Recommendation = definitionErr.Error() + "; rebuild the candidate from the owning definition"
+			return report, nil
+		}
 		return report, definitionErr
 	}
 	report.Supported = VersionEnvelope{
@@ -158,98 +163,4 @@ func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
 		}
 	}
 	return report, nil
-}
-
-// BumpFutureState advances the generation owned by the candidate writer. It
-// validates the current definition before reading or writing and refuses
-// legacy/unversioned documents; there is no migration fallback here.
-func BumpFutureState(root, path string) error {
-	return withFutureAdmission(root, func() error {
-		return bumpFutureState(root, path)
-	})
-}
-
-func bumpFutureState(root, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
-		return fmt.Errorf("future state is not JSON: %w", err)
-	}
-	envelope := VersionEnvelope{
-		Writer:                    rawString(document, "writer"),
-		StateSchemaVersion:        rawString(document, "stateSchemaVersion"),
-		WorkflowDefinitionVersion: rawString(document, "workflowDefinitionVersion"),
-		DefinitionSource:          rawString(document, "definitionSource"),
-		DefinitionDigest:          rawString(document, "definitionDigest"),
-		PackageDigest:             rawString(document, "packageDigest"),
-	}
-	if err := ValidateFutureEnvelope(root, envelope); err != nil {
-		return err
-	}
-	generation := uint64(0)
-	switch value := document["generation"].(type) {
-	case float64:
-		if value < 0 || value != float64(uint64(value)) {
-			return fmt.Errorf("future state generation is invalid")
-		}
-		generation = uint64(value)
-	case nil:
-	default:
-		return fmt.Errorf("future state generation is invalid")
-	}
-	if generation == ^uint64(0) {
-		return fmt.Errorf("future state generation overflow")
-	}
-	document["generation"] = generation + 1
-	document["writer"] = envelope.Writer
-	document["stateSchemaVersion"] = envelope.StateSchemaVersion
-	document["workflowDefinitionVersion"] = envelope.WorkflowDefinitionVersion
-	document["definitionSource"] = envelope.DefinitionSource
-	document["definitionDigest"] = envelope.DefinitionDigest
-	return writeJSONAtomically(path, document)
-}
-
-// withFutureAdmission keeps candidate state writes behind the same stable
-// launcher and registry admission boundary as legacy workflow state writes.
-// Test binaries retain the in-process fixture path; shipped binaries must
-// resolve an active record for the package root before opening the state file.
-func withFutureAdmission(root string, write func() error) error {
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	base := filepath.Base(filepath.Clean(executable))
-	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
-		return write()
-	}
-	registryPath, recordID, err := discoverAdmissionBinding(root, root, "", "")
-	if err != nil {
-		return err
-	}
-	if registryPath == "" || recordID == "" {
-		return fmt.Errorf("UNREGISTERED_INSTALL: future workflow writes require an admitted stable launcher")
-	}
-	unlock, err := acquireRegistryLock(registryPath)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	receipt, err := admitRegistryUnlocked(registryPath, recordID)
-	if err != nil {
-		return err
-	}
-	if !receipt.Accepted {
-		return fmt.Errorf("%s: future workflow write refused for registry record %q", receipt.Code, recordID)
-	}
-	_, record, err := registryAdmissionIdentity(registryPath, recordID)
-	if err != nil {
-		return err
-	}
-	if err := verifyRegistryBinding(registryPath, recordID, record.ProjectRoot, root); err != nil {
-		return err
-	}
-	return write()
 }

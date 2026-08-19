@@ -32,6 +32,7 @@ $checksums = "SHA256SUMS-$suffix.txt"
 
 $tmp = Join-Path $env:TEMP ("formal-gates-" + [guid]::NewGuid().ToString())
 $stagedLauncher = $false
+$launcherBackup = ""
 $installSucceeded = $false
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
@@ -68,10 +69,16 @@ try {
   # writer.
   $launcherDir = Split-Path -Parent $formalBinary
   New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
-  if (-not (Test-Path -LiteralPath $formalBinary)) {
-    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
+  if (Test-Path -LiteralPath $formalBinary) {
+    $launcherBackup = Join-Path $tmp "launcher.before.exe"
+    Copy-Item $formalBinary $launcherBackup -Force
+  } else {
     $stagedLauncher = $true
   }
+  # A pre-stage launcher may not understand the transaction-owner arguments.
+  # Replace its executable bytes with the verified candidate before invoking
+  # the native transaction so upgrades and fresh installs share one owner.
+  Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
   $args = @("install", "--source", $sourceDir.FullName, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
@@ -94,8 +101,12 @@ try {
   Write-Host "Native binary: $formalBinary"
 }
 finally {
-  if ($stagedLauncher -and -not $installSucceeded -and (Test-Path -LiteralPath $formalBinary)) {
-    Remove-Item -LiteralPath $formalBinary -Force
+  if (-not $installSucceeded) {
+    if ($launcherBackup -and (Test-Path -LiteralPath $launcherBackup)) {
+      Copy-Item $launcherBackup $formalBinary -Force
+    } elseif ($stagedLauncher -and (Test-Path -LiteralPath $formalBinary)) {
+      Remove-Item -LiteralPath $formalBinary -Force
+    }
   }
   Remove-Item $tmp -Recurse -Force
 }

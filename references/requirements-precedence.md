@@ -36,5 +36,5 @@ owned by `prompts/reviewer-base.md`.
 
 When a later stage changes a current contract, it must add a dated inventory
 entry identifying the superseded source. The stage-0 implementation must not
-add future `drive`/`submit` behavior to stable `SKILL.md`, README files, or
-action prompts.
+add later-stage workflow behavior to stable `SKILL.md`, README files, or action
+prompts.

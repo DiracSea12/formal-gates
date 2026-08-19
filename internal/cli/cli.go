@@ -203,7 +203,7 @@ func runInstall(args []string, streams IO) (int, error) {
 		if target.HookConfig != "" {
 			fmt.Fprintf(streams.Stdout, "formal-gates hooks configured for %s: %s\n", target.Host, target.HookConfig)
 		}
-		if target.ManagedRulePath != "" {
+		if target.ManagedRulePath != "" && target.ManagedRuleAction == "APPLIED" {
 			fmt.Fprintf(streams.Stdout, "formal-gates host instruction block written for %s: %s\n", target.Host, target.ManagedRulePath)
 		}
 	}
@@ -616,44 +616,6 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 		}
 		report, err := validate.DiagnoseFutureState(*root, *path)
 		return printValue(streams.Stdout, report, err)
-	case "write":
-		fs := newFlagSet("workflow future write", streams)
-		root := fs.String("root", ".", "package root")
-		path := fs.String("path", "", "future state path")
-		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
-		value := fs.String("value", "{}", "JSON object payload")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		if strings.TrimSpace(*path) == "" {
-			return 1, fmt.Errorf("workflow future write requires --path")
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(*value), &payload); err != nil {
-			return 1, fmt.Errorf("workflow future write --value must be a JSON object: %w", err)
-		}
-		envelope, err := validate.GenerateFutureEnvelope(*root, *packageDigest)
-		if err != nil {
-			return 1, err
-		}
-		if err := validate.WriteFutureVersionedState(*root, *path, envelope, payload); err != nil {
-			return 1, err
-		}
-		return printValue(streams.Stdout, envelope, nil)
-	case "bump":
-		fs := newFlagSet("workflow future bump", streams)
-		root := fs.String("root", ".", "package root")
-		path := fs.String("path", "", "future state path")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		if strings.TrimSpace(*path) == "" {
-			return 1, fmt.Errorf("workflow future bump requires --path")
-		}
-		if err := validate.BumpFutureState(*root, *path); err != nil {
-			return 1, err
-		}
-		return printValue(streams.Stdout, map[string]any{"path": *path, "status": "BUMPED"}, nil)
 	default:
 		return 1, fmt.Errorf("unknown workflow future action: %s", action)
 	}
@@ -1081,10 +1043,11 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 	case "fault-matrix":
 		fs := newFlagSet("canary fault-matrix", streams)
 		root := fs.String("root", ".", "package root")
+		fixture := fs.String("fixture", "", "one fault fixture, such as copy-component:prompts or verify-stage:installed-target")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		report, result := validate.InstallFaultMatrix(validate.InstallFaultMatrixOptions{Root: *root})
+		report, result := validate.InstallFaultMatrix(validate.InstallFaultMatrixOptions{Root: *root, Fixture: *fixture})
 		if code, err := printJSON(streams.Stdout, report); err != nil {
 			return code, err
 		}
@@ -1486,7 +1449,7 @@ func printWorkflowUsage(w io.Writer, program string) {
 }
 
 func printFutureUsage(w io.Writer, program string) error {
-	fmt.Fprintf(w, "Usage: %s workflow future <generate|view|write|bump>\n\nFuture envelope operations are owned by the candidate engine and require the immutable definitions/workflow.json identity.\n", program)
+	fmt.Fprintf(w, "Usage: %s workflow future <generate|view>\n\nInspect the versioned candidate envelope derived from definitions/workflow.json. State mutation is not available on this stable command surface.\n", program)
 	return nil
 }
 
@@ -1503,7 +1466,7 @@ func printLifecycleUsage(w io.Writer, program string) {
 }
 
 func printCanaryUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  fault-matrix    exercise public install copy/switch/verify/recovery fixtures\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  fault-matrix    exercise public install copy/switch/verify/recovery fixtures\n                  --fixture copy-component:prompts|verify-stage:installed-target selects one fixture\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 // printVersion reports the binary's version situation. The project keeps no

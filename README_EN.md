@@ -71,7 +71,7 @@ Review runs in mutually invisible independent sessions: a reviewer receives only
 - **A review gate is just a file** — every independent review gate (called a "gate" here) is one Markdown file, and the filename is its ID. Add a file to add a gate, delete one to drop it, edit the file to change what it checks.
 - **Repair and inheritance** — failures are sent back for repair; PASS conclusions that the repair can't affect are inherited directly, while any gate that does re-run always sees the complete change, and testing re-runs all approved cases on the new snapshot.
 - **The CLI is the only record** — during a run there is one temporary state file; when it ends only an immutable record remains. The CLI copies no project files; the VCS itself is the whole truth.
-- **Native VCS** — Git, SVN, and P4 drive snapshots and diffs directly; projects without a VCS don't enter the formal flow.
+- **Native VCS** — Git, SVN, and P4 control snapshots and diffs directly; projects without a VCS don't enter the formal flow.
 
 ---
 

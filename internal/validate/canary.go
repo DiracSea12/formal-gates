@@ -24,7 +24,10 @@ type PortableCanaryReport struct {
 	Checks        []CanaryCheck `json:"checks"`
 }
 
-type InstallFaultMatrixOptions struct{ Root string }
+type InstallFaultMatrixOptions struct {
+	Root    string
+	Fixture string
+}
 
 type InstallFaultMatrixReport = PortableCanaryReport
 
@@ -45,7 +48,10 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 		}
 		report.Checks = append(report.Checks, CanaryCheck{Name: name, Status: status, Detail: detail})
 	}
-	phases := []string{"journal-boundary", "intent", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit"}
+	phases := []string{"journal-boundary", "intent", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "verify-stage:installed-target"}
+	if fixture := strings.TrimSpace(options.Fixture); fixture != "" {
+		phases = []string{fixture}
+	}
 	for _, phase := range phases {
 		phase := phase
 		fixture, err := os.MkdirTemp("", "formal-gates-fault-matrix-")

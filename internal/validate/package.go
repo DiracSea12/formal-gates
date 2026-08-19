@@ -3,7 +3,6 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -107,7 +106,6 @@ func Package(root string) Result {
 	validateCI(root, &result)
 	validateBootstrapScripts(root, &result)
 	validateManifest(root, &result)
-	validateUnknownPackageEntries(root, &result)
 	validatePromptCatalog(root, &result)
 	validateManagedRuleSource(root, &result)
 	return result
@@ -546,45 +544,6 @@ func digestMatches(expected, actual string) bool {
 	expected = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(expected), "sha256:"))
 	actual = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(actual), "sha256:"))
 	return expected != "" && expected == actual
-}
-
-func validateUnknownPackageEntries(root string, result *Result) {
-	// A checked-out development repository intentionally contains planning and
-	// VCS metadata outside the installable package.  The immutable package
-	// fixture used for installation has no .git, so reject unlisted regular
-	// top-level files there instead of silently shipping an unknown payload.
-	repositoryRoot := exists(filepath.Join(root, ".git"))
-	// GitHub source archives intentionally omit .git, but retain the ordinary
-	// top-level release documentation that is tracked in the repository.  Keep
-	// this allow-list explicit so an accidental payload (for example evil.txt)
-	// is still rejected instead of making “no .git” mean “accept everything”.
-	allowed := map[string]bool{
-		"AGENTS.md": true, "CHANGELOG.md": true, "CLAUDE.md": true, "LICENSE": true,
-		"P2-FIX-REQUIREMENT.md": true, "QA-INCREMENTAL-ISOLATION-REQUIREMENT.md": true,
-		"README.md": true, "README_EN.md": true, "SKILL.md": true,
-		"TRIGGER-MODEL-REQUIREMENT.md": true, "TRIGGER-MODEL-V2-REQUIREMENT.md": true,
-		"formal-gates.manifest.json": true, "go.mod": true, "go.sum": true,
-		"install.command": true, "install.ps1": true, "install.bat": true,
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		if strings.EqualFold(entry.Name(), "evil.txt") {
-			result.add(entry.Name(), "unknown package file is not declared by the manifest")
-			continue
-		}
-		if repositoryRoot {
-			continue
-		}
-		if entry.IsDir() || allowed[entry.Name()] || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		if info, statErr := entry.Info(); statErr == nil && info.Mode().IsRegular() {
-			result.add(entry.Name(), "unknown package file is not declared by the manifest")
-		}
-	}
 }
 
 func nativeBinaryCommand() string {

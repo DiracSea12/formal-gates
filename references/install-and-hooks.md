@@ -25,20 +25,6 @@ Windows 上构建并调用 `bin\formal-gates.exe`。
 检查不需要实机 AI host 的包、流程、hook 决策和安装行为。这两个命令都不是独立审查
 或正式 Seal 结果。
 
-候选/future 状态使用唯一的 engine envelope 入口；定义来源和摘要来自包内固定的
-`definitions/workflow.json`，不接受占位摘要或第二份定义。正常检查/写入/递增流程为：
-
-```bash
-formal-gates workflow future generate --root <package> --output <envelope.json>
-formal-gates workflow future view --path <state.json>
-formal-gates workflow future write --root <package> --path <state.json> --value '{"status":"ACTIVE"}'
-formal-gates workflow future bump --root <package> --path <state.json>
-```
-
-`write` 和 `bump` 在打开目标前验证 writer、schema、definition source/digest；旧格式或
-未来格式只能 `view`/diagnose，不能通过兼容旁路写回。它们还必须由 registry 已登记的
-stable launcher 驱动；未登记的开发 binary 在打开目标前返回 `UNREGISTERED_INSTALL`。
-
 ## 原生安装
 
 ```bash
@@ -55,7 +41,7 @@ $HOME/.local/bin/formal-gates uninstall \
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
 考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
-关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置必须逐字节保持不变时，才使用
+关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置和受理规则都必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
 只有带 `--force` 时，安装才会替换一个已存在的 formal-gates 目标。它不得把另一个
@@ -253,8 +239,8 @@ observe/reconcile 恢复旧 runtime/config/registry bytes，再写 recovery rece
 包含 source/package 与 installed digest、逐输入 `Lstat`/realpath manifest、hook/config 与
 managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resource canonical paths。
 重复安装时如果 hook 或 managed-rule 内容已经相同，receipt 的 action 会明确记录
-`SKIPPED_UNCHANGED`，不会用另一个兼容 writer 改写字节；`--skip-hooks` 只跳过 hook，
-不绕过 runtime、receipt 或 registry transaction。故障矩阵可用同一原生入口复现：
+`SKIPPED_UNCHANGED`，不会用另一个兼容 writer 改写字节；`--skip-hooks` 同时跳过 hook
+和受理规则更新，不绕过 runtime、receipt 或 registry transaction。故障矩阵可用同一原生入口复现：
 
 ```bash
 FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit \
@@ -263,10 +249,12 @@ FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|prepared|switched|po
 ```
 
 也可以用公开 fixture 一次覆盖复制、切换、installed-binary smoke、pointer、hook、规则、
-registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher：
+registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher。复制
+fixture 可按组件选择，installed-target 校验 fixture 可按阶段选择：
 
 ```bash
-<stable-launcher> canary fault-matrix --root <candidate>
+<stable-launcher> canary fault-matrix --root <candidate> --fixture copy-component:prompts
+<stable-launcher> canary fault-matrix --root <candidate> --fixture verify-stage:installed-target
 ```
 
 真实 hook JSON、managed-rule、pointer/config、registry 和 post-switch/pre-commit

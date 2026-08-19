@@ -37,6 +37,25 @@ func TestValidateVersionEnvelopeUsesExactWriteBarrier(t *testing.T) {
 	}
 }
 
+func TestLoadFutureDefinitionRejectsChangedBytesWithoutVersionBump(t *testing.T) {
+	root := t.TempDir()
+	definitionDir := filepath.Join(root, "definitions")
+	if err := os.MkdirAll(definitionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	definition, err := os.ReadFile(filepath.Join(repoRootValidateTest(t), "definitions", "workflow.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition = append(definition, '\n')
+	if err := os.WriteFile(filepath.Join(definitionDir, "workflow.json"), definition, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFutureDefinition(root); !IsUnsupportedRunVersion(err) || !strings.Contains(err.Error(), "definitionDigest") {
+		t.Fatalf("changed definition without a version bump was accepted: %v", err)
+	}
+}
+
 func TestWriteVersionedStateOwnsIdentityFieldsAndRejectsBeforeCreate(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "state.json")

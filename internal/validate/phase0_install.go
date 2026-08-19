@@ -69,6 +69,9 @@ func switchPreparedInstallTree(candidate *stagedInstallTree, force bool) error {
 }
 
 func verifySwitchedInstallTree(candidate stagedInstallTree, allowPlaceholder bool) error {
+	if err := installFaultAliases("verify-stage:installed-target", "verify:installed-target"); err != nil {
+		return err
+	}
 	installed, err := PackageReceipt(candidate.Destination, candidate.Source)
 	if err != nil {
 		return fmt.Errorf("switched install package validation failed: %w", err)
@@ -114,8 +117,80 @@ func copyTreeImmutable(source, target string) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("release entry %s is not an immutable regular file", filepath.ToSlash(rel))
 		}
+		topLevel := strings.Split(filepath.ToSlash(rel), "/")[0]
+		if err := installFaultAliases("copy-component:"+topLevel, "copy:"+topLevel); err != nil {
+			return err
+		}
 		return copyFile(path, filepath.Join(target, rel), info.Mode())
 	})
+}
+
+// copyTreeForBackup snapshots legacy installs as bytes.  Older releases used
+// prompt/gate symlinks, which are valid historical runtime state but are not
+// valid immutable release input.  Following those links only while making the
+// transaction's private undo copy lets a normal upgrade retain rollback
+// coverage without reintroducing symlinks into the new package.
+func copyTreeForBackup(source, target string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("backup source is not a directory: %s", source)
+	}
+	return copyBackupDirectory(source, target)
+}
+
+func copyBackupDirectory(source, target string) error {
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == ".git" || entry.Name() == ".gates" || (entry.IsDir() && entry.Name() == "__pycache__") {
+			continue
+		}
+		from := filepath.Join(source, entry.Name())
+		to := filepath.Join(target, entry.Name())
+		info, err := os.Lstat(from)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, statErr := os.Stat(from)
+			if statErr != nil {
+				return statErr
+			}
+			if resolved.IsDir() {
+				if err := copyBackupDirectory(from, to); err != nil {
+					return err
+				}
+			} else if resolved.Mode().IsRegular() {
+				if err := copyFile(from, to, resolved.Mode()); err != nil {
+					return err
+				}
+			} else {
+				return fmt.Errorf("backup entry %s is not a regular file or directory", filepath.ToSlash(filepath.Join(filepath.Base(source), entry.Name())))
+			}
+			continue
+		}
+		if info.IsDir() {
+			if err := copyBackupDirectory(from, to); err != nil {
+				return err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("backup entry %s is not a regular file", filepath.ToSlash(entry.Name()))
+		}
+		if err := copyFile(from, to, info.Mode()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateBinaryFormat rejects a regular file that cannot be executed by any
@@ -453,6 +528,15 @@ func installFault(phase string) error {
 	return nil
 }
 
+func installFaultAliases(phases ...string) error {
+	for _, phase := range phases {
+		if err := installFault(phase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error {
 	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("installed binary smoke path is empty")
@@ -491,43 +575,40 @@ func installLockPath(target string) string {
 }
 
 func acquireInstallLock(target string) (func(), error) {
-	path := installLockPath(target)
+	return acquirePhase0Lock(installLockPath(target), "install/uninstall")
+}
+
+func acquirePhase0Lock(path, description string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			// A crashed owner can leave a fresh-looking lock behind. Reconcile
-			// the recorded PID before applying the age fallback so a journal is
-			// not blocked until an arbitrary timeout expires.
-			if lockOwnerDead(path) {
-				if removeErr := os.Remove(path); removeErr == nil {
-					return acquireInstallLock(target)
-				}
+	for {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			if _, writeErr := file.WriteString(fmt.Sprintf("pid=%d\n", os.Getpid())); writeErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				return nil, writeErr
 			}
-			if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
-				if removeErr := os.Remove(path); removeErr == nil {
-					return acquireInstallLock(target)
-				}
+			if closeErr := file.Close(); closeErr != nil {
+				_ = os.Remove(path)
+				return nil, closeErr
 			}
-			return nil, fmt.Errorf("install/uninstall lock is held: %s", path)
+			return func() { _ = os.Remove(path) }, nil
 		}
-		return nil, err
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if lockIsStale(path) {
+			if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
+				continue
+			}
+		}
+		return nil, fmt.Errorf("%s lock is held: %s", description, path)
 	}
-	if _, err := file.WriteString(fmt.Sprintf("pid=%d\n", os.Getpid())); err != nil {
-		file.Close()
-		_ = os.Remove(path)
-		return nil, err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, err
-	}
-	return func() { _ = os.Remove(path) }, nil
 }
 
-func lockOwnerDead(path string) bool {
+func lockIsStale(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -545,6 +626,9 @@ func lockOwnerDead(path string) bool {
 		return true
 	}
 	if err := process.Signal(syscall.Signal(0)); err == nil {
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
+			return true
+		}
 		return false
 	}
 	return true

@@ -62,6 +62,7 @@ type InstallTargetReport struct {
 	PackageDigest     string            `json:"packageDigest,omitempty"`
 	SourceLstat       PathLstat         `json:"sourceLstat"`
 	InstalledLstat    PathLstat         `json:"installedLstat"`
+	Disjoint          map[string]string `json:"disjoint"`
 	DisjointProof     map[string]string `json:"disjointProof"`
 	HookAction        string            `json:"hookAction,omitempty"`
 	ManagedRuleAction string            `json:"managedRuleAction,omitempty"`
@@ -421,7 +422,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			}
 			hookChanges[target.hookConfig] = changed
 		}
-		if target.managedRulePath != "" {
+		if target.managedRulePath != "" && !options.SkipHooks {
 			if err := installFault("managed-rule"); err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
@@ -434,7 +435,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 	}
 	records := make([]RegistryRecord, 0, len(targets))
 	for _, target := range targets {
-		installedReceipt, receiptErr := PackageReceipt(target.targetPath)
+		installedReceipt, receiptErr := PackageReceipt(target.targetPath, sourceAbs)
 		if receiptErr != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installed target receipt failed: %w", receiptErr))
 		}
@@ -455,6 +456,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			SourceDigest:    sourcePackage.Digest,
 			InstalledDigest: installedReceipt.Digest,
 			Manifest:        sourcePackage.Entries,
+			Disjoint:        installedReceipt.Disjoint,
 			CanonicalPaths:  canonicalNamespaces,
 			Smoke:           "PASS",
 			VCSIdentity:     vcsIdentity,
@@ -532,20 +534,6 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		return UninstallReport{}, err
 	}
 	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath})
-	if registryPath != "" {
-		// Uninstall must use the same stable launcher identity that install
-		// recorded; falling back to target/bin would leave hooks pointing at a
-		// launcher outside the host target after a published install.
-		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
-			for index := range targets {
-				for _, record := range doc.Records {
-					if filepath.Clean(record.Target) == filepath.Clean(targets[index].targetPath) && strings.TrimSpace(record.LauncherPath) != "" {
-						targets[index].launcherPath = record.LauncherPath
-					}
-				}
-			}
-		}
-	}
 	var unlock func()
 	if registryPath != "" {
 		unlock, err = acquireInstallLock(registryPath)
@@ -560,6 +548,19 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		defer unlock()
 		if err := reconcileOuterInstallJournal(registryPath); err != nil {
 			return UninstallReport{}, err
+		}
+		// Resolve the launcher only after taking both locks.  Otherwise a
+		// concurrent install can change the registry between this lookup and the
+		// uninstall transaction, leaving hooks and the registry describing
+		// different generations.
+		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			for index := range targets {
+				for _, record := range doc.Records {
+					if filepath.Clean(record.Target) == filepath.Clean(targets[index].targetPath) && strings.TrimSpace(record.LauncherPath) != "" {
+						targets[index].launcherPath = record.LauncherPath
+					}
+				}
+			}
 		}
 	}
 	transactionParent := filepath.Dir(registryPath)
@@ -643,6 +644,9 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	if err := installFault("switched"); err != nil {
 		return UninstallReport{}, rollback(err)
 	}
+	if err := installFault("post-switch-smoke"); err != nil {
+		return UninstallReport{}, rollback(err)
+	}
 	for _, target := range targets {
 		if target.managedRulePath != "" {
 			if err := installFault("managed-rule"); err != nil {
@@ -661,12 +665,12 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	}
 	if registryPath != "" {
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
-			updated := make([]RegistryRecord, 0, len(targets))
-			for index := range doc.Records {
+			updated := append([]RegistryRecord(nil), doc.Records...)
+			for index := range updated {
 				for _, target := range targets {
-					if filepath.Clean(doc.Records[index].Target) == filepath.Clean(target.targetPath) {
-						doc.Records[index].Status = "disabled"
-						updated = append(updated, doc.Records[index])
+					if filepath.Clean(updated[index].Target) == filepath.Clean(target.targetPath) {
+						updated[index].Status = "disabled"
+						break
 					}
 				}
 			}
@@ -717,7 +721,7 @@ func snapshotInstallTree(path, backup string) (installTreeBackup, error) {
 		return state, fmt.Errorf("cannot back up non-directory install target: %s", state.path)
 	}
 	state.existed = true
-	if err := copyTreeImmutable(state.path, state.backup); err != nil {
+	if err := copyTreeForBackup(state.path, state.backup); err != nil {
 		return installTreeBackup{}, err
 	}
 	return state, nil
@@ -1252,6 +1256,9 @@ func copyInstallRuntime(source, target string, force bool) error {
 			// it through Package validation, while the fixture remains runtime-only.
 			continue
 		}
+		if err := installFaultAliases("copy-component:"+entry, "copy:"+entry); err != nil {
+			return err
+		}
 		if err := copyPath(from, to); err != nil {
 			return err
 		}
@@ -1491,6 +1498,20 @@ func readHookConfig(path string) (map[string]any, error) {
 	var config map[string]any
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("existing hook config is not valid JSON; refusing to touch it: %s", path)
+	}
+	if config == nil {
+		return nil, fmt.Errorf("existing hook config must be a JSON object; refusing to touch it: %s", path)
+	}
+	if rawHooks, present := config["hooks"]; present {
+		hooks, ok := rawHooks.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("existing hook config has malformed hooks object; refusing to touch it: %s", path)
+		}
+		for event, rawEntries := range hooks {
+			if _, ok := rawEntries.([]any); !ok {
+				return nil, fmt.Errorf("existing hook config has malformed %s entries; refusing to touch it: %s", event, path)
+			}
+		}
 	}
 	return config, nil
 }
