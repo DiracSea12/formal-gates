@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -666,8 +667,25 @@ func TestWhiteboxPhase0Round12InstallAndUninstallUseTheSameLockOwner(t *testing.
 }
 
 func TestWhiteboxPhase0Round12InstallFaultsRestoreRegistryIdentityAndCleanup(t *testing.T) {
-	for _, fault := range []string{"journal-boundary", "intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "verify-stage:installed-target"} {
-		t.Run(fault, func(t *testing.T) {
+	faults := []struct {
+		name  string
+		phase string
+	}{
+		{"journal-boundary", "intent"},
+		{"intent", "intent"},
+		{"registry", "intent"},
+		{"prepared", "prepared"},
+		{"switched", "switched"},
+		{"post-switch-smoke", "switched"},
+		{"pointer", "smoke-passed"},
+		{"hook", "smoke-passed"},
+		{"managed-rule", "smoke-passed"},
+		{"registry-commit", "smoke-passed"},
+		{"copy-component:prompts", "intent"},
+		{"verify-stage:installed-target", "switched"},
+	}
+	for _, fault := range faults {
+		t.Run(fault.name, func(t *testing.T) {
 			source := round12InstallSource(t)
 			project := t.TempDir()
 			registry := filepath.Join(t.TempDir(), "registry.json")
@@ -681,10 +699,10 @@ func TestWhiteboxPhase0Round12InstallFaultsRestoreRegistryIdentityAndCleanup(t *
 			round12WriteFile(t, targets[0].hookConfig, []byte(`{"hooks":{"External":[{"command":"keep"}]}}`+"\n"), 0o600)
 			round12WriteFile(t, targets[0].managedRulePath, []byte("external rule\n"), 0o600)
 			round12WriteFile(t, launcher, []byte("old launcher\n"), 0o700)
-			t.Setenv("FORMAL_GATES_INSTALL_FAULT", fault)
+			t.Setenv("FORMAL_GATES_INSTALL_FAULT", fault.name)
 			_, err = Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true})
 			if err == nil || !strings.Contains(err.Error(), "deterministic install fault") {
-				t.Fatalf("fault %q did not stop installation: %v", fault, err)
+				t.Fatalf("fault %q did not stop installation: %v", fault.name, err)
 			}
 			if got := round12ReadFile(t, filepath.Join(targets[0].targetPath, "old.txt")); string(got) != "old runtime\n" || string(round12ReadFile(t, targets[0].hookConfig)) != `{"hooks":{"External":[{"command":"keep"}]}}`+"\n" || string(round12ReadFile(t, targets[0].managedRulePath)) != "external rule\n" || string(round12ReadFile(t, launcher)) != "old launcher\n" {
 				t.Fatal("install fault did not restore old runtime/configuration identity")
@@ -695,6 +713,16 @@ func TestWhiteboxPhase0Round12InstallFaultsRestoreRegistryIdentityAndCleanup(t *
 			var receipt installRecoveryReceipt
 			if err := json.Unmarshal(round12ReadFile(t, installOuterJournalPath(registry)+".failure.json"), &receipt); err != nil {
 				t.Fatal(err)
+			}
+			if receipt.Operation != "install" || receipt.Target != registry || receipt.Phase != fault.phase {
+				t.Fatalf("recovery receipt does not identify the interrupted operation: fault=%s receipt=%+v", fault.name, receipt)
+			}
+			expectedFact := "deterministic install fault injected at " + fault.name
+			if receipt.ObservedFact != expectedFact || receipt.Reconcile != "restore all target, release, binary, hook, managed-rule and registry snapshots" {
+				t.Fatalf("recovery receipt does not bind observation and reconciliation: fault=%s receipt=%+v", fault.name, receipt)
+			}
+			if observedAt, err := time.Parse(time.RFC3339Nano, receipt.ObservedAt); err != nil || observedAt.IsZero() {
+				t.Fatalf("recovery receipt has invalid observation timestamp %q: %v", receipt.ObservedAt, err)
 			}
 			if !receipt.Recovered || receipt.Outcome != "ROLLED_BACK" || receipt.VCSIdentity == "" || receipt.PackageDigest == "" || receipt.InstalledTarget == "" || receipt.Generation == 0 || receipt.Lease == "" || receipt.Token == "" || receipt.RecoveryReceipt == "" || receipt.StableDigest == "" {
 				t.Fatalf("recovery identity is incomplete: %+v", receipt)
@@ -1272,14 +1300,28 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 			t.Fatalf("inventory path is not present in installed tree: %s: %v", path, err)
 		}
 	}
-	docFiles := []string{filepath.Join(root, "SKILL.md"), filepath.Join(root, "README.md"), filepath.Join(root, "README_EN.md"), filepath.Join(root, "references", "requirements-precedence.md")}
-	for _, pattern := range []string{filepath.Join(root, "prompts", "*.md"), filepath.Join(root, "prompts", "actions", "*.md"), filepath.Join(root, "references", "*.md")} {
+	stableDocFiles := []string{filepath.Join(root, "SKILL.md"), filepath.Join(root, "README.md"), filepath.Join(root, "README_EN.md")}
+	for _, pattern := range []string{filepath.Join(root, "prompts", "*.md"), filepath.Join(root, "prompts", "actions", "*.md")} {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			t.Fatal(err)
 		}
-		docFiles = append(docFiles, matches...)
+		stableDocFiles = append(stableDocFiles, matches...)
 	}
+	futureCommandToken := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])(drive|submit)([^[:alnum:]_-]|$)`)
+	for _, path := range stableDocFiles {
+		content := string(round12ReadFile(t, path))
+		if token := futureCommandToken.FindString(content); token != "" {
+			t.Fatalf("stable document %s leaks future command token %q", path, token)
+		}
+	}
+	docFiles := append([]string{}, stableDocFiles...)
+	referenceFiles, err := filepath.Glob(filepath.Join(root, "references", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docFiles = append(docFiles, filepath.Join(root, "references", "requirements-precedence.md"))
+	docFiles = append(docFiles, referenceFiles...)
 	for _, path := range docFiles {
 		content := strings.ToLower(string(round12ReadFile(t, path)))
 		for _, forbidden := range []string{"workflow drive", "workflow submit", "drive/submit", "shadow"} {
@@ -1356,6 +1398,9 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		help.WriteByte('\n')
 	}
 	helpText := strings.ToLower(help.String())
+	if token := futureCommandToken.FindString(helpText); token != "" {
+		t.Fatalf("public help leaks future command token %q: %s", token, helpText)
+	}
 	for _, forbidden := range []string{"workflow drive", "workflow submit", "drive/submit", "shadow"} {
 		if strings.Contains(helpText, forbidden) {
 			t.Fatalf("public help leaks future surface %q: %s", forbidden, helpText)
