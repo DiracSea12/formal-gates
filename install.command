@@ -120,6 +120,18 @@ if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
 "${cmd[@]}"
+# The native transaction now owns a valid stable launcher. A later bootstrap
+# receipt failure must not remove that committed launcher during shell cleanup.
+staged_launcher=""
+
+# Bootstrap the already-installed artifact through the same stable launcher.
+# This creates the admission receipt before any workflow command can write
+# state, while keeping the source archive out of the writer path.
+bootstrap_cmd=("$binary_target" install --bootstrap --source "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
+if [ -n "$project" ]; then
+  bootstrap_cmd+=(--project "$project")
+fi
+"${bootstrap_cmd[@]}"
 install_succeeded=true
 
 echo "Installed package to $install_root"

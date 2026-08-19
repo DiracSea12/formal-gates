@@ -36,7 +36,8 @@ formal-gates workflow future bump --root <package> --path <state.json>
 ```
 
 `write` 和 `bump` 在打开目标前验证 writer、schema、definition source/digest；旧格式或
-未来格式只能 `view`/diagnose，不能通过兼容旁路写回。
+未来格式只能 `view`/diagnose，不能通过兼容旁路写回。它们还必须由 registry 已登记的
+stable launcher 驱动；未登记的开发 binary 在打开目标前返回 `UNREGISTERED_INSTALL`。
 
 ## 原生安装
 

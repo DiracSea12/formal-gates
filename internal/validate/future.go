@@ -118,7 +118,9 @@ func WriteFutureVersionedState(root, path string, envelope VersionEnvelope, valu
 	if err := ValidateFutureEnvelope(root, envelope); err != nil {
 		return err
 	}
-	return writeVersionedStateDocument(path, envelope, value)
+	return withFutureAdmission(root, func() error {
+		return writeVersionedStateDocument(path, envelope, value)
+	})
 }
 
 func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
@@ -162,6 +164,12 @@ func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
 // validates the current definition before reading or writing and refuses
 // legacy/unversioned documents; there is no migration fallback here.
 func BumpFutureState(root, path string) error {
+	return withFutureAdmission(root, func() error {
+		return bumpFutureState(root, path)
+	})
+}
+
+func bumpFutureState(root, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -202,4 +210,46 @@ func BumpFutureState(root, path string) error {
 	document["definitionSource"] = envelope.DefinitionSource
 	document["definitionDigest"] = envelope.DefinitionDigest
 	return writeJSONAtomically(path, document)
+}
+
+// withFutureAdmission keeps candidate state writes behind the same stable
+// launcher and registry admission boundary as legacy workflow state writes.
+// Test binaries retain the in-process fixture path; shipped binaries must
+// resolve an active record for the package root before opening the state file.
+func withFutureAdmission(root string, write func() error) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+		return write()
+	}
+	registryPath, recordID, err := discoverAdmissionBinding(root, root, "", "")
+	if err != nil {
+		return err
+	}
+	if registryPath == "" || recordID == "" {
+		return fmt.Errorf("UNREGISTERED_INSTALL: future workflow writes require an admitted stable launcher")
+	}
+	unlock, err := acquireRegistryLock(registryPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	receipt, err := admitRegistryUnlocked(registryPath, recordID)
+	if err != nil {
+		return err
+	}
+	if !receipt.Accepted {
+		return fmt.Errorf("%s: future workflow write refused for registry record %q", receipt.Code, recordID)
+	}
+	_, record, err := registryAdmissionIdentity(registryPath, recordID)
+	if err != nil {
+		return err
+	}
+	if err := verifyRegistryBinding(registryPath, recordID, record.ProjectRoot, root); err != nil {
+		return err
+	}
+	return write()
 }

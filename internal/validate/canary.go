@@ -26,11 +26,7 @@ type PortableCanaryReport struct {
 
 type InstallFaultMatrixOptions struct{ Root string }
 
-type InstallFaultMatrixReport struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Root          string        `json:"root"`
-	Checks        []CanaryCheck `json:"checks"`
-}
+type InstallFaultMatrixReport = PortableCanaryReport
 
 // InstallFaultMatrix is the public, deterministic fixture for the native
 // install transaction. Each named boundary injects one failure through the

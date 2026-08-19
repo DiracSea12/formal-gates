@@ -440,16 +440,15 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 }
 
 // canonicalManifestPackageDigest removes the self-referential package digest
-// fields before hashing the manifest as part of the package digest. Release
-// packaging can therefore write the resulting digest into the manifest, while
-// later validation still detects every substantive manifest edit.
+// before hashing the manifest as part of the package digest. Release packaging
+// can therefore write the resulting digest into the manifest, while later
+// validation still detects every substantive manifest edit.
 func canonicalManifestPackageDigest(data []byte) (string, int64, bool) {
 	var document map[string]any
 	if err := json.Unmarshal(data, &document); err != nil {
 		return "", 0, false
 	}
 	delete(document, "package_digest")
-	delete(document, "packageDigest")
 	canonical, err := json.Marshal(document)
 	if err != nil {
 		return "", 0, false

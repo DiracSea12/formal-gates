@@ -188,20 +188,17 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if readErr != nil {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest cannot be read: %w", readErr)
 	}
-	var manifestShape map[string]any
+	var manifestShape manifest
 	if unmarshalErr := json.Unmarshal(manifestData, &manifestShape); unmarshalErr != nil {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest JSON is invalid: %w", unmarshalErr)
 	}
-	if name, _ := manifestShape["name"].(string); name != "formal-gates" {
+	if manifestShape.Name != "formal-gates" {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
 	}
-	expected, _ := manifestShape["package_digest"].(string)
-	if strings.TrimSpace(expected) == "" {
-		expected, _ = manifestShape["packageDigest"].(string)
-	}
-	if strings.TrimSpace(options.ReleaseRoot) != "" && completePackage && !exists(filepath.Join(sourceAbs, ".git")) && strings.TrimSpace(expected) == "" {
-		return InstallReport{}, fmt.Errorf("formal-gates release package is missing the expected package digest (package_digest)")
-	}
+	// GitHub source archives do not contain .git and the platform binary is
+	// added only after download. PackageReceipt therefore supplies the
+	// assembled release identity when the optional manifest digest is absent.
+	expected := manifestShape.PackageDigest
 	if strings.TrimSpace(expected) != "" && !digestMatches(expected, sourcePackage.Digest) {
 		return InstallReport{}, fmt.Errorf("formal-gates package digest mismatch: expected %s, got sha256:%s", expected, sourcePackage.Digest)
 	}
@@ -724,19 +721,6 @@ func snapshotInstallTree(path, backup string) (installTreeBackup, error) {
 		return installTreeBackup{}, err
 	}
 	return state, nil
-}
-
-func restoreInstallTree(state installTreeBackup) error {
-	if strings.TrimSpace(state.path) == "" {
-		return nil
-	}
-	if err := os.RemoveAll(state.path); err != nil {
-		return err
-	}
-	if !state.existed {
-		return nil
-	}
-	return copyTreeImmutable(state.backup, state.path)
 }
 
 func installRegistryRecord(target installTarget, options InstallOptions) RegistryRecord {

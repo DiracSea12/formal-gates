@@ -157,11 +157,6 @@ type registryProviderDocument struct {
 	Records []registryProviderRecord `json:"records"`
 }
 
-func providerFromRegistry(executable string) string {
-	provider, _ := providerFromRegistryDetailed(executable)
-	return provider
-}
-
 // providerFromRegistryDetailed returns the most-specific admitted provider.
 // A shared stable launcher may have more than one active host admission at the
 // same project specificity; silently choosing the first record would bind the

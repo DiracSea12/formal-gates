@@ -78,6 +78,16 @@ try {
   if ($SkipHooks) { $args += "--skip-hooks" }
   & $formalBinary @args
   if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+  # The native transaction now owns a valid stable launcher. A later bootstrap
+  # receipt failure must not remove that committed launcher during cleanup.
+  $stagedLauncher = $false
+
+  # Bootstrap the installed artifact through the same stable launcher before
+  # any workflow command can write state.
+  $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
+  if ($Project) { $bootstrapArgs += @("--project", $Project) }
+  & $formalBinary @bootstrapArgs
+  if ($LASTEXITCODE -ne 0) { throw "formal-gates bootstrap failed with exit code $LASTEXITCODE" }
   $installSucceeded = $true
 
   Write-Host "Installed formal-gates to $installRoot"

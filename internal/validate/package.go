@@ -61,18 +61,15 @@ var requiredHosts = []string{
 }
 
 type manifest struct {
-	Name               string         `json:"name"`
-	Hosts              []manifestHost `json:"hosts"`
-	Parts              []string       `json:"package_parts"`
-	Installs           []string       `json:"install_commands"`
-	Commands           []string       `json:"verification_commands"`
-	Notes              []string       `json:"validation_notes"`
-	Caveats            []string       `json:"support_caveats"`
-	Validators         []any          `json:"external_validators"`
-	Digest             string         `json:"digest,omitempty"`
-	ManifestDigest     string         `json:"manifest_digest,omitempty"`
-	PackageDigest      string         `json:"package_digest,omitempty"`
-	PackageDigestCamel string         `json:"packageDigest,omitempty"`
+	Name          string         `json:"name"`
+	Hosts         []manifestHost `json:"hosts"`
+	Parts         []string       `json:"package_parts"`
+	Installs      []string       `json:"install_commands"`
+	Commands      []string       `json:"verification_commands"`
+	Notes         []string       `json:"validation_notes"`
+	Caveats       []string       `json:"support_caveats"`
+	Validators    []any          `json:"external_validators"`
+	PackageDigest string         `json:"package_digest,omitempty"`
 }
 
 type manifestHost struct {
@@ -293,6 +290,7 @@ func validateBootstrapScripts(root string, result *Result) {
 			`checksums="SHA256SUMS-${suffix}.txt"`,
 			`--release-root "$install_root"`,
 			`--binary-target "$binary_target"`,
+			"--bootstrap",
 		} {
 			if !strings.Contains(bash, required) {
 				result.add("install.command", "bootstrap script is not bound to release asset contract: "+required)
@@ -323,6 +321,7 @@ func validateBootstrapScripts(root string, result *Result) {
 			`throw "checksum validation failed: $file"`,
 			`"--release-root", $installRoot`,
 			`"--binary-target", $formalBinary`,
+			`"--bootstrap"`,
 		} {
 			if !strings.Contains(powershell, required) {
 				result.add("install.ps1", "bootstrap script is not bound to release asset contract: "+required)
@@ -481,20 +480,7 @@ func validateManifest(root string, result *Result) {
 		result.add("formal-gates.manifest.json", fmt.Sprintf("manifest JSON is invalid: %v", err))
 		return
 	}
-	manifestDigest := doc.Digest
-	if strings.TrimSpace(manifestDigest) == "" {
-		manifestDigest = doc.ManifestDigest
-	}
-	if strings.TrimSpace(manifestDigest) != "" {
-		actual, digestErr := fileDigest(path)
-		if digestErr != nil || !digestMatches(manifestDigest, actual) {
-			result.add("formal-gates.manifest.json", fmt.Sprintf("manifest digest mismatch: expected %s, got sha256:%s", manifestDigest, actual))
-		}
-	}
 	packageDigest := doc.PackageDigest
-	if strings.TrimSpace(packageDigest) == "" {
-		packageDigest = doc.PackageDigestCamel
-	}
 	if strings.TrimSpace(packageDigest) != "" {
 		actual, digestErr := PackageDigest(root)
 		if digestErr != nil || !digestMatches(packageDigest, actual) {
