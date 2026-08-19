@@ -2,6 +2,7 @@ package validate
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +53,49 @@ func round15RepoRoot(t *testing.T) string {
 		t.Fatal("could not locate the whitebox test source as an absolute path")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+}
+
+func round15CopyPackage(t *testing.T, source, target string) {
+	t.Helper()
+	err := filepath.Walk(source, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return os.MkdirAll(target, 0o700)
+		}
+		if info.IsDir() && (relative == ".git" || relative == ".gates" || relative == "$tmp") {
+			return filepath.SkipDir
+		}
+		destination := filepath.Join(target, relative)
+		if info.IsDir() {
+			return os.MkdirAll(destination, info.Mode().Perm())
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("package fixture entry is not a regular file: %s", relative)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(destination, data, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func round15PathWithin(parent, path string) bool {
+	parent, path = canonicalRegistryPath(parent), canonicalRegistryPath(path)
+	relative, err := filepath.Rel(parent, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
 func round15InstallSource(t *testing.T) string {
@@ -191,7 +235,68 @@ func round15StableDocs(t *testing.T, root string) []string {
 
 func TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens(t *testing.T) {
 	root := round15RepoRoot(t)
-	for _, path := range round15StableDocs(t, root) {
+	packageRoot := t.TempDir()
+	round15CopyPackage(t, root, packageRoot)
+	installedBinary := filepath.Join(packageRoot, "bin", nativeBinaryName())
+	round15Run(t, root, "go", "build", "-o", installedBinary, "./cmd/formal-gates")
+
+	if result := Package(packageRoot); !result.OK() {
+		t.Fatalf("built package inventory is invalid: %#v", result.Failures)
+	}
+	var packageManifest manifest
+	if err := json.Unmarshal(round15ReadFile(t, filepath.Join(packageRoot, "formal-gates.manifest.json")), &packageManifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range packageManifest.Parts {
+		path := filepath.Join(packageRoot, filepath.FromSlash(strings.TrimSuffix(part, "/")))
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("manifest package part is absent from built package: %s: %v", part, err)
+		}
+	}
+
+	project := t.TempDir()
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	launcher := filepath.Join(t.TempDir(), "launcher", nativeBinaryName())
+	report, err := Install(InstallOptions{
+		Source:       packageRoot,
+		Host:         "claude",
+		Scope:        "project",
+		Project:      project,
+		RegistryPath: registry,
+		BinaryTarget: launcher,
+		Force:        true,
+		SkipHooks:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Targets) != 1 {
+		t.Fatalf("install report has unexpected target count: %+v", report)
+	}
+	target := filepath.FromSlash(report.Targets[0].TargetPath)
+	installedReceipt, err := PackageReceipt(target, packageRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installedReceipt.Digest != report.Targets[0].InstalledDigest || report.Targets[0].InstalledLstat != pathLstat(target) {
+		t.Fatalf("installed target identity is not bound to the installed tree: report=%+v receipt=%+v", report.Targets[0], installedReceipt)
+	}
+	for _, entry := range installRuntimeEntries {
+		path := filepath.Join(target, filepath.FromSlash(entry))
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("installed runtime inventory omits %s: %v", entry, err)
+		}
+	}
+	for _, entry := range installedReceipt.Entries {
+		if !round15PathWithin(target, entry.RealPath) {
+			t.Fatalf("installed inventory entry escaped the installed target: %+v", entry)
+		}
+	}
+	if got := round15ReadFile(t, filepath.Join(target, "formal-gates.manifest.json")); string(got) != string(round15ReadFile(t, filepath.Join(packageRoot, "formal-gates.manifest.json"))) {
+		t.Fatal("installed manifest differs from the built package manifest")
+	}
+
+	for _, path := range round15StableDocs(t, target) {
 		content := string(round15ReadFile(t, path))
 		for _, token := range []string{"drive", "submit"} {
 			standalone := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])` + token + `([^[:alnum:]_-]|$)`)
@@ -264,8 +369,9 @@ func TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens(t *test
 		{[]string{"canary", "codex-hook", "--help"}, "canary codex-hook"},
 		{[]string{"canary", "codex-hook-probe", "--help"}, "canary codex-hook-probe"},
 	}
+	executionDir := t.TempDir()
 	for _, helpCase := range helpCases {
-		output := round15Run(t, root, "go", append([]string{"run", "./cmd/formal-gates"}, helpCase.args...)...)
+		output := round15Run(t, executionDir, filepath.Join(target, "bin", nativeBinaryName()), helpCase.args...)
 		if !strings.Contains(strings.ToLower(output), strings.ToLower(helpCase.marker)) {
 			t.Fatalf("help %q omitted %q: %s", strings.Join(helpCase.args, " "), helpCase.marker, output)
 		}
