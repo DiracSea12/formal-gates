@@ -178,7 +178,7 @@ func TestWhiteboxPhase0VersionEnvelopeExactBarrier(t *testing.T) {
 		StateSchemaVersion:        CurrentStateSchemaVersion,
 		WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
 		DefinitionSource:          "definitions/workflow.json",
-		DefinitionDigest:          "sha256:definition",
+		DefinitionDigest:          CurrentWorkflowDefinitionDigest,
 		PackageDigest:             "sha256:package",
 	}
 	if err := ValidateVersionEnvelope(valid); err != nil {

@@ -1,34 +1,40 @@
 # Requirements precedence
 
-This inventory is the stage-0 evidence index. It records which documents are
-authoritative for the orchestration-pipeline-engine work and keeps older plans
-traceable without treating their retired command names as a current contract.
+This is the complete stage-0 document inventory. Every listed requirement
+source has one explicit status and priority; there is no catch-all or unnamed
+OpenSpec source. “Priority” is the priority within this implementation scope,
+not a new severity rule. The project boundary and P0–P3 interpretation remain
+owned by `prompts/reviewer-base.md`.
 
-| Status | Document | Use |
-| --- | --- | --- |
-| current-authority | `openspec/changes/orchestration-pipeline-engine/master-requirements.md` | Overall engine requirements and non-negotiable boundaries. |
-| current-authority | `openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md` | Stage-0 requirements for this implementation run. |
-| current-authority | `refactor-plan/incremental-seal-plan.md` | Stage ordering, environment isolation, and stage exit conditions. |
-| current-authority | `refactor-plan/stage-0-requirements.md` | Confirmed stage-0 scope and acceptance requirements. |
-| current-authority | `refactor-plan/stage-0-solution.md` | Confirmed stage-0 implementation choices. |
-| reference | `openspec/changes/orchestration-pipeline-engine-phase-0/alignment.md` | Stage-0 alignment record; does not override the confirmed requirements. |
-| reference | `openspec/changes/orchestration-pipeline-engine-phase-0/design.md` | Stage-0 design detail; does not override the confirmed requirements. |
-| reference | `openspec/changes/orchestration-pipeline-engine-phase-0/proposal.md` | Stage-0 proposal context; does not override the confirmed requirements. |
-| reference | `openspec/changes/orchestration-pipeline-engine-phase-0/tasks.md` | Stage-0 implementation-task evidence; does not create public semantics. |
-| reference | `refactor-plan/final-implementation-draft.md` | Target architecture; later-stage behavior does not flow backward into stage 0. |
-| orthogonal | `openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md` | Applies only to its named QA/seal feature scope. |
-| orthogonal | `openspec/changes/deadlock-recovery-and-codex-lifecycle/master-requirements.md` | Applies only to its named lifecycle/recovery feature scope. |
-| orthogonal | `openspec/changes/fix-existing-defects/master-requirements.md` | Applies only to its named defect-remediation scope. |
-| orthogonal | `openspec/changes/host-rule-management-and-codex-hook/master-requirements.md` | Applies only to its named host-rule and hook feature scope. |
-| orthogonal | `openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md` | Applies only to its named QA/carry feature scope. |
-| orthogonal | `openspec/changes/qa-execution-rerun-scope/master-requirements.md` | Applies only to its named QA-rerun feature scope. |
-| orthogonal | `openspec/changes/runtime-review-guards/master-requirements.md` | Applies only to its named runtime-review feature scope. |
-| orthogonal | `openspec/changes/sliced-runs-confirmation-and-qa-refactor/master-requirements.md` | Applies only to its named sliced-run and QA feature scope. |
-| orthogonal | `openspec/changes/two-phase-pre-development-review/master-requirements.md` | Applies only to its named pre-development-review feature scope. |
-| superseded | `openspec/changes/universal-modification-intake/master-requirements.md` | Retained for traceability only; its universal-intake precedence and retired command surface are superseded by the current stage-0 authorities above. |
-| historical | `CHANGELOG.md` and archived gate results | Traceability and prior behavior only; not a source for new public semantics. |
+| Status | Priority | Document | Authority in this work |
+| --- | --- | --- | --- |
+| current-authority | P0 | `openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md` | Complete stage-0 requirements and acceptance contract. |
+| current-authority | P0 | `refactor-plan/stage-0-requirements.md` | Confirmed stage-0 scope, gates, and normal-use boundary. |
+| current-authority | P0 | `refactor-plan/stage-0-solution.md` | Confirmed implementation choices for this stage. |
+| current-authority | P1 | `openspec/changes/orchestration-pipeline-engine/master-requirements.md` | Parent engine requirements, used where they do not conflict with the stage-0 slice. |
+| current-authority | P1 | `refactor-plan/incremental-seal-plan.md` | Confirmed sequencing, isolation, and exit conditions. |
+| reference | P0 | `openspec/changes/orchestration-pipeline-engine-phase-0/alignment.md` | Alignment evidence; it cannot override the two confirmed requirement documents. |
+| reference | P0 | `openspec/changes/orchestration-pipeline-engine-phase-0/design.md` | Design rationale and constraints; implementation choices above win on conflict. |
+| reference | P0 | `openspec/changes/orchestration-pipeline-engine-phase-0/proposal.md` | Proposal context only; not a public semantic source. |
+| reference | P0 | `openspec/changes/orchestration-pipeline-engine-phase-0/tasks.md` | Task evidence only; it does not create a requirement or public entrypoint. |
+| reference | P1 | `refactor-plan/final-implementation-draft.md` | Later architecture reference; later-stage behavior does not flow backward into stage 0. |
+| orthogonal | P2 | `openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md` | Parallel/seal/squash QA scope; not part of this repair. |
+| orthogonal | P2 | `openspec/changes/deadlock-recovery-and-codex-lifecycle/master-requirements.md` | Lifecycle/deadlock scope; only shared constraints are references. |
+| orthogonal | P2 | `openspec/changes/fix-existing-defects/master-requirements.md` | Separate defect-remediation scope. |
+| orthogonal | P2 | `openspec/changes/host-rule-management-and-codex-hook/master-requirements.md` | Host-rule and hook scope outside the stage-0 authority unless explicitly cited above. |
+| orthogonal | P2 | `openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md` | QA/carry scope outside this repair. |
+| orthogonal | P2 | `openspec/changes/qa-execution-rerun-scope/master-requirements.md` | QA rerun scope outside this repair. |
+| orthogonal | P2 | `openspec/changes/runtime-review-guards/master-requirements.md` | Runtime-review scope outside this repair. |
+| orthogonal | P2 | `openspec/changes/sliced-runs-confirmation-and-qa-refactor/master-requirements.md` | Sliced-run and QA scope outside this repair. |
+| orthogonal | P2 | `openspec/changes/two-phase-pre-development-review/master-requirements.md` | Pre-development-review scope outside this repair. |
+| orthogonal | P2 | `P2-FIX-REQUIREMENT.md` | Root-level P2 historical/parallel defect scope; does not redefine stage-0 priority. |
+| orthogonal | P2 | `QA-INCREMENTAL-ISOLATION-REQUIREMENT.md` | Root-level QA isolation scope; stage-0 uses it only as a non-conflicting reference. |
+| orthogonal | P2 | `TRIGGER-MODEL-REQUIREMENT.md` | Root-level trigger-model scope outside the install/workflow repair. |
+| orthogonal | P2 | `TRIGGER-MODEL-V2-REQUIREMENT.md` | Root-level trigger-model successor scope outside the install/workflow repair. |
+| superseded | P3 | `openspec/changes/universal-modification-intake/master-requirements.md` | Retained for traceability; its universal-intake precedence and retired command surface are superseded by the current-authority rows. |
+| historical | P3 | `CHANGELOG.md` and archived gate results | Historical evidence only; never a source for new public semantics. |
 
-The stage-0 implementation must not add future `drive`/`submit` behavior to the
-stable `SKILL.md`, README files, or action prompts. When a later stage changes a
-current contract, it must add a new dated entry and identify the superseded
-document explicitly rather than deleting history.
+When a later stage changes a current contract, it must add a dated inventory
+entry identifying the superseded source. The stage-0 implementation must not
+add future `drive`/`submit` behavior to stable `SKILL.md`, README files, or
+action prompts.

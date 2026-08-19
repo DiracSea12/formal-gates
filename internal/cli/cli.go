@@ -294,6 +294,7 @@ var workflowSubcommands = map[string]func(args []string, streams IO) (int, error
 	"qa-execution-scope": runWorkflowQAExecutionScope,
 	"snapshot":           runWorkflowSnapshot,
 	"cleanup":            runWorkflowCleanup,
+	"future":             runWorkflowFuture,
 	"carry":              runCarry,
 	"authorize-repair":   runWorkflowAuthorizeRepair,
 	"seal":               runWorkflowSeal,
@@ -571,11 +572,91 @@ func runWorkflowClaimDispatch(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "run id")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id")
 	reviewer := fs.String("reviewer", "", "host reviewer or session identity")
+	provider := fs.String("provider", "", "explicit lifecycle host provider (required when a shared launcher has multiple admitted hosts)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.ClaimDispatch(*root, *pkg, *runID, *dispatch, *reviewer)
+	state, err := validate.ClaimDispatchWithProvider(*root, *pkg, *runID, *dispatch, *reviewer, *provider)
 	return workflowResult(streams, *root, *runID, state, err)
+}
+
+func runWorkflowFuture(args []string, streams IO) (int, error) {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		return 0, printFutureUsage(streams.Stdout, "formal-gates")
+	}
+	action, args := args[0], args[1:]
+	switch action {
+	case "generate":
+		fs := newFlagSet("workflow future generate", streams)
+		root := fs.String("root", ".", "package root")
+		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
+		output := fs.String("output", "", "optional envelope output path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		envelope, err := validate.GenerateFutureEnvelope(*root, *packageDigest)
+		if err != nil {
+			return 1, err
+		}
+		if strings.TrimSpace(*output) != "" {
+			if err := validate.WriteFutureEnvelope(*root, *output, envelope); err != nil {
+				return 1, err
+			}
+		}
+		return printValue(streams.Stdout, envelope, nil)
+	case "view":
+		fs := newFlagSet("workflow future view", streams)
+		root := fs.String("root", ".", "package root")
+		path := fs.String("path", "", "future state or envelope path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" {
+			return 1, fmt.Errorf("workflow future view requires --path")
+		}
+		report, err := validate.DiagnoseFutureState(*root, *path)
+		return printValue(streams.Stdout, report, err)
+	case "write":
+		fs := newFlagSet("workflow future write", streams)
+		root := fs.String("root", ".", "package root")
+		path := fs.String("path", "", "future state path")
+		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
+		value := fs.String("value", "{}", "JSON object payload")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" {
+			return 1, fmt.Errorf("workflow future write requires --path")
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(*value), &payload); err != nil {
+			return 1, fmt.Errorf("workflow future write --value must be a JSON object: %w", err)
+		}
+		envelope, err := validate.GenerateFutureEnvelope(*root, *packageDigest)
+		if err != nil {
+			return 1, err
+		}
+		if err := validate.WriteFutureVersionedState(*root, *path, envelope, payload); err != nil {
+			return 1, err
+		}
+		return printValue(streams.Stdout, envelope, nil)
+	case "bump":
+		fs := newFlagSet("workflow future bump", streams)
+		root := fs.String("root", ".", "package root")
+		path := fs.String("path", "", "future state path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" {
+			return 1, fmt.Errorf("workflow future bump requires --path")
+		}
+		if err := validate.BumpFutureState(*root, *path); err != nil {
+			return 1, err
+		}
+		return printValue(streams.Stdout, map[string]any{"path": *path, "status": "BUMPED"}, nil)
+	default:
+		return 1, fmt.Errorf("unknown workflow future action: %s", action)
+	}
 }
 
 func runWorkflowQAExecutionScope(args []string, streams IO) (int, error) {
@@ -986,17 +1067,31 @@ func runLifecycle(program string, args []string, streams IO) (int, error) {
 
 func runCanary(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
-		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|codex-hook|codex-hook-probe)")
+		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|fault-matrix|codex-hook|codex-hook-probe)")
 	}
 	if isHelpArg(args[0]) {
 		printCanaryUsage(streams.Stdout, program)
 		return 0, nil
 	}
 	if strings.HasPrefix(args[0], "-") {
-		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|codex-hook|codex-hook-probe)")
+		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|fault-matrix|codex-hook|codex-hook-probe)")
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
+	case "fault-matrix":
+		fs := newFlagSet("canary fault-matrix", streams)
+		root := fs.String("root", ".", "package root")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		report, result := validate.InstallFaultMatrix(validate.InstallFaultMatrixOptions{Root: *root})
+		if code, err := printJSON(streams.Stdout, report); err != nil {
+			return code, err
+		}
+		if !result.OK() {
+			return 1, fmt.Errorf("install fault matrix failed")
+		}
+		return 0, nil
 	case "portable":
 		fs := newFlagSet("canary portable", streams)
 		root := fs.String("root", ".", "package root")
@@ -1376,7 +1471,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printRegistryUsage(w io.Writer, program string) {
@@ -1387,7 +1482,12 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+}
+
+func printFutureUsage(w io.Writer, program string) error {
+	fmt.Fprintf(w, "Usage: %s workflow future <generate|view|write|bump>\n\nFuture envelope operations are owned by the candidate engine and require the immutable definitions/workflow.json identity.\n", program)
+	return nil
 }
 
 func printGateUsage(w io.Writer, program string) {
@@ -1403,7 +1503,7 @@ func printLifecycleUsage(w io.Writer, program string) {
 }
 
 func printCanaryUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  fault-matrix    exercise public install copy/switch/verify/recovery fixtures\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 // printVersion reports the binary's version situation. The project keeps no

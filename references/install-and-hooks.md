@@ -25,6 +25,19 @@ Windows 上构建并调用 `bin\formal-gates.exe`。
 检查不需要实机 AI host 的包、流程、hook 决策和安装行为。这两个命令都不是独立审查
 或正式 Seal 结果。
 
+候选/future 状态使用唯一的 engine envelope 入口；定义来源和摘要来自包内固定的
+`definitions/workflow.json`，不接受占位摘要或第二份定义。正常检查/写入/递增流程为：
+
+```bash
+formal-gates workflow future generate --root <package> --output <envelope.json>
+formal-gates workflow future view --path <state.json>
+formal-gates workflow future write --root <package> --path <state.json> --value '{"status":"ACTIVE"}'
+formal-gates workflow future bump --root <package> --path <state.json>
+```
+
+`write` 和 `bump` 在打开目标前验证 writer、schema、definition source/digest；旧格式或
+未来格式只能 `view`/diagnose，不能通过兼容旁路写回。
+
 ## 原生安装
 
 ```bash
@@ -160,7 +173,17 @@ Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动
 不会创建生命周期日志。
 
 在 `workflow claim-dispatch` 绑定 host 身份之后，可以在不改变流程状态的情况下检
-视推导出的结果：
+视推导出的结果。固定 stable launcher 同时服务多个 host 时，认领必须显式给出
+`--provider <claude-code|codex|cursor|deepseek-harness>`；同一项目路径下存在冲突的
+active registry host 时不会猜测第一个记录：
+
+```bash
+$HOME/.local/bin/formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --reviewer <identity> --provider codex
+```
+
+省略 `--provider` 只适用于没有歧义的正常开发构建/已登记 host；共享 launcher 的歧义
+会硬阻断，避免把生命周期证据绑定到错误 host。
 
 ```bash
 $HOME/.local/bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
@@ -228,12 +251,21 @@ lock(admission/install -> registry)
 observe/reconcile 恢复旧 runtime/config/registry bytes，再写 recovery receipt。receipt 至少
 包含 source/package 与 installed digest、逐输入 `Lstat`/realpath manifest、hook/config 与
 managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resource canonical paths。
-故障矩阵可用同一原生入口复现：
+重复安装时如果 hook 或 managed-rule 内容已经相同，receipt 的 action 会明确记录
+`SKIPPED_UNCHANGED`，不会用另一个兼容 writer 改写字节；`--skip-hooks` 只跳过 hook，
+不绕过 runtime、receipt 或 registry transaction。故障矩阵可用同一原生入口复现：
 
 ```bash
-FORMAL_GATES_INSTALL_FAULT=intent|registry|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit \
+FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit \
   <stable-launcher> install --source <candidate> --host claude --scope project \
   --project <project> --binary-target <stable-launcher> --force
+```
+
+也可以用公开 fixture 一次覆盖复制、切换、installed-binary smoke、pointer、hook、规则、
+registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher：
+
+```bash
+<stable-launcher> canary fault-matrix --root <candidate>
 ```
 
 真实 hook JSON、managed-rule、pointer/config、registry 和 post-switch/pre-commit

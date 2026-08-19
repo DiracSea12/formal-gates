@@ -2,6 +2,7 @@ package validate
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -241,6 +242,16 @@ func Start(options StartOptions) (RunState, error) {
 		if err != nil {
 			return RunState{}, err
 		}
+		if strings.EqualFold(admissionRecord.Scope, "global") && canonicalRegistryPath(admissionRecord.ProjectRoot) != canonicalRegistryPath(root) {
+			// Global installation bytes are shared, but workflow state and
+			// resources are project-local. Materialize this invocation binding
+			// through the registry transaction owner before creating state.
+			admissionRecord, admissionDoc, err = bindGlobalInvocationRoot(registryPath, admissionRecord, root)
+			if err != nil {
+				return RunState{}, err
+			}
+			registryRecordID = admissionRecord.ID
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(RunDir(root, runID)), 0o700); err != nil {
 		return RunState{}, err
@@ -280,6 +291,43 @@ func Start(options StartOptions) (RunState, error) {
 		return RunState{}, err
 	}
 	return state, nil
+}
+
+func bindGlobalInvocationRoot(path string, base RegistryRecord, root string) (RegistryRecord, RegistryDocument, error) {
+	unlock, err := acquireRegistryLock(path)
+	if err != nil {
+		return RegistryRecord{}, RegistryDocument{}, err
+	}
+	defer unlock()
+	doc, err := loadRegistryForCommit(path)
+	if err != nil {
+		return RegistryRecord{}, RegistryDocument{}, err
+	}
+	projectRoot := canonicalRegistryPath(root)
+	derived := base
+	identity := sha256.Sum256([]byte(base.ID + "\x00" + projectRoot))
+	derived.ID = fmt.Sprintf("%s-project-%x", base.ID, identity[:6])
+	derived.ProjectRoot = projectRoot
+	derived.StateRoot = canonicalRegistryPath(filepath.Join(projectRoot, ".gates"))
+	derived.ResourceRoot = canonicalRegistryPath(filepath.Join(projectRoot, ".formal-gates-resources"))
+	derived.CanonicalPaths = map[string]string{
+		"target": canonicalRegistryPath(derived.Target), "launcher": canonicalRegistryPath(derived.LauncherPath),
+		"projectRoot": derived.ProjectRoot, "stateRoot": derived.StateRoot,
+		"resourceRoot": derived.ResourceRoot, "runtimeSibling": canonicalRegistryPath(derived.RuntimeSibling),
+	}
+	if strings.TrimSpace(derived.HookConfig) != "" {
+		derived.CanonicalPaths["hookConfig"] = canonicalRegistryPath(derived.HookConfig)
+	}
+	for _, existing := range doc.Records {
+		if existing.ID == derived.ID && strings.EqualFold(existing.Status, "active") && sameRegistryBinding(existing, derived) {
+			return existing, doc, nil
+		}
+	}
+	committed, err := commitRegistryRecordsUnlocked(path, doc, []RegistryRecord{derived})
+	if err != nil {
+		return RegistryRecord{}, RegistryDocument{}, err
+	}
+	return derived, committed, nil
 }
 
 // discoverAdmissionBinding resolves the shared user registry before Start
@@ -1135,6 +1183,10 @@ func RegisterQAWorktree(root, packageRoot, runID, worktree string) (RunState, er
 }
 
 func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string) (RunState, error) {
+	return ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIdentity, "")
+}
+
+func ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIdentity, provider string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
 		if dispatchID == "" {
@@ -1205,7 +1257,7 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		// identity (common operator mistake compatibility), and an ambiguous
 		// or empty resolution is rejected rather than binding the wrong
 		// subagent or silently dropping lifecycle evidence.
-		effective, err := workflowLifecycle.ResolveClaimIdentity(root, state.RunID, reviewerIdentity)
+		effective, err := resolveClaimIdentity(root, state.RunID, reviewerIdentity, provider)
 		if err != nil {
 			return err
 		}
@@ -1227,13 +1279,37 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		if err := verifyCanonicalPromptFile(*state, dispatch); err != nil {
 			return err
 		}
-		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, effective); err != nil {
+		if err := bindClaimDispatch(root, state.RunID, dispatchID, effective, provider); err != nil {
 			return err
 		}
 		dispatch.ReviewerIdentity, dispatch.Status = effective, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
 		return nil
 	})
+}
+
+func resolveClaimIdentity(root, runID, preferred, provider string) (string, error) {
+	if strings.TrimSpace(provider) != "" {
+		if explicit, ok := workflowLifecycle.(interface {
+			ResolveClaimIdentityWithProvider(string, string, string, string) (string, error)
+		}); ok {
+			return explicit.ResolveClaimIdentityWithProvider(root, runID, preferred, provider)
+		}
+		return "", fmt.Errorf("lifecycle implementation does not support explicit provider claim context")
+	}
+	return workflowLifecycle.ResolveClaimIdentity(root, runID, preferred)
+}
+
+func bindClaimDispatch(root, runID, dispatchID, identity, provider string) error {
+	if strings.TrimSpace(provider) != "" {
+		if explicit, ok := workflowLifecycle.(interface {
+			BindWithProvider(string, string, string, string, string) error
+		}); ok {
+			return explicit.BindWithProvider(root, runID, dispatchID, identity, provider)
+		}
+		return fmt.Errorf("lifecycle implementation does not support explicit provider claim context")
+	}
+	return workflowLifecycle.Bind(root, runID, dispatchID, identity)
 }
 
 // openRecord opens a Record* state mutation and runs the shared entry prologue:

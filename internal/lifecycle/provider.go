@@ -91,7 +91,9 @@ func currentProvider() (string, error) {
 	// an identity signal.  Resolve the provider from the same shared registry
 	// that admitted the target, scoped to the current project/root and launcher;
 	// this is read-only observation and does not create a second registry truth.
-	if provider := providerFromRegistry(path); provider != "" {
+	if provider, ambiguous := providerFromRegistryDetailed(path); ambiguous {
+		return "", fmt.Errorf("lifecycle provider is ambiguous for shared launcher %q; pass an explicit --provider host context", path)
+	} else if provider != "" {
 		return provider, nil
 	}
 	// A directly built source binary outside a maintained host installation
@@ -156,6 +158,16 @@ type registryProviderDocument struct {
 }
 
 func providerFromRegistry(executable string) string {
+	provider, _ := providerFromRegistryDetailed(executable)
+	return provider
+}
+
+// providerFromRegistryDetailed returns the most-specific admitted provider.
+// A shared stable launcher may have more than one active host admission at the
+// same project specificity; silently choosing the first record would bind the
+// lifecycle transcript to the wrong host, so that case is explicitly reported
+// as ambiguous to the caller.
+func providerFromRegistryDetailed(executable string) (string, bool) {
 	registryPath := ""
 	for _, name := range []string{"HOME", "USERPROFILE"} {
 		if home := strings.TrimSpace(os.Getenv(name)); home != "" {
@@ -164,24 +176,26 @@ func providerFromRegistry(executable string) string {
 		}
 	}
 	if registryPath == "" {
-		return ""
+		return "", false
 	}
 	data, err := os.ReadFile(registryPath)
 	if err != nil {
-		return ""
+		return "", false
 	}
 	var document registryProviderDocument
 	if err := json.Unmarshal(data, &document); err != nil {
-		return ""
+		return "", false
 	}
 	executable = canonicalProviderPath(executable)
 	workingDirectory, err := os.Getwd()
 	if err != nil {
-		return ""
+		return "", false
 	}
 	workingDirectory = canonicalProviderPath(workingDirectory)
 	bestHost := ""
+	bestRoot := ""
 	bestRootLength := -1
+	ambiguous := false
 	for _, record := range document.Records {
 		if strings.ToLower(strings.TrimSpace(record.Status)) != "active" {
 			continue
@@ -202,6 +216,12 @@ func providerFromRegistry(executable string) string {
 			continue
 		}
 		if len(root) <= bestRootLength {
+			if len(root) == bestRootLength && root == bestRoot && bestHost != "" {
+				adapter, adapterErr := adapterFor(record.Host)
+				if adapterErr == nil && adapter.name != bestHost {
+					ambiguous = true
+				}
+			}
 			continue
 		}
 		adapter, adapterErr := adapterFor(record.Host)
@@ -209,9 +229,11 @@ func providerFromRegistry(executable string) string {
 			continue
 		}
 		bestHost = adapter.name
+		bestRoot = root
 		bestRootLength = len(root)
+		ambiguous = false
 	}
-	return bestHost
+	return bestHost, ambiguous
 }
 
 func canonicalProviderPath(path string) string {

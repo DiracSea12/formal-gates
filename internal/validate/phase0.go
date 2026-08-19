@@ -30,7 +30,7 @@ const (
 	UnsupportedRunVersionCode        = "UNSUPPORTED_RUN_VERSION"
 	RegistrySchemaVersion            = 1
 	CurrentWorkflowDefinitionSource  = "definitions/workflow.json"
-	CurrentWorkflowDefinitionDigest  = "sha256:definition"
+	CurrentWorkflowDefinitionDigest  = "sha256:9ec68cd758cf9bad5bd8beefedac51755442c521ffe5e8276e805e82e66faa4c"
 )
 
 type VersionEnvelope struct {
@@ -100,6 +100,10 @@ func WriteVersionedState(path string, envelope VersionEnvelope, value any) error
 	if err := ValidateVersionEnvelope(envelope); err != nil {
 		return err
 	}
+	return writeVersionedStateDocument(path, envelope, value)
+}
+
+func writeVersionedStateDocument(path string, envelope VersionEnvelope, value any) error {
 	document := map[string]any{}
 	if envelope.PackageDigest != "" {
 		document["packageDigest"] = envelope.PackageDigest
@@ -506,6 +510,7 @@ type RegistryDocument struct {
 type AdmissionReceipt struct {
 	Code      string `json:"code"`
 	Accepted  bool   `json:"accepted"`
+	Status    string `json:"status,omitempty"`
 	RecordID  string `json:"recordId,omitempty"`
 	Registry  string `json:"registry,omitempty"`
 	Reason    string `json:"reason,omitempty"`

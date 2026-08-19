@@ -1,0 +1,13 @@
+{
+  "$schema": "https://formal-gates.dev/schema/workflow-definition-v1.json",
+  "id": "formal-gates.workflow",
+  "version": "1",
+  "stateSchemaVersion": "1",
+  "writer": "engine",
+  "transactionOwner": "validate",
+  "entrypoints": [
+    "workflow start",
+    "workflow resume",
+    "workflow seal"
+  ]
+}

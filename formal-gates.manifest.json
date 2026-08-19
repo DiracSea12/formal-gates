@@ -93,7 +93,8 @@
     "internal/",
     "agents/",
     "prompts/",
-    "gates/"
+    "gates/",
+    "definitions/"
   ],
   "install_commands": [
     "./install.command --host claude --scope global --force",

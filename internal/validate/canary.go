@@ -24,6 +24,75 @@ type PortableCanaryReport struct {
 	Checks        []CanaryCheck `json:"checks"`
 }
 
+type InstallFaultMatrixOptions struct{ Root string }
+
+type InstallFaultMatrixReport struct {
+	SchemaVersion int           `json:"schemaVersion"`
+	Root          string        `json:"root"`
+	Checks        []CanaryCheck `json:"checks"`
+}
+
+// InstallFaultMatrix is the public, deterministic fixture for the native
+// install transaction. Each named boundary injects one failure through the
+// same process-wide hook used by the real installer, then verifies that the
+// target, release root, launcher and transaction journal have no partial
+// committed state. The fixture is read-only with respect to the source root.
+func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixReport, Result) {
+	root := lifecycle.CleanRoot(options.Root)
+	report := InstallFaultMatrixReport{SchemaVersion: 1, Root: slash(absPath(root))}
+	var result Result
+	add := func(name string, err error) {
+		status, detail := "PASS", ""
+		if err != nil {
+			status, detail = "FAIL", err.Error()
+			result.add(name, detail)
+		}
+		report.Checks = append(report.Checks, CanaryCheck{Name: name, Status: status, Detail: detail})
+	}
+	phases := []string{"journal-boundary", "intent", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit"}
+	for _, phase := range phases {
+		phase := phase
+		fixture, err := os.MkdirTemp("", "formal-gates-fault-matrix-")
+		if err != nil {
+			add("fault-"+phase, err)
+			continue
+		}
+		project := filepath.Join(fixture, "project")
+		release := filepath.Join(fixture, "release")
+		launcher := filepath.Join(fixture, "stable", nativeBinaryName())
+		registry := filepath.Join(fixture, "registry.json")
+		faultPrior, hadFault := os.LookupEnv("FORMAL_GATES_INSTALL_FAULT")
+		_ = os.Setenv("FORMAL_GATES_INSTALL_FAULT", phase)
+		_, installErr := Install(InstallOptions{Source: root, Host: "codex", Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: launcher, RegistryPath: registry, Force: true, SkipHooks: phase != "hook"})
+		if hadFault {
+			_ = os.Setenv("FORMAL_GATES_INSTALL_FAULT", faultPrior)
+		} else {
+			_ = os.Unsetenv("FORMAL_GATES_INSTALL_FAULT")
+		}
+		checkErr := installErr
+		if checkErr == nil {
+			checkErr = fmt.Errorf("fault %s unexpectedly succeeded", phase)
+		} else if !strings.Contains(checkErr.Error(), "deterministic install fault injected") {
+			// A fixture that fails before the requested boundary is still a
+			// failure of the matrix: the named injection must be observable.
+			checkErr = fmt.Errorf("fault %s did not reach its injection boundary: %w", phase, checkErr)
+		} else {
+			checkErr = nil
+			target := filepath.Join(project, ".codex", "skills", "formal-gates")
+			if exists(target) || exists(release) || exists(launcher) {
+				checkErr = fmt.Errorf("fault %s left committed target/release/launcher state", phase)
+			} else if matches, globErr := filepath.Glob(registry + ".transaction.json*"); globErr != nil {
+				checkErr = globErr
+			} else if len(matches) == 0 {
+				checkErr = fmt.Errorf("fault %s did not leave an independent recovery receipt", phase)
+			}
+		}
+		add("fault-"+phase, checkErr)
+		_ = os.RemoveAll(fixture)
+	}
+	return report, result
+}
+
 // hostProviderEnvKeys are the environment variables the lifecycle host
 // provider reads to detect the driving host. The portable canary is a
 // host-agnostic check: it must observe the lenient default provider even when

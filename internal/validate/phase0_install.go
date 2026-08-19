@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -186,16 +188,23 @@ func atomicCopyFile(source, target string) error {
 }
 
 type installRecoveryReceipt struct {
-	Operation    string `json:"operation"`
-	Target       string `json:"target"`
-	Phase        string `json:"interruptedPhase"`
-	Recovered    bool   `json:"recovered"`
-	Outcome      string `json:"outcome,omitempty"`
-	ObservedFact string `json:"observedFact,omitempty"`
-	Reconcile    string `json:"reconcileAction,omitempty"`
-	StableDigest string `json:"stableDigest,omitempty"`
-	Backup       string `json:"backup,omitempty"`
-	ObservedAt   string `json:"observedAt"`
+	Operation       string `json:"operation"`
+	Target          string `json:"target"`
+	Phase           string `json:"interruptedPhase"`
+	Recovered       bool   `json:"recovered"`
+	Outcome         string `json:"outcome,omitempty"`
+	ObservedFact    string `json:"observedFact,omitempty"`
+	Reconcile       string `json:"reconcileAction,omitempty"`
+	StableDigest    string `json:"stableDigest,omitempty"`
+	VCSIdentity     string `json:"vcsIdentity,omitempty"`
+	PackageDigest   string `json:"packageDigest,omitempty"`
+	InstalledTarget string `json:"installedTarget,omitempty"`
+	Generation      uint64 `json:"generation,omitempty"`
+	Lease           string `json:"lease,omitempty"`
+	Token           string `json:"token,omitempty"`
+	RecoveryReceipt string `json:"recoveryReceipt,omitempty"`
+	Backup          string `json:"backup,omitempty"`
+	ObservedAt      string `json:"observedAt"`
 }
 
 // outerInstallJournal is the only durable install/uninstall undo record.  It
@@ -213,6 +222,12 @@ type outerInstallJournal struct {
 	Release         outerTreeSnapshot     `json:"release"`
 	Binary          outerFileSnapshot     `json:"binary"`
 	Staged          []string              `json:"staged,omitempty"`
+	VCSIdentity     string                `json:"vcsIdentity,omitempty"`
+	PackageDigest   string                `json:"packageDigest,omitempty"`
+	InstalledTarget string                `json:"installedTarget,omitempty"`
+	Generation      uint64                `json:"generation,omitempty"`
+	Lease           string                `json:"lease,omitempty"`
+	Token           string                `json:"token,omitempty"`
 }
 
 type outerTreeSnapshot struct {
@@ -317,8 +332,11 @@ func outerJournalFailure(path string, journal outerInstallJournal, cause error) 
 	receipt := installRecoveryReceipt{
 		Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase,
 		Recovered: true, Outcome: "ROLLED_BACK", ObservedFact: cause.Error(),
-		Reconcile: "restore all target, release, binary, hook, managed-rule and registry snapshots",
-		Backup:    journal.TransactionRoot, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Reconcile:   "restore all target, release, binary, hook, managed-rule and registry snapshots",
+		VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest,
+		InstalledTarget: journal.InstalledTarget, Generation: journal.Generation,
+		Lease: journal.Lease, Token: journal.Token,
+		RecoveryReceipt: path + ".failure.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if data, err := os.ReadFile(journal.RegistryPath); err == nil {
 		sum := sha256.Sum256(data)
@@ -368,7 +386,7 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 		_ = os.RemoveAll(path)
 	}
 	if recovered {
-		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", Reconcile: "restore all outer transaction snapshots", Backup: journal.TransactionRoot, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", Reconcile: "restore all outer transaction snapshots", VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest, InstalledTarget: journal.InstalledTarget, Generation: journal.Generation, Lease: journal.Lease, Token: journal.Token, RecoveryReceipt: path + ".receipt.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		if data, err := os.ReadFile(journal.Registry.Backup); err == nil {
 			sum := sha256.Sum256(data)
 			receipt.StableDigest = hex.EncodeToString(sum[:])
@@ -480,8 +498,14 @@ func acquireInstallLock(target string) (func(), error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			// A process crash can leave an old lock behind.  A recent lock is
-			// still treated as live; only an obviously stale lock is reclaimed.
+			// A crashed owner can leave a fresh-looking lock behind. Reconcile
+			// the recorded PID before applying the age fallback so a journal is
+			// not blocked until an arbitrary timeout expires.
+			if lockOwnerDead(path) {
+				if removeErr := os.Remove(path); removeErr == nil {
+					return acquireInstallLock(target)
+				}
+			}
 			if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
 				if removeErr := os.Remove(path); removeErr == nil {
 					return acquireInstallLock(target)
@@ -501,4 +525,27 @@ func acquireInstallLock(target string) (func(), error) {
 		return nil, err
 	}
 	return func() { _ = os.Remove(path) }, nil
+}
+
+func lockOwnerDead(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 1 || !strings.HasPrefix(fields[0], "pid=") {
+		return true
+	}
+	pid, err := strconv.Atoi(strings.TrimPrefix(fields[0], "pid="))
+	if err != nil || pid <= 0 {
+		return true
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return true
+	}
+	if err := process.Signal(syscall.Signal(0)); err == nil {
+		return false
+	}
+	return true
 }

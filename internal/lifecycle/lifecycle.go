@@ -172,6 +172,18 @@ func BindDispatch(root, runID, dispatchID, identity string) error {
 	if err != nil {
 		return err
 	}
+	return BindDispatchWithProvider(root, runID, dispatchID, identity, provider)
+}
+
+// BindDispatchWithProvider is the explicit host-context entrypoint used by a
+// shared stable launcher. A host=both install intentionally has one launcher;
+// provider identity therefore comes from the claim context, never from a
+// launcher path plus an ambiguous working-directory heuristic.
+func BindDispatchWithProvider(root, runID, dispatchID, identity, provider string) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return fmt.Errorf("lifecycle provider is required for an explicit dispatch claim")
+	}
 	adapter, err := adapterFor(provider)
 	if err != nil {
 		return err
@@ -201,6 +213,17 @@ func BindDispatch(root, runID, dispatchID, identity string) error {
 func ResolveClaimIdentity(root, runID, preferred string) (string, error) {
 	provider, err := currentProvider()
 	if err != nil {
+		return "", err
+	}
+	return ResolveClaimIdentityWithProvider(root, runID, preferred, provider)
+}
+
+func ResolveClaimIdentityWithProvider(root, runID, preferred, provider string) (string, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return "", fmt.Errorf("lifecycle provider is required for an explicit dispatch claim")
+	}
+	if _, err := adapterFor(provider); err != nil {
 		return "", err
 	}
 	preferred = strings.TrimSpace(preferred)

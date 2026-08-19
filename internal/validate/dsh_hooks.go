@@ -222,15 +222,6 @@ func writeDshPatch(path string, doc *yaml.Node) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	if isFile(path) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path+".bak", data, 0o600); err != nil {
-			return err
-		}
-	}
 	var buf bytes.Buffer
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)

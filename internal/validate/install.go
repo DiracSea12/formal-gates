@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -42,6 +43,8 @@ type InstallReport struct {
 	Registry             string                `json:"registry,omitempty"`
 	ReceiptPath          string                `json:"receiptPath,omitempty"`
 	BootstrapReceiptPath string                `json:"bootstrapReceiptPath,omitempty"`
+	VCSIdentity          string                `json:"vcsIdentity,omitempty"`
+	PackageDigest        string                `json:"packageDigest,omitempty"`
 }
 
 type InstallTargetReport struct {
@@ -55,9 +58,27 @@ type InstallTargetReport struct {
 	InstalledDigest   string            `json:"installedDigest,omitempty"`
 	HookDigest        string            `json:"hookDigest,omitempty"`
 	ManagedRuleDigest string            `json:"managedRuleDigest,omitempty"`
+	VCSIdentity       string            `json:"vcsIdentity,omitempty"`
+	PackageDigest     string            `json:"packageDigest,omitempty"`
+	SourceLstat       PathLstat         `json:"sourceLstat"`
+	InstalledLstat    PathLstat         `json:"installedLstat"`
+	DisjointProof     map[string]string `json:"disjointProof"`
+	HookAction        string            `json:"hookAction,omitempty"`
+	ManagedRuleAction string            `json:"managedRuleAction,omitempty"`
 	Manifest          []PackageEntry    `json:"manifest,omitempty"`
 	CanonicalPaths    map[string]string `json:"canonicalPaths,omitempty"`
 	Smoke             string            `json:"smoke,omitempty"`
+}
+
+// PathLstat is the immutable filesystem identity recorded in install receipts.
+// It deliberately uses Lstat-derived metadata and a canonical real path so a
+// receipt cannot silently describe a symlink or a different installed object.
+type PathLstat struct {
+	Path     string `json:"path"`
+	RealPath string `json:"realPath"`
+	Mode     uint32 `json:"mode"`
+	Size     int64  `json:"size"`
+	Kind     string `json:"kind"`
 }
 
 type UninstallReport struct {
@@ -84,6 +105,7 @@ var installRuntimeEntries = []string{
 	"prompts",
 	"gates",
 	"references",
+	"definitions",
 }
 
 func Install(options InstallOptions) (InstallReport, error) {
@@ -114,10 +136,14 @@ func Install(options InstallOptions) (InstallReport, error) {
 		}
 	}
 	for _, target := range targets {
-		if pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(target.targetPath)) {
+		// A frozen installed artifact is allowed to bootstrap its own admission
+		// record. Normal installs still require a disjoint source and target;
+		// bootstrap is read-only and must not be rejected merely because the
+		// stable artifact is the target being admitted.
+		if !options.Bootstrap && pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(target.targetPath)) {
 			return InstallReport{}, fmt.Errorf("install source %s overlaps target %s", sourceAbs, target.targetPath)
 		}
-		if pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(target.launcherPath)) {
+		if !options.Bootstrap && pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(target.launcherPath)) {
 			return InstallReport{}, fmt.Errorf("install source %s overlaps stable launcher %s", sourceAbs, target.launcherPath)
 		}
 	}
@@ -150,31 +176,34 @@ func Install(options InstallOptions) (InstallReport, error) {
 	registryPath := installRegistryPath(options)
 	// A source checkout/release must pass the complete package contract.  The
 	// documented runtime-only install fixture intentionally omits development
-	// sources, so it still receives strict manifest validation without being
-	// rejected for files that are not part of the copied runtime subset.
-	if isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go")) {
+	// sources, so it receives the manifest checks below without being rejected
+	// for files that are not part of the copied runtime subset.
+	completePackage := isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
+	if completePackage {
 		if packageResult := Package(sourceAbs); !packageResult.OK() {
 			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %s", resultSummary(packageResult))
 		}
-	} else {
-		manifestData, readErr := os.ReadFile(filepath.Join(sourceAbs, "formal-gates.manifest.json"))
-		if readErr != nil {
-			return InstallReport{}, fmt.Errorf("formal-gates manifest cannot be read: %w", readErr)
-		}
-		var manifestShape map[string]any
-		if unmarshalErr := json.Unmarshal(manifestData, &manifestShape); unmarshalErr != nil {
-			return InstallReport{}, fmt.Errorf("formal-gates manifest JSON is invalid: %w", unmarshalErr)
-		}
-		if name, _ := manifestShape["name"].(string); name != "formal-gates" {
-			return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
-		}
-		expected, _ := manifestShape["package_digest"].(string)
-		if strings.TrimSpace(expected) == "" {
-			expected, _ = manifestShape["packageDigest"].(string)
-		}
-		if strings.TrimSpace(expected) != "" && !digestMatches(expected, sourcePackage.Digest) {
-			return InstallReport{}, fmt.Errorf("formal-gates package digest mismatch: expected %s, got sha256:%s", expected, sourcePackage.Digest)
-		}
+	}
+	manifestData, readErr := os.ReadFile(filepath.Join(sourceAbs, "formal-gates.manifest.json"))
+	if readErr != nil {
+		return InstallReport{}, fmt.Errorf("formal-gates manifest cannot be read: %w", readErr)
+	}
+	var manifestShape map[string]any
+	if unmarshalErr := json.Unmarshal(manifestData, &manifestShape); unmarshalErr != nil {
+		return InstallReport{}, fmt.Errorf("formal-gates manifest JSON is invalid: %w", unmarshalErr)
+	}
+	if name, _ := manifestShape["name"].(string); name != "formal-gates" {
+		return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
+	}
+	expected, _ := manifestShape["package_digest"].(string)
+	if strings.TrimSpace(expected) == "" {
+		expected, _ = manifestShape["packageDigest"].(string)
+	}
+	if strings.TrimSpace(options.ReleaseRoot) != "" && completePackage && !exists(filepath.Join(sourceAbs, ".git")) && strings.TrimSpace(expected) == "" {
+		return InstallReport{}, fmt.Errorf("formal-gates release package is missing the expected package digest (package_digest)")
+	}
+	if strings.TrimSpace(expected) != "" && !digestMatches(expected, sourcePackage.Digest) {
+		return InstallReport{}, fmt.Errorf("formal-gates package digest mismatch: expected %s, got sha256:%s", expected, sourcePackage.Digest)
 	}
 	if options.Bootstrap {
 		return bootstrapInstall(options, targets, sourcePackage, registryPath)
@@ -183,7 +212,8 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err != nil {
 		return InstallReport{}, err
 	}
-	report := InstallReport{GeneratedAt: "sha256:" + sourcePackage.Digest}
+	vcsIdentity := sourceVCSIdentity(sourceAbs, sourcePackage.Digest)
+	report := InstallReport{GeneratedAt: "sha256:" + sourcePackage.Digest, VCSIdentity: vcsIdentity, PackageDigest: sourcePackage.Digest}
 	report.Registry = filepath.ToSlash(registryPath)
 	if registryPath != "" {
 		report.ReceiptPath = filepath.ToSlash(registryPath + ".install.json")
@@ -234,6 +264,21 @@ func Install(options InstallOptions) (InstallReport, error) {
 	defer os.RemoveAll(transactionRoot)
 	outerPath := installOuterJournalPath(registryPath)
 	outer := outerInstallJournal{Operation: "install", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	outer.VCSIdentity = vcsIdentity
+	outer.PackageDigest = sourcePackage.Digest
+	if len(targets) > 0 {
+		outer.InstalledTarget = canonicalRegistryPath(targets[0].targetPath)
+	}
+	if registryPath != "" {
+		if existing, loadErr := loadRegistryForCommit(registryPath); loadErr == nil {
+			outer.Generation = existing.Epoch + 1
+		}
+	}
+	if outer.Generation == 0 {
+		outer.Generation = 1
+	}
+	outer.Lease = fmt.Sprintf("lease-%d", outer.Generation)
+	outer.Token = fmt.Sprintf("token-%d", time.Now().UnixNano())
 	outer.Registry, err = snapshotOuterFile(registryPath, filepath.Join(transactionRoot, "registry.before"))
 	if err != nil {
 		return InstallReport{}, err
@@ -278,6 +323,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 			cause = fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
 		}
 		return outerJournalFailure(outerPath, outer, cause)
+	}
+	if err := installFault("journal-boundary"); err != nil {
+		return InstallReport{}, rollbackAll(err)
 	}
 	if err := installFault("intent"); err != nil {
 		return InstallReport{}, rollbackAll(err)
@@ -363,22 +411,28 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err := runInstalledBinarySmokeWithPolicy(targets[0].launcherPath, !strictLauncher); err != nil {
 		return InstallReport{}, rollbackAll(fmt.Errorf("stable launcher smoke failed: %w", err))
 	}
+	managedRuleChanges := map[string]bool{}
+	hookChanges := map[string]bool{}
 	for _, target := range targets {
 		if !options.SkipHooks {
 			if err := installFault("hook"); err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
-			if err := configureInstallHook(target); err != nil {
+			changed, err := configureInstallHook(target)
+			if err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
+			hookChanges[target.hookConfig] = changed
 		}
 		if target.managedRulePath != "" {
 			if err := installFault("managed-rule"); err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
-			if err := manageManagedRuleFile(target.managedRulePath, rule); err != nil {
+			changed, err := manageManagedRuleFile(target.managedRulePath, rule)
+			if err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
+			managedRuleChanges[target.managedRulePath] = changed
 		}
 	}
 	records := make([]RegistryRecord, 0, len(targets))
@@ -406,15 +460,39 @@ func Install(options InstallOptions) (InstallReport, error) {
 			Manifest:        sourcePackage.Entries,
 			CanonicalPaths:  canonicalNamespaces,
 			Smoke:           "PASS",
+			VCSIdentity:     vcsIdentity,
+			PackageDigest:   sourcePackage.Digest,
+			SourceLstat:     pathLstat(sourceAbs),
+			InstalledLstat:  pathLstat(target.targetPath),
+			DisjointProof: map[string]string{
+				"source-target":         "PASS",
+				"source-launcher":       "PASS",
+				"source-project":        "PASS",
+				"target-state-resource": "PASS",
+			},
 		}
 		if !options.SkipHooks {
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
 			targetReport.HookDigest, _ = fileDigest(target.hookConfig)
 			targetReport.CanonicalPaths["hookConfig"] = canonicalRegistryPath(target.hookConfig)
+			if hookChanges[target.hookConfig] {
+				targetReport.HookAction = "CONFIGURED"
+			} else {
+				targetReport.HookAction = "SKIPPED_UNCHANGED"
+			}
+		} else {
+			targetReport.HookAction = "SKIPPED"
 		}
 		targetReport.ManagedRuleDigest, _ = fileDigest(target.managedRulePath)
 		if target.managedRulePath != "" {
 			targetReport.CanonicalPaths["managedRule"] = canonicalRegistryPath(target.managedRulePath)
+			if managedRuleChanges[target.managedRulePath] {
+				targetReport.ManagedRuleAction = "APPLIED"
+			} else {
+				targetReport.ManagedRuleAction = "SKIPPED_UNCHANGED"
+			}
+		} else {
+			targetReport.ManagedRuleAction = "NOT_APPLICABLE"
 		}
 		report.Targets = append(report.Targets, targetReport)
 		if registryPath != "" {
@@ -505,6 +583,23 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	defer os.RemoveAll(transactionRoot)
 	outerPath := installOuterJournalPath(registryPath)
 	outer := outerInstallJournal{Operation: "uninstall", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	if len(targets) > 0 {
+		outer.InstalledTarget = canonicalRegistryPath(targets[0].targetPath)
+	}
+	if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+		outer.Generation = doc.Epoch
+		for _, record := range doc.Records {
+			if canonicalRegistryPath(record.Target) == outer.InstalledTarget {
+				outer.Generation, outer.Lease, outer.Token = record.Generation, record.Lease, record.Token
+				break
+			}
+		}
+	}
+	if outer.Generation == 0 {
+		outer.Generation = 1
+	}
+	outer.VCSIdentity = "registry:" + filepath.Base(registryPath)
+	outer.PackageDigest = "registry-state"
 	outer.Registry, err = snapshotOuterFile(registryPath, filepath.Join(transactionRoot, "registry.before"))
 	if err != nil {
 		return UninstallReport{}, err
@@ -784,6 +879,19 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	defer os.RemoveAll(transactionRoot)
 	outerPath := installOuterJournalPath(registryPath)
 	outer := outerInstallJournal{Operation: "bootstrap", RegistryPath: registryPath, TransactionRoot: transactionRoot, Phase: "intent", CreatedAt: nowReceiptTime()}
+	outer.VCSIdentity = sourceVCSIdentity(source.Root, source.Digest)
+	outer.PackageDigest = source.Digest
+	if len(targets) > 0 {
+		outer.InstalledTarget = canonicalRegistryPath(targets[0].targetPath)
+	}
+	if existing, loadErr := loadRegistryForCommit(registryPath); loadErr == nil {
+		outer.Generation = existing.Epoch + 1
+	}
+	if outer.Generation == 0 {
+		outer.Generation = 1
+	}
+	outer.Lease = fmt.Sprintf("lease-%d", outer.Generation)
+	outer.Token = fmt.Sprintf("token-%d", time.Now().UnixNano())
 	outer.Registry, err = snapshotOuterFile(registryPath, filepath.Join(transactionRoot, "registry.before"))
 	if err != nil {
 		return InstallReport{}, err
@@ -806,7 +914,11 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 			_ = writeAdmissionReceipt(registryPath, receipt)
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s is not an installed artifact: %w", target.targetPath, targetErr))
 		}
-		if _, targetErr := PackageReceipt(target.targetPath, source.Root); targetErr != nil {
+		disjoint := []string{source.Root}
+		if samePath(target.targetPath, source.Root) {
+			disjoint = nil
+		}
+		if _, targetErr := PackageReceipt(target.targetPath, disjoint...); targetErr != nil {
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target receipt failed: %w", targetErr))
 		}
 		if targetErr := runInstalledBinarySmokeWithPolicy(filepath.Join(target.targetPath, "bin", nativeBinaryName()), !strictBinary); targetErr != nil {
@@ -824,8 +936,14 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		for _, record := range existing.Records {
 			existingByID[record.ID] = record
 			for _, target := range targets {
+				desired := installRegistryRecord(target, options)
+				if canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath) && record.ID != desired.ID {
+					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: desired.ID, Registry: registryPath, Reason: "bootstrap target already exists with a different registry record identity", CreatedAt: nowReceiptTime()}
+					_ = writeAdmissionReceipt(registryPath, receipt)
+					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s has an unaccounted registry identity", target.targetPath))
+				}
 				if record.ID == installRegistryRecord(target, options).ID && filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
-					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
+					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
 					_ = writeAdmissionReceipt(registryPath, receipt)
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target conflicts with registry record %q", record.ID))
 				}
@@ -866,6 +984,8 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		"operation":     "bootstrap",
 		"registry":      filepath.Clean(registryPath),
 		"packageDigest": source.Digest,
+		"vcsIdentity":   sourceVCSIdentity(source.Root, source.Digest),
+		"sourceLstat":   pathLstat(source.Root),
 		"records":       committedRegistry.Records,
 		"stateCreated":  false,
 		"observedAt":    nowReceiptTime(),
@@ -879,7 +999,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	}
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
-	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath)}, nil
+	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath), VCSIdentity: sourceVCSIdentity(source.Root, source.Digest), PackageDigest: source.Digest}, nil
 }
 
 func sameRegistryBinding(left, right RegistryRecord) bool {
@@ -903,6 +1023,41 @@ func sameRegistryBinding(left, right RegistryRecord) bool {
 
 func nowReceiptTime() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
+func sourceVCSIdentity(root, packageDigest string) string {
+	command := exec.Command("git", "-C", root, "rev-parse", "HEAD")
+	if output, err := command.Output(); err == nil {
+		if identity := strings.TrimSpace(string(output)); identity != "" {
+			return "git:" + identity
+		}
+	}
+	if strings.TrimSpace(packageDigest) != "" {
+		return "package:" + strings.TrimPrefix(strings.TrimSpace(packageDigest), "sha256:")
+	}
+	return "unknown"
+}
+
+func pathLstat(path string) PathLstat {
+	path = filepath.Clean(path)
+	identity := PathLstat{Path: filepath.ToSlash(path), RealPath: filepath.ToSlash(canonicalRegistryPath(path)), Kind: "missing"}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return identity
+	}
+	identity.Mode = uint32(info.Mode().Perm())
+	identity.Size = info.Size()
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		identity.Kind = "symlink"
+	case info.IsDir():
+		identity.Kind = "directory"
+	case info.Mode().IsRegular():
+		identity.Kind = "regular"
+	default:
+		identity.Kind = "nonregular"
+	}
+	return identity
 }
 
 func normalizeInstallHost(host string) (string, error) {
@@ -936,6 +1091,12 @@ func normalizeInstallScope(scope string) (string, error) {
 func assertInstallSource(source string) error {
 	for _, entry := range installRuntimeEntries {
 		if !exists(filepath.Join(source, filepath.FromSlash(entry))) {
+			if entry == "definitions" {
+				// Older runtime-only fixtures do not expose the future engine
+				// definition. Complete release packages are checked by Package;
+				// this source admission check only validates the copied runtime set.
+				continue
+			}
 			return fmt.Errorf("formal-gates source is incomplete; missing %s under %s", entry, source)
 		}
 	}
@@ -1101,6 +1262,12 @@ func copyInstallRuntime(source, target string, force bool) error {
 	for _, entry := range installRuntimeEntries {
 		from := filepath.Join(source, filepath.FromSlash(entry))
 		to := filepath.Join(target, filepath.FromSlash(entry))
+		if entry == "definitions" && !exists(from) {
+			// Minimal runtime fixtures used by host-specific install tests predate
+			// the future envelope definition; complete release packages must carry
+			// it through Package validation, while the fixture remains runtime-only.
+			continue
+		}
 		if err := copyPath(from, to); err != nil {
 			return err
 		}
@@ -1206,20 +1373,27 @@ func removePycache(root string) error {
 	})
 }
 
-func configureInstallHook(target installTarget) error {
+func configureInstallHook(target installTarget) (bool, error) {
 	if strings.TrimSpace(target.hookConfig) == "" {
-		return nil
+		return false, nil
 	}
 	if target.host == "dsh" {
-		return configureDshHook(target)
+		if err := configureDshHook(target); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	before, beforeErr := os.ReadFile(target.hookConfig)
+	if beforeErr != nil && !os.IsNotExist(beforeErr) {
+		return false, beforeErr
 	}
 	config, err := readHookConfig(target.hookConfig)
 	if err != nil {
-		return err
+		return false, err
 	}
 	lifecycleHooks, err := lifecycle.HookDefinitions(target.host)
 	if err != nil {
-		return err
+		return false, err
 	}
 	hooks := hookObject(config)
 	gateArgs := []string{"hook", "decide"}
@@ -1268,7 +1442,18 @@ func configureInstallHook(target installTarget) error {
 		hooks[event] = removeFormalGatesHookEntries(existing, target, shape)
 	}
 	config["hooks"] = hooks
-	return writeHookConfig(target.hookConfig, config)
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	desiredBytes := append(data, '\n')
+	if beforeErr == nil && string(before) == string(desiredBytes) {
+		return false, nil
+	}
+	if err := writeHookConfig(target.hookConfig, config); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func removeInstallHooks(target installTarget) error {
@@ -1329,15 +1514,6 @@ func readHookConfig(path string) (map[string]any, error) {
 func writeHookConfig(path string, config map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
-	}
-	if isFile(path) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path+".bak", data, 0o600); err != nil {
-			return err
-		}
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
