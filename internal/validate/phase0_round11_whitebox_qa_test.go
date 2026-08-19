@@ -83,6 +83,15 @@ func TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite(t *testing.T) {
 			if !bytes.Equal(after, sentinel) {
 				t.Fatalf("write barrier modified the destination: got %q, want %q", after, sentinel)
 			}
+
+			absentTarget := filepath.Join(t.TempDir(), "nested", "state.json")
+			err = WriteVersionedState(absentTarget, candidate, map[string]any{"status": "MUST_NOT_CREATE"})
+			if !errors.As(err, &unsupported) || !IsUnsupportedRunVersion(err) || !strings.Contains(err.Error(), UnsupportedRunVersionCode) {
+				t.Fatalf("incompatible envelope did not reject an absent destination with typed %s: %v", UnsupportedRunVersionCode, err)
+			}
+			if _, statErr := os.Stat(absentTarget); !os.IsNotExist(statErr) {
+				t.Fatalf("write barrier created an absent destination: %v", statErr)
+			}
 		})
 	}
 }

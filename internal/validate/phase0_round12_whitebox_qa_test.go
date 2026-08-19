@@ -47,11 +47,11 @@ func round12Run(t *testing.T, dir, name string, args ...string) string {
 
 func round12RepoRoot(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate the whitebox test source")
 	}
-	return root
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
 func round12GitProject(t *testing.T) string {
@@ -160,6 +160,7 @@ func round12AssertNoTransactionArtifacts(t *testing.T, registry, target string) 
 func TestWhiteboxPhase0Round12PackageReceiptBindsStableAndInstalledIdentities(t *testing.T) {
 	source := round12InstallSource(t)
 	installed := round12InstallSource(t)
+	round12WriteFile(t, filepath.Join(installed, "README.md"), []byte("installed runtime only\n"), 0o600)
 	round12Run(t, source, "git", "init")
 	round12Run(t, source, "git", "config", "user.email", "round12-package@example.invalid")
 	round12Run(t, source, "git", "config", "user.name", "Round Twelve Package")
@@ -179,8 +180,15 @@ func TestWhiteboxPhase0Round12PackageReceiptBindsStableAndInstalledIdentities(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Digest == "" || first.Digest != second.Digest || first.GeneratedAt != second.GeneratedAt {
+	if first.Digest == "" || !reflect.DeepEqual(first, second) {
 		t.Fatalf("package receipt was not deterministic: first=%+v second=%+v", first, second)
+	}
+	installedReceipt, err := PackageReceipt(installed, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installedReceipt.Digest == first.Digest || reflect.DeepEqual(installedReceipt.Entries, first.Entries) {
+		t.Fatalf("source and installed fixtures did not establish distinct package identity: source=%+v installed=%+v", first, installedReceipt)
 	}
 	for _, entry := range first.Entries {
 		if !round12PathWithin(source, entry.RealPath) {
@@ -191,7 +199,7 @@ func TestWhiteboxPhase0Round12PackageReceiptBindsStableAndInstalledIdentities(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if baseline.VCSIdentity != "git:"+vcsIdentity || baseline.SourceRoot != canonicalRegistryPath(source) || baseline.InstalledTarget != canonicalRegistryPath(installed) || baseline.PackageDigest != first.Digest || baseline.InstalledTargetDigest != second.Digest {
+	if baseline.VCSIdentity != "git:"+vcsIdentity || baseline.SourceRoot != canonicalRegistryPath(source) || baseline.InstalledTarget != canonicalRegistryPath(installed) || baseline.PackageDigest != first.Digest || baseline.InstalledTargetDigest != installedReceipt.Digest {
 		t.Fatalf("baseline did not bind package identities: %+v", baseline)
 	}
 	if baseline.CanonicalPaths["hostConfig"] != canonicalRegistryPath(hostConfig) || len(baseline.PackageManifest) != len(first.Entries) {
@@ -228,6 +236,26 @@ func TestWhiteboxPhase0Round12BaselineReceiptValidatesManifestPathsAndIdentityBo
 		if !filepath.IsAbs(entry.RealPath) || !round12PathWithin(source, entry.RealPath) || entry.Size < 0 || entry.SHA256 == "" {
 			t.Fatalf("manifest entry lacks realpath/Lstat-like identity: %+v", entry)
 		}
+		path := filepath.Join(source, filepath.FromSlash(entry.Path))
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		actualDigest, digestErr := fileDigest(path)
+		if digestErr != nil {
+			t.Fatal(digestErr)
+		}
+		if entry.Size != info.Size() || entry.SHA256 != actualDigest || entry.RealPath != canonicalRegistryPath(path) || filepath.Clean(entry.RealPath) != canonicalRegistryPath(path) {
+			t.Fatalf("manifest entry is not faithful to its source file: entry=%+v size=%d digest=%s realpath=%s", entry, info.Size(), actualDigest, canonicalRegistryPath(path))
+		}
+	}
+	for name, want := range map[string]string{"sourceRoot": source, "installedTarget": installed, "hostConfig": hostConfig, "stateRoot": stateRoot, "resourceRoot": resourceRoot, "registry": registry} {
+		if got := receipt.CanonicalPaths[name]; got != canonicalRegistryPath(want) {
+			t.Fatalf("canonical path %s is not equal to its realpath: got=%q want=%q", name, got, canonicalRegistryPath(want))
+		}
+	}
+	if len(receipt.Disjoint) != 1 || receipt.Disjoint[canonicalRegistryPath(source)] != canonicalRegistryPath(source) {
+		t.Fatalf("installed identity did not retain the complete source disjoint proof: %+v", receipt.Disjoint)
 	}
 	for name, path := range receipt.CanonicalPaths {
 		if !filepath.IsAbs(path) || strings.TrimSpace(name) == "" {
@@ -255,8 +283,19 @@ func TestWhiteboxPhase0Round12BaselineReceiptValidatesManifestPathsAndIdentityBo
 		"missing package": func() BaselineReceipt { value := receipt; value.PackageDigest = ""; return value }(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := WriteBaselineReceipt(filepath.Join(t.TempDir(), "invalid.json"), invalid); err == nil {
+			target := filepath.Join(t.TempDir(), "nested", "invalid.json")
+			if err := WriteBaselineReceipt(target, invalid); err == nil {
 				t.Fatal("incomplete identity was persisted")
+			}
+			if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+				t.Fatalf("incomplete identity created a receipt before rejection: %v", statErr)
+			}
+		})
+	}
+	for name, path := range map[string]string{"auxiliary root mixed with installed target": installed, "auxiliary root mixed with source root": source} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := BuildBaselineReceipt("git:round12", source, installed, map[string]string{"stateRoot": path}); err == nil || !strings.Contains(err.Error(), "overlaps") {
+				t.Fatalf("mixed source/installed identity was accepted: %v", err)
 			}
 		})
 	}
@@ -292,6 +331,9 @@ func TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUnins
 	secondDocument, err := LoadRegistry(registry)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(secondDocument.Records) != 2 {
+		t.Fatalf("second host install changed the registry to an unexpected record set: %+v", secondDocument.Records)
 	}
 	claudeAfter := round12RecordByID(t, secondDocument, claudeBefore.ID)
 	if !reflect.DeepEqual(claudeBefore, claudeAfter) {
@@ -333,8 +375,10 @@ func TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUnins
 		t.Fatalf("uninstall changed the unrelated record: before=%+v after=%+v", claudeBefore, got)
 	}
 	codexAfter := round12RecordByID(t, thirdDocument, codexID)
-	if codexAfter.Status != "disabled" || codexAfter.Generation == 0 || codexAfter.Lease == "" || codexAfter.Token == "" {
-		t.Fatalf("uninstall lost transaction identity: %+v", codexAfter)
+	codexWant := round12RecordByID(t, secondDocument, codexID)
+	codexWant.Status = "disabled"
+	if !reflect.DeepEqual(codexAfter, codexWant) {
+		t.Fatalf("uninstall changed non-status fields of the installing record: before=%+v after=%+v", codexWant, codexAfter)
 	}
 }
 
@@ -584,7 +628,7 @@ func TestWhiteboxPhase0Round12InstallAndUninstallUseTheSameLockOwner(t *testing.
 }
 
 func TestWhiteboxPhase0Round12InstallFaultsRestoreRegistryIdentityAndCleanup(t *testing.T) {
-	for _, fault := range []string{"intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit"} {
+	for _, fault := range []string{"intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "verify-stage:installed-target"} {
 		t.Run(fault, func(t *testing.T) {
 			source := round12InstallSource(t)
 			project := t.TempDir()
@@ -641,7 +685,7 @@ func TestWhiteboxPhase0Round12MalformedHookRestoresRegistryAndRecoveryEvidence(t
 	if _, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Force: true}); err == nil || !strings.Contains(strings.ToLower(err.Error()), "json") {
 		t.Fatalf("malformed hook did not stop install: %v", err)
 	}
-	if !bytes.Equal(round12ReadFile(t, targets[0].hookConfig), hookBefore) || !bytes.Equal(round12ReadFile(t, targets[0].managedRulePath), ruleBefore) || !bytes.Equal(round12ReadFile(t, registry), registryBefore) || string(round12ReadFile(t, launcher)) != "old launcher\n" {
+	if string(round12ReadFile(t, filepath.Join(targets[0].targetPath, "old.txt"))) != "old runtime\n" || !bytes.Equal(round12ReadFile(t, targets[0].hookConfig), hookBefore) || !bytes.Equal(round12ReadFile(t, targets[0].managedRulePath), ruleBefore) || !bytes.Equal(round12ReadFile(t, registry), registryBefore) || string(round12ReadFile(t, launcher)) != "old launcher\n" {
 		t.Fatal("malformed hook rollback did not preserve all authoritative bytes")
 	}
 	var receipt installRecoveryReceipt
@@ -674,10 +718,17 @@ func TestWhiteboxPhase0Round12UninstallFaultsReconcileAndPreserveExternalContent
 		if string(round12ReadFile(t, filepath.Join(targets[0].targetPath, "stable.txt"))) != "stable\n" || string(round12ReadFile(t, launcher)) != "stable launcher\n" || !bytes.Equal(round12ReadFile(t, registry), registryBefore) {
 			t.Fatal("post-switch smoke recovery did not preserve the stable identity")
 		}
+		var receipt installRecoveryReceipt
+		if err := json.Unmarshal(round12ReadFile(t, installOuterJournalPath(registry)+".failure.json"), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.Operation != "install" || receipt.Phase != "switched" || !receipt.Recovered || receipt.Outcome != "ROLLED_BACK" || receipt.RecoveryReceipt == "" || receipt.StableDigest == "" {
+			t.Fatalf("post-switch install recovery evidence is incomplete: %+v", receipt)
+		}
 		round12AssertNoTransactionArtifacts(t, registry, targets[0].targetPath)
 	})
 
-	for _, fault := range []string{"intent", "switched", "managed-rule", "hook"} {
+	for _, fault := range []string{"intent", "switched", "post-switch-smoke", "managed-rule", "hook"} {
 		t.Run("uninstall "+fault, func(t *testing.T) {
 			source := round12InstallSource(t)
 			project := t.TempDir()
@@ -802,8 +853,13 @@ func TestWhiteboxPhase0Round12ReleaseRollbackRestoresAllOuterIdentity(t *testing
 	if string(round12ReadFile(t, filepath.Join(release, "old-release.txt"))) != "old release\n" || string(round12ReadFile(t, launcher)) != "old launcher\n" || string(round12ReadFile(t, filepath.Join(targets[0].targetPath, "old.txt"))) != "old runtime\n" || !bytes.Equal(round12ReadFile(t, targets[0].hookConfig), hookBefore) || !bytes.Equal(round12ReadFile(t, targets[0].managedRulePath), ruleBefore) || !bytes.Equal(round12ReadFile(t, registry), registryBefore) {
 		t.Fatal("release rollback did not restore the complete outer identity")
 	}
-	if _, err := os.Stat(filepath.Join(release, "README.md")); !os.IsNotExist(err) {
-		t.Fatalf("candidate release remained after rollback: %v", err)
+	if _, err := os.Stat(filepath.Join(release, "old-release.txt")); err != nil {
+		t.Fatalf("pre-existing release was not restored: %v", err)
+	}
+	for _, candidatePath := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "bin", "agents", "prompts", "gates", "references", "definitions"} {
+		if _, err := os.Stat(filepath.Join(release, candidatePath)); !os.IsNotExist(err) {
+			t.Fatalf("candidate release content remained at %s: %v", candidatePath, err)
+		}
 	}
 	var receipt installRecoveryReceipt
 	if err := json.Unmarshal(round12ReadFile(t, installOuterJournalPath(registry)+".failure.json"), &receipt); err != nil {
@@ -889,11 +945,24 @@ func TestWhiteboxPhase0Round12InstallReceiptCoversMultiHostScopeRootsAndMismatch
 	if err != nil {
 		t.Fatal(err)
 	}
+	projectReceiptBytes := round12ReadFile(t, filepath.FromSlash(projectReport.ReceiptPath))
 	globalReport, err := Install(InstallOptions{Source: source, Host: "both", Scope: "global", RegistryPath: registry, BinaryTarget: launcher, Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	globalReceiptBytes := round12ReadFile(t, filepath.FromSlash(globalReport.ReceiptPath))
 	for name, report := range map[string]InstallReport{"project": projectReport, "global": globalReport} {
+		var persisted InstallReport
+		receiptBytes := projectReceiptBytes
+		if name == "global" {
+			receiptBytes = globalReceiptBytes
+		}
+		if err := json.Unmarshal(receiptBytes, &persisted); err != nil {
+			t.Fatalf("%s persisted install receipt is not readable: %v", name, err)
+		}
+		if !reflect.DeepEqual(persisted, report) {
+			t.Fatalf("%s persisted install receipt does not match the returned identity: persisted=%+v returned=%+v", name, persisted, report)
+		}
 		if len(report.Targets) != 2 || report.VCSIdentity == "" || report.PackageDigest == "" || report.Registry == "" || report.ReceiptPath == "" {
 			t.Fatalf("%s report lacks multi-host identity: %+v", name, report)
 		}
@@ -901,12 +970,60 @@ func TestWhiteboxPhase0Round12InstallReceiptCoversMultiHostScopeRootsAndMismatch
 			if target.SourceDigest == "" || target.InstalledDigest == "" || target.SourceLstat.Kind != "directory" || target.InstalledLstat.Kind != "directory" || target.VCSIdentity == "" || target.PackageDigest == "" || len(target.Manifest) == 0 {
 				t.Fatalf("%s target receipt lacks runtime identity: %+v", name, target)
 			}
+			if !reflect.DeepEqual(target.SourceLstat, pathLstat(source)) || !reflect.DeepEqual(target.InstalledLstat, pathLstat(target.TargetPath)) {
+				t.Fatalf("%s target receipt lost complete Lstat identity: %+v", name, target)
+			}
+			for _, entry := range target.Manifest {
+				path := filepath.Join(source, filepath.FromSlash(entry.Path))
+				info, statErr := os.Lstat(path)
+				if statErr != nil {
+					t.Fatal(statErr)
+				}
+				actualDigest, digestErr := fileDigest(path)
+				if digestErr != nil {
+					t.Fatal(digestErr)
+				}
+				if entry.Size != info.Size() || entry.SHA256 != actualDigest || entry.RealPath != canonicalRegistryPath(path) {
+					t.Fatalf("%s manifest entry is not faithful: %+v actualSize=%d actualDigest=%s actualRealPath=%s", name, entry, info.Size(), actualDigest, canonicalRegistryPath(path))
+				}
+			}
 			installed, err := PackageReceipt(target.TargetPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if installed.Digest != target.InstalledDigest || target.CanonicalPaths["sourceRoot"] != canonicalRegistryPath(source) || target.CanonicalPaths["launcher"] != canonicalRegistryPath(launcher) {
+			if installed.Digest != target.InstalledDigest {
 				t.Fatalf("%s target receipt has mismatched digest/canonical identity: %+v", name, target)
+			}
+			document, docErr := LoadRegistry(registry)
+			if docErr != nil {
+				t.Fatal(docErr)
+			}
+			var record RegistryRecord
+			for _, candidate := range document.Records {
+				if canonicalRegistryPath(candidate.Target) == canonicalRegistryPath(target.TargetPath) {
+					record = candidate
+					break
+				}
+			}
+			if record.ID == "" {
+				t.Fatalf("%s target has no registry identity: %+v", name, target)
+			}
+			expectedCanonical := map[string]string{
+				"sourceRoot": source, "target": target.TargetPath, "launcher": launcher,
+				"projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot,
+				"resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling,
+				"registry": registry, "hookConfig": target.HookConfig, "managedRule": target.ManagedRulePath,
+			}
+			if len(target.CanonicalPaths) != len(expectedCanonical) {
+				t.Fatalf("%s target receipt has an incomplete canonical path set: %+v", name, target.CanonicalPaths)
+			}
+			for key, want := range expectedCanonical {
+				if got := target.CanonicalPaths[key]; got != canonicalRegistryPath(want) {
+					t.Fatalf("%s canonical path %s mismatch: got=%q want=%q", name, key, got, canonicalRegistryPath(want))
+				}
+			}
+			if len(target.Disjoint) != 1 || target.Disjoint[filepath.Clean(source)] != canonicalRegistryPath(source) {
+				t.Fatalf("%s target receipt has an incomplete disjoint identity: %+v", name, target.Disjoint)
 			}
 			for _, key := range []string{"source-target", "source-launcher", "source-project", "target-state-resource"} {
 				if target.DisjointProof[key] != "PASS" {
@@ -929,13 +1046,19 @@ func TestWhiteboxPhase0Round12InstallReceiptCoversMultiHostScopeRootsAndMismatch
 	}
 	for _, record := range document.Records {
 		if record.Scope == "project" {
+			if record.ProjectRoot != filepath.Clean(project) || record.CanonicalPaths["projectRoot"] != canonicalRegistryPath(project) {
+				t.Fatalf("project record lost its canonical project root: %+v", record)
+			}
 			if err := verifyRegistryBinding(registry, record.ID, project, filepath.Join(project, "wrong-package")); err == nil {
 				t.Fatalf("mismatched package identity was accepted for %s", record.ID)
 			}
 			if err := verifyRegistryBinding(registry, record.ID, filepath.Join(project, "other-root"), record.Target); err == nil {
 				t.Fatalf("mismatched project identity was accepted for %s", record.ID)
 			}
-			break
+		} else if record.Scope == "global" {
+			if record.ProjectRoot != filepath.Clean(home) || record.CanonicalPaths["projectRoot"] != canonicalRegistryPath(home) {
+				t.Fatalf("global record lost its canonical host root: %+v", record)
+			}
 		}
 	}
 }
@@ -1127,8 +1250,34 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		}
 	}
 	var help strings.Builder
-	for _, args := range [][]string{{"--help"}, {"workflow", "--help"}, {"registry", "--help"}, {"install", "--help"}, {"uninstall", "--help"}, {"canary", "--help"}} {
-		help.WriteString(round12Run(t, root, "go", append([]string{"run", "./cmd/formal-gates"}, args...)...))
+	for _, surface := range []struct {
+		args   []string
+		marker string
+	}{
+		{[]string{"--help"}, "commands:"},
+		{[]string{"package", "--help"}, "package validate"},
+		{[]string{"package", "validate", "--help"}, "package validate"},
+		{[]string{"package", "route-candidates", "--help"}, "package route-candidates"},
+		{[]string{"package", "baseline", "--help"}, "package baseline"},
+		{[]string{"workflow", "--help"}, "subcommands:"},
+		{[]string{"registry", "--help"}, "subcommands:"},
+		{[]string{"install", "--help"}, "usage of install"},
+		{[]string{"uninstall", "--help"}, "usage of uninstall"},
+		{[]string{"gate", "--help"}, "subcommands:"},
+		{[]string{"gate", "run", "--help"}, "gate run"},
+		{[]string{"gate", "report", "--help"}, "gate report"},
+		{[]string{"hook", "--help"}, "hook decide"},
+		{[]string{"hook", "decide", "--help"}, "hook decide"},
+		{[]string{"lifecycle", "--help"}, "capture"},
+		{[]string{"lifecycle", "capture", "--help"}, "lifecycle capture"},
+		{[]string{"lifecycle", "verify", "--help"}, "lifecycle verify"},
+		{[]string{"canary", "--help"}, "subcommands:"},
+	} {
+		output := round12Run(t, root, "go", append([]string{"run", "./cmd/formal-gates"}, surface.args...)...)
+		if !strings.Contains(strings.ToLower(output), strings.ToLower(surface.marker)) {
+			t.Fatalf("help surface %q omitted %q: %s", strings.Join(surface.args, " "), surface.marker, output)
+		}
+		help.WriteString(output)
 		help.WriteByte('\n')
 	}
 	helpText := strings.ToLower(help.String())
