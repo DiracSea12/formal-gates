@@ -131,14 +131,21 @@ func TestAdmitRegistryLeavesMachineReadableUnregisteredReceipt(t *testing.T) {
 
 func TestBuildBaselineReceiptBindsCanonicalPathsAndDigest(t *testing.T) {
 	root := t.TempDir()
+	hostConfig := filepath.Join(t.TempDir(), "host", "config.json")
 	if err := os.WriteFile(filepath.Join(root, "payload"), []byte("stable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := BuildBaselineReceipt("git:abc123", root, "", map[string]string{"source": root})
+	if err := os.MkdirAll(filepath.Dir(hostConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostConfig, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := BuildBaselineReceipt("git:abc123", root, "", map[string]string{"hostConfig": hostConfig})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.VCSIdentity != "git:abc123" || receipt.PackageDigest == "" || receipt.CanonicalPaths["source"] == "" {
+	if receipt.VCSIdentity != "git:abc123" || receipt.PackageDigest == "" || receipt.CanonicalPaths["hostConfig"] != canonicalRegistryPath(hostConfig) {
 		t.Fatalf("unexpected baseline receipt: %+v", receipt)
 	}
 	path := filepath.Join(t.TempDir(), "baseline.json")

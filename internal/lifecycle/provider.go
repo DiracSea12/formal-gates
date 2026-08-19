@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,6 +86,14 @@ func currentProvider() (string, error) {
 	if isProjectDshInstall(path) {
 		return ProviderDefault, nil
 	}
+	// The stage-0 launcher is deliberately one fixed user-level path for every
+	// host.  Host-specific directory names are therefore no longer available as
+	// an identity signal.  Resolve the provider from the same shared registry
+	// that admitted the target, scoped to the current project/root and launcher;
+	// this is read-only observation and does not create a second registry truth.
+	if provider := providerFromRegistry(path); provider != "" {
+		return provider, nil
+	}
 	// A directly built source binary outside a maintained host installation
 	// (go run, a local development build, or an uninstalled copy) resolves to
 	// the lenient default provider from its path. When such a binary is driven
@@ -127,6 +136,105 @@ func providerFromEnvironment() string {
 		return ProviderDeepSeek
 	}
 	return ""
+}
+
+// registryProviderRecord is the read-only subset of the shared admission
+// registry needed to recover host identity for the fixed stable launcher.
+// Lifecycle does not own registry writes; validate's transaction owner remains
+// the only semantic writer.
+type registryProviderRecord struct {
+	Target       string            `json:"target"`
+	LauncherPath string            `json:"launcherPath"`
+	Host         string            `json:"host"`
+	ProjectRoot  string            `json:"projectRoot"`
+	Canonical    map[string]string `json:"canonicalPaths"`
+	Status       string            `json:"status"`
+}
+
+type registryProviderDocument struct {
+	Records []registryProviderRecord `json:"records"`
+}
+
+func providerFromRegistry(executable string) string {
+	registryPath := ""
+	for _, name := range []string{"HOME", "USERPROFILE"} {
+		if home := strings.TrimSpace(os.Getenv(name)); home != "" {
+			registryPath = filepath.Join(home, ".formal-gates", "registry.json")
+			break
+		}
+	}
+	if registryPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		return ""
+	}
+	var document registryProviderDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		return ""
+	}
+	executable = canonicalProviderPath(executable)
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	workingDirectory = canonicalProviderPath(workingDirectory)
+	bestHost := ""
+	bestRootLength := -1
+	for _, record := range document.Records {
+		if strings.ToLower(strings.TrimSpace(record.Status)) != "active" {
+			continue
+		}
+		launcher := record.LauncherPath
+		if launcher == "" && record.Canonical != nil {
+			launcher = record.Canonical["launcher"]
+		}
+		if canonicalProviderPath(launcher) != executable {
+			continue
+		}
+		root := record.ProjectRoot
+		if root == "" && record.Canonical != nil {
+			root = record.Canonical["projectRoot"]
+		}
+		root = canonicalProviderPath(root)
+		if root == "" || !providerPathContains(root, workingDirectory) {
+			continue
+		}
+		if len(root) <= bestRootLength {
+			continue
+		}
+		adapter, adapterErr := adapterFor(record.Host)
+		if adapterErr != nil {
+			continue
+		}
+		bestHost = adapter.name
+		bestRootLength = len(root)
+	}
+	return bestHost
+}
+
+func canonicalProviderPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(path)
+}
+
+func providerPathContains(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative))
 }
 
 func providerFromExecutable(path string) string {

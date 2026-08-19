@@ -206,22 +206,17 @@ No Go toolchain needed. Download the latest release source archive, extract it, 
 # Windows: install.bat
 ```
 
-### Build from source
+### Build from source (read-only validation)
 
-Build the native binary in the source checkout, then pick a host and scope:
+A source-built binary is a candidate. It may run package validation and the isolated canary, but
+it cannot install, bootstrap, uninstall, or write workflow state. Production installation always
+uses the release bootstrap above, which stages the verified binary at the fixed stable launcher
+before entering the single native transaction:
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates
-
-bin/formal-gates install --source . --host claude --scope global --force
-bin/formal-gates install --source . --host codex --scope project --project <project> --force
-bin/formal-gates install --source . --host cursor --scope project --project <project> --force
-bin/formal-gates install --source . --host dsh --scope global --force
-bin/formal-gates install --source . --host dsh --scope project --project <project> --force
-
-bin/formal-gates uninstall --host claude --scope global
-bin/formal-gates uninstall --host codex --scope project --project <project>
-bin/formal-gates uninstall --host dsh --scope global
+bin/formal-gates package validate --root .
+bin/formal-gates canary portable --root . --format json
 ```
 
 On Windows use `bin\formal-gates.exe`. `bin\formal-gates.exe` is a Windows-only asset: do not try to run it on macOS/Linux (it fails with `exec format error`); use that platform's `bin/formal-gates` instead.
@@ -245,8 +240,9 @@ retain the existing runtime and hook integration. The current rule is enclosed b
 instructions block `<formal-gates:host-instructions:start>` and
 `<formal-gates:host-instructions:end>`; repeated installs replace the block content and collapse
 duplicate blocks to one.
-When upgrading from an older release, including one using the previous marker, uninstall once with
-the old binary before installing this release. Later releases can be installed in place.
+When upgrading from an older release, including an old target/bin hook or marker, run the release
+bootstrap with `--force`. The single transaction migrates installer-owned hooks to the fixed
+launcher and converges the managed instruction block.
 
 ### Native uninstall
 
@@ -255,10 +251,11 @@ runtime, installer-owned hook entries, and the complete marker-delimited rule bl
 preserving content outside the block and other hooks:
 
 ```bash
-bin/formal-gates uninstall --host claude --scope global
-bin/formal-gates uninstall --host cursor --scope project --project <project>
-bin/formal-gates uninstall --host dsh --scope global
-bin/formal-gates uninstall --host dsh --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host claude --scope global
+$HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope global
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>
+# Windows: %LOCALAPPDATA%\formal-gates\bin\formal-gates.exe uninstall ...
 ```
 
 Marker-based rule cleanup does not need the runtime or a rule source directory.
@@ -267,7 +264,6 @@ Marker-based rule cleanup does not need the runtime or a rule source directory.
 
 - `--force` — replace an existing target.
 - `--skip-hooks` — install the package without touching host hooks (only when the host hook config must stay byte-for-byte unchanged).
-- `uninstall --source` — retained for compatibility with older calls; unused by marker-based cleanup.
 
 ---
 

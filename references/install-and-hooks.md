@@ -28,16 +28,14 @@ Windows 上构建并调用 `bin\formal-gates.exe`。
 ## 原生安装
 
 ```bash
-bin/formal-gates install --source <formal-gates> \
-  --host <claude|codex|cursor|dsh> --scope global --force
+./install.command --host <claude|codex|cursor|dsh> --scope global --force
+./install.command --host <claude|codex|cursor|dsh> --scope project --project <project> --force
+# Windows: install.bat ...
 
-bin/formal-gates install --source <formal-gates> \
-  --host <claude|codex|cursor|dsh> --scope project --project <project> --force
-
-bin/formal-gates uninstall \
+$HOME/.local/bin/formal-gates uninstall \
   --host <claude|codex|cursor|dsh> --scope global
 
-bin/formal-gates uninstall \
+$HOME/.local/bin/formal-gates uninstall \
   --host <claude|codex|cursor|dsh> --scope project --project <project>
 ```
 
@@ -50,7 +48,9 @@ bin/formal-gates uninstall \
 host 的全局安装当作回退。
 
 引导文件 `install.command` 和 `install.bat` 会下载匹配的 release 源码与二进制、
-校验已发布的 checksum、组装本地包，并调用同一个原生安装器。它们不是第二个安装器。
+校验已发布的 checksum、组装本地包，把 binary 首次放到固定 stable launcher，再由该
+launcher 调用唯一原生安装事务。源码目录的 `bin/formal-gates` 是候选，只能做只读验证
+和隔离 canary，不能安装、bootstrap、卸载或写 workflow state；引导脚本不是第二个安装器。
 
 ## 安装位置
 
@@ -61,8 +61,8 @@ host 的全局安装当作回退。
 - Cursor：`~/.cursor/formal-gates`
 - DeepSeek Harness：`$DSH_HOME/skills/formal-gates`（默认 `~/.dsh`）
 
-项目级安装使用所选项目下的对应目录。当 host 需要时，安装器会把原生二进制的绝对
-路径写入 hook 配置。
+项目级安装使用所选项目下的对应目录。hook 配置始终写固定 stable launcher 的绝对路径，
+不会指向可替换 target 内的 candidate binary。
 
 安装器维护的规则文件是：
 
@@ -77,8 +77,8 @@ Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook�
 唯一宿主指令区块；安装器把同一区块写入宿主指令文件。重复安装会替换区块内容并把
 重复区块收敛为一个，同时保留区块外内容。
 
-从旧版（包括使用旧 marker 的版本）升级时，先用旧版本二进制执行一次 `uninstall`，再安装
-本版本；之后可直接重复覆盖安装，不再依赖任何历史规则全文。
+从旧版（包括旧 target/bin hook 或旧 marker）升级时，直接从 release 引导脚本加
+`--force` 安装；事务只识别并迁移安装器拥有的精确旧 hook 形状，不保留旧 writer 或入口。
 
 DeepSeek Harness 的 hook 补丁是 home 级 `cordis.patch.yml`；DSH 不自动加载项目目录
 下的补丁文件，所以 `--host dsh --scope project` 只安装 skill 与 `AGENTS.md` 指令，不
@@ -92,24 +92,24 @@ provider，lifecycle verify 为 `UNAVAILABLE`，既有派发与身份检查仍�
 卸载使用与安装相同的 host、scope 和 project 解析：
 
 ```bash
-bin/formal-gates uninstall --host claude --scope global
-bin/formal-gates uninstall --host codex --scope project --project <project>
-bin/formal-gates uninstall --host cursor --scope project --project <project>
-bin/formal-gates uninstall --host dsh --scope global
-bin/formal-gates uninstall --host dsh --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host claude --scope global
+$HOME/.local/bin/formal-gates uninstall --host codex --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope global
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>
 ```
 
 它会删除所选 host 的 formal-gates 运行时目录、安装器拥有的 hook 条目和完整 marker
 规则区块，同时保留规则区块外内容与非 formal-gates hook。规则清理由 marker 独立完成，
-即使运行时目录已经不存在也不需要规则源码。`uninstall --source` 仅作为兼容参数保留，
-不再参与规则清理。
+即使运行时目录已经不存在也不需要规则源码。卸载只能由 registry 登记的 stable launcher
+执行，不接受旧 `--source` 旁路。
 
 ## Hook 边界
 
 原生 hook 入口是：
 
 ```bash
-bin/formal-gates hook decide
+$HOME/.local/bin/formal-gates hook decide
 ```
 
 Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通过 JSON 的
@@ -146,7 +146,7 @@ Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷�
 送给已安装的原生二进制：
 
 ```bash
-bin/formal-gates lifecycle capture \
+$HOME/.local/bin/formal-gates lifecycle capture \
   --provider <claude-code|codex|cursor|deepseek-harness> --event <provider-event-name>
 ```
 
@@ -163,7 +163,7 @@ Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动
 视推导出的结果：
 
 ```bash
-bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
+$HOME/.local/bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
   --dispatch <dispatch-id>
 ```
 
@@ -231,15 +231,15 @@ managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resourc
 故障矩阵可用同一原生入口复现：
 
 ```bash
-FORMAL_GATES_INSTALL_FAULT=intent|prepared|switched|hook|managed-rule|post-switch-smoke \
-  bin/formal-gates install --source <candidate> --host claude --scope project \
-  --project <project> --force
+FORMAL_GATES_INSTALL_FAULT=intent|registry|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit \
+  <stable-launcher> install --source <candidate> --host claude --scope project \
+  --project <project> --binary-target <stable-launcher> --force
 ```
 
 真实 hook JSON、managed-rule、pointer/config、registry 和 post-switch/pre-commit
-installed-binary smoke 失败也会回滚到旧 runtime/config/registry，并在目标父目录留下
-`.formal-gates-recovery.json.failure.json`；崩溃后下次 install/uninstall 会对账 journal，
-清理临时/备份路径并写 `.formal-gates-recovery.json.receipt.json`。smoke 失败时 journal
+installed-binary smoke 失败也会回滚到旧 runtime/config/registry，并在 registry 旁留下
+`<registry>.transaction.json.failure.json`；崩溃后下次 install/uninstall 会对账同一 journal，
+清理临时/备份路径并写 `<registry>.transaction.json.receipt.json`。smoke 失败时 journal
 仍处于 `switched`，不会伪装成 committed；脚本不得自行删除 release、切换 pointer 或写
 registry。
 

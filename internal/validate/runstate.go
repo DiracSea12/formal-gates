@@ -49,12 +49,17 @@ type RunState struct {
 	OwnerTranscript string `json:"ownerTranscript,omitempty"`
 	OwnerSession    string `json:"ownerSession,omitempty"`
 	// AdmissionRegistry/AdmissionRecordID bind every subsequent state write to
-	// the registry bridge that admitted this run.  Empty values preserve the
-	// documented legacy workflow format and skip the stage-0 bridge.
+	// the registry bridge that admitted this run. Empty values preserve the
+	// documented legacy state shape; production writes still require the
+	// invoking executable to be an active registered stable launcher.
 	AdmissionRegistry    string                       `json:"admissionRegistry,omitempty"`
 	AdmissionRecordID    string                       `json:"admissionRecordId,omitempty"`
 	AdmissionRoot        string                       `json:"admissionRoot,omitempty"`
 	AdmissionTarget      string                       `json:"admissionTarget,omitempty"`
+	AdmissionEpoch       uint64                       `json:"admissionEpoch,omitempty"`
+	AdmissionGeneration  uint64                       `json:"admissionGeneration,omitempty"`
+	AdmissionLease       string                       `json:"admissionLease,omitempty"`
+	AdmissionToken       string                       `json:"admissionToken,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
 	SettledFindings      map[string][]SettledFinding  `json:"settledFindings,omitempty"`
@@ -353,6 +358,14 @@ func RunStatePath(root, runID string) string {
 }
 
 func SaveRunState(root string, state RunState) error {
+	return saveRunState(root, state, false)
+}
+
+// saveRunState writes one state envelope.  registryHeld is used only by
+// workflow operations that must fence a VCS mutation and its resulting state
+// under one admission critical section (notably Seal); ordinary callers keep
+// the public SaveRunState path and acquire the registry lock here.
+func saveRunState(root string, state RunState, registryHeld bool) error {
 	if strings.TrimSpace(state.RunID) == "" {
 		return fmt.Errorf("run id is required")
 	}
@@ -367,25 +380,19 @@ func SaveRunState(root string, state RunState) error {
 		// Hold the registry lock through the state write.  A separate Admit call
 		// followed by an unlocked write permits uninstall/disable to win between
 		// the two operations, leaving an active run bound to a disabled target.
-		var err error
-		admissionUnlock, err = acquireRegistryLock(state.AdmissionRegistry)
-		if err != nil {
+		if !registryHeld {
+			var err error
+			admissionUnlock, err = acquireRegistryLock(state.AdmissionRegistry)
+			if err != nil {
+				return err
+			}
+			defer admissionUnlock()
+		}
+		if err := verifyRunStateAdmissionLocked(root, state); err != nil {
 			return err
 		}
-		defer admissionUnlock()
-		receipt, err := admitRegistryUnlocked(filepath.Clean(state.AdmissionRegistry), state.AdmissionRecordID)
-		if err != nil {
-			return err
-		}
-		if !receipt.Accepted {
-			return fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, state.AdmissionRecordID)
-		}
-		if strings.TrimSpace(state.AdmissionRoot) == "" || strings.TrimSpace(state.AdmissionTarget) == "" {
-			return fmt.Errorf("admission root and target must be supplied with the registry binding")
-		}
-		if err := verifyRegistryBinding(state.AdmissionRegistry, state.AdmissionRecordID, state.AdmissionRoot, state.AdmissionTarget); err != nil {
-			return err
-		}
+	} else if err := verifyLegacyStableLauncher(); err != nil {
+		return err
 	}
 	if state.Actions == nil {
 		state.Actions = map[string]ActionResult{}
@@ -463,6 +470,74 @@ func SaveRunState(root string, state RunState) error {
 		return err
 	}
 	return writeAtomic(path, append(finalData, '\n'), 0o600)
+}
+
+// verifyLegacyStableLauncher preserves the legacy run-state shape without
+// preserving a candidate writer. Existing pre-stage-0 runs have no admission
+// fields, so a production mutation is allowed only from a fixed launcher that
+// an active shared-registry record names. Test executables retain in-process
+// legacy semantics.
+func verifyLegacyStableLauncher() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+		return nil
+	}
+	home, err := installHomeDir()
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: legacy run requires a registered stable launcher: %w", err)
+	}
+	registry := filepath.Join(home, ".formal-gates", "registry.json")
+	doc, err := LoadRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: legacy run requires the shared registry: %w", err)
+	}
+	for _, record := range doc.Records {
+		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(executable) {
+			return nil
+		}
+	}
+	return fmt.Errorf("UNREGISTERED_INSTALL: legacy run must be driven by a registered stable launcher")
+}
+
+// verifyRunStateAdmissionLocked is called only while the shared registry lock
+// is held.  Operations with external effects (Seal) call it before touching
+// VCS; ordinary state updates call it immediately before the atomic state
+// replacement through saveRunState.
+func verifyRunStateAdmissionLocked(root string, state RunState) error {
+	if strings.TrimSpace(state.AdmissionRegistry) == "" && strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return nil
+	}
+	if strings.TrimSpace(state.AdmissionRegistry) == "" || strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return fmt.Errorf("admission registry and record id must be supplied together")
+	}
+	receipt, err := admitRegistryUnlocked(filepath.Clean(state.AdmissionRegistry), state.AdmissionRecordID)
+	if err != nil {
+		return err
+	}
+	if !receipt.Accepted {
+		return fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, state.AdmissionRecordID)
+	}
+	if strings.TrimSpace(state.AdmissionRoot) == "" || strings.TrimSpace(state.AdmissionTarget) == "" {
+		return fmt.Errorf("admission root and target must be supplied with the registry binding")
+	}
+	if canonicalRegistryPath(root) != canonicalRegistryPath(state.AdmissionRoot) {
+		return fmt.Errorf("UNREGISTERED_INSTALL: workflow root does not match its admission binding")
+	}
+	doc, record, err := registryAdmissionIdentity(state.AdmissionRegistry, state.AdmissionRecordID)
+	if err != nil {
+		return err
+	}
+	if state.AdmissionEpoch == 0 || state.AdmissionGeneration == 0 || strings.TrimSpace(state.AdmissionLease) == "" || strings.TrimSpace(state.AdmissionToken) == "" {
+		return fmt.Errorf("UNREGISTERED_INSTALL: run is missing its registry epoch/lease identity")
+	}
+	if doc.Epoch < state.AdmissionEpoch || record.Generation != state.AdmissionGeneration || record.Lease != state.AdmissionLease || record.Token != state.AdmissionToken {
+		return fmt.Errorf("UNREGISTERED_INSTALL: run registry epoch/lease identity is stale")
+	}
+	return verifyRegistryBinding(state.AdmissionRegistry, state.AdmissionRecordID, state.AdmissionRoot, state.AdmissionTarget)
 }
 
 func LoadRunState(root, runID string) (RunState, error) {

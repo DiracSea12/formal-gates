@@ -31,6 +31,8 @@ $canary = "portable-canary-$suffix.json"
 $checksums = "SHA256SUMS-$suffix.txt"
 
 $tmp = Join-Path $env:TEMP ("formal-gates-" + [guid]::NewGuid().ToString())
+$stagedLauncher = $false
+$installSucceeded = $false
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
   $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$Version"
@@ -56,24 +58,34 @@ try {
   New-Item -ItemType Directory -Force -Path (Join-Path $sourceDir.FullName "bin") | Out-Null
   Copy-Item (Join-Path $tmp $asset) (Join-Path $sourceDir.FullName "bin\formal-gates.exe") -Force
 
-$installRoot = Join-Path $env:LOCALAPPDATA "formal-gates\releases\$($Version.TrimStart('v'))-$suffix"
-$formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
+  $installRoot = Join-Path $env:LOCALAPPDATA "formal-gates\releases\$($Version.TrimStart('v'))-$suffix"
+  $formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
 
   if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
+  # Stage the downloaded executable at the fixed launcher path once.  The
+  # native transaction then owns release replacement, smoke, hooks and
+  # registry commit; the source-tree candidate is never invoked as a workflow
+  # writer.
+  $launcherDir = Split-Path -Parent $formalBinary
+  New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
+  if (-not (Test-Path -LiteralPath $formalBinary)) {
+    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
+    $stagedLauncher = $true
+  }
   $args = @("install", "--source", $sourceDir.FullName, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
-  $bootstrapArgs = @("install", "--bootstrap", "--source", $sourceDir.FullName, "--host", $TargetHost, "--scope", $Scope)
-  if ($Project) { $bootstrapArgs += @("--project", $Project) }
-  & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @bootstrapArgs
-  if ($LASTEXITCODE -ne 0) { throw "formal-gates bootstrap failed with exit code $LASTEXITCODE" }
-  & (Join-Path $sourceDir.FullName "bin\formal-gates.exe") @args
+  & $formalBinary @args
   if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+  $installSucceeded = $true
 
   Write-Host "Installed formal-gates to $installRoot"
   Write-Host "Native binary: $formalBinary"
 }
 finally {
+  if ($stagedLauncher -and -not $installSucceeded -and (Test-Path -LiteralPath $formalBinary)) {
+    Remove-Item -LiteralPath $formalBinary -Force
+  }
   Remove-Item $tmp -Recurse -Force
 }

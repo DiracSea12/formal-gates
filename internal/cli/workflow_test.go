@@ -353,9 +353,9 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root, pkg := cliWorkflowFixture(t)
+			root, _ := cliWorkflowFixture(t)
 			alternateRoot := t.TempDir()
-			binary := buildInstalledHostCLI(t, tc.provider)
+			binary, pkg := installHostCLI(t, tc.provider, root)
 			runID := strings.ReplaceAll(tc.name, "_", "-")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", runID, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git", "--split", "no")
 
@@ -384,7 +384,7 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			}
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "start-readiness", "--dispatch", dispatchID, "--status", "PASS")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", runID, "--decision", "no-split", "--note", "single coherent bounded unit")
-			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "quality")
+			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "implementation-quality-gate")
 			state := installedWorkflowState(t, binary, root, runID)
 			if state.Actions["start-readiness"].Status != "PASS" {
 				t.Fatalf("verified lifecycle did not permit public workflow recording: %#v", state.Actions["start-readiness"])
@@ -393,26 +393,41 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 	}
 }
 
-func buildInstalledHostCLI(t *testing.T, provider string) string {
+func installHostCLI(t *testing.T, provider, project string) (string, string) {
 	t.Helper()
-	relative := map[string]string{
-		lifecycle.ProviderClaude: filepath.Join(".claude", "skills", "formal-gates", "bin", installTestBinaryName()),
-		lifecycle.ProviderCursor: filepath.Join(".cursor", "formal-gates", "bin", installTestBinaryName()),
-	}[provider]
-	path := filepath.Join(t.TempDir(), relative)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("go", "build", "-o", path, "./cmd/formal-gates")
+	sourceBinary := filepath.Join(repoRoot, "bin", installTestBinaryName())
+	if err := os.MkdirAll(filepath.Dir(sourceBinary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", sourceBinary, "./cmd/formal-gates")
 	cmd.Dir = repoRoot
+	cmd.Env = environmentWithOverrides(os.Environ(), map[string]string{
+		"HOME":        os.Getenv("FORMAL_GATES_TEST_BUILD_HOME"),
+		"USERPROFILE": os.Getenv("FORMAL_GATES_TEST_BUILD_USERPROFILE"),
+	})
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build installed %s CLI: %v: %s", provider, err, output)
 	}
-	return path
+	launcher := filepath.Join(os.Getenv("HOME"), ".local", "bin", installTestBinaryName())
+	host := map[string]string{
+		lifecycle.ProviderClaude: "claude",
+		lifecycle.ProviderCursor: "cursor",
+	}[provider]
+	if host == "" {
+		t.Fatalf("unsupported installed-host fixture provider %q", provider)
+	}
+	report, err := validate.Install(validate.InstallOptions{Source: repoRoot, Host: host, Scope: "project", Project: project, BinaryTarget: launcher, Force: true})
+	if err != nil {
+		t.Fatalf("install %s CLI: %v", provider, err)
+	}
+	if len(report.Targets) != 1 {
+		t.Fatalf("install %s returned %d targets", provider, len(report.Targets))
+	}
+	return launcher, report.Targets[0].TargetPath
 }
 
 func prepareInstalledAction(t *testing.T, binary, root, pkg, runID, action string) string {
@@ -537,6 +552,11 @@ func runCLI(t *testing.T, args ...string) string {
 
 func cliWorkflowFixture(t *testing.T) (string, string) {
 	t.Helper()
+	t.Setenv("FORMAL_GATES_TEST_BUILD_HOME", os.Getenv("HOME"))
+	t.Setenv("FORMAL_GATES_TEST_BUILD_USERPROFILE", os.Getenv("USERPROFILE"))
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	root := t.TempDir()
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "requirement\n")
 	mustWriteCLI(t, filepath.Join(root, "design.md"), "design\n")
@@ -560,6 +580,22 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")
 	return root, pkg
+}
+
+func environmentWithOverrides(environment []string, overrides map[string]string) []string {
+	result := make([]string, 0, len(environment)+len(overrides))
+	for _, item := range environment {
+		key := strings.SplitN(item, "=", 2)[0]
+		if _, overridden := overrides[key]; !overridden {
+			result = append(result, item)
+		}
+	}
+	for key, value := range overrides {
+		if strings.TrimSpace(value) != "" {
+			result = append(result, key+"="+value)
+		}
+	}
+	return result
 }
 
 func cliGit(t *testing.T, root string, args ...string) string {

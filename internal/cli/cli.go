@@ -141,29 +141,6 @@ func runRegistry(args []string, streams IO) (int, error) {
 	}
 	subcommand, args := args[0], args[1:]
 	switch subcommand {
-	case "bootstrap":
-		fs := newFlagSet("registry bootstrap", streams)
-		path := fs.String("path", "", "registry JSON path")
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		if strings.TrimSpace(*path) == "" {
-			return 1, fmt.Errorf("registry bootstrap requires --path")
-		}
-		doc, err := validate.BootstrapRegistry(*path, nil)
-		return printValue(streams.Stdout, doc, err)
-	case "register":
-		fs := newFlagSet("registry register", streams)
-		path := fs.String("path", "", "registry JSON path")
-		record := registryRecordFlags(fs)
-		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
-			return code, err
-		}
-		if strings.TrimSpace(*path) == "" || strings.TrimSpace(*record.id) == "" {
-			return 1, fmt.Errorf("registry register requires --path and --id")
-		}
-		doc, err := validate.RegisterRegistryRecord(*path, record.value())
-		return printValue(streams.Stdout, doc, err)
 	case "admit":
 		fs := newFlagSet("registry admit", streams)
 		path := fs.String("path", "", "registry JSON path")
@@ -195,33 +172,6 @@ func runRegistry(args []string, streams IO) (int, error) {
 	}
 }
 
-type registryRecordInput struct {
-	id, target, scope, host, projectRoot, stateRoot, resourceRoot, runtimeSibling *string
-}
-
-func registryRecordFlags(fs *flag.FlagSet) registryRecordInput {
-	return registryRecordInput{
-		id:             fs.String("id", "", "stable registry record id"),
-		target:         fs.String("target", "", "documented install target"),
-		scope:          fs.String("scope", "", "global or project"),
-		host:           fs.String("host", "", "host provider"),
-		projectRoot:    fs.String("project-root", "", "project root"),
-		stateRoot:      fs.String("state-root", "", "state root"),
-		resourceRoot:   fs.String("resource-root", "", "resource root"),
-		runtimeSibling: fs.String("runtime-sibling", "", "immutable runtime sibling"),
-	}
-}
-
-func (record registryRecordInput) value() validate.RegistryRecord {
-	paths := map[string]string{}
-	for name, value := range map[string]*string{"projectRoot": record.projectRoot, "stateRoot": record.stateRoot, "resourceRoot": record.resourceRoot, "runtimeSibling": record.runtimeSibling} {
-		if strings.TrimSpace(*value) != "" {
-			paths[name] = *value
-		}
-	}
-	return validate.RegistryRecord{ID: *record.id, Target: *record.target, Scope: *record.scope, Host: *record.host, ProjectRoot: *record.projectRoot, StateRoot: *record.stateRoot, ResourceRoot: *record.resourceRoot, RuntimeSibling: *record.runtimeSibling, CanonicalPaths: paths}
-}
-
 func runInstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
@@ -231,7 +181,6 @@ func runInstall(args []string, streams IO) (int, error) {
 	project := fs.String("project", "", "project path for project installs")
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
 	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
-	registryPath := fs.String("registry", "", "registry JSON path (defaults to the project/global admission bridge)")
 	bootstrap := fs.Bool("bootstrap", false, "register the selected target in the stage-0 admission bridge without installing runtime files")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
@@ -241,7 +190,11 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, RegistryPath: *registryPath, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks})
+	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
+	if err := validate.RequireInstallLauncher(options); err != nil {
+		return 1, err
+	}
+	report, err := validate.Install(options)
 	if err != nil {
 		return 1, err
 	}
@@ -266,7 +219,6 @@ func runInstall(args []string, streams IO) (int, error) {
 func runUninstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
-	source := fs.String("source", "", "deprecated compatibility flag; marker-based uninstall does not need a source directory")
 	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
 	scope := fs.String("scope", "", "uninstall scope: global or project")
 	project := fs.String("project", "", "project path for project uninstalls")
@@ -276,7 +228,11 @@ func runUninstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("uninstall does not accept positional arguments")
 	}
-	report, err := validate.Uninstall(validate.UninstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project})
+	options := validate.UninstallOptions{Host: *host, Scope: *scope, Project: *project}
+	if err := validate.RequireUninstallLauncher(options); err != nil {
+		return 1, err
+	}
+	report, err := validate.Uninstall(options)
 	if err != nil {
 		return 1, err
 	}
@@ -352,8 +308,6 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	vcs := fs.String("vcs", "", "external VCS name")
 	base := fs.String("base-snapshot", "", "optional native base identity to verify")
 	currentSnapshot := fs.String("current-snapshot", "", "explicit native identity to adopt as the current snapshot (must be an ancestor or equal of the native head); defaults to the native head (RQ-010)")
-	registry := fs.String("registry", "", "optional stage-0 admission registry path")
-	registryRecord := fs.String("registry-record", "", "registry record id required with --registry")
 	artifacts := stringListFlag{}
 	fs.Var(&artifacts, "requirement-artifact", "additional requirement or solution document; repeat as needed")
 	retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
@@ -363,7 +317,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, AdmissionRegistry: *registry, AdmissionRecordID: *registryRecord, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route})
+	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -1422,11 +1376,11 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry bootstrap|register|admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
 }
 
 func printRegistryUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s registry <subcommand>\n\nSubcommands:\n  bootstrap --path PATH\n  register --path PATH --id ID [--target PATH --scope global|project --host HOST]\n  admit --path PATH --record-id ID\n  show --path PATH\n", program)
+	fmt.Fprintf(w, "Usage: %s registry <subcommand>\n\nSubcommands:\n  admit --path PATH --record-id ID\n  show --path PATH\n\nRegistry mutation is owned by install --bootstrap/install/uninstall.\n", program)
 }
 
 // 二层 --help 粒度统一：workflow/gate/hook/lifecycle/canary 各自打印本组的子命令清单，

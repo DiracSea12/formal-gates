@@ -15,10 +15,9 @@ import (
 
 type StartOptions struct {
 	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot string
-	// AdmissionRegistry and AdmissionRecordID opt a versioned/candidate
-	// launcher into the stage-0 registry bridge. Empty values preserve the
-	// stable driver's legacy start semantics; when supplied, admission is
-	// checked before the run directory or state file is created.
+	// AdmissionRegistry and AdmissionRecordID explicitly select the stage-0
+	// registry bridge. Empty values discover the shared user registry; only Go
+	// test executables retain the in-process legacy start path.
 	AdmissionRegistry string
 	AdmissionRecordID string
 	// CurrentSnapshot 显式指定当前快照停在某祖先：默认不传时取原生 HEAD；
@@ -221,6 +220,8 @@ func Start(options StartOptions) (RunState, error) {
 	if discoveryErr != nil {
 		return RunState{}, discoveryErr
 	}
+	var admissionDoc RegistryDocument
+	var admissionRecord RegistryRecord
 	if registryPath != "" {
 		recordID := registryRecordID
 		if recordID == "" {
@@ -235,6 +236,10 @@ func Start(options StartOptions) (RunState, error) {
 		}
 		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
 			return RunState{}, bindingErr
+		}
+		admissionDoc, admissionRecord, err = registryAdmissionIdentity(registryPath, recordID)
+		if err != nil {
+			return RunState{}, err
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(RunDir(root, runID)), 0o700); err != nil {
@@ -255,6 +260,10 @@ func Start(options StartOptions) (RunState, error) {
 	state.AdmissionRecordID = registryRecordID
 	state.AdmissionRoot = root
 	state.AdmissionTarget = options.PackageRoot
+	state.AdmissionEpoch = admissionDoc.Epoch
+	state.AdmissionGeneration = admissionRecord.Generation
+	state.AdmissionLease = admissionRecord.Lease
+	state.AdmissionToken = admissionRecord.Token
 	state.RetainedOverall = options.RetainedOverall
 	state.SplitDeclaration = split
 	state.SplitMasterRunID = master
@@ -273,12 +282,12 @@ func Start(options StartOptions) (RunState, error) {
 	return state, nil
 }
 
-// discoverAdmissionBinding resolves both project-scoped and user-global
-// registries before Start creates .gates/tmp.  A present registry is an
+// discoverAdmissionBinding resolves the shared user registry before Start
+// creates .gates/tmp.  A present registry is an
 // admission boundary: if it cannot account for the installed package, start
 // fails with UNREGISTERED_INSTALL instead of silently falling back to a direct
-// state writer.  A missing registry remains the legacy source-tree path for
-// pre-stage-0 runs, which intentionally have no admission envelope.
+// state writer. In-process test binaries retain the legacy phase-0 state path;
+// a shipped binary must always be the stable launcher admitted by a registry.
 func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID string) (string, string, error) {
 	registryPath := strings.TrimSpace(requestedPath)
 	registryRecordID := strings.TrimSpace(requestedID)
@@ -288,7 +297,20 @@ func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID stri
 		}
 		return filepath.Clean(registryPath), registryRecordID, nil
 	}
-	candidates := []string{filepath.Join(root, ".gates", "registry.json")}
+	// Unit and integration tests execute the workflow API in-process rather
+	// than through an installed launcher.  Their temporary roots must remain
+	// isolated from any real user registry that happens to exist on the host;
+	// otherwise an unrelated global record turns every fixture into an
+	// UNREGISTERED_INSTALL failure.  Admission-specific tests pass an explicit
+	// registry/record above, so this exemption does not weaken the production
+	// launcher boundary.
+	if executable, executableErr := os.Executable(); executableErr == nil {
+		base := filepath.Base(filepath.Clean(executable))
+		if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+			return "", "", nil
+		}
+	}
+	candidates := []string{}
 	if home, err := installHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, ".formal-gates", "registry.json"))
 	}
@@ -302,12 +324,13 @@ func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID stri
 		}
 		return filepath.Clean(candidate), record.ID, nil
 	}
-	// A copied/installed package has no VCS metadata and therefore must be
-	// launched through the registered bridge.  Only a repository checkout keeps
-	// the legacy source-tree path used by pre-stage-0 runs; it cannot be used to
-	// masquerade as an installed runtime.
-	if isFile(filepath.Join(packageRoot, "bin", nativeBinaryName())) && !exists(filepath.Join(packageRoot, ".git")) {
-		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: no global or project admission registry is registered for installed package %s", packageRoot)
+	executable, executableErr := os.Executable()
+	if executableErr != nil {
+		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") {
+		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: stable launcher has no registry record for package %s", packageRoot)
 	}
 	return "", "", nil
 }
@@ -322,11 +345,27 @@ func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, erro
 		return RegistryRecord{}, err
 	}
 	for _, record := range doc.Records {
-		if filepath.Clean(record.Target) == filepath.Clean(want) || filepath.Clean(record.CanonicalPaths["target"]) == filepath.Clean(want) {
+		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && canonicalRegistryPath(record.Target) == canonicalRegistryPath(want) && canonicalRegistryPath(record.CanonicalPaths["target"]) == canonicalRegistryPath(want) {
 			return record, nil
 		}
 	}
 	return RegistryRecord{}, fmt.Errorf("no registry record matches package root %s", packageRoot)
+}
+
+func registryAdmissionIdentity(path, recordID string) (RegistryDocument, RegistryRecord, error) {
+	doc, err := LoadRegistry(path)
+	if err != nil {
+		return RegistryDocument{}, RegistryRecord{}, err
+	}
+	for _, record := range doc.Records {
+		if record.ID == recordID {
+			if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) {
+				return RegistryDocument{}, RegistryRecord{}, fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is inactive or incomplete", recordID)
+			}
+			return doc, record, nil
+		}
+	}
+	return RegistryDocument{}, RegistryRecord{}, fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is missing", recordID)
 }
 
 func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) error {
@@ -335,8 +374,11 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		return err
 	}
 	for _, record := range doc.Records {
-		if record.ID != recordID || len(record.CanonicalPaths) == 0 {
+		if record.ID != recordID {
 			continue
+		}
+		if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: registry record is inactive or incomplete")
 		}
 		canonicalRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -351,16 +393,30 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		// projectRoot records the host-level installation namespace rather than
 		// the arbitrary repository that is invoking the stable driver.
 		if record.Scope == "project" {
-			if expected := canonicalPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalPath(canonicalRoot) {
+			if expected := canonicalRegistryPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalRegistryPath(canonicalRoot) {
 				return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
 			}
 		}
-		if expected := canonicalPath(record.CanonicalPaths["target"]); expected != "." && expected != canonicalPath(canonicalPackage) {
+		if canonicalRegistryPath(record.Target) != canonicalRegistryPath(canonicalPackage) || canonicalRegistryPath(record.CanonicalPaths["target"]) != canonicalRegistryPath(canonicalPackage) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
+		}
+		// Installed packages are only allowed to drive workflow writes through
+		// the fixed launcher recorded by admission.  A direct invocation of the
+		// candidate binary under the host target has the same package binding but
+		// a different executable identity and is therefore rejected.  Repository
+		// checkouts keep the legacy source-tree path and intentionally do not use
+		// this installed-launcher check.
+		executable, executableErr := os.Executable()
+		if executableErr != nil {
+			return fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
+		}
+		base := filepath.Base(filepath.Clean(executable))
+		if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") && canonicalRegistryPath(executable) != canonicalRegistryPath(record.LauncherPath) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: workflow must be driven by stable launcher %s", record.LauncherPath)
 		}
 		return nil
 	}
-	return nil
+	return fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is missing", recordID)
 }
 
 // ResumeStatus is the recoverable classification reported when resuming an

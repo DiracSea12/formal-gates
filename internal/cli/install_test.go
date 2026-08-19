@@ -302,7 +302,7 @@ func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T)
 			config := testHookConfigPath(project, host, "project")
 			writeUserOwnedHookConfig(t, config, host)
 			installArgs := []string{"install", "--source", source, "--host", host, "--scope", "project", "--project", project}
-			uninstallArgs := []string{"uninstall", "--source", source, "--host", host, "--scope", "project", "--project", project}
+			uninstallArgs := []string{"uninstall", "--host", host, "--scope", "project", "--project", project}
 
 			var stdout, stderr bytes.Buffer
 			if code := Run("formal-gates", installArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
@@ -330,10 +330,16 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 	target := testInstallTargetPath(project, "codex", "project")
 	config := testHookConfigPath(project, "codex", "project")
 	legacyCommand := testNativeHookCommand(target, "hook", "decide")
-	currentCommand := testNativeHookCommand(target, "hook", "decide", "--provider", "codex")
+	oldCurrentCommand := testNativeHookCommand(target, "hook", "decide", "--provider", "codex")
+	canonicalHome, err := filepath.EvalSymlinks(os.Getenv("HOME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableLauncher := filepath.Join(canonicalHome, ".local", "bin", installTestBinaryName())
+	currentCommand := strings.Join([]string{filepath.ToSlash(stableLauncher), "hook", "decide", "--provider", "codex"}, " ")
 
 	mustWriteCLI(t, filepath.Join(target, "SKILL.md"), "legacy runtime without catalog\n")
-	writeCodexHookConfig(t, config, legacyCommand, currentCommand, "echo formal-gates status")
+	writeCodexHookConfig(t, config, legacyCommand, oldCurrentCommand, "echo formal-gates status")
 
 	var stdout, stderr bytes.Buffer
 	code := Run("formal-gates", []string{
@@ -344,6 +350,9 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 	}
 	if got := countHookCommand(t, config, legacyCommand); got != 0 {
 		t.Fatalf("legacy Codex gate remains after upgrade (%d): %s", got, readFile(t, config))
+	}
+	if got := countHookCommand(t, config, oldCurrentCommand); got != 0 {
+		t.Fatalf("old target-bound Codex gate remains after upgrade (%d): %s", got, readFile(t, config))
 	}
 	if got := countHookCommand(t, config, currentCommand); got != 1 {
 		t.Fatalf("current Codex gate count=%d after upgrade, want 1: %s", got, readFile(t, config))
@@ -497,10 +506,10 @@ func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *test
 }
 
 func TestRunInstallGlobalUsesTemporaryHome(t *testing.T) {
+	source := writeInstallSource(t, "global source")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	source := writeInstallSource(t, "global source")
 	var stdout, stderr bytes.Buffer
 
 	code := Run("formal-gates", []string{
@@ -752,6 +761,9 @@ func assertManagedRuleState(t *testing.T, path string, preserveUnrelated bool) {
 
 func writeInstallSource(t *testing.T, skillText string) string {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	source := t.TempDir()
 	mustWriteCLI(t, filepath.Join(source, "SKILL.md"), skillText+"\n"+testManagedRuleBlock(testManagedRuleLatest))
 	mustWriteCLI(t, filepath.Join(source, "README.md"), "readme\n")

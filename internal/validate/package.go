@@ -179,8 +179,10 @@ func validateCIText(text string, result *Result) {
 		"ubuntu-latest",
 		"go test ./...",
 		"go build -o",
-		"package validate --root .",
-		"canary portable --root .",
+		"git archive --format=",
+		"FORMAL_GATES_ARCHIVE_ROOT",
+		"package validate --root",
+		"canary portable --root",
 		"portable-canary.json",
 		"portable-canary-windows-amd64.json",
 		"portable-canary-macos-arm64.json",
@@ -509,7 +511,7 @@ func validateManifest(root string, result *Result) {
 		result.add("formal-gates.manifest.json", "verification_commands must include a repo-local command")
 	}
 	if !contains(doc.Installs, nativeInstallCommandExample()) {
-		result.add("formal-gates.manifest.json", "install_commands must include the native install command")
+		result.add("formal-gates.manifest.json", "install_commands must include the release bootstrap entry")
 	}
 	if !contains(doc.Commands, nativeBinaryCommand()) {
 		result.add("formal-gates.manifest.json", "verification_commands must include the built native binary package validation command")
@@ -606,9 +608,9 @@ func nativeBinaryCommand() string {
 
 func nativeInstallCommandExample() string {
 	if runtime.GOOS == "windows" {
-		return "bin\\formal-gates.exe install --source . --host claude --scope global --force"
+		return "install.bat -TargetHost claude -Scope global -Force"
 	}
-	return "bin/formal-gates install --source . --host claude --scope global --force"
+	return "./install.command --host claude --scope global --force"
 }
 
 func nativeBinaryName() string {

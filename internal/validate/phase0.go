@@ -239,7 +239,7 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 	if err != nil {
 		return BaselineReceipt{}, err
 	}
-	sourceAbs = filepath.Clean(sourceAbs)
+	sourceAbs = canonicalRegistryPath(sourceAbs)
 	packageDigest, err := PackageDigest(sourceAbs)
 	if err != nil {
 		return BaselineReceipt{}, err
@@ -249,12 +249,13 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		return BaselineReceipt{}, err
 	}
 	receipt := BaselineReceipt{VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs, PackageDigest: packageDigest, PackageManifest: packageManifest.Entries, CanonicalPaths: map[string]string{}}
+	canonicalSeen := map[string]string{"sourceRoot": sourceAbs}
 	if strings.TrimSpace(installedTarget) != "" {
 		installedAbs, err := filepath.Abs(installedTarget)
 		if err != nil {
 			return BaselineReceipt{}, err
 		}
-		installedAbs = filepath.Clean(installedAbs)
+		installedAbs = canonicalRegistryPath(installedAbs)
 		if pathOverlaps(sourceAbs, installedAbs) {
 			return BaselineReceipt{}, fmt.Errorf("baseline source root %s overlaps installed target %s", sourceAbs, installedAbs)
 		}
@@ -263,6 +264,7 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		if err != nil {
 			return BaselineReceipt{}, err
 		}
+		canonicalSeen["installedTarget"] = installedAbs
 	}
 	for name, path := range paths {
 		if strings.TrimSpace(path) == "" {
@@ -272,11 +274,17 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		if err != nil {
 			return BaselineReceipt{}, err
 		}
-		realPath, err := filepath.EvalSymlinks(abs)
-		if err != nil {
+		realPath := canonicalRegistryPath(abs)
+		if _, err := os.Lstat(realPath); err != nil {
 			return BaselineReceipt{}, fmt.Errorf("resolve canonical path %s: %w", path, err)
 		}
-		receipt.CanonicalPaths[name] = filepath.Clean(realPath)
+		for existingName, existingPath := range canonicalSeen {
+			if pathOverlaps(realPath, existingPath) {
+				return BaselineReceipt{}, fmt.Errorf("baseline canonical path %s overlaps %s (%s)", name, existingName, realPath)
+			}
+		}
+		canonicalSeen[name] = realPath
+		receipt.CanonicalPaths[name] = realPath
 		if strings.EqualFold(name, "hookConfig") || strings.EqualFold(name, "config") || strings.EqualFold(name, "hook") {
 			if !isFile(realPath) {
 				return BaselineReceipt{}, fmt.Errorf("hook/config identity is not a regular file: %s", path)
@@ -347,8 +355,14 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		if err != nil {
 			return err
 		}
+		if rel == ".git" || rel == ".gates" {
+			if dirEntry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if dirEntry.IsDir() {
-			if rel == ".git" || rel == ".gates" || strings.EqualFold(filepath.Base(path), "__pycache__") {
+			if strings.EqualFold(filepath.Base(path), "__pycache__") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -434,9 +448,41 @@ func pathOverlaps(a, b string) bool {
 	return a == b || within(a, b) || within(b, a)
 }
 
+func canonicalRegistryPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return canonicalPath(path)
+	}
+	abs = filepath.Clean(abs)
+	// EvalSymlinks requires the complete path to exist.  Install identities also
+	// include not-yet-created state/resource/release paths, so resolve the
+	// nearest existing ancestor and append the untouched suffix.  This closes
+	// common aliases such as macOS /var -> /private/var without inventing a path.
+	current := abs
+	for {
+		if resolved, resolveErr := filepath.EvalSymlinks(current); resolveErr == nil {
+			rel, relErr := filepath.Rel(current, abs)
+			if relErr == nil && rel != "." {
+				return filepath.Clean(filepath.Join(resolved, rel))
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs
+		}
+		current = parent
+	}
+}
+
 type RegistryRecord struct {
-	ID             string            `json:"id"`
-	Target         string            `json:"target"`
+	ID     string `json:"id"`
+	Target string `json:"target"`
+	// LauncherPath is the stable executable allowed to drive workflow writes
+	// for this target.  It is intentionally separate from Target: the host
+	// skill tree is a candidate/runtime payload, while hooks must invoke this
+	// fixed launcher path.
+	LauncherPath   string            `json:"launcherPath"`
 	Scope          string            `json:"scope"`
 	Host           string            `json:"host"`
 	HookConfig     string            `json:"hookConfig,omitempty"`
@@ -466,41 +512,6 @@ type AdmissionReceipt struct {
 	CreatedAt string `json:"createdAt"`
 }
 
-func BootstrapRegistry(path string, records []RegistryRecord) (RegistryDocument, error) {
-	path = filepath.Clean(path)
-	unlock, err := acquireRegistryLock(path)
-	if err != nil {
-		return RegistryDocument{}, err
-	}
-	defer unlock()
-	return bootstrapRegistryRecordsUnlocked(path, records)
-}
-
-// bootstrapRegistryRecordsUnlocked is the one native owner for creating a
-// registry document.  Public maintenance commands and the installer all use
-// the same normalization and atomic commit path; they differ only in whether
-// bootstrap replaces the initial document or registration merges records.
-func bootstrapRegistryRecordsUnlocked(path string, records []RegistryRecord) (RegistryDocument, error) {
-	doc := RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1, Records: make([]RegistryRecord, 0, len(records))}
-	for i, record := range records {
-		if strings.TrimSpace(record.ID) == "" {
-			record.ID = fmt.Sprintf("target-%d", i+1)
-		}
-		if record.Status == "" {
-			record.Status = "active"
-		}
-		if record.CanonicalPaths == nil {
-			record.CanonicalPaths = map[string]string{}
-		}
-		normalizeRegistryRecord(&record, doc.Epoch)
-		doc.Records = append(doc.Records, record)
-	}
-	if err := writeJSONAtomically(path, doc); err != nil {
-		return RegistryDocument{}, err
-	}
-	return doc, nil
-}
-
 func LoadRegistry(path string) (RegistryDocument, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -516,40 +527,10 @@ func LoadRegistry(path string) (RegistryDocument, error) {
 	return doc, nil
 }
 
-// RegisterRegistryRecord appends or replaces a target record while preserving
-// the registry epoch. It is the idempotent bootstrap/admission bridge entry
-// used by installers and launchers; workflow state is never written here.
-func RegisterRegistryRecord(path string, record RegistryRecord) (RegistryDocument, error) {
-	path = filepath.Clean(path)
-	unlock, err := acquireRegistryLock(path)
-	if err != nil {
-		return RegistryDocument{}, err
-	}
-	defer unlock()
-	return registerRegistryRecordUnlocked(path, record)
-}
-
-func registerRegistryRecordUnlocked(path string, record RegistryRecord) (RegistryDocument, error) {
-	doc, err := loadRegistryForCommit(path)
-	if err != nil {
-		return RegistryDocument{}, err
-	}
-	if strings.TrimSpace(record.ID) == "" {
-		return RegistryDocument{}, fmt.Errorf("registry record id is required")
-	}
-	if record.Status == "" {
-		record.Status = "active"
-	}
-	if record.CanonicalPaths == nil {
-		record.CanonicalPaths = map[string]string{}
-	}
-	return commitRegistryRecordsUnlocked(path, doc, []RegistryRecord{record})
-}
-
 func loadRegistryForCommit(path string) (RegistryDocument, error) {
 	doc, err := LoadRegistry(path)
 	if os.IsNotExist(err) {
-		return RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 1}, nil
+		return RegistryDocument{SchemaVersion: RegistrySchemaVersion, Epoch: 0, Records: []RegistryRecord{}}, nil
 	}
 	if err != nil {
 		return RegistryDocument{}, err
@@ -557,13 +538,21 @@ func loadRegistryForCommit(path string) (RegistryDocument, error) {
 	return doc, nil
 }
 
-// commitRegistryRecordsUnlocked is shared by bootstrap-admission and the
-// install transaction.  The caller owns registry locking.  A single function
-// owns epoch advancement, record normalization and replacement semantics so
-// registry CLI calls cannot diverge from installer commits.
+// commitRegistryRecordsUnlocked is the only semantic registry writer.  The
+// install/bootstrap/uninstall transaction already holds the registry lock and
+// supplies complete bound records; recovery may only restore exact old bytes.
 func commitRegistryRecordsUnlocked(path string, doc RegistryDocument, records []RegistryRecord) (RegistryDocument, error) {
 	if len(records) == 0 {
 		return doc, nil
+	}
+	replacements := map[string]bool{}
+	for _, record := range records {
+		replacements[record.ID] = true
+	}
+	for _, existing := range doc.Records {
+		if !replacements[existing.ID] && !validRegistryRecord(existing) {
+			return RegistryDocument{}, fmt.Errorf("registry record %q cannot be reconciled", existing.ID)
+		}
 	}
 	doc.Epoch++
 	for index := range records {
@@ -578,6 +567,9 @@ func commitRegistryRecordsUnlocked(path string, doc RegistryDocument, records []
 			record.CanonicalPaths = map[string]string{}
 		}
 		normalizeRegistryRecord(&record, doc.Epoch)
+		if !validRegistryRecord(record) {
+			return RegistryDocument{}, fmt.Errorf("registry record %q has incomplete or mismatched canonical target/launcher binding", record.ID)
+		}
 		replaced := false
 		for existing := range doc.Records {
 			if doc.Records[existing].ID == record.ID {
@@ -647,22 +639,24 @@ func normalizeRegistryRecord(record *RegistryRecord, generation uint64) {
 	if strings.TrimSpace(record.Token) == "" {
 		record.Token = fmt.Sprintf("token-%d", time.Now().UnixNano())
 	}
-	if record.HookConfig == "" {
-		record.HookConfig = record.CanonicalPaths["hookConfig"]
-	}
 	if record.CanonicalPaths == nil {
 		record.CanonicalPaths = map[string]string{}
 	}
 	for key, value := range record.CanonicalPaths {
 		if strings.TrimSpace(value) != "" {
-			record.CanonicalPaths[key] = canonicalPath(value)
+			record.CanonicalPaths[key] = canonicalRegistryPath(value)
 		}
 	}
 }
 
 func validRegistryRecord(record RegistryRecord) bool {
-	for _, value := range []string{record.ID, record.Target, record.Scope, record.Host, record.ProjectRoot, record.StateRoot, record.ResourceRoot, record.RuntimeSibling} {
+	for _, value := range []string{record.ID, record.Scope, record.Host} {
 		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	for _, path := range []string{record.Target, record.LauncherPath, record.ProjectRoot, record.StateRoot, record.ResourceRoot, record.RuntimeSibling} {
+		if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
 			return false
 		}
 	}
@@ -670,19 +664,25 @@ func validRegistryRecord(record RegistryRecord) bool {
 		return false
 	}
 	// Canonical paths are the bridge's proof that the registered roots are the
-	// roots the candidate will actually use.  Older complete records may omit
-	// this map; path fields still establish the identity in that case.
-	if len(record.CanonicalPaths) != 0 {
-		for key, value := range record.CanonicalPaths {
-			value = strings.TrimSpace(value)
-			if value == "" || !filepath.IsAbs(value) {
-				return false
-			}
-			if field := map[string]string{"target": record.Target, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling, "hookConfig": record.HookConfig}[key]; field != "" {
-				if filepath.Clean(value) != canonicalPath(field) {
-					return false
-				}
-			}
+	// roots the candidate will actually use.  Target and launcher are mandatory
+	// bindings; accepting a record that only names a project would let a
+	// different installed package write the same registry.
+	fields := map[string]string{"target": record.Target, "launcher": record.LauncherPath, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling, "hookConfig": record.HookConfig}
+	for key, field := range fields {
+		value, ok := record.CanonicalPaths[key]
+		if key == "hookConfig" && strings.TrimSpace(field) == "" {
+			continue
+		}
+		if !ok || strings.TrimSpace(value) == "" || !filepath.IsAbs(value) || filepath.Clean(value) != canonicalRegistryPath(field) {
+			return false
+		}
+	}
+	for key, value := range record.CanonicalPaths {
+		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) {
+			return false
+		}
+		if _, known := fields[key]; !known {
+			return false
 		}
 	}
 	return true

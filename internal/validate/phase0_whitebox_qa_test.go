@@ -78,6 +78,44 @@ func phase0InstallSource(t *testing.T) string {
 	return root
 }
 
+func phase0RegistryRecord(id, target, launcher, scope, host, project, status string) RegistryRecord {
+	target = canonicalRegistryPath(target)
+	launcher = canonicalRegistryPath(launcher)
+	project = canonicalRegistryPath(project)
+	state := canonicalRegistryPath(filepath.Join(project, ".gates"))
+	resources := canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources"))
+	runtime := canonicalRegistryPath(filepath.Dir(target))
+	return RegistryRecord{
+		ID: id, Target: target, LauncherPath: launcher, Scope: scope, Host: host,
+		ProjectRoot: project, StateRoot: state, ResourceRoot: resources,
+		RuntimeSibling: runtime, Status: status,
+		CanonicalPaths: map[string]string{
+			"target": target, "launcher": launcher, "projectRoot": project,
+			"stateRoot": state, "resourceRoot": resources, "runtimeSibling": runtime,
+		},
+	}
+}
+
+// phase0CommitRegistry exercises the one production semantic registry owner
+// while supplying the lock that Install/Uninstall normally hold around it.
+func phase0CommitRegistry(t *testing.T, path string, records ...RegistryRecord) RegistryDocument {
+	t.Helper()
+	unlock, err := acquireRegistryLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	doc, err := loadRegistryForCommit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = commitRegistryRecordsUnlocked(path, doc, records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
 func phase0AssertOldInstallRestored(t *testing.T, target installTarget, hookBefore, ruleBefore string) {
 	t.Helper()
 	if got := phase0ReadFile(t, filepath.Join(target.targetPath, "old.txt")); got != "old runtime\n" {
@@ -358,48 +396,33 @@ func TestWhiteboxPhase0BaselineReceiptBindsAllIdentities(t *testing.T) {
 	}
 }
 
-func TestWhiteboxPhase0RegistryBootstrapAndIdempotentRegistration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "registry.json")
-	initial := RegistryRecord{
-		Target: "/install/stable", Scope: "global", Host: "codex",
-		ProjectRoot: "/project", StateRoot: "/state", ResourceRoot: "/resources",
-		RuntimeSibling: "/runtime/stable", CanonicalPaths: map[string]string{"target": "/install/stable"},
-	}
-	doc, err := BootstrapRegistry(path, []RegistryRecord{initial})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestWhiteboxPhase0RegistryTransactionOwnerPreservesRecords(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "registry.json")
+	initial := phase0RegistryRecord("target-1", filepath.Join(root, "install", "stable"), filepath.Join(root, "bin", nativeBinaryName()), "global", "codex", filepath.Join(root, "home"), "active")
+	doc := phase0CommitRegistry(t, path, initial)
 	if doc.SchemaVersion != RegistrySchemaVersion || doc.Epoch != 1 || len(doc.Records) != 1 {
-		t.Fatalf("bootstrap document is incomplete: %+v", doc)
+		t.Fatalf("initial transaction document is incomplete: %+v", doc)
 	}
-	if doc.Records[0].ID != "target-1" || doc.Records[0].Status != "active" || len(doc.Records[0].CanonicalPaths) == 0 || doc.Records[0].CanonicalPaths["target"] != "/install/stable" {
-		t.Fatalf("bootstrap defaults were not materialized: %+v", doc.Records[0])
+	if doc.Records[0].ID != "target-1" || doc.Records[0].Status != "active" || doc.Records[0].Generation == 0 || doc.Records[0].Lease == "" || doc.Records[0].Token == "" {
+		t.Fatalf("transaction identity was not materialized: %+v", doc.Records[0])
 	}
 
 	replacement := initial
-	replacement.ID = "target-1"
 	replacement.Status = "disabled"
-	replacement.RuntimeSibling = "/runtime/replacement"
-	doc, err = RegisterRegistryRecord(path, replacement)
-	if err != nil {
-		t.Fatal(err)
-	}
+	doc = phase0CommitRegistry(t, path, replacement)
 	if doc.Epoch != 2 || len(doc.Records) != 1 || doc.Records[0].ID != replacement.ID || doc.Records[0].Status != replacement.Status || doc.Records[0].Target != replacement.Target || doc.Records[0].RuntimeSibling != replacement.RuntimeSibling || len(doc.Records[0].CanonicalPaths) == 0 || doc.Records[0].CanonicalPaths["target"] != replacement.CanonicalPaths["target"] {
-		t.Fatalf("same-id registration appended or lost the epoch: %+v", doc)
+		t.Fatalf("same-id transaction appended or lost the epoch: %+v", doc)
 	}
 
-	second := initial
-	second.ID = "project-target"
-	doc, err = RegisterRegistryRecord(path, second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := phase0RegistryRecord("project-target", filepath.Join(root, "install", "project"), filepath.Join(root, "bin", nativeBinaryName()), "project", "claude", filepath.Join(root, "project"), "active")
+	doc = phase0CommitRegistry(t, path, second)
 	loaded, err := LoadRegistry(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if doc.Epoch != 3 || loaded.Epoch != doc.Epoch || len(loaded.Records) != 2 {
-		t.Fatalf("new registration was not durably appended: doc=%+v loaded=%+v", doc, loaded)
+		t.Fatalf("new transaction was not durably appended: doc=%+v loaded=%+v", doc, loaded)
 	}
 	var replacementLoaded, secondLoaded *RegistryRecord
 	for index := range loaded.Records {
@@ -423,12 +446,28 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 	source := phase0InstallSource(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
+	launcher := filepath.Join(t.TempDir(), "stable", nativeBinaryName())
+	phase0WriteFile(t, launcher, phase0ReadFile(t, filepath.Join(source, "bin", nativeBinaryName())), 0o700)
+	allTargets, err := resolveInstallTargets("both", "project", project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range allTargets {
+		if err := copyInstallRuntime(source, target.targetPath, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeTarget, err := PackageDigest(allTargets[0].targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	report, err := Install(InstallOptions{
 		Source:       source,
 		Host:         "claude",
 		Scope:        "project",
 		Project:      project,
 		RegistryPath: registry,
+		BinaryTarget: launcher,
 		Bootstrap:    true,
 	})
 	if err != nil {
@@ -437,8 +476,9 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 	if report.BootstrapReceiptPath != registry+".bootstrap.json" || report.ReceiptPath != report.BootstrapReceiptPath {
 		t.Fatalf("bootstrap report did not expose its durable receipt: %+v", report)
 	}
-	if _, err := os.Stat(filepath.Join(project, ".claude", "skills", "formal-gates")); !os.IsNotExist(err) {
-		t.Fatalf("bootstrap created runtime files instead of only registry metadata: %v", err)
+	afterTarget, err := PackageDigest(allTargets[0].targetPath)
+	if err != nil || afterTarget != beforeTarget {
+		t.Fatalf("bootstrap mutated the existing runtime: before=%s after=%s err=%v", beforeTarget, afterTarget, err)
 	}
 	if _, err := os.Stat(filepath.Join(project, ".gates")); !os.IsNotExist(err) {
 		t.Fatalf("bootstrap created workflow state root: %v", err)
@@ -462,17 +502,50 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 	if receipt.PackageDigest == "" || len(receipt.Records) != 1 || receipt.Records[0].Generation == 0 || receipt.Records[0].Lease == "" || receipt.Records[0].Token == "" || receipt.StateCreated {
 		t.Fatalf("bootstrap receipt lost identity or state boundary: %+v", receipt)
 	}
+	firstEpoch := doc.Epoch
+	firstIdentity := record
+	if _, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true}); err != nil {
+		t.Fatalf("idempotent bootstrap failed: %v", err)
+	}
+	doc, err = LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Epoch != firstEpoch || len(doc.Records) != 1 || doc.Records[0].Generation != firstIdentity.Generation || doc.Records[0].Lease != firstIdentity.Lease || doc.Records[0].Token != firstIdentity.Token {
+		t.Fatalf("idempotent bootstrap replaced its existing admission identity: %+v", doc)
+	}
+	if _, err := Install(InstallOptions{Source: source, Host: "codex", Scope: "project", Project: project, RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true}); err != nil {
+		t.Fatalf("second target bootstrap failed: %v", err)
+	}
+	doc, err = LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Epoch != firstEpoch+1 || len(doc.Records) != 2 {
+		t.Fatalf("second target bootstrap replaced the registry instead of merging: %+v", doc)
+	}
+	for _, current := range doc.Records {
+		if current.ID == firstIdentity.ID && (current.Generation != firstIdentity.Generation || current.Lease != firstIdentity.Lease || current.Token != firstIdentity.Token) {
+			t.Fatalf("second target bootstrap changed the unrelated record: %+v", current)
+		}
+	}
 }
 
 func TestWhiteboxPhase0AdmissionRejectsIncompleteDisabledAndMissingRecords(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "registry.json")
-	records := []RegistryRecord{
-		{ID: "complete", Target: "/install", Scope: "global", Host: "codex", ProjectRoot: "/project", StateRoot: "/state", ResourceRoot: "/resources", RuntimeSibling: "/runtime", Status: "active"},
-		{ID: "incomplete", Status: "active"},
-		{ID: "disabled", Target: "/install-disabled", Scope: "project", Host: "claude", ProjectRoot: "/project", StateRoot: "/state", ResourceRoot: "/resources", RuntimeSibling: "/runtime-disabled", Status: "disabled"},
-	}
-	if _, err := BootstrapRegistry(path, records); err != nil {
+	root := t.TempDir()
+	path := filepath.Join(root, "registry.json")
+	complete := phase0RegistryRecord("complete", filepath.Join(root, "install"), filepath.Join(root, "bin", nativeBinaryName()), "global", "codex", filepath.Join(root, "home"), "active")
+	disabled := phase0RegistryRecord("disabled", filepath.Join(root, "install-disabled"), filepath.Join(root, "bin", nativeBinaryName()), "project", "claude", filepath.Join(root, "project"), "disabled")
+	phase0CommitRegistry(t, path, complete, disabled)
+	// The unique transaction owner rejects incomplete records before they can
+	// become registry state; admission then covers only normal disabled/missing
+	// operation rather than a manually corrupted registry.
+	doc, err := LoadRegistry(path)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := commitRegistryRecordsUnlocked(path, doc, []RegistryRecord{{ID: "incomplete", Status: "active"}}); err == nil {
+		t.Fatal("semantic registry owner accepted an incomplete record")
 	}
 	accepted, err := AdmitRegistry(path, "complete")
 	if err != nil {
@@ -482,7 +555,7 @@ func TestWhiteboxPhase0AdmissionRejectsIncompleteDisabledAndMissingRecords(t *te
 		t.Fatalf("complete active registration was not admitted: %+v", accepted)
 	}
 
-	for _, id := range []string{"incomplete", "disabled", "missing"} {
+	for _, id := range []string{"disabled", "missing"} {
 		receipt, err := AdmitRegistry(path, id)
 		if err != nil {
 			t.Fatal(err)
@@ -502,12 +575,10 @@ func TestWhiteboxPhase0AdmissionRejectsIncompleteDisabledAndMissingRecords(t *te
 
 func TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation(t *testing.T) {
 	root, packageRoot := phase0StartFixture(t)
-	registry := filepath.Join(t.TempDir(), "registry.json")
-	if _, err := BootstrapRegistry(registry, []RegistryRecord{
-		{ID: "candidate", Target: "/candidate", Scope: "project", Host: "codex", ProjectRoot: root, StateRoot: filepath.Join(root, ".gates"), ResourceRoot: filepath.Join(root, ".resources"), RuntimeSibling: "/runtime/candidate", Status: "disabled"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	registryRoot := t.TempDir()
+	registry := filepath.Join(registryRoot, "registry.json")
+	record := phase0RegistryRecord("candidate", packageRoot, filepath.Join(registryRoot, "bin", nativeBinaryName()), "project", "codex", root, "disabled")
+	phase0CommitRegistry(t, registry, record)
 	options := StartOptions{
 		Root: root, PackageRoot: packageRoot, RunID: "phase0-admission", Flow: "formal",
 		RequirementSource: "requirements.md", VCS: "git", Split: "no",
@@ -523,21 +594,40 @@ func TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation(t *testing.T) {
 		t.Fatalf("state file was created before admission: %v", err)
 	}
 
-	doc, err := LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := doc.Records[0]
 	record.Status = "active"
-	if _, err := RegisterRegistryRecord(registry, record); err != nil {
-		t.Fatal(err)
-	}
+	phase0CommitRegistry(t, registry, record)
 	state, err := Start(options)
 	if err != nil {
 		t.Fatalf("admitted candidate could not start: %v", err)
 	}
 	if state.RunID != options.RunID || !isFile(RunStatePath(root, options.RunID)) {
 		t.Fatalf("admitted start did not create its state: %+v", state)
+	}
+	if state.AdmissionEpoch == 0 || state.AdmissionGeneration == 0 || state.AdmissionLease == "" || state.AdmissionToken == "" {
+		t.Fatalf("admitted run did not bind registry epoch/lease identity: %+v", state)
+	}
+	record.Token = "replacement-token"
+	phase0CommitRegistry(t, registry, record)
+	if err := SaveRunState(root, state); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("state write ignored a replaced registry lease/token: %v", err)
+	}
+}
+
+func TestWhiteboxPhase0WorkflowAdmissionBindsCurrentRoot(t *testing.T) {
+	root, packageRoot := phase0StartFixture(t)
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	record := phase0RegistryRecord("root-bound", packageRoot, filepath.Join(t.TempDir(), "bin", nativeBinaryName()), "project", "codex", root, "active")
+	phase0CommitRegistry(t, registry, record)
+	state, err := Start(StartOptions{
+		Root: root, PackageRoot: packageRoot, RunID: "phase0-root-bound", Flow: "formal",
+		RequirementSource: "requirements.md", VCS: "git", Split: "no",
+		AdmissionRegistry: registry, AdmissionRecordID: record.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRunState(t.TempDir(), state); err == nil || !strings.Contains(err.Error(), "workflow root does not match") {
+		t.Fatalf("state binding was reusable from a different workflow root: %v", err)
 	}
 }
 
@@ -550,27 +640,11 @@ func TestWhiteboxPhase0GlobalAdmissionAllowsProjectsOutsideHostNamespace(t *test
 	if canonicalPath(root) == canonicalPath(hostRoot) {
 		t.Fatal("fixture did not create distinct project and host namespaces")
 	}
-	record := RegistryRecord{
-		ID:             "global-stable",
-		Target:         packageRoot,
-		Scope:          "global",
-		Host:           "codex",
-		ProjectRoot:    hostRoot,
-		StateRoot:      stateRoot,
-		ResourceRoot:   resourceRoot,
-		RuntimeSibling: filepath.Dir(packageRoot),
-		Status:         "active",
-		CanonicalPaths: map[string]string{
-			"target":         packageRoot,
-			"projectRoot":    hostRoot,
-			"stateRoot":      stateRoot,
-			"resourceRoot":   resourceRoot,
-			"runtimeSibling": filepath.Dir(packageRoot),
-		},
+	record := phase0RegistryRecord("global-stable", packageRoot, filepath.Join(hostRoot, "bin", nativeBinaryName()), "global", "codex", hostRoot, "active")
+	if record.StateRoot != canonicalRegistryPath(stateRoot) || record.ResourceRoot != canonicalRegistryPath(resourceRoot) {
+		t.Fatal("global registry fixture did not bind the documented roots")
 	}
-	if _, err := BootstrapRegistry(registry, []RegistryRecord{record}); err != nil {
-		t.Fatal(err)
-	}
+	phase0CommitRegistry(t, registry, record)
 	state, err := Start(StartOptions{
 		Root: root, PackageRoot: packageRoot, RunID: "phase0-global-admission", Flow: "formal",
 		RequirementSource: "requirements.md", VCS: "git", Split: "no",
@@ -584,6 +658,59 @@ func TestWhiteboxPhase0GlobalAdmissionAllowsProjectsOutsideHostNamespace(t *test
 	}
 	if err := SaveRunState(root, state); err != nil {
 		t.Fatalf("later state write did not re-admit the same global target: %v", err)
+	}
+}
+
+func TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash(t *testing.T) {
+	root, packageRoot := phase0StartFixture(t)
+	registryRoot := t.TempDir()
+	registry := filepath.Join(registryRoot, "registry.json")
+	record := phase0RegistryRecord("seal-stable", packageRoot, filepath.Join(registryRoot, "bin", nativeBinaryName()), "project", "codex", root, "active")
+	phase0CommitRegistry(t, registry, record)
+	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "phase0-seal-fence", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight", AdmissionRegistry: registry, AdmissionRecordID: record.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "requirements-clarification", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := state.BaseSnapshot
+	for index := 1; index <= 2; index++ {
+		phase0WriteFile(t, filepath.Join(root, fmt.Sprintf("delivery-%d.txt", index)), fmt.Sprintf("delivery %d\n", index), 0o600)
+		phase0Run(t, root, "git", "add", "--all")
+		phase0Run(t, root, "git", "commit", "-m", fmt.Sprintf("delivery %d", index))
+	}
+	head := phase0Run(t, root, "git", "rev-parse", "HEAD")
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.CurrentSnapshot = head
+	if err := SaveRunState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	record.Status = "disabled"
+	phase0CommitRegistry(t, registry, record)
+	if _, err := Seal(root, packageRoot, state.RunID, nil, false, "must-not-squash"); err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
+		t.Fatalf("disabled admission reached Seal VCS work: %v", err)
+	}
+	if after := phase0Run(t, root, "git", "rev-parse", "HEAD"); after != head {
+		t.Fatalf("Seal rewrote HEAD before admission fencing: before=%s after=%s", head, after)
+	}
+	if count := phase0Run(t, root, "git", "rev-list", "--count", base+".."+head); count != "2" {
+		t.Fatalf("Seal squashed commits before admission fencing: count=%s", count)
 	}
 }
 
@@ -640,33 +767,39 @@ func TestWhiteboxPhase0InstallLockSerializesInstallAndUninstall(t *testing.T) {
 }
 
 func TestWhiteboxPhase0InstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.T) {
-	for _, fault := range []string{"intent", "prepared", "switched", "hook", "managed-rule", "post-switch-smoke"} {
+	for _, fault := range []string{"intent", "registry", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit"} {
 		t.Run(fault, func(t *testing.T) {
 			source := phase0InstallSource(t)
 			root := t.TempDir()
-			target := installTarget{
-				host:            "claude",
-				targetPath:      filepath.Join(root, "skills", "formal-gates"),
-				hookConfig:      filepath.Join(root, "settings.json"),
-				managedRulePath: filepath.Join(root, "CLAUDE.md"),
+			project := filepath.Join(root, "project")
+			targets, err := resolveInstallTargets("claude", "project", project)
+			if err != nil {
+				t.Fatal(err)
 			}
+			target := targets[0]
+			launcher := filepath.Join(root, "stable", nativeBinaryName())
+			registry := filepath.Join(root, "registry", "registry.json")
 			phase0WriteFile(t, filepath.Join(target.targetPath, "old.txt"), "old runtime\n", 0o600)
+			phase0WriteFile(t, launcher, "old launcher\n", 0o700)
 			hookBefore := `{"hooks":{"Unrelated":[{"command":"keep"}]}}` + "\n"
 			ruleBefore := "unrelated rule\n"
 			phase0WriteFile(t, target.hookConfig, hookBefore, 0o600)
 			phase0WriteFile(t, target.managedRulePath, ruleBefore, 0o600)
 			t.Setenv("FORMAL_GATES_INSTALL_FAULT", fault)
-			err := executeInstallTransaction(source, target, true, false, "stage zero rule")
+			_, err = Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, BinaryTarget: launcher, RegistryPath: registry, Force: true})
 			if err == nil || !strings.Contains(err.Error(), "deterministic install fault") {
 				t.Fatalf("fault %q did not interrupt installation: %v", fault, err)
 			}
 			phase0AssertOldInstallRestored(t, target, hookBefore, ruleBefore)
+			if got := phase0ReadFile(t, launcher); got != "old launcher\n" {
+				t.Fatalf("stable launcher was not restored: %q", got)
+			}
 			var receipt installRecoveryReceipt
-			failurePath := installJournalPath(target.targetPath) + ".failure.json"
+			failurePath := installOuterJournalPath(registry) + ".failure.json"
 			if err := json.Unmarshal([]byte(phase0ReadFile(t, failurePath)), &receipt); err != nil {
 				t.Fatal(err)
 			}
-			if receipt.Operation != "install" || receipt.Target != target.targetPath || receipt.Phase == "" {
+			if receipt.Operation != "install" || receipt.Target != registry || receipt.Phase == "" || !receipt.Recovered || receipt.Outcome != "ROLLED_BACK" {
 				t.Fatalf("fault receipt is incomplete: %+v", receipt)
 			}
 		})
@@ -676,89 +809,113 @@ func TestWhiteboxPhase0InstallFaultMatrixRestoresRuntimeHooksAndRule(t *testing.
 func TestWhiteboxPhase0HookJSONFailureRestoresInstallAndWritesReceipt(t *testing.T) {
 	source := phase0InstallSource(t)
 	root := t.TempDir()
-	target := installTarget{
-		host:            "claude",
-		targetPath:      filepath.Join(root, "skills", "formal-gates"),
-		hookConfig:      filepath.Join(root, "settings.json"),
-		managedRulePath: filepath.Join(root, "CLAUDE.md"),
+	project := filepath.Join(root, "project")
+	targets, err := resolveInstallTargets("claude", "project", project)
+	if err != nil {
+		t.Fatal(err)
 	}
+	target := targets[0]
+	launcher := filepath.Join(root, "stable", nativeBinaryName())
+	registry := filepath.Join(root, "registry", "registry.json")
 	phase0WriteFile(t, filepath.Join(target.targetPath, "old.txt"), "old runtime\n", 0o600)
+	phase0WriteFile(t, launcher, "old launcher\n", 0o700)
 	hookBefore := "{invalid-json\n"
 	ruleBefore := "unrelated rule\n"
 	phase0WriteFile(t, target.hookConfig, hookBefore, 0o600)
 	phase0WriteFile(t, target.managedRulePath, ruleBefore, 0o600)
 
-	err := executeInstallTransaction(source, target, true, false, "stage zero rule")
+	_, err = Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, BinaryTarget: launcher, RegistryPath: registry, Force: true})
 	if err == nil || !strings.Contains(err.Error(), "not valid JSON") {
 		t.Fatalf("malformed hook JSON did not stop installation: %v", err)
 	}
 	phase0AssertOldInstallRestored(t, target, hookBefore, ruleBefore)
 	var receipt installRecoveryReceipt
-	failurePath := installJournalPath(target.targetPath) + ".failure.json"
+	failurePath := installOuterJournalPath(registry) + ".failure.json"
 	if err := json.Unmarshal([]byte(phase0ReadFile(t, failurePath)), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Operation != "install" || receipt.Target != target.targetPath || receipt.Phase != "switched" {
+	if receipt.Operation != "install" || receipt.Target != registry || receipt.Phase != "smoke-passed" || !receipt.Recovered {
 		t.Fatalf("hook JSON failure receipt is incomplete: %+v", receipt)
 	}
 }
 
 func TestWhiteboxPhase0UninstallFaultRestoresRuntimeHooksAndRule(t *testing.T) {
+	source := phase0InstallSource(t)
 	root := t.TempDir()
-	target := installTarget{
-		host:            "claude",
-		targetPath:      filepath.Join(root, "skills", "formal-gates"),
-		hookConfig:      filepath.Join(root, "settings.json"),
-		managedRulePath: filepath.Join(root, "CLAUDE.md"),
+	project := filepath.Join(root, "project")
+	launcher := filepath.Join(root, "stable", nativeBinaryName())
+	registry := filepath.Join(root, "registry", "registry.json")
+	report, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, BinaryTarget: launcher, RegistryPath: registry, Force: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	phase0WriteFile(t, filepath.Join(target.targetPath, "old.txt"), "old runtime\n", 0o600)
-	hookBefore := `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/old/formal-gates/bin/formal-gates hook decide"}]}],"Unrelated":[{"command":"keep"}]}}` + "\n"
-	ruleBefore := "unrelated\n" + hostInstructionsStartMarker + "\nstage zero rule\n" + hostInstructionsEndMarker + "\n"
-	phase0WriteFile(t, target.hookConfig, hookBefore, 0o600)
-	phase0WriteFile(t, target.managedRulePath, ruleBefore, 0o600)
-	t.Setenv("FORMAL_GATES_INSTALL_FAULT", "post-switch-smoke")
-	err := executeUninstallTransaction(target)
-	if err == nil || !strings.Contains(err.Error(), "post-switch-smoke") {
+	target := report.Targets[0]
+	hookBefore := phase0ReadFile(t, target.HookConfig)
+	ruleBefore := phase0ReadFile(t, target.ManagedRulePath)
+	t.Setenv("FORMAL_GATES_INSTALL_FAULT", "hook")
+	_, err = Uninstall(UninstallOptions{Host: "claude", Scope: "project", Project: project, RegistryPath: registry})
+	if err == nil || !strings.Contains(err.Error(), "hook") {
 		t.Fatalf("uninstall fault did not interrupt the transaction: %v", err)
 	}
-	if got := phase0ReadFile(t, filepath.Join(target.targetPath, "old.txt")); got != "old runtime\n" {
-		t.Fatalf("uninstall did not restore runtime: %q", got)
+	if !isFile(filepath.Join(target.TargetPath, "README.md")) {
+		t.Fatal("uninstall did not restore installed runtime")
 	}
-	if got := phase0ReadFile(t, target.hookConfig); got != hookBefore {
+	if got := phase0ReadFile(t, target.HookConfig); got != hookBefore {
 		t.Fatalf("uninstall did not restore hook bytes: %s", got)
 	}
-	if got := phase0ReadFile(t, target.managedRulePath); got != ruleBefore {
+	if got := phase0ReadFile(t, target.ManagedRulePath); got != ruleBefore {
 		t.Fatalf("uninstall did not restore rule bytes: %s", got)
 	}
 	var receipt installRecoveryReceipt
-	if err := json.Unmarshal([]byte(phase0ReadFile(t, installJournalPath(target.targetPath)+".failure.json")), &receipt); err != nil {
+	if err := json.Unmarshal([]byte(phase0ReadFile(t, installOuterJournalPath(registry)+".failure.json")), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Operation != "uninstall" || receipt.Phase != "committed" {
+	if receipt.Operation != "uninstall" || receipt.Phase != "switched" || !receipt.Recovered {
 		t.Fatalf("uninstall failure receipt is incomplete: %+v", receipt)
+	}
+	doc, err := LoadRegistry(registry)
+	if err != nil || len(doc.Records) != 1 || doc.Records[0].Status != "active" {
+		t.Fatalf("uninstall rollback did not preserve active registry state: %+v (%v)", doc, err)
 	}
 }
 
 func TestWhiteboxPhase0CrashJournalReconcileRestoresBackupAndReceipt(t *testing.T) {
 	parent := t.TempDir()
 	target := filepath.Join(parent, "skills", "formal-gates")
-	backup := filepath.Join(filepath.Dir(target), ".formal-gates.backup-crash")
-	temp := filepath.Join(filepath.Dir(target), ".formal-gates.tmp-crash")
+	registry := filepath.Join(parent, "registry", "registry.json")
+	transactionRoot := filepath.Join(parent, "transaction")
+	staged := filepath.Join(parent, "skills", ".formal-gates-stage-crash")
+	phase0WriteFile(t, filepath.Join(target, "stable.txt"), "stable\n", 0o600)
+	phase0WriteFile(t, registry, "stable registry\n", 0o600)
+	tree, err := snapshotInstallTree(target, filepath.Join(transactionRoot, "target.before"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryBefore, err := snapshotOuterFile(registry, filepath.Join(transactionRoot, "registry.before"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
 	phase0WriteFile(t, filepath.Join(target, "candidate.txt"), "candidate\n", 0o600)
-	phase0WriteFile(t, filepath.Join(backup, "stable.txt"), "stable\n", 0o600)
-	phase0WriteFile(t, filepath.Join(temp, "partial.txt"), "partial\n", 0o600)
-	journal := installJournal{Operation: "install", Target: target, Temp: temp, Backup: backup, Phase: "switched", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	journalPath := installJournalPath(target)
+	phase0WriteFile(t, staged, "partial\n", 0o600)
+	phase0WriteFile(t, registry, "candidate registry\n", 0o600)
+	journal := outerInstallJournal{Operation: "install", RegistryPath: registry, TransactionRoot: transactionRoot, Phase: "switched", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Registry: registryBefore, Targets: []outerTargetSnapshot{{TargetPath: target, Tree: outerTreeFromBackup(tree)}}, Staged: []string{staged}}
+	journalPath := installOuterJournalPath(registry)
 	if err := writeJSONAtomically(journalPath, journal); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcileInstallJournal(target); err != nil {
+	if err := reconcileOuterInstallJournal(registry); err != nil {
 		t.Fatal(err)
 	}
 	if got := phase0ReadFile(t, filepath.Join(target, "stable.txt")); got != "stable\n" {
 		t.Fatalf("reconcile did not restore stable target: %q", got)
 	}
-	for _, stale := range []string{filepath.Join(target, "candidate.txt"), temp, backup, journalPath} {
+	if got := phase0ReadFile(t, registry); got != "stable registry\n" {
+		t.Fatalf("reconcile did not restore stable registry: %q", got)
+	}
+	for _, stale := range []string{filepath.Join(target, "candidate.txt"), staged, transactionRoot, journalPath} {
 		if _, err := os.Stat(stale); !os.IsNotExist(err) {
 			t.Fatalf("reconcile left stale path %s: %v", stale, err)
 		}
@@ -767,7 +924,7 @@ func TestWhiteboxPhase0CrashJournalReconcileRestoresBackupAndReceipt(t *testing.
 	if err := json.Unmarshal([]byte(phase0ReadFile(t, journalPath+".receipt.json")), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if !receipt.Recovered || receipt.Operation != "install" || receipt.Phase != "switched" || receipt.Target != target {
+	if !receipt.Recovered || receipt.Operation != "install" || receipt.Phase != "switched" || receipt.Target != registry {
 		t.Fatalf("recovery receipt does not describe the reconciled crash: %+v", receipt)
 	}
 }
@@ -775,12 +932,14 @@ func TestWhiteboxPhase0CrashJournalReconcileRestoresBackupAndReceipt(t *testing.
 func TestWhiteboxPhase0ReleaseRollbackRestoresReleaseAndExecutable(t *testing.T) {
 	source := phase0InstallSource(t)
 	root := t.TempDir()
+	project := filepath.Join(root, "project")
 	release := filepath.Join(root, "releases", "candidate")
 	binary := filepath.Join(root, "bin", nativeBinaryName())
+	registry := filepath.Join(root, "registry", "registry.json")
 	phase0WriteFile(t, filepath.Join(release, "old.txt"), "old release\n", 0o600)
 	phase0WriteFile(t, binary, "old executable\n", 0o700)
 	t.Setenv("FORMAL_GATES_INSTALL_FAULT", "post-switch-smoke")
-	err := installReleaseTransaction(source, release, binary, true)
+	_, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: binary, RegistryPath: registry, Force: true, SkipHooks: true})
 	if err == nil || !strings.Contains(err.Error(), "post-switch-smoke") {
 		t.Fatalf("release transaction did not fail at post-switch smoke: %v", err)
 	}
@@ -794,10 +953,10 @@ func TestWhiteboxPhase0ReleaseRollbackRestoresReleaseAndExecutable(t *testing.T)
 		t.Fatalf("old executable was not restored: %q", got)
 	}
 	var receipt installRecoveryReceipt
-	if err := json.Unmarshal([]byte(phase0ReadFile(t, installJournalPath(release)+".failure.json")), &receipt); err != nil {
+	if err := json.Unmarshal([]byte(phase0ReadFile(t, installOuterJournalPath(registry)+".failure.json")), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Operation != "release-install" || receipt.Phase != "committed" {
+	if receipt.Operation != "install" || receipt.Target != registry || receipt.Phase != "switched" || !receipt.Recovered {
 		t.Fatalf("release failure receipt is incomplete: %+v", receipt)
 	}
 }
@@ -806,12 +965,62 @@ func TestWhiteboxPhase0InstallValidatesManifestBeforeTargetWrite(t *testing.T) {
 	source := phase0InstallSource(t)
 	phase0WriteFile(t, filepath.Join(source, "formal-gates.manifest.json"), "{not-json\n", 0o600)
 	project := t.TempDir()
-	_, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, Force: true, SkipHooks: true})
+	_, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, RegistryPath: filepath.Join(t.TempDir(), "registry.json"), Force: true, SkipHooks: true})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "manifest") {
 		t.Fatalf("installer accepted a package with an invalid manifest: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(project, ".claude", "skills", "formal-gates")); !os.IsNotExist(statErr) {
 		t.Fatalf("installer wrote the target before rejecting the manifest: %v", statErr)
+	}
+}
+
+func TestWhiteboxPhase0RelativeReleaseRootCannotOverlapSource(t *testing.T) {
+	source := phase0InstallSource(t)
+	releaseInsideSource := filepath.Join(source, "nested-release")
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativeRelease, err := filepath.Rel(workingDirectory, releaseInsideSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	_, err = Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, ReleaseRoot: relativeRelease, BinaryTarget: filepath.Join(t.TempDir(), nativeBinaryName()), RegistryPath: filepath.Join(t.TempDir(), "registry.json"), Force: true})
+	if err == nil || !strings.Contains(err.Error(), "overlaps release root") {
+		t.Fatalf("relative release root inside source was accepted: %v", err)
+	}
+	if _, statErr := os.Stat(releaseInsideSource); !os.IsNotExist(statErr) {
+		t.Fatalf("overlap rejection wrote inside the source: %v", statErr)
+	}
+}
+
+func TestWhiteboxPhase0InstallReceiptBindsAllRuntimeRoots(t *testing.T) {
+	source := phase0InstallSource(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	release := filepath.Join(root, "release")
+	launcher := filepath.Join(root, "stable", nativeBinaryName())
+	registry := filepath.Join(root, "registry", "registry.json")
+	report, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: launcher, RegistryPath: registry, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Targets) != 1 || report.ReceiptPath != filepath.ToSlash(registry+".install.json") {
+		t.Fatalf("install receipt/report shape is incomplete: %+v", report)
+	}
+	for _, key := range []string{"sourceRoot", "target", "launcher", "projectRoot", "stateRoot", "resourceRoot", "runtimeSibling", "registry", "releaseRoot", "hookConfig", "managedRule"} {
+		value := report.Targets[0].CanonicalPaths[key]
+		if value == "" || !filepath.IsAbs(value) {
+			t.Fatalf("install receipt is missing canonical %s: %+v", key, report.Targets[0].CanonicalPaths)
+		}
+	}
+	var persisted InstallReport
+	if err := json.Unmarshal([]byte(phase0ReadFile(t, registry+".install.json")), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Targets) != 1 || persisted.Targets[0].CanonicalPaths["launcher"] != canonicalRegistryPath(launcher) || persisted.Targets[0].CanonicalPaths["registry"] != canonicalRegistryPath(registry) {
+		t.Fatalf("persisted install receipt lost launcher/registry roots: %+v", persisted)
 	}
 }
 
@@ -822,7 +1031,8 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 	root := t.TempDir()
 	release := filepath.Join(root, "releases", "candidate")
 	binary := filepath.Join(root, "bin", nativeBinaryName())
-	journal := installJournalPath(release)
+	registry := filepath.Join(root, "registry", "registry.json")
+	journal := installOuterJournalPath(registry)
 	// The candidate writes evidence only when the installed executable is
 	// actually launched. It also observes the transaction journal while it is
 	// running: smoke must happen after the switch, but before the journal moves
@@ -832,7 +1042,7 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 	phase0WriteFile(t, filepath.Join(release, "stable.txt"), "stable\n", 0o600)
 	phase0WriteFile(t, binary, "stable executable\n", 0o700)
 
-	err := installReleaseTransaction(source, release, binary, true)
+	_, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: filepath.Join(root, "project"), ReleaseRoot: release, BinaryTarget: binary, RegistryPath: registry, Force: true, SkipHooks: true})
 	if err == nil {
 		t.Fatalf("release transaction did not fail because the candidate installed-binary smoke exited non-zero")
 	}
@@ -843,7 +1053,8 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 	if !strings.Contains(markerData, "phase0-candidate-smoke-ran") {
 		t.Fatalf("candidate installed binary did not leave its execution marker: %q", markerData)
 	}
-	if !strings.Contains(markerData, "exec-path="+binary) {
+	installedBinary := canonicalRegistryPath(filepath.Join(release, "bin", nativeBinaryName()))
+	if !strings.Contains(markerData, "exec-path="+installedBinary) {
 		t.Fatalf("smoke marker does not prove the installed binary path ran: %q", markerData)
 	}
 	if !strings.Contains(markerData, "journal-phase=switched") {
@@ -858,7 +1069,7 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 	if _, err := os.Stat(filepath.Join(release, "candidate-only.txt")); !os.IsNotExist(err) {
 		t.Fatalf("candidate-only release content remained after failed smoke: %v", err)
 	}
-	for _, entry := range []string{".formal-gates-release-", ".formal-gates-release-backup-"} {
+	for _, entry := range []string{".formal-gates-stage-", ".formal-gates-transaction-"} {
 		matches, globErr := filepath.Glob(filepath.Join(filepath.Dir(release), entry+"*"))
 		if globErr != nil {
 			t.Fatal(globErr)
@@ -872,7 +1083,7 @@ func TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit(t *testing.T)
 	if err := json.Unmarshal([]byte(phase0ReadFile(t, failurePath)), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Operation != "release-install" || receipt.Target != release || receipt.Phase != "switched" || receipt.Recovered || receipt.ObservedAt == "" {
+	if receipt.Operation != "install" || receipt.Target != registry || receipt.Phase != "switched" || !receipt.Recovered || receipt.ObservedAt == "" {
 		t.Fatalf("release smoke failure receipt does not describe the observed boundary and rollback: %+v", receipt)
 	}
 }
@@ -896,11 +1107,11 @@ func TestWhiteboxPhase0BootstrapScriptsDelegateToNativeTransactionOwner(t *testi
 			t.Fatalf("bootstrap script still mutates the release pointer itself: %q", forbidden)
 		}
 	}
-	if !strings.Contains(shell, `"$source_root/bin/formal-gates" install`) {
-		t.Fatal("shell bootstrap does not invoke the downloaded native owner directly")
+	if !strings.Contains(shell, `"$binary_target" install`) || strings.Contains(shell, `"$source_root/bin/formal-gates" install`) {
+		t.Fatal("shell bootstrap does not invoke only the fixed stable launcher")
 	}
-	if !strings.Contains(powershell, `Join-Path $sourceDir.FullName "bin\formal-gates.exe"`) {
-		t.Fatal("PowerShell bootstrap does not invoke the downloaded native owner directly")
+	if !strings.Contains(powershell, `& $formalBinary @args`) || strings.Contains(powershell, `& (Join-Path $sourceDir.FullName "bin\formal-gates.exe")`) {
+		t.Fatal("PowerShell bootstrap does not invoke only the fixed stable launcher")
 	}
 }
 

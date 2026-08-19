@@ -70,7 +70,7 @@ func configureDshHook(target installTarget) error {
 	if strings.TrimSpace(target.hookConfig) == "" {
 		return nil
 	}
-	binary := filepath.Join(target.targetPath, filepath.FromSlash("bin"), nativeBinaryName())
+	binary := targetLauncherPath(target)
 	if !isFile(binary) {
 		return fmt.Errorf("formal-gates native binary is missing at %s", binary)
 	}

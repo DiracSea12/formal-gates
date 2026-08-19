@@ -54,7 +54,12 @@ canary="portable-canary-${suffix}.json"
 checksums="SHA256SUMS-${suffix}.txt"
 
 tmp="$(mktemp -d)"
+staged_launcher=""
+install_succeeded=false
 cleanup() {
+  if [ -n "$staged_launcher" ] && [ "$install_succeeded" != true ]; then
+    rm -f "$staged_launcher"
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -91,7 +96,20 @@ PY
 )}"
 install_root="$home/.formal-gates/releases/${tag#v}-${suffix}"
 binary_target="$home/.local/bin/formal-gates"
-cmd=("$source_root/bin/formal-gates" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
+# The checksum-verified executable is staged once at the fixed launcher path.
+# The source-tree copy is install input only and never owns registry/workflow
+# writes.  On a failed first install cleanup removes the staged launcher.
+mkdir -p "$(dirname "$binary_target")"
+if [ -e "$binary_target" ] && [ ! -x "$binary_target" ]; then
+  echo "stable launcher exists but is not executable: $binary_target" >&2
+  exit 1
+fi
+if [ ! -e "$binary_target" ]; then
+  cp "$source_root/bin/formal-gates" "$binary_target"
+  chmod +x "$binary_target"
+  staged_launcher="$binary_target"
+fi
+cmd=("$binary_target" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   cmd+=(--project "$project")
 fi
@@ -101,12 +119,8 @@ fi
 if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
-bootstrap_cmd=("$source_root/bin/formal-gates" install --bootstrap --source "$source_root" --host "$host" --scope "$scope")
-if [ -n "$project" ]; then
-  bootstrap_cmd+=(--project "$project")
-fi
-"${bootstrap_cmd[@]}"
 "${cmd[@]}"
+install_succeeded=true
 
 echo "Installed package to $install_root"
 echo "Native binary: $binary_target"

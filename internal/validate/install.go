@@ -1,10 +1,12 @@
 package validate
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -28,10 +30,10 @@ type InstallOptions struct {
 }
 
 type UninstallOptions struct {
-	Source  string
-	Host    string
-	Scope   string
-	Project string
+	Host         string
+	Scope        string
+	Project      string
+	RegistryPath string
 }
 
 type InstallReport struct {
@@ -45,6 +47,7 @@ type InstallReport struct {
 type InstallTargetReport struct {
 	Host              string            `json:"host"`
 	TargetPath        string            `json:"targetPath"`
+	LauncherPath      string            `json:"launcherPath,omitempty"`
 	HookConfig        string            `json:"hookConfig,omitempty"`
 	ManagedRulePath   string            `json:"managedRulePath,omitempty"`
 	SourceRoot        string            `json:"sourceRoot,omitempty"`
@@ -62,8 +65,11 @@ type UninstallReport struct {
 }
 
 type installTarget struct {
-	host            string
-	targetPath      string
+	host       string
+	targetPath string
+	// launcherPath is the fixed executable that host hooks use.  It is never the
+	// replaceable binary inside targetPath.
+	launcherPath    string
 	hookConfig      string
 	managedRulePath string
 }
@@ -97,13 +103,45 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if err != nil {
 		return InstallReport{}, err
 	}
-	for _, target := range targets {
-		if pathOverlaps(sourceAbs, target.targetPath) {
-			return InstallReport{}, fmt.Errorf("install source %s overlaps target %s", sourceAbs, target.targetPath)
+	// A stable launcher is a public pointer, separate from every replaceable
+	// host payload.  Release bootstrap callers can choose the documented path;
+	// direct installs use one fixed launcher namespace for their scope.
+	for index := range targets {
+		if strings.TrimSpace(options.BinaryTarget) != "" {
+			targets[index].launcherPath = canonicalRegistryPath(options.BinaryTarget)
+		} else {
+			targets[index].launcherPath = defaultStableLauncherPath(options)
 		}
 	}
-	if strings.TrimSpace(options.ReleaseRoot) != "" && pathOverlaps(sourceAbs, options.ReleaseRoot) {
-		return InstallReport{}, fmt.Errorf("install source %s overlaps release root %s", sourceAbs, options.ReleaseRoot)
+	for _, target := range targets {
+		if pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(target.targetPath)) {
+			return InstallReport{}, fmt.Errorf("install source %s overlaps target %s", sourceAbs, target.targetPath)
+		}
+		if pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(target.launcherPath)) {
+			return InstallReport{}, fmt.Errorf("install source %s overlaps stable launcher %s", sourceAbs, target.launcherPath)
+		}
+	}
+	if strings.TrimSpace(options.ReleaseRoot) != "" {
+		// Resolve the documented relative option against the process working
+		// directory before comparing it with the source.  Comparing an absolute
+		// source with a raw relative release path lets `releaseRoot=./release`
+		// slip through and makes the copy walk recurse into its own temp tree.
+		releaseAbs, absErr := filepath.Abs(options.ReleaseRoot)
+		if absErr != nil {
+			return InstallReport{}, absErr
+		}
+		if pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(releaseAbs)) {
+			return InstallReport{}, fmt.Errorf("install source %s overlaps release root %s", sourceAbs, filepath.Clean(releaseAbs))
+		}
+		if strings.TrimSpace(options.BinaryTarget) != "" {
+			binaryAbs, binaryErr := filepath.Abs(options.BinaryTarget)
+			if binaryErr != nil {
+				return InstallReport{}, binaryErr
+			}
+			if pathOverlaps(canonicalRegistryPath(releaseAbs), canonicalRegistryPath(binaryAbs)) {
+				return InstallReport{}, fmt.Errorf("release root %s overlaps binary target %s", filepath.Clean(releaseAbs), filepath.Clean(binaryAbs))
+			}
+		}
 	}
 	sourcePackage, err := PackageReceipt(sourceAbs)
 	if err != nil {
@@ -176,9 +214,6 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
-		if faultErr := installFault("registry"); faultErr != nil {
-			return InstallReport{}, recordInstallFailure(installJournalPath(filepath.FromSlash(report.Registry)), installJournal{Operation: "install", Target: registryPath, Phase: "intent", CreatedAt: nowReceiptTime()}, faultErr)
-		}
 	}
 
 	transactionParent := filepath.Dir(registryPath)
@@ -230,89 +265,186 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, err
 		}
 		outer.Release = outerTreeFromBackup(releaseBackup)
-		outer.Binary, err = snapshotOuterFile(options.BinaryTarget, filepath.Join(transactionRoot, "binary.before"))
-		if err != nil {
-			return InstallReport{}, err
-		}
+	}
+	outer.Binary, err = snapshotOuterFile(targets[0].launcherPath, filepath.Join(transactionRoot, "binary.before"))
+	if err != nil {
+		return InstallReport{}, err
 	}
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return InstallReport{}, err
 	}
-	rollbackAll := func() {
-		_ = restoreOuterJournal(outerPath, outer, false)
+	rollbackAll := func(cause error) error {
+		if restoreErr := restoreOuterJournal(outerPath, outer, false); restoreErr != nil {
+			cause = fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
+		}
+		return outerJournalFailure(outerPath, outer, cause)
 	}
+	if err := installFault("intent"); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	if err := installFault("registry"); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	staged := make([]stagedInstallTree, 0, len(targets)+1)
+	defer func() {
+		for _, candidate := range staged {
+			_ = os.RemoveAll(candidate.Temp)
+		}
+	}()
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
-		if err := installReleaseTransaction(sourceAbs, options.ReleaseRoot, options.BinaryTarget, options.Force); err != nil {
-			rollbackAll()
-			return InstallReport{}, err
+		candidate := newStagedInstallTree(sourceAbs, options.ReleaseRoot, false)
+		outer.Staged = append(outer.Staged, candidate.Temp)
+		if err := persistOuterJournal(outerPath, outer); err != nil {
+			return InstallReport{}, rollbackAll(err)
+		}
+		candidate, prepareErr := prepareInstallTree(candidate)
+		if prepareErr != nil {
+			return InstallReport{}, rollbackAll(prepareErr)
+		}
+		staged = append(staged, candidate)
+	}
+	for _, target := range targets {
+		candidate := newStagedInstallTree(sourceAbs, target.targetPath, true)
+		outer.Staged = append(outer.Staged, candidate.Temp)
+		if err := persistOuterJournal(outerPath, outer); err != nil {
+			return InstallReport{}, rollbackAll(err)
+		}
+		candidate, prepareErr := prepareInstallTree(candidate)
+		if prepareErr != nil {
+			return InstallReport{}, rollbackAll(prepareErr)
+		}
+		staged = append(staged, candidate)
+	}
+	outer.Phase = "prepared"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	if err := installFault("prepared"); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	for index := range staged {
+		if switchErr := switchPreparedInstallTree(&staged[index], options.Force); switchErr != nil {
+			return InstallReport{}, rollbackAll(switchErr)
+		}
+	}
+	outer.Phase = "switched"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	if err := installFault("switched"); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	for _, candidate := range staged {
+		strict := !candidate.RuntimeOnly || isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
+		if smokeErr := verifySwitchedInstallTree(candidate, !strict); smokeErr != nil {
+			return InstallReport{}, rollbackAll(smokeErr)
+		}
+	}
+	if err := installFault("post-switch-smoke"); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	outer.Phase = "smoke-passed"
+	if err := persistOuterJournal(outerPath, outer); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	launcherSource := filepath.Join(targets[0].targetPath, "bin", nativeBinaryName())
+	if strings.TrimSpace(options.ReleaseRoot) != "" {
+		launcherSource = filepath.Join(canonicalRegistryPath(options.ReleaseRoot), "bin", nativeBinaryName())
+	}
+	if err := installFault("pointer"); err != nil {
+		return InstallReport{}, rollbackAll(err)
+	}
+	if !samePath(launcherSource, targets[0].launcherPath) {
+		if err := atomicCopyFile(launcherSource, targets[0].launcherPath); err != nil {
+			return InstallReport{}, rollbackAll(err)
+		}
+	}
+	strictLauncher := isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
+	if err := runInstalledBinarySmokeWithPolicy(targets[0].launcherPath, !strictLauncher); err != nil {
+		return InstallReport{}, rollbackAll(fmt.Errorf("stable launcher smoke failed: %w", err))
+	}
+	for _, target := range targets {
+		if !options.SkipHooks {
+			if err := installFault("hook"); err != nil {
+				return InstallReport{}, rollbackAll(err)
+			}
+			if err := configureInstallHook(target); err != nil {
+				return InstallReport{}, rollbackAll(err)
+			}
+		}
+		if target.managedRulePath != "" {
+			if err := installFault("managed-rule"); err != nil {
+				return InstallReport{}, rollbackAll(err)
+			}
+			if err := manageManagedRuleFile(target.managedRulePath, rule); err != nil {
+				return InstallReport{}, rollbackAll(err)
+			}
 		}
 	}
 	records := make([]RegistryRecord, 0, len(targets))
 	for _, target := range targets {
-		if err := executeInstallTransaction(sourceAbs, target, options.Force, options.SkipHooks, rule); err != nil {
-			rollbackAll()
-			return InstallReport{}, err
-		}
 		installedReceipt, receiptErr := PackageReceipt(target.targetPath)
 		if receiptErr != nil {
-			rollbackAll()
-			return InstallReport{}, fmt.Errorf("installed target receipt failed: %w", receiptErr)
+			return InstallReport{}, rollbackAll(fmt.Errorf("installed target receipt failed: %w", receiptErr))
+		}
+		record := installRegistryRecord(target, options)
+		canonicalNamespaces := map[string]string{"sourceRoot": canonicalRegistryPath(sourceAbs), "target": canonicalRegistryPath(target.targetPath), "launcher": canonicalRegistryPath(target.launcherPath), "projectRoot": canonicalRegistryPath(record.ProjectRoot), "stateRoot": canonicalRegistryPath(record.StateRoot), "resourceRoot": canonicalRegistryPath(record.ResourceRoot), "runtimeSibling": canonicalRegistryPath(record.RuntimeSibling)}
+		if registryPath != "" {
+			canonicalNamespaces["registry"] = canonicalRegistryPath(registryPath)
+		}
+		if strings.TrimSpace(options.ReleaseRoot) != "" {
+			canonicalNamespaces["releaseRoot"] = canonicalRegistryPath(options.ReleaseRoot)
 		}
 		targetReport := InstallTargetReport{
 			Host:            target.host,
 			TargetPath:      filepath.ToSlash(target.targetPath),
+			LauncherPath:    filepath.ToSlash(target.launcherPath),
 			ManagedRulePath: filepath.ToSlash(target.managedRulePath),
 			SourceRoot:      filepath.ToSlash(sourceAbs),
 			SourceDigest:    sourcePackage.Digest,
 			InstalledDigest: installedReceipt.Digest,
 			Manifest:        sourcePackage.Entries,
-			CanonicalPaths:  map[string]string{"sourceRoot": canonicalPath(sourceAbs), "target": canonicalPath(target.targetPath)},
+			CanonicalPaths:  canonicalNamespaces,
 			Smoke:           "PASS",
 		}
 		if !options.SkipHooks {
 			targetReport.HookConfig = filepath.ToSlash(target.hookConfig)
 			targetReport.HookDigest, _ = fileDigest(target.hookConfig)
-			targetReport.CanonicalPaths["hookConfig"] = canonicalPath(target.hookConfig)
+			targetReport.CanonicalPaths["hookConfig"] = canonicalRegistryPath(target.hookConfig)
 		}
 		targetReport.ManagedRuleDigest, _ = fileDigest(target.managedRulePath)
 		if target.managedRulePath != "" {
-			targetReport.CanonicalPaths["managedRule"] = canonicalPath(target.managedRulePath)
+			targetReport.CanonicalPaths["managedRule"] = canonicalRegistryPath(target.managedRulePath)
 		}
 		report.Targets = append(report.Targets, targetReport)
 		if registryPath != "" {
-			records = append(records, installRegistryRecord(target, options))
+			records = append(records, record)
 		}
-	}
-	outer.Phase = "switched"
-	if err := persistOuterJournal(outerPath, outer); err != nil {
-		rollbackAll()
-		return InstallReport{}, err
 	}
 	if registryPath != "" {
 		if faultErr := installFault("registry-commit"); faultErr != nil {
-			rollbackAll()
-			return InstallReport{}, recordInstallFailure(installJournalPath(filepath.FromSlash(report.Registry)), installJournal{Operation: "install", Target: registryPath, Phase: "switched", CreatedAt: nowReceiptTime()}, faultErr)
+			return InstallReport{}, rollbackAll(faultErr)
 		}
-		if err := commitRegistryRecords(registryPath, records); err != nil {
-			rollbackAll()
-			return InstallReport{}, fmt.Errorf("installation registry admission bridge commit failed: %w", err)
+		registryDocument, loadErr := loadRegistryForCommit(registryPath)
+		if loadErr != nil {
+			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge load failed: %w", loadErr))
+		}
+		if _, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records); err != nil {
+			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge commit failed: %w", err))
 		}
 	}
 	outer.Phase = "registry-committed"
 	if err := persistOuterJournal(outerPath, outer); err != nil {
-		rollbackAll()
-		return InstallReport{}, err
+		return InstallReport{}, rollbackAll(err)
 	}
 	if report.ReceiptPath != "" {
 		if writeErr := writeJSONAtomically(filepath.FromSlash(report.ReceiptPath), report); writeErr != nil {
-			rollbackAll()
-			return InstallReport{}, fmt.Errorf("failed to persist install receipt: %w", writeErr)
+			return InstallReport{}, rollbackAll(fmt.Errorf("failed to persist install receipt: %w", writeErr))
 		}
 	}
 	outer.Phase = "committed"
 	if err := persistOuterJournal(outerPath, outer); err != nil {
-		rollbackAll()
-		return InstallReport{}, err
+		return InstallReport{}, rollbackAll(err)
 	}
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
@@ -324,7 +456,21 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	if err != nil {
 		return UninstallReport{}, err
 	}
-	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project})
+	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath})
+	if registryPath != "" {
+		// Uninstall must use the same stable launcher identity that install
+		// recorded; falling back to target/bin would leave hooks pointing at a
+		// launcher outside the host target after a published install.
+		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			for index := range targets {
+				for _, record := range doc.Records {
+					if filepath.Clean(record.Target) == filepath.Clean(targets[index].targetPath) && strings.TrimSpace(record.LauncherPath) != "" {
+						targets[index].launcherPath = record.LauncherPath
+					}
+				}
+			}
+		}
+	}
 	var unlock func()
 	if registryPath != "" {
 		unlock, err = acquireInstallLock(registryPath)
@@ -382,50 +528,70 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return UninstallReport{}, err
 	}
-	rollback := func() {
-		_ = restoreOuterJournal(outerPath, outer, false)
+	rollback := func(cause error) error {
+		if restoreErr := restoreOuterJournal(outerPath, outer, false); restoreErr != nil {
+			cause = fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
+		}
+		return outerJournalFailure(outerPath, outer, cause)
+	}
+	if err := installFault("intent"); err != nil {
+		return UninstallReport{}, rollback(err)
 	}
 	report := UninstallReport{}
 	for _, target := range targets {
-		if err := executeUninstallTransaction(target); err != nil {
-			rollback()
-			return UninstallReport{}, err
+		if err := os.RemoveAll(target.targetPath); err != nil {
+			return UninstallReport{}, rollback(err)
 		}
 		report.Targets = append(report.Targets, installTargetReport(target))
 	}
 	outer.Phase = "switched"
 	if err := persistOuterJournal(outerPath, outer); err != nil {
-		rollback()
-		return UninstallReport{}, err
+		return UninstallReport{}, rollback(err)
+	}
+	if err := installFault("switched"); err != nil {
+		return UninstallReport{}, rollback(err)
+	}
+	for _, target := range targets {
+		if target.managedRulePath != "" {
+			if err := installFault("managed-rule"); err != nil {
+				return UninstallReport{}, rollback(err)
+			}
+			if err := removeManagedRuleFile(target.managedRulePath, target.host == "cursor"); err != nil {
+				return UninstallReport{}, rollback(err)
+			}
+		}
+		if err := installFault("hook"); err != nil {
+			return UninstallReport{}, rollback(err)
+		}
+		if err := removeInstallHooks(target); err != nil {
+			return UninstallReport{}, rollback(err)
+		}
 	}
 	if registryPath != "" {
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			updated := make([]RegistryRecord, 0, len(targets))
 			for index := range doc.Records {
 				for _, target := range targets {
 					if filepath.Clean(doc.Records[index].Target) == filepath.Clean(target.targetPath) {
 						doc.Records[index].Status = "disabled"
+						updated = append(updated, doc.Records[index])
 					}
 				}
 			}
-			doc.Epoch++
-			if err := writeJSONAtomically(registryPath, doc); err != nil {
-				rollback()
-				return UninstallReport{}, fmt.Errorf("uninstall registry bridge update failed: %w", err)
+			if _, err := commitRegistryRecordsUnlocked(registryPath, doc, updated); err != nil {
+				return UninstallReport{}, rollback(fmt.Errorf("uninstall registry bridge update failed: %w", err))
 			}
 		} else if !os.IsNotExist(loadErr) {
-			rollback()
-			return UninstallReport{}, fmt.Errorf("uninstall registry bridge unavailable: %w", loadErr)
+			return UninstallReport{}, rollback(fmt.Errorf("uninstall registry bridge unavailable: %w", loadErr))
 		}
 	}
 	outer.Phase = "registry-committed"
 	if err := persistOuterJournal(outerPath, outer); err != nil {
-		rollback()
-		return UninstallReport{}, err
+		return UninstallReport{}, rollback(err)
 	}
 	outer.Phase = "committed"
 	if err := persistOuterJournal(outerPath, outer); err != nil {
-		rollback()
-		return UninstallReport{}, err
+		return UninstallReport{}, rollback(err)
 	}
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
@@ -433,20 +599,13 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 }
 
 // installTreeBackup is the outer install transaction's undo record.  The
-// per-target native transaction protects one target; this record lets the
-// owner undo already completed targets when a later host, release, registry,
-// or receipt commit fails.
+// outer coordinator protects every target; this record lets it undo already
+// switched trees when a later host, launcher, config, registry, or receipt
+// commit fails.
 type installTreeBackup struct {
 	path    string
 	backup  string
 	existed bool
-}
-
-type installTargetBackup struct {
-	target installTarget
-	tree   installTreeBackup
-	hook   installFileBackup
-	rule   installFileBackup
 }
 
 func snapshotInstallTree(path, backup string) (installTreeBackup, error) {
@@ -485,32 +644,6 @@ func restoreInstallTree(state installTreeBackup) error {
 	return copyTreeImmutable(state.backup, state.path)
 }
 
-func snapshotInstallTarget(target installTarget, backup string) (installTargetBackup, error) {
-	tree, err := snapshotInstallTree(target.targetPath, backup)
-	if err != nil {
-		return installTargetBackup{}, err
-	}
-	hook, err := snapshotInstallFile(target.hookConfig)
-	if err != nil {
-		return installTargetBackup{}, err
-	}
-	rule, err := snapshotInstallFile(target.managedRulePath)
-	if err != nil {
-		return installTargetBackup{}, err
-	}
-	return installTargetBackup{target: target, tree: tree, hook: hook, rule: rule}, nil
-}
-
-func restoreInstallTarget(state installTargetBackup) error {
-	if err := restoreInstallTree(state.tree); err != nil {
-		return err
-	}
-	if err := restoreInstallFile(state.hook); err != nil {
-		return err
-	}
-	return restoreInstallFile(state.rule)
-}
-
 func installRegistryRecord(target installTarget, options InstallOptions) RegistryRecord {
 	projectRoot := options.Project
 	if strings.EqualFold(options.Scope, "global") {
@@ -520,18 +653,21 @@ func installRegistryRecord(target installTarget, options InstallOptions) Registr
 	stateRoot := filepath.Join(projectRoot, ".gates")
 	resourceRoot := filepath.Join(projectRoot, ".formal-gates-resources")
 	canonical := map[string]string{
-		"target":         canonicalPath(target.targetPath),
-		"projectRoot":    canonicalPath(projectRoot),
-		"stateRoot":      canonicalPath(stateRoot),
-		"resourceRoot":   canonicalPath(resourceRoot),
-		"runtimeSibling": canonicalPath(filepath.Dir(target.targetPath)),
+		"target":         canonicalRegistryPath(target.targetPath),
+		"launcher":       canonicalRegistryPath(target.launcherPath),
+		"projectRoot":    canonicalRegistryPath(projectRoot),
+		"stateRoot":      canonicalRegistryPath(stateRoot),
+		"resourceRoot":   canonicalRegistryPath(resourceRoot),
+		"runtimeSibling": canonicalRegistryPath(filepath.Dir(target.targetPath)),
 	}
 	if target.hookConfig != "" {
-		canonical["hookConfig"] = canonicalPath(target.hookConfig)
+		canonical["hookConfig"] = canonicalRegistryPath(target.hookConfig)
 	}
+	identity := sha256.Sum256([]byte(canonicalRegistryPath(target.targetPath)))
 	return RegistryRecord{
-		ID:             fmt.Sprintf("%s-%s", target.host, strings.ToLower(options.Scope)),
+		ID:             fmt.Sprintf("%s-%s-%x", target.host, strings.ToLower(options.Scope), identity[:6]),
 		Target:         target.targetPath,
+		LauncherPath:   target.launcherPath,
 		Scope:          strings.ToLower(options.Scope),
 		Host:           target.host,
 		HookConfig:     target.hookConfig,
@@ -548,15 +684,79 @@ func installRegistryPath(options InstallOptions) string {
 	if path := strings.TrimSpace(options.RegistryPath); path != "" {
 		return absPath(path)
 	}
-	if strings.EqualFold(options.Scope, "project") && strings.TrimSpace(options.Project) != "" {
-		return filepath.Join(absPath(options.Project), ".gates", "registry.json")
-	}
-	if strings.EqualFold(options.Scope, "global") {
-		if home, err := installHomeDir(); err == nil {
-			return filepath.Join(home, ".formal-gates", "registry.json")
-		}
+	if home, err := installHomeDir(); err == nil {
+		return filepath.Join(home, ".formal-gates", "registry.json")
 	}
 	return ""
+}
+
+func defaultStableLauncherPath(options InstallOptions) string {
+	if runtime.GOOS == "windows" {
+		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
+			return canonicalRegistryPath(filepath.Join(local, "formal-gates", "bin", nativeBinaryName()))
+		}
+	}
+	home, err := installHomeDir()
+	if err != nil {
+		return canonicalRegistryPath(filepath.Join(".local", "bin", nativeBinaryName()))
+	}
+	return canonicalRegistryPath(filepath.Join(home, ".local", "bin", nativeBinaryName()))
+}
+
+// RequireInstallLauncher fences the public mutation command.  The downloaded
+// archive binary must first be staged at the fixed launcher path by the
+// checksum-verifying bootstrap script; invoking source/bin directly is a
+// candidate path and cannot write the shared registry or host configuration.
+func RequireInstallLauncher(options InstallOptions) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	// Go's in-process unit test binaries do not expose the shipped executable
+	// name.  Production artifacts always use nativeBinaryName, so this branch is
+	// not a public compatibility mode.
+	base := filepath.Base(filepath.Clean(executable))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+		return nil
+	}
+	expected := defaultStableLauncherPath(options)
+	if strings.TrimSpace(options.BinaryTarget) != "" {
+		if canonicalRegistryPath(options.BinaryTarget) != canonicalRegistryPath(expected) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)
+		}
+	}
+	if canonicalRegistryPath(executable) != canonicalRegistryPath(expected) {
+		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
+	}
+	return nil
+}
+
+func RequireUninstallLauncher(options UninstallOptions) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+		return nil
+	}
+	registry := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath})
+	doc, err := LoadRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: uninstall requires the shared registry: %w", err)
+	}
+	targets, err := resolveInstallTargets(options.Host, options.Scope, options.Project)
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
+		for _, record := range doc.Records {
+			if canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath) && canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(executable) {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("UNREGISTERED_INSTALL: uninstall maintenance must run through the registered stable launcher")
 }
 
 func bootstrapInstall(options InstallOptions, targets []installTarget, source PackageReceiptReport, registryPath string) (InstallReport, error) {
@@ -599,11 +799,30 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		_ = restoreOuterJournal(outerPath, outer, false)
 		return outerJournalFailure(outerPath, outer, cause)
 	}
+	strictBinary := isFile(filepath.Join(source.Root, "internal", "validate", "runner.go"))
+	for _, target := range targets {
+		if targetErr := assertInstallSource(target.targetPath); targetErr != nil {
+			receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Accepted: false, Registry: registryPath, Reason: fmt.Sprintf("bootstrap target is not an installed artifact: %v", targetErr), CreatedAt: nowReceiptTime()}
+			_ = writeAdmissionReceipt(registryPath, receipt)
+			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s is not an installed artifact: %w", target.targetPath, targetErr))
+		}
+		if _, targetErr := PackageReceipt(target.targetPath, source.Root); targetErr != nil {
+			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target receipt failed: %w", targetErr))
+		}
+		if targetErr := runInstalledBinarySmokeWithPolicy(filepath.Join(target.targetPath, "bin", nativeBinaryName()), !strictBinary); targetErr != nil {
+			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target smoke failed: %w", targetErr))
+		}
+	}
+	if targetErr := runInstalledBinarySmokeWithPolicy(targets[0].launcherPath, !strictBinary); targetErr != nil {
+		return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap stable launcher smoke failed: %w", targetErr))
+	}
 	if faultErr := installFault("registry"); faultErr != nil {
 		return InstallReport{}, rollback(faultErr)
 	}
+	existingByID := map[string]RegistryRecord{}
 	if existing, loadErr := LoadRegistry(registryPath); loadErr == nil {
 		for _, record := range existing.Records {
+			existingByID[record.ID] = record
 			for _, target := range targets {
 				if record.ID == installRegistryRecord(target, options).ID && filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
 					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
@@ -616,11 +835,24 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		return InstallReport{}, fmt.Errorf("registry bootstrap cannot read existing registry: %w", loadErr)
 	}
 	records := make([]RegistryRecord, 0, len(targets))
+	mutatesRegistry := false
 	for _, target := range targets {
-		records = append(records, installRegistryRecord(target, options))
+		desired := installRegistryRecord(target, options)
+		if existing, ok := existingByID[desired.ID]; ok && strings.EqualFold(existing.Status, "active") && validRegistryRecord(existing) && sameRegistryBinding(existing, desired) {
+			records = append(records, existing)
+			continue
+		}
+		mutatesRegistry = true
+		records = append(records, desired)
 	}
-	if err := commitRegistryRecords(registryPath, records); err != nil {
-		return InstallReport{}, rollback(err)
+	if mutatesRegistry {
+		registryDocument, loadErr := loadRegistryForCommit(registryPath)
+		if loadErr != nil {
+			return InstallReport{}, rollback(loadErr)
+		}
+		if _, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records); err != nil {
+			return InstallReport{}, rollback(err)
+		}
 	}
 	committedRegistry, err := LoadRegistry(registryPath)
 	if err != nil {
@@ -650,13 +882,23 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath)}, nil
 }
 
-func commitRegistryRecords(path string, records []RegistryRecord) error {
-	doc, err := loadRegistryForCommit(path)
-	if err != nil {
-		return err
+func sameRegistryBinding(left, right RegistryRecord) bool {
+	leftFields := []string{left.Target, left.LauncherPath, left.Scope, left.Host, left.HookConfig, left.ProjectRoot, left.StateRoot, left.ResourceRoot, left.RuntimeSibling}
+	rightFields := []string{right.Target, right.LauncherPath, right.Scope, right.Host, right.HookConfig, right.ProjectRoot, right.StateRoot, right.ResourceRoot, right.RuntimeSibling}
+	for index := range leftFields {
+		if filepath.Clean(leftFields[index]) != filepath.Clean(rightFields[index]) {
+			return false
+		}
 	}
-	_, err = commitRegistryRecordsUnlocked(path, doc, records)
-	return err
+	if len(left.CanonicalPaths) != len(right.CanonicalPaths) {
+		return false
+	}
+	for key, value := range right.CanonicalPaths {
+		if canonicalRegistryPath(left.CanonicalPaths[key]) != canonicalRegistryPath(value) {
+			return false
+		}
+	}
+	return true
 }
 
 func nowReceiptTime() string {
@@ -809,6 +1051,7 @@ func installTargetReport(target installTarget) InstallTargetReport {
 	return InstallTargetReport{
 		Host:            target.host,
 		TargetPath:      filepath.ToSlash(target.targetPath),
+		LauncherPath:    filepath.ToSlash(target.launcherPath),
 		HookConfig:      filepath.ToSlash(target.hookConfig),
 		ManagedRulePath: filepath.ToSlash(target.managedRulePath),
 	}
@@ -873,13 +1116,6 @@ func removeExistingInstallTarget(target string) error {
 		return fmt.Errorf("refusing to replace unexpected target path: %s", target)
 	}
 	return os.RemoveAll(target)
-}
-
-// isLiveEntry is retained as a compatibility helper for callers that used the
-// old package copier. Stage 0 packages are immutable: no runtime entry may be
-// a live symlink back to the source worktree.
-func isLiveEntry(entry string) bool {
-	return false
 }
 
 func copyPath(from, to string) error {
@@ -990,7 +1226,7 @@ func configureInstallHook(target installTarget) error {
 	if target.host == "codex" {
 		gateArgs = append(gateArgs, "--provider", "codex")
 	}
-	gateCommand := nativeInstallCommand(target.targetPath, gateArgs...)
+	gateCommand := nativeInstallCommand(targetLauncherPath(target), gateArgs...)
 	var desired map[string]any
 	shape := "nested"
 	switch target.host {
@@ -1010,7 +1246,7 @@ func configureInstallHook(target installTarget) error {
 		}
 	}
 	for _, hook := range lifecycleHooks {
-		command := nativeInstallCommand(target.targetPath, hook.Command...)
+		command := nativeInstallCommand(targetLauncherPath(target), hook.Command...)
 		if shape == "flat" {
 			desired[hook.Event] = flatHookEntry(command)
 		} else {
@@ -1212,8 +1448,11 @@ func isInstallerHookValue(parent map[string]any, value any, target installTarget
 
 func installerHookCommands(target installTarget) map[string]bool {
 	commands := map[string]bool{}
+	launchers := []string{targetLauncherPath(target), filepath.Join(target.targetPath, "bin", nativeBinaryName())}
 	add := func(args ...string) {
-		commands[normalizeHookCommand(nativeInstallCommand(target.targetPath, args...))] = true
+		for _, launcher := range launchers {
+			commands[normalizeHookCommand(nativeInstallCommand(launcher, args...))] = true
+		}
 	}
 	gateArgs := []string{"hook", "decide"}
 	if target.host == "codex" {
@@ -1268,7 +1507,12 @@ func isLegacyCodexGateCommand(command string, target installTarget) bool {
 	if target.host != "codex" {
 		return false
 	}
-	return normalizeHookCommand(command) == normalizeHookCommand(nativeInstallCommand(target.targetPath, "hook", "decide"))
+	want := normalizeHookCommand(command)
+	// Stage 0 explicitly migrates the former target/bin hook to the fixed
+	// launcher. Recognizing that one exact old owned shape is cleanup for the
+	// migration, not a second supported writer or fallback launcher.
+	return want == normalizeHookCommand(nativeInstallCommand(targetLauncherPath(target), "hook", "decide")) ||
+		want == normalizeHookCommand(nativeInstallCommand(filepath.Join(target.targetPath, "bin", nativeBinaryName()), "hook", "decide"))
 }
 
 func exactObjectKeys(value map[string]any, expected ...string) bool {
@@ -1288,7 +1532,11 @@ func exactObjectKeys(value map[string]any, expected ...string) bool {
 }
 
 func nativeInstallCommand(skillRoot string, args ...string) string {
-	parts := []string{quoteCommandArg(filepath.Join(skillRoot, "bin", nativeBinaryName()))}
+	launcher := skillRoot
+	if filepath.Base(filepath.Clean(launcher)) != nativeBinaryName() {
+		launcher = filepath.Join(skillRoot, "bin", nativeBinaryName())
+	}
+	parts := []string{quoteCommandArg(launcher)}
 	for _, arg := range args {
 		if isPlainCommandToken(arg) {
 			parts = append(parts, arg)
@@ -1297,6 +1545,13 @@ func nativeInstallCommand(skillRoot string, args ...string) string {
 		parts = append(parts, quoteCommandArg(arg))
 	}
 	return strings.Join(parts, " ")
+}
+
+func targetLauncherPath(target installTarget) string {
+	if strings.TrimSpace(target.launcherPath) != "" {
+		return target.launcherPath
+	}
+	return filepath.Join(target.targetPath, "bin", nativeBinaryName())
 }
 
 // normalizeHookCommand 去掉命令字符串里的双引号，用于卸载/升级时识别新旧两种 install
