@@ -73,9 +73,9 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 		}
 		report.Checks = append(report.Checks, CanaryCheck{Name: name, Status: status, Detail: detail})
 	}
-	phases := []string{"journal-boundary", "intent", "registry", "runtime", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "copy-component:gates", "verify-stage:installed-target", "verify-stage:manifest", "verify-stage:realpath", "verify-stage:digest"}
+	phases := []string{"journal-boundary", "intent", "registry", "copy-component:runtime", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "copy-component:gates", "verify-stage:installed-target", "verify-stage:manifest", "verify-stage:realpath", "verify-stage:digest"}
 	if fixture := strings.TrimSpace(options.Fixture); fixture != "" {
-		phases = []string{fixture}
+		phases = []string{canonicalInstallFaultPhase(fixture)}
 	}
 	for _, phase := range phases {
 		phase := phase

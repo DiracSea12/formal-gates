@@ -132,6 +132,54 @@ func TestRemoveManagedRuleFileCanRemoveEmptyCursorRuleFile(t *testing.T) {
 	}
 }
 
+func TestOuterFileSnapshotRestoresStableLauncherSymlink(t *testing.T) {
+	root := t.TempDir()
+	oldRelease := filepath.Join(root, "release-v1", "bin", nativeBinaryName())
+	launcher := filepath.Join(root, "bin", nativeBinaryName())
+	if err := os.MkdirAll(filepath.Dir(oldRelease), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldRelease, []byte("old-release\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(oldRelease, launcher); err != nil {
+		t.Fatal(err)
+	}
+	if got := stableLauncherPath(launcher); got == canonicalRegistryPath(launcher) {
+		t.Fatalf("stable launcher path resolved the existing pointer: got=%s", got)
+	}
+
+	snapshot, err := snapshotOuterFile(launcher, filepath.Join(root, "transaction", "launcher.before"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Kind != "symlink" || snapshot.LinkTarget != oldRelease {
+		t.Fatalf("stable launcher snapshot=%+v, want symlink to %s", snapshot, oldRelease)
+	}
+	if err := os.Remove(launcher); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("new-release\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreOuterFile(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("restored stable launcher mode=%s, want symlink", info.Mode())
+	}
+	if got, err := os.Readlink(launcher); err != nil || got != oldRelease {
+		t.Fatalf("restored stable launcher target=%q, err=%v, want=%s", got, err, oldRelease)
+	}
+}
+
 func writeManagedRuleTestFile(t *testing.T, path, current string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

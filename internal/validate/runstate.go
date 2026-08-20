@@ -496,7 +496,7 @@ func verifyLegacyStableLauncher() error {
 		return fmt.Errorf("UNREGISTERED_INSTALL: legacy run requires the shared registry: %w", err)
 	}
 	for _, record := range doc.Records {
-		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(executable) {
+		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && launcherInvocationMatches(record.LauncherPath) {
 			return nil
 		}
 	}

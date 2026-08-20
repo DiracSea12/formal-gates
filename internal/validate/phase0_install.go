@@ -33,9 +33,6 @@ func newStagedInstallTree(source, destination string, runtimeOnly bool) stagedIn
 }
 
 func prepareInstallTree(candidate stagedInstallTree) (stagedInstallTree, error) {
-	if err := installFault("runtime"); err != nil {
-		return stagedInstallTree{}, err
-	}
 	if err := os.MkdirAll(filepath.Dir(candidate.Destination), 0o700); err != nil {
 		return stagedInstallTree{}, err
 	}
@@ -43,7 +40,7 @@ func prepareInstallTree(candidate stagedInstallTree) (stagedInstallTree, error) 
 		if err := copyInstallRuntime(candidate.Source, candidate.Temp, true); err != nil {
 			return stagedInstallTree{}, err
 		}
-	} else if err := copyTreeImmutable(candidate.Source, candidate.Temp); err != nil {
+	} else if err := copyTreeImmutableForInstall(candidate.Source, candidate.Temp); err != nil {
 		return stagedInstallTree{}, err
 	}
 	receipt, err := PackageReceipt(candidate.Temp, candidate.Source)
@@ -92,6 +89,15 @@ func verifySwitchedInstallTree(candidate stagedInstallTree, allowPlaceholder boo
 }
 
 func copyTreeImmutable(source, target string) error {
+	return copyTreeImmutableWithFaults(source, target, false)
+}
+
+func copyTreeImmutableForInstall(source, target string) error {
+	return copyTreeImmutableWithFaults(source, target, true)
+}
+
+func copyTreeImmutableWithFaults(source, target string, injectFaults bool) error {
+	runtimeFaultChecked := false
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -123,10 +129,23 @@ func copyTreeImmutable(source, target string) error {
 			return fmt.Errorf("release entry %s is not an immutable regular file", filepath.ToSlash(rel))
 		}
 		topLevel := strings.Split(filepath.ToSlash(rel), "/")[0]
-		if err := installFault("copy-component:" + topLevel); err != nil {
+		if injectFaults && (topLevel == "prompts" || topLevel == "gates") {
+			if err := installFault("copy-component:" + topLevel); err != nil {
+				return err
+			}
+		}
+		if err := copyFile(path, filepath.Join(target, rel), info.Mode()); err != nil {
 			return err
 		}
-		return copyFile(path, filepath.Join(target, rel), info.Mode())
+		// Inject after a real file crosses the copy boundary, not before the
+		// walk starts. This exercises staged-copy rollback rather than setup.
+		if injectFaults && !runtimeFaultChecked {
+			runtimeFaultChecked = true
+			if err := installFault("copy-component:runtime"); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -317,10 +336,12 @@ type outerTreeSnapshot struct {
 }
 
 type outerFileSnapshot struct {
-	Path    string `json:"path"`
-	Backup  string `json:"backup"`
-	Existed bool   `json:"existed"`
-	Mode    uint32 `json:"mode,omitempty"`
+	Path       string `json:"path"`
+	Backup     string `json:"backup"`
+	Existed    bool   `json:"existed"`
+	Mode       uint32 `json:"mode,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+	LinkTarget string `json:"linkTarget,omitempty"`
 }
 
 type outerTargetSnapshot struct {
@@ -350,7 +371,17 @@ func snapshotOuterFile(path, backup string) (outerFileSnapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+	if info.Mode()&os.ModeSymlink != 0 {
+		linkTarget, readlinkErr := os.Readlink(path)
+		if readlinkErr != nil {
+			return snapshot, readlinkErr
+		}
+		snapshot.Existed = true
+		snapshot.Kind = "symlink"
+		snapshot.LinkTarget = linkTarget
+		return snapshot, nil
+	}
+	if !info.Mode().IsRegular() {
 		return snapshot, fmt.Errorf("cannot back up non-regular install file: %s", path)
 	}
 	data, err := os.ReadFile(path)
@@ -365,6 +396,7 @@ func snapshotOuterFile(path, backup string) (outerFileSnapshot, error) {
 	}
 	snapshot.Existed = true
 	snapshot.Mode = uint32(info.Mode().Perm())
+	snapshot.Kind = "regular"
 	return snapshot, nil
 }
 
@@ -377,6 +409,19 @@ func restoreOuterFile(snapshot outerFileSnapshot) error {
 			return err
 		}
 		return nil
+	}
+	if snapshot.Kind == "symlink" {
+		if current, err := os.Lstat(snapshot.Path); err == nil {
+			if current.IsDir() && current.Mode()&os.ModeSymlink == 0 {
+				return fmt.Errorf("cannot replace directory while restoring launcher symlink: %s", snapshot.Path)
+			}
+			if err := os.Remove(snapshot.Path); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return os.Symlink(snapshot.LinkTarget, snapshot.Path)
 	}
 	data, err := os.ReadFile(snapshot.Backup)
 	if err != nil {
@@ -564,10 +609,24 @@ func reconcileOuterInstallJournal(registryPath string) error {
 }
 
 func installFault(phase string) error {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("FORMAL_GATES_INSTALL_FAULT")), phase) {
+	configured := canonicalInstallFaultPhase(os.Getenv("FORMAL_GATES_INSTALL_FAULT"))
+	if configured == canonicalInstallFaultPhase(phase) {
 		return fmt.Errorf("deterministic install fault injected at %s", phase)
 	}
 	return nil
+}
+
+func canonicalInstallFaultPhase(phase string) string {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "runtime", "copy-component:runtime":
+		return "copy-component:runtime"
+	case "hook", "hooks", "copy-component:hook", "copy-component:hooks":
+		return "hook"
+	case "managed-rule", "managed-rules", "rules", "copy-component:managed-rule", "copy-component:managed-rules", "copy-component:rules":
+		return "managed-rule"
+	default:
+		return strings.ToLower(strings.TrimSpace(phase))
+	}
 }
 
 func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error {

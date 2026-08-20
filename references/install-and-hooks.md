@@ -243,14 +243,16 @@ managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resourc
 和受理规则更新，不绕过 runtime、receipt 或 registry transaction。故障矩阵可用同一原生入口复现：
 
 ```bash
-FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit \
+FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|copy-component:runtime|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit|copy-component:prompts|copy-component:gates|verify-stage:installed-target|verify-stage:manifest|verify-stage:realpath|verify-stage:digest \
   <stable-launcher> install --source <candidate> --host claude --scope project \
   --project <project> --binary-target <stable-launcher> --force
 ```
 
 也可以用公开 fixture 一次覆盖复制、切换、installed-binary smoke、pointer、hook、规则、
-registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher。复制
-fixture 可按组件选择，installed-target 校验 fixture 可按阶段选择：
+registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher。规范
+fixture 名称只有一个 canonical 形式；`runtime`、`hooks`、`rules` 等旧输入会在入口归一化，
+报告使用 `copy-component:runtime`、`hook`、`managed-rule`。复制 fixture 可按组件选择，
+installed-target 校验 fixture 可按阶段选择：
 
 ```bash
 <stable-launcher> canary fault-matrix --root <candidate> --fixture copy-component:prompts

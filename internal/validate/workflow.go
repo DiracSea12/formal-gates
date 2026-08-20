@@ -541,7 +541,7 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 			return fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
 		}
 		base := filepath.Base(filepath.Clean(executable))
-		if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") && canonicalRegistryPath(executable) != canonicalRegistryPath(record.LauncherPath) {
+		if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") && !launcherInvocationMatches(record.LauncherPath) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: workflow must be driven by stable launcher %s", record.LauncherPath)
 		}
 		return nil

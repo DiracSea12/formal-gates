@@ -153,7 +153,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 	// direct installs use one fixed launcher namespace for their scope.
 	for index := range targets {
 		if strings.TrimSpace(options.BinaryTarget) != "" {
-			targets[index].launcherPath = canonicalRegistryPath(options.BinaryTarget)
+			targets[index].launcherPath = stableLauncherPath(options.BinaryTarget)
 		} else {
 			targets[index].launcherPath = defaultStableLauncherPath(options)
 		}
@@ -923,14 +923,53 @@ func rejectActiveWorkflowRuns(operation string, targets []installTarget, options
 func defaultStableLauncherPath(options InstallOptions) string {
 	if runtime.GOOS == "windows" {
 		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
-			return canonicalRegistryPath(filepath.Join(local, "formal-gates", "bin", nativeBinaryName()))
+			return stableLauncherPath(filepath.Join(local, "formal-gates", "bin", nativeBinaryName()))
 		}
 	}
 	home, err := installHomeDir()
 	if err != nil {
-		return canonicalRegistryPath(filepath.Join(".local", "bin", nativeBinaryName()))
+		return stableLauncherPath(filepath.Join(".local", "bin", nativeBinaryName()))
 	}
-	return canonicalRegistryPath(filepath.Join(home, ".local", "bin", nativeBinaryName()))
+	return stableLauncherPath(filepath.Join(home, ".local", "bin", nativeBinaryName()))
+}
+
+// Keep the public launcher path lexical. Resolving an existing symlink here
+// would make an upgrade overwrite the old release instead of replacing the
+// stable pointer itself.
+func stableLauncherPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	abs = filepath.Clean(abs)
+	// Resolve aliases in the existing parent only. The final component is the
+	// public stable pointer and must not be resolved when it is already a
+	// symlink to an older release.
+	current := filepath.Dir(abs)
+	for {
+		if resolved, resolveErr := filepath.EvalSymlinks(current); resolveErr == nil {
+			rel, relErr := filepath.Rel(current, abs)
+			if relErr == nil {
+				return filepath.Clean(filepath.Join(resolved, rel))
+			}
+			break
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return abs
+}
+
+func launcherInvocationMatches(expected string) bool {
+	expected = stableLauncherPath(expected)
+	if argument := strings.TrimSpace(os.Args[0]); argument != "" && stableLauncherPath(argument) == expected {
+		return true
+	}
+	executable, err := os.Executable()
+	return err == nil && stableLauncherPath(executable) == expected
 }
 
 // RequireInstallLauncher fences the public mutation command. The downloaded
@@ -951,11 +990,11 @@ func RequireInstallLauncher(options InstallOptions) error {
 	}
 	expected := defaultStableLauncherPath(options)
 	if strings.TrimSpace(options.BinaryTarget) != "" {
-		if canonicalRegistryPath(options.BinaryTarget) != canonicalRegistryPath(expected) {
+		if stableLauncherPath(options.BinaryTarget) != expected {
 			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)
 		}
 	}
-	if canonicalRegistryPath(executable) != canonicalRegistryPath(expected) {
+	if !launcherInvocationMatches(expected) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
 	}
 	return nil
@@ -981,7 +1020,7 @@ func RequireUninstallLauncher(options UninstallOptions) error {
 	}
 	for _, target := range targets {
 		for _, record := range doc.Records {
-			if canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath) && canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(executable) {
+			if canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath) && launcherInvocationMatches(record.LauncherPath) {
 				return nil
 			}
 		}
@@ -1153,10 +1192,13 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	} else if !os.IsNotExist(loadErr) {
 		return InstallReport{}, fmt.Errorf("registry bootstrap cannot read existing registry: %w", loadErr)
 	}
-	if registryWasPresent && !isTestBinary() {
+	if registryWasPresent {
 		for _, target := range targets {
 			desired := installRegistryRecord(target, options)
 			if _, found := existingByID[desired.ID]; found {
+				continue
+			}
+			if bootstrapHasSiblingAdmission(desired, existingRegistry.Records, source.Digest) {
 				continue
 			}
 			writeBootstrapAdmissionRejection(registryPath, target, options, desired.ID, "an existing registry has no admission record for the bootstrap target")
@@ -1224,6 +1266,21 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
 	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), RegistryEpoch: committedRegistry.Epoch, ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath), VCSIdentity: outer.VCSIdentity, PackageDigest: source.Digest}, nil
+}
+
+func bootstrapHasSiblingAdmission(desired RegistryRecord, records []RegistryRecord, packageDigest string) bool {
+	for _, record := range records {
+		if !strings.EqualFold(record.Status, "active") || !validAdmissionRegistryRecord(record) {
+			continue
+		}
+		if record.PackageDigest == packageDigest &&
+			record.Scope == desired.Scope &&
+			canonicalRegistryPath(record.ProjectRoot) == canonicalRegistryPath(desired.ProjectRoot) &&
+			canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(desired.LauncherPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func bootstrapUnregisteredReceipt(registryPath string, target installTarget, options InstallOptions, reason string) AdmissionReceipt {
@@ -1550,6 +1607,7 @@ func copyInstallRuntime(source, target string, force bool) error {
 	if err := os.MkdirAll(target, 0o700); err != nil {
 		return err
 	}
+	runtimeFaultChecked := false
 	for _, entry := range installRuntimeEntries {
 		from := filepath.Join(source, filepath.FromSlash(entry))
 		to := filepath.Join(target, filepath.FromSlash(entry))
@@ -1564,6 +1622,12 @@ func copyInstallRuntime(source, target string, force bool) error {
 		}
 		if err := copyPath(from, to); err != nil {
 			return err
+		}
+		if !runtimeFaultChecked {
+			runtimeFaultChecked = true
+			if err := installFault("copy-component:runtime"); err != nil {
+				return err
+			}
 		}
 	}
 	return removePycache(target)
