@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 import (
@@ -1190,7 +1192,7 @@ func TestWhiteboxPhase0Round12BootstrapWrappersForwardOnlyToStableOwner(t *testi
 	round12CreateSourceArchive(t, sourceZip)
 	binaryAsset := filepath.Join(fixture, "formal-gates-"+suffix)
 	logPath := filepath.Join(fixture, "owner.log")
-	round12WriteFile(t, binaryAsset, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$ROUND12_OWNER_LOG\"\nexit 0\n"), 0o700)
+	round12WriteFile(t, binaryAsset, []byte("#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$ROUND12_OWNER_LOG\"\nif [ \"$1\" = install ] && [ \"${2:-}\" != --bootstrap ]; then\n  previous=\"\"\n  target=\"\"\n  for argument in \"$@\"; do\n    if [ \"$previous\" = --binary-target ]; then target=\"$argument\"; fi\n    previous=\"$argument\"\n  done\n  mkdir -p \"$(dirname \"$target\")\"\n  cp \"$0\" \"$target\"\n  chmod +x \"$target\"\nfi\nexit 0\n"), 0o700)
 	canary := filepath.Join(fixture, "portable-canary-"+suffix+".json")
 	checksums := filepath.Join(fixture, "SHA256SUMS-"+suffix+".txt")
 	round12WriteFile(t, canary, []byte("{}\n"), 0o600)

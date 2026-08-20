@@ -400,13 +400,45 @@ func restoreOuterTree(snapshot outerTreeSnapshot) error {
 	if strings.TrimSpace(snapshot.Path) == "" {
 		return nil
 	}
-	if err := os.RemoveAll(snapshot.Path); err != nil {
-		return err
-	}
 	if !snapshot.Existed {
+		if err := os.RemoveAll(snapshot.Path); err != nil {
+			return err
+		}
 		return nil
 	}
-	return copyTreeImmutable(snapshot.Backup, snapshot.Path)
+	// Materialize the complete old tree beside the live path first. Removing the
+	// current release before a copy has succeeded can leave prompts/gates or the
+	// binary missing when recovery itself encounters an ordinary validation
+	// error.
+	restoreTemp := fmt.Sprintf("%s.formal-gates-restore-%d", snapshot.Path, time.Now().UnixNano())
+	if err := os.RemoveAll(restoreTemp); err != nil {
+		return err
+	}
+	defer os.RemoveAll(restoreTemp)
+	if err := copyTreeImmutable(snapshot.Backup, restoreTemp); err != nil {
+		return err
+	}
+
+	oldPath := fmt.Sprintf("%s.formal-gates-old-%d", snapshot.Path, time.Now().UnixNano())
+	oldExists := false
+	if _, err := os.Lstat(snapshot.Path); err == nil {
+		if err := os.Rename(snapshot.Path, oldPath); err != nil {
+			return err
+		}
+		oldExists = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(restoreTemp, snapshot.Path); err != nil {
+		if oldExists {
+			_ = os.Rename(oldPath, snapshot.Path)
+		}
+		return err
+	}
+	if oldExists {
+		return os.RemoveAll(oldPath)
+	}
+	return nil
 }
 
 func persistOuterJournal(path string, journal outerInstallJournal) error {

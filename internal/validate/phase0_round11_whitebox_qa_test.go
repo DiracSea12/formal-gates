@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 import (

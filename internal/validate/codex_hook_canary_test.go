@@ -84,3 +84,10 @@ func TestCodexHookCanaryUsesUniqueCaseIDs(t *testing.T) {
 		t.Fatalf("canary outputs must be isolated: first=%#v second=%#v", first, second)
 	}
 }
+
+func TestCodexHookPromptRequestsARealToolCall(t *testing.T) {
+	prompt := codexHookPrompt("formal-gates", "/tmp/case", "/tmp/case/marker.txt")
+	if !strings.Contains(prompt, "Use the shell tool now") || !strings.Contains(prompt, "not a response") {
+		t.Fatalf("Codex canary prompt does not require a real shell tool call: %q", prompt)
+	}
+}

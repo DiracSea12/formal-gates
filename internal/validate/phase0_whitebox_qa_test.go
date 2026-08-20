@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 // This file is the independently authored whitebox QA delivery for stage 0.

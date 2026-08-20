@@ -233,6 +233,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	project := fs.String("project", "", "project path for project installs")
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
 	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
+	candidateBinary := fs.String("candidate-binary", "", "verified temporary owner used only when no stable launcher exists")
 	bootstrap := fs.Bool("bootstrap", false, "register the selected target in the stage-0 admission bridge without installing runtime files")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
@@ -242,7 +243,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
+	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, CandidateBinary: *candidateBinary, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
 	if err := validate.RequireInstallLauncher(options); err != nil {
 		return operationError(streams, err)
 	}

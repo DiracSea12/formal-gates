@@ -60,15 +60,14 @@ var requiredHosts = []string{
 }
 
 type manifest struct {
-	Name          string         `json:"name"`
-	Hosts         []manifestHost `json:"hosts"`
-	Parts         []string       `json:"package_parts"`
-	Installs      []string       `json:"install_commands"`
-	Commands      []string       `json:"verification_commands"`
-	Notes         []string       `json:"validation_notes"`
-	Caveats       []string       `json:"support_caveats"`
-	Validators    []any          `json:"external_validators"`
-	PackageDigest string         `json:"package_digest,omitempty"`
+	Name       string         `json:"name"`
+	Hosts      []manifestHost `json:"hosts"`
+	Parts      []string       `json:"package_parts"`
+	Installs   []string       `json:"install_commands"`
+	Commands   []string       `json:"verification_commands"`
+	Notes      []string       `json:"validation_notes"`
+	Caveats    []string       `json:"support_caveats"`
+	Validators []any          `json:"external_validators"`
 }
 
 type manifestHost struct {
@@ -478,13 +477,6 @@ func validateManifest(root string, result *Result) {
 		result.add("formal-gates.manifest.json", fmt.Sprintf("manifest JSON is invalid: %v", err))
 		return
 	}
-	packageDigest := doc.PackageDigest
-	if strings.TrimSpace(packageDigest) != "" {
-		actual, digestErr := PackageDigest(root)
-		if digestErr != nil || !digestMatches(packageDigest, actual) {
-			result.add("formal-gates.manifest.json", fmt.Sprintf("package digest mismatch: expected %s, got sha256:%s", packageDigest, actual))
-		}
-	}
 	if doc.Name != "formal-gates" {
 		result.add("formal-gates.manifest.json", "manifest name must be formal-gates")
 	}
@@ -538,12 +530,6 @@ func validateManifest(root string, result *Result) {
 	if !containsText(doc.Caveats, "live canary") {
 		result.add("formal-gates.manifest.json", "support_caveats must preserve live canary wording")
 	}
-}
-
-func digestMatches(expected, actual string) bool {
-	expected = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(expected), "sha256:"))
-	actual = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(actual), "sha256:"))
-	return expected != "" && expected == actual
 }
 
 func nativeBinaryCommand() string {

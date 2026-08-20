@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 
 export const name = 'formal-gates-dsh'
 
@@ -120,17 +121,24 @@ function parseDecision(result) {
   }
 }
 
+function stableLauncherPath() {
+  const home = process.env.HOME || process.env.USERPROFILE || homedir()
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local')
+    return join(localAppData, 'formal-gates', 'bin', 'formal-gates.exe')
+  }
+  return join(home, '.local', 'bin', 'formal-gates')
+}
+
 export function apply(ctx, config = {}) {
   const warn = typeof ctx.logger && typeof ctx.logger.warn === 'function'
     ? (message) => ctx.logger.warn(message)
     : () => {}
-  // 优先显式 binary（本地手工配置）；安装器生成的 patch 只给 skillRoot，由插件按
-  // 当前平台选择 formal-gates(.exe)，使 cordis.patch.yml 可跨机器/跨系统复用。
-  const binary = typeof config.binary === 'string' && config.binary.trim() !== ''
-    ? config.binary
-    : typeof config.skillRoot === 'string' && config.skillRoot.trim() !== ''
-      ? join(config.skillRoot, 'bin', process.platform === 'win32' ? 'formal-gates.exe' : 'formal-gates')
-      : ''
+  // DSH loads the skill from a replaceable release directory. The configured
+  // config.skillRoot is only the plugin location; hook writes must
+  // instead go through the registry-admitted stable launcher so an upgrade or
+  // rollback cannot leave the plugin executing an unregistered candidate.
+  const binary = stableLauncherPath()
   const timeoutMs = Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS
   const dshHome = typeof config.dshHome === 'string' && config.dshHome.trim() !== '' ? config.dshHome : undefined
   if (!binary) {

@@ -22,12 +22,13 @@ type InstallOptions struct {
 	// ReleaseRoot and BinaryTarget are used by the bootstrap scripts. When
 	// provided, the native installer owns release copy, backup, and executable
 	// replacement in the same transaction as host installation.
-	ReleaseRoot  string
-	BinaryTarget string
-	RegistryPath string
-	Bootstrap    bool
-	Force        bool
-	SkipHooks    bool
+	ReleaseRoot     string
+	BinaryTarget    string
+	CandidateBinary string
+	RegistryPath    string
+	Bootstrap       bool
+	Force           bool
+	SkipHooks       bool
 }
 
 type UninstallOptions struct {
@@ -196,6 +197,26 @@ func Install(options InstallOptions) (InstallReport, error) {
 		return InstallReport{}, fmt.Errorf("formal-gates source failed immutable package validation: %w", err)
 	}
 	registryPath := installRegistryPath(options)
+	for _, target := range targets {
+		record := installRegistryRecord(target, options)
+		namespaces := map[string]string{
+			"sourceRoot": canonicalRegistryPath(sourceAbs),
+		}
+		for name, path := range record.CanonicalPaths {
+			namespaces[name] = path
+		}
+		if registryPath != "" {
+			namespaces["registry"] = canonicalRegistryPath(registryPath)
+		}
+		if strings.TrimSpace(options.ReleaseRoot) != "" {
+			namespaces["releaseRoot"] = canonicalRegistryPath(options.ReleaseRoot)
+		}
+		if !options.Bootstrap {
+			if err := validateCanonicalNamespaceRelations(namespaces, "install"); err != nil {
+				return InstallReport{}, err
+			}
+		}
+	}
 	// A source checkout/release must pass the complete package contract.  The
 	// documented runtime-only install fixture intentionally omits development
 	// sources, so it receives the manifest checks below without being rejected
@@ -216,13 +237,6 @@ func Install(options InstallOptions) (InstallReport, error) {
 	}
 	if manifestShape.Name != "formal-gates" {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
-	}
-	// GitHub source archives do not contain .git and the platform binary is
-	// added only after download. PackageReceipt therefore supplies the
-	// assembled release identity when the optional manifest digest is absent.
-	expected := manifestShape.PackageDigest
-	if strings.TrimSpace(expected) != "" && !digestMatches(expected, sourcePackage.Digest) {
-		return InstallReport{}, fmt.Errorf("formal-gates package digest mismatch: expected %s, got sha256:%s", expected, sourcePackage.Digest)
 	}
 	if options.Bootstrap {
 		return bootstrapInstall(options, targets, sourcePackage, registryPath)
@@ -867,6 +881,14 @@ func RequireInstallLauncher(options InstallOptions) error {
 			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)
 		}
 	}
+	if candidate := strings.TrimSpace(options.CandidateBinary); candidate != "" {
+		candidatePath := canonicalRegistryPath(candidate)
+		expectedCandidate := canonicalRegistryPath(filepath.Join(options.Source, "bin", nativeBinaryName()))
+		if candidatePath != expectedCandidate || canonicalRegistryPath(executable) != candidatePath {
+			return fmt.Errorf("UNREGISTERED_INSTALL: candidate install owner must be the verified package binary %s", expectedCandidate)
+		}
+		return nil
+	}
 	if canonicalRegistryPath(executable) != canonicalRegistryPath(expected) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
 	}
@@ -968,6 +990,22 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		_ = writeAdmissionReceipt(registryPath, receipt)
 		return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry has no admission record for bootstrap"))
 	}
+	if registryWasPresent {
+		for _, record := range existingRegistry.Records {
+			if !validRegistryRecord(record) {
+				receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "an existing registry record cannot be reconciled", CreatedAt: nowReceiptTime()}
+				_ = writeAdmissionReceipt(registryPath, receipt)
+				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry record %q cannot be reconciled", record.ID))
+			}
+			if strings.EqualFold(record.Status, "active") {
+				if targetErr := assertInstallSource(record.Target); targetErr != nil {
+					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: fmt.Sprintf("an existing active target is not an installed artifact: %v", targetErr), CreatedAt: nowReceiptTime()}
+					_ = writeAdmissionReceipt(registryPath, receipt)
+					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target %q is not an installed artifact", record.Target))
+				}
+			}
+		}
+	}
 	strictBinary := isFile(filepath.Join(source.Root, "internal", "validate", "runner.go"))
 	targetDigests := map[string]string{}
 	for _, target := range targets {
@@ -1001,15 +1039,27 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 			existingByID[record.ID] = record
 			for _, target := range targets {
 				desired := installRegistryRecord(target, options)
-				if canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath) && record.ID != desired.ID {
+				sameTarget := canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath)
+				if sameTarget && record.ID != desired.ID {
 					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: desired.ID, Registry: registryPath, Reason: "bootstrap target already exists with a different registry record identity", CreatedAt: nowReceiptTime()}
 					_ = writeAdmissionReceipt(registryPath, receipt)
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s has an unaccounted registry identity", target.targetPath))
 				}
-				if record.ID == installRegistryRecord(target, options).ID && filepath.Clean(record.Target) != filepath.Clean(target.targetPath) {
+				if record.ID == desired.ID && !sameTarget {
 					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
 					_ = writeAdmissionReceipt(registryPath, receipt)
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target conflicts with registry record %q", record.ID))
+				}
+				if sameTarget {
+					expected := desired
+					expected.VCSIdentity = outer.VCSIdentity
+					expected.PackageDigest = source.Digest
+					expected.InstalledDigest = targetDigests[canonicalRegistryPath(target.targetPath)]
+					if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) || !sameRegistryBinding(record, expected) || !sameRegistryIdentity(record, expected) {
+						receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target has a stale or incomplete registry identity", CreatedAt: nowReceiptTime()}
+						_ = writeAdmissionReceipt(registryPath, receipt)
+						return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s cannot reconcile its existing registry identity", target.targetPath))
+					}
 				}
 			}
 		}

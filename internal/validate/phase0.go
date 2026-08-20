@@ -259,7 +259,6 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		return BaselineReceipt{}, err
 	}
 	receipt := BaselineReceipt{VCSIdentity: strings.TrimSpace(vcsIdentity), SourceRoot: sourceAbs, PackageDigest: packageDigest, PackageManifest: packageManifest.Entries, CanonicalPaths: map[string]string{"sourceRoot": sourceAbs}, Disjoint: map[string]string{}}
-	canonicalSeen := map[string]string{"sourceRoot": sourceAbs}
 	if strings.TrimSpace(installedTarget) != "" {
 		installedAbs, err := filepath.Abs(installedTarget)
 		if err != nil {
@@ -277,7 +276,6 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		receipt.InstalledTargetDigest = installedPackage.Digest
 		receipt.Disjoint = installedPackage.Disjoint
 		receipt.CanonicalPaths["installedTarget"] = installedAbs
-		canonicalSeen["installedTarget"] = installedAbs
 	}
 	for name, path := range paths {
 		if strings.TrimSpace(path) == "" {
@@ -290,18 +288,6 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 		realPath := canonicalRegistryPath(abs)
 		if _, err := os.Lstat(realPath); err != nil {
 			return BaselineReceipt{}, fmt.Errorf("resolve canonical path %s: %w", path, err)
-		}
-		for existingName, existingPath := range canonicalSeen {
-			if existingName == "sourceRoot" && pathOverlaps(realPath, existingPath) {
-				return BaselineReceipt{}, fmt.Errorf("baseline canonical path %s overlaps %s (%s)", name, existingName, realPath)
-			}
-			// A project root and its runtime sibling naturally contain an installed
-			// target. They are namespace identities, not disjoint package inputs.
-			// State/resource/hook paths must remain disjoint from the installed
-			// runtime and therefore retain the strict overlap check.
-			if existingName == "installedTarget" && pathOverlaps(realPath, existingPath) && name != "projectRoot" && name != "runtimeSibling" {
-				return BaselineReceipt{}, fmt.Errorf("baseline canonical path %s overlaps %s (%s)", name, existingName, realPath)
-			}
 		}
 		receipt.CanonicalPaths[name] = realPath
 		if strings.EqualFold(name, "hookConfig") || strings.EqualFold(name, "config") || strings.EqualFold(name, "hook") {
@@ -323,10 +309,59 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 			}
 		}
 	}
+	if err := validateCanonicalNamespaceRelations(receipt.CanonicalPaths, "baseline"); err != nil {
+		return BaselineReceipt{}, err
+	}
 	// Identity receipts must be repeatable for unchanged inputs.  A wall-clock
 	// timestamp would make otherwise identical JSON drift between invocations.
 	receipt.GeneratedAt = "sha256:" + packageDigest
 	return receipt, nil
+}
+
+// validateCanonicalNamespaceRelations checks the relationships that make a
+// receipt meaningful, rather than reporting PASS for independently canonical
+// paths that still identify the same namespace. A project root is expected to
+// contain its state, resources, hook files, and installed runtime; the runtime
+// sibling is expected to contain that runtime. All other namespace identities
+// must be disjoint, and sourceRoot is never allowed to overlap a destination.
+func validateCanonicalNamespaceRelations(paths map[string]string, label string) error {
+	names := make([]string, 0, len(paths))
+	for name, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) || filepath.Clean(path) != canonicalRegistryPath(path) {
+			return fmt.Errorf("%s canonical path %s is not a canonical absolute path: %s", label, name, path)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for leftIndex := 0; leftIndex < len(names); leftIndex++ {
+		left := names[leftIndex]
+		for rightIndex := leftIndex + 1; rightIndex < len(names); rightIndex++ {
+			right := names[rightIndex]
+			if !pathOverlaps(paths[left], paths[right]) || canonicalNamespaceOverlapAllowed(left, right) {
+				continue
+			}
+			return fmt.Errorf("%s canonical path %s overlaps %s", label, left, right)
+		}
+	}
+	return nil
+}
+
+func canonicalNamespaceOverlapAllowed(left, right string) bool {
+	if left == "sourceRoot" || right == "sourceRoot" {
+		return false
+	}
+	if left == "projectRoot" || right == "projectRoot" {
+		return true
+	}
+	if left == "runtimeSibling" && (right == "projectRoot" || right == "stateRoot" || right == "resourceRoot" || right == "hookConfig" || right == "managedRule" || right == "launcher") ||
+		right == "runtimeSibling" && (left == "projectRoot" || left == "stateRoot" || left == "resourceRoot" || left == "hookConfig" || left == "managedRule" || left == "launcher") {
+		return true
+	}
+	return (left == "installedTarget" || left == "target") && right == "runtimeSibling" ||
+		(right == "installedTarget" || right == "target") && left == "runtimeSibling"
 }
 
 func WriteBaselineReceipt(path string, receipt BaselineReceipt) error {
@@ -363,8 +398,6 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		return PackageReceiptReport{}, err
 	}
 	entries := make([]PackageEntry, 0)
-	digestOverrides := map[string]string{}
-	digestOverrideSizes := map[string]int64{}
 	err = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -408,12 +441,6 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		}
 		sum := sha256.Sum256(data)
 		entries = append(entries, PackageEntry{Path: filepath.ToSlash(rel), Mode: uint32(info.Mode().Perm()), Size: info.Size(), SHA256: hex.EncodeToString(sum[:]), RealPath: filepath.Clean(realPath)})
-		if filepath.ToSlash(rel) == "formal-gates.manifest.json" {
-			if digest, size, ok := canonicalManifestPackageDigest(data); ok {
-				digestOverrides[filepath.ToSlash(rel)] = digest
-				digestOverrideSizes[filepath.ToSlash(rel)] = size
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -422,15 +449,7 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	hash := sha256.New()
 	for _, entry := range entries {
-		digest := entry.SHA256
-		if override, ok := digestOverrides[entry.Path]; ok {
-			digest = override
-		}
-		size := entry.Size
-		if overrideSize, ok := digestOverrideSizes[entry.Path]; ok {
-			size = overrideSize
-		}
-		fmt.Fprintf(hash, "%s\x00%o\x00%d\x00%s\n", entry.Path, entry.Mode, size, digest)
+		fmt.Fprintf(hash, "%s\x00%o\x00%d\x00%s\n", entry.Path, entry.Mode, entry.Size, entry.SHA256)
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
 	receipt := PackageReceiptReport{Root: root, Digest: digest, Entries: entries, Disjoint: map[string]string{}, GeneratedAt: "sha256:" + digest}
@@ -452,24 +471,6 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		receipt.Disjoint[filepath.Clean(otherAbs)] = filepath.Clean(otherReal)
 	}
 	return receipt, nil
-}
-
-// canonicalManifestPackageDigest removes the self-referential package digest
-// before hashing the manifest as part of the package digest. Release packaging
-// can therefore write the resulting digest into the manifest, while later
-// validation still detects every substantive manifest edit.
-func canonicalManifestPackageDigest(data []byte) (string, int64, bool) {
-	var document map[string]any
-	if err := json.Unmarshal(data, &document); err != nil {
-		return "", 0, false
-	}
-	delete(document, "package_digest")
-	canonical, err := json.Marshal(document)
-	if err != nil {
-		return "", 0, false
-	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:]), int64(len(canonical)), true
 }
 
 func PackageDigest(root string) (string, error) {
@@ -743,7 +744,7 @@ func validRegistryRecord(record RegistryRecord) bool {
 			return false
 		}
 	}
-	return true
+	return validateCanonicalNamespaceRelations(record.CanonicalPaths, "registry record") == nil
 }
 
 func writeAdmissionReceipt(registryPath string, receipt AdmissionReceipt) error {

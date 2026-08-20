@@ -407,9 +407,9 @@ func codexHookPrompt(binary, caseDir, markerPath string) string {
 		"hook-canary",
 	}, " ")
 	if runtime.GOOS == "windows" {
-		return "Run exactly this shell command once, then stop: & " + record + "; Set-Content -LiteralPath " + quoteCommandArg(markerPath) + " -Value HIT"
+		return "Use the shell tool now, not a response. Run exactly this command once, then stop: & " + record + "; Set-Content -LiteralPath " + quoteCommandArg(markerPath) + " -Value HIT"
 	}
-	return "Run exactly this shell command once, then stop: " + record + "; printf HIT > " + quoteCommandArg(markerPath)
+	return "Use the shell tool now, not a response. Run exactly this command once, then stop: " + record + "; printf HIT > " + quoteCommandArg(markerPath)
 }
 
 func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath string, timeoutSeconds int) (int, bool, error) {

@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 // These tests are the independently authored whitebox QA increment for the

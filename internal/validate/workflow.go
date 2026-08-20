@@ -397,6 +397,9 @@ func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, erro
 	}
 	for _, record := range doc.Records {
 		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && canonicalRegistryPath(record.Target) == canonicalRegistryPath(want) && canonicalRegistryPath(record.CanonicalPaths["target"]) == canonicalRegistryPath(want) {
+			if err := verifyRegisteredTargetIdentity(record); err != nil {
+				return RegistryRecord{}, err
+			}
 			return record, nil
 		}
 	}
@@ -430,6 +433,9 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		}
 		if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: registry record is inactive or incomplete")
+		}
+		if err := verifyRegisteredTargetIdentity(record); err != nil {
+			return err
 		}
 		canonicalRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -468,6 +474,23 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		return nil
 	}
 	return fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is missing", recordID)
+}
+
+func verifyRegisteredTargetIdentity(record RegistryRecord) error {
+	if err := assertInstallSource(record.Target); err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target is not an installed artifact: %w", err)
+	}
+	if strings.TrimSpace(record.InstalledDigest) == "" {
+		return nil
+	}
+	receipt, err := PackageReceipt(record.Target)
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target identity cannot be read: %w", err)
+	}
+	if receipt.Digest != record.InstalledDigest {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target digest is stale")
+	}
+	return nil
 }
 
 // ResumeStatus is the recoverable classification reported when resuming an

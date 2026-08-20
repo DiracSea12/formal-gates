@@ -17,8 +17,8 @@ import (
 // 插件文件写在已安装的 skill 目录内，home 级 `cordis.patch.yml` 用相对 specifier
 // 引用它。DSH 的 home patch 会以所选 profile 目录（`$DSH_HOME/profiles/<name>`）
 // 为解析基准，所以写 `../../skills/...`：任何机器、任何 profile 都会解析回
-// `$DSH_HOME/skills/...`，不携带用户名或盘符。二进制与 home 路径同样通过 DSH
-// 的 `!!js dshHomePath(...)` 在启动时求值，patch 文件不落任何绝对路径。
+// `$DSH_HOME/skills/...`，不携带用户名或盘符。插件不从 skillRoot 派生执行器，而是
+// 按宿主平台解析用户级固定 stable launcher；patch 文件不落任何绝对路径。
 //
 // DSH 的 cordis.patch.yml 是机器级（home 级）补丁层，项目目录下的
 // cordis.patch.yml 不会被 DSH 自动加载。因此 `--host dsh --scope project`
@@ -268,6 +268,8 @@ func newDshPluginEntry() *yaml.Node {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!js", Value: "dshHomePath('skills', 'formal-gates')"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "dshHome"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!js", Value: "dshHomePath()"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "launcher"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "registry-admitted-stable"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "provider"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "deepseek-harness"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "timeoutMs"},
