@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,9 +31,33 @@ func Run(program string, args []string, streams IO) int {
 	}
 	code, err := run(program, args, streams)
 	if err != nil {
+		var lockErr *validate.LockHeldError
+		if errors.As(err, &lockErr) {
+			_, _ = printJSON(streams.Stdout, map[string]any{
+				"code": "LOCK_HELD", "operation": lockErr.Operation,
+				"path": lockErr.Path, "message": lockErr.Error(),
+			})
+			return code
+		}
 		fmt.Fprintln(streams.Stderr, err)
 	}
 	return code
+}
+
+func operationError(streams IO, err error) (int, error) {
+	var lockErr *validate.LockHeldError
+	if !errors.As(err, &lockErr) {
+		return 1, err
+	}
+	if _, printErr := printJSON(streams.Stdout, map[string]any{
+		"code":      "LOCK_HELD",
+		"operation": lockErr.Operation,
+		"path":      lockErr.Path,
+		"message":   lockErr.Error(),
+	}); printErr != nil {
+		return 1, printErr
+	}
+	return 1, nil
 }
 
 func run(program string, args []string, streams IO) (int, error) {
@@ -81,6 +106,10 @@ func runPackage(args []string, streams IO) (int, error) {
 	case "validate":
 		fs := newFlagSet("package validate", streams)
 		root := fs.String("root", ".", "formal-gates package root")
+		installed := fs.String("installed-target", "", "optional installed target root to bind in the validation receipt")
+		vcs := fs.String("vcs-identity", "", "optional immutable VCS identity to bind in the validation receipt")
+		pathFlags := stringListFlag{}
+		fs.Var(&pathFlags, "path", "canonical path as name=PATH; repeat as needed")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -92,6 +121,29 @@ func runPackage(args []string, streams IO) (int, error) {
 		receipt, receiptErr := validate.PackageReceipt(*root)
 		if receiptErr != nil {
 			return 1, receiptErr
+		}
+		if strings.TrimSpace(*installed) != "" || strings.TrimSpace(*vcs) != "" || len(pathFlags) != 0 {
+			if strings.TrimSpace(*installed) == "" || strings.TrimSpace(*vcs) == "" {
+				return 1, fmt.Errorf("package validate identity output requires --installed-target and --vcs-identity together")
+			}
+			canonical := map[string]string{}
+			for _, item := range pathFlags {
+				parts := strings.SplitN(item, "=", 2)
+				if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+					return 1, fmt.Errorf("--path must use name=PATH")
+				}
+				canonical[parts[0]] = parts[1]
+			}
+			baseline, baselineErr := validate.BuildBaselineReceipt(*vcs, *root, *installed, canonical)
+			if baselineErr != nil {
+				return 1, baselineErr
+			}
+			receipt.InstalledTarget = baseline.InstalledTarget
+			receipt.InstalledTargetDigest = baseline.InstalledTargetDigest
+			receipt.VCSIdentity = baseline.VCSIdentity
+			receipt.Disjoint = baseline.Disjoint
+			receipt.CanonicalPaths = baseline.CanonicalPaths
+			receipt.DisjointProof = map[string]string{"source-installed-target": "PASS"}
 		}
 		return printJSON(streams.Stdout, receipt)
 	case "route-candidates":
@@ -181,6 +233,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	project := fs.String("project", "", "project path for project installs")
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
 	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
+	candidateBinary := fs.String("candidate-binary", "", "verified candidate executable used only to begin a first native transaction")
 	bootstrap := fs.Bool("bootstrap", false, "register the selected target in the stage-0 admission bridge without installing runtime files")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
@@ -190,13 +243,13 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
+	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, CandidateBinary: *candidateBinary, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
 	if err := validate.RequireInstallLauncher(options); err != nil {
-		return 1, err
+		return operationError(streams, err)
 	}
 	report, err := validate.Install(options)
 	if err != nil {
-		return 1, err
+		return operationError(streams, err)
 	}
 	for _, target := range report.Targets {
 		fmt.Fprintf(streams.Stdout, "formal-gates installed for %s: %s\n", target.Host, target.TargetPath)
@@ -234,7 +287,7 @@ func runUninstall(args []string, streams IO) (int, error) {
 	}
 	report, err := validate.Uninstall(options)
 	if err != nil {
-		return 1, err
+		return operationError(streams, err)
 	}
 	for _, target := range report.Targets {
 		fmt.Fprintf(streams.Stdout, "formal-gates uninstalled for %s: %s\n", target.Host, target.TargetPath)
@@ -604,6 +657,52 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 			}
 		}
 		return printValue(streams.Stdout, envelope, nil)
+	case "write", "submit":
+		name := "workflow future " + action
+		fs := newFlagSet(name, streams)
+		root := fs.String("root", ".", "package root")
+		path := fs.String("path", "", "versioned future state output path")
+		output := fs.String("output", "", "alias for --path")
+		envelopePath := fs.String("envelope", "", "validated envelope JSON path")
+		input := fs.String("input", "", "alias for --envelope")
+		packageDigest := fs.String("package-digest", "", "immutable package digest to include when generating an envelope")
+		payload := fs.String("payload", "", "JSON payload to place in the future state document")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		target := strings.TrimSpace(*path)
+		if target == "" {
+			target = strings.TrimSpace(*output)
+		}
+		if target == "" {
+			return 1, fmt.Errorf("%s requires --path or --output", name)
+		}
+		envelopeFile := strings.TrimSpace(*envelopePath)
+		if envelopeFile == "" {
+			envelopeFile = strings.TrimSpace(*input)
+		}
+		var envelope validate.VersionEnvelope
+		var err error
+		if envelopeFile != "" {
+			envelope, err = validate.LoadFutureEnvelope(*root, envelopeFile)
+		} else {
+			envelope, err = validate.GenerateFutureEnvelope(*root, *packageDigest)
+		}
+		if err != nil {
+			return 1, err
+		}
+		var value any
+		if strings.TrimSpace(*payload) != "" {
+			if err := json.Unmarshal([]byte(*payload), &value); err != nil {
+				return 1, fmt.Errorf("future payload JSON is invalid: %w", err)
+			}
+		}
+		if action == "submit" {
+			err = validate.SubmitFutureState(*root, target, envelope, value)
+		} else {
+			err = validate.WriteFutureState(*root, target, envelope, value)
+		}
+		return printValue(streams.Stdout, envelope, err)
 	case "view":
 		fs := newFlagSet("workflow future view", streams)
 		root := fs.String("root", ".", "package root")
@@ -1449,7 +1548,7 @@ func printWorkflowUsage(w io.Writer, program string) {
 }
 
 func printFutureUsage(w io.Writer, program string) error {
-	fmt.Fprintf(w, "Usage: %s workflow future <generate|view>\n\nInspect the versioned candidate envelope derived from definitions/workflow.json. State mutation is not available on this stable command surface.\n", program)
+	fmt.Fprintf(w, "Usage: %s workflow future <action>\n\nGenerate and validate the versioned candidate envelope derived from definitions/workflow.json, or mutate a validated future state document through the owning future writer.\n", program)
 	return nil
 }
 

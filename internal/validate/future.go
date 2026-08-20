@@ -52,13 +52,11 @@ func LoadFutureDefinition(root string) (FutureDefinition, error) {
 	}
 	sum := sha256.Sum256(data)
 	digest := "sha256:" + hex.EncodeToString(sum[:])
-	if stateVersion != CurrentStateSchemaVersion {
-		return FutureDefinition{}, &UnsupportedRunVersionError{Field: "stateSchemaVersion", Expected: CurrentStateSchemaVersion, Observed: stateVersion}
-	}
-	if workflowVersion != CurrentWorkflowDefinitionVersion {
-		return FutureDefinition{}, &UnsupportedRunVersionError{Field: "workflowDefinitionVersion", Expected: CurrentWorkflowDefinitionVersion, Observed: workflowVersion}
-	}
-	if digest != CurrentWorkflowDefinitionDigest {
+	// The current stable definition is one supported candidate. A changed
+	// definition becomes a new future candidate only when at least one version
+	// is bumped; changing bytes without bumping either version is ambiguous and
+	// remains an unsupported run version.
+	if digest != CurrentWorkflowDefinitionDigest && stateVersion == CurrentStateSchemaVersion && workflowVersion == CurrentWorkflowDefinitionVersion {
 		return FutureDefinition{}, &UnsupportedRunVersionError{Field: "definitionDigest", Expected: CurrentWorkflowDefinitionDigest, Observed: digest}
 	}
 	return FutureDefinition{
@@ -122,6 +120,39 @@ func WriteFutureEnvelope(root, path string, envelope VersionEnvelope) error {
 		return err
 	}
 	return writeJSONAtomically(path, envelope)
+}
+
+func LoadFutureEnvelope(root, path string) (VersionEnvelope, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return VersionEnvelope{}, err
+	}
+	var envelope VersionEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return VersionEnvelope{}, fmt.Errorf("future envelope JSON is invalid: %w", err)
+	}
+	if err := ValidateFutureEnvelope(root, envelope); err != nil {
+		return VersionEnvelope{}, err
+	}
+	return envelope, nil
+}
+
+func WriteFutureState(root, path string, envelope VersionEnvelope, value any) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("future state output path is required")
+	}
+	definition, err := LoadFutureDefinition(root)
+	if err != nil {
+		return err
+	}
+	if err := validateFutureEnvelope(envelope, definition); err != nil {
+		return err
+	}
+	return writeVersionedStateDocument(path, envelope, value)
+}
+
+func SubmitFutureState(root, path string, envelope VersionEnvelope, value any) error {
+	return WriteFutureState(root, path, envelope, value)
 }
 
 func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {

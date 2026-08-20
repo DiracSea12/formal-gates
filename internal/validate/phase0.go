@@ -207,11 +207,16 @@ func rawString(values map[string]any, key string) string {
 }
 
 type PackageReceiptReport struct {
-	Root        string            `json:"root"`
-	Digest      string            `json:"digest"`
-	Entries     []PackageEntry    `json:"entries"`
-	Disjoint    map[string]string `json:"disjoint,omitempty"`
-	GeneratedAt string            `json:"generatedAt"`
+	Root                  string            `json:"root"`
+	Digest                string            `json:"digest"`
+	VCSIdentity           string            `json:"vcsIdentity,omitempty"`
+	Entries               []PackageEntry    `json:"entries"`
+	Disjoint              map[string]string `json:"disjoint,omitempty"`
+	InstalledTarget       string            `json:"installedTarget,omitempty"`
+	InstalledTargetDigest string            `json:"installedTargetDigest,omitempty"`
+	CanonicalPaths        map[string]string `json:"canonicalPaths,omitempty"`
+	DisjointProof         map[string]string `json:"disjointProof,omitempty"`
+	GeneratedAt           string            `json:"generatedAt"`
 }
 
 type PackageEntry struct {
@@ -287,7 +292,14 @@ func BuildBaselineReceipt(vcsIdentity, sourceRoot, installedTarget string, paths
 			return BaselineReceipt{}, fmt.Errorf("resolve canonical path %s: %w", path, err)
 		}
 		for existingName, existingPath := range canonicalSeen {
-			if (existingName == "sourceRoot" || existingName == "installedTarget") && pathOverlaps(realPath, existingPath) {
+			if existingName == "sourceRoot" && pathOverlaps(realPath, existingPath) {
+				return BaselineReceipt{}, fmt.Errorf("baseline canonical path %s overlaps %s (%s)", name, existingName, realPath)
+			}
+			// A project root and its runtime sibling naturally contain an installed
+			// target. They are namespace identities, not disjoint package inputs.
+			// State/resource/hook paths must remain disjoint from the installed
+			// runtime and therefore retain the strict overlap check.
+			if existingName == "installedTarget" && pathOverlaps(realPath, existingPath) && name != "projectRoot" && name != "runtimeSibling" {
 				return BaselineReceipt{}, fmt.Errorf("baseline canonical path %s overlaps %s (%s)", name, existingName, realPath)
 			}
 		}
@@ -523,19 +535,23 @@ type RegistryRecord struct {
 	// for this target.  It is intentionally separate from Target: the host
 	// skill tree is a candidate/runtime payload, while hooks must invoke this
 	// fixed launcher path.
-	LauncherPath   string            `json:"launcherPath"`
-	Scope          string            `json:"scope"`
-	Host           string            `json:"host"`
-	HookConfig     string            `json:"hookConfig,omitempty"`
-	ProjectRoot    string            `json:"projectRoot"`
-	StateRoot      string            `json:"stateRoot"`
-	ResourceRoot   string            `json:"resourceRoot"`
-	RuntimeSibling string            `json:"runtimeSibling"`
-	CanonicalPaths map[string]string `json:"canonicalPaths"`
-	Status         string            `json:"status"`
-	Generation     uint64            `json:"generation,omitempty"`
-	Lease          string            `json:"lease,omitempty"`
-	Token          string            `json:"token,omitempty"`
+	LauncherPath    string            `json:"launcherPath"`
+	Scope           string            `json:"scope"`
+	Host            string            `json:"host"`
+	HookConfig      string            `json:"hookConfig,omitempty"`
+	ProjectRoot     string            `json:"projectRoot"`
+	StateRoot       string            `json:"stateRoot"`
+	ResourceRoot    string            `json:"resourceRoot"`
+	RuntimeSibling  string            `json:"runtimeSibling"`
+	ReleaseRoot     string            `json:"releaseRoot,omitempty"`
+	VCSIdentity     string            `json:"vcsIdentity,omitempty"`
+	PackageDigest   string            `json:"packageDigest,omitempty"`
+	InstalledDigest string            `json:"installedDigest,omitempty"`
+	CanonicalPaths  map[string]string `json:"canonicalPaths"`
+	Status          string            `json:"status"`
+	Generation      uint64            `json:"generation,omitempty"`
+	Lease           string            `json:"lease,omitempty"`
+	Token           string            `json:"token,omitempty"`
 }
 
 type RegistryDocument struct {
@@ -709,10 +725,10 @@ func validRegistryRecord(record RegistryRecord) bool {
 	// roots the candidate will actually use.  Target and launcher are mandatory
 	// bindings; accepting a record that only names a project would let a
 	// different installed package write the same registry.
-	fields := map[string]string{"target": record.Target, "launcher": record.LauncherPath, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling, "hookConfig": record.HookConfig}
+	fields := map[string]string{"target": record.Target, "launcher": record.LauncherPath, "projectRoot": record.ProjectRoot, "stateRoot": record.StateRoot, "resourceRoot": record.ResourceRoot, "runtimeSibling": record.RuntimeSibling, "hookConfig": record.HookConfig, "releaseRoot": record.ReleaseRoot}
 	for key, field := range fields {
 		value, ok := record.CanonicalPaths[key]
-		if key == "hookConfig" && strings.TrimSpace(field) == "" {
+		if (key == "hookConfig" || key == "releaseRoot") && strings.TrimSpace(field) == "" {
 			continue
 		}
 		if !ok || strings.TrimSpace(value) == "" || !filepath.IsAbs(value) || filepath.Clean(value) != canonicalRegistryPath(field) {

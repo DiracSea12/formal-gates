@@ -354,7 +354,7 @@ timeout = 30
 statusMessage = "formal-gates Codex hook canary user prompt"
 
 [[hooks.PreToolUse]]
-matcher = "*"
+matcher = ".*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = %s

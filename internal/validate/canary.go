@@ -19,9 +19,28 @@ type CanaryCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 type PortableCanaryReport struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Root          string        `json:"root"`
-	Checks        []CanaryCheck `json:"checks"`
+	SchemaVersion  int                     `json:"schemaVersion"`
+	Root           string                  `json:"root"`
+	VCSIdentity    string                  `json:"vcsIdentity,omitempty"`
+	PackageDigest  string                  `json:"packageDigest,omitempty"`
+	CanonicalPaths map[string]string       `json:"canonicalPaths,omitempty"`
+	DigestBinding  map[string]string       `json:"digestBinding,omitempty"`
+	Installed      []CanaryInstallIdentity `json:"installed,omitempty"`
+	Checks         []CanaryCheck           `json:"checks"`
+}
+
+type CanaryInstallIdentity struct {
+	Host             string            `json:"host"`
+	Target           string            `json:"target"`
+	ReleaseRoot      string            `json:"releaseRoot,omitempty"`
+	VCSIdentity      string            `json:"vcsIdentity"`
+	PackageDigest    string            `json:"packageDigest"`
+	InstalledDigest  string            `json:"installedDigest"`
+	CanonicalPaths   map[string]string `json:"canonicalPaths"`
+	Disjoint         map[string]string `json:"disjoint"`
+	Registry         string            `json:"registry,omitempty"`
+	RegistryRecordID string            `json:"registryRecordId,omitempty"`
+	RegistryEpoch    uint64            `json:"registryEpoch,omitempty"`
 }
 
 type InstallFaultMatrixOptions struct {
@@ -39,6 +58,12 @@ type InstallFaultMatrixReport = PortableCanaryReport
 func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixReport, Result) {
 	root := lifecycle.CleanRoot(options.Root)
 	report := InstallFaultMatrixReport{SchemaVersion: 1, Root: slash(absPath(root))}
+	if receipt, receiptErr := PackageReceipt(root); receiptErr == nil {
+		report.PackageDigest = receipt.Digest
+		report.VCSIdentity = sourceVCSIdentity(root, receipt.Digest)
+		report.CanonicalPaths = map[string]string{"root": canonicalRegistryPath(root)}
+		report.DigestBinding = map[string]string{"package": receipt.Digest}
+	}
 	var result Result
 	add := func(name string, err error) {
 		status, detail := "PASS", ""
@@ -48,7 +73,7 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 		}
 		report.Checks = append(report.Checks, CanaryCheck{Name: name, Status: status, Detail: detail})
 	}
-	phases := []string{"journal-boundary", "intent", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "managed-rule", "registry-commit", "copy-component:prompts", "verify-stage:installed-target"}
+	phases := []string{"journal-boundary", "intent", "registry", "runtime", "prepared", "switched", "post-switch-smoke", "pointer", "hook", "hooks", "managed-rule", "rules", "registry-commit", "copy-component:prompts", "copy-component:gates", "verify-stage:installed-target", "verify-stage:manifest", "verify-stage:realpath", "verify-stage:digest"}
 	if fixture := strings.TrimSpace(options.Fixture); fixture != "" {
 		phases = []string{fixture}
 	}
@@ -65,7 +90,7 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 		registry := filepath.Join(fixture, "registry.json")
 		faultPrior, hadFault := os.LookupEnv("FORMAL_GATES_INSTALL_FAULT")
 		_ = os.Setenv("FORMAL_GATES_INSTALL_FAULT", phase)
-		_, installErr := Install(InstallOptions{Source: root, Host: "codex", Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: launcher, RegistryPath: registry, Force: true, SkipHooks: phase != "hook"})
+		_, installErr := Install(InstallOptions{Source: root, Host: "codex", Scope: "project", Project: project, ReleaseRoot: release, BinaryTarget: launcher, RegistryPath: registry, Force: true})
 		if hadFault {
 			_ = os.Setenv("FORMAL_GATES_INSTALL_FAULT", faultPrior)
 		} else {
@@ -123,6 +148,12 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	defer restore()
 	root := lifecycle.CleanRoot(options.Root)
 	report := PortableCanaryReport{SchemaVersion: 1, Root: slash(absPath(root))}
+	if receipt, receiptErr := PackageReceipt(root); receiptErr == nil {
+		report.PackageDigest = receipt.Digest
+		report.DigestBinding = map[string]string{"package": receipt.Digest}
+	}
+	report.VCSIdentity = sourceVCSIdentity(root, report.PackageDigest)
+	report.CanonicalPaths = map[string]string{"root": canonicalRegistryPath(root)}
 	var result Result
 	add := func(name string, err error) {
 		status, detail := "PASS", ""
@@ -178,13 +209,14 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 		add("install", err)
 	} else {
 		defer os.RemoveAll(tempRoot)
-		addInstallChecks(root, tempRoot, func(name string, ok bool, detail string) {
+		identities := addInstallChecks(root, tempRoot, func(name string, ok bool, detail string) {
 			if ok {
 				add(name, nil)
 			} else {
 				add(name, fmt.Errorf("%s", detail))
 			}
 		})
+		report.Installed = append(report.Installed, identities...)
 	}
 	// 写阻断 canary：在有活动正式 run 的仓库根上，验证主线程阻断、development-worker
 	// 放行、审查类代理阻断、登记文档豁免、无 run 放行的判定矩阵。
@@ -422,7 +454,8 @@ func openDispatchID(state RunState, kind, target string) string {
 	return ""
 }
 
-func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) {
+func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) []CanaryInstallIdentity {
+	var identities []CanaryInstallIdentity
 	canaryHome := filepath.Join(tempRoot, "stable-home")
 	canaryLocalAppData := filepath.Join(tempRoot, "stable-localappdata")
 	registry := filepath.Join(canaryHome, ".formal-gates", "registry.json")
@@ -444,6 +477,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		for _, target := range report.Targets {
+			identities = append(identities, CanaryInstallIdentity{Host: target.Host, Target: target.TargetPath, ReleaseRoot: target.ReleaseRoot, VCSIdentity: target.VCSIdentity, PackageDigest: target.PackageDigest, InstalledDigest: target.InstalledDigest, CanonicalPaths: target.CanonicalPaths, Disjoint: target.Disjoint, Registry: report.Registry, RegistryRecordID: target.RegistryRecordID, RegistryEpoch: report.RegistryEpoch})
 			installedBinary := filepath.Join(target.TargetPath, "bin", nativeBinaryName())
 			if output, smokeErr := exec.Command(installedBinary, "--version").CombinedOutput(); smokeErr != nil {
 				addCheck(tc.name+"-installed-binary-smoke", false, fmt.Sprintf("%s: %v (%s)", installedBinary, smokeErr, strings.TrimSpace(string(output))))
@@ -551,6 +585,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		}
 		addCheck(tc.name+"-uninstall", true, "runtime, hooks, and host instruction blocks cleaned")
 	}
+	return identities
 }
 
 func canaryEnvironment(home, localAppData string) []string {

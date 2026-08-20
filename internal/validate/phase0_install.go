@@ -33,6 +33,9 @@ func newStagedInstallTree(source, destination string, runtimeOnly bool) stagedIn
 }
 
 func prepareInstallTree(candidate stagedInstallTree) (stagedInstallTree, error) {
+	if err := installFaultAliases("runtime", "copy-component:runtime", "copy:runtime"); err != nil {
+		return stagedInstallTree{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(candidate.Destination), 0o700); err != nil {
 		return stagedInstallTree{}, err
 	}
@@ -69,7 +72,12 @@ func switchPreparedInstallTree(candidate *stagedInstallTree, force bool) error {
 }
 
 func verifySwitchedInstallTree(candidate stagedInstallTree, allowPlaceholder bool) error {
-	if err := installFaultAliases("verify-stage:installed-target", "verify:installed-target"); err != nil {
+	if err := installFaultAliases(
+		"verify-stage:installed-target", "verify:installed-target",
+		"verify-stage:manifest", "verify:manifest", "manifest",
+		"verify-stage:realpath", "verify:realpath", "realpath",
+		"verify-stage:digest", "verify:digest", "digest",
+	); err != nil {
 		return err
 	}
 	installed, err := PackageReceipt(candidate.Destination, candidate.Source)
@@ -319,12 +327,14 @@ type outerFileSnapshot struct {
 }
 
 type outerTargetSnapshot struct {
-	TargetPath string            `json:"targetPath"`
-	HookPath   string            `json:"hookPath,omitempty"`
-	RulePath   string            `json:"rulePath,omitempty"`
-	Tree       outerTreeSnapshot `json:"tree"`
-	Hook       outerFileSnapshot `json:"hook"`
-	Rule       outerFileSnapshot `json:"rule"`
+	TargetPath      string            `json:"targetPath"`
+	HookPath        string            `json:"hookPath,omitempty"`
+	RulePath        string            `json:"rulePath,omitempty"`
+	ResourcePath    string            `json:"resourcePath,omitempty"`
+	ResourceExisted bool              `json:"resourceExisted,omitempty"`
+	Tree            outerTreeSnapshot `json:"tree"`
+	Hook            outerFileSnapshot `json:"hook"`
+	Rule            outerFileSnapshot `json:"rule"`
 }
 
 func installOuterJournalPath(registryPath string) string {
@@ -436,6 +446,9 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 		if err := restoreOuterFile(target.Rule); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if !target.ResourceExisted {
+			removeEmptyDirectory(target.ResourcePath)
+		}
 	}
 	if err := restoreOuterTree(journal.Release); err != nil && firstErr == nil {
 		firstErr = err
@@ -461,7 +474,7 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 		_ = os.RemoveAll(path)
 	}
 	if recovered {
-		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", Reconcile: "restore all outer transaction snapshots", VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest, InstalledTarget: journal.InstalledTarget, Generation: journal.Generation, Lease: journal.Lease, Token: journal.Token, RecoveryReceipt: path + ".receipt.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", ObservedFact: fmt.Sprintf("recovery journal observed at interrupted phase %s", journal.Phase), Reconcile: "restore all outer transaction snapshots", VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest, InstalledTarget: journal.InstalledTarget, Generation: journal.Generation, Lease: journal.Lease, Token: journal.Token, RecoveryReceipt: path + ".receipt.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		if data, err := os.ReadFile(journal.Registry.Backup); err == nil {
 			sum := sha256.Sum256(data)
 			receipt.StableDigest = hex.EncodeToString(sum[:])
@@ -604,8 +617,17 @@ func acquirePhase0Lock(path, description string) (func(), error) {
 				continue
 			}
 		}
-		return nil, fmt.Errorf("%s lock is held: %s", description, path)
+		return nil, &LockHeldError{Operation: description, Path: path}
 	}
+}
+
+type LockHeldError struct {
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+}
+
+func (e *LockHeldError) Error() string {
+	return fmt.Sprintf("%s lock is held: %s", e.Operation, e.Path)
 }
 
 func lockIsStale(path string) bool {

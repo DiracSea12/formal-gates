@@ -318,6 +318,9 @@ func bindGlobalInvocationRoot(path string, base RegistryRecord, root string) (Re
 	if strings.TrimSpace(derived.HookConfig) != "" {
 		derived.CanonicalPaths["hookConfig"] = canonicalRegistryPath(derived.HookConfig)
 	}
+	if err := os.MkdirAll(derived.ResourceRoot, 0o700); err != nil {
+		return RegistryRecord{}, RegistryDocument{}, fmt.Errorf("resource root setup failed: %w", err)
+	}
 	for _, existing := range doc.Records {
 		if existing.ID == derived.ID && strings.EqualFold(existing.Status, "active") && sameRegistryBinding(existing, derived) {
 			return existing, doc, nil
@@ -482,6 +485,9 @@ type ResumeStatus struct {
 // ResumeReport classifies everything the main agent must judge before the run
 // can continue without hard failure.
 func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
+	if err := requireWorkflowAdmission(root, packageRoot); err != nil {
+		return ResumeStatus{}, err
+	}
 	state, err := LoadRunState(root, runID)
 	if err != nil {
 		return ResumeStatus{}, err
@@ -516,6 +522,27 @@ func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
 		isolationDrifted = !strings.EqualFold(resolved, state.BaseSnapshot)
 	}
 	return ResumeStatus{ClassificationRequired: changed, CatalogDelta: catalogDelta(state, catalog), NativeDrifted: native != state.CurrentSnapshot, IsolationDrifted: isolationDrifted}, nil
+}
+
+// Resume is a workflow control operation even though it primarily reports
+// state. A candidate executable must not use that read path to inspect or
+// continue a stable run, so admission is checked before loading run bytes.
+func requireWorkflowAdmission(root, packageRoot string) error {
+	registry, recordID, err := discoverAdmissionBinding(root, packageRoot, "", "")
+	if err != nil {
+		return err
+	}
+	if registry == "" {
+		return verifyLegacyStableLauncher()
+	}
+	receipt, err := AdmitRegistry(registry, recordID)
+	if err != nil {
+		return err
+	}
+	if !receipt.Accepted {
+		return fmt.Errorf("%s: workflow resume refused for registry record %q", receipt.Code, recordID)
+	}
+	return verifyRegistryBinding(registry, recordID, root, packageRoot)
 }
 
 // AdoptExternalChange explicitly rebinds the current snapshot to the native

@@ -31,8 +31,6 @@ $canary = "portable-canary-$suffix.json"
 $checksums = "SHA256SUMS-$suffix.txt"
 
 $tmp = Join-Path $env:TEMP ("formal-gates-" + [guid]::NewGuid().ToString())
-$stagedLauncher = $false
-$launcherBackup = ""
 $installSucceeded = $false
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
@@ -63,32 +61,31 @@ try {
   $formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
 
   if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-  # Stage the downloaded executable at the fixed launcher path once.  The
-  # native transaction then owns release replacement, smoke, hooks and
-  # registry commit; the source-tree candidate is never invoked as a workflow
-  # writer.
+  # Let the native owner journal before it publishes the stable launcher. An
+  # existing installation uses that stable owner; a first install invokes the
+  # verified candidate with an explicit bootstrap flag.
   $launcherDir = Split-Path -Parent $formalBinary
   New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
-  if (Test-Path -LiteralPath $formalBinary) {
-    $launcherBackup = Join-Path $tmp "launcher.before.exe"
-    Copy-Item $formalBinary $launcherBackup -Force
-  } else {
-    $stagedLauncher = $true
+  $owner = $formalBinary
+  $candidateArgs = @()
+  if (-not (Test-Path -LiteralPath $owner)) {
+    $owner = Join-Path $sourceDir.FullName "bin\formal-gates.exe"
+    $candidateArgs = @("--candidate-binary", $owner)
   }
-  # A pre-stage launcher may not understand the transaction-owner arguments.
-  # Replace its executable bytes with the verified candidate before invoking
-  # the native transaction so upgrades and fresh installs share one owner.
-  Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
   $args = @("install", "--source", $sourceDir.FullName, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
-  & $formalBinary @args
+  $args += $candidateArgs
+  if ($owner -eq $formalBinary) {
+    & $formalBinary @args
+  } else {
+    & $owner @args
+  }
   if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
-  # The native transaction now owns a valid stable launcher. A later bootstrap
-  # receipt failure must not remove that committed launcher during cleanup.
-  $stagedLauncher = $false
-
+  if (-not (Test-Path -LiteralPath $formalBinary)) {
+    Copy-Item $owner $formalBinary -Force
+  }
   # Bootstrap the installed artifact through the same stable launcher before
   # any workflow command can write state.
   $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
@@ -101,12 +98,5 @@ try {
   Write-Host "Native binary: $formalBinary"
 }
 finally {
-  if (-not $installSucceeded) {
-    if ($launcherBackup -and (Test-Path -LiteralPath $launcherBackup)) {
-      Copy-Item $launcherBackup $formalBinary -Force
-    } elseif ($stagedLauncher -and (Test-Path -LiteralPath $formalBinary)) {
-      Remove-Item -LiteralPath $formalBinary -Force
-    }
-  }
   Remove-Item $tmp -Recurse -Force
 }
