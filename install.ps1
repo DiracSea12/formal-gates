@@ -19,6 +19,10 @@ $ErrorActionPreference = "Stop"
 if (-not $Version) { $Version = "v0.1.0" }
 $stagedLauncher = $false
 
+function Test-LegacyOwnerRejectedNewFlags([string]$Output) {
+  return $Output -match "flag provided but not defined|unknown flag|unknown option"
+}
+
 $repo = "DiracSea12/formal-gates"
 $os = "windows"
 $arch = "amd64"
@@ -75,12 +79,30 @@ try {
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
-  & $formalBinary @args
-  if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+  $ownerOutput = & $formalBinary @args 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $ownerText = ($ownerOutput | Out-String)
+    if (-not (Test-LegacyOwnerRejectedNewFlags $ownerText)) {
+      throw "formal-gates install failed with exit code $LASTEXITCODE"
+    }
+    # A pre-contract launcher can reject the new owner flags before its
+    # transaction starts. Replace it only for this compatibility handoff,
+    # then retry with the verified current binary at the fixed path.
+    $launcherBackup = Join-Path $tmp "launcher.before.exe"
+    Copy-Item $formalBinary $launcherBackup -Force
+    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
+    $stagedLauncher = $true
+    & $formalBinary @args
+    if ($LASTEXITCODE -ne 0) {
+      Copy-Item $launcherBackup $formalBinary -Force
+      $stagedLauncher = $false
+      throw "formal-gates install failed with exit code $LASTEXITCODE"
+    }
+  }
   $stagedLauncher = $false
   # Bootstrap the installed artifact through the same stable launcher before
   # any workflow command can write state.
-  $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
+  $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $bootstrapArgs += @("--project", $Project) }
   & $formalBinary @bootstrapArgs
   if ($LASTEXITCODE -ne 0) { throw "formal-gates bootstrap failed with exit code $LASTEXITCODE" }

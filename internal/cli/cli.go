@@ -143,7 +143,10 @@ func runPackage(args []string, streams IO) (int, error) {
 			receipt.VCSIdentity = baseline.VCSIdentity
 			receipt.Disjoint = baseline.Disjoint
 			receipt.CanonicalPaths = baseline.CanonicalPaths
-			receipt.DisjointProof = map[string]string{"source-installed-target": "PASS"}
+			receipt.DisjointProof = baseline.DisjointProof
+			receipt.PathIdentities = baseline.PathIdentities
+			receipt.HookConfigDigest = baseline.HookConfigDigest
+			receipt.ManagedRuleDigest = baseline.ManagedRuleDigest
 		}
 		return printJSON(streams.Stdout, receipt)
 	case "route-candidates":
@@ -1196,6 +1199,7 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 	case "codex-hook-probe":
 		fs := newFlagSet("canary codex-hook-probe", streams)
 		dir := fs.String("payload-dir", "", "payload directory")
+		quiet := fs.Bool("quiet", false, "do not write status text to stdout when used as a host hook")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -1207,7 +1211,7 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "canary codex-hook-probe", result)
 		}
-		if probe.PayloadPath != "" {
+		if probe.PayloadPath != "" && !*quiet {
 			fmt.Fprintf(streams.Stdout, "codex-hook-probe: wrote %d-byte payload to %s\n", probe.PayloadBytes, probe.PayloadPath)
 		}
 		return probe.ExitCode, nil

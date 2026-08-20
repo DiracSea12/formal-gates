@@ -63,6 +63,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+legacy_owner_rejected_new_flags() {
+  case "$1" in
+    *"flag provided but not defined"*|*"unknown flag"*|*"unknown option"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 curl -fsSL "https://api.github.com/repos/${repo}/zipball/${tag}" -o "$tmp/source.zip"
 curl -fsSL "https://github.com/${repo}/releases/download/${tag}/${binary}" -o "$tmp/${binary}"
 curl -fsSL "https://github.com/${repo}/releases/download/${tag}/${canary}" -o "$tmp/${canary}"
@@ -120,13 +131,31 @@ fi
 if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
-"${cmd[@]}"
+owner_output=""
+if ! owner_output=$("${cmd[@]}" 2>&1); then
+  if ! legacy_owner_rejected_new_flags "$owner_output"; then
+    printf '%s\n' "$owner_output" >&2
+    exit 1
+  fi
+  # A launcher from before the release-root transaction contract can reject
+  # these arguments before its transaction starts. Retry once with the
+  # verified current binary at the fixed launcher path.
+  cp "$binary_target" "$tmp/launcher.before"
+  cp "$source_root/bin/formal-gates" "$binary_target"
+  chmod +x "$binary_target"
+  staged_launcher=true
+  if ! "$binary_target" "${cmd[@]:1}"; then
+    cp "$tmp/launcher.before" "$binary_target"
+    staged_launcher=false
+    exit 1
+  fi
+fi
 staged_launcher=false
 
 # Bootstrap the already-installed artifact through the same stable launcher.
 # This creates the admission receipt before any workflow command can write
 # state, while keeping the source archive out of the writer path.
-bootstrap_cmd=("$binary_target" install --bootstrap --source "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
+bootstrap_cmd=("$binary_target" install --bootstrap --source "$install_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   bootstrap_cmd+=(--project "$project")
 fi

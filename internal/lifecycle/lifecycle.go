@@ -114,7 +114,14 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 
 func captureRoots(root string, adapter providerAdapter, payload any) ([]string, error) {
 	if root = strings.TrimSpace(root); root != "" {
-		return []string{root}, nil
+		activeRoot, found, err := activeRunRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, nil
+		}
+		return []string{activeRoot}, nil
 	}
 	candidates := adapter.projectRoots(payload)
 	if len(candidates) == 0 {
@@ -133,7 +140,9 @@ func captureRoots(root string, adapter providerAdapter, payload any) ([]string, 
 	if len(activeRoots) > 0 {
 		return activeRoots, nil
 	}
-	return []string{candidates[0]}, nil
+	// Host lifecycle hooks are also installed outside formal runs. Do not
+	// create an orphan event tree in that normal no-op case.
+	return nil, nil
 }
 
 func activeRunRoot(candidate string) (string, bool, error) {

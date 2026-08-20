@@ -342,6 +342,7 @@ func writeCodexCanaryProfile(path, binary, payloadDir string) error {
 		"codex-hook-probe",
 		"--payload-dir",
 		quoteCommandArg(payloadDir),
+		"--quiet",
 	}, " ")
 	content := fmt.Sprintf(`[features]
 hooks = true

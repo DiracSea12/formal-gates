@@ -318,6 +318,9 @@ func bindGlobalInvocationRoot(path string, base RegistryRecord, root string) (Re
 	if strings.TrimSpace(derived.HookConfig) != "" {
 		derived.CanonicalPaths["hookConfig"] = canonicalRegistryPath(derived.HookConfig)
 	}
+	if strings.TrimSpace(derived.ReleaseRoot) != "" {
+		derived.CanonicalPaths["releaseRoot"] = canonicalRegistryPath(derived.ReleaseRoot)
+	}
 	if err := os.MkdirAll(derived.ResourceRoot, 0o700); err != nil {
 		return RegistryRecord{}, RegistryDocument{}, fmt.Errorf("resource root setup failed: %w", err)
 	}
@@ -396,7 +399,7 @@ func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, erro
 		return RegistryRecord{}, err
 	}
 	for _, record := range doc.Records {
-		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && canonicalRegistryPath(record.Target) == canonicalRegistryPath(want) && canonicalRegistryPath(record.CanonicalPaths["target"]) == canonicalRegistryPath(want) {
+		if strings.EqualFold(record.Status, "active") && validAdmissionRegistryRecord(record) && canonicalRegistryPath(record.Target) == canonicalRegistryPath(want) && canonicalRegistryPath(record.CanonicalPaths["target"]) == canonicalRegistryPath(want) {
 			if err := verifyRegisteredTargetIdentity(record); err != nil {
 				return RegistryRecord{}, err
 			}
@@ -413,7 +416,7 @@ func registryAdmissionIdentity(path, recordID string) (RegistryDocument, Registr
 	}
 	for _, record := range doc.Records {
 		if record.ID == recordID {
-			if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) {
+			if !strings.EqualFold(record.Status, "active") || !validAdmissionRegistryRecord(record) {
 				return RegistryDocument{}, RegistryRecord{}, fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is inactive or incomplete", recordID)
 			}
 			return doc, record, nil
@@ -431,7 +434,7 @@ func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) err
 		if record.ID != recordID {
 			continue
 		}
-		if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) {
+		if !strings.EqualFold(record.Status, "active") || !validAdmissionRegistryRecord(record) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: registry record is inactive or incomplete")
 		}
 		if err := verifyRegisteredTargetIdentity(record); err != nil {

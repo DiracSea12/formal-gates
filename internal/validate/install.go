@@ -101,6 +101,7 @@ type PathLstat struct {
 	Mode     uint32 `json:"mode"`
 	Size     int64  `json:"size"`
 	Kind     string `json:"kind"`
+	Digest   string `json:"digest,omitempty"`
 }
 
 type UninstallReport struct {
@@ -983,7 +984,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	}
 	if registryWasPresent {
 		for _, record := range existingRegistry.Records {
-			if !validRegistryRecord(record) {
+			if !validAdmissionRegistryRecord(record) {
 				receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "an existing registry record cannot be reconciled", CreatedAt: nowReceiptTime()}
 				_ = writeAdmissionReceipt(registryPath, receipt)
 				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry record %q cannot be reconciled", record.ID))
@@ -1001,7 +1002,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	targetDigests := map[string]string{}
 	for _, target := range targets {
 		if targetErr := assertInstallSource(target.targetPath); targetErr != nil {
-			receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Accepted: false, Registry: registryPath, Reason: fmt.Sprintf("bootstrap target is not an installed artifact: %v", targetErr), CreatedAt: nowReceiptTime()}
+			receipt := bootstrapUnregisteredReceipt(registryPath, target, options, fmt.Sprintf("bootstrap target is not an installed artifact: %v", targetErr))
 			_ = writeAdmissionReceipt(registryPath, receipt)
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s is not an installed artifact: %w", target.targetPath, targetErr))
 		}
@@ -1056,6 +1057,17 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		}
 	} else if !os.IsNotExist(loadErr) {
 		return InstallReport{}, fmt.Errorf("registry bootstrap cannot read existing registry: %w", loadErr)
+	}
+	if registryWasPresent && !isTestBinary() {
+		for _, target := range targets {
+			desired := installRegistryRecord(target, options)
+			if _, found := existingByID[desired.ID]; found {
+				continue
+			}
+			receipt := bootstrapUnregisteredReceipt(registryPath, target, options, "an existing registry has no admission record for the bootstrap target")
+			_ = writeAdmissionReceipt(registryPath, receipt)
+			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s is missing from the existing registry", target.targetPath))
+		}
 	}
 	records := make([]RegistryRecord, 0, len(targets))
 	mutatesRegistry := false
@@ -1118,6 +1130,16 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
 	return InstallReport{GeneratedAt: "sha256:" + source.Digest, Registry: filepath.ToSlash(registryPath), RegistryEpoch: committedRegistry.Epoch, ReceiptPath: filepath.ToSlash(receiptPath), BootstrapReceiptPath: filepath.ToSlash(receiptPath), VCSIdentity: outer.VCSIdentity, PackageDigest: source.Digest}, nil
+}
+
+func bootstrapUnregisteredReceipt(registryPath string, target installTarget, options InstallOptions, reason string) AdmissionReceipt {
+	record := installRegistryRecord(target, options)
+	return AdmissionReceipt{
+		Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false,
+		RecordID: record.ID, Registry: registryPath, Target: record.Target,
+		Scope: record.Scope, Host: record.Host, CanonicalPaths: record.CanonicalPaths,
+		Reason: reason, CreatedAt: nowReceiptTime(),
+	}
 }
 
 func sameRegistryBinding(left, right RegistryRecord) bool {
@@ -1190,6 +1212,33 @@ func pathLstat(path string) PathLstat {
 		identity.Kind = "nonregular"
 	}
 	return identity
+}
+
+func pathLstatIdentity(path string) (PathLstat, error) {
+	identity := pathLstat(path)
+	if identity.Kind == "missing" {
+		return PathLstat{}, fmt.Errorf("path does not exist: %s", path)
+	}
+	if identity.Kind == "symlink" || identity.Kind == "nonregular" {
+		return PathLstat{}, fmt.Errorf("path is not an immutable regular file or directory: %s", path)
+	}
+	identity.Digest = pathIdentityDigest(path, identity.Kind)
+	if identity.Digest == "" {
+		return PathLstat{}, fmt.Errorf("path digest is unavailable: %s", path)
+	}
+	return identity, nil
+}
+
+func pathIdentityDigest(path, kind string) string {
+	var digest string
+	if kind == "regular" {
+		digest, _ = fileDigest(path)
+	} else if kind == "directory" {
+		if receipt, err := PackageReceipt(path); err == nil {
+			digest = receipt.Digest
+		}
+	}
+	return digest
 }
 
 func removeEmptyDirectory(path string) {
