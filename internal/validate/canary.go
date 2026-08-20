@@ -112,6 +112,16 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 				checkErr = globErr
 			} else if len(matches) == 0 {
 				checkErr = fmt.Errorf("fault %s did not leave an independent recovery receipt", phase)
+			} else if strings.HasPrefix(phase, "copy-component:") {
+				data, readErr := os.ReadFile(registry + ".transaction.json.failure.json")
+				var receipt installRecoveryReceipt
+				if readErr != nil {
+					checkErr = readErr
+				} else if json.Unmarshal(data, &receipt) != nil {
+					checkErr = fmt.Errorf("fault %s left an unreadable recovery receipt", phase)
+				} else if !receipt.Prepared || !receipt.PartialCopy || len(receipt.CopiedComponents) == 0 {
+					checkErr = fmt.Errorf("fault %s did not record prepared partial-copy evidence: %+v", phase, receipt)
+				}
 			}
 		}
 		add("fault-"+phase, checkErr)
@@ -488,12 +498,14 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		// regression and portable canary through the executable copied to the
 		// stable launcher path so a passing in-process source test cannot stand
 		// in for candidate evidence.
-		regressionCommand := exec.Command(launcher, "package", "validate", "--root", releaseRoot)
+		installedTarget := filepath.FromSlash(report.Targets[0].TargetPath)
+		regressionCommand := exec.Command(launcher, "package", "validate", "--root", installedTarget)
 		regressionCommand.Env = stableEnv
 		if output, regressionErr := regressionCommand.CombinedOutput(); regressionErr != nil {
 			addCheck(tc.name+"-installed-binary-regression", false, fmt.Sprintf("%v (%s)", regressionErr, strings.TrimSpace(string(output))))
 			continue
 		}
+		addCheck(tc.name+"-installed-binary-regression", true, "stable launcher validated the installed target package")
 		registryDoc, registryErr := LoadRegistry(registry)
 		if registryErr != nil {
 			addCheck(tc.name+"-installed-binary-canary", false, registryErr.Error())
@@ -512,12 +524,13 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name+"-installed-binary-canary", false, "installed target has no exact registry record")
 			continue
 		}
-		canaryCommand := exec.Command(launcher, "canary", "portable", "--root", releaseRoot, "--format", "json")
+		canaryCommand := exec.Command(launcher, "canary", "portable", "--root", installedTarget, "--format", "json")
 		canaryCommand.Env = append(stableEnv, "FORMAL_GATES_INSTALLED_CANARY=1", "FORMAL_GATES_CANARY_PACKAGE_ROOT="+report.Targets[0].TargetPath, "FORMAL_GATES_CANARY_WORKFLOW_ROOT="+project, "FORMAL_GATES_CANARY_REGISTRY="+registry, "FORMAL_GATES_CANARY_RECORD="+canaryRecord)
 		if output, canaryErr := canaryCommand.CombinedOutput(); canaryErr != nil {
 			addCheck(tc.name+"-installed-binary-canary", false, fmt.Sprintf("%v (%s)", canaryErr, strings.TrimSpace(string(output))))
 			continue
 		}
+		addCheck(tc.name+"-installed-binary-canary", true, "stable launcher completed the installed target canary")
 		candidateExecutable, executableErr := os.Executable()
 		candidateBase := filepath.Base(filepath.Clean(candidateExecutable))
 		if executableErr == nil && candidateBase == nativeBinaryName() && canonicalRegistryPath(candidateExecutable) != canonicalRegistryPath(launcher) {

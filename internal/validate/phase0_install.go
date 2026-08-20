@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -129,13 +130,13 @@ func copyTreeImmutableWithFaults(source, target string, injectFaults bool) error
 			return fmt.Errorf("release entry %s is not an immutable regular file", filepath.ToSlash(rel))
 		}
 		topLevel := strings.Split(filepath.ToSlash(rel), "/")[0]
+		if err := copyFile(path, filepath.Join(target, rel), info.Mode()); err != nil {
+			return err
+		}
 		if injectFaults && (topLevel == "prompts" || topLevel == "gates") {
 			if err := installFault("copy-component:" + topLevel); err != nil {
 				return err
 			}
-		}
-		if err := copyFile(path, filepath.Join(target, rel), info.Mode()); err != nil {
-			return err
 		}
 		// Inject after a real file crosses the copy boundary, not before the
 		// walk starts. This exercises staged-copy rollback rather than setup.
@@ -287,46 +288,51 @@ func atomicCopyFile(source, target string) error {
 }
 
 type installRecoveryReceipt struct {
-	Operation       string `json:"operation"`
-	Target          string `json:"target"`
-	Phase           string `json:"interruptedPhase"`
-	Recovered       bool   `json:"recovered"`
-	Outcome         string `json:"outcome,omitempty"`
-	ObservedFact    string `json:"observedFact,omitempty"`
-	Reconcile       string `json:"reconcileAction,omitempty"`
-	StableDigest    string `json:"stableDigest,omitempty"`
-	VCSIdentity     string `json:"vcsIdentity,omitempty"`
-	PackageDigest   string `json:"packageDigest,omitempty"`
-	InstalledTarget string `json:"installedTarget,omitempty"`
-	Generation      uint64 `json:"generation,omitempty"`
-	Lease           string `json:"lease,omitempty"`
-	Token           string `json:"token,omitempty"`
-	RecoveryReceipt string `json:"recoveryReceipt,omitempty"`
-	Backup          string `json:"backup,omitempty"`
-	ObservedAt      string `json:"observedAt"`
+	Operation        string   `json:"operation"`
+	Target           string   `json:"target"`
+	Phase            string   `json:"interruptedPhase"`
+	Recovered        bool     `json:"recovered"`
+	Outcome          string   `json:"outcome,omitempty"`
+	ObservedFact     string   `json:"observedFact,omitempty"`
+	Reconcile        string   `json:"reconcileAction,omitempty"`
+	StableDigest     string   `json:"stableDigest,omitempty"`
+	VCSIdentity      string   `json:"vcsIdentity,omitempty"`
+	PackageDigest    string   `json:"packageDigest,omitempty"`
+	InstalledTarget  string   `json:"installedTarget,omitempty"`
+	Generation       uint64   `json:"generation,omitempty"`
+	Lease            string   `json:"lease,omitempty"`
+	Token            string   `json:"token,omitempty"`
+	RecoveryReceipt  string   `json:"recoveryReceipt,omitempty"`
+	Backup           string   `json:"backup,omitempty"`
+	Prepared         bool     `json:"prepared,omitempty"`
+	PartialCopy      bool     `json:"partialCopy,omitempty"`
+	CopiedComponents []string `json:"copiedComponents,omitempty"`
+	ObservedAt       string   `json:"observedAt"`
 }
 
 // outerInstallJournal is the only durable install/uninstall undo record.  It
 // records every old byte/tree before the first mutation and remains present
 // until runtime, launcher, configuration, and registry commit are all durable.
 type outerInstallJournal struct {
-	Operation       string                `json:"operation"`
-	RegistryPath    string                `json:"registryPath"`
-	TransactionRoot string                `json:"transactionRoot"`
-	Phase           string                `json:"phase"`
-	CreatedAt       string                `json:"createdAt"`
-	Registry        outerFileSnapshot     `json:"registry"`
-	Receipt         outerFileSnapshot     `json:"receipt"`
-	Targets         []outerTargetSnapshot `json:"targets"`
-	Release         outerTreeSnapshot     `json:"release"`
-	Binary          outerFileSnapshot     `json:"binary"`
-	Staged          []string              `json:"staged,omitempty"`
-	VCSIdentity     string                `json:"vcsIdentity,omitempty"`
-	PackageDigest   string                `json:"packageDigest,omitempty"`
-	InstalledTarget string                `json:"installedTarget,omitempty"`
-	Generation      uint64                `json:"generation,omitempty"`
-	Lease           string                `json:"lease,omitempty"`
-	Token           string                `json:"token,omitempty"`
+	Operation        string                `json:"operation"`
+	RegistryPath     string                `json:"registryPath"`
+	TransactionRoot  string                `json:"transactionRoot"`
+	Phase            string                `json:"phase"`
+	CreatedAt        string                `json:"createdAt"`
+	Registry         outerFileSnapshot     `json:"registry"`
+	Receipt          outerFileSnapshot     `json:"receipt"`
+	Targets          []outerTargetSnapshot `json:"targets"`
+	Release          outerTreeSnapshot     `json:"release"`
+	Binary           outerFileSnapshot     `json:"binary"`
+	Staged           []string              `json:"staged,omitempty"`
+	VCSIdentity      string                `json:"vcsIdentity,omitempty"`
+	PackageDigest    string                `json:"packageDigest,omitempty"`
+	InstalledTarget  string                `json:"installedTarget,omitempty"`
+	PartialCopy      bool                  `json:"partialCopy,omitempty"`
+	CopiedComponents []string              `json:"copiedComponents,omitempty"`
+	Generation       uint64                `json:"generation,omitempty"`
+	Lease            string                `json:"lease,omitempty"`
+	Token            string                `json:"token,omitempty"`
 }
 
 type outerTreeSnapshot struct {
@@ -495,7 +501,9 @@ func outerJournalFailure(path string, journal outerInstallJournal, cause error) 
 		VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest,
 		InstalledTarget: journal.InstalledTarget, Generation: journal.Generation,
 		Lease: journal.Lease, Token: journal.Token,
-		RecoveryReceipt: path + ".failure.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Prepared: journal.Phase == "prepared", PartialCopy: journal.PartialCopy,
+		CopiedComponents: append([]string{}, journal.CopiedComponents...),
+		RecoveryReceipt:  path + ".failure.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if data, err := os.ReadFile(journal.RegistryPath); err == nil {
 		sum := sha256.Sum256(data)
@@ -508,6 +516,11 @@ func outerJournalFailure(path string, journal outerInstallJournal, cause error) 
 }
 
 func restoreOuterJournal(path string, journal outerInstallJournal, recovered bool) error {
+	partialCopy := journal.PartialCopy || stagedCopyObserved(journal.Staged)
+	copiedComponents := append([]string{}, journal.CopiedComponents...)
+	if len(copiedComponents) == 0 {
+		copiedComponents = stagedCopyComponents(journal.Staged)
+	}
 	var firstErr error
 	for index := len(journal.Targets) - 1; index >= 0; index-- {
 		target := journal.Targets[index]
@@ -548,7 +561,7 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 		_ = os.RemoveAll(path)
 	}
 	if recovered {
-		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", ObservedFact: fmt.Sprintf("recovery journal observed at interrupted phase %s", journal.Phase), Reconcile: "restore all outer transaction snapshots", VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest, InstalledTarget: journal.InstalledTarget, Generation: journal.Generation, Lease: journal.Lease, Token: journal.Token, RecoveryReceipt: path + ".receipt.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		receipt := installRecoveryReceipt{Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase, Recovered: true, Outcome: "RECOVERED", ObservedFact: fmt.Sprintf("recovery journal observed at interrupted phase %s", journal.Phase), Reconcile: "restore all outer transaction snapshots", VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest, InstalledTarget: journal.InstalledTarget, Prepared: journal.Phase == "prepared", PartialCopy: partialCopy, CopiedComponents: copiedComponents, Generation: journal.Generation, Lease: journal.Lease, Token: journal.Token, RecoveryReceipt: path + ".receipt.json", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 		if data, err := os.ReadFile(journal.Registry.Backup); err == nil {
 			sum := sha256.Sum256(data)
 			receipt.StableDigest = hex.EncodeToString(sum[:])
@@ -560,6 +573,43 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 	_ = os.RemoveAll(journal.TransactionRoot)
 	_ = os.Remove(path)
 	return firstErr
+}
+
+func markOuterCopyEvidence(journal *outerInstallJournal) {
+	journal.PartialCopy = stagedCopyObserved(journal.Staged)
+	journal.CopiedComponents = stagedCopyComponents(journal.Staged)
+}
+
+func stagedCopyObserved(paths []string) bool {
+	for _, path := range paths {
+		entries, err := os.ReadDir(path)
+		if err == nil && len(entries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func stagedCopyComponents(paths []string) []string {
+	seen := map[string]bool{}
+	for _, root := range paths {
+		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || path == root || entry.IsDir() {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr == nil && rel != "." {
+				seen[strings.Split(filepath.ToSlash(rel), "/")[0]] = true
+			}
+			return nil
+		})
+	}
+	components := make([]string, 0, len(seen))
+	for component := range seen {
+		components = append(components, component)
+	}
+	sort.Strings(components)
+	return components
 }
 
 func cleanupAtomicTemps(dir string) {

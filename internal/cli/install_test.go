@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
+func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 	source := writeInstallSource(t, "source v1")
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
@@ -34,9 +34,9 @@ func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
 	assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
 	assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
 	assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
-	for _, sourceOnly := range []string{"go.mod", "cmd", "internal", ".github"} {
-		if _, err := os.Stat(filepath.Join(target, sourceOnly)); !os.IsNotExist(err) {
-			t.Fatalf("source-only entry %q was installed: %v", sourceOnly, err)
+	for _, installedPackageEntry := range []string{"go.mod", "cmd", "internal", ".github"} {
+		if _, err := os.Stat(filepath.Join(target, installedPackageEntry)); err != nil {
+			t.Fatalf("installed package entry %q was not copied: %v", installedPackageEntry, err)
 		}
 	}
 	assertNoScriptRuntimeFiles(t, target)

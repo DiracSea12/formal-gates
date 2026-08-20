@@ -719,6 +719,13 @@ func admitRegistryUnlocked(path, recordID string) (AdmissionReceipt, error) {
 		receipt.Host = record.Host
 		receipt.CanonicalPaths = record.CanonicalPaths
 		if strings.EqualFold(record.Status, "active") && validAdmissionRegistryRecord(record) {
+			if strings.TrimSpace(record.InstalledDigest) != "" {
+				if identityErr := verifyRegisteredTargetIdentity(record); identityErr != nil {
+					receipt.Code = "UNREGISTERED_INSTALL"
+					receipt.Reason = identityErr.Error()
+					return receipt, writeAdmissionReceipt(path, receipt)
+				}
+			}
 			receipt.Code, receipt.Accepted = "ADMITTED", true
 			return receipt, nil
 		}

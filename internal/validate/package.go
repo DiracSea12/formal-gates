@@ -59,6 +59,23 @@ var requiredHosts = []string{
 	"Windsurf",
 }
 
+var knownManifestParts = []string{
+	"SKILL.md",
+	"README.md",
+	"README_EN.md",
+	"formal-gates.manifest.json",
+	"go.mod",
+	".github/workflows/portable-validation.yml",
+	"bin/",
+	"references/",
+	"cmd/",
+	"internal/",
+	"agents/",
+	"prompts/",
+	"gates/",
+	"definitions/",
+}
+
 type manifest struct {
 	Name       string         `json:"name"`
 	Hosts      []manifestHost `json:"hosts"`
@@ -483,7 +500,10 @@ func validateManifest(root string, result *Result) {
 	for _, host := range unknownManifestHosts(doc.Hosts) {
 		result.add("formal-gates.manifest.json", fmt.Sprintf("manifest lists unsupported host target %q", host))
 	}
-	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "agents/", "prompts/", "gates/", "definitions/"} {
+	for _, part := range unknownManifestParts(doc.Parts) {
+		result.add("formal-gates.manifest.json", fmt.Sprintf("package_parts lists unsupported target %q", part))
+	}
+	for _, part := range knownManifestParts {
 		if !contains(doc.Parts, part) {
 			result.add("formal-gates.manifest.json", "package_parts missing "+part)
 		}
@@ -533,6 +553,16 @@ func validateManifest(root string, result *Result) {
 	if !containsText(doc.Caveats, "live canary") {
 		result.add("formal-gates.manifest.json", "support_caveats must preserve live canary wording")
 	}
+}
+
+func unknownManifestParts(parts []string) []string {
+	unknown := []string{}
+	for _, part := range parts {
+		if !contains(knownManifestParts, part) {
+			unknown = append(unknown, part)
+		}
+	}
+	return unknown
 }
 
 func nativeBinaryCommand() string {

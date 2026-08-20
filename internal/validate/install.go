@@ -131,6 +131,15 @@ var installRuntimeEntries = []string{
 	"definitions",
 }
 
+// Complete packages keep the source files required by the installed-binary
+// package validator. Runtime-only test fixtures may omit these entries.
+var installPackageEntries = []string{
+	"go.mod",
+	".github/workflows/portable-validation.yml",
+	"cmd",
+	"internal",
+}
+
 func Install(options InstallOptions) (InstallReport, error) {
 	if strings.TrimSpace(options.Source) == "" {
 		return InstallReport{}, fmt.Errorf("formal-gates source is required (--source); it must point at the package directory to install")
@@ -240,6 +249,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 	}
 	if unknown := unknownManifestHosts(manifestShape.Hosts); len(unknown) > 0 {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported host target %q", unknown[0])
+	}
+	if unknown := unknownManifestParts(manifestShape.Parts); len(unknown) > 0 {
+		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported package target %q", unknown[0])
 	}
 	if options.Bootstrap {
 		return bootstrapInstall(options, targets, sourcePackage, registryPath)
@@ -365,6 +377,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 	}
 	createdResourceRoots := []string{}
 	rollbackAll := func(cause error) error {
+		markOuterCopyEvidence(&outer)
 		if restoreErr := restoreOuterJournal(outerPath, outer, false); restoreErr != nil {
 			cause = fmt.Errorf("%w (rollback failed: %v)", cause, restoreErr)
 		}
@@ -587,6 +600,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if loadErr != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge load failed: %w", loadErr))
 		}
+		records = append(records, refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, vcsIdentity, sourcePackage.Digest, records)...)
 		committed, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records)
 		if err != nil {
 			return InstallReport{}, rollbackAll(fmt.Errorf("installation registry admission bridge commit failed: %w", err))
@@ -1166,6 +1180,9 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 				desired := installRegistryRecord(target, options)
 				sameTarget := canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath)
 				if sameTarget && record.ID != desired.ID {
+					if isGlobalInvocationRecord(record, desired) {
+						continue
+					}
 					writeBootstrapAdmissionRejection(registryPath, target, options, desired.ID, "bootstrap target already exists with a different registry record identity")
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s has an unaccounted registry identity", target.targetPath))
 				}
@@ -1226,6 +1243,18 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		mutatesRegistry = true
 		records = append(records, desired)
 	}
+	registryDocument, loadErr := loadRegistryForCommit(registryPath)
+	if loadErr != nil {
+		for _, path := range createdResourceRoots {
+			removeEmptyDirectory(path)
+		}
+		return InstallReport{}, rollback(loadErr)
+	}
+	siblingRefresh := refreshedGlobalInvocationRecords(registryDocument.Records, targets, options, outer.VCSIdentity, source.Digest, records)
+	if len(siblingRefresh) != 0 {
+		records = append(records, siblingRefresh...)
+		mutatesRegistry = true
+	}
 	rollbackWithResources := func(cause error) error {
 		for _, path := range createdResourceRoots {
 			removeEmptyDirectory(path)
@@ -1233,10 +1262,6 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		return rollback(cause)
 	}
 	if mutatesRegistry {
-		registryDocument, loadErr := loadRegistryForCommit(registryPath)
-		if loadErr != nil {
-			return InstallReport{}, rollbackWithResources(loadErr)
-		}
 		if _, err := commitRegistryRecordsUnlocked(registryPath, registryDocument, records); err != nil {
 			return InstallReport{}, rollbackWithResources(err)
 		}
@@ -1281,6 +1306,43 @@ func bootstrapHasSiblingAdmission(desired RegistryRecord, records []RegistryReco
 		}
 	}
 	return false
+}
+
+// Global installs have one canonical host record, but workflow state and
+// resources remain project-local. bindGlobalInvocationRoot therefore creates
+// project-derived sibling records that share the same installed target. They
+// are not a competing installation identity and must be refreshed whenever the
+// canonical global target is upgraded or bootstrapped.
+func isGlobalInvocationRecord(record, desired RegistryRecord) bool {
+	return desired.Scope == "global" && record.Scope == "global" &&
+		record.ID != desired.ID && strings.HasPrefix(record.ID, desired.ID+"-project-") &&
+		canonicalRegistryPath(record.Target) == canonicalRegistryPath(desired.Target) &&
+		canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(desired.LauncherPath) &&
+		record.Host == desired.Host && record.HookConfig == desired.HookConfig &&
+		record.RuntimeSibling == desired.RuntimeSibling && record.ReleaseRoot == desired.ReleaseRoot
+}
+
+func refreshedGlobalInvocationRecords(existing []RegistryRecord, targets []installTarget, options InstallOptions, vcsIdentity, packageDigest string, already []RegistryRecord) []RegistryRecord {
+	refreshed := []RegistryRecord{}
+	for _, record := range existing {
+		for index, target := range targets {
+			desired := installRegistryRecord(target, options)
+			if !isGlobalInvocationRecord(record, desired) {
+				continue
+			}
+			updated := record
+			updated.VCSIdentity = vcsIdentity
+			updated.PackageDigest = packageDigest
+			if index < len(already) {
+				updated.InstalledDigest = already[index].InstalledDigest
+			}
+			if sameRegistryIdentity(record, updated) {
+				continue
+			}
+			refreshed = append(refreshed, updated)
+		}
+	}
+	return refreshed
 }
 
 func bootstrapUnregisteredReceipt(registryPath string, target installTarget, options InstallOptions, reason string) AdmissionReceipt {
@@ -1608,19 +1670,20 @@ func copyInstallRuntime(source, target string, force bool) error {
 		return err
 	}
 	runtimeFaultChecked := false
-	for _, entry := range installRuntimeEntries {
+	entries := append(append([]string{}, installRuntimeEntries...), installPackageEntries...)
+	for _, entry := range entries {
 		from := filepath.Join(source, filepath.FromSlash(entry))
 		to := filepath.Join(target, filepath.FromSlash(entry))
-		if entry == "definitions" && !exists(from) {
-			// Minimal runtime fixtures used by host-specific install tests predate
-			// the future envelope definition; complete release packages must carry
-			// it through Package validation, while the fixture remains runtime-only.
+		if !exists(from) {
+			// Runtime-only fixtures may omit optional package-validation inputs;
+			// complete release packages copy them so installed targets validate
+			// independently of the source checkout.
 			continue
 		}
-		if err := installFault("copy-component:" + entry); err != nil {
+		if err := copyPath(from, to); err != nil {
 			return err
 		}
-		if err := copyPath(from, to); err != nil {
+		if err := installFault("copy-component:" + entry); err != nil {
 			return err
 		}
 		if !runtimeFaultChecked {
