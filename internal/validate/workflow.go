@@ -235,7 +235,7 @@ func Start(options StartOptions) (RunState, error) {
 			return RunState{}, err
 		}
 		if !receipt.Accepted {
-			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, receipt.Reason)
+			writeWorkflowAdmissionReceipt(registryPath, receipt, root, options.PackageRoot, receipt.Reason)
 			return RunState{}, fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, recordID)
 		}
 		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
@@ -445,6 +445,40 @@ func writeWorkflowAdmissionRejection(path, recordID, root, packageRoot, reason s
 	})
 }
 
+func writeWorkflowAdmissionReceipt(path string, receipt AdmissionReceipt, root, packageRoot, reason string) {
+	target := strings.TrimSpace(receipt.Target)
+	if target == "" {
+		target = strings.TrimSpace(packageRoot)
+	}
+	if target == "" {
+		target = strings.TrimSpace(root)
+	}
+	if target != "" {
+		receipt.Target = canonicalRegistryPath(target)
+	}
+	if strings.TrimSpace(receipt.Registry) == "" {
+		receipt.Registry = filepath.Clean(path)
+	}
+	if strings.TrimSpace(receipt.Scope) == "" {
+		receipt.Scope = "unknown"
+	}
+	if receipt.CanonicalPaths == nil {
+		receipt.CanonicalPaths = map[string]string{}
+	}
+	if receipt.Target != "" {
+		receipt.CanonicalPaths["target"] = canonicalRegistryPath(receipt.Target)
+	}
+	if strings.TrimSpace(root) != "" {
+		receipt.CanonicalPaths["projectRoot"] = canonicalRegistryPath(root)
+	}
+	receipt.Code = "UNREGISTERED_INSTALL"
+	receipt.Accepted = false
+	receipt.Status = "disabled"
+	receipt.Reason = reason
+	receipt.CreatedAt = nowReceiptTime()
+	_ = writeAdmissionReceipt(path, receipt)
+}
+
 func registryAdmissionIdentity(path, recordID string) (RegistryDocument, RegistryRecord, error) {
 	doc, err := LoadRegistry(path)
 	if err != nil {
@@ -603,7 +637,7 @@ func requireWorkflowAdmission(root, packageRoot string) error {
 		return err
 	}
 	if !receipt.Accepted {
-		writeWorkflowAdmissionRejection(registry, recordID, root, packageRoot, receipt.Reason)
+		writeWorkflowAdmissionReceipt(registry, receipt, root, packageRoot, receipt.Reason)
 		return fmt.Errorf("%s: workflow resume refused for registry record %q", receipt.Code, recordID)
 	}
 	return verifyRegistryBinding(registry, recordID, root, packageRoot)
