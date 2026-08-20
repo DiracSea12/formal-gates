@@ -22,13 +22,12 @@ type InstallOptions struct {
 	// ReleaseRoot and BinaryTarget are used by the bootstrap scripts. When
 	// provided, the native installer owns release copy, backup, and executable
 	// replacement in the same transaction as host installation.
-	ReleaseRoot     string
-	BinaryTarget    string
-	CandidateBinary string
-	RegistryPath    string
-	Bootstrap       bool
-	Force           bool
-	SkipHooks       bool
+	ReleaseRoot  string
+	BinaryTarget string
+	RegistryPath string
+	Bootstrap    bool
+	Force        bool
+	SkipHooks    bool
 }
 
 type UninstallOptions struct {
@@ -859,7 +858,7 @@ func defaultStableLauncherPath(options InstallOptions) string {
 	return canonicalRegistryPath(filepath.Join(home, ".local", "bin", nativeBinaryName()))
 }
 
-// RequireInstallLauncher fences the public mutation command.  The downloaded
+// RequireInstallLauncher fences the public mutation command. The downloaded
 // archive binary must first be staged at the fixed launcher path by the
 // checksum-verifying bootstrap script; invoking source/bin directly is a
 // candidate path and cannot write the shared registry or host configuration.
@@ -880,14 +879,6 @@ func RequireInstallLauncher(options InstallOptions) error {
 		if canonicalRegistryPath(options.BinaryTarget) != canonicalRegistryPath(expected) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)
 		}
-	}
-	if candidate := strings.TrimSpace(options.CandidateBinary); candidate != "" {
-		candidatePath := canonicalRegistryPath(candidate)
-		expectedCandidate := canonicalRegistryPath(filepath.Join(options.Source, "bin", nativeBinaryName()))
-		if candidatePath != expectedCandidate || canonicalRegistryPath(executable) != candidatePath {
-			return fmt.Errorf("UNREGISTERED_INSTALL: candidate install owner must be the verified package binary %s", expectedCandidate)
-		}
-		return nil
 	}
 	if canonicalRegistryPath(executable) != canonicalRegistryPath(expected) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)

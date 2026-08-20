@@ -1192,7 +1192,7 @@ func TestWhiteboxPhase0Round12BootstrapWrappersForwardOnlyToStableOwner(t *testi
 	round12CreateSourceArchive(t, sourceZip)
 	binaryAsset := filepath.Join(fixture, "formal-gates-"+suffix)
 	logPath := filepath.Join(fixture, "owner.log")
-	round12WriteFile(t, binaryAsset, []byte("#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$ROUND12_OWNER_LOG\"\nif [ \"$1\" = install ] && [ \"${2:-}\" != --bootstrap ]; then\n  previous=\"\"\n  target=\"\"\n  for argument in \"$@\"; do\n    if [ \"$previous\" = --binary-target ]; then target=\"$argument\"; fi\n    previous=\"$argument\"\n  done\n  mkdir -p \"$(dirname \"$target\")\"\n  cp \"$0\" \"$target\"\n  chmod +x \"$target\"\nfi\nexit 0\n"), 0o700)
+	round12WriteFile(t, binaryAsset, []byte("#!/bin/sh\nset -eu\nprintf '%s %s\\n' \"$0\" \"$*\" >> \"$ROUND12_OWNER_LOG\"\nif [ \"$1\" = install ] && [ \"${2:-}\" != --bootstrap ]; then\n  previous=\"\"\n  target=\"\"\n  for argument in \"$@\"; do\n    if [ \"$previous\" = --binary-target ]; then target=\"$argument\"; fi\n    previous=\"$argument\"\n  done\n  mkdir -p \"$(dirname \"$target\")\"\n  if [ \"$0\" != \"$target\" ]; then\n    cp \"$0\" \"$target\"\n    chmod +x \"$target\"\n  fi\nfi\nexit 0\n"), 0o700)
 	canary := filepath.Join(fixture, "portable-canary-"+suffix+".json")
 	checksums := filepath.Join(fixture, "SHA256SUMS-"+suffix+".txt")
 	round12WriteFile(t, canary, []byte("{}\n"), 0o600)
@@ -1247,15 +1247,45 @@ esac
 	if !strings.Contains(lines[0], "install --source") || !strings.Contains(lines[0], "--release-root "+release) || !strings.Contains(lines[0], "--binary-target "+launcher) || !strings.Contains(lines[0], "--host codex --scope project --project "+project+" --force --skip-hooks") {
 		t.Fatalf("install arguments were not forwarded to the stable owner: %q", lines[0])
 	}
+	if !strings.HasPrefix(lines[0], launcher+" ") || strings.Contains(lines[0], "--candidate-binary") {
+		t.Fatalf("first install was not executed by the stable launcher: %q", lines[0])
+	}
 	if !strings.Contains(lines[1], "install --bootstrap --source "+release) || !strings.Contains(lines[1], "--binary-target "+launcher) || !strings.Contains(lines[1], "--host codex --scope project --project "+project) {
 		t.Fatalf("bootstrap arguments were not forwarded to the stable owner: %q", lines[1])
 	}
+	if !strings.HasPrefix(lines[1], launcher+" ") || strings.Contains(lines[1], "--candidate-binary") {
+		t.Fatalf("bootstrap was not executed by the stable launcher: %q", lines[1])
+	}
 	powershell := string(round12ReadFile(t, filepath.Join(root, "install.ps1")))
+	unixWrapper := string(round12ReadFile(t, script))
 	batch := string(round12ReadFile(t, filepath.Join(root, "install.bat")))
 	for _, required := range []string{"--release-root", "--binary-target", "install", "--bootstrap", "& $formalBinary @args", "& $formalBinary @bootstrapArgs"} {
 		if !strings.Contains(powershell, required) {
 			t.Fatalf("PowerShell wrapper omits native-owner delegation %q", required)
 		}
+	}
+	if strings.Contains(unixWrapper, "--candidate-binary") || strings.Contains(powershell, "--candidate-binary") {
+		t.Fatal("wrappers retain the removed candidate writer flag")
+	}
+	oldStable := []byte("#!/bin/sh\nset -eu\nprintf 'old %s %s\\n' \"$0\" \"$*\" >> \"$ROUND12_OWNER_LOG\"\n")
+	round12WriteFile(t, launcher, oldStable, 0o700)
+	upgrade := exec.Command("bash", script, "--host", "codex", "--scope", "project", "--project", project, "--force", "--skip-hooks")
+	upgrade.Dir = root
+	upgrade.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"HOME="+home, "USERPROFILE="+home, "FORMAL_GATES_VERSION=vround12-upgrade",
+		"ROUND12_SOURCE_ZIP="+sourceZip, "ROUND12_BINARY="+binaryAsset, "ROUND12_CANARY="+canary,
+		"ROUND12_CHECKSUMS="+checksums, "ROUND12_OWNER_LOG="+logPath,
+	)
+	if output, err := upgrade.CombinedOutput(); err != nil {
+		t.Fatalf("stable upgrade wrapper failed: %v\n%s", err, output)
+	}
+	lines = strings.Split(strings.TrimSpace(string(round12ReadFile(t, logPath))), "\n")
+	if len(lines) != 4 || !strings.HasPrefix(lines[2], "old ") || !strings.HasPrefix(lines[3], "old ") {
+		t.Fatalf("existing stable launcher was overwritten before native ownership: %q", lines)
+	}
+	if got := string(round12ReadFile(t, launcher)); got != string(oldStable) {
+		t.Fatalf("existing stable launcher changed during wrapper preflight: %q", got)
 	}
 	if !strings.Contains(batch, "install.ps1") || strings.Contains(powershell, "SymbolicLink") || strings.Contains(powershell, "Remove-Item $installRoot") {
 		t.Fatal("Windows wrappers retain a second pointer-mutating transaction")

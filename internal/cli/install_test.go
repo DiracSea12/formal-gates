@@ -448,6 +448,18 @@ func TestRunInstallRejectsRemovedConfigureHooksFlag(t *testing.T) {
 	}
 }
 
+func TestRunInstallRejectsCandidateBinaryWriterFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"install", "--candidate-binary", "/tmp/candidate/formal-gates"}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code == 0 {
+		t.Fatal("expected candidate writer flag to be rejected")
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -candidate-binary") {
+		t.Fatalf("expected candidate writer flag error, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestRunInstallHookFailureDoesNotClaimInstallSuccess(t *testing.T) {
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()

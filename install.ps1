@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if (-not $Version) { $Version = "v0.1.0" }
+$stagedLauncher = $false
 
 $repo = "DiracSea12/formal-gates"
 $os = "windows"
@@ -60,26 +61,23 @@ try {
   $formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
 
   if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-  # An existing stable launcher owns upgrades. A first install has no stable
-  # launcher yet, so the checksum-verified temporary candidate may own this
-  # one native transaction through an explicit candidate fence.
-  $owner = $formalBinary
-  $candidateArgs = @()
-  if (-not (Test-Path -LiteralPath $owner)) {
-    $owner = Join-Path $sourceDir.FullName "bin\formal-gates.exe"
-    $candidateArgs = @("--candidate-binary", $owner)
+  # The stable launcher is the only native writer. An existing launcher is
+  # never overwritten by this script; the native journal owns that replacement.
+  # On a first install only, place the verified candidate at the empty stable
+  # path so the same stable owner can create the journal and finish the work.
+  $launcherDir = Split-Path -Parent $formalBinary
+  New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
+  if (-not (Test-Path -LiteralPath $formalBinary)) {
+    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
+    $stagedLauncher = $true
   }
   $args = @("install", "--source", $sourceDir.FullName, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
-  $args += $candidateArgs
-  if ($owner -eq $formalBinary) {
-    & $formalBinary @args
-  } else {
-    & $owner @args
-  }
+  & $formalBinary @args
   if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+  $stagedLauncher = $false
   # Bootstrap the installed artifact through the same stable launcher before
   # any workflow command can write state.
   $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
@@ -91,5 +89,8 @@ try {
   Write-Host "Native binary: $formalBinary"
 }
 finally {
+  if ($stagedLauncher -and (Test-Path -LiteralPath $formalBinary)) {
+    Remove-Item -LiteralPath $formalBinary -Force
+  }
   Remove-Item $tmp -Recurse -Force
 }

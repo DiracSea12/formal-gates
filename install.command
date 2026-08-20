@@ -54,7 +54,11 @@ canary="portable-canary-${suffix}.json"
 checksums="SHA256SUMS-${suffix}.txt"
 
 tmp="$(mktemp -d)"
+staged_launcher=false
 cleanup() {
+  if [ "$staged_launcher" = true ]; then
+    rm -f "$binary_target"
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -91,22 +95,22 @@ PY
 )}"
 install_root="$home/.formal-gates/releases/${tag#v}-${suffix}"
 binary_target="$home/.local/bin/formal-gates"
-# An existing stable launcher owns upgrades. A first install has no stable
-# launcher yet, so the checksum-verified temporary candidate may own this one
-# native transaction; it is explicitly fenced and is never used for workflow
-# or registry operations after the transaction creates the stable launcher.
-owner="$binary_target"
-candidate_args=()
-if [ -e "$owner" ]; then
-  if [ ! -x "$owner" ]; then
-    echo "stable launcher exists but is not executable: $owner" >&2
+# The stable launcher is the only native writer. An existing launcher is never
+# overwritten by the shell; the native journal owns that replacement. On a
+# first install only, place the verified candidate at the empty stable path so
+# the same stable owner can create the journal and complete the transaction.
+mkdir -p "$(dirname "$binary_target")"
+if [ -e "$binary_target" ]; then
+  if [ ! -x "$binary_target" ]; then
+    echo "stable launcher exists but is not executable: $binary_target" >&2
     exit 1
   fi
 else
-  owner="$source_root/bin/formal-gates"
-  candidate_args+=(--candidate-binary "$owner")
+  cp "$source_root/bin/formal-gates" "$binary_target"
+  chmod +x "$binary_target"
+  staged_launcher=true
 fi
-cmd=("$owner" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
+cmd=("$binary_target" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   cmd+=(--project "$project")
 fi
@@ -116,8 +120,8 @@ fi
 if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
-cmd+=("${candidate_args[@]}")
 "${cmd[@]}"
+staged_launcher=false
 
 # Bootstrap the already-installed artifact through the same stable launcher.
 # This creates the admission receipt before any workflow command can write
