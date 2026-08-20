@@ -54,8 +54,17 @@ canary="portable-canary-${suffix}.json"
 checksums="SHA256SUMS-${suffix}.txt"
 
 tmp="$(mktemp -d)"
+staged_launcher=""
+launcher_backup=""
 install_succeeded=false
 cleanup() {
+  if [ "$install_succeeded" != true ]; then
+    if [ -n "$launcher_backup" ]; then
+      cp "$launcher_backup" "$binary_target"
+    elif [ -n "$staged_launcher" ]; then
+      rm -f "$staged_launcher"
+    fi
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -92,20 +101,26 @@ PY
 )}"
 install_root="$home/.formal-gates/releases/${tag#v}-${suffix}"
 binary_target="$home/.local/bin/formal-gates"
-# The native owner creates its recovery journal before it publishes the stable
-# launcher. Existing installations use that stable owner; a first install uses
-# the checksum-verified candidate with an explicit, narrowly scoped bootstrap
-# flag instead of copying over the stable path in the shell.
-owner="$binary_target"
-candidate_args=()
-if [ ! -e "$owner" ]; then
-  owner="$source_root/bin/formal-gates"
-  candidate_args+=(--candidate-binary "$owner")
-elif [ ! -x "$owner" ]; then
-  echo "stable launcher exists but is not executable: $owner" >&2
+# The checksum-verified executable is staged once at the fixed launcher path.
+# The source-tree copy is install input only and never owns registry/workflow
+# writes. On a failed first install cleanup removes the staged launcher.
+mkdir -p "$(dirname "$binary_target")"
+if [ -e "$binary_target" ] && [ ! -x "$binary_target" ]; then
+  echo "stable launcher exists but is not executable: $binary_target" >&2
   exit 1
 fi
-cmd=("$owner" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
+if [ -e "$binary_target" ]; then
+  launcher_backup="$tmp/launcher.before"
+  cp "$binary_target" "$launcher_backup"
+else
+  staged_launcher="$binary_target"
+fi
+# A pre-stage launcher may not understand the transaction-owner arguments. The
+# checksum-verified candidate replaces its executable bytes before the owner is
+# invoked, so upgrades and fresh installs share one native owner.
+cp "$source_root/bin/formal-gates" "$binary_target"
+chmod +x "$binary_target"
+cmd=("$binary_target" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   cmd+=(--project "$project")
 fi
@@ -115,17 +130,10 @@ fi
 if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
-cmd+=("${candidate_args[@]}")
 "${cmd[@]}"
-# A legacy wrapper fixture may use a recording owner that does not implement
-# the native transaction. Real owners always create this file themselves; this
-# fallback runs only after a successful owner call and is never a pre-journal
-# replacement of an existing stable launcher.
-if [ ! -e "$binary_target" ]; then
-  mkdir -p "$(dirname "$binary_target")"
-  cp "$owner" "$binary_target"
-  chmod +x "$binary_target"
-fi
+# The native transaction now owns a valid stable launcher. A later bootstrap
+# receipt failure must not remove that committed launcher during shell cleanup.
+staged_launcher=""
 
 # Bootstrap the already-installed artifact through the same stable launcher.
 # This creates the admission receipt before any workflow command can write

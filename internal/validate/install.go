@@ -22,13 +22,12 @@ type InstallOptions struct {
 	// ReleaseRoot and BinaryTarget are used by the bootstrap scripts. When
 	// provided, the native installer owns release copy, backup, and executable
 	// replacement in the same transaction as host installation.
-	ReleaseRoot     string
-	BinaryTarget    string
-	CandidateBinary string
-	RegistryPath    string
-	Bootstrap       bool
-	Force           bool
-	SkipHooks       bool
+	ReleaseRoot  string
+	BinaryTarget string
+	RegistryPath string
+	Bootstrap    bool
+	Force        bool
+	SkipHooks    bool
 }
 
 type UninstallOptions struct {
@@ -863,14 +862,6 @@ func RequireInstallLauncher(options InstallOptions) error {
 		return nil
 	}
 	expected := defaultStableLauncherPath(options)
-	if candidate := strings.TrimSpace(options.CandidateBinary); candidate != "" {
-		candidateAbs := canonicalRegistryPath(candidate)
-		expectedCandidate := canonicalRegistryPath(filepath.Join(options.Source, "bin", nativeBinaryName()))
-		if candidateAbs != expectedCandidate || canonicalRegistryPath(executable) != candidateAbs {
-			return fmt.Errorf("UNREGISTERED_INSTALL: candidate bootstrap executable must be the verified package binary %s", expectedCandidate)
-		}
-		return nil
-	}
 	if strings.TrimSpace(options.BinaryTarget) != "" {
 		if canonicalRegistryPath(options.BinaryTarget) != canonicalRegistryPath(expected) {
 			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)

@@ -16,6 +16,17 @@ import (
 	"formal-gates/internal/validate"
 )
 
+func TestCLIWorkflowFutureRejectsSubmitAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.json")
+	var stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "future", "submit", "--path", path}, IO{Stderr: &stderr}); code == 0 {
+		t.Fatalf("workflow future submit unexpectedly succeeded: stderr=%q", stderr.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("rejected submit alias created future state: %v", err)
+	}
+}
+
 func TestCLIWorkflowUsesDispatchesKindsAndNativeSnapshots(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
 	state := startCLIWorkflow(t, root, pkg, "cli-run")

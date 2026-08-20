@@ -151,10 +151,6 @@ func WriteFutureState(root, path string, envelope VersionEnvelope, value any) er
 	return writeVersionedStateDocument(path, envelope, value)
 }
 
-func SubmitFutureState(root, path string, envelope VersionEnvelope, value any) error {
-	return WriteFutureState(root, path, envelope, value)
-}
-
 func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
 	report, err := DiagnoseState(path)
 	if err != nil {

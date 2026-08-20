@@ -233,7 +233,6 @@ func runInstall(args []string, streams IO) (int, error) {
 	project := fs.String("project", "", "project path for project installs")
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
 	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
-	candidateBinary := fs.String("candidate-binary", "", "verified candidate executable used only to begin a first native transaction")
 	bootstrap := fs.Bool("bootstrap", false, "register the selected target in the stage-0 admission bridge without installing runtime files")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
@@ -243,7 +242,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, CandidateBinary: *candidateBinary, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
+	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
 	if err := validate.RequireInstallLauncher(options); err != nil {
 		return operationError(streams, err)
 	}
@@ -657,8 +656,8 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 			}
 		}
 		return printValue(streams.Stdout, envelope, nil)
-	case "write", "submit":
-		name := "workflow future " + action
+	case "write":
+		name := "workflow future write"
 		fs := newFlagSet(name, streams)
 		root := fs.String("root", ".", "package root")
 		path := fs.String("path", "", "versioned future state output path")
@@ -697,11 +696,7 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 				return 1, fmt.Errorf("future payload JSON is invalid: %w", err)
 			}
 		}
-		if action == "submit" {
-			err = validate.SubmitFutureState(*root, target, envelope, value)
-		} else {
-			err = validate.WriteFutureState(*root, target, envelope, value)
-		}
+		err = validate.WriteFutureState(*root, target, envelope, value)
 		return printValue(streams.Stdout, envelope, err)
 	case "view":
 		fs := newFlagSet("workflow future view", streams)
@@ -1548,7 +1543,7 @@ func printWorkflowUsage(w io.Writer, program string) {
 }
 
 func printFutureUsage(w io.Writer, program string) error {
-	fmt.Fprintf(w, "Usage: %s workflow future <action>\n\nGenerate and validate the versioned candidate envelope derived from definitions/workflow.json, or mutate a validated future state document through the owning future writer.\n", program)
+	fmt.Fprintf(w, "Usage: %s workflow future <generate|write|view>\n\nGenerate, inspect, or write the versioned candidate envelope derived from definitions/workflow.json through its owning future writer.\n", program)
 	return nil
 }
 
