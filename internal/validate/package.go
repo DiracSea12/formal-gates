@@ -480,6 +480,9 @@ func validateManifest(root string, result *Result) {
 	if doc.Name != "formal-gates" {
 		result.add("formal-gates.manifest.json", "manifest name must be formal-gates")
 	}
+	for _, host := range unknownManifestHosts(doc.Hosts) {
+		result.add("formal-gates.manifest.json", fmt.Sprintf("manifest lists unsupported host target %q", host))
+	}
 	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "agents/", "prompts/", "gates/", "definitions/"} {
 		if !contains(doc.Parts, part) {
 			result.add("formal-gates.manifest.json", "package_parts missing "+part)
@@ -579,4 +582,18 @@ func findHost(hosts []manifestHost, name string) *manifestHost {
 		}
 	}
 	return nil
+}
+
+func unknownManifestHosts(hosts []manifestHost) []string {
+	known := make(map[string]bool, len(requiredHosts))
+	for _, host := range requiredHosts {
+		known[host] = true
+	}
+	unknown := []string{}
+	for _, host := range hosts {
+		if !known[host.Name] {
+			unknown = append(unknown, host.Name)
+		}
+	}
+	return unknown
 }

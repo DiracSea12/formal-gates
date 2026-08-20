@@ -74,6 +74,12 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if err != nil {
 		return CaptureResult{}, err
 	}
+	// Lifecycle hooks are installed outside formal runs as well. Once the
+	// payload has been normalized and no active run was found, discard it before
+	// applying provider identity requirements or creating any event files.
+	if len(roots) == 0 {
+		return CaptureResult{Provider: adapter.name, Event: event}, nil
+	}
 	identity := adapter.identity(event, decoded)
 	correlation := adapter.correlation(event, decoded)
 	if event == eventStart && identity == "" && adapter.required {

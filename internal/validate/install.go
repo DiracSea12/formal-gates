@@ -179,7 +179,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if absErr != nil {
 			return InstallReport{}, absErr
 		}
-		if pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(releaseAbs)) {
+		if !options.Bootstrap && pathOverlaps(canonicalRegistryPath(sourceAbs), canonicalRegistryPath(releaseAbs)) {
 			return InstallReport{}, fmt.Errorf("install source %s overlaps release root %s", sourceAbs, filepath.Clean(releaseAbs))
 		}
 		if strings.TrimSpace(options.BinaryTarget) != "" {
@@ -238,6 +238,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if manifestShape.Name != "formal-gates" {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
 	}
+	if unknown := unknownManifestHosts(manifestShape.Hosts); len(unknown) > 0 {
+		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported host target %q", unknown[0])
+	}
 	if options.Bootstrap {
 		return bootstrapInstall(options, targets, sourcePackage, registryPath)
 	}
@@ -274,9 +277,17 @@ func Install(options InstallOptions) (InstallReport, error) {
 		// Validate the existing bridge before changing any host target.  A
 		// malformed registry is an unregistered install, not a reason to leave
 		// a partially installed runtime behind.
-		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
+		var existingRecords []RegistryRecord
+		if existing, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			existingRecords = existing.Records
+		} else if !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
+		if fenceErr := rejectActiveWorkflowRuns("install", targets, options, existingRecords); fenceErr != nil {
+			return InstallReport{}, fenceErr
+		}
+	} else if fenceErr := rejectActiveWorkflowRuns("install", targets, options, nil); fenceErr != nil {
+		return InstallReport{}, fenceErr
 	}
 
 	transactionParent := filepath.Dir(registryPath)
@@ -377,6 +388,15 @@ func Install(options InstallOptions) (InstallReport, error) {
 			_ = os.RemoveAll(candidate.Temp)
 		}
 	}()
+	// A release copy has a real copy phase. Mark the journal prepared before
+	// entering it so component faults produce evidence that the transaction
+	// reached the copy boundary rather than stopping at intent validation.
+	if strings.TrimSpace(options.ReleaseRoot) != "" {
+		outer.Phase = "prepared"
+		if err := persistOuterJournal(outerPath, outer); err != nil {
+			return InstallReport{}, rollbackAll(err)
+		}
+	}
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
 		candidate := newStagedInstallTree(sourceAbs, options.ReleaseRoot, false)
 		outer.Staged = append(outer.Staged, candidate.Temp)
@@ -442,7 +462,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 	hookChanges := map[string]bool{}
 	for _, target := range targets {
 		if !options.SkipHooks {
-			if err := installFaultAliases("hook", "hooks", "copy-component:hooks"); err != nil {
+			if err := installFault("hook"); err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
 			changed, err := configureInstallHook(target)
@@ -452,7 +472,7 @@ func Install(options InstallOptions) (InstallReport, error) {
 			hookChanges[target.hookConfig] = changed
 		}
 		if target.managedRulePath != "" && !options.SkipHooks {
-			if err := installFaultAliases("managed-rule", "managed-rules", "rules", "copy-component:rules"); err != nil {
+			if err := installFault("managed-rule"); err != nil {
 				return InstallReport{}, rollbackAll(err)
 			}
 			changed, err := manageManagedRuleFile(target.managedRulePath, rule)
@@ -544,7 +564,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 		targetReport.ManagedRuleDigest, _ = fileDigest(target.managedRulePath)
 		if target.managedRulePath != "" {
 			targetReport.CanonicalPaths["managedRule"] = canonicalRegistryPath(target.managedRulePath)
-			if managedRuleChanges[target.managedRulePath] {
+			if options.SkipHooks {
+				targetReport.ManagedRuleAction = "SKIPPED"
+			} else if managedRuleChanges[target.managedRulePath] {
 				targetReport.ManagedRuleAction = "APPLIED"
 			} else {
 				targetReport.ManagedRuleAction = "SKIPPED_UNCHANGED"
@@ -619,6 +641,9 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		// uninstall transaction, leaving hooks and the registry describing
 		// different generations.
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			if fenceErr := rejectActiveWorkflowRuns("uninstall", targets, InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath}, doc.Records); fenceErr != nil {
+				return UninstallReport{}, fenceErr
+			}
 			for index := range targets {
 				for _, record := range doc.Records {
 					if filepath.Clean(record.Target) == filepath.Clean(targets[index].targetPath) && strings.TrimSpace(record.LauncherPath) != "" {
@@ -626,7 +651,11 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 					}
 				}
 			}
+		} else if !os.IsNotExist(loadErr) {
+			return UninstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
+	} else if fenceErr := rejectActiveWorkflowRuns("uninstall", targets, InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath}, nil); fenceErr != nil {
+		return UninstallReport{}, fenceErr
 	}
 	transactionParent := filepath.Dir(registryPath)
 	if transactionParent == "." || transactionParent == "" {
@@ -846,6 +875,51 @@ func installRegistryPath(options InstallOptions) string {
 	return ""
 }
 
+// rejectActiveWorkflowRuns inventories the state roots owned by the affected
+// registry records before an install or uninstall can replace runtime bytes or
+// advance admission identity. An active run keeps the current target and its
+// launcher authoritative until the run reaches a terminal state.
+func rejectActiveWorkflowRuns(operation string, targets []installTarget, options InstallOptions, records []RegistryRecord) error {
+	targetPaths := map[string]bool{}
+	stateRoots := map[string]bool{}
+	for _, target := range targets {
+		targetPaths[canonicalRegistryPath(target.targetPath)] = true
+		desired := installRegistryRecord(target, options)
+		if desired.StateRoot != "" {
+			stateRoots[canonicalRegistryPath(desired.StateRoot)] = true
+		}
+	}
+	for _, record := range records {
+		if !targetPaths[canonicalRegistryPath(record.Target)] {
+			continue
+		}
+		if record.StateRoot != "" {
+			stateRoots[canonicalRegistryPath(record.StateRoot)] = true
+		}
+	}
+	for stateRoot := range stateRoots {
+		matches, err := filepath.Glob(filepath.Join(stateRoot, "tmp", "*", "state.json"))
+		if err != nil {
+			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
+		}
+		for _, statePath := range matches {
+			data, readErr := os.ReadFile(statePath)
+			if readErr != nil {
+				return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, statePath, readErr)
+			}
+			var probe struct {
+				RunID  string `json:"runId"`
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(data, &probe) != nil || !strings.EqualFold(probe.Status, "ACTIVE") {
+				continue
+			}
+			return fmt.Errorf("active workflow run %q at %s fences %s", probe.RunID, statePath, operation)
+		}
+	}
+	return nil
+}
+
 func defaultStableLauncherPath(options InstallOptions) string {
 	if runtime.GOOS == "windows" {
 		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
@@ -947,6 +1021,27 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	if existingRegistryErr != nil && !os.IsNotExist(existingRegistryErr) {
 		return InstallReport{}, fmt.Errorf("registry bootstrap cannot read existing registry: %w", existingRegistryErr)
 	}
+	if registryWasPresent {
+		for _, target := range targets {
+			for _, record := range existingRegistry.Records {
+				if canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath) && record.PackageDigest == source.Digest && strings.TrimSpace(record.VCSIdentity) != "" {
+					// The first install may have been sourced from a Git checkout,
+					// while bootstrap necessarily reads the copied release tree.
+					// Keep the authoritative identity already committed for this
+					// target when the immutable package digest is unchanged.
+					outer.VCSIdentity = record.VCSIdentity
+					break
+				}
+			}
+		}
+	}
+	if registryWasPresent {
+		if fenceErr := rejectActiveWorkflowRuns("bootstrap", targets, options, existingRegistry.Records); fenceErr != nil {
+			return InstallReport{}, fenceErr
+		}
+	} else if fenceErr := rejectActiveWorkflowRuns("bootstrap", targets, options, nil); fenceErr != nil {
+		return InstallReport{}, fenceErr
+	}
 	if len(targets) > 0 {
 		outer.InstalledTarget = canonicalRegistryPath(targets[0].targetPath)
 	}
@@ -978,21 +1073,18 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		return outerJournalFailure(outerPath, outer, cause)
 	}
 	if registryWasPresent && len(existingRegistry.Records) == 0 {
-		receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, Registry: registryPath, Reason: "an existing empty registry is not a fresh bootstrap boundary", CreatedAt: nowReceiptTime()}
-		_ = writeAdmissionReceipt(registryPath, receipt)
+		writeBootstrapAdmissionRejection(registryPath, targets[0], options, "", "an existing empty registry is not a fresh bootstrap boundary")
 		return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry has no admission record for bootstrap"))
 	}
 	if registryWasPresent {
 		for _, record := range existingRegistry.Records {
 			if !validAdmissionRegistryRecord(record) {
-				receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "an existing registry record cannot be reconciled", CreatedAt: nowReceiptTime()}
-				_ = writeAdmissionReceipt(registryPath, receipt)
+				writeBootstrapAdmissionRejection(registryPath, targets[0], options, record.ID, "an existing registry record cannot be reconciled")
 				return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry record %q cannot be reconciled", record.ID))
 			}
 			if strings.EqualFold(record.Status, "active") {
 				if targetErr := assertInstallSource(record.Target); targetErr != nil {
-					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: fmt.Sprintf("an existing active target is not an installed artifact: %v", targetErr), CreatedAt: nowReceiptTime()}
-					_ = writeAdmissionReceipt(registryPath, receipt)
+					writeBootstrapAdmissionRejection(registryPath, targets[0], options, record.ID, fmt.Sprintf("an existing active target is not an installed artifact: %v", targetErr))
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: existing registry target %q is not an installed artifact", record.Target))
 				}
 			}
@@ -1002,8 +1094,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 	targetDigests := map[string]string{}
 	for _, target := range targets {
 		if targetErr := assertInstallSource(target.targetPath); targetErr != nil {
-			receipt := bootstrapUnregisteredReceipt(registryPath, target, options, fmt.Sprintf("bootstrap target is not an installed artifact: %v", targetErr))
-			_ = writeAdmissionReceipt(registryPath, receipt)
+			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target is not an installed artifact: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s is not an installed artifact: %w", target.targetPath, targetErr))
 		}
 		disjoint := []string{source.Root}
@@ -1012,14 +1103,17 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		}
 		targetReceipt, targetErr := PackageReceipt(target.targetPath, disjoint...)
 		if targetErr != nil {
+			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target receipt failed: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target receipt failed: %w", targetErr))
 		}
 		targetDigests[canonicalRegistryPath(target.targetPath)] = targetReceipt.Digest
 		if targetErr := runInstalledBinarySmokeWithPolicy(filepath.Join(target.targetPath, "bin", nativeBinaryName()), !strictBinary); targetErr != nil {
+			writeBootstrapAdmissionRejection(registryPath, target, options, "", fmt.Sprintf("bootstrap target smoke failed: %v", targetErr))
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target smoke failed: %w", targetErr))
 		}
 	}
 	if targetErr := runInstalledBinarySmokeWithPolicy(targets[0].launcherPath, !strictBinary); targetErr != nil {
+		writeBootstrapAdmissionRejection(registryPath, targets[0], options, "", fmt.Sprintf("bootstrap stable launcher smoke failed: %v", targetErr))
 		return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap stable launcher smoke failed: %w", targetErr))
 	}
 	if faultErr := installFault("registry"); faultErr != nil {
@@ -1033,13 +1127,11 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 				desired := installRegistryRecord(target, options)
 				sameTarget := canonicalRegistryPath(record.Target) == canonicalRegistryPath(target.targetPath)
 				if sameTarget && record.ID != desired.ID {
-					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: desired.ID, Registry: registryPath, Reason: "bootstrap target already exists with a different registry record identity", CreatedAt: nowReceiptTime()}
-					_ = writeAdmissionReceipt(registryPath, receipt)
+					writeBootstrapAdmissionRejection(registryPath, target, options, desired.ID, "bootstrap target already exists with a different registry record identity")
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s has an unaccounted registry identity", target.targetPath))
 				}
 				if record.ID == desired.ID && !sameTarget {
-					receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target conflicts with an existing registry record", CreatedAt: nowReceiptTime()}
-					_ = writeAdmissionReceipt(registryPath, receipt)
+					writeBootstrapAdmissionRejection(registryPath, target, options, record.ID, "bootstrap target conflicts with an existing registry record")
 					return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target conflicts with registry record %q", record.ID))
 				}
 				if sameTarget {
@@ -1047,10 +1139,13 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 					expected.VCSIdentity = outer.VCSIdentity
 					expected.PackageDigest = source.Digest
 					expected.InstalledDigest = targetDigests[canonicalRegistryPath(target.targetPath)]
-					if !strings.EqualFold(record.Status, "active") || !validRegistryRecord(record) || !sameRegistryBinding(record, expected) || !sameRegistryIdentity(record, expected) {
-						receipt := AdmissionReceipt{Code: "UNREGISTERED_INSTALL", Status: "disabled", Accepted: false, RecordID: record.ID, Registry: registryPath, Reason: "bootstrap target has a stale or incomplete registry identity", CreatedAt: nowReceiptTime()}
-						_ = writeAdmissionReceipt(registryPath, receipt)
-						return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s cannot reconcile its existing registry identity", target.targetPath))
+					valid := validRegistryRecord(record)
+					binding := sameRegistryBinding(record, expected)
+					identity := sameRegistryIdentity(record, expected)
+					if !strings.EqualFold(record.Status, "active") || !valid || !binding || !identity {
+						reason := fmt.Sprintf("bootstrap target has a stale or incomplete registry identity (status=%s valid=%t binding=%t identity=%t)", record.Status, valid, binding, identity)
+						writeBootstrapAdmissionRejection(registryPath, target, options, record.ID, reason)
+						return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s cannot reconcile its existing registry identity: %s", target.targetPath, reason))
 					}
 				}
 			}
@@ -1064,8 +1159,7 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 			if _, found := existingByID[desired.ID]; found {
 				continue
 			}
-			receipt := bootstrapUnregisteredReceipt(registryPath, target, options, "an existing registry has no admission record for the bootstrap target")
-			_ = writeAdmissionReceipt(registryPath, receipt)
+			writeBootstrapAdmissionRejection(registryPath, target, options, desired.ID, "an existing registry has no admission record for the bootstrap target")
 			return InstallReport{}, rollback(fmt.Errorf("UNREGISTERED_INSTALL: bootstrap target %s is missing from the existing registry", target.targetPath))
 		}
 	}
@@ -1140,6 +1234,14 @@ func bootstrapUnregisteredReceipt(registryPath string, target installTarget, opt
 		Scope: record.Scope, Host: record.Host, CanonicalPaths: record.CanonicalPaths,
 		Reason: reason, CreatedAt: nowReceiptTime(),
 	}
+}
+
+func writeBootstrapAdmissionRejection(registryPath string, target installTarget, options InstallOptions, recordID, reason string) {
+	receipt := bootstrapUnregisteredReceipt(registryPath, target, options, reason)
+	if strings.TrimSpace(recordID) != "" {
+		receipt.RecordID = recordID
+	}
+	_ = writeAdmissionReceipt(registryPath, receipt)
 }
 
 func sameRegistryBinding(left, right RegistryRecord) bool {
@@ -1457,7 +1559,7 @@ func copyInstallRuntime(source, target string, force bool) error {
 			// it through Package validation, while the fixture remains runtime-only.
 			continue
 		}
-		if err := installFaultAliases("copy-component:"+entry, "copy:"+entry); err != nil {
+		if err := installFault("copy-component:" + entry); err != nil {
 			return err
 		}
 		if err := copyPath(from, to); err != nil {

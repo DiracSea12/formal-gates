@@ -33,7 +33,7 @@ func newStagedInstallTree(source, destination string, runtimeOnly bool) stagedIn
 }
 
 func prepareInstallTree(candidate stagedInstallTree) (stagedInstallTree, error) {
-	if err := installFaultAliases("runtime", "copy-component:runtime", "copy:runtime"); err != nil {
+	if err := installFault("runtime"); err != nil {
 		return stagedInstallTree{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(candidate.Destination), 0o700); err != nil {
@@ -72,13 +72,10 @@ func switchPreparedInstallTree(candidate *stagedInstallTree, force bool) error {
 }
 
 func verifySwitchedInstallTree(candidate stagedInstallTree, allowPlaceholder bool) error {
-	if err := installFaultAliases(
-		"verify-stage:installed-target", "verify:installed-target",
-		"verify-stage:manifest", "verify:manifest", "manifest",
-		"verify-stage:realpath", "verify:realpath", "realpath",
-		"verify-stage:digest", "verify:digest", "digest",
-	); err != nil {
-		return err
+	for _, phase := range []string{"verify-stage:installed-target", "verify-stage:manifest", "verify-stage:realpath", "verify-stage:digest"} {
+		if err := installFault(phase); err != nil {
+			return err
+		}
 	}
 	installed, err := PackageReceipt(candidate.Destination, candidate.Source)
 	if err != nil {
@@ -126,7 +123,7 @@ func copyTreeImmutable(source, target string) error {
 			return fmt.Errorf("release entry %s is not an immutable regular file", filepath.ToSlash(rel))
 		}
 		topLevel := strings.Split(filepath.ToSlash(rel), "/")[0]
-		if err := installFaultAliases("copy-component:"+topLevel, "copy:"+topLevel); err != nil {
+		if err := installFault("copy-component:" + topLevel); err != nil {
 			return err
 		}
 		return copyFile(path, filepath.Join(target, rel), info.Mode())
@@ -569,15 +566,6 @@ func reconcileOuterInstallJournal(registryPath string) error {
 func installFault(phase string) error {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("FORMAL_GATES_INSTALL_FAULT")), phase) {
 		return fmt.Errorf("deterministic install fault injected at %s", phase)
-	}
-	return nil
-}
-
-func installFaultAliases(phases ...string) error {
-	for _, phase := range phases {
-		if err := installFault(phase); err != nil {
-			return err
-		}
 	}
 	return nil
 }

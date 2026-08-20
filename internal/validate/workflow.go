@@ -226,13 +226,16 @@ func Start(options StartOptions) (RunState, error) {
 	if registryPath != "" {
 		recordID := registryRecordID
 		if recordID == "" {
+			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, "admission record id is required when --registry is supplied")
 			return RunState{}, fmt.Errorf("admission record id is required when --registry is supplied")
 		}
 		receipt, err := AdmitRegistry(registryPath, recordID)
 		if err != nil {
+			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, err.Error())
 			return RunState{}, err
 		}
 		if !receipt.Accepted {
+			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, receipt.Reason)
 			return RunState{}, fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, recordID)
 		}
 		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
@@ -347,6 +350,7 @@ func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID stri
 	registryRecordID := strings.TrimSpace(requestedID)
 	if registryPath != "" {
 		if registryRecordID == "" {
+			writeWorkflowAdmissionRejection(registryPath, registryRecordID, root, packageRoot, "admission record id is required when --registry is supplied")
 			return "", "", fmt.Errorf("admission record id is required when --registry is supplied")
 		}
 		return filepath.Clean(registryPath), registryRecordID, nil
@@ -378,6 +382,9 @@ func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID stri
 		}
 		return filepath.Clean(candidate), record.ID, nil
 	}
+	for _, candidate := range candidates {
+		writeWorkflowAdmissionRejection(candidate, registryRecordID, root, packageRoot, "stable launcher registry is missing")
+	}
 	executable, executableErr := os.Executable()
 	if executableErr != nil {
 		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
@@ -392,6 +399,7 @@ func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID stri
 func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, error) {
 	doc, err := LoadRegistry(path)
 	if err != nil {
+		writeWorkflowAdmissionRejection(path, "", "", packageRoot, fmt.Sprintf("registry cannot be read: %v", err))
 		return RegistryRecord{}, err
 	}
 	want, err := filepath.Abs(packageRoot)
@@ -406,7 +414,35 @@ func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, erro
 			return record, nil
 		}
 	}
+	writeWorkflowAdmissionRejection(path, "", "", packageRoot, fmt.Sprintf("no registry record matches package root %s", packageRoot))
 	return RegistryRecord{}, fmt.Errorf("no registry record matches package root %s", packageRoot)
+}
+
+func writeWorkflowAdmissionRejection(path, recordID, root, packageRoot, reason string) {
+	target := strings.TrimSpace(packageRoot)
+	if target == "" {
+		target = root
+	}
+	canonicalTarget := ""
+	if target != "" {
+		canonicalTarget = canonicalRegistryPath(target)
+	}
+	canonicalRoot := ""
+	if strings.TrimSpace(root) != "" {
+		canonicalRoot = canonicalRegistryPath(root)
+	}
+	paths := map[string]string{}
+	if canonicalTarget != "" {
+		paths["target"] = canonicalTarget
+	}
+	if canonicalRoot != "" {
+		paths["projectRoot"] = canonicalRoot
+	}
+	_ = writeAdmissionReceipt(path, AdmissionReceipt{
+		Code: "UNREGISTERED_INSTALL", Accepted: false, Status: "disabled",
+		RecordID: recordID, Registry: filepath.Clean(path), Target: canonicalTarget,
+		Scope: "unknown", CanonicalPaths: paths, Reason: reason, CreatedAt: nowReceiptTime(),
+	})
 }
 
 func registryAdmissionIdentity(path, recordID string) (RegistryDocument, RegistryRecord, error) {
@@ -563,9 +599,11 @@ func requireWorkflowAdmission(root, packageRoot string) error {
 	}
 	receipt, err := AdmitRegistry(registry, recordID)
 	if err != nil {
+		writeWorkflowAdmissionRejection(registry, recordID, root, packageRoot, err.Error())
 		return err
 	}
 	if !receipt.Accepted {
+		writeWorkflowAdmissionRejection(registry, recordID, root, packageRoot, receipt.Reason)
 		return fmt.Errorf("%s: workflow resume refused for registry record %q", receipt.Code, recordID)
 	}
 	return verifyRegistryBinding(registry, recordID, root, packageRoot)
