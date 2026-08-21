@@ -54,10 +54,10 @@
 3. 执行责任使用两个正交维度：`DecisionAuthority = ENGINE | AGENT | HUMAN`，`RunnerKind = ENGINE_LOCAL | DURABLE_ACTIVITY | HOST_ADAPTER | AGENT_WORKER`。HOST 只表示外部能力/执行位置，不拥有流程决定权；HUMAN 只能经 Ask。Operator 是当前主代理执行的 `AGENT + AGENT_WORKER + SEMANTIC_JUDGMENT` typed observation，不是 HUMAN 决策，也不能借 Operator 执行 engine/adapter 动作。
 4. 能确定性实现的操作必须由 ENGINE 决定并通过本地 handler、durable activity 或 host adapter 程序化执行。AGENT 只允许用于 `SEMANTIC_JUDGMENT`、`CREATIVE_IMPLEMENTATION`、`INDEPENDENT_REVIEW` 三类不可程序化工作；“实现麻烦”不是理由。缺 adapter 只可在开发期 diagnostic compiler mode 标记为 `MISSING_ENGINE_ADAPTER` 技术债；该定义不得进入 executable plan、不得签发 Ready/HostAction，正常 compile/drive 必须以 `BLOCKED_BUG` 和 diagnose 拒绝。本次范围内的最终候选不得残留该 marker。
 5. 纯内存、廉价、确定性的连续变换，或能够在一个原子/幂等事务中一起恢复的操作，可留在单个 engine handler 内，由代码顺序机械保证，不要求把每条语句都持久化。若步骤涉及独立恢复/重试/超时/补偿/幂等、不可逆副作用或 UNKNOWN receipt、人/代理边界、fan-out/fan-in、独立审计/版本/证据，或必须避免重放已完成前缀，则必须拆成 Controller 跟踪的 `StepSpec`。
-6. `StepSpec` 至少包含 `id`、`nodeID`、`ordinal/dependencies`、可执行 pre/postcondition、decision authority、runner kind、输入/输出 schema、retry/timeout、idempotency key、side-effect/receipt policy、interrupt policy、parallel group/join policy、failure-class map 与 definition version。AGENT 另须合法 `nonProgrammableReason`；可执行 HOST_ADAPTER 的 `hostBoundaryReason` 只能是 `EXTERNAL_CAPABILITY_BOUNDARY | USER_IO_TRANSPORT | AGENT_DISPATCH_API`。`MISSING_ENGINE_ADAPTER` 只是 diagnostic-only definition marker，不是 runner reason。
-7. 定义编译时拒绝不可达步骤/非法循环、无类型输入输出、仅以自然语言表达的 pre/postcondition、无幂等或 reconcile 的副作用、无 request/schema 的人工等待、无 join/failure policy 的并行组、缺合法理由的 AGENT/HOST，以及未绑定 definition version 的执行计划。运行时只允许当前 eligible frontier，拒绝乱序、遗漏和重复 step；代理只看到当前已解锁步骤的最小输入、typed output 和 postcondition，不能决定下一步。
+6. 定义的唯一 authoring 形态是封闭 Go 类型变体加 constructor 加显式节点/步骤表（ADR-001）；不引入 JSON/YAML 工作流 DSL、通用 schema 解释器、用户自定义节点插件或任意脚本/表达式扩展点。编译产物为具体结构组成、由 compiler 生成、checked-in 且字节级稳定的 canonical 制品，每个步骤（`StepSpec`）包含 `id`、`nodeID`、`ordinal/dependencies`、可执行 pre/postcondition 引用、由变体派生并物化的 decision authority 与 runner kind、typed I/O codec 引用、retry/timeout、idempotency key、side-effect/receipt policy、interrupt policy、parallel group/join policy、failure-class map、definition version 与稳定 registry ID（handler/predicate/codec/reconcile）。制品不含函数、闭包、内存地址、绝对路径、当前时间或无序 map。AGENT 另须合法 `nonProgrammableReason`；可执行 HOST_ADAPTER 的 `hostBoundaryReason` 只能是 `EXTERNAL_CAPABILITY_BOUNDARY | USER_IO_TRANSPORT | AGENT_DISPATCH_API`。`MISSING_ENGINE_ADAPTER` 只是 diagnostic-only definition marker，不是 runner reason。
+7. 八类非法定义拒绝结果全部保留，不因实现分层减少：不可达步骤/非法循环、无类型输入输出、仅以自然语言表达的 pre/postcondition、无幂等或 reconcile 的副作用、无 request/schema 的人工等待、无 join/failure policy 的并行组、缺合法理由的 AGENT/HOST，以及未绑定 definition version 的执行计划。局部非法组合优先由封闭类型与 constructor 消除（非法状态在正常 authoring API 下不可构造），全局图不变量由小型 closed-world compiler 校验，runtime loader 对版本绑定做最后防线；executable definition 只有在同一候选包 registry 完整、唯一解析其全部 registry ID 时才能激活。运行时只允许当前 eligible frontier，拒绝乱序、遗漏和重复 step；代理只看到当前已解锁步骤的最小输入、typed output 和 postcondition，不能决定下一步。
 8. 引擎失败不得静默或动态降级给代理/LLM。固定分类为：`TRANSIENT_ENGINE_ERROR` → 机械 retry/backoff；`BUSINESS_REJECT` → 声明的业务边；`USER_ACTION_REQUIRED` → Ask/Wait；`SIDE_EFFECT_UNKNOWN` → reconcile/Wait/Operator；`INVARIANT_VIOLATION`/`BLOCKED_BUG` → 显式失败并 diagnose；只有定义中预先声明的 `AGENT_RECOVERABLE_SEMANTIC_ERROR` 可进入代理语义修复。
-9. `state.json` 继续作唯一权威工作流投影；新增单调 revision/CAS、`pendingActions`、精确版本字段、按 TaskKey 派生的当前 Attempt、持久化 typed `ReviewScopeMode` 和逐项 QA approved whitelist，不引事件溯源、SQLite、watchdog、OS 定时器、repo 级队列或开放式通用 Effect/Artifact 框架。StepSpec 的 side-effect/receipt 与 artifact 仅允许定义中穷举的 typed policy/schema。
+9. `state.json` 继续作唯一权威工作流投影；新增单调 revision/CAS、`pendingActions`、精确版本字段、按 TaskKey 派生的当前 Attempt、持久化 typed `ReviewScopeMode` 和逐项 QA approved whitelist，不引事件溯源、SQLite、watchdog、OS 定时器、repo 级队列或开放式通用 Effect/Artifact 框架。StepSpec 的 side-effect/receipt 与 artifact 仅允许定义中穷举的 typed policy/schema。run envelope 同时绑定 definitionDigest 与 owning runtime 的 packageDigest/installed-target identity：packageDigest 是执行绑定而非审计附注，loader 在写入前必须校验其与实际执行 runtime 一致（或由 run 绑定的不可变 runtime sibling 执行并验证实际摘要，或持有显式 adopt receipt），不得仅凭 HandlerID 相同接受接管。三类身份职责分离：DefinitionDigest 绑定拓扑/registry ID/策略，PackageDigest 绑定实现字节与安装包，PlanDigest 绑定给定 state+observation 的决策结果；HandlerID 标识可恢复执行合同，合同不兼容变化必须晋升 ID，合同兼容的实现变化保持 ID 并由 PackageDigest 标识。
 10. 动态任务走 `expectedTasks` / `TaskKey` / `TaskTransitionTable`；迁移表只管理 run-level phase。
 11. `NextResult` 只有 Ready、HostAction、Ask、Wait、Operator、Complete 六类外部边界；同一 canonical Plan 的 Kind 唯一。
 12. `Ready`/`HostAction` 只携薄指针和 actionID；主代理必须原样、整批搬运，不能选择或改写。每个 Ready agent action 显式绑定两个 StepSpec 边界：`ENGINE + HOST_ADAPTER + AGENT_DISPATCH_API` 的 spawn transport/SpawnReceipt，以及 `AGENT + AGENT_WORKER + nonProgrammableReason` 的 worker result；spawn 仍属于 Ready，不进入 HostAction。HostAction 是 `RESUME_AGENT | TERMINATE_AGENT | EXECUTE_ADAPTER_OPERATION` 的封闭 typed union；adapter operation 只能引用定义中注册的 operation/schema，不得成为自由 shell 通道。
@@ -193,7 +193,7 @@
 以下每一项都要求可复现测试/QA 证据，不能用 smoke 或口头保证代替：
 
 1. **迁移表与用户节点**：每条合法边、pre 拒绝、trigger 分类、Ask/Operator/Wait/HostAction/Ready/Complete、主动 `REQUEST_*`、终态与回退；正常入口不存在遗漏用户节点。
-2. **节点内执行计划**：StepSpec 编译校验、合法/非法 reason、typed I/O、可执行 pre/postcondition、固定顺序、乱序/遗漏/重复拒绝、精确 frontier、崩溃后不重放已完成前缀，以及纯原子 handler 不被过度拆分。
+2. **节点内执行计划**：封闭变体 constructor 非法状态拒绝、closed-world compiler 图校验（可达性/循环/依赖/join 覆盖/版本绑定/registry ID 完备性）、合法/非法 reason、typed I/O、可执行 pre/postcondition、固定顺序、乱序/遗漏/重复拒绝、精确 frontier、崩溃后不重放已完成前缀，以及纯原子 handler 不被过度拆分。
 3. **失败分类与禁止降级**：每类 engine/business/user/UNKNOWN/invariant/semantic error 只进入声明边；engine/adapter 故障绝不动态改派 AGENT；diagnostic-only `MISSING_ENGINE_ADAPTER` 不可编译/签发并稳定进入 `BLOCKED_BUG` diagnose；最终定义扫描证明本次范围内没有该 marker。
 4. **并行**：eligible N、capacity C 时恰好签发 `min(N,C)`；整批搬运、释放容量立即补位、固定顺序无饥饿、支路失败不压制独立 sibling；`Dn` 后白盒 authoring/review 与生产 view 黑盒/门并行，`Qn` 后用精确 view digest 将未受影响 provisional result 纳入 expected set，只重跑受影响项，白盒 execution 与剩余任务立即 fan-out。
 5. **任务与派发**：expected set 漏派/重复、TaskKey、Attempt、旧 Attempt、result-before-receipt、UNKNOWN/lifecycle 对账、同 actionID 不重复 spawn、重复 submit 不重放 SpawnRequest。
@@ -207,10 +207,11 @@
 13. **宿主**：DSH、Claude Code、Codex、Cursor 各自在真实环境跑一次 Git 非分片完整正式流程，覆盖产品审、技术审、开发/黑盒设计并行、whitebox workspace 与生产验证并行、test-only/view 等价复用、完整候选、白盒与受影响验证、精确 promotion、至少一次 FAIL→repair→重审、receipt/result、一次中断恢复、无残留 cleanup 和 Seal。
 14. **最小 canary 数**：四宿主 Git 非分片与 VCS 3×2 可复用一个 Git 非分片单元格，故最低九条完整 canary；不要求四宿主×三 VCS×两种拆分的笛卡尔积。全部权威结果必须绑定同一份已删除旧运行时逻辑的最终候选 revision 和实际安装副本。
 15. **黑盒边界**：文档化正常入口、常见误操作和已知恢复/崩溃窗口；对抗输入、恶意/手工状态编辑、权限/不可变文件和未支持 OS 只作 P3、不阻塞。
+16. **canonical 制品与身份**：compiler 同一生成动作产出 `definitions/workflow.json` 与期望身份常量，禁止人工双写；authoring source 重新生成 checked-in 制品字节无 diff（独立于 round-trip 的 freshness CI）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节；只改 handler 实现不改 ID 与定义语义时 definition digest 不变而 package digest 变，改变 dependency/policy/reason/schema ID/handler ID/join 语义时 definition digest 必变；registry 对每个 ID 精确解析一次，缺失、重复或 kind 不匹配拒绝；packageDigest 执行绑定（含 runtime sibling 实际摘要校验与 adopt receipt 路径）有正反向测试。
 
 ## 11. 验收判定
 
-1. 方案稿全部确定性闸门、节点内 StepSpec 顺序/失败分类、强制并行不变量和用户节点覆盖测试通过。
+1. 方案稿全部确定性闸门、节点内执行计划顺序/失败分类、强制并行不变量和用户节点覆盖测试通过。
 2. 六个 VCS×split 单元格、四宿主 same-host canary、独立 QA 全部 PASS；每项有可复现事件、状态、snapshot 和最终 Seal/receipt 证据。
 3. 任何范围内 FAIL/P0/P1/P2/P3 obligation 按已确认三轮规则闭环；范围外项不阻塞。
 4. 最终候选不存在旧 run 兼容、迁移、legacy mode、旧公开推进入口、第二写入口、cleanup 后门或 engine→legacy 回退。
@@ -246,3 +247,5 @@
 - 所有可程序化动作都由 ENGINE 决定；代理仅负责语义判断、创造性实现和独立审查，VCS 写操作与集成顺序全部由 Git/SVN/P4 adapter 执行，且引擎失败不得动态降级给代理。
 - 旧 run/旧命令不兼容、不迁移、不续跑；只有 raw diagnose，失败后以当前版本新建。
 - 当前稳定安装仅保障 `orch-engine-003` 开发完成；最终候选隔离验证并在 Seal/全部 canary PASS 后安装。
+- 步骤模型采用 typed Go authoring（封闭变体 + constructor + 显式表）→ 小型 closed-world compiler → 单一 canonical encoder → compiler 生成 `definitions/workflow.json` 与身份常量的形态（ADR-001）；拒绝扁平万能 StepSpec、通用 DSL/schema 解释层、完全删除定义编译器与定义制品，以及为实现对照建两套架构。
+- HandlerID 只在执行合同或恢复兼容边界变化时晋升，合同兼容的实现变化保持 ID、由 PackageDigest 标识；executable definition 与二进制 registry 锁步激活；packageDigest 是 owning-runtime 执行绑定而非审计附注。

@@ -157,9 +157,11 @@ Seal 后状态：插件公开行为仍是当前 legacy，固定稳定驱动环�
 
 范围：
 
-- 定义 `RunPhase`、`TaskKey`、`TaskTransitionTable`、`NodeExecutionPlan`、`StepSpec` 和 `NextResult`。
-- 实现 definition compiler、`Observe`、`Decide`、`SelectIssued` 与 canonical Plan。
-- 实现 DecisionAuthority、RunnerKind、合法 reason 与 failure-class 的静态校验。
+- 开工前定稿 ADR-001（typed Go authoring + 编译式 canonical 定义制品）并完成六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小型 compiler spike，确认 compiled IR、registry 与 canonical encoder 边界；spike 不进入 production。
+- 按封闭类型变体 + constructor + 显式节点/步骤表定义 `RunPhase`、`TaskKey`、`TaskTransitionTable`、`NodeExecutionPlan`、`StepSpec` 与 `NextResult`。
+- 实现 closed-world definition compiler（registry 解析、全局图不变量、归一化、authority/runner 派生、canonical 编码）、`Observe`、`Decide`、`SelectIssued` 与 canonical Plan；compiler 同一生成动作产出 `definitions/workflow.json` 与期望身份常量，禁止人工双写 digest。
+- 实现 DecisionAuthority、RunnerKind、合法 reason 与 failure-class 的静态校验；八类非法定义拒绝按 enforcement matrix 分层拦截且结果全保留。
+- canonical 制品独立验收：authoring source 重新生成 checked-in 制品字节无 diff（freshness CI，不能用 round-trip 替代）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节、definition/package digest 分离、语义变化必变 definition digest、registry 完备性、constructor 非法状态测试、mutation tests；复杂度止损规则：新增普通业务节点不得要求修改 compiler core，compiler 不得理解具体业务语义。
 - `MISSING_ENGINE_ADAPTER` 只能作为 diagnostic-only marker；正常 compile/drive 必须路由为 `BLOCKED_BUG` 并拒绝签发 Ready/HostAction，最终候选必须有 marker 扫描证明不存在该技术债。
 - 以 fixtures、golden traces 和 property tests 验证合法边、非法图、稳定排序、完整 frontier、乱序/遗漏/重复拒绝。
 - Shadow 只读取 legacy 状态和外部事实，输出预测与差异；不改写 state，不触发副作用，也不参与用户正式决定。
