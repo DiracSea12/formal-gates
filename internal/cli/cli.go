@@ -2,9 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -29,9 +31,33 @@ func Run(program string, args []string, streams IO) int {
 	}
 	code, err := run(program, args, streams)
 	if err != nil {
+		var lockErr *validate.LockHeldError
+		if errors.As(err, &lockErr) {
+			_, _ = printJSON(streams.Stdout, map[string]any{
+				"code": "LOCK_HELD", "operation": lockErr.Operation,
+				"path": lockErr.Path, "message": lockErr.Error(),
+			})
+			return code
+		}
 		fmt.Fprintln(streams.Stderr, err)
 	}
 	return code
+}
+
+func operationError(streams IO, err error) (int, error) {
+	var lockErr *validate.LockHeldError
+	if !errors.As(err, &lockErr) {
+		return 1, err
+	}
+	if _, printErr := printJSON(streams.Stdout, map[string]any{
+		"code":      "LOCK_HELD",
+		"operation": lockErr.Operation,
+		"path":      lockErr.Path,
+		"message":   lockErr.Error(),
+	}); printErr != nil {
+		return 1, printErr
+	}
+	return 1, nil
 }
 
 func run(program string, args []string, streams IO) (int, error) {
@@ -49,6 +75,8 @@ func run(program string, args []string, streams IO) (int, error) {
 	switch args[0] {
 	case "package":
 		return runPackage(args[1:], streams)
+	case "registry":
+		return runRegistry(args[1:], streams)
 	case "install":
 		return runInstall(args[1:], streams)
 	case "uninstall":
@@ -78,10 +106,49 @@ func runPackage(args []string, streams IO) (int, error) {
 	case "validate":
 		fs := newFlagSet("package validate", streams)
 		root := fs.String("root", ".", "formal-gates package root")
+		installed := fs.String("installed-target", "", "optional installed target root to bind in the validation receipt")
+		vcs := fs.String("vcs-identity", "", "optional immutable VCS identity to bind in the validation receipt")
+		pathFlags := stringListFlag{}
+		fs.Var(&pathFlags, "path", "canonical path as name=PATH; repeat as needed")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
-		return printValidationResult(streams.Stdout, "package", validate.Package(*root))
+		result := validate.Package(*root)
+		code, err := printValidationResult(streams.Stdout, "package", result)
+		if code != 0 || err != nil {
+			return code, err
+		}
+		receipt, receiptErr := validate.PackageReceipt(*root)
+		if receiptErr != nil {
+			return 1, receiptErr
+		}
+		if strings.TrimSpace(*installed) != "" || strings.TrimSpace(*vcs) != "" || len(pathFlags) != 0 {
+			if strings.TrimSpace(*installed) == "" || strings.TrimSpace(*vcs) == "" {
+				return 1, fmt.Errorf("package validate identity output requires --installed-target and --vcs-identity together")
+			}
+			canonical := map[string]string{}
+			for _, item := range pathFlags {
+				parts := strings.SplitN(item, "=", 2)
+				if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+					return 1, fmt.Errorf("--path must use name=PATH")
+				}
+				canonical[parts[0]] = parts[1]
+			}
+			baseline, baselineErr := validate.BuildBaselineReceipt(*vcs, *root, *installed, canonical)
+			if baselineErr != nil {
+				return 1, baselineErr
+			}
+			receipt.InstalledTarget = baseline.InstalledTarget
+			receipt.InstalledTargetDigest = baseline.InstalledTargetDigest
+			receipt.VCSIdentity = baseline.VCSIdentity
+			receipt.Disjoint = baseline.Disjoint
+			receipt.CanonicalPaths = baseline.CanonicalPaths
+			receipt.DisjointProof = baseline.DisjointProof
+			receipt.PathIdentities = baseline.PathIdentities
+			receipt.HookConfigDigest = baseline.HookConfigDigest
+			receipt.ManagedRuleDigest = baseline.ManagedRuleDigest
+		}
+		return printJSON(streams.Stdout, receipt)
 	case "route-candidates":
 		fs := newFlagSet("package route-candidates", streams)
 		root := fs.String("root", ".", "formal-gates package root")
@@ -90,8 +157,73 @@ func runPackage(args []string, streams IO) (int, error) {
 		}
 		candidates, err := validate.PackageRouteCandidates(*root)
 		return printValue(streams.Stdout, candidates, err)
+	case "baseline":
+		fs := newFlagSet("package baseline", streams)
+		root := fs.String("root", ".", "package root")
+		installed := fs.String("installed-target", "", "installed target root to digest")
+		vcs := fs.String("vcs-identity", "", "immutable VCS identity")
+		output := fs.String("output", "", "baseline receipt output path")
+		pathFlags := stringListFlag{}
+		fs.Var(&pathFlags, "path", "canonical path as name=PATH; repeat as needed")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*vcs) == "" || strings.TrimSpace(*output) == "" {
+			return 1, fmt.Errorf("package baseline requires --vcs-identity and --output")
+		}
+		canonical := map[string]string{}
+		for _, item := range pathFlags {
+			parts := strings.SplitN(item, "=", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+				return 1, fmt.Errorf("--path must use name=PATH")
+			}
+			canonical[parts[0]] = parts[1]
+		}
+		receipt, err := validate.BuildBaselineReceipt(*vcs, *root, *installed, canonical)
+		if err == nil {
+			err = validate.WriteBaselineReceipt(*output, receipt)
+		}
+		return printValue(streams.Stdout, receipt, err)
 	default:
 		return 1, fmt.Errorf("unknown package subcommand: %s", subcommand)
+	}
+}
+
+func runRegistry(args []string, streams IO) (int, error) {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		printRegistryUsage(streams.Stdout, "formal-gates")
+		return 0, nil
+	}
+	subcommand, args := args[0], args[1:]
+	switch subcommand {
+	case "admit":
+		fs := newFlagSet("registry admit", streams)
+		path := fs.String("path", "", "registry JSON path")
+		recordID := fs.String("record-id", "", "registry record id")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" || strings.TrimSpace(*recordID) == "" {
+			return 1, fmt.Errorf("registry admit requires --path and --record-id")
+		}
+		receipt, err := validate.AdmitRegistry(*path, *recordID)
+		if printCode, printErr := printValue(streams.Stdout, receipt, err); printErr != nil {
+			return printCode, printErr
+		}
+		if !receipt.Accepted {
+			return 1, fmt.Errorf("%s: %s", receipt.Code, receipt.Reason)
+		}
+		return 0, nil
+	case "show":
+		fs := newFlagSet("registry show", streams)
+		path := fs.String("path", "", "registry JSON path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		doc, err := validate.LoadRegistry(*path)
+		return printValue(streams.Stdout, doc, err)
+	default:
+		return 1, fmt.Errorf("unknown registry subcommand: %s", subcommand)
 	}
 }
 
@@ -102,6 +234,9 @@ func runInstall(args []string, streams IO) (int, error) {
 	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
 	scope := fs.String("scope", "", "install scope: global or project")
 	project := fs.String("project", "", "project path for project installs")
+	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
+	binaryTarget := fs.String("binary-target", "", "native transaction executable target (bootstrap use)")
+	bootstrap := fs.Bool("bootstrap", false, "register the selected target in the stage-0 admission bridge without installing runtime files")
 	force := fs.Bool("force", false, "replace an existing target")
 	skipHooks := fs.Bool("skip-hooks", false, "install without changing native host hooks")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -110,18 +245,28 @@ func runInstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("install does not accept positional arguments")
 	}
-	report, err := validate.Install(validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, Force: *force, SkipHooks: *skipHooks})
+	options := validate.InstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project, ReleaseRoot: *releaseRoot, BinaryTarget: *binaryTarget, Bootstrap: *bootstrap, Force: *force, SkipHooks: *skipHooks}
+	if err := validate.RequireInstallLauncher(options); err != nil {
+		return operationError(streams, err)
+	}
+	report, err := validate.Install(options)
 	if err != nil {
-		return 1, err
+		return operationError(streams, err)
 	}
 	for _, target := range report.Targets {
 		fmt.Fprintf(streams.Stdout, "formal-gates installed for %s: %s\n", target.Host, target.TargetPath)
 		if target.HookConfig != "" {
 			fmt.Fprintf(streams.Stdout, "formal-gates hooks configured for %s: %s\n", target.Host, target.HookConfig)
 		}
-		if target.ManagedRulePath != "" {
+		if target.ManagedRulePath != "" && target.ManagedRuleAction == "APPLIED" {
 			fmt.Fprintf(streams.Stdout, "formal-gates host instruction block written for %s: %s\n", target.Host, target.ManagedRulePath)
 		}
+	}
+	// Keep the friendly lines above for interactive bootstrap users, and also
+	// emit the complete immutable receipt so callers can bind source/installed
+	// digests, manifests and hook/rule paths without scraping prose.
+	if _, printErr := printJSON(streams.Stdout, report); printErr != nil {
+		return 1, printErr
 	}
 	return 0, nil
 }
@@ -129,7 +274,6 @@ func runInstall(args []string, streams IO) (int, error) {
 func runUninstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
-	source := fs.String("source", "", "deprecated compatibility flag; marker-based uninstall does not need a source directory")
 	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
 	scope := fs.String("scope", "", "uninstall scope: global or project")
 	project := fs.String("project", "", "project path for project uninstalls")
@@ -139,9 +283,13 @@ func runUninstall(args []string, streams IO) (int, error) {
 	if fs.NArg() != 0 {
 		return 1, fmt.Errorf("uninstall does not accept positional arguments")
 	}
-	report, err := validate.Uninstall(validate.UninstallOptions{Source: *source, Host: *host, Scope: *scope, Project: *project})
-	if err != nil {
+	options := validate.UninstallOptions{Host: *host, Scope: *scope, Project: *project}
+	if err := validate.RequireUninstallLauncher(options); err != nil {
 		return 1, err
+	}
+	report, err := validate.Uninstall(options)
+	if err != nil {
+		return operationError(streams, err)
 	}
 	for _, target := range report.Targets {
 		fmt.Fprintf(streams.Stdout, "formal-gates uninstalled for %s: %s\n", target.Host, target.TargetPath)
@@ -179,6 +327,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 var workflowSubcommands = map[string]func(args []string, streams IO) (int, error){
 	"start":              runWorkflowStart,
 	"show":               runWorkflowShow,
+	"diagnose":           runWorkflowDiagnose,
 	"resume":             runWorkflowResume,
 	"abort":              runWorkflowAbort,
 	"reset":              runWorkflowReset,
@@ -200,6 +349,7 @@ var workflowSubcommands = map[string]func(args []string, streams IO) (int, error
 	"qa-execution-scope": runWorkflowQAExecutionScope,
 	"snapshot":           runWorkflowSnapshot,
 	"cleanup":            runWorkflowCleanup,
+	"future":             runWorkflowFuture,
 	"carry":              runCarry,
 	"authorize-repair":   runWorkflowAuthorizeRepair,
 	"seal":               runWorkflowSeal,
@@ -236,6 +386,30 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	}
 	state, err := validate.LoadRunState(*root, *runID)
 	return printValue(streams.Stdout, state, err)
+}
+
+func runWorkflowDiagnose(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow diagnose", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "run id whose raw state should be diagnosed")
+	path := fs.String("path", "", "raw state or terminal summary path")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	statePath := strings.TrimSpace(*path)
+	if statePath == "" {
+		if strings.TrimSpace(*runID) == "" {
+			return 1, fmt.Errorf("workflow diagnose requires --path or --run-id")
+		}
+		statePath = validate.RunStatePath(*root, *runID)
+		if _, statErr := os.Stat(statePath); os.IsNotExist(statErr) {
+			// Terminal runs intentionally remove .gates/tmp/<run-id>/state.json;
+			// diagnose --run-id must fall back to the retained summary.
+			statePath = validate.RunSummaryPath(*root, *runID)
+		}
+	}
+	report, err := validate.DiagnoseState(statePath)
+	return printValue(streams.Stdout, report, err)
 }
 
 func runWorkflowResume(args []string, streams IO) (int, error) {
@@ -453,11 +627,95 @@ func runWorkflowClaimDispatch(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "run id")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id")
 	reviewer := fs.String("reviewer", "", "host reviewer or session identity")
+	provider := fs.String("provider", "", "explicit lifecycle host provider (required when a shared launcher has multiple admitted hosts)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.ClaimDispatch(*root, *pkg, *runID, *dispatch, *reviewer)
+	state, err := validate.ClaimDispatchWithProvider(*root, *pkg, *runID, *dispatch, *reviewer, *provider)
 	return workflowResult(streams, *root, *runID, state, err)
+}
+
+func runWorkflowFuture(args []string, streams IO) (int, error) {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		return 0, printFutureUsage(streams.Stdout, "formal-gates")
+	}
+	action, args := args[0], args[1:]
+	switch action {
+	case "generate":
+		fs := newFlagSet("workflow future generate", streams)
+		root := fs.String("root", ".", "package root")
+		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
+		output := fs.String("output", "", "optional envelope output path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		envelope, err := validate.GenerateFutureEnvelope(*root, *packageDigest)
+		if err != nil {
+			return 1, err
+		}
+		if strings.TrimSpace(*output) != "" {
+			if err := validate.WriteFutureEnvelope(*root, *output, envelope); err != nil {
+				return 1, err
+			}
+		}
+		return printValue(streams.Stdout, envelope, nil)
+	case "write":
+		name := "workflow future write"
+		fs := newFlagSet(name, streams)
+		root := fs.String("root", ".", "package root")
+		path := fs.String("path", "", "versioned future state output path")
+		output := fs.String("output", "", "alias for --path")
+		envelopePath := fs.String("envelope", "", "validated envelope JSON path")
+		input := fs.String("input", "", "alias for --envelope")
+		packageDigest := fs.String("package-digest", "", "immutable package digest to include when generating an envelope")
+		payload := fs.String("payload", "", "JSON payload to place in the future state document")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		target := strings.TrimSpace(*path)
+		if target == "" {
+			target = strings.TrimSpace(*output)
+		}
+		if target == "" {
+			return 1, fmt.Errorf("%s requires --path or --output", name)
+		}
+		envelopeFile := strings.TrimSpace(*envelopePath)
+		if envelopeFile == "" {
+			envelopeFile = strings.TrimSpace(*input)
+		}
+		var envelope validate.VersionEnvelope
+		var err error
+		if envelopeFile != "" {
+			envelope, err = validate.LoadFutureEnvelope(*root, envelopeFile)
+		} else {
+			envelope, err = validate.GenerateFutureEnvelope(*root, *packageDigest)
+		}
+		if err != nil {
+			return 1, err
+		}
+		var value any
+		if strings.TrimSpace(*payload) != "" {
+			if err := json.Unmarshal([]byte(*payload), &value); err != nil {
+				return 1, fmt.Errorf("future payload JSON is invalid: %w", err)
+			}
+		}
+		err = validate.WriteFutureState(*root, target, envelope, value)
+		return printValue(streams.Stdout, envelope, err)
+	case "view":
+		fs := newFlagSet("workflow future view", streams)
+		root := fs.String("root", ".", "package root")
+		path := fs.String("path", "", "future state or envelope path")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		if strings.TrimSpace(*path) == "" {
+			return 1, fmt.Errorf("workflow future view requires --path")
+		}
+		report, err := validate.DiagnoseFutureState(*root, *path)
+		return printValue(streams.Stdout, report, err)
+	default:
+		return 1, fmt.Errorf("unknown workflow future action: %s", action)
+	}
 }
 
 func runWorkflowQAExecutionScope(args []string, streams IO) (int, error) {
@@ -868,17 +1126,32 @@ func runLifecycle(program string, args []string, streams IO) (int, error) {
 
 func runCanary(program string, args []string, streams IO) (int, error) {
 	if len(args) == 0 {
-		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|codex-hook|codex-hook-probe)")
+		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|fault-matrix|codex-hook|codex-hook-probe)")
 	}
 	if isHelpArg(args[0]) {
 		printCanaryUsage(streams.Stdout, program)
 		return 0, nil
 	}
 	if strings.HasPrefix(args[0], "-") {
-		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|codex-hook|codex-hook-probe)")
+		return 1, fmt.Errorf("canary subcommand is required (e.g. canary portable|fault-matrix|codex-hook|codex-hook-probe)")
 	}
 	sub, args := args[0], args[1:]
 	switch sub {
+	case "fault-matrix":
+		fs := newFlagSet("canary fault-matrix", streams)
+		root := fs.String("root", ".", "package root")
+		fixture := fs.String("fixture", "", "one fault fixture, such as copy-component:prompts or verify-stage:installed-target")
+		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+			return code, err
+		}
+		report, result := validate.InstallFaultMatrix(validate.InstallFaultMatrixOptions{Root: *root, Fixture: *fixture})
+		if code, err := printJSON(streams.Stdout, report); err != nil {
+			return code, err
+		}
+		if !result.OK() {
+			return 1, fmt.Errorf("install fault matrix failed")
+		}
+		return 0, nil
 	case "portable":
 		fs := newFlagSet("canary portable", streams)
 		root := fs.String("root", ".", "package root")
@@ -926,6 +1199,7 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 	case "codex-hook-probe":
 		fs := newFlagSet("canary codex-hook-probe", streams)
 		dir := fs.String("payload-dir", "", "payload directory")
+		quiet := fs.Bool("quiet", false, "do not write status text to stdout when used as a host hook")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
 		}
@@ -937,7 +1211,7 @@ func runCanary(program string, args []string, streams IO) (int, error) {
 		if !result.OK() {
 			return printValidationResult(streams.Stdout, "canary codex-hook-probe", result)
 		}
-		if probe.PayloadPath != "" {
+		if probe.PayloadPath != "" && !*quiet {
 			fmt.Fprintf(streams.Stdout, "codex-hook-probe: wrote %d-byte payload to %s\n", probe.PayloadBytes, probe.PayloadPath)
 		}
 		return probe.ExitCode, nil
@@ -1258,14 +1532,23 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates\n  install\n  uninstall\n  workflow start|show|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+}
+
+func printRegistryUsage(w io.Writer, program string) {
+	fmt.Fprintf(w, "Usage: %s registry <subcommand>\n\nSubcommands:\n  admit --path PATH --record-id ID\n  show --path PATH\n\nRegistry mutation is owned by install --bootstrap/install/uninstall.\n", program)
 }
 
 // 二层 --help 粒度统一：workflow/gate/hook/lifecycle/canary 各自打印本组的子命令清单，
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+}
+
+func printFutureUsage(w io.Writer, program string) error {
+	fmt.Fprintf(w, "Usage: %s workflow future <generate|write|view>\n\nGenerate, inspect, or write the versioned candidate envelope derived from definitions/workflow.json through its owning future writer.\n", program)
+	return nil
 }
 
 func printGateUsage(w io.Writer, program string) {
@@ -1281,7 +1564,7 @@ func printLifecycleUsage(w io.Writer, program string) {
 }
 
 func printCanaryUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s canary <subcommand>\n\nSubcommands:\n  portable        run the host-agnostic package/install canary\n  fault-matrix    exercise public install copy/switch/verify/recovery fixtures\n                  --fixture copy-component:prompts|verify-stage:installed-target selects one fixture\n  codex-hook      run the live Codex hook blocking canary\n  codex-hook-probe  capture a hook payload to --payload-dir (for hook debugging)\n\nRun `%s canary <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 // printVersion reports the binary's version situation. The project keeps no

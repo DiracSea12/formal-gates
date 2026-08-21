@@ -205,22 +205,16 @@ formal-gates 用一套覆盖全过程的流程回应这两个问题：
 # Windows: install.bat
 ```
 
-### 从源码构建
+### 从源码构建（只读验证）
 
-在源码目录构建本机二进制，再选择宿主和范围：
+源码构建产物是候选 binary，只用于包验证和隔离 canary，不能执行安装、bootstrap、
+卸载或 workflow 写入。正式安装统一使用上面的 release 引导脚本，由脚本把校验后的
+binary 放到固定 stable launcher 后再进入唯一原生事务：
 
 ```bash
 go build -o bin/formal-gates ./cmd/formal-gates
-
-bin/formal-gates install --source . --host claude --scope global --force
-bin/formal-gates install --source . --host codex --scope project --project <project> --force
-bin/formal-gates install --source . --host cursor --scope project --project <project> --force
-bin/formal-gates install --source . --host dsh --scope global --force
-bin/formal-gates install --source . --host dsh --scope project --project <project> --force
-
-bin/formal-gates uninstall --host claude --scope global
-bin/formal-gates uninstall --host codex --scope project --project <project>
-bin/formal-gates uninstall --host dsh --scope global
+bin/formal-gates package validate --root .
+bin/formal-gates canary portable --root . --format json
 ```
 
 Windows 使用 `bin\formal-gates.exe`。`bin\formal-gates.exe` 是 Windows 资产：在
@@ -244,8 +238,8 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 或项目 `AGENTS.md`。Cursor 全局不创建规则文件，只保留现有运行时和
 hook 集成。当前规则写在宿主指令区块 `<formal-gates:host-instructions:start>` 与
 `<formal-gates:host-instructions:end>` 之间；重复安装会替换区块内容并把重复区块收敛为一个。
-从旧版（包括使用旧 marker 的版本）升级时，先用旧版本二进制卸载，再安装本版本；此后可直接
-覆盖安装。
+从旧版（包括旧 target/bin hook 或旧 marker）升级时，直接用 release 引导脚本加
+`--force` 安装；唯一事务会把安装器拥有的旧 hook 迁移到固定 launcher，并收敛规则区块。
 
 ### 原生卸载
 
@@ -253,10 +247,11 @@ hook 集成。当前规则写在宿主指令区块 `<formal-gates:host-instructi
 的 hook 条目和完整 marker 规则区块，同时保留区块外文档内容与其他 hook：
 
 ```bash
-bin/formal-gates uninstall --host claude --scope global
-bin/formal-gates uninstall --host cursor --scope project --project <project>
-bin/formal-gates uninstall --host dsh --scope global
-bin/formal-gates uninstall --host dsh --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host claude --scope global
+$HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope global
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>
+# Windows: %LOCALAPPDATA%\formal-gates\bin\formal-gates.exe uninstall ...
 ```
 
 规则区块按 marker 删除，即使运行时目录已经不存在也不需要规则源码。
@@ -265,7 +260,6 @@ bin/formal-gates uninstall --host dsh --scope project --project <project>
 
 - `--force`：目标已存在时替换它。
 - `--skip-hooks`：只安装包，不改宿主 hook 配置（只有当 hook 配置必须逐字节不变时才用）。
-- `uninstall --source`：兼容旧调用保留；marker 模式下不再使用该参数。
 
 ---
 

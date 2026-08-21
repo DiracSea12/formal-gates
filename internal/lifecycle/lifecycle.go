@@ -74,6 +74,12 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 	if err != nil {
 		return CaptureResult{}, err
 	}
+	// Lifecycle hooks are installed outside formal runs as well. Once the
+	// payload has been normalized and no active run was found, discard it before
+	// applying provider identity requirements or creating any event files.
+	if len(roots) == 0 {
+		return CaptureResult{Provider: adapter.name, Event: event}, nil
+	}
 	identity := adapter.identity(event, decoded)
 	correlation := adapter.correlation(event, decoded)
 	if event == eventStart && identity == "" && adapter.required {
@@ -114,7 +120,14 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 
 func captureRoots(root string, adapter providerAdapter, payload any) ([]string, error) {
 	if root = strings.TrimSpace(root); root != "" {
-		return []string{root}, nil
+		activeRoot, found, err := activeRunRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, nil
+		}
+		return []string{activeRoot}, nil
 	}
 	candidates := adapter.projectRoots(payload)
 	if len(candidates) == 0 {
@@ -133,7 +146,9 @@ func captureRoots(root string, adapter providerAdapter, payload any) ([]string, 
 	if len(activeRoots) > 0 {
 		return activeRoots, nil
 	}
-	return []string{candidates[0]}, nil
+	// Host lifecycle hooks are also installed outside formal runs. Do not
+	// create an orphan event tree in that normal no-op case.
+	return nil, nil
 }
 
 func activeRunRoot(candidate string) (string, bool, error) {
@@ -172,6 +187,18 @@ func BindDispatch(root, runID, dispatchID, identity string) error {
 	if err != nil {
 		return err
 	}
+	return BindDispatchWithProvider(root, runID, dispatchID, identity, provider)
+}
+
+// BindDispatchWithProvider is the explicit host-context entrypoint used by a
+// shared stable launcher. A host=both install intentionally has one launcher;
+// provider identity therefore comes from the claim context, never from a
+// launcher path plus an ambiguous working-directory heuristic.
+func BindDispatchWithProvider(root, runID, dispatchID, identity, provider string) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return fmt.Errorf("lifecycle provider is required for an explicit dispatch claim")
+	}
 	adapter, err := adapterFor(provider)
 	if err != nil {
 		return err
@@ -201,6 +228,17 @@ func BindDispatch(root, runID, dispatchID, identity string) error {
 func ResolveClaimIdentity(root, runID, preferred string) (string, error) {
 	provider, err := currentProvider()
 	if err != nil {
+		return "", err
+	}
+	return ResolveClaimIdentityWithProvider(root, runID, preferred, provider)
+}
+
+func ResolveClaimIdentityWithProvider(root, runID, preferred, provider string) (string, error) {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return "", fmt.Errorf("lifecycle provider is required for an explicit dispatch claim")
+	}
+	if _, err := adapterFor(provider); err != nil {
 		return "", err
 	}
 	preferred = strings.TrimSpace(preferred)

@@ -13,32 +13,41 @@
 ## 关键实现选择
 
 1. 以原生 VCS identity、源码/二进制/package digest、installed-target digest、hook/config、managed-rule 和 realpath manifest 组成不可变 baseline receipt。
-2. 用 registry admission bridge 作为文档化入口；runtime sibling 由 bridge 管理，未登记安装在 workflow state 写入前硬拒绝，并留下可机读 receipt。
-3. 用跨进程 install/uninstall lock 与持久 recovery journal 保护 `prepare → copy/verify → smoke → pointer/config commit`；失败或崩溃通过 journal observe/reconcile 恢复旧稳定包。
-4. Go installer、Shell 和 PowerShell 只共享同一 native transaction owner；脚本不得先删除 release、切换 pointer 或绕过 journal。
+2. 用 registry admission bridge 作为文档化入口；runtime sibling 由 bridge 管理，未登记安装在 workflow state 写入前硬拒绝，并留下可机读 receipt。首次 bootstrap 也走同一 native owner：固定 stable driver 从冻结已安装 artifact 调用受支持的 `install --bootstrap` 维护入口，先登记 target/host/root/state/resource/runtime record，完成 bootstrap receipt 后才允许第一次 `workflow start` 写 state；bootstrap 本身不创建 workflow state。
+3. 用跨进程 install/uninstall lock、registry lock 与持久 recovery journal 保护同一笔 `prepare → copy/verify → switched → installed-path smoke → atomic runtime+registry commit` 事务。`switched` 只表示候选 release/installed target 已切到临时可见状态，current/pointer/config 和 registry record 仍保持旧版本；实际 installed binary 的 smoke 在此状态执行，失败时 journal 保持 `switched` 并回滚，成功后才共同提交 runtime 与 registry。
+4. Go installer、Shell 和 PowerShell 以及 admission bridge 共享同一 native transaction owner、锁顺序、journal schema、generation/token 和 recovery receipt；脚本不得先删除 release、切换 pointer、写 registry 或绕过 journal。任一 runtime、pointer/config 或 registry commit 失败，都由同一 owner observe/reconcile，恢复旧 runtime、旧 pointer/config 和旧 registry bytes。
 5. package validation 对每个安装输入执行 `Lstat`、realpath disjoint proof 和 digest 校验；候选安装不得读取开发 worktree 或 stable 区的可变内容。
-6. schema/definition version 采用精确匹配；正常写入路径在缺失或不匹配时返回 `UNSUPPORTED_RUN_VERSION`。`diagnose` 是唯一 raw read 例外，不修复、不迁移、不清理。
+6. 未来版本化 engine/candidate surface 的 schema/definition version 采用精确匹配；该 surface 在缺失或不匹配时返回 `UNSUPPORTED_RUN_VERSION`。阶段 0 的 stable driver 与既有 legacy run 继续按当前 state 格式和写入语义运行，不迁移、不回写旧状态。`diagnose` 是唯一 raw read 例外，不修复、不迁移、不清理。
 7. 所有阶段 0 故障窗口使用可重复 fixture/fault injection，证据绑定 candidate identity，不把 source-tree 单测当作 installed-binary 证明。
+
+## 首次 bootstrap 与 admission 顺序
+
+正式 run 的首个写入也必须可执行，不能依赖一个尚未登记的 bridge：
+
+1. 冻结 stable driver 从已安装 artifact 调用 `install --bootstrap`；该维护入口只负责发现并登记文档化的 global/project target、host hook、project root、state/resource root 和 runtime sibling，不创建 workflow state。
+2. bootstrap owner 取得 install/uninstall lock，再按固定顺序取得 registry lock，写入 `bootstrap-intent` journal，逐项生成 record、epoch/generation、lease/token 和 canonical-path receipt；所有已知 target 登记成功后，原子提交 registry 与 bootstrap receipt。
+3. 若 registry 不存在，允许此一次性 bootstrap 创建它；若已有 record 缺失、冲突或不可对账，留下 disabled/`UNREGISTERED_INSTALL` receipt 并停止，不得先写 `.gates/tmp`。bootstrap 成功后，stable launcher 对每次 workflow 写入重新 admission；候选 binary 不能执行 bootstrap、驱动本 run 或写 stable registry。
 
 ## 事务与证据顺序
 
 ```text
-admission/lock
+admission/install lock + registry lock
   -> recovery journal intent
-  -> sibling temp + old pointer/config backup
+  -> sibling temp + old runtime/pointer/config/registry backup
   -> copy runtime/prompts/gates/hooks/rules
   -> manifest, realpath and digest verification
-  -> installed-binary package validation and post-switch smoke
-  -> atomic current/pointer/config commit
+  -> switch release/installed target (journal: switched; old registry remains authoritative)
+  -> installed-binary package validation and post-switch/pre-commit smoke
+  -> atomic current/pointer/config + registry record commit
   -> journal committed receipt
 ```
 
-任一中间步骤失败时，先观察外部事实，再按 journal 对账；只有确认旧 pointer/config/release 与旧 binary smoke 可用，才提交 recovery receipt。候选验证必须从实际 installed path 启动 binary，并记录 source identity、package/installed digest、host/config/state/resource canonical paths、legacy regression、portable canary、安装 smoke 和 fault matrix。
+这里的“post-switch”特指 release/installed target 已切换、但公共 current/pointer/config 与 registry 尚未提交；它不是“提交之后再做 smoke”。任一中间步骤失败时，先观察外部事实，再按同一 journal 对账；runtime、pointer/config 或 registry 任一提交失败都回滚到旧稳定 identity，只有恢复核验完成才提交 recovery receipt。候选验证必须从实际 installed path 启动 binary，并记录 source identity、package/installed digest、host/config/state/resource canonical paths、legacy regression、portable canary、安装 smoke 和 fault matrix。
 
 ## 验证安排
 
 - stable driver 先启动本阶段正式 run；候选在独立 test project 中验证新增分发能力，候选 run 只写候选 namespace。
-- 开发前进行产品审与 start-readiness/技术审；开发后独立 QA 和选定 gate 审查完整 base→current diff。
+- 开发前进行产品审与 start-readiness/技术审；两者都必须独立比对登记的计划文件、详细方案文件、阶段 OpenSpec 与本阶段需求，且不得使用主代理解释、未解决的既有 finding、修复说明或预期结论形成锚定。CLI 合法注入的已拍板 settled finding 及其 ID/digest 仅用于避免已处置问题原样重提，不作为本轮结论依据；开发后独立 QA 和选定 gate 审查完整 base→current diff。
 - Seal 前复核 VCS identity、package/installed digest、registry/bootstrap receipt、fault-injection receipt、候选 path disjoint proof、QA 结果和无残留证明。
 
 ## 约束

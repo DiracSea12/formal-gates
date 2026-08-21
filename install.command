@@ -54,10 +54,25 @@ canary="portable-canary-${suffix}.json"
 checksums="SHA256SUMS-${suffix}.txt"
 
 tmp="$(mktemp -d)"
+staged_launcher=false
 cleanup() {
+  if [ "$staged_launcher" = true ]; then
+    rm -f "$binary_target"
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
+
+legacy_owner_rejected_new_flags() {
+  case "$1" in
+    *"flag provided but not defined"*|*"unknown flag"*|*"unknown option"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 curl -fsSL "https://api.github.com/repos/${repo}/zipball/${tag}" -o "$tmp/source.zip"
 curl -fsSL "https://github.com/${repo}/releases/download/${tag}/${binary}" -o "$tmp/${binary}"
@@ -90,14 +105,23 @@ print(pathlib.Path.home())
 PY
 )}"
 install_root="$home/.formal-gates/releases/${tag#v}-${suffix}"
-mkdir -p "$(dirname "$install_root")"
-rm -rf "$install_root"
-cp -R "$source_root" "$install_root"
-
-mkdir -p "$home/.local/bin"
-ln -sfn "$install_root/bin/formal-gates" "$home/.local/bin/formal-gates"
-
-cmd=("$home/.local/bin/formal-gates" install --source "$install_root" --host "$host" --scope "$scope")
+binary_target="$home/.local/bin/formal-gates"
+# The stable launcher is the only native writer. An existing launcher is never
+# overwritten by the shell; the native journal owns that replacement. On a
+# first install only, place the verified candidate at the empty stable path so
+# the same stable owner can create the journal and complete the transaction.
+mkdir -p "$(dirname "$binary_target")"
+if [ -e "$binary_target" ]; then
+  if [ ! -x "$binary_target" ]; then
+    echo "stable launcher exists but is not executable: $binary_target" >&2
+    exit 1
+  fi
+else
+  cp "$source_root/bin/formal-gates" "$binary_target"
+  chmod +x "$binary_target"
+  staged_launcher=true
+fi
+cmd=("$binary_target" install --source "$source_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
 if [ -n "$project" ]; then
   cmd+=(--project "$project")
 fi
@@ -107,7 +131,35 @@ fi
 if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
-"${cmd[@]}"
+owner_output=""
+if ! owner_output=$("${cmd[@]}" 2>&1); then
+  if ! legacy_owner_rejected_new_flags "$owner_output"; then
+    printf '%s\n' "$owner_output" >&2
+    exit 1
+  fi
+  # A launcher from before the release-root transaction contract can reject
+  # these arguments before its transaction starts. Retry once with the
+  # verified current binary at the fixed launcher path.
+  cp "$binary_target" "$tmp/launcher.before"
+  cp "$source_root/bin/formal-gates" "$binary_target"
+  chmod +x "$binary_target"
+  staged_launcher=true
+  if ! "$binary_target" "${cmd[@]:1}"; then
+    cp "$tmp/launcher.before" "$binary_target"
+    staged_launcher=false
+    exit 1
+  fi
+fi
+staged_launcher=false
+
+# Bootstrap the already-installed artifact through the same stable launcher.
+# This creates the admission receipt before any workflow command can write
+# state, while keeping the source archive out of the writer path.
+bootstrap_cmd=("$binary_target" install --bootstrap --source "$install_root" --release-root "$install_root" --binary-target "$binary_target" --host "$host" --scope "$scope")
+if [ -n "$project" ]; then
+  bootstrap_cmd+=(--project "$project")
+fi
+"${bootstrap_cmd[@]}"
 
 echo "Installed package to $install_root"
-echo "Native binary symlink: $home/.local/bin/formal-gates"
+echo "Native binary: $binary_target"

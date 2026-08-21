@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 // 白盒结构测试（QA-INCREMENTAL-ISOLATION 白盒用例实现）。

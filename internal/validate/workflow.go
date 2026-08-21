@@ -2,7 +2,9 @@ package validate
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +17,11 @@ import (
 
 type StartOptions struct {
 	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot string
+	// AdmissionRegistry and AdmissionRecordID explicitly select the stage-0
+	// registry bridge. Empty values discover the shared user registry; only Go
+	// test executables retain the in-process legacy start path.
+	AdmissionRegistry string
+	AdmissionRecordID string
 	// CurrentSnapshot 显式指定当前快照停在某祖先：默认不传时取原生 HEAD；
 	// 传入值必须是原生 HEAD 的祖先或相等，用于接手"开发已提交"的 run 时让 current 停在
 	// 开发前、已有开发提交作为待登记快照。
@@ -211,6 +218,48 @@ func Start(options StartOptions) (RunState, error) {
 	} else if !os.IsNotExist(err) {
 		return RunState{}, err
 	}
+	registryPath, registryRecordID, discoveryErr := discoverAdmissionBinding(root, options.PackageRoot, options.AdmissionRegistry, options.AdmissionRecordID)
+	if discoveryErr != nil {
+		return RunState{}, discoveryErr
+	}
+	var admissionDoc RegistryDocument
+	var admissionRecord RegistryRecord
+	if registryPath != "" {
+		recordID := registryRecordID
+		if recordID == "" {
+			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, "admission record id is required when --registry is supplied")
+			return RunState{}, fmt.Errorf("admission record id is required when --registry is supplied")
+		}
+		receipt, err := AdmitRegistry(registryPath, recordID)
+		if err != nil {
+			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, err.Error())
+			return RunState{}, err
+		}
+		if !receipt.Accepted {
+			writeWorkflowAdmissionReceipt(registryPath, receipt, root, options.PackageRoot, receipt.Reason)
+			return RunState{}, fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, recordID)
+		}
+		if err := requireRegistryBootstrapReceipt(registryPath, recordID, root, options.PackageRoot); err != nil {
+			return RunState{}, err
+		}
+		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
+			return RunState{}, bindingErr
+		}
+		admissionDoc, admissionRecord, err = registryAdmissionIdentity(registryPath, recordID)
+		if err != nil {
+			return RunState{}, err
+		}
+		if strings.EqualFold(admissionRecord.Scope, "global") && canonicalRegistryPath(admissionRecord.ProjectRoot) != canonicalRegistryPath(root) {
+			// Global installation bytes are shared, but workflow state and
+			// resources are project-local. Materialize this invocation binding
+			// through the registry transaction owner before creating state.
+			admissionRecord, admissionDoc, err = bindGlobalInvocationRoot(registryPath, admissionRecord, root)
+			if err != nil {
+				return RunState{}, err
+			}
+			registryRecordID = admissionRecord.ID
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(RunDir(root, runID)), 0o700); err != nil {
 		return RunState{}, err
 	}
@@ -223,6 +272,16 @@ func Start(options StartOptions) (RunState, error) {
 	}
 	state := NewRunState(runID, strings.TrimSpace(options.Flow), normalizeArtifactPath(root, options.RequirementSource), revision, vcs, baseSnapshot, currentSnapshot, catalog.BaseRevision, catalog.CatalogRevision, options.RequirementConfirmed, catalog.GateIDs(), artifacts)
 	state.PromptHashes = catalogPromptHashes(catalog)
+	// Preserve the admission binding in the run envelope so every later
+	// SaveRunState call re-admits the same target before writing state.
+	state.AdmissionRegistry = registryPath
+	state.AdmissionRecordID = registryRecordID
+	state.AdmissionRoot = root
+	state.AdmissionTarget = options.PackageRoot
+	state.AdmissionEpoch = admissionDoc.Epoch
+	state.AdmissionGeneration = admissionRecord.Generation
+	state.AdmissionLease = admissionRecord.Lease
+	state.AdmissionToken = admissionRecord.Token
 	state.RetainedOverall = options.RetainedOverall
 	state.SplitDeclaration = split
 	state.SplitMasterRunID = master
@@ -241,6 +300,304 @@ func Start(options StartOptions) (RunState, error) {
 	return state, nil
 }
 
+func bindGlobalInvocationRoot(path string, base RegistryRecord, root string) (RegistryRecord, RegistryDocument, error) {
+	unlock, err := acquireRegistryLock(path)
+	if err != nil {
+		return RegistryRecord{}, RegistryDocument{}, err
+	}
+	defer unlock()
+	doc, err := loadRegistryForCommit(path)
+	if err != nil {
+		return RegistryRecord{}, RegistryDocument{}, err
+	}
+	projectRoot := canonicalRegistryPath(root)
+	derived := base
+	identity := sha256.Sum256([]byte(base.ID + "\x00" + projectRoot))
+	derived.ID = fmt.Sprintf("%s-project-%x", base.ID, identity[:6])
+	derived.ProjectRoot = projectRoot
+	derived.StateRoot = canonicalRegistryPath(filepath.Join(projectRoot, ".gates"))
+	derived.ResourceRoot = canonicalRegistryPath(filepath.Join(projectRoot, ".formal-gates-resources"))
+	derived.CanonicalPaths = map[string]string{
+		"target": canonicalRegistryPath(derived.Target), "launcher": canonicalRegistryPath(derived.LauncherPath),
+		"projectRoot": derived.ProjectRoot, "stateRoot": derived.StateRoot,
+		"resourceRoot": derived.ResourceRoot, "runtimeSibling": canonicalRegistryPath(derived.RuntimeSibling),
+	}
+	if strings.TrimSpace(derived.HookConfig) != "" {
+		derived.CanonicalPaths["hookConfig"] = canonicalRegistryPath(derived.HookConfig)
+	}
+	if strings.TrimSpace(derived.ReleaseRoot) != "" {
+		derived.CanonicalPaths["releaseRoot"] = canonicalRegistryPath(derived.ReleaseRoot)
+	}
+	if err := os.MkdirAll(derived.ResourceRoot, 0o700); err != nil {
+		return RegistryRecord{}, RegistryDocument{}, fmt.Errorf("resource root setup failed: %w", err)
+	}
+	for _, existing := range doc.Records {
+		if existing.ID == derived.ID && strings.EqualFold(existing.Status, "active") && sameRegistryBinding(existing, derived) {
+			return existing, doc, nil
+		}
+	}
+	committed, err := commitRegistryRecordsUnlocked(path, doc, []RegistryRecord{derived})
+	if err != nil {
+		return RegistryRecord{}, RegistryDocument{}, err
+	}
+	return derived, committed, nil
+}
+
+// discoverAdmissionBinding resolves the shared user registry before Start
+// creates .gates/tmp.  A present registry is an
+// admission boundary: if it cannot account for the installed package, start
+// fails with UNREGISTERED_INSTALL instead of silently falling back to a direct
+// state writer. In-process test binaries retain the legacy phase-0 state path;
+// a shipped binary must always be the stable launcher admitted by a registry.
+func discoverAdmissionBinding(root, packageRoot, requestedPath, requestedID string) (string, string, error) {
+	registryPath := strings.TrimSpace(requestedPath)
+	registryRecordID := strings.TrimSpace(requestedID)
+	if registryPath != "" {
+		if registryRecordID == "" {
+			writeWorkflowAdmissionRejection(registryPath, registryRecordID, root, packageRoot, "admission record id is required when --registry is supplied")
+			return "", "", fmt.Errorf("admission record id is required when --registry is supplied")
+		}
+		return filepath.Clean(registryPath), registryRecordID, nil
+	}
+	// Unit and integration tests execute the workflow API in-process rather
+	// than through an installed launcher.  Their temporary roots must remain
+	// isolated from any real user registry that happens to exist on the host;
+	// otherwise an unrelated global record turns every fixture into an
+	// UNREGISTERED_INSTALL failure.  Admission-specific tests pass an explicit
+	// registry/record above, so this exemption does not weaken the production
+	// launcher boundary.
+	if executable, executableErr := os.Executable(); executableErr == nil {
+		base := filepath.Base(filepath.Clean(executable))
+		if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+			return "", "", nil
+		}
+	}
+	candidates := []string{}
+	if home, err := installHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".formal-gates", "registry.json"))
+	}
+	for _, candidate := range candidates {
+		if !isFile(candidate) {
+			continue
+		}
+		record, err := findRegistryRecordForTarget(candidate, packageRoot)
+		if err != nil {
+			return "", "", fmt.Errorf("UNREGISTERED_INSTALL: registry admission bridge cannot bind %s: %w", packageRoot, err)
+		}
+		return filepath.Clean(candidate), record.ID, nil
+	}
+	for _, candidate := range candidates {
+		writeWorkflowAdmissionRejection(candidate, registryRecordID, root, packageRoot, "stable launcher registry is missing")
+	}
+	executable, executableErr := os.Executable()
+	if executableErr != nil {
+		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") {
+		return "", "", fmt.Errorf("UNREGISTERED_INSTALL: stable launcher has no registry record for package %s", packageRoot)
+	}
+	return "", "", nil
+}
+
+func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, error) {
+	doc, err := LoadRegistry(path)
+	if err != nil {
+		writeWorkflowAdmissionRejection(path, "", "", packageRoot, fmt.Sprintf("registry cannot be read: %v", err))
+		return RegistryRecord{}, err
+	}
+	want, err := filepath.Abs(packageRoot)
+	if err != nil {
+		return RegistryRecord{}, err
+	}
+	for _, record := range doc.Records {
+		if strings.EqualFold(record.Status, "active") && validAdmissionRegistryRecord(record) && canonicalRegistryPath(record.Target) == canonicalRegistryPath(want) && canonicalRegistryPath(record.CanonicalPaths["target"]) == canonicalRegistryPath(want) {
+			if err := verifyRegisteredTargetIdentity(record); err != nil {
+				return RegistryRecord{}, err
+			}
+			return record, nil
+		}
+	}
+	writeWorkflowAdmissionRejection(path, "", "", packageRoot, fmt.Sprintf("no registry record matches package root %s", packageRoot))
+	return RegistryRecord{}, fmt.Errorf("no registry record matches package root %s", packageRoot)
+}
+
+// requireRegistryBootstrapReceipt enforces the documented first-start
+// boundary: the stable launcher may create workflow state only after the
+// registry's bootstrap receipt exists. A normal install commits registry
+// records without writing <registry>.bootstrap.json, so an interruption
+// between the registry commit and the documented `install --bootstrap`
+// maintenance entry leaves an active registry that workflow start must reject
+// instead of silently creating state the bridge never bootstrapped.
+func requireRegistryBootstrapReceipt(registryPath, recordID, root, packageRoot string) error {
+	data, err := os.ReadFile(registryPath + ".bootstrap.json")
+	if err != nil {
+		reason := fmt.Sprintf("registry bootstrap receipt is unavailable: %v", err)
+		writeWorkflowAdmissionRejection(registryPath, recordID, root, packageRoot, reason)
+		return fmt.Errorf("UNREGISTERED_INSTALL: registry %s has no committed bootstrap receipt; run the documented install --bootstrap maintenance entry before the first workflow start (%w)", registryPath, err)
+	}
+	var receipt BootstrapReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		reason := fmt.Sprintf("registry bootstrap receipt is unreadable: %v", err)
+		writeWorkflowAdmissionRejection(registryPath, recordID, root, packageRoot, reason)
+		return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap receipt is not a valid receipt: %w", err)
+	}
+	if !receipt.Accepted {
+		reason := "registry bootstrap receipt was not accepted"
+		writeWorkflowAdmissionRejection(registryPath, recordID, root, packageRoot, reason)
+		return fmt.Errorf("UNREGISTERED_INSTALL: %s", reason)
+	}
+	return nil
+}
+
+func writeWorkflowAdmissionRejection(path, recordID, root, packageRoot, reason string) {
+	target := strings.TrimSpace(packageRoot)
+	if target == "" {
+		target = root
+	}
+	canonicalTarget := ""
+	if target != "" {
+		canonicalTarget = canonicalRegistryPath(target)
+	}
+	canonicalRoot := ""
+	if strings.TrimSpace(root) != "" {
+		canonicalRoot = canonicalRegistryPath(root)
+	}
+	paths := map[string]string{}
+	if canonicalTarget != "" {
+		paths["target"] = canonicalTarget
+	}
+	if canonicalRoot != "" {
+		paths["projectRoot"] = canonicalRoot
+	}
+	_ = writeAdmissionReceipt(path, AdmissionReceipt{
+		Code: "UNREGISTERED_INSTALL", Accepted: false, Status: "disabled",
+		RecordID: recordID, Registry: filepath.Clean(path), Target: canonicalTarget,
+		Scope: "unknown", CanonicalPaths: paths, Reason: reason, CreatedAt: nowReceiptTime(),
+	})
+}
+
+func writeWorkflowAdmissionReceipt(path string, receipt AdmissionReceipt, root, packageRoot, reason string) {
+	target := strings.TrimSpace(receipt.Target)
+	if target == "" {
+		target = strings.TrimSpace(packageRoot)
+	}
+	if target == "" {
+		target = strings.TrimSpace(root)
+	}
+	if target != "" {
+		receipt.Target = canonicalRegistryPath(target)
+	}
+	if strings.TrimSpace(receipt.Registry) == "" {
+		receipt.Registry = filepath.Clean(path)
+	}
+	if strings.TrimSpace(receipt.Scope) == "" {
+		receipt.Scope = "unknown"
+	}
+	if receipt.CanonicalPaths == nil {
+		receipt.CanonicalPaths = map[string]string{}
+	}
+	if receipt.Target != "" {
+		receipt.CanonicalPaths["target"] = canonicalRegistryPath(receipt.Target)
+	}
+	if strings.TrimSpace(root) != "" {
+		receipt.CanonicalPaths["projectRoot"] = canonicalRegistryPath(root)
+	}
+	receipt.Code = "UNREGISTERED_INSTALL"
+	receipt.Accepted = false
+	receipt.Status = "disabled"
+	receipt.Reason = reason
+	receipt.CreatedAt = nowReceiptTime()
+	_ = writeAdmissionReceipt(path, receipt)
+}
+
+func registryAdmissionIdentity(path, recordID string) (RegistryDocument, RegistryRecord, error) {
+	doc, err := LoadRegistry(path)
+	if err != nil {
+		return RegistryDocument{}, RegistryRecord{}, err
+	}
+	for _, record := range doc.Records {
+		if record.ID == recordID {
+			if !strings.EqualFold(record.Status, "active") || !validAdmissionRegistryRecord(record) {
+				return RegistryDocument{}, RegistryRecord{}, fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is inactive or incomplete", recordID)
+			}
+			return doc, record, nil
+		}
+	}
+	return RegistryDocument{}, RegistryRecord{}, fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is missing", recordID)
+}
+
+func verifyRegistryBinding(registryPath, recordID, root, packageRoot string) error {
+	doc, err := LoadRegistry(registryPath)
+	if err != nil {
+		return err
+	}
+	for _, record := range doc.Records {
+		if record.ID != recordID {
+			continue
+		}
+		if !strings.EqualFold(record.Status, "active") || !validAdmissionRegistryRecord(record) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: registry record is inactive or incomplete")
+		}
+		if err := verifyRegisteredTargetIdentity(record); err != nil {
+			return err
+		}
+		canonicalRoot, err := filepath.Abs(root)
+		if err != nil {
+			return err
+		}
+		canonicalPackage, err := filepath.Abs(packageRoot)
+		if err != nil {
+			return err
+		}
+		// A project-scope record is bound to one repository root.  A global
+		// installation is intentionally reusable across projects, so its
+		// projectRoot records the host-level installation namespace rather than
+		// the arbitrary repository that is invoking the stable driver.
+		if record.Scope == "project" {
+			if expected := canonicalRegistryPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalRegistryPath(canonicalRoot) {
+				return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
+			}
+		}
+		if canonicalRegistryPath(record.Target) != canonicalRegistryPath(canonicalPackage) || canonicalRegistryPath(record.CanonicalPaths["target"]) != canonicalRegistryPath(canonicalPackage) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
+		}
+		// Installed packages are only allowed to drive workflow writes through
+		// the fixed launcher recorded by admission.  A direct invocation of the
+		// candidate binary under the host target has the same package binding but
+		// a different executable identity and is therefore rejected.  Repository
+		// checkouts keep the legacy source-tree path and intentionally do not use
+		// this installed-launcher check.
+		executable, executableErr := os.Executable()
+		if executableErr != nil {
+			return fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
+		}
+		base := filepath.Base(filepath.Clean(executable))
+		if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") && !launcherInvocationMatches(record.LauncherPath) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: workflow must be driven by stable launcher %s", record.LauncherPath)
+		}
+		return nil
+	}
+	return fmt.Errorf("UNREGISTERED_INSTALL: registry record %q is missing", recordID)
+}
+
+func verifyRegisteredTargetIdentity(record RegistryRecord) error {
+	if err := assertInstallSource(record.Target); err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target is not an installed artifact: %w", err)
+	}
+	if strings.TrimSpace(record.InstalledDigest) == "" {
+		return nil
+	}
+	receipt, err := PackageReceipt(record.Target)
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target identity cannot be read: %w", err)
+	}
+	if receipt.Digest != record.InstalledDigest {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target digest is stale")
+	}
+	return nil
+}
+
 // ResumeStatus is the recoverable classification reported when resuming an
 // interrupted run: requirement edits need classification, catalog changes are
 // reported per gate/action, a drifted native snapshot must be adopted, and a
@@ -256,6 +613,9 @@ type ResumeStatus struct {
 // ResumeReport classifies everything the main agent must judge before the run
 // can continue without hard failure.
 func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
+	if err := requireWorkflowAdmission(root, packageRoot); err != nil {
+		return ResumeStatus{}, err
+	}
 	state, err := LoadRunState(root, runID)
 	if err != nil {
 		return ResumeStatus{}, err
@@ -290,6 +650,29 @@ func ResumeReport(root, packageRoot, runID string) (ResumeStatus, error) {
 		isolationDrifted = !strings.EqualFold(resolved, state.BaseSnapshot)
 	}
 	return ResumeStatus{ClassificationRequired: changed, CatalogDelta: catalogDelta(state, catalog), NativeDrifted: native != state.CurrentSnapshot, IsolationDrifted: isolationDrifted}, nil
+}
+
+// Resume is a workflow control operation even though it primarily reports
+// state. A candidate executable must not use that read path to inspect or
+// continue a stable run, so admission is checked before loading run bytes.
+func requireWorkflowAdmission(root, packageRoot string) error {
+	registry, recordID, err := discoverAdmissionBinding(root, packageRoot, "", "")
+	if err != nil {
+		return err
+	}
+	if registry == "" {
+		return verifyLegacyStableLauncher()
+	}
+	receipt, err := AdmitRegistry(registry, recordID)
+	if err != nil {
+		writeWorkflowAdmissionRejection(registry, recordID, root, packageRoot, err.Error())
+		return err
+	}
+	if !receipt.Accepted {
+		writeWorkflowAdmissionReceipt(registry, receipt, root, packageRoot, receipt.Reason)
+		return fmt.Errorf("%s: workflow resume refused for registry record %q", receipt.Code, recordID)
+	}
+	return verifyRegistryBinding(registry, recordID, root, packageRoot)
 }
 
 // AdoptExternalChange explicitly rebinds the current snapshot to the native
@@ -957,6 +1340,10 @@ func RegisterQAWorktree(root, packageRoot, runID, worktree string) (RunState, er
 }
 
 func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string) (RunState, error) {
+	return ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIdentity, "")
+}
+
+func ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIdentity, provider string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		dispatchID, reviewerIdentity = strings.TrimSpace(dispatchID), strings.TrimSpace(reviewerIdentity)
 		if dispatchID == "" {
@@ -1027,7 +1414,7 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		// identity (common operator mistake compatibility), and an ambiguous
 		// or empty resolution is rejected rather than binding the wrong
 		// subagent or silently dropping lifecycle evidence.
-		effective, err := workflowLifecycle.ResolveClaimIdentity(root, state.RunID, reviewerIdentity)
+		effective, err := resolveClaimIdentity(root, state.RunID, reviewerIdentity, provider)
 		if err != nil {
 			return err
 		}
@@ -1049,13 +1436,37 @@ func ClaimDispatch(root, packageRoot, runID, dispatchID, reviewerIdentity string
 		if err := verifyCanonicalPromptFile(*state, dispatch); err != nil {
 			return err
 		}
-		if err := workflowLifecycle.Bind(root, state.RunID, dispatchID, effective); err != nil {
+		if err := bindClaimDispatch(root, state.RunID, dispatchID, effective, provider); err != nil {
 			return err
 		}
 		dispatch.ReviewerIdentity, dispatch.Status = effective, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
 		return nil
 	})
+}
+
+func resolveClaimIdentity(root, runID, preferred, provider string) (string, error) {
+	if strings.TrimSpace(provider) != "" {
+		if explicit, ok := workflowLifecycle.(interface {
+			ResolveClaimIdentityWithProvider(string, string, string, string) (string, error)
+		}); ok {
+			return explicit.ResolveClaimIdentityWithProvider(root, runID, preferred, provider)
+		}
+		return "", fmt.Errorf("lifecycle implementation does not support explicit provider claim context")
+	}
+	return workflowLifecycle.ResolveClaimIdentity(root, runID, preferred)
+}
+
+func bindClaimDispatch(root, runID, dispatchID, identity, provider string) error {
+	if strings.TrimSpace(provider) != "" {
+		if explicit, ok := workflowLifecycle.(interface {
+			BindWithProvider(string, string, string, string, string) error
+		}); ok {
+			return explicit.BindWithProvider(root, runID, dispatchID, identity, provider)
+		}
+		return fmt.Errorf("lifecycle implementation does not support explicit provider claim context")
+	}
+	return workflowLifecycle.Bind(root, runID, dispatchID, identity)
 }
 
 // openRecord opens a Record* state mutation and runs the shared entry prologue:
@@ -1562,6 +1973,15 @@ func mutateRun(root, runID string, change func(*RunState) error) (RunState, erro
 		return RunState{}, err
 	}
 	if err := requireActive(state); err != nil {
+		return RunState{}, err
+	}
+	// Candidate admission is re-checked before the change function runs. The
+	// final SaveRunState repeats the same gate under its own lock, but prepare
+	// operations write the canonical dispatch prompt file before that save;
+	// without this early gate a candidate binary first creates
+	// .gates/tmp/<run>/prompts/<dispatch>.md and only then gets
+	// UNREGISTERED_INSTALL, leaving an orphan workflow artifact.
+	if err := requireRunWriteAdmission(root, state); err != nil {
 		return RunState{}, err
 	}
 	if err := change(&state); err != nil {

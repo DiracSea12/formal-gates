@@ -16,38 +16,50 @@ import (
 )
 
 type RunState struct {
-	RunID                string                       `json:"runId"`
-	Flow                 string                       `json:"flow"`
-	Status               string                       `json:"status"`
-	RequirementSource    string                       `json:"requirementSource"`
-	RequirementRevision  string                       `json:"requirementRevision"`
-	RequirementConfirmed bool                         `json:"requirementConfirmed"`
-	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
-	BasePromptRevision   string                       `json:"basePromptRevision"`
-	CatalogRevision      string                       `json:"catalogRevision"`
-	PromptHashes         map[string]string            `json:"promptHashes,omitempty"`
-	VCS                  string                       `json:"vcs"`
-	BaseSnapshot         string                       `json:"baseSnapshot"`
-	CurrentSnapshot      string                       `json:"currentSnapshot"`
+	RunID                string                `json:"runId"`
+	Flow                 string                `json:"flow"`
+	Status               string                `json:"status"`
+	RequirementSource    string                `json:"requirementSource"`
+	RequirementRevision  string                `json:"requirementRevision"`
+	RequirementConfirmed bool                  `json:"requirementConfirmed"`
+	RequirementArtifacts []RequirementArtifact `json:"requirementArtifacts"`
+	BasePromptRevision   string                `json:"basePromptRevision"`
+	CatalogRevision      string                `json:"catalogRevision"`
+	PromptHashes         map[string]string     `json:"promptHashes,omitempty"`
+	VCS                  string                `json:"vcs"`
+	BaseSnapshot         string                `json:"baseSnapshot"`
+	CurrentSnapshot      string                `json:"currentSnapshot"`
 	// StateIntegrity 是 run 状态的完整性校验：SaveRunState 写盘前先置空本字段、
 	// 以 json.MarshalIndent 规范化序列化、对规范化内容计算 sha256 回填后写盘；LoadRunState
 	// 校验非空的本字段：置空后按同样方式重算比对，不匹配即硬拒绝 "state was modified outside
 	// the CLI"。run 状态只能由 CLI 写入，任何人（含 host/主代理）不得手工改写。旧状态文件
 	// 无本字段，跳过校验。随 Seal 保留（写入后随状态文件持久化）。
-	StateIntegrity       string                       `json:"stateIntegrity,omitempty"`
-	RetainedOverall      bool                         `json:"retainedOverall,omitempty"`
+	StateIntegrity  string `json:"stateIntegrity,omitempty"`
+	RetainedOverall bool   `json:"retainedOverall,omitempty"`
 	// SplitDeclaration 记录 workflow start 时强制声明的拆分意向（需求 4）：yes 表示本 run 是
 	// 保留总任务实例或切片实例、no 表示不拆分。旧 run（本功能上线前启动）缺失本字段，按旧
 	// 语义处理：保留总任务实例仍可记录 split，其余 run 不受额外限制。
-	SplitDeclaration     string                       `json:"splitDeclaration,omitempty"`
+	SplitDeclaration string `json:"splitDeclaration,omitempty"`
 	// SplitMasterRunID 记录切片实例在启动声明中钉死的保留总任务 master run id（--split yes
 	// --master <id>）；workflow slicing 记录 split 时引用的 master 必须与之一致。
-	SplitMasterRunID     string                       `json:"splitMasterRunID,omitempty"`
+	SplitMasterRunID string `json:"splitMasterRunID,omitempty"`
 	// OwnerTranscript / OwnerSession 记录启动本 run 的对话身份（PreToolUse hook 在
 	// workflow start 时捕获、经 sidecar 桥接由 Start 写入）。写墙只对身份匹配的对话生效，
 	// 其它对话放行。transcript_path 为主键，session_id 兜底。旧 run 缺失时为空。
-	OwnerTranscript      string                       `json:"ownerTranscript,omitempty"`
-	OwnerSession         string                       `json:"ownerSession,omitempty"`
+	OwnerTranscript string `json:"ownerTranscript,omitempty"`
+	OwnerSession    string `json:"ownerSession,omitempty"`
+	// AdmissionRegistry/AdmissionRecordID bind every subsequent state write to
+	// the registry bridge that admitted this run. Empty values preserve the
+	// documented legacy state shape; production writes still require the
+	// invoking executable to be an active registered stable launcher.
+	AdmissionRegistry    string                       `json:"admissionRegistry,omitempty"`
+	AdmissionRecordID    string                       `json:"admissionRecordId,omitempty"`
+	AdmissionRoot        string                       `json:"admissionRoot,omitempty"`
+	AdmissionTarget      string                       `json:"admissionTarget,omitempty"`
+	AdmissionEpoch       uint64                       `json:"admissionEpoch,omitempty"`
+	AdmissionGeneration  uint64                       `json:"admissionGeneration,omitempty"`
+	AdmissionLease       string                       `json:"admissionLease,omitempty"`
+	AdmissionToken       string                       `json:"admissionToken,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
 	SettledFindings      map[string][]SettledFinding  `json:"settledFindings,omitempty"`
@@ -91,11 +103,11 @@ type RunState struct {
 	// QADesignChangesByMode 记录每个 QA 派发 mode 最近一轮 qa-design 增量记录的变更
 	// （新增/修改/删除的用例 id），供 qa-review 提示词注入"本轮变更"上下文。设计轮记录
 	// 时写入，需求作废/路线不含黑盒时清空。
-	QADesignChangesByMode map[string]QADesignChange `json:"qaDesignChangesByMode,omitempty"`
-	Gates          map[string]GateResult   `json:"gates"`
-	Carry                  map[string]CarryResult        `json:"carry"`
-	Dispatches             map[string]PreparedDispatch   `json:"dispatches"`
-	Cost                   *cost.RunCost                 `json:"cost,omitempty"`
+	QADesignChangesByMode map[string]QADesignChange   `json:"qaDesignChangesByMode,omitempty"`
+	Gates                 map[string]GateResult       `json:"gates"`
+	Carry                 map[string]CarryResult      `json:"carry"`
+	Dispatches            map[string]PreparedDispatch `json:"dispatches"`
+	Cost                  *cost.RunCost               `json:"cost,omitempty"`
 	// QAWorktree 是黑盒 QA 的隔离工作区路径（Git 为从基线分支的 linked worktree，
 	// SVN/P4 为签出到基线版本的工作副本/客户端工作区）。它从基线快照创建、恒等于
 	// 基线，始终不含本次开发代码；黑盒 qa-design/qa-review 的原生标识校验与派发源
@@ -273,11 +285,11 @@ type CarryResult struct {
 }
 
 type QACase struct {
-	ID           string `json:"id"`
-	Mode         string `json:"mode"`
-	Description  string `json:"description"`
-	Procedure    string `json:"procedure"`
-	Oracle       string `json:"oracle"`
+	ID          string `json:"id"`
+	Mode        string `json:"mode"`
+	Description string `json:"description"`
+	Procedure   string `json:"procedure"`
+	Oracle      string `json:"oracle"`
 	// Test 是白盒用例对应的测试引用 = "<文件路径>::<函数名>"：文件路径定位到
 	// 交付测试代码所在文件、函数名定位到该文件里的测试，两者都是不透明字符串、CLI 不解析
 	// 代码内容。用例文档自包含——读文档即知该测试在哪个文件、叫什么。CLI 记录时只校验引用
@@ -346,11 +358,41 @@ func RunStatePath(root, runID string) string {
 }
 
 func SaveRunState(root string, state RunState) error {
+	return saveRunState(root, state, false)
+}
+
+// saveRunState writes one state envelope.  registryHeld is used only by
+// workflow operations that must fence a VCS mutation and its resulting state
+// under one admission critical section (notably Seal); ordinary callers keep
+// the public SaveRunState path and acquire the registry lock here.
+func saveRunState(root string, state RunState, registryHeld bool) error {
 	if strings.TrimSpace(state.RunID) == "" {
 		return fmt.Errorf("run id is required")
 	}
 	if state.Status != "ACTIVE" && state.Status != "SEALED" && state.Status != "ABORTED" {
 		return fmt.Errorf("invalid run status %q", state.Status)
+	}
+	var admissionUnlock func()
+	if strings.TrimSpace(state.AdmissionRegistry) != "" || strings.TrimSpace(state.AdmissionRecordID) != "" {
+		if strings.TrimSpace(state.AdmissionRegistry) == "" || strings.TrimSpace(state.AdmissionRecordID) == "" {
+			return fmt.Errorf("admission registry and record id must be supplied together")
+		}
+		// Hold the registry lock through the state write.  A separate Admit call
+		// followed by an unlocked write permits uninstall/disable to win between
+		// the two operations, leaving an active run bound to a disabled target.
+		if !registryHeld {
+			var err error
+			admissionUnlock, err = acquireRegistryLock(state.AdmissionRegistry)
+			if err != nil {
+				return err
+			}
+			defer admissionUnlock()
+		}
+		if err := verifyRunStateAdmissionLocked(root, state); err != nil {
+			return err
+		}
+	} else if err := verifyLegacyStableLauncher(); err != nil {
+		return err
 	}
 	if state.Actions == nil {
 		state.Actions = map[string]ActionResult{}
@@ -428,6 +470,94 @@ func SaveRunState(root string, state RunState) error {
 		return err
 	}
 	return writeAtomic(path, append(finalData, '\n'), 0o600)
+}
+
+// verifyLegacyStableLauncher preserves the legacy run-state shape without
+// preserving a candidate writer. Existing pre-stage-0 runs have no admission
+// fields, so a production mutation is allowed only from a fixed launcher that
+// an active shared-registry record names. Test executables retain in-process
+// legacy semantics.
+func verifyLegacyStableLauncher() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe") {
+		return nil
+	}
+	home, err := installHomeDir()
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: legacy run requires a registered stable launcher: %w", err)
+	}
+	registry := filepath.Join(home, ".formal-gates", "registry.json")
+	doc, err := LoadRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: legacy run requires the shared registry: %w", err)
+	}
+	for _, record := range doc.Records {
+		if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) && launcherInvocationMatches(record.LauncherPath) {
+			return nil
+		}
+	}
+	return fmt.Errorf("UNREGISTERED_INSTALL: legacy run must be driven by a registered stable launcher")
+}
+
+// requireRunWriteAdmission enforces the same admission gate SaveRunState
+// applies, but before a workflow operation performs any write of its own.
+// Prepare flows write the canonical dispatch prompt file under
+// .gates/tmp/<run>/prompts/ before the final SaveRunState, so checking
+// admission only at state-save time let a candidate binary first write that
+// artifact and only then hit UNREGISTERED_INSTALL, leaving an orphan prompt
+// file behind. Running this gate before the change function hard-rejects the
+// candidate before the first write.
+func requireRunWriteAdmission(root string, state RunState) error {
+	if strings.TrimSpace(state.AdmissionRegistry) == "" && strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return verifyLegacyStableLauncher()
+	}
+	unlock, err := acquireRegistryLock(state.AdmissionRegistry)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return verifyRunStateAdmissionLocked(root, state)
+}
+
+// verifyRunStateAdmissionLocked is called only while the shared registry lock
+// is held.  Operations with external effects (Seal) call it before touching
+// VCS; ordinary state updates call it immediately before the atomic state
+// replacement through saveRunState.
+func verifyRunStateAdmissionLocked(root string, state RunState) error {
+	if strings.TrimSpace(state.AdmissionRegistry) == "" && strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return nil
+	}
+	if strings.TrimSpace(state.AdmissionRegistry) == "" || strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return fmt.Errorf("admission registry and record id must be supplied together")
+	}
+	receipt, err := admitRegistryUnlocked(filepath.Clean(state.AdmissionRegistry), state.AdmissionRecordID)
+	if err != nil {
+		return err
+	}
+	if !receipt.Accepted {
+		return fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, state.AdmissionRecordID)
+	}
+	if strings.TrimSpace(state.AdmissionRoot) == "" || strings.TrimSpace(state.AdmissionTarget) == "" {
+		return fmt.Errorf("admission root and target must be supplied with the registry binding")
+	}
+	if canonicalRegistryPath(root) != canonicalRegistryPath(state.AdmissionRoot) {
+		return fmt.Errorf("UNREGISTERED_INSTALL: workflow root does not match its admission binding")
+	}
+	doc, record, err := registryAdmissionIdentity(state.AdmissionRegistry, state.AdmissionRecordID)
+	if err != nil {
+		return err
+	}
+	if state.AdmissionEpoch == 0 || state.AdmissionGeneration == 0 || strings.TrimSpace(state.AdmissionLease) == "" || strings.TrimSpace(state.AdmissionToken) == "" {
+		return fmt.Errorf("UNREGISTERED_INSTALL: run is missing its registry epoch/lease identity")
+	}
+	if doc.Epoch < state.AdmissionEpoch || record.Generation != state.AdmissionGeneration || record.Lease != state.AdmissionLease || record.Token != state.AdmissionToken {
+		return fmt.Errorf("UNREGISTERED_INSTALL: run registry epoch/lease identity is stale")
+	}
+	return verifyRegistryBinding(state.AdmissionRegistry, state.AdmissionRecordID, state.AdmissionRoot, state.AdmissionTarget)
 }
 
 func LoadRunState(root, runID string) (RunState, error) {
