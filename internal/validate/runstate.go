@@ -43,6 +43,12 @@ type RunState struct {
 	// SplitMasterRunID 记录切片实例在启动声明中钉死的保留总任务 master run id（--split yes
 	// --master <id>）；workflow slicing 记录 split 时引用的 master 必须与之一致。
 	SplitMasterRunID     string                       `json:"splitMasterRunID,omitempty"`
+	// SplitAmendment 记录拆分启动声明的一次用户确认修订（workflow slicing --user-confirm）：
+	// 绑定点是 slicing 记录（记录后不重切），记录前允许经用户确认把 --split no 修订为
+	// split（自升保留总任务实例，不重启、不重过整体审）或把保留总任务实例降级为 no-split
+	// （解除"记 no-split 即死端"）；切片实例（--master）不可经修订脱钩。值为
+	// "<from>-><to> (USER_CONFIRM): <理由>"，仅留痕展示。
+	SplitAmendment       string                       `json:"splitAmendment,omitempty"`
 	// OwnerTranscript / OwnerSession 记录启动本 run 的对话身份（PreToolUse hook 在
 	// workflow start 时捕获、经 sidecar 桥接由 Start 写入）。写墙只对身份匹配的对话生效，
 	// 其它对话放行。transcript_path 为主键，session_id 兜底。旧 run 缺失时为空。
@@ -284,8 +290,16 @@ type QACase struct {
 	// 非空、且同一引用不被两条白盒用例共用（一个测试实现一个用例）；存在性与对应性由
 	// qa-review（读代码核对）与 qa-execution（实际运行）验证，使"测 A 的测试给 B 用例标
 	// PASS"可被发现。黑盒用例不需要（黑盒执行实际使用产品、无结构测试绑定）。
-	Test         string `json:"test,omitempty"`
+	Test string `json:"test,omitempty"`
+	// ReviewStatus 由 qa-review 轮置位（PASS/FAIL/PENDING）。PENDING 之外还有一条
+	// 置为 PASS 的路径：ApprovedSource（见下）。
 	ReviewStatus string `json:"reviewStatus"`
+	// ApprovedSource 溯源非 review 轮置位的批准：SUGGESTION_APPLIED 表示该用例是
+	// 按该 mode 最近一次 qa-review 记录在案的 P2 集合级建议、经 qa-design
+	// --per-suggestion 直接吸收置为已批准（P2/P3 只豁免重审、不豁免修复），
+	// 未另派 qa-review；空值表示由常规 review 轮批准。错误用例由 qa-execution
+	// 执行时暴露并走正常修复轮兜底。
+	ApprovedSource string `json:"approvedSource,omitempty"`
 }
 
 // QADesignChange 记录一轮 qa-design 增量记录对本 mode 用例集的变更：Added/Modified/

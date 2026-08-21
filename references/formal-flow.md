@@ -28,7 +28,8 @@ formal-gates workflow start --root <repo> --package-root <package> \
 #   --split yes：本 run 必须是保留总任务实例（--retained-overall）或切片实例
 #     （--master <保留总任务 run id>）；启动即钉死归属，忘带 retained-overall 在
 #     启动时就报错，而不是拖到拆分决定。
-#   --split no：本 run 不拆分，后续 slicing 禁止记录 split。
+#   --split no：本 run 默认不拆分；后续 slicing 记录 split 需经用户确认修订声明
+#     （--user-confirm + 修订理由，见下方 slicing），预测错了无需重启。
 # 未声明 --split 拒绝启动。
 
 # --route lightweight：轻量路线（非受理阶段选项）。创建正式 run 但跳过全部验证、只留
@@ -82,10 +83,16 @@ formal-gates workflow requirement --root <repo> --package-root <package> \
 
 # 拆分决定在 Part 2（start-readiness）PASS 后记录，是所有正式 run 的必填留痕；
 # 记录后即为绑定点、不重切。no-split 必须带原因留痕；split 需要分片数 >= 2。
+# 声明修订（用户确认）：拆分决定与启动声明冲突时，--user-confirm + 必填修订理由
+# （--note）即用户确认的声明修订——--split no 的 run 修订为 split 时自升保留总任务
+# 实例（不重启、不重过整体审）；保留总任务实例改记 no-split 时降级解除保留身份
+# （解开"记 no-split 即死端"）；切片实例（--master）不可经修订脱钩。修订留痕于
+# run 状态（splitAmendment），绑定点仍是本次记录。
 formal-gates workflow slicing --root <repo> --package-root <package> \
   --run-id <id> --decision <split|no-split> [--count <n>] \
   [--slice '<slice-definition>' ...] [--parallel '<parallel-suggestion>'] \
-  [--note '<reason>'] [--master <retained-overall-master-run-id>]
+  [--note '<reason>'] [--master <retained-overall-master-run-id>] \
+  [--user-confirm]
 # 拆分建议对所有正式 run 必填呈现并留痕，含：拆分理由、如何拆、哪些子任务可并行、
 # 以及改拆后果说明（若改拆，黑盒 QA 设计按新拆分拓扑展开、已覆盖用例复用）；仅高置信
 # 要拆时需用户确认拆分方案。分片场景下整体级产品审/技术审足够，切片继承整体审查结果、
@@ -177,9 +184,15 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # Advisory obligation；不得自动改判 FAIL、自动修复或静默丢弃。product-review /
 # start-readiness 的 Advisory 合并成一次类型化 Ask，逐项只允许 confirm / dismiss；全部
 # 处置并由 settle-findings 记录后才推进。确认 P2/P3 本身不置 `NeedsReReview`；若确认后修改
-# 需求并造成语义变化，再由需求修订规则决定重审。开发后 gate 的 `PASS + P2/P3` 只保留在
-# 状态和 Seal 摘要中、默认继续推进；同轮另有 QA FAIL 或 P0/P1 时随整轮一并修复，只有建议
-# 时仅在用户明确要求后才创建修复义务。
+# 需求并造成语义变化，再由需求修订规则决定重审。开发后 QA review 与 gate 的
+# `PASS + P2/P3`：PASS 即权威结果，P2/P3 不阻塞、不触发重审，但不豁免修复——经核查属
+# 范围内的发现项形成修复义务。同轮另有 QA FAIL 或 P0/P1 时随整轮一并修复（重审针对
+# P0/P1/QA，不因 P2/P3 而重审）；仅含 P2/P3 时，轮次预算未用尽则不问用户、直接修复
+# （纯 P2/P3 修复按有界修复走 carry 继承，不派重审、不计轮次），预算用尽后先把 P2/P3
+# 与处置选项呈现给用户决定（修复/跳过/作废，经 authorize-repair 授权或 Seal 跳过记录）。
+# 修复派发的实现任务必须写明"本修复不伴随复审、要求最高强度自测（完整构建+全量测试+
+# 受影响用例自跑）"；若修复影响已验证行为、需重跑验证才能继承，按普通修复轮计次。
+# 范围外 P3 维持仅作建议、不形成修复义务（封板时一次性展示）。
 
 # Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2/P3，复审规则同产品审。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
@@ -222,6 +235,13 @@ formal-gates workflow qa-design --root <repo> --package-root <package> --run-id 
 #  --case-id/--remove-case 引用的 id 必须存在于同 mode，否则报错；--replace-all 替换整个用
 #  例集（空集即清空该 mode）；三者不能同轮混用。未提及的既有用例及其 review PASS 状态自动
 #  保留、遗漏绝不清除。语义重复（同 mode 同描述/过程/预期）的无 id 提交报错并提示改用修改。
+# 按该 mode 最近一次 qa-review 记录在案的 P2 集合级建议直接吸收（P2 不豁免修改、只豁免
+# 重审）：本轮新增/修改用例直接置为已批准并留 SUGGESTION_APPLIED 溯源，不派新 qa-review、
+# 不重置该 mode 的 review 结果；要求最近一次 qa-review 结果为 PASS 且含 P2 集合级发现项，
+# 不能与 --replace-all 同轮混用（CLI 强制）。错误用例由 qa-execution 暴露并走正常修复轮。
+formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
+  --dispatch <dispatch-id> [--case ... | --case-id <id> ... | --remove-case <id>] \
+  --per-suggestion
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-review --mode <blackbox|whitebox>
 formal-gates workflow qa-review --root <repo> --package-root <package> \
@@ -229,7 +249,8 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
   --case CASE-001 --outcome <PASS|FAIL> [--reason '<required for FAIL>'] \
   [--finding '<set-level finding>' --severity <P1|P2> --location '<path:line>']
 # 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式，含被选中
-# 模式零用例）判 P1、阻塞、必须补用例；P2 仅为建议、不阻塞、不需处置。不设机械化质量
+# 模式零用例）判 P1、阻塞、必须补用例；P2 不阻塞、不触发重审，但不豁免修改——host 按
+# 建议经 qa-design --per-suggestion 直接吸收修订（见上）。不设机械化质量
 # 下限，用例集充分性由 qa-review 的 set-level 覆盖判定承担。
 # qa-review 审查完整合并集（未提及的既有用例自动保留在集中）；提示词注入本轮变更清单
 # （Added/Modified/Removed）。黑盒 qa-review 的提示词工作区指向隔离工作区，用例文件在
@@ -367,7 +388,8 @@ formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> 
 ```
 
 修复流程（SKILL 第 8 步的执行机制）：触发条件——QA FAIL 或 P0/P1 → 整轮退回修复、
-P2/P3 一并处理；下面只列命令形式与其余机制。
+P2/P3 一并处理；仅含 P2/P3 → 同样进入修复（轮次预算内不问用户，修复不重审、不计轮次）；
+下面只列命令形式与其余机制。
 - 开始编辑前先冻结当前 VCS 标识。
 - 总任务实例把集成发现项分发给各子任务实例，收到各子任务已 Seal 的修复后直接调用
   `workflow snapshot`；其他子任务实例准备并派发开发工作者，完成后冻结新标识并调用
@@ -375,6 +397,8 @@ P2/P3 一并处理；下面只列命令形式与其余机制。
 - 主代理通过修复前紧邻快照到当前的比较检查修复内容。
 - 派发独立门审/QA 前，先用目标项目自己的构建/测试做便宜健全性检查，明显失败如编译
   不过直接退回修复、不派发子代理；无校验入口则跳过。
+- 纯 P2/P3 修复派发的实现任务必须写明"本修复不伴随复审、要求最高强度自测（完整构建+
+  全量测试+受影响用例自跑）"，因为没有重审兜底。
 
 继承判定（SKILL 第 8 步的执行机制）：如果修复范围不影响任何此前已通过的被选验证，主
 代理可以直接做继承判定（写明理由，继承所有此前 PASS，包括 QA）；否则，对每个此前通过
@@ -392,7 +416,10 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
   修复，直到共享审查轮次上限耗尽或用户主动要求才可授权跳过。
 - 路线跳过和 Seal 跳过都会记录在摘要里。
 - 已授权的 Seal 跳过在当前快照仍被其他结果阻塞时继续有效，但不延续到后续修复快照。
-- 只有 P2/P3 的 PASS 建议保持可见，不阻塞 Seal。
+- 只有 P2/P3 的 PASS 不阻塞 Seal，但 P2/P3 须已按修复规则处置：轮次预算内已修复并继承，
+  或预算用尽后经用户决定跳过/作废；不是仅保持可见、放任不修。
+- Seal 前把所有留档未处置的建议级发现项（范围外 P3、未吸收建议）一次性列出展示给用户，
+  由用户决定是否处理；展示不阻塞、不逐条问询。
 
 ## 成本计量
 

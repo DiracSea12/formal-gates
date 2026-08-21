@@ -670,6 +670,13 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 	})
 }
 
+// SlicingAmendOptions 是拆分决定记录的用户确认修订选项。UserConfirm 为 true 表示
+// `workflow slicing --user-confirm`：拆分决定与启动声明冲突时，允许把启动拆分声明
+// 修订为与决定一致（须带修订理由 note），绑定点仍是本次 slicing 记录（记录后不重切）。
+type SlicingAmendOptions struct {
+	UserConfirm bool
+}
+
 // RecordSlicing records the run's formal split decision. The decision is binary
 // (split or no-split), can only be recorded after Start Readiness passes, and
 // once recorded is the binding point: it is not re-cut. A split requires at
@@ -678,7 +685,10 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 // verification (the merge route), so it never goes through normal route
 // selection. A no-split decision requires the mandatory "建议不拆（原因）" reason
 // trace. The fast-path (non-high-confidence) decision note may note uncertainty.
-func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note, masterRunID string) (RunState, error) {
+// With SlicingAmendOptions.UserConfirm the start declaration may be amended to
+// match the decision (see SlicingAmendOptions).
+func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note, masterRunID string, opts ...SlicingAmendOptions) (RunState, error) {
+	amend := len(opts) > 0 && opts[0].UserConfirm
 	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, catalog PromptCatalog) error {
 		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
@@ -693,10 +703,21 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 		// 需求 4：启动声明与拆分决定互相校验，杜绝"启动时说 no、拆分时说 split"或反向的
 		// 不一致被静默放过。缺失启动声明的旧 run（本功能上线前启动）不在此约束，按旧语义
 		// 处理（保留总任务实例仍须记录 split，其余 run 无额外限制）。
+		// 声明修订（用户确认）：绑定点仍是本次 slicing 记录，记录前允许经 --user-confirm
+		// 把启动声明修订为与决定一致——no→split 自升保留总任务实例（不重启、不重过整体
+		// 审）；修订须带理由留痕。切片实例（--master）不可脱钩，维持拒绝。
 		switch state.SplitDeclaration {
 		case "no":
 			if decision == "split" {
-				return fmt.Errorf("this run declared --split no at start, so a split decision is not allowed; restart with `workflow start --split yes ...` to split")
+				if !amend {
+					return fmt.Errorf("this run declared --split no at start, so a split decision is not allowed; amend the start declaration with a user-confirmed slicing call (workflow slicing --user-confirm --note <amendment reason>) instead of restarting the run")
+				}
+				if strings.TrimSpace(note) == "" {
+					return fmt.Errorf("amending the --split no declaration requires the amendment reason note")
+				}
+				state.RetainedOverall = true
+				state.SplitDeclaration = "yes"
+				state.SplitAmendment = "no->split (USER_CONFIRM): " + strings.TrimSpace(note)
 			}
 		case "yes":
 			if state.SplitMasterRunID != "" && decision == "no-split" {
@@ -707,10 +728,19 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			return fmt.Errorf("the current requirement is not confirmed")
 		}
 		if state.RetainedOverall && decision == "no-split" {
-			// 保留总任务实例专为拆分而启动，必须记录 split；记录 no-split 会让它
-			// 无法进入开发（prepareDevelopmentAction 拒绝保留总任务实例），只能
-			// abort+restart 恢复，是死端。
-			return fmt.Errorf("a retained-overall run must record a split decision")
+			// 保留总任务实例默认必须记录 split（记录 no-split 会让它无法进入开发——
+			// prepareDevelopmentAction 拒绝保留总任务实例，只能 abort+restart 恢复）。
+			// 用户确认修订例外：--user-confirm + 修订理由把 run 降级为普通 no-split run，
+			// 解开死端；绑定点仍是本次记录。
+			if !amend {
+				return fmt.Errorf("a retained-overall run must record a split decision; demote it to a single no-split run with a user-confirmed slicing call (workflow slicing --user-confirm --note <amendment reason>)")
+			}
+			if strings.TrimSpace(note) == "" {
+				return fmt.Errorf("amending the retained-overall declaration requires the amendment reason note")
+			}
+			state.RetainedOverall = false
+			state.SplitDeclaration = "no"
+			state.SplitAmendment = "split->no (USER_CONFIRM): " + strings.TrimSpace(note)
 		}
 		if decision == "split" && !state.RetainedOverall {
 			// 切片实例：必须引用其保留总任务 master run，且该 master 的整体级产品

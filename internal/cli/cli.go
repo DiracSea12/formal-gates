@@ -344,10 +344,14 @@ func runWorkflowSlicing(args []string, streams IO) (int, error) {
 	parallel := fs.String("parallel", "", "parallel suggestion (which subtasks may run concurrently)")
 	note := fs.String("note", "", "reason trace; required for no-split (建议不拆原因)")
 	master := fs.String("master", "", "retained-overall master run id for a slice instance split decision")
+	// --user-confirm：拆分决定与启动拆分声明冲突时的用户确认声明修订——--split no 的 run
+	// 记 split 自升保留总任务实例（不重启）、保留总任务实例记 no-split 降级解死端；修订理由
+	// 必填（--note）。切片实例（--master）不可经修订脱钩；绑定点仍是本次记录（记录后不重切）。
+	userConfirm := fs.Bool("user-confirm", false, "user-confirmed amendment of the start split declaration when the slicing decision contradicts it: --split no -> split promotes the run to retained-overall without a restart; retained-overall -> no-split demotes it to a single run; the amendment reason (--note) is required")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master)
+	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master, validate.SlicingAmendOptions{UserConfirm: *userConfirm})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -632,10 +636,14 @@ func runQADesign(args []string, streams IO) (int, error) {
 	removeCases := stringListFlag{}
 	fs.Var(&removeCases, "remove-case", "remove an existing CASE id from this mode (repeatable; the id must exist)")
 	replaceAll := fs.Bool("replace-all", false, "replace this mode's whole QA case set with the submitted cases (an empty submission clears the mode)")
+	// --per-suggestion 吸收该 mode 最近一次 qa-review 记录在案的 P2 集合级建议：本轮
+	// 新增/修改用例直接置为已批准（SUGGESTION_APPLIED 溯源），不派新 qa-review；要求该
+	// mode 最近一次 qa-review 结果为 PASS 且含 P2 集合级发现项，不能与 --replace-all 同用。
+	perSuggestion := fs.Bool("per-suggestion", false, "absorb the mode's recorded P2 set-level qa-review suggestions directly: cases submitted this round are recorded approved (SUGGESTION_APPLIED provenance) without a new qa-review round; requires the mode's latest qa-review PASS with P2 set findings; cannot combine with --replace-all")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{RemoveCases: removeCases, ReplaceAll: *replaceAll})
+	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{RemoveCases: removeCases, ReplaceAll: *replaceAll, PerSuggestion: *perSuggestion})
 	return workflowResult(streams, *root, *runID, state, err)
 }
 

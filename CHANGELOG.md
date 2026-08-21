@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `workflow slicing --user-confirm`：拆分启动声明的用户确认修订——拆分决定与启动声明冲突时，带修订理由（`--note` 必填）的记录即修订：`--split no` 的 run 改记 split 时自升保留总任务实例（不重启、不重过整体审，走合并路线）；保留总任务实例改记 no-split 时降级解除保留身份（解开"记 no-split 即死端"，降级后可正常进入开发）；切片实例（`--master`）不可经修订脱钩；绑定点不变（slicing 记录后不重切），修订留痕于 run 状态（`splitAmendment`）。无 `--user-confirm` 时沿用原拒绝，报错从"重启 run"改为提示修订路径。
+- P2/P3 语义澄清为"只豁免重审、不豁免修复"：产品审/技术审的 P2/P3 经用户逐项处置（确认→落实修订但无需重审、驳回→作废）；开发后 QA review 与各门的范围内 P2/P3 在轮次预算（三轮）内不问用户直接修复、预算用尽后由用户决定；纯 P2/P3 修复按有界修复继承既有 PASS，不派重审、不计审查轮次，修复任务写明要求最高强度自测；范围外 P3 仍仅作建议，Seal 前一次性展示未处置建议清单（SKILL.md、references/formal-flow.md、README、example-run 与产品审/技术审/开发工作者提示词同步更新）。
+- 新增 `workflow qa-design --per-suggestion`：按该 mode 最近一次 qa-review 记录在案的 P2 集合级建议直接吸收——本轮新增/修改用例直接置为已批准（SUGGESTION_APPLIED 溯源）、不派新 qa-review、不重置该 mode 的 review 结果；要求最近一次 qa-review 结果为 PASS 且含 P2 集合级发现项，不能与 `--replace-all` 同轮混用；错误用例由 qa-execution 暴露并走正常修复轮。
+- 实现质量门恢复显式命名的四个并列维度（需求覆盖、实现-需求偏差、架构与耦合、实现正确性与质量），架构与耦合不再作为无名段落弱化（修复 6aeb37e 合并架构门后维度命名漂移）。
 - 分片封板：切片实例的 `workflow seal`/`abort` 都不再产出独立封板文件
   （`.gates/results/<run-id>.json`），成本投影写入主干 temp run 下的 sidecar
   （`.gates/tmp/<主干run-id>/slice-costs/`，gitignored、不入交付 diff），主干（保留

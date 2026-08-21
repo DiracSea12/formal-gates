@@ -35,6 +35,11 @@ type QACaseInput struct {
 type QADesignRecordOptions struct {
 	RemoveCases []string
 	ReplaceAll  bool
+	// PerSuggestion 按 P2 集合级建议直接吸收：本轮新增/修改用例置为已批准
+	// （ApprovedSource=SUGGESTION_APPLIED），不重置 review、不要求新 qa-review 轮。
+	// 仅当该 mode 最近一次 qa-review 权威结果为 PASS 且含 P2 集合级发现项时允许；
+	// 与 ReplaceAll 互斥（整体替换丢弃已批准用例，不属于吸收）。
+	PerSuggestion bool
 }
 
 type QAReviewInput struct{ CaseID, Outcome, Reason string }
@@ -446,6 +451,11 @@ func formatQACase(testCase QACase, includeReview bool) string {
 	}
 	if includeReview {
 		value += "\nreview status: " + testCase.ReviewStatus
+		// 非 review 轮置位的批准展示溯源（--per-suggestion 吸收），读文档即知该用例
+		// 为何不经 qa-review 即已批准。
+		if strings.TrimSpace(testCase.ApprovedSource) != "" {
+			value += " (" + testCase.ApprovedSource + ")"
+		}
 	}
 	return value
 }
@@ -516,6 +526,30 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		// 显式操作互斥：整体替换与按 id 删除语义冲突，不能同时给出。
 		if options.ReplaceAll && len(options.RemoveCases) != 0 {
 			return fmt.Errorf("--replace-all cannot be combined with --remove-case")
+		}
+		// --per-suggestion 前置校验：P2/P3 只豁免重审、不豁免修复，qa-review 的集合级
+		// P2 建议按本标志直接吸收（本轮新增/修改用例置为已批准、留 SUGGESTION_APPLIED
+		// 溯源），不派新 qa-review。吸收只信任"该 mode 最近一次 qa-review 权威结果为
+		// PASS 且记录了 P2 集合级发现项"的现状；整体替换丢弃已批准用例、不属于吸收，
+		// 拒绝组合。错误用例由 qa-execution 执行时暴露并走正常修复轮兜底。
+		if options.PerSuggestion {
+			if options.ReplaceAll {
+				return fmt.Errorf("--per-suggestion cannot be combined with --replace-all")
+			}
+			review := state.qaReview(dispatch.Mode)
+			if review.Status != "PASS" {
+				return fmt.Errorf("--per-suggestion requires the mode's latest qa-review result to be PASS with recorded P2 set-level findings")
+			}
+			hasP2Finding := false
+			for _, finding := range review.Findings {
+				if finding.Severity == "P2" {
+					hasP2Finding = true
+					break
+				}
+			}
+			if !hasP2Finding {
+				return fmt.Errorf("--per-suggestion requires at least one recorded P2 set-level finding in the mode's latest qa-review result")
+			}
 		}
 		// 设计轮只对本派发 mode 的用例列表做增量合并——从该 mode 自己的存储列表取
 		// 既有用例（未提及即保留、含已批准用例），另一 mode 的列表保持不动。
@@ -621,11 +655,22 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				// 实质修订判定：--case-id 修改把规格（description/procedure/oracle，白盒
 				// 含 test 绑定）改成与修改前不同才计为实质修订；内容相同的重交不是实质变更，
 				// 在 review FAIL 的返工约束下仍被拒绝。
-				if normalized.Description != base[idx].Description || normalized.Procedure != base[idx].Procedure || normalized.Oracle != base[idx].Oracle || normalized.Test != base[idx].Test {
+				caseChanged := normalized.Description != base[idx].Description || normalized.Procedure != base[idx].Procedure || normalized.Oracle != base[idx].Oracle || normalized.Test != base[idx].Test
+				if caseChanged {
 					substantiveRevised = true
 				}
 				base[idx].Description, base[idx].Procedure, base[idx].Oracle, base[idx].Test = normalized.Description, normalized.Procedure, normalized.Oracle, normalized.Test
-				base[idx].ReviewStatus = "PENDING"
+				if options.PerSuggestion {
+					// 按建议吸收的修改不回 PENDING：直接置为已批准并留溯源，
+					// 后续执行/封板把它当已批准用例对待。内容未变的重交无实质吸收，
+					// 不打 SUGGESTION_APPLIED 溯源（原状态已是 PASS）。
+					base[idx].ReviewStatus = "PASS"
+					if caseChanged {
+						base[idx].ApprovedSource = "SUGGESTION_APPLIED"
+					}
+				} else {
+					base[idx].ReviewStatus = "PENDING"
+				}
 				modifiedIDs = append(modifiedIDs, caseID)
 				continue
 			}
@@ -641,7 +686,13 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			for usedIDs[fmt.Sprintf("CASE-%03d", nextID)] {
 				nextID++
 			}
-			normalized.ID, normalized.ReviewStatus = fmt.Sprintf("CASE-%03d", nextID), "PENDING"
+			normalized.ID = fmt.Sprintf("CASE-%03d", nextID)
+			if options.PerSuggestion {
+				normalized.ReviewStatus = "PASS"
+				normalized.ApprovedSource = "SUGGESTION_APPLIED"
+			} else {
+				normalized.ReviewStatus = "PENDING"
+			}
 			usedIDs[normalized.ID] = true
 			nextID++
 			byID[normalized.ID] = len(base)
@@ -686,9 +737,13 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		if isMergeVerification(*state) && len(updated) == 0 && !removedAny {
 			message = "切片基本独立、无跨切片交互用例"
 		}
-		// 设计 PASS 记录到本 mode、本 mode 的 review 重置为 PENDING，另一 mode 不动。
+		// 设计 PASS 记录到本 mode；常规设计轮把本 mode 的 review 重置为 PENDING（用例集
+		// 已变、须重新审查），另一 mode 不动。--per-suggestion 吸收轮例外：保留既有 PASS
+		// review 结果（其 P2 发现项即吸收来源、留作溯源），不重置——吸收不派新 review。
 		state.setQADesign(dispatch.Mode, ActionResult{Status: "PASS", Message: message, DispatchID: dispatch.ID})
-		state.setQAReview(dispatch.Mode, ActionResult{Status: "PENDING"})
+		if !options.PerSuggestion {
+			state.setQAReview(dispatch.Mode, ActionResult{Status: "PENDING"})
+		}
 		// 记录本轮增量变更（新增/修改/删除的用例 id），供 qa-review 提示词注入"本轮变更"
 		// 上下文，使审查保持对完整合并集的感知。
 		if state.QADesignChangesByMode == nil {
@@ -777,7 +832,9 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			}
 		}
 		// 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式）判 P1、
-		// 阻塞、必须补用例；P2 仅为建议、不阻塞、不需处置。P0 不接受（集合层面不判终态致命）。
+		// 阻塞、必须补用例；P2 不阻塞、不触发重审，但不是无需修改——host 经 qa-design
+		// --per-suggestion 按建议直接吸收修订（见 RecordQADesign 的前置校验）。
+		// P0 不接受（集合层面不判终态致命）。
 		for _, input := range setFindings {
 			severity := strings.ToUpper(strings.TrimSpace(input.Severity))
 			if severity != "P1" && severity != "P2" {

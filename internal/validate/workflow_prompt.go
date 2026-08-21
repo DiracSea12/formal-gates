@@ -329,7 +329,7 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 			pending = append(pending, formatQACase(testCase, false))
 		}
 		if len(pending) == 1 {
-			accepted = append(accepted, "There are no pending case decisions. Review the set for missing or duplicated coverage and return no case decisions. Set-level coverage omission for a selected mode is P1 and blocks; P2 findings are suggestions only.")
+			accepted = append(accepted, "There are no pending case decisions. Review the set for missing or duplicated coverage and return no case decisions. Set-level coverage omission for a selected mode is P1 and blocks; P2 findings are suggestions that do not block this round's verdict.")
 			return strings.Join(accepted, "\n\n"), nil
 		}
 		if len(accepted) == 1 {
@@ -391,7 +391,7 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 				}
 			}
 			if len(pending) == 1 {
-				lines = append(lines, "There are no pending items to decide in this incremental review. Review the declared scope and return no item decisions; set-level coverage omission for a declared item is P1 and blocks; P2 findings are suggestions only.")
+				lines = append(lines, "There are no pending items to decide in this incremental review. Review the declared scope and return no item decisions; set-level coverage omission for a declared item is P1 and blocks; P2 findings are suggestions that do not block this round's verdict.")
 				return strings.Join(lines, "\n"), nil
 			}
 			lines = append(lines, strings.Join(pending, "\n"), strings.Join(accepted, "\n"))
