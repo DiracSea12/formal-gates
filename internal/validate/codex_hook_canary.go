@@ -30,6 +30,7 @@ type CodexHookCanarySummary struct {
 	CodexVersion           string `json:"codexVersion"`
 	ProfileFlag            string `json:"profileFlag,omitempty"`
 	TimeoutSeconds         int    `json:"timeoutSeconds"`
+	Attempts               int    `json:"attempts"`
 	ExitCode               int    `json:"exitCode"`
 	TimedOut               bool   `json:"timedOut"`
 	MarkerExists           bool   `json:"markerExists"`
@@ -156,15 +157,36 @@ func CodexHookCanary(options CodexHookCanaryOptions) (CodexHookCanarySummary, Re
 	exitCode, timedOut, runErr := runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath, timeout)
 	summary.ExitCode = exitCode
 	summary.TimedOut = timedOut
+	summary.Attempts = 1
 	if runErr != nil {
 		appendText(stderrPath, runErr.Error()+"\n")
 	}
 
 	summary.MarkerExists = isFile(markerPath)
 	summary.HookPayloadCount, summary.PreToolUsePayloadCount = countCodexHookPayloads(payloadDir)
+	// A session that finished without any PreToolUse payload and without the
+	// forbidden marker answered the prompt in text instead of calling the
+	// shell tool, so no host payload ever reached the hooks. Retry the driven
+	// session once before concluding that the host cannot emit PreToolUse
+	// payloads; the payload directory keeps accumulating evidence across both
+	// attempts.
+	if summary.PreToolUsePayloadCount == 0 && !summary.MarkerExists && !summary.TimedOut {
+		summary.Attempts = 2
+		exitCode, timedOut, runErr = runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath, timeout)
+		summary.ExitCode = exitCode
+		summary.TimedOut = timedOut
+		if runErr != nil {
+			appendText(stderrPath, runErr.Error()+"\n")
+		}
+		summary.MarkerExists = isFile(markerPath)
+		summary.HookPayloadCount, summary.PreToolUsePayloadCount = countCodexHookPayloads(payloadDir)
+	}
 	proof := summary.PreToolUsePayloadCount > 0 && !summary.MarkerExists
 	if proof {
 		summary.Status = "PASS"
+		if summary.Attempts > 1 {
+			summary.Diagnostic = "the driven session answered the first prompt without a tool call; the retry produced the PreToolUse proof"
+		}
 		if timedOut {
 			summary.Diagnostic = fmt.Sprintf("Codex exec timed out after %d seconds after the native PreToolUse block was proven; external Codex shutdown was not observed", summary.TimeoutSeconds)
 		}
@@ -328,6 +350,12 @@ func isPathLike(value string) bool {
 	return strings.ContainsAny(value, `/\`)
 }
 
+// writeCodexCanaryProfile writes the temporary Codex profile for the canary.
+// Every matcher is the regex ".*": Codex matchers are regular expressions, so
+// the glob "*" is an invalid pattern that matches nothing and the hook never
+// fires. The PreToolUse chain pairs the passive payload recorder with the
+// native formal-gates hook decide so one driven session yields both the raw
+// host payloads and the real block decision.
 func writeCodexCanaryProfile(path, binary, payloadDir string) error {
 	nativeHookCommand := strings.Join([]string{
 		quoteCommandArg(binary),
@@ -342,6 +370,7 @@ func writeCodexCanaryProfile(path, binary, payloadDir string) error {
 		"codex-hook-probe",
 		"--payload-dir",
 		quoteCommandArg(payloadDir),
+		"--quiet",
 	}, " ")
 	content := fmt.Sprintf(`[features]
 hooks = true
@@ -354,7 +383,7 @@ timeout = 30
 statusMessage = "formal-gates Codex hook canary user prompt"
 
 [[hooks.PreToolUse]]
-matcher = "*"
+matcher = ".*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = %s
@@ -367,7 +396,7 @@ timeout = 30
 statusMessage = "formal-gates Codex hook canary native formal-gates hook"
 
 [[hooks.PostToolUse]]
-matcher = "*"
+matcher = ".*"
 [[hooks.PostToolUse.hooks]]
 type = "command"
 command = %s
@@ -392,6 +421,12 @@ func tomlString(value string) string {
 	return `"` + replacer.Replace(value) + `"`
 }
 
+// codexHookPrompt is the exact instruction the canary drives through codex
+// exec. The instruction must force a real shell tool call: answering in text
+// produces no PreToolUse payload, which is exactly the "hook payload captured
+// but no PreToolUse payload" failure mode, so the prompt explicitly forbids a
+// text-only reply and the command paths stay absolute (the driven session
+// must not depend on a PATH alias for the formal-gates binary).
 func codexHookPrompt(binary, caseDir, markerPath string) string {
 	record := strings.Join([]string{
 		quoteCommandArg(binary),
@@ -407,9 +442,9 @@ func codexHookPrompt(binary, caseDir, markerPath string) string {
 		"hook-canary",
 	}, " ")
 	if runtime.GOOS == "windows" {
-		return "Run exactly this shell command once, then stop: & " + record + "; Set-Content -LiteralPath " + quoteCommandArg(markerPath) + " -Value HIT"
+		return "You must call the shell tool now; do not answer in text, a text-only reply is a failure. Run exactly this command once, then stop: & " + record + "; Set-Content -LiteralPath " + quoteCommandArg(markerPath) + " -Value HIT"
 	}
-	return "Run exactly this shell command once, then stop: " + record + "; printf HIT > " + quoteCommandArg(markerPath)
+	return "You must call the shell tool now; do not answer in text, a text-only reply is a failure. Run exactly this command once, then stop: " + record + "; printf HIT > " + quoteCommandArg(markerPath)
 }
 
 func runCodexCanary(codexCommand, profileFlag, profileName, worktree, promptPath, stdoutPath, stderrPath, finalPath string, timeoutSeconds int) (int, bool, error) {

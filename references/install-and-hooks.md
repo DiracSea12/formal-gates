@@ -28,29 +28,29 @@ Windows 上构建并调用 `bin\formal-gates.exe`。
 ## 原生安装
 
 ```bash
-bin/formal-gates install --source <formal-gates> \
-  --host <claude|codex|cursor|dsh> --scope global --force
+./install.command --host <claude|codex|cursor|dsh> --scope global --force
+./install.command --host <claude|codex|cursor|dsh> --scope project --project <project> --force
+# Windows: install.bat ...
 
-bin/formal-gates install --source <formal-gates> \
-  --host <claude|codex|cursor|dsh> --scope project --project <project> --force
-
-bin/formal-gates uninstall \
+$HOME/.local/bin/formal-gates uninstall \
   --host <claude|codex|cursor|dsh> --scope global
 
-bin/formal-gates uninstall \
+$HOME/.local/bin/formal-gates uninstall \
   --host <claude|codex|cursor|dsh> --scope project --project <project>
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
 考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
-关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置必须逐字节保持不变时，才使用
+关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置和受理规则都必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
 只有带 `--force` 时，安装才会替换一个已存在的 formal-gates 目标。它不得把另一个
 host 的全局安装当作回退。
 
 引导文件 `install.command` 和 `install.bat` 会下载匹配的 release 源码与二进制、
-校验已发布的 checksum、组装本地包，并调用同一个原生安装器。它们不是第二个安装器。
+校验已发布的 checksum、组装本地包，把 binary 首次放到固定 stable launcher，再由该
+launcher 调用唯一原生安装事务。源码目录的 `bin/formal-gates` 是候选，只能做只读验证
+和隔离 canary，不能安装、bootstrap、卸载或写 workflow state；引导脚本不是第二个安装器。
 
 ## 安装位置
 
@@ -61,8 +61,8 @@ host 的全局安装当作回退。
 - Cursor：`~/.cursor/formal-gates`
 - DeepSeek Harness：`$DSH_HOME/skills/formal-gates`（默认 `~/.dsh`）
 
-项目级安装使用所选项目下的对应目录。当 host 需要时，安装器会把原生二进制的绝对
-路径写入 hook 配置。
+项目级安装使用所选项目下的对应目录。hook 配置始终写固定 stable launcher 的绝对路径，
+不会指向可替换 target 内的 candidate binary。
 
 安装器维护的规则文件是：
 
@@ -77,8 +77,8 @@ Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook�
 唯一宿主指令区块；安装器把同一区块写入宿主指令文件。重复安装会替换区块内容并把
 重复区块收敛为一个，同时保留区块外内容。
 
-从旧版（包括使用旧 marker 的版本）升级时，先用旧版本二进制执行一次 `uninstall`，再安装
-本版本；之后可直接重复覆盖安装，不再依赖任何历史规则全文。
+从旧版（包括旧 target/bin hook 或旧 marker）升级时，直接从 release 引导脚本加
+`--force` 安装；事务只识别并迁移安装器拥有的精确旧 hook 形状，不保留旧 writer 或入口。
 
 DeepSeek Harness 的 hook 补丁是 home 级 `cordis.patch.yml`；DSH 不自动加载项目目录
 下的补丁文件，所以 `--host dsh --scope project` 只安装 skill 与 `AGENTS.md` 指令，不
@@ -92,24 +92,24 @@ provider，lifecycle verify 为 `UNAVAILABLE`，既有派发与身份检查仍�
 卸载使用与安装相同的 host、scope 和 project 解析：
 
 ```bash
-bin/formal-gates uninstall --host claude --scope global
-bin/formal-gates uninstall --host codex --scope project --project <project>
-bin/formal-gates uninstall --host cursor --scope project --project <project>
-bin/formal-gates uninstall --host dsh --scope global
-bin/formal-gates uninstall --host dsh --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host claude --scope global
+$HOME/.local/bin/formal-gates uninstall --host codex --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope global
+$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>
 ```
 
 它会删除所选 host 的 formal-gates 运行时目录、安装器拥有的 hook 条目和完整 marker
 规则区块，同时保留规则区块外内容与非 formal-gates hook。规则清理由 marker 独立完成，
-即使运行时目录已经不存在也不需要规则源码。`uninstall --source` 仅作为兼容参数保留，
-不再参与规则清理。
+即使运行时目录已经不存在也不需要规则源码。卸载只能由 registry 登记的 stable launcher
+执行，不接受旧 `--source` 旁路。
 
 ## Hook 边界
 
 原生 hook 入口是：
 
 ```bash
-bin/formal-gates hook decide
+$HOME/.local/bin/formal-gates hook decide
 ```
 
 Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通过 JSON 的
@@ -146,7 +146,7 @@ Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷�
 送给已安装的原生二进制：
 
 ```bash
-bin/formal-gates lifecycle capture \
+$HOME/.local/bin/formal-gates lifecycle capture \
   --provider <claude-code|codex|cursor|deepseek-harness> --event <provider-event-name>
 ```
 
@@ -160,10 +160,20 @@ Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动
 不会创建生命周期日志。
 
 在 `workflow claim-dispatch` 绑定 host 身份之后，可以在不改变流程状态的情况下检
-视推导出的结果：
+视推导出的结果。固定 stable launcher 同时服务多个 host 时，认领必须显式给出
+`--provider <claude-code|codex|cursor|deepseek-harness>`；同一项目路径下存在冲突的
+active registry host 时不会猜测第一个记录：
 
 ```bash
-bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
+$HOME/.local/bin/formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <dispatch-id> --reviewer <identity> --provider codex
+```
+
+省略 `--provider` 只适用于没有歧义的正常开发构建/已登记 host；共享 launcher 的歧义
+会硬阻断，避免把生命周期证据绑定到错误 host。
+
+```bash
+$HOME/.local/bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
   --dispatch <dispatch-id>
 ```
 
@@ -197,6 +207,65 @@ installed: <test-project>/<host-path>/formal-gates
 
 不要一边测试过期的全局包，一边把结果报告成候选版本的结果。包、提示词目录、安装
 和实机 hook 的所有声明，都必须指明实际使用的那份副本。
+
+首次使用固定 stable driver 时，先从冻结的已安装 artifact 调用受支持的
+`install --bootstrap` 维护入口。bootstrap 只登记 target、host、project/state/resource
+root、runtime sibling、epoch/generation 和 lease/token，并写 bootstrap receipt；它不创建
+workflow state。registry 不存在时允许这一次创建，已有记录缺失、冲突或无法对账时只留下
+disabled/`UNREGISTERED_INSTALL` receipt 并停止。bootstrap receipt 提交后，stable launcher
+才允许第一次 `workflow start`；候选 binary 和裸旧绝对 binary 都不能执行 bootstrap 或写
+stable registry。
+
+安装事务会在每个非幂等边界持久化同一份 journal，并把完整机器 receipt 写入 registry
+旁的 `<registry>.install.json`。Go installer、admission bridge、Shell 和 PowerShell
+共享 native owner、install/uninstall lock、registry lock、generation/token 和 recovery
+receipt schema。事务的可观察顺序固定为：
+
+```text
+lock(admission/install -> registry)
+  -> journal intent(old/new runtime, pointer/config, registry digests)
+  -> temp + backups
+  -> copy + manifest/Lstat/realpath/digest validation
+  -> switch release/installed target (journal=switched; old registry remains authoritative)
+  -> installed-binary package validation + post-switch/pre-commit smoke
+  -> atomic current/pointer/config + registry record commit
+  -> journal committed + install receipt
+```
+
+这里的 post-switch 指 release/installed target 已切换但公共 pointer/config 和 registry 尚未
+提交；smoke 必须从实际 installed binary path 启动。只有 smoke 通过后才共同提交 runtime
+和 registry；任一 runtime、pointer/config 或 registry 提交失败，都由同一 owner
+observe/reconcile 恢复旧 runtime/config/registry bytes，再写 recovery receipt。receipt 至少
+包含 source/package 与 installed digest、逐输入 `Lstat`/realpath manifest、hook/config 与
+managed-rule 路径和 digest、事务 smoke 结果以及 registry/state/resource canonical paths。
+重复安装时如果 hook 或 managed-rule 内容已经相同，receipt 的 action 会明确记录
+`SKIPPED_UNCHANGED`，不会用另一个兼容 writer 改写字节；`--skip-hooks` 同时跳过 hook
+和受理规则更新，不绕过 runtime、receipt 或 registry transaction。故障矩阵可用同一原生入口复现：
+
+```bash
+FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|copy-component:runtime|prepared|switched|post-switch-smoke|pointer|hook|managed-rule|registry-commit|copy-component:prompts|copy-component:gates|verify-stage:installed-target|verify-stage:manifest|verify-stage:realpath|verify-stage:digest \
+  <stable-launcher> install --source <candidate> --host claude --scope project \
+  --project <project> --binary-target <stable-launcher> --force
+```
+
+也可以用公开 fixture 一次覆盖复制、切换、installed-binary smoke、pointer、hook、规则、
+registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher。每个
+注入边界只暴露一个 canonical fixture 名称（`hook`、`managed-rule` 不再有 `hooks`/`rules`
+等别名，同一边界不重复执行）；唯一保留的旧输入 `runtime` 在入口归一化为
+`copy-component:runtime`。复制 fixture 可按组件选择，
+installed-target 校验 fixture 可按阶段选择：
+
+```bash
+<stable-launcher> canary fault-matrix --root <candidate> --fixture copy-component:prompts
+<stable-launcher> canary fault-matrix --root <candidate> --fixture verify-stage:installed-target
+```
+
+真实 hook JSON、managed-rule、pointer/config、registry 和 post-switch/pre-commit
+installed-binary smoke 失败也会回滚到旧 runtime/config/registry，并在 registry 旁留下
+`<registry>.transaction.json.failure.json`；崩溃后下次 install/uninstall 会对账同一 journal，
+清理临时/备份路径并写 `<registry>.transaction.json.receipt.json`。smoke 失败时 journal
+仍处于 `switched`，不会伪装成 committed；脚本不得自行删除 release、切换 pointer 或写
+registry。
 
 ## Release 边界
 

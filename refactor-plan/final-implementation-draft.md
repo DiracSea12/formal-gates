@@ -468,6 +468,8 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 - 把权威需求、本方案、SKILL 和所有参考文档统一成同一语义。
 - 为最终公共命令面、旧 run 拒绝、用户节点、StepSpec/失败分类、parallel frontier、三轮和 split receipts 建 contract fixtures。
 - 冻结当前正常使用中仍需由内部 handler 承接的业务语义，不冻结旧命令形态或兼容行为。
+- 阶段 0 的分发事务先由冻结 stable driver 调用 `install --bootstrap` 建立 registry；bootstrap 不创建 workflow state。安装、admission bridge、Go installer、Shell/PowerShell 共享同一 native owner，按 `switched -> installed-path post-switch/pre-commit smoke -> atomic runtime/pointer/config+registry commit -> journal committed` 顺序执行，失败由同一 journal 对账并恢复旧 runtime/config/registry。
+- 只为未来版本化 engine/candidate surface 冻结 state/definition version envelope 与缺失/不匹配 fixture；stable driver 和既有 legacy run 继续沿用当前 state 格式及写入语义，严格版本拒绝在 engine surface 可用后才生效。
 
 ### 阶段 1：纯决策内核
 

@@ -27,6 +27,10 @@ func (nativeWorkflowLifecycle) Bind(root, runID, dispatchID, identity string) er
 	return lifecycle.BindDispatch(root, runID, dispatchID, identity)
 }
 
+func (nativeWorkflowLifecycle) BindWithProvider(root, runID, dispatchID, identity, provider string) error {
+	return lifecycle.BindDispatchWithProvider(root, runID, dispatchID, identity, provider)
+}
+
 func (nativeWorkflowLifecycle) Verify(root, runID, dispatchID string) (lifecycle.Verification, error) {
 	return lifecycle.VerifyDispatch(root, runID, dispatchID)
 }
@@ -37,6 +41,10 @@ func (nativeWorkflowLifecycle) TranscriptPath(root, runID, dispatchID string) (s
 
 func (nativeWorkflowLifecycle) ResolveClaimIdentity(root, runID, preferred string) (string, error) {
 	return lifecycle.ResolveClaimIdentity(root, runID, preferred)
+}
+
+func (nativeWorkflowLifecycle) ResolveClaimIdentityWithProvider(root, runID, preferred, provider string) (string, error) {
+	return lifecycle.ResolveClaimIdentityWithProvider(root, runID, preferred, provider)
 }
 
 func (nativeWorkflowLifecycle) InterruptionReason(root, runID, dispatchID string) (string, error) {

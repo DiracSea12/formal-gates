@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 // White-box structure tests for the trigger-model V2 change

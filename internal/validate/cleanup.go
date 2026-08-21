@@ -66,7 +66,13 @@ func CleanupTempRuns(root string) (TempRunCleanup, error) {
 // CleanupTempRun deletes one named run temp directory, terminated or not.
 // This is the explicit escape hatch for abandoned active runs; it never
 // touches .gates/results. Unsafe names (path separators, "." and "..",
-// empty) are rejected.
+// empty) are rejected. Deleting a run directory destroys workflow state, so
+// the same candidate admission gate as every other mutating workflow
+// entrypoint is enforced first: a run with a recorded registry binding may
+// only be deleted by an invocation that still admits that binding, and a
+// legacy run requires the registered stable launcher. A missing or unreadable
+// state file carries no binding, so it keeps the legacy stable-launcher
+// check.
 func CleanupTempRun(root, runID string) (bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || runID == "." || runID == ".." ||
@@ -77,6 +83,13 @@ func CleanupTempRun(root, runID string) (bool, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return false, nil
 	} else if err != nil {
+		return false, err
+	}
+	if state, err := LoadRunState(root, runID); err != nil {
+		if err := verifyLegacyStableLauncher(); err != nil {
+			return false, err
+		}
+	} else if err := requireRunWriteAdmission(root, state); err != nil {
 		return false, err
 	}
 	if err := os.RemoveAll(dir); err != nil {

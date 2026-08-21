@@ -6,6 +6,7 @@
 gofmt -w <changed-go-files>
 go test ./...
 go test -race ./internal/validate ./internal/cli
+go test -tags=phase0whitebox ./internal/validate
 go vet ./...
 go build -o bin/formal-gates ./cmd/formal-gates
 bin/formal-gates package validate --root .

@@ -1,3 +1,5 @@
+//go:build phase0whitebox
+
 package validate
 
 // 白盒结构测试（白盒设计者交付）：本文件由白盒 QA 设计者在开发后独立设计并编写，

@@ -93,21 +93,21 @@
     "internal/",
     "agents/",
     "prompts/",
-    "gates/"
+    "gates/",
+    "definitions/"
   ],
   "install_commands": [
-    "bin\\formal-gates.exe install --source . --host claude --scope global --force",
-    "bin/formal-gates install --source . --host claude --scope global --force",
-    "bin/formal-gates install --source . --host codex --scope project --project <project> --force",
-    "bin/formal-gates install --source . --host cursor --scope project --project <project> --force",
-    "bin/formal-gates uninstall --host claude --scope global",
-    "bin/formal-gates uninstall --host codex --scope project --project <project>",
-    "bin/formal-gates uninstall --host cursor --scope project --project <project>",
-    "bin/formal-gates install --source . --host dsh --scope global --force",
-    "bin\\formal-gates.exe install --source . --host dsh --scope global --force",
-    "bin/formal-gates install --source . --host dsh --scope project --project <project> --force",
-    "bin/formal-gates uninstall --host dsh --scope global",
-    "bin/formal-gates uninstall --host dsh --scope project --project <project>"
+    "./install.command --host claude --scope global --force",
+    "./install.command --host codex --scope project --project <project> --force",
+    "./install.command --host cursor --scope project --project <project> --force",
+    "./install.command --host dsh --scope global --force",
+    "./install.command --host dsh --scope project --project <project> --force",
+    "install.bat -TargetHost claude -Scope global -Force",
+    "$HOME/.local/bin/formal-gates uninstall --host claude --scope global",
+    "$HOME/.local/bin/formal-gates uninstall --host codex --scope project --project <project>",
+    "$HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>",
+    "$HOME/.local/bin/formal-gates uninstall --host dsh --scope global",
+    "$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>"
   ],
   "verification_commands": [
     "bin\\formal-gates.exe package validate --root .",
@@ -122,11 +122,13 @@
     "Native workflow commands resolve and verify immutable identities through the selected Git, SVN, or P4 command while reviewers inspect native comparisons directly.",
     "Native install copies the verifiable installable package subset, including prompts and gates, without PS1/Python script runtime files and writes each selected host's native hook configuration.",
     "Native install and uninstall use the single marker-delimited host-instruction block from SKILL.md for the applicable Claude Code, Codex, Cursor, and DeepSeek Harness guidance files; Cursor global has no host-instruction file.",
-    "Source checkout development tests may use go run ./cmd/formal-gates, but installed hook and validation paths must use bin/formal-gates(.exe).",
+    "Source checkout builds are read-only candidate validation inputs; install/bootstrap/uninstall and workflow writes must use the registry-admitted fixed stable launcher.",
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root.",
     "Native install also writes the DeepSeek Harness skill under .dsh/skills and mounts the bundled minimal Cordis hook plugin through the DSH home cordis.patch.yml; project-scope DSH installs skills and AGENTS.md instructions only because DSH loads only the home-level patch layer.",
-    "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking."
+    "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking.",
+    "Stage-0 native installation owns the immutable release copy, cross-process lock, one recovery journal, backup, stable launcher, host configuration, and registry commit; shell and PowerShell bootstrap entries only download, verify, stage the fixed launcher, and invoke that owner.",
+    "Stage-0 package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
   ],
   "support_caveats": [
     "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, Cursor, and DeepSeek Harness have bundled installer/hook target entries.",
