@@ -12,9 +12,10 @@
 
 ## 环境基线（含阶段 0 缺陷修复记录）
 
-- 固定 stable driver：`~/.formal-gates/releases/0.1.0-macos-arm64`。阶段 0 故障注入测试曾将其 launcher 与 `~/.local/bin/formal-gates` 写成 25 字节空桩（2026-08-21 01:34/20:54，与 `internal/validate/package_test.go:252` 桩内容逐字节一致）；2026-08-22 从冻结源 commit `5373c13`（release 树 SKILL/manifest 指纹匹配）以 git archive + go build 重建恢复，`package validate` 与 `canary portable` 均 PASS，桩备份于 `/tmp/stub-backup/`。本 run 全程由该修复后 launcher 驱动。
-- phase-0 run（phase-0-distribution-002）执行期间 launcher 已是桩，其实际驱动二进制不可考，与"全部正式 run 由冻结 stable driver 驱动"的自狗粮规则存在偏离；如实留痕，自本 run 起每次会话首次调用前 smoke 留证。
-- 测试隔离缺陷（污染真实 `~/.formal-gates/registry.json`，142 条测试记录）在本阶段修复并回归。
+- **固定 stable driver（2026-08-22 用户拍板重冻结）**：`~/.formal-gates/releases/0.1.0-macos-arm64` 内容与两个 launcher（含 `~/.local/bin/formal-gates`）已重建为 main HEAD `7929891`（git archive + go build；SKILL 指纹 46941e99 一致；`package validate` 与 `canary portable` PASS）。阶段 1–6 固定使用该驱动，不再随开发更新；阶段 7 按计划切换。
+- **重冻结原因（阶段 0 契约缺口的显式修正）**：阶段 0 名义冻结的 5373c13（8 月 4 日）缺少 8 月中旬实现的现行流程命令（`--split`、`slicing`、`settle-findings`、`qa-worktree` 等），从未实际驱动过任何 run；phase-0 run（含 slicing 记录）实际由更新构建驱动，违反"全部正式 run 由固定 stable driver 驱动"的自狗粮规则。旧树备份于 `/tmp/stub-backup/release-old-tree-5373c13.tar`。
+- 阶段 0 故障注入测试曾将旧 release launcher 与 `~/.local/bin/formal-gates` 写成 25 字节空桩（2026-08-21 01:34/20:54，与 `internal/validate/package_test.go:252` 桩内容逐字节一致）；该污染连同真实 `~/.formal-gates/registry.json` 的 142 条测试记录构成测试隔离缺陷，在本阶段修复并回归。
+- 自本 run 起，每次会话首次调用驱动前执行 launcher smoke 并留证。
 
 ## 本 run 预定决策
 
