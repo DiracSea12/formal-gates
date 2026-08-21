@@ -2,7 +2,7 @@
 
 ## 基线与环境
 
-- [ ] 记录本阶段基线 identity（db1822b）与 stable driver 恢复证据（源 5373c13 重建、package validate/canary PASS、桩备份位置）。
+- [ ] 记录本阶段基线 identity（db1822b）与 stable driver 重冻结证据（main HEAD 7929891 构建、package validate/canary PASS、旧树备份位置）。
 - [ ] 测试隔离修复：触及用户级 registry/安装路径的测试全部改用临时 HOME/registry root；复现本次 launcher 桩污染的回归用例在隔离环境通过。
 
 ## Spike

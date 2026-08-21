@@ -1,6 +1,6 @@
 # 阶段 1：纯决策内核与只读 Shadow——阶段需求
 
-状态：需求与方案已由用户确认（2026-08-22），本文件是本次 formal-gates run 的阶段化需求入口。
+状态：需求与方案已由用户确认（2026-08-22）；本文件是本次 formal-gates run 的唯一阶段化需求入口。
 
 ## 权威来源与边界
 
@@ -22,9 +22,9 @@
 4. **决策核心**：RunPhase、TaskKey、TaskTransitionTable、Observe/Decide/SelectIssued、NextResult 六类 Kind 校验；相同 state+observation 产出字节级稳定的 canonical Plan；eligible frontier 完整、固定顺序。
 5. **十条独立验收**：freshness CI（重新生成无 diff，独立于 round-trip）、assembly 顺序不变、round-trip、跨进程/重复构建确定性、definition/package digest 分离与语义敏感性、registry 完备性、constructor 非法状态、mutation tests、复杂度止损（新增普通业务节点不得要求修改 compiler core）。
 6. **Shadow**：只读 legacy 状态与外部事实，输出 eligible frontier 预测与差异；不写权威 state、不触发副作用；从阶段候选 installed binary 在独立测试项目执行。
-7. **`MISSING_ENGINE_ADAPTER`** 仅 diagnostic-only；正常 compile/drive 路由 `BLOCKED_BUG` 并拒绝签发。
-8. **环境缺陷修复**：phase-0 测试隔离修复——测试不得写真实用户级 registry/安装路径（含故障注入桩替换）；stable driver 恢复记录（源 5373c13 重建、package validate + canary portable PASS）作为本阶段基线证据。
-9. **Legacy 回归**：stable driver 文档化正常入口 smoke 与 legacy 正常路径回归通过；本 run 全程由修复后的 stable launcher 驱动并留证。
+7. **`MISSING_ENGINE_ADAPTER`** 仅 diagnostic-only；正常 compile/drive 路由 `BLOCKED_BUG` 并拒绝签发；最终候选必须有 marker 扫描证明不存在该技术债。
+8. **环境缺陷修复**：phase-0 测试隔离修复——测试不得写真实用户级 registry/安装路径（含故障注入桩替换）；stable driver 重冻结记录（2026-08-22 用户拍板：main HEAD `7929891` 构建、SKILL 指纹一致、package validate + canary portable PASS；取代从未实际驱动过 run 的 5373c13）作为本阶段基线证据。
+9. **Legacy 回归**：stable driver 文档化正常入口 smoke 与 legacy 正常路径回归通过；本 run 全程由重冻结后的 stable launcher 驱动并留证。
 
 ## 非目标
 
@@ -36,9 +36,16 @@
 ## 环境约束
 
 - 本 run 在 `codex/refactor-phase-1` worktree 开发，基线为 db1822b；主分支其他改动不属于本 run。
-- 固定 stable driver（`~/.formal-gates/releases/0.1.0-macos-arm64`，已修复验证）驱动本 run；每次会话首次调用前执行 launcher smoke。
+- 固定 stable driver（2026-08-22 用户拍板重冻结）：`~/.formal-gates/releases/0.1.0-macos-arm64` 与 `~/.local/bin/formal-gates` 已重建为 main HEAD `7929891`（git archive + go build；SKILL 指纹 46941e99 一致；package validate 与 canary portable PASS）。阶段 1–6 固定使用该驱动，不再随开发更新；阶段 7 按计划切换。重冻结原因：阶段 0 名义冻结的 5373c13 缺少现行流程命令（`--split`、`slicing`、`settle-findings`、`qa-worktree`），从未实际驱动过任何 run；phase-0 run 实际由更新构建驱动，偏离自狗粮规则，如实留痕。旧树备份 `/tmp/stub-backup/`。
+- phase-0 故障注入测试曾将旧 launcher 写成 25 字节空桩（与 `package_test.go:252` 桩逐字节一致）并污染真实 registry（142 条测试记录）；测试隔离缺陷在本阶段修复并回归。自本 run 起每次会话首次调用前 launcher smoke 留证。
 - 阶段候选从已提交快照构建隔离安装，在独立测试项目/host config/state namespace 验证；候选不得驱动本 run、写 stable registry 或签发权威 Seal。
 - 开发前先完成六种代表性 step 的 compiler spike（engine local、durable side effect、host action、agent task、human ask、parallel/join），确认 IR/registry/encoder 边界；spike 代码不进入 production。
+
+## 本 run 预定决策
+
+- 拆分：no-split（单一强耦合内核单元；理由随 slicing 命令留痕）。
+- 路线：full（黑盒 + 白盒 + 全部四道门，与阶段 0 一致）。
+- 开发顺序：compiler spike 先行，确认边界后正式实现。
 
 ## 一致性审查要求
 
