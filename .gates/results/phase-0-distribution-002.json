@@ -1,0 +1,1955 @@
+{
+  "runId": "phase-0-distribution-002",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "606662c814249b97798d886d71894e7db3ac564c0982c93c78a8860e7216fc5c",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "8c1185d2c31ed6704b0529df994ba208c55f66203ec1adc15c4a47dbe5ac2b72",
+  "vcs": "git",
+  "baseSnapshot": "6b8197931977a407eafe24e4f39af3d002854774",
+  "currentSnapshot": "2a8e8864bf507a299d491ad3a4921960cce39de1",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-0/alignment.md",
+      "revision": "d058c1510c119a77fba96e5d9b8000256374e102a470951bb17dd71dbd93ce07"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-0/design.md",
+      "revision": "96c8e9f04ff3eb0264d049dd268299819be95b144517ede6ab3a7871290dfef6"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md",
+      "revision": "9296e7c5922f840f203c4886b87e882c21463fbdf4a2a48ed05930ae7cee3600"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-0/proposal.md",
+      "revision": "75c5ccf40d9b72efff544fcfc64d3f39954cae10e632734cd4532f6d8ae7092b"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-0/tasks.md",
+      "revision": "97842fa826ff2c9e1eb293daf87f08dd98d0d32efd2d258a9683a9327753761b"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine/master-requirements.md",
+      "revision": "6e40d0637715719622c304def7c105be2df6b90448efe0f900128f317474cd06"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "0462c783bdc0af304f2e30e502fec8441c9250531cc15333e402d2df23032cbb"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "15860b6a7aaacba0ecdd162a8892a62bc2d52d0e4aa03631feb582fef8edc43c"
+    },
+    {
+      "path": "refactor-plan/stage-0-requirements.md",
+      "revision": "606662c814249b97798d886d71894e7db3ac564c0982c93c78a8860e7216fc5c"
+    },
+    {
+      "path": "refactor-plan/stage-0-solution.md",
+      "revision": "c6e9d7d7351d89e8c092e86cc317baef9e9cc636109f60f0d95bc30e59f39b7c"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "阶段 0 是一个相互耦合的基础交付单元：分发/安装、registry admission、stable/legacy 基线、故障恢复和候选证据必须绑定同一条完整证据链；拆成多个子 run 会重复执行完整 formal-gates，增加 run/候选/Seal 绑定成本而不增加可验证性。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 9,
+  "extraReviewWaves": 6,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "2a8e8864bf507a299d491ad3a4921960cce39de1",
+      "sourceSnapshot": "99dfef63358fc370a6f8d09eeba0fa4d45894641",
+      "compared": "6b8197931977a407eafe24e4f39af3d002854774..aa074f8386fd1b220c2f6dbef6b1e2b66df13c9a",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "fault-matrix exposes duplicate hook/hooks and managed-rule/rules aliases for the same injection boundaries; one canonical fixture ID per actual boundary would preserve coverage with less repeated execution.",
+          "locations": [
+            "internal/validate/canary.go:76; internal/validate/install.go:443; internal/validate/install.go:453"
+          ]
+        }
+      ],
+      "message": "Host rejected the proposed future-command removal as inconsistent with the confirmed requirement for a versioned future surface and documented positive write/rejection behavior. The remaining complexity observation is non-blocking.",
+      "dispatchId": "dispatch-0248da8adc3c72206943d173"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "2a8e8864bf507a299d491ad3a4921960cce39de1",
+      "sourceSnapshot": "99dfef63358fc370a6f8d09eeba0fa4d45894641",
+      "compared": "6b8197931977a407eafe24e4f39af3d002854774..99dfef63358fc370a6f8d09eeba0fa4d45894641",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "acquirePhase0Lock/lockIsStale 在 Windows 上把所有存活进程持有的锁判为 stale 并删除抢锁：syscall.Signal(0) 在 Windows 恒返回错误（Go stdlib exec_windows.go 对非 Kill 信号返回 syscall.EWINDOWS），导致阶段0新引入的 install/uninstall 锁与 registry 锁在 Windows 上无任何互斥。并发两个变更入口（如两个 install --force 并行、全局安装下两项目并发 workflow start）会互相干扰。主代理验证：复现路径仅存在于本次未承诺支持矩阵的 Windows 平台（master-requirements.md:22/226），按已确认边界降为 P3；darwin 上 Signal(0) 正常、全部锁相关测试与故障矩阵通过。",
+          "locations": [
+            "internal/validate/phase0_install.go:779"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "未登记 legacy run 写入拒绝路径不落 machine-readable receipt：无 admission 绑定的 run 变更（verifyLegacyStableLauncher 失败）只返回错误文本，不写 UNREGISTERED_INSTALL receipt；硬拒绝本身生效，无状态写入。",
+          "locations": [
+            "internal/validate/runstate.go:480"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "引导脚本 legacy 交接分支在 journal 之外覆写 launcher 字节：旧版 launcher 是符号链接时，install.command/install.ps1 的兼容重试用 cp/Copy-Item 写穿符号链接，直接改写旧 release 内的 bin 文件；崩溃在该窗口内时 recovery journal 只记录 LinkTarget，无法恢复旧稳定包字节。建议先替换符号链接为真实文件再进入事务。",
+          "locations": [
+            "install.command:143"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "锁存活判定的 10 分钟阈值基于锁文件 ModTime 且持有期间不刷新，配合 runInstalledBinarySmokeWithPolicy 的 exec.Command 无超时：Unix 上慢事务超过 10 分钟即被抢锁；建议为 smoke 加超时并在长事务中刷新锁心跳。",
+          "locations": [
+            "internal/validate/phase0_install.go:708"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "每次 workflow 变更 CLI 调用重复做完整 admission 验证：requireRunWriteAdmission 与随后的 saveRunState 各自 LoadRegistry 三次并对整个安装目标重算 PackageReceipt（全树 sha256）；建议同一进程内缓存验证结果或仅在登记边界校验 digest。",
+          "locations": [
+            "internal/validate/workflow.go:1981"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "isTestBinary 将任何带 -test. 前缀 argv 的进程视为测试二进制，放宽 verifyLegacyStableLauncher/validAdmissionRegistryRecord 的 launcher 归属检查；经 CLI flag 解析实际不可达，属防御纵深弱点，建议仅依赖可执行文件名/编译期注入。",
+          "locations": [
+            "internal/validate/phase0.go:759"
+          ]
+        }
+      ],
+      "message": "门审代理返回 FAIL（1×P1+5×P3）。主代理按审查者契约对阻塞项做记录前独立验证：P1 唯一复现平台为 Windows，而已确认验收文档 openspec/changes/orchestration-pipeline-engine/master-requirements.md:22（用户拍板条目6）明确本次不承诺 Windows/macOS/Linux 支持矩阵、跨 OS 实机适配待对应设备后处理、不支持平台发现只作 P3 建议不阻塞 PASS；:226 亦把承诺适配矩阵/升级阻塞列为本次非目标。P1 的需求前提不成立，按边界规则降为 P3 后范围内无 P0/P1，故记 PASS。代码事实（lockIsStale 以 Signal(0) 判存活，Windows 上非 Kill 信号恒返回 EWINDOWS 致互斥失效）经主代理核实属实，作为 P3 建议保留，供后续跨 OS 适配时处理。",
+      "dispatchId": "dispatch-537cd4d0e803248ccd799fe3"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "2a8e8864bf507a299d491ad3a4921960cce39de1",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "独立 home/project，从开发区副本经 stable launcher 原生 install claude/global + bootstrap；installed binary 运行 package baseline/validate、canary portable；安装后修改开发区并重跑（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "install/bootstrap/validate/canary 全 rc=0；baseline receipt 含冻结 VCS 99dfef6、source/package digest、installedTargetDigest、disjoint proof、221 项逐文件 Lstat/realpath/digest manifest；目标与 binary 均 regular file 非 symlink；开发区变更后 installed tree digest 逐字节不变、canary 仍 0 FAIL",
+        "oracleResult": "PASS: 全部满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "全新 namespace install→bootstrap→workflow start --split no→show，分阶段快照（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "bootstrap 前 registry 已由 install 创建但无 bootstrap receipt、无 .gates；bootstrap rc=0 提交 \u003cregistry\u003e.bootstrap.json（record 含 canonical paths、epoch/generation、stateCreated=false）；bootstrap 未创建任何 .gates/tmp/state；之后首次 start 在登记 namespace 写入 state.json（ACTIVE），show rc=0",
+        "oracleResult": "PASS: bootstrap 与首次写入顺序满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Fixture A 全新 namespace bootstrap+start；B1 target record 缺失 bootstrap；B2 不可对账（同 target 换 digest）；B3 旧裸绝对 binary 路径（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "A rc=0 + receipt + start/show 成功；B1 rc=1 UNREGISTERED_INSTALL + registry.json.admission.json disabled receipt（code/status/recordId/target/scope/canonicalPaths/reason），无 state/resource/lease，registry bytes 不变，后续 start 写前被拒；B2 rc=1 stale or incomplete registry identity；B3 bootstrap/start 均 UNREGISTERED_INSTALL must run through stable launcher，写前结束",
+        "oracleResult": "PASS: admission 与 namespace 写入 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "claude/codex/cursor/dsh × global/project 共 8 组隔离安装（预置外部 hook/插件行/规则区外文本）（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全部 rc=0；目标路径与文档一致；外部内容保留、formal-gates 内容正确添加；Cursor global 无全局规则文件；DSH project 不写 home hook；4 个 installed package validate/portable canary 全过；install receipt 含 canonicalPaths/disjointProof/hook/rule digest/manifest。install.ps1/install.bat 在 macOS 不可运行仅 P3 记录",
+        "oracleResult": "PASS: 文档化 host/scope install oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "预置外部内容后 install --skip-hooks --force（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "rc=0；settings.json/CLAUDE.md bytes+mode+mtime 逐字节不变、无任何 formal-gates 内容；receipt hookAction/managedRuleAction=SKIPPED；installed binary validate/canary/CLI smoke 全过",
+        "oracleResult": "PASS: skip-hooks oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "install+bootstrap 后连续 3 次 uninstall（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "首次 rc=0 删除自有 runtime/hook 条目/marker 区块，外部 hook 与规则区外文本保留（逐字节一致）；重复卸载 rc=0 幂等；registry record 转 disabled；无 temp/backup/journal 残留；旧 stable launcher smoke rc=0。Advisory：卸载后 settings.json 留下安装器自建键的空数组（自建残留，非外部内容损失）",
+        "oracleResult": "PASS: uninstall oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "6 个文档化 fault（intent/prepared/switched/hook/managed-rule/post-switch-smoke）+ malformed hook JSON（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全部 rc=1；失败后旧 target tree + launcher/config/hook/rule/registry 逐字节与故障前一致；.transaction.json.failure.json receipt 含 operation/interruptedPhase/observedFact/reconcileAction/recovered/stableDigest/generation/lease/token；无 temp/journal 残留；旧 stable validate/canary/CLI 全过；reinstall reconcile rc=0；malformed hook JSON 拒绝且用户文件保持原样",
+        "oracleResult": "PASS: rollback/recovery oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "真实 SIGKILL 在持久 journal 各边界（intent/prepared/switched，轮询 phase 后 kill）终止 installer 后重跑 install --force（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "crash 后 journal 停在对应 phase（switched 时 target 已换，真实中断形态）；重跑先 observe/reconcile（receipt 含 observedFact=recovery journal observed at interrupted phase X）；journal 清理、epoch 1→2 单调、无 temp/backup 残留、launcher+installed binary+canary smoke 全过",
+        "oracleResult": "PASS: 崩溃恢复 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "candidate namespace 内从 installed binary 同 definition 两次 workflow future generate；bump version/schema；不 bump 改 bytes（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "两次生成结果完全一致（version=1/schema=1/digest 可独立复算）；bump 后 envelope 随之、digest 更新；不 bump 改 bytes → UNSUPPORTED_RUN_VERSION: definitionDigest；原 installed definition 未被改动",
+        "oracleResult": "PASS: 版本 envelope oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "stable namespace（bootstrap+活动 run）全量快照后，从不可变 candidate installed path 依次攻击 install --bootstrap、workflow start、resume、abort --user-confirm、seal；随后 candidate namespace 内 validate/canary/CLI smoke；stable binary show/resume（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全部 rc=1 UNREGISTERED_INSTALL must be driven by stable launcher，写前结束；攻击后 stable target/state/resource/launcher/config/hook/registry/receipts 及 epoch/generation/lease/token 逐字节不变；无 candidate run/receipt/lease 落入 stable 侧；candidate namespace smoke 全过；stable binary 仍可 show/resume；无任何 SEALED/seal receipt",
+        "oracleResult": "PASS: 候选隔离与写前拒绝 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "installed package 内 precedence inventory 与五类文档；package validate；各 help 面（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "precedence inventory 具备 current-authority/reference/orthogonal/superseded/historical 五类；package validate rc=0；CLI/workflow/package/install help 可用；SKILL/README/references/prompts 无 drive/submit、Shadow、RunPhase、TaskKey、Observe/Decide 泄漏（唯一 future 面 = 文档化 workflow future generate|write|view）",
+        "oracleResult": "PASS: 公共面与语义泄漏 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "真实宿主会话（claude -p / codex exec，hooks 指向 installed stable binary）驱动 allow/block 矩阵、经文档化 prepare-action/claim-dispatch 的真实 subagent 生命周期、lifecycle verify、无 run project 的 capture no-op（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "①start 后 development-worker=PENDING 主线程写入→allow（文件真实落盘）；②真实 subagent 走完 req-clar→product-review→start-readiness→slicing→route，development-worker 进入 PREPARED；③边界后主线程无身份写入→block（decision=block/deny+exit 2；同 payload --provider codex 重放 block 且 exit 0）；development-worker 子代理写入→allow；qa-review 子代理→block；④已 claim identity 的真实成对 SubagentStart/Stop→lifecycle verify VERIFIED（三次）；逐字节重放 duplicate:true、lifecycle 文件无新增；未 claim verify→REJECTED；⑤无 run project capture→no-op。Caveat：codex-cli 0.145.0 只发 SubagentStart 未发 SubagentStop（宿主版本行为），配对验证在 Claude Code 实机完成",
+        "oracleResult": "PASS: live allow/block 与 lifecycle oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/install 入口逐项负例：symlink、回指 symlink、FIFO、--installed-target 与 root 重叠、manifest 未知 host target；安装后篡改 target 字节再 workflow start；恢复正常包后全量正例（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "symlink/回指/FIFO/重叠/未知 host target 全部 rc=1 带明确原因（is a symlink; immutable packages must contain copies / not a regular file / overlaps installed target / unsupported host target）；篡改 target 后 start → UNREGISTERED_INSTALL: registered target digest is stale（machine-readable admission receipt，写前拒绝）；恢复后 install/start/validate/canary 全过无残留。Note：独立 package validate --installed-target 不比对 source/installed digest，digest mismatch 拒绝由 admission/install verify-stage 强制",
+        "oracleResult": "PASS: unknown/alter target 拒绝 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Go installer 完整链路（007/008/018/019 覆盖）；install.command 结构验证；install.ps1 Windows-only 记录（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "install.command 仅 staged launcher 后以同一原生命令调用唯一事务，不自行删 release/切 pointer/写 registry/绕 journal；端到端无法完成：唯一已发布 release v0.1.0 binary 早于 --binary-target/--release-root 契约（拒绝新 flag，legacy 重试干净失败、无半安装）——候选 install.command 需随候选自身发布；install.ps1 本机不支持仅 P3",
+        "oracleResult": "PASS: 等价性结构验证满足，端到端缺口为发布协同属性且失败干净",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "无 --force 重装已存在目标；不同 host global 独立安装；连续两次 --force（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "无 --force：rc=1 target already exists，旧 stable tree 逐字节不变；不同 host global 目标独立成功；两次 --force：rc=0、第二次 hookAction/managedRuleAction=SKIPPED_UNCHANGED、hook/marker 区块各 1 处、registry 单一 active identity、validate/canary 过、无 journal 残留",
+        "oracleResult": "PASS: 替换/幂等 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "并发 install --force / uninstall / install --force 三进程（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "uninstall 完整提交 rc=0；两个 install 得到机读 lock is held busy 失败（rc=1，JSON 含 operation/path）——跨进程锁串行化、无死锁/崩溃/半提交；后续 install 后单一 active identity、validate/canary 过、journal/lock 残留 0、marker 区块唯一",
+        "oracleResult": "PASS: 并发 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "uninstall faults（intent/managed-rule/hook/post-switch-smoke）（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全部 rc=1；旧 runtime/launcher/config/hook/rule/registry 逐字节恢复；receipt operation=uninstall 含 phase/observed/reconcile/recovered/generation；外部内容逐字节保留；旧 stable validate/canary/CLI 过；随后完整 uninstall rc=0",
+        "oracleResult": "PASS: 卸载故障恢复 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "pointer commit-failure fixture（FORMAL_GATES_INSTALL_FAULT=pointer）--force 安装（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "rc=1，observedFact=deterministic install fault injected at pointer、interruptedPhase=smoke-passed（post-switch/pre-commit 提交位）；旧 runtime/launcher(pointer)/config/hook/rule/registry/bootstrap-receipt 逐字节恢复、epoch 不回退；recovery receipt 完整；reconcile reinstall rc=0；旧 stable validate/canary 过；后续 workflow start/show/resume 全过；无残留",
+        "oracleResult": "PASS: pointer 提交失败恢复 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "registry commit-failure fixture（FORMAL_GATES_INSTALL_FAULT=registry-commit）（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "对称结果：rc=1 于 registry commit 阶段、旧 registry authoritative bytes 与 runtime/pointer/config 逐字节恢复、receipt 完整、epoch 单调、reconcile+smoke+workflow 继续通过、无残留",
+        "oracleResult": "PASS: registry 提交失败恢复 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "冻结 stable installed binary 全新 namespace bootstrap→start→show→resume→abort 收尾；package baseline characterization（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全 rc=0；state 保持当前 legacy 格式（无 envelope 字段，绑定 admission epoch/generation）；abort 产出 terminal summary（.gates/results/\u003crun\u003e.json ABORTED，tmp 清理）；characterization receipt 绑定同一 VCS/package/installed identity；stable driver 唯一 writer、无 future 语义混入",
+        "oracleResult": "PASS: characterization oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "文档化写入口 workflow future write 合法 envelope+payload；同内容重放（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "rc=0；目标文档实际出现且含四字段 envelope+payload；重放 byte-identical；目标外无 side-effect（无 .gates、registry 不变、无 temp）",
+        "oracleResult": "PASS: future write oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "9 种非法 envelope（缺 4 字段各一、writer/schema/version/digest mismatch）（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全部 rc=1 UNSUPPORTED_RUN_VERSION（指明 expected/got 字段）；目标目录 0 bytes 写入、无 .gates/state/lease/半提交",
+        "oracleResult": "PASS: envelope 拒绝 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "workflow diagnose --path：合法/缺字段/schema mismatch/malformed JSON（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "合法：报告四字段与可复算 digest/source，terminal summary 保留；缺字段/mismatch：UNSUPPORTED_RUN_VERSION recommendation；malformed：jsonReadable:false/integrity:unknown + 文档化 recommendation（非静默成功）；全部 fixture bytes/mode/mtime 逐字节不变、无任何写入",
+        "oracleResult": "PASS: 只读诊断 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "legacy 活动 run：stable binary show/resume/diagnose；future surface 操作前后快照（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全过；state 键集前后一致、无 envelope/版本字段注入；diagnose 只给 state has no version envelope 建议不迁移；future 操作前后 legacy 快照逐字节不变",
+        "oracleResult": "PASS: legacy 共存 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "基线后对 candidate/test-project/state/resource/registry/evidence/host-config/managed-rule/runtime/launcher 采集 Lstat/realpath/digest（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全部路径 realpath 无一指向开发 worktree、无 symlink；嵌套关系符合文档化层级；package baseline evidence 绑定同一 VCS(99dfef6)/package/installed identity",
+        "oracleResult": "PASS: 冻结 identity/路径 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "隔离 baseline namespace 从冻结 stable installed path 执行 package validate（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "PASS + machine receipt（221 项 mode/size/sha256/realPath、root digest、VCS identity、installedTarget 绑定）；validation read-only；canonical paths 与 candidate/worktree 不重叠",
+        "oracleResult": "PASS: validation oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "独立 test-project/host/registry namespace 冻结 stable installed path 两次 canary portable；安装后改动开发区再重跑（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "均 rc=0、0 FAIL、receipt 绑定同一 installed identity；开发区改动不影响 installed digest 与 canary 结果；运行只读 installed immutable runtime",
+        "oracleResult": "PASS: portable canary oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "全新 clean namespace 公开 install smoke（install+bootstrap+CLI/validate/canary）（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "rc=0；installed binary 实际路径上 CLI/validate/canary 全过；receipt 含全部 canonical paths 与 epoch；runtime/pointer/hook/rule/registry 单一完整 identity；temp/backup/journal/lock 残留 0；与 worktree disjoint",
+        "oracleResult": "PASS: install smoke oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "copy-component fixtures（runtime/prompts/gates/references/definitions）触发中途 copy 失败后 reconcile（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "各 rc=1，journal/receipt 证明已越过 prepared 并实际进入对应组件 copy（observedFact 点名组件）；未提交 candidate current/pointer/config/registry，旧 stable tree 逐字节恢复；reconcile 后 validate 过、残留 0。hooks/rules 组件在文档化 copy 面无对应名，由 CASE-007 hook/managed-rule fixture 覆盖同事务相应失败点",
+        "oracleResult": "PASS: copy 阶段故障恢复 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "verify-stage fixtures（installed-target/manifest/realpath/digest）（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "各 rc=1，journal phase=switched 证明 copy 已完成、处于公共提交前 verify；旧 stable 全对象逐字节恢复、epoch 不回退；reconcile 后 validate/canary 过、无 temp/backup/journal/candidate writer 残留",
+        "oracleResult": "PASS: verify 阶段故障恢复 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-059",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "全新 namespace 按文档安装但跳过 bootstrap：workflow start；扫描写入；补做 install --bootstrap 后重跑 start/show（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "start rc=1 UNREGISTERED_INSTALL: no committed bootstrap receipt，registry.json.admission.json machine-readable disabled receipt（code/status/reason）；前置快照逐字节不变——无 .gates/tmp、无 workflow state、无 resource/lease/token、registry root 未被拒绝路径抢先创建（registry bytes 不变仅新增拒绝 receipt）；补做 bootstrap 后同一 start 成功写 state 且 show 可读",
+        "oracleResult": "PASS: 未 bootstrap 首次写入硬拒绝 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-060",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "独立候选 host/config/test-project/state/resource/registry namespace（显式 registry 配置+登记步骤）从不可变 candidate installed path 执行 legacy start/show/resume；前后 stable 全量快照（隔离 namespace /tmp/fg-qa-ddc4/，候选=99dfef63 git archive+go build，证据存 /tmp/fg-qa-ddc4/evidence/）",
+        "observation": "全 rc=0；可观察语义与 stable characterization 基线一致（status/action 集合/各 action 状态相同）；run state、receipt、registry record 只出现在候选 namespace；执行前后 stable registry record/epoch/generation、stable target/launcher/config 及 stable namespace bytes 逐字节不变；候选与 stable canonical paths 不重叠",
+        "oracleResult": "PASS: 候选 legacy 回归 oracle 满足",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round7RegistryMutationSurfaceOwnedByInstaller$' -v ./internal/cli（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-031.txt）",
+        "observation": "顶层 PASS，含 bootstrap/register 子测试与帮助面检查",
+        "oracleResult": "PASS: registry 写入面仅归安装事务 owner，CLI 无独立 bootstrap/register 入口、无 --registry 注入",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round7StableLauncherDiscoveryFencesCandidateWrites$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-032.txt）",
+        "observation": "顶层 PASS（1.16s），stable/candidate 子测试均过",
+        "oracleResult": "PASS: stable 持久化完整 admission 身份；candidate 在 state 创建前 UNREGISTERED_INSTALL；与进程 CWD 无关",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-033",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round7ProviderSelectionUsesSpecificRegistryBinding$' -v ./internal/lifecycle（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-033.txt）",
+        "observation": "顶层 PASS",
+        "oracleResult": "PASS: nested 取 active Claude 而非更具体 disabled Cursor；外部同级取 global Codex；有效 registry identity 压过冲突环境变量",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-034",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round7OuterInstallRollbackIsAtomicAcrossHosts$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-034.txt）",
+        "observation": "顶层 PASS（0.80s）",
+        "oracleResult": "PASS: host=both 第二宿主失败时 outer transaction 整体回滚，runtime/hook/rule/launcher/registry 逐字节恢复、无残留、receipt 标记 ROLLED_BACK/recovered",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-035",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-035.txt）",
+        "observation": "顶层 PASS，全部 writer/schema/source/digest 不兼容变体子测试逐项 PASS",
+        "oracleResult": "PASS: 合法 envelope 写入；所有不兼容 envelope 在创建/截断前返回类型化 UNSUPPORTED_RUN_VERSION，sentinel 字节保留、缺失路径保持缺失",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-036",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0DiagnoseRawReadOnlyFallback$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-036.txt）",
+        "observation": "顶层 PASS",
+        "oracleResult": "PASS: malformed raw 只读诊断、保留 fallback，输入 bytes/digest/mtime 不被重写",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-037",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12PackageReceiptBindsStableAndInstalledIdentities$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-037.txt）",
+        "observation": "顶层 PASS（0.11s）",
+        "oracleResult": "PASS: 两次构建 digest 适度不同、receipt 确定、每条 source/installed entry 精确落于各自 fixture 内",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-038",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12BaselineReceiptValidatesManifestPathsAndIdentityBoundaries$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-038.txt）",
+        "observation": "顶层 PASS，含 canonical overlap、missing VCS/package、auxiliary root mixed 等全部子测试 PASS",
+        "oracleResult": "PASS: manifest 与文件系统事实精确一致；canonical/disjoint 证明完整；mixed/incomplete identity 在 receipt 持久化前拒绝",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-039",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUninstall$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-039.txt）",
+        "observation": "顶层 PASS（1.69s）",
+        "oracleResult": "PASS: install+uninstall 后 registry 恰两条 record；无关 record 逐字节不变；仅被卸载 record 状态变化",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-040",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12BootstrapReceiptBindsExactRegistryIdentity$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-040.txt）",
+        "observation": "顶层 PASS（0.69s）",
+        "oracleResult": "PASS: bootstrap receipt 逐字段等于 admitted record，且 workflow start 前不创建 .gates state",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-041",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12AdmissionRejectsInvalidRecordsBeforeNamespaceWrites$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-041.txt）",
+        "observation": "顶层 PASS，incomplete/conflicting/missing 三子测试 PASS",
+        "oracleResult": "PASS: 每种非法 admission 在任何 run/state 目录或权威 registry 写入前返回 UNREGISTERED_INSTALL",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-042",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-042.txt）",
+        "observation": "顶层 PASS（0.19s）",
+        "oracleResult": "PASS: 未过 admission 的启动在任何 state/run 写入前被拒，无半创建状态",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-043",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12WorkflowStateUsesNestedProjectBinding$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-043.txt）",
+        "observation": "顶层 PASS（0.15s）",
+        "oracleResult": "PASS: 父 binding 被拒；nested binding 成功且重载 state 保留 root/target/record ID/generation/lease/token",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-044",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12GlobalAdmissionDerivesProjectLocalRoots$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-044.txt）",
+        "observation": "顶层 PASS（0.13s）",
+        "oracleResult": "PASS: global 身份保留、project/state/resource roots 本地派生，无宿主或无关项目命名空间写入",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-045",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-045.txt）",
+        "observation": "顶层 PASS（0.36s）",
+        "oracleResult": "PASS: admission/identity 校验先于 squash 与 Seal，失败不产生 committed seal/错误 squash/不可对账状态",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-046",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12LegacyLifecyclePreservesExistingStateAndNamespaces$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-046.txt）",
+        "observation": "顶层 PASS（0.14s）",
+        "oracleResult": "PASS: legacy start/load/resume/diagnose 无 envelope 字段、无迁移，现有 state 与无关命名空间字节不变",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-047",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12InstallAndUninstallUseTheSameLockOwner$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-047.txt）",
+        "observation": "顶层 PASS（0.71s）",
+        "oracleResult": "PASS: 共享锁被持有时 install/uninstall 均拒且身份不变；释放后可完成；完成事务不残留锁",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-048",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round15InstallFaultMatrixRecoveryReceiptIdentity$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-048.txt）",
+        "observation": "顶层 PASS，journal-boundary/intent/registry/prepared/switched、copy-component、verify-stage 等全部矩阵故障子测试 PASS",
+        "oracleResult": "PASS: 每个故障确定性失败、恢复稳定状态，receipt 含 operation/target/interrupted phase/observed fact/reconciliation/observedAt/完整身份且无残留",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-049",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12MalformedHookRestoresRegistryAndRecoveryEvidence$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-049.txt）",
+        "observation": "顶层 PASS（0.30s）",
+        "oracleResult": "PASS: malformed hook 在 commit 前失败；runtime/hook/rule/launcher/registry 字节恢复，recovery 身份与清理证据完整",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-050",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12UninstallFaultsReconcileAndPreserveExternalContent$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-050.txt）",
+        "observation": "顶层 PASS，install post-switch smoke recovery 与全部文档化 uninstall 故障子测试 PASS",
+        "oracleResult": "PASS: 各故障恢复稳定 runtime/外部内容/registry 身份；post-switch 证据被检查且残留清除",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-051",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12SupportedRestartReconcilesCrashJournalAutomatically$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-051.txt）",
+        "observation": "顶层 PASS（0.07s）",
+        "oracleResult": "PASS: 支持的重启在新事务前自动对账，恢复稳定字节与 registry，RECOVERED 证据含 journal generation/lease/token，staged/事务工件移除",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-052",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12ReleaseRollbackRestoresAllOuterIdentity$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-052.txt）",
+        "observation": "顶层 PASS（1.67s）",
+        "oracleResult": "PASS: release-root registry-commit 故障后旧 release 全对象与身份恢复，candidate 路径全部消失，失败证据完整无残留",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-053",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12ManifestRejectsBeforeAnyTargetOrReceiptWrite$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-053.txt）",
+        "observation": "顶层 PASS（0.01s）",
+        "oracleResult": "PASS: 非法 manifest 在安装事务前失败，既有字节不变，无 candidate/pointer/registry/receipt/journal/stage 残留",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-054",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12RelativeReleaseOverlapRejectsWithoutNamespaceWrites$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-054.txt）",
+        "observation": "顶层 PASS",
+        "oracleResult": "PASS: 相对 release-root 与 source 的 canonical realpath 重叠在变更前拒绝，无任何写入",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-055",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12InstallReceiptCoversMultiHostScopeRootsAndMismatchRejection$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-055.txt）",
+        "observation": "顶层 PASS（1.44s）",
+        "oracleResult": "PASS: project 与 global 两种 scope 均拒绝 package 身份不匹配，保留完整 Lstat/canonical-root/disjoint 证明",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-056",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0ReleaseRunsInstalledBinarySmokeBeforeCommit$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-056.txt）",
+        "observation": "顶层 PASS（0.70s）",
+        "oracleResult": "PASS: installed smoke 失败非零且发生在 commit 前，旧 stable 恢复，无半提交 pointer/错误 registry",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-057",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round12BootstrapWrappersForwardOnlyToStableOwner$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-057.txt）",
+        "observation": "顶层 PASS（1.80s）",
+        "oracleResult": "PASS: wrapper 仅发起预期的 install/bootstrap owner 调用（带 release/binary/project 参数），帮助面暴露文档化 flags，无第二指针变更事务",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-058",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-058.txt）",
+        "observation": "顶层 PASS（1.13s）",
+        "oracleResult": "PASS: 构建包与 package_parts 全部验证；安装后 inventory/manifest/digest/Lstat/canonical 一致且无逃逸条目；全部 stable 帮助面符合 stage 0，无 standalone 或反引号 drive/submit token",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-061",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16FirstStartRequiresCommittedBootstrapReceipt$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-061.txt）",
+        "observation": "顶层 PASS（0.68s）",
+        "oracleResult": "PASS: 普通 install 无 .bootstrap.json；无 receipt/malformed/Accepted=false 三态各自返回带理由的 UNREGISTERED_INSTALL，RunDir/RunStatePath 不存在，admission.json 记录 code 与 reason；补跑 bootstrap 后 start 成功并绑定原 record",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-062",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16MutateRunAdmissionPrecedesPromptArtifact$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-062.txt）",
+        "observation": "顶层 PASS（0.92s）",
+        "oracleResult": "PASS: binding 置 disabled 后 prepare-action 在写出派发提示词文件前拒绝（err 含 UNREGISTERED_INSTALL），state 字节不变、无 prompts/Dispatches；恢复后恰 1 条 OPEN dispatch，PromptFile 存在且 sha256==PromptHash、内容一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-063",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16CleanupRunAdmitsRunBinding$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-063.txt）",
+        "observation": "顶层 PASS（0.75s）",
+        "oracleResult": "PASS: 失效准入删除被拒（错误含 UNREGISTERED_INSTALL，RunDir 与 state 原样）；恢复后 deleted=true；stateless 残留走 legacy 路径可删；../\u003crun\u003e 返回 unsafe run id",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-064",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16InstallRejectsManifestUnregisteredHostTarget$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-064.txt）",
+        "observation": "顶层 PASS，registered-control/downgraded-support/missing-entry 三子测试 PASS",
+        "oracleResult": "PASS: 两个拒绝场景 err 含 does not register 与 Claude Code，target/launcher/registry/.gates 四命名空间未创建；control 恰 1 个 target 且 registry 存在",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-065",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16GlobalSiblingIdentitySurvivesUpgradeAndBootstrap$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-065.txt）",
+        "observation": "顶层 PASS（2.41s）",
+        "oracleResult": "PASS: sibling ID 形如 \u003ccanonical\u003e-project-* 且 roots 派生自项目；升级后 digest 等于第二次安装报告值、ID/Generation/Lease/Token 不变；bootstrap 不报 unaccounted identity；第二次 start 复用同一 AdmissionRecordID 与保留 Generation",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-066",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16AdmissionRejectsStaleInstalledDigest$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-066.txt）",
+        "observation": "顶层 PASS（0.57s）",
+        "oracleResult": "PASS: 对照 ADMITTED；就地编辑后 Accepted=false、Code=UNREGISTERED_INSTALL、reason 含 stale、receipt 持久化绑定同一 recordID；经该 record 的 start 在 run 目录创建前被拒",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-067",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -tags phase0whitebox -count=1 -run '^TestWhiteboxPhase0Round16CodexHookCanaryRetriesTextOnlySession$' -v ./internal/validate（主 worktree 99dfef63，输出存 /tmp/dispatch-3f82e6f37e582173e7fa323a/CASE-067.txt）",
+        "observation": "顶层 PASS（2.61s），三模式子测试 PASS",
+        "oracleResult": "PASS: retry-proof → PASS、Attempts=2、payload 证据保留；never → FAIL、Attempts=2、reason no PreToolUse；marker-proof → FAIL、Attempts=1、reason marker file",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-002284cc7626a8fd93735e35": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0248da8adc3c72206943d173": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0258708356ff7e77ac3f8e7a": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-027224e37f6ae4036b6d0041": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-041b812014ad3429ed0c3757": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-06bbb43c20b29a66e5f5e148": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-06f2515ae03f8ea71309509c": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-07c88c4594bad99b0855db9e": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-083ae98afb920c983645a478": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0a18fd8b550110d6050c1dd9": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0d968db467b1fae3489df4bb": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0de56751a2e512714cf35f84": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0f2958457ac32201dff34b6f": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-115c8674a2736e2384a680d7": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-11a9b285b864c7476e6b40e7": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-11ec1e8a4533b17d13a2ab2d": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-126f75a2e79bef4b8e97480e": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1330ce90ccdef82f05d0b6f7": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-137dc0c7dcb8b41b74f00e4c": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-15b0d614d587b17b04cdebd7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-175e60c39f1dddd285b240df": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-19ac39f3d577c75845f5c56a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1a4b87f3049453f1fa5d9570": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1bbdaa4cfc848808a41113d0": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1c44758a9ac69f04f2bd1ae2": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1e25b08e39a7e95f980bb8e9": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-21473e860231cab680e9782f": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2379678fc21ed3e72eb84d86": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2817b9662c7015d101650528": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-287dfd4907ec825b0730fa60": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2ae03d80de310cdabd2ea09a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2b83c21269cd8fea04fcf2b7": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-30cca0c3738a8634986c3f0b": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-30f50cc55c36685936dd827c": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-31d2139c96cf055d50db238a": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-361327387e836f3638a93eac": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-37019a6f20e43f67fcf775c7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3e0bea39f334f5e1d1e23b76": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3f82e6f37e582173e7fa323a": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-40a8cabd2a79172de6c6e61a": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-41307951234af96262b3ee82": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-41557a1912fb6443ab383326": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-44b00ad7e3a61fcd499aec4c": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-44d764c95b6fe53cdc5d02ea": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-46837fb2110536e0fc721c92": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-49c86b33d10e4ac9c3e17272": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4a3957e68abd39c0289d312c": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4ad212b26d4e5b13640358d7": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4c55a5151d5df7f37a189583": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4c963ff308425b0d08f9ebd3": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4dbd5078bc5bfcc77b4fa9a1": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-537cd4d0e803248ccd799fe3": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5640c537304b20d3378a6d9d": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5641ac3959f7d498552f45ed": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-57e5291b9200480a61147982": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-58c0ecc11097ac068effd7d4": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5a9521e6281c20507c2503a2": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-607520ed22306d925d9a8324": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-656c16ed0c91764f41defd16": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6b292a4492b6f1fe796527f7": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6bfd49b7344ccd496833f04e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6d29dfabae648bb782ca89ec": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6e5af21d97ae4924b1ec5b8a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6ee18c5f6ce36496db908208": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-712819970d6cc9e1a70450cb": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-717f02bca40c0ddfc379104f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-71f924f639eb1c170366ea5c": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7365f73be2d5ae3ee7a4783a": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-76c72ca699d6feae54636970": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-77ff404e942442d9181e9a7d": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-797faf38b2d53f2ef4328fd7": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7a291c8b4451596d89eb3989": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-80c5de5649a901653c46e6df": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8419b1b91f42126f53546122": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-842debdc60f075f31b9db963": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8621095e5ef0c18425e8c87d": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8645c799b2211e27790c5cc9": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-88343d7b7c31ceff372d67d4": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8f8d29bbb79ae29511e37e80": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9026cd746dfc1aa5027f2605": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9348d03cd11bcc56a0e8c618": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-940a952d847fecfed8969910": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9443d5008e057d41ee9171fc": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-94c5c9bd7211af859eb7f018": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-984904a47594ec752a6d5e34": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9b60d0ad2c4e247473162b88": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a05fc9d30bf8f8c6fb61eb7a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a26acb37e6023ecf1f8cb0a4": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-aaf3b63e24554d99f5f3e0c1": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-abfddea8b0132f21595a5519": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ac5d37af81c9fd66d4eb6441": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ae1054992088f61f21e24619": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-af3f7b7f6858109f75b860e5": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b23be819b7d42af4fd95be95": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b6d56e67452fb420a1ee106f": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b94b7bf957d5a9dafc289f30": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ba39ba267c6ee7dcc92c9d74": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bb10795dfe9834d1aaee7a01": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bc5c4c96825495cd89e58917": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bd302502253d0ece4529af10": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-be8f2343083431c1d49ce826": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bf73b14a16756d0b8f2548ea": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c20cc859a95d62f7bdd96fef": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c2e4e84535ac132611f43f3b": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c3ba28f237e04816b7737bda": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c64da2ff4eea5fdc6cd743f1": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c704622a3014bfad975bc3b6": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c883f227d74d6376a102e378": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c9acdc0c60e64a026ee90da6": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cafb350902dccfa048213480": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cb17e66feb32c0deb8eb1774": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cfff17a603a97dfc0ce48557": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d03c708035804776e11ab8fe": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d51c821fc3bafaf2834b5063": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-da29c6b8ad6af6c1cdc4d9b3": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ddc4afc3b8ae5a03fe247f91": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-df71b3d7f5d5830724a57a3e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e0898953aa1a063bd009b622": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e10b4921e884ee6ed2a639fd": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e148407a276bf7651851aeb2": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e1e44fae8ab65d897b933d02": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e429189a9e93a6b2d9e93480": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e731fa9752b71b3bcbeb37dd": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e9bf0ec093c9710171b85d9b": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ece150ceeef22f0adac4b183": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f356ef1f26589ddb55db6eeb": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f3ad9b32b0fd0ac1a9de32dd": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f6ba64171b4a84699c581733": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f92217eef3824706748f133b": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fc88f918269f259fd203f3d3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fca488ddfedcdac6851764cf": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fe271b7e901763f4dc48c9cc": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fecae30cea86f49a9cdf8c4b": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
