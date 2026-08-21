@@ -19,7 +19,7 @@
 
 ## 验收测试
 
-- [ ] 十条独立验收：freshness CI、assembly-order、round-trip、跨进程确定性、digest 分离与敏感性、registry 完备性、constructor 非法状态、mutation tests、复杂度止损。
+- [ ] 十条独立验收：freshness CI、assembly-order、round-trip、跨进程确定性、digest 分离、digest 语义敏感性、registry 完备性、constructor 非法状态、mutation tests、复杂度止损。
 - [ ] golden traces/property tests：合法边、非法事件、step 乱序/遗漏/重复拒绝、非终态无空结果、canonical Plan 字节稳定。
 - [ ] Shadow harness：只读预测与差异报告，不写权威 state。
 

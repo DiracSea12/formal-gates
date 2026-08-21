@@ -20,7 +20,7 @@
 2. **Closed-world compiler**：registry ID 解析（存在、唯一、kind 匹配）、全局图不变量（可达性、非法循环、依赖存在、分支目标封闭、并行组 join/failure 覆盖、版本绑定）、归一化、canonical 编码；compiler 不解释业务表达式、不证明 predicate 语义。八类非法定义拒绝结果全保留，按 enforcement matrix 分层拦截。
 3. **Canonical 制品**：compiler 同一生成动作产出 `definitions/workflow.json` 与期望身份常量，禁止人工双写；制品为公共头 + 封闭变体 payload，不含函数、闭包、内存地址、绝对路径、当前时间或无序 map。
 4. **决策核心**：RunPhase、TaskKey、TaskTransitionTable、Observe/Decide/SelectIssued、NextResult 六类 Kind 校验；相同 state+observation 产出字节级稳定的 canonical Plan；eligible frontier 完整、固定顺序。
-5. **十条独立验收**：freshness CI（重新生成无 diff，独立于 round-trip）、assembly 顺序不变、round-trip、跨进程/重复构建确定性、definition/package digest 分离与语义敏感性、registry 完备性、constructor 非法状态、mutation tests、复杂度止损（新增普通业务节点不得要求修改 compiler core）。
+5. **十条独立验收**：freshness CI（重新生成无 diff，独立于 round-trip）、assembly 顺序不变、round-trip、跨进程/重复构建确定性、definition/package digest 分离（只改 handler 实现不改 ID 与定义语义时 definition digest 不变而 package digest 变）、digest 语义敏感性（改 dependency/policy/reason/schema ID/handler ID/join 语义时 definition digest 必变）、registry 完备性、constructor 非法状态、mutation tests、复杂度止损（新增普通业务节点不得要求修改 compiler core）。
 6. **Shadow**：只读 legacy 状态与外部事实，输出 eligible frontier 预测与差异；不写权威 state、不触发副作用；从阶段候选 installed binary 在独立测试项目执行。
 7. **`MISSING_ENGINE_ADAPTER`** 仅 diagnostic-only；正常 compile/drive 路由 `BLOCKED_BUG` 并拒绝签发；最终候选必须有 marker 扫描证明不存在该技术债。
 8. **环境缺陷修复**：phase-0 测试隔离修复——测试不得写真实用户级 registry/安装路径（含故障注入桩替换）；stable driver 重冻结记录（2026-08-22 用户拍板：main HEAD `7929891` 构建、SKILL 指纹一致、package validate + canary portable PASS；取代从未实际驱动过 run 的 5373c13）作为本阶段基线证据。
