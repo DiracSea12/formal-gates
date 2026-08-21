@@ -2,13 +2,13 @@
 
 ## 前置（prerequisite，开发开始前）
 
-- [ ] 记录本阶段基线 identity（db1822b）与 stable driver 重冻结证据（main HEAD 7929891 构建、package validate/canary PASS、旧树备份位置）。
+- [x] 记录本阶段基线 identity（db1822b）与 stable driver 重冻结证据（main HEAD 7929891 构建、package validate/canary PASS、旧树备份位置）。
 - [x] 批次计划与档位留痕（批次 0–4 + 收口段；档位 = 单次全量门禁，结构性理由：生产逻辑集中单链、测试占比高、独立验收单元 1）。
 
 ## 批次 0（两支并行）
 
-- [ ] **0A｜测试隔离修复**：触及用户级 registry/安装路径的测试改用临时 HOME/registry root；复现 launcher 桩污染的回归用例（隔离环境下证明不再发生）。
-- [ ] **0B｜Compiler spike（探路首批）**：六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小编译器；产出 IR 字段集、registry 绑定、encoder 字节稳定性、止损指标四项结论留痕（结论入 `refactor-plan/spike-notes-compiler.md`，spike 代码不 commit）。
+- [x] **0A｜测试隔离修复**：触及用户级 registry/安装路径的测试改用临时 HOME/registry root；复现 launcher 桩污染的回归用例（隔离环境下证明不再发生）。（根因：3 个测试漏 HOME 隔离——TestInstallReproducesV2ModelAtTarget（事故主因，桩经 Install 覆盖真实 launcher）、cli/install_test.go 两个 uninstall 测试回写真实 registry；修复为 t.Setenv 隔离 + install_isolation_regression_test.go 两个回归用例；批边界全量测试绿且真实安装 sha256 前后一致）
+- [x] **0B｜Compiler spike（探路首批）**：六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小编译器；产出 IR 字段集、registry 绑定、encoder 字节稳定性、止损指标四项结论留痕（结论入 `refactor-plan/spike-notes-compiler.md`，spike 代码不 commit）。（spike 1817+1035 行在 /tmp/fg-spike 全绿；关键结论：ordinal 必须由 compiler 派生（Kahn+字典序）防 assembly 顺序泄漏；"inputs source bindings == dependencies"不变量使删依赖必拒；新增业务节点 0 改核心）
 
 ## 批次 1（串行主干，spike 冻结的 IR 为切分缝）
 

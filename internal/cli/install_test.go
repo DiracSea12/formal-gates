@@ -385,6 +385,13 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 }
 
 func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
+	// 2026-08-21 事故根因修复：uninstall 的共享 registry 默认按 HOME 解析
+	// （installRegistryPath -> installHomeDir）。本用例此前未隔离 HOME，
+	// 会加载并回写真实 ~/.formal-gates/registry.json，还在真实 ~/.formal-gates/
+	// 下留 uninstall 事务与锁文件。先隔离 HOME 再执行同一 uninstall 语义。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
 	target := testInstallTargetPath(project, "codex", "project")
 	config := testHookConfigPath(project, "codex", "project")
@@ -666,6 +673,12 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 }
 
 func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
+	// 2026-08-21 事故根因修复：与 TestRunUninstallRemovesLegacyRuntime 同类——
+	// uninstall 的共享 registry 默认按 HOME 解析，未隔离时会加载并回写真实
+	// ~/.formal-gates/registry.json（epoch 前移）。先隔离 HOME。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
 	managed := filepath.Join(project, "AGENTS.md")
 	mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleLatest))
