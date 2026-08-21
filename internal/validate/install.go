@@ -253,6 +253,14 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if unknown := unknownManifestParts(manifestShape.Parts); len(unknown) > 0 {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported package target %q", unknown[0])
 	}
+	// An install target is only valid when this payload's manifest registers
+	// the requested host as an installable host target. A manifest that omits
+	// the host or downgrades it to explanation-level support describes a
+	// payload that must not install there; accepting it would create an
+	// unregistered target with exit 0 before any state exists to notice.
+	if unregistered := unregisteredManifestInstallHosts(manifestShape.Hosts, targets); len(unregistered) > 0 {
+		return InstallReport{}, fmt.Errorf("formal-gates manifest does not register %q as an installable host target (support \"host-target\"); refusing the unknown install target", unregistered[0])
+	}
 	if options.Bootstrap {
 		return bootstrapInstall(options, targets, sourcePackage, registryPath)
 	}

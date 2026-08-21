@@ -59,6 +59,31 @@ func TestCodexCanaryProfileUsesNativeHookAndPassiveRecorder(t *testing.T) {
 	}
 }
 
+// CASE-012 回归：Codex 的 matcher 是正则表达式，glob "*" 是不匹配任何工具的
+// 非法模式（hostMatcher 同理）。canary profile 里任何 matcher 都必须是 ".*"，
+// 否则对应事件的载荷永远捕获不到（QA 观察到的"有 hook payload、无 PreToolUse
+// payload"形态之一）。
+func TestCodexCanaryProfileMatchersAreRegexes(t *testing.T) {
+	dir := t.TempDir()
+	profile := filepath.Join(dir, "formal-gates.config.toml")
+	if err := writeCodexCanaryProfile(profile, filepath.Join(dir, "formal-gates"), filepath.Join(dir, "payloads")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "matcher") {
+			continue
+		}
+		if !strings.Contains(trimmed, `".*"`) {
+			t.Fatalf("canary profile matcher is not the Codex regex \".*\": %q", trimmed)
+		}
+	}
+}
+
 func TestCodexHookCanaryUsesUniqueCaseIDs(t *testing.T) {
 	worktree := t.TempDir()
 	missingCodex := filepath.Join(worktree, "missing-codex")
@@ -87,7 +112,9 @@ func TestCodexHookCanaryUsesUniqueCaseIDs(t *testing.T) {
 
 func TestCodexHookPromptRequestsARealToolCall(t *testing.T) {
 	prompt := codexHookPrompt("formal-gates", "/tmp/case", "/tmp/case/marker.txt")
-	if !strings.Contains(prompt, "Use the shell tool now") || !strings.Contains(prompt, "not a response") {
+	// 提示词必须强制真实 shell 工具调用并禁止纯文本回复：纯文本回复不产生
+	// PreToolUse 载荷，正是 QA CASE-012 观察到的失败形态。
+	if !strings.Contains(prompt, "must call the shell tool now") || !strings.Contains(prompt, "do not answer in text") {
 		t.Fatalf("Codex canary prompt does not require a real shell tool call: %q", prompt)
 	}
 }

@@ -107,7 +107,7 @@ func round15InstallSource(t *testing.T) string {
 	round15WriteFile(t, filepath.Join(root, "SKILL.md"), []byte(skill), 0o600)
 	round15WriteFile(t, filepath.Join(root, "README.md"), []byte("round fifteen runtime\n"), 0o600)
 	round15WriteFile(t, filepath.Join(root, "README_EN.md"), []byte("round fifteen runtime\n"), 0o600)
-	round15WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), []byte(`{"name":"formal-gates"}`+"\n"), 0o600)
+	round15WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), []byte(phase0TestManifest), 0o600)
 	round15WriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), []byte("#!/bin/sh\nexit 0\n"), 0o700)
 	for _, relative := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		round15WriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), []byte(relative+"\n"), 0o600)

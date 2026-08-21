@@ -506,6 +506,19 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			continue
 		}
 		addCheck(tc.name+"-installed-binary-regression", true, "stable launcher validated the installed target package")
+		// The documented first-start boundary: a normal install commits registry
+		// records without a bootstrap receipt, and workflow start rejects a
+		// registry that was never bootstrapped. Bootstrap the same registry from
+		// the same source before the installed-binary canary starts its run.
+		if _, bootstrapErr := Install(InstallOptions{Source: root, Host: tc.host, Scope: "project", Project: project, ReleaseRoot: releaseRoot, BinaryTarget: launcher, RegistryPath: registry, Bootstrap: true, Force: true}); bootstrapErr != nil {
+			addCheck(tc.name+"-bootstrap", false, bootstrapErr.Error())
+			continue
+		}
+		if !isFile(registry + ".bootstrap.json") {
+			addCheck(tc.name+"-bootstrap", false, "bootstrap did not persist the registry bootstrap receipt")
+			continue
+		}
+		addCheck(tc.name+"-bootstrap", true, "registry bootstrap receipt committed for the installed target")
 		registryDoc, registryErr := LoadRegistry(registry)
 		if registryErr != nil {
 			addCheck(tc.name+"-installed-binary-canary", false, registryErr.Error())

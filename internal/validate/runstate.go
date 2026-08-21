@@ -503,6 +503,26 @@ func verifyLegacyStableLauncher() error {
 	return fmt.Errorf("UNREGISTERED_INSTALL: legacy run must be driven by a registered stable launcher")
 }
 
+// requireRunWriteAdmission enforces the same admission gate SaveRunState
+// applies, but before a workflow operation performs any write of its own.
+// Prepare flows write the canonical dispatch prompt file under
+// .gates/tmp/<run>/prompts/ before the final SaveRunState, so checking
+// admission only at state-save time let a candidate binary first write that
+// artifact and only then hit UNREGISTERED_INSTALL, leaving an orphan prompt
+// file behind. Running this gate before the change function hard-rejects the
+// candidate before the first write.
+func requireRunWriteAdmission(root string, state RunState) error {
+	if strings.TrimSpace(state.AdmissionRegistry) == "" && strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return verifyLegacyStableLauncher()
+	}
+	unlock, err := acquireRegistryLock(state.AdmissionRegistry)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return verifyRunStateAdmissionLocked(root, state)
+}
+
 // verifyRunStateAdmissionLocked is called only while the shared registry lock
 // is held.  Operations with external effects (Seal) call it before touching
 // VCS; ordinary state updates call it immediately before the atomic state

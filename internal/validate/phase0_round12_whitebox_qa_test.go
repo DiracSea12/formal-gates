@@ -105,7 +105,7 @@ func round12InstallSource(t *testing.T) string {
 	round12WriteFile(t, filepath.Join(root, "SKILL.md"), []byte(skill), 0o600)
 	round12WriteFile(t, filepath.Join(root, "README.md"), []byte("round twelve runtime\n"), 0o600)
 	round12WriteFile(t, filepath.Join(root, "README_EN.md"), []byte("round twelve runtime\n"), 0o600)
-	round12WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), []byte(`{"name":"formal-gates"}`+"\n"), 0o600)
+	round12WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), []byte(phase0TestManifest), 0o600)
 	round12WriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), []byte("#!/bin/sh\nexit 0\n"), 0o700)
 	for _, relative := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		round12WriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), []byte(relative+"\n"), 0o600)
@@ -524,6 +524,7 @@ func TestWhiteboxPhase0Round12WorkflowStateUsesNestedProjectBinding(t *testing.T
 	parentRecord := round12Record("parent", packageRoot, launcher, "project", "codex", parent, "active")
 	nestedRecord := round12Record("nested", packageRoot, launcher, "project", "codex", nested, "active")
 	round12WriteRegistry(t, registry, 12, parentRecord, nestedRecord)
+	phase0WriteBootstrapReceipt(t, registry)
 	if _, err := Start(StartOptions{Root: nested, PackageRoot: packageRoot, RunID: "round12-parent", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: parentRecord.ID}); err == nil || !strings.Contains(err.Error(), "workflow root") {
 		t.Fatalf("less-specific project binding was accepted for nested root: %v", err)
 	}
@@ -549,6 +550,7 @@ func TestWhiteboxPhase0Round12GlobalAdmissionDerivesProjectLocalRoots(t *testing
 	launcher := filepath.Join(hostRoot, "bin", nativeBinaryName())
 	global := round12Record("global", packageRoot, launcher, "global", "codex", hostRoot, "active")
 	round12WriteRegistry(t, registry, 20, global)
+	phase0WriteBootstrapReceipt(t, registry)
 	state, err := Start(StartOptions{Root: project, PackageRoot: packageRoot, RunID: "round12-global", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: global.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -1143,7 +1145,7 @@ func round12CreateSourceArchive(t *testing.T, path string) {
 		"formal-gates-round12/SKILL.md":                   "skill\n",
 		"formal-gates-round12/README.md":                  "readme\n",
 		"formal-gates-round12/README_EN.md":               "readme\n",
-		"formal-gates-round12/formal-gates.manifest.json": `{"name":"formal-gates"}` + "\n",
+		"formal-gates-round12/formal-gates.manifest.json": phase0TestManifest,
 		"formal-gates-round12/agents/agent.md":            "agent\n",
 		"formal-gates-round12/prompts/action.md":          "prompt\n",
 		"formal-gates-round12/gates/gate.md":              "gate\n",

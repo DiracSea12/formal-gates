@@ -72,13 +72,22 @@ func phase0StartFixture(t *testing.T) (string, string) {
 	return root, phase0RepoRoot(t)
 }
 
+// phase0TestManifest 是测试 fixture 的最小 manifest：登记四个可安装 host
+// target。install 会拒绝 manifest 未登记为 host-target 的安装目标（unknown
+// target 在写 target/state 前非零拒绝），fixture 必须携带该登记。
+const phase0TestManifest = `{"name":"formal-gates","hosts":[` +
+	`{"name":"Claude Code","support":"host-target"},` +
+	`{"name":"Codex","support":"host-target"},` +
+	`{"name":"Cursor","support":"host-target"},` +
+	`{"name":"DeepSeek Harness","support":"host-target"}]}` + "\n"
+
 func phase0InstallSource(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	phase0WriteFile(t, filepath.Join(root, "SKILL.md"), "---\nname: formal-gates\n---\n"+hostInstructionsStartMarker+"\nstage zero rule\n"+hostInstructionsEndMarker+"\n", 0o600)
 	phase0WriteFile(t, filepath.Join(root, "README.md"), "runtime\n", 0o600)
 	phase0WriteFile(t, filepath.Join(root, "README_EN.md"), "runtime\n", 0o600)
-	phase0WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), `{"name":"formal-gates"}`+"\n", 0o600)
+	phase0WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), phase0TestManifest, 0o600)
 	phase0WriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "#!/bin/sh\nexit 0\n", 0o700)
 	for _, entry := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		phase0WriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
@@ -122,6 +131,18 @@ func phase0CommitRegistry(t *testing.T, path string, records ...RegistryRecord) 
 		t.Fatal(err)
 	}
 	return doc
+}
+
+// phase0WriteBootstrapReceipt materializes the committed bootstrap receipt
+// workflow start requires beside a test registry. Test fixtures commit
+// registry records directly instead of running the install --bootstrap
+// maintenance entry, so they must provide the same first-start boundary the
+// documented flow produces.
+func phase0WriteBootstrapReceipt(t *testing.T, registryPath string) {
+	t.Helper()
+	if err := writeJSONAtomically(registryPath+".bootstrap.json", BootstrapReceipt{Operation: "bootstrap", Accepted: true, Registry: registryPath, Epoch: 1, ObservedAt: nowReceiptTime()}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func phase0AssertOldInstallRestored(t *testing.T, target installTarget, hookBefore, ruleBefore string) {
@@ -604,6 +625,7 @@ func TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation(t *testing.T) {
 
 	record.Status = "active"
 	phase0CommitRegistry(t, registry, record)
+	phase0WriteBootstrapReceipt(t, registry)
 	state, err := Start(options)
 	if err != nil {
 		t.Fatalf("admitted candidate could not start: %v", err)
@@ -626,6 +648,7 @@ func TestWhiteboxPhase0WorkflowAdmissionBindsCurrentRoot(t *testing.T) {
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	record := phase0RegistryRecord("root-bound", packageRoot, filepath.Join(t.TempDir(), "bin", nativeBinaryName()), "project", "codex", root, "active")
 	phase0CommitRegistry(t, registry, record)
+	phase0WriteBootstrapReceipt(t, registry)
 	state, err := Start(StartOptions{
 		Root: root, PackageRoot: packageRoot, RunID: "phase0-root-bound", Flow: "formal",
 		RequirementSource: "requirements.md", VCS: "git", Split: "no",
@@ -653,6 +676,7 @@ func TestWhiteboxPhase0GlobalAdmissionAllowsProjectsOutsideHostNamespace(t *test
 		t.Fatal("global registry fixture did not bind the documented roots")
 	}
 	phase0CommitRegistry(t, registry, record)
+	phase0WriteBootstrapReceipt(t, registry)
 	state, err := Start(StartOptions{
 		Root: root, PackageRoot: packageRoot, RunID: "phase0-global-admission", Flow: "formal",
 		RequirementSource: "requirements.md", VCS: "git", Split: "no",
@@ -675,6 +699,7 @@ func TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash(t *testing.T) {
 	registry := filepath.Join(registryRoot, "registry.json")
 	record := phase0RegistryRecord("seal-stable", packageRoot, filepath.Join(registryRoot, "bin", nativeBinaryName()), "project", "codex", root, "active")
 	phase0CommitRegistry(t, registry, record)
+	phase0WriteBootstrapReceipt(t, registry)
 	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "phase0-seal-fence", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight", AdmissionRegistry: registry, AdmissionRecordID: record.ID})
 	if err != nil {
 		t.Fatal(err)

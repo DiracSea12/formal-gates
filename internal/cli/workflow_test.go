@@ -440,6 +440,11 @@ func installHostCLI(t *testing.T, provider, project string) (string, string) {
 	if len(report.Targets) != 1 {
 		t.Fatalf("install %s returned %d targets", provider, len(report.Targets))
 	}
+	// 文档化首启边界：普通 install 只提交 registry record，第一次 workflow start
+	// 前必须先提交 bootstrap receipt（同一 source/launcher/registry）。
+	if _, err := validate.Install(validate.InstallOptions{Source: repoRoot, Host: host, Scope: "project", Project: project, BinaryTarget: launcher, Bootstrap: true, Force: true}); err != nil {
+		t.Fatalf("bootstrap %s CLI registry: %v", provider, err)
+	}
 	return launcher, report.Targets[0].TargetPath
 }
 

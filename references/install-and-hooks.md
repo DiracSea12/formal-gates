@@ -249,9 +249,10 @@ FORMAL_GATES_INSTALL_FAULT=journal-boundary|intent|registry|copy-component:runti
 ```
 
 也可以用公开 fixture 一次覆盖复制、切换、installed-binary smoke、pointer、hook、规则、
-registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher。规范
-fixture 名称只有一个 canonical 形式；`runtime`、`hooks`、`rules` 等旧输入会在入口归一化，
-报告使用 `copy-component:runtime`、`hook`、`managed-rule`。复制 fixture 可按组件选择，
+registry commit 和 journal 边界，并验证每次失败没有留下已提交 target/release/launcher。每个
+注入边界只暴露一个 canonical fixture 名称（`hook`、`managed-rule` 不再有 `hooks`/`rules`
+等别名，同一边界不重复执行）；唯一保留的旧输入 `runtime` 在入口归一化为
+`copy-component:runtime`。复制 fixture 可按组件选择，
 installed-target 校验 fixture 可按阶段选择：
 
 ```bash

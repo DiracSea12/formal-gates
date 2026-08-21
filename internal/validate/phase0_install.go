@@ -666,17 +666,17 @@ func installFault(phase string) error {
 	return nil
 }
 
+// canonicalInstallFaultPhase normalizes one legacy fault input to its
+// canonical fixture id and trims/lowercases every other input. Each injection
+// boundary exposes exactly one canonical fixture id: the former hook/hooks and
+// managed-rule/rules aliases executed the same boundary under several names
+// without adding coverage, so only the canonical ids remain.
 func canonicalInstallFaultPhase(phase string) string {
-	switch strings.ToLower(strings.TrimSpace(phase)) {
-	case "runtime", "copy-component:runtime":
+	normalized := strings.ToLower(strings.TrimSpace(phase))
+	if normalized == "runtime" {
 		return "copy-component:runtime"
-	case "hook", "hooks", "copy-component:hook", "copy-component:hooks":
-		return "hook"
-	case "managed-rule", "managed-rules", "rules", "copy-component:managed-rule", "copy-component:managed-rules", "copy-component:rules":
-		return "managed-rule"
-	default:
-		return strings.ToLower(strings.TrimSpace(phase))
 	}
+	return normalized
 }
 
 func runInstalledBinarySmokeWithPolicy(path string, allowPlaceholder bool) error {

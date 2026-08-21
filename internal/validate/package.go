@@ -565,6 +565,37 @@ func unknownManifestParts(parts []string) []string {
 	return unknown
 }
 
+// manifestHostTargetNames maps each normalized install host to the manifest
+// host entry that must register it as an installable target.
+var manifestHostTargetNames = map[string]string{
+	"claude": "Claude Code",
+	"codex":  "Codex",
+	"cursor": "Cursor",
+	"dsh":    "DeepSeek Harness",
+}
+
+// unregisteredManifestInstallHosts returns the manifest host names the
+// requested install targets need but the payload manifest does not register
+// with support "host-target". An install into such a host is an unknown
+// target for this payload and must be rejected before any target or state is
+// created.
+func unregisteredManifestInstallHosts(hosts []manifestHost, targets []installTarget) []string {
+	var unregistered []string
+	seen := map[string]bool{}
+	for _, target := range targets {
+		manifestName, known := manifestHostTargetNames[target.host]
+		if !known || seen[manifestName] {
+			continue
+		}
+		seen[manifestName] = true
+		found := findHost(hosts, manifestName)
+		if found == nil || !strings.EqualFold(strings.TrimSpace(found.Support), "host-target") {
+			unregistered = append(unregistered, manifestName)
+		}
+	}
+	return unregistered
+}
+
 func nativeBinaryCommand() string {
 	if runtime.GOOS == "windows" {
 		return "bin\\formal-gates.exe package validate --root ."

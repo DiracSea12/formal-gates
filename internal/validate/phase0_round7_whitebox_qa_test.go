@@ -169,6 +169,9 @@ func TestWhiteboxPhase0Round7StableLauncherDiscoveryFencesCandidateWrites(t *tes
 		t.Fatal(err)
 	}
 	round7WriteFile(t, registry, string(registryData)+"\n", 0o600)
+	// 文档化首启边界：发现式准入的 workflow start 同样要求已提交的 bootstrap
+	// receipt（fixture 直接构造 registry，须补写该 receipt）。
+	phase0WriteBootstrapReceipt(t, registry)
 
 	baseEnvironment := map[string]string{
 		"HOME": home, "USERPROFILE": home,
@@ -208,7 +211,7 @@ func round7InstallSource(t *testing.T) string {
 	for _, name := range []string{"README.md", "README_EN.md"} {
 		round7WriteFile(t, filepath.Join(root, name), "stage zero runtime\n", 0o600)
 	}
-	round7WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), `{"name":"formal-gates"}`+"\n", 0o600)
+	round7WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), phase0TestManifest, 0o600)
 	round7WriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "#!/bin/sh\nexit 0\n", 0o700)
 	for _, relative := range []string{"agents/worker.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		round7WriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), relative+"\n", 0o600)

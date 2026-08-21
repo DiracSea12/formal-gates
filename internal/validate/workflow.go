@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -238,6 +239,9 @@ func Start(options StartOptions) (RunState, error) {
 			writeWorkflowAdmissionReceipt(registryPath, receipt, root, options.PackageRoot, receipt.Reason)
 			return RunState{}, fmt.Errorf("%s: workflow state write refused for registry record %q", receipt.Code, recordID)
 		}
+		if err := requireRegistryBootstrapReceipt(registryPath, recordID, root, options.PackageRoot); err != nil {
+			return RunState{}, err
+		}
 		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
 			return RunState{}, bindingErr
 		}
@@ -416,6 +420,34 @@ func findRegistryRecordForTarget(path, packageRoot string) (RegistryRecord, erro
 	}
 	writeWorkflowAdmissionRejection(path, "", "", packageRoot, fmt.Sprintf("no registry record matches package root %s", packageRoot))
 	return RegistryRecord{}, fmt.Errorf("no registry record matches package root %s", packageRoot)
+}
+
+// requireRegistryBootstrapReceipt enforces the documented first-start
+// boundary: the stable launcher may create workflow state only after the
+// registry's bootstrap receipt exists. A normal install commits registry
+// records without writing <registry>.bootstrap.json, so an interruption
+// between the registry commit and the documented `install --bootstrap`
+// maintenance entry leaves an active registry that workflow start must reject
+// instead of silently creating state the bridge never bootstrapped.
+func requireRegistryBootstrapReceipt(registryPath, recordID, root, packageRoot string) error {
+	data, err := os.ReadFile(registryPath + ".bootstrap.json")
+	if err != nil {
+		reason := fmt.Sprintf("registry bootstrap receipt is unavailable: %v", err)
+		writeWorkflowAdmissionRejection(registryPath, recordID, root, packageRoot, reason)
+		return fmt.Errorf("UNREGISTERED_INSTALL: registry %s has no committed bootstrap receipt; run the documented install --bootstrap maintenance entry before the first workflow start (%w)", registryPath, err)
+	}
+	var receipt BootstrapReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		reason := fmt.Sprintf("registry bootstrap receipt is unreadable: %v", err)
+		writeWorkflowAdmissionRejection(registryPath, recordID, root, packageRoot, reason)
+		return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap receipt is not a valid receipt: %w", err)
+	}
+	if !receipt.Accepted {
+		reason := "registry bootstrap receipt was not accepted"
+		writeWorkflowAdmissionRejection(registryPath, recordID, root, packageRoot, reason)
+		return fmt.Errorf("UNREGISTERED_INSTALL: %s", reason)
+	}
+	return nil
 }
 
 func writeWorkflowAdmissionRejection(path, recordID, root, packageRoot, reason string) {
@@ -1941,6 +1973,15 @@ func mutateRun(root, runID string, change func(*RunState) error) (RunState, erro
 		return RunState{}, err
 	}
 	if err := requireActive(state); err != nil {
+		return RunState{}, err
+	}
+	// Candidate admission is re-checked before the change function runs. The
+	// final SaveRunState repeats the same gate under its own lock, but prepare
+	// operations write the canonical dispatch prompt file before that save;
+	// without this early gate a candidate binary first creates
+	// .gates/tmp/<run>/prompts/<dispatch>.md and only then gets
+	// UNREGISTERED_INSTALL, leaving an orphan workflow artifact.
+	if err := requireRunWriteAdmission(root, state); err != nil {
 		return RunState{}, err
 	}
 	if err := change(&state); err != nil {
