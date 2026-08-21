@@ -113,7 +113,7 @@ HOST 不是判断权。它只提供凭据、UI、进程或外部系统能力；H
 
 “实现麻烦”不是代理理由。缺程序化 adapter 时只在开发期 diagnostic compiler mode 给未完成 definition 标记 `MISSING_ENGINE_ADAPTER`，不能临时把命令顺序交给代理。该 marker 不是 RunnerKind/hostBoundaryReason：不得生成 executable StepSpec，不得签发 Ready/HostAction；normal compile/drive 以 `BLOCKED_BUG` 和 diagnose 拒绝。最终候选的本次范围内定义不得残留。可执行 HOST_ADAPTER 的合法 `hostBoundaryReason` 只有 `EXTERNAL_CAPABILITY_BOUNDARY`、`USER_IO_TRANSPORT`、`AGENT_DISPATCH_API`。
 
-每个有顺序语义的节点编译为 `NodeExecutionPlan`。定义的唯一 authoring 形态是封闭 Go 类型变体 + constructor + 显式节点/步骤表（`LocalStep`、`DurableStep`、`AgentStep`、`HumanAskStep`、`HostActionStep`、`ParallelStep` 等，详见 ADR-001）：变体只暴露自己适用的字段，local step 看不到 receipt/join/agent reason，human step 填不了 retry/side-effect；`DecisionAuthority`/`RunnerKind` 由变体自动派生并在制品中物化，作者不手填。编译产物是具体结构组成的 `CompiledDefinition`，每个持久化步骤（`StepSpec`）承载：
+每个有顺序语义的节点编译为 `NodeExecutionPlan`。定义的唯一 authoring 形态是封闭 Go 类型变体 + constructor + 显式节点/步骤表（`LocalStep`、`DurableStep`、`AgentStep`、`HumanAskStep`、`HostActionStep`、`ParallelStep` 等，详见 ADR-001）：变体只暴露自己适用的字段，local step 看不到 receipt/join/agent reason，human step 填不了 retry/side-effect；`DecisionAuthority`/`RunnerKind` 由变体自动派生并在制品中物化，作者不手填。编译产物是具体结构组成的 `CompiledDefinition`，其步骤同样采用公共头（id/nodeId/ordinal/dependencies/kind/definitionVersion）加封闭变体 payload（`CompiledLocalStep`、`CompiledDurableStep`、`CompiledAgentStep`、`CompiledHumanAskStep`、`CompiledHostActionStep`、`CompiledParallelStep`）的结构——变体不适用的策略字段不得存在于该步骤，不得实现为全字段平铺的单结构。每个持久化步骤（`StepSpec`）在自身变体内承载：
 
 ```text
 id / nodeId / ordinal / dependencies

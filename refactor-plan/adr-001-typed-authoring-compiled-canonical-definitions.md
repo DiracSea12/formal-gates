@@ -25,7 +25,7 @@
    | PlanDigest | 给定 state+observation 的确定性决策结果 |
 
    PackageDigest 是 owning-runtime 的执行绑定而非审计附注。活动 run 的写入前校验采用其一：(a) run 由其绑定的不可变 runtime sibling 执行并验证实际 package digest（推荐）；(b) loader 校验 envelope package digest 与当前安装身份一致；(c) 持有显式兼容/adopt receipt。不得仅凭 HandlerID 相同接受新实现接管旧 run。
-8. **HandlerID 版本规则**：HandlerID 标识可恢复执行合同，不标识每一版实现。合同不兼容变化（输入/输出 schema、side-effect protocol、receipt/reconcile 语义、idempotency key 计算、failure-class 合同、持久化/恢复前提、authority/runner 或外部能力边界）必须晋升 ID；合同兼容的实现变化（内部重构、性能、日志、符合合同的 bug 修复、兼容性收紧、依赖库升级）保持 ID，由 PackageDigest 标识。保持合同的 bug 修复不改变可观察行为合同，属后者。
+8. **HandlerID 版本规则**：HandlerID 标识可恢复执行合同，不标识每一版实现。合同不兼容变化（输入/输出 schema、side-effect protocol、receipt/reconcile 语义、idempotency key 计算、failure-class 合同、持久化/恢复前提、authority/runner 或外部能力边界）必须晋升 ID；其中**声明的输入/输出接受域收紧也属合同不兼容**——以前接受、现在拒绝同一合法输入即改变了输入合同。合同兼容的实现变化（内部重构、性能、日志、依赖库升级，以及不改变已声明合同的 bug 修复与内部校验加固——加固仅指拒绝定义上本就非法、此前被错误接受的输入）保持 ID，由 PackageDigest 标识。保持合同的 bug 修复不改变可观察行为合同，属后者。
 9. **锁步激活**：executable definition 只有在同一候选包 registry 能完整、唯一解析其全部 ID 时才能激活。分层边界：源码开发层允许暂时存在未完整实现的 diagnostic-only 定义（可输出诊断、不可执行、不可签发 Ready/HostAction、不可进入 promotion），与 `MISSING_ENGINE_ADAPTER` 原则一致；候选激活层严格 definition + binary registry 锁步；正式运行层精确版本与双摘要绑定。
 10. **八类拒绝结果全保留**：不可达 step/非法循环、无类型 I/O、自然语言-only pre/postcondition、无幂等/reconcile 的副作用、无 request/schema 的 human wait、无 join/failure policy 的并行组、缺合法 reason 的 AGENT/HOST、未绑定 definition version——以 enforcement matrix 标注主要拦截层（封闭类型/constructor、closed-world compiler、runtime loader）与二次防线；需求不因实现分层而减少约束。
 

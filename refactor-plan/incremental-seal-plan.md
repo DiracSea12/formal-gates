@@ -92,7 +92,7 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 
 同一矩阵还要覆盖 top-level 维护/transport 面：`hook`、`lifecycle capture/verify`、`canary`、`gate`、`install`、`uninstall` 和 `package`，以及 registry `admission/register/reconcile`、cutover、rollback 的受支持维护动作或内部 owner handler。逐项标明它是只读、只写外部 observation/receipt，还是委托 engine `submit`；生命周期事件可以写 observation buffer，但不得直接改变 workflow state，install/package 不得拥有 workflow writer。每个 registry/cutover 动作都必须记录 owner、generation/token、receipt schema、恢复入口和权限边界。所有这些入口都必须经过 registry launcher/lease 或 per-operation token，并有“绕过 submit、绕过 freshness、绕过 scope/host 隔离”的 negative tests。
 
-矩阵的 `start` 行必须钉死公开的 `--split yes|no`：`yes` 绑定 retained-overall 或 `--master` child 角色，`no` 永久禁止后续 split；阶段 4/5 的 no-split/split 只是该同一契约在不同阶段的具体出口，不得用宽泛的“拆分决定”替代启动时声明。
+矩阵的 `start` 行不得引入任何拆分意向声明（无 `--split` 参数）：`start` 不接受也不冻结拆分意向；拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认——split 需精确拓扑、no-split 需理由留痕，确认前用户可改变意向、确认后不得重切（变更走用户需求变化、reset/rebuild 或 abort）。阶段 4/5 的 no-split/split 出口都以该拓扑确认时点为准，不得恢复启动时声明，也不得用宽泛的“拆分决定”替代该唯一绑定点。
 
 ### 2.4 全局安装切换与活动 run fencing
 
@@ -208,7 +208,7 @@ Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径�
 
 范围：
 
-- 迁移 intake、产品审、技术审、start-readiness、拆分决定（no-split）和 full/custom 路线。
+- 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线。
 - 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和三轮规则。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
