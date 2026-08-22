@@ -12,24 +12,24 @@
 
 ## 批次 1（串行主干，spike 冻结的 IR 为切分缝）
 
-- [ ] **1a｜Authoring**：六种封闭变体 + constructor + 显式表；authority/runner 派生物化。配套：constructor 非法状态测试。
-- [ ] **1b｜Closed-world compiler**：registry 解析、图不变量（可达性/循环/依赖/join 覆盖/版本绑定）、归一化。配套：八类拒绝的 enforcement matrix 测试。
-- [ ] **1c｜Canonical encoder + 制品/常量同源生成**（bump workflowDefinitionVersion）。配套：freshness/assembly-order/round-trip 测试。
+- [x] **1a｜Authoring**：六种封闭变体 + constructor + 显式表；authority/runner 派生物化。配套：constructor 非法状态测试。
+- [x] **1b｜Closed-world compiler**：registry 解析、图不变量（可达性/循环/依赖/join 覆盖/版本绑定）、归一化。配套：八类拒绝的 enforcement matrix 测试。
+- [x] **1c｜Canonical encoder + 制品/常量同源生成**（bump workflowDefinitionVersion）。配套：freshness/assembly-order/round-trip 测试。
 
 ## 批次 2（2a 可与批次 1 并行先行；2b 依赖 1c）
 
-- [ ] **2a｜RunPhase/TaskKey/TaskTransitionTable**：纯数据结构（含 batch 作为 TaskKey 分组与依赖信息、完成状态派生）。
-- [ ] **2b｜决策核心**：Observe/Decide/SelectIssued + NextResult 六类 Kind 校验；canonical Plan 字节稳定。
+- [x] **2a｜RunPhase/TaskKey/TaskTransitionTable**：纯数据结构（含 batch 作为 TaskKey 分组与依赖信息、完成状态派生）。
+- [x] **2b｜决策核心**：Observe/Decide/SelectIssued + NextResult 六类 Kind 校验；canonical Plan 字节稳定。
 
 ## 批次 3（依赖 1+2）
 
-- [ ] **验收套件补全**：digest 分离、digest 语义敏感性、registry 完备性、mutation tests、跨进程确定性。
-- [ ] **golden/property tests**：合法边、非法事件、step 乱序/遗漏/重复拒绝、非终态无空结果。
-- [ ] `MISSING_ENGINE_ADAPTER` diagnostic-only 与 `BLOCKED_BUG` 路由测试；最终候选 marker 扫描。
+- [x] **验收套件补全**：digest 分离、digest 语义敏感性、registry 完备性、mutation tests、跨进程确定性。
+- [x] **golden/property tests**：合法边、非法事件、step 乱序/遗漏/重复拒绝、非终态无空结果。
+- [x] `MISSING_ENGINE_ADAPTER` diagnostic-only 与 `BLOCKED_BUG` 路由测试；最终候选 marker 扫描。
 
 ## 批次 4（依赖 2b）
 
-- [ ] **Shadow harness**：只读 legacy 状态 → 预测 frontier → 差异报告；telemetry 落独立目录，不写权威 state。
+- [x] **Shadow harness**：只读 legacy 状态 → 预测 frontier → 差异报告；telemetry 落独立目录，不写权威 state。
 
 ## 收口（closure，开发完成后；独立于开发批次）
 
