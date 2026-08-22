@@ -43,11 +43,11 @@ func TestLoadFutureDefinitionRejectsChangedBytesWithoutVersionBump(t *testing.T)
 	if err := os.MkdirAll(definitionDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	definition, err := os.ReadFile(filepath.Join(repoRootValidateTest(t), "definitions", "workflow.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	definition = append(definition, '\n')
+	// 批 1c 起 checked-in definitions/workflow.json 已 bump 到 "2"（完整拓扑），
+	// 不再是本负例的载体：版本已不同即为新 future 候选。此处内联构造一个
+	// 版本等于当前常量、但字节不同于冻结 digest 的 v1 形态定义，保持
+	// "changed bytes without bump 被拒"的原有断言语义。
+	definition := []byte("{\n  \"version\": \"1\",\n  \"stateSchemaVersion\": \"1\",\n  \"note\": \"changed bytes without bump\"\n}\n")
 	if err := os.WriteFile(filepath.Join(definitionDir, "workflow.json"), definition, 0o600); err != nil {
 		t.Fatal(err)
 	}

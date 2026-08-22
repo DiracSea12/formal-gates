@@ -411,7 +411,7 @@ func TestWhiteboxPhase0Round16InstallRejectsManifestUnregisteredHostTarget(t *te
 			rejects: true,
 		},
 		{
-			name: "missing-entry",
+			name:     "missing-entry",
 			manifest: strings.Replace(round16Manifest, claudeEntry+",\n  ", "", 1),
 			rejects:  true,
 		},

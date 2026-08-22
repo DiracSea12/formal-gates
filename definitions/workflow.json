@@ -1,7 +1,7 @@
 {
-  "$schema": "https://formal-gates.dev/schema/workflow-definition-v1.json",
+  "$schema": "https://formal-gates.dev/schema/workflow-definition-v2.json",
   "id": "formal-gates.workflow",
-  "version": "1",
+  "version": "2",
   "stateSchemaVersion": "1",
   "writer": "engine",
   "transactionOwner": "validate",
@@ -9,5 +9,256 @@
     "workflow start",
     "workflow resume",
     "workflow seal"
+  ],
+  "entryNode": "entry",
+  "steps": [
+    {
+      "id": "ask.decide",
+      "nodeId": "ask",
+      "ordinal": 2,
+      "kind": "HUMAN_ASK",
+      "definitionVersion": "2",
+      "dependencies": [
+        "entry.persist"
+      ],
+      "authority": "HUMAN",
+      "runner": "HOST_ADAPTER",
+      "payload": {
+        "askKind": "decision",
+        "requestSchema": "schema.ask.decision.request",
+        "responseSchema": "schema.ask.decision.response",
+        "freshnessTtlNs": 900000000000
+      }
+    },
+    {
+      "id": "entry.parse",
+      "nodeId": "entry",
+      "ordinal": 0,
+      "kind": "LOCAL",
+      "definitionVersion": "2",
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out"
+      },
+      "payload": {
+        "handler": "engine.entry.parse"
+      }
+    },
+    {
+      "id": "entry.persist",
+      "nodeId": "entry",
+      "ordinal": 1,
+      "kind": "DURABLE",
+      "definitionVersion": "2",
+      "dependencies": [
+        "entry.parse"
+      ],
+      "authority": "ENGINE",
+      "runner": "DURABLE_ACTIVITY",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "entry.parse",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.entry.persist",
+        "idempotency": "DETERMINISTIC_INPUT",
+        "reconcileId": "reconcile.entry.persist",
+        "timeoutNs": 30000000000,
+        "retry": {
+          "maxAttempts": 3,
+          "backoffNs": 2000000000
+        }
+      }
+    },
+    {
+      "id": "fan.split",
+      "nodeId": "fan",
+      "ordinal": 3,
+      "kind": "PARALLEL",
+      "definitionVersion": "2",
+      "dependencies": [
+        "entry.parse"
+      ],
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "payload": {
+        "children": [
+          "fan.slice",
+          "fan.transport"
+        ],
+        "join": {
+          "joinStep": "fan.join",
+          "mode": "ALL"
+        },
+        "failure": {
+          "mode": "FAIL_FAST",
+          "escalate": "INVARIANT_VIOLATION"
+        }
+      }
+    },
+    {
+      "id": "fan.slice",
+      "nodeId": "fan",
+      "ordinal": 4,
+      "kind": "LOCAL",
+      "definitionVersion": "2",
+      "dependencies": [
+        "fan.split"
+      ],
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "fan.split",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.fan.slice"
+      }
+    },
+    {
+      "id": "fan.transport",
+      "nodeId": "fan",
+      "ordinal": 5,
+      "kind": "HOST_ACTION",
+      "definitionVersion": "2",
+      "dependencies": [
+        "fan.split"
+      ],
+      "authority": "ENGINE",
+      "runner": "HOST_ADAPTER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "fan.split",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.fan.transport",
+        "boundary": "AGENT_DISPATCH_API",
+        "operation": "op.fan.transport",
+        "timeoutNs": 10000000000
+      }
+    },
+    {
+      "id": "fan.join",
+      "nodeId": "fan",
+      "ordinal": 6,
+      "kind": "LOCAL",
+      "definitionVersion": "2",
+      "dependencies": [
+        "fan.slice",
+        "fan.transport"
+      ],
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "fan.slice",
+            "output": "out",
+            "to": "in"
+          },
+          {
+            "from": "fan.transport",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.fan.join"
+      }
+    },
+    {
+      "id": "report.cost",
+      "nodeId": "report",
+      "ordinal": 7,
+      "kind": "LOCAL",
+      "definitionVersion": "2",
+      "dependencies": [
+        "ask.decide",
+        "fan.join"
+      ],
+      "authority": "ENGINE",
+      "runner": "ENGINE_LOCAL",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "inputs": [
+          {
+            "from": "ask.decide",
+            "output": "out",
+            "to": "in"
+          },
+          {
+            "from": "fan.join",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.report.cost",
+        "retry": {
+          "maxAttempts": 2
+        }
+      }
+    },
+    {
+      "id": "review.worker",
+      "nodeId": "review",
+      "ordinal": 8,
+      "kind": "AGENT",
+      "definitionVersion": "2",
+      "dependencies": [
+        "entry.persist"
+      ],
+      "authority": "AGENT",
+      "runner": "AGENT_WORKER",
+      "io": {
+        "inputCodec": "codec.any.in",
+        "outputCodec": "codec.any.out",
+        "postconditions": [
+          {
+            "id": "pred.review.post"
+          }
+        ],
+        "inputs": [
+          {
+            "from": "entry.persist",
+            "output": "out",
+            "to": "in"
+          }
+        ]
+      },
+      "payload": {
+        "handler": "engine.review.worker",
+        "nonProgrammableReason": "INDEPENDENT_REVIEW",
+        "timeoutNs": 60000000000
+      }
+    }
   ]
 }

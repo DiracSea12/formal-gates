@@ -271,6 +271,15 @@ func TestManifestDescriptionStatesV2Model(t *testing.T) {
 // metadata, the on-request manifest description, and the managed rule file
 // written to the host rule file must carry the V2 wording without「不要求回应」.
 func TestInstallReproducesV2ModelAtTarget(t *testing.T) {
+	// 2026-08-21 事故根因修复：install 的共享 registry 与稳定 launcher 默认都
+	// 按 HOME 解析（installRegistryPath/defaultStableLauncherPath ->
+	// installHomeDir）。本用例此前未隔离 HOME，把真实 ~/.formal-gates/
+	// registry.json 与 ~/.local/bin/formal-gates 写坏（launcher 被源包 bin/
+	// 下的 25 字节桩覆盖）。先把 HOME 指向临时目录，再以完全相同的安装语义
+	// 复现 V2 触发模型断言。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	source := copyPackageFixture(t)
 	project := t.TempDir()
 	report, err := Install(InstallOptions{Source: source, Host: "claude", Scope: "project", Project: project, Force: true})

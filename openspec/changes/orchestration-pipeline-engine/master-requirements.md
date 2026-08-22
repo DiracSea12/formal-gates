@@ -175,6 +175,15 @@
 8. RUNTIME_ERROR 不算 finding、不计 wave；安全重试自动进行，长期不可恢复才 Ask 重试/skip/change/abort。
 9. 正常 Seal 自动执行。PENDING 不能 waiver；FAIL/RUNTIME_ERROR/P2/P3 obligation 的 waiver 必须绑定当前 validation candidate、request、精确 obligation ID 和理由，后续候选不沿用。
 
+### 8.5 开发分批与组间验证
+
+1. **批次计划义务**：受理阶段只确认需求与方案，不冻结批次计划。显式批次计划在拆分决定与路线确认时一并产生，经同一次用户决定确认并留痕，于开发开始前登记为任务清单的组织结构；允许"单批 + 理由"退化形态。批次划分依据依赖链、体量与风险：依赖链（消费链）必须串行；零耦合支线可并行；共享文件、接口或语义的工作面不并行。接口冻结点优先作为批边界。
+2. **批粒度**：批是任务单元，单批一个内聚关注点——语义判据为"能用一句话说清本批 diff 即一批"；批内提交保持原子、可独立构建。批内每次编辑后执行项目声明的低成本确定性检查，批边界执行该开发计划指定的回归命令；每批终态可判——树可构建、声明的回归通过、自测留痕、任务清单逐批勾选。
+3. **探路优先**：含不确定性边界的探路工作必须作为首批 spike：结论留痕，代码不进入交付。
+4. **验证档位**（随批次计划一并选定并留痕，依据与已拒绝替代见 ADR-002）：批内自测为固定底座（永远启用）；默认为开发完成后单次全量门禁；确有需要时增设组间快照 + 增量审查 checkpoint（冻结中间 `DevelopmentSnapshot`，复用 `ReviewScopeMode` 与 carry 继承判定：未受影响 PASS 直接沿用，只对增量 diff 审查/执行；组间轮不计 repair wave）。档位依据结构性信号：预期生产逻辑是否多模块扩散、独立验收单元数；不依据总行数或批数。split 属 run 拆分机制（见 8.1），不是验证档位，不在此选择。
+5. **不变量**：批次不改变 run 边界、公共入口、Seal 语义或强制并行不变量；不产生额外受理、双审或 Seal 轮次。
+6. **引擎义务**：batch 是现有 TaskKey 上的分组与依赖信息，批次完成状态从成员 task 与验证结果派生，不新增 batch 状态机、receipt 或独立生命周期。组间快照与增量 diff artifact、carry/AFFECTED 判定复用既有机制。批次登记与边界执行由引擎机械承载；批怎么切、档位选哪个等语义判断由主代理/Operator 建议、用户确认，引擎不实现语义分类器。
+
 ## 9. 程序化 VCS、本地副作用与恢复
 
 1. Git/SVN/P4 的 provider 探测、根与身份解析、status/diff/untracked 识别、base/current/ancestry、workspace/client 创建、显式 track/add/open/reopen、resolve 状态验证、merge/integrate、commit/submit、snapshot、Git squash、已授权 reset/rollback、cleanup 和崩溃对账全部由 VCS adapter 程序化执行；宿主和代理不得自行拼 VCS 命令或决定其顺序。
