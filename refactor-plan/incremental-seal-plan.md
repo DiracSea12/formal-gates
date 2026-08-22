@@ -81,7 +81,7 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 过渡期间虽然 legacy runtime 与 engine runtime 同时存在于代码库，但同一个 run 只能有一个权威写入者：
 
 1. façade 只能在 `workflow start` 或最小读取版本 envelope 时选择整条 runtime。
-2. run 创建后永久绑定 writer、`stateSchemaVersion` 和 `workflowDefinitionVersion`。
+2. 新建的版本化 engine/candidate run 创建后永久绑定 writer、`stateSchemaVersion` 和 `workflowDefinitionVersion`；阶段 0 的 stable driver 与既有 legacy run 继续使用当前 state 格式和写入语义。
 3. 禁止同一 run 按子命令在 legacy 与 engine 之间回退、翻译或双写。
 4. engine run 不由 legacy 命令续跑；legacy run 不由 engine 改写。
 5. 过渡 façade 只是开发期脚手架，最终阶段必须删除。
@@ -92,15 +92,15 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 
 同一矩阵还要覆盖 top-level 维护/transport 面：`hook`、`lifecycle capture/verify`、`canary`、`gate`、`install`、`uninstall` 和 `package`，以及 registry `admission/register/reconcile`、cutover、rollback 的受支持维护动作或内部 owner handler。逐项标明它是只读、只写外部 observation/receipt，还是委托 engine `submit`；生命周期事件可以写 observation buffer，但不得直接改变 workflow state，install/package 不得拥有 workflow writer。每个 registry/cutover 动作都必须记录 owner、generation/token、receipt schema、恢复入口和权限边界。所有这些入口都必须经过 registry launcher/lease 或 per-operation token，并有“绕过 submit、绕过 freshness、绕过 scope/host 隔离”的 negative tests。
 
-矩阵的 `start` 行必须钉死公开的 `--split yes|no`：`yes` 绑定 retained-overall 或 `--master` child 角色，`no` 永久禁止后续 split；阶段 4/5 的 no-split/split 只是该同一契约在不同阶段的具体出口，不得用宽泛的“拆分决定”替代启动时声明。
+矩阵的 `start` 行不得引入任何拆分意向声明（无 `--split` 参数）：`start` 不接受也不冻结拆分意向；拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认——split 需精确拓扑、no-split 需理由留痕，确认前用户可改变意向、确认后不得重切（变更走用户需求变化、reset/rebuild 或 abort）。阶段 4/5 的 no-split/split 出口都以该拓扑确认时点为准，不得恢复启动时声明，也不得用宽泛的“拆分决定”替代该唯一绑定点。
 
 ### 2.4 全局安装切换与活动 run fencing
 
 固定稳定插件跨阶段继续驱动 formal-gates，因此最终切换不是单个测试项目的局部操作。每次候选升级或最终全局切换前，必须从登记的所有项目 root、host home、state/resource root 和安装 scope 建立可复核的活动 run inventory；不能只扫描当前候选项目的 `.gates/tmp`。
 
-registry 不是某个项目的 `.gates/tmp`，而是由安装清单钉死的、跨 global/project scope 共用的用户级 registry root；候选验证通过显式配置使用完全不同的 registry namespace。每个安装 target、host hook、项目 root、state/resource root 和 runtime identity 都必须有 registry record，record 的 canonical paths 与 scope 是可机械校验的。阶段 0 必须先交付 admission bridge/launcher：所有文档化的 global/project 安装 target 和 host hook 都指向该 launcher，真实 immutable runtime 放在 launcher 管理的 sibling 路径，不能再暴露未登记的绝对旧 binary。
+registry 不是某个项目的 `.gates/tmp`，而是由安装清单钉死的、跨 global/project scope 共用的用户级 registry root；候选验证通过显式配置使用完全不同的 registry namespace。每个安装 target、host hook、项目 root、state/resource root 和 runtime identity 都必须有 registry record，record 的 canonical paths 与 scope 是可机械校验的。阶段 0 必须先交付 admission bridge/launcher：所有文档化的 global/project 安装 target 和 host hook 都指向该 launcher，真实 immutable runtime 放在 launcher 管理的 sibling 路径，不能再暴露未登记的绝对旧 binary。首次 bootstrap 的公开入口固定为冻结 stable driver 提供的 `install --bootstrap` 维护动作；它只建立 registry/launcher record 和 bootstrap receipt，不创建 workflow state。
 
-bootstrap/migration 必须覆盖现有 global 安装和受支持的 project roots：安装时原子登记 root/scope/host/runtime，`workflow start` 在创建 `.gates/tmp` 前再次原子登记或校验 root；无法登记、registry 不可达或发现 `UNREGISTERED_INSTALL` 时在写入前硬拒绝。已有 project-scope target 必须迁移到 launcher 或留下可审计的 disabled/待处理 receipt；最终切换遇到任何未登记 target、root、旧 launcher lease 或未知 scope 都只能 Operator/Wait。legacy launcher 为固定稳定驱动取得覆盖整个进程调用的 invocation lease，并在入口检查 admission epoch；engine 则在每个 intent/receipt/commit/cleanup 使用 per-operation fencing token。两者都不能通过直达 runtime sibling 绕过 registry。
+bootstrap/migration 必须覆盖现有 global 安装和受支持的 project roots：冻结 stable driver 先取得 install/uninstall lock，再取得 registry lock，写入 bootstrap intent，逐项登记 root/scope/host/runtime、epoch/generation、lease/token 和 canonical-path receipt；所有 record 提交成功后才允许第一次 `workflow start`。registry 不存在时允许这一次 bootstrap 创建；已有 record 缺失、冲突、registry 不可达或无法对账时，只留下可审计的 disabled/`UNREGISTERED_INSTALL` receipt 并停止，不得先创建 `.gates/tmp`。之后 `workflow start` 在创建 `.gates/tmp` 前再次 admission/校验 root；无法登记或发现 `UNREGISTERED_INSTALL` 时在写入前硬拒绝。已有 project-scope target 必须迁移到 launcher 或留下可审计的 disabled/待处理 receipt；最终切换遇到任何未登记 target、root、旧 launcher lease 或未知 scope 都只能 Operator/Wait。legacy launcher 为固定稳定驱动取得覆盖整个进程调用的 invocation lease，并在入口检查 admission epoch；engine 则在每个 intent/receipt/commit/cleanup 使用 per-operation fencing token。两者都不能通过直达 runtime sibling 绕过 registry。
 
 切换协议是显式的、只前进的 generation 状态机（`authority` 为 stable 或 candidate）：
 
@@ -111,7 +111,7 @@ OPEN(E, stable)
   -> OPEN(E+2, candidate)
 ```
 
-候选安装、pointer/hook/config/rule 提交和 post-switch smoke 都在 `SWITCHING` 下由带 cutover token 的 owner 执行；普通 stable/candidate `start` 一律拒绝。失败回退不能恢复任何旧 generation，而是继续前进：
+候选安装、pointer/hook/config/rule/registry staged record 提交和 post-switch/pre-commit smoke 都在 `SWITCHING` 下由带 cutover token 的同一 owner 执行；普通 stable/candidate `start` 一律拒绝。`post-switch` 特指 release/installed target 已切换而公共 pointer/config/registry 尚未提交，smoke 必须从实际 installed path 启动；只有 smoke 通过后才共同提交 runtime 与 registry。失败回退不能恢复任何旧 generation，而是继续前进：
 
 ```text
 SWITCHING(E+1, candidate)
@@ -141,13 +141,13 @@ SWITCHING(E+1, candidate)
 - 建立 legacy 正常行为 characterization、package validation、portable canary 和安装 smoke 基线。
 - 在任何阶段 worktree 创建前记录初始 Git commit、SVN revision 或 P4 changelist，以及固定稳定 binary/package/installed-target digest、host hook/config 和 managed-rule canonical paths；这组 identity 是阶段 0 的不可变起点。
 - 把当前稳定驱动插件冻结成不可变复制品，取消稳定安装中 `prompts/`、`gates/` 对开发工作区的 live symlink；`package validation` 增加 `Lstat`/realpath 和 digest 检查，不能用会跟随 symlink 的 `os.Stat` 代替。
-- 在复制稳定驱动的同时完成一次性 registry bootstrap：从冻结的已安装 artifact（而不是当前 worktree）启动 admission bridge，登记所有已知 global/project target、host hook、root、state/resource root 和 runtime sibling；现有 target 要么迁移为 launcher 管理的 target，要么留下 machine-readable disabled/`UNREGISTERED_INSTALL` receipt，不能以人工“已检查”替代。之后所有文档化入口都必须经过 bridge；固定稳定驱动的用户语义不变，但未包装的旧绝对 binary 不再是受支持入口。
-- 把 runtime、prompts、gates、host hook/config、managed rule、release/current pointer 纳入同一安装事务：先获取跨进程 install/uninstall lock，写入持久 recovery journal，准备 sibling 临时目录和备份，复制并校验完整 manifest，执行安装后 smoke，再原子提交 pointer/config；任一复制、hook、rule、pointer 或 post-switch smoke 失败都恢复旧安装和旧配置。
-- 对每个 intent 前后、删除/替换前后、hook JSON 解析失败、managed-rule 写失败、pointer 换位失败、进程崩溃重启和 post-switch smoke 失败注入故障，证明旧稳定包仍可运行；`install.command`、`install.ps1` 和 Go installer 必须遵循同一事务协议并能从 journal 恢复。bridge、Go installer、shell/PowerShell 脚本共享同一 lock/journal/commit owner，脚本不得先于 native installer 删除 release 或切换 pointer。
+- 在复制稳定驱动的同时由冻结 stable driver 调用一次性 `install --bootstrap`：从冻结的已安装 artifact（而不是当前 worktree）登记所有已知 global/project target、host hook、root、state/resource root 和 runtime sibling，提交 bootstrap receipt 后才允许首个 workflow state 写入；现有 target 要么迁移为 launcher 管理的 target，要么留下 machine-readable disabled/`UNREGISTERED_INSTALL` receipt，不能以人工“已检查”替代。之后所有文档化入口都必须经过 bridge；固定稳定驱动的用户语义不变，但未包装的旧绝对 binary 不再是受支持入口，候选不得执行 bootstrap 或写 stable registry。
+- 把 runtime、prompts、gates、host hook/config、managed rule、release/current pointer 和 registry record 纳入同一安装事务：同一 native owner 先获取 install/uninstall lock，再获取 registry lock，写入包含旧/新 runtime、pointer/config、registry digest、generation/token 的持久 recovery journal，准备 sibling 临时目录和备份，复制并校验完整 manifest，切换 release/installed target（journal=`switched`），从实际 installed path 执行 post-switch/pre-commit smoke，最后原子提交 pointer/config 与 registry；任一复制、hook、rule、pointer、registry 或 smoke 失败都恢复旧安装、旧配置和旧 registry。
+- 对每个 intent 前后、删除/替换前后、hook JSON 解析失败、managed-rule 写失败、pointer/registry 换位失败、进程崩溃重启和 post-switch/pre-commit smoke 失败注入故障，证明旧稳定包和旧 registry 仍可用；`install.command`、`install.ps1`、Go installer 和 admission bridge 必须遵循同一事务协议并能从 journal 恢复。脚本不得先于 native owner 删除 release、切换 pointer 或写 registry，失败必须留下可关联的 failure/recovery receipt。
 - 建立阶段候选目录、测试项目、状态/证据目录和包摘要记录格式。
 - 建立 requirements-precedence/supersession 清单，扫描所有旧 OpenSpec/root requirements 和 plan 文档，标记当前权威、正交、已 supersede 与历史项；本阶段不删除历史文件，但不允许旧公共入口文档继续冒充本重构的当前契约。
 - 最终公共契约只冻结在设计文档和 fixtures；本阶段不提前把运行时 `SKILL.md`、README 或 prompts 改成尚未实现的 `drive/submit` 语义。
-- 固定 schema/definition 版本常量、来源、definition digest 和 bump 规则，建立缺失/不匹配时写前返回 `UNSUPPORTED_RUN_VERSION` 的 fixtures；同时固定 `diagnose` 的最小 envelope/raw parser、terminal summary 版本回落和只读边界。
+- 固定未来版本化 engine/candidate surface 的 schema/definition 版本常量、来源、definition digest 和 bump 规则，建立该 surface 在缺失/不匹配时写前返回 `UNSUPPORTED_RUN_VERSION` 的 fixtures；阶段 0 的 stable driver 与既有 legacy run 不因缺少新字段而拒绝正常写入，也不迁移或回写旧状态。与此同时固定 `diagnose` 的最小 envelope/raw parser、terminal summary 版本回落和只读边界。
 
 Seal 后状态：插件公开行为仍是当前 legacy，固定稳定驱动环境与开发 worktree 已经真正隔离，安装失败可回到旧稳定包，后续阶段可安全修改 prompts、gates 和安装内容。
 
@@ -157,9 +157,11 @@ Seal 后状态：插件公开行为仍是当前 legacy，固定稳定驱动环�
 
 范围：
 
-- 定义 `RunPhase`、`TaskKey`、`TaskTransitionTable`、`NodeExecutionPlan`、`StepSpec` 和 `NextResult`。
-- 实现 definition compiler、`Observe`、`Decide`、`SelectIssued` 与 canonical Plan。
-- 实现 DecisionAuthority、RunnerKind、合法 reason 与 failure-class 的静态校验。
+- 开工前定稿 ADR-001（typed Go authoring + 编译式 canonical 定义制品）并完成六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小型 compiler spike，确认 compiled IR、registry 与 canonical encoder 边界；spike 不进入 production。
+- 按封闭类型变体 + constructor + 显式节点/步骤表定义 `RunPhase`、`TaskKey`、`TaskTransitionTable`、`NodeExecutionPlan`、`StepSpec` 与 `NextResult`。
+- 实现 closed-world definition compiler（registry 解析、全局图不变量、归一化、authority/runner 派生、canonical 编码）、`Observe`、`Decide`、`SelectIssued` 与 canonical Plan；compiler 同一生成动作产出 `definitions/workflow.json` 与期望身份常量，禁止人工双写 digest。
+- 实现 DecisionAuthority、RunnerKind、合法 reason 与 failure-class 的静态校验；八类非法定义拒绝按 enforcement matrix 分层拦截且结果全保留。
+- canonical 制品独立验收：authoring source 重新生成 checked-in 制品字节无 diff（freshness CI，不能用 round-trip 替代）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节、definition/package digest 分离、语义变化必变 definition digest、registry 完备性、constructor 非法状态测试、mutation tests；复杂度止损规则：新增普通业务节点不得要求修改 compiler core，compiler 不得理解具体业务语义。
 - `MISSING_ENGINE_ADAPTER` 只能作为 diagnostic-only marker；正常 compile/drive 必须路由为 `BLOCKED_BUG` 并拒绝签发 Ready/HostAction，最终候选必须有 marker 扫描证明不存在该技术债。
 - 以 fixtures、golden traces 和 property tests 验证合法边、非法图、稳定排序、完整 frontier、乱序/遗漏/重复拒绝。
 - Shadow 只读取 legacy 状态和外部事实，输出预测与差异；不改写 state，不触发副作用，也不参与用户正式决定。
@@ -206,7 +208,7 @@ Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径�
 
 范围：
 
-- 迁移 intake、产品审、技术审、start-readiness、拆分决定（no-split）和 full/custom 路线。
+- 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线。
 - 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和三轮规则。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
@@ -280,6 +282,18 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 - 阶段 7 内不同 canary 单元格。
 
 任何内部并行分支都不能单独成为下一阶段基线；只有该正式阶段的共同候选 Seal 后才能推进。
+
+### 阶段内分批推进
+
+各阶段开发按总需求 §8.5"开发分批与组间验证"与 ADR-002 执行：批次计划随拆分决定/路线确认一并产生并留痕（受理不冻结）；探路工作首批 spike、结论留痕不进交付；批内执行项目声明的轻量检查、批边界执行声明的回归命令；验证档位按结构性信号选定并留痕。
+
+引擎承载义务的阶段分配：批次计划登记（作为 TaskKey 的分组与依赖信息，完成状态从成员派生，无新生命周期）进阶段 1 任务模型；组间 `DevelopmentSnapshot` 只读投影进阶段 1，真实组间快照与增量审查随阶段 3 完整流程迁移交付（复用该阶段迁移的 ReviewScopeMode/carry/继承判定）；split 归 8.1 拆分机制，随阶段 4/5 分片生命周期交付。engine 建成前的过渡期由 legacy 快照/审查/carry 修复轮机制承载组间档。
+
+本次重构的补充约束：
+
+1. 各阶段收口段固定且独立，含隔离安装构建、installed binary 回归与 namespace disjoint proof（三环境模型要求），不得并入开发批次。
+2. 预期生产逻辑多模块扩散或独立验收单元 ≥ 2 的阶段，在拆分决定/路线确认时必须评估组间增量审查档或 split，不得默认单次全量门禁硬扛；评估结论留痕。
+3. 阶段候选的测试与实现同批推进，不留到收口段补写。
 
 ## 5. 每阶段退出条件与最终退出条件
 

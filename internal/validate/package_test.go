@@ -3,6 +3,7 @@ package validate
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -308,20 +309,11 @@ func mustWriteValidateTest(t *testing.T, path, text string) {
 
 func repoRootValidateTest(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok || !filepath.IsAbs(sourceFile) {
+		t.Fatal("could not locate the package test source as an absolute path")
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		next := filepath.Dir(dir)
-		if next == dir {
-			t.Fatal("go.mod not found")
-		}
-		dir = next
-	}
+	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
 }
 
 func resultHasPath(result Result, expected string) bool {

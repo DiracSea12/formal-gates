@@ -27,6 +27,7 @@ var requiredFiles = []string{
 	"internal/validate/managed_rules.go",
 	"internal/validate/workflow.go",
 	"internal/validate/canary.go",
+	"definitions/workflow.json",
 	"internal/validate/codex_hook_canary.go",
 	"internal/validate/hook.go",
 	"agents/openai.yaml",
@@ -45,6 +46,7 @@ var requiredDirs = []string{
 	"cmd",
 	"internal",
 	"references",
+	"definitions",
 }
 
 var requiredHosts = []string{
@@ -55,6 +57,23 @@ var requiredHosts = []string{
 	"Gemini",
 	"OpenCode",
 	"Windsurf",
+}
+
+var knownManifestParts = []string{
+	"SKILL.md",
+	"README.md",
+	"README_EN.md",
+	"formal-gates.manifest.json",
+	"go.mod",
+	".github/workflows/portable-validation.yml",
+	"bin/",
+	"references/",
+	"cmd/",
+	"internal/",
+	"agents/",
+	"prompts/",
+	"gates/",
+	"definitions/",
 }
 
 type manifest struct {
@@ -78,6 +97,12 @@ type manifestHost struct {
 func Package(root string) Result {
 	root = lifecycle.CleanRoot(root)
 	var result Result
+	// A package is an immutable input to installation.  Walk it with Lstat and
+	// reject symlink entries before any normal content checks so prompts/gates
+	// cannot silently point back to a mutable development worktree.
+	if _, err := PackageReceipt(root); err != nil {
+		result.add("package", fmt.Sprintf("immutable package validation failed: %v", err))
+	}
 
 	for _, dir := range requiredDirs {
 		path := filepath.Join(root, filepath.FromSlash(dir))
@@ -116,8 +141,13 @@ func validateManagedRuleSource(root string, result *Result) {
 
 func validateNativeBinary(root string, result *Result) {
 	rel := filepath.ToSlash(filepath.Join("bin", nativeBinaryName()))
-	if !isFile(filepath.Join(root, filepath.FromSlash(rel))) {
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if !isFile(path) {
 		result.add(rel, "built native CLI binary is missing; build ./cmd/formal-gates before package validation")
+		return
+	}
+	if err := validateBinaryFormat(path); err != nil {
+		result.add(rel, err.Error())
 	}
 }
 
@@ -162,8 +192,10 @@ func validateCIText(text string, result *Result) {
 		"ubuntu-latest",
 		"go test ./...",
 		"go build -o",
-		"package validate --root .",
-		"canary portable --root .",
+		"git archive --format=",
+		"FORMAL_GATES_ARCHIVE_ROOT",
+		"package validate --root",
+		"canary portable --root",
 		"portable-canary.json",
 		"portable-canary-windows-amd64.json",
 		"portable-canary-macos-arm64.json",
@@ -270,6 +302,9 @@ func validateBootstrapScripts(root string, result *Result) {
 			`binary="formal-gates-${suffix}"`,
 			`canary="portable-canary-${suffix}.json"`,
 			`checksums="SHA256SUMS-${suffix}.txt"`,
+			`--release-root "$install_root"`,
+			`--binary-target "$binary_target"`,
+			"--bootstrap",
 		} {
 			if !strings.Contains(bash, required) {
 				result.add("install.command", "bootstrap script is not bound to release asset contract: "+required)
@@ -278,6 +313,11 @@ func validateBootstrapScripts(root string, result *Result) {
 		for _, forbidden := range []string{`os="darwin"`, "linux-arm64", "windows-arm64"} {
 			if strings.Contains(bash, forbidden) {
 				result.add("install.command", "bootstrap script references unpublished release suffix: "+forbidden)
+			}
+		}
+		for _, forbidden := range []string{"ln -s", "ln -sf", "rm -rf \"$install_root\"", "rm -rf \"$release"} {
+			if strings.Contains(bash, forbidden) {
+				result.add("install.command", "bootstrap script must not mutate a live release pointer directly: "+forbidden)
 			}
 		}
 	}
@@ -293,6 +333,9 @@ func validateBootstrapScripts(root string, result *Result) {
 			`$checksums = "SHA256SUMS-$suffix.txt"`,
 			`foreach ($file in @($asset, $canary))`,
 			`throw "checksum validation failed: $file"`,
+			`"--release-root", $installRoot`,
+			`"--binary-target", $formalBinary`,
+			`"--bootstrap"`,
 		} {
 			if !strings.Contains(powershell, required) {
 				result.add("install.ps1", "bootstrap script is not bound to release asset contract: "+required)
@@ -301,6 +344,11 @@ func validateBootstrapScripts(root string, result *Result) {
 		for _, forbidden := range []string{"windows-arm64", "linux-arm64", "darwin"} {
 			if strings.Contains(strings.ToLower(powershell), forbidden) {
 				result.add("install.ps1", "bootstrap script references unpublished release suffix: "+forbidden)
+			}
+		}
+		for _, forbidden := range []string{"SymbolicLink", "Remove-Item $installRoot", "Remove-Item $current"} {
+			if strings.Contains(powershell, forbidden) {
+				result.add("install.ps1", "bootstrap script must not mutate a live release pointer directly: "+forbidden)
 			}
 		}
 	}
@@ -449,7 +497,13 @@ func validateManifest(root string, result *Result) {
 	if doc.Name != "formal-gates" {
 		result.add("formal-gates.manifest.json", "manifest name must be formal-gates")
 	}
-	for _, part := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "go.mod", ".github/workflows/portable-validation.yml", "bin/", "references/", "cmd/", "internal/", "agents/", "prompts/", "gates/"} {
+	for _, host := range unknownManifestHosts(doc.Hosts) {
+		result.add("formal-gates.manifest.json", fmt.Sprintf("manifest lists unsupported host target %q", host))
+	}
+	for _, part := range unknownManifestParts(doc.Parts) {
+		result.add("formal-gates.manifest.json", fmt.Sprintf("package_parts lists unsupported target %q", part))
+	}
+	for _, part := range knownManifestParts {
 		if !contains(doc.Parts, part) {
 			result.add("formal-gates.manifest.json", "package_parts missing "+part)
 		}
@@ -458,7 +512,7 @@ func validateManifest(root string, result *Result) {
 		result.add("formal-gates.manifest.json", "verification_commands must include a repo-local command")
 	}
 	if !contains(doc.Installs, nativeInstallCommandExample()) {
-		result.add("formal-gates.manifest.json", "install_commands must include the native install command")
+		result.add("formal-gates.manifest.json", "install_commands must include the release bootstrap entry")
 	}
 	if !contains(doc.Commands, nativeBinaryCommand()) {
 		result.add("formal-gates.manifest.json", "verification_commands must include the built native binary package validation command")
@@ -501,6 +555,47 @@ func validateManifest(root string, result *Result) {
 	}
 }
 
+func unknownManifestParts(parts []string) []string {
+	unknown := []string{}
+	for _, part := range parts {
+		if !contains(knownManifestParts, part) {
+			unknown = append(unknown, part)
+		}
+	}
+	return unknown
+}
+
+// manifestHostTargetNames maps each normalized install host to the manifest
+// host entry that must register it as an installable target.
+var manifestHostTargetNames = map[string]string{
+	"claude": "Claude Code",
+	"codex":  "Codex",
+	"cursor": "Cursor",
+	"dsh":    "DeepSeek Harness",
+}
+
+// unregisteredManifestInstallHosts returns the manifest host names the
+// requested install targets need but the payload manifest does not register
+// with support "host-target". An install into such a host is an unknown
+// target for this payload and must be rejected before any target or state is
+// created.
+func unregisteredManifestInstallHosts(hosts []manifestHost, targets []installTarget) []string {
+	var unregistered []string
+	seen := map[string]bool{}
+	for _, target := range targets {
+		manifestName, known := manifestHostTargetNames[target.host]
+		if !known || seen[manifestName] {
+			continue
+		}
+		seen[manifestName] = true
+		found := findHost(hosts, manifestName)
+		if found == nil || !strings.EqualFold(strings.TrimSpace(found.Support), "host-target") {
+			unregistered = append(unregistered, manifestName)
+		}
+	}
+	return unregistered
+}
+
 func nativeBinaryCommand() string {
 	if runtime.GOOS == "windows" {
 		return "bin\\formal-gates.exe package validate --root ."
@@ -510,9 +605,9 @@ func nativeBinaryCommand() string {
 
 func nativeInstallCommandExample() string {
 	if runtime.GOOS == "windows" {
-		return "bin\\formal-gates.exe install --source . --host claude --scope global --force"
+		return "install.bat -TargetHost claude -Scope global -Force"
 	}
-	return "bin/formal-gates install --source . --host claude --scope global --force"
+	return "./install.command --host claude --scope global --force"
 }
 
 func nativeBinaryName() string {
@@ -548,4 +643,18 @@ func findHost(hosts []manifestHost, name string) *manifestHost {
 		}
 	}
 	return nil
+}
+
+func unknownManifestHosts(hosts []manifestHost) []string {
+	known := make(map[string]bool, len(requiredHosts))
+	for _, host := range requiredHosts {
+		known[host] = true
+	}
+	unknown := []string{}
+	for _, host := range hosts {
+		if !known[host.Name] {
+			unknown = append(unknown, host.Name)
+		}
+	}
+	return unknown
 }

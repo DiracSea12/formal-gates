@@ -1,11 +1,7 @@
 # Windows installer for formal-gates.
 #
-# Prerequisite: this script creates a SymbolicLink (New-Item -ItemType
-# SymbolicLink) for the "current" release directory and the
-# bin\formal-gates.exe entry. Creating symbolic links on Windows requires
-# either an elevated (Administrator) PowerShell session or Developer Mode
-# enabled (Settings > Update & Security > For developers). Run this script
-# under one of those conditions, otherwise the SymbolicLink calls fail.
+# The bootstrap keeps installed releases and the native executable as regular
+# copied files. No elevated symbolic-link privilege or Developer Mode is needed.
 
 param(
   [string]$Version = $env:FORMAL_GATES_VERSION,
@@ -21,6 +17,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 if (-not $Version) { $Version = "v0.1.0" }
+$stagedLauncher = $false
+
+function Test-LegacyOwnerRejectedNewFlags([string]$Output) {
+  return $Output -match "flag provided but not defined|unknown flag|unknown option"
+}
 
 $repo = "DiracSea12/formal-gates"
 $os = "windows"
@@ -61,31 +62,66 @@ try {
   Copy-Item (Join-Path $tmp $asset) (Join-Path $sourceDir.FullName "bin\formal-gates.exe") -Force
 
   $installRoot = Join-Path $env:LOCALAPPDATA "formal-gates\releases\$($Version.TrimStart('v'))-$suffix"
-  if (Test-Path $installRoot) { Remove-Item $installRoot -Recurse -Force }
-  Copy-Item $sourceDir.FullName $installRoot -Recurse -Force
-
-  $current = Join-Path $env:LOCALAPPDATA "formal-gates\current"
-  New-Item -ItemType Directory -Force -Path (Split-Path $current) | Out-Null
-  if (Test-Path $current) { Remove-Item $current -Recurse -Force }
-  New-Item -ItemType SymbolicLink -Path $current -Target $installRoot | Out-Null
-
-  $binDir = Join-Path $env:LOCALAPPDATA "formal-gates\bin"
-  New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-  $formalBinary = Join-Path $binDir "formal-gates.exe"
-  if (Test-Path $formalBinary) { Remove-Item $formalBinary -Force }
-  New-Item -ItemType SymbolicLink -Path $formalBinary -Target (Join-Path $current "bin\formal-gates.exe") | Out-Null
+  $formalBinary = Join-Path $env:LOCALAPPDATA "formal-gates\bin\formal-gates.exe"
 
   if ($Scope -eq "project" -and -not $Project) { throw "--project is required when --scope project is used" }
-  $args = @("install", "--source", $installRoot, "--host", $TargetHost, "--scope", $Scope)
+  # The stable launcher is the only native writer. An existing launcher is
+  # never overwritten by this script; the native journal owns that replacement.
+  # On a first install only, place the verified candidate at the empty stable
+  # path so the same stable owner can create the journal and finish the work.
+  $launcherDir = Split-Path -Parent $formalBinary
+  New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
+  if (-not (Test-Path -LiteralPath $formalBinary)) {
+    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
+    $stagedLauncher = $true
+  }
+  $args = @("install", "--source", $sourceDir.FullName, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $args += @("--project", $Project) }
   if ($Force) { $args += "--force" }
   if ($SkipHooks) { $args += "--skip-hooks" }
-  & $formalBinary @args
-  if ($LASTEXITCODE -ne 0) { throw "formal-gates install failed with exit code $LASTEXITCODE" }
+  $ownerOutput = & $formalBinary @args 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $ownerText = ($ownerOutput | Out-String)
+    if (-not (Test-LegacyOwnerRejectedNewFlags $ownerText)) {
+      throw "formal-gates install failed with exit code $LASTEXITCODE"
+    }
+    # A pre-contract launcher can reject the new owner flags before its
+    # transaction starts. Replace it only for this compatibility handoff,
+    # then retry with the verified current binary at the fixed path. When the
+    # legacy launcher is a link (any reparse point), remove it before copying
+    # so the retry writes a real file instead of writing through the link
+    # into the old release. On failure the backed-up bytes are restored as a
+    # real file: the fixed launcher path keeps launching the same legacy
+    # binary while also satisfying the immutable-real-file pointer invariant.
+    $launcherWasLink = [bool](Get-Item -LiteralPath $formalBinary -Force).LinkType
+    $launcherBackup = Join-Path $tmp "launcher.before.exe"
+    Copy-Item $formalBinary $launcherBackup -Force
+    if ($launcherWasLink) {
+      Remove-Item -LiteralPath $formalBinary -Force
+    }
+    Copy-Item (Join-Path $sourceDir.FullName "bin\formal-gates.exe") $formalBinary -Force
+    $stagedLauncher = $true
+    & $formalBinary @args
+    if ($LASTEXITCODE -ne 0) {
+      Copy-Item $launcherBackup $formalBinary -Force
+      $stagedLauncher = $false
+      throw "formal-gates install failed with exit code $LASTEXITCODE"
+    }
+  }
+  $stagedLauncher = $false
+  # Bootstrap the installed artifact through the same stable launcher before
+  # any workflow command can write state.
+  $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
+  if ($Project) { $bootstrapArgs += @("--project", $Project) }
+  & $formalBinary @bootstrapArgs
+  if ($LASTEXITCODE -ne 0) { throw "formal-gates bootstrap failed with exit code $LASTEXITCODE" }
 
   Write-Host "Installed formal-gates to $installRoot"
-  Write-Host "Binary symlink: $formalBinary"
+  Write-Host "Native binary: $formalBinary"
 }
 finally {
+  if ($stagedLauncher -and (Test-Path -LiteralPath $formalBinary)) {
+    Remove-Item -LiteralPath $formalBinary -Force
+  }
   Remove-Item $tmp -Recurse -Force
 }

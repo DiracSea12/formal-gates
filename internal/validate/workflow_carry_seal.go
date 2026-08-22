@@ -271,6 +271,26 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	if err != nil {
 		return RunSummary{}, err
 	}
+	// Seal may rewrite the repository (Git squash) before its terminal state is
+	// persisted. Keep the admission registry lock through terminal summary and
+	// cleanup as well: a retry after a crash at SEALED is still a workflow write
+	// and must not bypass an installation that has since been disabled.
+	var admissionUnlock func()
+	if strings.TrimSpace(state.AdmissionRegistry) != "" {
+		admissionUnlock, err = acquireRegistryLock(state.AdmissionRegistry)
+		if err != nil {
+			return RunSummary{}, err
+		}
+		defer admissionUnlock()
+		// Re-admit immediately after taking the lock and before any VCS or
+		// sidecar mutation.  Checking only at the final state save would allow an
+		// already-disabled record to reach the Git squash first.
+		if err := verifyRunStateAdmissionLocked(root, state); err != nil {
+			return RunSummary{}, err
+		}
+	} else if err := verifyLegacyStableLauncher(); err != nil {
+		return RunSummary{}, err
+	}
 	if state.Status == "SEALED" {
 		return completeTerminalRun(root, state)
 	}
@@ -295,7 +315,7 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 		return RunSummary{}, err
 	}
 	if err := requireTransition(state, "seal", ""); err != nil {
-		if saveErr := SaveRunState(root, state); saveErr != nil {
+		if saveErr := saveRunState(root, state, admissionUnlock != nil); saveErr != nil {
 			return RunSummary{}, saveErr
 		}
 		return RunSummary{}, err
@@ -354,11 +374,11 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	// Persist the post-squash snapshot and merged cost projection while the run
 	// is still ACTIVE, then make the terminal state durable before its summary.
 	// A summary failure can be resumed without reopening normal mutations.
-	if err := SaveRunState(root, state); err != nil {
+	if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
 		return RunSummary{}, err
 	}
 	state.Status = "SEALED"
-	if err := SaveRunState(root, state); err != nil {
+	if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
 		return RunSummary{}, err
 	}
 	// 黑盒用例 seal 物化（需求 1）：已批准 blackbox 用例从 run-state 物化到主工作区
@@ -451,6 +471,19 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 	if err != nil {
 		return RunSummary{}, err
 	}
+	var admissionUnlock func()
+	if strings.TrimSpace(state.AdmissionRegistry) != "" {
+		admissionUnlock, err = acquireRegistryLock(state.AdmissionRegistry)
+		if err != nil {
+			return RunSummary{}, err
+		}
+		defer admissionUnlock()
+		if err := verifyRunStateAdmissionLocked(root, state); err != nil {
+			return RunSummary{}, err
+		}
+	} else if err := verifyLegacyStableLauncher(); err != nil {
+		return RunSummary{}, err
+	}
 	if state.Status == status {
 		return completeTerminalRun(root, state)
 	}
@@ -471,7 +504,7 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 		}
 	}
 	state.Status = status
-	if err := SaveRunState(root, state); err != nil {
+	if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
 		return RunSummary{}, err
 	}
 	return completeTerminalRun(root, state)

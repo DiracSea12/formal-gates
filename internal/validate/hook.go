@@ -15,30 +15,20 @@ type HookDecision struct {
 }
 
 type CodexHookDecision struct {
-	HookSpecificOutput CodexHookSpecificOutput `json:"hookSpecificOutput"`
-}
-
-type CodexHookSpecificOutput struct {
-	HookEventName            string `json:"hookEventName"`
-	PermissionDecision       string `json:"permissionDecision"`
-	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+	Decision string `json:"decision"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 func HookResponse(provider string, decision HookDecision) any {
 	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
-		// Codex 的 PreToolUse hook 契约：allow 是 no-op（输出空、exit 0），deny 输出
-		// hookSpecificOutput.permissionDecision:"deny"。control-capable hook 返回
-		// permissionDecision:"allow" 却不带 updatedInput 会被判 error；旧式
-		// decision:"approve" 也会被判 unsupported decision——两者都 fail-open 放行。
+		// Codex's installed hook contract uses a top-level block decision.
+		// Allow remains a no-op, so only a denied decision produces JSON.
 		if decision.PermissionDecision != "deny" {
 			return nil
 		}
 		return CodexHookDecision{
-			HookSpecificOutput: CodexHookSpecificOutput{
-				HookEventName:            "PreToolUse",
-				PermissionDecision:       "deny",
-				PermissionDecisionReason: decision.PermissionDecisionReason,
-			},
+			Decision: "block",
+			Reason:   decision.Reason,
 		}
 	}
 	return decision

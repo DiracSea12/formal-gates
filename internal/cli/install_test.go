@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
+func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 	source := writeInstallSource(t, "source v1")
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
@@ -34,9 +34,9 @@ func TestRunInstallProjectCopiesRuntimeSubset(t *testing.T) {
 	assertFileContains(t, filepath.Join(target, "prompts", "reviewer-base.md"), "reviewer base")
 	assertFileContains(t, filepath.Join(target, "prompts", "actions", "sample-action.md"), "sample action")
 	assertFileContains(t, filepath.Join(target, "gates", "sample-gate.md"), "sample gate")
-	for _, sourceOnly := range []string{"go.mod", "cmd", "internal", ".github"} {
-		if _, err := os.Stat(filepath.Join(target, sourceOnly)); !os.IsNotExist(err) {
-			t.Fatalf("source-only entry %q was installed: %v", sourceOnly, err)
+	for _, installedPackageEntry := range []string{"go.mod", "cmd", "internal", ".github"} {
+		if _, err := os.Stat(filepath.Join(target, installedPackageEntry)); err != nil {
+			t.Fatalf("installed package entry %q was not copied: %v", installedPackageEntry, err)
 		}
 	}
 	assertNoScriptRuntimeFiles(t, target)
@@ -302,7 +302,7 @@ func TestRunInstallAndUninstallPreserveUserOwnedFormalGatesCommand(t *testing.T)
 			config := testHookConfigPath(project, host, "project")
 			writeUserOwnedHookConfig(t, config, host)
 			installArgs := []string{"install", "--source", source, "--host", host, "--scope", "project", "--project", project}
-			uninstallArgs := []string{"uninstall", "--source", source, "--host", host, "--scope", "project", "--project", project}
+			uninstallArgs := []string{"uninstall", "--host", host, "--scope", "project", "--project", project}
 
 			var stdout, stderr bytes.Buffer
 			if code := Run("formal-gates", installArgs, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
@@ -330,10 +330,16 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 	target := testInstallTargetPath(project, "codex", "project")
 	config := testHookConfigPath(project, "codex", "project")
 	legacyCommand := testNativeHookCommand(target, "hook", "decide")
-	currentCommand := testNativeHookCommand(target, "hook", "decide", "--provider", "codex")
+	oldCurrentCommand := testNativeHookCommand(target, "hook", "decide", "--provider", "codex")
+	canonicalHome, err := filepath.EvalSymlinks(os.Getenv("HOME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableLauncher := filepath.Join(canonicalHome, ".local", "bin", installTestBinaryName())
+	currentCommand := strings.Join([]string{filepath.ToSlash(stableLauncher), "hook", "decide", "--provider", "codex"}, " ")
 
 	mustWriteCLI(t, filepath.Join(target, "SKILL.md"), "legacy runtime without catalog\n")
-	writeCodexHookConfig(t, config, legacyCommand, currentCommand, "echo formal-gates status")
+	writeCodexHookConfig(t, config, legacyCommand, oldCurrentCommand, "echo formal-gates status")
 
 	var stdout, stderr bytes.Buffer
 	code := Run("formal-gates", []string{
@@ -344,6 +350,9 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 	}
 	if got := countHookCommand(t, config, legacyCommand); got != 0 {
 		t.Fatalf("legacy Codex gate remains after upgrade (%d): %s", got, readFile(t, config))
+	}
+	if got := countHookCommand(t, config, oldCurrentCommand); got != 0 {
+		t.Fatalf("old target-bound Codex gate remains after upgrade (%d): %s", got, readFile(t, config))
 	}
 	if got := countHookCommand(t, config, currentCommand); got != 1 {
 		t.Fatalf("current Codex gate count=%d after upgrade, want 1: %s", got, readFile(t, config))
@@ -376,6 +385,13 @@ func TestRunCodexForceUpgradeReplacesLegacyGateAndUninstallRemovesBothVariants(t
 }
 
 func TestRunUninstallRemovesLegacyRuntimeWithoutManagedCatalog(t *testing.T) {
+	// 2026-08-21 事故根因修复：uninstall 的共享 registry 默认按 HOME 解析
+	// （installRegistryPath -> installHomeDir）。本用例此前未隔离 HOME，
+	// 会加载并回写真实 ~/.formal-gates/registry.json，还在真实 ~/.formal-gates/
+	// 下留 uninstall 事务与锁文件。先隔离 HOME 再执行同一 uninstall 语义。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
 	target := testInstallTargetPath(project, "codex", "project")
 	config := testHookConfigPath(project, "codex", "project")
@@ -401,8 +417,11 @@ func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	configPath := filepath.Join(project, ".codex", "hooks.json")
+	managedPath := filepath.Join(project, "AGENTS.md")
 	original := "{\n  \"custom\": \"unchanged\"\n}\n"
+	originalRule := "external rule\n"
 	mustWriteCLI(t, configPath, original)
+	mustWriteCLI(t, managedPath, originalRule)
 	var stdout, stderr bytes.Buffer
 
 	code := Run("formal-gates", []string{
@@ -415,6 +434,9 @@ func TestRunInstallSkipHooksLeavesExistingConfigUntouched(t *testing.T) {
 	assertFileContains(t, filepath.Join(project, ".codex", "skills", "formal-gates", "SKILL.md"), "source")
 	if got := readFile(t, configPath); got != original {
 		t.Fatalf("--skip-hooks changed hook config: got %q want %q", got, original)
+	}
+	if got := readFile(t, managedPath); got != originalRule {
+		t.Fatalf("--skip-hooks changed managed rule: got %q want %q", got, originalRule)
 	}
 	if strings.Contains(stdout.String(), "hooks configured") {
 		t.Fatalf("--skip-hooks reported hook configuration success: %q", stdout.String())
@@ -430,6 +452,18 @@ func TestRunInstallRejectsRemovedConfigureHooksFlag(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "flag provided but not defined: -configure-hooks") {
 		t.Fatalf("expected unknown flag error, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunInstallRejectsCandidateBinaryWriterFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run("formal-gates", []string{"install", "--candidate-binary", "/tmp/candidate/formal-gates"}, IO{Stdout: &stdout, Stderr: &stderr})
+
+	if code == 0 {
+		t.Fatal("expected candidate writer flag to be rejected")
+	}
+	if !strings.Contains(stderr.String(), "flag provided but not defined: -candidate-binary") {
+		t.Fatalf("expected candidate writer flag error, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
@@ -497,10 +531,10 @@ func TestRunInstallRefusesExistingTargetWithoutForceAndReplacesWithForce(t *test
 }
 
 func TestRunInstallGlobalUsesTemporaryHome(t *testing.T) {
+	source := writeInstallSource(t, "global source")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	source := writeInstallSource(t, "global source")
 	var stdout, stderr bytes.Buffer
 
 	code := Run("formal-gates", []string{
@@ -546,7 +580,7 @@ func TestRunInstallConvergesManagedMarkerBlocksAcrossHostsAndScopes(t *testing.T
 			t.Run(host+"/"+scope, func(t *testing.T) {
 				source := writeInstallSource(t, "source")
 				root := t.TempDir()
-				args := []string{"install", "--source", source, "--host", host, "--scope", scope, "--force", "--skip-hooks"}
+				args := []string{"install", "--source", source, "--host", host, "--scope", scope, "--force"}
 				if scope == "global" {
 					t.Setenv("HOME", root)
 					t.Setenv("USERPROFILE", root)
@@ -639,6 +673,12 @@ func TestRunUninstallRemovesRuntimeHooksAndManagedRulesAcrossHostsAndScopes(t *t
 }
 
 func TestRunUninstallRemovesManagedMarkerWithoutRuntimeOrSource(t *testing.T) {
+	// 2026-08-21 事故根因修复：与 TestRunUninstallRemovesLegacyRuntime 同类——
+	// uninstall 的共享 registry 默认按 HOME 解析，未隔离时会加载并回写真实
+	// ~/.formal-gates/registry.json（epoch 前移）。先隔离 HOME。
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
 	managed := filepath.Join(project, "AGENTS.md")
 	mustWriteCLI(t, managed, "unrelated\n"+testManagedRuleBlock(testManagedRuleLatest))
@@ -752,11 +792,20 @@ func assertManagedRuleState(t *testing.T, path string, preserveUnrelated bool) {
 
 func writeInstallSource(t *testing.T, skillText string) string {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	source := t.TempDir()
 	mustWriteCLI(t, filepath.Join(source, "SKILL.md"), skillText+"\n"+testManagedRuleBlock(testManagedRuleLatest))
 	mustWriteCLI(t, filepath.Join(source, "README.md"), "readme\n")
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
-	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates"}`+"\n")
+	// manifest 登记四个可安装 host target：install 会拒绝 manifest 未登记为
+	// host-target 的安装目标（unknown target 在写 target/state 前非零拒绝）。
+	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","hosts":[`+
+		`{"name":"Claude Code","support":"host-target"},`+
+		`{"name":"Codex","support":"host-target"},`+
+		`{"name":"Cursor","support":"host-target"},`+
+		`{"name":"DeepSeek Harness","support":"host-target"}]}`+"\n")
 	mustWriteCLI(t, filepath.Join(source, "go.mod"), "module formal-gates\n")
 	mustWriteCLI(t, filepath.Join(source, ".github", "workflows", "portable-validation.yml"), "portable validation\n")
 	mustWriteCLI(t, filepath.Join(source, "bin", installTestBinaryName()), "binary\n")

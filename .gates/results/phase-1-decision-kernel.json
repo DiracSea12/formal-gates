@@ -1,0 +1,846 @@
+{
+  "runId": "phase-1-decision-kernel",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "6b6615224794aa594c0ab2f61ad2086d3c0eb8c97d1466dfcc35d9bf31b7bd0b",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "cc80e04c60a11e3391e72aabdbe3e21026dd944c59866c28d0e46c8230412948",
+  "vcs": "git",
+  "baseSnapshot": "ba1f60d9a7c02c1e7afc2dfee2d8e10ed733df5f",
+  "currentSnapshot": "b9eb03c0cbfa8e66d235074ff4d5520f5b0e3535",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-1/alignment.md",
+      "revision": "fe0cac1bd7b2e85905b8f0459f6a6b68e5252fa784d8a79f2178a6954c8aa818"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-1/design.md",
+      "revision": "027dec44b7e0fb9f01292002ca6b0ef61331c4453ee19ea409a5729da529bd8e"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md",
+      "revision": "6b6615224794aa594c0ab2f61ad2086d3c0eb8c97d1466dfcc35d9bf31b7bd0b"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-1/proposal.md",
+      "revision": "99b4f134a7538e7d4f130f3dcc327f91e68f8ca6f332d0e25ba819c27c6f79e4"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-1/tasks.md",
+      "revision": "92df342001690589f62209cc8fa8bdb644a81c898fcf3eece5b088b7b981d7a7"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine/master-requirements.md",
+      "revision": "8e24c90fd06103ca46f373536d4629472dea16026dc8edecf5609d2a518307a2"
+    },
+    {
+      "path": "refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md",
+      "revision": "7059d47264705f5f14a3d0514e63c53b954fa027516b1d26c23aefabbf20b83c"
+    },
+    {
+      "path": "refactor-plan/adr-002-development-batching-and-verification-tiers.md",
+      "revision": "a45782dc340ba31a967a0225e5313262074106ccb15c5ba36fce6cdf5469f55f"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "82895f69e04144aa45b41e6ad8db3690705aea00f7dab4cc78cfa1f569e16008"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "38d6407ff69f04bb0ea7732e9378b19317e649f89b506e82fb3bb42b58d5edca"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "阶段 1 是单一强耦合内核切片：authoring→compiler→canonical 制品→决策核心→Shadow 为一条依赖链，十条验收绑定同一 canonical 制品身份；测试隔离修复是保护固定驱动的有界附页，拆出反而产生跨 Seal 依赖。产品审拆分评估同此结论。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "b9eb03c0cbfa8e66d235074ff4d5520f5b0e3535",
+      "compared": "ba1f60d9a7c02c1e7afc2dfee2d8e10ed733df5f..221e75b68fc196925e702ecbbaf5d98d0680b1e9",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "可收缩导出面：compiler.Registry 六个 Resolve* 方法在本改动内无生产调用方（编译走包内 resolveCtx），可改非导出或删除"
+        },
+        {
+          "severity": "P3",
+          "message": "canonicalJSON（decision/shadow 各一份）可中心化到 encoder；normalizeIDs/checkRetryValue 分层重复系 enforcement matrix 要求，保留合理"
+        }
+      ],
+      "dispatchId": "dispatch-4671481c5a86da0b95119a51"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "b9eb03c0cbfa8e66d235074ff4d5520f5b0e3535",
+      "compared": "ba1f60d9a7c02c1e7afc2dfee2d8e10ed733df5f..221e75b68fc196925e702ecbbaf5d98d0680b1e9",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "止损回归测试缺失：十条验收第 10 条（新增普通业务节点不改 compiler core）无已提交机械回归——白盒用例 TestCompilerAcceptsNewBusinessNodeWithoutCoreChange 将随白盒测试提交补齐"
+        },
+        {
+          "severity": "P3",
+          "message": "验收第 5 条 package digest 变半段显式延后（引擎尚无 handler 实现），收口证据登记注明归属批次"
+        },
+        {
+          "severity": "P3",
+          "message": "encoder.checkCoherence 不校验可执行变体 IO 段存在性，encode/decode 对带外 IR 不对称（正常路径不可达，加固建议）"
+        },
+        {
+          "severity": "P3",
+          "message": "whitebox_qa 未提交目录需在收口提交进候选或显式排除——将随白盒测试 commit 补齐"
+        }
+      ],
+      "dispatchId": "dispatch-b918ee06fc5af9cb3558dda8"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "b9eb03c0cbfa8e66d235074ff4d5520f5b0e3535",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "再生成入口+git diff+TestGenerateFreshness",
+        "observation": "两交付物 sha256 前后一致、diff 空、freshness PASS",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "python 两轮独立解析制品并扫描",
+        "observation": "公共头+封闭 payload、版本 2 已提升、无禁类内容、键序两轮一致",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestArtifactIndependentOfAssemblyAndRegistrationOrder",
+        "observation": "反向 assembly/注册序产物字节与 digest 相同",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestCheckedInArtifactRoundTrip + TestEncodeDecodeRoundTrip",
+        "observation": "decode→encode 字节相等、digest 与常量一致",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceCrossProcessGenerationDeterministic + 双进程手动",
+        "observation": "验收 PASS、两独立进程产物 sha256 相同",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceDefinitionDigestSeparatedFromImplementationSide",
+        "observation": "实现侧差异不改变 DefinitionDigest",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations",
+        "observation": "8 类语义突变 digest 全变",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceRegistryCompleteness",
+        "observation": "缺失/重复/kind 错槽全拒、完整解析才产出",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/authoring -v",
+        "observation": "7 测试全绿：构造拒绝矩阵+双维派生",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceMutation + TestGraphRejects + 二次防线/marker 路由",
+        "observation": "枚举+fuzz 全拒、branch closure 独立行 PASS",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "-overlay 探针新增业务节点编译",
+        "observation": "探针编译成功、git status=0 即 core 零改动",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestDecide|TestObserve + 合法/非法完成序列",
+        "observation": "Plan 字节稳定/frontier 固定序/三类拒绝/非终态无空结果",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceMarkerScan + TestMissingEngineAdapterRouting",
+        "observation": "marker 只产诊断、BLOCKED_BUG 拒",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "TestAcceptanceMarkerScan 绑定候选 identity",
+        "observation": "扫描零命中、HEAD 221e75b+制品 digest 与常量一致",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "全量 go test + 隔离回归 2 条 + 前后指纹",
+        "observation": "全绿、registry/launcher/release 前后逐字节一致",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "隔离安装候选 shadow.Run 双跑 + TestShadow",
+        "observation": "状态树不变、telemetry 仅候选目录、双跑字节同、预测==fixture",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "git archive 221e75b 构建+隔离 HOME bootstrap/install+清单核验",
+        "observation": "canonical path 全不重叠、0 symlink、真实 registry 字节不变",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "隔离 HOME lightweight 三步闭环+validate/canary+只读命令",
+        "observation": "SEALED 带 unverified 标注、产物仅落候选 namespace",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "stable launcher 只读 smoke+指纹+Lstat",
+        "observation": "smoke 通过、SKILL 指纹 46941e99、0 symlink",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-033",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-034",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-035",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-036",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-037",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-038",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-039",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-040",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-041",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-042",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-043",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-044",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-045",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-046",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-047",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-048",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-049",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-050",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-051",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-052",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-053",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-054",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-055",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-056",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-057",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-058",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-059",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-060",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/ -count=1（绑定测试真实运行于快照工作树）",
+        "observation": "41 用例函数全绿（含子测试 54 PASS/0 FAIL）；测试文件在工作树、随 Seal 提交",
+        "oracleResult": "与 oracle 一致",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-044140bdfc88ee8041995bd0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1118dbcbf1b6aa6919cf20e6": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1191331e600ef9815a8edc5a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2170861f9121a3a3820b2173": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-416a4a1e964e914825c2d6c6": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-444c88c09f283b1dd9542b92": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4671481c5a86da0b95119a51": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-49b5d6931d876ba3a9c29d0c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-563fc58c3a70af33c23b9ece": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5709e6118c7195a9d43f778b": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-61cc49bb2a4862cdc25f624c": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-70e36f5db6a6d44682484eb3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7f0c4ac969a0809b62783f58": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-998303fc73825d437ee73b2f": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b918ee06fc5af9cb3558dda8": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c6bfc96304ff7e9edd93a324": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d4e5073aabaf960ecbdb7a86": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d5eab891d4ab522f3f7e16a5": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d720a93e3bfa8a154eee6724": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ff217dc5d4eedfc013493d5f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

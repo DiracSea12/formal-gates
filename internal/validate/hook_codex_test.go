@@ -13,9 +13,12 @@ func TestHookResponseCodexFormat(t *testing.T) {
 	}
 
 	deny, _ := json.Marshal(HookResponse("codex", denyWrite("blocked")))
-	if !strings.Contains(string(deny), `"permissionDecision":"deny"`) ||
-		!strings.Contains(string(deny), `"permissionDecisionReason":"blocked"`) {
-		t.Fatalf("codex deny should carry permissionDecision:deny + reason, got %s", deny)
+	if !strings.Contains(string(deny), `"decision":"block"`) ||
+		!strings.Contains(string(deny), `"reason":"blocked"`) {
+		t.Fatalf("codex deny should carry top-level decision:block + reason, got %s", deny)
+	}
+	if strings.Contains(string(deny), `"hookSpecificOutput"`) || strings.Contains(string(deny), `"permissionDecision"`) {
+		t.Fatalf("codex deny should not use the nested permission protocol, got %s", deny)
 	}
 }
 

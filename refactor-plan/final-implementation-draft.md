@@ -113,13 +113,13 @@ HOST 不是判断权。它只提供凭据、UI、进程或外部系统能力；H
 
 “实现麻烦”不是代理理由。缺程序化 adapter 时只在开发期 diagnostic compiler mode 给未完成 definition 标记 `MISSING_ENGINE_ADAPTER`，不能临时把命令顺序交给代理。该 marker 不是 RunnerKind/hostBoundaryReason：不得生成 executable StepSpec，不得签发 Ready/HostAction；normal compile/drive 以 `BLOCKED_BUG` 和 diagnose 拒绝。最终候选的本次范围内定义不得残留。可执行 HOST_ADAPTER 的合法 `hostBoundaryReason` 只有 `EXTERNAL_CAPABILITY_BOUNDARY`、`USER_IO_TRANSPORT`、`AGENT_DISPATCH_API`。
 
-每个有顺序语义的节点编译为 `NodeExecutionPlan`。它的持久化 `StepSpec` 至少包含：
+每个有顺序语义的节点编译为 `NodeExecutionPlan`。定义的唯一 authoring 形态是封闭 Go 类型变体 + constructor + 显式节点/步骤表（`LocalStep`、`DurableStep`、`AgentStep`、`HumanAskStep`、`HostActionStep`、`ParallelStep` 等，详见 ADR-001）：变体只暴露自己适用的字段，local step 看不到 receipt/join/agent reason，human step 填不了 retry/side-effect；`DecisionAuthority`/`RunnerKind` 由变体自动派生并在制品中物化，作者不手填。编译产物是具体结构组成的 `CompiledDefinition`，其步骤同样采用公共头（id/nodeId/ordinal/dependencies/kind/definitionVersion）加封闭变体 payload（`CompiledLocalStep`、`CompiledDurableStep`、`CompiledAgentStep`、`CompiledHumanAskStep`、`CompiledHostActionStep`、`CompiledParallelStep`）的结构——变体不适用的策略字段不得存在于该步骤，不得实现为全字段平铺的单结构。每个持久化步骤（`StepSpec`）在自身变体内承载：
 
 ```text
 id / nodeId / ordinal / dependencies
-executable preconditions / postconditions
-decisionAuthority / runnerKind
-inputSchema / outputSchema
+executable preconditions / postconditions（封闭 predicate ID）
+decisionAuthority / runnerKind（编译器派生并物化）
+input/output codec ID（typed I/O）
 retryPolicy / timeout
 idempotencyKeyStrategy
 sideEffectProtocol / receiptPolicy
@@ -127,12 +127,26 @@ interruptPolicy
 parallelGroup / joinPolicy
 failureClassMap
 definitionVersion
-nonProgrammableReason | hostBoundaryReason（按类型必填）
+nonProgrammableReason | hostBoundaryReason（按变体必填）
+handler / predicate / codec / reconcile 的稳定 registry ID
 ```
 
 以下任一条件成立就必须拆成 Controller 跟踪的 StepSpec：需要独立恢复、重试、超时、补偿或幂等；含不可逆副作用或 UNKNOWN receipt；跨越人/代理边界；形成 fan-out/fan-in；需要独立审计、版本或证据；崩溃恢复时必须避免重放已完成前缀。纯内存、廉价、确定性的连续变换，或能在一个原子/幂等事务中共同恢复的操作，可保留在同一 engine handler，代码顺序本身就是机械顺序。
 
-定义编译器拒绝：不可达 step/非法循环、无类型 I/O、只写在提示词或自然语言里的 pre/postcondition、无 idempotency/reconcile 的副作用、无 request/schema 的 human wait、无 join/failure policy 的并行组、缺合法 reason 的 AGENT/HOST、任何 `MISSING_ENGINE_ADAPTER` marker、未绑定 definition version 的计划。只有显式 diagnostic compiler mode 可加载 marker 并输出诊断，不能执行。运行时只执行当前 eligible frontier，拒绝乱序、遗漏和重复 step。AGENT_WORKER 只收到当前已解锁 step 的最小输入、typed output contract 和 postcondition，不能选择后续 step。
+八类非法定义拒绝结果全部保留，拦截层按 enforcement matrix 分工——局部非法组合优先由封闭类型与 constructor 消除（Go 无编译器穷举的 sum type，“非法状态不可表示”指正常 authoring API 下不可构造；compiler 仍拒绝 nil、未知变体与零值），全局图不变量由小型 closed-world compiler 校验，runtime loader 对版本绑定做最后防线：
+
+| 非法定义 | 主要拦截层 | 二次防线 |
+| --- | --- | --- |
+| 不可达 step / 非法循环 | graph compiler | property test |
+| 无类型 I/O | typed constructor / codec registry | compiler |
+| 自然语言-only pre/postcondition | predicate 类型 / constructor | compiler |
+| 副作用无 idempotency/reconcile | durable constructor | compiler |
+| human wait 无 request/schema | HumanAsk constructor | compiler |
+| 并行组无 join/failure policy | parallel constructor | graph compiler（join 目标存在且覆盖完整 fan-out） |
+| AGENT/HOST 缺合法 reason | 变体 constructor | compiled IR 校验 |
+| 未绑定 definition version | compiler / encoder | runtime loader |
+
+compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind 匹配、图不变量、版本绑定），不证明 predicate 语义正确——“编译成功”不替代行为测试；也不解释业务表达式。`MISSING_ENGINE_ADAPTER` 及一切未完整实现的定义只能以 diagnostic-only 形式存在：可输出诊断，不得编译为 executable plan、不得签发 Ready/HostAction、不得进入 promotion；executable definition 只有在同一候选包 registry 完整解析其全部 ID 时才能激活（definition 与二进制锁步）。运行时只执行当前 eligible frontier，拒绝乱序、遗漏和重复 step。AGENT_WORKER 只收到当前已解锁 step 的最小输入、typed output contract 和 postcondition，不能选择后续 step。HandlerID 标识可恢复执行合同而非每一版实现：合同不兼容变化必须晋升 ID，合同兼容的实现变化保持 ID、由 PackageDigest 标识。
 
 错误不得动态降级给 agent/LLM：
 
@@ -156,11 +170,14 @@ nonProgrammableReason | hostBoundaryReason（按类型必填）
 - pending Ask、available-action freshness、obligations、impact set；
 - typed `ReviewScopeMode` 与逐项 QA approved whitelist（按 review/candidate/result 绑定）；
 - split topology、`sliceID -> childRunID` 与 receipts；
-- terminal summary 的最后 request/event receipt。
+- terminal summary 的最后 request/event receipt；
+- `definitionDigest` 与 owning runtime `packageDigest` 的双重绑定与校验记录。
 
 写事务为：读 state → Observe → Decide → 加锁重读 → 校验 revision → 重验外部 fingerprint → 持久化 intent/动作与 revision+1 → 原子保存。外部事实变化则释放锁重算，不依据过期 HEAD 或需求摘要推进。
 
 本期不引入事件溯源、SQLite、watchdog、OS 定时器、repo 级集成队列或开放式通用 Effect/Artifact 框架。StepSpec 中的 side-effect/receipt policy 与 artifact schema 必须是定义里穷举的 typed variant，不能变成任意脚本/字符串扩展点。
+
+三类 canonical 身份职责分离且不得混用：DefinitionDigest 绑定拓扑、handler/predicate/codec ID、策略与 join/failure 语义；PackageDigest 绑定真正的实现字节、二进制与安装包资源；PlanDigest 绑定给定 state+observation 的决策结果。PackageDigest 是 owning-runtime 执行绑定而非审计附注：loader 在写入前必须校验 envelope 的 package digest 与实际执行 runtime 的安装身份一致（或由 run 绑定的不可变 runtime sibling 执行并验证其实际摘要，或持有显式 adopt receipt），不得仅凭 HandlerID 相同接受新实现接管旧 run。
 
 ### 3.4 submit 幂等与新鲜度
 
@@ -468,11 +485,15 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 - 把权威需求、本方案、SKILL 和所有参考文档统一成同一语义。
 - 为最终公共命令面、旧 run 拒绝、用户节点、StepSpec/失败分类、parallel frontier、三轮和 split receipts 建 contract fixtures。
 - 冻结当前正常使用中仍需由内部 handler 承接的业务语义，不冻结旧命令形态或兼容行为。
+- 阶段 0 的分发事务先由冻结 stable driver 调用 `install --bootstrap` 建立 registry；bootstrap 不创建 workflow state。安装、admission bridge、Go installer、Shell/PowerShell 共享同一 native owner，按 `switched -> installed-path post-switch/pre-commit smoke -> atomic runtime/pointer/config+registry commit -> journal committed` 顺序执行，失败由同一 journal 对账并恢复旧 runtime/config/registry。
+- 只为未来版本化 engine/candidate surface 冻结 state/definition version envelope 与缺失/不匹配 fixture；stable driver 和既有 legacy run 继续沿用当前 state 格式及写入语义，严格版本拒绝在 engine surface 可用后才生效。
 
 ### 阶段 1：纯决策内核
 
+- 开工前定稿 ADR-001 并完成六种代表性 step（engine local、durable side effect、host action、agent task、human ask、parallel/join）的小型 compiler spike，确认 compiled IR、registry 与 canonical encoder 边界；spike 不进入 production。
 - 实现版本 envelope、RunPhase、TaskKey、TaskTransitionTable、Observe/Decide/SelectIssued 和 NextResult 校验。
-- 实现 NodeExecutionPlan/StepSpec schema、定义编译器、eligible-step runtime 与 DecisionAuthority/RunnerKind policy。
+- 按 ADR-001 实现封闭类型变体 authoring、closed-world compiler（registry 解析、图不变量、归一化、authority/runner 派生）、单一 canonical encoder、compiler 生成的 `definitions/workflow.json` 与身份常量、eligible-step runtime。
+- canonical 制品验收：authoring source 重新生成 checked-in 制品字节无 diff（独立于 round-trip 的 freshness CI）、任意 assembly 顺序同字节、decode→encode 字节不变、跨进程/重复构建同字节、definition/package digest 分离（只改实现不改 ID 时 definition digest 不变）、语义变化必改变 definition digest、registry 完备性、constructor 非法状态、mutation tests 与复杂度止损规则（新增普通业务节点不得要求修改 compiler core）。
 - 用 golden traces/property tests 覆盖合法边、非法事件、step 顺序/遗漏/重复、非终态无空结果和 canonical Plan 字节稳定。
 - 先以只读 shadow 比较 eligible frontier、完整 fan-out、依赖顺序和最终投影；telemetry 不写权威 state。
 
@@ -514,7 +535,7 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 ### 12.1 自动测试
 
 1. 每条迁移边、pre 拒绝、Ask/Operator/Wait/Ready/HostAction/Complete。
-2. StepSpec 编译器拒绝非法图、untyped I/O、自然语言-only pre/postcondition、无可靠副作用协议、无 join/failure policy、非法 reason 与缺版本计划。
+2. 八类非法定义按 enforcement matrix 拒绝：constructor/变体层（untyped I/O、非法 reason、自然语言-only pre/postcondition、无幂等/reconcile 副作用、无 request/schema human wait）、closed-world compiler 层（非法图/不可达/循环、join/failure 覆盖、版本绑定、registry ID 完备性）；compiler 生成的 canonical 制品通过 freshness（重新生成无 diff）、assembly-order、round-trip 与跨进程确定性测试，definition/package digest 分离且语义变化必变 definition digest。
 3. runtime 拒绝 step 乱序/遗漏/重复；崩溃只恢复未完成边界，不重放已完成副作用；原子纯 handler 不被过度拆分。
 4. 每个 FailureClass 只走声明边，engine/adapter 故障不动态降级 agent；AGENT 只出现于三种合法 nonProgrammableReason；最终本次范围内定义不存在 `MISSING_ENGINE_ADAPTER`。
 5. stable TaskKey、完整 expected set、`min(C,N)`、自动 refill、分支失败不压兄弟任务。
@@ -550,7 +571,7 @@ VCS 六格全部跑通：
 只有以下条件同时成立才安装最终最新版：
 
 1. 相同 state+observation 的 canonical Plan 字节稳定，非终态无静默死端。
-2. 每个有顺序语义的节点由编译后的 StepSpec/engine handler 机械执行，乱序、遗漏、重复和未声明失败边不可发生。
+2. 每个有顺序语义的节点由封闭变体定义编译出的 NodeExecutionPlan/engine handler 机械执行，乱序、遗漏、重复和未声明失败边不可发生；活动 run 的 DefinitionDigest 与 PackageDigest 双绑定经 loader 校验。
 3. 可程序化动作不落入 agent；engine/VCS adapter 故障不动态降级 agent；AGENT/HOST 均有合法、可审计理由。
 4. 并行任务无漏派、无选择性忽略、无容量闲置；未形成完整候选的验证不会被错误标为 eligible，完整候选就绪后全部验证立即并发。
 5. HostAction、本地副作用和所有确定性崩溃窗可恢复或明确进入 Operator。
