@@ -2,9 +2,12 @@ package definition
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 
 	"formal-gates/internal/engine/compiler"
@@ -89,6 +92,82 @@ func TestGenerateDeterministic(t *testing.T) {
 		if !bytes.Equal(a, b) {
 			t.Errorf("%s differs between repeated generation runs", rel)
 		}
+	}
+}
+
+// TestWriteGeneratedAtomic（封板后审计 H5）：writeGenerated 必须以
+// temp+rename 原子替换——并发读者只能观察到完整的旧字节或完整的新字节，
+// 不存在撕裂中间态；不得残留临时文件，权限保持 0644。字节内容与直写
+// 逐字节相同由 TestGenerateFreshness 对 checked-in 交付物的零 diff 保证。
+func TestWriteGeneratedAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "artifact.json")
+	stale := []byte("{\"stale\":true}\n")
+	fresh := []byte("{\"fresh\":true,\"payload\":\"0123456789abcdef0123456789abcdef\"}\n")
+	if err := writeGenerated(path, stale); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	stop := make(chan struct{})
+	torn := make(chan string, 1)
+	var reader sync.WaitGroup
+	reader.Add(1)
+	go func() {
+		defer reader.Done()
+		for {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				select {
+				case <-stop:
+					return
+				default:
+					continue // 目标文件尚未首次落位；rename 原子性下不存在 ENOENT 窗口
+				}
+			}
+			if !bytes.Equal(b, stale) && !bytes.Equal(b, fresh) {
+				select {
+				case torn <- fmt.Sprintf("torn read observed partial bytes: %q", b):
+				default:
+				}
+				return
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
+	}()
+	for i := 0; i < 300; i++ {
+		if err := writeGenerated(path, fresh); err != nil {
+			t.Fatalf("write fresh: %v", err)
+		}
+		if err := writeGenerated(path, stale); err != nil {
+			t.Fatalf("write stale: %v", err)
+		}
+	}
+	close(stop)
+	reader.Wait()
+	select {
+	case msg := <-torn:
+		t.Fatal(msg)
+	default:
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".gen-definition-") {
+			t.Fatalf("temporary file %q left behind after writeGenerated", e.Name())
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("artifact mode = %v, want 0644", info.Mode().Perm())
 	}
 }
 

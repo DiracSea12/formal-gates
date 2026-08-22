@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -21,13 +22,21 @@ import (
 //   - HumanAskStep：ask 类型 + request/response schema + freshness TTL 必填；
 //   - ParallelStep：join/failure 策略 + >= 2 个 children 必填。
 
-// checkHeader 校验公共头必填项。
+// checkHeader 校验公共头必填项与字符约束：ID/NodeID 不得含 "/"——canonical
+// task key 以 "/" 连接 node/step/scope 三段，段内分隔符会使不同键坍缩为同一
+// 字符串形态（{n,a/b} 与 {n/a,b} 同为 n/a/b）。
 func checkHeader(h Header) error {
 	if h.ID == "" {
 		return errors.New("step id is empty")
 	}
+	if strings.Contains(string(h.ID), "/") {
+		return fmt.Errorf("step %q: step id must not contain \"/\" (canonical task keys join node/step/scope with \"/\")", h.ID)
+	}
 	if h.NodeID == "" {
 		return fmt.Errorf("step %q: node id is empty", h.ID)
+	}
+	if strings.Contains(string(h.NodeID), "/") {
+		return fmt.Errorf("step %q: node id %q must not contain \"/\" (canonical task keys join node/step/scope with \"/\")", h.ID, h.NodeID)
 	}
 	if h.DefinitionVersion == "" {
 		return fmt.Errorf("step %q: definition version is empty", h.ID)
@@ -321,6 +330,12 @@ func NewParallelStep(h Header, spec ParallelSpec) (ParallelStep, error) {
 	}
 	if spec.Join.JoinStep == "" {
 		return ParallelStep{}, fmt.Errorf("parallel step %q: join step id required", h.ID)
+	}
+	// join 必须是组外分立步骤：join 步 == 并行步自身时 join 依赖集合与
+	// children 自指重合，会在 compiler 层绕过 fan-out 覆盖检查（封板后审计
+	// H1），在构造层直接拒绝。
+	if spec.Join.JoinStep == h.ID {
+		return ParallelStep{}, fmt.Errorf("parallel step %q: join step %q must be outside the parallel group (join step is the parallel step itself)", h.ID, spec.Join.JoinStep)
 	}
 	if !spec.Join.Mode.Valid() {
 		return ParallelStep{}, fmt.Errorf("parallel step %q: join mode required (ALL|ANY)", h.ID)

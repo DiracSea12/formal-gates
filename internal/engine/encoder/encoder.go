@@ -102,7 +102,9 @@ type bindingWire struct {
 
 // 变体 payload wire：每变体确切字段，与 IR payload 一一对应；duration 一律
 // int64 纳秒。local 的 timeout 可选（0 省略）、retry 可选（指针）；durable
-// 的幂等/reconcile/timeout/retry 必填。
+// 的幂等/reconcile/timeout/retry 必填——retry 用指针承载使 decode 能区分
+// "键缺失"与"键存在"：缺失即拒绝，不得静默归一为零值（零值 re-encode 会
+// 改写制品字节）。
 type localPayloadWire struct {
 	Handler   string     `json:"handler"`
 	TimeoutNs int64      `json:"timeoutNs,omitempty"`
@@ -110,11 +112,11 @@ type localPayloadWire struct {
 }
 
 type durablePayloadWire struct {
-	Handler     string    `json:"handler"`
-	Idempotency string    `json:"idempotency"`
-	Reconcile   string    `json:"reconcileId"`
-	TimeoutNs   int64     `json:"timeoutNs"`
-	Retry       retryWire `json:"retry"`
+	Handler     string     `json:"handler"`
+	Idempotency string     `json:"idempotency"`
+	Reconcile   string     `json:"reconcileId"`
+	TimeoutNs   int64      `json:"timeoutNs"`
+	Retry       *retryWire `json:"retry"`
 }
 
 type hostPayloadWire struct {
@@ -274,8 +276,9 @@ func checkEnvelope(w *definitionWire) error {
 }
 
 // checkCoherence 拒绝物化不一致的 IR：marker 定义、空信封、kind 与 payload
-// 变体不符、authority/runner 与变体派生物不符、步骤版本未与信封绑定。
-// compiler 正常输出天然满足；本检查是 encode/decode 共用的二次防线。
+// 变体不符、authority/runner 与变体派生物不符、步骤版本未与信封绑定、
+// 步骤表结构性缺陷（重复 step id、重复 ordinal、悬空 dependency——封板后
+// 审计 H3 的 decode 二次防线，compiler 正常输出天然满足）。
 func checkCoherence(cd *compiler.CompiledDefinition) error {
 	if cd == nil {
 		return errors.New("encoder: nil definition")
@@ -286,8 +289,27 @@ func checkCoherence(cd *compiler.CompiledDefinition) error {
 	if cd.Version == "" || cd.EntryNode == "" || len(cd.Steps) == 0 {
 		return errors.New("encoder: definition requires version, entryNode and steps")
 	}
+	index := make(map[authoring.StepID]bool, len(cd.Steps))
+	for i := range cd.Steps {
+		index[cd.Steps[i].Header.ID] = true
+	}
+	seenIDs := make(map[authoring.StepID]bool, len(cd.Steps))
+	seenOrdinals := make(map[int]authoring.StepID, len(cd.Steps))
 	for i := range cd.Steps {
 		cs := &cd.Steps[i]
+		if seenIDs[cs.Header.ID] {
+			return fmt.Errorf("encoder: duplicate step id %q", cs.Header.ID)
+		}
+		seenIDs[cs.Header.ID] = true
+		if prev, dup := seenOrdinals[cs.Header.Ordinal]; dup {
+			return fmt.Errorf("encoder: steps %q and %q share ordinal %d", prev, cs.Header.ID, cs.Header.Ordinal)
+		}
+		seenOrdinals[cs.Header.Ordinal] = cs.Header.ID
+		for _, d := range cs.Header.Dependencies {
+			if !index[d] {
+				return fmt.Errorf("encoder: step %q: dependency %q not found", cs.Header.ID, d)
+			}
+		}
 		profile, ok := kindProfiles[cs.Header.Kind]
 		if !ok {
 			return fmt.Errorf("encoder: step %q: unknown kind %q", cs.Header.ID, cs.Header.Kind)
@@ -406,7 +428,7 @@ func payloadToWire(cs *compiler.CompiledStep) (any, error) {
 	case compiler.CompiledLocalStep:
 		return localPayloadWire{Handler: string(p.Handler), TimeoutNs: int64(p.Timeout), Retry: retryToWire(p.Retry)}, nil
 	case compiler.CompiledDurableStep:
-		retry := retryWire{MaxAttempts: p.Retry.MaxAttempts, BackoffNs: int64(p.Retry.Backoff)}
+		retry := &retryWire{MaxAttempts: p.Retry.MaxAttempts, BackoffNs: int64(p.Retry.Backoff)}
 		return durablePayloadWire{Handler: string(p.Handler), Idempotency: string(p.Idempotency),
 			Reconcile: string(p.Reconcile), TimeoutNs: int64(p.Timeout), Retry: retry}, nil
 	case compiler.CompiledHostActionStep:

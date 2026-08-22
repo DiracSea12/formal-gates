@@ -63,6 +63,10 @@ func sharedRejectRows() []struct {
 		{"empty definition version", func(h *Header) { h.DefinitionVersion = "" }, "definition version is empty"},
 		{"empty dependency id", func(h *Header) { h.Dependencies = []StepID{"node.a", ""} }, "empty dependency id"},
 		{"self dependency", func(h *Header) { h.Dependencies = []StepID{"node.s1"} }, "references the step itself"},
+		// 封板后审计 H4：ID/NodeID 段内 "/" 会使 canonical task key 坍缩
+		//（{n,a/b} 与 {n/a,b} 同为 n/a/b），构造层直接拒绝。
+		{"id with path separator", func(h *Header) { h.ID = "node/s1" }, `must not contain "/"`},
+		{"node id with path separator", func(h *Header) { h.NodeID = "node/sub" }, `must not contain "/"`},
 	}
 }
 
@@ -358,6 +362,9 @@ func TestNewParallelStep(t *testing.T) {
 		{"invalid failure mode", ParallelSpec{Children: []StepID{"node.c1", "node.c2"}, Join: spec.Join}, "failure mode required"},
 		{"invalid escalate class", ParallelSpec{Children: []StepID{"node.c1", "node.c2"}, Join: spec.Join, Failure: FailurePolicy{Mode: WaitAll}}, "failure escalate class required"},
 		{"join step is a child", ParallelSpec{Children: []StepID{"node.c1", "node.join"}, Join: spec.Join, Failure: spec.Failure}, "must not be a child"},
+		// 封板后审计 H1：join 步 == 并行步自身使 join 依赖集合与 children
+		// 自指重合，会在 compiler 层绕过 fan-out 覆盖检查，构造层直接拒绝。
+		{"join step is the parallel step itself", ParallelSpec{Children: []StepID{"node.c1", "node.c2"}, Join: JoinPolicy{JoinStep: "node.s1", Mode: JoinAll}, Failure: spec.Failure}, "must be outside the parallel group"},
 	}
 	for _, row := range rejects {
 		_, err := NewParallelStep(validHeader(), row.spec)

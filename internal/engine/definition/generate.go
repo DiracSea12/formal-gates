@@ -76,12 +76,37 @@ const (
 	return formatted, nil
 }
 
-// writeGenerated 以仓库常规权限写出交付物（制品与 Go 源均 0644）。
+// writeGenerated 以仓库常规权限原子写出交付物（制品与 Go 源均 0644）：
+// 先写同目录临时文件并 fsync，再 rename 落位——读者要么看到旧字节、要么
+// 看到完整新字节，不存在撕裂中间态（封板后审计 H5；参考 internal/validate
+// 的 writeAtomic 模式）。字节内容与非原子写逐字节相同。
 func writeGenerated(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("gen-definition: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".gen-definition-*")
+	if err != nil {
+		return fmt.Errorf("gen-definition: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("gen-definition: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("gen-definition: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("gen-definition: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("gen-definition: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("gen-definition: %w", err)
 	}
 	return nil

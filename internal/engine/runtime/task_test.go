@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/authoring"
@@ -92,6 +93,23 @@ func TestTaskKey(t *testing.T) {
 	} {
 		if _, err := NewTaskKey(authoring.NodeID(tc.node), authoring.StepID(tc.step), ""); err == nil {
 			t.Errorf("NewTaskKey(%q, %q) accepted empty node/step", tc.node, tc.step)
+		}
+	}
+	// 封板后审计 H4：段内含 "/" 或 "\" 的键可碰撞（{n,a/b} 与 {n/a,b} 同为
+	// n/a/b），构造即拒绝；错误消息说明字符约束。
+	for _, tc := range []struct{ name, node, step, scope string }{
+		{"slash in step", "dev", "im/pl", ""},
+		{"slash in node", "de/v", "impl", ""},
+		{"slash in scope", "dev", "impl", "child/2"},
+		{"backslash in step", "dev", `im\pl`, ""},
+	} {
+		_, err := NewTaskKey(authoring.NodeID(tc.node), authoring.StepID(tc.step), tc.scope)
+		if err == nil {
+			t.Errorf("NewTaskKey(%q, %q, %q) accepted a separator inside a segment", tc.node, tc.step, tc.scope)
+			continue
+		}
+		if !strings.Contains(err.Error(), "must not contain") {
+			t.Errorf("NewTaskKey(%q, %q, %q) error lacks constraint explanation: %q", tc.node, tc.step, tc.scope, err.Error())
 		}
 	}
 	// 不同 scope 是不同键；相同三元组是相同键。

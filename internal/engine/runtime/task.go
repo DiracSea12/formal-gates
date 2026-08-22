@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"formal-gates/internal/engine/authoring"
 )
@@ -17,11 +18,20 @@ type TaskKey struct {
 	Scope string
 }
 
-// NewTaskKey 构造并校验稳定键：node 与 step 必填（scope 可空）。
+// NewTaskKey 构造并校验稳定键：node 与 step 必填（scope 可空）；三段均不得
+// 包含 "/" 或 "\"——String() 以 "/" 连接三段，段内分隔符会使不同键坍缩为
+// 同一字符串形态（{n,a/b} 与 {n/a,b} 同为 n/a/b，封板后审计 H4）。
 func NewTaskKey(node authoring.NodeID, step authoring.StepID, scope string) (TaskKey, error) {
 	k := TaskKey{Node: node, Step: step, Scope: scope}
 	if !k.Valid() {
 		return TaskKey{}, fmt.Errorf("runtime: task key requires node and step, got %q", k.String())
+	}
+	for _, seg := range []struct{ name, value string }{
+		{"node", string(k.Node)}, {"step", string(k.Step)}, {"scope", k.Scope},
+	} {
+		if strings.ContainsAny(seg.value, `/\`) {
+			return TaskKey{}, fmt.Errorf("runtime: task key %s %q must not contain '/' or '\\' (canonical string form joins node/step/scope with '/')", seg.name, seg.value)
+		}
 	}
 	return k, nil
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,25 @@ func TestShadowReadOnlyObservesWithoutWriting(t *testing.T) {
 	}
 	if want := filepath.Join(outDir, runID+".shadow.json"); report.OutPath != want {
 		t.Fatalf("report path = %q, want %q", report.OutPath, want)
+	}
+}
+
+// TestShadowRejectsParentDirRunID（封板后审计 H6）：run id ".." 是父目录
+// 引用，会把观测路径越出 .gates/tmp——与路径分隔符拒绝同族，直接拒绝；
+// 合法 run id 的正常观测不受影响。
+func TestShadowRejectsParentDirRunID(t *testing.T) {
+	root := t.TempDir()
+	_, err := shadow.Run(shadow.Options{Root: root, RunID: "..", OutputDir: t.TempDir()})
+	if err == nil {
+		t.Fatal(`shadow run accepted run id ".."`)
+	}
+	if !strings.Contains(err.Error(), "parent-directory") {
+		t.Fatalf("want parent-directory rejection, got %q", err.Error())
+	}
+	runID := "shadow-runid-ok"
+	newLegacyRun(t, root, runID, nil)
+	if _, err := shadow.Run(shadow.Options{Root: root, RunID: runID, OutputDir: t.TempDir()}); err != nil {
+		t.Fatalf("shadow run with legal run id must not regress: %v", err)
 	}
 }
 

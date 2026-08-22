@@ -124,6 +124,71 @@ func TestGraphRejects(t *testing.T) {
 			mustLocal(header("fan.join", "fan", "fan.s1"), ioWith("fan.s1"), "engine.fan.join"),
 		}
 	}
+	// 封板后审计 H1 复现：join 步 == 并行步自身，且 split 的依赖恰为
+	// children——joinDeps==children 自指使覆盖/封闭检查全部通过（constructor
+	// 已拒该组合，绕过构造的原始结构体由 compiler 二次防线拒绝）。
+	selfJoin := func() []authoring.Step {
+		return []authoring.Step{
+			authoring.LocalStep{Header: header("entry.c1", "entry"), IO: ioWith(), Handler: "engine.entry.parse"},
+			authoring.LocalStep{Header: header("entry.c2", "entry"), IO: ioWith(), Handler: "engine.entry.parse"},
+			authoring.ParallelStep{
+				Header:   header("fan.split", "fan", "entry.c1", "entry.c2"),
+				Children: []authoring.StepID{"entry.c1", "entry.c2"},
+				Join:     authoring.JoinPolicy{JoinStep: "fan.split", Mode: authoring.JoinAll},
+				Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
+			},
+		}
+	}
+	// 封板后审计 H2：两个并行组共享同 children+同 join——每个组各自的
+	// 覆盖/封闭检查都通过，唯一缺陷是归属歧义，由归属排他预检拒绝。
+	sharedChildren := func() []authoring.Step {
+		p := authoring.ParallelSpec{
+			Children: []authoring.StepID{"fan.a", "fan.b"},
+			Join:     authoring.JoinPolicy{JoinStep: "fan.join", Mode: authoring.JoinAll},
+			Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
+		}
+		split1, err := authoring.NewParallelStep(header("fan.split1", "fan", "entry.root"), p)
+		if err != nil {
+			t.Fatalf("split1: %v", err)
+		}
+		split2, err := authoring.NewParallelStep(header("fan.split2", "fan", "entry.root"), p)
+		if err != nil {
+			t.Fatalf("split2: %v", err)
+		}
+		return []authoring.Step{
+			mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse"),
+			split1, split2,
+			mustLocal(header("fan.a", "fan", "fan.split1", "fan.split2"), ioWith("fan.split1", "fan.split2"), "engine.fan.slice"),
+			mustLocal(header("fan.b", "fan", "fan.split1", "fan.split2"), ioWith("fan.split1", "fan.split2"), "engine.fan.slice"),
+			mustLocal(header("fan.join", "fan", "fan.a", "fan.b"), ioWith("fan.a", "fan.b"), "engine.fan.join"),
+		}
+	}
+	// H2 变体：children 不同但 join 步共享——join 归属歧义（无归属预检时
+	// 只会以误导性的 fan-out 覆盖错误暴露）。
+	sharedJoin := func() []authoring.Step {
+		mk := func(id, dep string) authoring.Step {
+			return mustLocal(header(id, "fan", dep), ioWith(dep), "engine.fan.slice")
+		}
+		return []authoring.Step{
+			mustLocal(header("entry.root", "entry"), ioWith(), "engine.entry.parse"),
+			authoring.ParallelStep{
+				Header:   header("fan.split1", "fan", "entry.root"),
+				Children: []authoring.StepID{"fan.a", "fan.b"},
+				Join:     authoring.JoinPolicy{JoinStep: "fan.join", Mode: authoring.JoinAll},
+				Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
+			},
+			authoring.ParallelStep{
+				Header:   header("fan.split2", "fan", "entry.root"),
+				Children: []authoring.StepID{"fan.c", "fan.d"},
+				Join:     authoring.JoinPolicy{JoinStep: "fan.join", Mode: authoring.JoinAll},
+				Failure:  authoring.FailurePolicy{Mode: authoring.FailFast, Escalate: authoring.FailureInvariantViolation},
+			},
+			mk("fan.a", "fan.split1"), mk("fan.b", "fan.split1"),
+			mk("fan.c", "fan.split2"), mk("fan.d", "fan.split2"),
+			mustLocal(header("fan.join", "fan", "fan.a", "fan.b", "fan.c", "fan.d"),
+				ioWith("fan.a", "fan.b", "fan.c", "fan.d"), "engine.fan.join"),
+		}
+	}
 
 	rows := []struct {
 		name  string
@@ -139,6 +204,9 @@ func TestGraphRejects(t *testing.T) {
 		{"join misses child (fan-out coverage)", parallelSteps([]string{"fan.s1", "fan.s2"}, "fan.join", "fan.s1"), goldenEntry, `join step "fan.join" does not depend on child "fan.s2" (fan-out coverage)`},
 		{"join depends outside children", parallelSteps([]string{"fan.s1", "fan.s2"}, "fan.join", "fan.s1", "fan.s2", "entry.root"), goldenEntry, `depends on "entry.root" outside children (fan-out coverage)`},
 		{"join is a child", joinIsChild(), goldenEntry, `join step "fan.join" must not be a child`},
+		{"join is the parallel step itself", selfJoin(), goldenEntry, `join step "fan.split" must be outside the parallel group`},
+		{"parallel groups sharing children", sharedChildren(), goldenEntry, `child "fan.a" already claimed by parallel step "fan.split1" (parallel group ownership is exclusive)`},
+		{"parallel groups sharing join", sharedJoin(), goldenEntry, `join step "fan.join" already claimed by parallel step "fan.split1" (parallel group ownership is exclusive)`},
 		{"branch closure", append(parallelSteps([]string{"fan.s1", "fan.s2"}, "fan.join", "fan.s1", "fan.s2"),
 			mustLocal(header("fan.x", "fan", "fan.s1"), ioWith("fan.s1"), "engine.fan.slice")), goldenEntry,
 			`child "fan.s1" has dependent "fan.x" other than join "fan.join"`},

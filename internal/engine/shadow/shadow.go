@@ -144,6 +144,11 @@ func Run(opts Options) (*Report, error) {
 	if strings.ContainsAny(runID, `/\`) {
 		return nil, fmt.Errorf("shadow: run id %q must not contain path separators", runID)
 	}
+	// 同族防线：run id ".." 是父目录引用，会把观测路径越出 .gates/tmp
+	//（封板后审计 H6）。
+	if runID == ".." {
+		return nil, fmt.Errorf("shadow: run id %q must not be a parent-directory reference", runID)
+	}
 	if strings.TrimSpace(opts.Root) == "" {
 		return nil, fmt.Errorf("shadow: root required")
 	}

@@ -187,7 +187,7 @@ func (c *resolveCtx) resolveID(step authoring.StepID, ref string, want EntryKind
 			c.diags = append(c.diags, Diagnostic{Step: step, Ref: ref, Want: want})
 			return "", nil
 		}
-		return "", blockedBugError(`step %q: MISSING_ENGINE_ADAPTER: %s id %q not registered (closed world)`, step, want, ref)
+		return "", blockedBugError(`step %q: MISSING_ENGINE_ADAPTER: %s id %q not registered (closed world); use diagnostic compile for the technical-debt marker`, step, want, ref)
 	}
 	if e.kind != want {
 		return "", invariantError(`step %q: registry: id %q registered as %s, want %s`, step, ref, e.kind, want)

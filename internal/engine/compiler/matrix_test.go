@@ -172,6 +172,14 @@ func TestMissingEngineAdapterRouting(t *testing.T) {
 	if !strings.Contains(err.Error(), "MISSING_ENGINE_ADAPTER") {
 		t.Fatalf("error must name the MISSING_ENGINE_ADAPTER marker: %q", err.Error())
 	}
+	// 封板后审计 QA-B13：正常模式的拒绝消息必须携带 diagnostic compile
+	// 提示（resolveID 直返路径可达，不再是死代码拼接）。
+	if !strings.Contains(err.Error(), "use diagnostic compile") {
+		t.Fatalf("normal-mode BLOCKED_BUG error must carry the diagnostic-compile hint: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "not registered (closed world)") {
+		t.Fatalf("normal-mode BLOCKED_BUG error must keep the closed-world wording: %q", err.Error())
+	}
 
 	dr, err := CompileDiagnostic(goldenDefinition(), reg)
 	if err != nil {

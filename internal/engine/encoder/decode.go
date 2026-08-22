@@ -115,6 +115,12 @@ func payloadFromWire(sw *stepWire) (compiler.Payload, error) {
 		if err := dec.Decode(&w); err != nil {
 			return nil, bad(err)
 		}
+		// retry 是 durable 的必填键：缺失（或显式 null）不得 decode 为零值——
+		// 零值 re-encode 会静默补写 "retry":{"maxAttempts":0} 改写制品字节
+		//（封板后审计 H3，严格拒绝，不静默归一）。
+		if w.Retry == nil {
+			return nil, fmt.Errorf("encoder: step %q: durable payload requires a retry object (missing retry key must not decode as zero-value)", sw.ID)
+		}
 		return compiler.CompiledDurableStep{
 			Handler: authoring.HandlerID(w.Handler), Idempotency: authoring.IdempotencyKeyStrategy(w.Idempotency),
 			Reconcile: authoring.ReconcileID(w.Reconcile), Timeout: time.Duration(w.TimeoutNs),

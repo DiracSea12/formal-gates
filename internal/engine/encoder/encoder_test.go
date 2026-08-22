@@ -222,6 +222,60 @@ func TestDecodeRejectsEnvelopeAndCoherenceTampering(t *testing.T) {
 	}
 }
 
+// TestDecodeSecondLineRejects：decode 二次防线（封板后审计 H3）——durable
+// payload 缺 retry 键不得静默归一为零值（零值 re-encode 会补写
+// "retry":{"maxAttempts":0} 改写制品字节）；重复 step id、重复 ordinal、
+// 悬空 dependency 的制品一律拒绝。合法制品的 round-trip 不回归由
+// TestEncodeDecodeRoundTrip/TestCheckedInArtifactRoundTrip 覆盖。
+func TestDecodeSecondLineRejects(t *testing.T) {
+	data := encodeWorkflow(t)
+	cases := []struct {
+		name   string
+		mutate func(doc map[string]any)
+		want   string
+	}{
+		{"durable missing retry key", func(doc map[string]any) {
+			for _, s := range doc["steps"].([]any) {
+				step := s.(map[string]any)
+				if step["kind"] == "DURABLE" {
+					delete(step["payload"].(map[string]any), "retry")
+				}
+			}
+		}, "requires a retry object"},
+		{"durable null retry", func(doc map[string]any) {
+			for _, s := range doc["steps"].([]any) {
+				step := s.(map[string]any)
+				if step["kind"] == "DURABLE" {
+					step["payload"].(map[string]any)["retry"] = nil
+				}
+			}
+		}, "requires a retry object"},
+		{"duplicate step id", func(doc map[string]any) {
+			steps := doc["steps"].([]any)
+			steps[1].(map[string]any)["id"] = steps[0].(map[string]any)["id"]
+		}, "duplicate step id"},
+		{"duplicate ordinal", func(doc map[string]any) {
+			steps := doc["steps"].([]any)
+			steps[1].(map[string]any)["ordinal"] = steps[0].(map[string]any)["ordinal"]
+		}, "share ordinal"},
+		{"dangling dependency", func(doc map[string]any) {
+			steps := doc["steps"].([]any)
+			steps[0].(map[string]any)["dependencies"] = []any{"ghost.step"}
+		}, `dependency "ghost.step" not found`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := encoder.Decode(mutateJSON(t, data, tc.mutate))
+			if err == nil {
+				t.Fatalf("decode accepted tampered artifact (%s)", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %q", tc.want, err.Error())
+			}
+		})
+	}
+}
+
 // TestEncodeRejectsMarkerAndIncoherentIR：MISSING_ENGINE_ADAPTER marker 定义
 // 不得物化为 canonical 制品；kind/payload/物化维度不一致的 IR 拒绝编码。
 func TestEncodeRejectsMarkerAndIncoherentIR(t *testing.T) {
