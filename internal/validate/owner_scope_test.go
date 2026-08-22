@@ -10,10 +10,10 @@ import (
 
 func TestSameOwnerIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		owners               []ownerIdentity
-		payloadT, payloadS   string
-		wantKnown, wantSame  bool
+		name                string
+		owners              []ownerIdentity
+		payloadT, payloadS  string
+		wantKnown, wantSame bool
 	}{
 		{"transcript match", []ownerIdentity{{"t1", "s1"}}, "t1", "s1", true, true},
 		{"transcript differ", []ownerIdentity{{"t1", "s1"}}, "t2", "s1", true, false},

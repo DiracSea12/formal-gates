@@ -110,11 +110,11 @@ type localPayloadWire struct {
 }
 
 type durablePayloadWire struct {
-	Handler     string     `json:"handler"`
-	Idempotency string     `json:"idempotency"`
-	Reconcile   string     `json:"reconcileId"`
-	TimeoutNs   int64      `json:"timeoutNs"`
-	Retry       retryWire  `json:"retry"`
+	Handler     string    `json:"handler"`
+	Idempotency string    `json:"idempotency"`
+	Reconcile   string    `json:"reconcileId"`
+	TimeoutNs   int64     `json:"timeoutNs"`
+	Retry       retryWire `json:"retry"`
 }
 
 type hostPayloadWire struct {

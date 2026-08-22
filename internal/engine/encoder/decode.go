@@ -118,7 +118,7 @@ func payloadFromWire(sw *stepWire) (compiler.Payload, error) {
 		return compiler.CompiledDurableStep{
 			Handler: authoring.HandlerID(w.Handler), Idempotency: authoring.IdempotencyKeyStrategy(w.Idempotency),
 			Reconcile: authoring.ReconcileID(w.Reconcile), Timeout: time.Duration(w.TimeoutNs),
-			Retry:     authoring.RetryPolicy{MaxAttempts: w.Retry.MaxAttempts, Backoff: time.Duration(w.Retry.BackoffNs)},
+			Retry: authoring.RetryPolicy{MaxAttempts: w.Retry.MaxAttempts, Backoff: time.Duration(w.Retry.BackoffNs)},
 		}, nil
 	case compiler.KindHostAction:
 		var w hostPayloadWire
