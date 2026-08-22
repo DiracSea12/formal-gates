@@ -63,10 +63,13 @@ func sharedRejectRows() []struct {
 		{"empty definition version", func(h *Header) { h.DefinitionVersion = "" }, "definition version is empty"},
 		{"empty dependency id", func(h *Header) { h.Dependencies = []StepID{"node.a", ""} }, "empty dependency id"},
 		{"self dependency", func(h *Header) { h.Dependencies = []StepID{"node.s1"} }, "references the step itself"},
-		// 封板后审计 H4：ID/NodeID 段内 "/" 会使 canonical task key 坍缩
-		//（{n,a/b} 与 {n/a,b} 同为 n/a/b），构造层直接拒绝。
-		{"id with path separator", func(h *Header) { h.ID = "node/s1" }, `must not contain "/"`},
-		{"node id with path separator", func(h *Header) { h.NodeID = "node/sub" }, `must not contain "/"`},
+		// 封板后审计 H4：ID/NodeID 段内 "/" 或 "\" 会使 canonical task key
+		// 坍缩（{n,a/b} 与 {n/a,b} 同为 n/a/b），构造层直接拒绝；段内禁用
+		// 字符集与 runtime.NewTaskKey 两层对齐。
+		{"id with path separator", func(h *Header) { h.ID = "node/s1" }, "must not contain '/' or '\\'"},
+		{"node id with path separator", func(h *Header) { h.NodeID = "node/sub" }, "must not contain '/' or '\\'"},
+		{"id with backslash", func(h *Header) { h.ID = "node\\s1" }, "must not contain '/' or '\\'"},
+		{"node id with backslash", func(h *Header) { h.NodeID = "node\\sub" }, "must not contain '/' or '\\'"},
 	}
 }
 

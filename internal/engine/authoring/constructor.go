@@ -22,21 +22,22 @@ import (
 //   - HumanAskStep：ask 类型 + request/response schema + freshness TTL 必填；
 //   - ParallelStep：join/failure 策略 + >= 2 个 children 必填。
 
-// checkHeader 校验公共头必填项与字符约束：ID/NodeID 不得含 "/"——canonical
-// task key 以 "/" 连接 node/step/scope 三段，段内分隔符会使不同键坍缩为同一
-// 字符串形态（{n,a/b} 与 {n/a,b} 同为 n/a/b）。
+// checkHeader 校验公共头必填项与字符约束：ID/NodeID 不得含 "/" 或 "\"——
+// canonical task key 以 "/" 连接 node/step/scope 三段，段内分隔符会使不同键
+// 坍缩为同一字符串形态（{n,a/b} 与 {n/a,b} 同为 n/a/b）；段内禁用字符集与
+// runtime.NewTaskKey 两层对齐，"\" 一并拒绝。
 func checkHeader(h Header) error {
 	if h.ID == "" {
 		return errors.New("step id is empty")
 	}
-	if strings.Contains(string(h.ID), "/") {
-		return fmt.Errorf("step %q: step id must not contain \"/\" (canonical task keys join node/step/scope with \"/\")", h.ID)
+	if strings.ContainsAny(string(h.ID), `/\`) {
+		return fmt.Errorf("step %q: step id must not contain '/' or '\\' (canonical task keys join node/step/scope with '/')", h.ID)
 	}
 	if h.NodeID == "" {
 		return fmt.Errorf("step %q: node id is empty", h.ID)
 	}
-	if strings.Contains(string(h.NodeID), "/") {
-		return fmt.Errorf("step %q: node id %q must not contain \"/\" (canonical task keys join node/step/scope with \"/\")", h.ID, h.NodeID)
+	if strings.ContainsAny(string(h.NodeID), `/\`) {
+		return fmt.Errorf("step %q: node id %q must not contain '/' or '\\' (canonical task keys join node/step/scope with '/')", h.ID, h.NodeID)
 	}
 	if h.DefinitionVersion == "" {
 		return fmt.Errorf("step %q: definition version is empty", h.ID)

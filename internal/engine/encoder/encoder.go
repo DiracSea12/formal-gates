@@ -428,9 +428,8 @@ func payloadToWire(cs *compiler.CompiledStep) (any, error) {
 	case compiler.CompiledLocalStep:
 		return localPayloadWire{Handler: string(p.Handler), TimeoutNs: int64(p.Timeout), Retry: retryToWire(p.Retry)}, nil
 	case compiler.CompiledDurableStep:
-		retry := &retryWire{MaxAttempts: p.Retry.MaxAttempts, BackoffNs: int64(p.Retry.Backoff)}
 		return durablePayloadWire{Handler: string(p.Handler), Idempotency: string(p.Idempotency),
-			Reconcile: string(p.Reconcile), TimeoutNs: int64(p.Timeout), Retry: retry}, nil
+			Reconcile: string(p.Reconcile), TimeoutNs: int64(p.Timeout), Retry: retryToWire(&p.Retry)}, nil
 	case compiler.CompiledHostActionStep:
 		return hostPayloadWire{Handler: string(p.Handler), Boundary: string(p.Boundary),
 			Operation: string(p.Operation), TimeoutNs: int64(p.Timeout)}, nil

@@ -236,7 +236,12 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 	var agentTasks []ReadyTask
 	var hostSteps, askSteps []authoring.StepID
 	for _, cs := range frontier {
-		key := runtime.TaskKey{Node: cs.Header.NodeID, Step: cs.Header.ID}
+		// 稳定键构造走 NewTaskKey 校验：绕过构造层的非法段字符（"/" 或
+		// "\"）在此决定性失败，而非静默坍缩进 canonical 键形态。
+		key, err := runtime.NewTaskKey(cs.Header.NodeID, cs.Header.ID, "")
+		if err != nil {
+			return nil, fmt.Errorf("decision: decide: %w", err)
+		}
 		queued := state.TaskStatusOf(key) == runtime.TaskQueued
 		switch cs.Header.Kind {
 		case compiler.KindAgent:

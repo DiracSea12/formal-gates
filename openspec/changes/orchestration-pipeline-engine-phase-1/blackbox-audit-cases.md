@@ -212,3 +212,36 @@
 
 - 条目 1（Authoring）：B01–B06；条目 2（compiler/八类拒绝/分层拦截）：B06–B15、B23、B45；条目 3（canonical 制品）：B16–B23、B44；条目 4（决策核心）：B24–B36；条目 5 十条独立验收：5.1→B17、5.2→B15/B19、5.3→B20、5.4→B16、5.5→B21、5.6→B22、5.7→B14、5.8→B03–B06、5.9→B08/B09/B11/B13、5.10→B45；条目 6（Shadow）：B37–B40；条目 7（MISSING_ENGINE_ADAPTER）：B13/B41/B42；条目 8（隔离）：B43；条目 9（legacy 回归，库面切片）：B44。
 - 全部用例以文档化产品入口实际使用产品（`go run ./cmd/gen-definition`、`go build` 产物、公开 Go API 驱动、真实文件制品外部观察），不以内嵌测试运行为步骤或证据；未发明对抗性/手工改状态/权限/不支持平台用例；未登记 CLI 用例（归主代理）。
+---
+
+## I. 前置修复批行为面（2026-08-22 补充，QA-B46~B52，对应 post-seal-audit H1-H6 与 QA-B13 修复）
+
+**QA-B46｜自 join 并行步双层拒绝**（H1/条目 2）
+- 步骤：驱动①经 `authoring.NewParallelStep` 构造 `Join.JoinStep == 自身 ID` 的并行步；②绕过 constructor 以合法形态结构体字面量构造同款（deps/children/join 齐备、join==自身）放入 `compiler.Definition.Steps` 调 `Compile`。
+- 判据：①constructor 返回非 nil error 含 `join step must be outside the parallel group`；②compiler 二次防线同样拒绝（同类消息）。失败信号：任一层接受自 join 定义（审计 H1 复现形态回归）。
+
+**QA-B47｜并行组归属排他**（H2/条目 2）
+- 步骤：驱动构造两个 PARALLEL 步共享同一 children 集合（同 join）；再构造共享同一 join 但 children 不同的变体；各调 `Compile`。
+- 判据：两形态均拒绝，消息含 `parallel group ownership is exclusive` 或同义可区分文案。失败信号：同一 child/join 被多组声明仍编译通过。
+
+**QA-B48｜字符集约束两层一致且决策端确定性失败**（H4/条目 4）
+- 步骤：驱动①`runtime.NewTaskKey("n/a","s","")`、`("n","s/x","")`、`("n","s","sc\\x")` 等段内含 `/` 与 `\` 的键；②`authoring.NewLocalStep` 以 `StepID:"a/b"`、`NodeID:"x/y"`、`StepID:"a\\b"` 构造；③以原始结构体（绕过 constructor 校验）构造含 `/` ID 的步骤喂 `decision.Decide`（经 compiled 定义或直接，取实际可行路径）。
+- 判据：①②均拒绝且消息含字符约束说明（两层文案一致拒 `/` 与 `\`）；③确定性返回错误（含 task key 约束），不再静默产出可碰撞键。失败信号：任一层接受段内分隔符（审计 H4 碰撞形态回归）。
+
+**QA-B49｜生成器写出完整性与无残留（本机平台）**（H5/条目 3）
+- 步骤：驱动在临时根并发跑 `definition.Generate` 20 轮（同内容）同时读者循环持续读取两交付物；结束后检查目录无 `.gen-definition-*` 临时残留；`stat` 两文件权限与内容（与 checked-in 逐字节一致）。
+- 判据：读者全程只观测到完整合法内容（JSON 可解析、Go 源完整）、无撕裂；零临时残留；权限 0644（本机 Unix）。失败信号：撕裂读、残留临时文件或内容不完整（审计 H5 回归；Windows rename 行为已按用户决定延期）。
+
+**QA-B50｜shadow 拒绝父目录引用 runID**（H6/条目 6）
+- 步骤：驱动以 `RunID:".."` 调 `shadow.Run`（root 指向临时项目）；检查返回错误与输出目录文件数。
+- 判据：返回非 nil error 含 `must not be a parent-directory reference`；零输出文件、被观测 root 零改动。失败信号：`..` 被接受或观测/输出路径越出预期（审计 H6 回归）。
+
+**QA-B51｜durable retry 严格 decode 与结构二次校验**（H3/条目 3）
+- 步骤：驱动以 checked-in 制品字节为基线做五种篡改后调 `encoder.Decode`：①删除某 DURABLE payload 的 `retry` 键；②`retry` 置 null；③复制某步骤整个条目造成重复 step id；④复制造成重复 ordinal；⑤把某步骤 dependency 改为不存在 id。
+- 判据：①②报 `requires a retry object`；③④⑤分别报重复/悬空的可区分错误；全部拒绝、re-encode 不发生静默补默认值。失败信号：零值接受或静默归一（审计 H3 回归）。
+
+**QA-B52｜BLOCKED_BUG 提示语完整（六槽位）**（QA-B13 修复/条目 7）
+- 步骤：驱动对 codec/handler/predicate/schema/operation/reconciler 六类 ID 各构造一个未注册引用的最小定义，正常 `Compile`，`errors.As` 取 `*compiler.Error` 打印 Class 与完整消息。
+- 判据：六例 Class 均 `BLOCKED_BUG`，消息同时含 `MISSING_ENGINE_ADAPTER`、`not registered (closed world)`、`use diagnostic compile`。失败信号：任一槽位缺提示（QA-B13 原 FAIL 形态回归）。
+
+**覆盖核对（补充节）**：H1→B46、H2→B47、H4→B48、H5→B49、H6→B50、H3→B51、QA-B13→B52；至此审计 7 项修复全部有独立黑盒用例。
