@@ -6,10 +6,10 @@ import (
 	"formal-gates/internal/engine/authoring"
 )
 
-// 封闭 registry（ADR-001 决策 3/9）：六类 registry ID（HandlerID/PredicateID/
-// CodecID/ReconcileID/SchemaID/OperationID）共用单一 ID 命名空间。单一命名空间
-// 的收益（spike 实证）：把 handler ID 填进 predicate 槽不是含糊的 not found，
-// 而是立即暴露为 kind 不匹配，错误更早更准。
+// 封闭 registry（ADR-001 决策 3/9）：七类 registry ID（HandlerID/PredicateID/
+// CodecID/ReconcileID/SchemaID/OperationID/AskKindID）共用单一 ID 命名空间。单一
+// 命名空间的收益（spike 实证）：把 handler ID 填进 predicate 槽不是含糊的
+// not found，而是立即暴露为 kind 不匹配，错误更早更准。
 //
 // 条目不携带函数/闭包：编译只做 ID 解析（存在、唯一、kind 匹配），实现绑定
 // 属运行时批次；compiled IR 里 likewise 只有稳定 ID 引用。
@@ -29,6 +29,7 @@ const (
 	KindReconciler EntryKind = "reconciler"
 	KindSchema     EntryKind = "schema"
 	KindOperation  EntryKind = "operation"
+	KindAskKind    EntryKind = "askKind"
 )
 
 // entry 是单条注册。runner 仅对 handler 条目有意义：编译期用于 handler
@@ -129,6 +130,13 @@ func (r *Registry) RegisterOperation(id authoring.OperationID) error {
 	return r.register(string(id), entry{kind: KindOperation})
 }
 
+// RegisterAskKind 注册 human ask 的合法类型。Ask 类型不是自由字符串通道：
+// HumanAskStep 引用的 askKind 必须在此注册，缺失按 MISSING_ENGINE_ADAPTER
+// 路由（正常 compile 以 BLOCKED_BUG 拒绝）。
+func (r *Registry) RegisterAskKind(id authoring.AskKindID) error {
+	return r.register(string(id), entry{kind: KindAskKind})
+}
+
 // ResolveHandler 解析 handler ID，返回注册时声明的 runner。
 func (r *Registry) ResolveHandler(id authoring.HandlerID) (authoring.RunnerKind, error) {
 	return r.resolve(string(id), KindHandler)
@@ -161,5 +169,11 @@ func (r *Registry) ResolveSchema(id authoring.SchemaID) error {
 // ResolveOperation 解析 operation ID。
 func (r *Registry) ResolveOperation(id authoring.OperationID) error {
 	_, err := r.resolve(string(id), KindOperation)
+	return err
+}
+
+// ResolveAskKind 解析 ask 类型 ID。
+func (r *Registry) ResolveAskKind(id authoring.AskKindID) error {
+	_, err := r.resolve(string(id), KindAskKind)
 	return err
 }

@@ -147,7 +147,7 @@ func payloadFromWire(sw *stepWire) (compiler.Payload, error) {
 			return nil, bad(err)
 		}
 		return compiler.CompiledHumanAskStep{
-			AskKind: w.AskKind, RequestSchema: authoring.SchemaID(w.RequestSchema),
+			AskKind: authoring.AskKindID(w.AskKind), RequestSchema: authoring.SchemaID(w.RequestSchema),
 			ResponseSchema: authoring.SchemaID(w.ResponseSchema), FreshnessTTL: time.Duration(w.FreshnessTtlNs),
 		}, nil
 	case compiler.KindParallel:

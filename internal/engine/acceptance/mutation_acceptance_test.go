@@ -48,6 +48,7 @@ func TestAcceptanceRegistryCompleteness(t *testing.T) {
 			{"reconciler", "reconcile.entry.persist"},
 			{"schema", "schema.ask.decision.response"},
 			{"operation", "op.fan.transport"},
+			{"askKind", "decision"},
 		} {
 			t.Run(row.kind, func(t *testing.T) {
 				_, err := compiler.Compile(definition.Workflow(), workflowRegistry(t, row.skip))

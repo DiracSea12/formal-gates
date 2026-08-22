@@ -81,10 +81,10 @@ type CompiledAgentStep struct {
 }
 
 // CompiledHumanAskStep 是 human_ask 变体 payload：typed request/response
-// schema 必填。无 handler/retry/timeout/共享 IO 段——human 的 typed I/O
-// 就是 payload 内的 schema。
+// schema 与 registry 中的 ask 类型必填。无 handler/retry/timeout/共享 IO
+// 段——human 的 typed I/O 就是 payload 内的 schema。
 type CompiledHumanAskStep struct {
-	AskKind        string
+	AskKind        authoring.AskKindID
 	RequestSchema  authoring.SchemaID
 	ResponseSchema authoring.SchemaID
 	FreshnessTTL   time.Duration

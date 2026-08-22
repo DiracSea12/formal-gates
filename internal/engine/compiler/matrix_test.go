@@ -89,6 +89,12 @@ func TestCompilerSecondLineRejects(t *testing.T) {
 			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
 			Reason: authoring.ReasonSemanticJudgment}},
 			"positive timeout required"},
+		// worker result 合同的二次防线：绕过 constructor 的原始结构体缺
+		// postconditions 必拒（constructor 主拦项复核，封板后补漏）。
+		{"agent without postconditions", []authoring.Step{authoring.AgentStep{
+			Header: rawHeader("entry.s"), IO: ioWith(), Handler: "engine.review.worker",
+			Reason: authoring.ReasonSemanticJudgment, Timeout: time.Second}},
+			"postcondition predicate reference required (worker result contract)"},
 		{"human without request schema", []authoring.Step{authoring.HumanAskStep{
 			Header: rawHeader("entry.s"), AskKind: "decision",
 			ResponseSchema: "schema.ask.decision.response", FreshnessTTL: time.Minute}},
@@ -244,6 +250,15 @@ func TestKindAndRunnerMismatchBothModes(t *testing.T) {
 			}
 			return reg
 		}, `handler "engine.review.worker" runner ENGINE_LOCAL != variant runner AGENT_WORKER`},
+		{"ask kind mismatch", func(t *testing.T) *Registry {
+			// ask 类型 ID 错注册进 schema 槽：human 步解析 askKind 时报 kind
+			// 错用，而非含糊的 not found（单一命名空间的收益）。
+			reg := goldenRegistry(t, "decision")
+			if err := reg.RegisterSchema("decision"); err != nil {
+				t.Fatalf("register schema: %v", err)
+			}
+			return reg
+		}, `id "decision" registered as schema, want askKind`},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			_, err := Compile(goldenDefinition(), row.reg(t))

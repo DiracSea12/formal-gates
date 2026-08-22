@@ -30,6 +30,7 @@ func TestRegistryRegister(t *testing.T) {
 		wantErr(t, reg.RegisterReconciler(""), "empty id")
 		wantErr(t, reg.RegisterSchema(""), "empty id")
 		wantErr(t, reg.RegisterOperation(""), "empty id")
+		wantErr(t, reg.RegisterAskKind(""), "empty id")
 	})
 	t.Run("duplicate same kind", func(t *testing.T) {
 		reg := NewRegistry()
@@ -53,6 +54,7 @@ func TestRegistryRegister(t *testing.T) {
 			{"reconciler", func() error { return reg.RegisterReconciler("engine.cross") }},
 			{"schema", func() error { return reg.RegisterSchema("engine.cross") }},
 			{"operation", func() error { return reg.RegisterOperation("engine.cross") }},
+			{"askKind", func() error { return reg.RegisterAskKind("engine.cross") }},
 		} {
 			wantErr(t, row.reg(), `duplicate id "engine.cross"`)
 		}

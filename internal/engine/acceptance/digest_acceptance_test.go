@@ -33,7 +33,7 @@ func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T)
 	// 实例，定义语义未动）。
 	_, instanceBytes, instanceDigest := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
 
-	// 变体二：registry 槽位描述差异——追加六类"已注册但定义未引用"的条目
+	// 变体二：registry 槽位描述差异——追加七类"已注册但定义未引用"的条目
 	// （含一个 runner 语义不同于任何 canonical handler 的多余 handler），
 	// 模拟实现集扩充/codec 侧内容差异：这些实现侧描述不进定义。
 	aug := workflowRegistry(t)
@@ -47,6 +47,7 @@ func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T)
 		{"reconciler", func() error { return aug.RegisterReconciler("reconcile.impl.extra") }},
 		{"schema", func() error { return aug.RegisterSchema("schema.impl.extra") }},
 		{"operation", func() error { return aug.RegisterOperation("op.impl.extra") }},
+		{"askKind", func() error { return aug.RegisterAskKind("ask.impl.extra") }},
 	} {
 		if err := reg.fn(); err != nil {
 			t.Fatalf("register extra %s: %v", reg.name, err)

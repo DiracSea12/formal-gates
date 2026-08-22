@@ -300,8 +300,8 @@ func TestCompileRequiresInputsEqualToDependencies(t *testing.T) {
 func TestCompileRoutesUnregisteredIDsPerMode(t *testing.T) {
 	def := fxDefinition(t)
 
-	// 正常模式：六类槽位各抽一个未注册 ID，均 BLOCKED_BUG + MISSING_ENGINE_ADAPTER。
-	for _, skip := range []string{"h.s.review", "c.in", "pred.done", "r.persist", "s.req", "op.x"} {
+	// 正常模式：七类槽位各抽一个未注册 ID，均 BLOCKED_BUG + MISSING_ENGINE_ADAPTER。
+	for _, skip := range []string{"h.s.review", "c.in", "pred.done", "r.persist", "s.req", "op.x", "confirm"} {
 		_, err := compiler.Compile(def, fxRegistryWithout(t, skip))
 		if err == nil {
 			t.Fatalf("unregistered %q: expected BLOCKED_BUG rejection, got nil", skip)
@@ -423,6 +423,12 @@ func TestRegistryRegistrationAndResolutionRules(t *testing.T) {
 	if err := reg.RegisterOperation("op.x2"); err != nil {
 		t.Fatal(err)
 	}
+	if err := reg.RegisterAskKind("ask.x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterAskKind("h.x"); err == nil {
+		t.Error("cross-kind duplicate ask kind registration must be rejected")
+	}
 
 	// 未注册：closed world not found。
 	if err := reg.ResolvePredicate("pred.nope"); err == nil {
@@ -444,6 +450,7 @@ func TestRegistryRegistrationAndResolutionRules(t *testing.T) {
 		{"reconciler", func() error { return reg.ResolveReconciler("rec.x") }},
 		{"schema", func() error { return reg.ResolveSchema("schema.x") }},
 		{"operation", func() error { return reg.ResolveOperation("op.x2") }},
+		{"askKind", func() error { return reg.ResolveAskKind("ask.x") }},
 	} {
 		if err := probe.call(); err != nil {
 			t.Errorf("%s resolution of registered id failed: %v", probe.name, err)

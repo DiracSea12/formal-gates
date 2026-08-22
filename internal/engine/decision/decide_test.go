@@ -57,6 +57,9 @@ func testDefinition(t *testing.T) *compiler.CompiledDefinition {
 	if err := reg.RegisterOperation("op.test.gate"); err != nil {
 		t.Fatalf("register operation: %v", err)
 	}
+	if err := reg.RegisterAskKind("route"); err != nil {
+		t.Fatalf("register ask kind: %v", err)
+	}
 
 	ioWith := func(bindings ...string) authoring.IO {
 		inputs := make([]authoring.InputBinding, 0, len(bindings))

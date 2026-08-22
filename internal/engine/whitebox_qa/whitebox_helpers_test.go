@@ -316,6 +316,15 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 			t.Fatal(err)
 		}
 	}
+	asks := []authoring.AskKindID{"confirm"}
+	if extras {
+		asks = append(asks, "ask.alt")
+	}
+	for _, id := range asks {
+		if err := reg.RegisterAskKind(id); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // fxRegistryWithout 返回缺少 skip 中列出 ID 的夹具 registry（模拟未注册）。
@@ -377,6 +386,13 @@ func fxRegistryWithout(t *testing.T, skip ...string) *compiler.Registry {
 	for _, id := range []authoring.OperationID{"op.x"} {
 		if !skipped[string(id)] {
 			if err := reg.RegisterOperation(id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, id := range []authoring.AskKindID{"confirm"} {
+		if !skipped[string(id)] {
+			if err := reg.RegisterAskKind(id); err != nil {
 				t.Fatal(err)
 			}
 		}
