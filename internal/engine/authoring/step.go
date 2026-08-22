@@ -137,7 +137,7 @@ type AgentStep struct {
 // request/response schema 在 payload 内必填。无 handler/retry/timeout/IO 字段。
 type HumanAskStep struct {
 	Header
-	AskKind        string // Ask 类型标识，非空；具体合法集合由后续 compiler 批次对注册表校验
+	AskKind        AskKindID // Ask 类型标识，非空；合法集合由 compiler 对 registry 的 askKind 槽位解析
 	RequestSchema  SchemaID
 	ResponseSchema SchemaID
 	FreshnessTTL   time.Duration // 必填 > 0

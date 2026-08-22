@@ -272,7 +272,7 @@ func NewAgentStep(h Header, io IO, spec AgentSpec) (AgentStep, error) {
 
 // HumanAskSpec 是 NewHumanAskStep 的 payload 必填项。
 type HumanAskSpec struct {
-	AskKind        string
+	AskKind        AskKindID
 	RequestSchema  SchemaID
 	ResponseSchema SchemaID
 	FreshnessTTL   time.Duration // 必填 > 0

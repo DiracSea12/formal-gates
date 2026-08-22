@@ -147,6 +147,13 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 				authoring.HumanAskSpec{AskKind: "confirm", RequestSchema: "s.alt",
 					ResponseSchema: "s.resp", FreshnessTTL: 10 * time.Minute})
 		}},
+		{"ask kind id", func(t *testing.T) authoring.Step {
+			// ask 类型是 registry 解析的定义语义：换一个已注册的合法类型，
+			// 制品字节与 digest 必变（封闭 askKind 槽位的 digest 敏感性）。
+			return mkHumanAskStep(t, fxHeader("s.ask", "n1", "s.parse"),
+				authoring.HumanAskSpec{AskKind: "ask.alt", RequestSchema: "s.req",
+					ResponseSchema: "s.resp", FreshnessTTL: 10 * time.Minute})
+		}},
 		{"non-programmable reason", func(t *testing.T) authoring.Step {
 			io := fxIO("s.parse")
 			io.Postconditions = []authoring.PredicateRef{{ID: "pred.done"}}

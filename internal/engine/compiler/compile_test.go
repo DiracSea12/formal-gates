@@ -47,6 +47,7 @@ var (
 	goldenReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
 	goldenSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response"}
 	goldenOperations = []authoring.OperationID{"op.fan.transport"}
+	goldenAskKinds   = []authoring.AskKindID{"decision"}
 )
 
 // goldenRegistry 注册 golden 定义引用的全部 ID。skip 列出故意不注册的 ID
@@ -98,6 +99,13 @@ func goldenRegistry(t *testing.T, skip ...string) *Registry {
 		if !skipSet[string(id)] {
 			if err := reg.RegisterOperation(id); err != nil {
 				t.Fatalf("register operation %q: %v", id, err)
+			}
+		}
+	}
+	for _, id := range goldenAskKinds {
+		if !skipSet[string(id)] {
+			if err := reg.RegisterAskKind(id); err != nil {
+				t.Fatalf("register ask kind %q: %v", id, err)
 			}
 		}
 	}
@@ -323,6 +331,11 @@ func TestCompileIrrelevantToAssemblyAndRegistrationOrder(t *testing.T) {
 
 	// 注册顺序反排：同一批条目逆序注册。
 	reg := NewRegistry()
+	for _, id := range goldenAskKinds {
+		if err := reg.RegisterAskKind(id); err != nil {
+			t.Fatalf("register ask kind: %v", err)
+		}
+	}
 	for _, id := range goldenOperations {
 		if err := reg.RegisterOperation(id); err != nil {
 			t.Fatalf("register operation: %v", err)

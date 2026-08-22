@@ -200,6 +200,11 @@ func TestArtifactIndependentOfAssemblyAndRegistrationOrder(t *testing.T) {
 
 	// 反向注册：同一批 registry 条目逆序注册（内部测试可见包内注册表）。
 	reg := compiler.NewRegistry()
+	for i := len(workflowAskKinds) - 1; i >= 0; i-- {
+		if err := reg.RegisterAskKind(workflowAskKinds[i]); err != nil {
+			t.Fatalf("register ask kind: %v", err)
+		}
+	}
 	for i := len(workflowOperations) - 1; i >= 0; i-- {
 		if err := reg.RegisterOperation(workflowOperations[i]); err != nil {
 			t.Fatalf("register operation: %v", err)

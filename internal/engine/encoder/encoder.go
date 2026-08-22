@@ -437,7 +437,7 @@ func payloadToWire(cs *compiler.CompiledStep) (any, error) {
 		return agentPayloadWire{Handler: string(p.Handler), Reason: string(p.Reason),
 			TimeoutNs: int64(p.Timeout), Retry: retryToWire(p.Retry)}, nil
 	case compiler.CompiledHumanAskStep:
-		return humanPayloadWire{AskKind: p.AskKind, RequestSchema: string(p.RequestSchema),
+		return humanPayloadWire{AskKind: string(p.AskKind), RequestSchema: string(p.RequestSchema),
 			ResponseSchema: string(p.ResponseSchema), FreshnessTtlNs: int64(p.FreshnessTTL)}, nil
 	case compiler.CompiledParallelStep:
 		join := joinWire{JoinStep: string(p.Join.JoinStep), Mode: string(p.Join.Mode)}

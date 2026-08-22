@@ -52,6 +52,7 @@ var (
 	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
 	workflowSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response"}
 	workflowOperations = []authoring.OperationID{"op.fan.transport"}
+	workflowAskKinds   = []authoring.AskKindID{"decision"}
 )
 
 // Registry 返回注册了定义引用的全部封闭 ID 的 registry。条目不携带实现：
@@ -75,6 +76,9 @@ func Registry() *compiler.Registry {
 	}
 	for _, id := range workflowOperations {
 		must(id, reg.RegisterOperation(id))
+	}
+	for _, id := range workflowAskKinds {
+		must(id, reg.RegisterAskKind(id))
 	}
 	return reg
 }

@@ -98,7 +98,15 @@ func validateStepIR(cs CompiledStep) error {
 		if p.Timeout <= 0 {
 			return invariantError(`agent step %q: positive timeout required`, h.ID)
 		}
-		return checkRetryPtr(p.Retry)
+		if err := checkRetryPtr(p.Retry); err != nil {
+			return err
+		}
+		// worker result 合同的二次防线：constructor 主拦（NewAgentStep 拒绝空
+		// postconditions），绕过 constructor 的原始结构体在此复核。
+		if len(cs.IO.Postconditions) == 0 {
+			return invariantError(`agent step %q: postcondition predicate reference required (worker result contract)`, h.ID)
+		}
+		return nil
 	case CompiledHumanAskStep:
 		if p.AskKind == "" {
 			return invariantError(`human ask step %q: ask kind required`, h.ID)
@@ -258,6 +266,9 @@ func (c *resolveCtx) resolveStepRefs(cs *CompiledStep) error {
 		}
 		return checkHandler(p.Handler)
 	case CompiledHumanAskStep:
+		if _, err := c.resolveID(h.ID, string(p.AskKind), KindAskKind); err != nil {
+			return err
+		}
 		if _, err := c.resolveID(h.ID, string(p.RequestSchema), KindSchema); err != nil {
 			return err
 		}

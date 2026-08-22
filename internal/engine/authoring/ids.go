@@ -34,4 +34,8 @@ type (
 	// 通道（master-requirements §5.12），因此与 HandlerID 等其余 registry ID
 	// 一样做成独立命名类型，防止跨槽位误用。
 	OperationID string
+	// AskKindID 标识封闭 registry 中的 human ask 类型（如 decision）。
+	// Ask 类型不是自由字符串通道：合法集合由 registry 决定，compiler 对
+	// human 变体逐条解析（缺失走 MISSING_ENGINE_ADAPTER 路由）。
+	AskKindID string
 )

@@ -124,6 +124,13 @@ func workflowRegistry(t *testing.T, skip ...string) *compiler.Registry {
 			}
 		}
 	}
+	for _, id := range []authoring.AskKindID{"decision"} {
+		if !skipSet[string(id)] {
+			if err := reg.RegisterAskKind(id); err != nil {
+				t.Fatalf("register ask kind %q: %v", id, err)
+			}
+		}
+	}
 	return reg
 }
 

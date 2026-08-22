@@ -29,6 +29,13 @@
 9. **锁步激活**：executable definition 只有在同一候选包 registry 能完整、唯一解析其全部 ID 时才能激活。分层边界：源码开发层允许暂时存在未完整实现的 diagnostic-only 定义（可输出诊断、不可执行、不可签发 Ready/HostAction、不可进入 promotion），与 `MISSING_ENGINE_ADAPTER` 原则一致；候选激活层严格 definition + binary registry 锁步；正式运行层精确版本与双摘要绑定。
 10. **八类拒绝结果全保留**：不可达 step/非法循环、无类型 I/O、自然语言-only pre/postcondition、无幂等/reconcile 的副作用、无 request/schema 的 human wait、无 join/failure policy 的并行组、缺合法 reason 的 AGENT/HOST、未绑定 definition version——以 enforcement matrix 标注主要拦截层（封闭类型/constructor、closed-world compiler、runtime loader）与二次防线；需求不因实现分层而减少约束。
 
+## 增补（2026-08-22，阶段 1 封板后补漏）
+
+两项增补不改变已冻结的决策，只补齐落地对照与封闭面：
+
+1. **NodeExecutionPlan 落地对照**：master-requirements §5 与 final-implementation-draft §3.2 的"每个节点编译为有序 `NodeExecutionPlan`"由 `CompiledDefinition` 直接落地，不设独立结构——制品步骤按 (nodeId, ordinal) 稳定排序（ordinal 由确定性 Kahn 拓扑序全局唯一派生），某节点的 NodeExecutionPlan 即其步骤按 ordinal 的有序子序列，节点内机械顺序、前后置条件与 fan-out/join 语义全部由该子序列承载。与拍平 StepSpec 被拒同理，不为"节点"再投影出第二套并行结构。阶段 3 真实业务节点迁入时沿用本对照，不新增节点级重写层。
+2. **registry 槽位扩至七类**：AskKindID（human ask 的合法类型，如 `decision`）加入封闭 registry，与 OperationID 同纪律（独立命名类型、单一命名空间、缺失走 MISSING_ENGINE_ADAPTER 路由）。此前 authoring 注释承诺的"由 compiler 对注册表校验"自本增补起生效。同步补齐 compiled IR 二次防线对 agent 步 postconditions 非空（worker result 合同）的复核，enforcement matrix 的 constructor 主拦项至此全部有 compiler 层二次防线。
+
 ## 已拒绝的替代方案
 
 - 扁平万能 StepSpec 单结构体（原方案 §3.2 字段清单形态）；
