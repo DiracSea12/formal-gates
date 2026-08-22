@@ -42,3 +42,20 @@
 ## 处置（待用户拍板后执行）
 
 sealed run 不可重开。候选处置：修复项（H1 P1、QA-B13、及低成本 P2）作为阶段 2 前置修复批（独立验证 + 本审计用例子集回归），全部发现登记进阶段 2 受理的继承风险清单；或全部移交阶段 2 run 首批处理。
+
+## 四、补审与返修结果（2026-08-22 后段）
+
+- **complexity-gate 补审（修复批 diff 2e53a14..c2be481）：PASS**，4 条 P3（原子写模式重复系分层归属、retryToWire 一行复用、字符集两层对齐、H1 双层防线非冗余确认）。
+- **implementation-quality-gate 补审：FAIL（1 P1）**——修复批 H5 的裸 os.Rename 在 Windows 上确定性失败（GitHub CI run 32560940772 实证；父提交无此失败），另有 perm 断言 Windows 潜伏破坏。**用户拍板：Windows 项延期**（符合总需求 §2.6 边界：不承诺 OS 矩阵、不支持平台只作 P3）；非 Windows 项（F2 TaskKey 走 NewTaskKey、P3-3 字符集两层对齐、P3-2 retryToWire 复用）已返修于 `a29f688`。
+- **黑盒补 7 条修复面用例（QA-B46~B52）**：登记于 blackbox-audit-cases.md 补充节；独立审查 7/7 PASS、新准则 0 违例；审查建议（B48 补反斜杠输入）已吸收（76da5ab）。过程注记：B46-B52 由主代理起草而非独立设计者（封板后独立性缺口，审查独立故质量兜住）；用户未裁决是否重走独立设计，默认保留。
+- **52 条全量执行**：后台执行中，证据目录 /tmp/fg-audit-bb3/；若结果缺失，以 blackbox-audit-cases.md + prompts/actions/qa-execution.md 契约重新派发执行者即可复现。
+- **过程结论修正**：封板后作业的标准形态 = 独立子代理 + 包内契约文件（prompts/actions/*.md、gates/*.md）直接作为任务契约——设计上契约独立于 CLI 派发可用，不损标准化。本审计期两处偏离：修复批/返修使用主代理手写契约（development-worker.md 本可用）、B46-B52 主代理起草；均已留痕。
+- **深度机制讨论结论（用户裁决）**：敌意复审不设固定轮次（按需临时）、风险信号呈现不做、fix+test 本就是现行惯例——第 3 类（判断深度）问题无新增机制，依赖现有流程质量与用户抽查。测试时长对策：阶段 5 删 legacy（validate ~3min 是大头）、日常不用 -count=1（缓存）、内循环只跑相关包、慢测试 tag 分层。
+
+## 五、阶段 2 受理登记清单（继承输入）
+
+1. 验证深度风险：phase-1 封板时黑盒 19 用例/1 轮 0 修复（补审后 52 用例），后续阶段 QA 规模以此为底线参照。
+2. PackageDigest 执行绑定与计算（envelope 校验 + 安装事务侧），含"只改实现 digest 分离"的另一半验证。
+3. Windows 延期项：gen-definition rename 平台分叉（ReplaceFileW）+ perm 断言平台感知（H5 补丁的两点）。
+4. （可选评估）封板后小额修复的正门成比例性：新 run 继承已确认需求工件、审查限定 delta。
+5. 环境清理：真实 ~/.formal-gates/registry.json 内 142 条阶段 0 测试残留记录（无现行代码读写，纯环境数据）。
