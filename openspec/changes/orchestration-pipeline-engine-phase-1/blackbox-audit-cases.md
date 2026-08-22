@@ -225,7 +225,7 @@
 - 判据：两形态均拒绝，消息含 `parallel group ownership is exclusive` 或同义可区分文案。失败信号：同一 child/join 被多组声明仍编译通过。
 
 **QA-B48｜字符集约束两层一致且决策端确定性失败**（H4/条目 4）
-- 步骤：驱动①`runtime.NewTaskKey("n/a","s","")`、`("n","s/x","")`、`("n","s","sc\\x")` 等段内含 `/` 与 `\` 的键；②`authoring.NewLocalStep` 以 `StepID:"a/b"`、`NodeID:"x/y"` 构造；③以原始结构体（绕过 constructor 校验）构造含 `/` ID 的步骤喂 `decision.Decide`（经 compiled 定义或直接，取实际可行路径）。
+- 步骤：驱动①`runtime.NewTaskKey("n/a","s","")`、`("n","s/x","")`、`("n","s","sc\\x")` 等段内含 `/` 与 `\` 的键；②`authoring.NewLocalStep` 以 `StepID:"a/b"`、`NodeID:"x/y"`、`StepID:"a\\b"` 构造；③以原始结构体（绕过 constructor 校验）构造含 `/` ID 的步骤喂 `decision.Decide`（经 compiled 定义或直接，取实际可行路径）。
 - 判据：①②均拒绝且消息含字符约束说明（两层文案一致拒 `/` 与 `\`）；③确定性返回错误（含 task key 约束），不再静默产出可碰撞键。失败信号：任一层接受段内分隔符（审计 H4 碰撞形态回归）。
 
 **QA-B49｜生成器写出完整性与无残留（本机平台）**（H5/条目 3）
