@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -164,8 +165,8 @@ func TestInstallIncidentStubReplacementLandsOnlyInInjectedHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stable launcher was not published inside the injected home: %v", err)
 	}
-	if string(stub) != "#!/usr/bin/env sh\nexit 0\n" {
-		t.Fatalf("published launcher payload changed: %q", string(stub))
+	if !bytes.Equal(stub, stubBinaryPayload(t)) {
+		t.Fatalf("published launcher payload changed: %q (first bytes)", stub[:min(len(stub), 32)])
 	}
 
 	// The shared registry write also stayed inside the injected home.

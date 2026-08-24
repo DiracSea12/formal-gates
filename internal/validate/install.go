@@ -942,8 +942,20 @@ func rejectActiveWorkflowRuns(operation string, targets []installTarget, options
 	return nil
 }
 
+// defaultStableLauncherPath 解析默认稳定 launcher 落点。Windows 优先使用
+// %LOCALAPPDATA%\formal-gates\bin（~/.local/bin 不是 Windows 惯例）；但当
+// HOME 被显式设置时改走 HOME——真实 Windows 会话不设置 HOME，显式 HOME 只
+// 出现在测试/便携环境，此时 registry 等其余状态都锚定该 HOME（installHomeDir），
+// launcher 必须跟随，否则会绕过隔离把桩写进真实用户目录。
 func defaultStableLauncherPath(options InstallOptions) string {
 	if runtime.GOOS == "windows" {
+		if strings.TrimSpace(os.Getenv("HOME")) != "" {
+			home, err := installHomeDir()
+			if err != nil {
+				return stableLauncherPath(filepath.Join(".local", "bin", nativeBinaryName()))
+			}
+			return stableLauncherPath(filepath.Join(home, ".local", "bin", nativeBinaryName()))
+		}
 		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
 			return stableLauncherPath(filepath.Join(local, "formal-gates", "bin", nativeBinaryName()))
 		}

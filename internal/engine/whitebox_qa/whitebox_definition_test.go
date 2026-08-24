@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"formal-gates/internal/engine/compiler"
@@ -81,7 +82,12 @@ func TestGenerateReproducesCheckedInArtifactsZeroDiff(t *testing.T) {
 func TestGenDefinitionCommandDeterministicAcrossProcesses(t *testing.T) {
 	root := repoRoot(t)
 	tmp := t.TempDir()
-	bin := filepath.Join(tmp, "gen-definition")
+	// Windows 上可执行文件必须带 .exe 后缀（CreateProcess 不认无后缀名）。
+	binName := "gen-definition"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	bin := filepath.Join(tmp, binName)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/gen-definition")
 	build.Dir = root
 	if out, err := build.CombinedOutput(); err != nil {

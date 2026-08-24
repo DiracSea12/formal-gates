@@ -1,10 +1,13 @@
 package validate
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -249,9 +252,55 @@ func copyPackageFixture(t *testing.T) string {
 	for _, rel := range []string{"install.command", "install.ps1", "install.bat"} {
 		copyValidateTestFile(t, source, target, rel)
 	}
-	mustWriteValidateTest(t, filepath.Join(target, "bin", nativeBinaryName()), "#!/usr/bin/env sh\nexit 0\n")
+	// 桩二进制内容按平台区分：Windows 上该文件名为 formal-gates.exe，完整包
+	// 校验（validateBinaryFormat）与安装后 smoke 都会真实对待它——非 PE 字节
+	// 要么被格式检查拒绝、要么 fork/exec 报 "%1 is not compatible"；POSIX 上
+	// shebang 桩经解释器执行即可。
+	mustWriteValidateTest(t, filepath.Join(target, "bin", nativeBinaryName()), string(stubBinaryPayload(t)))
 	return target
 }
+
+// stubBinaryPayload 返回平台对应的桩二进制载荷。POSIX 用 25 字节 shebang 桩；
+// Windows 必须提供真实可执行的微型 PE——首次调用时从仓库源码构建一次
+// formal-gates CLI 并在进程内缓存复用。"binary\n" 占位标记只供宽松 smoke
+// 策略的小型进程内夹具使用（phase0_install.go runInstalledBinarySmokeWithPolicy），
+// 完整包校验走严格模式，不能用占位标记。
+func stubBinaryPayload(t *testing.T) []byte {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return []byte("#!/usr/bin/env sh\nexit 0\n")
+	}
+	data, err := stubWindowsPE()
+	if err != nil {
+		t.Fatalf("build windows stub binary: %v", err)
+	}
+	return data
+}
+
+var stubWindowsPE = sync.OnceValues(func() ([]byte, error) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return nil, fmt.Errorf("could not locate the test source as an absolute path")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	dir, err := os.MkdirTemp("", "formal-gates-stub-*")
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, nativeBinaryName())
+	build := exec.Command("go", "build", "-o", path, "./cmd/formal-gates")
+	build.Dir = repoRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("go build ./cmd/formal-gates: %w: %s", err, out)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	return data, nil
+})
 
 func mutateWorkflow(t *testing.T, root, old, new string) {
 	t.Helper()

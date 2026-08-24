@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
@@ -50,7 +51,12 @@ func readRun(t *testing.T, workdir string) (artifact, identity []byte) {
 func TestAcceptanceCrossProcessGenerationDeterministic(t *testing.T) {
 	root := repoRoot(t)
 
-	bin := filepath.Join(t.TempDir(), "gen-definition")
+	// Windows 上可执行文件必须带 .exe 后缀（CreateProcess 不认无后缀名）。
+	binName := "gen-definition"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), binName)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/gen-definition")
 	build.Dir = root
 	if out, err := build.CombinedOutput(); err != nil {
