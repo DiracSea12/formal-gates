@@ -138,7 +138,7 @@ func TestPackageAcceptsPermissionIndentAndCommentVariations(t *testing.T) {
 func TestPackageAllowsMacOSRunnerLabelChanges(t *testing.T) {
 	root := copyPackageFixture(t)
 	mutateWorkflow(t, root, "macos-latest", "macos-custom-arm64")
-	mutateWorkflow(t, root, "macos-26-intel", "macos-custom-intel")
+	mutateWorkflow(t, root, "macos-15-intel", "macos-custom-intel")
 
 	result := Package(root)
 	if !result.OK() {
