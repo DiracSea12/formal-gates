@@ -17,9 +17,9 @@ type Admission struct {
 // 不含随机数与当前时间——phase 1 由 TaskKey 决定性地派生
 // （"act:" + 规范键形态）；重试/Attempt 身份随阶段 2 的 Attempt 模型扩展。
 type IssuedAction struct {
-	ActionID string
-	Task     runtime.TaskKey
-	Step     authoring.StepID
+	ActionID string           `json:"actionId"`
+	Task     runtime.TaskKey  `json:"task"`
+	Step     authoring.StepID `json:"step"`
 }
 
 // IssuedSet 是一次签发的完整集合：容量 C、可签发 N 时恰好 min(C,N) 个，

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
@@ -24,6 +26,140 @@ func TestCLIWorkflowFutureRejectsSubmitAlias(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("rejected submit alias created future state: %v", err)
+	}
+}
+
+func TestCLIWorkflowDiagnoseReportsCandidateEngineIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	mustWriteCLI(t, path, `{
+  "writer": "engine",
+  "stateSchemaVersion": "1",
+  "workflowDefinitionVersion": "unsupported",
+  "definitionSource": "definitions/workflow.json",
+  "definitionDigest": "sha256:unsupported",
+  "packageDigest": "sha256:testkit",
+  "status": "ACTIVE"
+}
+`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report validate.DiagnoseReport
+	if err := json.Unmarshal([]byte(runCLI(t, "workflow", "diagnose", "--path", path)), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.JSONReadable || report.DetectedVersions["workflowDefinitionVersion"] != "unsupported" {
+		t.Fatalf("detected report = %+v", report)
+	}
+	packageDigest, err := validate.PackageDigest(".")
+	if err != nil {
+		t.Fatalf("package digest: %v", err)
+	}
+	if report.Supported.StateSchemaVersion != encoder.StateSchemaVersion ||
+		report.Supported.WorkflowDefinitionVersion != definition.WorkflowDefinitionVersion ||
+		report.Supported.DefinitionDigest != definition.WorkflowDefinitionDigest ||
+		report.Supported.PackageDigest != packageDigest {
+		t.Fatalf("supported identity = %+v", report.Supported)
+	}
+	if !strings.Contains(report.Recommendation, validate.UnsupportedRunVersionCode) || !strings.Contains(report.Recommendation, "rebuild") {
+		t.Fatalf("recommendation = %q", report.Recommendation)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("workflow diagnose changed its input")
+	}
+}
+
+func TestCLIWorkflowFutureGenerateEmitsCompleteEnvelope(t *testing.T) {
+	root := t.TempDir()
+	definitionBytes, err := os.ReadFile(filepath.Join("..", "..", "definitions", "workflow.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(root, "definitions", "workflow.json"), string(definitionBytes))
+	var envelope validate.VersionEnvelope
+	if err := json.Unmarshal([]byte(runCLI(t, "workflow", "future", "generate", "--root", root, "--package-digest", "sha256:installed-package")), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Writer != "engine" || envelope.StateSchemaVersion == "" || envelope.WorkflowDefinitionVersion == "" ||
+		envelope.DefinitionSource == "" || envelope.DefinitionDigest == "" || envelope.PackageDigest == "" {
+		t.Fatalf("future envelope is incomplete: %+v", envelope)
+	}
+	if envelope.PackageDigest != "sha256:installed-package" {
+		t.Fatalf("package digest = %q", envelope.PackageDigest)
+	}
+}
+
+func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate CLI test source")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	fixture := t.TempDir()
+	statePath := filepath.Join(fixture, "unsupported.json")
+	mustWriteCLI(t, statePath, `{"writer":"engine","stateSchemaVersion":"1","workflowDefinitionVersion":"unsupported","definitionSource":"definitions/workflow.json","definitionDigest":"sha256:unsupported","status":"ACTIVE"}`+"\n")
+	var diagnose validate.DiagnoseReport
+	if err := json.Unmarshal([]byte(runCLI(t, "workflow", "diagnose", "--root", root, "--path", statePath)), &diagnose); err != nil {
+		t.Fatal(err)
+	}
+	if diagnose.Supported.PackageDigest == "" {
+		t.Fatalf("diagnose supported report omitted package digest: %+v", diagnose.Supported)
+	}
+	receipt, err := validate.PackageReceipt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Digest != diagnose.Supported.PackageDigest {
+		t.Fatalf("diagnose supported digest %q differs from install/package receipt %q", diagnose.Supported.PackageDigest, receipt.Digest)
+	}
+	var missing bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "future", "generate", "--root", root}, IO{Stderr: &missing}); code == 0 ||
+		!strings.Contains(missing.String(), "install/bootstrap receipt") || !strings.Contains(missing.String(), "workflow diagnose supported.packageDigest") {
+		t.Fatalf("missing digest refusal did not name legal sources: code=%d err=%s", code, missing.String())
+	}
+	envelopePath := filepath.Join(fixture, "envelope.json")
+	runCLI(t, "workflow", "future", "generate", "--root", root, "--package-digest", diagnose.Supported.PackageDigest, "--output", envelopePath)
+	envelopeBytes, err := os.ReadFile(envelopePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, mutate := range []func(*validate.VersionEnvelope){
+		func(value *validate.VersionEnvelope) { value.PackageDigest = "tampered" },
+		func(value *validate.VersionEnvelope) { value.DefinitionDigest = "sha256:tampered" },
+		func(value *validate.VersionEnvelope) { value.WorkflowDefinitionVersion = "future" },
+		func(value *validate.VersionEnvelope) { value.Writer = "legacy" },
+	} {
+		var candidate validate.VersionEnvelope
+		if err := json.Unmarshal(envelopeBytes, &candidate); err != nil {
+			t.Fatal(err)
+		}
+		mutate(&candidate)
+		candidatePath := filepath.Join(fixture, fmt.Sprintf("tampered-%d.json", index))
+		encoded, err := json.Marshal(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteCLI(t, candidatePath, string(encoded)+"\n")
+		target := filepath.Join(fixture, fmt.Sprintf("target-%d.json", index))
+		var stderr bytes.Buffer
+		if code := Run("formal-gates", []string{"workflow", "future", "write", "--root", root, "--path", target, "--envelope", candidatePath}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), validate.UnsupportedRunVersionCode) {
+			t.Fatalf("tampered write %d was accepted: code=%d err=%s", index, code, stderr.String())
+		}
+		if info, statErr := os.Stat(target); statErr == nil && info.Size() != 0 {
+			t.Fatalf("tampered write %d created %d bytes", index, info.Size())
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			t.Fatal(statErr)
+		}
+	}
+	control := filepath.Join(fixture, "control.json")
+	runCLI(t, "workflow", "future", "write", "--root", root, "--path", control, "--envelope", envelopePath)
+	if info, err := os.Stat(control); err != nil || info.Size() == 0 {
+		t.Fatalf("control write did not persist a target: info=%v err=%v", info, err)
 	}
 }
 

@@ -145,7 +145,7 @@ func fxDispatch(t *testing.T) authoring.HostActionStep {
 	return mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO("s.parse"),
 		authoring.HostActionSpec{
 			Handler: "h.s.dispatch", Boundary: authoring.BoundaryExternalCapability,
-			Operation: "op.x", Timeout: 5 * time.Second,
+			Operation: "op.x", Schema: "schema.x", Timeout: 5 * time.Second,
 		})
 }
 
@@ -298,9 +298,9 @@ func regsitryMisc(t *testing.T, reg *compiler.Registry, extras bool) {
 			t.Fatal(err)
 		}
 	}
-	schemas := []authoring.SchemaID{"s.req", "s.resp"}
+	schemas := []authoring.SchemaID{"s.req", "s.resp", "schema.x"}
 	if extras {
-		schemas = append(schemas, "s.alt")
+		schemas = append(schemas, "s.alt", "schema.alt")
 	}
 	for _, id := range schemas {
 		if err := reg.RegisterSchema(id); err != nil {
@@ -376,7 +376,7 @@ func fxRegistryWithout(t *testing.T, skip ...string) *compiler.Registry {
 			}
 		}
 	}
-	for _, id := range []authoring.SchemaID{"s.req", "s.resp"} {
+	for _, id := range []authoring.SchemaID{"s.req", "s.resp", "schema.x"} {
 		if !skipped[string(id)] {
 			if err := reg.RegisterSchema(id); err != nil {
 				t.Fatal(err)

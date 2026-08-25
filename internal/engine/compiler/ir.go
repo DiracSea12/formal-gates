@@ -68,6 +68,7 @@ type CompiledHostActionStep struct {
 	Handler   authoring.HandlerID
 	Boundary  authoring.HostBoundaryReason
 	Operation authoring.OperationID
+	Schema    authoring.SchemaID
 	Timeout   time.Duration
 }
 

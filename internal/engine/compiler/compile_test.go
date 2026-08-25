@@ -45,7 +45,7 @@ var (
 	goldenCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	goldenPredicates = []authoring.PredicateID{"pred.review.post"}
 	goldenReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
-	goldenSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response"}
+	goldenSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response", "schema.host.fan.transport"}
 	goldenOperations = []authoring.OperationID{"op.fan.transport"}
 	goldenAskKinds   = []authoring.AskKindID{"decision"}
 )
@@ -189,7 +189,7 @@ func goldenSteps() []authoring.Step {
 	transport, err := authoring.NewHostActionStep(header("fan.transport", "fan", "fan.split"),
 		ioWith("fan.split"), authoring.HostActionSpec{
 			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
-			Operation: "op.fan.transport", Timeout: 10 * time.Second,
+			Operation: "op.fan.transport", Schema: "schema.host.fan.transport", Timeout: 10 * time.Second,
 		})
 	if err != nil {
 		panic(err)
@@ -284,7 +284,7 @@ func TestCompileGolden(t *testing.T) {
 		t.Fatalf("durable payload not materialized: %+v", byID["entry.persist"].Payload)
 	}
 	if p, ok := byID["fan.transport"].Payload.(CompiledHostActionStep); !ok ||
-		p.Boundary != authoring.BoundaryAgentDispatchAPI || p.Operation != "op.fan.transport" {
+		p.Boundary != authoring.BoundaryAgentDispatchAPI || p.Operation != "op.fan.transport" || p.Schema != "schema.host.fan.transport" {
 		t.Fatalf("host action payload not materialized: %+v", byID["fan.transport"].Payload)
 	}
 	if p, ok := byID["fan.split"].Payload.(CompiledParallelStep); !ok ||

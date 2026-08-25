@@ -119,6 +119,7 @@ type HostActionStep struct {
 	Handler   HandlerID
 	Boundary  HostBoundaryReason
 	Operation OperationID
+	Schema    SchemaID
 	Timeout   time.Duration // 必填 > 0
 }
 

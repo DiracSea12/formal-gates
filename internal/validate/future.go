@@ -72,13 +72,17 @@ func GenerateFutureEnvelope(root, packageDigest string) (VersionEnvelope, error)
 	if err != nil {
 		return VersionEnvelope{}, err
 	}
+	packageDigest = strings.TrimSpace(packageDigest)
+	if packageDigest == "" {
+		return VersionEnvelope{}, fmt.Errorf("future package digest is required: pass PackageDigest from an install/bootstrap receipt or workflow diagnose supported.packageDigest")
+	}
 	envelope := VersionEnvelope{
 		Writer:                    "engine",
 		StateSchemaVersion:        definition.SchemaVersion,
 		WorkflowDefinitionVersion: definition.WorkflowVersion,
 		DefinitionSource:          definition.Source,
 		DefinitionDigest:          definition.Digest,
-		PackageDigest:             strings.TrimSpace(packageDigest),
+		PackageDigest:             packageDigest,
 	}
 	if err := validateFutureEnvelope(envelope, definition); err != nil {
 		return VersionEnvelope{}, err
@@ -108,6 +112,9 @@ func validateFutureEnvelope(envelope VersionEnvelope, definition FutureDefinitio
 		if strings.TrimSpace(check.observed) == "" || check.observed != check.expected {
 			return &UnsupportedRunVersionError{Field: check.field, Expected: check.expected, Observed: check.observed}
 		}
+	}
+	if strings.TrimSpace(envelope.PackageDigest) == "" {
+		return &UnsupportedRunVersionError{Field: "packageDigest", Expected: "confirmed installed package digest", Observed: envelope.PackageDigest}
 	}
 	return nil
 }
@@ -147,6 +154,13 @@ func WriteFutureState(root, path string, envelope VersionEnvelope, value any) er
 	}
 	if err := validateFutureEnvelope(envelope, definition); err != nil {
 		return err
+	}
+	packageDigest, err := PackageDigest(root)
+	if err != nil {
+		return fmt.Errorf("future package binding: %w", err)
+	}
+	if envelope.PackageDigest != packageDigest {
+		return &UnsupportedRunVersionError{Field: "packageDigest", Expected: packageDigest, Observed: envelope.PackageDigest}
 	}
 	return writeVersionedStateDocument(path, envelope, value)
 }

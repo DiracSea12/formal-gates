@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
@@ -408,7 +410,17 @@ func runWorkflowDiagnose(args []string, streams IO) (int, error) {
 			statePath = validate.RunSummaryPath(*root, *runID)
 		}
 	}
-	report, err := validate.DiagnoseState(statePath)
+	packageDigest, err := validate.PackageDigest(*root)
+	if err != nil {
+		return 1, err
+	}
+	report, err := validate.DiagnoseStateWithSupported(statePath, validate.VersionEnvelope{
+		Writer: "engine", StateSchemaVersion: encoder.StateSchemaVersion,
+		WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion,
+		DefinitionSource:          validate.CurrentWorkflowDefinitionSource,
+		DefinitionDigest:          definition.WorkflowDefinitionDigest,
+		PackageDigest:             packageDigest,
+	})
 	return printValue(streams.Stdout, report, err)
 }
 
@@ -648,7 +660,7 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 	case "generate":
 		fs := newFlagSet("workflow future generate", streams)
 		root := fs.String("root", ".", "package root")
-		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
+		packageDigest := fs.String("package-digest", "", "required immutable package digest confirmed by installation")
 		output := fs.String("output", "", "optional envelope output path")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err

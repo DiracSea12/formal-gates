@@ -1,7 +1,8 @@
 # 命令路由矩阵（§2.3 全列名 · 活文档）
 
 > 义务来源：`refactor-plan/incremental-seal-plan.md` §2.3（唯一写入者与版本绑定）、§5 第 11 项
-> （每阶段退出条件）。本矩阵为阶段 0/1 交付义务补漏实物（2026-08-22），此后作为活文档维护。
+> （每阶段退出条件）。本矩阵为阶段 0/1 交付义务补漏实物（2026-08-22），阶段 2 开始按
+> 阶段交付继续维护。
 >
 > 维护规则（用户拍板 2026-08-22）：**先覆盖后实现**——任何新公共面在代码实现落地前必须先进
 > 入矩阵；实现落地后矩阵与实际公开面一致，实际入口在矩阵中缺席即缺陷。反向普查机器测试
@@ -14,6 +15,7 @@
 > - `legacy`：stable driver 既有 legacy runtime 语义，阶段内不变；
 > - `install-bootstrap`：阶段 0 安装/registry 事务面（无 workflow writer）；
 > - `Shadow/诊断`：阶段 1 只读计划/诊断能力（不写权威 workflow state）；
+> - `隔离 engine`：阶段 2 只在 internal/test-only 面写隔离 engine state，不是公开 CLI；
 > - `unsupported`：未实现面——必须显式拒绝或不存在，不得缺省冒充。
 >
 > 计划枚举取值：`计划内` = §2.3 明文枚举；`计划未枚举` = 实际存在但 §2.3 未枚举的公开入口
@@ -28,8 +30,9 @@
 全部行为 `workflow <subcommand>` 形态，经 `cli.go` 的 `workflowSubcommands` 注册表分发
 （cli.go:327-356）；注册表缺席的入口走 `runWorkflow` default 分支显式拒绝
 （`unknown workflow subcommand: %s`，rc=1，cli.go:318-321）。阶段 0/1 无任何 engine runtime
-公开 workflow 面：legacy run 与 stable driver 的 state 为当前 legacy 格式（无版本 envelope，
-绑定 admission epoch/generation），版本化 engine/candidate run 尚不存在。
+公开 workflow 面；阶段 2 虽已交付隔离 engine 协议内核，但没有注册新的公开 workflow 面。
+legacy run 与 stable driver 的 state 仍为 legacy 格式（无版本 envelope，绑定 admission
+epoch/generation）。
 
 | 入口 | runtime | 唯一 writer | schema/definition 版本绑定 | 允许的状态变化 | 错误码 | 是否只读 | 阶段 0 绑定 | 阶段 1 绑定 | 计划枚举 | 机器证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -62,14 +65,69 @@
 | carry | legacy | stable driver legacy runtime（`validate.RecordCarry`，cli.go:942-959） | legacy state 无版本 envelope | carry 处置决定留痕（含主代理接管理由） | 处置输入校验错误文本 | 否 | legacy | legacy | 计划内 | validate `decoupled_qa_test.go`、`repro_carry_regression_test.go`；cli `workflow_carry_seal.go` |
 | authorize-repair | legacy | stable driver legacy runtime（`validate.AuthorizeExtraRepair`，cli.go:773-793） | legacy state 无版本 envelope | 授权额外修复轮（轮次/QA 范围授权留痕） | 授权参数校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` authorize-repair 用例；P0-JSON skipAuthorizations 机制 |
 | seal | legacy | stable driver legacy runtime（`validate.Seal`，cli.go:795-808） | legacy state 无版本 envelope；Seal 写 terminal summary（.gates/results/<run>.json，SEALED）并支持 squash 集成 | 终态封板：admission/identity 校验先于 git squash；写封板产物（含黑盒用例交付物） | admission 失败不产生 committed seal；门未过需 --user-requested 授权留痕 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-045；`TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash`；cli `workflow_test.go` seal 用例 |
-| drive | 无（不在注册表，显式拒绝） | 无 | 无（engine 驱动面未实现，阶段 3 交付） | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: drive` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | `TestCLIWorkflowFutureRejectsSubmitAlias`（future 面拒绝 submit 别名，同族拒绝路径）；`TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens`（CASE-058：帮助/文档无 drive/submit token）；反向普查测试机械断言注册表缺席 |
-| submit | 无（不在注册表，显式拒绝） | 无 | 无（engine 幂等提交面未实现，阶段 2/3 交付） | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | cli `TestCLIWorkflowFutureRejectsSubmitAlias`（future write 唯一提交路径，submit 别名显式拒绝且不落文件）；CASE-058 帮助/文档扫描；反向普查测试机械断言注册表缺席 |
-| future | legacy（阶段 0 冻结的 versioned future surface 契约入口，非 workflow state writer） | future writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:e342a5f4…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 future 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`future submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowFutureRejectsSubmitAlias` |
+| drive | 无（不在注册表，显式拒绝） | 无 | 无（engine 驱动面未实现，阶段 3 交付） | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: drive` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | validate `TestRouteMatrixUnsupportedFacesExplicitlyRejectedByPublicCLI`（真实 CLI 拒绝且工作目录零写入）；`TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens`（CASE-058：帮助/文档无 drive/submit token）；反向普查测试机械断言注册表缺席 |
+| submit | 无（不在注册表，显式拒绝） | 无 | 公开面无；阶段 2 的幂等 submit 仅存在于下表 `protocol.Engine.Submit` 内部协议面 | 无（公开拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | cli `TestCLIWorkflowFutureRejectsSubmitAlias`；validate `TestRouteMatrixUnsupportedFacesExplicitlyRejectedByPublicCLI`（真实 CLI 拒绝且工作目录零写入）；`TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens`（CASE-058） |
+| future | legacy（阶段 0 冻结的 versioned future surface 契约入口，非 workflow state writer） | future writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:3db87c9c…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 future 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`future submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowFutureRejectsSubmitAlias` |
+
+### 阶段 2 公开 workflow 绑定补表
+
+此纵向补表登记原主表同名行的阶段 2 绑定；其余 runtime/writer/version/transition/error/evidence
+列继续由原主表持有，避免复制后漂移。
+
+| 入口 | 阶段 2 绑定 | 阶段 2 变化 |
+| --- | --- | --- |
+| start | legacy | 无；stable driver 继续拥有公开 run 创建 |
+| show | legacy | 无 |
+| status | unsupported | 无；仍不在公开注册表 |
+| next | unsupported | 无；仍不在公开注册表 |
+| diagnose | legacy | 无 |
+| resume | legacy | 无 |
+| abort | legacy | 无 |
+| reset | legacy | 无 |
+| requirement | legacy | 无 |
+| route-candidates | legacy | 无 |
+| slicing | legacy | 无 |
+| settle-findings | legacy | 无 |
+| route | legacy | 无 |
+| route-add | legacy | 无 |
+| qa-worktree | legacy | 无 |
+| prepare-gate | legacy | 无 |
+| prepare-action | legacy | 无 |
+| claim-dispatch | legacy | 无 |
+| record-action | legacy | 无 |
+| record-gate | legacy | 无 |
+| qa-design | legacy | 无 |
+| qa-review | legacy | 无 |
+| qa-execution | legacy | 无 |
+| qa-execution-scope | legacy | 无 |
+| snapshot | legacy | 无 |
+| cleanup | legacy | 无 |
+| carry | legacy | 无 |
+| authorize-repair | legacy | 无 |
+| seal | legacy | 无 |
+| drive | unsupported | 无；公开 façade 属阶段 3 |
+| submit | unsupported | 内部 `protocol.Engine.Submit` 已交付，但公开命令仍不存在 |
+| future | legacy | 无；仍非 engine workflow writer |
+
+## 阶段 2 隔离 engine / test-only 协议面（非公开 CLI）
+
+本表登记阶段 2 实际交付的内部面。它们只能由 Go 调用方显式构造，并把状态目录指向隔离
+namespace；不在 `workflowSubcommands` 或 top-level CLI 注册表中，也不接管本 run 的 stable
+legacy writer。这里的“隔离 engine”是阶段绑定，不是计划枚举中的新增公共入口。
+
+| 内部入口 | 归属与可见性 | 唯一 writer | 版本/新鲜度绑定 | 允许的状态变化与恢复 | 拒绝/结果 | 阶段 2 绑定 | 机器证据 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `persistence.Store.Save` / `Store.Recover` | `internal/engine/persistence`；由内部调用方用显式 state directory 和 `Config.PackageDigest` 构造 | `persistence.Store` 四段协议（intent -> execute -> observe/reconcile -> commit） | writer=`engine`、state schema `1`、workflow definition `2`、definition digest `sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f`、调用方注入 package digest；revision CAS + external fingerprint | 原子保存 `state.json`；崩溃后 `clean/committed/recovered/residual` 对账；完整性摘要、目录锁与残留清扫 | `UNSUPPORTED_RUN_VERSION`、`STATE_INTEGRITY_MISMATCH`、`REVISION_CONFLICT`、`FINGERPRINT_CHANGED` | 隔离 engine | persistence `TestSaveFaultBoundariesRecoverDeterministically`、`TestRecoverRedoesInterruptedCommit`、`TestRevisionCASConflict`、`TestFingerprintBeforeWriteRejects`、`TestFingerprintAfterWriteCommitsAndReports` |
+| `protocol.Engine.Submit` | `internal/engine/protocol`；统一接纳受限 request/decision、task progress、SpawnReceipt、worker result、Operator observation、HostAction receipt、lifecycle event | `protocol.Engine`，每次接纳经 `persistence.Store.Save` | event ID + canonical payload digest 幂等；request ID + 当前 freshness token；当前 task/Attempt/provider/definition registry | 更新 expected tasks、Attempt、pending action/Ask、receipt/result/observation 台账；result-before-receipt 暂存，接纳后继续 Decide/SelectIssued | 同 ID 同 digest 稳定重放；异 digest、stale freshness/task-progress Attempt、provider mismatch、未知/非当前事件拒绝且零状态变化；旧 Attempt 的 worker result 记为 `OBSOLETE_RESULT` | 隔离 engine | protocol `TestRequestIdempotentReplay`、`TestSameIDDifferentDigestHardReject`、`TestFreshnessStaleRejectedZeroChange`、`TestWorkerResultStagesBeforeReceipt`、`TestLifecycleDuplicateReplayIdempotent`、`TestFreeUserEventRejectedThroughSubmit` |
+| `Engine.RecoverAttempt` / `ReconcileUnknownReceipt` / `ReconcileHostAction` | `internal/engine/protocol` 恢复方法；只处理已持久化 action/receipt/intent | `protocol.Engine`，恢复决定与记录仍经同一持久 writer | current action/Attempt、task/snapshot/responsibility bindings、lifecycle identity、expected fingerprint | 客观瞬态且 bindings 未变 resume；绑定变化或已知失效建新 Attempt；原因未知 Ask；UNKNOWN receipt 唯一 lifecycle 匹配 attach，零/多匹配 Operator；UNKNOWN HostAction 先观察再 reconcile/wait/operator，不重放副作用 | 返回封闭 `RecoveryPlan`；engine/invariant 故障不动态降级 agent，旧 Attempt 结果记 `OBSOLETE_RESULT` | 隔离 engine | protocol `TestUnknownSpawnReceiptRecoveryIsDurable`、`TestHostActionReconciliationReplay`、`TestDefinitionFailureResultsAreTerminalAndDiagnosable`；testkit `TestLateAttemptResultIsRecordedObsolete`、`TestHostActionUnknownReconcileDoesNotExecuteAgain` |
+| `testkit.NewProtocolFixture` + `FaultPlan` / fake host / fake worker / fake VCS | `internal/engine/testkit`；仅供仓库内测试与 test-only harness 调用；`FaultPlan.Arm/ArmCrash(FaultPoint)` 是命名、单次触发开关 | 复用上述 engine writer；FakeVCS 是 Engine 的 external fingerprint collector，并以 project-local ledger 提供 `ApplyOnce` 持久副作用计数 | fixture package digest 固定为 `sha256:testkit`；fake provider=`fake-host`；注入点与调用产生的 current revision/receipt 台账绑定 | 覆盖持久边界、spawn attach、result-before-receipt、响应丢失、并发 submit、旧 Attempt、fingerprint、FakeVCS 与 HostAction observe/reconcile/commit；输出 snapshot、NextResult、acceptance、调用计数与 recovery report | `ErrInjected`/`ErrInjectedCrash` 为 test-only 注入结果；无 sleep/概率竞争；FakeVCS 同名操作跨重启至多执行一次 | 隔离 engine | testkit `TestFaultPlanIsNamedAndSingleTrigger`、`TestFakeHostSpawnCrashDoesNotRepeatSideEffect`、`TestSubmitResponseLossIsIdempotent`、`TestConcurrentSubmitLeavesOneCanonicalState`、`TestExternalFingerprintRecheckBeforeAndAfterWrite`、`TestHarnessHostUnknownReconcilesAtMostOnce` |
+| `internal/engine/testkit/cmd/harness` | 独立 test-only 二进制；`go build -o <path> ./internal/engine/testkit/cmd/harness`；`--project-root`/`FORMAL_GATES_TEST_PROJECT` 是唯一 namespace 入口，`--scenario` 选择登记场景，event/action/request/provider/correlation/status/outcome/failure/fault 等参数只作用于该隔离项目 | 复用 `NewProtocolFixture` 的隔离 engine writer；不注册公开 `workflow drive/submit` | project root 决定 `engine-state/state.json`/`terminal-summary.json`；event ID + digest、revision、freshness、provider、Attempt 与 package envelope 均由场景报告暴露 | `smoke`/`recover`、五次 revision submit、request/decision/worker/receipt/lifecycle/operator、idempotency/freshness/CAS/concurrency/fingerprint、capacity refill、interruption/result-before-receipt、HostAction、terminal query/replay、六类 NextResult、failure routing、`full` E2E；`fault --fault <point>` 跨进程保留并恢复协议窗口 | 缺参数或非法事件 rc=1；envelope 缺字段写前拒绝；同 ID 异 digest、旧 revision/freshness/provider/Attempt 硬拒绝；terminal replay 不恢复 active state；故障点按名确定触发 | 隔离 engine | acceptance `TestAcceptanceInstalledProtocolHarness`；testkit `TestHarnessEnvelopeBarrierDoesNotCreateTarget`、`TestHarnessCapacityOneRefillsSecondEligibleTask`、`TestHarnessResultBeforeReceiptSettlesAfterRestart`、`TestHarnessTerminalReplayUsesDurableSummaryWithoutWrites` |
 
 ## 维护/transport 面（§2.3 第二段：top-level 维护/registry/cutover/rollback）
 
-分类取值：`只读`、`只写外部 observation/receipt`、`委托 engine submit`（阶段 0/1 无任何
-`委托 engine submit` 入口——engine submit 未实现，本面所有入口不得成为 workflow writer）。
+分类取值：`只读`、`只写外部 observation/receipt`、`委托 engine submit`。阶段 0/1 无任何
+`委托 engine submit` 入口；阶段 2 的 engine submit 只在上表 internal/test-only 面存在，本维护
+面仍无入口委托它，且不得成为 workflow writer。
 top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level 命令显式拒绝
 （`unknown command: %s`，rc=1，cli.go:94-96）。
 
@@ -91,6 +149,26 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
 | cutover | 无（generation/authority 切换协议未实现，无公开入口） | 无 | 目标态为 SWITCHING(E+1) 下 cutover token（§2.4，阶段 7 交付） | 无 | 无 | 当前 CLI 无该命令：top-level 显式拒绝 `unknown command`（cli.go:94-96）；普通 stable/candidate start 在切换协议落地前不受 generation 拒绝面约束 | unsupported | unsupported | 计划内 | 反向普查测试断言 top-level 命令面；证据缺口：无既有 negative test（无实现面可测；唯一既有事实是 top-level switch 缺席该命令） |
 | rollback | 内部 owner handler（install/uninstall 事务内 rollbackAll + journal 恢复；非公开命令） | 安装事务 native owner（install.go:387 rollbackAll） | 事务 journal 的 generation/lease/token（epoch 不回退） | failure/recovery receipt（ROLLED_BACK/recovered、stableDigest/generation） | 事务内恢复旧 runtime/pointer/config/hook/rule/registry；reconcile 后旧 stable validate/canary smoke | 不改 workflow state；generation 级 ROLLING_BACK 公开动作不存在（属阶段 7 协议，当前 CLI 无该命令，显式拒绝 unknown command） | install-bootstrap | install-bootstrap | 计划内 | P0-JSON CASE-007/017/018/019；`TestWhiteboxPhase0Round7OuterInstallRollbackIsAtomicAcrossHosts`（CASE-034）、`TestWhiteboxPhase0Round12ReleaseRollbackRestoresAllOuterIdentity`（CASE-052） |
 
+### 阶段 2 维护/transport 绑定补表
+
+| 入口 | 阶段 2 绑定 | 阶段 2 变化 |
+| --- | --- | --- |
+| hook | legacy | 无；不委托 engine submit |
+| lifecycle capture | legacy | 无；仍只写外部 observation buffer |
+| lifecycle verify | legacy | 无 |
+| canary | legacy | 无 |
+| gate | legacy | 无 |
+| install | install-bootstrap | 无 |
+| install --bootstrap | install-bootstrap | 无 |
+| uninstall | install-bootstrap | 无 |
+| package | install-bootstrap | 无 |
+| registry admission | install-bootstrap | 无 |
+| registry register | install-bootstrap | 无 |
+| registry reconcile | install-bootstrap | 无 |
+| registry show | legacy | 无 |
+| cutover | unsupported | 无 |
+| rollback | install-bootstrap | 无；仍为 installer 内部 owner handler |
+
 ## 阶段 0/1 绑定结论（§5.11 一句式）
 
 - 阶段 0：公开 workflow 面全部为 `legacy`（stable driver 语义不变，`--split` 维持现状）；新增
@@ -101,4 +179,10 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
   `Shadow/诊断`（engine decision/shadow 不经任何公开 CLI 入口写权威 state——Shadow harness
   为候选安装内测试入口，`TestShadowReadOnlyObservesWithoutWriting`）；`future` envelope 跟随
   制品 bump 至 version "2"。不存在第二个状态写入权威。
-- 阶段 2–7 绑定列：行保留，绑定留待各阶段封板时更新（本 run 非目标，不预填）。
+
+## 阶段 2 绑定结论（§5.11 一句式）
+
+- 阶段 2：所有既有公开 workflow/维护入口维持阶段 1 绑定；公开 `workflow drive`、
+  `workflow submit` 仍显式 `unsupported`。新增 writer 仅为隔离 state directory 内的
+  `protocol.Engine`/`persistence.Store`，经 internal API 或 test-only harness 调用，不是公开
+  CLI，也不接管 stable legacy run。阶段 3–7 绑定留待对应阶段更新。

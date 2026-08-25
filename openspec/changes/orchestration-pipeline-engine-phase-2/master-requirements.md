@@ -24,7 +24,7 @@
 6. **确定性故障注入**：fake host、fake worker、fake VCS 在每个持久边界做确定性注入验证。
 7. **隔离与回归**：engine 写入只进入隔离状态目录；正常公开插件仍由 legacy runtime 完整驱动；从阶段候选的实际 installed binary 启动独立 test project，执行 legacy 回归与声明的 protocol/recovery harness；验证候选 host/config/state/resource namespace 不污染固定稳定环境。
 8. **负向测试**：缺失版本字段、schema/definition mismatch、旧版本写入、raw `diagnose`。
-9. **envelope PackageDigest 执行绑定**（继承项 2 的 envelope 校验侧）：envelope 校验侧在本阶段交付；PackageDigest 的实际计算随安装事务在阶段 3+ 交付（阶段 1 审计已留痕的口径）。
+9. **envelope PackageDigest 执行绑定**（继承项 2 的 envelope 校验侧）：envelope 校验侧在本阶段交付；PackageDigest 的实际计算与"只改实现 digest 分离"的另一半验证（只改实现时 PackageDigest 必变而 DefinitionDigest 不变）随安装事务在阶段 3+ 交付（总需求 §10.16 保留至终验）。
 10. **交付义务**：`refactor-plan/route-matrix.md` 活文档更新阶段 2 绑定列（本阶段无新公开面：公开 `drive/submit` 仍 unsupported，submit 协议面在矩阵中如实标注为 harness 内部协议面）；`refactor-plan/stage-records.md` 按同构追加阶段 2 节。
 11. **成比例性影响评估**（继承项 4，用户拍板口径）：针对重构完成后的目标架构（受限 submit 事件、`availableActions` 带 freshness token、新 run 机制）评估"封板后小额修复走正门的成比例性"问题的影响性，产出评估文档；不改引擎行为。
 
@@ -45,7 +45,7 @@
 ## 继承项处置（post-seal-audit §五）
 
 1. 验证深度参照（52 用例底线）：纳入验收——本阶段黑盒 QA 规模以 52 用例为底线参照、按新准则设计（禁已有测试充当用例主体或证据）。
-2. PackageDigest 执行绑定：envelope 校验侧在本阶段（范围 9）；安装事务侧计算在阶段 3+。
+2. PackageDigest 执行绑定：envelope 校验侧在本阶段（范围 9）；安装事务侧计算与"只改实现 digest 分离"的另一半验证随计算侧在阶段 3+ 交付。
 3. Windows 延期项：维持延期（见非目标）。
 4. 正门成比例性：转为"重构完成后影响性评估"，在本阶段交付评估文档（范围 11）。
 5. registry 142 条残留清理：已在阶段 2 受理前由用户环境处置闭环（registry 现存 2 条记录、epoch=2），本 run 无剩余义务。

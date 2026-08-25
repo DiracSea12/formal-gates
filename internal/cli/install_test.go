@@ -4,11 +4,49 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// A plain candidate may not select its own explicit transaction path as a
+// stable launcher in a fresh namespace.  This is the process-level fence used
+// by the portable canary; in-process tests intentionally bypass launcher
+// discovery because their executable is a Go test binary.
+func TestRunInstallRejectsUnregisteredCandidateLauncher(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate CLI test source")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+	candidate := filepath.Join(t.TempDir(), "candidate", installTestBinaryName())
+	if err := os.MkdirAll(filepath.Dir(candidate), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", candidate, "./cmd/formal-gates")
+	build.Dir = repoRoot
+	build.Env = environmentWithOverrides(os.Environ(), map[string]string{"GOCACHE": t.TempDir()})
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("candidate build failed: %v\n%s", err, output)
+	}
+	home := t.TempDir()
+	project := t.TempDir()
+	command := exec.Command(candidate, "install", "--source", t.TempDir(), "--host", "claude", "--scope", "project", "--project", project, "--binary-target", candidate, "--skip-hooks", "--force")
+	command.Env = environmentWithOverrides(os.Environ(), map[string]string{
+		"HOME": home, "USERPROFILE": home, "GOCACHE": t.TempDir(),
+		"AI_AGENT": "", "CLAUDE_CODE_ENTRYPOINT": "", "CODEX_HOME": "", "CODEX_CLI_PATH": "",
+		"CURSOR_TRACE_ID": "", "CURSOR_RUNTIME": "", "DSH_HOME": "", "DSH_PROJECT_DIR": "",
+	})
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "UNREGISTERED_INSTALL") || !strings.Contains(string(output), "is not registered") {
+		t.Fatalf("unregistered candidate launcher was not fenced: err=%v output=%s", err, output)
+	}
+	if _, statErr := os.Stat(filepath.Join(project, ".claude", "skills", "formal-gates")); !os.IsNotExist(statErr) {
+		t.Fatalf("candidate rejection left an install target: %v", statErr)
+	}
+}
 
 func TestRunInstallProjectCopiesInstallablePackage(t *testing.T) {
 	source := writeInstallSource(t, "source v1")

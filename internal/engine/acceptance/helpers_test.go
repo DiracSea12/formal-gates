@@ -110,7 +110,7 @@ func workflowRegistry(t *testing.T, skip ...string) *compiler.Registry {
 			}
 		}
 	}
-	for _, id := range []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response"} {
+	for _, id := range []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response", "schema.host.fan.transport"} {
 		if !skipSet[string(id)] {
 			if err := reg.RegisterSchema(id); err != nil {
 				t.Fatalf("register schema %q: %v", id, err)

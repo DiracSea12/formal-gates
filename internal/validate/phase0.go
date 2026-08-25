@@ -140,14 +140,22 @@ type DiagnoseReport struct {
 // normal loader, never writes a repaired state, and preserves a terminal
 // summary when the full envelope is from an older or newer version.
 func DiagnoseState(path string) (DiagnoseReport, error) {
+	return DiagnoseStateWithSupported(path, VersionEnvelope{
+		Writer: "engine", StateSchemaVersion: CurrentStateSchemaVersion,
+		WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
+		DefinitionSource:          CurrentWorkflowDefinitionSource,
+		DefinitionDigest:          CurrentWorkflowDefinitionDigest,
+	})
+}
+
+// DiagnoseStateWithSupported is the candidate-aware form used by an installed
+// CLI whose compiled engine definition is newer than the stage-0 frozen future
+// contract. It remains raw and read-only; only the reported supported identity
+// and exact envelope comparison differ.
+func DiagnoseStateWithSupported(path string, supported VersionEnvelope) (DiagnoseReport, error) {
 	report := DiagnoseReport{
-		Path: filepath.Clean(path),
-		Supported: VersionEnvelope{
-			Writer: "engine", StateSchemaVersion: CurrentStateSchemaVersion,
-			WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
-			DefinitionSource:          CurrentWorkflowDefinitionSource,
-			DefinitionDigest:          CurrentWorkflowDefinitionDigest,
-		},
+		Path:      filepath.Clean(path),
+		Supported: supported,
 		Integrity: "unknown",
 	}
 	data, err := os.ReadFile(path)
@@ -180,7 +188,7 @@ func DiagnoseState(path string) (DiagnoseReport, error) {
 			DefinitionDigest:          rawString(raw, "definitionDigest"),
 			PackageDigest:             rawString(raw, "packageDigest"),
 		}
-		if err := ValidateVersionEnvelope(envelope); err != nil {
+		if err := validateReportedEnvelope(envelope, supported); err != nil {
 			report.Recommendation = err.Error() + "; rebuild it with the owning writer"
 		}
 	}
@@ -199,6 +207,27 @@ func DiagnoseState(path string) (DiagnoseReport, error) {
 		}
 	}
 	return report, nil
+}
+
+func validateReportedEnvelope(observed, supported VersionEnvelope) error {
+	checks := []struct {
+		field, got, want string
+	}{
+		{"writer", observed.Writer, supported.Writer},
+		{"stateSchemaVersion", observed.StateSchemaVersion, supported.StateSchemaVersion},
+		{"workflowDefinitionVersion", observed.WorkflowDefinitionVersion, supported.WorkflowDefinitionVersion},
+		{"definitionSource", observed.DefinitionSource, supported.DefinitionSource},
+		{"definitionDigest", observed.DefinitionDigest, supported.DefinitionDigest},
+	}
+	if strings.TrimSpace(supported.PackageDigest) != "" {
+		checks = append(checks, struct{ field, got, want string }{"packageDigest", observed.PackageDigest, supported.PackageDigest})
+	}
+	for _, check := range checks {
+		if strings.TrimSpace(check.got) == "" || check.got != check.want {
+			return &UnsupportedRunVersionError{Field: check.field, Expected: check.want, Observed: check.got}
+		}
+	}
+	return nil
 }
 
 func rawString(values map[string]any, key string) string {
