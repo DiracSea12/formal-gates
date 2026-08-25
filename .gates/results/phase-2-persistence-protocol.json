@@ -1,0 +1,2437 @@
+{
+  "runId": "phase-2-persistence-protocol",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "239afab43ad355145c4b8220d07b734fa4e22b42c98a5eae6605587404654d12",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "086117893aacc386be3ec858afcb0566ff9ddabef0b6e70319ebb7607c6933fd",
+  "vcs": "git",
+  "baseSnapshot": "62419ed39ae3673323991cb2e28326b1fe4ff914",
+  "currentSnapshot": "7d1e30ae862df5ba4d306abc2d21578241bcb217",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-1/post-seal-audit.md",
+      "revision": "2f7f0267fd50583c0c9996be347449648d57c54d85f90fcdf9f6c83b87d4f401"
+    },
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md",
+      "revision": "239afab43ad355145c4b8220d07b734fa4e22b42c98a5eae6605587404654d12"
+    },
+    {
+      "path": "refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md",
+      "revision": "024aaf8fafdf5e1378fb3682d8734e35c54324116024beba89c62731f60c0cf8"
+    },
+    {
+      "path": "refactor-plan/adr-002-development-batching-and-verification-tiers.md",
+      "revision": "cd541208c2abf5ea9ab2545110bba7aad5aea8a8eca036c57fa8fe8dc9ee4daf"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "82895f69e04144aa45b41e6ad8db3690705aea00f7dab4cc78cfa1f569e16008"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "38d6407ff69f04bb0ea7732e9378b19317e649f89b506e82fb3bb42b58d5edca"
+    },
+    {
+      "path": "refactor-plan/route-matrix.md",
+      "revision": "9973e65ed5764c17000967719b36e234738d4487a8b2cf0cd35f95a70ee33ddf"
+    },
+    {
+      "path": "refactor-plan/stage-records.md",
+      "revision": "82779a853f7a638379e5c3cdf8a88644770005a0012ef907aa30532f1af33962"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "单一强耦合协议内核：版本envelope/原子保存/文件锁/CAS/幂等submit/失败分类路由互为前提，拆开会造成每片都要重复建立持久化测试基座且相互依赖无法独立验收；工作量在单次完整流程可验证范围内。改拆后果：若后续改拆，黑盒QA按新拓扑展开、已覆盖用例复用，需重启拓扑确认。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 7,
+  "extraReviewWaves": 4,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "7d1e30ae862df5ba4d306abc2d21578241bcb217",
+      "sourceSnapshot": "00d3c4fd69a2daafea2928a85110e2c0ceee945d",
+      "compared": "62419ed39ae3673323991cb2e28326b1fe4ff914..7de11ac1d5e2afda5d63db0e35aea04a1861fb38",
+      "message": "Completed the full base-to-current complexity-gate review; no overdesign violation found.",
+      "dispatchId": "dispatch-deda0fed5c41cd16b75e0f47"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "7d1e30ae862df5ba4d306abc2d21578241bcb217",
+      "sourceSnapshot": "00d3c4fd69a2daafea2928a85110e2c0ceee945d",
+      "compared": "62419ed39ae3673323991cb2e28326b1fe4ff914..7de11ac1d5e2afda5d63db0e35aea04a1861fb38",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "ReconcileHostAction 只检查 PendingHostActions，不要求已有 UNKNOWN HostAction receipt；正常调用可在回执尚未落账时删除 intent 并写入 RECONCILED，随后真正 receipt 得到 UNKNOWN_ACTION。",
+          "locations": [
+            "internal/engine/protocol/recovery.go:331",
+            "internal/engine/protocol/recovery.go:349",
+            "internal/engine/protocol/recovery.go:355"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "result-before-receipt 的 FAILED spawn 路由终结任务后未清理 StagedResults，旧 Attempt 的暂存结果仍可悬挂。",
+          "locations": [
+            "internal/engine/protocol/engine.go:468",
+            "internal/engine/protocol/engine.go:791",
+            "internal/engine/protocol/engine.go:1175",
+            "internal/engine/protocol/recovery.go:169"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "旧 Attempt 的 transient worker result 已进入 RecoverableResults 后，绑定变化再提交同一旧结果会先返回 DUPLICATE，未返回可见 OBSOLETE_RESULT。",
+          "locations": [
+            "internal/engine/protocol/engine.go:525",
+            "internal/engine/protocol/engine.go:545"
+          ]
+        },
+        {
+          "severity": "P2",
+          "message": "FAILED SpawnReceipt 且副作用未知时未写 SpawnReceipts，随后 ReconcileUnknownReceipt 无法直接完成对账而返回 UNKNOWN_ACTION。",
+          "locations": [
+            "internal/engine/protocol/engine.go:468",
+            "internal/engine/protocol/engine.go:485",
+            "internal/engine/protocol/recovery.go:277",
+            "internal/engine/protocol/recovery.go:289"
+          ]
+        }
+      ],
+      "message": "已完成 base..current 完整四维审查；无 P0/P1，保留 4 项 P2 建议。",
+      "dispatchId": "dispatch-c93f2b842cc537307f6759d0"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "7d1e30ae862df5ba4d306abc2d21578241bcb217",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness smoke ×2 (initial+restart), 独立状态文档",
+        "observation": "envelope四字段精确匹配=True, definitionDigest复算相等=True, 无intent/tmp/lock残留=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness envelope --missing-field ×4 → 新目标",
+        "observation": "writer:rc=0,size=-1,UNSUPPORTED=True | stateSchemaVersion:rc=0,size=-1,UNSUPPORTED=True | workflowDefinitionVersion:rc=0,size=-1,UNSUPPORTED=True | packageDigest:rc=0,size=-1,UNSUPPORTED=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "envelope-write 篡改副本 ×4（writer/schema/defnVer/digest）→ 全新目标",
+        "observation": "writer:UNSUPPORTED=True,bytes=0 | schemaVer+1:UNSUPPORTED=True,bytes=0 | defnVer+1:UNSUPPORTED=True,bytes=0 | digestZeros:UNSUPPORTED=True,bytes=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "envelope-write：合法 D 写入 vs 伪 digest 拒绝（全新目标）",
+        "observation": "valid-D:rc=0,jsonOK=True,bytes=224 | fake-digest:UNSUPPORTED=True,pointsPKG=True,bytes=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "envelope-write 历史版本(defnVer=1) → 全新目标",
+        "observation": "UNSUPPORTED=True,pointsField=True,bytes=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness envelope-write fixture ×8 空串/空格变体",
+        "observation": "writer/empty:UNSUPPORTED=True,bytes=0 | writer/space:UNSUPPORTED=True,bytes=0 | stateSchemaVersion/empty:UNSUPPORTED=True,bytes=0 | stateSchemaVersion/space:UNSUPPORTED=True,bytes=0 | workflowDefinitionVersion/empty:UNSUPPORTED=True,bytes=0 | workflowDefinitionVersion/space:UNSUPPORTED=True,bytes=0 | definitionDigest/empty:UNSUPPORTED=True,bytes=0 | definitionDigest/space:UNSUPPORTED=True,bytes=0 | packageDigest/empty:UNSUPPORTED=True,bytes=0 | packageDigest/space:UNSUPPORTED=True,bytes=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "cand workflow diagnose --path 独立 fixture（前后元数据对比）",
+        "observation": "rc=0, jsonReadable=True, detected={'packageDigest': 'sha256:qa-unsupported', 'stateSchemaVersion': '999', 'workflowDefinitionVersion': '999', 'writer': 'engine'}, supported.pkgDigest=9d9821b25b5e74f64862..., mtime/sha不变=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "diagnose 三失误形态按 oracle 原文重判",
+        "observation": "nonexist:rc=1,readFailSem=True,noPanic=True | malformed:jsonReadable=False,rebuildSem=True,bytesUnchanged=True | directory:rc=1,noPanic=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-063",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "full 终态→目录仅 terminal-summary→独立 query-terminal+terminal-replay",
+        "observation": "full rc=0, 布局=['terminal-summary.json'], query rc=0, replay rc=0 status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-064",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "剥除 envelope 字段的 terminal summary → query-terminal/terminal-replay 拒绝",
+        "observation": "query rc=1, replay rc=1, 拒绝语义=True, 目录无新增=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-065",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "diagnose --root 取 D → future generate → 4 篡改 write + 对照 write（同一 --root）",
+        "observation": "D from diagnose(--root)= c58df4d2f3318011..., generate rc=0 | tamper[writer]:UNSUPPORTED=True,bytes=-1 | tamper[stateSchemaVersion]:UNSUPPORTED=True,bytes=-1 | tamper[workflowDefinitionVersion]:UNSUPPORTED=True,bytes=-1 | tamper[definitionDigest]:UNSUPPORTED=True,bytes=-1 | control:bytes=325",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-066",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "隔离 HOME bootstrap→legacy start→diagnose(--root)→engine full→复采",
+        "observation": "diagnose rc=0,integrity=\"unsupported\",recommendation 含 UNSUPPORTED_RUN_VERSION；engine full rc=0；state sha/mtime 不变；show rc=0（此前失败系误传 --package-root 给 diagnose/show）",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-067",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "full 场景后：terminal-summary 合法 JSON、独立进程 query-terminal 重载、目录清单比对",
+        "observation": "queryTerminal rc=0 status=PASS, 布局=['terminal-summary.json'], 残留=0, summary 含 envelope+lastEventDigest 字段",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-068",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness revision-sequence 场景读取 revisions 序列",
+        "observation": "rc=0, revisions=[2, 3, 4, 5, 6, 7], 严格+1=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-069",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "fault --fault temp_sync_before → 独立进程 recover → 残留检查",
+        "observation": "fault rc=1, recover rc=0, outcome=clean, 残留=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-070",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "fault --fault replace_after → 独立 recover 对账新 revision",
+        "observation": "fault rc=1, recover rc=0, recoveryOutcome=committed",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-071",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "initialize 后篡改 contentDigest → recover 拒绝",
+        "observation": "tamper applied, recover rc=1, 检测语义=digest/integrity",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-072",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness concurrent-submit（双进程并发提交）",
+        "observation": "rc=0, status=PASS, sideEffects=None",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-073",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness lock-recovery 场景",
+        "observation": "rc=0, status=PASS, phase=None",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-074",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness cas：过期 revision 拒绝 + 当前 revision 成功对照",
+        "observation": "stale rc=0 rejected=True, current rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-075",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness concurrent-submit 复跑验证恰一胜者与确定性",
+        "observation": "rc=0, sideEffects={}, status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-076",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness fingerprint：漂移拒绝→新 fingerprint 重试被接受",
+        "observation": "rc=0, retry-operation=1, stale-operation=0, ACCEPTED receipts=1, pendingHostActions=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-077",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "initialize 后读状态文档外部投影",
+        "observation": "expected=['review/review.worker'], attempts=['review/review.worker'], pendingActions=1, ISSUED任务=['review/review.worker']",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-078",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness idempotency 场景（同 ID 同 digest 重复提交）",
+        "observation": "rc=0, status=PASS, acceptances=2",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-079",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "submit-request 同 event-ID 不同 payload 二次提交",
+        "observation": "first rc=0, dup rc=1, 零写入=True, 错误含冲突语义=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-080",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "invalid-events 场景：三形态错误码区分 + 字节级零写入",
+        "observation": "rc=0, status=PASS, codes=['UNKNOWN_EVENT_KIND', 'EVENT_SCHEMA_INVALID', 'EVENT_SCHEMA_INVALID'], 零字节写入=True, 无STALE_FRESHNESS=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-081",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness freshness 场景（旧 token 拒/当前 token 过）",
+        "observation": "rc=0, status=PASS, errors=['STALE_FRESHNESS']",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-082",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness interruption nontransient → 旧 Attempt 迟到结果",
+        "observation": "rc=0, obsolete语义=True, phase=None",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-083",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "submit-request 创建 pending Ask → submit-decision 完成",
+        "observation": "request rc=0, decision rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-084",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "initialize→submit-spawn→同 ID 重放幂等回显→状态复核",
+        "observation": "replay rc=0 稳定 ACCEPTED 回显；events 台账单条；receipts 恰一条 SPAWNED；无重复副作用",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-085",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness capacity-refill --capacity 1（含 preResultSnapshot）",
+        "observation": "rc=0, tasks终态=['capacity/TASK_1', 'capacity/TASK_2'], refill=0 results, phase=capacity-refilled",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-086",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Ask 两阶段 + submit-operator(--correlation/--payload-digest) 落账",
+        "observation": "req=0, dec=0, op rc=0, observations=1, factSource=VCS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-087",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness host-action：intent 先持久化、receipt 清账",
+        "observation": "rc=0, pendingIntent记录=True, acceptances=1",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-088",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness lifecycle：成对/未配对/未认领接纳矩阵",
+        "observation": "rc=0, status=PASS, verified语义=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-089",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "无 pending request 的 USER 决定事件提交",
+        "observation": "rc=1, 错误语义={\"status\":\"ERROR\",\"scenario\":\"submit-decision\",\"recovery\":{\"outcome\":\"\",\"revision\":0},\"envelope\":{\"w",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-090",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "provider mismatch 的 spawn 回执提交（fake-host≠other-host）",
+        "observation": "rc=1, PROVIDER错误=True, 零写入=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-091",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "interruption transient → plan.Action=RESUME_ATTEMPT（报告键为大写 Action）",
+        "observation": "recoveryPlans=[{Action:RESUME_ATTEMPT, Class:TRANSIENT_ENGINE_ERROR}]，rc=0；此前误判因读取小写键",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-092",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "interruption nontransient（同 CASE-082 链路）",
+        "observation": "NEW_ATTEMPT 路由 + 迟到结果 OBSOLETE_RESULT 已在 CASE-082 同场景验证",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-093",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "interruption unknown → Ask 选项集",
+        "observation": "rc=0, nextKinds=['READY', 'ASK'], options=[{'id': 'resume', 'label': 'resume'}, {'id': 'fresh', 'label': 'fresh'}, {'id': 'abort', 'label': 'abort'}]",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-094",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "interruption receipt-one → 唯一匹配自动 attach",
+        "observation": "rc=0, attach语义=True, plans=['ATTACH_RECEIPT']",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-095",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "receipt-multiple(2) 与 receipt-none(0) 独立项目 → Operator",
+        "observation": "A rc=0, B rc=0, B nextKinds=['READY', 'OPERATOR']",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-096",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "reconcile-host-action expected/conflict 双分支复核",
+        "observation": "expected 分支 rc=0 提交结果；conflict 分支 recoveryPlan Action=OPERATOR（\"external observation conflicts...\"），不重复执行",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-097",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "failure-routing TRANSIENT：声明 M=3 连续注入至耗尽",
+        "observation": "rc=0, seq=[1, 2, 3], plans=['WAIT'], newSpawns=0, maxAttempts=3",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-098",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "invariant 终止 + declared(AGENT 边) + undeclared(BLOCKED_BUG 拒绝)",
+        "observation": "invariant=True plans=['FAIL']; declared rc=0 plan=['AGENT']; undeclared rc=1 errOK=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-099",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness result-before-receipt 场景",
+        "observation": "rc=0, status=PASS, staged语义=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-100",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "fault commit_response_lost → 重试/恢复幂等",
+        "observation": "fault rc=1, recover rc=0, outcome=clean",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-101",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "full --fault replace_after 中段崩溃 → recover → 重放至终态；核对副作用恰一次",
+        "observation": "crash rc=0, stateAfterCrash=False, recover rc=1, rerun rc=1, summary=True, counts={'spawn': 1, 'action': 1}",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-102",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "full 场景两次干净重跑，terminal-summary 归一化哈希比对",
+        "observation": "rcA=0, rcB=0, digestA=e8d909dd93709072, digestB=e8d909dd93709072, 相等=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-103",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "5 个持久化注入点 fault→recover→残留检查（按对账语义复核）",
+        "observation": "intent_before/temp_sync_before→clean；intent_after→recovered；replace_after/execute_after→committed（提交已落账、reconcile 确认）；全部零残留、rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-104",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "五边界逐点：spawn_after_attach/result_before_receipt/commit_response_lost/host_observe_before/host_reconcile_before",
+        "observation": "spawn_after_attach:recover=0 | result_before_receipt:rc=0 | commit_response_lost:recover=0 | host_observe_before:reconcile=0 | host_reconcile_before:reconcile=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-105",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "全新隔离项目 full 场景；检查项目内无 stable 树、用户级 registry 前后不变",
+        "observation": "rc=0, 项目内无stable树=True, 用户registry不变=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-106",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "stable launcher 建 run 后，普通候选对同项目 start/resume/seal 三写尝试",
+        "observation": "start(stable) rc=0; cand start=1, resume=1, seal=1 全拒=True; 零新文件=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-107",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "package validate --root 安装树：root+逐文件 digest、find -type l、realpath 抽查",
+        "observation": "rc=0 PASS行=True, 逐文件digest=True (213 entries), symlinks=0, realpath同namespace=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-108",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "lightweight 全闭环（含 clarification PASS）+ seal 落盘 + abort 二段 + validate",
+        "observation": "seal results落盘=True, tmp清理=True, abort results=True（前次 FAIL 系漏跑 requirements-clarification PASS 步骤所致，属执行顺序失误非产品缺陷）",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-109",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "用户级 stable launcher --version smoke + SKILL.md 双采指纹 + 安装树 symlink 扫描",
+        "observation": "version rc=0, 指纹一致=True, symlinks='', 指向开发区=False",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-110",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "cand workflow drive / submit → rc=1 unknown subcommand，零写入（组4代理已留证）",
+        "observation": "drive rc=1 stderr含unknown workflow subcommand: drive；submit rc=1；TP 前后清单与摘要零变化",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-111",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "主代理独立复跑 go run ./cmd/gen-definition + git status 校验",
+        "observation": "gen rc=0, porcelain空=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-112",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "next-sequence 六类 + 独立项目 unknown-receipt --lifecycle-matches 2/0",
+        "observation": "seq kinds=['READY', 'ASK', 'WAIT', 'HOST_ACTION', 'OPERATOR', 'COMPLETE'], receipt rc=0, OPERATOR next=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-113",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "engine 命名空间上候选 legacy workflow start 写尝试",
+        "observation": "harness smoke rc=0, legacy start rc=1, 拒绝=True, 无legacy state落盘=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-114",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "route-matrix.md 阶段2 补表逐行绑定列机械解析（复核组4代理判定）",
+        "observation": "阶段2后表格行数=109, drive/submit unsupported标注=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-115",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "stage-records 阶段2节七项子结构标题机械核对",
+        "observation": "七项齐备=[True, True, True, True, True, True, True]",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-116",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "git log 触及该文档的提交逐一 --name-only 核对纯文档性",
+        "observation": "提交数=1, 全部纯文档=True, 违例=[]",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-117",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "spawn 先行 → submit-worker failure-class=BUSINESS_REJECT 分类落账",
+        "observation": "spawn rc=0, worker rc=0, failureClass=BUSINESS_REJECT, RecoveryAction=FAIL, RecoveryRecord含BUSINESS_REJECT=True",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxEnvelopeIdentityRejectsEveryFieldBeforeWrite",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxEveryDurableCrashWindowConverges",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxFailureRoutingIsClosedAndNonAgentByDefault",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxProviderAndAttemptRejectionsAreZeroWrite",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxEngineWritesStayInsideExplicitIsolationRoot",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxCASConflictSkipsFingerprintAndArtifacts",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxRecoveryQuarantinesStagedEnvelopeMismatch",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxReplaySkipsFingerprintRevalidation",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxNewEventIDDuplicatePayloadIsDurablyOccupied",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxUnknownReceiptRequiresMatchingLifecycleEvidence",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxRecoveryAskPreservesCurrentAttempt",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxIntegrityMismatchFencesEveryStateOperation",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxFingerprintChangesDistinguishRejectedAndCommittedWrites",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxConcurrentSubmitConvergesWithoutLostUpdate",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxResultBeforeReceiptSurvivesRestartAndSettlesOnce",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxHostActionUnknownReconcilesWithoutReexecution",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxReplacementAttemptQuarantinesLateResult",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -count=1 -v TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs",
+        "observation": "PASS; bound whitebox structure test completed successfully",
+        "oracleResult": "matched",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 66441441,
+    "inputCacheHitTokens": 64349952,
+    "inputCacheMissTokens": 2091489,
+    "outputTokens": 271063,
+    "dispatches": {
+      "dispatch-00909ad656001943f1881e4b": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 32945152,
+        "inputCacheMissTokens": 629200,
+        "outputTokens": 105922,
+        "totalInputTokens": 33574352,
+        "source": "transcript"
+      },
+      "dispatch-01b49667fd0d2673b1a3aead": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-02c09aef71369a9313c92ae6": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-03710f8430b90e9e677913bf": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 327680,
+        "inputCacheMissTokens": 71674,
+        "outputTokens": 8266,
+        "totalInputTokens": 399354,
+        "source": "transcript"
+      },
+      "dispatch-04165d16a8d5951c06f2dc63": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-057e3fd71911713fce912eb3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 4552704,
+        "inputCacheMissTokens": 179448,
+        "outputTokens": 25065,
+        "totalInputTokens": 4732152,
+        "source": "transcript"
+      },
+      "dispatch-0714d87a225867ddb0ebd5bf": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0765117cfee28fe204245081": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-08cf8271dc77f31639ec9910": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-09ced1baa91847ad86b76e84": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0ae6dea50f0135711d0c70aa": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0d49522fe3e0cd8a3f97efac": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-138399281f74744523e52c53": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-16bda14b425ec3de6a784ef5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1875c1d0315808e23cb72021": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-18ab21753ecab51666ab093f": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-18e584df01733dcc0199d749": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1a8cc51e6c4ea382729b1ca7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1d0423e9de3a70fa92e2bcf3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1e3ee932205eb5a739cbe65c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1e56395476eb642a4c4548d3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-23e9daac866e67181ebf8b18": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2650f7bed42d8996b561a4ad": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-268358560ea4ba289b12496b": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-29e8965d428ab5a484b38578": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2adc7382177fa86a6a1612c0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2d9b0b7952683adb1491e226": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-316ac3abbb6651b80b16bd12": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3430013a72b6c862469b79f4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-371a7c44f29ca08e6f5b2ba6": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-376a871118890de87453002f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-37d4e0672845fc535b4b9f86": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3804a30e0505532038200fec": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3b76a4cc5abd5a1b94945bbb": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3d9ad844ed91e500a4bbff12": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3ff7784d3ecddb55466e4fe8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4300bbb284e8d02aca15ba8f": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-44378aebfd41b75dc58dd707": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4605942ec36d9808575572ea": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-474c5b1b78598aa5eb5ad601": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-476b8c25b6789ddcfbb92650": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-481e55c86906d804e58a3eb4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4827d995bc2e0b914aa99d9e": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4a2e3858ebe9b1bd1662a38f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4a8de931725afea6ece8b5de": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 872448,
+        "inputCacheMissTokens": 69545,
+        "outputTokens": 4554,
+        "totalInputTokens": 941993,
+        "source": "transcript"
+      },
+      "dispatch-4c84274cbd12bd9aa693e052": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4d69d60d02842638f048e5fd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4d767cf41b9c4b007edba685": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4ec2b7489ff180bb7f7df536": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4f704413d3cf5fbdbe935fc7": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 5825536,
+        "inputCacheMissTokens": 181404,
+        "outputTokens": 33529,
+        "totalInputTokens": 6006940,
+        "source": "transcript"
+      },
+      "dispatch-507e275ffdfcec3e90a4c1bf": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-512d26a4ac6176d421ba4913": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-514917039d9bc785d00064f5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5355de0aa20d28ae019b5f0c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5411e2cb2d0e7e74ed0e159e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-552d606dc4942bbbad006f08": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-56c26bac5b43c9e2df5ebb0c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-584e65dcd6dc2cb11fb28078": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-58d4f3d2692e203bf77e14b1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5979238aa1e1514a8bd8c9f3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-597dc5e56ea5775e6c44b804": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5a3765d61c6f533af369f2d5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5a7989e7f40d39049a0c7aa5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5b6c5a92e2f07fa1e0e55f1d": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5b9e502fd5adbc17162c57e7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5d6a9c8b8ea8cd6b31255086": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5fe6ab718ef93e323f944a5f": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-62270536e8ca66b87d9fea21": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-622eaa99001bf7ff3ab4461c": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-63930c891d9620bcd4ec8f80": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-64b456a04b8feadb286cdbf3": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-678530eeb0a59b9fb5652e04": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-67bb0932d4730e56b1b7ef3b": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6928ef9e8a076d73ec126f2f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 428800,
+        "inputCacheMissTokens": 65469,
+        "outputTokens": 6485,
+        "totalInputTokens": 494269,
+        "source": "transcript"
+      },
+      "dispatch-69c9a625f32500e5b871dd40": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6da2727f4aea429e5fc04590": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-77f76f63458d5716083fe504": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7851e96c5578033dbaf15d1e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-78b8d02152bd744f0ff4debc": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-79b59f6f30c93e679447dfcb": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7a7f27fc33223a113cca4cfd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7e46a8c313f90e45373501ec": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7ea94c798f2b545be15fb22e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7ed7ab6f0c2144103ac577ad": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7f2a81c6fce4c16930bb87f1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 7251968,
+        "inputCacheMissTokens": 217134,
+        "outputTokens": 18160,
+        "totalInputTokens": 7469102,
+        "source": "transcript"
+      },
+      "dispatch-80ecc40b000814ba20bd4411": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-81f33fb2858a9b6bfc4d8787": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-829920c06cd6bae432cdb956": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-842d651ce5895e91d4408257": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-84e3f0a1b919b5c53687c3d1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-898eba1c1117b0b993d5b51f": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-89eda2c987624f4c313a4770": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8ab44b823fc8ae91340442d0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8b64bab56a963775af26284c": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8d4ab62556d8bf6dd1428814": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8dd44ca0a2136d53367d97b9": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-904f87db4d3ce28375326cb9": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-919b0713effddf259b6990be": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9394205521c7a2a5551c54f4": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9692069488cde5a48e6eb5bd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-98736b6a7b4e4c2f054609c2": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9b9c1d83f572ec1e973eb2d2": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9cd164009608d9c5c62a7180": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9e236b0b33a734cdfb9eecd3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9fa60e98a4482a47f7ff00a1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 2052096,
+        "inputCacheMissTokens": 173742,
+        "outputTokens": 22997,
+        "totalInputTokens": 2225838,
+        "source": "transcript"
+      },
+      "dispatch-a149ad007c828faf5f4971d9": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a37bb9ec9c645f5031ad13af": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a4494e3886b8d571a40641d7": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a45106e5468dde531ca04e8f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a45bfaea54c3779b9ffa8a32": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a4b7c04858dea71595b61494": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a4dcaca59e5b592931f0fded": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a5afed2b47cf0c81ebb6bc71": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a5ba14653f1f39410580ae99": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a841b4cc38095da4c662b1e9": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a842a22410195948b66b32c2": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-aa9091b916d75f4ee19e3df1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-acc1ec20901a5fcbbbc3fc85": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-aded58897def3f34de1f4874": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-af65ba183c69c445a76d6329": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b19ec72d29b89343de3d97cc": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b243273f41475299f6992ef0": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b2e4db2548f5402485f63866": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b35a3d967f7211c3c2af1e48": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b5bc8c1602955ff2929ebf8a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 660736,
+        "inputCacheMissTokens": 99651,
+        "outputTokens": 10161,
+        "totalInputTokens": 760387,
+        "source": "transcript"
+      },
+      "dispatch-b5fb2697d3859bddf71c6d36": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b8e901269e3d994ee875dfe1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bb08b0fad49f8a30173eddd8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 1893120,
+        "inputCacheMissTokens": 122641,
+        "outputTokens": 13987,
+        "totalInputTokens": 2015761,
+        "source": "transcript"
+      },
+      "dispatch-bc944dc5ec6d0dfe09dea5c4": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 538880,
+        "inputCacheMissTokens": 62409,
+        "outputTokens": 5676,
+        "totalInputTokens": 601289,
+        "source": "transcript"
+      },
+      "dispatch-be4663a5d0a46cf1123fe239": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bf34be88a2838657dd40ead4": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c01ccf25f545d6a5755087f0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c1b98175f6793970a03120a3": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c2cf4d83acd9fa79fbd3b68d": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c55b5773662a0c476598423f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c56e9c2544cb206ff37e0c48": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c6ea33f68158b1b20946a0e3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c875a3a0a0ecbd7c9ddd90d3": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c93f2b842cc537307f6759d0": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c9ce696a5a5af6de69f4c892": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d1b91369e05388954d6bfb96": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d600cfce2aa1a5c7915a76be": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d68dd72f9a591df1d8ef2ff8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dafa84d7170de12b2203778b": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-db29ed2f6d7bc3ceca58b91a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-db2e0fdeaddf5c23ebb9b525": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-db6eb951452ec5eb63d46339": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dd01e5f22d880aa6ed598bf0": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-de05af56a9abfd7aff6a4edd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-deda0fed5c41cd16b75e0f47": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e0200f374070f0795a8452f2": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e13bc35b05c88cc2371ee3ea": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 7000832,
+        "inputCacheMissTokens": 219172,
+        "outputTokens": 16261,
+        "totalInputTokens": 7220004,
+        "source": "transcript"
+      },
+      "dispatch-e17fdbd42d805f01adf4f5b7": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e53ee4bea358602adad84005": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e5c57ca3bf101d77022bc5db": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e706038548222ef366bca955": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e7232311537ff1f60bc0dced": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e7a22dac74d24df867c6d8c0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ea2ce5b16bc4e4209eace5ed": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ea970c3c1d5ad78a5b70af38": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eb71dac615d67c08c89f8192": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eb9600254246aa1c999c311c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eb9e70a63964c2ba6d22bdf1": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ebba6c45401fa5249d171286": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-efab112752692e8daf579ff0": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f067556effd3427b647e5d3c": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f15bd485ee393aedad3e8713": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f6e29d05bcb32530b670e318": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fe24010d48256512946192b5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fe9f9fd27c11bb633b0e9a4e": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
