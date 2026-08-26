@@ -16,7 +16,7 @@
 
 ## 范围与验收
 
-1. **版本 envelope**：engine state 带四字段 envelope（writer、stateSchemaVersion、workflowDefinitionVersion、packageDigest）；缺失或不精确匹配一律 `UNSUPPORTED_RUN_VERSION` 写前拒绝、绝不写状态；`diagnose` 的最小 raw/envelope parser 只读报告是唯一例外。`show/status/next` 只从带版本绑定的 terminal summary 回落。
+1. **版本 envelope**：engine state 带五字段 envelope（writer、stateSchemaVersion、workflowDefinitionVersion、definitionDigest、packageDigest）。`definitionDigest` 绑定当前定义的拓扑、registry ID、策略与失败语义；`packageDigest` 绑定 owning runtime 的安装实现身份，不把绝对安装路径写入 state。缺失或任一身份不精确匹配一律 `UNSUPPORTED_RUN_VERSION` 写前拒绝、绝不写状态；不提供旧版迁移或兼容读取，`diagnose` 的最小 raw/envelope parser 只读报告是唯一例外。`show/status/next` 只从带版本绑定的 terminal summary 回落。
 2. **持久化基座**：原子保存（persist intent → execute → observe/reconcile → commit result）、完整性摘要、文件锁、revision/CAS、external fingerprint 重验。
 3. **提交协议**：expected tasks、Attempt、pending action、typed request/event/action、幂等 `submit`、freshness 校验。
 4. **统一接纳**：SpawnReceipt、worker result、Ask/Operator event、HostAction receipt、lifecycle event 的统一接纳。
@@ -45,7 +45,7 @@
 ## 继承项处置（post-seal-audit §五）
 
 1. 验证深度参照（52 用例底线）：纳入验收——本阶段黑盒 QA 规模以 52 用例为底线参照、按新准则设计（禁已有测试充当用例主体或证据）。
-2. PackageDigest 执行绑定：envelope 校验侧在本阶段（范围 9）；安装事务侧计算与"只改实现 digest 分离"的另一半验证随计算侧在阶段 3+ 交付。
+2. DefinitionDigest 与 PackageDigest 执行绑定：envelope 两项身份的精确校验侧在本阶段（范围 1/9）；PackageDigest 的实际计算、installed-target receipt 与"只改实现 digest 分离"的另一半验证随安装事务计算侧在阶段 3+ 交付。本阶段不为旧 run 增加迁移或兼容路径，测试使用固定的 owning-runtime package digest 验证身份不匹配时零写入拒绝。
 3. Windows 延期项：维持延期（见非目标）。
 4. 正门成比例性：转为"重构完成后影响性评估"，在本阶段交付评估文档（范围 11）。
 5. registry 142 条残留清理：已在阶段 2 受理前由用户环境处置闭环（registry 现存 2 条记录、epoch=2），本 run 无剩余义务。
