@@ -1,0 +1,88 @@
+{
+  "runId": "phase-2-persistence-protocol-repair-v2",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "6bf75084218ce1c9a2f77c0377d6fd1593616525008988380187efec07de4a52",
+  "basePromptRevision": "8988a5bb69d8ec43e126531559944dd1eebe4b1c58fc37190efd588b63bba238",
+  "catalogRevision": "975e10ec71858cfe45e81376dc40df7ff685cd465594c4de606571ac502d6fdc",
+  "vcs": "git",
+  "baseSnapshot": "69d75d3862663bb35fa01356b20b1a29849b5d85",
+  "currentSnapshot": "666178104d3c77ff0df8f36ba8383e56bb8c8d90",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md",
+      "revision": "6bf75084218ce1c9a2f77c0377d6fd1593616525008988380187efec07de4a52"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "82895f69e04144aa45b41e6ad8db3690705aea00f7dab4cc78cfa1f569e16008"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "38d6407ff69f04bb0ea7732e9378b19317e649f89b506e82fb3bb42b58d5edca"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "单一连续修复范围，阶段2既有实现整体进入验收，不拆分新切片。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-39bafa0ec609a1a400860bff": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-59b1fa35ba2753027a7c7d02": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a9e3521944ff36938ec6c5b1": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
