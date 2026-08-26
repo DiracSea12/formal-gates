@@ -837,13 +837,39 @@ func mustLifecycleEvent(t *testing.T, id, correlation, identity, event string) E
 	return result
 }
 
-// TestOperatorObservationAdmits：typed observation 入账并绑定来源对账项；
-// Ask 决定（1b 两阶段）在统一接纳面上照常关账生效。
+// TestOperatorObservationAdmits：typed observation 绑定真实对账项入账；
+// 伪造 subject（无 UNKNOWN receipt / 未清账 intent）拒绝且零写入；Ask
+// 决定（1b 两阶段）在统一接纳面上照常关账生效。
 func TestOperatorObservationAdmits(t *testing.T) {
 	engine, _, plan, _ := preparedEngine(t)
 	fp := fingerprintOf(t, engine)
 	if _, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: 4}, fp); err != nil {
 		t.Fatalf("issue: %v", err)
+	}
+	forged, err := NewOperatorObservationEvent("evt-obs-forged", "forged-not-pending",
+		decision.Fact{Source: decision.SourceReceipt, Key: "spawn.status", Value: "forged"},
+	)
+	if err != nil {
+		t.Fatalf("forged observation event: %v", err)
+	}
+	before := engine.LoadMustSucceed(t)
+	if _, err := engine.Submit(forged, fp); err == nil {
+		t.Fatal("forged observation subject was accepted")
+	} else if code := rejectionCode(t, err); code != CodeUnknownAction {
+		t.Fatalf("forged observation code = %q, want %q", code, CodeUnknownAction)
+	}
+	after := engine.LoadMustSucceed(t)
+	if len(after.State.OperatorObservations) != 0 || after.Revision != before.Revision {
+		t.Fatalf("forged observation mutated state: revision %d -> %d, observations=%d",
+			before.Revision, after.Revision, len(after.State.OperatorObservations))
+	}
+
+	unknownSpawn, err := NewSpawnReceiptEvent("evt-obs-unknown-spawn", reviewAction, testProvider, "obs-agent", SpawnStatusUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Submit(unknownSpawn, fp); err != nil {
+		t.Fatalf("unknown spawn: %v", err)
 	}
 	observation, err := NewOperatorObservationEvent("evt-obs-1", reviewAction,
 		decision.Fact{Source: decision.SourceReceipt, Key: "spawn.status", Value: "observed-running"},

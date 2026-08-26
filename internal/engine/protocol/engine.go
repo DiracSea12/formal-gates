@@ -406,9 +406,18 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			RequestID: requestID, Control: ask.Control, Choice: ev.Decide.Choice,
 			EventID: string(ev.ID), Revision: nextRevision,
 		}
+		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（draft §2.2：
+		// submit 接纳后立即继续 Decide/SelectIssued）。
+		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+			return Acceptance{}, nil, false, err
+		}
+		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
+		if refillErr != nil {
+			return Acceptance{}, nil, false, refillErr
+		}
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-			Revision: nextRevision, RequestID: requestID,
+			Revision: nextRevision, RequestID: requestID, Refill: refill,
 		}, state, true, nil
 
 	case KindTaskProgress:
@@ -679,14 +688,38 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 
 	case KindOperatorObservation:
 		// Operator typed observation 入账（draft §2.2：主代理核实事实、
-		// 不替用户授权）：绑定来源对账项并保留提交时 revision。
+		// 不替用户授权）：绑定来源对账项并保留提交时 revision。Subject 必
+		// 须指向引擎当前真实等待处置的对账对象——UNKNOWN spawn receipt、
+		// UNKNOWN HostAction receipt 或未清账 intent——否则 UNKNOWN_ACTION
+		// 拒绝且零写入；伪造 subject 不能凭空入账。
+		subject := ev.Observation.Subject
+		bound := false
+		if receipt, ok := state.SpawnReceipts[subject]; ok && receipt.Status == SpawnStatusUnknown {
+			bound = true
+		}
+		if !bound {
+			if hostReceipt, ok := state.HostActionReceipts[subject]; ok && hostReceipt.Status == HostActionStatusUnknown {
+				bound = true
+			}
+		}
+		if !bound {
+			if _, pending := state.PendingHostActions[subject]; pending {
+				bound = true
+			}
+		}
+		if !bound {
+			return Acceptance{}, nil, false, &RejectedError{
+				Code:   CodeUnknownAction,
+				Detail: fmt.Sprintf("operator observation subject %q is not a pending reconciliation subject (unknown spawn/HostAction receipt or unsettled intent)", subject),
+			}
+		}
 		state.OperatorObservations = append(state.OperatorObservations, OperatorObservation{
 			Subject: ev.Observation.Subject, Facts: ev.Observation.Facts,
 			EventID: string(ev.ID), Revision: nextRevision,
 		})
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-			Revision: nextRevision,
+			Revision: nextRevision, ActionID: subject,
 		}, state, true, nil
 
 	case KindHostActionReceipt:
@@ -762,6 +795,16 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 				ActionID: actionID, Class: route.Class, Action: route.Action,
 				Detail: route.ActionDetail(), Revision: nextRevision,
 			})
+			if route.Action == RecoveryReconcile {
+				// Keep the wire-level FAILED receipt in HostActionFailures while
+				// exposing an UNKNOWN ledger entry, mirroring the spawn-side
+				// bridge: without it the declared RECOVER route has no
+				// reconciliation entry (ReconcileHostAction requires a durable
+				// UNKNOWN receipt) and the recovery instruction dead-ends.
+				unknown := receipt
+				unknown.Status = HostActionStatusUnknown
+				state.HostActionReceipts[actionID] = unknown
+			}
 			if route.Action == RecoveryFail {
 				delete(state.PendingHostActions, actionID)
 			}
@@ -780,9 +823,18 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			return Acceptance{EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED", Revision: nextRevision, ActionID: actionID, RecoveryAction: string(RecoveryReconcile)}, state, true, nil
 		}
 		delete(state.PendingHostActions, actionID)
+		// EXECUTED 回执清账即完成对应 HOST_ACTION frontier 步骤并补位签发
+		//（draft §2.2：submit 接纳后立即继续 Decide/SelectIssued）。
+		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+			return Acceptance{}, nil, false, err
+		}
+		refill, refillErr := e.refill(state, nextRevision, expectedFingerprint)
+		if refillErr != nil {
+			return Acceptance{}, nil, false, refillErr
+		}
 		return Acceptance{
 			EventID: string(ev.ID), Kind: string(ev.Kind), Status: "ACCEPTED",
-			Revision: nextRevision, ActionID: actionID,
+			Revision: nextRevision, ActionID: actionID, Refill: refill,
 		}, state, true, nil
 
 	case KindLifecycleEvent:
@@ -874,6 +926,11 @@ func (e *Engine) completeResult(state *State, record WorkerResult, nextRevision 
 	}
 	if err := state.CompleteStep(authoring.StepID(pending.Step), e.cfg.Definition); err != nil {
 		return nil, fmt.Errorf("protocol: complete step %s: %w", pending.Step, err)
+	}
+	// PASS 结果完成步骤后，其外部边界事实（已落账的 Ask 决定 / EXECUTED
+	// 回执）可能恰好满足其他 frontier 步骤——补一次 settle。
+	if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+		return nil, err
 	}
 	return e.refill(state, nextRevision, expectedFingerprint)
 }

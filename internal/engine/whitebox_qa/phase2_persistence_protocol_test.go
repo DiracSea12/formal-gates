@@ -1162,9 +1162,8 @@ func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Freshness before observation: %v", err)
 	}
-	observation, err := protocol.NewOperatorObservationEvent(
-		"phase2-operator-observation", "phase2-reconcile-subject",
-		decision.Fact{Source: decision.SourceVCS, Key: "current", Value: "snapshot-2"})
+	observation, err := protocol.NewCorrelatedLifecycleEvent(
+		"phase2-operator-observation", phase2Provider, "phase2-rotation", "phase2-identity", protocol.LifecycleStart)
 	if err != nil {
 		t.Fatalf("NewOperatorObservationEvent: %v", err)
 	}
@@ -1173,9 +1172,9 @@ func TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Load before stale decision: %v", err)
 	}
-	if len(beforeStale.State.OperatorObservations) != 1 ||
-		beforeStale.State.OperatorObservations[0].Subject != "phase2-reconcile-subject" {
-		t.Fatalf("typed Operator observation not recorded: %+v", beforeStale.State.OperatorObservations)
+	if len(beforeStale.State.LifecycleEvents) != 1 ||
+		beforeStale.State.LifecycleEvents[0].Correlation != "phase2-rotation" {
+		t.Fatalf("intervening lifecycle observation not recorded: %+v", beforeStale.State.LifecycleEvents)
 	}
 	staleDecision, err := protocol.NewDecideEvent(
 		"phase2-stale-decision", "phase2-stale-request", staleToken, "proceed")

@@ -647,7 +647,9 @@ func runFreshness(report *HarnessReport, fixture *ProtocolFixture) error {
 	if err != nil {
 		return err
 	}
-	bump, _ := protocol.NewOperatorObservationEvent("freshness-bump", "facts", decision.Fact{Source: decision.SourceVCS, Key: "head", Value: "new"})
+	// 推进 revision 用一个真实协议事件（lifecycle observation buffer），
+	// 不再借用 operator observation 伪造任意入账。
+	bump, _ := protocol.NewCorrelatedLifecycleEvent("freshness-bump", "fake-host", "freshness-agent", "freshness-agent", protocol.LifecycleStart)
 	if _, err := submit(fixture.Engine, bump); err != nil {
 		return err
 	}
@@ -723,7 +725,7 @@ func runCAS(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpti
 	if err != nil {
 		return err
 	}
-	event, _ := protocol.NewOperatorObservationEvent("cas-advance", "cas", decision.Fact{Source: decision.SourceVCS, Key: "revision", Value: "advance"})
+	event, _ := protocol.NewCorrelatedLifecycleEvent("cas-advance", "fake-host", "cas-agent", "cas-agent", protocol.LifecycleStart)
 	advance, err := submit(fixture.Engine, event)
 	if err != nil {
 		return err
@@ -1280,114 +1282,175 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 			return err
 		}
 	}
-	actions, err := ensureReady(report, fixture)
-	if err != nil {
+	if _, err := ensureReady(report, fixture); err != nil {
 		return err
 	}
-	actionID := first(actions)
-	spawn, err := fixture.Host.SpawnEvent("full-spawn", actionID, "full-agent", protocol.SpawnStatusSpawned)
-	if err != nil {
-		return err
+	// 驱动循环（审阅 P1-3 修复）：每个决策边界都由真实协议事件推进——
+	// AGENT 步走 spawn 回执 + worker result，HUMAN_ASK 走两阶段 request/
+	// decide，HOST_ACTION 走 intent 持久化 + adapter 执行 + EXECUTED 回执，
+	// LOCAL/DURABLE/PARALLEL 步由引擎自身的 completeResult 路径完成
+	// （PASS result → CompleteStep → refill），与 agent 步完全同一条接纳
+	// 面。不再手工 CompleteStep、不手工清空 Expected/Attempts/PendingActions、
+	// 不绕过 Engine 直连 Store.Save。
+	seq := 0
+	nextEventID := func(prefix string) protocol.EventID {
+		seq++
+		return protocol.EventID(fmt.Sprintf("full-%s-%d", prefix, seq))
 	}
-	report.Acceptances = append(report.Acceptances, spawn.Acceptance)
-	for _, eventName := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
-		event, _ := protocol.NewCorrelatedLifecycleEvent(protocol.EventID("full-"+eventName), "fake-host", "full-agent", "full-agent", eventName)
-		acceptance, submitErr := submit(fixture.Engine, event)
-		if submitErr != nil {
-			return submitErr
+	var lastRequest protocol.Acceptance
+	requestDigest := ""
+	var hostIntent protocol.HostActionIntent
+	hostReceiptAcceptance := protocol.Acceptance{}
+	vcsCount := 0
+	for round := 0; round < 64; round++ { // 有界防御：定义本身有限步，正常路径远小于该值
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
 		}
-		report.Acceptances = append(report.Acceptances, acceptance)
-	}
-	workerAcceptance, err := fixture.Worker.ResultEvent("full-result", actionID, protocol.OutcomePass, "sha256:full-result", "")
-	if err != nil {
-		return err
-	}
-	report.Acceptances = append(report.Acceptances, workerAcceptance)
-	request, _ := protocol.NewRequestEvent("full-request", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
-	requestAcceptance, err := submit(fixture.Engine, request)
-	if err != nil {
-		return err
-	}
-	token, err := fixture.Engine.Freshness("full-request")
-	if err != nil {
-		return err
-	}
-	decideEvent, _ := protocol.NewDecideEvent("full-decision", "full-request", token, "confirm")
-	decisionAcceptance, err := submit(fixture.Engine, decideEvent)
-	if err != nil {
-		return err
-	}
-	report.Acceptances = append(report.Acceptances, requestAcceptance, decisionAcceptance)
-	count, err := fixture.VCS.ApplyOnce("full-commit", "delivery/result.txt", []byte("complete\n"))
-	if err != nil {
-		return err
-	}
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "phase2", "retries": 1})
-	if err != nil {
-		return err
-	}
-	hostAcceptance, err := fixture.Host.ReceiptEvent("full-host-receipt", intent, protocol.HostActionStatusExecuted, "full-host-correlation")
-	if err != nil {
-		return err
-	}
-	report.Acceptances = append(report.Acceptances, hostAcceptance)
-
-	snapshot, err := fixture.Engine.Load()
-	if err != nil {
-		return err
-	}
-	compiled, err := compiler.Compile(definition.Workflow(), definition.Registry())
-	if err != nil {
-		return err
-	}
-	for _, step := range []authoring.StepID{"fan.split", "fan.slice", "fan.transport", "fan.join", "ask.decide", "report.cost"} {
-		if !completed(snapshot.State.Completed, step) {
-			if err := snapshot.State.CompleteStep(step, compiled); err != nil {
+		plan, decideErr := decision.Decide(&snapshot.State.State, decision.Observation{}, fixture.Definition)
+		if decideErr != nil {
+			return decideErr
+		}
+		switch plan.Next.Kind {
+		case decision.KindWait:
+			// WAIT(TASKS_IN_FLIGHT)：frontier 的外部步骤已全部签发在途——
+			// 驱动唯一 pending action（spawn 回执 + PASS result）完成它，
+			// 而不是空转。无在途任务时才是真正的死锁。
+			actionID := ""
+			for id := range snapshot.State.PendingActions {
+				if _, receipted := snapshot.State.SpawnReceipts[id]; !receipted {
+					actionID = id
+					break
+				}
+			}
+			if actionID == "" {
+				return fmt.Errorf("full scenario WAIT without a drivable pending action")
+			}
+			spawn, spawnErr := fixture.Host.SpawnEvent(nextEventID("wait-spawn"), actionID, "full-agent-wait", protocol.SpawnStatusSpawned)
+			if spawnErr != nil {
+				return spawnErr
+			}
+			result, resultErr := fixture.Worker.ResultEvent(nextEventID("wait-result"), actionID, protocol.OutcomePass, "sha256:full-result", "")
+			if resultErr != nil {
+				return resultErr
+			}
+			report.Acceptances = append(report.Acceptances, spawn.Acceptance, result)
+		case decision.KindComplete:
+			final, loadErr := fixture.Engine.Load()
+			if loadErr != nil {
+				return loadErr
+			}
+			if final.State.Phase != runtime.PhaseTerminal && len(final.State.Expected) != 0 {
+				return fmt.Errorf("full scenario reached COMPLETE with %d unsettled tasks", len(final.State.Expected))
+			}
+			hostReceiptDigest := ""
+			if hostReceiptAcceptance.EventID != "" {
+				hostEvent, eventErr := protocol.NewHostActionReceiptEvent(
+					protocol.EventID(hostReceiptAcceptance.EventID), hostIntent.ActionID, hostIntent.Adapter.Operation,
+					"fake-host", "full-host-correlation", hostIntent.PayloadDigest, protocol.HostActionStatusExecuted)
+				if eventErr != nil {
+					return eventErr
+				}
+				digest, digestErr := hostEvent.Digest()
+				if digestErr != nil {
+					return digestErr
+				}
+				hostReceiptDigest = digest
+			}
+			summary, summaryErr := WriteTerminalSummary(fixture.Root, final.Revision, lastRequest, requestDigest, hostReceiptAcceptance, hostReceiptDigest, "COMPLETE")
+			if summaryErr != nil {
+				return summaryErr
+			}
+			if err := os.Remove(report.StatePath); err != nil {
 				return err
 			}
+			report.Terminal = &summary
+			report.Next = append(report.Next, summary.Next)
+			report.SideEffects = map[string]int{
+				"fakeVCS.full-commit":             vcsCount,
+				"fakeHost.spawn":                  fixture.Host.SpawnCalls(lastSpawnActionID(report)),
+				"fakeHost." + hostIntent.ActionID: fixture.Host.ActionCalls(hostIntent.ActionID),
+			}
+			report.Phase = "terminal"
+			return nil
+		case decision.KindReady:
+			for _, task := range plan.Next.Ready.Tasks {
+				actionID := "act:" + task.Task.String()
+				spawn, spawnErr := fixture.Host.SpawnEvent(nextEventID("spawn"), actionID, "full-agent-"+string(task.Step), protocol.SpawnStatusSpawned)
+				if spawnErr != nil {
+					return spawnErr
+				}
+				report.Acceptances = append(report.Acceptances, spawn.Acceptance)
+				result, resultErr := fixture.Worker.ResultEvent(nextEventID("result"), actionID, protocol.OutcomePass, "sha256:full-result", "")
+				if resultErr != nil {
+					return resultErr
+				}
+				report.Acceptances = append(report.Acceptances, result)
+			}
+		case decision.KindAsk:
+			// ask.decide 的选项集来自 canonical definition（schema 固定）；
+			// request 事件携带与旧 full 场景一致的 confirm 选项。
+			request, reqErr := protocol.NewRequestEvent(nextEventID("request"), protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+			if reqErr != nil {
+				return reqErr
+			}
+			requestAcceptance, submitErr := submit(fixture.Engine, request)
+			if submitErr != nil {
+				return submitErr
+			}
+			requestID := string(request.ID)
+			token, tokenErr := fixture.Engine.Freshness(protocol.RequestID(requestID))
+			if tokenErr != nil {
+				return tokenErr
+			}
+			decideEvent, decErr := protocol.NewDecideEvent(nextEventID("decision"), protocol.RequestID(requestID), token, "confirm")
+			if decErr != nil {
+				return decErr
+			}
+			decisionAcceptance, submitErr := submit(fixture.Engine, decideEvent)
+			if submitErr != nil {
+				return submitErr
+			}
+			lastRequest = requestAcceptance
+			digest, digestErr := request.Digest()
+			if digestErr != nil {
+				return digestErr
+			}
+			requestDigest = digest
+			report.Acceptances = append(report.Acceptances, requestAcceptance, decisionAcceptance)
+			count, vcsErr := fixture.VCS.ApplyOnce("full-commit", "delivery/result.txt", []byte("complete\n"))
+			if vcsErr != nil {
+				return vcsErr
+			}
+			vcsCount = count
+		case decision.KindHostAction:
+			intent, execErr := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "phase2", "retries": float64(1)})
+			if execErr != nil {
+				return execErr
+			}
+			receipt, receiptErr := fixture.Host.ReceiptEvent(nextEventID("host-receipt"), intent, protocol.HostActionStatusExecuted, "full-host-correlation")
+			if receiptErr != nil {
+				return receiptErr
+			}
+			hostIntent = intent
+			hostReceiptAcceptance = receipt
+			report.Acceptances = append(report.Acceptances, receipt)
+		default:
+			return fmt.Errorf("full scenario cannot drive NextResult kind %s", plan.Next.Kind)
 		}
 	}
-	if snapshot.State.Phase != runtime.PhaseTerminal {
-		if err := snapshot.State.TransitionPhase(runtime.PhaseTerminal); err != nil {
-			return err
+	return fmt.Errorf("full scenario did not reach COMPLETE within the step bound")
+}
+
+// lastSpawnActionID returns the most recent action the full loop spawned, for
+// the side-effect projection.
+func lastSpawnActionID(report *HarnessReport) string {
+	for index := len(report.Acceptances) - 1; index >= 0; index-- {
+		if report.Acceptances[index].Kind == "SPAWN_RECEIPT" {
+			return report.Acceptances[index].ActionID
 		}
 	}
-	snapshot.State.Expected = []runtime.TaskKey{}
-	snapshot.State.Attempts = map[runtime.TaskKey]protocol.Attempt{}
-	snapshot.State.PendingActions = map[string]protocol.PendingAction{}
-	fingerprint, err := fixture.Engine.ObserveFingerprint()
-	if err != nil {
-		return err
-	}
-	saved, err := fixture.Store.Save(persistence.Transaction{ExpectedRevision: snapshot.Revision, ExpectedFingerprint: fingerprint, CollectFingerprint: fixture.VCS.Fingerprint, Content: &snapshot.State})
-	if err != nil {
-		return err
-	}
-	plan, err := decision.Decide(&snapshot.State.State, decision.Observation{}, compiled)
-	if err != nil {
-		return err
-	}
-	if plan.Next.Kind != decision.KindComplete {
-		return fmt.Errorf("full scenario final NextResult is %s", plan.Next.Kind)
-	}
-	requestDigest, _ := request.Digest()
-	hostEvent, eventErr := protocol.NewHostActionReceiptEvent("full-host-receipt", intent.ActionID, intent.Adapter.Operation, "fake-host", "full-host-correlation", intent.PayloadDigest, protocol.HostActionStatusExecuted)
-	if eventErr != nil {
-		return eventErr
-	}
-	hostDigest, _ := hostEvent.Digest()
-	summary, err := WriteTerminalSummary(fixture.Root, saved.Revision, requestAcceptance, requestDigest, hostAcceptance, hostDigest, "COMPLETE")
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(report.StatePath); err != nil {
-		return err
-	}
-	report.Terminal = &summary
-	report.Next = append(report.Next, summary.Next)
-	report.SideEffects = map[string]int{"fakeVCS.full-commit": count, "fakeHost." + intent.ActionID: fixture.Host.ActionCalls(intent.ActionID), "fakeHost.spawn": fixture.Host.SpawnCalls(actionID)}
-	report.Phase = "terminal"
-	return nil
+	return ""
 }
 
 func runEnvelopeScenario(report HarnessReport, options HarnessOptions, root string, envelope persistence.Envelope) (HarnessReport, error) {

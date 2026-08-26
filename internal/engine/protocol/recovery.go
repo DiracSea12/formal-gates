@@ -163,9 +163,10 @@ func (s *State) appendRecovery(record RecoveryRecord) {
 	s.RecoveryRecords = append(s.RecoveryRecords, record)
 }
 
-// retireAction 把当前 action 从可接纳索引移到 obsolete 索引。它不删除
-// 已有 receipt/result，因为那些是审计事实；只阻止旧 Attempt 再推进当前
-// workflow。
+// retireAction 把当前 action 从可接纳索引移到 obsolete 索引。已落账的
+// receipt/result 是审计事实，保留；未消费的 result-before-receipt 暂存
+// 结果属于失败/被替换的派发边界，随 action 一并清除——否则它没有正常
+// 消费路径，会在 state 中永久残留（审阅 P2）。
 func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction, bool) {
 	pending, ok := s.PendingActions[actionID]
 	if !ok {
@@ -174,6 +175,7 @@ func (s *State) retireAction(actionID, replacedBy, reason string) (PendingAction
 	attempt := s.Attempts[pending.Task]
 	delete(s.PendingActions, actionID)
 	delete(s.Attempts, pending.Task)
+	delete(s.StagedResults, actionID)
 	s.ObsoleteActions[actionID] = ObsoleteAction{
 		ActionID: actionID, Task: pending.Task, AttemptID: pending.AttemptID,
 		ReplacedBy: replacedBy, Reason: reason, Bindings: attempt.Bindings, Plan: attempt.Plan,
@@ -366,6 +368,14 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 		}
 		state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: adapterOperation, ObservationDigest: observationDigest, Status: "FULFILLED", Revision: nextRevision}
 		state.HostActionReceipts[actionID] = HostActionReceipt{ActionID: actionID, Operation: intent.Operation, Provider: state.RunProvider, Correlation: "reconcile", PayloadDigest: intent.PayloadDigest, Status: "RECONCILED", Digest: digestOfCanonical(map[string]any{"actionId": actionID, "observationDigest": observationDigest, "status": "RECONCILED"})}
+		// 对账即外部事实已满足：完成对应 HOST_ACTION frontier 步骤并补位
+		// 签发（与 EXECUTED 回执接纳同一条 settle 语义，不再次执行）。
+		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
+			return RecoveryPlan{}, 0, err
+		}
+		if _, refillErr := e.refill(state, nextRevision, expectedFingerprint); refillErr != nil {
+			return RecoveryPlan{}, 0, refillErr
+		}
 	} else {
 		plan.Action = RecoveryWait
 		plan.Detail = "external observation does not yet satisfy the intent; keep pending and wait"
