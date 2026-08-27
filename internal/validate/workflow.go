@@ -1872,14 +1872,18 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		// binds the lifecycle and records the worker result; the existing repair
 		// boundary and review surface are kept for the normal Carry/QA flow.
 		adoptedDevelopment := developmentStatus == developmentRepairPrepared &&
-			currentSnapshot == state.CurrentSnapshot && isAdoptionBoundary(*state)
+			isAdoptionBoundary(*state) && adoptedSnapshotAtOrAfter(root, *state, currentSnapshot)
 		// 快照要求开发侧真正完成：产生开发提交（原生标识前进到派发源快照之后），而非仅
 		// PREPARED 状态。dev worker 已派发但未提交时，快照不得直接把基线记为开发快照
 		// （需求 2 验收"任一未完成时 snapshot 被挡"）。
 		if currentSnapshot == state.CurrentSnapshot && !adoptedDevelopment {
 			return fmt.Errorf("a new current snapshot is required")
 		}
-		if err := verifyNativeSnapshot(root, state.VCS, state.CurrentSnapshot); err != nil {
+		snapshotToVerify := state.CurrentSnapshot
+		if adoptedDevelopment {
+			snapshotToVerify = currentSnapshot
+		}
+		if err := verifyNativeSnapshot(root, state.VCS, snapshotToVerify); err != nil {
 			return err
 		}
 		if !adoptedDevelopment {
@@ -1908,6 +1912,12 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 				state.SnapshotOverride = &SnapshotOverride{Origin: "USER", Snapshot: currentSnapshot, Message: strings.TrimSpace(reason)}
 			} else if blackboxSelected && blackboxReviewPassed(*state) {
 				state.SnapshotOverride = nil
+			}
+			if currentSnapshot != state.CurrentSnapshot {
+				adoption := state.Carry[carryAdoptKey]
+				adoption.TargetSnapshot = currentSnapshot
+				state.Carry[carryAdoptKey] = adoption
+				state.CurrentSnapshot = currentSnapshot
 			}
 			state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
 			completeDispatch(state, developmentDispatch.ID)
@@ -2176,6 +2186,29 @@ func requireDispatchSourceAncestorOfHead(root string, state RunState, dispatch P
 		return fmt.Errorf("native VCS identity does not match the current snapshot")
 	}
 	return nil
+}
+
+// adoptedSnapshotAtOrAfter accepts the native head that is equal to, or has
+// advanced beyond, the externally adopted commit. A host may create the
+// formal snapshot boundary after adoption; the fresh development dispatch
+// still pins the adopted snapshot as its source.
+func adoptedSnapshotAtOrAfter(root string, state RunState, current string) bool {
+	if current == state.CurrentSnapshot {
+		return true
+	}
+	resolver, err := resolverForVCS(state.VCS, nil)
+	if err != nil {
+		return false
+	}
+	return resolver.IsAncestorOrEqual(root, state.CurrentSnapshot, current) == nil
+}
+
+func adoptedDevelopmentNativeHeadAtOrAfter(root string, state RunState) bool {
+	if !isAdoptionBoundary(state) {
+		return false
+	}
+	current, err := resolveNativeSnapshot(root, state.VCS)
+	return err == nil && adoptedSnapshotAtOrAfter(root, state, current)
 }
 
 func routeForState(root string, state RunState) PromptRoute {

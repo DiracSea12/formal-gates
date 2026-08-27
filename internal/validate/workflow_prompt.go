@@ -152,7 +152,9 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 				return err
 			}
 		} else if _, err := requireNativeCurrent(root, *state); err != nil {
-			return err
+			if !(target == "development-worker" && state.Actions["development-worker"].Status == developmentRepairPrepared && adoptedDevelopmentNativeHeadAtOrAfter(root, *state)) {
+				return err
+			}
 		}
 		wave := 0
 		if targetKind == "gate" {

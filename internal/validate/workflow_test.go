@@ -1362,6 +1362,9 @@ func TestAdoptedDevelopmentCommitCanCompleteSnapshotRegistration(t *testing.T) {
 	if state.CurrentSnapshot != adoptedHead || state.PreRepairSnapshot != prior {
 		t.Fatalf("adoption did not establish the expected repair boundary: %#v", state)
 	}
+	writeTestFile(t, filepath.Join(root, "snapshot-boundary.txt"), "formal snapshot boundary\n")
+	commitAll(t, root, "record formal snapshot boundary")
+	boundaryHead := gitHead(t, root)
 
 	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "")
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
@@ -1369,10 +1372,10 @@ func TestAdoptedDevelopmentCommitCanCompleteSnapshotRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adopted development snapshot registration failed: %v", err)
 	}
-	if state.CurrentSnapshot != adoptedHead || state.Actions["development-worker"].Status != developmentComplete {
+	if state.CurrentSnapshot != boundaryHead || state.Actions["development-worker"].Status != developmentComplete {
 		t.Fatalf("adopted development snapshot was not recorded: %#v", state)
 	}
-	if state.Dispatches[dispatchID].Status != "COMPLETED" || state.PreRepairSnapshot != prior {
+	if state.Dispatches[dispatchID].Status != "COMPLETED" || state.PreRepairSnapshot != prior || state.Carry[carryAdoptKey].TargetSnapshot != boundaryHead {
 		t.Fatalf("adopted snapshot changed dispatch or repair boundary: dispatch=%#v preRepair=%s", state.Dispatches[dispatchID], state.PreRepairSnapshot)
 	}
 }
