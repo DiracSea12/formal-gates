@@ -1335,6 +1335,48 @@ func TestAdoptExternalChangeRebindsAndCarries(t *testing.T) {
 	}
 }
 
+// TestAdoptedDevelopmentCommitCanCompleteSnapshotRegistration covers the
+// recovery path where a delivered repair commit was adopted before the host
+// recorded its development snapshot. The adopted commit is already the native
+// current snapshot, so snapshot registration must complete the fresh dispatch
+// without requiring a second repository commit or dropping the repair boundary.
+func TestAdoptedDevelopmentCommitCanCompleteSnapshotRegistration(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := readyDeliveryForRoute(t, root, pkg, "adopted-development", "custom", []string{"quality"})
+	state = recordGateResult(t, root, pkg, state, "quality", "adopted-development-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	state, err := LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := state.CurrentSnapshot
+	writeTestFile(t, filepath.Join(root, "adopted-repair.txt"), "repair delivered externally\n")
+	commitAll(t, root, "adopt repair externally")
+	adoptedHead := gitHead(t, root)
+	state, err = AdoptExternalChange(root, pkg, state.RunID, "adopt delivered repair commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentSnapshot != adoptedHead || state.PreRepairSnapshot != prior {
+		t.Fatalf("adoption did not establish the expected repair boundary: %#v", state)
+	}
+
+	stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "")
+	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	state, err = AdvanceSnapshot(root, pkg, state.RunID, dispatchID, false, "")
+	if err != nil {
+		t.Fatalf("adopted development snapshot registration failed: %v", err)
+	}
+	if state.CurrentSnapshot != adoptedHead || state.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("adopted development snapshot was not recorded: %#v", state)
+	}
+	if state.Dispatches[dispatchID].Status != "COMPLETED" || state.PreRepairSnapshot != prior {
+		t.Fatalf("adopted snapshot changed dispatch or repair boundary: dispatch=%#v preRepair=%s", state.Dispatches[dispatchID], state.PreRepairSnapshot)
+	}
+}
+
 // TestPreDevelopmentAdoptRebindsWithoutRepairBoundary covers the pre-dev adopt
 // deadlock (requirement 1): adopting an external change before any development
 // snapshot must not set PreRepairSnapshot or reset the review surface, so the

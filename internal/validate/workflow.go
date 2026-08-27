@@ -1865,17 +1865,53 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			return err
 		}
 		developmentStatus := state.Actions["development-worker"].Status
+		// External adoption can happen after a worker has already delivered and the
+		// host has independently verified that commit. In that case the adopted
+		// commit is already the run's current snapshot, so a second VCS commit is
+		// neither necessary nor meaningful. The fresh development dispatch still
+		// binds the lifecycle and records the worker result; the existing repair
+		// boundary and review surface are kept for the normal Carry/QA flow.
+		adoptedDevelopment := developmentStatus == developmentRepairPrepared &&
+			currentSnapshot == state.CurrentSnapshot && isAdoptionBoundary(*state)
 		// 快照要求开发侧真正完成：产生开发提交（原生标识前进到派发源快照之后），而非仅
 		// PREPARED 状态。dev worker 已派发但未提交时，快照不得直接把基线记为开发快照
 		// （需求 2 验收"任一未完成时 snapshot 被挡"）。
-		if currentSnapshot == state.CurrentSnapshot {
+		if currentSnapshot == state.CurrentSnapshot && !adoptedDevelopment {
 			return fmt.Errorf("a new current snapshot is required")
 		}
 		if err := verifyNativeSnapshot(root, state.VCS, state.CurrentSnapshot); err != nil {
 			return err
 		}
-		if err := requireTransition(*state, "snapshot", ""); err != nil {
-			return err
+		if !adoptedDevelopment {
+			if err := requireTransition(*state, "snapshot", ""); err != nil {
+				return err
+			}
+		}
+		if adoptedDevelopment {
+			var developmentDispatch PreparedDispatch
+			if state.RetainedOverall {
+				return fmt.Errorf("an adopted development snapshot cannot use a retained overall dispatch")
+			}
+			developmentDispatch, err = requirePreparedDispatch(*state, dispatchID, "action", "development-worker")
+			if err != nil {
+				return err
+			}
+			if err := requireLifecycleVerification(root, *state, developmentDispatch); err != nil {
+				return err
+			}
+			backfillDispatchCost(root, state, developmentDispatch)
+			blackboxSelected := isSelected(*state, blackboxQAID)
+			if blackboxSelected && !blackboxReviewPassed(*state) && state.SnapshotOverride == nil {
+				if !userRequested {
+					return fmt.Errorf("blackbox QA Review must pass before an adopted development snapshot; development and blackbox QA review both need to complete")
+				}
+				state.SnapshotOverride = &SnapshotOverride{Origin: "USER", Snapshot: currentSnapshot, Message: strings.TrimSpace(reason)}
+			} else if blackboxSelected && blackboxReviewPassed(*state) {
+				state.SnapshotOverride = nil
+			}
+			state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
+			completeDispatch(state, developmentDispatch.ID)
+			return nil
 		}
 		// 白盒测试代码推进路径（方案 A）：host 已提交白盒设计者交付的结构测试代码，
 		// 把快照推进到包含该测试代码的新提交，供 qa-review / qa-execution 在其上派发、
