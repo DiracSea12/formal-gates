@@ -297,17 +297,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 		// Validate the existing bridge before changing any host target.  A
 		// malformed registry is an unregistered install, not a reason to leave
 		// a partially installed runtime behind.
-		var existingRecords []RegistryRecord
-		if existing, loadErr := LoadRegistry(registryPath); loadErr == nil {
-			existingRecords = existing.Records
-		} else if !os.IsNotExist(loadErr) {
+		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
-		if fenceErr := rejectActiveWorkflowRuns("install", targets, options, existingRecords); fenceErr != nil {
-			return InstallReport{}, fenceErr
-		}
-	} else if fenceErr := rejectActiveWorkflowRuns("install", targets, options, nil); fenceErr != nil {
-		return InstallReport{}, fenceErr
 	}
 
 	transactionParent := filepath.Dir(registryPath)
@@ -1095,13 +1087,6 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 				}
 			}
 		}
-	}
-	if registryWasPresent {
-		if fenceErr := rejectActiveWorkflowRuns("bootstrap", targets, options, existingRegistry.Records); fenceErr != nil {
-			return InstallReport{}, fenceErr
-		}
-	} else if fenceErr := rejectActiveWorkflowRuns("bootstrap", targets, options, nil); fenceErr != nil {
-		return InstallReport{}, fenceErr
 	}
 	if len(targets) > 0 {
 		outer.InstalledTarget = canonicalRegistryPath(targets[0].targetPath)
