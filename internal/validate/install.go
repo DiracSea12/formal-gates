@@ -2248,7 +2248,11 @@ func targetLauncherPath(target installTarget) string {
 // normalizeHookCommand 去掉命令字符串里的双引号，用于卸载/升级时识别新旧两种 install
 // 格式：旧版无条件给 exe 路径加引号、新版仅在需要时加引号，归一化后相同。
 func normalizeHookCommand(command string) string {
-	return strings.ReplaceAll(command, `"`, "")
+	command = strings.ReplaceAll(command, `"`, "")
+	// Hook configs may preserve Windows backslashes while the installer
+	// compares against a slash-normalized launcher path.  Normalize both
+	// separators so uninstall/upgrade recognizes its own hook cross-platform.
+	return strings.ReplaceAll(command, `\`, "/")
 }
 
 func quoteCommandArg(value string) string {
