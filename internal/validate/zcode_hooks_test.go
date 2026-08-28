@@ -12,7 +12,7 @@ func TestRemoveZCodeHookPreservesSameLauncherUserHook(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configPath := filepath.Join(home, ".zcode", "cli", "config.json")
-	target := installTarget{hookConfig: configPath, launcherPath: filepath.Join(home, ".zcode", "skills", "formal-gates", "bin", "formal-gates")}
+	target := installTarget{hookConfig: configPath, launcherPath: filepath.Join(home, ".zcode", "skills", "formal-gates", "bin", nativeBinaryName())}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}

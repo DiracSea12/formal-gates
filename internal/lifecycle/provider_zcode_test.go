@@ -10,6 +10,7 @@ import (
 func TestProviderFromExecutableDistinguishesGlobalZCodeInstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	global := filepath.Join(home, ".zcode", "skills", "formal-gates", "bin", nativeName())
 	if got := providerFromExecutable(global); got != ProviderZCode {
 		t.Fatalf("global ZCode binary resolved provider %q, want %q", got, ProviderZCode)
@@ -23,6 +24,7 @@ func TestProviderFromExecutableDistinguishesGlobalZCodeInstall(t *testing.T) {
 func TestCurrentProviderKeepsProjectZCodeLenient(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("AI_AGENT", "zcode")
 	for _, key := range []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"} {
 		t.Setenv(key, "")

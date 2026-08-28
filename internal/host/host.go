@@ -130,7 +130,7 @@ var descriptors = []Descriptor{
 			GlobalBase: ".zcode/skills", GlobalHookConfig: ".zcode/cli/config.json", GlobalManaged: ".zcode/AGENTS.md",
 			ProjectBase: ".zcode/skills", ProjectManaged: "AGENTS.md",
 		},
-		Hook:            HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: "*", LifecycleMatcher: "Agent|Task"},
+		Hook:            HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", LifecycleMatcher: "Agent|Task"},
 		LifecycleEvents: []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}, LifecycleRequired: true,
 	},
 	{

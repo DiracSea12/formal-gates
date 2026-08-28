@@ -37,7 +37,12 @@ jobs:
             suffix: linux-amd64
             binary: formal-gates-linux-amd64
     steps:
+      # The route-matrix provenance tests inspect sealed and candidate commits
+      # preserved by the archive tags below, so the validation checkout must
+      # include complete history and tags.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"

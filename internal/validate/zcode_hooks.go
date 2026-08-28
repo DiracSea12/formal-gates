@@ -194,7 +194,7 @@ func zcodeHookEvents(root map[string]any) map[string]any {
 
 func zcodeHookGroup(matcher string, entry map[string]any) map[string]any {
 	if strings.TrimSpace(matcher) == "" {
-		matcher = "*"
+		matcher = ".*"
 	}
 	return map[string]any{"matcher": matcher, "hooks": []any{entry}}
 }

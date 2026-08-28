@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1011,7 +1012,11 @@ func TestRouteMatrixCitedWriterSymbolsExistAndNoEngineSubmitFaceInStage01(t *tes
 // 临时目录，作为公共入口探测的载体。
 func qaBuildRouteMatrixCLIBinary(t *testing.T) string {
 	t.Helper()
-	binPath := filepath.Join(t.TempDir(), "formal-gates-cli")
+	name := "formal-gates-cli"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	binPath := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", binPath, "./cmd/formal-gates")
 	build.Dir = repoRootValidateTest(t)
 	if out, err := build.CombinedOutput(); err != nil {
