@@ -26,15 +26,6 @@ func round7WriteFile(t *testing.T, path, content string, mode os.FileMode) {
 	}
 }
 
-func round7ReadFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
-}
-
 func round7Run(t *testing.T, dir, name string, args ...string) string {
 	t.Helper()
 	command := exec.Command(name, args...)
@@ -201,19 +192,4 @@ func TestWhiteboxPhase0Round7StableLauncherDiscoveryFencesCandidateWrites(t *tes
 			}
 		})
 	}
-}
-
-func round7InstallSource(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	round7WriteFile(t, filepath.Join(root, "SKILL.md"), "---\nname: formal-gates\n---\n"+hostInstructionsStartMarker+"\nstage zero rule\n"+hostInstructionsEndMarker+"\n", 0o600)
-	for _, name := range []string{"README.md", "README_EN.md"} {
-		round7WriteFile(t, filepath.Join(root, name), "stage zero runtime\n", 0o600)
-	}
-	round7WriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), phase0TestManifest, 0o600)
-	round7WriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "#!/bin/sh\nexit 0\n", 0o700)
-	for _, relative := range []string{"agents/worker.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
-		round7WriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), relative+"\n", 0o600)
-	}
-	return root
 }
