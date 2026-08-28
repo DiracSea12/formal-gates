@@ -22,6 +22,25 @@ func TestHookResponseCodexFormat(t *testing.T) {
 	}
 }
 
+func TestHookResponseZCodeFormat(t *testing.T) {
+	if resp := HookResponse("zcode", allowHook("ok")); resp != nil {
+		t.Fatalf("zcode allow should be nil (no output), got %#v", resp)
+	}
+	deny, _ := json.Marshal(HookResponse("z-code", denyWrite("blocked")))
+	for _, expected := range []string{`"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `"permissionDecision":"deny"`, `"permissionDecisionReason":"blocked"`} {
+		if !strings.Contains(string(deny), expected) {
+			t.Fatalf("zcode deny missing %s: %s", expected, deny)
+		}
+	}
+	decision := denyWrite("blocked")
+	if got := HookExitCode("zcode", decision); got != 2 {
+		t.Fatalf("zcode deny should use documented exit-2 shortcut, got %d", got)
+	}
+	if got := HookExitCode("zcode", allowHook("ok")); got != 0 {
+		t.Fatalf("zcode allow should exit 0, got %d", got)
+	}
+}
+
 func TestIsWriteToolCodexExec(t *testing.T) {
 	// Codex 跑 shell 命令用 tool_name:"exec"，写墙必须认得它。
 	if !isWriteTool("exec", "git add -A") {

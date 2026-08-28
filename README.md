@@ -229,13 +229,14 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 | Codex | `~/.codex/skills/formal-gates` | 所选项目下的对应目录 |
 | Cursor | `~/.cursor/formal-gates` | 所选项目下的对应目录 |
 | DeepSeek Harness | `~/.dsh/skills/formal-gates`（`$DSH_HOME` 下） | 所选项目 `.dsh/skills/formal-gates` |
+| ZCode | `~/.zcode/skills/formal-gates` | 所选项目 `.zcode/skills/formal-gates` |
 
-安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）。已有的非 formal-gates hook/插件行不会被覆盖。
+安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装只装 skill 与 `AGENTS.md` 指令（当前 ZCode 忽略项目级 hook 配置）。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
 
 安装还会维护受理规则：Claude Code 使用全局 `~/.claude/CLAUDE.md` 或项目
 `CLAUDE.md`，Codex 使用全局 `~/.codex/AGENTS.md` 或项目 `AGENTS.md`，Cursor 项目
 使用 `.cursor/rules/formal-gates.mdc`，DeepSeek Harness 使用 `$DSH_HOME/AGENTS.md`
-或项目 `AGENTS.md`。Cursor 全局不创建规则文件，只保留现有运行时和
+或项目 `AGENTS.md`，ZCode 使用全局 `~/.zcode/AGENTS.md` 或项目 `AGENTS.md`。Cursor 全局不创建规则文件，只保留现有运行时和
 hook 集成。当前规则写在宿主指令区块 `<formal-gates:host-instructions:start>` 与
 `<formal-gates:host-instructions:end>` 之间；重复安装会替换区块内容并把重复区块收敛为一个。
 从旧版（包括旧 target/bin hook 或旧 marker）升级时，直接用 release 引导脚本加
@@ -251,6 +252,8 @@ $HOME/.local/bin/formal-gates uninstall --host claude --scope global
 $HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>
 $HOME/.local/bin/formal-gates uninstall --host dsh --scope global
 $HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host zcode --scope global
+$HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <project>
 # Windows: %LOCALAPPDATA%\formal-gates\bin\formal-gates.exe uninstall ...
 ```
 
@@ -267,7 +270,7 @@ $HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <pr
 
 作为使用者，你只需要做三件事：
 
-1. **安装** —— 按上一节把它装到你的 AI 宿主平台（claude / codex / cursor / dsh）。给对应 AI 宿主平台说一句"帮我安装 formal-gates"即可。
+1. **安装** —— 按上一节把它装到你的 AI 宿主平台（claude / codex / cursor / dsh / zcode）。给对应 AI 宿主平台说一句"帮我安装 formal-gates"即可。
 2. **让 AI 引导你走完整个流程** —— 装好后，对你的 AI 说"帮我用 formal-gates 处理这次改动"，它会引导你走完：问清你的需求、把方案讲给你确认、执行、汇报结果。你不需要记任何命令，也不需要先读懂本文里的术语。
 3. **审阅结果** —— 每轮结果由主代理汇总给你：哪些关卡通过、哪些发现项需要处理、封板存档长什么样。你随时可以打开 `.gates/results/<run-id>.json` 查看这一轮的完整结论。
 
@@ -296,7 +299,7 @@ review bot 通常运行在生成代码的同一个上下文里，AI 可以用写
 是。正式流程会派出多名独立评审员、真实执行测试，比普通开发消耗更多时间与 token。若 full 过于繁重，可在正式流程内选择 **custom** 自行缩减（不选择测试、或不选择部分关卡）；只想留记录的轻量任务可走 **lightweight** 路线（`workflow start --route lightweight` → 需求登记 → Seal，不验证只留记录，封板标注「本 run 未经任何验证」）；规模特别大的工作可采用**拆分**模式，拆分为若干独立部分并行开发、合并后整体审查。此外，审查关卡（门）可自由增删与定制——若某道门不合适，可删除或修改其审查逻辑，这同样会影响整体轻重。
 
 **需要什么前置条件？**
-从源码构建需要 Go 1.22+，并选一个宿主（claude / codex / cursor / dsh）。正式流程需要一个 Git、SVN 或 P4 仓库；无版本库的项目不进入正式流程。
+从源码构建需要 Go 1.22+，并选一个宿主（claude / codex / cursor / dsh / zcode）。正式流程需要一个 Git、SVN 或 P4 仓库；无版本库的项目不进入正式流程。
 
 **如何增加或删除一道审查关卡？**
 新建或删除 `gates/<id>.md` 并重新安装即可。文件名就是门 ID，不需要改任何配置表。删除文件即移除关卡，数量不限。若要修改审查逻辑，修改门文件即可。

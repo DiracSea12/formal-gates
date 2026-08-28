@@ -130,19 +130,12 @@ func InstallFaultMatrix(options InstallFaultMatrixOptions) (InstallFaultMatrixRe
 	return report, result
 }
 
-// hostProviderEnvKeys are the environment variables the lifecycle host
-// provider reads to detect the driving host. The portable canary is a
-// host-agnostic check: it must observe the lenient default provider even when
-// invoked from inside a real host shell (e.g. `canary portable` from a Claude
-// Code session), so the host environment is neutralized for its duration.
-var hostProviderEnvKeys = []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME", "DSH_HOME", "DSH_PROJECT_DIR"}
-
 // withoutHostEnv clears the host lifecycle environment and returns a restore
 // function. Empty is treated as unset by providerFromEnvironment, so clearing
 // and restoring with empty values is behavior-preserving.
 func withoutHostEnv() func() {
 	prior := map[string]string{}
-	for _, key := range hostProviderEnvKeys {
+	for _, key := range lifecycle.ProviderEnvironmentKeys() {
 		prior[key] = os.Getenv(key)
 		os.Setenv(key, "")
 	}
@@ -474,7 +467,7 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		launcher = filepath.Join(canaryLocalAppData, "formal-gates", "bin", nativeBinaryName())
 	}
 	stableEnv := canaryEnvironment(canaryHome, canaryLocalAppData)
-	for _, tc := range []struct{ name, host string }{{"install-claude-codex-native-runtime", "both"}, {"install-cursor-native-runtime", "cursor"}, {"install-dsh-project-runtime", "dsh"}} {
+	for _, tc := range []struct{ name, host string }{{"install-claude-native-runtime", "claude"}, {"install-codex-native-runtime", "codex"}, {"install-cursor-native-runtime", "cursor"}, {"install-dsh-project-runtime", "dsh"}} {
 		project := filepath.Join(tempRoot, tc.name)
 		if err := os.MkdirAll(project, 0o700); err != nil {
 			addCheck(tc.name, false, err.Error())

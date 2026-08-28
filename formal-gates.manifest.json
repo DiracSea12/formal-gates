@@ -1,6 +1,6 @@
 {
   "name": "formal-gates",
-  "description": "Agent Skill compatible formal workflow package with a default one-time reminder, an on-request formal flow, and a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, and DeepSeek Harness. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible formal workflow package with a default one-time reminder, an on-request formal flow, and a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Claude Code",
@@ -45,6 +45,17 @@
         "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
       },
       "caveat": "Install the skill under the DeepSeek Harness home and mount a small bundled Cordis plugin through the home cordis.patch.yml; hook enforcement requires a live canary on DeepSeek Harness."
+    },
+    {
+      "name": "ZCode",
+      "support": "host-target",
+      "capabilities": {
+        "readable_skill_support": "supported",
+        "install_guidance": "bundled-installer",
+        "hook_configuration": "bundled-global-cli-hook-guidance",
+        "hook_blocking_live_canary": "not-claimed-without-same-host-canary"
+      },
+      "caveat": "ZCode hooks are configured at user level because current ZCode ignores project-level hook configuration; Agent/Task lifecycle observations use documented PreToolUse/PostToolUse/PostToolUseFailure events and require a same-host canary before claiming child-completion semantics."
     },
     {
       "name": "Gemini",
@@ -102,12 +113,16 @@
     "./install.command --host cursor --scope project --project <project> --force",
     "./install.command --host dsh --scope global --force",
     "./install.command --host dsh --scope project --project <project> --force",
+    "./install.command --host zcode --scope global --force",
+    "./install.command --host zcode --scope project --project <project> --force",
     "install.bat -TargetHost claude -Scope global -Force",
     "$HOME/.local/bin/formal-gates uninstall --host claude --scope global",
     "$HOME/.local/bin/formal-gates uninstall --host codex --scope project --project <project>",
     "$HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>",
     "$HOME/.local/bin/formal-gates uninstall --host dsh --scope global",
-    "$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>"
+    "$HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>",
+    "$HOME/.local/bin/formal-gates uninstall --host zcode --scope global",
+    "$HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <project>"
   ],
   "verification_commands": [
     "bin\\formal-gates.exe package validate --root .",
@@ -121,18 +136,20 @@
     "GateRunner loads the shared reviewer base and every valid package-local gate prompt from the prompt catalog without a per-gate manifest or Go registry.",
     "Native workflow commands resolve and verify immutable identities through the selected Git, SVN, or P4 command while reviewers inspect native comparisons directly.",
     "Native install copies the verifiable installable package subset, including prompts and gates, without PS1/Python script runtime files and writes each selected host's native hook configuration.",
-    "Native install and uninstall use the single marker-delimited host-instruction block from SKILL.md for the applicable Claude Code, Codex, Cursor, and DeepSeek Harness guidance files; Cursor global has no host-instruction file.",
+    "Native install and uninstall use the single marker-delimited host-instruction block from SKILL.md for the applicable Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode guidance files; Cursor global has no host-instruction file.",
     "Source checkout builds are read-only candidate validation inputs; install/bootstrap/uninstall and workflow writes must use the registry-admitted fixed stable launcher.",
     "The native Codex hook canary uses formal-gates canary codex-hook; same-host hook blocking still requires live canary evidence.",
     "verification_commands contains only repo-local commands runnable from this package root.",
     "Native install also writes the DeepSeek Harness skill under .dsh/skills and mounts the bundled minimal Cordis hook plugin through the DSH home cordis.patch.yml; project-scope DSH installs skills and AGENTS.md instructions only because DSH loads only the home-level patch layer.",
     "The native DeepSeek Harness hook path uses the same generic hook decide protocol through the bundled dsh_plugin.mjs adapter and still requires live canary evidence before claiming blocking.",
+    "Native ZCode installs the skill under .zcode/skills and configures the user-level .zcode/cli/config.json hook; project-scope ZCode installs the skill and AGENTS.md guidance only because current ZCode ignores project-level hooks.",
+    "The native ZCode lifecycle path observes documented Agent/Task tool calls through PreToolUse, PostToolUse, and PostToolUseFailure, correlating tool_use_id (or its documented aliases); exact child-agent completion semantics remain unclaimed until a same-host canary verifies them.",
     "Stage-0 native installation owns the immutable release copy, cross-process lock, one recovery journal, backup, stable launcher, host configuration, and registry commit; shell and PowerShell bootstrap entries only download, verify, stage the fixed launcher, and invoke that owner.",
     "Stage-0 package validation uses Lstat/realpath and deterministic SHA-256 receipts and rejects package entries that resolve through a symlink to a mutable worktree."
   ],
   "support_caveats": [
-    "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, Cursor, and DeepSeek Harness have bundled installer/hook target entries.",
-    "Claude Code, Codex, Cursor, DeepSeek Harness, Gemini, OpenCode, and Windsurf are described by readable-skill, install-guidance, hook-configuration, and live-canary-proven blocking capability levels.",
+    "Core skill documents may be read by other Agent Skill compatible runtimes, but only Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode have bundled installer/hook target entries.",
+    "Claude Code, Codex, Cursor, DeepSeek Harness, ZCode, Gemini, OpenCode, and Windsurf are described by readable-skill, install-guidance, hook-configuration, and live-canary-proven blocking capability levels.",
     "Hook enforcement claims require live canary evidence on the specific host.",
     "A passing canary on one host does not prove another host. Do not claim Codex or DeepSeek Harness plugin distribution from this package."
   ],

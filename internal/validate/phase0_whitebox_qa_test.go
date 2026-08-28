@@ -477,7 +477,7 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "stable", nativeBinaryName())
 	phase0WriteFile(t, launcher, phase0ReadFile(t, filepath.Join(source, "bin", nativeBinaryName())), 0o700)
-	allTargets, err := resolveInstallTargets("both", "project", project)
+	allTargets, err := resolveInstallTargets("claude", "project", project)
 	if err != nil {
 		t.Fatal(err)
 	}

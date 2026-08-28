@@ -1,12 +1,18 @@
 package lifecycle
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 func claudeAdapter() providerAdapter {
 	return providerAdapter{
-		name:       ProviderClaude,
-		required:   true,
-		hookEvents: []string{"SubagentStart", "SubagentStop"},
+		name: ProviderClaude,
+		executableMatches: func(path string) bool {
+			return strings.Contains(normalizeProviderExecutablePath(path), "/.claude/skills/formal-gates/bin/")
+		},
+		agentPrefixes:   []string{"claude-code"},
+		environmentKeys: []string{"CLAUDE_CODE_ENTRYPOINT"},
 		normalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(ProviderClaude, eventName, "SubagentStart", "SubagentStop")
 		},

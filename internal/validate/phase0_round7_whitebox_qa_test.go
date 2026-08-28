@@ -8,7 +8,6 @@ package validate
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,87 +216,4 @@ func round7InstallSource(t *testing.T) string {
 		round7WriteFile(t, filepath.Join(root, filepath.FromSlash(relative)), relative+"\n", 0o600)
 	}
 	return root
-}
-
-func TestWhiteboxPhase0Round7OuterInstallRollbackIsAtomicAcrossHosts(t *testing.T) {
-	source := round7InstallSource(t)
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	targets, err := resolveInstallTargets("both", "project", project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(targets) != 2 {
-		t.Fatalf("both-host fixture resolved %d targets", len(targets))
-	}
-	before := map[string]string{}
-	for _, target := range targets {
-		round7WriteFile(t, filepath.Join(target.targetPath, "old.txt"), "old "+target.host+" runtime\n", 0o600)
-		hook := fmt.Sprintf(`{"hooks":{"Unrelated":[{"command":"keep-%s"}]}}`, target.host) + "\n"
-		if target.host == "codex" {
-			hook = "{malformed-codex-hook\n"
-		}
-		rule := "old " + target.host + " rule\n"
-		round7WriteFile(t, target.hookConfig, hook, 0o600)
-		round7WriteFile(t, target.managedRulePath, rule, 0o600)
-		before[target.targetPath] = round7ReadFile(t, filepath.Join(target.targetPath, "old.txt"))
-		before[target.hookConfig] = hook
-		before[target.managedRulePath] = rule
-	}
-	launcher := filepath.Join(root, "stable", nativeBinaryName())
-	round7WriteFile(t, launcher, "old launcher\n", 0o700)
-	before[launcher] = "old launcher\n"
-	registry := filepath.Join(root, "registry", "registry.json")
-	registryBefore := "{\n  \"schemaVersion\": 1,\n  \"epoch\": 9,\n  \"records\": []\n}\n"
-	round7WriteFile(t, registry, registryBefore, 0o600)
-
-	_, err = Install(InstallOptions{
-		Source: source, Host: "both", Scope: "project", Project: project,
-		BinaryTarget: launcher, RegistryPath: registry, Force: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "not valid JSON") {
-		t.Fatalf("second-host hook failure did not interrupt the shared transaction: %v", err)
-	}
-	for _, target := range targets {
-		if got := round7ReadFile(t, filepath.Join(target.targetPath, "old.txt")); got != before[target.targetPath] {
-			t.Fatalf("%s runtime was not restored: %q", target.host, got)
-		}
-		if _, statErr := os.Stat(filepath.Join(target.targetPath, "README.md")); !os.IsNotExist(statErr) {
-			t.Fatalf("%s candidate tree survived rollback: %v", target.host, statErr)
-		}
-		if got := round7ReadFile(t, target.hookConfig); got != before[target.hookConfig] {
-			t.Fatalf("%s hook was not restored byte-for-byte: %q", target.host, got)
-		}
-		if got := round7ReadFile(t, target.managedRulePath); got != before[target.managedRulePath] {
-			t.Fatalf("%s managed rule was not restored byte-for-byte: %q", target.host, got)
-		}
-	}
-	if got := round7ReadFile(t, launcher); got != before[launcher] {
-		t.Fatalf("stable launcher was not restored: %q", got)
-	}
-	if got := round7ReadFile(t, registry); got != registryBefore {
-		t.Fatalf("registry was not restored byte-for-byte:\n%s", got)
-	}
-	journal := installOuterJournalPath(registry)
-	if _, statErr := os.Stat(journal); !os.IsNotExist(statErr) {
-		t.Fatalf("rolled-back transaction journal remains: %v", statErr)
-	}
-	var receipt installRecoveryReceipt
-	if unmarshalErr := json.Unmarshal([]byte(round7ReadFile(t, journal+".failure.json")), &receipt); unmarshalErr != nil {
-		t.Fatal(unmarshalErr)
-	}
-	if receipt.Operation != "install" || receipt.Target != registry || receipt.Phase != "smoke-passed" || !receipt.Recovered || receipt.Outcome != "ROLLED_BACK" {
-		t.Fatalf("multi-host rollback receipt is incomplete: %+v", receipt)
-	}
-	for _, parent := range []string{filepath.Dir(targets[0].targetPath), filepath.Dir(targets[1].targetPath), filepath.Dir(registry)} {
-		entries, readErr := os.ReadDir(parent)
-		if readErr != nil && !os.IsNotExist(readErr) {
-			t.Fatal(readErr)
-		}
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".formal-gates-stage-") || strings.HasPrefix(entry.Name(), ".formal-gates-transaction-") {
-				t.Fatalf("transaction-owned path survived rollback: %s", filepath.Join(parent, entry.Name()))
-			}
-		}
-	}
 }

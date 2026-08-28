@@ -16,7 +16,7 @@ func TestMain(m *testing.M) {
 	// inside a real host shell (e.g. `go test` from Claude Code), and host
 	// environment detection must not turn the lenient default provider into a
 	// required provider that rejects lifecycle-less unit flow.
-	for _, key := range hostProviderEnvKeys {
+	for _, key := range lifecycle.ProviderEnvironmentKeys() {
 		os.Setenv(key, "")
 	}
 	os.Exit(m.Run())

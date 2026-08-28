@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"formal-gates/internal/host"
 )
 
 func TestLifecycleCaptureAndVerification(t *testing.T) {
@@ -128,16 +130,17 @@ func TestLifecycleUnclaimedObservationsRetireWithRun(t *testing.T) {
 }
 
 func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
-	// 独立期望：每个宿主定义且只定义其 start/stop 两个捕获 hook 事件。
+	// 独立期望：每个宿主定义自己的生命周期捕获事件集合。
 	wantEvents := map[string][]string{
 		ProviderClaude:   {"SubagentStart", "SubagentStop"},
 		ProviderCodex:    {"SubagentStart", "SubagentStop"},
 		ProviderCursor:   {"subagentStart", "subagentStop"},
 		ProviderDeepSeek: {"SubagentStart", "SubagentStop"},
+		ProviderZCode:    {"PreToolUse", "PostToolUse", "PostToolUseFailure"},
 	}
-	for _, host := range []string{ProviderClaude, ProviderCodex, ProviderCursor, ProviderDeepSeek} {
+	for _, host := range []string{ProviderClaude, ProviderCodex, ProviderCursor, ProviderDeepSeek, ProviderZCode} {
 		t.Run(host, func(t *testing.T) {
-			// 对照实际定义来源：宿主适配器持有 hook 事件集合，定义须一一对应。
+			// 对照实际定义来源：host registry 注入宿主事件集合，定义须一一对应。
 			adapter, err := adapterFor(host)
 			if err != nil {
 				t.Fatal(err)
@@ -169,6 +172,54 @@ func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
 	// 未支持宿主拒绝。
 	if _, err := HookDefinitions("unsupported-host"); err == nil {
 		t.Fatal("unsupported lifecycle host was accepted")
+	}
+}
+
+func TestLifecycleFactoryRegistryCoversEveryInstallableHost(t *testing.T) {
+	for _, descriptor := range host.All() {
+		if !descriptor.Installable {
+			continue
+		}
+		adapter, err := adapterFor(descriptor.ID)
+		if err != nil {
+			t.Fatalf("installable host %q has no lifecycle adapter: %v", descriptor.ID, err)
+		}
+		if adapter.name != descriptor.ID {
+			t.Fatalf("adapter for %q reports name %q", descriptor.ID, adapter.name)
+		}
+	}
+}
+
+func TestZCodeToolHooksCorrelateAgentCallLifecycle(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderZCode)
+	if err := BeginRun(root, "run-zcode"); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(fmt.Sprintf(`{"cwd":%q,"tool_name":"Agent","tool_use_id":"call-1"}`, root))
+	start, err := Capture("", ProviderZCode, "PreToolUse", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.Event != eventStart || start.Identity != "call-1" || len(start.Roots) != 1 {
+		t.Fatalf("unexpected ZCode start capture: %+v", start)
+	}
+	stop, err := Capture("", ProviderZCode, "PostToolUse", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop.Event != eventStop || stop.Identity != "call-1" {
+		t.Fatalf("unexpected ZCode stop capture: %+v", stop)
+	}
+	if err := BindDispatchWithProvider(root, "run-zcode", "dispatch-zcode", "call-1", ProviderZCode); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := VerifyDispatch(root, "run-zcode", "dispatch-zcode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Outcome != Verified || !verification.StartObserved || !verification.StopObserved {
+		t.Fatalf("expected correlated ZCode Agent tool call to verify, got %+v", verification)
 	}
 }
 
@@ -360,6 +411,7 @@ func TestProviderFromExecutable(t *testing.T) {
 		filepath.Join("tmp", ".claude", "skills", "formal-gates", "bin", "formal-gates"): ProviderClaude,
 		filepath.Join("tmp", ".codex", "skills", "formal-gates", "bin", "formal-gates"):  ProviderCodex,
 		filepath.Join("tmp", ".cursor", "formal-gates", "bin", "formal-gates"):           ProviderCursor,
+		filepath.Join("tmp", ".zcode", "skills", "formal-gates", "bin", "formal-gates"):  ProviderDefault,
 		filepath.Join("tmp", "source", "formal-gates"):                                   ProviderDefault,
 	}
 	for path, want := range tests {
@@ -368,6 +420,21 @@ func TestProviderFromExecutable(t *testing.T) {
 				t.Fatalf("providerFromExecutable(%q)=%q want %q", path, got, want)
 			}
 		})
+	}
+}
+
+func TestProviderFromEnvironmentRecognizesZCode(t *testing.T) {
+	for _, key := range []string{"AI_AGENT", "ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("AI_AGENT", "zcode")
+	if got := providerFromEnvironment(); got != ProviderZCode {
+		t.Fatalf("AI_AGENT=zcode resolved to %q", got)
+	}
+	t.Setenv("AI_AGENT", "")
+	t.Setenv("ZCODE_PLUGIN_ROOT", "/tmp/zcode-plugin")
+	if got := providerFromEnvironment(); got != ProviderZCode {
+		t.Fatalf("ZCODE_PLUGIN_ROOT resolved to %q", got)
 	}
 }
 
@@ -476,12 +543,13 @@ func useProvider(t *testing.T, provider string) {
 		ProviderClaude:   filepath.Join(t.TempDir(), ".claude", "skills", "formal-gates", "bin", "formal-gates"),
 		ProviderCodex:    filepath.Join(t.TempDir(), ".codex", "skills", "formal-gates", "bin", "formal-gates"),
 		ProviderCursor:   filepath.Join(t.TempDir(), ".cursor", "formal-gates", "bin", "formal-gates"),
+		ProviderZCode:    filepath.Join(t.TempDir(), ".zcode", "skills", "formal-gates", "bin", "formal-gates"),
 		ProviderDeepSeek: filepath.Join(deepseekHome, "skills", "formal-gates", "bin", "formal-gates"),
 		ProviderDefault:  filepath.Join(t.TempDir(), "source", "formal-gates"),
 	}[provider]
 	// Neutralize host environment detection so the stubbed executable path is
 	// the only provider signal in these tests.
-	for _, key := range []string{"AI_AGENT", "CLAUDE_CODE_ENTRYPOINT", "CODEX_HOME", "CODEX_CLI_PATH", "CURSOR_TRACE_ID", "CURSOR_RUNTIME", "DSH_HOME", "DSH_PROJECT_DIR"} {
+	for _, key := range ProviderEnvironmentKeys() {
 		t.Setenv(key, "")
 	}
 	if provider == ProviderDeepSeek {

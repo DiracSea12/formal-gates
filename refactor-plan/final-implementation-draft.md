@@ -14,7 +14,7 @@ formal-gates 从“主代理阅读流程规范并选择下一条命令”改成�
 
 - regular 非分片、retained master、child、merge 和 lightweight；
 - Git、SVN、P4 的非分片与分片全流程；
-- Claude Code、Codex、Cursor、DeepSeek Harness 的真实 adapter 与完整 canary；
+- Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的真实 adapter 与完整 canary；
 - 产品审、技术审、开发、黑盒/白盒 QA、门、修复、需求变化、中断恢复、Seal/Abort；
 - 严格拒绝旧 run；不承诺 Windows/macOS/Linux 支持矩阵，但实现保持可移植。
 
@@ -562,9 +562,9 @@ VCS 六格全部跑通：
 | SVN | 必须 | 必须 |
 | P4 | 必须 | 必须 |
 
-四个宿主各自在真实环境跑一次 Git 非分片 full：产品审 → start-readiness → 开发与黑盒设计并行 → 实现 snapshot → whitebox workspace/design/review 与 production-view 黑盒/门并行 → freeze 完整候选 → test-only/view 等价 reuse 或精确重跑 → 白盒执行 → 真实或注入 FAIL → repair/新候选 → 重验 → promotion 中断/恢复 → 无残留 cleanup → Seal。每次保存 provider/bridge、SpawnRequest/Receipt、worker result、revision、candidate/reuse/promotion/cleanup receipt、结果和 Seal 证据。
+五个宿主各自在真实环境跑一次 Git 非分片 full：产品审 → start-readiness → 开发与黑盒设计并行 → 实现 snapshot → whitebox workspace/design/review 与 production-view 黑盒/门并行 → freeze 完整候选 → test-only/view 等价 reuse 或精确重跑 → 白盒执行 → 真实或注入 FAIL → repair/新候选 → 重验 → promotion 中断/恢复 → 无残留 cleanup → Seal。每次保存 provider/bridge、SpawnRequest/Receipt、worker result、revision、candidate/reuse/promotion/cleanup receipt、结果和 Seal 证据。
 
-允许一个宿主 Git 非分片 canary 与 VCS 六格中的 Git 非分片重叠，因此最低是 9 个完整 canary，而不是 24 个笛卡尔积。hook-only、lifecycle-only、lightweight 或 smoke 均不能替代任何完整 canary。
+允许一个宿主 Git 非分片 canary 与 VCS 六格中的 Git 非分片重叠，因此最低是 10 个完整 canary，而不是 30 个笛卡尔积。hook-only、lifecycle-only、lightweight 或 smoke 均不能替代任何完整 canary。
 
 ## 13. 完成判定
 
@@ -576,7 +576,7 @@ VCS 六格全部跑通：
 4. 并行任务无漏派、无选择性忽略、无容量闲置；未形成完整候选的验证不会被错误标为 eligible，完整候选就绪后全部验证立即并发。
 5. HostAction、本地副作用和所有确定性崩溃窗可恢复或明确进入 Operator。
 6. 用户节点、验证细节歧义处置的最高优先级 Ask、任意时点需求变化、审查来源规则和三轮规则全部有可复现证据。
-7. Git/SVN/P4 六格与四宿主 canary 全部绑定同一最终 candidate revision/安装副本并 PASS。
+7. Git/SVN/P4 六格与五宿主 canary 全部绑定同一最终 candidate revision/安装副本并 PASS。
 8. 最终树不存在旧 run 兼容、迁移、旧公开入口、双写入口、legacy 回退或 cleanup 后门。
 9. 独立产品审、技术审、QA 和所有选定门按 formal-gates 完成，当前开发 run Seal。
 10. `go test ./...` 在不恢复过时受理/复审/lightweight 断言的前提下全部 PASS；基线中已确认的旧文本断言已删除或改写为当前 engine 契约。

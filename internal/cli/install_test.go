@@ -51,6 +51,7 @@ func TestRunInstallCopiesPromptCatalogForEveryHost(t *testing.T) {
 		{host: "codex", targetRel: ".codex/skills/formal-gates"},
 		{host: "cursor", targetRel: ".cursor/formal-gates"},
 		{host: "dsh", targetRel: ".dsh/skills/formal-gates"},
+		{host: "zcode", targetRel: ".zcode/skills/formal-gates"},
 	} {
 		t.Run(tc.host, func(t *testing.T) {
 			source := writeInstallSource(t, "source")
@@ -154,6 +155,89 @@ func TestRunInstallConfiguresHooksByDefaultForEveryHostAndScope(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRunInstallConfiguresZCodeGlobalHookAndProjectGuidance(t *testing.T) {
+	source := writeInstallSource(t, "source")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	configPath := filepath.Join(home, ".zcode", "cli", "config.json")
+	writeJSONFile(t, configPath, map[string]any{
+		"hooks": map[string]any{
+			"enabled": false,
+			"events": map[string]any{
+				"PostToolUse": []any{map[string]any{
+					"matcher": "*",
+					"hooks":   []any{map[string]any{"type": "process", "command": "echo keep-zcode-hook"}},
+				}},
+			},
+		},
+	})
+	var stdout, stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "zcode", "--scope", "global", "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("ZCode global install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertFileContains(t, filepath.Join(home, ".zcode", "skills", "formal-gates", "SKILL.md"), "source")
+	assertManagedRuleState(t, filepath.Join(home, ".zcode", "AGENTS.md"), false)
+	raw := readFile(t, configPath)
+	for _, expected := range []string{"keep-zcode-hook", "PreToolUse", "PostToolUseFailure", "Agent|Task", "--provider", "zcode"} {
+		if !strings.Contains(raw, expected) {
+			t.Fatalf("ZCode config missing %q: %s", expected, raw)
+		}
+	}
+	if strings.Contains(raw, ".ps1") {
+		t.Fatalf("ZCode config contains legacy script: %s", raw)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"uninstall", "--host", "zcode", "--scope", "global"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("ZCode global uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".zcode", "skills", "formal-gates")); !os.IsNotExist(err) {
+		t.Fatalf("ZCode runtime remains after uninstall: %v", err)
+	}
+	raw = readFile(t, configPath)
+	if !strings.Contains(raw, "keep-zcode-hook") || strings.Contains(raw, "lifecycle capture") || strings.Contains(raw, "formal-gates/bin") || !strings.Contains(raw, `"enabled": false`) {
+		t.Fatalf("ZCode uninstall did not preserve unrelated hook and remove owned hooks: %s", raw)
+	}
+	if _, err := os.Stat(configPath + ".formal-gates-state.json"); !os.IsNotExist(err) {
+		t.Fatalf("ZCode hook state backup remains after uninstall: %v", err)
+	}
+
+	project := t.TempDir()
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "zcode", "--scope", "project", "--project", project, "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("ZCode project install failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertFileContains(t, filepath.Join(project, ".zcode", "skills", "formal-gates", "SKILL.md"), "source")
+	assertManagedRuleState(t, filepath.Join(project, "AGENTS.md"), false)
+	if _, err := os.Stat(filepath.Join(project, ".zcode", "cli", "config.json")); !os.IsNotExist(err) {
+		t.Fatalf("ZCode project install created ignored project hook config: %v", err)
+	}
+	// Codex and ZCode intentionally share project AGENTS.md. Removing one
+	// host must retain the managed block while the other host remains active.
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--force"}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("Codex project install for shared AGENTS.md failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"uninstall", "--host", "zcode", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("ZCode project uninstall with active Codex failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertFileContains(t, filepath.Join(project, "AGENTS.md"), testManagedRuleLatest)
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run("formal-gates", []string{"uninstall", "--host", "codex", "--scope", "project", "--project", project}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("Codex project uninstall failed, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if remaining := readFile(t, filepath.Join(project, "AGENTS.md")); strings.Contains(remaining, testManagedRulesStartMarker) {
+		t.Fatalf("shared project AGENTS.md still contains managed marker after both hosts uninstall: %q", remaining)
 	}
 }
 
@@ -272,7 +356,7 @@ func TestRunInstallDshGlobalWritesCordisPatchAndUninstallPreservesOtherRows(t *t
 	}
 }
 
-func TestRunInstallConfiguresEverySelectedHostByDefault(t *testing.T) {
+func TestRunInstallRejectsRemovedMultiHostAlias(t *testing.T) {
 	source := writeInstallSource(t, "source")
 	project := t.TempDir()
 	var stdout, stderr bytes.Buffer
@@ -281,16 +365,8 @@ func TestRunInstallConfiguresEverySelectedHostByDefault(t *testing.T) {
 		"install", "--source", source, "--host", "both", "--scope", "project", "--project", project,
 	}, IO{Stdout: &stdout, Stderr: &stderr})
 
-	if code != 0 {
-		t.Fatalf("expected install to pass, code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	for _, expected := range []string{
-		filepath.Join(project, ".claude", "settings.json"),
-		filepath.Join(project, ".codex", "hooks.json"),
-	} {
-		if _, err := os.Stat(expected); err != nil {
-			t.Fatalf("expected selected-host hook config %s: %v", expected, err)
-		}
+	if code == 0 || !strings.Contains(stderr.String(), `unsupported --host "both"`) {
+		t.Fatalf("removed multi-host alias was accepted: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -708,6 +784,8 @@ func testInstallTargetPath(root, host, scope string) string {
 			return filepath.Join(base, ".codex", "skills", "formal-gates")
 		case "cursor":
 			return filepath.Join(base, ".cursor", "formal-gates")
+		case "zcode":
+			return filepath.Join(base, ".zcode", "skills", "formal-gates")
 		}
 	}
 	switch host {
@@ -715,6 +793,8 @@ func testInstallTargetPath(root, host, scope string) string {
 		return filepath.Join(base, ".claude", "skills", "formal-gates")
 	case "codex":
 		return filepath.Join(base, ".codex", "skills", "formal-gates")
+	case "zcode":
+		return filepath.Join(base, ".zcode", "skills", "formal-gates")
 	default:
 		return filepath.Join(base, ".cursor", "formal-gates")
 	}
@@ -739,6 +819,12 @@ func testManagedRulePath(root, host, scope string) string {
 		}
 		return filepath.Join(root, "AGENTS.md")
 	}
+	if host == "zcode" {
+		if scope == "global" {
+			return filepath.Join(root, ".zcode", "AGENTS.md")
+		}
+		return filepath.Join(root, "AGENTS.md")
+	}
 	if scope == "project" {
 		return filepath.Join(root, ".cursor", "rules", "formal-gates.mdc")
 	}
@@ -749,6 +835,12 @@ func testHookConfigPath(root, host, scope string) string {
 	if host == "dsh" {
 		if scope == "global" {
 			return filepath.Join(root, ".dsh", "cordis.patch.yml")
+		}
+		return ""
+	}
+	if host == "zcode" {
+		if scope == "global" {
+			return filepath.Join(root, ".zcode", "cli", "config.json")
 		}
 		return ""
 	}
@@ -799,13 +891,14 @@ func writeInstallSource(t *testing.T, skillText string) string {
 	mustWriteCLI(t, filepath.Join(source, "SKILL.md"), skillText+"\n"+testManagedRuleBlock(testManagedRuleLatest))
 	mustWriteCLI(t, filepath.Join(source, "README.md"), "readme\n")
 	mustWriteCLI(t, filepath.Join(source, "README_EN.md"), "readme en\n")
-	// manifest 登记四个可安装 host target：install 会拒绝 manifest 未登记为
+	// manifest 登记五个可安装 host target：install 会拒绝 manifest 未登记为
 	// host-target 的安装目标（unknown target 在写 target/state 前非零拒绝）。
 	mustWriteCLI(t, filepath.Join(source, "formal-gates.manifest.json"), `{"name":"formal-gates","hosts":[`+
 		`{"name":"Claude Code","support":"host-target"},`+
 		`{"name":"Codex","support":"host-target"},`+
 		`{"name":"Cursor","support":"host-target"},`+
-		`{"name":"DeepSeek Harness","support":"host-target"}]}`+"\n")
+		`{"name":"DeepSeek Harness","support":"host-target"},`+
+		`{"name":"ZCode","support":"host-target"}]}`+"\n")
 	mustWriteCLI(t, filepath.Join(source, "go.mod"), "module formal-gates\n")
 	mustWriteCLI(t, filepath.Join(source, ".github", "workflows", "portable-validation.yml"), "portable validation\n")
 	mustWriteCLI(t, filepath.Join(source, "bin", installTestBinaryName()), "binary\n")

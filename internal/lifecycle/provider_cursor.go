@@ -7,9 +7,12 @@ import (
 
 func cursorAdapter() providerAdapter {
 	return providerAdapter{
-		name:       ProviderCursor,
-		required:   true,
-		hookEvents: []string{"subagentStart", "subagentStop"},
+		name: ProviderCursor,
+		executableMatches: func(path string) bool {
+			return strings.Contains(normalizeProviderExecutablePath(path), "/.cursor/formal-gates/bin/")
+		},
+		agentPrefixes:   []string{"cursor"},
+		environmentKeys: []string{"CURSOR_TRACE_ID", "CURSOR_RUNTIME"},
 		normalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(ProviderCursor, eventName, "subagentStart", "subagentStop")
 		},

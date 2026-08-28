@@ -231,7 +231,7 @@ Seal 后状态：隔离候选可用于 Git 非分片 regular 的完整正式流�
 
 Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流程；SVN、P4 和剩余宿主仍不宣称完成。
 
-### 阶段 6：SVN/P4 与四宿主完成
+### 阶段 6：SVN/P4 与五宿主完成
 
 目标是在 workflow 语义已经稳定后完成 provider 和 host 的机械适配面。
 
@@ -239,11 +239,11 @@ Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流�
 
 - 按同一 VCS adapter 契约实现 SVN 的 working copy、revision/property、integrate/commit、candidate identity、receipt 和 cleanup。
 - 按同一 VCS adapter 契约实现 P4 的 client/workspace、changelist/filetype/view、integrate/submit、candidate identity、receipt 和 cleanup。
-- 完成 Claude Code、Codex、Cursor、DeepSeek Harness 的 provider identity、bridge、dispatch、lifecycle、resume/terminate 和 receipt 对账。
+- 完成 Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的 provider identity、bridge、dispatch、lifecycle、resume/terminate 和 receipt 对账。
 - 每个 host canary 必须使用候选专属 host home/config、hook/managed-rule 路径和 state/resource roots，并记录 canonical-path disjoint proof；不能调用固定全局 binary、全局 hook 或稳定 host home。
 - DSH canary 必须使用隔离 `DSH_HOME` 和候选 Cordis bridge，使 binary 解析为 required DeepSeek provider；project-local DSH 的 `ProviderDefault/UNAVAILABLE` 不能作为 lifecycle full canary 证据，provider/bridge mismatch 必须硬拒绝。
 - SVN、P4 和不同宿主可在本阶段内部使用独立 worktree/working copy/client 并行开发，但必须在同一候选 join 后统一审查和 Seal。
-- 跑 SVN/P4 的非分片与分片 full canary，并完成四宿主各自的 Git 非分片 full canary；每条 full canary 都覆盖产品/技术审、并行开发与黑盒设计、whitebox authoring/review、candidate freeze、view reuse 或受影响重跑、FAIL -> repair -> 新候选、promotion 中断恢复、receipt/result、无残留 cleanup 和 Seal。
+- 跑 SVN/P4 的非分片与分片 full canary，并完成五宿主各自的 Git 非分片 full canary；每条 full canary 都覆盖产品/技术审、并行开发与黑盒设计、whitebox authoring/review、candidate freeze、view reuse 或受影响重跑、FAIL -> repair -> 新候选、promotion 中断恢复、receipt/result、无残留 cleanup 和 Seal。
 - 每条证据绑定 provider/bridge、source identity、installed-target/package digest、snapshot、candidate/promotion/cleanup receipt；不能用 hook-only、lifecycle-only、source tree 或旧全局包冒充候选 full canary。
 - 回归 Git 非分片、Git 分片和 fixed stable driver 正常入口。
 
@@ -260,7 +260,7 @@ Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 
 - 在最终公共面真正可用后，同步切换 `SKILL.md`、README、references、prompts、catalog 和测试；不得保留指导用户调用已删除入口的文档。
 - 根据阶段 0 建立的 requirements-precedence/supersession 清单，更新或标记所有仍把 `prepare-*`、`record-*`、`qa-worktree`、公开 `cleanup` 等旧入口写成当前公共面的旧 OpenSpec/root 文档；历史文档保留可追溯性，但不能继续作为已确认的当前实现契约。
 - 从主线集成后的唯一 post-integration canonical revision 构建不可变隔离安装副本，并以 promotion/integration receipt 绑定到清理完成的 sealed candidate；若 digest 不等价，必须先重验并取得新的 Seal。
-- 在该 post-integration revision 的包摘要和 installed-target digest 上重新运行 Git/SVN/P4 × 非分片/分片六格和四宿主 Git 非分片 canary；允许按总需求定义复用一个 Git 非分片单元格，最低九条完整 canary。每条都必须覆盖产品/技术审、并行开发+黑盒设计、whitebox authoring/review、candidate freeze、view reuse/受影响重跑、FAIL -> repair -> 新候选、promotion 中断恢复、receipt/result、无残留 cleanup 和 Seal。
+- 在该 post-integration revision 的包摘要和 installed-target digest 上重新运行 Git/SVN/P4 × 非分片/分片六格和五宿主 Git 非分片 canary；允许按总需求定义复用一个 Git 非分片单元格，最低十条完整 canary。每条都必须覆盖产品/技术审、并行开发+黑盒设计、whitebox authoring/review、candidate freeze、view reuse/受影响重跑、FAIL -> repair -> 新候选、promotion 中断恢复、receipt/result、无残留 cleanup 和 Seal。
 - 完成前置产品审、技术审、QA 和选定 gates，但在主线集成前不 Seal；final-release run 保持 ACTIVE，集成后用受支持的 `workflow resume --adopt-external --reason` receipt 绑定 post-integration canonical identity，重建候选，重新执行安装 smoke、cleanup 核对、全部最终 canary 和切换前 QA，并将这些结果绑定同一个 final-release run。无法安全 rebind 时新建 final-release run，前置结果全部降为非权威说明。
 - 只有 post-integration candidate 的全部最终证据、全局 registry bootstrap/inventory receipt 和所有 abort/complete/UNKNOWN 处置记录成立后，才由基线 stable driver 执行阶段 7 唯一的 final-release Seal；随后按全局 inventory/fencing 协议冻结新旧 writer，确认不存在会被新版本拒绝的活动旧版本 run，再执行一次覆盖 runtime、hook/config、managed-rule、release/current pointer 的原子全局切换；切换成功且逐 host 的 binary、pointer、hook/config、managed-rule、provider/bridge post-switch smoke 全部通过后才退役固定稳定包。
 
@@ -278,7 +278,7 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 
 - 阶段 1 内不同 compiler/property-test work package；
 - 阶段 2 内 fake host、fake VCS 和故障注入；
-- 阶段 6 内 SVN、P4 和四宿主 adapter；
+- 阶段 6 内 SVN、P4 和五宿主 adapter；
 - 阶段 7 内不同 canary 单元格。
 
 任何内部并行分支都不能单独成为下一阶段基线；只有该正式阶段的共同候选 Seal 后才能推进。
@@ -347,7 +347,7 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 | 1 纯决策内核 | 1 纯决策内核与 Shadow | 只读，不产生第二 workflow writer |
 | 2 可靠写入与动作协议 | 2 持久协议与恢复内核 | 仅隔离 namespace/test harness 写入 |
 | 3 完整流程迁移 | 3 最小纵向闭环 + 4 Git regular | 先证明最小 engine 路由，再扩展到 Git 非分片完整流程 |
-| 4 split 与三 VCS | 5 Git split/child/merge + 6 SVN/P4/四宿主 | 先固定 Git split，再接入其他 VCS/host |
+| 4 split 与三 VCS | 5 Git split/child/merge + 6 SVN/P4/五宿主 | 先固定 Git split，再接入其他 VCS/host |
 | 5 删除旧逻辑 + 6 最终 canary/安装 | 7 唯一权威切换与最终发布 | 这两个总体工作包在最终一个 Seal 内严格按“前置验证（不 Seal）→ 主线集成 → 重建最终候选 → 最终 canary → 基线 driver 执行 final-release Seal → 全局切换”顺序完成；阶段 6 增量 Seal 绝不等同于最终交付 |
 
 任何引用总体方案阶段号的需求、任务或验收记录都必须同时注明本文增量 Seal 阶段号；只有增量阶段 7 Seal 后，才可宣称主需求的总体阶段 5/6 和本次最终交付完成。

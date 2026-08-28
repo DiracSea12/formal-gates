@@ -11,7 +11,9 @@ skip_hooks=false
 
 usage() {
   cat <<'EOF'
-Usage: install.command [--version vX.Y.Z] [--host claude|codex|cursor|dsh|both] [--scope global|project] [--project PATH] [--force] [--skip-hooks]
+Usage: install.command [--version vX.Y.Z] [--host HOST] [--scope global|project] [--project PATH] [--force] [--skip-hooks]
+
+HOST is validated by the downloaded native CLI; run `formal-gates install --help` for the current registry-derived names.
 
 Downloads the release source snapshot and the matching native binary for the current platform,
 assembles a local package copy, and runs formal-gates install against the selected target host.

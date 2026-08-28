@@ -1,5 +1,7 @@
 package lifecycle
 
+import "strings"
+
 // codexAdapter adapts the installed Codex CLI. Codex requires paired start and
 // stop lifecycle events, matching Claude Code and Cursor: an unpaired dispatch
 // verification is REJECTED, with no soft fallback. Only an actually installed
@@ -8,7 +10,13 @@ package lifecycle
 // portable canary and the workflow test suite still observe UNAVAILABLE without
 // lifecycle events.
 func codexAdapter() providerAdapter {
-	return codexShapeAdapter(ProviderCodex, true)
+	adapter := codexShapeAdapter(ProviderCodex)
+	adapter.executableMatches = func(path string) bool {
+		return strings.Contains(normalizeProviderExecutablePath(path), "/.codex/skills/formal-gates/bin/")
+	}
+	adapter.agentPrefixes = []string{"codex"}
+	adapter.environmentKeys = []string{"CODEX_HOME", "CODEX_CLI_PATH"}
+	return adapter
 }
 
 // defaultAdapter adapts the uninstalled/default provider derived from a binary
@@ -18,17 +26,15 @@ func codexAdapter() providerAdapter {
 // the test and canary verification surface lenient even though the installed
 // Codex provider became required.
 func defaultAdapter() providerAdapter {
-	return codexShapeAdapter(ProviderDefault, false)
+	return codexShapeAdapter(ProviderDefault)
 }
 
 // codexShapeAdapter builds a provider adapter with the Codex event and identity
 // shape. The installed Codex provider and the lenient default provider share
 // this shape and differ only in their name and required flag.
-func codexShapeAdapter(name string, required bool) providerAdapter {
+func codexShapeAdapter(name string) providerAdapter {
 	return providerAdapter{
-		name:       name,
-		required:   required,
-		hookEvents: []string{"SubagentStart", "SubagentStop"},
+		name: name,
 		normalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(name, eventName, "SubagentStart", "SubagentStop")
 		},

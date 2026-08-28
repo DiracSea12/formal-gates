@@ -354,11 +354,13 @@ type outerFileSnapshot struct {
 type outerTargetSnapshot struct {
 	TargetPath      string            `json:"targetPath"`
 	HookPath        string            `json:"hookPath,omitempty"`
+	HookStatePath   string            `json:"hookStatePath,omitempty"`
 	RulePath        string            `json:"rulePath,omitempty"`
 	ResourcePath    string            `json:"resourcePath,omitempty"`
 	ResourceExisted bool              `json:"resourceExisted,omitempty"`
 	Tree            outerTreeSnapshot `json:"tree"`
 	Hook            outerFileSnapshot `json:"hook"`
+	HookState       outerFileSnapshot `json:"hookState"`
 	Rule            outerFileSnapshot `json:"rule"`
 }
 
@@ -498,7 +500,7 @@ func outerJournalFailure(path string, journal outerInstallJournal, cause error) 
 	receipt := installRecoveryReceipt{
 		Operation: journal.Operation, Target: journal.RegistryPath, Phase: journal.Phase,
 		Recovered: true, Outcome: "ROLLED_BACK", ObservedFact: cause.Error(),
-		Reconcile:   "restore all target, release, binary, hook, managed-rule and registry snapshots",
+		Reconcile:   "restore all target, release, binary, hook, hook-state, managed-rule and registry snapshots",
 		VCSIdentity: journal.VCSIdentity, PackageDigest: journal.PackageDigest,
 		InstalledTarget: journal.InstalledTarget, Generation: journal.Generation,
 		Lease: journal.Lease, Token: journal.Token,
@@ -529,6 +531,9 @@ func restoreOuterJournal(path string, journal outerInstallJournal, recovered boo
 			firstErr = err
 		}
 		if err := restoreOuterFile(target.Hook); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := restoreOuterFile(target.HookState); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		if err := restoreOuterFile(target.Rule); err != nil && firstErr == nil {

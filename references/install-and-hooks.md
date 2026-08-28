@@ -28,15 +28,15 @@ Windows 上构建并调用 `bin\formal-gates.exe`。
 ## 原生安装
 
 ```bash
-./install.command --host <claude|codex|cursor|dsh> --scope global --force
-./install.command --host <claude|codex|cursor|dsh> --scope project --project <project> --force
+./install.command --host <host> --scope global --force
+./install.command --host <host> --scope project --project <project> --force
 # Windows: install.bat ...
 
 $HOME/.local/bin/formal-gates uninstall \
-  --host <claude|codex|cursor|dsh> --scope global
+  --host <host> --scope global
 
 $HOME/.local/bin/formal-gates uninstall \
-  --host <claude|codex|cursor|dsh> --scope project --project <project>
+  --host <host> --scope project --project <project>
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
@@ -60,6 +60,7 @@ launcher 调用唯一原生安装事务。源码目录的 `bin/formal-gates` 是
 - Codex：`~/.codex/skills/formal-gates`
 - Cursor：`~/.cursor/formal-gates`
 - DeepSeek Harness：`$DSH_HOME/skills/formal-gates`（默认 `~/.dsh`）
+- ZCode：`~/.zcode/skills/formal-gates`
 
 项目级安装使用所选项目下的对应目录。hook 配置始终写固定 stable launcher 的绝对路径，
 不会指向可替换 target 内的 candidate binary。
@@ -70,6 +71,7 @@ launcher 调用唯一原生安装事务。源码目录的 `bin/formal-gates` 是
 - Codex 全局：`~/.codex/AGENTS.md`；项目：`<project>/AGENTS.md`
 - Cursor 项目：`<project>/.cursor/rules/formal-gates.mdc`
 - DeepSeek Harness 全局：`$DSH_HOME/AGENTS.md`；项目：`<project>/AGENTS.md`
+- ZCode 全局：`~/.zcode/AGENTS.md`；项目：`<project>/AGENTS.md`
 
 Cursor 全局只安装 `~/.cursor/formal-gates` 运行时和 `hooks.json` hook，不创建全局
 规则文件。当前规则直接取自 `SKILL.md` 中
@@ -97,10 +99,13 @@ $HOME/.local/bin/formal-gates uninstall --host codex --scope project --project <
 $HOME/.local/bin/formal-gates uninstall --host cursor --scope project --project <project>
 $HOME/.local/bin/formal-gates uninstall --host dsh --scope global
 $HOME/.local/bin/formal-gates uninstall --host dsh --scope project --project <project>
+$HOME/.local/bin/formal-gates uninstall --host zcode --scope global
+$HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <project>
 ```
 
 它会删除所选 host 的 formal-gates 运行时目录、安装器拥有的 hook 条目和完整 marker
-规则区块，同时保留规则区块外内容与非 formal-gates hook。规则清理由 marker 独立完成，
+规则区块，同时保留规则区块外内容与非 formal-gates hook；若另一个已安装 host 仍共享同一
+项目规则文件，则保留该文件直到最后一个 host 卸载。规则清理由 marker 独立完成，
 即使运行时目录已经不存在也不需要规则源码。卸载只能由 registry 登记的 stable launcher
 执行，不接受旧 `--source` 旁路。
 
@@ -114,7 +119,9 @@ $HOME/.local/bin/formal-gates hook decide
 
 Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通过 JSON 的
 `decision: "block"` 返回，同时 hook 进程退出码必须为 0；Claude Code、Cursor 和
-DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON 决策。
+DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON 决策。ZCode 使用
+嵌套的 `hookSpecificOutput`/`permissionDecision` 决策对象，允许时不输出 JSON，拒绝时
+使用文档化的退出码 2 快速阻断。
 
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
@@ -145,9 +152,14 @@ canary 验证。
 Cursor 配置 `subagentStart` 与 `subagentStop`。这些 hook 把 host 载荷经 stdin 发
 送给已安装的原生二进制：
 
+ZCode 的全局 CLI 配置使用 `PreToolUse`、`PostToolUse` 和 `PostToolUseFailure`，并以
+`Agent|Task` matcher 观察工具调用；当前运行时不读取项目级 hook 配置，因此项目安装
+只写 skill 与 `AGENTS.md` 指令。工具调用生命周期的精确子代理完成语义仍须同一 ZCode
+版本的实机 canary 才能确认。
+
 ```bash
 $HOME/.local/bin/formal-gates lifecycle capture \
-  --provider <claude-code|codex|cursor|deepseek-harness> --event <provider-event-name>
+  --provider <claude-code|codex|cursor|deepseek-harness|zcode> --event <provider-event-name>
 ```
 
 capture 命令从正常的 host 载荷推导项目根（必要时使用 host 的项目目录环境变量），
@@ -161,7 +173,7 @@ Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动
 
 在 `workflow claim-dispatch` 绑定 host 身份之后，可以在不改变流程状态的情况下检
 视推导出的结果。固定 stable launcher 同时服务多个 host 时，认领必须显式给出
-`--provider <claude-code|codex|cursor|deepseek-harness>`；同一项目路径下存在冲突的
+`--provider <claude-code|codex|cursor|deepseek-harness|zcode>`；同一项目路径下存在冲突的
 active registry host 时不会猜测第一个记录：
 
 ```bash
@@ -177,10 +189,12 @@ $HOME/.local/bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
   --dispatch <dispatch-id>
 ```
 
-Claude Code、Cursor、Codex 和 DeepSeek Harness 都要求 start 与 stop 事件配对。Codex
+全局安装的 Claude Code、Cursor、Codex、DeepSeek Harness 和 ZCode 都要求其适配器的生命周期事件配对；
+项目级 DSH/ZCode 因宿主不读取项目 hook 配置而保持宽松默认 provider，验证结果为 `UNAVAILABLE`。Codex
 派发独立代理走原生 `spawn_agent`，用返回的 `agent_id` 认领；DeepSeek Harness 的
 Cordis 插件把 `subagent/start`/`subagent/end` 转成同一身份对，claim → lifecycle 配对
-验证即可通过。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的
+验证即可通过。ZCode 以 `tool_use_id`（或同等调用 ID）关联 Agent/Task 工具调用；这
+证明的是工具调用闭环，子代理“完成”语义仍需同版本实机 canary。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的
 默认 provider，生命周期验证为 `UNAVAILABLE`，此时既有的派发与身份检查仍是权威依据。
 
 一个设置文件或直接的 `hook decide` 单元测试，只能证明本地决策逻辑。只有当实际目

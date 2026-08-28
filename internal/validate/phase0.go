@@ -581,6 +581,7 @@ type RegistryRecord struct {
 	Scope           string            `json:"scope"`
 	Host            string            `json:"host"`
 	HookConfig      string            `json:"hookConfig,omitempty"`
+	SkipHooks       bool              `json:"skipHooks,omitempty"`
 	ProjectRoot     string            `json:"projectRoot"`
 	StateRoot       string            `json:"stateRoot"`
 	ResourceRoot    string            `json:"resourceRoot"`

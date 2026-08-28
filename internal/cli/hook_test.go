@@ -35,3 +35,21 @@ func TestRunHookUsesCodexJSONDecisionProtocol(t *testing.T) {
 		t.Fatalf("generic denied hook should keep exit code 2, code=%d stdout=%q stderr=%q", genericCode, genericOut.String(), genericErr.String())
 	}
 }
+
+func TestRunHookUsesZCodeNestedDecisionProtocol(t *testing.T) {
+	payload := `{"tool_name":"Bash","tool_input":{"command":"formal-gates workflow record-gate --gate quality --status PASS"}}`
+	var out, errOut bytes.Buffer
+	code := Run("formal-gates", []string{"hook", "decide", "--provider", "zcode"}, IO{
+		Stdin:  strings.NewReader(payload),
+		Stdout: &out,
+		Stderr: &errOut,
+	})
+	if code != 2 {
+		t.Fatalf("ZCode denied hook should use documented exit-2 block shortcut, code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	for _, expected := range []string{`"hookSpecificOutput"`, `"hookEventName":"PreToolUse"`, `"permissionDecision":"deny"`} {
+		if !strings.Contains(out.String(), expected) {
+			t.Fatalf("ZCode hook response missing %s: %q", expected, out.String())
+		}
+	}
+}

@@ -60,7 +60,7 @@ func TestCodexCanaryProfileUsesNativeHookAndPassiveRecorder(t *testing.T) {
 }
 
 // CASE-012 回归：Codex 的 matcher 是正则表达式，glob "*" 是不匹配任何工具的
-// 非法模式（hostMatcher 同理）。canary profile 里任何 matcher 都必须是 ".*"，
+// 非法模式。canary profile 里任何 matcher 都必须是 ".*"，
 // 否则对应事件的载荷永远捕获不到（QA 观察到的"有 hook payload、无 PreToolUse
 // payload"形态之一）。
 func TestCodexCanaryProfileMatchersAreRegexes(t *testing.T) {

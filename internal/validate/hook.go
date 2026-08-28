@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 type HookDecision struct {
@@ -19,27 +21,76 @@ type CodexHookDecision struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
+type ZCodeHookDecision struct {
+	HookSpecificOutput ZCodeHookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type ZCodeHookSpecificOutput struct {
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+}
+
+type hookProtocolAdapter struct {
+	response func(HookDecision) any
+	exitCode func(HookDecision) int
+}
+
+var hookProtocolAdapters = map[host.HookProtocol]hookProtocolAdapter{
+	host.ProtocolGeneric: {
+		response: func(decision HookDecision) any { return decision },
+		exitCode: genericHookExitCode,
+	},
+	host.ProtocolCodex: {
+		response: codexHookResponse,
+		exitCode: func(HookDecision) int { return 0 },
+	},
+	host.ProtocolZCode: {
+		response: zcodeHookResponse,
+		exitCode: genericHookExitCode,
+	},
+}
+
 func HookResponse(provider string, decision HookDecision) any {
-	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
-		// Codex's installed hook contract uses a top-level block decision.
-		// Allow remains a no-op, so only a denied decision produces JSON.
-		if decision.PermissionDecision != "deny" {
-			return nil
-		}
-		return CodexHookDecision{
-			Decision: "block",
-			Reason:   decision.Reason,
-		}
-	}
-	return decision
+	return hookProtocolFor(provider).response(decision)
 }
 
 // HookExitCode returns the process status expected by the selected host. Codex
-// consumes the JSON block decision only when the hook process itself succeeds.
+// consumes its JSON block decision only when the hook process itself succeeds;
+// ZCode also accepts the documented exit-2 blocking shortcut for denied calls.
 func HookExitCode(provider string, decision HookDecision) int {
-	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
-		return 0
+	return hookProtocolFor(provider).exitCode(decision)
+}
+
+func hookProtocolFor(provider string) hookProtocolAdapter {
+	descriptor, err := host.Lookup(provider)
+	if err == nil {
+		if adapter, ok := hookProtocolAdapters[descriptor.Hook.Protocol]; ok {
+			return adapter
+		}
 	}
+	return hookProtocolAdapters[host.ProtocolGeneric]
+}
+
+func codexHookResponse(decision HookDecision) any {
+	if decision.PermissionDecision != "deny" {
+		return nil
+	}
+	return CodexHookDecision{Decision: "block", Reason: decision.Reason}
+}
+
+func zcodeHookResponse(decision HookDecision) any {
+	if decision.PermissionDecision != "deny" {
+		return nil
+	}
+	return ZCodeHookDecision{HookSpecificOutput: ZCodeHookSpecificOutput{
+		HookEventName:            "PreToolUse",
+		PermissionDecision:       "deny",
+		PermissionDecisionReason: decision.Reason,
+	}}
+}
+
+func genericHookExitCode(decision HookDecision) int {
 	if decision.PermissionDecision == "deny" {
 		return 2
 	}

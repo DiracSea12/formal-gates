@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"gopkg.in/yaml.v3"
 )
@@ -27,6 +28,7 @@ var requiredFiles = []string{
 	"internal/validate/managed_rules.go",
 	"internal/validate/workflow.go",
 	"internal/validate/canary.go",
+	"internal/host/host.go",
 	"definitions/workflow.json",
 	"internal/validate/codex_hook_canary.go",
 	"internal/validate/hook.go",
@@ -54,6 +56,7 @@ var requiredHosts = []string{
 	"Codex",
 	"Cursor",
 	"DeepSeek Harness",
+	"ZCode",
 	"Gemini",
 	"OpenCode",
 	"Windsurf",
@@ -565,13 +568,16 @@ func unknownManifestParts(parts []string) []string {
 	return unknown
 }
 
-// manifestHostTargetNames maps each normalized install host to the manifest
-// host entry that must register it as an installable target.
-var manifestHostTargetNames = map[string]string{
-	"claude": "Claude Code",
-	"codex":  "Codex",
-	"cursor": "Cursor",
-	"dsh":    "DeepSeek Harness",
+// manifestHostTargetNames derives the manifest target names from the finite
+// host registry so adding a host does not require a second production list.
+func manifestHostTargetNames() map[string]string {
+	names := make(map[string]string)
+	for _, descriptor := range host.All() {
+		if descriptor.Installable {
+			names[descriptor.InstallName] = descriptor.ManifestName
+		}
+	}
+	return names
 }
 
 // unregisteredManifestInstallHosts returns the manifest host names the
@@ -582,8 +588,9 @@ var manifestHostTargetNames = map[string]string{
 func unregisteredManifestInstallHosts(hosts []manifestHost, targets []installTarget) []string {
 	var unregistered []string
 	seen := map[string]bool{}
+	manifestNames := manifestHostTargetNames()
 	for _, target := range targets {
-		manifestName, known := manifestHostTargetNames[target.host]
+		manifestName, known := manifestNames[target.host]
 		if !known || seen[manifestName] {
 			continue
 		}

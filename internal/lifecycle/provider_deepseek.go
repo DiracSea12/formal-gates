@@ -57,9 +57,14 @@ func isProjectDshInstall(path string) bool {
 
 func deepseekAdapter() providerAdapter {
 	return providerAdapter{
-		name:       ProviderDeepSeek,
-		required:   true,
-		hookEvents: []string{"SubagentStart", "SubagentStop"},
+		name: ProviderDeepSeek,
+		executableMatches: func(path string) bool {
+			normalized := normalizeProviderExecutablePath(path)
+			prefix := deepseekGlobalInstallPrefix()
+			return prefix != "" && strings.HasPrefix(normalized, prefix)
+		},
+		agentPrefixes:   []string{"deepseek", "dsh"},
+		environmentKeys: []string{"DSH_HOME", "DSH_PROJECT_DIR"},
 		normalizeEvent: func(eventName string) (string, error) {
 			return normalizeNamedEvent(ProviderDeepSeek, eventName, "SubagentStart", "SubagentStop")
 		},

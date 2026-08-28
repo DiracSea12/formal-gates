@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -287,10 +288,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 			return InstallReport{}, err
 		}
 		defer registryUnlock()
-		// Recover an interrupted multi-target transaction before validating the
-		// bridge or touching a new target.  The outer journal owns all runtime,
-		// host-config and registry snapshots, so host-both cannot resume in a
-		// mixed state after a process crash.
+		// Recover an interrupted transaction before validating the bridge or
+		// touching a new target. The outer journal owns all runtime, host-config
+		// and registry snapshots.
 		if err := reconcileOuterInstallJournal(registryPath); err != nil {
 			return InstallReport{}, err
 		}
@@ -357,8 +357,17 @@ func Install(options InstallOptions) (InstallReport, error) {
 		if backupErr != nil {
 			return InstallReport{}, backupErr
 		}
+		hookStatePath := ""
+		hookState := outerFileSnapshot{}
+		if descriptor, descriptorErr := host.Lookup(target.host); descriptorErr == nil && descriptor.Hook.Kind == host.HookZCode && target.hookConfig != "" {
+			hookStatePath = zcodeHookStatePath(target.hookConfig)
+			hookState, backupErr = snapshotOuterFile(hookStatePath, filepath.Join(backupRoot, "hook-state.before"))
+			if backupErr != nil {
+				return InstallReport{}, backupErr
+			}
+		}
 		resourceRoot := installRegistryRecord(target, options).ResourceRoot
-		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, RulePath: target.managedRulePath, ResourcePath: resourceRoot, ResourceExisted: exists(resourceRoot), Tree: outerTreeFromBackup(tree), Hook: hook, Rule: rule})
+		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, ResourcePath: resourceRoot, ResourceExisted: exists(resourceRoot), Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule})
 	}
 	var releaseBackup installTreeBackup
 	if strings.TrimSpace(options.ReleaseRoot) != "" {
@@ -636,6 +645,7 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	}
 	registryPath := installRegistryPath(InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath})
 	var unlock func()
+	var activeRegistryRecords []RegistryRecord
 	if registryPath != "" {
 		unlock, err = acquireInstallLock(registryPath)
 		if err != nil {
@@ -655,6 +665,7 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		// uninstall transaction, leaving hooks and the registry describing
 		// different generations.
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
+			activeRegistryRecords = append([]RegistryRecord(nil), doc.Records...)
 			if fenceErr := rejectActiveWorkflowRuns("uninstall", targets, InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath}, doc.Records); fenceErr != nil {
 				return UninstallReport{}, fenceErr
 			}
@@ -724,7 +735,16 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		if backupErr != nil {
 			return UninstallReport{}, backupErr
 		}
-		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, Rule: rule})
+		hookStatePath := ""
+		hookState := outerFileSnapshot{}
+		if descriptor, descriptorErr := host.Lookup(target.host); descriptorErr == nil && descriptor.Hook.Kind == host.HookZCode && target.hookConfig != "" {
+			hookStatePath = zcodeHookStatePath(target.hookConfig)
+			hookState, backupErr = snapshotOuterFile(hookStatePath, filepath.Join(backupRoot, "hook-state.before"))
+			if backupErr != nil {
+				return UninstallReport{}, backupErr
+			}
+		}
+		outer.Targets = append(outer.Targets, outerTargetSnapshot{TargetPath: target.targetPath, HookPath: target.hookConfig, HookStatePath: hookStatePath, RulePath: target.managedRulePath, Tree: outerTreeFromBackup(tree), Hook: hook, HookState: hookState, Rule: rule})
 	}
 	if err := persistOuterJournal(outerPath, outer); err != nil {
 		return UninstallReport{}, err
@@ -760,8 +780,14 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 			if err := installFault("managed-rule"); err != nil {
 				return UninstallReport{}, rollback(err)
 			}
-			if err := removeManagedRuleFile(target.managedRulePath, target.host == "cursor"); err != nil {
-				return UninstallReport{}, rollback(err)
+			removeManagedWhenEmpty := false
+			if descriptor, descriptorErr := host.Lookup(target.host); descriptorErr == nil {
+				removeManagedWhenEmpty = descriptor.Paths.RemoveManagedWhenEmpty
+			}
+			if !managedRuleSharedByActiveInstall(target.managedRulePath, targets, activeRegistryRecords) {
+				if err := removeManagedRuleFile(target.managedRulePath, removeManagedWhenEmpty); err != nil {
+					return UninstallReport{}, rollback(err)
+				}
 			}
 		}
 		if err := installFault("hook"); err != nil {
@@ -800,6 +826,35 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 	_ = os.RemoveAll(outer.TransactionRoot)
 	_ = os.Remove(outerPath)
 	return report, nil
+}
+
+// managedRuleSharedByActiveInstall keeps a shared project instruction file
+// until every active host installation that owns that path is removed. Codex,
+// DeepSeek Harness, and ZCode can share project-level AGENTS.md; uninstalling
+// one must not erase another host's managed block. Skip-hooks records do not
+// claim ownership because they deliberately did not write the rule.
+func managedRuleSharedByActiveInstall(path string, removing []installTarget, records []RegistryRecord) bool {
+	want := canonicalRegistryPath(path)
+	removingTargets := map[string]bool{}
+	for _, target := range removing {
+		removingTargets[canonicalRegistryPath(target.targetPath)] = true
+	}
+	for _, record := range records {
+		if !strings.EqualFold(strings.TrimSpace(record.Status), "active") || record.SkipHooks || removingTargets[canonicalRegistryPath(record.Target)] {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(record.Scope), "project") {
+			descriptor, err := host.Lookup(record.Host)
+			if err != nil || descriptor.Paths.ProjectManaged == "" || record.ProjectRoot == "" {
+				continue
+			}
+			managed := filepath.Join(record.ProjectRoot, filepath.FromSlash(descriptor.Paths.ProjectManaged))
+			if canonicalRegistryPath(managed) == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // installTreeBackup is the outer install transaction's undo record.  The
@@ -869,6 +924,7 @@ func installRegistryRecord(target installTarget, options InstallOptions) Registr
 		Scope:          strings.ToLower(options.Scope),
 		Host:           target.host,
 		HookConfig:     target.hookConfig,
+		SkipHooks:      options.SkipHooks,
 		ProjectRoot:    projectRoot,
 		StateRoot:      stateRoot,
 		ResourceRoot:   resourceRoot,
@@ -1357,8 +1413,8 @@ func writeBootstrapAdmissionRejection(registryPath string, target installTarget,
 }
 
 func sameRegistryBinding(left, right RegistryRecord) bool {
-	leftFields := []string{left.Target, left.LauncherPath, left.Scope, left.Host, left.HookConfig, left.ProjectRoot, left.StateRoot, left.ResourceRoot, left.RuntimeSibling, left.ReleaseRoot}
-	rightFields := []string{right.Target, right.LauncherPath, right.Scope, right.Host, right.HookConfig, right.ProjectRoot, right.StateRoot, right.ResourceRoot, right.RuntimeSibling, right.ReleaseRoot}
+	leftFields := []string{left.Target, left.LauncherPath, left.Scope, left.Host, left.HookConfig, fmt.Sprint(left.SkipHooks), left.ProjectRoot, left.StateRoot, left.ResourceRoot, left.RuntimeSibling, left.ReleaseRoot}
+	rightFields := []string{right.Target, right.LauncherPath, right.Scope, right.Host, right.HookConfig, fmt.Sprint(right.SkipHooks), right.ProjectRoot, right.StateRoot, right.ResourceRoot, right.RuntimeSibling, right.ReleaseRoot}
 	for index := range leftFields {
 		if filepath.Clean(leftFields[index]) != filepath.Clean(rightFields[index]) {
 			return false
@@ -1463,21 +1519,12 @@ func removeEmptyDirectory(path string) {
 	_ = os.Remove(path)
 }
 
-func normalizeInstallHost(host string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(host)) {
-	case "claude":
-		return "claude", nil
-	case "codex":
-		return "codex", nil
-	case "cursor":
-		return "cursor", nil
-	case "dsh", "deepseek", "deepseek-harness":
-		return "dsh", nil
-	case "both":
-		return "both", nil
-	default:
-		return "", fmt.Errorf("unsupported --host %q (want claude, codex, cursor, dsh, or both)", host)
+func normalizeInstallHost(hostName string) (string, error) {
+	descriptor, err := host.Lookup(hostName)
+	if err != nil || !descriptor.Installable {
+		return "", fmt.Errorf("unsupported --host %q (want %s)", hostName, strings.Join(host.InstallableNames(), ", "))
 	}
+	return descriptor.InstallName, nil
 }
 
 func normalizeInstallScope(scope string) (string, error) {
@@ -1510,11 +1557,8 @@ func assertInstallSource(source string) error {
 	return nil
 }
 
-func installTargets(host, scope, project string) ([]installTarget, error) {
-	hosts := []string{host}
-	if host == "both" {
-		hosts = []string{"claude", "codex"}
-	}
+func installTargets(hostName, scope, project string) ([]installTarget, error) {
+	hosts := []string{hostName}
 	home := ""
 	if scope == "global" {
 		var err error
@@ -1525,50 +1569,13 @@ func installTargets(host, scope, project string) ([]installTarget, error) {
 	}
 	targets := make([]installTarget, 0, len(hosts))
 	for _, h := range hosts {
-		var base string
-		var hookConfig string
-		var managedRulePath string
-		if scope == "global" {
-			switch h {
-			case "claude":
-				base = filepath.Join(home, ".claude", "skills")
-				hookConfig = filepath.Join(home, ".claude", "settings.json")
-				managedRulePath = filepath.Join(home, ".claude", "CLAUDE.md")
-			case "codex":
-				base = filepath.Join(home, ".codex", "skills")
-				hookConfig = filepath.Join(home, ".codex", "hooks.json")
-				managedRulePath = filepath.Join(home, ".codex", "AGENTS.md")
-			case "cursor":
-				base = filepath.Join(home, ".cursor")
-				hookConfig = filepath.Join(home, ".cursor", "hooks.json")
-			case "dsh":
-				var err error
-				base, hookConfig, managedRulePath, err = dshInstallTargetPaths(home, "", scope)
-				if err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			switch h {
-			case "claude":
-				base = filepath.Join(project, ".claude", "skills")
-				hookConfig = filepath.Join(project, ".claude", "settings.json")
-				managedRulePath = filepath.Join(project, "CLAUDE.md")
-			case "codex":
-				base = filepath.Join(project, ".codex", "skills")
-				hookConfig = filepath.Join(project, ".codex", "hooks.json")
-				managedRulePath = filepath.Join(project, "AGENTS.md")
-			case "cursor":
-				base = filepath.Join(project, ".cursor")
-				hookConfig = filepath.Join(project, ".cursor", "hooks.json")
-				managedRulePath = filepath.Join(project, ".cursor", "rules", "formal-gates.mdc")
-			case "dsh":
-				var err error
-				base, hookConfig, managedRulePath, err = dshInstallTargetPaths("", project, scope)
-				if err != nil {
-					return nil, err
-				}
-			}
+		descriptor, err := host.Lookup(h)
+		if err != nil {
+			return nil, err
+		}
+		base, hookConfig, managedRulePath, err := installTargetPaths(descriptor, home, project, scope)
+		if err != nil {
+			return nil, err
 		}
 		managedRule := ""
 		if managedRulePath != "" {
@@ -1586,6 +1593,37 @@ func installTargets(host, scope, project string) ([]installTarget, error) {
 		})
 	}
 	return targets, nil
+}
+
+type installPathResolver func(home, project, scope string) (base, hookConfig, managedRulePath string, err error)
+
+// installPathResolvers contains only layouts that cannot be represented by
+// the declarative host.PathLayout. Ordinary hosts use the descriptor paths;
+// a new host should need this registry only when its installer has a custom
+// home/config convention.
+var installPathResolvers = map[host.HookKind]installPathResolver{
+	host.HookDSH: dshInstallTargetPaths,
+}
+
+func installTargetPaths(descriptor host.Descriptor, home, project, scope string) (string, string, string, error) {
+	if resolver, ok := installPathResolvers[descriptor.Hook.Kind]; ok {
+		return resolver(home, project, scope)
+	}
+	if scope == "global" {
+		return filepath.Join(home, filepath.FromSlash(descriptor.Paths.GlobalBase)),
+			joinOptionalPath(home, descriptor.Paths.GlobalHookConfig),
+			joinOptionalPath(home, descriptor.Paths.GlobalManaged), nil
+	}
+	return filepath.Join(project, filepath.FromSlash(descriptor.Paths.ProjectBase)),
+		joinOptionalPath(project, descriptor.Paths.ProjectHookConfig),
+		joinOptionalPath(project, descriptor.Paths.ProjectManaged), nil
+}
+
+func joinOptionalPath(root, relative string) string {
+	if strings.TrimSpace(relative) == "" {
+		return ""
+	}
+	return filepath.Join(root, filepath.FromSlash(relative))
 }
 
 func resolveInstallTargets(host, scope, project string) ([]installTarget, error) {
@@ -1787,15 +1825,47 @@ func removePycache(root string) error {
 	})
 }
 
+type hookCapability struct {
+	configure func(installTarget) (bool, error)
+	remove    func(installTarget) error
+}
+
+// hookCapabilities is the install-time capability registry. Generic nested
+// and flat hosts share one implementation; DSH and ZCode supply only their
+// protocol-specific writers.
+var hookCapabilities = map[host.HookKind]hookCapability{
+	host.HookNested: {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
+	host.HookFlat:   {configure: configureGenericInstallHook, remove: removeGenericInstallHooks},
+	host.HookDSH:    {configure: configureDSHInstallHook, remove: removeDshHook},
+	host.HookZCode:  {configure: configureZCodeHook, remove: removeZCodeHook},
+}
+
 func configureInstallHook(target installTarget) (bool, error) {
 	if strings.TrimSpace(target.hookConfig) == "" {
 		return false, nil
 	}
-	if target.host == "dsh" {
-		if err := configureDshHook(target); err != nil {
-			return false, err
-		}
-		return true, nil
+	descriptor, err := host.Lookup(target.host)
+	if err != nil {
+		return false, err
+	}
+	capability, ok := hookCapabilities[descriptor.Hook.Kind]
+	if !ok || capability.configure == nil {
+		return false, fmt.Errorf("host %q has no hook install capability", descriptor.ID)
+	}
+	return capability.configure(target)
+}
+
+func configureDSHInstallHook(target installTarget) (bool, error) {
+	if err := configureDshHook(target); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func configureGenericInstallHook(target installTarget) (bool, error) {
+	descriptor, err := host.Lookup(target.host)
+	if err != nil {
+		return false, err
 	}
 	before, beforeErr := os.ReadFile(target.hookConfig)
 	if beforeErr != nil && !os.IsNotExist(beforeErr) {
@@ -1811,34 +1881,36 @@ func configureInstallHook(target installTarget) (bool, error) {
 	}
 	hooks := hookObject(config)
 	gateArgs := []string{"hook", "decide"}
-	if target.host == "codex" {
-		gateArgs = append(gateArgs, "--provider", "codex")
+	if descriptor.Hook.Protocol == host.ProtocolCodex {
+		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	gateCommand := nativeInstallCommand(targetLauncherPath(target), gateArgs...)
 	var desired map[string]any
-	shape := "nested"
-	switch target.host {
-	case "claude":
+	shape := string(descriptor.Hook.Kind)
+	switch descriptor.Hook.Kind {
+	case host.HookNested:
 		desired = map[string]any{
-			"PreToolUse": nestedHookEntry("*", gateCommand, false),
+			descriptor.Hook.GateEvent: nestedHookEntry(descriptor.Hook.GateMatcher, gateCommand, descriptor.Hook.GateTimeout),
 		}
-	case "codex":
-		desired = map[string]any{
-			"PreToolUse": nestedHookEntry(hostMatcher("codex"), gateCommand, true),
-		}
-	case "cursor":
-		shape = "flat"
+	case host.HookFlat:
 		config["version"] = float64(1)
 		desired = map[string]any{
-			"preToolUse": flatHookEntry(gateCommand),
+			descriptor.Hook.GateEvent: flatHookEntry(gateCommand),
 		}
 	}
 	for _, hook := range lifecycleHooks {
 		command := nativeInstallCommand(targetLauncherPath(target), hook.Command...)
-		if shape == "flat" {
+		matcher := hook.Matcher
+		if matcher == "" {
+			matcher = descriptor.Hook.LifecycleMatcher
+		}
+		if matcher == "" {
+			matcher = descriptor.Hook.GateMatcher
+		}
+		if shape == string(host.HookFlat) {
 			desired[hook.Event] = flatHookEntry(command)
 		} else {
-			desired[hook.Event] = nestedHookEntry(hostMatcher(target.host), command, target.host == "codex")
+			desired[hook.Event] = nestedHookEntry(matcher, command, hook.Timeout)
 		}
 	}
 	for event, entry := range desired {
@@ -1874,11 +1946,24 @@ func removeInstallHooks(target installTarget) error {
 	if strings.TrimSpace(target.hookConfig) == "" {
 		return nil
 	}
-	if target.host == "dsh" {
-		return removeDshHook(target)
+	descriptor, err := host.Lookup(target.host)
+	if err != nil {
+		return err
 	}
+	capability, ok := hookCapabilities[descriptor.Hook.Kind]
+	if !ok || capability.remove == nil {
+		return fmt.Errorf("host %q has no hook removal capability", descriptor.ID)
+	}
+	return capability.remove(target)
+}
+
+func removeGenericInstallHooks(target installTarget) error {
 	if !isFile(target.hookConfig) {
 		return nil
+	}
+	descriptor, err := host.Lookup(target.host)
+	if err != nil {
+		return err
 	}
 	config, err := readHookConfig(target.hookConfig)
 	if err != nil {
@@ -1889,10 +1974,7 @@ func removeInstallHooks(target installTarget) error {
 		return nil
 	}
 	before, _ := json.Marshal(config)
-	shape := "nested"
-	if target.host == "cursor" {
-		shape = "flat"
-	}
+	shape := string(descriptor.Hook.Kind)
 	for event, value := range hooks {
 		existing, ok := value.([]any)
 		if !ok {
@@ -1957,16 +2039,6 @@ func hookObject(config map[string]any) map[string]any {
 		hooks = map[string]any{}
 	}
 	return hooks
-}
-
-// hostMatcher returns the tool-name matcher for a host: Claude Code uses the glob
-// "*" (matches every tool), Codex uses the regex ".*" — Codex's matcher is a regex,
-// so the glob "*" is an invalid pattern that matches nothing and the hook never fires.
-func hostMatcher(host string) string {
-	if host == "codex" {
-		return ".*"
-	}
-	return "*"
 }
 
 func nestedHookEntry(matcher, command string, timeout bool) map[string]any {
@@ -2059,9 +2131,9 @@ func installerHookCommands(target installTarget) map[string]bool {
 		}
 	}
 	gateArgs := []string{"hook", "decide"}
-	if target.host == "codex" {
+	if descriptor, err := host.Lookup(target.host); err == nil && descriptor.Hook.Protocol == host.ProtocolCodex {
 		add("hook", "decide")
-		gateArgs = append(gateArgs, "--provider", "codex")
+		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	add(gateArgs...)
 	lifecycleHooks, err := lifecycle.HookDefinitions(target.host)
@@ -2079,11 +2151,11 @@ func installerHookCommands(target installTarget) map[string]bool {
 	return commands
 }
 
-func exactNestedHookShape(value map[string]any, host string) bool {
+func exactNestedHookShape(value map[string]any, hostName string) bool {
 	if value == nil || value["type"] != "command" {
 		return false
 	}
-	if host == "codex" {
+	if descriptor, err := host.Lookup(hostName); err == nil && descriptor.Hook.Protocol == host.ProtocolCodex {
 		return exactObjectKeys(value, "type", "command", "timeout") && value["timeout"] == float64(30)
 	}
 	return exactObjectKeys(value, "type", "command")

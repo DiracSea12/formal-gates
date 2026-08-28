@@ -21,14 +21,3 @@ func TestNormalizeHostPath(t *testing.T) {
 		}
 	}
 }
-
-func TestHostMatcher(t *testing.T) {
-	if got := hostMatcher("codex"); got != ".*" {
-		t.Errorf("codex matcher should be regex .*, got %q", got)
-	}
-	for _, host := range []string{"claude", "cursor"} {
-		if got := hostMatcher(host); got != "*" {
-			t.Errorf("%s matcher should be glob *, got %q", host, got)
-		}
-	}
-}

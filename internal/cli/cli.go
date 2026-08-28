@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
@@ -231,7 +232,7 @@ func runInstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
 	source := fs.String("source", "", "formal-gates source directory")
-	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
+	host := fs.String("host", "", "target host: "+installHostHelp())
 	scope := fs.String("scope", "", "install scope: global or project")
 	project := fs.String("project", "", "project path for project installs")
 	releaseRoot := fs.String("release-root", "", "native transaction release root (bootstrap use)")
@@ -274,7 +275,7 @@ func runInstall(args []string, streams IO) (int, error) {
 func runUninstall(args []string, streams IO) (int, error) {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
-	host := fs.String("host", "", "target host: claude, codex, cursor, dsh, or both")
+	host := fs.String("host", "", "target host: "+installHostHelp())
 	scope := fs.String("scope", "", "uninstall scope: global or project")
 	project := fs.String("project", "", "project path for project uninstalls")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
@@ -1052,7 +1053,7 @@ func runHook(program string, args []string, streams IO) (int, error) {
 		return 1, fmt.Errorf("hook decide is required")
 	}
 	fs := newFlagSet("hook decide", streams)
-	provider := fs.String("provider", "", "hook host provider: codex, claude-code, cursor, deepseek-harness, or empty for the generic protocol")
+	provider := fs.String("provider", "", "hook host provider: "+providerHelp()+", or empty for the generic protocol")
 	if code, err, done := parseFlagSet(fs, args[1:], streams.Stdout); done {
 		return code, err
 	}
@@ -1093,7 +1094,7 @@ func runLifecycle(program string, args []string, streams IO) (int, error) {
 	case "capture":
 		fs := newFlagSet("lifecycle capture", streams)
 		root := fs.String("root", "", "repository root override (normally derived from the host payload)")
-		provider := fs.String("provider", "", "host provider: claude-code, codex, cursor, or deepseek-harness")
+		provider := fs.String("provider", "", "host provider: "+providerHelp())
 		event := fs.String("event", "", "provider lifecycle event name")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
@@ -1564,11 +1565,11 @@ func printGateUsage(w io.Writer, program string) {
 }
 
 func printHookUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s hook decide\n\nHook decision CLI: reads the host hook JSON payload from stdin and prints the JSON decision.\nFlags:\n  --provider <codex|claude-code|cursor|deepseek-harness|''>  hook host provider (codex uses the Codex JSON block protocol)\n", program)
+	fmt.Fprintf(w, "Usage: %s hook decide\n\nHook decision CLI: reads the host hook JSON payload from stdin and prints the JSON decision.\nFlags:\n  --provider <%s|''>  hook host provider (Codex and ZCode use host-specific JSON protocols)\n", program, providerHelp())
 }
 
 func printLifecycleUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s lifecycle <subcommand>\n\nSubcommands:\n  capture  record a host lifecycle event (subagent start/stop) from the host payload on stdin\n  verify   verify a dispatch's lifecycle binding\n\nRun `%s lifecycle <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s lifecycle <subcommand>\n\nSubcommands:\n  capture  record a host lifecycle event (%s) from the host payload on stdin\n  verify   verify a dispatch's lifecycle binding\n\nRun `%s lifecycle <subcommand> --help` for a subcommand's flags.\n", program, lifecycleEventHelp(), program)
 }
 
 func printCanaryUsage(w io.Writer, program string) {
@@ -1585,10 +1586,36 @@ func printVersion(w io.Writer, program string) {
 // validateHookProvider accepts the recognized hook host providers and rejects
 // anything else instead of silently treating it as the generic default.
 func validateHookProvider(provider string) error {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "", "codex", "claude", "claude-code", "claude code", "cursor", "dsh", "deepseek", "deepseek-harness":
+	if strings.TrimSpace(provider) == "" {
 		return nil
-	default:
-		return fmt.Errorf("unsupported hook provider %q (want codex, claude-code, cursor, deepseek-harness, or empty for the generic protocol)", provider)
 	}
+	if descriptor, err := host.Lookup(provider); err == nil && descriptor.Installable {
+		return nil
+	}
+	return fmt.Errorf("unsupported hook provider %q (want %s, or empty for the generic protocol)", provider, providerHelp())
+}
+
+func installHostHelp() string {
+	return strings.Join(host.InstallableNames(), ", ")
+}
+
+func providerHelp() string {
+	return strings.Join(host.InstallableIDs(), "|")
+}
+
+func lifecycleEventHelp() string {
+	seen := map[string]bool{}
+	events := make([]string, 0)
+	for _, descriptor := range host.All() {
+		if !descriptor.Installable {
+			continue
+		}
+		for _, event := range descriptor.LifecycleEvents {
+			if !seen[event] {
+				seen[event] = true
+				events = append(events, event)
+			}
+		}
+	}
+	return strings.Join(events, "|")
 }

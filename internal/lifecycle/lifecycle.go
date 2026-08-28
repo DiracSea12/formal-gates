@@ -191,9 +191,8 @@ func BindDispatch(root, runID, dispatchID, identity string) error {
 }
 
 // BindDispatchWithProvider is the explicit host-context entrypoint used by a
-// shared stable launcher. A host=both install intentionally has one launcher;
-// provider identity therefore comes from the claim context, never from a
-// launcher path plus an ambiguous working-directory heuristic.
+// shared stable launcher. Provider identity comes from the claim context,
+// never from a launcher path plus an ambiguous working-directory heuristic.
 func BindDispatchWithProvider(root, runID, dispatchID, identity, provider string) error {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {

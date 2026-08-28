@@ -7,28 +7,37 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 const (
-	ProviderClaude   = "claude-code"
-	ProviderCodex    = "codex"
-	ProviderCursor   = "cursor"
-	ProviderDeepSeek = "deepseek-harness"
-	ProviderDefault  = "default"
+	ProviderClaude   = host.Claude
+	ProviderCodex    = host.Codex
+	ProviderCursor   = host.Cursor
+	ProviderDeepSeek = host.DeepSeek
+	ProviderZCode    = host.ZCode
+	ProviderDefault  = host.Default
 
 	eventStart = "subagent_start"
 	eventStop  = "subagent_stop"
 )
 
 type providerAdapter struct {
-	name           string
-	required       bool
-	hookEvents     []string
-	normalizeEvent func(string) (string, error)
-	identity       func(string, any) string
-	correlation    func(string, any) string
-	projectRoots   func(any) []string
-	transcriptPath func(any) string
+	name       string
+	required   bool
+	hookEvents []string
+	// Identity signals are declared by the adapter that owns the host
+	// integration. The detector below only scans these declarations; it does
+	// not contain a second host-specific switch.
+	executableMatches func(string) bool
+	agentPrefixes     []string
+	environmentKeys   []string
+	normalizeEvent    func(string) (string, error)
+	identity          func(string, any) string
+	correlation       func(string, any) string
+	projectRoots      func(any) []string
+	transcriptPath    func(any) string
 	// reason 从宿主 stop/error 事件提取中断原因（含 HTTP 错误码），供自动记录。
 	reason func(any) string
 }
@@ -36,27 +45,84 @@ type providerAdapter struct {
 type HookDefinition struct {
 	Event   string
 	Command []string
+	Matcher string
+	Timeout bool
+}
+
+// adapterFactories is the lifecycle capability registry. Keeping factories
+// here (rather than switching on provider IDs in the call path) means a new
+// host only registers its payload adapter once; event names and requiredness
+// still come from internal/host's descriptor registry.
+var adapterFactories = map[string]func() providerAdapter{
+	ProviderClaude:   claudeAdapter,
+	ProviderCodex:    codexAdapter,
+	ProviderCursor:   cursorAdapter,
+	ProviderDeepSeek: deepseekAdapter,
+	ProviderZCode:    zcodeAdapter,
+	ProviderDefault:  defaultAdapter,
+}
+
+type registeredAdapter struct {
+	descriptor host.Descriptor
+	adapter    providerAdapter
+}
+
+func installedAdapters() []registeredAdapter {
+	result := make([]registeredAdapter, 0, len(adapterFactories))
+	for _, descriptor := range host.All() {
+		if !descriptor.Installable {
+			continue
+		}
+		factory, ok := adapterFactories[descriptor.ID]
+		if ok {
+			result = append(result, registeredAdapter{descriptor: descriptor, adapter: factory()})
+		}
+	}
+	return result
+}
+
+// ProviderEnvironmentKeys returns the environment keys consulted by lifecycle
+// host detection. Callers that temporarily neutralize host identity (such as
+// the portable canary) derive their cleanup set from the same registry.
+func ProviderEnvironmentKeys() []string {
+	keys := []string{"AI_AGENT"}
+	seen := map[string]bool{"AI_AGENT": true}
+	for _, registered := range installedAdapters() {
+		for _, key := range registered.adapter.environmentKeys {
+			if key = strings.TrimSpace(key); key != "" && !seen[key] {
+				seen[key] = true
+				keys = append(keys, key)
+			}
+		}
+	}
+	return keys
 }
 
 func adapterFor(provider string) (providerAdapter, error) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case ProviderClaude, "claude", "claude code":
-		return claudeAdapter(), nil
-	case ProviderCodex:
-		return codexAdapter(), nil
-	case ProviderCursor:
-		return cursorAdapter(), nil
-	case ProviderDeepSeek, "dsh", "deepseek", "deepseek harness":
-		return deepseekAdapter(), nil
-	case ProviderDefault:
-		return defaultAdapter(), nil
-	default:
+	descriptor, err := host.Lookup(provider)
+	if err != nil {
 		return providerAdapter{}, fmt.Errorf("unsupported lifecycle provider %q", provider)
 	}
+	factory, ok := adapterFactories[descriptor.ID]
+	if !ok {
+		return providerAdapter{}, fmt.Errorf("unsupported lifecycle provider %q", provider)
+	}
+	adapter := factory()
+	// The finite registry owns event names and required/lenient semantics. The
+	// adapter constructors only own payload-specific normalization and identity.
+	adapter.required = descriptor.LifecycleRequired
+	if len(descriptor.LifecycleEvents) > 0 {
+		adapter.hookEvents = append([]string(nil), descriptor.LifecycleEvents...)
+	}
+	return adapter, nil
 }
 
-func HookDefinitions(host string) ([]HookDefinition, error) {
-	adapter, err := adapterFor(host)
+func HookDefinitions(provider string) ([]HookDefinition, error) {
+	adapter, err := adapterFor(provider)
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := host.Lookup(adapter.name)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +131,8 @@ func HookDefinitions(host string) ([]HookDefinition, error) {
 		hooks = append(hooks, HookDefinition{
 			Event:   event,
 			Command: []string{"lifecycle", "capture", "--provider", adapter.name, "--event", event},
+			Matcher: descriptor.Hook.LifecycleMatcher,
+			Timeout: descriptor.Hook.LifecycleTimeout,
 		})
 	}
 	return hooks, nil
@@ -76,6 +144,12 @@ func currentProvider() (string, error) {
 	path, err := executablePath()
 	if err != nil {
 		return "", err
+	}
+	// ZCode currently ignores project-level hook configuration. A project-local
+	// skill therefore has no active lifecycle bridge and remains lenient, just
+	// like the existing project-local DSH install.
+	if isProjectZCodeInstall(path) {
+		return ProviderDefault, nil
 	}
 	if provider := providerFromExecutable(path); provider != ProviderDefault {
 		return provider, nil
@@ -117,25 +191,20 @@ func currentProvider() (string, error) {
 // uninstalled contexts on the lenient default provider.
 func providerFromEnvironment() string {
 	agent := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT")))
-	switch {
-	case strings.HasPrefix(agent, "claude-code"):
-		return ProviderClaude
-	case strings.HasPrefix(agent, "codex"):
-		return ProviderCodex
-	case strings.HasPrefix(agent, "cursor"):
-		return ProviderCursor
-	case strings.HasPrefix(agent, "deepseek"), strings.HasPrefix(agent, "dsh"):
-		return ProviderDeepSeek
+	adapters := installedAdapters()
+	for _, registered := range adapters {
+		for _, prefix := range registered.adapter.agentPrefixes {
+			if strings.HasPrefix(agent, strings.ToLower(strings.TrimSpace(prefix))) {
+				return registered.descriptor.ID
+			}
+		}
 	}
-	switch {
-	case os.Getenv("CLAUDE_CODE_ENTRYPOINT") != "":
-		return ProviderClaude
-	case os.Getenv("CODEX_HOME") != "", os.Getenv("CODEX_CLI_PATH") != "":
-		return ProviderCodex
-	case os.Getenv("CURSOR_TRACE_ID") != "", os.Getenv("CURSOR_RUNTIME") != "":
-		return ProviderCursor
-	case os.Getenv("DSH_HOME") != "", os.Getenv("DSH_PROJECT_DIR") != "":
-		return ProviderDeepSeek
+	for _, registered := range adapters {
+		for _, key := range registered.adapter.environmentKeys {
+			if strings.TrimSpace(os.Getenv(key)) != "" {
+				return registered.descriptor.ID
+			}
+		}
 	}
 	return ""
 }
@@ -148,6 +217,7 @@ type registryProviderRecord struct {
 	Target       string            `json:"target"`
 	LauncherPath string            `json:"launcherPath"`
 	Host         string            `json:"host"`
+	Scope        string            `json:"scope"`
 	ProjectRoot  string            `json:"projectRoot"`
 	Canonical    map[string]string `json:"canonicalPaths"`
 	Status       string            `json:"status"`
@@ -191,8 +261,14 @@ func providerFromRegistryDetailed(executable string) (string, bool) {
 	bestRoot := ""
 	bestRootLength := -1
 	ambiguous := false
+	lenientProjectMatch := false
+	lenientRootLength := -1
 	for _, record := range document.Records {
 		if strings.ToLower(strings.TrimSpace(record.Status)) != "active" {
+			continue
+		}
+		descriptor, descriptorErr := host.Lookup(record.Host)
+		if descriptorErr != nil {
 			continue
 		}
 		launcher := record.LauncherPath
@@ -208,6 +284,17 @@ func providerFromRegistryDetailed(executable string) (string, bool) {
 		}
 		root = canonicalProviderPath(root)
 		if root == "" || !providerPathContains(root, workingDirectory) {
+			continue
+		}
+		// A project install without a project hook configuration cannot provide
+		// lifecycle observations. Keep the shared stable launcher lenient for
+		// such records instead of turning a normal project invocation into a
+		// required-provider rejection.
+		if strings.EqualFold(strings.TrimSpace(record.Scope), "project") && descriptor.Paths.ProjectHookConfig == "" {
+			lenientProjectMatch = true
+			if len(root) > lenientRootLength {
+				lenientRootLength = len(root)
+			}
 			continue
 		}
 		if len(root) <= bestRootLength {
@@ -227,6 +314,12 @@ func providerFromRegistryDetailed(executable string) (string, bool) {
 		bestRoot = root
 		bestRootLength = len(root)
 		ambiguous = false
+	}
+	if lenientProjectMatch && lenientRootLength > bestRootLength {
+		return ProviderDefault, false
+	}
+	if bestHost == "" && lenientProjectMatch {
+		return ProviderDefault, false
 	}
 	return bestHost, ambiguous
 }
@@ -255,6 +348,18 @@ func providerPathContains(root, path string) bool {
 }
 
 func providerFromExecutable(path string) string {
+	for _, registered := range installedAdapters() {
+		if matcher := registered.adapter.executableMatches; matcher != nil && matcher(path) {
+			return registered.descriptor.ID
+		}
+	}
+	// 未安装二进制（go test、canary portable、本地开发构建）解析为宽松的默认
+	// provider：无生命周期事件时仍走 UNAVAILABLE。只有实际安装且声明身份信号
+	// 的宿主二进制才解析为 required provider，验证生命周期配对。
+	return ProviderDefault
+}
+
+func normalizeProviderExecutablePath(path string) string {
 	path = strings.TrimSpace(path)
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
@@ -262,23 +367,7 @@ func providerFromExecutable(path string) string {
 	if absolute, err := filepath.Abs(path); err == nil {
 		path = absolute
 	}
-	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
-	dshPrefix := deepseekGlobalInstallPrefix()
-	switch {
-	case strings.Contains(normalized, "/.claude/skills/formal-gates/bin/"):
-		return ProviderClaude
-	case strings.Contains(normalized, "/.cursor/formal-gates/bin/"):
-		return ProviderCursor
-	case strings.Contains(normalized, "/.codex/skills/formal-gates/bin/"):
-		return ProviderCodex
-	case dshPrefix != "" && strings.HasPrefix(normalized, dshPrefix):
-		return ProviderDeepSeek
-	default:
-		// 未安装二进制（go test、canary portable、本地开发构建）解析为宽松的默认
-		// provider：无生命周期事件时仍走 UNAVAILABLE。只有真实安装的 Codex /
-		// global DSH 二进制才解析为 required provider，验证生命周期配对。
-		return ProviderDefault
-	}
+	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }
 
 func normalizeNamedEvent(provider, eventName, startName, stopName string) (string, error) {
