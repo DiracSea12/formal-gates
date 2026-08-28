@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -467,7 +468,8 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 		launcher = filepath.Join(canaryLocalAppData, "formal-gates", "bin", nativeBinaryName())
 	}
 	stableEnv := canaryEnvironment(canaryHome, canaryLocalAppData)
-	for _, tc := range []struct{ name, host string }{{"install-claude-native-runtime", "claude"}, {"install-codex-native-runtime", "codex"}, {"install-cursor-native-runtime", "cursor"}, {"install-dsh-project-runtime", "dsh"}} {
+	for _, hostName := range host.InstallableNames() {
+		tc := struct{ name, host string }{name: "install-" + hostName + "-native-runtime", host: hostName}
 		project := filepath.Join(tempRoot, tc.name)
 		if err := os.MkdirAll(project, 0o700); err != nil {
 			addCheck(tc.name, false, err.Error())
