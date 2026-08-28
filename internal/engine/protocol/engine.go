@@ -143,6 +143,35 @@ type Snapshot struct {
 	State    *State
 }
 
+// MarshalJSON keeps the report-facing snapshot contract stable: Snapshot's
+// exported fields are addressed as Revision/State, and the State fields are
+// addressed with their exported names for consumers that inspect a report
+// without knowing the persistence wire tags.
+func (s Snapshot) MarshalJSON() ([]byte, error) {
+	var state map[string]json.RawMessage
+	if s.State != nil {
+		encoded, err := json.Marshal(s.State)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &state); err != nil {
+			return nil, err
+		}
+		upper := make(map[string]json.RawMessage, len(state))
+		for key, value := range state {
+			if key == "" {
+				continue
+			}
+			upper[strings.ToUpper(key[:1])+key[1:]] = value
+		}
+		state = upper
+	}
+	return json.Marshal(struct {
+		Revision uint64                     `json:"Revision"`
+		State    map[string]json.RawMessage `json:"State"`
+	}{Revision: s.Revision, State: state})
+}
+
 // Load 读取当前权威投影（未初始化时 NOT_INITIALIZED 拒绝）。
 func (e *Engine) Load() (Snapshot, error) {
 	revision, state, err := e.load()
@@ -177,6 +206,7 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	if err != nil {
 		return nil, 0, fmt.Errorf("protocol: issue: %w", err)
 	}
+	state.retainExpected(plan.Next.Ready)
 	if err := state.issueInto(issued, revision+1, expectedFingerprint, state.RunProvider, identity, e.retryMaxAttempts); err != nil {
 		return nil, 0, err
 	}
@@ -257,7 +287,8 @@ func (e *Engine) retryMaxAttempts(stepID authoring.StepID) int {
 
 // issueInto 把一次签发集落账进 state（IssueFromPlan 与结果接纳后的容量
 // 补位共用）：重复 action/已有当前 Attempt/非法 QUEUED→ISSUED 转移一律
-// 拒绝；Attempt ID 以落盘 revision 确定性派生。
+// 拒绝；Attempt ID 以落盘 revision 确定性派生。Expected 由调用方先登记
+// 完整 eligible Ready frontier，因此这里只补齐缺失的已签发任务。
 func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapshot, responsibility string, plan PlanIdentity, retryMax func(authoring.StepID) int) error {
 	for _, action := range issued {
 		if _, exists := s.PendingActions[action.ActionID]; exists {
@@ -291,9 +322,25 @@ func (s *State) issueInto(issued decision.IssuedSet, nextRevision uint64, snapsh
 		s.PendingActions[action.ActionID] = PendingAction{
 			ActionID: action.ActionID, Task: action.Task, Step: string(action.Step), AttemptID: attempt.ID,
 		}
-		s.Expected = append(s.Expected, action.Task)
+		if !s.expectedContains(action.Task) {
+			s.Expected = append(s.Expected, action.Task)
+		}
 	}
 	return nil
+}
+
+// retainExpected keeps the complete Ready frontier in the durable task ledger,
+// even when admission only signs the first capacity-sized prefix. Unissued
+// tasks have no Attempt or pending action until a later refill.
+func (s *State) retainExpected(ready *decision.ReadyPayload) {
+	if ready == nil {
+		return
+	}
+	for _, task := range ready.Tasks {
+		if !s.expectedContains(task.Task) {
+			s.Expected = append(s.Expected, task.Task)
+		}
+	}
 }
 
 // Submit 是唯一的外部事件接纳入口（draft §3.4）。顺序固定：
@@ -367,8 +414,12 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		if _, exists := state.PendingAsks[requestID]; exists {
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("pending ask %q already exists", requestID)}
 		}
+		step := authoring.StepID("")
+		if ev.Request.Control != ControlRecovery {
+			step = state.nextHumanAskStep(e.cfg.Definition)
+		}
 		state.PendingAsks[requestID] = PendingAsk{
-			RequestID: requestID, Control: ev.Request.Control, Options: ev.Request.Options,
+			RequestID: requestID, Control: ev.Request.Control, Step: step, Options: ev.Request.Options,
 		}
 		token := freshnessToken(nextRevision, RequestID(requestID))
 		return Acceptance{
@@ -383,6 +434,9 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		requestID := string(ev.Decide.Request)
 		ask, exists := state.PendingAsks[requestID]
 		if !exists {
+			if _, decided := state.Decisions[requestID]; decided {
+				return Acceptance{}, nil, false, &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", requestID)}
+			}
 			return Acceptance{}, nil, false, &RejectedError{Code: CodeUnknownRequest, Detail: fmt.Sprintf("request %q does not exist", requestID)}
 		}
 		if ask.Resolved {
@@ -403,9 +457,12 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 		ask.Resolved = true
 		state.PendingAsks[requestID] = ask
 		state.Decisions[requestID] = RecordedDecision{
-			RequestID: requestID, Control: ask.Control, Choice: ev.Decide.Choice,
+			RequestID: requestID, Control: ask.Control, Step: ask.Step, Choice: ev.Decide.Choice,
 			EventID: string(ev.ID), Revision: nextRevision,
 		}
+		// Keep the request record after settlement so its request ID, step binding,
+		// options, and resolved state remain independently inspectable. Decisions
+		// remains the immutable decision history and also rejects later submissions.
 		// 决定落账即完成对应 HUMAN_ASK frontier 步骤并补位签发（draft §2.2：
 		// submit 接纳后立即继续 Decide/SelectIssued）。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {
@@ -782,7 +839,7 @@ func (e *Engine) admit(ev Event, digest string, state *State, revision, nextRevi
 			return Acceptance{}, nil, false, err
 		}
 		receipt := HostActionReceipt{
-			ActionID: actionID, Operation: ev.HostAction.Operation, AdapterOperation: ev.HostAction.AdapterOperation,
+			ActionID: actionID, Operation: ev.HostAction.Operation, Step: intent.Step, AdapterOperation: ev.HostAction.AdapterOperation,
 			Provider: ev.HostAction.Provider, Correlation: ev.HostAction.Correlation,
 			PayloadDigest: ev.HostAction.PayloadDigest, Status: ev.HostAction.Status,
 			FailureClass: ev.HostAction.FailureClass, LifecycleEvidence: ev.HostAction.LifecycleEvidence,
@@ -974,6 +1031,7 @@ func (e *Engine) refill(state *State, nextRevision uint64, expectedFingerprint s
 	if len(issued) == 0 {
 		return nil, nil
 	}
+	state.retainExpected(plan.Next.Ready)
 	identity, err := identityOfPlan(plan)
 	if err != nil {
 		return nil, fmt.Errorf("protocol: refill plan identity: %w", err)
@@ -1030,6 +1088,7 @@ func (e *Engine) executeHostAction(operation authoring.OperationID, params any, 
 	intent := HostActionIntent{
 		ActionID:      "hact:" + string(HostActionExecuteAdapterOperation) + ":" + strconv.FormatUint(nextRevision, 10),
 		Operation:     HostActionExecuteAdapterOperation,
+		Step:          state.nextHostActionStep(e.cfg.Definition, operation),
 		Adapter:       adapter,
 		PayloadDigest: digestOfCanonical(adapter),
 		Correlation:   strings.TrimSpace(correlation),
@@ -1337,6 +1396,9 @@ func (e *Engine) Freshness(request RequestID) (string, error) {
 	}
 	ask, exists := state.PendingAsks[string(request)]
 	if !exists {
+		if _, decided := state.Decisions[string(request)]; decided {
+			return "", &RejectedError{Code: CodeRequestResolved, Detail: fmt.Sprintf("request %q already decided", request)}
+		}
 		return "", &RejectedError{Code: CodeUnknownRequest, Detail: fmt.Sprintf("request %q does not exist", request)}
 	}
 	if ask.Resolved {

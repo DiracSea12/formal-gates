@@ -160,22 +160,24 @@ type PendingAction struct {
 // PendingAsk 是受限 REQUEST_* 事件创建的待决 Ask（draft §2.3）：request
 // ID、控制类型与选项集落账。freshness token 不静态存储——它确定性绑定
 // (当前 revision, requestID)，随 Freshness/Submit 即时求值，因此任何
-// 后续提交都自然使旧 token 失效。Resolved 后记录决定并保留（审计），
-// 不允许二次决定。
+// 后续提交都自然使旧 token 失效。决定后仍保留 PendingAsks 条目并置
+// Resolved=true，审计同时保留在 Decisions 中，不允许二次决定。
 type PendingAsk struct {
-	RequestID string      `json:"requestId"`
-	Control   ControlKind `json:"control"`
-	Options   []AskOption `json:"options"`
-	Resolved  bool        `json:"resolved"`
+	RequestID string           `json:"requestId"`
+	Control   ControlKind      `json:"control"`
+	Step      authoring.StepID `json:"step,omitempty"`
+	Options   []AskOption      `json:"options"`
+	Resolved  bool             `json:"resolved"`
 }
 
 // RecordedDecision 是用户经两阶段 Ask 提交的决定（本批只落账不执行）。
 type RecordedDecision struct {
-	RequestID string      `json:"requestId"`
-	Control   ControlKind `json:"control"`
-	Choice    AskOptionID `json:"choice"`
-	EventID   string      `json:"eventId"`
-	Revision  uint64      `json:"revision"`
+	RequestID string           `json:"requestId"`
+	Control   ControlKind      `json:"control"`
+	Step      authoring.StepID `json:"step,omitempty"`
+	Choice    AskOptionID      `json:"choice"`
+	EventID   string           `json:"eventId"`
+	Revision  uint64           `json:"revision"`
 }
 
 // EventRecord 是事件台账的单条记录：accepted 事件的 payload digest 与
@@ -300,6 +302,7 @@ type AdapterHostAction struct {
 type HostActionIntent struct {
 	ActionID      string              `json:"actionId"`
 	Operation     HostActionOperation `json:"operation"`
+	Step          authoring.StepID    `json:"step,omitempty"`
 	Resume        *AgentHostAction    `json:"resume,omitempty"`
 	Terminate     *AgentHostAction    `json:"terminate,omitempty"`
 	Adapter       *AdapterHostAction  `json:"adapter,omitempty"`
@@ -325,6 +328,7 @@ type AdapterEvidence struct {
 type HostActionReceipt struct {
 	ActionID          string                 `json:"actionId"`
 	Operation         HostActionOperation    `json:"operation"`
+	Step              authoring.StepID       `json:"step,omitempty"`
 	AdapterOperation  authoring.OperationID  `json:"adapterOperation,omitempty"`
 	Provider          string                 `json:"provider"`
 	Correlation       string                 `json:"correlation"`

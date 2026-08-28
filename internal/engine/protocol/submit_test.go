@@ -105,7 +105,7 @@ func TestSameIDDifferentDigestHardReject(t *testing.T) {
 }
 
 // TestDecideTwoPhaseHappyPath：第二段——以 request ID + 当前 token 提交
-// 决定；Ask 置 resolved、决定落账（控制类型、选项、事件与 revision）；
+// 决定；Ask 保留并置 resolved、决定落账（控制类型、选项、事件与 revision）；
 // 重放返回稳定 acceptance 且 revision 不再 +1。
 func TestDecideTwoPhaseHappyPath(t *testing.T) {
 	engine, _, _, _ := preparedEngine(t)
@@ -129,8 +129,8 @@ func TestDecideTwoPhaseHappyPath(t *testing.T) {
 		t.Fatalf("decide acceptance = %+v", acceptance)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if !snap.State.PendingAsks["req-reset-1"].Resolved {
-		t.Fatal("ask not resolved")
+	if ask, pending := snap.State.PendingAsks["req-reset-1"]; !pending || !ask.Resolved {
+		t.Fatalf("resolved ask = %+v pending=%v", ask, pending)
 	}
 	decision := snap.State.Decisions["req-reset-1"]
 	if decision.Choice != "proceed" || decision.Control != ControlReset ||
@@ -201,7 +201,7 @@ func TestFreshnessStaleRejectedZeroChange(t *testing.T) {
 		t.Fatalf("current token rejected: %v", err)
 	}
 	snap := engine.LoadMustSucceed(t)
-	if !snap.State.PendingAsks["req-reset-1"].Resolved || snap.State.Decisions["req-reset-1"].Choice != "cancel" {
+	if ask, pending := snap.State.PendingAsks["req-reset-1"]; !pending || !ask.Resolved || snap.State.Decisions["req-reset-1"].Choice != "cancel" {
 		t.Fatalf("decision not recorded: %+v", snap.State.Decisions)
 	}
 }

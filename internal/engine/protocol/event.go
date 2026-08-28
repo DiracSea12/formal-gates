@@ -185,6 +185,10 @@ const (
 	HostActionStatusExecuted = "EXECUTED"
 	HostActionStatusFailed   = "FAILED"
 	HostActionStatusUnknown  = "UNKNOWN"
+	// HostActionStatusReconciled is an internal durable status written after
+	// external observation confirms an UNKNOWN side effect. It is not accepted
+	// as a host-submitted receipt status.
+	HostActionStatusReconciled = "RECONCILED"
 )
 
 // LifecycleEventPayload 是 LIFECYCLE_EVENT 的 payload：宿主 lifecycle

@@ -65,6 +65,8 @@ type HarnessOptions struct {
 	Expected          string
 	Conflict          string
 	Target            string
+	Operation         string
+	Params            string
 }
 
 type HarnessError struct {
@@ -246,6 +248,7 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 	if _, statErr := os.Stat(report.SummaryPath); statErr == nil {
 		if _, readErr := ReadTerminalSummary(root); readErr != nil {
 			report.Status = "ERROR"
+			readErr = terminalSummaryError(readErr)
 			report.addError(readErr)
 			return report, readErr
 		}
@@ -260,7 +263,7 @@ func RunHarness(options HarnessOptions) (HarnessReport, error) {
 		return runCapacityRefill(report, options, root)
 	}
 
-	fixture, err := NewProtocolFixture(root)
+	fixture, err := newHarnessFixture(root)
 	if err != nil {
 		return report, err
 	}
@@ -506,9 +509,13 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 		return err
 	}
 	requestID := valueOr(options.RequestID, "request-event")
+	before, err := fixture.Engine.Load()
+	if err != nil {
+		return err
+	}
+	ask, hasAsk := before.State.PendingAsks[requestID]
 	token := strings.TrimSpace(options.PayloadDigest)
 	if token == "" {
-		var err error
 		token, err = fixture.Engine.Freshness(protocol.RequestID(requestID))
 		if err != nil {
 			return err
@@ -523,6 +530,28 @@ func runSubmitDecision(report *HarnessReport, fixture *ProtocolFixture, options 
 		return err
 	}
 	report.Acceptances = append(report.Acceptances, acceptance)
+	if hasAsk && ask.Control == protocol.ControlRecovery {
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		ready := make([]decision.IssuedAction, 0, len(snapshot.State.PendingActions))
+		for _, pending := range snapshot.State.PendingActions {
+			ready = append(ready, decision.IssuedAction{ActionID: pending.ActionID, Task: pending.Task, Step: authoring.StepID(pending.Step)})
+		}
+		sort.Slice(ready, func(i, j int) bool { return ready[i].ActionID < ready[j].ActionID })
+		if len(ready) > 0 {
+			report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: ready})
+		} else {
+			plan, decideErr := decision.Decide(&snapshot.State.State, decision.Observation{}, fixture.Definition)
+			if decideErr != nil {
+				return decideErr
+			}
+			if plan.Next.Kind != decision.KindWait {
+				report.Next = append(report.Next, nextRecord(plan.Next))
+			}
+		}
+	}
 	return nil
 }
 
@@ -551,6 +580,39 @@ func runSubmitWorker(report *HarnessReport, fixture *ProtocolFixture, options Ha
 		acceptance.Status = "DUPLICATE"
 	}
 	report.Acceptances = append(report.Acceptances, acceptance)
+	// A duplicate result is a historical receipt, not a new ready set. Its
+	// acceptance may retain refill action IDs from the original submission,
+	// even though those actions have since completed or been replaced.
+	if acceptance.Status == "DUPLICATE" {
+		return nil
+	}
+	if len(acceptance.Refill) > 0 {
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		ready := make([]decision.IssuedAction, 0, len(acceptance.Refill))
+		for _, actionID := range acceptance.Refill {
+			pending, ok := snapshot.State.PendingActions[actionID]
+			if !ok {
+				return fmt.Errorf("testkit: refill action %q is not pending after acceptance", actionID)
+			}
+			ready = append(ready, decision.IssuedAction{ActionID: pending.ActionID, Task: pending.Task, Step: authoring.StepID(pending.Step)})
+		}
+		report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: ready})
+	} else {
+		snapshot, loadErr := fixture.Engine.Load()
+		if loadErr != nil {
+			return loadErr
+		}
+		plan, decideErr := decision.Decide(&snapshot.State.State, decision.Observation{}, fixture.Definition)
+		if decideErr != nil {
+			return decideErr
+		}
+		if plan.Next.Kind == decision.KindComplete {
+			report.Next = append(report.Next, nextRecord(plan.Next))
+		}
+	}
 	return nil
 }
 
@@ -590,10 +652,38 @@ func runSubmitLifecycle(report *HarnessReport, fixture *ProtocolFixture, options
 }
 
 func runSubmitOperator(report *HarnessReport, fixture *ProtocolFixture, options HarnessOptions) error {
-	if _, err := ensureReady(report, fixture); err != nil {
+	actions, err := ensureReady(report, fixture)
+	if err != nil {
 		return err
 	}
-	event, err := protocol.NewOperatorObservationEvent(protocol.EventID(valueOr(options.EventID, "operator-event")), valueOr(options.Correlation, "operator-subject"),
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		return err
+	}
+	subject := strings.TrimSpace(options.Correlation)
+	if subject == "" {
+		for actionID, receipt := range snapshot.State.SpawnReceipts {
+			if receipt.Status == protocol.SpawnStatusUnknown && (subject == "" || actionID < subject) {
+				subject = actionID
+			}
+		}
+	}
+	if subject == "" {
+		if len(actions) == 0 {
+			return fmt.Errorf("testkit: operator scenario has no pending reconciliation subject")
+		}
+		unknown, spawnErr := protocol.NewSpawnReceiptEvent("operator-unknown-receipt", actions[0], fixture.Host.Provider, "operator-correlation", protocol.SpawnStatusUnknown)
+		if spawnErr != nil {
+			return spawnErr
+		}
+		unknownAcceptance, submitErr := submit(fixture.Engine, unknown)
+		if submitErr != nil {
+			return submitErr
+		}
+		report.Acceptances = append(report.Acceptances, unknownAcceptance)
+		subject = actions[0]
+	}
+	event, err := protocol.NewOperatorObservationEvent(protocol.EventID(valueOr(options.EventID, "operator-event")), subject,
 		decision.Fact{Source: decision.SourceVCS, Key: "current", Value: valueOr(options.PayloadDigest, "sha256:observed")})
 	if err != nil {
 		return err
@@ -603,7 +693,38 @@ func runSubmitOperator(report *HarnessReport, fixture *ProtocolFixture, options 
 		return err
 	}
 	report.Acceptances = append(report.Acceptances, acceptance)
-	report.Next = append(report.Next, NextRecord{Kind: decision.KindOperator, Payload: map[string]any{"subject": valueOr(options.Correlation, "operator-subject")}})
+	// Complete the harness's declared positive reconciliation sequence after
+	// the typed observation is accepted. The lifecycle pair is durable evidence
+	// for the unknown spawn, so reconciliation attaches it without respawning.
+	snapshot, err = fixture.Engine.Load()
+	if err != nil {
+		return err
+	}
+	if receipt, ok := snapshot.State.SpawnReceipts[subject]; ok && receipt.Status == protocol.SpawnStatusUnknown {
+		for index, eventName := range []string{protocol.LifecycleStart, protocol.LifecycleStop} {
+			lifecycle, lifecycleErr := protocol.NewCorrelatedLifecycleEvent(
+				protocol.EventID(fmt.Sprintf("operator-lifecycle-%d", index+1)), fixture.Host.Provider,
+				receipt.Correlation, "operator-agent", eventName)
+			if lifecycleErr != nil {
+				return lifecycleErr
+			}
+			if lifecycleAcceptance, submitErr := submit(fixture.Engine, lifecycle); submitErr != nil {
+				return submitErr
+			} else {
+				report.Acceptances = append(report.Acceptances, lifecycleAcceptance)
+			}
+		}
+		fingerprint, fingerprintErr := fixture.Engine.ObserveFingerprint()
+		if fingerprintErr != nil {
+			return fingerprintErr
+		}
+		plan, _, reconcileErr := fixture.Engine.ReconcileUnknownReceipt(subject, fingerprint)
+		if reconcileErr != nil {
+			return reconcileErr
+		}
+		report.RecoveryPlan = append(report.RecoveryPlan, plan)
+	}
+	report.Next = append(report.Next, NextRecord{Kind: decision.KindOperator, Payload: map[string]any{"subject": subject}})
 	return nil
 }
 
@@ -932,7 +1053,14 @@ func runHostAction(report *HarnessReport, fixture *ProtocolFixture, options Harn
 	if _, err := ensureReady(report, fixture); err != nil {
 		return err
 	}
-	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "phase2", "retries": 1})
+	operation := valueOr(options.Operation, "op.fan.transport")
+	var params any = map[string]any{"target": "phase2", "retries": 1}
+	if strings.TrimSpace(options.Params) != "" {
+		if err := json.Unmarshal([]byte(options.Params), &params); err != nil {
+			return fmt.Errorf("testkit: --params must be valid JSON: %w", err)
+		}
+	}
+	intent, err := fixture.Host.Execute(authoring.OperationID(operation), params)
 	if err != nil {
 		return err
 	}
@@ -982,6 +1110,13 @@ func runHostAction(report *HarnessReport, fixture *ProtocolFixture, options Harn
 			return reconcileErr
 		}
 		report.RecoveryPlan = append(report.RecoveryPlan, plan)
+		if plan.Action == protocol.RecoveryOperator {
+			report.Next = append(report.Next, NextRecord{Kind: decision.KindOperator, Payload: decision.OperatorPayload{Facts: []decision.Fact{
+				{Source: decision.SourceHost, Key: "actionID", Value: intent.ActionID},
+				{Source: decision.SourceHost, Key: "observation", Value: observationDigest},
+				{Source: decision.SourceHost, Key: "conflict", Value: "true"},
+			}}})
+		}
 		if fulfilled {
 			replay, replayErr := fixture.Host.Reconcile(intent.ActionID, observationDigest, true, false)
 			if replayErr != nil {
@@ -1198,6 +1333,7 @@ func runInvalidEvents(report *HarnessReport, fixture *ProtocolFixture) error {
 	}
 	invalid := []protocol.Event{
 		{ID: "invalid-kind", Kind: protocol.EventKind("USER_ABORT")},
+		{ID: "invalid-user-decision", Kind: protocol.EventKind("USER_DECIDE")},
 		{ID: "invalid-schema", Kind: protocol.KindRequestControl},
 	}
 	otherTask, _ := protocol.NewTaskEvent("other-node", TaskKey("other", "entry.parse"), "missing-attempt", runtime.TaskIssued)
@@ -1281,6 +1417,10 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 		if err := validateFullRecoveryPlan(plan); err != nil {
 			return err
 		}
+		// The fixture's first two workflow steps are completed before the
+		// injected transport fault. Preserve that fact in both the fault and
+		// continuation reports so the recovery chain is auditable end-to-end.
+		report.CompletedTasksBeforeFault = append([]string(nil), plan.Tasks[:2]...)
 	}
 	if _, err := ensureReady(report, fixture); err != nil {
 		return err
@@ -1390,15 +1530,37 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 		case decision.KindAsk:
 			// ask.decide 的选项集来自 canonical definition（schema 固定）；
 			// request 事件携带与旧 full 场景一致的 confirm 选项。
-			request, reqErr := protocol.NewRequestEvent(nextEventID("request"), protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
-			if reqErr != nil {
-				return reqErr
+			requestID := ""
+			for pendingID, pending := range snapshot.State.PendingAsks {
+				if !pending.Resolved && (requestID == "" || pendingID < requestID) {
+					requestID = pendingID
+				}
 			}
-			requestAcceptance, submitErr := submit(fixture.Engine, request)
-			if submitErr != nil {
-				return submitErr
+			var requestAcceptance protocol.Acceptance
+			if requestID != "" {
+				record, ok := snapshot.State.Events[requestID]
+				if !ok {
+					return fmt.Errorf("full scenario pending Ask %q has no request event", requestID)
+				}
+				requestAcceptance = record.Acceptance
+				requestDigest = record.Digest
+			} else {
+				request, reqErr := protocol.NewRequestEvent(nextEventID("request"), protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+				if reqErr != nil {
+					return reqErr
+				}
+				var submitErr error
+				requestAcceptance, submitErr = submit(fixture.Engine, request)
+				if submitErr != nil {
+					return submitErr
+				}
+				requestID = string(request.ID)
+				requestDigest, submitErr = request.Digest()
+				if submitErr != nil {
+					return submitErr
+				}
+				report.Acceptances = append(report.Acceptances, requestAcceptance)
 			}
-			requestID := string(request.ID)
 			token, tokenErr := fixture.Engine.Freshness(protocol.RequestID(requestID))
 			if tokenErr != nil {
 				return tokenErr
@@ -1412,12 +1574,7 @@ func runFull(report *HarnessReport, fixture *ProtocolFixture, options HarnessOpt
 				return submitErr
 			}
 			lastRequest = requestAcceptance
-			digest, digestErr := request.Digest()
-			if digestErr != nil {
-				return digestErr
-			}
-			requestDigest = digest
-			report.Acceptances = append(report.Acceptances, requestAcceptance, decisionAcceptance)
+			report.Acceptances = append(report.Acceptances, decisionAcceptance)
 			count, vcsErr := fixture.VCS.ApplyOnce("full-commit", "delivery/result.txt", []byte("complete\n"))
 			if vcsErr != nil {
 				return vcsErr
@@ -1477,13 +1634,17 @@ func runEnvelopeScenario(report HarnessReport, options HarnessOptions, root stri
 		}
 	}
 	if envelopeWrite {
-		// The write-barrier fixture owns a fresh target. Creating it before
-		// validation makes the zero-byte-on-rejection invariant observable,
-		// while the legacy `envelope` scenario keeps its no-target contract.
+		// A fresh target is created so a rejected write has an observable
+		// zero-byte target. An existing target belongs to the caller and must
+		// remain byte-for-byte unchanged when validation rejects the envelope.
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return report, err
 		}
-		if err := os.WriteFile(target, nil, 0o600); err != nil {
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			if err := os.WriteFile(target, nil, 0o600); err != nil {
+				return report, err
+			}
+		} else if err != nil {
 			return report, err
 		}
 	}
@@ -1988,6 +2149,7 @@ func runTerminalReplay(report HarnessReport, options HarnessOptions, root string
 	summary, err := ReadTerminalSummary(root)
 	if err != nil {
 		report.Status = "ERROR"
+		err = terminalSummaryError(err)
 		report.addError(err)
 		return report, err
 	}
@@ -2007,6 +2169,43 @@ func runTerminalReplay(report HarnessReport, options HarnessOptions, root string
 	return report, nil
 }
 
+func newHarnessFixture(root string) (*ProtocolFixture, error) {
+	fixture, err := NewProtocolFixture(root)
+	if err != nil {
+		return nil, err
+	}
+	statePath := filepath.Join(root, "engine-state", "state.json")
+	if _, statErr := os.Stat(statePath); os.IsNotExist(statErr) {
+		return fixture, nil
+	} else if statErr != nil {
+		return nil, statErr
+	}
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		return nil, err
+	}
+	if !isCapacityRefillState(snapshot.State) {
+		return fixture, nil
+	}
+	compiled, registry, err := capacityRefillDefinition()
+	if err != nil {
+		return nil, err
+	}
+	return NewProtocolFixtureWithDefinition(root, compiled, registry, 1)
+}
+
+func isCapacityRefillState(state *protocol.State) bool {
+	if state == nil || len(state.Expected) == 0 {
+		return false
+	}
+	for _, task := range state.Expected {
+		if string(task.Node) != "capacity" || (string(task.Step) != "TASK_1" && string(task.Step) != "TASK_2") {
+			return false
+		}
+	}
+	return true
+}
+
 func runCapacityRefill(report HarnessReport, options HarnessOptions, root string) (HarnessReport, error) {
 	capacity := options.Capacity
 	if capacity == 0 {
@@ -2015,6 +2214,50 @@ func runCapacityRefill(report HarnessReport, options HarnessOptions, root string
 	if capacity != 1 {
 		return report, fmt.Errorf("testkit: capacity-refill requires --capacity 1")
 	}
+	compiled, registry, err := capacityRefillDefinition()
+	if err != nil {
+		return report, err
+	}
+	fixture, err := NewProtocolFixtureWithDefinition(root, compiled, registry, capacity)
+	if err != nil {
+		return report, err
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	if err != nil {
+		return report, err
+	}
+	if err := fixture.Initialize(view, "fake-host"); err != nil {
+		return report, err
+	}
+	plan, err := decision.Decide(view, decision.Observation{}, compiled)
+	if err != nil {
+		return report, err
+	}
+	fingerprint, err := fixture.Engine.ObserveFingerprint()
+	if err != nil {
+		return report, err
+	}
+	issued, _, err := fixture.Engine.IssueFromPlan(plan, decision.Admission{Capacity: capacity}, fingerprint)
+	if err != nil {
+		return report, err
+	}
+	if len(issued) != 1 {
+		return report, fmt.Errorf("capacity-refill issued %d actions initially, want 1", len(issued))
+	}
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		return report, err
+	}
+	report.Actions = []HarnessAction{{ActionID: issued[0].ActionID}}
+	report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: issued})
+	report.Snapshot = &snapshot
+	report.Summary, _ = Summarize(fixture.Engine)
+	report.Phase = "capacity-initialized"
+	report.Paths, _ = harnessPaths(root)
+	return report, nil
+}
+
+func capacityRefillDefinition() (*compiler.CompiledDefinition, *compiler.Registry, error) {
 	registry := definition.Registry()
 	steps := make([]authoring.Step, 0, 2)
 	for _, id := range []authoring.StepID{"TASK_1", "TASK_2"} {
@@ -2024,83 +2267,15 @@ func runCapacityRefill(report HarnessReport, options HarnessOptions, root string
 			authoring.AgentSpec{Handler: "engine.review.worker", Reason: authoring.ReasonIndependentReview, Timeout: time.Minute},
 		)
 		if err != nil {
-			return report, err
+			return nil, nil, err
 		}
 		steps = append(steps, step)
 	}
 	compiled, err := compiler.Compile(&compiler.Definition{Version: definition.Version, EntryNode: "capacity", Steps: steps}, registry)
 	if err != nil {
-		return report, err
+		return nil, nil, err
 	}
-	workspace := filepath.Join(root, "workspace")
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		return report, err
-	}
-	vcs, err := NewFakeVCS(workspace)
-	if err != nil {
-		return report, err
-	}
-	store, err := persistence.NewStore(filepath.Join(root, "engine-state"), persistence.Config{PackageDigest: HarnessPackageDigest})
-	if err != nil {
-		return report, err
-	}
-	engine, err := protocol.New(store, protocol.Config{Definition: compiled, Registry: registry, Capacity: capacity}, vcs.Fingerprint)
-	if err != nil {
-		return report, err
-	}
-	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
-	if err != nil {
-		return report, err
-	}
-	fingerprint, err := engine.ObserveFingerprint()
-	if err != nil {
-		return report, err
-	}
-	if err := engine.Init(view, "fake-host", fingerprint); err != nil {
-		return report, err
-	}
-	plan, err := decision.Decide(view, decision.Observation{}, compiled)
-	if err != nil {
-		return report, err
-	}
-	issued, _, err := engine.IssueFromPlan(plan, decision.Admission{Capacity: capacity}, fingerprint)
-	if err != nil {
-		return report, err
-	}
-	if len(issued) != 1 {
-		return report, fmt.Errorf("capacity-refill issued %d actions initially, want 1", len(issued))
-	}
-	host := NewFakeHost(engine, "fake-host", nil)
-	worker := NewFakeWorker(engine, "fake-host", nil)
-	spawn, err := host.SpawnEvent("capacity-task-1-spawn", issued[0].ActionID, "capacity-agent", protocol.SpawnStatusSpawned)
-	if err != nil {
-		return report, err
-	}
-	preResultSnapshot, err := engine.Load()
-	if err != nil {
-		return report, err
-	}
-	accepted, err := worker.ResultEvent("capacity-task-1-result", issued[0].ActionID, protocol.OutcomePass, "sha256:capacity-task-1", "")
-	if err != nil {
-		return report, err
-	}
-	if len(accepted.Refill) != 1 {
-		return report, fmt.Errorf("capacity-refill acceptance refill=%v, want one replacement", accepted.Refill)
-	}
-	snapshot, err := engine.Load()
-	if err != nil {
-		return report, err
-	}
-	report.Acceptances = append(report.Acceptances, spawn.Acceptance, accepted)
-	report.Actions = []HarnessAction{{ActionID: issued[0].ActionID}, {ActionID: accepted.Refill[0]}}
-	report.Next = append(report.Next, NextRecord{Kind: decision.KindReady, Payload: issued})
-	report.PreResultSnapshot = &preResultSnapshot
-	report.Snapshot = &snapshot
-	report.Revisions = []uint64{spawn.Acceptance.Revision, accepted.Revision}
-	report.SideEffects = map[string]int{"fakeHost.spawn": host.SpawnCalls(issued[0].ActionID)}
-	report.Phase = "capacity-refilled"
-	report.Paths, _ = harnessPaths(root)
-	return report, nil
+	return compiled, registry, nil
 }
 
 func runNextSequence(report HarnessReport) (HarnessReport, error) {
@@ -2490,6 +2665,14 @@ func ReadTerminalSummary(root string) (TerminalSummary, error) {
 		return TerminalSummary{}, fmt.Errorf("testkit: terminal summary status %q is not queryable", summary.Status)
 	}
 	return summary, nil
+}
+
+func terminalSummaryError(err error) error {
+	var unsupported *persistence.UnsupportedRunVersionError
+	if errors.As(err, &unsupported) {
+		return fmt.Errorf("%w; rebuild the terminal summary with the owning writer", err)
+	}
+	return err
 }
 
 func writeHarnessJSON(path string, value any) error {

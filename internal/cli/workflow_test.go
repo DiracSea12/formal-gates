@@ -74,7 +74,7 @@ func TestCLIWorkflowDiagnoseReportsCandidateEngineIdentity(t *testing.T) {
 	}
 }
 
-func TestCLIWorkflowFutureGenerateEmitsCompleteEnvelope(t *testing.T) {
+func TestCLIWorkflowFutureGenerateEmitsLegacyEnvelope(t *testing.T) {
 	root := t.TempDir()
 	definitionBytes, err := os.ReadFile(filepath.Join("..", "..", "definitions", "workflow.json"))
 	if err != nil {
@@ -82,15 +82,25 @@ func TestCLIWorkflowFutureGenerateEmitsCompleteEnvelope(t *testing.T) {
 	}
 	mustWriteCLI(t, filepath.Join(root, "definitions", "workflow.json"), string(definitionBytes))
 	var envelope validate.VersionEnvelope
-	if err := json.Unmarshal([]byte(runCLI(t, "workflow", "future", "generate", "--root", root, "--package-digest", "sha256:installed-package")), &envelope); err != nil {
+	encoded := []byte(runCLI(t, "workflow", "future", "generate", "--root", root))
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Writer != "engine" || envelope.StateSchemaVersion == "" || envelope.WorkflowDefinitionVersion == "" ||
-		envelope.DefinitionSource == "" || envelope.DefinitionDigest == "" || envelope.PackageDigest == "" {
+	if envelope.Writer != "" || envelope.StateSchemaVersion == "" || envelope.WorkflowDefinitionVersion == "" ||
+		envelope.DefinitionSource == "" || envelope.DefinitionDigest == "" || envelope.PackageDigest != "" {
 		t.Fatalf("future envelope is incomplete: %+v", envelope)
 	}
-	if envelope.PackageDigest != "sha256:installed-package" {
-		t.Fatalf("package digest = %q", envelope.PackageDigest)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"stateSchemaVersion", "workflowDefinitionVersion", "definitionSource", "definitionDigest"} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("legacy future envelope omitted %s: %s", key, encoded)
+		}
+	}
+	if len(fields) != 4 {
+		t.Fatalf("legacy future envelope has unexpected fields: %v", fields)
 	}
 }
 
@@ -117,22 +127,19 @@ func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
 	if receipt.Digest != diagnose.Supported.PackageDigest {
 		t.Fatalf("diagnose supported digest %q differs from install/package receipt %q", diagnose.Supported.PackageDigest, receipt.Digest)
 	}
-	var missing bytes.Buffer
-	if code := Run("formal-gates", []string{"workflow", "future", "generate", "--root", root}, IO{Stderr: &missing}); code == 0 ||
-		!strings.Contains(missing.String(), "install/bootstrap receipt") || !strings.Contains(missing.String(), "workflow diagnose supported.packageDigest") {
-		t.Fatalf("missing digest refusal did not name legal sources: code=%d err=%s", code, missing.String())
-	}
 	envelopePath := filepath.Join(fixture, "envelope.json")
-	runCLI(t, "workflow", "future", "generate", "--root", root, "--package-digest", diagnose.Supported.PackageDigest, "--output", envelopePath)
+	runCLI(t, "workflow", "future", "generate", "--root", root, "--output", envelopePath)
 	envelopeBytes, err := os.ReadFile(envelopePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for index, mutate := range []func(*validate.VersionEnvelope){
 		func(value *validate.VersionEnvelope) { value.PackageDigest = "tampered" },
+		func(value *validate.VersionEnvelope) { value.Writer = "legacy" },
 		func(value *validate.VersionEnvelope) { value.DefinitionDigest = "sha256:tampered" },
 		func(value *validate.VersionEnvelope) { value.WorkflowDefinitionVersion = "future" },
-		func(value *validate.VersionEnvelope) { value.Writer = "legacy" },
+		func(value *validate.VersionEnvelope) { value.DefinitionSource = "definitions/other.json" },
+		func(value *validate.VersionEnvelope) { value.StateSchemaVersion = "future" },
 	} {
 		var candidate validate.VersionEnvelope
 		if err := json.Unmarshal(envelopeBytes, &candidate); err != nil {
@@ -160,6 +167,17 @@ func TestCLIWorkflowFutureDigestSourceAndWriteBarrier(t *testing.T) {
 	runCLI(t, "workflow", "future", "write", "--root", root, "--path", control, "--envelope", envelopePath)
 	if info, err := os.Stat(control); err != nil || info.Size() == 0 {
 		t.Fatalf("control write did not persist a target: info=%v err=%v", info, err)
+	}
+	var stateFields map[string]json.RawMessage
+	controlBytes, err := os.ReadFile(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(controlBytes, &stateFields); err != nil {
+		t.Fatal(err)
+	}
+	if len(stateFields) != 4 {
+		t.Fatalf("future state has non-legacy fields: %v", stateFields)
 	}
 }
 
@@ -797,6 +815,26 @@ func TestCLIShowMissingRunFriendly(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := Run("formal-gates", []string{"workflow", "show", "--root", t.TempDir(), "--run-id", "never-existed"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "was not found or is already terminated") {
 		t.Fatalf("show missing run did not hint: code=%d err=%s", code, stderr.String())
+	}
+}
+
+func TestCLIShowFallsBackToTerminalRunSummary(t *testing.T) {
+	root := t.TempDir()
+	state := validate.NewRunState("sealed-show", "formal", "requirements.md", "rev", "git", "base", "current", "prompt", "catalog", false, nil, nil)
+	state.Status = "SEALED"
+	if err := validate.SaveRunSummary(root, state); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run("formal-gates", []string{"workflow", "show", "--root", root, "--run-id", state.RunID}, IO{Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("show terminal summary failed: code=%d stderr=%s", code, stderr.String())
+	}
+	var summary validate.RunSummary
+	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.RunID != state.RunID || summary.Status != "SEALED" {
+		t.Fatalf("show returned unexpected terminal summary: %+v", summary)
 	}
 }
 

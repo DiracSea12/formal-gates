@@ -72,17 +72,15 @@ func GenerateFutureEnvelope(root, packageDigest string) (VersionEnvelope, error)
 	if err != nil {
 		return VersionEnvelope{}, err
 	}
-	packageDigest = strings.TrimSpace(packageDigest)
-	if packageDigest == "" {
-		return VersionEnvelope{}, fmt.Errorf("future package digest is required: pass PackageDigest from an install/bootstrap receipt or workflow diagnose supported.packageDigest")
-	}
+	// The legacy future writer is intentionally independent of installed-package
+	// identity. Keep the argument for source compatibility with the stage-0 API,
+	// but do not read, validate, or emit it.
+	_ = packageDigest
 	envelope := VersionEnvelope{
-		Writer:                    "engine",
 		StateSchemaVersion:        definition.SchemaVersion,
 		WorkflowDefinitionVersion: definition.WorkflowVersion,
 		DefinitionSource:          definition.Source,
 		DefinitionDigest:          definition.Digest,
-		PackageDigest:             packageDigest,
 	}
 	if err := validateFutureEnvelope(envelope, definition); err != nil {
 		return VersionEnvelope{}, err
@@ -99,10 +97,15 @@ func ValidateFutureEnvelope(root string, envelope VersionEnvelope) error {
 }
 
 func validateFutureEnvelope(envelope VersionEnvelope, definition FutureDefinition) error {
+	if strings.TrimSpace(envelope.Writer) != "" {
+		return &UnsupportedRunVersionError{Field: "writer", Expected: "absent", Observed: envelope.Writer}
+	}
+	if strings.TrimSpace(envelope.PackageDigest) != "" {
+		return &UnsupportedRunVersionError{Field: "packageDigest", Expected: "absent", Observed: envelope.PackageDigest}
+	}
 	checks := []struct {
 		field, observed, expected string
 	}{
-		{"writer", envelope.Writer, "engine"},
 		{"stateSchemaVersion", envelope.StateSchemaVersion, definition.SchemaVersion},
 		{"workflowDefinitionVersion", envelope.WorkflowDefinitionVersion, definition.WorkflowVersion},
 		{"definitionSource", envelope.DefinitionSource, definition.Source},
@@ -112,9 +115,6 @@ func validateFutureEnvelope(envelope VersionEnvelope, definition FutureDefinitio
 		if strings.TrimSpace(check.observed) == "" || check.observed != check.expected {
 			return &UnsupportedRunVersionError{Field: check.field, Expected: check.expected, Observed: check.observed}
 		}
-	}
-	if strings.TrimSpace(envelope.PackageDigest) == "" {
-		return &UnsupportedRunVersionError{Field: "packageDigest", Expected: "confirmed installed package digest", Observed: envelope.PackageDigest}
 	}
 	return nil
 }
@@ -155,53 +155,87 @@ func WriteFutureState(root, path string, envelope VersionEnvelope, value any) er
 	if err := validateFutureEnvelope(envelope, definition); err != nil {
 		return err
 	}
-	packageDigest, err := PackageDigest(root)
-	if err != nil {
-		return fmt.Errorf("future package binding: %w", err)
+	// This writer predates package admission. Its on-disk identity is exactly
+	// the four historical definition fields; in particular it must not acquire
+	// the candidate writer or package digest fields used by phase 2 state.
+	document := map[string]any{}
+	if fields, ok := value.(map[string]any); ok {
+		for key, item := range fields {
+			document[key] = item
+		}
+	} else if value != nil {
+		document["payload"] = value
 	}
-	if envelope.PackageDigest != packageDigest {
-		return &UnsupportedRunVersionError{Field: "packageDigest", Expected: packageDigest, Observed: envelope.PackageDigest}
-	}
-	return writeVersionedStateDocument(path, envelope, value)
+	document["stateSchemaVersion"] = envelope.StateSchemaVersion
+	document["workflowDefinitionVersion"] = envelope.WorkflowDefinitionVersion
+	document["definitionSource"] = envelope.DefinitionSource
+	document["definitionDigest"] = envelope.DefinitionDigest
+	return writeJSONAtomically(path, document)
 }
 
 func DiagnoseFutureState(root, path string) (DiagnoseReport, error) {
-	report, err := DiagnoseState(path)
-	if err != nil {
-		return report, err
-	}
 	definition, definitionErr := LoadFutureDefinition(root)
 	if definitionErr != nil {
 		if IsUnsupportedRunVersion(definitionErr) {
-			report.Recommendation = definitionErr.Error() + "; rebuild the candidate from the owning definition"
-			return report, nil
+			return DiagnoseReport{Path: filepath.Clean(path), Supported: VersionEnvelope{
+				StateSchemaVersion: CurrentStateSchemaVersion, WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
+				DefinitionSource: CurrentWorkflowDefinitionSource, DefinitionDigest: CurrentWorkflowDefinitionDigest,
+			}, Integrity: "unsupported", Recommendation: definitionErr.Error() + "; rebuild the candidate from the owning definition"}, nil
 		}
-		return report, definitionErr
+		return DiagnoseReport{Path: filepath.Clean(path)}, definitionErr
 	}
-	report.Supported = VersionEnvelope{
-		Writer:                    "engine",
-		StateSchemaVersion:        definition.SchemaVersion,
-		WorkflowDefinitionVersion: definition.WorkflowVersion,
-		DefinitionSource:          definition.Source,
-		DefinitionDigest:          definition.Digest,
+	report := DiagnoseReport{
+		Path: filepath.Clean(path), Integrity: "unknown",
+		Supported: VersionEnvelope{
+			StateSchemaVersion:        definition.SchemaVersion,
+			WorkflowDefinitionVersion: definition.WorkflowVersion,
+			DefinitionSource:          definition.Source,
+			DefinitionDigest:          definition.Digest,
+		},
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return report, err
 	}
 	var raw map[string]any
-	data, readErr := os.ReadFile(path)
-	if readErr != nil {
-		return report, readErr
+	if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
+		report.Recommendation = "rebuild the state with the owning future writer"
+		return report, nil
 	}
-	if jsonErr := json.Unmarshal(data, &raw); jsonErr == nil {
-		envelope := VersionEnvelope{
-			Writer:                    rawString(raw, "writer"),
-			StateSchemaVersion:        rawString(raw, "stateSchemaVersion"),
-			WorkflowDefinitionVersion: rawString(raw, "workflowDefinitionVersion"),
-			DefinitionSource:          rawString(raw, "definitionSource"),
-			DefinitionDigest:          rawString(raw, "definitionDigest"),
-			PackageDigest:             rawString(raw, "packageDigest"),
+	report.JSONReadable = true
+	report.Integrity = "readable"
+	report.DetectedVersions = map[string]any{}
+	for _, key := range []string{"stateSchemaVersion", "workflowDefinitionVersion", "definitionSource", "definitionDigest"} {
+		if value, ok := raw[key]; ok {
+			report.DetectedVersions[key] = value
 		}
-		if validateErr := validateFutureEnvelope(envelope, definition); validateErr != nil {
-			report.Recommendation = validateErr.Error() + "; rebuild it with the owning future writer"
+	}
+	envelope := VersionEnvelope{
+		StateSchemaVersion:        rawString(raw, "stateSchemaVersion"),
+		WorkflowDefinitionVersion: rawString(raw, "workflowDefinitionVersion"),
+		DefinitionSource:          rawString(raw, "definitionSource"),
+		DefinitionDigest:          rawString(raw, "definitionDigest"),
+	}
+	if _, hasWriter := raw["writer"]; hasWriter {
+		report.Integrity = "unsupported"
+		report.Recommendation = (&UnsupportedRunVersionError{Field: "writer", Expected: "absent", Observed: rawString(raw, "writer")}).Error() + "; rebuild it with the owning future writer"
+	} else if _, hasPackageDigest := raw["packageDigest"]; hasPackageDigest {
+		report.Integrity = "unsupported"
+		report.Recommendation = (&UnsupportedRunVersionError{Field: "packageDigest", Expected: "absent", Observed: rawString(raw, "packageDigest")}).Error() + "; rebuild it with the owning future writer"
+	} else if validateErr := validateFutureEnvelope(envelope, definition); validateErr != nil {
+		report.Integrity = "unsupported"
+		report.Recommendation = validateErr.Error() + "; rebuild it with the owning future writer"
+	}
+	if summary, ok := raw["summary"].(map[string]any); ok {
+		report.Summary = summary
+	} else if status, ok := raw["status"]; ok {
+		report.Summary = map[string]any{"status": status}
+		if runID, exists := raw["runId"]; exists {
+			report.Summary["runId"] = runID
 		}
+	}
+	if report.Summary == nil && report.Recommendation == "" {
+		report.Recommendation = "inspect the owning writer before attempting a write"
 	}
 	return report, nil
 }

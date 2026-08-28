@@ -34,7 +34,7 @@ const (
 )
 
 type VersionEnvelope struct {
-	Writer                    string `json:"writer"`
+	Writer                    string `json:"writer,omitempty"`
 	StateSchemaVersion        string `json:"stateSchemaVersion"`
 	WorkflowDefinitionVersion string `json:"workflowDefinitionVersion"`
 	DefinitionSource          string `json:"definitionSource"`

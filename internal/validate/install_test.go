@@ -7,6 +7,39 @@ import (
 	"testing"
 )
 
+func TestInstallAndBootstrapAllowActiveWorkflowRun(t *testing.T) {
+	source := copyPackageFixture(t)
+	project := t.TempDir()
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+	activeState := filepath.Join(project, ".gates", "tmp", "active-run", "state.json")
+	if err := os.MkdirAll(filepath.Dir(activeState), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(activeState, []byte(`{"runId":"active-run","status":"ACTIVE"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	installed, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: project,
+		RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
+	})
+	if err != nil {
+		t.Fatalf("install was fenced by an active run: %v", err)
+	}
+	if len(installed.Targets) != 1 {
+		t.Fatalf("unexpected install report: %+v", installed)
+	}
+
+	if _, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: project,
+		RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true,
+		Force: true, SkipHooks: true,
+	}); err != nil {
+		t.Fatalf("bootstrap was fenced by an active run: %v", err)
+	}
+}
+
 func TestLoadManagedRuleRequiresSingleCurrentRule(t *testing.T) {
 	root := t.TempDir()
 	skillPath := filepath.Join(root, filepath.FromSlash(managedRuleSourceRelativePath))

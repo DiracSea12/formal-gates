@@ -132,6 +132,30 @@ if [ "$skip_hooks" = true ]; then
   cmd+=(--skip-hooks)
 fi
 owner_output=""
+retry_with_verified_owner() {
+  # Keep the old launcher bytes available while a legacy owner is upgraded.
+  # This retry also covers owners that accept the new flags but silently omit
+  # the release-root copy introduced by the transaction contract.
+  cp "$binary_target" "$tmp/launcher.before"
+  if [ -L "$binary_target" ]; then
+    rm "$binary_target"
+  fi
+  staged_launcher=true
+  if ! cp "$source_root/bin/formal-gates" "$binary_target"; then
+    cp "$tmp/launcher.before" "$binary_target"
+    chmod +x "$binary_target"
+    staged_launcher=false
+    return 1
+  fi
+  chmod +x "$binary_target"
+  if ! "$binary_target" "${cmd[@]:1}"; then
+    cp "$tmp/launcher.before" "$binary_target"
+    chmod +x "$binary_target"
+    staged_launcher=false
+    return 1
+  fi
+  staged_launcher=false
+}
 if ! owner_output=$("${cmd[@]}" 2>&1); then
   if ! legacy_owner_rejected_new_flags "$owner_output"; then
     printf '%s\n' "$owner_output" >&2
@@ -145,24 +169,15 @@ if ! owner_output=$("${cmd[@]}" 2>&1); then
   # release. On failure the backed-up bytes are restored as a real file: the
   # fixed launcher path keeps launching the same legacy binary while also
   # satisfying the immutable-real-file pointer invariant.
-  cp "$binary_target" "$tmp/launcher.before"
-  if [ -L "$binary_target" ]; then
-    rm "$binary_target"
-  fi
-  staged_launcher=true
-  if ! cp "$source_root/bin/formal-gates" "$binary_target"; then
-    # 拷贝本身失败（如磁盘满）时同样以真实文件恢复备份字节，固定 launcher
-    # 路径不因兼容重试而缺失。
-    cp "$tmp/launcher.before" "$binary_target"
-    chmod +x "$binary_target"
-    staged_launcher=false
+  if ! retry_with_verified_owner; then
     exit 1
   fi
-  chmod +x "$binary_target"
-  if ! "$binary_target" "${cmd[@]:1}"; then
-    cp "$tmp/launcher.before" "$binary_target"
-    chmod +x "$binary_target"
-    staged_launcher=false
+fi
+release_binary="$install_root/bin/formal-gates"
+if [ ! -f "$release_binary" ] || ! cmp -s "$binary_target" "$release_binary"; then
+  echo "stable launcher and release-root binary diverged; retrying through the verified current owner" >&2
+  if ! retry_with_verified_owner; then
+    echo "failed to restore launcher/release-root identity" >&2
     exit 1
   fi
 fi
@@ -176,6 +191,11 @@ if [ -n "$project" ]; then
   bootstrap_cmd+=(--project "$project")
 fi
 "${bootstrap_cmd[@]}"
+
+if [ ! -f "$release_binary" ] || ! cmp -s "$binary_target" "$release_binary"; then
+  echo "stable launcher and release-root binary are not identical after bootstrap" >&2
+  exit 1
+fi
 
 echo "Installed package to $install_root"
 echo "Native binary: $binary_target"

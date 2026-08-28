@@ -494,6 +494,18 @@ func saveRunState(root string, state RunState, registryHeld bool) error {
 // an active shared-registry record names. Test executables retain in-process
 // legacy semantics.
 func verifyLegacyStableLauncher() error {
+	err := verifyLegacyStableLauncherReadOnly()
+	if err == nil {
+		return nil
+	}
+	home, homeErr := installHomeDir()
+	if homeErr == nil {
+		writeLegacyAdmissionRejection(filepath.Join(home, ".formal-gates", "registry.json"), err.Error())
+	}
+	return err
+}
+
+func verifyLegacyStableLauncherReadOnly() error {
 	executable, err := os.Executable()
 	if err != nil {
 		return err
@@ -509,9 +521,6 @@ func verifyLegacyStableLauncher() error {
 	registry := filepath.Join(home, ".formal-gates", "registry.json")
 	doc, err := LoadRegistry(registry)
 	if err != nil {
-		// 与登记路径的拒绝一致：能定位到共享 registry 路径的 legacy 拒绝也
-		// 落一份机读凭证，供自动化对账，而不是只返回错误文本。
-		writeLegacyAdmissionRejection(registry, fmt.Sprintf("legacy run requires the shared registry: %v", err))
 		return fmt.Errorf("UNREGISTERED_INSTALL: legacy run requires the shared registry: %w", err)
 	}
 	for _, record := range doc.Records {
@@ -519,7 +528,6 @@ func verifyLegacyStableLauncher() error {
 			return nil
 		}
 	}
-	writeLegacyAdmissionRejection(registry, "legacy run must be driven by a registered stable launcher")
 	return fmt.Errorf("UNREGISTERED_INSTALL: legacy run must be driven by a registered stable launcher")
 }
 
@@ -559,6 +567,20 @@ func requireRunWriteAdmission(root string, state RunState) error {
 	}
 	defer unlock()
 	return verifyRunStateAdmissionLocked(root, state)
+}
+
+// RequireRunReadAdmission checks the launcher identity for a read-only active
+// run without creating an admission receipt. This keeps workflow show from
+// becoming a candidate inspection escape hatch while preserving its existing
+// state-only command surface.
+func RequireRunReadAdmission(root string, state RunState) error {
+	if strings.TrimSpace(state.AdmissionRegistry) == "" && strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return verifyLegacyStableLauncherReadOnly()
+	}
+	if strings.TrimSpace(state.AdmissionRegistry) == "" || strings.TrimSpace(state.AdmissionRecordID) == "" {
+		return fmt.Errorf("admission registry and record id must be supplied together")
+	}
+	return verifyRegistryBinding(state.AdmissionRegistry, state.AdmissionRecordID, root, state.AdmissionTarget)
 }
 
 // verifyRunStateAdmissionLocked is called only while the shared registry lock
@@ -1003,6 +1025,28 @@ func SaveRunSummary(root string, state RunState) error {
 
 func RunSummaryPath(root, runID string) string {
 	return filepath.Join(lifecycle.CleanRoot(root), ".gates", "results", runID+".json")
+}
+
+func LoadRunSummary(root, runID string) (RunSummary, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return RunSummary{}, fmt.Errorf("run id is required (--run-id)")
+	}
+	data, err := os.ReadFile(RunSummaryPath(root, runID))
+	if err != nil {
+		return RunSummary{}, err
+	}
+	var summary RunSummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return RunSummary{}, fmt.Errorf("run summary JSON is invalid: %w", err)
+	}
+	if summary.RunID != runID {
+		return RunSummary{}, fmt.Errorf("run summary id %q does not match requested run %q", summary.RunID, runID)
+	}
+	if summary.Status != "SEALED" && summary.Status != "ABORTED" {
+		return RunSummary{}, fmt.Errorf("run summary status %q is not terminal", summary.Status)
+	}
+	return summary, nil
 }
 
 // SliceCostRecord persists a slice instance's cost projection for its

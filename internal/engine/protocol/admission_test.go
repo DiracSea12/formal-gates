@@ -449,7 +449,7 @@ func TestWorkerResultStagesBeforeReceipt(t *testing.T) {
 }
 
 // TestWorkerResultNegatives：未知 action、provider mismatch、同 action
-// 异字节结果冲突、FAIL 结果只终结不推进 frontier。
+// 异字节结果冲突、FAIL 结果只终结当前任务而不推进完成 frontier。
 func TestWorkerResultNegatives(t *testing.T) {
 	engine, _, alphaAction := refillEngine(t)
 	fp := fingerprintOf(t, engine)
@@ -480,7 +480,8 @@ func TestWorkerResultNegatives(t *testing.T) {
 		t.Fatal("rejected results changed state")
 	}
 
-	// FAIL：任务终结、step 不完成、无补位（失败分类路由属后续批次）。
+	// FAIL：任务终结、step 不完成；未签发的兄弟 Ready 仍保留在完整
+	// Expected 前沿中，失败分类路由属后续批次。
 	fail, err := NewWorkerResultEvent("evt-res-fail", alphaAction, testProvider, OutcomeFail, "sha256:fail", authoring.FailureBusinessReject)
 	if err != nil {
 		t.Fatalf("event: %v", err)
@@ -497,7 +498,7 @@ func TestWorkerResultNegatives(t *testing.T) {
 	if snap.State.TaskStatusOf(alphaKey) != runtime.TaskTerminal {
 		t.Fatalf("failed task = %s, want TERMINAL", snap.State.TaskStatusOf(alphaKey))
 	}
-	if containsStep(snap.State.Completed, "alpha.worker") || len(snap.State.Expected) != 0 {
+	if containsStep(snap.State.Completed, "alpha.worker") || len(snap.State.Expected) != 1 || snap.State.Expected[0].Step != "beta.worker" {
 		t.Fatalf("FAIL result advanced frontier: completed=%+v expected=%+v", snap.State.Completed, snap.State.Expected)
 	}
 
@@ -913,8 +914,8 @@ func TestOperatorObservationAdmits(t *testing.T) {
 		t.Fatalf("decide: %v", err)
 	}
 	final := engine.LoadMustSucceed(t)
-	if !final.State.PendingAsks["req-reset-9"].Resolved || final.State.Decisions["req-reset-9"].Choice != "proceed" {
-		t.Fatalf("ask not closed: %+v", final.State.Decisions)
+	if ask, pending := final.State.PendingAsks["req-reset-9"]; !pending || !ask.Resolved || final.State.Decisions["req-reset-9"].Choice != "proceed" {
+		t.Fatalf("ask not closed: ask=%+v pending=%v decisions=%+v", ask, pending, final.State.Decisions)
 	}
 
 	// Operator 负向：非法来源枚举、空 subject、空事实集。

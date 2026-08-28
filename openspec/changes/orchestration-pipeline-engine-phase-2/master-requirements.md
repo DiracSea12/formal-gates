@@ -65,3 +65,35 @@
 ## 阶段退出条件
 
 阶段 2 在一次完整 formal-gates run 内完成分批开发、installed binary 验证、legacy 回归、独立审查（含对照原始方案的偏差/遗漏核查）、QA（黑盒底线参照 52 用例）、必要修复和 Seal；协议/恢复证据绑定候选 identity；范围内未通过项不得以口头说明替代。
+
+## 本轮修复受理确认（2026-08-27）
+
+本轮沿用上述已确认的阶段 2 需求与技术方案，不重新设计需求，不重做产品审查。用户明确确认的修复范围为：
+
+1. 修复两个既有协议行为问题；
+2. 为对应行为补充白盒覆盖；
+3. 修复完成后，对黑盒与白盒执行全量重跑，并以重跑结果作为本轮验证输入。
+
+本轮不扩大公开行为、协议范围、版本边界、隔离边界或验收口径；除上述修复与覆盖外，不引入新的需求或技术选择。
+
+两个协议行为问题及本轮验收口径如下：
+
+1. 副作用 UNKNOWN 对账成功后，`RECONCILED` 事实必须能够完成对应的 HostAction frontier 步骤，并继续推进后续步骤/补充可用动作；不得因为结算逻辑只识别 `EXECUTED` 而让已成功对账的步骤保持未完成。
+2. frontier 结算必须按当前具体步骤及其对应的 decision/intent 结算，不能用一个全局 Ask decision 解决多个 Ask 步骤，也不能用一个 operation 的回执误结算多个同 operation 的 HostAction 步骤。
+
+验收要求：为上述两条分别补充白盒测试，至少覆盖对账成功后的 frontier 推进，以及多个 Ask/重复 operation 的逐步骤绑定；既有 63 条黑盒和 23 条白盒用例在实现修复后均全量重跑。
+
+### 受理问答与缺口检查
+
+- 用户确认：本轮按上述修复范围继续执行；不重新设计需求，不重做产品审查。
+- 无剩余缺口：当前修复范围、验证顺序、非目标和审查边界均已明确，无需作实质猜测。
+
+### RQ-011 登记集确认
+
+本 change 的需求/方案承载文档登记如下；该登记集同时作为需求修订作用域和主代理写豁免集：
+
+- `openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md`
+- `refactor-plan/final-implementation-draft.md`
+- `refactor-plan/incremental-seal-plan.md`
+
+以下材料不登记：`stage-records.md` 和 `route-matrix.md` 属于阶段记录/路由跟踪交付物；比例性影响评估属于不改变引擎行为的评估交付物；ADR-001、ADR-002 属于继续有效的冻结参考；phase-1 `post-seal-audit.md` 属于继承输入。它们均不承载本轮需求或方案本身。

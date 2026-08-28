@@ -367,7 +367,7 @@ func (e *Engine) ReconcileHostAction(actionID, observationDigest string, fulfill
 			adapterOperation = intent.Adapter.Operation
 		}
 		state.ReconciledEffects[actionID] = ReconciledEffect{ActionID: actionID, Operation: intent.Operation, AdapterOperation: adapterOperation, ObservationDigest: observationDigest, Status: "FULFILLED", Revision: nextRevision}
-		state.HostActionReceipts[actionID] = HostActionReceipt{ActionID: actionID, Operation: intent.Operation, Provider: state.RunProvider, Correlation: "reconcile", PayloadDigest: intent.PayloadDigest, Status: "RECONCILED", Digest: digestOfCanonical(map[string]any{"actionId": actionID, "observationDigest": observationDigest, "status": "RECONCILED"})}
+		state.HostActionReceipts[actionID] = HostActionReceipt{ActionID: actionID, Operation: intent.Operation, Step: intent.Step, Provider: state.RunProvider, Correlation: "reconcile", PayloadDigest: intent.PayloadDigest, Status: HostActionStatusReconciled, Digest: digestOfCanonical(map[string]any{"actionId": actionID, "observationDigest": observationDigest, "status": HostActionStatusReconciled})}
 		// 对账即外部事实已满足：完成对应 HOST_ACTION frontier 步骤并补位
 		// 签发（与 EXECUTED 回执接纳同一条 settle 语义，不再次执行）。
 		if err := state.settleFrontierSteps(e.cfg.Definition); err != nil {

@@ -45,12 +45,31 @@ func TestHarnessEnvelopeWriteReportsBarrierBytesAndValidWrite(t *testing.T) {
 	if info, statErr := os.Stat(blocked.StatePath); statErr != nil || info.Size() != 0 {
 		t.Fatalf("blocked target = info=%v err=%v, want fresh zero-byte target", info, statErr)
 	}
-	valid, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "envelope-write"})
+	validRoot := t.TempDir()
+	valid, err := RunHarness(HarnessOptions{ProjectRoot: validRoot, Scenario: "envelope-write"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if valid.Metadata["targetBytes"].(int64) == 0 {
 		t.Fatalf("valid envelope did not write target: %+v", valid.Metadata)
+	}
+	before, err := os.ReadFile(valid.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedExisting, err := RunHarness(HarnessOptions{ProjectRoot: validRoot, Scenario: "envelope-write", MissingField: "definition-digest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockedExisting.Metadata["targetBytes"] != int64(len(before)) {
+		t.Fatalf("existing target size changed in report: %+v", blockedExisting.Metadata)
+	}
+	after, err := os.ReadFile(valid.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected envelope rewrote an existing target")
 	}
 }
 
@@ -69,7 +88,7 @@ func TestHarnessRegisteredUnknownReceiptAndHostReconcileAliases(t *testing.T) {
 		t.Fatalf("fulfilled host reconcile = %+v err=%v", fulfilled, err)
 	}
 	conflict, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "reconcile-host-action", Conflict: "true"})
-	if err != nil || len(conflict.RecoveryPlan) == 0 || conflict.RecoveryPlan[0].Action != protocol.RecoveryOperator {
+	if err != nil || len(conflict.RecoveryPlan) == 0 || conflict.RecoveryPlan[0].Action != protocol.RecoveryOperator || len(conflict.Next) != 1 || conflict.Next[0].Kind != decision.KindOperator {
 		t.Fatalf("conflict host reconcile = %+v err=%v", conflict, err)
 	}
 }
@@ -102,21 +121,54 @@ func atoiTest(t *testing.T, value string) int {
 }
 
 func TestHarnessCapacityOneRefillsSecondEligibleTask(t *testing.T) {
-	report, err := RunHarness(HarnessOptions{ProjectRoot: t.TempDir(), Scenario: "capacity-refill", Capacity: 1})
+	root := t.TempDir()
+	initial, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "capacity-refill", Capacity: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Actions) != 2 || len(report.Acceptances) != 2 || len(report.Acceptances[1].Refill) != 1 {
-		t.Fatalf("capacity report = %+v", report)
+	if len(initial.Actions) != 1 || len(initial.Acceptances) != 0 || len(initial.Next) != 1 || initial.Next[0].Kind != decision.KindReady {
+		t.Fatalf("capacity initial report = %+v", initial)
 	}
-	if report.Snapshot == nil || len(report.Snapshot.State.Expected) != 1 || len(report.Snapshot.State.PendingActions) != 1 {
-		t.Fatalf("refilled snapshot = %+v", report.Snapshot)
+	if initial.Snapshot == nil || len(initial.Snapshot.State.Expected) != 2 || len(initial.Snapshot.State.PendingActions) != 1 {
+		t.Fatalf("capacity initial snapshot = %+v", initial.Snapshot)
 	}
-	if report.SideEffects["fakeHost.spawn"] != 1 {
-		t.Fatalf("side effects = %+v", report.SideEffects)
+	var first protocol.PendingAction
+	for _, pending := range initial.Snapshot.State.PendingActions {
+		first = pending
 	}
-	if report.PreResultSnapshot == nil || report.PreResultSnapshot.State.Expected[0].Step != "TASK_1" || report.Actions[1].ActionID != "act:capacity/TASK_2" {
-		t.Fatalf("pre-result/task identifiers = %+v actions=%+v", report.PreResultSnapshot, report.Actions)
+	spawn, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "submit-spawn", EventID: "capacity-spawn-1", ActionID: first.ActionID, Provider: "fake-host", Correlation: first.AttemptID, Status: protocol.SpawnStatusSpawned})
+	if err != nil || len(spawn.Acceptances) != 1 || spawn.Acceptances[0].Kind != "SPAWN_RECEIPT" {
+		t.Fatalf("capacity spawn = %+v err=%v", spawn, err)
+	}
+	result, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "submit-worker", EventID: "capacity-worker-result-1", ActionID: first.ActionID, Provider: "fake-host", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:capacity-worker-result-1"})
+	if err != nil || len(result.Acceptances) != 1 || len(result.Acceptances[0].Refill) != 1 || len(result.Next) != 1 || result.Next[0].Kind != decision.KindReady {
+		t.Fatalf("capacity first result = %+v err=%v", result, err)
+	}
+	if result.Snapshot == nil || len(result.Snapshot.State.Expected) != 1 || len(result.Snapshot.State.PendingActions) != 1 || result.Snapshot.State.Expected[0].Step != "TASK_2" {
+		t.Fatalf("capacity refilled snapshot = %+v", result.Snapshot)
+	}
+	var second protocol.PendingAction
+	for _, pending := range result.Snapshot.State.PendingActions {
+		second = pending
+	}
+	spawn, err = RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "submit-spawn", EventID: "capacity-spawn-2", ActionID: second.ActionID, Provider: "fake-host", Correlation: second.AttemptID, Status: protocol.SpawnStatusSpawned})
+	if err != nil {
+		t.Fatalf("capacity second spawn: %v", err)
+	}
+	final, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "submit-worker", EventID: "capacity-worker-result-2", ActionID: second.ActionID, Provider: "fake-host", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:capacity-worker-result-2"})
+	if err != nil || len(final.Acceptances) != 1 || len(final.Next) != 1 || final.Next[0].Kind != decision.KindComplete {
+		t.Fatalf("capacity final result = %+v err=%v", final, err)
+	}
+	if final.Snapshot == nil || len(final.Snapshot.State.Expected) != 0 || len(final.Snapshot.State.PendingActions) != 0 {
+		t.Fatalf("capacity final snapshot = %+v", final.Snapshot)
+	}
+	replay, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "submit-worker", EventID: "capacity-worker-result-1", ActionID: first.ActionID, Provider: "fake-host", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:capacity-worker-result-1"})
+	if err != nil || len(replay.Acceptances) != 1 || replay.Acceptances[0].Status != "DUPLICATE" || len(replay.Next) != 0 {
+		t.Fatalf("capacity historical result replay = %+v err=%v", replay, err)
+	}
+	payloadReplay, err := RunHarness(HarnessOptions{ProjectRoot: root, Scenario: "submit-worker", EventID: "capacity-worker-result-payload-replay", ActionID: first.ActionID, Provider: "fake-host", Outcome: protocol.OutcomePass, PayloadDigest: "sha256:capacity-worker-result-1"})
+	if err != nil || len(payloadReplay.Acceptances) != 1 || payloadReplay.Acceptances[0].Status != "DUPLICATE" || len(payloadReplay.Next) != 0 {
+		t.Fatalf("capacity payload-level result replay = %+v err=%v", payloadReplay, err)
 	}
 }
 

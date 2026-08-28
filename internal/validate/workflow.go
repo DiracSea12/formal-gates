@@ -230,6 +230,12 @@ func Start(options StartOptions) (RunState, error) {
 			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, "admission record id is required when --registry is supplied")
 			return RunState{}, fmt.Errorf("admission record id is required when --registry is supplied")
 		}
+		// Verify the caller and the immutable target before AdmitRegistry can
+		// write an admission receipt. A candidate invoked directly against a
+		// stable project must leave the registry namespace byte-for-byte intact.
+		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
+			return RunState{}, bindingErr
+		}
 		receipt, err := AdmitRegistry(registryPath, recordID)
 		if err != nil {
 			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, err.Error())
@@ -241,9 +247,6 @@ func Start(options StartOptions) (RunState, error) {
 		}
 		if err := requireRegistryBootstrapReceipt(registryPath, recordID, root, options.PackageRoot); err != nil {
 			return RunState{}, err
-		}
-		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
-			return RunState{}, bindingErr
 		}
 		admissionDoc, admissionRecord, err = registryAdmissionIdentity(registryPath, recordID)
 		if err != nil {
@@ -677,7 +680,13 @@ func requireWorkflowAdmission(root, packageRoot string) error {
 		return err
 	}
 	if registry == "" {
-		return verifyLegacyStableLauncher()
+		return verifyLegacyStableLauncherReadOnly()
+	}
+	// The launcher identity is a read-only prerequisite. Check it before the
+	// admission receipt path so a direct candidate invocation cannot create a
+	// user-level registry sidecar while being rejected.
+	if err := verifyRegistryBinding(registry, recordID, root, packageRoot); err != nil {
+		return err
 	}
 	receipt, err := AdmitRegistry(registry, recordID)
 	if err != nil {
@@ -688,7 +697,7 @@ func requireWorkflowAdmission(root, packageRoot string) error {
 		writeWorkflowAdmissionReceipt(registry, receipt, root, packageRoot, receipt.Reason)
 		return fmt.Errorf("%s: workflow resume refused for registry record %q", receipt.Code, recordID)
 	}
-	return verifyRegistryBinding(registry, recordID, root, packageRoot)
+	return nil
 }
 
 // AdoptExternalChange explicitly rebinds the current snapshot to the native
@@ -964,7 +973,7 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		if semanticEffect != "" {
 			return fmt.Errorf("semantic effect is accepted only when the requirement revision changed")
 		}
-		if confirmed && state.Actions["requirements-clarification"].Status != "PASS" {
+		if confirmed && !isLightweight(*state) && state.Actions["requirements-clarification"].Status != "PASS" {
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
 		}
 		state.RequirementConfirmed = confirmed

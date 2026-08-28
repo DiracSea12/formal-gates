@@ -50,6 +50,8 @@ func main() {
 	flag.StringVar(&options.Fact, "fact", "", "reconciliation fact observed")
 	flag.StringVar(&options.Expected, "expected", "", "reconciliation expected fact")
 	flag.StringVar(&options.Conflict, "conflict", "", "reconciliation conflict boolean")
+	flag.StringVar(&options.Operation, "operation", "", "registered adapter operation for host-action scenarios")
+	flag.StringVar(&options.Params, "params", "", "structured JSON object for the registered adapter operation")
 	flag.Parse()
 	if bindTemplatePath != "" {
 		options.BindTemplate = true

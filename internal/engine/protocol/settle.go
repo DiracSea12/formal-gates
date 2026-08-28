@@ -12,9 +12,10 @@ import (
 // completes engine-internal steps (LOCAL / DURABLE / PARALLEL) that became
 // eligible. The canonical rule set:
 //
-//   - HUMAN_ASK step: complete when a two-phase decision is durably recorded.
-//   - HOST_ACTION step: complete when an EXECUTED adapter receipt exists for
-//     the operation bound in the compiled payload.
+//   - HUMAN_ASK step: complete when its own two-phase decision is durably
+//     recorded.
+//   - HOST_ACTION step: complete when its own intent has an EXECUTED or
+//     RECONCILED receipt.
 //   - AGENT steps are never settled here — only a PASS worker result through
 //     completeResult completes them.
 //   - LOCAL / DURABLE steps execute inside the engine's controller boundary;
@@ -31,13 +32,6 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 		for _, id := range s.Completed {
 			completedSet[id] = true
 		}
-		executedOperations := make(map[authoring.OperationID]bool, len(s.HostActionReceipts))
-		for _, receipt := range s.HostActionReceipts {
-			if receipt.Status == HostActionStatusExecuted && receipt.AdapterOperation != "" {
-				executedOperations[receipt.AdapterOperation] = true
-			}
-		}
-		askResolved := len(s.Decisions) > 0
 		for i := range compiled.Steps {
 			step := &compiled.Steps[i]
 			if completedSet[step.Header.ID] {
@@ -47,11 +41,11 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 				continue
 			}
 			settle := false
-			switch payload := step.Payload.(type) {
+			switch step.Payload.(type) {
 			case compiler.CompiledHumanAskStep:
-				settle = askResolved
+				settle = s.hasDecisionForStep(step.Header.ID)
 			case compiler.CompiledHostActionStep:
-				settle = executedOperations[payload.Operation]
+				settle = s.hasSettledHostActionForStep(step.Header.ID)
 			case compiler.CompiledLocalStep, compiler.CompiledDurableStep, compiler.CompiledParallelStep:
 				settle = true
 			case compiler.CompiledAgentStep:
@@ -73,6 +67,85 @@ func (s *State) settleFrontierSteps(compiled *compiler.CompiledDefinition) error
 		}
 	}
 	return nil
+}
+
+func (s *State) nextHumanAskStep(compiled *compiler.CompiledDefinition) authoring.StepID {
+	for i := range compiled.Steps {
+		step := &compiled.Steps[i]
+		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step) {
+			continue
+		}
+		if _, ok := step.Payload.(compiler.CompiledHumanAskStep); !ok || s.askStepBound(step.Header.ID) {
+			continue
+		}
+		return step.Header.ID
+	}
+	return ""
+}
+
+func (s *State) nextHostActionStep(compiled *compiler.CompiledDefinition, operation authoring.OperationID) authoring.StepID {
+	for i := range compiled.Steps {
+		step := &compiled.Steps[i]
+		if s.stepCompleted(step.Header.ID) || !s.dependenciesSatisfied(step) {
+			continue
+		}
+		payload, ok := step.Payload.(compiler.CompiledHostActionStep)
+		if !ok || payload.Operation != operation || s.hostActionStepBound(step.Header.ID) {
+			continue
+		}
+		return step.Header.ID
+	}
+	return ""
+}
+
+func (s *State) askStepBound(stepID authoring.StepID) bool {
+	for _, ask := range s.PendingAsks {
+		if ask.Step == stepID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) hostActionStepBound(stepID authoring.StepID) bool {
+	for _, intent := range s.PendingHostActions {
+		if intent.Step == stepID {
+			return true
+		}
+	}
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.Step == stepID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) hasDecisionForStep(stepID authoring.StepID) bool {
+	for _, recorded := range s.Decisions {
+		if recorded.Step == stepID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) hasSettledHostActionForStep(stepID authoring.StepID) bool {
+	for _, receipt := range s.HostActionReceipts {
+		if receipt.Step == stepID && (receipt.Status == HostActionStatusExecuted || receipt.Status == HostActionStatusReconciled) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) stepCompleted(stepID authoring.StepID) bool {
+	for _, completed := range s.Completed {
+		if completed == stepID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *State) dependenciesSatisfied(step *compiler.CompiledStep) bool {

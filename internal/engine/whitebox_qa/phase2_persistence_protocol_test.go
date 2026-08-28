@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
@@ -1438,6 +1439,285 @@ func TestPhase2WhiteboxHostActionUnknownReconcilesWithoutReexecution(t *testing.
 	if afterReplay.Revision != settled.Revision || fixture.Host.ActionCalls(intent.ActionID) != 1 {
 		t.Fatalf("reconciliation replay changed revision/calls: revision %d -> %d, calls=%d",
 			settled.Revision, afterReplay.Revision, fixture.Host.ActionCalls(intent.ActionID))
+	}
+}
+
+func phase2ConcreteBindingDefinition(t *testing.T) *compiler.CompiledDefinition {
+	t.Helper()
+	version := definition.Version
+	header := func(id string, deps ...authoring.StepID) authoring.Header {
+		return authoring.Header{ID: authoring.StepID(id), NodeID: "binding", Dependencies: deps, DefinitionVersion: version}
+	}
+	input := func() authoring.IO {
+		return authoring.IO{
+			InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+			Inputs: []authoring.InputBinding{{From: "entry.parse", OutputField: "out", ToField: "in"}},
+		}
+	}
+	parse, err := authoring.NewLocalStep(header("entry.parse"), authoring.IO{
+		InputCodec: "codec.any.in", OutputCodec: "codec.any.out",
+	}, authoring.LocalSpec{Handler: "engine.entry.parse"})
+	if err != nil {
+		t.Fatalf("binding parse step: %v", err)
+	}
+	newAsk := func(id string) authoring.HumanAskStep {
+		step, err := authoring.NewHumanAskStep(header(id, "entry.parse"), authoring.HumanAskSpec{
+			AskKind: "decision", RequestSchema: "schema.ask.decision.request",
+			ResponseSchema: "schema.ask.decision.response", FreshnessTTL: time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("binding ask step %s: %v", id, err)
+		}
+		return step
+	}
+	newHost := func(id string) authoring.HostActionStep {
+		step, err := authoring.NewHostActionStep(header(id, "entry.parse"), input(), authoring.HostActionSpec{
+			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
+			Operation: "op.fan.transport", Schema: "schema.host.fan.transport", Timeout: time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("binding host step %s: %v", id, err)
+		}
+		return step
+	}
+	compiled, err := compiler.Compile(&compiler.Definition{
+		Version: version, EntryNode: "binding",
+		Steps: []authoring.Step{parse, newAsk("ask.one"), newAsk("ask.two"), newHost("host.one"), newHost("host.two")},
+	}, definition.Registry())
+	if err != nil {
+		t.Fatalf("binding definition: %v", err)
+	}
+	return compiled
+}
+
+func phase2InitializeBindingFixture(t *testing.T) *testkit.ProtocolFixture {
+	t.Helper()
+	compiled := phase2ConcreteBindingDefinition(t)
+	fixture, err := testkit.NewProtocolFixtureWithDefinition(t.TempDir(), compiled, definition.Registry(), 4)
+	if err != nil {
+		t.Fatalf("binding fixture: %v", err)
+	}
+	view, err := decision.NewState(compiled.Version, runtime.PhaseDevelopmentParallel)
+	if err != nil {
+		t.Fatalf("binding state: %v", err)
+	}
+	if err := view.CompleteStep("entry.parse", compiled); err != nil {
+		t.Fatalf("complete binding entry: %v", err)
+	}
+	if err := fixture.Initialize(view, "fake-host"); err != nil {
+		t.Fatalf("initialize binding fixture: %v", err)
+	}
+	return fixture
+}
+
+// A reconciled UNKNOWN HostAction is a successful completion fact. It must
+// advance the concrete frontier step and let the normal settle/refill path
+// continue without executing the side effect again.
+func TestPhase2WhiteboxReconciledHostActionAdvancesFrontier(t *testing.T) {
+	fixture, err := testkit.NewProtocolFixture(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewProtocolFixture: %v", err)
+	}
+	view, err := decision.NewState(definition.Version, runtime.PhaseDevelopmentParallel)
+	if err != nil {
+		t.Fatalf("decision.NewState: %v", err)
+	}
+	for _, id := range []authoring.StepID{"entry.parse", "entry.persist", "fan.split"} {
+		if err := view.CompleteStep(id, fixture.Definition); err != nil {
+			t.Fatalf("complete %s: %v", id, err)
+		}
+	}
+	if err := fixture.Initialize(view, "fake-host"); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	intent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "reconciled"})
+	if err != nil {
+		t.Fatalf("execute HostAction: %v", err)
+	}
+	if intent.Step != "fan.transport" {
+		t.Fatalf("HostAction intent step = %q, want fan.transport", intent.Step)
+	}
+	if _, err := fixture.Host.Receipt(intent, protocol.HostActionStatusUnknown); err != nil {
+		t.Fatalf("UNKNOWN receipt: %v", err)
+	}
+	plan, err := fixture.Host.Reconcile(intent.ActionID, "sha256:fulfilled", true, false)
+	if err != nil {
+		t.Fatalf("reconcile HostAction: %v", err)
+	}
+	if plan.Action != protocol.RecoveryReconcile {
+		t.Fatalf("reconcile plan = %+v", plan)
+	}
+	if fixture.Host.ActionCalls(intent.ActionID) != 1 {
+		t.Fatalf("HostAction side effects = %d, want 1", fixture.Host.ActionCalls(intent.ActionID))
+	}
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load reconciled state: %v", err)
+	}
+	completed := map[authoring.StepID]bool{}
+	for _, id := range snapshot.State.Completed {
+		completed[id] = true
+	}
+	for _, id := range []authoring.StepID{"fan.transport", "fan.slice", "fan.join"} {
+		if !completed[id] {
+			t.Fatalf("reconciled frontier did not complete %s: %v", id, snapshot.State.Completed)
+		}
+	}
+	if _, pending := snapshot.State.PendingHostActions[intent.ActionID]; pending {
+		t.Fatal("reconciled HostAction intent remained pending")
+	}
+	if receipt := snapshot.State.HostActionReceipts[intent.ActionID]; receipt.Status != protocol.HostActionStatusReconciled || receipt.Step != "fan.transport" {
+		t.Fatalf("reconciled HostAction receipt = %+v", receipt)
+	}
+	if _, refilled := snapshot.State.PendingActions["act:review/review.worker"]; !refilled {
+		t.Fatalf("reconciled frontier did not refill the next available action: %+v", snapshot.State.PendingActions)
+	}
+}
+
+// Each Ask decision and each repeated-operation HostAction receipt must settle
+// only the concrete step that owns its durable binding.
+func TestPhase2WhiteboxSettlesAskAndRepeatedOperationPerStep(t *testing.T) {
+	fixture := phase2InitializeBindingFixture(t)
+	submit := func(event protocol.Event) protocol.Acceptance {
+		t.Helper()
+		fingerprint, err := fixture.Engine.ObserveFingerprint()
+		if err != nil {
+			t.Fatalf("observe binding fingerprint: %v", err)
+		}
+		acceptance, err := fixture.Engine.Submit(event, fingerprint)
+		if err != nil {
+			t.Fatalf("submit %s: %v", event.ID, err)
+		}
+		return acceptance
+	}
+	requestOne, err := protocol.NewRequestEvent("binding-request-one", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	if err != nil {
+		t.Fatalf("request one: %v", err)
+	}
+	submit(requestOne)
+	requestTwo, err := protocol.NewRequestEvent("binding-request-two", protocol.ControlReset, protocol.AskOption{ID: "confirm", Label: "confirm"})
+	if err != nil {
+		t.Fatalf("request two: %v", err)
+	}
+	submit(requestTwo)
+	snapshot, err := fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load bound asks: %v", err)
+	}
+	if snapshot.State.PendingAsks[string(requestOne.ID)].Step != "ask.one" || snapshot.State.PendingAsks[string(requestTwo.ID)].Step != "ask.two" {
+		t.Fatalf("ask bindings = %+v", snapshot.State.PendingAsks)
+	}
+	tokenOne, err := fixture.Engine.Freshness(protocol.RequestID(requestOne.ID))
+	if err != nil {
+		t.Fatalf("freshness one: %v", err)
+	}
+	decideOne, err := protocol.NewDecideEvent("binding-decision-one", protocol.RequestID(requestOne.ID), tokenOne, "confirm")
+	if err != nil {
+		t.Fatalf("decision one: %v", err)
+	}
+	submit(decideOne)
+	snapshot, err = fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load after first decision: %v", err)
+	}
+	completed := func(id authoring.StepID) bool {
+		for _, done := range snapshot.State.Completed {
+			if done == id {
+				return true
+			}
+		}
+		return false
+	}
+	firstAsk, firstAskPending := snapshot.State.PendingAsks[string(requestOne.ID)]
+	secondAsk, secondAskPending := snapshot.State.PendingAsks[string(requestTwo.ID)]
+	if !firstAskPending || !firstAsk.Resolved || !secondAskPending || secondAsk.Resolved ||
+		!completed("ask.one") || completed("ask.two") || snapshot.State.Decisions[string(requestOne.ID)].Step != "ask.one" {
+		t.Fatalf("first decision settled wrong Ask steps: asks=%+v completed=%v decisions=%+v", snapshot.State.PendingAsks, snapshot.State.Completed, snapshot.State.Decisions)
+	}
+	tokenTwo, err := fixture.Engine.Freshness(protocol.RequestID(requestTwo.ID))
+	if err != nil {
+		t.Fatalf("freshness two: %v", err)
+	}
+	decideTwo, err := protocol.NewDecideEvent("binding-decision-two", protocol.RequestID(requestTwo.ID), tokenTwo, "confirm")
+	if err != nil {
+		t.Fatalf("decision two: %v", err)
+	}
+	submit(decideTwo)
+	snapshot, err = fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load after second decision: %v", err)
+	}
+	if snapshot.State.Decisions[string(requestTwo.ID)].Step != "ask.two" {
+		t.Fatalf("second decision binding = %+v", snapshot.State.Decisions[string(requestTwo.ID)])
+	}
+	firstAsk, firstAskPending = snapshot.State.PendingAsks[string(requestOne.ID)]
+	secondAsk, secondAskPending = snapshot.State.PendingAsks[string(requestTwo.ID)]
+	if !firstAskPending || !firstAsk.Resolved || !secondAskPending || !secondAsk.Resolved {
+		t.Fatalf("resolved Ask records = first=%+v/%v second=%+v/%v", firstAsk, firstAskPending, secondAsk, secondAskPending)
+	}
+	for _, id := range []authoring.StepID{"ask.one", "ask.two"} {
+		found := false
+		for _, done := range snapshot.State.Completed {
+			if done == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("second decision did not settle %s: %v", id, snapshot.State.Completed)
+		}
+	}
+
+	firstIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "first"})
+	if err != nil {
+		t.Fatalf("first repeated operation: %v", err)
+	}
+	if firstIntent.Step != "host.one" {
+		t.Fatalf("first operation binding = %q, want host.one", firstIntent.Step)
+	}
+	if _, err := fixture.Host.Receipt(firstIntent, protocol.HostActionStatusExecuted); err != nil {
+		t.Fatalf("first operation receipt: %v", err)
+	}
+	snapshot, err = fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load after first operation: %v", err)
+	}
+	isCompleted := func(id authoring.StepID) bool {
+		for _, done := range snapshot.State.Completed {
+			if done == id {
+				return true
+			}
+		}
+		return false
+	}
+	if !isCompleted("host.one") || isCompleted("host.two") {
+		t.Fatalf("first operation settled wrong HostAction steps: %v", snapshot.State.Completed)
+	}
+	secondIntent, err := fixture.Host.Execute("op.fan.transport", map[string]any{"target": "second"})
+	if err != nil {
+		t.Fatalf("second repeated operation: %v", err)
+	}
+	if secondIntent.Step != "host.two" {
+		t.Fatalf("second operation binding = %q, want host.two", secondIntent.Step)
+	}
+	if _, err := fixture.Host.Receipt(secondIntent, protocol.HostActionStatusExecuted); err != nil {
+		t.Fatalf("second operation receipt: %v", err)
+	}
+	snapshot, err = fixture.Engine.Load()
+	if err != nil {
+		t.Fatalf("load after second operation: %v", err)
+	}
+	for _, id := range []authoring.StepID{"host.one", "host.two"} {
+		found := false
+		for _, done := range snapshot.State.Completed {
+			if done == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("second operation did not settle %s: %v", id, snapshot.State.Completed)
+		}
 	}
 }
 
