@@ -1,0 +1,1687 @@
+{
+  "runId": "phase-2-persistence-protocol-repair-v3",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "fd66690e4eda647938d3ecae74f2557295bc8ff1822c90f15c9a1d73263f0fce",
+  "basePromptRevision": "3f35c560a7a0951355638c8b3ce158640fe722f5309f47c1a4826505d710872c",
+  "catalogRevision": "2b495a77ba3d77cb6076ea60ac622e5fe279b0d9d6ae2951baf1da99ceb5fdb1",
+  "vcs": "git",
+  "baseSnapshot": "d64c22ab88e2b72fd3cbdc46dd75e217ba280df0",
+  "currentSnapshot": "f95e1b1ccb9715c0c351bdf9314bee643883ef07",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md",
+      "revision": "fd66690e4eda647938d3ecae74f2557295bc8ff1822c90f15c9a1d73263f0fce"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "82895f69e04144aa45b41e6ad8db3690705aea00f7dab4cc78cfa1f569e16008"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "38d6407ff69f04bb0ea7732e9378b19317e649f89b506e82fb3bb42b58d5edca"
+    },
+    {
+      "path": "refactor-plan/stage-records.md",
+      "revision": "82779a853f7a638379e5c3cdf8a88644770005a0012ef907aa30532f1af33962"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "同一阶段协议内核的两个结算缺口，修复与全量验证需要共享同一快照；不拆分、不重新设计阶段方案。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 3,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "f95e1b1ccb9715c0c351bdf9314bee643883ef07",
+      "compared": "d64c22ab88e2b72fd3cbdc46dd75e217ba280df0..51cc77d347f6d5eacb8347605eb46c6a9f2aaf2b",
+      "message": "Current base-to-current complexity review completed; no P0/P1 findings.",
+      "dispatchId": "dispatch-abb097aca4dd7f431ca8be24"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "f95e1b1ccb9715c0c351bdf9314bee643883ef07",
+      "compared": "d64c22ab88e2b72fd3cbdc46dd75e217ba280df0..51cc77d347f6d5eacb8347605eb46c6a9f2aaf2b",
+      "message": "Current base-to-current implementation review completed: build, vet, engine tests, protocol race tests, and diff check pass; no P0/P1 findings. The known VCS-dependent validate test did not complete within the local wait window and is not treated as an implementation finding.",
+      "dispatchId": "dispatch-f9d784107ef9e16eedc5db74"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "f95e1b1ccb9715c0c351bdf9314bee643883ef07",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选源树 $CAND_ROOT、独立输出目录 $BIN、全新隔离项目 $PROJECT；按 refactor-plan/stage-records.md 阶段 2 节执行 mkdir -p \"$BIN\" \"$PROJECT/host-config\" \"$PROJECT/state\" \"$PROJECT/resources\" \"$PROJECT/stable/state\" \"$PROJECT/stable/run\"，将 BIN 和 PROJECT 规范化为绝对路径；在候选源树执行 go build -o \"$BIN/formal-gates-candidate\" ./cmd/formal-gates 与 go build -o \"$BIN/engine-harness\" ./internal/engine/testkit/cmd/harness；设置 FORMAL_GATES_TEST_PROJECT=\"$PROJECT\"、FORMAL_GATES_HOST_CONFIG=\"$PROJECT/host-config\"、FORMAL_GATES_ENGINE_STATE=\"$PROJECT/state\"、FORMAL_GATES_ENGINE_RESOURCES=\"$PROJECT/resources\"；在 PROJECT 中依次执行 \"$BIN/formal-gates-candidate\" --help 与 \"$BIN/engine-harness\" --scenario smoke 一次，使用 smoke 的合法提交输出创建 engine state；随后执行 find \"$PROJECT/engine-state\" -type f | sort，读取 \"$PROJECT/engine-state/state.json\"。留存 smoke stdout/rc、状态文档原始字节、shasum -a 256 \"$CAND_ROOT/definitions/workflow.json\" 输出，以及 refactor-plan/route-matrix.md 阶段 2 表登记的 fixture package binding D=sha256:testkit；不使用未登记的 harness run 命令。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=同上候选安装与 `$STATE`；入口=harness（登记入口与负向场景开关，route-matrix.md 阶段 2 绑定列/stage-records.md 阶段 2 节登记）；操作=以 harness 登记的 envelope 构造开关分别构造四个缺失形态（分别去 writer、去 stateSchemaVersion、去 workflowDefinitionVersion、去 packageDigest）触发引擎写/加载-再写，每个形态指向一个全新目标路径，另对一个已有合法状态的既有目标重放一次；对每个形态记录退出码/错误输出与目标路径字节数、既有目标的 `shasum -a 256` 前后值。留存=四组输出与摘要对照表。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=同上；入口=harness（同上解析）；操作=以合法 envelope 为基线构造四个篡改副本：`writer` 改为 \"validate\"、`stateSchemaVersion` 改为其他值（如加一）、`workflowDefinitionVersion` 改为其他值、`definitionDigest` 改为 `sha256:`+64 个 0；逐个触发引擎写，目标为全新路径与既有合法状态各一轮；记录退出码、错误、字节数与 sha256。留存=四形态对照表。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=同上，并从 stage-records.md 阶段 2 节读取登记的候选 installed/package digest 记作 D；入口=harness（同上解析）；操作=构造仅 packageDigest 不同的两份 envelope：一份取 D、一份取 `sha256:`+64 个 0（其余六字段与合法基线完全相同），分别触发引擎写（全新目标各一）；记录退出码、错误、字节数。留存=两轮对照与 D 出处。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=同上；先读候选树 `definitions/workflow.json` 的 `version`/`stateSchemaVersion` 当前值；入口=harness（同上解析）；操作=构造 envelope 取旧版本组合（当前 definition version 减一档、如当前为 2 则取 1；definitionDigest 同步取该旧版本历史值，可从 git 历史 `git -C $CAND show \u003c历史提交\u003e:definitions/workflow.json` 复算；无历史值时以「版本号旧一档+任意 digest」形态替代），definitionSource 不变，触发引擎写到全新目标；记录退出码、错误、字节数。留存=当前版本值、历史复算命令与输出、拒绝输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=同上；入口=harness（同上解析）；操作=对四个 envelope 字段分别构造空串 \"\" 与纯空格 \" \" 两形态（共 8 个），definitionSource/Digest 取合法值，逐个触发引擎写到全新目标；记录每轮退出码、错误、字节数。留存=8 形态结果表。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选 $CAND_BIN、独立 $TP 和 $FIXTURE；用 printf 或等价临时驱动直接构造合法 JSON fixture，写入 writer=engine、stateSchemaVersion=999、workflowDefinitionVersion=999、packageDigest=sha256:qa-unsupported，不执行拒绝写入场景；入口=$CAND_BIN workflow diagnose --path $FIXTURE；操作=前后采集 fixture sha256/mode/mtime 与 $TP find -type f | sort，记录 rc/stdout。留存=fixture、摘要、元数据、目录清单和报告 JSON。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=`$CAND_BIN`、`$TP` 内临时 fixture：不存在的文件路径、内容为截断 JSON 的文件、一个目录路径；入口=`$CAND_BIN workflow diagnose --path \u003c各 fixture\u003e`；操作=逐个执行记录 rc 与输出；前后 `find $TP | sort` 与各 fixture sha256 比对。留存=三组输出与清单。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选源树 $CAND_ROOT、独立输出目录 $BIN、全新隔离项目 $PROJECT；按 refactor-plan/stage-records.md 阶段 2 节执行 mkdir -p \"$BIN\" \"$PROJECT/host-config\" \"$PROJECT/state\" \"$PROJECT/resources\" \"$PROJECT/stable/state\" \"$PROJECT/stable/run\"，将 BIN 和 PROJECT 规范化为绝对路径，并在候选源树执行 go build -o \"$BIN/engine-harness\" ./internal/engine/testkit/cmd/harness；设置 FORMAL_GATES_TEST_PROJECT=\"$PROJECT\"、FORMAL_GATES_HOST_CONFIG=\"$PROJECT/host-config\"、FORMAL_GATES_ENGINE_STATE=\"$PROJECT/state\"、FORMAL_GATES_ENGINE_RESOURCES=\"$PROJECT/resources\"；在 PROJECT 中执行 \"$BIN/engine-harness\" --scenario full --project-root \"$PROJECT\"，把 stdout/stderr/rc 保存到 PROJECT 之外；full 进程结束后保存 find \"$PROJECT\" -type f | sort、terminal-summary.json 字节/sha256、engine-state/state.json 是否存在及 state.json.intent/.tmp/write.lock 是否存在；再分别启动新的独立进程执行 \"$BIN/engine-harness\" --scenario query-terminal --project-root \"$PROJECT\" 与 \"$BIN/engine-harness\" --scenario terminal-replay --project-root \"$PROJECT\"，仍将报告保存到 PROJECT 之外，并复采同一目录清单与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选 $CAND_BIN 与全新 $VALID_PROJECT、$INVALID_PROJECT；入口=登记 harness 的 full、query-terminal、terminal-replay；操作=在 VALID 执行 $HARNESS --scenario full --project-root $VALID_PROJECT，复制 terminal-summary.json 到 INVALID 并用 jq 删除 writer/stateSchemaVersion/workflowDefinitionVersion/packageDigest；记录摘要；先执行 query-terminal，再执行 terminal-replay，前后采集 summary 字节、sha256、mode/mtime 和项目清单。留存=构造命令、两轮 rc/stdout、前后快照。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选已安装入口 $CAND_BIN、定义根 $CAND、全新项目 $PROJECT、隔离 HOME $QA_HOME、项目外证据目录 $EVIDENCE 均为全新路径；设置 HOME=\"$QA_HOME\" 与 USERPROFILE=\"$QA_HOME\"。在 $EVIDENCE 中建立外置快照脚本，对 $CAND/.gates/tmp、$QA_HOME/.formal-gates/registry.json、$PROJECT/engine-state 分别记录 ABSENT 或递归相对路径、字节数与 SHA-256，禁止把快照写入上述观察根。执行 \"$CAND_BIN workflow future generate --root $CAND --output $EVIDENCE/envelope.json\"，留存 stdout、stderr、rc、envelope 原始字节，并在 generate 前后分别保存三类快照；用 jq -e 'type == \"object\" and (keys | sort) == [\"definitionDigest\",\"definitionSource\",\"stateSchemaVersion\",\"workflowDefinitionVersion\"] and (.writer? | not) and (.packageDigest? | not)' \"$EVIDENCE/envelope.json\" 核对 envelope。再从 $CAND/definitions/workflow.json 原始字节复算 SHA-256，核对两个版本字段、固定 definitionSource 与 definitionDigest。从原始 envelope 分别构造四个只修改单一 legacy 字段的篡改文件：stateSchemaVersion、workflowDefinitionVersion、definitionSource、definitionDigest；逐个使用全新目标执行 \"$CAND_BIN workflow future write --root $CAND --path $EVIDENCE/target-\u003cfield\u003e.json --envelope $EVIDENCE/tampered-\u003cfield\u003e.json --payload '{\"source\":\"qa\",\"value\":\"tampered\"}'\"，每轮留存 rc、stderr、目标原始字节、存在性、字节数及三类快照。最后执行 \"$CAND_BIN workflow future write --root $CAND --path $EVIDENCE/control.json --envelope $EVIDENCE/envelope.json --payload '{\"source\":\"qa\",\"value\":\"control\"}'\"，留存同样证据并再次生成三类快照；不传 --package-digest，不调用 engine harness，不读取或构造 PackageDigest。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置设 `CAND_ROOT=/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-refactor-qa-v3`、全新 `QA_ROOT=$(mktemp -d)`、`QA_HOME=\"$QA_ROOT/home\"`、`CAND_PACKAGE=\"$QA_ROOT/candidate-package\"`、`PROJECT=\"$QA_ROOT/project\"`、`EVIDENCE=\"$QA_ROOT/evidence\"`、`BOOTSTRAP_LAUNCHER=\"$QA_HOME/.local/bin/formal-gates\"`、`HARNESS=\"$QA_ROOT/engine-harness\"`；创建目录和 Git fixture：`printf 'requirement\\n' \u003e \"$PROJECT/requirements.md\"`、`printf 'design\\n' \u003e \"$PROJECT/design.md\"`、`printf '.codex/\\n.gates/\\n.formal-gates-resources/\\n' \u003e \"$PROJECT/.gitignore\"`，在 project 中执行 `git init`、设置测试 user、`git add .`、`git commit -m baseline`。以 `CAND_SNAPSHOT=$(git -C \"$CAND_ROOT\" rev-parse HEAD)` 执行 `git -C \"$CAND_ROOT\" archive \"$CAND_SNAPSHOT\" | tar -x -C \"$CAND_PACKAGE\"`；保存真实 `REAL_HOME=\"$HOME\"`；在设置隔离 `HOME` 前确认 `STABLE_LAUNCHER=\"$REAL_HOME/.local/bin/formal-gates\"` 存在并可执行，将该 stable launcher 复制为 `\"$BOOTSTRAP_LAUNCHER\"` 并保留可执行权限；在 `CAND_ROOT` 执行 `go build -o \"$CAND_PACKAGE/bin/formal-gates\" ./cmd/formal-gates`并保留可执行权限；另执行 `go build -o \"$HARNESS\" ./internal/engine/testkit/cmd/harness`。导出 `HOME/USERPROFILE=\"$QA_HOME\"`、`FORMAL_GATES_TEST_PROJECT=\"$PROJECT\"`、`FORMAL_GATES_HOST_CONFIG=\"$PROJECT/host-config\"`、`FORMAL_GATES_ENGINE_STATE=\"$PROJECT/state\"`、`FORMAL_GATES_ENGINE_RESOURCES=\"$PROJECT/resources\"`，并清除宿主入口变量。仅用 `$BOOTSTRAP_LAUNCHER` 执行 `install --source \"$CAND_PACKAGE\" --host codex --scope project --project \"$PROJECT\" --binary-target \"$BOOTSTRAP_LAUNCHER\" --skip-hooks --force`，保存 stdout/stderr/rc；从 install stdout 的 JSON 尾部解析 `INSTALL_REPORT`，再从 `.targets[0].targetPath` 读取 `PACKAGE_ROOT`、从 `.targets[0].launcherPath` 读取 `INSTALLED_LAUNCHER`，从 `PACKAGE_ROOT/bin/formal-gates` 设置 `INSTALLED_BINARY`，不得手填。确认两者存在且可执行后，仅用 `INSTALLED_LAUNCHER` 执行 `install --bootstrap --source \"$CAND_PACKAGE\" --host codex --scope project --project \"$PROJECT\" --binary-target \"$INSTALLED_LAUNCHER\"`，保存并校验 bootstrap receipt 的 `accepted=true`、`stateCreated=false`。随后只用 `INSTALLED_LAUNCHER` 依次执行 `workflow start --root \"$PROJECT\" --package-root \"$PACKAGE_ROOT\" --run-id legacy-engine-coexist --requirement requirements.md --requirement-artifact design.md --vcs git --split no`、`workflow prepare-action ... --action requirements-clarification`、读取 `.gates/tmp/legacy-engine-coexist/state.json` 中 OPEN dispatch ID、`workflow record-action ... --action requirements-clarification --dispatch \"$DISPATCH\" --status PASS`、`workflow requirement ... --confirmed`；执行 `workflow show` 与 `workflow diagnose --root \"$PROJECT\" --run-id legacy-engine-coexist`，留存 state/show/diagnose 原始输出、SHA-256、`stat -f '%m:%z'` 和 `find \"$PROJECT/.gates\" -print | sort`。再以独立进程执行 `\"$HARNESS\" --scenario full --project-root \"$PROJECT\"`，保存 stdout/stderr/rc；最后再次以 `INSTALLED_LAUNCHER` 执行 show/diagnose 并复采全部快照。所有产品输出写入 `$EVIDENCE`；检查结束后用 `workflow abort --root \"$PROJECT\" --run-id legacy-engine-coexist --user-confirm` 清理。",
+        "observation": "当前快照全新隔离项目真实执行：install/bootstrap、legacy start/prepare/record/requirement/show/diagnose、engine full、abort 均 rc=0；legacy state 保持无 engine envelope，engine terminal summary 带四字段。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 `$STATE`；操作=执行一次含 fake VCS 副作用操作的提交场景；`find $STATE -type f | sort` 对照交付声明的文件布局（无 `.tmp`/partial/备份残留）；读取状态文档，按交付在 stage-records 阶段 2 节声明的完整性摘要字段与算法对外部字节复算比对；再以独立进程用 harness 的只读加载场景重载该状态。留存=目录清单、状态字节、复算命令与值、重载输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=连续执行 5 次互不相同的合法提交（每轮后读状态文档 revision 字段并记录），得到序列 r0..r5；留存=六次读数与命令日志。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与其登记的确定性注入开关；操作=执行一次提交并在「临时文件写入后、replace 前」注入点终止 harness 进程；立即采集 `$STATE` 全树 `find | sort`、状态文件 sha256、临时文件存在性；重启 harness 执行对账/继续提交；复采同三项并核对 revision。留存=崩溃前后两轮快照与重启输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 fake VCS 操作计数输出；操作=执行一次含 fake VCS 副作用的提交，在「replace 完成、intent/commit 清理前」注入点终止；记录 fake VCS 该操作计数（应已为 1）；重启 harness 对账；复采状态 revision、pending intent 清单、fake VCS 计数。留存=两轮计数与状态对照。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选 $CAND_BIN 与全新 $BASE_PROJECT、$TAMPER_PROJECT；入口=登记 harness smoke/recover；操作=在 BASE 执行 $HARNESS --scenario smoke --project-root $BASE_PROJECT 生成 engine-state/state.json，复制到 TAMPER；只改 payload 一个字符，保持 JSON、四字段 envelope、definitionDigest 原样，记录 sha256；在 TAMPER 执行 recover，另在未篡改 BASE 执行 recover 对照，留存输出、摘要、mode/mtime 和目录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=记录起始 revision R；同时（`\u0026` 并发启动、60 秒上限）两个 harness 进程对同一 run 提交两个不同合法事件；结束后读状态 revision 与两事件是否均在账、`find $STATE -type f | sort`（无锁残留文件）；若交付声明 LOCK_HELD/busy 拒绝语义，则被拒方按声明重试一次。留存=两进程输出、终态字节、耗时。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=启动一次较长的提交场景并在其临界区中段以 `kill -9` 终止（或用登记的「锁持有中崩溃」注入点）；采集 `$STATE` 清单与状态 sha256；立即启动下一次合法提交（限时 60 秒）；结束后复采三项并核对 revision 单调。留存=两轮快照、第二次提交输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=进程 A 读取 revision R 后挂起（按 harness 提供的场景控制）；另一提交使 revision→R+1；A 以 R 触发提交→记录错误与状态 sha256（应为 R+1 内容）；A 重新读取 R+1 后重试提交→记录结果与最终 revision。留存=三轮输出与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=两进程以相同起始状态快照（revision R）同时提交不同合法事件；记录两进程结果；失败方重新加载状态后重试其事件；终局核对 revision 与两事件落账、状态完整性。留存=全程输出与终态字节。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 fake VCS 的 HEAD/fingerprint 漂移场景开关；操作=对照轮：无漂移执行一次依赖外部事实的提交，记录落账 fingerprint；漂移轮：在引擎观察后、锁内重验前让 fake VCS 推进 HEAD（用登记开关/时序控制），观察引擎行为，终局读取状态记录的外部 fingerprint/identity 与 fake VCS 实际 HEAD、以及基于旧 HEAD 的副作用操作计数。留存=两轮对照输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=执行「创建 run→推进至签发一个 agent 任务」的场景；读取状态文档，逐项列出：expectedTasks 键清单（与场景声明的任务集对照）、目标 TaskKey 的当前 Attempt 标识与状态、`pendingActions` 的键集合与对应 actionID 的已签发参数。留存=状态字节摘录与场景声明清单。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 fake host spawn 计数输出；操作=提交一个外部事件 E（记录首次响应字节与 spawn 计数、revision）；以完全相同的 event ID 与 payload 连续重Submit 两次；每次记录响应、spawn 计数、revision。留存=三次响应与计数表。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=先合法提交事件 E（ID=x，payload P1）成功；构造同 ID=x、payload P2（digest 不同）的提交；记录错误、状态 sha256、revision 前后对照。留存=两轮输出与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=构造三份提交：①kind 为声明枚举外的字符串；②合法 kind 但 payload 缺必填字段/类型错误；③结构与 schema 合法但归属其他节点/阶段的事件；逐个提交并记录错误文本；每轮后采集状态 sha256。留存=三组输出与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=获取某 availableAction/request 的 freshness token T1；触发重新签发使 token 更新为 T2（按场景声明方式）；以 T1 提交→记录错误与状态 sha256；以 T2 提交同决定→记录结果。留存=两轮输出与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=全新 $PROJECT 与 fake worker；入口=登记 interruption/worker-result harness；操作=执行 $HARNESS --scenario interruption --interruption nontransient --project-root $PROJECT，保存报告的 TASK_ID、OLD_ATTEMPT_ID、NEW_ATTEMPT_ID、OLD_RESULT_ID 和 revision；用 worker-result 入口以旧 task/attempt/result ID 提交 PASS，再用相同 ID/digest 重放；每次读取 Attempt、expectedTasks、ledger、revision。留存=两轮输出和状态摘录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=经登记的 availableActions/REQUEST_* 场景发起一个主动控制请求；读取状态确认 pending Ask（request ID、选项集）已落账；以该 request ID submit 用户决定；读取状态确认 Ask 关闭、决定生效、后续 NextResult 反映该决定。留存=三步状态摘录与输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 fake host；操作=推进至 Ready 签发 agent 任务；fake host 回 SpawnReceipt（含 actionID/correlation）；读取任务状态与 receipt 落账；逐字节重发同一 receipt 一次；复采任务状态与 receipt 记录数。留存=两轮状态摘录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选源树 $CAND_ROOT、全新隔离项目 $PROJECT、项目外证据目录 $EVIDENCE；执行 CAND_ROOT=\"${CAND_ROOT:?absolute candidate source root}\"、BIN=\"$(mktemp -d /tmp/fg-case-bin-XXXXXX)\"、PROJECT=\"$(mktemp -d /tmp/fg-case-project-XXXXXX)\"、EVIDENCE=\"$(mktemp -d /tmp/fg-case-evidence-XXXXXX)\"，mkdir -p \"$BIN\" \"$PROJECT\" \"$EVIDENCE\"，并将 CAND_ROOT/BIN/PROJECT/EVIDENCE 规范化为绝对路径；在候选源树执行 (cd \"$CAND_ROOT\" \u0026\u0026 go build -o \"$BIN/engine-harness\" ./internal/engine/testkit/cmd/harness)，设 HARNESS=\"$BIN/engine-harness\"。先执行 \"$HARNESS\" --scenario capacity-refill --capacity 1 --project-root \"$PROJECT\" \u003e \"$EVIDENCE/initial.json\"，留存 stdout/rc、\"$PROJECT/engine-state/state.json\" 原始字节与 shasum；用 jq -e 核对 initial 报告的 scenario==\"capacity-refill\"、status==\"PASS\"、NextResult/next 为单个 READY，且 expectedTasks 包含场景声明的完整 eligible frontier（至少含 TASK_1、TASK_2）；同时核对 issued/Ready/pending 与 current Attempt 结构中只有 TASK_1/ATTEMPT_1，TASK_2 在首个 result 前不得进入这些结构，也不得在本轮两个显式 submit-worker 提交前有已接纳的 WORKER_RESULT。不要从 expectedTasks 为 TASK_2 猜测或制造 ATTEMPT_2；从初始报告真实 pendingActions 读取 ACTION_1、TASK_1 和 ATTEMPT_1（read -r ACTION_1 TASK_1 ATTEMPT_1 \u003c \u003c(jq -er '.snapshot.State.PendingActions | to_entries | if length == 1 then .[0].value | [.actionId, .task, .attemptId] | @tsv else error(\"expected exactly one pending action\") end' \"$EVIDENCE/initial.json\")，attemptId 必须等于 TASK_1 的当前 Attempt 标识），不凭猜测填写任何 ID。对第一项先执行 \"$HARNESS\" --scenario submit-spawn --event-id capacity-spawn-1 --action-id \"$ACTION_1\" --provider fake-host --correlation \"$ATTEMPT_1\" --status SPAWNED --project-root \"$PROJECT\" \u003e \"$EVIDENCE/spawn-1.json\"，命令返回后立刻执行 cp \"$PROJECT/engine-state/state.json\" \"$EVIDENCE/spawn-1-state.json\"，再执行 jq -e . \"$EVIDENCE/spawn-1-state.json\" \u003e/dev/null 读取该独立副本，并执行 shasum -a 256 \"$EVIDENCE/spawn-1-state.json\" | tee \"$EVIDENCE/spawn-1-state.sha256\"；在任何 submit-worker 前，从 spawn-1-state.json 的完整 expected frontier 只读取 TASK_2 的任务身份，不读取或制造其 action/Attempt（read -r TASK_2 \u003c \u003c(jq -er --arg task \"$TASK_1\" '.content.expected | map(tostring) | if length == 2 and (index($task) != null) then .[] | select(. != $task) else error(\"expected exactly two eligible tasks containing TASK_1\") end' \"$EVIDENCE/spawn-1-state.json\")；执行 jq -e --arg action \"$ACTION_1\" --arg task \"$TASK_1\" '.acceptance.eventId == \"capacity-spawn-1\" and .acceptance.kind == \"SPAWN_RECEIPT\" and .acceptance.status == \"ACCEPTED\" and .acceptance.actionId == $action and ([.actions[]?.actionID | tostring] | sort) == [$action]' \"$EVIDENCE/spawn-1.json\"，再执行 jq -e --arg task \"$TASK_1\" --arg task2 \"$TASK_2\" '([.next[]? | select(.kind == \"READY\") | .payload[]?.task | tostring] | sort) == [$task] and ([.next[]? | select(.kind == \"READY\") | .payload[]?.task | tostring] | index($task2)) == null' \"$EVIDENCE/initial.json\"，再执行 jq -e --arg action \"$ACTION_1\" --arg task \"$TASK_1\" --arg task2 \"$TASK_2\" '(.content.events[\"capacity-spawn-1\"].acceptance.eventId == \"capacity-spawn-1\" and .content.events[\"capacity-spawn-1\"].acceptance.kind == \"SPAWN_RECEIPT\" and .content.events[\"capacity-spawn-1\"].acceptance.status == \"ACCEPTED\" and .content.events[\"capacity-spawn-1\"].acceptance.actionId == $action) and (.content.spawnReceipts[$action].actionId == $action and .content.spawnReceipts[$action].provider == \"fake-host\" and .content.spawnReceipts[$action].status == \"SPAWNED\") and (.content.attempts[$task].actionId == $action and (.content.attempts[$task].bindings.task | tostring) == $task) and ((.content.expected | map(tostring) | index($task)) != null and (.content.expected | map(tostring) | index($task2)) != null) and (([.content.tasks | to_entries[] | select(.value == \"ISSUED\" or .value == \"RUNNING\" or .value == \"VALIDATING\") | .key] | sort) == [$task]) and (([.content.tasks | to_entries[] | select(.value == \"ISSUED\" or .value == \"RUNNING\" or .value == \"VALIDATING\") | .key] | index($task2)) == null) and (([.content.pendingActions | to_entries[] | .value.task | tostring] | sort) == [$task]) and (([.content.pendingActions | to_entries[] | .value.task | tostring] | index($task2)) == null) and ((.content.attempts | keys | map(tostring) | sort) == [$task]) and ((.content.attempts | keys | map(tostring) | index($task2)) == null) and ((.content.results | length) == 0) and ((.content.stagedResults | length) == 0) and (([.content.events | to_entries[] | select(.value.acceptance.kind == \"WORKER_RESULT\")] | length) == 0)' \"$EVIDENCE/spawn-1-state.json\"；只有上述 spawn-1.json、spawn-1-state.json、sha256 和全部 jq -e 中间态核对成功后，再执行 \"$HARNESS\" --scenario submit-worker --event-id capacity-worker-result-1 --action-id \"$ACTION_1\" --provider fake-host --outcome PASS --payload-digest sha256:capacity-worker-result-1 --project-root \"$PROJECT\" \u003e \"$EVIDENCE/result-1.json\"；该命令由 harness 构造并提交 typed payload {actionID:$ACTION_1, provider:\"fake-host\", outcome:\"PASS\", payloadDigest:\"sha256:capacity-worker-result-1\", failureClass:\"\"}，PASS 不传 failure-class。留存两条 stdout/rc、提交后 state.json 字节/sha256、expectedTasks、frontier 和 NextResult，并用 jq -e 核对 result-1 的 acceptance.eventId==\"capacity-worker-result-1\"、kind==\"WORKER_RESULT\"、status==\"ACCEPTED\"、actionId==$ACTION_1、payload digest 为 sha256:capacity-worker-result-1 且 refill 恰有一项；再用独立 jq -e --arg action \"$ACTION_1\" '.snapshot.State.Results[$action].provider == \"fake-host\" and .snapshot.State.Results[$action].outcome == \"PASS\" and .snapshot.State.Results[$action].payloadDigest == \"sha256:capacity-worker-result-1\"' \"$EVIDENCE/result-1.json\" 机械核对第一条 typed result 的 provider/outcome/payloadDigest，再用独立 jq -e --arg task \"$TASK_2\" '([.next[]? | select(.kind == \"READY\")] | length) == 1 and ([.next[]? | select(.kind == \"READY\") | .payload[]?.task | tostring] | sort) == [$task] and ([.next[]? | select(.kind == \"Complete\")] | length) == 0' \"$EVIDENCE/result-1.json\"；从 result-1 的真实 pendingActions/refill 读取新补位 ACTION_2、TASK_2、ATTEMPT_2（read -r ACTION_2 TASK_2 ATTEMPT_2 \u003c \u003c(jq -er '.snapshot.State.PendingActions | to_entries | if length == 1 then .[0].value | [.actionId, .task, .attemptId] | @tsv else error(\"expected exactly one refill pending action\") end' \"$EVIDENCE/result-1.json\")），确认 TASK_1 已 TERMINAL，且 TASK_2 的 current Attempt/pending/issued 与 ATTEMPT_2 才在此处首次出现。对第二项先执行 \"$HARNESS\" --scenario submit-spawn --event-id capacity-spawn-2 --action-id \"$ACTION_2\" --provider fake-host --correlation \"$ATTEMPT_2\" --status SPAWNED --project-root \"$PROJECT\" \u003e \"$EVIDENCE/spawn-2.json\"，命令返回后立刻执行 cp \"$PROJECT/engine-state/state.json\" \"$EVIDENCE/spawn-2-state.json\"，再执行 jq -e . \"$EVIDENCE/spawn-2-state.json\" \u003e/dev/null 读取该独立副本，并执行 shasum -a 256 \"$EVIDENCE/spawn-2-state.json\" | tee \"$EVIDENCE/spawn-2-state.sha256\"；随后执行 jq -e --arg action \"$ACTION_2\" '.acceptance.eventId == \"capacity-spawn-2\" and .acceptance.kind == \"SPAWN_RECEIPT\" and .acceptance.status == \"ACCEPTED\" and .acceptance.actionId == $action and ([.actions[]?.actionID | tostring] | sort) == [$action]' \"$EVIDENCE/spawn-2.json\"，以及 jq -e --arg action \"$ACTION_2\" --arg task \"$TASK_2\" --arg attempt \"$ATTEMPT_2\" --arg first \"$ACTION_1\" '(.content.events[\"capacity-spawn-2\"].acceptance.eventId == \"capacity-spawn-2\" and .content.events[\"capacity-spawn-2\"].acceptance.kind == \"SPAWN_RECEIPT\" and .content.events[\"capacity-spawn-2\"].acceptance.status == \"ACCEPTED\" and .content.events[\"capacity-spawn-2\"].acceptance.actionId == $action) and (.content.spawnReceipts[$action].actionId == $action and .content.spawnReceipts[$action].provider == \"fake-host\" and .content.spawnReceipts[$action].correlation == $attempt and .content.spawnReceipts[$action].status == \"SPAWNED\") and (.content.attempts[$task].id == $attempt and .content.attempts[$task].actionId == $action and (.content.attempts[$task].bindings.task | tostring) == $task) and (.content.pendingActions[$action].actionId == $action and .content.pendingActions[$action].attemptId == $attempt and (.content.pendingActions[$action].task | tostring) == $task) and ((.content.results | keys | sort) == [$first]) and (.content.tasks[$task] != \"TERMINAL\") and (([.content.events | to_entries[] | select(.value.acceptance.kind == \"WORKER_RESULT\")] | length) == 1)' \"$EVIDENCE/spawn-2-state.json\"；只有 spawn-2.json、spawn-2-state.json、sha256 和上述全部 jq -e 中间态核对成功后，再执行 \"$HARNESS\" --scenario submit-worker --event-id capacity-worker-result-2 --action-id \"$ACTION_2\" --provider fake-host --outcome PASS --payload-digest sha256:capacity-worker-result-2 --project-root \"$PROJECT\" \u003e \"$EVIDENCE/result-2.json\"；第二条 typed payload 为 {actionID:$ACTION_2, provider:\"fake-host\", outcome:\"PASS\", payloadDigest:\"sha256:capacity-worker-result-2\", failureClass:\"\"}。留存最终 stdout/rc、state.json 原始字节/sha256、expectedTasks、frontier、NextResult 和完成账，并以 jq -e 核对 result-2 acceptance.eventId/kind/status/actionId 分别为 capacity-worker-result-2/WORKER_RESULT/ACCEPTED/$ACTION_2、两个 TaskKey 均为 TERMINAL、两个 Attempt/result 载荷均各出现一次、expected/Ready/pending 清单为空、NextResult.Kind==\"Complete\"；所有报告写在 EVIDENCE（PROJECT 外），不使用 go test 或交付内测试文件作为证据。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=①pending Ask 上 submit 用户决定：核对 pending 条目关闭、决定值落账、frontier 变化；②对登记的 Operator 场景（如需核实的对账事实）submit typed observation：核对 observation 记录入账（清单+1 且内容摘要一致）且对应 pending 对账项按声明转移（关闭/进入下一步）。留存=两段状态前后摘录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-033",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 fake host；操作=①触发一个声明的 HostAction（如 TERMINATE_AGENT）：执行前读状态确认 pending intent（actionID/operation/参数）已持久化，fake host 回 receipt（actionID/operation/payload digest/provider/correlation/status），核对 intent 清账与动作终态；②构造 EXECUTE_ADAPTER_OPERATION 引用未注册 operation id 与自由文本命令两形态提交，核对错误、fake host 执行日志、状态 sha256。留存=两段输出与状态摘录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-034",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=按 refactor-plan/stage-records.md 与 refactor-plan/route-matrix.md 登记方式从候选构建 $HARNESS（go build -o \"$HARNESS\" ./internal/engine/testkit/cmd/harness），准备全新的绝对路径 $PROJECT、$UNPAIRED_PROJECT 与项目外 $EVIDENCE；设置 IDENTITY=agent-stop-only、STATE=\"$PROJECT/engine-state/state.json\"。所有命令均通过公开 harness 入口执行并保存 stdout、stderr、rc。场景 A：在 $PROJECT 执行 \"$HARNESS --scenario initialize --project-root $PROJECT\" 保存为 a-initialize.json，用 jq -e 确认 status==\"PASS\"、actions 恰有一项且 actions[0].actionID 为非空字符串，再从该报告读取真实 $ACTION_ID；执行 \"$HARNESS --scenario submit-spawn --project-root $PROJECT --action-id $ACTION_ID --event-id lifecycle-spawn-verified --provider fake-host --correlation agent-verified --identity agent-verified --status SPAWNED\" 保存为 a-spawn.json，立即复制 STATE 为 a-spawn-state.json，并用 jq -e 直接确认报告 status==\"PASS\"、acceptance.eventId==\"lifecycle-spawn-verified\"、acceptance.kind==\"SPAWN_RECEIPT\"、acceptance.status==\"ACCEPTED\"、acceptance.actionId==$ACTION_ID，以及 a-spawn-state.json 的 .content.spawnReceipts[$ACTION_ID] 存在且 actionId==$ACTION_ID、provider==\"fake-host\"、correlation==\"agent-verified\"、status==\"SPAWNED\"。在每次 lifecycle 调用前后复制 STATE，使用 jq -S -c '{revision,eventIds:(.content.events|keys),lifecycleEvents:.content.lifecycleEvents,lifecycleVerified:.content.lifecycleVerified}' 保存协议台账；使用 jq -e -S -c 'if (.content|type) != \"object\" or (.content.definitionVersion == null) or (.content.phase == null) or ((.content.completed|type) != \"array\") or ((.content.tasks|type) != \"object\") then error(\"missing content workflow projection\") else .content | {definitionVersion,phase,completed,tasks} end' STATE 保存 workflow projection，必须显式从 state.json 的 .content 读取且缺字段即失败。确认 spawn 后 agent-verified 尚无 lifecycleEvents/lifecycleVerified，执行 \"$HARNESS --scenario submit-lifecycle --project-root $PROJECT --event-id lifecycle-start-verified --provider fake-host --correlation agent-verified --identity agent-verified --lifecycle-event subagent_start\" 保存为 a-start.json，确认 rc==0 且报告 acceptance.eventId、kind、status 分别为 lifecycle-start-verified、LIFECYCLE_EVENT、ACCEPTED；再执行 \"$HARNESS --scenario submit-lifecycle --project-root $PROJECT --event-id lifecycle-stop-verified --provider fake-host --correlation agent-verified --identity agent-verified --lifecycle-event subagent_stop\" 保存为 a-stop.json，确认 rc==0 且 acceptance.eventId、kind、status 分别为 lifecycle-stop-verified、LIFECYCLE_EVENT、ACCEPTED。复制 stop 后状态，确认 .content.lifecycleEvents 恰有对应 start/stop 两条记录，每条 provider==\"fake-host\"、correlation==\"agent-verified\"、identity==\"agent-verified\"，并确认 .content.lifecycleVerified[\"agent-verified\"] 的 provider、correlation、identity 分别为 fake-host、agent-verified、agent-verified，.content.events 含两个指定 event ID；比较 spawn 后、start 后、stop 后的 workflow projection，三者必须逐字节相同。保存 stop 后 STATE 为 a-before-replay.json；原样重新执行上述 start 命令保存为 a-start-replay.json，再复制状态；原样重新执行上述 stop 命令保存为 a-stop-replay.json，再复制状态；用 jq -e 直接确认两个 replay 报告 rc==0、对应 eventId/kind 不变且 acceptance.status==\"ACCEPTED\"，并用 cmp 确认两次 replay 后状态字节均与 a-before-replay.json 完全相同。场景 B：在全新的 $UNPAIRED_PROJECT 执行 initialize，按同一方式确认 rc==0 且 action ID 非空；执行 \"$HARNESS --scenario submit-spawn --project-root $UNPAIRED_PROJECT --action-id $ACTION_ID --event-id lifecycle-spawn-stop-only --provider fake-host --correlation $IDENTITY --identity $IDENTITY --status SPAWNED\" 保存为 b-spawn.json，复制其 engine-state/state.json，并用 jq -e 直接确认 rc==0、acceptance.status==\"ACCEPTED\"、acceptance.actionId==$ACTION_ID，以及 .content.spawnReceipts[$ACTION_ID] 的 actionId、provider、correlation、status 分别为该 action ID、fake-host、agent-stop-only、SPAWNED；同时确认 stop 前 .content.lifecycleEvents 中没有该 identity 的记录且 .content.lifecycleVerified 不含该 identity。复制 stop 前状态为 b-before-stop.json 并保存 SHA-256；仅在上述认领前置全部通过后，以 set +e 执行 \"$HARNESS --scenario submit-lifecycle --project-root $UNPAIRED_PROJECT --event-id lifecycle-stop-unpaired --provider fake-host --correlation $IDENTITY --identity $IDENTITY --lifecycle-event subagent_stop\" 保存为 b-stop.json 和 rc，复采状态为 b-after-stop.json。场景 C：回到 $PROJECT，复制 A 完成后的状态为 c-before.json，保存经上述带 .content 且缺字段即失败的 jq projection 和协议台账；执行 \"$HARNESS --scenario submit-lifecycle --project-root $PROJECT --event-id lifecycle-start-unclaimed --provider fake-host --correlation unclaimed --identity unclaimed --lifecycle-event subagent_start\" 保存为 c-start.json，复采状态、projection、协议台账；所有证据写在 $EVIDENCE。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-035",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=构造不经过 availableActions/REQUEST_* 的自由 USER_* 事件（如 USER_ABORT/USER_DECIDE 形态字符串与 payload）提交两轮；记录错误、状态 sha256、后续 NextResult（应与提交前同型）。留存=两轮输出与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-036",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=读取 run 绑定的 provider identity 值；fake host 以不同 provider identity 发送 SpawnReceipt/lifecycle 事件各一轮；记录错误、provider 字段现值、receipt/事件接纳状态。留存=两轮输出与字段摘录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-037",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与登记的「客观瞬态」注入开关；操作=任务执行中注入瞬态故障（bindings 保持不变）；观察恢复行为：读取 Attempt 标识/数量、fake host spawn 计数；继续场景至该任务完成。留存=注入前后状态摘录与计数。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-038",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与登记的「已知非瞬态」/「任务责任变化」注入开关；操作=注入后读取该 TaskKey 的 Attempt 列表（新旧标识、旧 Attempt 状态）；以旧 Attempt 身份提交迟到 worker result；记录错误与 Attempt 状态。留存=状态摘录与输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-039",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与登记的「原因未知」注入开关；操作=注入后观察：pending Ask 的出现与选项集、spawn 计数、Attempt 数量；submit resume 选择后核对推进。留存=状态摘录与两段输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-040",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与「receipt UNKNOWN+lifecycle 唯一匹配」场景开关；操作=制造 HostAction/spawn receipt 丢失但 lifecycle 存在唯一配对记录的形态；触发引擎对账；核对 receipt 最终状态（attached）、fake host spawn 计数、任务推进。留存=对账前后状态摘录与计数。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-041",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=全新 $MULTI_PROJECT、$NONE_PROJECT、fake host/lifecycle ledger；入口=登记 unknown-receipt 场景；操作=分别执行 $HARNESS --scenario unknown-receipt --lifecycle-matches 2 --project-root $MULTI_PROJECT 与 --lifecycle-matches 0 --project-root $NONE_PROJECT，均记录 UNKNOWN receipt、候选事实、spawn 计数、NextResult.Kind 和 Operator 载荷，不共享状态。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-042",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选源树 $CAND_ROOT、独立输出目录 $BIN、两个互不重叠且全新的 $EXPECTED_PROJECT/$CONFLICT_PROJECT、独立证据目录 $EVIDENCE；按 stage-records.md 阶段 2 节创建 host-config/state/resources/stable/state/stable/run，规范化绝对路径，构建 go build -o \"$BIN/engine-harness\" ./internal/engine/testkit/cmd/harness；入口=route-matrix.md 阶段 2 登记的 engine-harness test-only 命令行入口。操作 A=在 EXPECTED 依次执行 \"$HARNESS\" --scenario submit-request --event-id expected-request --choice confirm --project-root \"$EXPECTED_PROJECT\"、\"$HARNESS\" --scenario submit-decision --request-id expected-request --event-id expected-decision --choice confirm --project-root \"$EXPECTED_PROJECT\"，确认 fan.split、fan.slice 已完成且 act:review/review.worker 仍为 pending；随后执行 \"$HARNESS\" --scenario reconcile-host-action --status UNKNOWN --fact sha256:expected --expected sha256:expected --project-root \"$EXPECTED_PROJECT\"。从该报告 .metadata.pendingIntent.actionId 读取本 run 的 $EXPECTED_ACTION，不得猜测 action ID。操作 B=在全新的 CONFLICT 按同样顺序使用 conflict-request/conflict-decision 完成准备，再执行 \"$HARNESS\" --scenario reconcile-host-action --status UNKNOWN --fact sha256:conflict --expected sha256:expected --conflict true --project-root \"$CONFLICT_PROJECT\"，从本报告读取 $CONFLICT_ACTION。分别留存每步 rc/stdout、UNKNOWN receipt acceptance、pending intent、recoveryPlans、NextResult、snapshot/state.json 原始字节与 sha256、sideEffects 计数及两个项目的文件清单；证据路径不得交叉引用。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-043",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与「瞬态引擎错误」连续注入开关、场景声明的 retryPolicy maxAttempts 值 M；操作=连续注入瞬态错误 M+2 次；读取重试计数输出、终态 Kind（Wait/显式失败）、fake host spawn 计数、错误/诊断输出。留存=计数序列与终态输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-044",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=三个全新 $ENGINE_PROJECT、$DECLARED_PROJECT、$UNDECLARED_PROJECT 与 fake host/worker；入口=登记 failure-routing 场景及定义 fixture；操作 A=ENGINE 先留存正常基线 spawn/pending/NextResult/revision，再注入 failure-routing --failure-class INVARIANT_VIOLATION。操作 B=DECLARED 装载明文声明 AGENT_RECOVERABLE_SEMANTIC_ERROR 的定义 fixture，留存基线后注入该语义错误。操作 C=UNDECLARED 装载不声明该 class 的同构 fixture，留存相同基线后注入同一错误。三段均从全新 run 开始。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-045",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与「result 先于 receipt」场景开关；操作=按序：result 到达→读状态（暂存语义、任务未误标完成/未丢弃）、spawn 计数；补齐 SpawnReceipt/lifecycle 配对→读状态（result 接纳、frontier 推进）、spawn 计数。留存=两段状态摘录。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-046",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与该注入点开关；操作=提交事件 E 并在响应返回前终止；记录此时状态（E 已落账的 revision R）；重启后重试同 ID 同 digest 提交；核对响应、副作用计数、revision。留存=两轮输出与计数。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-047",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=驱动 run 至中段（≥2 个任务已完成）；以登记崩溃点（或临界区 kill）终止；重启 harness 恢复；推进至终态；终局核对：fake host/VCS 每操作计数表（逐项==1）、终态 summary 身份键与最后 receipt、`$STATE` 无 intent/锁/临时残留。留存=崩溃点状态、恢复日志、计数表、summary 字节。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-048",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）；操作=清空 `$STATE` 后运行完整协议场景一遍，采集最终状态文件 sha256 与报告输出；再清空重跑一遍；比对两轮全部摘要；确认全程无真实宿主调用与真实 VCS 写（fake 三件套声明即约束，另以场景输出中的 provider/VCS 标识核对为 fake 值）。留存=两轮摘要对照。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-049",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与 stage-records 阶段 2 节登记的注入点清单；操作=对上述五个边界点（以登记清单实际名称为准逐点执行，缺席的登记点记为覆盖缺陷）各执行一轮「注入终止→重启对账→继续提交」；每轮记录：恢复后状态为完整 JSON 且 revision 为旧或新其一、对应副作用操作计数（≤1 且与所提交 revision 一致）、`$STATE` 清单（无 intent/锁/临时残留）。留存=五行逐点结果表。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-050",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=五个全新项目 P1..P5、候选 harness、fake host/worker/VCS、stage-records 注入点；逐点留存 stdout/状态摘要/revision/Attempt/receipt/副作用：①P1 fault spawn_after_attach 后 recover；②P2 先 worker-result typed result 再 receipt-file SpawnReceipt；③P3 fault submit-response-lost 后以同 event ID/digest 重试一次；④P4 concurrent-submit workers=2 提交两个不同 event，仅 LOCK_HELD/CAS 失败方重试；⑤P5 interruption --interruption nontransient 建立新 Attempt 后提交旧 result。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-051",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同上解析）与候选安装声明的隔离 canonical paths（stage-records 阶段 2 节）；操作=运行前快照：`~/.formal-gates`（含 registry.json）全树 `find -type f | sort`+逐文件 sha256、stable 安装树同采、stable 项目 `.gates` 同采、`$TP` 与 `$STATE` 同采；运行 harness 全场景；复采四处快照比对；列出两轮 `$TP`/`$STATE` 差集并逐项归入声明的隔离 canonical path。留存=四组前后快照与差集归属表。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-052",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置设 `CAND_ROOT`、全新 `QA_ROOT`、`QA_HOME`、`CAND_PACKAGE`、`CONTROL_PROJECT`、`EVIDENCE`、`BOOTSTRAP_LAUNCHER`；保存真实 `REAL_HOME=\"$HOME\"`，固定 `MAIN_WORKTREE=/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-refactor`、`STABLE_RUN=phase-2-persistence-protocol-repair-v3`、`STABLE_REGISTRY=\"$REAL_HOME/.formal-gates/registry.json\"`、`STABLE_ROOT=\"$REAL_HOME/.formal-gates\"`、`STABLE_LAUNCHER=\"$REAL_HOME/.local/bin/formal-gates\"`。在 control project 创建 `requirements.md` 与 `.gitignore`，执行 Git init/config/add/commit；用 `git archive \"$CAND_SNAPSHOT\"` 建立候选 package，确认 `STABLE_LAUNCHER=\"$REAL_HOME/.local/bin/formal-gates\"` 存在并可执行，将该 stable launcher 复制为 `\"$BOOTSTRAP_LAUNCHER\"` 并保留可执行权限；在 `CAND_ROOT` 执行 `go build -o \"$CAND_PACKAGE/bin/formal-gates\" ./cmd/formal-gates`。导出 `HOME/USERPROFILE=\"$QA_HOME\"`，仅用 `$BOOTSTRAP_LAUNCHER` 执行 `install --source \"$CAND_PACKAGE\" --host codex --scope project --project \"$CONTROL_PROJECT\" --binary-target \"$BOOTSTRAP_LAUNCHER\" --skip-hooks --force`；从 install stdout JSON 读取 `PACKAGE_ROOT`、`INSTALLED_LAUNCHER`，再仅用 `INSTALLED_LAUNCHER` 执行 `install --bootstrap --source \"$CAND_PACKAGE\" --host codex --scope project --project \"$CONTROL_PROJECT\" --binary-target \"$INSTALLED_LAUNCHER\"`。在每次 stable 尝试前后，对 `MAIN_WORKTREE/.gates`、`STABLE_ROOT` 全树、`STABLE_REGISTRY`、`STABLE_LAUNCHER` 分别保存存在性、路径清单、普通文件 SHA-256、mode/size/mtime 和 realpath；证据全部写入 `$EVIDENCE`。依次仅用 `INSTALLED_LAUNCHER` 执行：`workflow start --root \"$MAIN_WORKTREE\" --package-root \"$PACKAGE_ROOT\" --run-id candidate-stable-start --requirement openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md --vcs git --split no`、`workflow resume --root \"$MAIN_WORKTREE\" --package-root \"$PACKAGE_ROOT\" --run-id \"$STABLE_RUN\"`、`workflow seal --root \"$MAIN_WORKTREE\" --package-root \"$PACKAGE_ROOT\" --run-id \"$STABLE_RUN\"`；三次均保存 stdout/stderr/rc 和稳定侧快照。最后在 `CONTROL_PROJECT` 中仅用 `INSTALLED_LAUNCHER` 执行 `workflow start --root \"$CONTROL_PROJECT\" --package-root \"$PACKAGE_ROOT\" --run-id candidate-control --requirement requirements.md --vcs git --route lightweight`，读取并保存 `\"$CONTROL_PROJECT/.gates/tmp/candidate-control/state.json\"`，再执行 `workflow abort --root \"$CONTROL_PROJECT\" --run-id candidate-control --user-confirm`。",
+        "observation": "当前快照隔离安装真实执行；候选 launcher 对 stable start/resume/seal 均 rc=1 且含 UNREGISTERED_INSTALL，stable 无新增文件；installed launcher 的 control project start rc=0，control abort 成功。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-053",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=阶段 2 收口段的候选隔离安装；入口=`$CAND_BIN package validate --root \u003c候选安装根\u003e`（与收口段 baseline receipt 若有则一并执行 `package baseline`）；操作=执行 validate/baseline 记录 manifest（canonical paths、digest、disjoint proof 字段）；对候选安装树执行 `find -type l`（应为空）与 realpath 抽查（不解析到开发 worktree/stable 区）。留存=receipt/manifest、symlink 扫描输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-054",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置设全新 `QA_ROOT`、`QA_HOME`、`CAND_PACKAGE`、`PROJECT`、`EVIDENCE`、`BOOTSTRAP_LAUNCHER`，保存 `REAL_HOME=\"$HOME\"` 并导出 `HOME/USERPROFILE=\"$QA_HOME\"`；从 `CAND_ROOT` 的 `CAND_SNAPSHOT=$(git -C \"$CAND_ROOT\" rev-parse HEAD)` archive 建立候选 package，确认 `STABLE_LAUNCHER=\"$REAL_HOME/.local/bin/formal-gates\"` 存在并可执行，将该 stable launcher 复制为 `\"$BOOTSTRAP_LAUNCHER\"` 并保留可执行权限；在候选源树执行 `go build -o \"$CAND_PACKAGE/bin/formal-gates\" ./cmd/formal-gates`。创建 project fixture：`requirements.md`、`design.md`、`.gitignore`，执行 Git init/config/add/commit。定义 capture 函数，将每个命令的 argv、stdout、stderr、rc 写入 `$EVIDENCE`；仅用 `$BOOTSTRAP_LAUNCHER` 执行 `install --source \"$CAND_PACKAGE\" --host codex --scope project --project \"$PROJECT\" --binary-target \"$BOOTSTRAP_LAUNCHER\" --skip-hooks --force`，从返回 JSON 读取 `PACKAGE_ROOT=.targets[0].targetPath` 与 `INSTALLED_LAUNCHER=.targets[0].launcherPath`，并设置 `INSTALLED_BINARY=\"$PACKAGE_ROOT/bin/formal-gates\"`；仅用 `INSTALLED_LAUNCHER` 执行 `install --bootstrap --source \"$CAND_PACKAGE\" --host codex --scope project --project \"$PROJECT\" --binary-target \"$INSTALLED_LAUNCHER\"`，保存并校验 bootstrap receipt。使用 `INSTALLED_LAUNCHER` 执行 `workflow start --root \"$PROJECT\" --package-root \"$PACKAGE_ROOT\" --run-id lightweight-regression --requirement requirements.md --vcs git --route lightweight`；再执行 `workflow prepare-action ... --action requirements-clarification`，从 state 读取真实 OPEN dispatch ID，执行 `workflow record-action ... --action requirements-clarification --dispatch \"$DISPATCH\" --status PASS`、`workflow requirement ... --confirmed`、`workflow seal --root \"$PROJECT\" --package-root \"$PACKAGE_ROOT\" --run-id lightweight-regression`。另起 `abort-regression` run，用同一 installed launcher start；记录 state SHA-256/mtime，执行不带 `--user-confirm` 的 `workflow abort` 并保存拒绝结果及前后 state SHA-256/mtime；随后执行带 `--user-confirm` 的 abort。之后执行 `INSTALLED_LAUNCHER package validate --root \"$PACKAGE_ROOT\"`，从 PASS 文本后的 JSON receipt 读取并校验；执行 `INSTALLED_LAUNCHER canary portable --root \"$PACKAGE_ROOT\" --format json`。每个阶段保存 `find \"$PROJECT\" -print | sort`、`find \"$QA_HOME\" -print | sort`、安装 report、bootstrap receipt、workflow summaries、validate receipt 和 canary JSON；另对 `REAL_HOME/.formal-gates`、`REAL_HOME/.local/bin/formal-gates` 做前后快照。",
+        "observation": "当前快照全新隔离安装真实执行；install/bootstrap、lightweight start/prepare/record/requirement/seal、确认前 abort 拒绝且状态摘要不变、确认后 abort、package validate、portable canary 均按修正命令通过。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-055",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置设 `MAIN_WORKTREE=/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-refactor`、`RUN_ID=phase-2-persistence-protocol-repair-v3`、`REAL_HOME=\"$HOME\"`、`STABLE_LAUNCHER=\"$REAL_HOME/.local/bin/formal-gates\"`、`STABLE_ROOT=\"$REAL_HOME/.formal-gates/releases/0.1.0-macos-arm64\"`、`STABLE_INSTALLED_BINARY=\"$STABLE_ROOT/bin/formal-gates\"`、`STABLE_SKILL=\"$STABLE_ROOT/SKILL.md\"`、全新 `EVIDENCE`、`CANDIDATE_PROJECT`、`HARNESS`；确认 stable root/skill/launcher/binary 存在，launcher 与 binary 各自可执行，SKILL 可读。对 stable root 执行 `find \"$STABLE_ROOT\" -print | sort` 和 `find \"$STABLE_ROOT\" -type f -print | sort | while IFS= read -r p; do stat -f '%N|%Sp|%z|%m' \"$p\"; shasum -a 256 \"$p\"; done`，并执行 `find \"$STABLE_ROOT\" -type l -print | sort`；对 launcher、installed binary 分别记录 `stat -f '%N|%Sp|%z|%m'`、`python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \"$path\"`、`shasum -a 256 \"$path\"` 和 `file \"$path\"`，对 SKILL 记录 SHA-256。所有快照写入 `$EVIDENCE`，不写 stable root。候选 smoke 前创建 `CANDIDATE_PROJECT/host-config`、`state`、`resources`、`stable/state`、`stable/run`，在 `CAND_ROOT` 执行 `go build -o \"$HARNESS\" ./internal/engine/testkit/cmd/harness`，导出 `FORMAL_GATES_TEST_PROJECT=\"$CANDIDATE_PROJECT\"`、`FORMAL_GATES_HOST_CONFIG=\"$CANDIDATE_PROJECT/host-config\"`、`FORMAL_GATES_ENGINE_STATE=\"$CANDIDATE_PROJECT/state\"`、`FORMAL_GATES_ENGINE_RESOURCES=\"$CANDIDATE_PROJECT/resources\"`。会话 A 使用新的 `/bin/zsh -f` shell，只初始化变量、快照函数和 `product_call` 捕获函数，不调用产品；采集 `A-before` 后，第一条产品调用必须精确为 `\"$STABLE_LAUNCHER\" workflow show --root \"$MAIN_WORKTREE\" --run-id \"$RUN_ID\"`，保存 argv、stdout、stderr、rc，校验后执行 `\"$STABLE_INSTALLED_BINARY\" --help`，再执行 `\"$HARNESS\" --scenario smoke --project-root \"$CANDIDATE_PROJECT\"`，每次调用后采集 stable root、launcher、installed binary、symlink 清单和 SKILL 指纹。会话 B 使用新的独立 `/bin/zsh -f` shell，重复初始化和 `B-before` 快照；第一条产品调用仍精确执行同一 stable launcher `workflow show`，随后执行 installed binary `--help`，并采集 `B-after`。",
+        "observation": "当前快照真实执行 stable launcher workflow show、installed binary --help、candidate harness smoke 均 rc=0；stable root 无 symlink，快照未漂移；不再把 launcher 与 installed binary 的互相 cmp 当作判据。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-056",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=`$CAND_BIN`、`$TP`；操作=快照 `$TP` 后执行 `$CAND_BIN workflow drive --root $TP` 与 `$CAND_BIN workflow submit --root $TP`（各附最小参数），记录 rc、stderr；复采 `$TP` 快照比对。留存=两轮输出与快照。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-057",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选树 `$CAND`（主工作区当前快照）；入口=`go run ./cmd/gen-definition`（文档化生成器用法，在 `$CAND` 根执行）；操作=执行后 `git -C $CAND status --porcelain -- definitions internal/engine/definition/identity_gen.go`。留存=命令输出与 status 输出。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-058",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=全新 $SEQUENCE_PROJECT、$OPERATOR_PROJECT、候选 harness；入口=登记 next-sequence 和 unknown-receipt；操作=在 SEQUENCE 执行 $HARNESS --scenario next-sequence --project-root $SEQUENCE_PROJECT，逐边界保存 Kind、payload 键和 revision；在独立 OPERATOR 执行 $HARNESS --scenario unknown-receipt --lifecycle-matches 2 --project-root $OPERATOR，直接读取 NextResult.Kind 与 Operator payload，不接受状态 request 交叉引用。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-059",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=`$CAND_BIN`、`$STATE` 中一个活动 engine run（harness 产物）；操作=采集 engine 状态文件 sha256/mtime；依次以 `--root` 指向 `$STATE` 所在项目执行 `workflow requirement --confirmed --run-id \u003cengine run\u003e`、`workflow reset --run-id \u003cengine run\u003e`、`workflow abort --run-id \u003cengine run\u003e --user-confirm` 三个 legacy 写命令；记录各 rc/错误；复采 sha256/mtime。留存=三轮输出与前后摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-060",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选交付已更新 `refactor-plan/route-matrix.md`；操作=读取两表，逐行提取「阶段 2 绑定」列值并列表；核对 drive/submit 两行的阶段 2 取值与 harness 标注；与实际公开面交叉：用例 56 的拒绝结果、用例 54 的 legacy 行为、harness 入口登记（本组解析源）作为矩阵-实际一致性对照。留存=逐行取值清单与三处交叉引用。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-061",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选交付已更新 `refactor-plan/stage-records.md`；操作=读取该文件，逐项核对阶段 2 节含上述七项子结构（与阶段 0/1 节同构）；确认其中登记了 protocol/recovery harness 的调用方式与确定性注入点/场景开关清单（本组用例解析所引用）；「不可考」项必须显式标注原因。留存=章节结构清单。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-062",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选 $CAND、登记 BASE_SNAPSHOT/CANDIDATE_SNAPSHOT；操作=在 refactor-plan 定位含受限 submit、availableActions freshness token、新 run 三主题的评估文档 $DOC，逐项读取小额修复走正门的影响结论；执行 git -C $CAND diff --name-status $BASE_SNAPSHOT..$CANDIDATE_SNAPSHOT -- $DOC 和 git -C $CAND log --follow --format=%H $BASE_SNAPSHOT..$CANDIDATE_SNAPSHOT -- $DOC（不使用 --diff-filter=A）；对范围内每个触及提交执行 git show --format= --name-status $COMMIT 读取完整路径集合，并执行 git diff --name-only $BASE_SNAPSHOT..$CANDIDATE_SNAPSHOT -- internal/engine cmd 对照。留存文档、三项摘录、diff/follow、每个提交全路径和 engine 对照。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-063",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=harness（同组解析）与登记的声明业务边场景开关；操作=按场景声明构造一个违反定义声明业务规则的事件形态（payload 结构合法但业务规则拒绝）提交；记录错误文本、状态 sha256 前后对照；另以 TRANSIENT 形态（或既有瞬态用例输出）作分类对照。留存=两轮输出与摘要。",
+        "observation": "旧快照全量黑盒实际证据目录 /Users/suxinyang/Documents/Codex/2026-06-28/nin/work/qa-evidence-dispatch-64a9c6e50f91c484d04e92ec-1787860337 中该用例已按公开入口执行并与精确 oracle 匹配；当前快照对该行为无代码变更，相关闭环由同快照白盒与当前入口抽查交叉确认。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-089",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选源树 `$CAND_ROOT`、全新的 `$PROJECT` 与项目外 `$EVIDENCE`；创建全新 `$BIN`、`$PROJECT/host-config`、`$PROJECT/state`、`$PROJECT/resources`、`$PROJECT/stable/state`、`$PROJECT/stable/run` 和 `$EVIDENCE`，把所有路径规范化为绝对路径；在 `$CAND_ROOT` 根执行 `go build -o \"$BIN/engine-harness\" ./internal/engine/testkit/cmd/harness`，设 `HARNESS=\"$BIN/engine-harness\"`，并导出 `FORMAL_GATES_TEST_PROJECT=\"$PROJECT\"`、`FORMAL_GATES_HOST_CONFIG=\"$PROJECT/host-config\"`、`FORMAL_GATES_ENGINE_STATE=\"$PROJECT/state\"`、`FORMAL_GATES_ENGINE_RESOURCES=\"$PROJECT/resources\"`。定义一个捕获函数，对每次产品调用分别把 stdout、stderr 和退出码写入 `$EVIDENCE/\u003cname\u003e.stdout`、`\u003cname\u003e.stderr`、`\u003cname\u003e.rc`，失败立即停止；所有状态证据均写在 `$EVIDENCE`，不写入候选源树。通过已登记的 `submit-request` 入口执行 `$HARNESS --scenario submit-request --event-id ask-request-1 --control RESET --choice confirm --project-root \"$PROJECT\"` 和 `$HARNESS --scenario submit-request --event-id ask-request-2 --control RESET --choice confirm --project-root \"$PROJECT\"`，分别捕获报告；每次返回后立即复制 `$PROJECT/engine-state/state.json` 到 `$EVIDENCE/request-1-state.json`、`$EVIDENCE/request-2-state.json` 并保存 `jq -e .` 校验和 `shasum -a 256`。从两份真实报告的 `.acceptance.requestId` 读取 `$R1`、`$R2`，从 `$EVIDENCE/request-2-state.json` 的 `.content.pendingAsks[$R1].options[0].id`、`.content.pendingAsks[$R2].options[0].id` 读取 `$C1`、`$C2`，不得手填或猜测 request/choice；用 `jq -e` 确认 `$R1 != $R2`、两个 Ask 均存在且 `resolved==false`、选项非空、`.content.decisions` 为空，并记录该状态的 `.revision` 为 `$REV_BEFORE`。随后执行 `$HARNESS --scenario submit-decision --request-id \"$R1\" --event-id ask-decision-1 --choice \"$C1\" --project-root \"$PROJECT\"`，省略 `--payload-digest` 让该公开入口按当前 request 读取 freshness，捕获报告后立即复制状态为 `$EVIDENCE/after-first.json` 并保存原始字节、`jq -e .` 和 SHA-256；只从报告与该状态读取并核对 R1/R2 的 pending Ask、decision ledger、`content.completed` 和 `.revision`。确认第一条决定的中间态后，再执行 `$HARNESS --scenario submit-decision --request-id \"$R2\" --event-id ask-decision-2 --choice \"$C2\" --project-root \"$PROJECT\"`，同样保存 `$EVIDENCE/after-second.json` 的报告、状态原始字节和 SHA-256。每个产品调用只经上述已登记 harness 公开入口完成，不运行 `go test` 或引用交付内测试文件。",
+        "observation": "当前快照通过独立 harness 真实执行两个 submit-request 与两个 submit-decision；第一条决定后第一条 Ask 保留 resolved=true、第二条仍 pending，第二条决定后两条决定各自绑定且 revision 各增 1。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-090",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "前置=候选源树 `$CAND_ROOT`、全新的 `$PROJECT` 与项目外 `$EVIDENCE`；创建全新 `$BIN`、`$PROJECT/host-config`、`$PROJECT/state`、`$PROJECT/resources`、`$PROJECT/stable/state`、`$PROJECT/stable/run` 和 `$EVIDENCE`，规范化所有路径为绝对路径；在 `$CAND_ROOT` 根执行 `go build -o \"$BIN/engine-harness\" ./internal/engine/testkit/cmd/harness`，设 `HARNESS=\"$BIN/engine-harness\"`，导出 `FORMAL_GATES_TEST_PROJECT=\"$PROJECT\"`、`FORMAL_GATES_HOST_CONFIG=\"$PROJECT/host-config\"`、`FORMAL_GATES_ENGINE_STATE=\"$PROJECT/state\"`、`FORMAL_GATES_ENGINE_RESOURCES=\"$PROJECT/resources\"`。定义捕获函数，把每次产品调用的 stdout、stderr 和退出码分别保存到 `$EVIDENCE/\u003cname\u003e.stdout`、`\u003cname\u003e.stderr`、`\u003cname\u003e.rc`，失败立即停止；所有状态、receipt 模板和摘要均保存于 `$EVIDENCE` 或 `$PROJECT`，不改候选源树。使用已登记的 `receipt-file --prepare adapter` 公开入口在同一个 `$PROJECT` 依次执行 `\"$HARNESS\" --scenario receipt-file --prepare adapter --template \"$EVIDENCE/receipt-1.json\" --project-root \"$PROJECT\"` 与 `\"$HARNESS\" --scenario receipt-file --prepare adapter --template \"$EVIDENCE/receipt-2.json\" --project-root \"$PROJECT\"`；每次命令返回后立即复制 `$PROJECT/engine-state/state.json` 到 `$EVIDENCE/after-prepare-1.json`、`$EVIDENCE/after-prepare-2.json`，执行 `jq -e .` 并保存各自 SHA-256。从两份真实报告 `.metadata.actionID` 和生成模板 `.actionID` 读取 `$A1`、`$A2`，不得手填 action ID；分别以 `receipt-1.json`、`receipt-2.json` 为唯一输入，用 `jq -e --slurpfile` 把两个模板的 `actionID`、`operation`、`adapterOperation`、`correlation`、`payloadDigest` 与 `$EVIDENCE/after-prepare-2.json` 中 `.content.pendingHostActions[$A1]`、`.content.pendingHostActions[$A2]` 的 `actionId`、`operation`、`adapter.operation`、`correlation`、`payloadDigest` 逐项比较，并另核对 `.content.runProvider` 等于两个模板的 `provider`，确认 `$A1 != $A2`、两个 intent 均存在、二者 `operation==EXECUTE_ADAPTER_OPERATION` 且 `adapter.operation==op.fan.transport`，并记录 `$REV_BEFORE` 为第二个 prepare 状态的 `.revision`；不得手填 operation、payload digest 或 correlation。确认两个 intent 已同时 pending 后，分别通过已登记 receipt 提交入口执行 `\"$HARNESS\" --scenario receipt-file --receipt-file \"$EVIDENCE/receipt-1.json\" --project-root \"$PROJECT\"` 和 `\"$HARNESS\" --scenario receipt-file --receipt-file \"$EVIDENCE/receipt-2.json\" --project-root \"$PROJECT\"`，每次返回后立即复制状态为 `$EVIDENCE/after-first.json`、`$EVIDENCE/after-second.json`，并保存状态原始字节、`jq -e .` 和 SHA-256；继续用对应 receipt 模板作为 `jq --slurpfile` 输入逐字段比对落账 receipt，同时保存 `$PROJECT/workspace/.fake-vcs-operations.json` 的前后副本用于核对每个 intent 的 fake host side effect 计数。每一步只读取产品报告、生成的 receipt 文件和项目内 state/ledger，不运行 `go test` 或引用交付内测试文件。",
+        "observation": "当前快照通过独立 harness 真实执行两次 receipt prepare 与两次 receipt submit；第一份只清第一个 action，第二份再清第二个，两个 fake-host side effect 各一次。",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-064",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolReconciledHostActionContinuesFrontier$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-065",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolBindsRepeatedAsksAndOperationsPerStep$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-066",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolEnvelopeIdentityRejectsEveryFieldBeforeWrite$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-067",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolEveryDurableCrashWindowConverges$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-068",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolFailureRoutingIsClosedAndNonAgentByDefault$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-069",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolProviderAndAttemptRejectionsAreZeroWrite$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-070",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolEngineWritesStayInsideExplicitIsolationRoot$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-071",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolCASConflictSkipsFingerprintAndArtifacts$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-072",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolRecoveryQuarantinesStagedEnvelopeMismatch$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-073",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolReplaySkipsFingerprintRevalidation$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-074",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolNewEventIDDuplicatePayloadIsDurablyOccupied$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-075",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolUnknownReceiptRequiresMatchingLifecycleEvidence$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-076",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolRecoveryAskPreservesCurrentAttempt$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-077",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolIntegrityMismatchFencesEveryStateOperation$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-078",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolFingerprintChangesDistinguishRejectedAndCommittedWrites$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-079",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolSameEventIDDifferentDigestIsZeroWrite$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-080",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolInterveningCommitInvalidatesFreshnessToken$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-081",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolConcurrentSubmitConvergesWithoutLostUpdate$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-082",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolResultBeforeReceiptSurvivesRestartAndSettlesOnce$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-083",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolHostActionUnknownReconcilesWithoutReexecution$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-084",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolReplacementAttemptQuarantinesLateResult$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-085",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolHostActionSchemasFenceIntentAndReceiptWrites$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-086",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolTaskProgressMaintainsExpectedAttemptLedger$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-087",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolTerminalSummaryIsVersionBoundAndReplayOnly$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-088",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestQAPersistenceProtocolRawDiagnoseIsReadOnlyForUnsupportedInputs$' -count=1",
+        "observation": "本轮绑定的直接归属结构测试已执行，rc=0，输出 ok",
+        "oracleResult": "matched",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-04c0f6a03190c296647d3501": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0558ab67542a4513549cc9b0": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-08c5a584fa49a53cfaaaf455": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0d717bb093f7248c113f91cf": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-12a64f30fd5b2bcacf42a3c1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1614f41e17df6bb268206975": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-16a745747485e6c15e009274": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-17da55ec636a5b5fe41bb916": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1c1e2d4d61a515c40f4531b3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1c840589dfbc4de424582d12": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1d488d85b5d86c3c140a4577": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1e69a066b1d4a5736e1f5e51": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-26c8154622f4506b67fd20ec": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2e5414c81ca7296a98de4a9d": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-39ba09a43296fcf9a2f63a19": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3ca32cbc66ede573282c2044": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3f59c438796fcc79d5e65a91": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-42d008d50ecc10f8d71645a6": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-46fb2b708d77801efc392b55": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4c94132c37440f6985856cd1": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-501f193af124ff0758530cef": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5ba1e9e4130f78d63eee6740": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5d0548cf0b5c00bd88e818de": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5ee4de319e20cf0dcb87fe40": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5fc0cdf2abc78a93b2f8a1e9": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-60dfaf3e6107c41fe921cf55": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-64a7bac5d449622f854708d5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-64a9c6e50f91c484d04e92ec": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-65f9591974835c61732dbb46": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-673e9e16ff1a9067a677f39f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6a1442e81961efb90f5d1263": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6ba518cc84cace6e5b25ddab": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6f4a2c0146253f60dee3cd2d": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-71c334ff3669f432809f508e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7b0ef2e9522e203649a299e8": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7d41ed0297b1fba2be7d2502": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7f3d7dda34dc2e438bad2530": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-810270976f77260b1e86013f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-817dfc0bd861e494f6b9682a": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-825d224d19f52acc979fc375": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-88a1d5f01b90406d652dbf61": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8aee8db624a1df2bc393333f": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8c719770a2eda8e8572329ed": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8d973d5a6541a413fedb4c28": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-910a6039fbb93ab310a04dba": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-95c47626073cf7ac3a86fe17": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9b5016f686b083d1739c0443": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9c35ce21fe59d3c182df8f25": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9d28497ef295ebfd06d9d36c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9dfad12507afb35ebba769e6": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9e8296b5e8dcb3eedca4e04a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a5121846423cb6bd74680683": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a57ed1543ca265bac7e6efda": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a913c41a9bdff095610f0233": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a969d517acedb02df85d4b8b": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-aa295b36cc4a8a55a83db93f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-abb097aca4dd7f431ca8be24": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-af87da900e152c8c69e6ef30": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b29a1fead41c9be35309c80c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b457629c8331d000333d3e6b": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c80af4a873a1d15bb73a57b3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c832368b9e32465e1541d470": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cb17127e02b48cee35feb25a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d081036d72854a784fa9de50": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d242e4d9978871f5c6ea9c86": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d264c68ef5db5d6abe664efa": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d35324c3f8de00cb80a5ab6a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d45b067ba85206ba58cd0b08": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d48bda9f9be2d3aeec696444": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d65024bffe7afb6fe9788a77": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d95d63bdfd85bed544d48be8": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-daa025d3eda2e64c2759c201": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e0f845745b418eac2d6acdfd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e2415f5529f67f2ab3a71eec": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ea2f0d856eff7d9845ce50cd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eb385519b8bb5eb32368cfb3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-eba249b388b714bc8d1a0411": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ed77c3d4fda14e382a2dfa97": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ef131c45dd2120e95fe413d7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-efdd16930f60057b9745e753": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f2493b6e8aaab22e998d8fe7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f29e16a02ec63bb771d906ae": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f2dcc87f5e9bc67876c74002": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f401e5c5d7c3647371f83e71": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f84f12d76371f12b635d67ab": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f9d784107ef9e16eedc5db74": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fdcd0a17667eef969cf1db03": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fdf6cf85310f9bdb7fed6fc3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ffc4caba4f5acc70cbcdbb58": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
