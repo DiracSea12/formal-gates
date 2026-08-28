@@ -477,16 +477,16 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "stable", nativeBinaryName())
 	phase0WriteFile(t, launcher, phase0ReadFile(t, filepath.Join(source, "bin", nativeBinaryName())), 0o700)
-	allTargets, err := resolveInstallTargets("claude", "project", project)
+	targets, err := resolveInstallTargets("claude", "project", project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range allTargets {
+	for _, target := range targets {
 		if err := copyInstallRuntime(source, target.targetPath, true); err != nil {
 			t.Fatal(err)
 		}
 	}
-	beforeTarget, err := PackageDigest(allTargets[0].targetPath)
+	beforeTarget, err := PackageDigest(targets[0].targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 	if report.BootstrapReceiptPath != registry+".bootstrap.json" || report.ReceiptPath != report.BootstrapReceiptPath {
 		t.Fatalf("bootstrap report did not expose its durable receipt: %+v", report)
 	}
-	afterTarget, err := PackageDigest(allTargets[0].targetPath)
+	afterTarget, err := PackageDigest(targets[0].targetPath)
 	if err != nil || afterTarget != beforeTarget {
 		t.Fatalf("bootstrap mutated the existing runtime: before=%s after=%s err=%v", beforeTarget, afterTarget, err)
 	}

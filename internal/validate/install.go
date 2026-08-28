@@ -2121,9 +2121,12 @@ func isInstallerHookValue(parent map[string]any, value any, target installTarget
 		return false
 	}
 	if shape == "nested" {
-		// matcher 接受 "*"（Claude Code 与 legacy hook）或 ".*"（Codex 正则），
-		// 其余值视为非 formal-gates 安装的 hook。
-		if !exactObjectKeys(parent, "matcher", "hooks") || (parent["matcher"] != "*" && parent["matcher"] != ".*") {
+		descriptor, err := host.Lookup(target.host)
+		if err != nil || !exactObjectKeys(parent, "matcher", "hooks") {
+			return false
+		}
+		matcher, ok := parent["matcher"].(string)
+		if !ok || (matcher != descriptor.Hook.GateMatcher && matcher != "*" && matcher != ".*") {
 			return false
 		}
 		return exactNestedHookShape(command, target.host) ||
@@ -2167,7 +2170,7 @@ func exactNestedHookShape(value map[string]any, hostName string) bool {
 	if value == nil || value["type"] != "command" {
 		return false
 	}
-	if descriptor, err := host.Lookup(hostName); err == nil && descriptor.Hook.Protocol == host.ProtocolCodex {
+	if descriptor, err := host.Lookup(hostName); err == nil && descriptor.Hook.GateTimeout {
 		return exactObjectKeys(value, "type", "command", "timeout") && value["timeout"] == float64(30)
 	}
 	return exactObjectKeys(value, "type", "command")

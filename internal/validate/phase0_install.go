@@ -18,7 +18,7 @@ import (
 )
 
 // stagedInstallTree is the install coordinator's private candidate. Preparing
-// every tree before the first switch lets one journal own the whole multi-host
+// every tree before the first switch lets one journal own the whole install
 // operation.
 type stagedInstallTree struct {
 	Source      string
