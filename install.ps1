@@ -112,6 +112,7 @@ try {
   # any workflow command can write state.
   $bootstrapArgs = @("install", "--bootstrap", "--source", $installRoot, "--release-root", $installRoot, "--binary-target", $formalBinary, "--host", $TargetHost, "--scope", $Scope)
   if ($Project) { $bootstrapArgs += @("--project", $Project) }
+  if ($SkipHooks) { $bootstrapArgs += "--skip-hooks" }
   & $formalBinary @bootstrapArgs
   if ($LASTEXITCODE -ne 0) { throw "formal-gates bootstrap failed with exit code $LASTEXITCODE" }
 

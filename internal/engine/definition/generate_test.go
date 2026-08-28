@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -166,7 +167,13 @@ func TestWriteGeneratedAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	// Windows 的 NTFS 不保留 POSIX 权限位（可写文件 Stat 呈现为 0666），断言
+	// 退化为"未被置只读"；POSIX 上仍钉死 0644。
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Fatalf("artifact mode = %v, want owner-writable", info.Mode().Perm())
+		}
+	} else if info.Mode().Perm() != 0o644 {
 		t.Fatalf("artifact mode = %v, want 0644", info.Mode().Perm())
 	}
 }

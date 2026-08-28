@@ -30,7 +30,7 @@ jobs:
           - os: macos-latest
             suffix: macos-arm64
             binary: formal-gates-macos-arm64
-          - os: macos-26-intel
+          - os: macos-15-intel
             suffix: macos-amd64
             binary: formal-gates-macos-amd64
           - os: ubuntu-latest
@@ -162,7 +162,7 @@ jobs:
           - os: macos-latest
             suffix: macos-arm64
             binary: formal-gates-macos-arm64
-          - os: macos-26-intel
+          - os: macos-15-intel
             suffix: macos-amd64
             binary: formal-gates-macos-amd64
           - os: ubuntu-latest

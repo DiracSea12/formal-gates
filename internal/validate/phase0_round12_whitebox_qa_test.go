@@ -1119,7 +1119,7 @@ esac
 	if !strings.HasPrefix(lines[0], launcher+" ") || strings.Contains(lines[0], "--candidate-binary") {
 		t.Fatalf("first install was not executed by the stable launcher: %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "install --bootstrap --source "+release) || !strings.Contains(lines[1], "--binary-target "+launcher) || !strings.Contains(lines[1], "--host codex --scope project --project "+project) {
+	if !strings.Contains(lines[1], "install --bootstrap --source "+release) || !strings.Contains(lines[1], "--binary-target "+launcher) || !strings.Contains(lines[1], "--host codex --scope project --project "+project+" --skip-hooks") {
 		t.Fatalf("bootstrap arguments were not forwarded to the stable owner: %q", lines[1])
 	}
 	if !strings.HasPrefix(lines[1], launcher+" ") || strings.Contains(lines[1], "--candidate-binary") {

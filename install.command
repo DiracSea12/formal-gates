@@ -177,6 +177,9 @@ bootstrap_cmd=("$binary_target" install --bootstrap --source "$install_root" --r
 if [ -n "$project" ]; then
   bootstrap_cmd+=(--project "$project")
 fi
+if [ "$skip_hooks" = true ]; then
+  bootstrap_cmd+=(--skip-hooks)
+fi
 "${bootstrap_cmd[@]}"
 
 echo "Installed package to $install_root"
