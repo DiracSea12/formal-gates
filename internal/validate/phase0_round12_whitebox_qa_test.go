@@ -722,7 +722,7 @@ func TestWhiteboxPhase0Round12InstallFaultsRestoreRegistryIdentityAndCleanup(t *
 				t.Fatalf("recovery receipt does not identify the interrupted operation: fault=%s receipt=%+v", fault.name, receipt)
 			}
 			expectedFact := "deterministic install fault injected at " + fault.name
-			if receipt.ObservedFact != expectedFact || receipt.Reconcile != "restore all target, release, binary, hook, managed-rule and registry snapshots" {
+			if receipt.ObservedFact != expectedFact || receipt.Reconcile != "restore all target, release, binary, hook, hook-state, managed-rule and registry snapshots" {
 				t.Fatalf("recovery receipt does not bind observation and reconciliation: fault=%s receipt=%+v", fault.name, receipt)
 			}
 			if observedAt, err := time.Parse(time.RFC3339Nano, receipt.ObservedAt); err != nil || observedAt.IsZero() {

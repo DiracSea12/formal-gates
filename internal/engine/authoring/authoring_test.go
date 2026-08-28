@@ -199,6 +199,7 @@ func TestNewHostActionStep(t *testing.T) {
 		Handler:   "engine.node.dispatch",
 		Boundary:  BoundaryUserIOTransport,
 		Operation: "op.node.transport",
+		Schema:    "schema.node.transport",
 		Timeout:   10 * time.Second,
 	}
 	got, err := NewHostActionStep(validHeader(), validIO(), spec)
@@ -391,7 +392,7 @@ func TestDerivedAuthorityRunner(t *testing.T) {
 	}
 	host, err := NewHostActionStep(validHeader(), validIO(), HostActionSpec{
 		Handler: "engine.node.dispatch", Boundary: BoundaryAgentDispatchAPI,
-		Operation: "op.node.spawn", Timeout: time.Second,
+		Operation: "op.node.spawn", Schema: "schema.node.spawn", Timeout: time.Second,
 	})
 	if err != nil {
 		t.Fatalf("host: %v", err)

@@ -26,10 +26,10 @@ import (
 // 阶段 2；本结构只承载 Decide/Observe 所需的最小决策输入。Tasks 中缺省
 // 的键按 QUEUED 解释（依赖满足、尚未签发）。
 type State struct {
-	DefinitionVersion authoring.DefinitionVersion
-	Phase             runtime.RunPhase
-	Completed         []authoring.StepID // 有序去重，由 CompleteStep 维护
-	Tasks             map[runtime.TaskKey]runtime.TaskStatus
+	DefinitionVersion authoring.DefinitionVersion            `json:"definitionVersion"`
+	Phase             runtime.RunPhase                       `json:"phase"`
+	Completed         []authoring.StepID                     `json:"completed"` // 有序去重，由 CompleteStep 维护
+	Tasks             map[runtime.TaskKey]runtime.TaskStatus `json:"tasks"`
 }
 
 // NewState 构造并校验初始 state：definition 版本与 phase 枚举必填。

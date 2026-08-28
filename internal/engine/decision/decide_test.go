@@ -49,7 +49,7 @@ func testDefinition(t *testing.T) *compiler.CompiledDefinition {
 	if err := reg.RegisterReconciler("reconcile.test.durable"); err != nil {
 		t.Fatalf("register reconciler: %v", err)
 	}
-	for _, id := range []authoring.SchemaID{"schema.test.ask.request", "schema.test.ask.response"} {
+	for _, id := range []authoring.SchemaID{"schema.test.ask.request", "schema.test.ask.response", "schema.test.gate"} {
 		if err := reg.RegisterSchema(id); err != nil {
 			t.Fatalf("register schema: %v", err)
 		}
@@ -95,7 +95,7 @@ func testDefinition(t *testing.T) *compiler.CompiledDefinition {
 		})),
 		mk(authoring.NewHostActionStep(hdr("gate.host", "gate", "work.agent"), ioWith("work.agent"), authoring.HostActionSpec{
 			Handler: "engine.test.gate", Boundary: authoring.BoundaryExternalCapability,
-			Operation: "op.test.gate", Timeout: time.Minute,
+			Operation: "op.test.gate", Schema: "schema.test.gate", Timeout: time.Minute,
 		})),
 		mk(authoring.NewDurableStep(hdr("gate.durable", "gate", "work.ask"), ioWith("work.ask"), authoring.DurableSpec{
 			Handler: "engine.test.durable", Idempotency: authoring.IdempotencyDeterministicInput,
@@ -397,7 +397,7 @@ func stepCopies(t *testing.T, cd *compiler.CompiledDefinition) []authoring.Step 
 			})
 		case compiler.CompiledHostActionStep:
 			s, err = authoring.NewHostActionStep(hdr, io, authoring.HostActionSpec{
-				Handler: p.Handler, Boundary: p.Boundary, Operation: p.Operation, Timeout: p.Timeout,
+				Handler: p.Handler, Boundary: p.Boundary, Operation: p.Operation, Schema: p.Schema, Timeout: p.Timeout,
 			})
 		case compiler.CompiledAgentStep:
 			s, err = authoring.NewAgentStep(hdr, io, authoring.AgentSpec{

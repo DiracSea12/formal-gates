@@ -153,7 +153,7 @@ func TestWhiteboxPhase0Round15InstallFaultMatrixRecoveryReceiptIdentity(t *testi
 		{"copy-component:prompts", "intent"},
 		{"verify-stage:installed-target", "switched"},
 	}
-	const reconcileAction = "restore all target, release, binary, hook, managed-rule and registry snapshots"
+	const reconcileAction = "restore all target, release, binary, hook, hook-state, managed-rule and registry snapshots"
 
 	for _, fault := range faults {
 		t.Run(fault.name, func(t *testing.T) {

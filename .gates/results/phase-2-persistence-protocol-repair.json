@@ -1,0 +1,115 @@
+{
+  "runId": "phase-2-persistence-protocol-repair",
+  "flow": "formal",
+  "status": "ABORTED",
+  "requirementRevision": "6bf75084218ce1c9a2f77c0377d6fd1593616525008988380187efec07de4a52",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "086117893aacc386be3ec858afcb0566ff9ddabef0b6e70319ebb7607c6933fd",
+  "vcs": "git",
+  "baseSnapshot": "69d75d3862663bb35fa01356b20b1a29849b5d85",
+  "currentSnapshot": "69d75d3862663bb35fa01356b20b1a29849b5d85",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md",
+      "revision": "6bf75084218ce1c9a2f77c0377d6fd1593616525008988380187efec07de4a52"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "82895f69e04144aa45b41e6ad8db3690705aea00f7dab4cc78cfa1f569e16008"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "38d6407ff69f04bb0ea7732e9378b19317e649f89b506e82fb3bb42b58d5edca"
+    }
+  ],
+  "routeMode": "",
+  "selectedGates": [],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 0,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PENDING"
+    },
+    "implementation-quality-gate": {
+      "status": "PENDING"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PENDING"
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-1af81dcd034d237949ae5361": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-228431c060c9ec77ed7c57af": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7a888b0d7c2a22d24985b443": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-86a6aac368a43c6d609f3eed": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a2a2664c6b2d0b6fc5e16899": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b54de1d68f67cace59c89e44": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f5050e4bb4d1471c44a34afc": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

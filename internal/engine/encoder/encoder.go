@@ -123,6 +123,7 @@ type hostPayloadWire struct {
 	Handler   string `json:"handler"`
 	Boundary  string `json:"boundary"`
 	Operation string `json:"operation"`
+	Schema    string `json:"schema"`
 	TimeoutNs int64  `json:"timeoutNs"`
 }
 
@@ -432,7 +433,7 @@ func payloadToWire(cs *compiler.CompiledStep) (any, error) {
 			Reconcile: string(p.Reconcile), TimeoutNs: int64(p.Timeout), Retry: retryToWire(&p.Retry)}, nil
 	case compiler.CompiledHostActionStep:
 		return hostPayloadWire{Handler: string(p.Handler), Boundary: string(p.Boundary),
-			Operation: string(p.Operation), TimeoutNs: int64(p.Timeout)}, nil
+			Operation: string(p.Operation), Schema: string(p.Schema), TimeoutNs: int64(p.Timeout)}, nil
 	case compiler.CompiledAgentStep:
 		return agentPayloadWire{Handler: string(p.Handler), Reason: string(p.Reason),
 			TimeoutNs: int64(p.Timeout), Retry: retryToWire(p.Retry)}, nil

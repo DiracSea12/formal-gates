@@ -376,7 +376,7 @@ func TestCompileRejectsKindAndRunnerMismatchesInBothModes(t *testing.T) {
 	bound := mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO("s.parse"),
 		authoring.HostActionSpec{
 			Handler: "h.wrong.runner", Boundary: authoring.BoundaryExternalCapability,
-			Operation: "op.x", Timeout: time.Second,
+			Operation: "op.x", Schema: "schema.x", Timeout: time.Second,
 		})
 	def2 := fxDefinition(t, withStep(fxAllSteps(t), "s.dispatch", bound)...)
 	_, err = compiler.Compile(def2, reg)

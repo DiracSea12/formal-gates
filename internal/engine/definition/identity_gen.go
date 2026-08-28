@@ -15,5 +15,5 @@ const (
 	WorkflowDefinitionVersion = "2"
 	// WorkflowDefinitionDigest 是 canonical 制品字节的 SHA-256 摘要
 	// （sha256: 前缀，与仓库现行格式一致）。
-	WorkflowDefinitionDigest = "sha256:e342a5f4a766d153682275f96e7df378da035bcdb06cb27c1cab772d50d938a7"
+	WorkflowDefinitionDigest = "sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f"
 )

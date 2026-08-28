@@ -61,33 +61,33 @@ const (
 // ReadyTask 是 Ready 集的单个待签发任务：薄指针（TaskKey + step），不携
 // 输入数据与 actionID——actionID 由 SelectIssued 分配（§5.12）。
 type ReadyTask struct {
-	Task runtime.TaskKey
-	Step authoring.StepID
+	Task runtime.TaskKey  `json:"task"`
+	Step authoring.StepID `json:"step"`
 }
 
 // ReadyPayload 是 Ready 的 payload：完整可签发任务集（固定顺序）。
 type ReadyPayload struct {
-	Tasks []ReadyTask
+	Tasks []ReadyTask `json:"tasks"`
 }
 
 // HostActionPayload 是 HostAction 的 payload：待宿主执行的步骤引用。
 type HostActionPayload struct {
-	Steps []authoring.StepID
+	Steps []authoring.StepID `json:"steps"`
 }
 
 // AskPayload 是 Ask 的 payload：待用户决定的步骤引用（schema 在定义中）。
 type AskPayload struct {
-	Steps []authoring.StepID
+	Steps []authoring.StepID `json:"steps"`
 }
 
 // WaitPayload 是 Wait 的 payload：封闭原因。
 type WaitPayload struct {
-	Reason WaitReason
+	Reason WaitReason `json:"reason"`
 }
 
 // OperatorPayload 是 Operator 的 payload：待核实的事实集合。
 type OperatorPayload struct {
-	Facts []Fact
+	Facts []Fact `json:"facts"`
 }
 
 // CompletePayload 是 Complete 的 payload：无附加数据（终态摘要属阶段 2

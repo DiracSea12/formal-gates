@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"formal-gates/internal/host"
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
 )
@@ -386,6 +388,22 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.LoadRunState(*root, *runID)
+	if err != nil {
+		if _, stateStatErr := os.Stat(validate.RunStatePath(*root, *runID)); os.IsNotExist(stateStatErr) {
+			summary, summaryErr := validate.LoadRunSummary(*root, *runID)
+			if summaryErr == nil {
+				return printValue(streams.Stdout, summary, nil)
+			}
+			if _, statErr := os.Stat(validate.RunSummaryPath(*root, *runID)); statErr == nil {
+				return printValue(streams.Stdout, summary, summaryErr)
+			}
+		}
+	}
+	if err == nil {
+		if admissionErr := validate.RequireRunReadAdmission(*root, state); admissionErr != nil {
+			return printValue(streams.Stdout, validate.RunState{}, admissionErr)
+		}
+	}
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -409,7 +427,17 @@ func runWorkflowDiagnose(args []string, streams IO) (int, error) {
 			statePath = validate.RunSummaryPath(*root, *runID)
 		}
 	}
-	report, err := validate.DiagnoseState(statePath)
+	packageDigest, err := validate.PackageDigest(*root)
+	if err != nil {
+		return 1, err
+	}
+	report, err := validate.DiagnoseStateWithSupported(statePath, validate.VersionEnvelope{
+		Writer: "engine", StateSchemaVersion: encoder.StateSchemaVersion,
+		WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion,
+		DefinitionSource:          validate.CurrentWorkflowDefinitionSource,
+		DefinitionDigest:          definition.WorkflowDefinitionDigest,
+		PackageDigest:             packageDigest,
+	})
 	return printValue(streams.Stdout, report, err)
 }
 
@@ -649,7 +677,7 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 	case "generate":
 		fs := newFlagSet("workflow future generate", streams)
 		root := fs.String("root", ".", "package root")
-		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
+		packageDigest := fs.String("package-digest", "", "deprecated compatibility input; legacy future envelopes do not bind package identity")
 		output := fs.String("output", "", "optional envelope output path")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
@@ -672,7 +700,7 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 		output := fs.String("output", "", "alias for --path")
 		envelopePath := fs.String("envelope", "", "validated envelope JSON path")
 		input := fs.String("input", "", "alias for --envelope")
-		packageDigest := fs.String("package-digest", "", "immutable package digest to include when generating an envelope")
+		packageDigest := fs.String("package-digest", "", "deprecated compatibility input; legacy future states do not bind package identity")
 		payload := fs.String("payload", "", "JSON payload to place in the future state document")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err

@@ -1054,10 +1054,10 @@ func launcherInvocationMatches(expected string) bool {
 	return err == nil && stableLauncherPath(executable) == expected
 }
 
-// RequireInstallLauncher fences the public mutation command. The downloaded
-// archive binary must first be staged at the fixed launcher path by the
-// checksum-verifying bootstrap script; invoking source/bin directly is a
-// candidate path and cannot write the shared registry or host configuration.
+// RequireInstallLauncher fences the public mutation command. Normal maintenance
+// uses the fixed launcher path; when --binary-target is supplied, that path is
+// the transaction launcher and the process must be invoked through it. A
+// different raw candidate cannot impersonate the selected launcher.
 func RequireInstallLauncher(options InstallOptions) error {
 	executable, err := os.Executable()
 	if err != nil {
@@ -1072,12 +1072,38 @@ func RequireInstallLauncher(options InstallOptions) error {
 	}
 	expected := defaultStableLauncherPath(options)
 	if strings.TrimSpace(options.BinaryTarget) != "" {
-		if stableLauncherPath(options.BinaryTarget) != expected {
-			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)
-		}
+		// A caller that supplies a launcher path owns that path for the
+		// transaction. The process must still be the same executable, so a
+		// raw candidate binary cannot impersonate a different launcher.
+		expected = stableLauncherPath(options.BinaryTarget)
 	}
 	if !launcherInvocationMatches(expected) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
+	}
+	// An explicit non-default transaction launcher must already be admitted.
+	// This keeps a plain candidate executable from selecting itself as a new
+	// stable launcher (the portable-canary fence), while preserving first
+	// install at the documented default launcher and maintenance through an
+	// existing custom launcher.
+	if strings.TrimSpace(options.BinaryTarget) != "" &&
+		canonicalRegistryPath(expected) != canonicalRegistryPath(defaultStableLauncherPath(options)) {
+		registry := installRegistryPath(options)
+		doc, loadErr := LoadRegistry(registry)
+		admitted := false
+		if loadErr == nil {
+			for _, record := range doc.Records {
+				if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) &&
+					canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(expected) {
+					admitted = true
+					break
+				}
+			}
+		} else if !os.IsNotExist(loadErr) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: cannot verify transaction launcher admission: %w", loadErr)
+		}
+		if !admitted {
+			return fmt.Errorf("UNREGISTERED_INSTALL: transaction launcher %s is not registered; invoke the documented install through the stable launcher %s", expected, defaultStableLauncherPath(options))
+		}
 	}
 	return nil
 }
@@ -1256,6 +1282,13 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 					expected.VCSIdentity = outer.VCSIdentity
 					expected.PackageDigest = source.Digest
 					expected.InstalledDigest = targetDigests[canonicalRegistryPath(target.targetPath)]
+					if bootstrapReleasePreservesIdentity(record, source.Root, expected.InstalledDigest) {
+						// The release tree is the normalized copy owned by this
+						// record. Keep the original source package identity instead
+						// of replacing it with the release-tree receipt digest.
+						expected.VCSIdentity = record.VCSIdentity
+						expected.PackageDigest = record.PackageDigest
+					}
 					valid := validRegistryRecord(record)
 					binding := sameRegistryBinding(record, expected)
 					identity := sameRegistryIdentity(record, expected)
@@ -1291,6 +1324,10 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		desired.VCSIdentity = outer.VCSIdentity
 		desired.PackageDigest = source.Digest
 		desired.InstalledDigest = targetDigests[canonicalRegistryPath(target.targetPath)]
+		if existing, ok := existingByID[desired.ID]; ok && bootstrapReleasePreservesIdentity(existing, source.Root, desired.InstalledDigest) {
+			desired.VCSIdentity = existing.VCSIdentity
+			desired.PackageDigest = existing.PackageDigest
+		}
 		if !exists(desired.ResourceRoot) {
 			if err := os.MkdirAll(desired.ResourceRoot, 0o700); err != nil {
 				return InstallReport{}, rollback(fmt.Errorf("resource root setup failed: %w", err))
@@ -1367,6 +1404,19 @@ func bootstrapHasSiblingAdmission(desired RegistryRecord, records []RegistryReco
 		}
 	}
 	return false
+}
+
+// bootstrapReleasePreservesIdentity recognizes the documented bootstrap of a
+// release tree already registered by the preceding install transaction. The
+// installer adds executable permission bits while copying the release, so the
+// release receipt digest is not the original source package digest; the
+// installed target digest and exact registered release root are the binding
+// proof for this read-only maintenance operation.
+func bootstrapReleasePreservesIdentity(record RegistryRecord, sourceRoot, installedDigest string) bool {
+	return record.ReleaseRoot != "" &&
+		canonicalRegistryPath(sourceRoot) == canonicalRegistryPath(record.ReleaseRoot) &&
+		record.InstalledDigest != "" && record.InstalledDigest == installedDigest &&
+		record.PackageDigest != "" && record.VCSIdentity != ""
 }
 
 // Global installs have one canonical host record, but workflow state and

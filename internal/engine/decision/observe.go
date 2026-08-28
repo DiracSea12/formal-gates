@@ -33,9 +33,9 @@ func (f FactSource) Valid() bool {
 // Fact 是一条带 source binding 的外部事实。Key 在来源内唯一；Value 是
 // 该事实的规范字符串值（结构化值由各来源的收集器负责规范化）。
 type Fact struct {
-	Source FactSource
-	Key    string
-	Value  string
+	Source FactSource `json:"source"`
+	Key    string     `json:"key"`
+	Value  string     `json:"value"`
 }
 
 // Observation 是一次 Observe 的产物：全部事实按 (Source, Key) 规范排序，

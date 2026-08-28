@@ -194,7 +194,7 @@ func materializeStep(def *Definition, s authoring.Step) (CompiledStep, error) {
 		}
 		return CompiledStep{Header: h, IO: normalizeIO(v.IO),
 			Payload: CompiledHostActionStep{Handler: v.Handler, Boundary: v.Boundary,
-				Operation: v.Operation, Timeout: v.Timeout}}, nil
+				Operation: v.Operation, Schema: v.Schema, Timeout: v.Timeout}}, nil
 	case authoring.AgentStep:
 		h, err := compiledHeader(def, v.Header, KindAgent, v)
 		if err != nil {

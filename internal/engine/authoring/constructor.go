@@ -196,6 +196,7 @@ type HostActionSpec struct {
 	Handler   HandlerID
 	Boundary  HostBoundaryReason
 	Operation OperationID
+	Schema    SchemaID
 	Timeout   time.Duration // 必填 > 0
 }
 
@@ -220,12 +221,15 @@ func NewHostActionStep(h Header, io IO, spec HostActionSpec) (HostActionStep, er
 	if spec.Timeout <= 0 {
 		return HostActionStep{}, fmt.Errorf("host action step %q: positive timeout required", h.ID)
 	}
+	if spec.Schema == "" {
+		return HostActionStep{}, fmt.Errorf("host action step %q: operation schema id required", h.ID)
+	}
 	deps, err := normalizeIDs(h.ID, "dependency", h.Dependencies)
 	if err != nil {
 		return HostActionStep{}, err
 	}
 	return HostActionStep{Header: headerWith(h, deps), IO: io,
-		Handler: spec.Handler, Boundary: spec.Boundary, Operation: spec.Operation,
+		Handler: spec.Handler, Boundary: spec.Boundary, Operation: spec.Operation, Schema: spec.Schema,
 		Timeout: spec.Timeout}, nil
 }
 
