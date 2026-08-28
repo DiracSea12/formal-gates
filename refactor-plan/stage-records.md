@@ -215,7 +215,7 @@
   base 以之后阶段 2 run 受理时登记的 `baseSnapshot` 为准；当时可查证的最近 canonical 基线
   即上列 merge commit。
 
-## 阶段 2：持久协议与恢复内核（开发收口记录）
+## 阶段 2：持久协议与恢复内核（封板与主线集成记录）
 
 ### 1. 阶段编号、run ID、sealed commit 与主线集成 commit
 
@@ -236,10 +236,18 @@
   `6f6d5004d68a8d3a09dccd3601affb688506b952`、
   `8b66ec55b04c19053d581da53807644e76bd5537`；批次 3 testkit/harness =
   `be2712def04ff2cc9e3f7212f08a6e2d37e55af1`。
-- sealed commit / 主线集成 commit：**不可考 + 原因**——本节写于开发批次收口，按任务边界
-  未运行 workflow snapshot、QA、门或 Seal，仓库也尚无
-  `.gates/results/phase-2-persistence-protocol.json`；因此不得把当前开发候选冒充 sealed 或
-  post-integration identity。
+- sealed commit：主 run `phase-2-persistence-protocol` 的封板快照为
+  `7d1e30ae862df5ba4d306abc2d21578241bcb217`；修复 run
+  `phase-2-persistence-protocol-repair-v3` 的最终封板快照为
+  `f95e1b1ccb9715c0c351bdf9314bee643883ef07`。两者分别由
+  `.gates/results/phase-2-persistence-protocol.json` 与
+  `.gates/results/phase-2-persistence-protocol-repair-v3.json` 记录，后者是修复后的阶段 2
+  最终候选。
+- 主线集成 commit：`f0cde67f0871b39485a50538c3fe82d7d31dfa12`（`integrate sealed phase 2
+  candidate`，父提交 `a27b8d5c22f2b7b92a90a29cd76fed816e2c562d`，分支
+  `codex/refactor`）。该提交将阶段 2 封板候选的持久化/协议/恢复内核、testkit、验收与记录
+  纳入开发分支，并保留当前分支的安装与触发模型契约；关联机器记录见
+  `.gates/results/phase-2-post-integration.json`。
 - 过程留痕（不作合理化）：批次 4 任务书登记本 run 曾以手工状态方式续开发；对这次操作，
   现存临时状态只能显示续开发后的 snapshot/dispatch 投影，没有专门字段保存手工操作的
   命令、前后字节或授权 receipt，故这些细节不可考。本记录只承认该过程事实，不把它表述
@@ -283,7 +291,8 @@
   immutable identity 以对应 development-worker 提交为准，本开发中记录不预写尚未形成的
   commit。`TestAcceptanceInstalledProtocolHarness` 分别构建 candidate 与 test-only harness，
   candidate 走隔离 install/bootstrap receipt，harness 仍为不进入安装包的独立测试二进制。
-  promotion receipt 尚未产生，不能把临时 acceptance 安装表述为阶段 promotion。
+  promotion receipt 尚未产生；本阶段的主线集成 receipt 是
+  `.gates/results/phase-2-post-integration.json`，不把临时 acceptance 安装表述为 promotion。
 
 ### 4. 本阶段公开能力矩阵与唯一 writer
 
@@ -378,9 +387,9 @@
 
 ### 7. 下一阶段 worktree 的精确 post-integration canonical base 与关联 receipt
 
-- **不可考 + 原因**——阶段 2 尚未 Seal、未主线集成，因而不存在 sealed candidate 到
-  post-integration canonical identity 的 promotion/integration receipt，也不能确定阶段 3
-  worktree base。
-- 当前仅可登记 run base `62419ed39ae3673323991cb2e28326b1fe4ff914`、开发收口前候选
-  `be2712def04ff2cc9e3f7212f08a6e2d37e55af1`；后续必须以实际 Seal 结果、主线集成 identity
-  和 receipt 回填，不能用本开发记录代替。
+- 阶段 3 worktree 的 post-integration canonical base：
+  `f0cde67f0871b39485a50538c3fe82d7d31dfa12`（阶段 2 主线集成提交；实现树已通过
+  `go test ./...`、`go test -tags phase0whitebox ./...`、`go build ./...` 与 `go vet ./...`）。
+- 关联 receipt：`.gates/results/phase-2-post-integration.json`，其中同时绑定阶段 2 两个封板
+  candidate snapshot 与该集成 identity，并列出验证命令及结果。阶段 3 从该实现基线开始；本
+  文件本次修订只补录事实，不改变阶段 2 实现。

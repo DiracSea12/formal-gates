@@ -1,0 +1,29 @@
+{
+  "stage": 2,
+  "status": "INTEGRATED",
+  "branch": "codex/refactor",
+  "sealedCandidates": [
+    {
+      "runId": "phase-2-persistence-protocol",
+      "currentSnapshot": "7d1e30ae862df5ba4d306abc2d21578241bcb217"
+    },
+    {
+      "runId": "phase-2-persistence-protocol-repair-v3",
+      "currentSnapshot": "f95e1b1ccb9715c0c351bdf9314bee643883ef07"
+    }
+  ],
+  "integration": {
+    "commit": "f0cde67f0871b39485a50538c3fe82d7d31dfa12",
+    "parent": "a27b8d5c22f2b7b92a90a29cd76fed816e2c562d",
+    "message": "integrate sealed phase 2 candidate",
+    "receipt": "This file records the post-integration identity and does not claim a new formal Seal."
+  },
+  "verification": [
+    { "command": "go test ./...", "status": "PASS" },
+    { "command": "go test -tags phase0whitebox ./...", "status": "PASS" },
+    { "command": "go build ./...", "status": "PASS" },
+    { "command": "go vet ./...", "status": "PASS" },
+    { "command": "git diff --check", "status": "PASS" }
+  ],
+  "stage3Base": "f0cde67f0871b39485a50538c3fe82d7d31dfa12"
+}
