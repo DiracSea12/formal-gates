@@ -2892,7 +2892,9 @@ func initializeGit(t *testing.T, root string) {
 func commitAll(t *testing.T, root, message string) {
 	t.Helper()
 	runGit(t, root, "add", "--all")
-	runGit(t, root, "commit", "-m", message)
+	// Test repositories must not inherit runner-level commit hooks or signing
+	// prompts; neither is part of the snapshot behavior these fixtures verify.
+	runGit(t, root, "commit", "--no-verify", "--no-gpg-sign", "-m", message)
 }
 
 func gitHead(t *testing.T, root string) string {
