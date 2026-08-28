@@ -80,9 +80,13 @@ jobs:
           chmod +x "$archive_root/bin/formal-gates"
           echo "FORMAL_GATES_ARCHIVE_ROOT=$archive_root" >> "$GITHUB_ENV"
       - name: Run Go tests
-        run: go test -timeout=20m ./...
+        env:
+          GOFLAGS: -timeout=20m
+        run: go test ./...
       - name: Run Go integration tests
-        run: go test -timeout=20m -tags=integration ./internal/validate
+        env:
+          GOFLAGS: -timeout=20m
+        run: go test -tags=integration ./internal/validate
       - name: Run go vet
         run: go vet ./...
       - name: Run Go race tests (Unix)
