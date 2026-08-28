@@ -51,12 +51,7 @@ var requiredDirs = []string{
 	"definitions",
 }
 
-var requiredHosts = []string{
-	"Claude Code",
-	"Codex",
-	"Cursor",
-	"DeepSeek Harness",
-	"ZCode",
+var explanationOnlyHosts = []string{
 	"Gemini",
 	"OpenCode",
 	"Windsurf",
@@ -535,7 +530,7 @@ func validateManifest(root string, result *Result) {
 	if !containsText(doc.Notes, "hook canary") {
 		result.add("formal-gates.manifest.json", "validation_notes must mention native hook canary boundary")
 	}
-	for _, host := range requiredHosts {
+	for _, host := range requiredManifestHosts() {
 		found := findHost(doc.Hosts, host)
 		if found == nil {
 			result.add("formal-gates.manifest.json", "hosts missing "+host)
@@ -578,6 +573,20 @@ func manifestHostTargetNames() map[string]string {
 		}
 	}
 	return names
+}
+
+// requiredManifestHosts derives installable host entries from the shared
+// registry and appends the explanation-only support entries that have no
+// installer descriptor. Adding an installable host therefore updates one
+// registry instead of a second package-validation list.
+func requiredManifestHosts() []string {
+	names := make([]string, 0, len(host.All())+len(explanationOnlyHosts))
+	for _, descriptor := range host.All() {
+		if descriptor.Installable && descriptor.ManifestName != "" {
+			names = append(names, descriptor.ManifestName)
+		}
+	}
+	return append(names, explanationOnlyHosts...)
 }
 
 // unregisteredManifestInstallHosts returns the manifest host names the
@@ -653,8 +662,9 @@ func findHost(hosts []manifestHost, name string) *manifestHost {
 }
 
 func unknownManifestHosts(hosts []manifestHost) []string {
-	known := make(map[string]bool, len(requiredHosts))
-	for _, host := range requiredHosts {
+	required := requiredManifestHosts()
+	known := make(map[string]bool, len(required))
+	for _, host := range required {
 		known[host] = true
 	}
 	unknown := []string{}
