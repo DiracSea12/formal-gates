@@ -1,0 +1,567 @@
+{
+  "runId": "phase-3-engine-vertical-loop-rerun-001",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "216f066cbc8250b0f7a1959b6a59246888f6ff2495533d1f391e5346c5304182",
+  "basePromptRevision": "3f35c560a7a0951355638c8b3ce158640fe722f5309f47c1a4826505d710872c",
+  "catalogRevision": "2b495a77ba3d77cb6076ea60ac622e5fe279b0d9d6ae2951baf1da99ceb5fdb1",
+  "vcs": "git",
+  "baseSnapshot": "1cbdf4bee4d1079f2464612ae61ce54214d4753b",
+  "currentSnapshot": "96a774f346184352259296e142c04cb5bd64a88d",
+  "requirementArtifacts": [
+    {
+      "path": "refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md",
+      "revision": "024aaf8fafdf5e1378fb3682d8734e35c54324116024beba89c62731f60c0cf8"
+    },
+    {
+      "path": "refactor-plan/adr-002-development-batching-and-verification-tiers.md",
+      "revision": "cd541208c2abf5ea9ab2545110bba7aad5aea8a8eca036c57fa8fe8dc9ee4daf"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "bd2c3f6ca6cc2b5346084cec1e0a166abb775888529a8cf50905d658baf5f121"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "a5c391ab8d45f58bd0831fc13fe09738afecd443ec42d9e1f46ecaaafbbfc055"
+    },
+    {
+      "path": "refactor-plan/route-matrix.md",
+      "revision": "08d044ecf128c1f091de8352b6997062a2cc6ce931174fd3ff9f1f33bb6f800d"
+    },
+    {
+      "path": "refactor-plan/stage-3-5a-qa-coverage-contract.md",
+      "revision": "98560616447f8f116d7d819e10b473dea0944aa006204ac4fb6684ce7f26ffc5"
+    },
+    {
+      "path": "refactor-plan/stage-3-requirements.md",
+      "revision": "216f066cbc8250b0f7a1959b6a59246888f6ff2495533d1f391e5346c5304182"
+    },
+    {
+      "path": "refactor-plan/stage-3-solution.md",
+      "revision": "22628c282980b97a95c4c291ccefacc8b3b6fb78686c0097146d2e35db84ac49"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "技术审 granularity_review 判定单一 Batch：候选 installed engine lightweight vertical loop。S1 façade/admission/runtime 选择 → S2 StartRequest/intake receipt/canonical digest/envelope → S3 drive/submit/六类 NextResult → S4 terminal cleanup/Complete/replay → S5 installed 隔离、legacy 回归与 negative fixtures；共享未冻结的 façade、state.json、Store/CAS、typed protocol、envelope 和 cleanup 接口，拆成多个 Batch 无法独立验收或回滚且交接成本更高。Batch 内 Subtask 连续执行，不换代理。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {
+    "merge-gate": {
+      "origin": "ROUTE",
+      "status": "UNSELECTED"
+    }
+  },
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "96a774f346184352259296e142c04cb5bd64a88d",
+      "sourceSnapshot": "2d2abff3a8a2c6a1b336b8cc149e70b5d97c6389",
+      "compared": "1cbdf4bee4d1079f2464612ae61ce54214d4753b..95456cf4f38dcbdd204e0e9da0f1f826a86404f7",
+      "message": "complexity-gate full base-to-current review found no in-scope P0/P1; only P3 suggestions",
+      "dispatchId": "dispatch-04b74690f39c915c36c1d530"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "96a774f346184352259296e142c04cb5bd64a88d",
+      "compared": "1cbdf4bee4d1079f2464612ae61ce54214d4753b..2c5ddabbf0fde7cd160e13b022e396f23d65e59c",
+      "message": "implementation-quality-gate independently reviewed full base-to-current candidate; go test ./..., go vet ./..., go build ./... and public candidate/legacy paths pass; no in-scope P0/P1.",
+      "dispatchId": "dispatch-f694234fc4f3e16238cd19bf"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "96a774f346184352259296e142c04cb5bd64a88d",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "fixture prepare; candidate start; active and terminal show/status/next/diagnose; drive and replay; inspect cleanup intent/receipt and snapshots",
+        "observation": "All start, active/terminal reads, drive and replay rc=0; no cleanup intent; cleanup receipt status=reconciled residue=false; snapshots stable.",
+        "oracleResult": "Oracle matched: engine/lightweight lifecycle, terminal COMPLETE/unverified=true, cleanup and read replay invariants.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Three isolated fixtures; candidate start with empty JSON, invalid JSON, and nonexistent receipt paths; capture rc/output and filesystem snapshots.",
+        "observation": "All three rc=1 with stable INVALID_INTAKE_CONFIRMATION errors; no run or registry writes and no path leakage.",
+        "oracleResult": "Oracle matched for empty, invalid, and unavailable intake receipts.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Eight independent receipt mismatch fixtures for source/revisions/digest/artifacts/authority/transport; candidate start each and compare snapshots.",
+        "observation": "All eight rc=1 INVALID_INTAKE_CONFIRMATION with zero writes; authority and transport are typed fields and validated.",
+        "oracleResult": "Oracle matched: all typed binding mismatches rejected before write.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Prepare receipt with confirmedAt 2000-01-01; candidate start, drive, reads, and replay.",
+        "observation": "Start/drive/read/replay all rc=0; terminal COMPLETE/unverified=true; cleanup and snapshots normal.",
+        "oracleResult": "Oracle matched: no wall-clock expiry for a consistent old confirmation.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Prepare isolated registries; test empty HOME, cross-root/target registry, and ambiguous same-HOME registrations.",
+        "observation": "All admission attempts rc=1 UNREGISTERED_INSTALL; no state or registry writes.",
+        "oracleResult": "Oracle matched: missing, unregistered, and conflicting admission records reject.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Four isolated candidate starts with --engine, --runtime, --identity, and --digest overrides.",
+        "observation": "All four rc=1 with exact flag-provided-not-defined errors; zero writes.",
+        "oracleResult": "Oracle matched: user cannot override engine/runtime/identity/digest.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Three isolated candidate starts with --split, --retained-overall, and --master legacy controls.",
+        "observation": "All three rc=1 with candidate-engine old-parameter rejection; zero writes.",
+        "oracleResult": "Oracle matched: candidate start rejects old control parameters.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Create active candidate run; mutate writer and six envelope fields in independent clones; drive and diagnose each clone with snapshots.",
+        "observation": "All seven drive attempts rc=1 UNSUPPORTED_RUN_VERSION; diagnose reports jsonReadable=true integrity=unsupported; clone snapshots unchanged.",
+        "oracleResult": "Oracle matched: envelope barriers cover writer and six fields and diagnose is read-only.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Create one active candidate run; invoke nine legacy write entries; then legal drive.",
+        "observation": "All nine legacy entries rc=1 UNSUPPORTED_ENGINE_ENTRY with run unchanged; legal drive completes.",
+        "oracleResult": "Oracle matched: complete old write-entry fence and subsequent candidate completion.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Prepare forward and reversed artifact receipts; candidate start/drive and terminal/read replay for each; compare canonical artifact lists and digests.",
+        "observation": "Both runs complete; artifacts canonicalized; intakeDigest and solution binding equal; one receipt each; replay snapshots stable.",
+        "oracleResult": "Oracle matched: reverse artifact input persists canonically without duplicate confirmation.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Run legacy start, prepare-action/record-action, requirement, show/diagnose/status/next, and cleanup using stable launcher.",
+        "observation": "Legacy chain and cleanup follow oracle; diagnose unsupported; status/next stable candidate-engine-only rejects; no candidate mutation.",
+        "oracleResult": "Oracle matched: legacy public command regression and candidate isolation.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Exercise legacy-active vs candidate-active same run-id, retained result fencing, and candidate terminal read/replay with isolated registries.",
+        "observation": "All runtime/retained mutual exclusion checks pass; no cross-runtime run or second writer.",
+        "oracleResult": "Oracle matched: candidate and legacy same-ID states are mutually exclusive.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Create legacy fixture and active candidate; run cleanup plus install --force and uninstall fencing; compare state/launcher/registry/recovery artifacts.",
+        "observation": "Cleanup succeeds; install and uninstall are rejected on active candidate; target artifacts and snapshots unchanged.",
+        "oracleResult": "Oracle matched: install/uninstall fencing and artifact stability.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Create active candidate; reject drive --event; snapshot; perform legal drive and all four reads; compare reject/read snapshots.",
+        "observation": "Parser rejects --event with zero writes; legal drive completes; four reads succeed; both snapshot comparisons cmp=0.",
+        "oracleResult": "Oracle matched: no external event channel and read paths are side-effect free.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "Create active candidate; reject nonexistent submit-result subcommand; snapshot; legal drive and four reads; compare snapshots.",
+        "observation": "Unknown subcommand rejected with zero writes; legal drive/read complete; reject/read cmp=0 and one engine run.",
+        "oracleResult": "Oracle matched: no second submit-result writer and read paths remain side-effect free.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3FacadeAdmissionAndPreWriteInputFence$ -count=1 -v",
+        "observation": "rc=0; all admission, identity, route, run-id, and capacity assertions passed; rejected starts left no engine namespace.",
+        "oracleResult": "oracle matched: admission-derived engine envelope and pre-write fences passed.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3ProtocolIntakeReceiptIsExactlyOnce$ -count=1 -v",
+        "observation": "rc=0; first receipt persisted at revision 2, exact replay preserved revision/bytes, changed digest was rejected without mutation.",
+        "oracleResult": "oracle matched: intake receipt is exactly-once and digest-bound.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly$ -count=1 -v",
+        "observation": "rc=0; terminal summary reopened after active cleanup and Show/Status/Next preserved immutable bytes.",
+        "oracleResult": "oracle matched: terminal replay is read-only and returns Complete.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3FacadeDiagnoseRawVersionBarrierIsReadOnly$ -count=1 -v",
+        "observation": "rc=0; malformed and unsupported envelopes were diagnosed with expected fields and input bytes unchanged.",
+        "oracleResult": "oracle matched: raw version barrier diagnose is read-only.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3TestkitNextResultSequenceHasExactlySixTypedBoundaries$ -count=1 -v",
+        "observation": "rc=0; sequence returned READY, ASK, WAIT, HOST_ACTION, OPERATOR, COMPLETE with payloads.",
+        "oracleResult": "oracle matched: all six typed NextResult boundaries are present exactly once.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite$ -count=1 -v",
+        "observation": "rc=0; unknown kind and provider-mismatch submits were rejected; revision and state remained unchanged.",
+        "oracleResult": "oracle matched: typed submit fence rejects invalid events before write.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3BC06FacadeOpenMissingReceiptHidesFilesystemPath$ -count=1 -v",
+        "observation": "rc=0; missing receipt returned exact stable error without root/state path leakage.",
+        "oracleResult": "oracle matched: missing-intake boundary is stable and hides filesystem details.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run ^TestPhase3BC06InstallFencesActiveLegacyAndCandidateRuns$ -count=1 -v",
+        "observation": "rc=0; install --force was rejected for both active legacy and candidate runs with state/registry unchanged.",
+        "oracleResult": "oracle matched: install fencing covers both runtime types.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3BC06CleanupTerminalCommitsReceiptAndClearsIntent$ -count=1 -v",
+        "observation": "rc=0; cleanup removed active files, wrote reconciled residue=false receipt, and left no intent.",
+        "oracleResult": "oracle matched: terminal cleanup commits receipt before clearing intent.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3BC06CandidateStartRejectsRetainedLegacyResult$ -count=1 -v",
+        "observation": "rc=0; candidate start rejected retained legacy result without creating engine namespace or changing result bytes.",
+        "oracleResult": "oracle matched: retained legacy result fences candidate start.",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run ^TestPhase3ProtocolRejectsFirstIntakeReceiptBindingMismatchBeforeWrite$ -count=1 -v",
+        "observation": "rc=0; eight typed mismatch subcases each rejected before persistence with unchanged revision/content and no intake receipt.",
+        "oracleResult": "oracle matched: all typed confirmation bindings are fenced before first write.",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-04b74690f39c915c36c1d530": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0740365c98f8ac803554e386": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-20d6dcb123c033572ec5fd35": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-30e2c258559cf195d2811426": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-34bb0ff5e0f80cab45ed9e67": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3dfc208f10c2c477c82d305b": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-45b3be7044757ce6b502fc4c": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-48f5f3834354132143c66835": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4f0d9d9aee59a6b0b382a431": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-704a288934fc93bddb69dc35": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-70b7f1106d8a0e2b634702c5": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-79baf8bf3757f4504a9ee13d": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-86902f4b32d929f7a92557ba": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-88de6b6aee5b8206dfe88bf4": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-97eeca91fa7fc76b3a54f359": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9e5117e84fd333ddb03373f7": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a9a6a23050b9c9ba9a89f226": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b7fd74a7a225fdf76fd16733": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c1f3f351d39d2ab6416eb2a3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c3e8618af57b96d85215ced3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c6133066df87cfaf2dd33070": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d0ea51619cbd5698bc9bb213": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dfcedbe07f5b9dc43f279f09": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e00363c41b5f908e1be0b0cc": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f694234fc4f3e16238cd19bf": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  },
+  "qaOnlyRerun": {
+    "sourceRunId": "phase-3-engine-vertical-loop",
+    "sourceSnapshot": "f54f9e34ca108b8459cd85befec86e115856d202",
+    "skippedStages": [
+      "product-review",
+      "start-readiness",
+      "development-worker"
+    ],
+    "authorizationNote": "user authorized QA/gate-only rerun from the sealed source run"
+  }
+}
