@@ -34,12 +34,17 @@
 legacy run 与 stable driver 的 state 仍为 legacy 格式（无版本 envelope，绑定 admission
 epoch/generation）。
 
+本主表的“阶段 0/1 绑定”列保留历史 baseline 词汇；其中 status/next/drive/submit 行虽以
+`legacy` 记录历史列，当前行为已由阶段 3 candidate façade 启用，具体 runtime、writer、错误码和
+证据以本文“阶段 3 公共 workflow 逐入口绑定”表为准。该表示法不回写阶段 0/1 曾提供 candidate
+公共入口的事实。
+
 | 入口 | runtime | 唯一 writer | schema/definition 版本绑定 | 允许的状态变化 | 错误码 | 是否只读 | 阶段 0 绑定 | 阶段 1 绑定 | 计划枚举 | 机器证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | start | legacy | stable driver legacy runtime（`validate.Start`，cli.go:358-378） | legacy state 无版本 envelope，绑定 admission epoch/generation；不迁移不回写（P0-JSON CASE-024） | 创建 run：写 `.gates/tmp/<run>/state.json`（ACTIVE）与需求工件；首次写前要求已提交 bootstrap receipt。**--split 现状**：legacy start 仍带 `--split` 拆分意向声明（cli.go:370），与 §2.3 目标态（start 不接受拆分意向，拆分唯一绑定于 start-readiness PASS 后的拓扑确认）相反，属 legacy 维持项，阶段 3/4 迁移时改写并留修订记录 | UNREGISTERED_INSTALL（无 bootstrap receipt/登记失效，写前拒绝）、LOCK_HELD、参数校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-002/059/061；validate `TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation`（CASE-042）、`TestWhiteboxPhase0Round16FirstStartRequiresCommittedBootstrapReceipt`（CASE-061） |
 | show | legacy | 无（只读加载 `validate.LoadRunState`，cli.go:380-389） | 同上（读侧不引入新字段） | 无 | 加载错误文本（run 不存在/state 损坏） | 是 | legacy | legacy | 计划内 | P0-JSON CASE-020/024（installed binary show rc=0） |
-| status | 无（不在注册表，显式拒绝） | 无 | 无 | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: status`（cli.go:321 default 分支） | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | 注册表缺席本身（cli.go:327-356）+ 反向普查测试 `route_matrix_test.go` 机械断言缺席。证据缺口：无专门针对 `status` token 的既有拒绝用例，拒绝由注册表缺席结构性保证 |
-| next | 无（不在注册表，显式拒绝） | 无 | 无 | 无 | rc=1 + `unknown workflow subcommand: next` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | 同 status：注册表缺席 + 反向普查测试断言。证据缺口：无专门 token 拒绝用例 |
+| status | candidate engine（阶段 3 installed façade） | 无（只读 engine projection） | engine 六字段 envelope；终态可读 terminal summary | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | legacy | legacy | 计划内 | `TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
+| next | candidate engine（阶段 3 installed façade） | 无（只读 engine projection） | engine 六字段 envelope；终态可读 terminal summary | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | legacy | legacy | 计划内 | `TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
 | diagnose | legacy（只读 raw/envelope parser，§2.3 唯一 raw read 例外） | 无（只读诊断 `validate.DiagnoseState`，cli.go:391-411；terminal summary 回落 `validate.RunSummaryPath`） | 最小 raw parser 不要求 envelope：legacy state 报 `state has no version envelope` 建议（不迁移）；版本化 state 校验四字段 envelope | 无（fixture bytes/mode/mtime 逐字节不变） | UNSUPPORTED_RUN_VERSION（缺失/mismatch 时作为 recommendation）；malformed JSON 报 `jsonReadable:false` | 是 | legacy | legacy | 计划内 | P0-JSON CASE-023/024；validate `TestWhiteboxPhase0DiagnoseRawReadOnlyFallback`（CASE-036） |
 | resume | legacy | stable driver legacy runtime（缺省 `validate.ResumeReport` 只读；`--adopt-external` → `validate.AdoptExternalChange` 写，cli.go:413-428） | legacy state 无版本 envelope | 缺省只输出 resume 报告；`--adopt-external --reason` 采信外部变更并重绑 current snapshot（写） | 采信校验错误文本 | 否（含写路径） | legacy | legacy | 计划内 | P0-JSON CASE-020/024（stable binary resume）；cli `workflow_test.go` resume 用例 |
 | abort | legacy | stable driver legacy runtime（`validate.Abort`，cli.go:430-452） | legacy state 无版本 envelope；终止后写 terminal summary | 终止 run：写 `.gates/results/<run>.json`（ABORTED）并清理 `.gates/tmp/<run>` | `--user-confirm` 二段确认缺失即拒（确认前不调 validate.Abort）；终止校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-020（abort 产出 terminal summary）；cli `workflow_test.go` abort 用例 |
@@ -65,8 +70,9 @@ epoch/generation）。
 | carry | legacy | stable driver legacy runtime（`validate.RecordCarry`，cli.go:942-959） | legacy state 无版本 envelope | carry 处置决定留痕（含主代理接管理由） | 处置输入校验错误文本 | 否 | legacy | legacy | 计划内 | validate `decoupled_qa_test.go`、`repro_carry_regression_test.go`；cli `workflow_carry_seal.go` |
 | authorize-repair | legacy | stable driver legacy runtime（`validate.AuthorizeExtraRepair`，cli.go:773-793） | legacy state 无版本 envelope | 授权额外修复轮（轮次/QA 范围授权留痕） | 授权参数校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` authorize-repair 用例；P0-JSON skipAuthorizations 机制 |
 | seal | legacy | stable driver legacy runtime（`validate.Seal`，cli.go:795-808） | legacy state 无版本 envelope；Seal 写 terminal summary（.gates/results/<run>.json，SEALED）并支持 squash 集成 | 终态封板：admission/identity 校验先于 git squash；写封板产物（含黑盒用例交付物） | admission 失败不产生 committed seal；门未过需 --user-requested 授权留痕 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-045；`TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash`；cli `workflow_test.go` seal 用例 |
-| drive | 无（不在注册表，显式拒绝） | 无 | 无（engine 驱动面未实现，阶段 3 交付） | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: drive` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | validate `TestRouteMatrixUnsupportedFacesExplicitlyRejectedByPublicCLI`（真实 CLI 拒绝且工作目录零写入）；`TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens`（CASE-058：帮助/文档无 drive/submit token）；反向普查测试机械断言注册表缺席 |
-| submit | 无（不在注册表，显式拒绝） | 无 | 公开面无；阶段 2 的幂等 submit 仅存在于下表 `protocol.Engine.Submit` 内部协议面 | 无（公开拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit` | 是（拒绝即无写入） | unsupported | unsupported | 计划内 | cli `TestCLIWorkflowFutureRejectsSubmitAlias`；validate `TestRouteMatrixUnsupportedFacesExplicitlyRejectedByPublicCLI`（真实 CLI 拒绝且工作目录零写入）；`TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens`（CASE-058） |
+| drive | candidate engine（阶段 3 installed façade） | engine Controller/drive handler（唯一 engine writer） | engine 六字段 envelope；`definitionSource`/`definitionDigest`/package/installed identity 精确匹配 | `Observe → Decide → SelectIssued`；lightweight 自动终结并保留 terminal summary | `UNSUPPORTED_RUN_VERSION`、`REVISION_CONFLICT`、`BUSINESS_REJECT`、声明的 engine failure class | 否 | legacy | legacy | 计划内 | `TestPhase3ProtocolIntakeReceiptIsExactlyOnce`、`TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
+| submit | candidate engine（阶段 3 installed façade） | engine submit handler（唯一 engine writer） | engine 六字段 envelope + typed event/request/freshness 绑定 | 接纳 typed event 后继续确定性决策；同 ID 同 digest 幂等 | `UNSUPPORTED_RUN_VERSION`、`STALE_REQUEST`、`DIGEST_MISMATCH`、`INVALID_EVENT`、`REVISION_CONFLICT` | 否 | legacy | legacy | 计划内 | `TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite`；阶段 3 逐入口覆盖表为当前绑定 |
+| submit-result | 无（不提供第二事件写入口） | 无 | 无 | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit-result` | 是（拒绝即无写入） | unsupported | unsupported | 计划未枚举 | `TestCLIWorkflowFutureRejectsSubmitAlias`；阶段 3 只允许 typed `workflow submit`，`submit-result` 是明确禁止的第二写通道；route-matrix 反向普查的 unsupported negative probe |
 | future | legacy（阶段 0 冻结的 versioned future surface 契约入口，非 workflow state writer） | future writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:3db87c9c…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 future 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`future submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowFutureRejectsSubmitAlias` |
 
 ### 阶段 2 公开 workflow 绑定补表
@@ -186,3 +192,52 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
   `workflow submit` 仍显式 `unsupported`。新增 writer 仅为隔离 state directory 内的
   `protocol.Engine`/`persistence.Store`，经 internal API 或 test-only harness 调用，不是公开
   CLI，也不接管 stable legacy run。阶段 3–7 绑定留待对应阶段更新。
+
+## 阶段 3 绑定结论（§5.11 一句式）
+
+- 阶段 3 的 runtime 选择由已安装并通过 admission 的 target identity/package digest 决定，不新增
+  用户 runtime、identity 或 digest 参数：候选 façade 从 admission/launcher registry 解析 installed
+  target 的 identity/package digest，`start` 创建带 owning engine/package envelope 的
+  engine run；stable driver target 的 `start` 继续创建 legacy run。engine façade 后续只按 envelope
+  选择并拒绝跨 runtime。
+- 候选 engine 公共面启用 `start`、`drive`、`submit`、`show`、`status`、`next`、`diagnose`；
+  `start` 前置为已确认 intake，首次 `drive` 自动登记 intake receipt/digest。lightweight terminal
+  summary 标记 `unverified=true`。旧 `requirement`、公开 `cleanup` 及其他未迁移旧 workflow 写入口
+  在 engine run 上明确 unsupported/zero-write，在 stable legacy run 上维持原有语义；不引入第二个
+  writer 或第二次需求确认。
+
+## 阶段 3 公共 workflow 逐入口绑定（实现前冻结）
+
+本表是上方阶段 0/1 主表和阶段 2 补表在阶段 3 的权威覆盖；同名入口在本表出现时，以本表
+的 candidate/stable 分流为准。每个新增或改变的公共入口在实现前必须具备完整列，避免只写
+阶段结论而无法冻结验收判据。
+
+| 入口 | runtime | 唯一 writer | schema/definition 版本绑定 | 允许的状态变化 | 错误码 | 是否只读 | 阶段 3 绑定 | 计划枚举 | 机器证据 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| start（candidate target） | candidate engine（由 admission/launcher registry 的 installed-target identity/package digest 选择） | engine bootstrap handler（唯一 bootstrap writer） | 阶段 0 冻结 stable driver 仍只写既有确认状态；固定 launcher 从已确认 formal run 状态和登记集工件派生 `intakeConfirmationReceipt.json`，并按原相对路径注入 candidate test project；`StartRequest` 仅通过 `--intake-receipt <path>`/固定 host config 指针取得 typed receipt；写入 `workflowDefinitionVersion`、`stateSchemaVersion`、`definitionSource`、`definitionDigest`、owning `packageDigest`、`installedTargetIdentity`、requirement/solution bindings 与 `intakeDigest` | 只从 admission registry 解析 owning identity；以当前注入工件重算 binding，校验确认回执并创建 engine envelope 与 ACTIVE run；缺失/旧回执、工件变更或其他 binding 不一致首写前零写入；不接受 runtime/identity/digest 参数和 `--split`/`--retained-overall`/`--master`，不写第二次确认事件；stable driver 不新增 writer/公共入口 | `UNREGISTERED_INSTALL`、`INVALID_INTAKE_CONFIRMATION`、`UNSUPPORTED_RUN_VERSION`、`LOCK_HELD`、参数校验错误 | 否 | candidate installed target 创建 engine run；stable target 仍走下行 legacy 行 | 计划内 | 阶段 3 start admission/intake/identity/receipt-transport/zero-write fixtures |
+| start（stable target） | legacy | stable driver legacy runtime | 既有 legacy state/admission epoch/generation（不迁移） | 创建 legacy run，语义保持阶段 0/1/2 | 既有 `UNREGISTERED_INSTALL`、`LOCK_HELD`、参数校验错误 | 否 | legacy 回归对照，不进入 engine namespace | 计划内 | P0-JSON CASE-002/059/061 |
+| drive（candidate target） | candidate engine | engine Controller/drive handler（内部状态 writer；不接收外部事件） | loader 写前精确校验六字段 envelope：版本、`definitionSource`/`definitionDigest`、owning `packageDigest`/`installedTargetIdentity` | `Observe → Decide → SelectIssued`；首次 drive 原样登记 intake receipt/digest；lightweight 随后自动 cleanup 并提交 `unverified=true` terminal summary；六类边界由 whitebox/test-only harness 覆盖 | `UNSUPPORTED_RUN_VERSION`、`REVISION_CONFLICT`、`BUSINESS_REJECT`、声明的 engine failure class | 否 | 无 `--event` 第二通道；同一 run runtime 固定 | 计划内 | 阶段 3 drive/receipt/CAS/cleanup fixtures |
+| submit（candidate target） | candidate engine | engine submit handler（start 后唯一外部事件 writer） | typed event/receipt + request/action ID、freshness、当前节点、source binding 与 digest；禁止 `drive --event`/`submit-result` | 接纳用户决定、worker result、HostAction/lifecycle receipt 后继续确定性决策；同 ID 同 digest 幂等 | `UNSUPPORTED_RUN_VERSION`、`STALE_REQUEST`、`DIGEST_MISMATCH`、`INVALID_EVENT`、`REVISION_CONFLICT` | 否 | 不新增第二 workflow writer | 计划内 | 阶段 3 submit 幂等/旧 Attempt/receipt fixtures |
+| show（candidate target） | candidate engine | 无（只读 engine projection） | 同 drive 的六字段 envelope；终态可读 terminal summary | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | 只读查看 engine state/summary | 计划内 | 阶段 3 show/terminal replay fixtures |
+| status（candidate target） | candidate engine | 无（只读 engine projection） | 同 show；可展示 freshness token 与 `availableActions` | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | 新增公开只读面，不写状态 | 计划内 | 阶段 3 status/read-only fixtures |
+| next（candidate target） | candidate engine | 无（只读 engine projection） | 同 show；返回 canonical Plan 的唯一 `NextResult` kind | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | lightweight installed candidate 公共路径返回 `Complete`；六类 union contract 由 whitebox/test-only harness 覆盖，regular 公共路径留阶段 4 | 计划内 | 阶段 3 六类 NextResult/terminal replay fixtures |
+| diagnose（candidate 或 legacy） | candidate engine / legacy raw parser | 无（只读 raw/envelope parser） | candidate 报告六字段 envelope 缺失/mismatch；legacy 允许最小 raw parser，不迁移 | 无；fixture bytes/mtime/path 不变 | `UNSUPPORTED_RUN_VERSION` 作为 recommendation；malformed JSON 报 `jsonReadable:false` | 是 | 唯一 raw read 例外，不得绕过 decoder 写入 | 计划内 | 阶段 3 version/diagnose zero-write fixtures；P0-JSON CASE-023/024 |
+| requirement（engine run） | candidate engine | 无（显式 unsupported handler） | 不加载或改写 engine envelope | 无；拒绝前后 state/receipt/mtime 零变化 | `UNSUPPORTED_ENGINE_ENTRY`（稳定错误） | 是（拒绝即零写入） | 旧命令不能再次确认或绕过 intake binding | 计划内 | 阶段 3 old-requirement zero-write negative |
+| requirement（stable legacy run） | legacy | stable driver legacy runtime | 既有 legacy state/admission 绑定 | 需求确认/变化与工件登记保持原有 legacy 语义 | 既有需求源/工件校验错误 | 否 | 仅 legacy 回归对照 | 计划内 | P0-JSON CASE-012；cli workflow requirement tests |
+| cleanup（engine run） | candidate engine | 无（显式 unsupported handler；清理由 engine terminal handler 承担） | 不加载或改写 engine envelope | 无；不得删除活动 engine run | `UNSUPPORTED_ENGINE_ENTRY`（稳定错误） | 是（拒绝即零写入） | 公开 cleanup 不能成为第二清理通道；终结由 intent→execute→observe/reconcile→commit 完成 | 计划内 | 阶段 3 public-cleanup zero-write negative |
+| cleanup（stable legacy run） | legacy | stable driver legacy runtime | 既有 legacy state/admission 绑定 | 终态 `.gates/tmp` 清理保持原有语义 | 既有 admission/unsafe run-id 错误 | 否 | legacy 回归对照 | 计划内 | P0-JSON CASE-063 |
+
+### 阶段 3 未迁移旧入口的 engine 分流
+
+`resume`、`abort`、`reset`、`route`、`route-add`、`slicing`、`settle-findings`、`qa-worktree`、
+`prepare-*`、`claim-dispatch`、`record-*`、`snapshot`、`carry`、`authorize-repair`、`seal` 等
+未在本阶段启用 engine handler 的入口，先按 run envelope 分流：命中 candidate engine run 时统一返回
+`UNSUPPORTED_ENGINE_ENTRY` 且 state/receipt/mtime 零变化；命中 stable legacy run 时继续走既有 legacy
+语义。它们不得因 run ID 相同而落到另一 runtime，也不得成为 engine 的第二 writer。
+
+### 阶段 3 六类边界的证据层级
+
+阶段 3 的 installed-candidate 黑盒只把 lightweight 公共路径验到 `Complete`，并验证上述 façade、
+版本/身份、旧入口和隔离负向；`Ask`、`Ready`、`HostAction`、`Wait`、`Operator` 五类只有通过
+whitebox/test-only sequence harness 验证。阶段 4 regular 公共路径建立后，再把这五类扩展为候选
+公共黑盒路径。

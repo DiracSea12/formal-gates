@@ -367,12 +367,21 @@ type LifecycleVerification struct {
 // wire projection.
 type State struct {
 	decision.State
-	Expected       []runtime.TaskKey           `json:"expected"`
-	Attempts       map[runtime.TaskKey]Attempt `json:"attempts"`
-	PendingActions map[string]PendingAction    `json:"pendingActions"`
-	PendingAsks    map[string]PendingAsk       `json:"pendingAsks"`
-	Decisions      map[string]RecordedDecision `json:"decisions"`
-	Events         map[string]EventRecord      `json:"events"`
+	// Run metadata is owned by the engine façade but persisted with the same
+	// authoritative state document so a read never needs a second workflow
+	// writer.  Confirmation is captured at start; IntakeReceipt is populated by
+	// the first drive and is intentionally not a second confirmation event.
+	RunID                     string                      `json:"runId,omitempty"`
+	Route                     string                      `json:"route,omitempty"`
+	InstalledTargetIdentity   string                      `json:"installedTargetIdentity,omitempty"`
+	IntakeConfirmationReceipt *IntakeConfirmationReceipt  `json:"intakeConfirmationReceipt,omitempty"`
+	IntakeReceipt             *IntakeReceipt              `json:"intakeReceipt,omitempty"`
+	Expected                  []runtime.TaskKey           `json:"expected"`
+	Attempts                  map[runtime.TaskKey]Attempt `json:"attempts"`
+	PendingActions            map[string]PendingAction    `json:"pendingActions"`
+	PendingAsks               map[string]PendingAsk       `json:"pendingAsks"`
+	Decisions                 map[string]RecordedDecision `json:"decisions"`
+	Events                    map[string]EventRecord      `json:"events"`
 
 	// RunProvider 是 run 绑定的宿主 provider 身份（Init 落账）：一切携带
 	// provider 的事件/回执与之精确比对，不同或为空即硬拒绝（draft §9.1
@@ -408,6 +417,54 @@ type State struct {
 	ObsoleteResults   map[string]WorkerResult          `json:"obsoleteResults"`
 	RecoveryRecords   []RecoveryRecord                 `json:"recoveryRecords"`
 	ReconciledEffects map[string]ReconciledEffect      `json:"reconciledEffects"`
+}
+
+// IntakeArtifact is one canonical requirement/solution artifact binding.
+type IntakeArtifact struct {
+	Path     string `json:"path"`
+	Revision string `json:"revision"`
+}
+
+// IntakeAuthority identifies the stable driver that owns the confirmation.
+// It is a closed value so a candidate cannot accept a receipt made by an
+// unrelated writer.
+type IntakeAuthority string
+
+const (
+	IntakeAuthorityStableDriver IntakeAuthority = "stable-driver"
+)
+
+// IntakeTransport identifies the fixed launcher transport used to deliver the
+// confirmation receipt.  A candidate accepts only this documented transport.
+type IntakeTransport string
+
+const (
+	IntakeTransportStableLauncher IntakeTransport = "stable-launcher"
+)
+
+// IntakeConfirmationReceipt is the typed pre-start acceptance supplied by the
+// host.  It is deliberately data-only: validation and canonical digesting are
+// performed by the façade before Engine.Init writes anything.
+type IntakeConfirmationReceipt struct {
+	Source              string           `json:"source"`
+	Authority           IntakeAuthority  `json:"authority"`
+	Transport           IntakeTransport  `json:"transport"`
+	RequirementSource   string           `json:"requirementSource"`
+	RequirementRevision string           `json:"requirementRevision"`
+	Artifacts           []IntakeArtifact `json:"artifacts"`
+	SolutionRevision    string           `json:"solutionRevision"`
+	SolutionDigest      string           `json:"solutionDigest"`
+	ConfirmedAt         string           `json:"confirmedAt,omitempty"`
+	ExpiresAt           string           `json:"expiresAt,omitempty"`
+	Digest              string           `json:"digest,omitempty"`
+}
+
+// IntakeReceipt is the first-drive durable projection of the exact
+// IntakeConfirmationReceipt and its canonical digest.
+type IntakeReceipt struct {
+	Confirmation IntakeConfirmationReceipt `json:"confirmation"`
+	IntakeDigest string                    `json:"intakeDigest"`
+	Revision     uint64                    `json:"revision"`
 }
 
 // NewState 构造空台账的初始状态；决策视图经 decision.NewState 校验，

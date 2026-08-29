@@ -169,6 +169,7 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 - task/dispatch/Attempt 与 source bindings；
 - pending Ask、available-action freshness、obligations、impact set；
 - typed `ReviewScopeMode` 与逐项 QA approved whitelist（按 review/candidate/result 绑定）；
+- `AcceptanceManifest`、case↔acceptance-point map 及其 digest（按需求 revision、route/topology scope 绑定）；
 - split topology、`sliceID -> childRunID` 与 receipts；
 - terminal summary 的最后 request/event receipt；
 - `definitionDigest` 与 owning runtime `packageDigest` 的双重绑定与校验记录。
@@ -196,6 +197,12 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 普通修改请求只提醒一次可使用 formal-gates；复杂请求在完整需求/方案确认后、动手前再提醒一次。提醒均不需要用户回应，也不阻塞直接处理。
 
 用户主动提出 formal-gates 后直接进入受理，不再重复问“是否进入正式流程”。主代理逐项澄清需求和重大技术选择，然后单独请求确认完整整合后的需求与方案；只有确认后才能 `start`。`start` 后首个 `drive` 自动登记 intake receipt/digest，不再次询问同一份确认。
+
+受理确认的 typed `intakeConfirmationReceipt` 以固定 stable driver 已写入的确认状态为权威来源；
+固定 launcher 从该状态和登记的 requirement/solution 工件派生回执并落到 formal run evidence，再按
+原相对路径注入候选 test project。候选 `start` 通过 `--intake-receipt <path>` 或固定 host config
+指针读取，不能自行生成回执、读取 stable run state 或用 runtime/identity/digest 参数替代；旧回执配
+当前工件必须在首写前稳定拒绝。stable driver 不因候选 engine 阶段新增 writer 或公共入口。
 
 若用户尚未明确，受理时选择 lightweight 或 regular。lightweight 是 bootstrap 例外，不经拆分和 full/custom 路线，登记需求后直接 Seal 并标记 unverified；regular 不能在运行中改成 lightweight。
 
@@ -359,6 +366,8 @@ repair 的生产改动先形成新 `Dn`，再从它重建/对账 whitebox worksp
 
 黑盒 case review、白盒 test/case review、merge QA case review 使用同一确定性 `PreWaveReviewPolicy`，并持久化 typed `ReviewScopeMode`：首次建立基线为 `FULL`，后续新增、修改或 ImpactSet 受影响项为 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。QA case/test review 与 execution 均逐项使用 approved whitelist；缺失、未知、重复条目或仅总体 PASS 的结果拒绝，只有每项明确 `PASS` 才进入持久化 approved whitelist。按 run/child、review kind、requirement revision 与 route/topology scope 分别计数。第 1、2 次语义 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask fresh redesign、重试/fresh review、改需求、对精确 case-set/candidate 带理由 waiver/skip，或 abort。PASS 关闭/重置 series，runtime error 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（关联留痕），不因 P2 建议本身触发新 review 轮；自拟扩展仍需 fresh review。
 
+覆盖契约的最小结构是：每次 review 先冻结当前需求 revision、route/topology scope 的 `AcceptanceManifest`，由 case↔acceptance-point map 声明多对多覆盖关系，并同时返回逐 case 决策和逐 point `PointReviewDecision`。适用 point 必须有 approved case；执行必须绑定 manifest/map/whitelist digest 和当前 `ValidationCandidate`，摘要展开为 `pointID → caseID → result`，并区分 `EXECUTED_PASS` 与 `AUTHORIZED_SKIP`。这些结构性校验由 Controller/validator 完成，不依赖 agent 口头声明。
+
 ## 8. 分片、主线合并与 VCS
 
 ### 8.1 生命周期
@@ -504,6 +513,10 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 - 实现 failure-class 路由、UNKNOWN、中断、旧 Attempt、result-before-receipt 和本地 effect 对账，测试 engine 故障不会动态降级为 agent。
 
 ### 阶段 3：完整流程迁移
+
+> 本节沿用总方案的能力分层编号；交付顺序以 `incremental-seal-plan.md` 为准。增量计划的
+> “阶段 3”是先证明最小纵向 engine 闭环，本节所述完整流程迁移在该闭环 Seal 后的后续阶段
+> 才执行，不属于当前阶段 3 Batch。
 
 - 迁移 intake、产品/技术审、start-readiness、路线、两阶段需求变化、开发、白盒独立 authoring/完整候选、production-view 并行/reuse、白盒执行、repair、精确 promotion、adopt-external 和 Seal cleanup；同步修改 `gates/implementation-quality-gate.md`、catalog scope 与 README，移除实现质量门的测试代码审查责任，测试质量只由白盒 review 承担；门内维度保持显式命名且互不压制（需求覆盖、实现-需求偏差、架构与耦合、实现正确性与质量并列，架构与耦合不回退为无名段落）。
 - 强制完整 frontier 与自动 refill。

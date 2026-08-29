@@ -127,8 +127,10 @@ type Envelope struct {
 	Writer                    string `json:"writer"`
 	StateSchemaVersion        string `json:"stateSchemaVersion"`
 	WorkflowDefinitionVersion string `json:"workflowDefinitionVersion"`
+	DefinitionSource          string `json:"definitionSource,omitempty"`
 	DefinitionDigest          string `json:"definitionDigest"`
 	PackageDigest             string `json:"packageDigest"`
+	InstalledTargetIdentity   string `json:"installedTargetIdentity,omitempty"`
 }
 
 // expectedEnvelope 返回当前 engine 身份下的唯一合法信封。
@@ -137,8 +139,10 @@ func expectedEnvelope(cfg Config) Envelope {
 		Writer:                    Writer,
 		StateSchemaVersion:        encoder.StateSchemaVersion,
 		WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion,
+		DefinitionSource:          cfg.DefinitionSource,
 		DefinitionDigest:          definition.WorkflowDefinitionDigest,
 		PackageDigest:             cfg.PackageDigest,
+		InstalledTargetIdentity:   cfg.InstalledTargetIdentity,
 	}
 }
 
@@ -162,6 +166,25 @@ func ValidateEnvelope(observed Envelope, packageDigest string) error {
 	return validateEnvelope(observed, Config{PackageDigest: packageDigest})
 }
 
+// ValidateEnvelopeWithIdentity is the candidate-facing write barrier.  It
+// keeps the phase-2 package-only helper above intact while allowing a façade to
+// require the full phase-3 definition-source and installed-target identity.
+func ValidateEnvelopeWithIdentity(observed Envelope, packageDigest, definitionSource, installedTargetIdentity string) error {
+	if strings.TrimSpace(packageDigest) == "" {
+		return fmt.Errorf("persistence: package digest is required")
+	}
+	if strings.TrimSpace(definitionSource) == "" {
+		return &UnsupportedRunVersionError{Field: "definitionSource", Expected: definitionSource, Observed: observed.DefinitionSource}
+	}
+	if strings.TrimSpace(installedTargetIdentity) == "" {
+		return &UnsupportedRunVersionError{Field: "installedTargetIdentity", Expected: installedTargetIdentity, Observed: observed.InstalledTargetIdentity}
+	}
+	return validateEnvelope(observed, Config{
+		PackageDigest: packageDigest, DefinitionSource: definitionSource,
+		InstalledTargetIdentity: installedTargetIdentity,
+	})
+}
+
 // validateEnvelope 逐字段精确比对信封。缺失字段即零值，同样落入不精确
 // 匹配；调用方据此在写入前拒绝，本包不做迁移、修复或兼容读取。
 func validateEnvelope(observed Envelope, cfg Config) error {
@@ -174,6 +197,12 @@ func validateEnvelope(observed Envelope, cfg Config) error {
 		{"workflowDefinitionVersion", observed.WorkflowDefinitionVersion, expected.WorkflowDefinitionVersion},
 		{"definitionDigest", observed.DefinitionDigest, expected.DefinitionDigest},
 		{"packageDigest", observed.PackageDigest, expected.PackageDigest},
+	}
+	if expected.DefinitionSource != "" {
+		checks = append(checks, struct{ field, got, want string }{"definitionSource", observed.DefinitionSource, expected.DefinitionSource})
+	}
+	if expected.InstalledTargetIdentity != "" {
+		checks = append(checks, struct{ field, got, want string }{"installedTargetIdentity", observed.InstalledTargetIdentity, expected.InstalledTargetIdentity})
 	}
 	for _, check := range checks {
 		if check.got != check.want {
@@ -261,8 +290,10 @@ type document struct {
 	Writer                    string          `json:"writer"`
 	StateSchemaVersion        string          `json:"stateSchemaVersion"`
 	WorkflowDefinitionVersion string          `json:"workflowDefinitionVersion"`
+	DefinitionSource          string          `json:"definitionSource,omitempty"`
 	DefinitionDigest          string          `json:"definitionDigest"`
 	PackageDigest             string          `json:"packageDigest"`
+	InstalledTargetIdentity   string          `json:"installedTargetIdentity,omitempty"`
 	Revision                  uint64          `json:"revision"`
 	ContentDigest             string          `json:"contentDigest"`
 	Content                   json.RawMessage `json:"content"`
@@ -273,8 +304,10 @@ func (d *document) envelope() Envelope {
 		Writer:                    d.Writer,
 		StateSchemaVersion:        d.StateSchemaVersion,
 		WorkflowDefinitionVersion: d.WorkflowDefinitionVersion,
+		DefinitionSource:          d.DefinitionSource,
 		DefinitionDigest:          d.DefinitionDigest,
 		PackageDigest:             d.PackageDigest,
+		InstalledTargetIdentity:   d.InstalledTargetIdentity,
 	}
 }
 

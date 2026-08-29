@@ -94,6 +94,68 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	}
 }
 
+func TestQAOnlyRerunReopensQAAndGatesFromSealedRun(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	base := gitHead(t, root)
+	source := mustStart(t, root, pkg, "sealed-source")
+	source.Status = "SEALED"
+	source.RequirementConfirmed = true
+	source.Slicing = &Slicing{Decision: "no-split", Note: "one coherent batch"}
+	source.RouteMode = "full"
+	source.SelectedGates = []string{"blackbox", "whitebox", "quality"}
+	source.Actions["requirements-clarification"] = ActionResult{Status: "PASS"}
+	source.Actions["product-review"] = ActionResult{Status: "PASS"}
+	source.Actions["start-readiness"] = ActionResult{Status: "PASS"}
+	source.Actions["development-worker"] = ActionResult{Status: developmentComplete}
+	source.QACasesByMode = map[string][]QACase{"blackbox": {{ID: "CASE-001", Mode: "blackbox", Description: "start works", Procedure: "start and drive", Oracle: "complete", ReviewStatus: "PASS"}}}
+	source.QAExecutionByMode = map[string]QAExecutionResult{"blackbox": {Status: "PASS", Snapshot: base, Cases: []QAResultRecord{{CaseID: "CASE-001", Mode: "blackbox", Outcome: "PASS", Procedure: "start and drive", Observation: "complete", OracleResult: "PASS"}}}}
+	source.QAReviewByMode = map[string]ActionResult{"blackbox": {Status: "PASS"}}
+	source.QADesignByMode = map[string]ActionResult{"blackbox": {Status: "PASS"}}
+	if err := SaveRunSummary(root, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeBlackboxCases(root, source); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "rerun-candidate.txt"), "candidate\n")
+	commitAll(t, root, "candidate change")
+
+	run, err := Start(StartOptions{
+		Root:              root,
+		PackageRoot:       pkg,
+		RunID:             "qa-only-rerun",
+		Flow:              formalFlow,
+		RequirementSource: "requirements.md",
+		RequirementArtifacts: []string{
+			"design.md",
+		},
+		VCS:              "git",
+		FromSealedRun:    source.RunID,
+		FromSealedReason: "user requested Stage 3 QA/gate rerun only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !run.RequirementConfirmed || run.RouteMode != "full" || run.CurrentSnapshot == source.CurrentSnapshot || run.BaseSnapshot != source.BaseSnapshot {
+		t.Fatalf("QA-only rerun did not bind the new candidate and source route: %+v", run)
+	}
+	if run.Actions["product-review"].Status != "PASS" || run.Actions["start-readiness"].Status != "PASS" || run.Actions["development-worker"].Status != developmentComplete {
+		t.Fatalf("upstream skip handoff was not recorded: %+v", run.Actions)
+	}
+	if run.QAOnlyRerun == nil || run.QAOnlyRerun.SourceRunID != source.RunID || len(run.QAOnlyRerun.SkippedStages) != 3 {
+		t.Fatalf("QA-only provenance missing: %+v", run.QAOnlyRerun)
+	}
+	if len(run.QACasesByMode["blackbox"]) != 1 || run.QACasesByMode["blackbox"][0].ReviewStatus != "PASS" {
+		t.Fatalf("approved blackbox case was not reused: %+v", run.QACasesByMode)
+	}
+	if run.QAExecutionByMode["blackbox"].Snapshot != source.CurrentSnapshot || run.QAExecutionByMode["blackbox"].Status != "PASS" {
+		t.Fatalf("prior QA execution was not preserved as rerun source: %+v", run.QAExecutionByMode)
+	}
+	if run.Gates["quality"].Status != "PENDING" {
+		t.Fatalf("gate result was incorrectly carried into the final-candidate rerun: %+v", run.Gates["quality"])
+	}
+}
+
 func TestRequirementSourceCanPromoteAnAdditionalArtifact(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "promote-artifact"), "custom", []string{"quality"})

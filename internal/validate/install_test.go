@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestInstallAndBootstrapAllowActiveWorkflowRun(t *testing.T) {
+func TestInstallFencesActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testing.T) {
 	source := copyPackageFixture(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -20,23 +20,37 @@ func TestInstallAndBootstrapAllowActiveWorkflowRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	installed, err := Install(InstallOptions{
+	_, err := Install(InstallOptions{
 		Source: source, Host: "claude", Scope: "project", Project: project,
 		RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
 	})
-	if err != nil {
-		t.Fatalf("install was fenced by an active run: %v", err)
+	if err == nil || !strings.Contains(err.Error(), `active workflow run "active-run"`) || !strings.Contains(err.Error(), "fences install") {
+		t.Fatalf("install did not fence active run: %v", err)
 	}
-	if len(installed.Targets) != 1 {
-		t.Fatalf("unexpected install report: %+v", installed)
+
+	bootstrapProject := t.TempDir()
+	bootstrapRegistry := filepath.Join(t.TempDir(), "registry.json")
+	bootstrapLauncher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+	if _, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: bootstrapProject,
+		RegistryPath: bootstrapRegistry, BinaryTarget: bootstrapLauncher, Force: true, SkipHooks: true,
+	}); err != nil {
+		t.Fatalf("bootstrap fixture install failed: %v", err)
+	}
+	bootstrapState := filepath.Join(bootstrapProject, ".gates", "tmp", "active-run", "state.json")
+	if err := os.MkdirAll(filepath.Dir(bootstrapState), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bootstrapState, []byte(`{"runId":"active-run","status":"ACTIVE"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := Install(InstallOptions{
-		Source: source, Host: "claude", Scope: "project", Project: project,
-		RegistryPath: registry, BinaryTarget: launcher, Bootstrap: true,
+		Source: source, Host: "claude", Scope: "project", Project: bootstrapProject,
+		RegistryPath: bootstrapRegistry, BinaryTarget: bootstrapLauncher, Bootstrap: true,
 		Force: true, SkipHooks: true,
 	}); err != nil {
-		t.Fatalf("bootstrap was fenced by an active run: %v", err)
+		t.Fatalf("bootstrap was unexpectedly fenced by an active run: %v", err)
 	}
 }
 

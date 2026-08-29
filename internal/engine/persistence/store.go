@@ -27,7 +27,14 @@ const (
 // 注入期望值并参与逐字段精确校验。
 type Config struct {
 	PackageDigest string
-	FaultInjector func(FaultPoint) error
+	// DefinitionSource and InstalledTargetIdentity optionally bind a candidate
+	// run to the exact definition file and admitted installed target.  The
+	// phase-2 protocol leaves these empty for legacy test fixtures; candidate
+	// façades provide both so the loader can enforce the phase-3 six-field
+	// envelope without changing existing callers.
+	DefinitionSource        string
+	InstalledTargetIdentity string
+	FaultInjector           func(FaultPoint) error
 }
 
 // Snapshot 是一次成功 Load 的只读结果：revision、内容摘要与内容字节。
@@ -87,11 +94,71 @@ func NewStore(dir string, cfg Config) (*Store, error) {
 	return &Store{dir: abs, cfg: cfg}, nil
 }
 
+// NewStoreWithIdentity is the candidate convenience constructor.  It accepts
+// the phase-3 envelope identity in one call while retaining NewStore's
+// phase-2 package-only API for existing protocol fixtures.
+func NewStoreWithIdentity(dir string, cfg Config) (*Store, error) {
+	return NewStore(dir, cfg)
+}
+
 func (s *Store) statePath() string { return filepath.Join(s.dir, stateFileName) }
 func (s *Store) intentPath() string {
 	return filepath.Join(s.dir, intentFileName)
 }
-func (s *Store) lockPath() string { return filepath.Join(s.dir, lockFileName) }
+func (s *Store) cleanupIntentPath() string  { return filepath.Join(s.dir, "cleanup.intent.json") }
+func (s *Store) cleanupReceiptPath() string { return filepath.Join(s.dir, "cleanup.receipt.json") }
+func (s *Store) lockPath() string           { return filepath.Join(s.dir, lockFileName) }
+
+func writeCleanupEvidence(path string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
+}
+
+// CleanupTerminal removes the active projection and any persistence protocol
+// scratch files after a run has reached its immutable terminal summary. The
+// run directory itself, including request.json and terminal-summary.json, is
+// intentionally retained for read-only replay. Cleanup takes the same process
+// and filesystem locks as Save so a concurrent writer cannot be mistaken for
+// a stale protocol file.
+func (s *Store) CleanupTerminal() error {
+	if s == nil {
+		return fmt.Errorf("persistence: cleanup: nil store")
+	}
+	processLock := transactionLock(s.dir)
+	processLock.Lock()
+	defer processLock.Unlock()
+	unlock, err := s.acquireLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if err := writeCleanupEvidence(s.cleanupIntentPath(), map[string]any{"status": "requested"}); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != stateFileName && name != intentFileName &&
+			!(strings.HasPrefix(name, tempPrefix) && strings.HasSuffix(name, tempSuffix)) {
+			continue
+		}
+		if removeErr := os.Remove(filepath.Join(s.dir, name)); removeErr != nil && !os.IsNotExist(removeErr) {
+			return removeErr
+		}
+	}
+	if err := writeCleanupEvidence(s.cleanupReceiptPath(), map[string]any{"status": "reconciled", "residue": false}); err != nil {
+		return err
+	}
+	return os.Remove(s.cleanupIntentPath())
+}
 
 // Load 读取并校验当前 state。文件不存在时返回包装的 fs.ErrNotExist；
 // 信封缺失或不精确匹配返回 UnsupportedRunVersionError，摘要不符返回
@@ -332,8 +399,10 @@ func newDocument(cfg Config, revision uint64, contentDigest string, content []by
 		Writer:                    env.Writer,
 		StateSchemaVersion:        env.StateSchemaVersion,
 		WorkflowDefinitionVersion: env.WorkflowDefinitionVersion,
+		DefinitionSource:          env.DefinitionSource,
 		DefinitionDigest:          env.DefinitionDigest,
 		PackageDigest:             env.PackageDigest,
+		InstalledTargetIdentity:   env.InstalledTargetIdentity,
 		Revision:                  revision,
 		ContentDigest:             contentDigest,
 		Content:                   append(json.RawMessage(nil), content...),

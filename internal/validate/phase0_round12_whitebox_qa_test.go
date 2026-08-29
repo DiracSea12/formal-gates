@@ -1210,6 +1210,8 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		stableDocFiles = append(stableDocFiles, matches...)
 	}
 	futureCommandToken := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])(drive|submit)([^[:alnum:]_-]|$)`)
+	// Keep the legacy stable-document leak check; Stage 3's candidate façade
+	// intentionally exposes these commands in its CLI help.
 	for _, path := range stableDocFiles {
 		content := string(round12ReadFile(t, path))
 		if token := futureCommandToken.FindString(content); token != "" {
@@ -1299,10 +1301,9 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		help.WriteByte('\n')
 	}
 	helpText := strings.ToLower(help.String())
-	if token := futureCommandToken.FindString(helpText); token != "" {
-		t.Fatalf("public help leaks future command token %q: %s", token, helpText)
-	}
-	for _, forbidden := range []string{"workflow drive", "workflow submit", "drive/submit", "shadow"} {
+	// Stage 3 promotes workflow drive/submit to the installed candidate's
+	// public façade, so they are no longer future tokens in CLI help.
+	for _, forbidden := range []string{"shadow"} {
 		if strings.Contains(helpText, forbidden) {
 			t.Fatalf("public help leaks future surface %q: %s", forbidden, helpText)
 		}

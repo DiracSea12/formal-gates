@@ -44,18 +44,23 @@ type RunState struct {
 	SplitDeclaration string `json:"splitDeclaration,omitempty"`
 	// SplitMasterRunID 记录切片实例在启动声明中钉死的保留总任务 master run id（--split yes
 	// --master <id>）；workflow slicing 记录 split 时引用的 master 必须与之一致。
-	SplitMasterRunID     string                       `json:"splitMasterRunID,omitempty"`
+	SplitMasterRunID string `json:"splitMasterRunID,omitempty"`
 	// SplitAmendment 记录拆分启动声明的一次用户确认修订（workflow slicing --user-confirm）：
 	// 绑定点是 slicing 记录（记录后不重切），记录前允许经用户确认把 --split no 修订为
 	// split（自升保留总任务实例，不重启、不重过整体审）或把保留总任务实例降级为 no-split
 	// （解除"记 no-split 即死端"）；切片实例（--master）不可经修订脱钩。值为
 	// "<from>-><to> (USER_CONFIRM): <理由>"，仅留痕展示。
-	SplitAmendment       string                       `json:"splitAmendment,omitempty"`
+	SplitAmendment string `json:"splitAmendment,omitempty"`
 	// OwnerTranscript / OwnerSession 记录启动本 run 的对话身份（PreToolUse hook 在
 	// workflow start 时捕获、经 sidecar 桥接由 Start 写入）。写墙只对身份匹配的对话生效，
 	// 其它对话放行。transcript_path 为主键，session_id 兜底。旧 run 缺失时为空。
 	OwnerTranscript string `json:"ownerTranscript,omitempty"`
 	OwnerSession    string `json:"ownerSession,omitempty"`
+	// QAOnlyRerun records an explicit user-authorized handoff from a terminal
+	// formal run into a new QA/gate rerun. It is distinct from a reviewer PASS:
+	// the upstream product/start/development stages were skipped by the user,
+	// while inherited QA evidence is re-bound to the new candidate below.
+	QAOnlyRerun *QAOnlyRerunRecord `json:"qaOnlyRerun,omitempty"`
 	// AdmissionRegistry/AdmissionRecordID bind every subsequent state write to
 	// the registry bridge that admitted this run. Empty values preserve the
 	// documented legacy state shape; production writes still require the
@@ -345,10 +350,20 @@ type RunSummary struct {
 	Gates                map[string]GateResult        `json:"gates"`
 	QA                   QAExecutionResult            `json:"qaExecution"`
 	Cost                 *cost.RunCost                `json:"cost,omitempty"`
+	QAOnlyRerun          *QAOnlyRerunRecord           `json:"qaOnlyRerun,omitempty"`
 	// Unverified 是轻量 run（routeMode=lightweight）的封板标注：轻量路线不做任何验证、
 	// 只留记录，封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。非轻量
 	// run 为空（omitempty 不输出）。
 	Unverified string `json:"unverified,omitempty"`
+}
+
+// QAOnlyRerunRecord is the audit record for a user-requested QA/gate-only
+// rerun started from a prior terminal formal result.
+type QAOnlyRerunRecord struct {
+	SourceRunID       string   `json:"sourceRunId"`
+	SourceSnapshot    string   `json:"sourceSnapshot"`
+	SkippedStages     []string `json:"skippedStages"`
+	AuthorizationNote string   `json:"authorizationNote"`
 }
 
 func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseSnapshot, currentSnapshot, basePromptRevision, catalogRevision string, confirmed bool, gateIDs []string, artifacts []RequirementArtifact) RunState {
@@ -1089,7 +1104,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 }
 
 func runSummary(state RunState) RunSummary {
-	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost}
+	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun}
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"

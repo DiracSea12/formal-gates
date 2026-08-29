@@ -297,9 +297,16 @@ func Install(options InstallOptions) (InstallReport, error) {
 		// Validate the existing bridge before changing any host target.  A
 		// malformed registry is an unregistered install, not a reason to leave
 		// a partially installed runtime behind.
-		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
+		if doc, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
+		} else if loadErr == nil {
+			if fenceErr := rejectActiveWorkflowRuns("install", targets, options, doc.Records); fenceErr != nil {
+				return InstallReport{}, fenceErr
+			}
 		}
+	}
+	if fenceErr := rejectActiveWorkflowRuns("install", targets, options, nil); fenceErr != nil {
+		return InstallReport{}, fenceErr
 	}
 
 	transactionParent := filepath.Dir(registryPath)
@@ -967,22 +974,40 @@ func rejectActiveWorkflowRuns(operation string, targets []installTarget, options
 			stateRoots[canonicalRegistryPath(record.StateRoot)] = true
 		}
 	}
+	if strings.TrimSpace(options.Project) != "" {
+		stateRoots[canonicalRegistryPath(options.Project)] = true
+	}
 	for stateRoot := range stateRoots {
 		matches, err := filepath.Glob(filepath.Join(stateRoot, "tmp", "*", "state.json"))
 		if err != nil {
 			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
 		}
+		candidateMatches, err := filepath.Glob(filepath.Join(stateRoot, "engine", "*", "state.json"))
+		if err != nil {
+			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
+		}
+		matches = append(matches, candidateMatches...)
 		for _, statePath := range matches {
 			data, readErr := os.ReadFile(statePath)
 			if readErr != nil {
 				return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, statePath, readErr)
 			}
 			var probe struct {
-				RunID  string `json:"runId"`
-				Status string `json:"status"`
+				RunID   string `json:"runId"`
+				Status  string `json:"status"`
+				Phase   string `json:"phase"`
+				Content struct {
+					RunID string `json:"runId"`
+					Phase string `json:"phase"`
+				} `json:"content"`
 			}
-			if json.Unmarshal(data, &probe) != nil || !strings.EqualFold(probe.Status, "ACTIVE") {
+			_ = json.Unmarshal(data, &probe)
+			active := strings.EqualFold(probe.Status, "ACTIVE") || strings.EqualFold(probe.Phase, "INTAKE_REGISTERED") || strings.EqualFold(probe.Content.Phase, "INTAKE_REGISTERED")
+			if !active {
 				continue
+			}
+			if probe.RunID == "" {
+				probe.RunID = probe.Content.RunID
 			}
 			return fmt.Errorf("active workflow run %q at %s fences %s", probe.RunID, statePath, operation)
 		}

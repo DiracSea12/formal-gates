@@ -17,6 +17,13 @@ import (
 
 type StartOptions struct {
 	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot string
+	// FromSealedRun opens a new, explicitly user-authorized QA/gate-only rerun
+	// from a prior terminal formal result. The source supplies the already
+	// established route, development snapshot, and approved QA inventory; the
+	// new run still performs fresh incremental QA review/execution and gate review
+	// against the new current snapshot.
+	FromSealedRun    string
+	FromSealedReason string
 	// AdmissionRegistry and AdmissionRecordID explicitly select the stage-0
 	// registry bridge. Empty values discover the shared user registry; only Go
 	// test executables retain the in-process legacy start path.
@@ -92,6 +99,13 @@ const (
 var routeModes = map[string]bool{"lightweight": true, "full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
+	if strings.TrimSpace(options.FromSealedRun) != "" {
+		return startQAOnlyRerun(options)
+	}
+	return startRegular(options)
+}
+
+func startRegular(options StartOptions) (RunState, error) {
 	root := lifecycle.CleanRoot(options.Root)
 	ownerTranscript, ownerSession := consumeStartOwner(root)
 	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
@@ -210,6 +224,13 @@ func Start(options StartOptions) (RunState, error) {
 	}
 	if _, err := os.Stat(RunDir(root, runID)); err == nil {
 		return RunState{}, fmt.Errorf("run %q already exists", runID)
+	} else if !os.IsNotExist(err) {
+		return RunState{}, err
+	}
+	// Candidate and legacy runtimes share the run-id namespace; fence a
+	// legacy writer before creating its state directory.
+	if _, err := os.Stat(filepath.Join(root, ".gates", "engine", runID)); err == nil {
+		return RunState{}, fmt.Errorf("run %q already exists in candidate runtime", runID)
 	} else if !os.IsNotExist(err) {
 		return RunState{}, err
 	}

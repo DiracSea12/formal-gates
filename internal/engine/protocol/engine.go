@@ -105,6 +105,14 @@ func (e *Engine) load() (uint64, *State, error) {
 // PROVIDER_MISMATCH 硬拒绝、不降级 default（draft §9.1）。已存在状态时
 // 拒绝且零变化。
 func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint string) error {
+	return e.InitWithMetadata(view, provider, expectedFingerprint, "", "", nil)
+}
+
+// InitWithMetadata is the façade bootstrap variant.  It preserves Init's
+// original signature for protocol callers while persisting run identity and
+// the typed pre-start intake confirmation in the same authoritative state
+// write.
+func (e *Engine) InitWithMetadata(view *decision.State, provider, expectedFingerprint, runID, route string, confirmation *IntakeConfirmationReceipt) error {
 	if view == nil {
 		return fmt.Errorf("protocol: init: nil view")
 	}
@@ -118,8 +126,62 @@ func (e *Engine) Init(view *decision.State, provider string, expectedFingerprint
 	}
 	state := NewState(*view)
 	state.RunProvider = provider
+	state.RunID = runID
+	state.Route = route
+	state.IntakeConfirmationReceipt = confirmation
 	_, err := e.commit(state, 0, expectedFingerprint)
 	return err
+}
+
+// RecordIntakeReceipt persists the first-drive receipt exactly once.  A
+// matching existing receipt is idempotent; a different receipt is rejected so
+// a run can never acquire a second or altered intake confirmation.
+func (e *Engine) RecordIntakeReceipt(receipt IntakeReceipt, expectedFingerprint string) (uint64, error) {
+	if strings.TrimSpace(expectedFingerprint) == "" {
+		return 0, fmt.Errorf("protocol: intake receipt: expected fingerprint is required")
+	}
+	revision, state, err := e.load()
+	if err != nil {
+		return 0, err
+	}
+	if state == nil {
+		return 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if state.IntakeReceipt != nil {
+		if !sameIntakeReceipt(*state.IntakeReceipt, receipt) {
+			return 0, &RejectedError{Code: CodeDuplicateEventMismatch, Detail: "intake receipt already recorded with different digest"}
+		}
+		return revision, nil
+	}
+	if state.IntakeConfirmationReceipt == nil || !sameIntakeConfirmation(*state.IntakeConfirmationReceipt, receipt.Confirmation) {
+		return 0, &RejectedError{Code: CodeEventSchemaInvalid, Detail: "intake receipt does not match start confirmation"}
+	}
+	receipt.Revision = revision + 1
+	state.IntakeReceipt = &receipt
+	return e.commit(state, revision, expectedFingerprint)
+}
+
+func sameIntakeConfirmation(a, b IntakeConfirmationReceipt) bool {
+	return a.Source == b.Source && a.Authority == b.Authority && a.Transport == b.Transport &&
+		a.RequirementSource == b.RequirementSource &&
+		a.RequirementRevision == b.RequirementRevision && a.SolutionRevision == b.SolutionRevision &&
+		a.SolutionDigest == b.SolutionDigest && equalIntakeArtifacts(a.Artifacts, b.Artifacts)
+}
+
+func sameIntakeReceipt(a, b IntakeReceipt) bool {
+	return a.IntakeDigest == b.IntakeDigest && sameIntakeConfirmation(a.Confirmation, b.Confirmation)
+}
+
+func equalIntakeArtifacts(a, b []IntakeArtifact) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // commit 把变更后的状态经 persistence 四段协议原子提交（期望 revision
@@ -182,6 +244,143 @@ func (e *Engine) Load() (Snapshot, error) {
 		return Snapshot{}, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
 	return Snapshot{Revision: revision, State: state}, nil
+}
+
+// Plan returns the deterministic next boundary for the current state without
+// writing.  Façades use it for read-only `next`/`status` projections and for
+// validating a plan before issuing work.
+func (e *Engine) Plan() (*decision.Plan, uint64, error) {
+	revision, state, err := e.load()
+	if err != nil {
+		return nil, 0, err
+	}
+	if state == nil {
+		return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	plan, err := decision.Decide(&state.State, decision.Observation{}, e.cfg.Definition)
+	if err != nil {
+		return nil, revision, err
+	}
+	return plan, revision, nil
+}
+
+// Drive advances deterministic engine-internal steps, then performs the
+// standard Decide → SelectIssued cycle until an external boundary (or
+// Complete) is reached.  No external event is accepted here; callers must use
+// Submit for receipts, decisions and observations.
+func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, error) {
+	if strings.TrimSpace(expectedFingerprint) == "" {
+		return nil, 0, fmt.Errorf("protocol: drive: expected fingerprint is required")
+	}
+	for {
+		revision, state, err := e.load()
+		if err != nil {
+			return nil, 0, err
+		}
+		if state == nil {
+			return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+		}
+		plan, err := decision.Decide(&state.State, decision.Observation{}, e.cfg.Definition)
+		if err != nil {
+			return nil, revision, err
+		}
+		switch plan.Next.Kind {
+		case decision.KindWait:
+			if plan.Next.Wait != nil && plan.Next.Wait.Reason == decision.WaitEngineInternal {
+				if len(plan.Frontier) == 0 {
+					return plan, revision, nil
+				}
+				for _, entry := range plan.Frontier {
+					if err := state.CompleteStep(entry.Step, e.cfg.Definition); err != nil {
+						return nil, revision, fmt.Errorf("protocol: drive complete %s: %w", entry.Step, err)
+					}
+				}
+				if len(state.Completed) == len(e.cfg.Definition.Steps) && state.Phase != runtime.PhaseTerminal {
+					if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
+						return nil, revision, err
+					}
+				}
+				committed, err := e.commit(state, revision, expectedFingerprint)
+				if err != nil {
+					return nil, revision, err
+				}
+				_ = committed
+				continue
+			}
+			return plan, revision, nil
+		case decision.KindReady:
+			issued, _, err := e.IssueFromPlan(plan, decision.Admission{Capacity: e.cfg.Capacity}, expectedFingerprint)
+			if err != nil {
+				return nil, revision, err
+			}
+			if len(issued) == 0 {
+				return plan, revision, nil
+			}
+			continue
+		default:
+			return plan, revision, nil
+		}
+	}
+}
+
+// CompleteAll deterministically settles every compiled step and moves the run
+// to TERMINAL.  It is used only by the lightweight façade route, whose
+// acceptance contract has no external worker/host actions.
+func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
+	if strings.TrimSpace(expectedFingerprint) == "" {
+		return Snapshot{}, fmt.Errorf("protocol: complete all: expected fingerprint is required")
+	}
+	revision, state, err := e.load()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if state == nil {
+		return Snapshot{}, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	// Terminal completion is a read-only replay. Repeated drive calls after
+	// Complete must not advance revision or rewrite the state document.
+	if state.Phase == runtime.PhaseTerminal {
+		return e.Load()
+	}
+	// Compiled steps are ordered by deterministic ordinal, not necessarily by
+	// the author's slice order. Repeatedly settle the currently eligible set so
+	// every dependency is completed before its successor.
+	for len(state.Completed) < len(e.cfg.Definition.Steps) {
+		progressed := false
+		for _, step := range e.cfg.Definition.Steps {
+			done := false
+			for _, completed := range state.Completed {
+				if completed == step.Header.ID {
+					done = true
+					break
+				}
+			}
+			if done {
+				continue
+			}
+			if err := state.CompleteStep(step.Header.ID, e.cfg.Definition); err != nil {
+				// An unmet dependency may become eligible later in this pass;
+				// any other error is a malformed definition/state and must stop.
+				if strings.Contains(err.Error(), "dependency") {
+					continue
+				}
+				return Snapshot{}, err
+			}
+			progressed = true
+		}
+		if !progressed {
+			return Snapshot{}, fmt.Errorf("protocol: complete all: definition dependencies cannot be settled")
+		}
+	}
+	if state.Phase != runtime.PhaseTerminal {
+		if err := state.TransitionPhase(runtime.PhaseTerminal); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if _, err := e.commit(state, revision, expectedFingerprint); err != nil {
+		return Snapshot{}, err
+	}
+	return e.Load()
 }
 
 // IssueFromPlan 落账一次 Ready 签发（draft §3.3「不再次签发已经 ISSUED
