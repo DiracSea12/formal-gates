@@ -168,6 +168,7 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 - `pendingActions[actionID]`；
 - task/dispatch/Attempt 与 source bindings；
 - pending Ask、available-action freshness、obligations、impact set；
+- 用户确认的 `granularity_review`、Batch/Subtask 计划及其 digest（按需求/方案 revision、拆分决定和路线绑定）；
 - typed `ReviewScopeMode` 与逐项 QA approved whitelist（按 review/candidate/result 绑定）；
 - `AcceptanceManifest`、case↔point map 及其 digest（按需求 revision、route/topology scope 绑定）；
 - split topology、`sliceID -> childRunID` 与 receipts；
@@ -189,6 +190,31 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 - 新 Attempt 已建立后的旧结果：以 `OBSOLETE_RESULT` 可见拒绝；
 - result-before-receipt：暂存，lifecycle 对账成功后接纳；
 - 终态最后一个相同事件：由 durable summary 幂等重放结果。
+
+### 3.5 开发分块计划进入引擎的机械流程
+
+开发分块沿用 ADR-002 的 Batch/Subtask 模型，不与 Run 级 `slicing`（master/child 拓扑）
+混为一谈。分块的语义判断由 Part 2 技术审提出、用户确认；引擎只负责把已确认计划变成
+可校验、可执行的任务绑定，不从自然语言重新猜测粒度。
+
+固定接入顺序如下：
+
+1. Part 2 `start-readiness` 产出结构化 `granularity_review`：记录需求/方案 revision、
+   拆分决定、单一或多个 Batch、`Batch → Subtask` 映射、每个 Batch 的交付物、DoD/测试、
+   依赖、接口/状态边界、风险、回滚/恢复、交接与上下文成本，以及不拆或改拆理由。
+2. Controller 在用户确认后校验该计划：ID 唯一，Batch/Subtask 映射无遗漏和重复，
+   TaskKey 归属明确，批间依赖无环，必需的 DoD/验证/恢复/交接字段齐全；通过后保存
+   `granularity_review` 与计划摘要及其 digest，并绑定当前需求/方案、路线和拓扑。
+3. 引擎把 Batch 映射为现有 TaskKey 的分组与依赖信息，不新增 Batch 独立状态机。批次完成
+   由成员 task 的终态和该批已登记的 DoD/验证/交接结果派生。
+4. `development-worker` 派发必须带 `batch_id`；一个 `batch_id` 只能对应一次开发派发。
+   同一派发中的 `subtask_id` 只是顺序步骤，不能单独派发、不能触发换代理或 reset。
+5. 前一 Batch 的成员任务、DoD、验证和交接均完成后，Controller 才把下一 Batch 放入
+   eligible frontier；跨 Batch 才允许准备新的零上下文开发代理。Batch 契约、接口、依赖
+   或 DoD 变化时，原计划和未完成派发失效，必须重新做 `granularity_review` 并取得用户确认。
+
+这里的“机械”只保证结构完整、顺序、绑定和代理边界正确；是否值得拆、拆分是否符合产品
+语义，仍属于技术审和用户决定，不由引擎自动优化。
 
 ## 4. 受理、用户节点与审查
 

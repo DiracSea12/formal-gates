@@ -105,7 +105,7 @@ Every phase has a standard procedure, an explicit executor, and a written record
 ### 3. Decide whether to split, and how complete the flow runs
 
 **What happens** — first decide whether to **split** the work (break a large task into independent parts that are developed separately and reviewed together after merging — only very large work needs this; usually it does not). Then decide how complete the flow runs: **full** (complete testing plus every review gate — the most complete, and the heaviest) or **custom** (select your own subset — for example, only testing, or only a few gates; at least one item must be selected, and not the full set; the full set is full). If full is too heavy, custom can trim the scope. **lightweight** (record only, no verification) skips the slicing decision and route selection: it is declared at start (`workflow start --route lightweight`), start → register requirement → Seal, and its seal record is explicitly marked "本 run 未经任何验证".
-**Who does it** — the main agent gives a recommendation; you decide.
+**Who does it** — the Part 2 technical review gives the split recommendation, the main agent presents it, and you decide.
 **What is recorded** — the slicing decision and choice are written into the flow state and carried forward.
 **In one line** — decide how to split first, then how strictly to review.
 
@@ -151,7 +151,7 @@ Every phase has a standard procedure, an explicit executor, and a written record
 
 ### Advanced: task slicing and the overall run
 
-By default a request is handled as a single run. Large work can be split by dependency, ownership, and risk into independent parts, each developed in its own worktree; one "overall run" keeps the original baseline, the complete requirement, and the choice, and does the integration review of the merged results. With two or more slices, a merge gate and merge testing are attached automatically. Whether and how to slice is your decision in phase 3.
+By default a request is handled as a single run. Large work can be split by dependency, ownership, and risk into independent parts, each developed in its own worktree; one "overall run" keeps the original baseline, the complete requirement, and the choice, and does the integration review of the merged results. With two or more slices, a merge gate and merge testing are attached automatically. Part 2's technical review makes and records the `granularity_review`; you confirm the resulting split in phase 3. A formal Batch needs an independent deliverable, objective DoD, stable boundaries, and recoverable handoff. Steps inside one Batch are Subtasks and do not change the development agent. Item numbers, file count, line count, or phase names are not split criteria by themselves.
 
 ### An end-to-end example
 

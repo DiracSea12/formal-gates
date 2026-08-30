@@ -94,6 +94,30 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 
 矩阵的 `start` 行不得引入任何拆分意向声明（无 `--split` 参数）：`start` 不接受也不冻结拆分意向；拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认——split 需精确拓扑、no-split 需理由留痕，确认前用户可改变意向、确认后不得重切（变更走用户需求变化、reset/rebuild 或 abort）。阶段 4/5 的 no-split/split 出口都以该拓扑确认时点为准，不得恢复启动时声明，也不得用宽泛的“拆分决定”替代该唯一绑定点。
 
+### 2.3.1 开发分块计划的引擎接入
+
+开发分块与上面的 Run 级 split 拓扑分开处理。Part 2 `start-readiness` 技术审必须产出结构化
+`granularity_review`；它先判断单一 Batch 或多个 Batch，再给出 `Batch → Subtask` 映射、
+依赖/接口/状态边界、风险、DoD/测试、回滚/恢复、交接与上下文成本及不拆/改拆理由。用户
+在拆分决定与路线确认时确认该计划后，才允许进入开发。
+
+引擎接入固定为：
+
+1. Controller 将已确认的 `granularity_review` 绑定到需求/方案 revision、拆分决定、路线和
+   拓扑，并保存计划摘要/digest；校验 ID 唯一、映射无遗漏/重复、TaskKey 归属明确、批间
+   依赖无环以及 DoD/验证/恢复/交接字段齐全。
+2. 引擎把 Batch 作为现有 TaskKey 的分组与依赖信息承载，不新增 Batch 独立状态机；批次
+   完成从成员 task 的终态和已登记的 DoD/验证/交接结果派生。
+3. 每次 `development-worker` 派发必须带 `batch_id`，一个 Batch 只能有一次开发派发；其
+   `subtask_id` 仅表示该派发内的顺序步骤，不得单独派发、换代理或 reset。
+4. 前一 Batch 的成员任务、DoD、验证和交接完成后，下一 Batch 才进入 eligible frontier，
+   并允许派发新的零上下文开发代理。Batch 契约、接口、依赖或 DoD 改变时，旧计划失效，
+   必须重新做粒度审并取得用户确认。
+
+引擎不负责从自然语言判断最佳拆法，也不按编号、commit 数、文件/行数或阶段名自动切块；
+它只机械校验和执行已确认的分块计划。各阶段的具体 Batch/Subtask 清单在该阶段的需求入口
+中登记，阶段 3 的清单见 `refactor-plan/stage-3-requirements.md`。
+
 ### 2.4 全局安装切换与活动 run fencing
 
 固定稳定插件跨阶段继续驱动 formal-gates，因此最终切换不是单个测试项目的局部操作。每次候选升级或最终全局切换前，必须从登记的所有项目 root、host home、state/resource root 和安装 scope 建立可复核的活动 run inventory；不能只扫描当前候选项目的 `.gates/tmp`。
