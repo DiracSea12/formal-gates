@@ -31,9 +31,10 @@
    指针）读取，不改动 stable driver 的 writer 或公共入口。
    候选以注入工件重算当前 binding 与 `intakeDigest`，因此“旧回执 + 当前工件”在首写前稳定返回
    `INVALID_INTAKE_CONFIRMATION`；候选不生成回执、不读 stable run state，也不驱动正式 run。
-4. lightweight 首条路径在首次 drive 登记 intake receipt 后进入终结阶段，持久化 cleanup
-   intent/summary，由 engine handler 清理登记资源、核对无残留，再提交 terminal summary（标记
-   `unverified=true`），最后 `next` 返回 `Complete`。candidate façade 对所有未迁移旧 workflow
+4. lightweight 首条路径在首次 drive 登记 intake receipt 后进入终结阶段，先持久化可恢复的
+   terminal intent；engine handler 再清理登记资源并核对无残留，清理完成后才提交 terminal
+   summary（标记 `unverified=true`）。启动或终结中断由 intent 对账后继续，最后 `next` 返回
+   `Complete`。candidate façade 对所有未迁移旧 workflow
    写入口（包括 `requirement`、`cleanup`、`resume`、`abort`、`reset`、`route`、`slicing` 等）
    明确返回 `UNSUPPORTED_ENGINE_ENTRY` 且不写状态；stable legacy 回归单独验证旧命令仍按 legacy
    语义工作。candidate `start` 不接受 `--split`、`--retained-overall` 或 `--master`。

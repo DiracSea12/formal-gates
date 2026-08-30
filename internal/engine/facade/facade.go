@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
@@ -27,6 +28,8 @@ import (
 
 const (
 	EngineNamespace           = ".gates/engine"
+	startIntentSuffix         = ".start.intent.json"
+	terminalIntentName        = "terminal-summary.intent.json"
 	DefaultDefinitionSource   = "definitions/workflow.json"
 	RuntimeEngine             = "engine"
 	RuntimeLegacy             = "legacy"
@@ -105,6 +108,14 @@ type TerminalSummary struct {
 	CompletedAt   string              `json:"completedAt"`
 }
 
+type startIntent struct {
+	RunID                   string `json:"runId"`
+	PackageDigest           string `json:"packageDigest"`
+	InstalledTargetIdentity string `json:"installedTargetIdentity"`
+	DefinitionSource        string `json:"definitionSource"`
+	DefinitionDigest        string `json:"definitionDigest"`
+}
+
 type StartOptions struct {
 	Root    string
 	Request StartRequest
@@ -126,6 +137,7 @@ type StartOptions struct {
 // separate from StartRequest so user input cannot select a package digest or
 // installed identity.
 type Admission struct {
+	RegistryPath            string
 	PackageDigest           string
 	InstalledTargetIdentity string
 	Generation              uint64
@@ -161,6 +173,25 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	if !validRunID(req.RunID) {
 		return nil, Run{}, fmt.Errorf("engine start: run id %q is invalid", req.RunID)
+	}
+	runUnlock, err := coordination.AcquireRun(root, req.RunID)
+	if err != nil {
+		return nil, Run{}, err
+	}
+	defer runUnlock()
+	if err := recoverStartIntent(root, req.RunID); err != nil {
+		return nil, Run{}, err
+	}
+	var admissionUnlock func()
+	if options.Admission != nil && strings.TrimSpace(options.Admission.RegistryPath) != "" {
+		admissionUnlock, err = coordination.AcquirePath(options.Admission.RegistryPath+".lock", "admission")
+		if err != nil {
+			return nil, Run{}, err
+		}
+		defer admissionUnlock()
+		if err := verifyAdmissionSnapshot(*options.Admission); err != nil {
+			return nil, Run{}, err
+		}
 	}
 	// Legacy and candidate runtimes share the run-id namespace. Refuse a
 	// candidate writer before creating any engine files when the legacy run
@@ -254,6 +285,16 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, Run{}, err
 	}
+	intentPath := startIntentPath(root, req.RunID)
+	if err := writeJSONAtomic(intentPath, startIntent{RunID: req.RunID, PackageDigest: req.PackageDigest, InstalledTargetIdentity: req.InstalledTargetIdentity, DefinitionSource: req.DefinitionSource, DefinitionDigest: req.DefinitionDigest}); err != nil {
+		return nil, Run{}, err
+	}
+	intentWritten := true
+	defer func() {
+		if intentWritten {
+			_ = os.Remove(intentPath)
+		}
+	}()
 	// Atomically reserve the run directory. A separate Stat followed by
 	// MkdirAll lets concurrent starts race past the collision check; when one
 	// then fails its cleanup could remove the other process's active directory.
@@ -306,6 +347,8 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
+	intentWritten = false
+	_ = os.Remove(intentPath)
 	return f, run, nil
 }
 
@@ -349,18 +392,27 @@ func Open(root, runID string) (*Facade, error) {
 		return nil, err
 	} else if errors.Is(err, fs.ErrNotExist) {
 		// A completed run may have had its active state cleaned while retaining
-		// the immutable terminal summary. Validate that summary before exposing
-		// a read-only façade; a missing summary remains a normal not-found error.
-		data, summaryErr := os.ReadFile(filepath.Join(stateDir, "terminal-summary.json"))
-		if summaryErr != nil {
-			return nil, err
+		// the immutable terminal summary. During a crash window the summary is
+		// still represented by a durable terminal intent; Drive will reconcile
+		// cleanup and publish that summary before returning Complete.
+		for _, name := range []string{"terminal-summary.json", terminalIntentName} {
+			data, summaryErr := os.ReadFile(filepath.Join(stateDir, name))
+			if summaryErr != nil {
+				continue
+			}
+			var summary TerminalSummary
+			if summaryErr := json.Unmarshal(data, &summary); summaryErr != nil {
+				return nil, summaryErr
+			}
+			if summaryErr := persistence.ValidateEnvelopeWithIdentity(summary.Envelope, req.PackageDigest, req.DefinitionSource, req.InstalledTargetIdentity); summaryErr != nil {
+				return nil, summaryErr
+			}
+			break
 		}
-		var summary TerminalSummary
-		if summaryErr := json.Unmarshal(data, &summary); summaryErr != nil {
-			return nil, summaryErr
-		}
-		if summaryErr := persistence.ValidateEnvelopeWithIdentity(summary.Envelope, req.PackageDigest, req.DefinitionSource, req.InstalledTargetIdentity); summaryErr != nil {
-			return nil, summaryErr
+		if _, summaryErr := os.Stat(filepath.Join(stateDir, "terminal-summary.json")); summaryErr != nil {
+			if _, intentErr := os.Stat(filepath.Join(stateDir, terminalIntentName)); intentErr != nil {
+				return nil, err
+			}
 		}
 	}
 	eng, err := protocol.New(store, protocol.Config{Definition: cd, Registry: definition.Registry(), Capacity: 16}, nil)
@@ -380,8 +432,10 @@ func (f *Facade) Drive() (Run, error) {
 	}
 	// Recovery is a write-side reconciliation step: it may create/remove the
 	// protocol lock and orphan temp files.  Keep it out of Open/Show/Status/Next
-	// so those read-only paths cannot mutate directory metadata.  A terminal
-	// summary has no active state to recover, so skip reconciliation on replay.
+	// so those read-only paths cannot mutate directory metadata.
+	if err := f.recoverTerminalIntent(); err != nil {
+		return Run{}, err
+	}
 	if _, statErr := os.Stat(filepath.Join(f.stateDir, "state.json")); statErr == nil {
 		if _, recoverErr := f.store.Recover(); recoverErr != nil {
 			return Run{}, recoverErr
@@ -428,17 +482,12 @@ func (f *Facade) Drive() (Run, error) {
 		return Run{}, err
 	}
 	if run.Status == "COMPLETE" {
-		// Lightweight terminal runs retain only the immutable request and
-		// summary. Publish the immutable terminal summary before removing the
-		// active projection, so a process exit during cleanup still leaves a
-		// readable terminal result for the next Open/Recover cycle.
-		if err := f.writeSummary(run); err != nil {
-			return Run{}, err
-		}
 		if run.Route == "lightweight" {
-			if err := f.store.CleanupTerminal(); err != nil {
+			if err := f.finalizeTerminal(run); err != nil {
 				return Run{}, err
 			}
+		} else if err := f.writeSummaryValue(summaryForRun(run)); err != nil {
+			return Run{}, err
 		}
 	}
 	_ = plan
@@ -514,6 +563,17 @@ func (f *Facade) project() (Run, error) {
 	if snap.State.Phase == runtime.PhaseTerminal || plan.Next.Kind == decision.KindComplete {
 		status = "COMPLETE"
 	}
+	if status == "COMPLETE" {
+		if _, intentErr := os.Stat(terminalIntentPath(f.stateDir)); intentErr == nil {
+			// A terminal intent means cleanup is in progress. Keep the read
+			// projection non-terminal until Drive reconciles the intent and the
+			// immutable summary is committed.
+			status = "FINALIZING_CLEANUP"
+			plan.Next = decision.NextResult{Kind: decision.KindWait, Wait: &decision.WaitPayload{Reason: decision.WaitEngineInternal}}
+		} else if !errors.Is(intentErr, fs.ErrNotExist) {
+			return Run{}, intentErr
+		}
+	}
 	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
@@ -523,8 +583,20 @@ func (f *Facade) project() (Run, error) {
 	return run, nil
 }
 
-func (f *Facade) writeSummary(run Run) error {
-	path := filepath.Join(f.stateDir, "terminal-summary.json")
+func terminalSummaryPath(stateDir string) string {
+	return filepath.Join(stateDir, "terminal-summary.json")
+}
+
+func terminalIntentPath(stateDir string) string {
+	return filepath.Join(stateDir, terminalIntentName)
+}
+
+func summaryForRun(run Run) TerminalSummary {
+	return TerminalSummary{RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: "COMPLETE", Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
+func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
+	path := terminalSummaryPath(f.stateDir)
 	if data, err := os.ReadFile(path); err == nil {
 		var existing TerminalSummary
 		if decodeErr := json.Unmarshal(data, &existing); decodeErr != nil {
@@ -532,15 +604,70 @@ func (f *Facade) writeSummary(run Run) error {
 		}
 		// A terminal summary is immutable. Repeated drive/replay calls return
 		// the already committed bytes and never refresh CompletedAt.
-		if existing.RunID == run.RunID && existing.Status == "COMPLETE" && existing.Revision == run.Revision && existing.Envelope == run.Envelope && existing.Unverified == run.Unverified {
+		if existing.RunID == summary.RunID && existing.Status == "COMPLETE" && existing.Revision == summary.Revision && existing.Envelope == summary.Envelope && existing.Unverified == summary.Unverified {
 			return nil
 		}
 		return fmt.Errorf("engine terminal summary conflicts with completed run")
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	summary := TerminalSummary{RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: "COMPLETE", Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	return writeJSONAtomic(path, summary)
+}
+
+func (f *Facade) readTerminalIntent() (TerminalSummary, error) {
+	data, err := os.ReadFile(terminalIntentPath(f.stateDir))
+	if err != nil {
+		return TerminalSummary{}, err
+	}
+	var summary TerminalSummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		return TerminalSummary{}, err
+	}
+	if summary.Status != "COMPLETE" || summary.RunID != f.runID {
+		return TerminalSummary{}, fmt.Errorf("engine terminal intent is not a complete summary")
+	}
+	if err := persistence.ValidateEnvelopeWithIdentity(summary.Envelope, f.envelope.PackageDigest, f.envelope.DefinitionSource, f.envelope.InstalledTargetIdentity); err != nil {
+		return TerminalSummary{}, err
+	}
+	return summary, nil
+}
+
+// recoverTerminalIntent finishes a terminal cleanup whose process response
+// was lost. It is called only by Drive, keeping Show/Status/Next read-only.
+func (f *Facade) recoverTerminalIntent() error {
+	summary, err := f.readTerminalIntent()
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return f.commitTerminalCleanup(summary)
+}
+
+func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
+	if err := f.store.CleanupTerminal(); err != nil {
+		return err
+	}
+	if err := f.writeSummaryValue(summary); err != nil {
+		return err
+	}
+	if err := os.Remove(terminalIntentPath(f.stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (f *Facade) finalizeTerminal(run Run) error {
+	summary, err := f.readTerminalIntent()
+	if errors.Is(err, fs.ErrNotExist) {
+		summary = summaryForRun(run)
+		err = writeJSONAtomic(terminalIntentPath(f.stateDir), summary)
+	}
+	if err != nil {
+		return err
+	}
+	return f.commitTerminalCleanup(summary)
 }
 
 func (f *Facade) readSummary() (TerminalSummary, error) {
@@ -792,6 +919,86 @@ func validRunID(id string) bool {
 		}
 	}
 	return true
+}
+
+func startIntentPath(root, runID string) string {
+	return filepath.Join(root, filepath.FromSlash(EngineNamespace), runID+startIntentSuffix)
+}
+
+// recoverStartIntent removes only a start directory that is still incomplete
+// and is paired with our durable start intent. A directory with a request is a
+// completed start and is never deleted; the stale intent is simply cleared.
+func recoverStartIntent(root, runID string) error {
+	path := startIntentPath(root, runID)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var intent startIntent
+	if err := json.Unmarshal(data, &intent); err != nil {
+		return fmt.Errorf("engine start intent is invalid: %w", err)
+	}
+	if intent.RunID != runID {
+		return fmt.Errorf("engine start intent run id mismatch")
+	}
+	stateDir := filepath.Join(root, filepath.FromSlash(EngineNamespace), runID)
+	requestPath := filepath.Join(stateDir, "request.json")
+	if _, statErr := os.Stat(requestPath); statErr == nil {
+		return os.Remove(path)
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return statErr
+	}
+	if _, statErr := os.Stat(stateDir); statErr == nil {
+		if err := os.RemoveAll(stateDir); err != nil {
+			return err
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return statErr
+	}
+	return os.Remove(path)
+}
+
+// verifyAdmissionSnapshot closes the admission read/commit gap: the caller's
+// admission was resolved before Start, but the registry is rechecked while
+// the shared admission lock is held so install/uninstall cannot replace the
+// target between resolution and the first engine write.
+func verifyAdmissionSnapshot(admission Admission) error {
+	data, err := os.ReadFile(filepath.Clean(admission.RegistryPath))
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: admission registry cannot be read: %w", err)
+	}
+	var doc struct {
+		Records []struct {
+			ID              string `json:"id"`
+			Status          string `json:"status"`
+			PackageDigest   string `json:"packageDigest"`
+			InstalledDigest string `json:"installedDigest"`
+			Generation      uint64 `json:"generation"`
+			Lease           string `json:"lease"`
+			Token           string `json:"token"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: admission registry is invalid: %w", err)
+	}
+	for _, record := range doc.Records {
+		if record.ID != admission.InstalledTargetIdentity {
+			continue
+		}
+		packageDigest := record.PackageDigest
+		if packageDigest == "" {
+			packageDigest = record.InstalledDigest
+		}
+		if !strings.EqualFold(record.Status, "active") || packageDigest != admission.PackageDigest ||
+			record.Generation != admission.Generation || record.Lease != admission.Lease || record.Token != admission.Token {
+			return fmt.Errorf("UNREGISTERED_INSTALL: candidate admission changed before start")
+		}
+		return nil
+	}
+	return fmt.Errorf("UNREGISTERED_INSTALL: candidate admission record %q is no longer active", admission.InstalledTargetIdentity)
 }
 
 func emptyFingerprint() string {

@@ -154,8 +154,23 @@ func (s *Store) CleanupTerminal() error {
 			return removeErr
 		}
 	}
-	if err := writeCleanupEvidence(s.cleanupReceiptPath(), map[string]any{"status": "reconciled", "residue": false}); err != nil {
+	residue := []string{}
+	entries, err = os.ReadDir(s.dir)
+	if err != nil {
 		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "request.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupIntentPath()) || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName {
+			continue
+		}
+		residue = append(residue, name)
+	}
+	if err := writeCleanupEvidence(s.cleanupReceiptPath(), map[string]any{"status": "reconciled", "residue": len(residue) != 0, "entries": residue}); err != nil {
+		return err
+	}
+	if len(residue) != 0 {
+		return fmt.Errorf("persistence: cleanup: residue remains: %s", strings.Join(residue, ", "))
 	}
 	return os.Remove(s.cleanupIntentPath())
 }

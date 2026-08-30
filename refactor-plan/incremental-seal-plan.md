@@ -193,7 +193,7 @@ Seal 后状态：持久协议可独立验证和恢复，但不会改变稳定插
 范围：
 
 - 实现 `workflow start`、`drive`、`submit`、`show`、`status`、`next`、`diagnose` 的 engine 路径。
-- 先以 lightweight 跑通“start 前已确认 intake -> `start` -> 首次 `drive` 自动登记 intake receipt/digest -> Seal 内部自动 terminal cleanup -> Complete”；terminal summary 标记 `unverified=true`。start 绑定 requirement source/revision 与完整登记工件集，首次 drive 不重复询问或等待确认事件，不通过公开 `workflow cleanup` 推进或删除活动 run。
+- 先以 lightweight 跑通“start 前已确认 intake -> `start` -> 首次 `drive` 自动登记 intake receipt/digest -> Seal 内部自动 terminal cleanup -> Complete”；清理中的终结 intent 只投影 `FINALIZING_CLEANUP`/`WAIT`，对账完成后才返回 Complete；terminal summary 标记 `unverified=true`。start 绑定 requirement source/revision 与完整登记工件集，首次 drive 不重复询问或等待确认事件，不通过公开 `workflow cleanup` 推进或删除活动 run。
 - 阶段 0 冻结的 stable driver 仍只写既有确认状态；固定 launcher 从已确认 formal run 状态和登记集 requirement/solution 工件派生 `intakeConfirmationReceipt.json`，并按原相对路径注入候选 test project。候选 `start` 唯一从 `--intake-receipt <path>`（或等价 host config 指针）读取 typed 回执，并以当前注入工件重算 binding。回执缺失、旧回执配当前工件或任一 binding 不一致均在首写前返回 `INVALID_INTAKE_CONFIRMATION` 且零写入；候选不生成回执、不读 stable run state、不驱动正式 run，stable driver 不新增 writer/公共入口。
 - 本阶段的 `granularity_review` 已登记为单一 Batch `phase-3-engine-vertical-loop`：S1 façade/admission/runtime 选择 → S2 `StartRequest`/intake receipt/canonical digest/envelope → S3 `drive`/`submit`/六类 `NextResult` → S4 terminal cleanup/`Complete`/replay → S5 installed 隔离、legacy 回归与 negative fixtures。五段共享未冻结的 façade、`state.json`、`Store/CAS`、typed protocol、envelope 和 cleanup 接口，不能独立验收或回滚，故不拆 Batch；一个 Batch 只派发一个全新的零上下文开发代理，Subtask 间连续执行、不换代理。验证档位为 full，选定 blackbox、whitebox、complexity-gate、implementation-quality-gate，并在批边界执行项目声明的构建、测试、installed harness、package/canary、stable smoke、digest/namespace、registry/fencing、cleanup 检查。
 - 在 engine protocol 的 whitebox/test-only sequence harness 中完成 Ask、Ready、HostAction、Wait、Operator、Complete 六类外部边界的最小真实闭环；阶段 3 installed-candidate 黑盒只覆盖 lightweight 可公开到达的 Complete、façade 读写、版本/身份/旧入口负向和 legacy 回归，其余五类公开路径留到阶段 4 regular。
@@ -209,15 +209,16 @@ Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径�
 
 本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal 或另一套 QA
 状态机。它只冻结阶段 4 接入所需的最小 QA 覆盖契约，详见
-`refactor-plan/stage-3-5a-qa-coverage-contract.md`：`AcceptanceManifest`、显式
-case↔acceptance-point 多对多映射、逐 point/逐 case review、由 manifest/map digest
-投影的 approved whitelist，以及与当前 `ValidationCandidate` 绑定的 execution 结果。
-未知、缺失、重复、orphan 和仅集合级 PASS 的结果必须在结构层拒绝；用户授权 skip
-保留为 `AUTHORIZED_SKIP`，不等同 `EXECUTED_PASS`。
+`refactor-plan/stage-3-5a-qa-coverage-contract.md`：有限 `AcceptanceManifest`、显式
+case↔point 双向多对多映射、逐 point/逐 case review、由 manifest/map digest 投影的
+approved whitelist，以及与当前 `ValidationCandidate` 绑定的 expected/actual execution
+结果。未知、缺失、重复、orphan、仅集合级 PASS、`FULL` 对账不全或 `AFFECTED` 的执行/
+继承/未执行集合不全都必须在结构层拒绝；`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。
 
 3.5a 只交付 schema、validator、digest/白名单投影和 fixtures，不改 legacy `QACase`
-完整结构、不新增公开命令或通用框架。一个代理连续完成 Batch A 的内聚子任务；阶段 4
-由新代理完成 Batch B 接入 regular QA/candidate E2E，两个批次不并行。
+完整结构、不新增公开命令或通用框架，也不设置固定用例数、覆盖率阈值或强制测试工具
+组合。一个代理连续完成 Batch A 的内聚子任务；阶段 4 由新代理完成 Batch B 接入 regular
+QA/candidate E2E，两个批次不并行。
 
 ### 阶段 4：Git 非分片 regular 全流程
 

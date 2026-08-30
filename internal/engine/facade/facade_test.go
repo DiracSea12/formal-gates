@@ -11,7 +11,10 @@ import (
 	"sync"
 	"testing"
 
+	"formal-gates/internal/coordination"
+	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/protocol"
 )
 
 func testReceipt() IntakeConfirmationReceipt {
@@ -163,6 +166,119 @@ func TestConcurrentStartSameRunIDHasSingleOwner(t *testing.T) {
 	completed, err := winner.Drive()
 	if err != nil || completed.Status != "COMPLETE" {
 		t.Fatalf("winning run after loser rejection = %+v err=%v", completed, err)
+	}
+}
+
+func TestStartRecoversIncompleteStartIntent(t *testing.T) {
+	root := t.TempDir()
+	runID := "recover-start-intent"
+	stateDir := filepath.Join(root, EngineNamespace, runID)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "partial-state"), []byte("incomplete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(startIntentPath(root, runID), startIntent{RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+	f, run, err := Start(StartOptions{Root: root, Request: StartRequest{
+		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	if err != nil || f == nil || run.Status != "ACTIVE" {
+		t.Fatalf("recovered start = facade=%v run=%+v err=%v", f != nil, run, err)
+	}
+	if _, err := os.Stat(startIntentPath(root, runID)); !os.IsNotExist(err) {
+		t.Fatalf("start intent remained after successful start: %v", err)
+	}
+}
+
+func TestStartHonorsAdmissionLockAndRechecksGeneration(t *testing.T) {
+	root := t.TempDir()
+	registry := filepath.Join(root, "registry.json")
+	registryData := `{"records":[{"id":"target-1","status":"active","packageDigest":"sha256:package","generation":2,"lease":"lease-2","token":"token-2"}]}`
+	if err := os.WriteFile(registry, []byte(registryData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := coordination.AcquirePath(registry+".lock", "admission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = Start(StartOptions{Root: root, Request: StartRequest{
+		RunID: "admission-lock", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+	}, Admission: &Admission{RegistryPath: registry, PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: 2, Lease: "lease-2", Token: "token-2"}})
+	unlock()
+	if err == nil || !strings.Contains(err.Error(), "admission lock held") {
+		t.Fatalf("start under admission lock error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, EngineNamespace, "admission-lock")); !os.IsNotExist(statErr) {
+		t.Fatalf("admission-locked start created state: %v", statErr)
+	}
+	if err := os.WriteFile(registry, []byte(strings.Replace(registryData, `"generation":2`, `"generation":3`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = Start(StartOptions{Root: root, Request: StartRequest{
+		RunID: "admission-generation", Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+	}, Admission: &Admission{RegistryPath: registry, PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1", Generation: 2, Lease: "lease-2", Token: "token-2"}})
+	if err == nil || !strings.Contains(err.Error(), "admission changed") {
+		t.Fatalf("stale admission error = %v", err)
+	}
+}
+
+func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T) {
+	root := t.TempDir()
+	runID := "recover-terminal-intent"
+	f, _, err := Start(StartOptions{Root: root, Request: StartRequest{
+		RunID: runID, Route: "lightweight", DefinitionSource: DefaultDefinitionSource,
+		DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: testReceipt(),
+	}, Admission: &Admission{PackageDigest: "sha256:package", InstalledTargetIdentity: "target-1"}})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	receipt := testReceipt()
+	digest, err := IntakeDigest(receipt)
+	if err != nil {
+		t.Fatalf("intake digest: %v", err)
+	}
+	if _, err := f.engine.RecordIntakeReceipt(protocol.IntakeReceipt{Confirmation: receipt, IntakeDigest: digest}, emptyFingerprint()); err != nil {
+		t.Fatalf("record intake receipt: %v", err)
+	}
+	if _, err := f.engine.CompleteAll(emptyFingerprint()); err != nil {
+		t.Fatalf("complete engine: %v", err)
+	}
+	run, err := f.project()
+	if err != nil {
+		t.Fatalf("project complete run: %v", err)
+	}
+	if err := writeJSONAtomic(terminalIntentPath(f.stateDir), summaryForRun(run)); err != nil {
+		t.Fatalf("write terminal intent: %v", err)
+	}
+	pending, err := f.Show()
+	if err != nil || pending.Status != "FINALIZING_CLEANUP" || pending.Next.Kind != decision.KindWait || pending.Next.Wait.Reason != decision.WaitEngineInternal {
+		t.Fatalf("terminal cleanup projection = %+v err=%v", pending, err)
+	}
+	if err := f.store.CleanupTerminal(); err != nil {
+		t.Fatalf("simulate cleanup: %v", err)
+	}
+	if _, err := os.Stat(terminalSummaryPath(f.stateDir)); !os.IsNotExist(err) {
+		t.Fatalf("summary unexpectedly exists before recovery: %v", err)
+	}
+	opened, err := Open(root, runID)
+	if err != nil {
+		t.Fatalf("open terminal intent: %v", err)
+	}
+	recovered, err := opened.Drive()
+	if err != nil || recovered.Status != "COMPLETE" || recovered.Next.Kind != decision.KindComplete {
+		t.Fatalf("recovered terminal run = %+v err=%v", recovered, err)
+	}
+	if _, err := os.Stat(terminalIntentPath(f.stateDir)); !os.IsNotExist(err) {
+		t.Fatalf("terminal intent remained after recovery: %v", err)
+	}
+	if _, err := os.Stat(terminalSummaryPath(f.stateDir)); err != nil {
+		t.Fatalf("terminal summary missing after recovery: %v", err)
 	}
 }
 

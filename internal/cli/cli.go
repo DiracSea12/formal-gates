@@ -449,7 +449,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 		_, run, err := facade.Start(facade.StartOptions{Root: *root, Request: facade.StartRequest{
 			RunID: runID, Route: "lightweight", Provider: "engine", DefinitionSource: facade.DefaultDefinitionSource,
 			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
-		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
 		if err != nil {
 			return 1, err
 		}

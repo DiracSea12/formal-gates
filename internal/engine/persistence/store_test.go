@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
@@ -554,5 +555,23 @@ func TestSaveFaultBoundariesRecoverDeterministically(t *testing.T) {
 				t.Fatalf("snapshot revision = %d, want %d", snapshot.Revision, tc.revision)
 			}
 		})
+	}
+}
+
+func TestCleanupTerminalRefusesUnknownResidue(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, Config{PackageDigest: testPackageDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "unexpected-resource"), []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupTerminal(); err == nil || !strings.Contains(err.Error(), "residue remains") {
+		t.Fatalf("cleanup residue error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "cleanup.receipt.json"))
+	if err != nil || !strings.Contains(string(data), `"residue":true`) {
+		t.Fatalf("cleanup residue receipt = %s err=%v", data, err)
 	}
 }

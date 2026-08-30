@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -222,6 +223,11 @@ func startRegular(options StartOptions) (RunState, error) {
 	if !promptIDPattern.MatchString(runID) {
 		return RunState{}, fmt.Errorf("run id must match [a-z0-9]+(?:-[a-z0-9]+)*")
 	}
+	runUnlock, err := coordination.AcquireRun(root, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	defer runUnlock()
 	if _, err := os.Stat(RunDir(root, runID)); err == nil {
 		return RunState{}, fmt.Errorf("run %q already exists", runID)
 	} else if !os.IsNotExist(err) {

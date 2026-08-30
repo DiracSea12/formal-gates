@@ -169,7 +169,7 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 - task/dispatch/Attempt 与 source bindings；
 - pending Ask、available-action freshness、obligations、impact set；
 - typed `ReviewScopeMode` 与逐项 QA approved whitelist（按 review/candidate/result 绑定）；
-- `AcceptanceManifest`、case↔acceptance-point map 及其 digest（按需求 revision、route/topology scope 绑定）；
+- `AcceptanceManifest`、case↔point map 及其 digest（按需求 revision、route/topology scope 绑定）；
 - split topology、`sliceID -> childRunID` 与 receipts；
 - terminal summary 的最后 request/event receipt；
 - `definitionDigest` 与 owning runtime `packageDigest` 的双重绑定与校验记录。
@@ -366,7 +366,7 @@ repair 的生产改动先形成新 `Dn`，再从它重建/对账 whitebox worksp
 
 黑盒 case review、白盒 test/case review、merge QA case review 使用同一确定性 `PreWaveReviewPolicy`，并持久化 typed `ReviewScopeMode`：首次建立基线为 `FULL`，后续新增、修改或 ImpactSet 受影响项为 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。QA case/test review 与 execution 均逐项使用 approved whitelist；缺失、未知、重复条目或仅总体 PASS 的结果拒绝，只有每项明确 `PASS` 才进入持久化 approved whitelist。按 run/child、review kind、requirement revision 与 route/topology scope 分别计数。第 1、2 次语义 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask fresh redesign、重试/fresh review、改需求、对精确 case-set/candidate 带理由 waiver/skip，或 abort。PASS 关闭/重置 series，runtime error 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（关联留痕），不因 P2 建议本身触发新 review 轮；自拟扩展仍需 fresh review。
 
-覆盖契约的最小结构是：每次 review 先冻结当前需求 revision、route/topology scope 的 `AcceptanceManifest`，由 case↔acceptance-point map 声明多对多覆盖关系，并同时返回逐 case 决策和逐 point `PointReviewDecision`。适用 point 必须有 approved case；执行必须绑定 manifest/map/whitelist digest 和当前 `ValidationCandidate`，摘要展开为 `pointID → caseID → result`，并区分 `EXECUTED_PASS` 与 `AUTHORIZED_SKIP`。这些结构性校验由 Controller/validator 完成，不依赖 agent 口头声明。
+覆盖契约先从已确认需求/方案冻结当前 revision、route/topology scope 的有限验收点集合 `AcceptanceManifest`，再用 case↔point 多对多映射建立双向追踪：每个适用 point 有 approved case，每个 case 有 point 归属。review 同时返回逐 case、逐 point 决策和未绑定条目；仅有集合级 PASS 不足以通过。execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开为 `pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。Controller/validator 负责结构校验，覆盖率、mutation、property-based test 和 fuzz 只作辅助信号，不设固定阈值。
 
 ## 8. 分片、主线合并与 VCS
 

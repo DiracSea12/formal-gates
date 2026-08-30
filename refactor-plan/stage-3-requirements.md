@@ -49,7 +49,8 @@
    writer 或公共入口。
 2. 跑通 lightweight 的“start 前已确认 intake → `start` → 首次 `drive` 自动登记 intake
    receipt/digest → engine 自动终结清理 → `Complete`”，并在 terminal summary 标记
-   `unverified=true`。对 engine run 调用旧的
+   `unverified=true`；终结 intent 尚未清理完成时只投影 `FINALIZING_CLEANUP`/`WAIT`，由
+   `drive` 对账后才返回 `Complete`。对 engine run 调用旧的
    `workflow requirement --confirmed` 或公开 `workflow cleanup` 必须明确拒绝且零写入；这两条
    旧命令只在 stable legacy 回归中验证其原有语义，不能操作 engine run。
 3. 在 engine protocol 的 whitebox/test-only sequence harness 中覆盖 `Ask`、`Ready`、

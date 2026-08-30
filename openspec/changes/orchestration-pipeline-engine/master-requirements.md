@@ -166,7 +166,7 @@
 ### 8.4 发现项、QA scope 与三轮
 
 1. 黑盒 case review、白盒 test/case review、merge QA case review 共用一份确定性的 `PreWaveReviewPolicy`，但按 `run/child + review kind + requirement revision + route/topology scope` 分别计连续语义 FAIL。首次建立审查基线的 scope 固定为 `FULL`；后续新增、修改或 ImpactSet 受影响项的审查 scope 固定为 `AFFECTED`。每次审查与 QA execution 均逐项核对白名单：缺失、未知、重复条目或仅有总体 PASS 一律拒绝，只有每项明确 `PASS` 才能进入持久化 approved whitelist。第 1、2 次 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask：fresh redesign、重试/fresh review、用户需求变化、对精确 case-set/candidate 的带理由 waiver/skip，或 abort。PASS 关闭/重置该 series，RUNTIME_ERROR 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（与建议的关联留痕）、不因 P2 建议本身触发新 review 轮；超出建议内容的自拟修订仍需 fresh review。
-QA 覆盖的最小结构是：每次 review 先冻结当前需求 revision、route/topology scope 的 `AcceptanceManifest`，用显式 case↔acceptance-point map 表示多对多覆盖，并同时返回逐 case 决策和逐 point `PointReviewDecision`。适用 point 必须有 approved case；execution 绑定同一 manifest/map/whitelist digest 和当前 `ValidationCandidate`，摘要展开为 `pointID → caseID → result`，并区分 `EXECUTED_PASS` 与 `AUTHORIZED_SKIP`。这些结构性校验由 Controller/validator 完成，不依赖 agent 口头声明。
+QA 覆盖先从已确认需求/方案冻结当前 revision、route/topology scope 的有限验收点集合 `AcceptanceManifest`，再用 case↔point 多对多映射建立双向追踪：每个适用 point 有 approved case，每个 case 有 point 归属。review 同时返回逐 case、逐 point 决策和未绑定条目；仅有集合级 PASS 不足以通过。execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开为 `pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。Controller/validator 负责结构校验；覆盖率、mutation、property-based test 和 fuzz 只作辅助信号，不设固定阈值。
 2. QA/门发现开发后新细节时，Controller 只根据 FailureClass、producing task kind、artifact ownership 和 typed receipt 计算合法处置，不让 Operator/其他 AI 判根因。唯一分支机械执行；多个合法分支或 UNKNOWN 时生成 `VALIDATION_DETAIL_DISPOSITION` Ask，固定选项为 `DIRECT_REPAIR`（直接返修）、`QA_ARTIFACT_REPAIR`（修用例/测试）、`REQUEST_REQUIREMENT_CHANGE`（按需求修改重走流程）和 `DISMISS`（作废）。
 3. pending disposition 期间不形成 `RepairObligation`，对应 expected result 记为 `AWAITING_DISPOSITION`，当前 batch 不计 wave。`DIRECT_REPAIR` 才形成 obligation 并使本轮可结算；`QA_ARTIFACT_REPAIR` 使受影响 QA 证据与旧 candidate binding stale，完成 design/review 后冻结新候选、至少重跑改过的测试并按依赖扩大，再在新候选 join；artifact 修订本身不增加开发返修轮，替代候选完成时该 logical wave 只计一次。`REQUEST_REQUIREMENT_CHANGE` 进入用户主动需求变化 barrier；`DISMISS` 不形成 obligation。该 Ask 的优先级高于 `wave < 3` 自动返修规则。
 4. 处置唯一确定或用户选择直接返修后，经正常入口与范围核实的 QA FAIL、gate P0/P1/P2/P3 形成 `RepairObligation`。P2/P3 gate 结果仍可为 PASS，但 obligation 独立存在；范围外 P3 只留建议，不形成 obligation。
@@ -203,7 +203,7 @@ QA 覆盖的最小结构是：每次 review 先冻结当前需求 revision、rou
 
 以下每一项都要求可复现测试/QA 证据，不能用 smoke 或口头保证代替：
 
-QA 覆盖契约的独立 fixtures 还必须证明：合法多对多 case↔acceptance-point 映射、无适用 QA 点的显式理由、未知/重复/缺失/orphan 条目和集合级 PASS 被拒绝、manifest/map/whitelist digest 或当前 `ValidationCandidate` 不匹配时旧结果失效，以及 `AUTHORIZED_SKIP` 不计为执行 PASS。该 checkpoint 只冻结契约与 validator，regular E2E 留在阶段 4。
+QA 覆盖契约的独立 fixtures 还必须证明：合法多对多 case↔point 映射、无适用 QA 点的显式理由、未知/重复/缺失/orphan 条目和集合级 PASS 被拒绝、manifest/map/whitelist digest 或当前 `ValidationCandidate` 不匹配时旧结果失效、`FULL` expected/actual 不一致与 `AFFECTED` 执行/继承/未执行集合不完整被拒绝，以及 `AUTHORIZED_SKIP` 不计为执行 PASS。该 checkpoint 只冻结契约与 validator，regular E2E 留在阶段 4。
 
 1. **迁移表与用户节点**：每条合法边、pre 拒绝、trigger 分类、Ask/Operator/Wait/HostAction/Ready/Complete、主动 `REQUEST_*`、终态与回退；正常入口不存在遗漏用户节点。
 2. **节点内执行计划**：封闭变体 constructor 非法状态拒绝、closed-world compiler 图校验（可达性/循环/依赖/join 覆盖/版本绑定/registry ID 完备性）、合法/非法 reason、typed I/O、可执行 pre/postcondition、固定顺序、乱序/遗漏/重复拒绝、精确 frontier、崩溃后不重放已完成前缀，以及纯原子 handler 不被过度拆分。
