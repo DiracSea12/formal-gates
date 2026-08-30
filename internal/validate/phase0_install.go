@@ -13,8 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"formal-gates/internal/coordination"
 )
 
 // stagedInstallTree is the install coordinator's private candidate. Preparing
@@ -820,15 +821,11 @@ func lockIsStale(path string) bool {
 	if err != nil || pid <= 0 {
 		return true
 	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
+	if !coordination.ProcessAlive(pid) {
 		return true
 	}
-	if err := process.Signal(syscall.Signal(0)); err == nil {
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
-			return true
-		}
-		return false
+	if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Minute {
+		return true
 	}
-	return true
+	return false
 }

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -111,11 +110,7 @@ func stale(path string) bool {
 	if err != nil || pid <= 0 {
 		return true
 	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return true
-	}
-	if err := process.Signal(syscall.Signal(0)); err != nil {
+	if !ProcessAlive(pid) {
 		return true
 	}
 	info, err := os.Stat(path)

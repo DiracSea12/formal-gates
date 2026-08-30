@@ -500,21 +500,12 @@ func (s *Store) writeIntent(intent intentRecord) error {
 }
 
 // executeCommit 是 execute 段单点：暂存文件原子替换最终状态文件，
-// 随后 fsync 目录使 rename 持久。Windows 平台分叉按阶段决策延期，
-// 未来分层只替换本函数内的 rename 实现。
+// 随后按平台策略同步目录，使 rename 持久。
 func (s *Store) executeCommit(tempName string) error {
 	if err := os.Rename(filepath.Join(s.dir, tempName), s.statePath()); err != nil {
 		return err
 	}
-	dir, err := os.Open(s.dir)
-	if err != nil {
-		return err
-	}
-	if err := dir.Sync(); err != nil {
-		_ = dir.Close()
-		return err
-	}
-	return dir.Close()
+	return syncDirectory(s.dir)
 }
 
 // removeIntent 清除 intent 记录（提交完结或判定残留）；不存在视为成功。

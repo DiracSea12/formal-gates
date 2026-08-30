@@ -225,17 +225,12 @@
   routeMode=`full`、split declaration=`no`、slicing=`no-split`。
 - formal run base：`62419ed39ae3673323991cb2e28326b1fe4ff914`（“docs: 登记阶段 2
   （持久协议与恢复内核）阶段需求与受理清单处置”，父提交
-  `637994a52a26d8b475f4b6c3ae769cafdd1fd374`）。开发收口前的实际实现候选 identity：
-  `be2712def04ff2cc9e3f7212f08a6e2d37e55af1`（批次 3 testkit/独立进程验收，父提交
-  `8b66ec55b04c19053d581da53807644e76bd5537`）。
-- 已查证的阶段实现提交：1a persistence =
-  `15fbbe60bc6e3716e4e067f1336b754533dd8664`；1b submit protocol =
-  `397ce19cc3784c2b6be5590228ad2924b47dfea8`；1c unified admission =
-  `ecc3983b1b67db754a7b28687824f149465094a9`；2a recovery =
-  `0466bbc11700e16a13a9de0107d3133b2bca8d2a`，后续修复
-  `6f6d5004d68a8d3a09dccd3601affb688506b952`、
-  `8b66ec55b04c19053d581da53807644e76bd5537`；批次 3 testkit/harness =
-  `be2712def04ff2cc9e3f7212f08a6e2d37e55af1`。
+  `637994a52a26d8b475f4b6c3ae769cafdd1fd374`）。开发收口前的中间实现候选及其父提交曾在
+  本地过程记录中登记，但这些对象没有随当前远端历史发布，CI 无法复核；本节不把它们当作
+  当前 canonical identity。
+- 1a persistence、1b submit protocol、1c unified admission、2a recovery 及批次 3
+  testkit/harness 的中间实现提交没有包含在当前远端可复核历史中，故不再登记不可验证的完整
+  对象指针。阶段 2 以已登记的 sealed commit 和下方主线集成 commit 作为可验证指针。
 - sealed commit：主 run `phase-2-persistence-protocol` 的封板快照为
   `7d1e30ae862df5ba4d306abc2d21578241bcb217`；修复 run
   `phase-2-persistence-protocol-repair-v3` 的最终封板快照为
@@ -287,8 +282,9 @@
 - 固定 stable driver 的登记 source identity：
   `be6a787e50856c26689a77c7c3f4fa69c6a675fa`（阶段需求“环境约束”）；本阶段没有生成新的
   stable package digest receipt，故完整稳定插件摘要不可考。
-- 候选 source identity：开发收口前为 `be2712def04ff2cc9e3f7212f08a6e2d37e55af1`；后续修复批的
-  immutable identity 以对应 development-worker 提交为准，本开发中记录不预写尚未形成的
+- 候选 source identity：开发收口前的中间候选对象未随当前远端历史发布，完整 identity 不可考；
+  以已登记的 sealed commit 和主线集成 commit 为准，后续修复批的 immutable identity 以对应
+  development-worker 提交为准，本记录不预写尚未形成的
   commit。`TestAcceptanceInstalledProtocolHarness` 分别构建 candidate 与 test-only harness，
   candidate 走隔离 install/bootstrap receipt，harness 仍为不进入安装包的独立测试二进制。
   promotion receipt 尚未产生；本阶段的主线集成 receipt 是

@@ -7,8 +7,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"formal-gates/internal/coordination"
 )
 
 // lockStaleAge 是锁的陈旧阈值，与 phase0 家族同值。engine 写事务是
@@ -95,15 +96,11 @@ func lockIsStale(path string) bool {
 	if err != nil || pid <= 0 {
 		return true
 	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
+	if !coordination.ProcessAlive(pid) {
 		return true
 	}
-	if err := process.Signal(syscall.Signal(0)); err == nil {
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStaleAge {
-			return true
-		}
-		return false
+	if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStaleAge {
+		return true
 	}
-	return true
+	return false
 }

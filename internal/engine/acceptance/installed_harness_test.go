@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,9 +30,16 @@ type installedHarnessReport struct {
 
 func buildInstalledHarnessBinary(t *testing.T, root, packagePath, name string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), name)
+	bin := executablePath(filepath.Join(t.TempDir(), name))
 	buildInstalledBinaryAt(t, root, packagePath, bin)
 	return bin
+}
+
+func executablePath(path string) string {
+	if runtime.GOOS == "windows" && strings.ToLower(filepath.Ext(path)) != ".exe" {
+		return path + ".exe"
+	}
+	return path
 }
 
 func buildInstalledBinaryAt(t *testing.T, root, packagePath, bin string) {
@@ -64,7 +72,7 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
-	candidate := filepath.Join(home, ".local", "bin", "formal-gates")
+	candidate := executablePath(filepath.Join(home, ".local", "bin", "formal-gates"))
 	buildInstalledBinaryAt(t, root, "./cmd/formal-gates", candidate)
 	harness := buildInstalledHarnessBinary(t, root, "./internal/engine/testkit/cmd/harness", "engine-harness")
 	project, err := testkit.NewIsolatedProject(t.TempDir())

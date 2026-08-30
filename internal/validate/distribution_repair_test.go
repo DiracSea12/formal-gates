@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -123,7 +124,7 @@ func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if releaseInfo.Mode().Perm() != 0o711 {
+	if runtime.GOOS != "windows" && releaseInfo.Mode().Perm() != 0o711 {
 		t.Fatalf("unexpected normalized release executable mode: %v", releaseInfo.Mode().Perm())
 	}
 	beforeDigest, err := PackageDigest(source)
@@ -134,7 +135,7 @@ func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if releaseDigest == beforeDigest {
+	if runtime.GOOS != "windows" && releaseDigest == beforeDigest {
 		t.Fatalf("release normalization did not change package digest: %s", releaseDigest)
 	}
 	if _, err := Install(InstallOptions{
