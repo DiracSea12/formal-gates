@@ -67,7 +67,8 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
 3. **拆分决定与绑定路线。** 在 Part 2 `start-readiness` 技术审中一并完成粒度判断，
    不另派独立的粒度审查代理；技术审必须输出 `granularity_review`，说明本 run 是单一
    Batch 还是多个 Batch，并给出 `Batch → Subtask` 映射、依赖/接口/状态边界、风险、
-   DoD/测试、回滚/恢复、交接与上下文成本，以及不拆或改拆的理由。`start-readiness`
+   DoD/测试、回滚/恢复、交接与上下文成本，以及不拆或改拆的理由和改拆后果说明（若改拆，
+   黑盒 QA 设计按新拆分拓扑增量展开、已有适用用例复用）。`start-readiness`
    PASS 后记录拆分决定（`workflow slicing`），然后确认路线（`workflow route`；主代理给
    统一默认推荐、用户拍板）。拆分建议对所有正式 run 必须呈现并留痕；仅高置信要拆时需
    用户确认拆分方案。拆分决定与启动声明冲突时（`--split no` 要拆、保留实例要不拆），
