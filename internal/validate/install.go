@@ -297,9 +297,16 @@ func Install(options InstallOptions) (InstallReport, error) {
 		// Validate the existing bridge before changing any host target.  A
 		// malformed registry is an unregistered install, not a reason to leave
 		// a partially installed runtime behind.
-		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
+		if doc, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
+		} else if loadErr == nil {
+			if fenceErr := rejectActiveWorkflowRuns("install", targets, options, doc.Records); fenceErr != nil {
+				return InstallReport{}, fenceErr
+			}
 		}
+	}
+	if fenceErr := rejectActiveWorkflowRuns("install", targets, options, nil); fenceErr != nil {
+		return InstallReport{}, fenceErr
 	}
 
 	transactionParent := filepath.Dir(registryPath)
@@ -967,22 +974,40 @@ func rejectActiveWorkflowRuns(operation string, targets []installTarget, options
 			stateRoots[canonicalRegistryPath(record.StateRoot)] = true
 		}
 	}
+	if strings.TrimSpace(options.Project) != "" {
+		stateRoots[canonicalRegistryPath(options.Project)] = true
+	}
 	for stateRoot := range stateRoots {
 		matches, err := filepath.Glob(filepath.Join(stateRoot, "tmp", "*", "state.json"))
 		if err != nil {
 			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
 		}
+		candidateMatches, err := filepath.Glob(filepath.Join(stateRoot, "engine", "*", "state.json"))
+		if err != nil {
+			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
+		}
+		matches = append(matches, candidateMatches...)
 		for _, statePath := range matches {
 			data, readErr := os.ReadFile(statePath)
 			if readErr != nil {
 				return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, statePath, readErr)
 			}
 			var probe struct {
-				RunID  string `json:"runId"`
-				Status string `json:"status"`
+				RunID   string `json:"runId"`
+				Status  string `json:"status"`
+				Phase   string `json:"phase"`
+				Content struct {
+					RunID string `json:"runId"`
+					Phase string `json:"phase"`
+				} `json:"content"`
 			}
-			if json.Unmarshal(data, &probe) != nil || !strings.EqualFold(probe.Status, "ACTIVE") {
+			_ = json.Unmarshal(data, &probe)
+			active := strings.EqualFold(probe.Status, "ACTIVE") || strings.EqualFold(probe.Phase, "INTAKE_REGISTERED") || strings.EqualFold(probe.Content.Phase, "INTAKE_REGISTERED")
+			if !active {
 				continue
+			}
+			if probe.RunID == "" {
+				probe.RunID = probe.Content.RunID
 			}
 			return fmt.Errorf("active workflow run %q at %s fences %s", probe.RunID, statePath, operation)
 		}
@@ -1054,10 +1079,10 @@ func launcherInvocationMatches(expected string) bool {
 	return err == nil && stableLauncherPath(executable) == expected
 }
 
-// RequireInstallLauncher fences the public mutation command. The downloaded
-// archive binary must first be staged at the fixed launcher path by the
-// checksum-verifying bootstrap script; invoking source/bin directly is a
-// candidate path and cannot write the shared registry or host configuration.
+// RequireInstallLauncher fences the public mutation command. Normal maintenance
+// uses the fixed launcher path; when --binary-target is supplied, that path is
+// the transaction launcher and the process must be invoked through it. A
+// different raw candidate cannot impersonate the selected launcher.
 func RequireInstallLauncher(options InstallOptions) error {
 	executable, err := os.Executable()
 	if err != nil {
@@ -1072,12 +1097,38 @@ func RequireInstallLauncher(options InstallOptions) error {
 	}
 	expected := defaultStableLauncherPath(options)
 	if strings.TrimSpace(options.BinaryTarget) != "" {
-		if stableLauncherPath(options.BinaryTarget) != expected {
-			return fmt.Errorf("UNREGISTERED_INSTALL: --binary-target must be the fixed stable launcher %s", expected)
-		}
+		// A caller that supplies a launcher path owns that path for the
+		// transaction. The process must still be the same executable, so a
+		// raw candidate binary cannot impersonate a different launcher.
+		expected = stableLauncherPath(options.BinaryTarget)
 	}
 	if !launcherInvocationMatches(expected) {
 		return fmt.Errorf("UNREGISTERED_INSTALL: install maintenance must run through stable launcher %s", expected)
+	}
+	// An explicit non-default transaction launcher must already be admitted.
+	// This keeps a plain candidate executable from selecting itself as a new
+	// stable launcher (the portable-canary fence), while preserving first
+	// install at the documented default launcher and maintenance through an
+	// existing custom launcher.
+	if strings.TrimSpace(options.BinaryTarget) != "" &&
+		canonicalRegistryPath(expected) != canonicalRegistryPath(defaultStableLauncherPath(options)) {
+		registry := installRegistryPath(options)
+		doc, loadErr := LoadRegistry(registry)
+		admitted := false
+		if loadErr == nil {
+			for _, record := range doc.Records {
+				if strings.EqualFold(record.Status, "active") && validRegistryRecord(record) &&
+					canonicalRegistryPath(record.LauncherPath) == canonicalRegistryPath(expected) {
+					admitted = true
+					break
+				}
+			}
+		} else if !os.IsNotExist(loadErr) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: cannot verify transaction launcher admission: %w", loadErr)
+		}
+		if !admitted {
+			return fmt.Errorf("UNREGISTERED_INSTALL: transaction launcher %s is not registered; invoke the documented install through the stable launcher %s", expected, defaultStableLauncherPath(options))
+		}
 	}
 	return nil
 }
@@ -1256,6 +1307,13 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 					expected.VCSIdentity = outer.VCSIdentity
 					expected.PackageDigest = source.Digest
 					expected.InstalledDigest = targetDigests[canonicalRegistryPath(target.targetPath)]
+					if bootstrapReleasePreservesIdentity(record, source.Root, expected.InstalledDigest) {
+						// The release tree is the normalized copy owned by this
+						// record. Keep the original source package identity instead
+						// of replacing it with the release-tree receipt digest.
+						expected.VCSIdentity = record.VCSIdentity
+						expected.PackageDigest = record.PackageDigest
+					}
 					valid := validRegistryRecord(record)
 					binding := sameRegistryBinding(record, expected)
 					identity := sameRegistryIdentity(record, expected)
@@ -1291,6 +1349,10 @@ func bootstrapInstall(options InstallOptions, targets []installTarget, source Pa
 		desired.VCSIdentity = outer.VCSIdentity
 		desired.PackageDigest = source.Digest
 		desired.InstalledDigest = targetDigests[canonicalRegistryPath(target.targetPath)]
+		if existing, ok := existingByID[desired.ID]; ok && bootstrapReleasePreservesIdentity(existing, source.Root, desired.InstalledDigest) {
+			desired.VCSIdentity = existing.VCSIdentity
+			desired.PackageDigest = existing.PackageDigest
+		}
 		if !exists(desired.ResourceRoot) {
 			if err := os.MkdirAll(desired.ResourceRoot, 0o700); err != nil {
 				return InstallReport{}, rollback(fmt.Errorf("resource root setup failed: %w", err))
@@ -1367,6 +1429,19 @@ func bootstrapHasSiblingAdmission(desired RegistryRecord, records []RegistryReco
 		}
 	}
 	return false
+}
+
+// bootstrapReleasePreservesIdentity recognizes the documented bootstrap of a
+// release tree already registered by the preceding install transaction. The
+// installer adds executable permission bits while copying the release, so the
+// release receipt digest is not the original source package digest; the
+// installed target digest and exact registered release root are the binding
+// proof for this read-only maintenance operation.
+func bootstrapReleasePreservesIdentity(record RegistryRecord, sourceRoot, installedDigest string) bool {
+	return record.ReleaseRoot != "" &&
+		canonicalRegistryPath(sourceRoot) == canonicalRegistryPath(record.ReleaseRoot) &&
+		record.InstalledDigest != "" && record.InstalledDigest == installedDigest &&
+		record.PackageDigest != "" && record.VCSIdentity != ""
 }
 
 // Global installs have one canonical host record, but workflow state and

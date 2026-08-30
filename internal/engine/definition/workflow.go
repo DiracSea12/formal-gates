@@ -50,7 +50,7 @@ var (
 	workflowCodecs     = []authoring.CodecID{"codec.any.in", "codec.any.out"}
 	workflowPredicates = []authoring.PredicateID{"pred.review.post"}
 	workflowReconciles = []authoring.ReconcileID{"reconcile.entry.persist"}
-	workflowSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response"}
+	workflowSchemas    = []authoring.SchemaID{"schema.ask.decision.request", "schema.ask.decision.response", "schema.host.fan.transport"}
 	workflowOperations = []authoring.OperationID{"op.fan.transport"}
 	workflowAskKinds   = []authoring.AskKindID{"decision"}
 )
@@ -122,7 +122,7 @@ func Workflow() *compiler.Definition {
 	transport, err := authoring.NewHostActionStep(header("fan.transport", "fan", "fan.split"),
 		ioWith("fan.split"), authoring.HostActionSpec{
 			Handler: "engine.fan.transport", Boundary: authoring.BoundaryAgentDispatchAPI,
-			Operation: "op.fan.transport", Timeout: 10 * time.Second,
+			Operation: "op.fan.transport", Schema: "schema.host.fan.transport", Timeout: 10 * time.Second,
 		})
 	must("fan.transport", err)
 	join, err := authoring.NewLocalStep(header("fan.join", "fan", "fan.slice", "fan.transport"),

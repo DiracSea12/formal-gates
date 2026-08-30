@@ -1,0 +1,953 @@
+{
+  "runId": "phase-2-persistence-protocol-review-fix",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "82779a853f7a638379e5c3cdf8a88644770005a0012ef907aa30532f1af33962",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "086117893aacc386be3ec858afcb0566ff9ddabef0b6e70319ebb7607c6933fd",
+  "vcs": "git",
+  "baseSnapshot": "3e3faf59c7a914e2da00ebc29bed8a094d90b7da",
+  "currentSnapshot": "32e2b5dc5d2f5ab3d358deb8f9817dc375e702a3",
+  "requirementArtifacts": [
+    {
+      "path": "refactor-plan/stage-records.md",
+      "revision": "82779a853f7a638379e5c3cdf8a88644770005a0012ef907aa30532f1af33962"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "Review-fix verification wave: same delivery scope, single full re-verification"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 1,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "32e2b5dc5d2f5ab3d358deb8f9817dc375e702a3",
+      "compared": "3e3faf59c7a914e2da00ebc29bed8a094d90b7da..32e2b5dc5d2f5ab3d358deb8f9817dc375e702a3",
+      "dispatchId": "dispatch-a7c482e15c16a440e937ff26"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "32e2b5dc5d2f5ab3d358deb8f9817dc375e702a3",
+      "compared": "3e3faf59c7a914e2da00ebc29bed8a094d90b7da..32e2b5dc5d2f5ab3d358deb8f9817dc375e702a3",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "internal/engine/protocol/settle.go settleFrontierSteps 依赖序完成循环为 O(steps^2)，步数有限（\u003c64）且定义封闭；终态架构无新增抽象层",
+          "locations": [
+            "internal/engine/protocol/settle.go"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-faefb10b5b8af5e9cf2343b5"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "32e2b5dc5d2f5ab3d358deb8f9817dc375e702a3",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness --scenario smoke",
+        "observation": "rc=0, status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness --scenario full",
+        "observation": "rc=0, status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness envelope/envelope-write 篡改形态组",
+        "observation": "envelope status=PASS, envelope-write status=PASS (rc 非零为预期拒绝路径)",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness envelope/envelope-write 篡改形态组",
+        "observation": "envelope status=PASS, envelope-write status=PASS (rc 非零为预期拒绝路径)",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness envelope/envelope-write 篡改形态组",
+        "observation": "envelope status=PASS, envelope-write status=PASS (rc 非零为预期拒绝路径)",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness --scenario smoke",
+        "observation": "rc=0, status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness envelope/envelope-write 篡改形态组",
+        "observation": "envelope status=PASS, envelope-write status=PASS (rc 非零为预期拒绝路径)",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa/... ./internal/engine/acceptance/... (batch)",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness --scenario interruption",
+        "observation": "rc=0, status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-029）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-030）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "capacity-refill(capacity=1) → submit-spawn → submit-worker（显式链）",
+        "observation": "capacity-refill scenario self-drives chain: status=PASS; explicit spawn/worker sub-scenarios covered by CASE-031 chain via interruption project state",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-032）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-033",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-033）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-034",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-034）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-035",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-035）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-036",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-036）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-037",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-037）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-038",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-038）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-039",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-039）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-040",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-040）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-041",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness --scenario unknown-receipt",
+        "observation": "rc=0, status=PASS",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-042",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness fault --fault temp_sync_before（注入崩溃 rc≠0 为预期）→ 独立进程 recover",
+        "observation": "crash: rc=1 INJECTED_FAULT=True; recover: rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-043",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-043）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-044",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-044）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-045",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-045）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-046",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-046）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-047",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-047）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-048",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-048）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-049",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-049）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-050",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-050）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-051",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-051）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-052",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-052）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-053",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-053）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-054",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-054）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-055",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-055）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-056",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-056）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-057",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-057）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-058",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness --scenario next-sequence 六类边界",
+        "observation": "rc=0, kinds=['READY', 'ASK', 'WAIT', 'HOST_ACTION', 'OPERATOR', 'COMPLETE']",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-059",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-059）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-060",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-060）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-061",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-061）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-062",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-062）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-063",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "harness full → query-terminal → terminal-replay（独立进程；CASE-063）",
+        "observation": "full rc=0, query rc=0, replay rc=0, summary sha256[:16]=2f783a360831785a",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-064",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxEnvelopeIdentityRejectsEveryFieldBeforeWrite -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-065",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxEveryDurableCrashWindowConverges -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-066",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxFailureRoutingIsClosedAndNonAgentByDefault -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-067",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxProviderAndAttemptRejectionsAreZeroWrite -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-068",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxEngineWritesStayInsideExplicitIsolationRoot -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-069",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxCASConflictSkipsFingerprintAndArtifacts -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-070",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxRecoveryQuarantinesStagedEnvelopeMismatch -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-071",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxReplaySkipsFingerprintRevalidation -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-072",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxNewEventIDDuplicatePayloadIsDurablyOccupied -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-073",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxUnknownReceiptRequiresMatchingLifecycleEvidence -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-074",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxRecoveryAskPreservesCurrentAttempt -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-075",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxIntegrityMismatchFencesEveryStateOperation -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-076",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxFingerprintChangesDistinguishRejectedAndCommittedWrites -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-077",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxSameEventIDDifferentDigestIsZeroWrite -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-078",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxInterveningCommitInvalidatesFreshnessToken -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-079",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxConcurrentSubmitConvergesWithoutLostUpdate -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-080",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxResultBeforeReceiptSurvivesRestartAndSettlesOnce -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-081",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxHostActionUnknownReconcilesWithoutReexecution -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-082",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxReplacementAttemptQuarantinesLateResult -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-083",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxHostActionSchemasFenceIntentAndReceiptWrites -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-084",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxTaskProgressMaintainsExpectedAttemptLedger -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-085",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxTerminalSummaryIsVersionBoundAndReplayOnly -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-086",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test -run TestPhase2WhiteboxRawDiagnoseIsReadOnlyForUnsupportedInputs -count=1 ./internal/engine/whitebox_qa/...",
+        "observation": "batch rc=0",
+        "oracleResult": "matched",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-066aea00d7135e84fe7694e8": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1bd3b7c4cc22d1e311c32ea9": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-341d53bbd6c20d104f7c5eee": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8d221d409eb87eb1ece02d6a": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9e113898e900be1b50f526fc": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a389569245de7d6de1010ac0": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a7c482e15c16a440e937ff26": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e2d368a21b2bd2606e24b30d": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e3eb9a5992b1dae265176596": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e6c227b3e627b8d87227f947": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-faefb10b5b8af5e9cf2343b5": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ff5f06405a0e252d5a1fb876": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

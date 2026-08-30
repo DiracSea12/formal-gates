@@ -153,7 +153,7 @@ func TestWhiteboxPhase0Round15InstallFaultMatrixRecoveryReceiptIdentity(t *testi
 		{"copy-component:prompts", "intent"},
 		{"verify-stage:installed-target", "switched"},
 	}
-	const reconcileAction = "restore all target, release, binary, hook, managed-rule and registry snapshots"
+	const reconcileAction = "restore all target, release, binary, hook, hook-state, managed-rule and registry snapshots"
 
 	for _, fault := range faults {
 		t.Run(fault.name, func(t *testing.T) {
@@ -377,15 +377,8 @@ func TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens(t *test
 		if !strings.Contains(strings.ToLower(output), strings.ToLower(helpCase.marker)) {
 			t.Fatalf("help %q omitted %q: %s", strings.Join(helpCase.args, " "), helpCase.marker, output)
 		}
-		for _, token := range []string{"drive", "submit"} {
-			standalone := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])` + token + `([^[:alnum:]_-]|$)`)
-			backticked := regexp.MustCompile("(?i)`" + token + "`")
-			if match := standalone.FindString(output); match != "" {
-				t.Fatalf("help %q contains standalone future command token %q", strings.Join(helpCase.args, " "), match)
-			}
-			if match := backticked.FindString(output); match != "" {
-				t.Fatalf("help %q contains backticked future command token %q", strings.Join(helpCase.args, " "), match)
-			}
-		}
+		// Stage 3 exposes workflow drive/submit on the installed candidate
+		// façade; they are no longer future command tokens in CLI help. Stable
+		// package documentation is still checked above for legacy leakage.
 	}
 }

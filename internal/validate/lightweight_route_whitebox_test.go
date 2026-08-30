@@ -270,6 +270,24 @@ func TestSealPersistsLightweightUnverifiedRecord(t *testing.T) {
 	mustContain(t, string(record), `"unverified": "本 run 未经任何验证"`)
 }
 
+func TestLightweightRequirementCanConfirmWithoutClarificationAction(t *testing.T) {
+	root, pkg := startFixture(t)
+	state, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "lw-direct-confirm", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Route: "lightweight"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", true, "", nil)
+	if err != nil {
+		t.Fatalf("lightweight requirement confirmation: %v", err)
+	}
+	if !state.RequirementConfirmed {
+		t.Fatal("lightweight requirement was not confirmed")
+	}
+	if _, err := Seal(root, pkg, state.RunID, nil, false, ""); err != nil {
+		t.Fatalf("lightweight seal after direct confirmation: %v", err)
+	}
+}
+
 // Case: the renamed quick-e2e canary (was "lightweight-workflow") still runs the
 // complete verified formal route — start → requirement registration → Product
 // Review / Start Readiness → slicing → full-route confirmation → QA design /

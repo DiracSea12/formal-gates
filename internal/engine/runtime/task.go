@@ -50,6 +50,51 @@ func (k TaskKey) String() string {
 	return string(k.Node) + "/" + string(k.Step) + "/" + k.Scope
 }
 
+// MarshalText exposes the canonical task identity to structured encoders.
+// encoding/json uses this representation for both TaskKey values and map
+// keys, so the domain type itself owns its persistent identity.
+func (k TaskKey) MarshalText() ([]byte, error) {
+	if k == (TaskKey{}) {
+		return []byte{}, nil
+	}
+	validated, err := NewTaskKey(k.Node, k.Step, k.Scope)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(validated.String()), nil
+}
+
+// UnmarshalText restores the canonical node/step[/scope] representation.
+// Empty text represents the zero value used by optional task fields; map
+// keys written by the engine are always non-empty valid task identities.
+func (k *TaskKey) UnmarshalText(text []byte) error {
+	if k == nil {
+		return fmt.Errorf("runtime: unmarshal task key into nil receiver")
+	}
+	value := string(text)
+	if value == "" {
+		*k = TaskKey{}
+		return nil
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 && len(parts) != 3 {
+		return fmt.Errorf("runtime: task key %q is not node/step[/scope]", value)
+	}
+	scope := ""
+	if len(parts) == 3 {
+		scope = parts[2]
+	}
+	parsed, err := NewTaskKey(authoring.NodeID(parts[0]), authoring.StepID(parts[1]), scope)
+	if err != nil {
+		return err
+	}
+	if parsed.String() != value {
+		return fmt.Errorf("runtime: task key %q is not canonical", value)
+	}
+	*k = parsed
+	return nil
+}
+
 // TaskStatus 是单个动态任务的状态机（final-implementation-draft §3.1）。
 // 任务级结果是 TaskStatus 之外的数据（由后续批次的 typed result 承载），
 // 状态机本身只描述调度位置。

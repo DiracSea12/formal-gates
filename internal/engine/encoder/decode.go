@@ -133,7 +133,7 @@ func payloadFromWire(sw *stepWire) (compiler.Payload, error) {
 		}
 		return compiler.CompiledHostActionStep{
 			Handler: authoring.HandlerID(w.Handler), Boundary: authoring.HostBoundaryReason(w.Boundary),
-			Operation: authoring.OperationID(w.Operation), Timeout: time.Duration(w.TimeoutNs),
+			Operation: authoring.OperationID(w.Operation), Schema: authoring.SchemaID(w.Schema), Timeout: time.Duration(w.TimeoutNs),
 		}, nil
 	case compiler.KindAgent:
 		var w agentPayloadWire

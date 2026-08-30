@@ -1,0 +1,1020 @@
+{
+  "runId": "phase-3-engine-vertical-loop",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "216f066cbc8250b0f7a1959b6a59246888f6ff2495533d1f391e5346c5304182",
+  "basePromptRevision": "3f35c560a7a0951355638c8b3ce158640fe722f5309f47c1a4826505d710872c",
+  "catalogRevision": "2b495a77ba3d77cb6076ea60ac622e5fe279b0d9d6ae2951baf1da99ceb5fdb1",
+  "vcs": "git",
+  "baseSnapshot": "1cbdf4bee4d1079f2464612ae61ce54214d4753b",
+  "currentSnapshot": "f54f9e34ca108b8459cd85befec86e115856d202",
+  "requirementArtifacts": [
+    {
+      "path": "refactor-plan/adr-001-typed-authoring-compiled-canonical-definitions.md",
+      "revision": "024aaf8fafdf5e1378fb3682d8734e35c54324116024beba89c62731f60c0cf8"
+    },
+    {
+      "path": "refactor-plan/adr-002-development-batching-and-verification-tiers.md",
+      "revision": "cd541208c2abf5ea9ab2545110bba7aad5aea8a8eca036c57fa8fe8dc9ee4daf"
+    },
+    {
+      "path": "refactor-plan/final-implementation-draft.md",
+      "revision": "4361a642b38837886b8fe689a25b2100f6e7a4be3f0299ebc37682e1a2c5e052"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "a74829191c6911595a2b1a0a084c8856d96937c24cb475a68a6d2d6f5a3dbee9"
+    },
+    {
+      "path": "refactor-plan/route-matrix.md",
+      "revision": "08d044ecf128c1f091de8352b6997062a2cc6ce931174fd3ff9f1f33bb6f800d"
+    },
+    {
+      "path": "refactor-plan/stage-3-requirements.md",
+      "revision": "216f066cbc8250b0f7a1959b6a59246888f6ff2495533d1f391e5346c5304182"
+    },
+    {
+      "path": "refactor-plan/stage-3-solution.md",
+      "revision": "22628c282980b97a95c4c291ccefacc8b3b6fb78686c0097146d2e35db84ac49"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "技术审 granularity_review 判定单一 Batch：候选 installed engine lightweight vertical loop。S1 façade/admission/runtime 选择 → S2 StartRequest/intake receipt/canonical digest/envelope → S3 drive/submit/六类 NextResult → S4 terminal cleanup/Complete/replay → S5 installed 隔离、legacy 回归与 negative fixtures；共享未冻结的 façade、state.json、Store/CAS、typed protocol、envelope 和 cleanup 接口，拆成多个 Batch 无法独立验收或回滚且交接成本更高。Batch 内 Subtask 连续执行，不换代理。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 5,
+  "extraReviewWaves": 2,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "f54f9e34ca108b8459cd85befec86e115856d202",
+      "sourceSnapshot": "79f0ada906c7c3bbfd6c29938d158232bfc55132",
+      "compared": "1cbdf4bee4d1079f2464612ae61ce54214d4753b..bb07a1b200380f08236255f57888f242b70e6bf1",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "CLI 在 runWorkflow 集中调用 rejectEngineEntry 后，多个 legacy handler 又重复执行同一检查，造成同一命令重复解析 registry、执行 admission 和打开 façade；可保留单一集中式 fence。",
+          "locations": [
+            "internal/cli/cli.go:326",
+            "internal/cli/cli.go:627",
+            "internal/cli/cli.go:653",
+            "internal/cli/cli.go:673",
+            "internal/cli/cli.go:698",
+            "internal/cli/cli.go:746",
+            "internal/cli/cli.go:765",
+            "internal/cli/cli.go:782",
+            "internal/cli/cli.go:798",
+            "internal/cli/cli.go:997"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "改动保留多个零效果或未使用的 phase-3 概念：NewStoreWithIdentity 包装、facade metadata/definition/capacity 字段、protocol State.InstalledTargetIdentity、RuntimeLegacy 常量以及 QA fixture 的 sha256_file helper；可删除或收缩。",
+          "locations": [
+            "internal/engine/persistence/store.go:97",
+            "internal/engine/facade/facade.go:32",
+            "internal/engine/facade/facade.go:105",
+            "internal/engine/facade/facade.go:130",
+            "internal/engine/protocol/protocol.go:374",
+            "scripts/phase3-qa-fixture.sh:23"
+          ]
+        },
+        {
+          "severity": "P3",
+          "message": "Start 明确拒绝 lightweight 之外的 route，但 Drive 仍保留 regular 分支和无效 plan 临时变量；阶段 3 不含 regular engine 路径，可移除不可达分支。",
+          "locations": [
+            "internal/engine/facade/facade.go:159",
+            "internal/engine/facade/facade.go:371",
+            "internal/engine/facade/facade.go:402"
+          ]
+        }
+      ],
+      "message": "复杂度门审查完成：base→current 全量审查无范围内 P0/P1；发现三组仅 P3 的可收缩建议。",
+      "dispatchId": "dispatch-83c1ac3a08f8c491d2bb9061"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "f54f9e34ca108b8459cd85befec86e115856d202",
+      "sourceSnapshot": "79f0ada906c7c3bbfd6c29938d158232bfc55132",
+      "compared": "1cbdf4bee4d1079f2464612ae61ce54214d4753b..79f0ada906c7c3bbfd6c29938d158232bfc55132",
+      "message": "完整四维质量审查通过；当前快照无范围内 P0/P1，保留一个显式空 intake receipt 的 P2 建议。",
+      "dispatchId": "dispatch-6c58a27a2019c9fb111d8e2a"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "f54f9e34ca108b8459cd85befec86e115856d202",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "独立 fixture prepare；稳定 CAND_BIN 执行 candidate start/active read/drive/terminal replay，并检查 cleanup/namespace 快照。",
+        "observation": "全部公开命令 rc=0；COMPLETE/unverified=true；cleanup.receipt reconciled/residue=false；无 intent、UNKNOWN 或残留，replay 只读。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "三个独立 fixture 对 {}、截断 JSON、不存在路径执行 candidate start，捕获 stdout/stderr/rc 和前后快照。",
+        "observation": "A/B/C 均 rc=1；分别为稳定缺失绑定、JSON invalid、receipt unavailable typed 错误；无 parser/path 泄漏或 run 写入。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "八个 receipt 绑定变体分别 mutate 后用稳定 CAND_BIN start，保存错误与快照。",
+        "observation": "八项均 INVALID_INTAKE_CONFIRMATION、rc=1、零 engine 写入；authority/transport typed 字段存在且拒绝失配。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "old-confirmed-at fixture 执行 start/drive/read/replay。",
+        "observation": "全部 rc=0；旧 confirmedAt 不过期，COMPLETE/unverified=true，绑定一致、cleanup 正常、replay 只读。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "空 HOME、交叉 registry/root/packageRoot、同 HOME 多记录三种 candidate start 变体。",
+        "observation": "均 rc=1 且 UNREGISTERED_INSTALL；无 state/registry 写入。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "四个 fixture 追加 --engine/--runtime/--identity/--digest 后 candidate start。",
+        "observation": "四次均 rc=1，精确为对应 flag provided but not defined；零写入。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "三个 fixture 追加 --split no、--retained-overall、--master 后 candidate start。",
+        "observation": "均 rc=1，返回 candidate engine start does not accept 三项旧参数；零写入。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "七个 envelope 字段变体在 clone 执行 drive/diagnose，比较完整文件快照。",
+        "observation": "七项 drive 均 UNSUPPORTED_RUN_VERSION；diagnose readable unsupported 且字段完整；clone bytes/SHA/mtime 未变。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "ACTIVE candidate run 依次执行九个旧写入口，再 drive/show/next，逐步保存快照。",
+        "observation": "九项均 UNSUPPORTED_ENGINE_ENTRY、rc=1、零写入；最终 drive/show/next 为 engine/lightweight/COMPLETE。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "A/B fixture 中正序/反向 artifact receipt 分别 start/drive/terminal read/replay。",
+        "observation": "均 COMPLETE；artifact canonical 排序、intakeDigest/绑定相同、每 run 一份 receipt，replay 只读。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "stable launcher 执行 legacy start/requirement/show/diagnose/status/next/cleanup 回归。",
+        "observation": "legacy 语义保持；无 engine envelope，diagnose unsupported，status/next candidate-engine-only，cleanup deleted=true，stable/registry 不变。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "四个独立 fixture 覆盖 legacy/candidate 同 run-id、retained result、Complete 后跨 runtime，保存 namespace/state/result/summary 快照。",
+        "observation": "A/B/C/D 全部按互斥 oracle 通过；abort status=ABORTED/tmp 消失，retained/terminal 不变，无第二 writer 或 handoff。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "两个 fixture abort 遗留 run 后建立 candidate ACTIVE，分别执行 install --force 和 uninstall，捕获完整输出与目标快照。",
+        "observation": "abort 均 ABORTED/tmp 消失；install/uninstall 均精确以实际 c013 run-id 和 state 路径返回 fences，target/state/registry 不变。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3FacadeAdmissionAndPreWriteInputFence$' -count=1 -v",
+        "observation": "rc=0；主测试及五个绑定 subtest 全部 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3ProtocolIntakeReceiptIsExactlyOnce$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3FacadeDiagnoseRawVersionBarrierIsReadOnly$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3TestkitNextResultSequenceHasExactlySixTypedBoundaries$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3BC06FacadeOpenMissingReceiptHidesFilesystemPath$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestPhase3BC06InstallFencesActiveLegacyAndCandidateRuns$' -count=1 -v",
+        "observation": "rc=0；legacy-active 与 candidate-intake 两个 subtest 均 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3BC06CleanupTerminalCommitsReceiptAndClearsIntent$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestPhase3BC06CandidateStartRejectsRetainedLegacyResult$' -count=1 -v",
+        "observation": "rc=0；绑定测试 PASS。",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-02be782cc7604c26aaba9890": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-031cefec5702c5a9b2229caf": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-04184d9532ba5c592cbaef20": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-04341a9469c61c2cb390c8f1": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-06ce7c66dee7ee527b60f302": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-07715bc69f0e331fe1cc4e9d": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0a564641f5552f1cfdc79547": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0e42037cc3be122e4f35c4a3": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-120a7d3be0676792eabeb964": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1e6ba3484226de26c458e659": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1f5fe04c7d5bb408ee933acb": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2261b4981451299622f99aba": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2629f4c034d21fdea21fdb0e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-26883f1a56f95b21a7e10d06": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2cd58617870144ed4a283adc": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2f0ab07b41527731dd89d712": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2fc4f1d37bb0e95b5133d7ad": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-31cadf30fddfee527c44e26e": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-32ebfbae4159822f5dacdd69": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-36436010e1b520a6c8754c41": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-36c0680cb9c17057ec73697d": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-37ad30aa196404d0115264bb": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-38b3cf92cc094e66300f90b3": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3b01f226202f807205e131d1": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4107f003eba6c7575408d4a3": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-454e69fe4d618c7d7cc323e8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-488de19e4d65b1cde6f1c021": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-497c5b10c783aa0cc39fb34b": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-49bdcf401f31c2b8f09df7d9": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4a4fb37db331bf61b6d39ae9": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4ca90b8b2f824522ad674802": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4e399b1d5491e5e663ac548e": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-523f99f6f6d8d0e75c3e86be": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-54ac20764eb9909b2c3d181d": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5859ff3567a070bb3efb7e2a": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5e02a59edb8de2fca73aee11": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6516fcd17582dea4db4a12d7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6926df18442096a5a1eab1f8": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6a09c01565bc70fdf3e063c5": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6a98351757afc5e3fe2093b5": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6c58a27a2019c9fb111d8e2a": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6ce9ea91ef928080a72e196a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-738326573e906d7bc293dd75": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7405ad98afeb31897e986835": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-74e69113fd597f646d77b2a7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-76f38d36671c2c2e547e99a3": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7b214b0e0c1a06135fb49693": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-83c1ac3a08f8c491d2bb9061": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8dc4f05b759a13200189cd32": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-957377299d177740f2dd4511": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9793015680b236dfca782e71": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-990d447aa50326e84333f216": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-99dab5c411ede545febc0124": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9a3e3647472792be84b2ceb9": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9bb13410b1ddf205be5134b1": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9d745fc6e2ea3048ad111148": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a96ef067ca708fd3ab1174e3": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-abb316f3bf39545424a55495": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ad0a50acb738531d98cc66dc": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ae0b249848ef5f2eee5967e0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b700be2caa562faf86c9ab78": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b71a4d8223561ac180fbb49f": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-b9be95619f5f632e6f7876ff": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-bf542c91d971984323b8eeb5": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c652ee6b03caeaedf4ffe499": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c86e882706cd9b5cb511e595": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d47648f52056518da68429cf": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d74b52605bb2c242fdc81c30": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-daccf6eb6471503d47e475c8": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dcd0c38ba88fa649f0d51b5f": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e06e3d419fb827f8a32b5cfd": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e3bff58c2e2ba77820d385b7": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e470e3552451de423a6c7775": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e78b68578a8b47b9fb131f08": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f201de3ab3690771c569faf9": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ffdad26626f95c85cf8c8068": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

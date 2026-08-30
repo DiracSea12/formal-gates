@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"formal-gates/internal/engine/definition"
+	"formal-gates/internal/engine/encoder"
+	"formal-gates/internal/engine/facade"
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 	"formal-gates/internal/validate"
@@ -316,6 +321,17 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 		return 1, fmt.Errorf("workflow subcommand is required (e.g. workflow start|show|resume|abort ...)")
 	}
 	sub, args := args[0], args[1:]
+	// Every pre-migration state-changing entry is fenced at the façade boundary
+	// so an engine run can never fall through to the legacy validate writer.
+	if workflowLegacyWriteEntry[sub] {
+		runID := workflowFlag(args, "run-id", "")
+		if sub == "cleanup" && runID == "" {
+			runID = workflowFlag(args, "run", "")
+		}
+		if err := rejectEngineEntry(workflowFlag(args, "root", "."), runID); err != nil {
+			return 1, err
+		}
+	}
 	if handler, ok := workflowSubcommands[sub]; ok {
 		return handler(args, streams)
 	}
@@ -328,6 +344,10 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 var workflowSubcommands = map[string]func(args []string, streams IO) (int, error){
 	"start":              runWorkflowStart,
 	"show":               runWorkflowShow,
+	"status":             runWorkflowStatus,
+	"next":               runWorkflowNext,
+	"drive":              runWorkflowDrive,
+	"submit":             runWorkflowSubmit,
 	"diagnose":           runWorkflowDiagnose,
 	"resume":             runWorkflowResume,
 	"abort":              runWorkflowAbort,
@@ -356,6 +376,29 @@ var workflowSubcommands = map[string]func(args []string, streams IO) (int, error
 	"seal":               runWorkflowSeal,
 }
 
+var workflowLegacyWriteEntry = map[string]bool{
+	"resume": true, "abort": true, "reset": true, "requirement": true,
+	"slicing": true, "settle-findings": true, "route": true, "route-add": true,
+	"qa-worktree": true, "prepare-gate": true, "prepare-action": true,
+	"claim-dispatch": true, "record-action": true, "record-gate": true,
+	"qa-design": true, "qa-review": true, "qa-execution": true,
+	"qa-execution-scope": true, "snapshot": true, "cleanup": true,
+	"carry": true, "authorize-repair": true, "seal": true,
+}
+
+func workflowFlag(args []string, name, fallback string) string {
+	prefix := "--" + name + "="
+	for index, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix)
+		}
+		if arg == "--"+name && index+1 < len(args) {
+			return args[index+1]
+		}
+	}
+	return fallback
+}
+
 func runWorkflowStart(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow start", streams)
 	root, pkg := rootFlags(fs)
@@ -365,17 +408,72 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	vcs := fs.String("vcs", "", "external VCS name")
 	base := fs.String("base-snapshot", "", "optional native base identity to verify")
 	currentSnapshot := fs.String("current-snapshot", "", "explicit native identity to adopt as the current snapshot (must be an ancestor or equal of the native head); defaults to the native head (RQ-010)")
+	fromSealed := fs.String("from-sealed-run", "", "start a new user-authorized QA/gate-only rerun from a prior SEALED formal run")
+	fromSealedReason := fs.String("from-sealed-reason", "", "reason recorded for the QA/gate-only rerun handoff")
 	artifacts := stringListFlag{}
 	fs.Var(&artifacts, "requirement-artifact", "additional requirement or solution document; repeat as needed")
 	retainedOverall := fs.Bool("retained-overall", false, "retain this run for merged slice integration")
 	split := fs.String("split", "", "required split intent: yes or no; yes requires --retained-overall (保留总任务实例) or --master (切片实例); skipped for --route lightweight")
 	master := fs.String("master", "", "retained-overall master run id for a slice instance start (with --split yes)")
 	route := fs.String("route", "", "lightweight route declaration: --route lightweight creates the run but performs no verification (start → 需求登记 → Seal 三步直达, 只留记录); empty starts the regular intake")
+	intakePath := fs.String("intake-receipt", "", "typed intakeConfirmationReceipt JSON path (candidate engine start)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route})
+	if hasFlag(args, "intake-receipt") {
+		if hasFlag(args, "from-sealed-run") || hasFlag(args, "from-sealed-reason") {
+			return 1, fmt.Errorf("candidate engine start does not support --from-sealed-run")
+		}
+		if hasFlag(args, "split") || hasFlag(args, "master") || hasFlag(args, "retained-overall") {
+			return 1, fmt.Errorf("candidate engine start does not accept --split, --retained-overall, or --master")
+		}
+		if route := strings.ToLower(strings.TrimSpace(*route)); route != "" && route != "lightweight" {
+			return 1, fmt.Errorf("candidate engine start only supports --route lightweight")
+		}
+		receipt, err := readEngineIntakeReceipt(*intakePath)
+		if err != nil {
+			return 1, err
+		}
+		runID := strings.TrimSpace(*runID)
+		if runID == "" {
+			return 1, fmt.Errorf("workflow start candidate requires --run-id")
+		}
+		candidatePackageRoot := *pkg
+		if strings.TrimSpace(workflowFlag(args, "package-root", "")) == "" {
+			candidatePackageRoot = ""
+		}
+		admission, err := validate.ResolveEngineAdmission(*root, candidatePackageRoot)
+		if err != nil {
+			return 1, err
+		}
+		_, run, err := facade.Start(facade.StartOptions{Root: *root, Request: facade.StartRequest{
+			RunID: runID, Route: "lightweight", Provider: "engine", DefinitionSource: facade.DefaultDefinitionSource,
+			DefinitionDigest: definition.WorkflowDefinitionDigest, IntakeConfirmationReceipt: receipt,
+		}, PackageRoot: *pkg, ArtifactRoot: *root, Admission: &facade.Admission{RegistryPath: admission.RegistryPath, PackageDigest: admission.PackageDigest, InstalledTargetIdentity: admission.RecordID, Generation: admission.Generation, Lease: admission.Lease, Token: admission.Token}})
+		if err != nil {
+			return 1, err
+		}
+		return printValue(streams.Stdout, run, err)
+	}
+	if strings.TrimSpace(*fromSealed) != "" {
+		for _, name := range []string{"split", "retained-overall", "master", "route"} {
+			if hasFlag(args, name) {
+				return 1, fmt.Errorf("--from-sealed-run cannot be combined with --%s; the source run supplies the established route", name)
+			}
+		}
+	}
+	state, err := validate.Start(validate.StartOptions{Root: *root, PackageRoot: *pkg, RunID: *runID, Flow: *flow, RequirementSource: *req, RequirementArtifacts: artifacts, VCS: *vcs, BaseSnapshot: *base, CurrentSnapshot: *currentSnapshot, RetainedOverall: *retainedOverall, Split: *split, MasterRunID: *master, Route: *route, FromSealedRun: *fromSealed, FromSealedReason: *fromSealedReason})
 	return printValue(streams.Stdout, state, err)
+}
+
+func hasFlag(args []string, name string) bool {
+	prefix := "--" + name
+	for _, arg := range args {
+		if arg == prefix || strings.HasPrefix(arg, prefix+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func runWorkflowShow(args []string, streams IO) (int, error) {
@@ -385,8 +483,110 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if facadeRun, ok, err := openEngineIfPresent(*root, *runID); ok {
+		if err != nil {
+			return 1, err
+		}
+		run, err := facadeRun.Show()
+		return printValue(streams.Stdout, run, err)
+	}
 	state, err := validate.LoadRunState(*root, *runID)
+	if err != nil {
+		if _, stateStatErr := os.Stat(validate.RunStatePath(*root, *runID)); os.IsNotExist(stateStatErr) {
+			summary, summaryErr := validate.LoadRunSummary(*root, *runID)
+			if summaryErr == nil {
+				return printValue(streams.Stdout, summary, nil)
+			}
+			if _, statErr := os.Stat(validate.RunSummaryPath(*root, *runID)); statErr == nil {
+				return printValue(streams.Stdout, summary, summaryErr)
+			}
+		}
+	}
+	if err == nil {
+		if admissionErr := validate.RequireRunReadAdmission(*root, state); admissionErr != nil {
+			return printValue(streams.Stdout, validate.RunState{}, admissionErr)
+		}
+	}
 	return printValue(streams.Stdout, state, err)
+}
+
+func runWorkflowStatus(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow status", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "engine run id")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if !ok {
+		return 1, fmt.Errorf("workflow status is supported for candidate engine runs only")
+	}
+	if err != nil {
+		return 1, err
+	}
+	run, err := f.Status()
+	return printValue(streams.Stdout, run, err)
+}
+
+func runWorkflowNext(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow next", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "engine run id")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if !ok {
+		return 1, fmt.Errorf("workflow next is supported for candidate engine runs only")
+	}
+	if err != nil {
+		return 1, err
+	}
+	next, err := f.Next()
+	return printValue(streams.Stdout, next, err)
+}
+
+func runWorkflowDrive(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow drive", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "engine run id")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if !ok {
+		return 1, fmt.Errorf("workflow drive is supported for candidate engine runs only")
+	}
+	if err != nil {
+		return 1, err
+	}
+	run, err := f.Drive()
+	return printValue(streams.Stdout, run, err)
+}
+
+func runWorkflowSubmit(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow submit", streams)
+	root := fs.String("root", ".", "repository root")
+	runID := fs.String("run-id", "", "engine run id")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	f, ok, err := openEngineIfPresent(*root, *runID)
+	if !ok {
+		return 1, fmt.Errorf("workflow submit is supported for candidate engine runs only")
+	}
+	if err != nil {
+		return 1, err
+	}
+	var event protocol.Event
+	if err := json.NewDecoder(streams.Stdin).Decode(&event); err != nil {
+		return 1, fmt.Errorf("workflow submit requires a typed event JSON object on stdin: %w", err)
+	}
+	acceptance, run, err := f.Submit(event)
+	if err != nil {
+		return 1, err
+	}
+	return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 }
 
 func runWorkflowDiagnose(args []string, streams IO) (int, error) {
@@ -396,6 +596,20 @@ func runWorkflowDiagnose(args []string, streams IO) (int, error) {
 	path := fs.String("path", "", "raw state or terminal summary path")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if strings.TrimSpace(*path) == "" && strings.TrimSpace(*runID) != "" {
+		// Diagnose is the raw, read-only path. It must not require launcher
+		// admission or open a normal façade writer, and terminal runs use the
+		// retained summary after active state cleanup.
+		engineDir := filepath.Join(*root, facade.EngineNamespace, *runID)
+		if _, statErr := os.Stat(engineDir); statErr == nil {
+			statePath := filepath.Join(engineDir, "state.json")
+			if _, stateErr := os.Stat(statePath); os.IsNotExist(stateErr) {
+				statePath = filepath.Join(engineDir, "terminal-summary.json")
+			}
+			report, diagErr := facade.Diagnose(statePath, "", "")
+			return printValue(streams.Stdout, report, diagErr)
+		}
 	}
 	statePath := strings.TrimSpace(*path)
 	if statePath == "" {
@@ -409,7 +623,25 @@ func runWorkflowDiagnose(args []string, streams IO) (int, error) {
 			statePath = validate.RunSummaryPath(*root, *runID)
 		}
 	}
-	report, err := validate.DiagnoseState(statePath)
+	// Explicit candidate paths (state or retained terminal summary) use the
+	// candidate raw parser, matching --run-id behavior.
+	engineRoot, _ := filepath.Abs(filepath.Join(*root, facade.EngineNamespace))
+	cleanPath, _ := filepath.Abs(statePath)
+	if rel, relErr := filepath.Rel(engineRoot, cleanPath); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		report, diagErr := facade.Diagnose(statePath, "", "")
+		return printValue(streams.Stdout, report, diagErr)
+	}
+	packageDigest, err := validate.PackageDigest(*root)
+	if err != nil {
+		return 1, err
+	}
+	report, err := validate.DiagnoseStateWithSupported(statePath, validate.VersionEnvelope{
+		Writer: "engine", StateSchemaVersion: encoder.StateSchemaVersion,
+		WorkflowDefinitionVersion: definition.WorkflowDefinitionVersion,
+		DefinitionSource:          validate.CurrentWorkflowDefinitionSource,
+		DefinitionDigest:          definition.WorkflowDefinitionDigest,
+		PackageDigest:             packageDigest,
+	})
 	return printValue(streams.Stdout, report, err)
 }
 
@@ -421,6 +653,9 @@ func runWorkflowResume(args []string, streams IO) (int, error) {
 	reason := fs.String("reason", "", "main-agent justification when adopting an external change")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
 	}
 	if *adoptExternal {
 		state, err := validate.AdoptExternalChange(*root, *pkg, *runID, *reason)
@@ -445,6 +680,9 @@ func runWorkflowAbort(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
+	}
 	// 需求 6 第 2 条：abort 误触第一时间硬阻断。未经用户级确认不执行、不落任何状态
 	// （确认前返回，validate.Abort 不会被调用）。
 	if !*userConfirm {
@@ -461,6 +699,9 @@ func runWorkflowReset(args []string, streams IO) (int, error) {
 	userApprove := fs.Bool("user-approve", false, "user-level authorization required to reset this run's flow state; the main agent cannot trigger reset alone")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
 	}
 	// 需求 5：用户权限门控的流程重置。未授权拒绝执行、不落任何状态（确认前返回，
 	// validate.ResetRun 不会被调用）。
@@ -483,6 +724,12 @@ func runWorkflowRequirement(args []string, streams IO) (int, error) {
 	clearArtifacts := fs.Bool("clear-requirement-artifacts", false, "replace the set with the primary requirement only")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if _, ok, openErr := openEngineIfPresent(*root, *runID); ok {
+		if openErr != nil {
+			return 1, openErr
+		}
+		return 1, fmt.Errorf("%s: workflow requirement is not available for engine runs", facade.UnsupportedEngineEntry)
 	}
 	var artifactSet []string
 	if *clearArtifacts && len(artifacts) != 0 {
@@ -526,6 +773,9 @@ func runWorkflowSlicing(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
+	}
 	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master, validate.SlicingAmendOptions{UserConfirm: *userConfirm})
 	return printValue(streams.Stdout, state, err)
 }
@@ -542,6 +792,9 @@ func runWorkflowSettleFindings(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
+	}
 	state, err := validate.RecordSettledFindings(*root, *pkg, *runID, *action, confirm, dismiss)
 	return printValue(streams.Stdout, state, err)
 }
@@ -556,6 +809,9 @@ func runWorkflowRoute(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
+	}
 	state, err := validate.SetRoute(*root, *pkg, *runID, *mode, gates)
 	return printValue(streams.Stdout, state, err)
 }
@@ -568,6 +824,9 @@ func runWorkflowRouteAdd(args []string, streams IO) (int, error) {
 	fs.Var(&gates, "gate", "gate id to add; repeat as needed")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if err := rejectEngineEntry(*root, *runID); err != nil {
+		return 1, err
 	}
 	state, err := validate.AddRouteGates(*root, *pkg, *runID, gates)
 	return printValue(streams.Stdout, state, err)
@@ -649,7 +908,7 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 	case "generate":
 		fs := newFlagSet("workflow future generate", streams)
 		root := fs.String("root", ".", "package root")
-		packageDigest := fs.String("package-digest", "", "immutable package digest to include")
+		packageDigest := fs.String("package-digest", "", "deprecated compatibility input; legacy future envelopes do not bind package identity")
 		output := fs.String("output", "", "optional envelope output path")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
@@ -672,7 +931,7 @@ func runWorkflowFuture(args []string, streams IO) (int, error) {
 		output := fs.String("output", "", "alias for --path")
 		envelopePath := fs.String("envelope", "", "validated envelope JSON path")
 		input := fs.String("input", "", "alias for --envelope")
-		packageDigest := fs.String("package-digest", "", "immutable package digest to include when generating an envelope")
+		packageDigest := fs.String("package-digest", "", "deprecated compatibility input; legacy future states do not bind package identity")
 		payload := fs.String("payload", "", "JSON payload to place in the future state document")
 		if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 			return code, err
@@ -764,6 +1023,14 @@ func runWorkflowCleanup(args []string, streams IO) (int, error) {
 	runID := fs.String("run", "", "explicitly delete this run's temp directory (terminated or not)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if strings.TrimSpace(*runID) != "" {
+		if _, ok, openErr := openEngineIfPresent(*root, *runID); ok {
+			if openErr != nil {
+				return 1, openErr
+			}
+			return 1, fmt.Errorf("%s: public workflow cleanup cannot operate on engine runs", facade.UnsupportedEngineEntry)
+		}
 	}
 	if *runID != "" {
 		deleted, err := validate.CleanupTempRun(*root, *runID)
@@ -1466,6 +1733,91 @@ func newCarryField(fs *flag.FlagSet, name, usage, field string, items *[]validat
 func rootFlags(fs *flag.FlagSet) (*string, *string) {
 	return fs.String("root", ".", "repository root"), fs.String("package-root", ".", "installed formal-gates package root")
 }
+
+func readEngineIntakeReceipt(input string) (facade.IntakeConfirmationReceipt, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return facade.IntakeConfirmationReceipt{}, fmt.Errorf("%s: workflow start --engine requires --intake-receipt", facade.InvalidIntakeConfirmation)
+	}
+	var data []byte
+	var err error
+	data, err = os.ReadFile(input)
+	if err != nil {
+		return facade.IntakeConfirmationReceipt{}, fmt.Errorf("%s: intake receipt is unavailable", facade.InvalidIntakeConfirmation)
+	}
+	var receipt facade.IntakeConfirmationReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		return facade.IntakeConfirmationReceipt{}, fmt.Errorf("%s: intakeConfirmationReceipt JSON is invalid", facade.InvalidIntakeConfirmation)
+	}
+	return receipt, nil
+}
+
+func openEngineIfPresent(root, runID string) (*facade.Facade, bool, error) {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(runID) == "" {
+		return nil, false, nil
+	}
+	dir := filepath.Join(root, facade.EngineNamespace, runID)
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	requestData, err := os.ReadFile(filepath.Join(dir, "request.json"))
+	if err != nil {
+		return nil, true, err
+	}
+	var request facade.StartRequest
+	if err := json.Unmarshal(requestData, &request); err != nil {
+		return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine request is invalid: %w", err)
+	}
+	// The run request carries the exact registry record selected at start. Use
+	// that identity first so one stable launcher can own several project/global
+	// records; resolving by launcher alone would report every sibling as a
+	// conflict. The façade is opened before the root binding check so malformed
+	// copies still surface their UNSUPPORTED_RUN_VERSION barrier rather than a
+	// misleading admission error.
+	admission, err := validate.ResolveEngineAdmissionByRecord(request.InstalledTargetIdentity)
+	if err != nil {
+		return nil, true, err
+	}
+	if request.PackageDigest != admission.PackageDigest || request.InstalledTargetIdentity != admission.RecordID ||
+		request.AdmissionGeneration != admission.Generation || request.AdmissionLease != admission.Lease || request.AdmissionToken != admission.Token {
+		return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine run identity does not match current admitted launcher")
+	}
+	f, err := facade.Open(root, runID)
+	if err != nil {
+		return nil, true, err
+	}
+	// Once the envelope has passed its version/identity barrier, enforce the
+	// current project's target binding. This catches a run copied into another
+	// project while preserving the more specific version diagnostic above.
+	bound, bindingErr := validate.ResolveEngineAdmission(root, admission.Target)
+	if bindingErr != nil {
+		return nil, true, bindingErr
+	}
+	if bound.RecordID != admission.RecordID || bound.PackageDigest != admission.PackageDigest {
+		return nil, true, fmt.Errorf("UNREGISTERED_INSTALL: engine run identity does not match current project binding")
+	}
+	return f, true, nil
+}
+
+// rejectEngineEntry keeps pre-migration legacy writers from accidentally
+// opening an engine run.  The check is read-only and happens before any
+// validate package mutation.
+func rejectEngineEntry(root, runID string) error {
+	if strings.TrimSpace(runID) == "" {
+		return nil
+	}
+	if _, ok, err := openEngineIfPresent(root, runID); ok {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%s: workflow entry is not available for engine runs", facade.UnsupportedEngineEntry)
+	}
+	return nil
+}
+
 func newFlagSet(name string, streams IO) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(streams.Stderr)
@@ -1541,7 +1893,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printRegistryUsage(w io.Writer, program string) {
@@ -1552,7 +1904,7 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|show|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printFutureUsage(w io.Writer, program string) error {

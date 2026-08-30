@@ -486,6 +486,15 @@ func TestWhiteboxPhase0InstallBootstrapReceiptBindsRecordAndCreatesNoState(t *te
 			t.Fatal(err)
 		}
 	}
+	codexTargets, err := resolveInstallTargets("codex", "project", project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range codexTargets {
+		if err := copyInstallRuntime(source, target.targetPath, true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	beforeTarget, err := PackageDigest(targets[0].targetPath)
 	if err != nil {
 		t.Fatal(err)

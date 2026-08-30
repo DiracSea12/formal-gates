@@ -157,6 +157,7 @@
         "handler": "engine.fan.transport",
         "boundary": "AGENT_DISPATCH_API",
         "operation": "op.fan.transport",
+        "schema": "schema.host.fan.transport",
         "timeoutNs": 10000000000
       }
     },

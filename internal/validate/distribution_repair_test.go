@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,6 +80,87 @@ func TestGlobalProjectBindingSurvivesUpgradeAndBootstrap(t *testing.T) {
 		BinaryTarget: launcher, Bootstrap: true, Force: true,
 	}); err != nil {
 		t.Fatalf("bootstrap rejected the refreshed global sibling: %v", err)
+	}
+}
+
+// The documented release installer first installs from the unpacked source
+// while staging a release root, then invokes bootstrap with that release root
+// as its source.  Archive/extraction tools may normalize the native
+// executable's mode in the copied release tree; that normalization must not
+// rotate the already-registered source identity.  The target digest remains
+// the tamper fence and the resulting bootstrap receipt must still admit the
+// first workflow start.
+func TestReleaseRootBootstrapReconcilesNormalizedExecutableMode(t *testing.T) {
+	source := copyPackageFixture(t)
+	binary := filepath.Join(source, "bin", nativeBinaryName())
+	// The source receipt may carry owner-only execute permission.  The
+	// installer normalizes the copied release executable by adding execute
+	// bits for all users, so the release-tree package digest is intentionally
+	// different from the source package digest.
+	if err := os.Chmod(binary, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	project := repairGitProject(t)
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+	releaseRoot := filepath.Join(t.TempDir(), "releases", "v-test")
+
+	first, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: project,
+		ReleaseRoot: releaseRoot, RegistryPath: registry, BinaryTarget: launcher, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("documented release-root install failed: %v", err)
+	}
+	document, err := LoadRegistry(registry)
+	if err != nil || len(document.Records) != 1 {
+		t.Fatalf("initial registry=%+v err=%v", document, err)
+	}
+	before := document.Records[0]
+
+	// The release executable is 0711 after copyFile's native-binary
+	// normalization, while the source receipt above recorded 0700.
+	releaseInfo, err := os.Stat(filepath.Join(releaseRoot, "bin", nativeBinaryName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && releaseInfo.Mode().Perm() != 0o711 {
+		t.Fatalf("unexpected normalized release executable mode: %v", releaseInfo.Mode().Perm())
+	}
+	beforeDigest, err := PackageDigest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseDigest, err := PackageDigest(releaseRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && releaseDigest == beforeDigest {
+		t.Fatalf("release normalization did not change package digest: %s", releaseDigest)
+	}
+	if _, err := Install(InstallOptions{
+		Source: releaseRoot, Host: "claude", Scope: "project", Project: project,
+		ReleaseRoot: releaseRoot, RegistryPath: registry, BinaryTarget: launcher,
+		Bootstrap: true, Force: true,
+	}); err != nil {
+		t.Fatalf("release-root bootstrap rejected normalized executable mode: %v", err)
+	}
+
+	document, err = LoadRegistry(registry)
+	if err != nil || len(document.Records) != 1 {
+		t.Fatalf("bootstrapped registry=%+v err=%v", document, err)
+	}
+	after := document.Records[0]
+	if after.ID != before.ID || after.VCSIdentity != before.VCSIdentity ||
+		after.PackageDigest != before.PackageDigest || after.InstalledDigest != before.InstalledDigest {
+		t.Fatalf("bootstrap rotated registered identity: before=%+v after=%+v", before, after)
+	}
+	if _, err := Start(StartOptions{
+		Root: project, PackageRoot: first.Targets[0].TargetPath, RunID: "release-root-bootstrap",
+		Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no",
+		AdmissionRegistry: registry, AdmissionRecordID: before.ID,
+	}); err != nil {
+		t.Fatalf("workflow start after release-root bootstrap failed: %v", err)
 	}
 }
 

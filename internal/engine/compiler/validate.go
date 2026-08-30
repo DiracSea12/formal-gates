@@ -84,6 +84,9 @@ func validateStepIR(cs CompiledStep) error {
 		if p.Timeout <= 0 {
 			return invariantError(`host action step %q: positive timeout required`, h.ID)
 		}
+		if p.Schema == "" {
+			return invariantError(`host action step %q: operation schema id required`, h.ID)
+		}
 		return nil
 	case CompiledAgentStep:
 		if err := checkIO(); err != nil {
@@ -259,6 +262,10 @@ func (c *resolveCtx) resolveStepRefs(cs *CompiledStep) error {
 			return err
 		}
 		_, err := c.resolveID(h.ID, string(p.Operation), KindOperation)
+		if err != nil {
+			return err
+		}
+		_, err = c.resolveID(h.ID, string(p.Schema), KindSchema)
 		return err
 	case CompiledAgentStep:
 		if err := checkIORefs(); err != nil {

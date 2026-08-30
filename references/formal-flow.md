@@ -94,7 +94,10 @@ formal-gates workflow slicing --root <repo> --package-root <package> \
   [--note '<reason>'] [--master <retained-overall-master-run-id>] \
   [--user-confirm]
 # 拆分建议对所有正式 run 必填呈现并留痕，含：拆分理由、如何拆、哪些子任务可并行、
-# 以及改拆后果说明（若改拆，黑盒 QA 设计按新拆分拓扑展开、已覆盖用例复用）；仅高置信
+# 以及改拆后果说明（若改拆，黑盒 QA 设计按新拆分拓扑展开、已覆盖用例复用）。粒度判断
+# 由 Part 2 `start-readiness` 技术审一并完成，不另派独立的粒度审查代理；技术审输出
+# `granularity_review`，必须说明单一 Batch 或多个 Batch、`Batch → Subtask` 映射、依赖/接口/
+# 状态边界、风险、DoD/测试、回滚/恢复、交接与上下文成本，以及不拆或改拆的理由。仅高置信
 # 要拆时需用户确认拆分方案。分片场景下整体级产品审/技术审足够，切片继承整体审查结果、
 # 不单独重跑（切片实例在记录拆分决定时继承整体级 product-review/start-readiness）。
 # 用户已拍板（settled）的发现项清单：注入下一次 product-review / start-readiness
@@ -149,7 +152,8 @@ base/current 快照等关键字段）写入本 run 规范提示词文件
 ## 开发之前
 
 开发前检查分两段：先派发 Part 1 产品审（`product-review`），全部通过后再进入
-Part 2。Part 2 双速调度：高置信要拆 → 呈现拆分建议、用户确认后设置分片，然后确认
+Part 2。Part 2 双速调度：技术审先完成 `granularity_review`；高置信要拆 → 呈现拆分建议、
+用户确认后设置分片，然后确认
 路线（逐切片）；非高置信要拆（高置信不拆或不确定）→ 快速路径，黑盒 QA 设计可与
 `start-readiness` 并行开始，"建议不拆（原因）"必填留痕，按单一 run 进行。QA 模式拆
 为黑盒（真实 QA）与白盒（结构测试），各自可选、均由独立代理设计并经 review 批准。
@@ -194,7 +198,11 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 受影响用例自跑）"；若修复影响已验证行为、需重跑验证才能继承，按普通修复轮计次。
 # 范围外 P3 维持仅作建议、不形成修复义务（封板时一次性展示）。
 
-# Part 2 技术审：承接技术方案选择与对齐，发现项同样分级 P0/P1/P2/P3，复审规则同产品审。
+# Part 2 技术审：承接技术方案选择与对齐，并一并完成 `granularity_review`。技术审必须
+# 依据独立交付物/DoD、稳定接口/责任/状态边界、依赖与副作用/恢复边界、可管理的上下文与
+# 交接成本判断大块（Batch）或小块（Subtask）；不能仅按编号、commit、文件/行数、阶段、
+# 层、角色或时间段切分。大块是唯一开发代理换人边界；同一大块内的小块共享开发上下文，
+# 不单独派发。输出还必须包含不拆或改拆的理由。发现项同样分级 P0/P1/P2/P3，复审规则同产品审。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
@@ -278,6 +286,11 @@ seal，分片实例不落盘，成本并入主干封板）。黑盒 review 连�
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action development-worker
 
+# 开发分块只使用技术审已记录的 granularity_review：一个 batch_id 对应一次
+# development-worker 派发；Batch 内的 subtask_id 只是顺序步骤，不得各自派发或换代理。
+# 前一 Batch 完成 DoD、验证和交接后，才准备下一 Batch 的新开发代理；契约、接口、依赖
+# 或 DoD 改变时暂停并重新做粒度审查。
+
 # 记录开发后或修复后的不可变标识。快照门：开发完成 且 黑盒 qa-review PASS 两边都
 # 完成才允许固定快照，任一边未完成快照被挡；黑盒 review 未 PASS 时只有用户显式授权可手动
 # 放行（--user-requested + --reason，记录授权来源，非自动）。
@@ -292,6 +305,12 @@ formal-gates workflow snapshot --root <repo> --package-root <package> \
 （覆盖 worker 已提交的情形），随后 `workflow snapshot` 成功。其余派发（审查、QA 等）
 检查不变。放宽后的检查不验证 HEAD 是否由 worker 产生：开发期间无关外部提交落地会被
 **静默吸收**进开发快照（用户已接受此行为）。
+
+开发分批的代理纪律（ADR-002 决策 8，对外项目同等生效）：每个批次由**全新的零上下
+文开发代理**执行——薄启动（指向规范文件 + 批次任务书）一个新代理实例，同一开发代
+理会话不跨批复用，reset 粒度为批次边界（单批一个内聚关注点、批内连续）。批次任务书
+只写不可从仓库恢复的信息（决策理由、已知问题/债务、下一任务）；可从 VCS/代码/测试推
+导的内容一律不写，防止交接文档自身膨胀成第二份腐化上下文。
 
 ## 开发后审查
 

@@ -108,22 +108,20 @@ func TestSkillIntakeBodyDeclaresDefaultRemindOnce(t *testing.T) {
 	assertLacksText(t, skill, "反复催促或追问")
 	assertHasText(t, skill, "不得自行触发")
 	assertHasText(t, skill, "非修改性的提问、解释、诊断和 review 不触发")
-	assertHasText(t, skill, "用户明确要求走正式流程（或明确要求触发 formal-gates）时，才进入完整受理流程")
+	assertHasText(t, skill, "用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理")
 	assertLacksText(t, skill, "不要求回应")
 	assertLacksText(t, skill, "默认按常规方式直接处理")
 }
 
-// Case: intake step 4 must ask only whether to enter the formal flow (yes/no);
-// the full/custom route stays undecided until after the slicing decision,
-// lightweight skips the slicing decision and route selection, and the enter
-// question is not a requirements confirmation.
-func TestSkillStepFourAsksEnterFormalFlowOnly(t *testing.T) {
+// Case: after the complete requirement and solution are confirmed, intake
+// proceeds into the formal flow; full/custom stays undecided until after the
+// slicing decision and lightweight skips slicing and route selection.
+func TestSkillStepFourEntersAfterConfirmation(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
-	assertHasText(t, skill, "询问用户是否进入正式流程（是 / 否）")
-	assertHasText(t, skill, "受理阶段只决定是否进入正式流程（是 / 否），不决定路线")
-	assertHasText(t, skill, "进入后，正式路线（`full`/`custom`）本阶段不定，拆分决定之后确认")
+	assertHasText(t, skill, "用户明确确认完整需求与方案后进入正式流程")
+	assertHasText(t, skill, "正式路线（`full`/`custom`）本阶段不定，拆分决定之后确认")
 	assertHasText(t, skill, "不经拆分决定与路线选择")
-	assertHasText(t, skill, "进入正式流程的询问本身不构成需求确认")
+	assertLacksText(t, skill, "询问用户是否进入正式流程")
 }
 
 // Case: the SKILL.md lightweight route section must declare the record-only
@@ -165,6 +163,8 @@ func TestReadmeCnStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, readme, "你明确要求时才进入正式流程")
 	assertHasText(t, readme, "formal-gates 什么时候会被触发")
 	assertHasText(t, readme, "轻量路线")
+	assertLacksText(t, readme, "由你决定是否进入正式流程")
+	assertLacksText(t, readme, "受理阶段只决定是否进入正式流程")
 }
 
 // Case: README_EN.md must carry the V2 trigger model in English and reintroduce
@@ -179,12 +179,14 @@ func TestReadmeEnStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, readme, "never self-triggers")
 	assertHasText(t, readme, "When is formal-gates triggered?")
 	assertHasText(t, readme, "lightweight")
+	assertLacksText(t, readme, "asks you whether to enter the formal flow")
+	assertLacksText(t, readme, "intake decides only whether to enter")
 }
 
 // Case: references/example-run.md must carry the V2 trigger model (default
 // remind branch with the conditional copy, large/complex advisory emphasis),
 // reintroduce the lightweight route inside the formal flow (not an intake-phase
-// option), and keep the enter-formal-flow question.
+// option), without retaining the obsolete enter-formal-flow question.
 func TestExampleRunStatesV2TriggerModel(t *testing.T) {
 	example := readWorktreeFile(t, "references/example-run.md")
 	assertLacksText(t, example, "不走流程")
@@ -192,9 +194,10 @@ func TestExampleRunStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, example, "若需走 formal-gates 流程，可直接提出")
 	assertHasText(t, example, "检测到复杂需求，建议走 formal-gates 流程")
 	assertHasText(t, example, "在需求澄清与方案确认完毕、准备开做之际再额外强调一次")
-	assertHasText(t, example, "询问用户是否进入正式流程（是 / 否）")
-	assertHasText(t, example, "3. 是否进入正式流程")
-	assertHasText(t, example, "轻量选项在受理阶段不出现")
+	assertHasText(t, example, "3. 进入正式流程")
+	assertLacksText(t, example, "询问用户是否进入正式流程")
+	assertLacksText(t, example, "3. 是否进入正式流程")
+	assertHasText(t, example, "普通请求不进入本示例的正式流程分支")
 }
 
 // Case: references/formal-flow.md must declare the lightweight start surface
@@ -225,13 +228,13 @@ func TestSkillManagedRuleBlockDeclaresV2Intake(t *testing.T) {
 	assertHasText(t, rule, "检测到复杂需求，建议走 formal-gates 流程")
 	assertHasText(t, rule, "在需求澄清与方案确认完毕、准备开做之际再额外强调一次")
 	assertHasText(t, rule, "用户明确要求走正式流程（或明确要求触发 formal-gates）时")
-	assertHasText(t, rule, "受理阶段只决定是否进入正式流程（是/否），不决定路线")
+	assertLacksText(t, rule, "受理阶段只决定是否进入正式流程")
 	assertLacksText(t, rule, "不要求回应")
 	assertLacksText(t, rule, "必须先执行 formal-gates 受理流程")
 }
 
 // Case: agents/openai.yaml default_prompt must encode the V2 intake sequencing
-// — mention once, do not self-trigger, ask whether to enter the formal flow,
+// — mention once, do not self-trigger, enter after the confirmed intake,
 // full/custom confirmed after the slicing decision, lightweight skips slicing
 // and route selection and seals without verification.
 func TestOpenAIDefaultPromptStatesV2Model(t *testing.T) {
@@ -239,7 +242,8 @@ func TestOpenAIDefaultPromptStatesV2Model(t *testing.T) {
 	assertHasText(t, openai, "mention once")
 	assertHasText(t, openai, "not self-trigger")
 	assertHasText(t, openai, "on explicit user request")
-	assertHasText(t, openai, "ask whether to enter the formal flow")
+	assertHasText(t, openai, "then enter the formal flow")
+	assertLacksText(t, openai, "ask whether to enter the formal flow")
 	assertHasText(t, openai, "route full/custom is confirmed after the slicing decision")
 	assertHasText(t, openai, "lightweight")
 }

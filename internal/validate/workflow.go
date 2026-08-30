@@ -12,11 +12,19 @@ import (
 	"strings"
 	"time"
 
+	"formal-gates/internal/coordination"
 	"formal-gates/internal/lifecycle"
 )
 
 type StartOptions struct {
 	Root, PackageRoot, RunID, Flow, RequirementSource, VCS, BaseSnapshot string
+	// FromSealedRun opens a new, explicitly user-authorized QA/gate-only rerun
+	// from a prior terminal formal result. The source supplies the already
+	// established route, development snapshot, and approved QA inventory; the
+	// new run still performs fresh incremental QA review/execution and gate review
+	// against the new current snapshot.
+	FromSealedRun    string
+	FromSealedReason string
 	// AdmissionRegistry and AdmissionRecordID explicitly select the stage-0
 	// registry bridge. Empty values discover the shared user registry; only Go
 	// test executables retain the in-process legacy start path.
@@ -92,6 +100,13 @@ const (
 var routeModes = map[string]bool{"lightweight": true, "full": true, "custom": true}
 
 func Start(options StartOptions) (RunState, error) {
+	if strings.TrimSpace(options.FromSealedRun) != "" {
+		return startQAOnlyRerun(options)
+	}
+	return startRegular(options)
+}
+
+func startRegular(options StartOptions) (RunState, error) {
 	root := lifecycle.CleanRoot(options.Root)
 	ownerTranscript, ownerSession := consumeStartOwner(root)
 	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
@@ -208,8 +223,20 @@ func Start(options StartOptions) (RunState, error) {
 	if !promptIDPattern.MatchString(runID) {
 		return RunState{}, fmt.Errorf("run id must match [a-z0-9]+(?:-[a-z0-9]+)*")
 	}
+	runUnlock, err := coordination.AcquireRun(root, runID)
+	if err != nil {
+		return RunState{}, err
+	}
+	defer runUnlock()
 	if _, err := os.Stat(RunDir(root, runID)); err == nil {
 		return RunState{}, fmt.Errorf("run %q already exists", runID)
+	} else if !os.IsNotExist(err) {
+		return RunState{}, err
+	}
+	// Candidate and legacy runtimes share the run-id namespace; fence a
+	// legacy writer before creating its state directory.
+	if _, err := os.Stat(filepath.Join(root, ".gates", "engine", runID)); err == nil {
+		return RunState{}, fmt.Errorf("run %q already exists in candidate runtime", runID)
 	} else if !os.IsNotExist(err) {
 		return RunState{}, err
 	}
@@ -230,6 +257,12 @@ func Start(options StartOptions) (RunState, error) {
 			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, "admission record id is required when --registry is supplied")
 			return RunState{}, fmt.Errorf("admission record id is required when --registry is supplied")
 		}
+		// Verify the caller and the immutable target before AdmitRegistry can
+		// write an admission receipt. A candidate invoked directly against a
+		// stable project must leave the registry namespace byte-for-byte intact.
+		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
+			return RunState{}, bindingErr
+		}
 		receipt, err := AdmitRegistry(registryPath, recordID)
 		if err != nil {
 			writeWorkflowAdmissionRejection(registryPath, recordID, root, options.PackageRoot, err.Error())
@@ -241,9 +274,6 @@ func Start(options StartOptions) (RunState, error) {
 		}
 		if err := requireRegistryBootstrapReceipt(registryPath, recordID, root, options.PackageRoot); err != nil {
 			return RunState{}, err
-		}
-		if bindingErr := verifyRegistryBinding(registryPath, recordID, root, options.PackageRoot); bindingErr != nil {
-			return RunState{}, bindingErr
 		}
 		admissionDoc, admissionRecord, err = registryAdmissionIdentity(registryPath, recordID)
 		if err != nil {
@@ -677,7 +707,13 @@ func requireWorkflowAdmission(root, packageRoot string) error {
 		return err
 	}
 	if registry == "" {
-		return verifyLegacyStableLauncher()
+		return verifyLegacyStableLauncherReadOnly()
+	}
+	// The launcher identity is a read-only prerequisite. Check it before the
+	// admission receipt path so a direct candidate invocation cannot create a
+	// user-level registry sidecar while being rejected.
+	if err := verifyRegistryBinding(registry, recordID, root, packageRoot); err != nil {
+		return err
 	}
 	receipt, err := AdmitRegistry(registry, recordID)
 	if err != nil {
@@ -688,7 +724,7 @@ func requireWorkflowAdmission(root, packageRoot string) error {
 		writeWorkflowAdmissionReceipt(registry, receipt, root, packageRoot, receipt.Reason)
 		return fmt.Errorf("%s: workflow resume refused for registry record %q", receipt.Code, recordID)
 	}
-	return verifyRegistryBinding(registry, recordID, root, packageRoot)
+	return nil
 }
 
 // AdoptExternalChange explicitly rebinds the current snapshot to the native
@@ -964,7 +1000,7 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		if semanticEffect != "" {
 			return fmt.Errorf("semantic effect is accepted only when the requirement revision changed")
 		}
-		if confirmed && state.Actions["requirements-clarification"].Status != "PASS" {
+		if confirmed && !isLightweight(*state) && state.Actions["requirements-clarification"].Status != "PASS" {
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
 		}
 		state.RequirementConfirmed = confirmed

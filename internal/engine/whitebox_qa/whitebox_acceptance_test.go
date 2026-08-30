@@ -172,7 +172,7 @@ func TestDefinitionDigestSensitiveToSemanticMutations(t *testing.T) {
 			return mkHostActionStep(t, fxHeader("s.dispatch", "n1", "s.parse"), fxIO("s.parse"),
 				authoring.HostActionSpec{
 					Handler: "h.s.dispatch", Boundary: authoring.BoundaryExternalCapability,
-					Operation: "op.alt", Timeout: 5 * time.Second,
+					Operation: "op.alt", Schema: "schema.alt", Timeout: 5 * time.Second,
 				})
 		}},
 	}

@@ -7,6 +7,53 @@ import (
 	"testing"
 )
 
+func TestInstallFencesActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testing.T) {
+	source := copyPackageFixture(t)
+	project := t.TempDir()
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+	activeState := filepath.Join(project, ".gates", "tmp", "active-run", "state.json")
+	if err := os.MkdirAll(filepath.Dir(activeState), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(activeState, []byte(`{"runId":"active-run","status":"ACTIVE"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: project,
+		RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `active workflow run "active-run"`) || !strings.Contains(err.Error(), "fences install") {
+		t.Fatalf("install did not fence active run: %v", err)
+	}
+
+	bootstrapProject := t.TempDir()
+	bootstrapRegistry := filepath.Join(t.TempDir(), "registry.json")
+	bootstrapLauncher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+	if _, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: bootstrapProject,
+		RegistryPath: bootstrapRegistry, BinaryTarget: bootstrapLauncher, Force: true, SkipHooks: true,
+	}); err != nil {
+		t.Fatalf("bootstrap fixture install failed: %v", err)
+	}
+	bootstrapState := filepath.Join(bootstrapProject, ".gates", "tmp", "active-run", "state.json")
+	if err := os.MkdirAll(filepath.Dir(bootstrapState), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bootstrapState, []byte(`{"runId":"active-run","status":"ACTIVE"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Install(InstallOptions{
+		Source: source, Host: "claude", Scope: "project", Project: bootstrapProject,
+		RegistryPath: bootstrapRegistry, BinaryTarget: bootstrapLauncher, Bootstrap: true,
+		Force: true, SkipHooks: true,
+	}); err != nil {
+		t.Fatalf("bootstrap was unexpectedly fenced by an active run: %v", err)
+	}
+}
+
 func TestLoadManagedRuleRequiresSingleCurrentRule(t *testing.T) {
 	root := t.TempDir()
 	skillPath := filepath.Join(root, filepath.FromSlash(managedRuleSourceRelativePath))

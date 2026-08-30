@@ -168,7 +168,9 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 - `pendingActions[actionID]`；
 - task/dispatch/Attempt 与 source bindings；
 - pending Ask、available-action freshness、obligations、impact set；
+- 用户确认的 `granularity_review`、Batch/Subtask 计划及其 digest（按需求/方案 revision、拆分决定和路线绑定）；
 - typed `ReviewScopeMode` 与逐项 QA approved whitelist（按 review/candidate/result 绑定）；
+- `AcceptanceManifest`、case↔point map 及其 digest（按需求 revision、route/topology scope 绑定）；
 - split topology、`sliceID -> childRunID` 与 receipts；
 - terminal summary 的最后 request/event receipt；
 - `definitionDigest` 与 owning runtime `packageDigest` 的双重绑定与校验记录。
@@ -189,6 +191,31 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 - result-before-receipt：暂存，lifecycle 对账成功后接纳；
 - 终态最后一个相同事件：由 durable summary 幂等重放结果。
 
+### 3.5 开发分块计划进入引擎的机械流程
+
+开发分块沿用 ADR-002 的 Batch/Subtask 模型，不与 Run 级 `slicing`（master/child 拓扑）
+混为一谈。分块的语义判断由 Part 2 技术审提出、用户确认；引擎只负责把已确认计划变成
+可校验、可执行的任务绑定，不从自然语言重新猜测粒度。
+
+固定接入顺序如下：
+
+1. Part 2 `start-readiness` 产出结构化 `granularity_review`：记录需求/方案 revision、
+   拆分决定、单一或多个 Batch、`Batch → Subtask` 映射、每个 Batch 的交付物、DoD/测试、
+   依赖、接口/状态边界、风险、回滚/恢复、交接与上下文成本，以及不拆或改拆理由。
+2. Controller 在用户确认后校验该计划：ID 唯一，Batch/Subtask 映射无遗漏和重复，
+   TaskKey 归属明确，批间依赖无环，必需的 DoD/验证/恢复/交接字段齐全；通过后保存
+   `granularity_review` 与计划摘要及其 digest，并绑定当前需求/方案、路线和拓扑。
+3. 引擎把 Batch 映射为现有 TaskKey 的分组与依赖信息，不新增 Batch 独立状态机。批次完成
+   由成员 task 的终态和该批已登记的 DoD/验证/交接结果派生。
+4. `development-worker` 派发必须带 `batch_id`；一个 `batch_id` 只能对应一次开发派发。
+   同一派发中的 `subtask_id` 只是顺序步骤，不能单独派发、不能触发换代理或 reset。
+5. 前一 Batch 的成员任务、DoD、验证和交接均完成后，Controller 才把下一 Batch 放入
+   eligible frontier；跨 Batch 才允许准备新的零上下文开发代理。Batch 契约、接口、依赖
+   或 DoD 变化时，原计划和未完成派发失效，必须重新做 `granularity_review` 并取得用户确认。
+
+这里的“机械”只保证结构完整、顺序、绑定和代理边界正确；是否值得拆、拆分是否符合产品
+语义，仍属于技术审和用户决定，不由引擎自动优化。
+
 ## 4. 受理、用户节点与审查
 
 ### 4.1 宿主受理
@@ -196,6 +223,12 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 普通修改请求只提醒一次可使用 formal-gates；复杂请求在完整需求/方案确认后、动手前再提醒一次。提醒均不需要用户回应，也不阻塞直接处理。
 
 用户主动提出 formal-gates 后直接进入受理，不再重复问“是否进入正式流程”。主代理逐项澄清需求和重大技术选择，然后单独请求确认完整整合后的需求与方案；只有确认后才能 `start`。`start` 后首个 `drive` 自动登记 intake receipt/digest，不再次询问同一份确认。
+
+受理确认的 typed `intakeConfirmationReceipt` 以固定 stable driver 已写入的确认状态为权威来源；
+固定 launcher 从该状态和登记的 requirement/solution 工件派生回执并落到 formal run evidence，再按
+原相对路径注入候选 test project。候选 `start` 通过 `--intake-receipt <path>` 或固定 host config
+指针读取，不能自行生成回执、读取 stable run state 或用 runtime/identity/digest 参数替代；旧回执配
+当前工件必须在首写前稳定拒绝。stable driver 不因候选 engine 阶段新增 writer 或公共入口。
 
 若用户尚未明确，受理时选择 lightweight 或 regular。lightweight 是 bootstrap 例外，不经拆分和 full/custom 路线，登记需求后直接 Seal 并标记 unverified；regular 不能在运行中改成 lightweight。
 
@@ -359,6 +392,8 @@ repair 的生产改动先形成新 `Dn`，再从它重建/对账 whitebox worksp
 
 黑盒 case review、白盒 test/case review、merge QA case review 使用同一确定性 `PreWaveReviewPolicy`，并持久化 typed `ReviewScopeMode`：首次建立基线为 `FULL`，后续新增、修改或 ImpactSet 受影响项为 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。QA case/test review 与 execution 均逐项使用 approved whitelist；缺失、未知、重复条目或仅总体 PASS 的结果拒绝，只有每项明确 `PASS` 才进入持久化 approved whitelist。按 run/child、review kind、requirement revision 与 route/topology scope 分别计数。第 1、2 次语义 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask fresh redesign、重试/fresh review、改需求、对精确 case-set/candidate 带理由 waiver/skip，或 abort。PASS 关闭/重置 series，runtime error 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（关联留痕），不因 P2 建议本身触发新 review 轮；自拟扩展仍需 fresh review。
 
+覆盖契约先从已确认需求/方案冻结当前 revision、route/topology scope 的有限验收点集合 `AcceptanceManifest`，再用 case↔point 多对多映射建立双向追踪：每个适用 point 有 approved case，每个 case 有 point 归属。review 同时返回逐 case、逐 point 决策和未绑定条目；仅有集合级 PASS 不足以通过。execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开为 `pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。Controller/validator 负责结构校验，覆盖率、mutation、property-based test 和 fuzz 只作辅助信号，不设固定阈值。
+
 ## 8. 分片、主线合并与 VCS
 
 ### 8.1 生命周期
@@ -504,6 +539,10 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 - 实现 failure-class 路由、UNKNOWN、中断、旧 Attempt、result-before-receipt 和本地 effect 对账，测试 engine 故障不会动态降级为 agent。
 
 ### 阶段 3：完整流程迁移
+
+> 本节沿用总方案的能力分层编号；交付顺序以 `incremental-seal-plan.md` 为准。增量计划的
+> “阶段 3”是先证明最小纵向 engine 闭环，本节所述完整流程迁移在该闭环 Seal 后的后续阶段
+> 才执行，不属于当前阶段 3 Batch。
 
 - 迁移 intake、产品/技术审、start-readiness、路线、两阶段需求变化、开发、白盒独立 authoring/完整候选、production-view 并行/reuse、白盒执行、repair、精确 promotion、adopt-external 和 Seal cleanup；同步修改 `gates/implementation-quality-gate.md`、catalog scope 与 README，移除实现质量门的测试代码审查责任，测试质量只由白盒 review 承担；门内维度保持显式命名且互不压制（需求覆盖、实现-需求偏差、架构与耦合、实现正确性与质量并列，架构与耦合不回退为无名段落）。
 - 强制完整 frontier 与自动 refill。

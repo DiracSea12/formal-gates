@@ -94,6 +94,30 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 
 矩阵的 `start` 行不得引入任何拆分意向声明（无 `--split` 参数）：`start` 不接受也不冻结拆分意向；拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认——split 需精确拓扑、no-split 需理由留痕，确认前用户可改变意向、确认后不得重切（变更走用户需求变化、reset/rebuild 或 abort）。阶段 4/5 的 no-split/split 出口都以该拓扑确认时点为准，不得恢复启动时声明，也不得用宽泛的“拆分决定”替代该唯一绑定点。
 
+### 2.3.1 开发分块计划的引擎接入
+
+开发分块与上面的 Run 级 split 拓扑分开处理。Part 2 `start-readiness` 技术审必须产出结构化
+`granularity_review`；它先判断单一 Batch 或多个 Batch，再给出 `Batch → Subtask` 映射、
+依赖/接口/状态边界、风险、DoD/测试、回滚/恢复、交接与上下文成本及不拆/改拆理由。用户
+在拆分决定与路线确认时确认该计划后，才允许进入开发。
+
+引擎接入固定为：
+
+1. Controller 将已确认的 `granularity_review` 绑定到需求/方案 revision、拆分决定、路线和
+   拓扑，并保存计划摘要/digest；校验 ID 唯一、映射无遗漏/重复、TaskKey 归属明确、批间
+   依赖无环以及 DoD/验证/恢复/交接字段齐全。
+2. 引擎把 Batch 作为现有 TaskKey 的分组与依赖信息承载，不新增 Batch 独立状态机；批次
+   完成从成员 task 的终态和已登记的 DoD/验证/交接结果派生。
+3. 每次 `development-worker` 派发必须带 `batch_id`，一个 Batch 只能有一次开发派发；其
+   `subtask_id` 仅表示该派发内的顺序步骤，不得单独派发、换代理或 reset。
+4. 前一 Batch 的成员任务、DoD、验证和交接完成后，下一 Batch 才进入 eligible frontier，
+   并允许派发新的零上下文开发代理。Batch 契约、接口、依赖或 DoD 改变时，旧计划失效，
+   必须重新做粒度审并取得用户确认。
+
+引擎不负责从自然语言判断最佳拆法，也不按编号、commit 数、文件/行数或阶段名自动切块；
+它只机械校验和执行已确认的分块计划。各阶段的具体 Batch/Subtask 清单在该阶段的需求入口
+中登记，阶段 3 的清单见 `refactor-plan/stage-3-requirements.md`。
+
 ### 2.4 全局安装切换与活动 run fencing
 
 固定稳定插件跨阶段继续驱动 formal-gates，因此最终切换不是单个测试项目的局部操作。每次候选升级或最终全局切换前，必须从登记的所有项目 root、host home、state/resource root 和安装 scope 建立可复核的活动 run inventory；不能只扫描当前候选项目的 `.gates/tmp`。
@@ -193,14 +217,32 @@ Seal 后状态：持久协议可独立验证和恢复，但不会改变稳定插
 范围：
 
 - 实现 `workflow start`、`drive`、`submit`、`show`、`status`、`next`、`diagnose` 的 engine 路径。
-- 先以 lightweight 跑通 start -> 需求登记 -> Seal 内部自动 terminal cleanup -> Complete；不通过公开 `workflow cleanup` 推进或删除活动 run。
-- 完成 Ask、Ready、HostAction、Wait、Operator、Complete 六类外部边界的最小真实闭环。
-- façade 按 run envelope 选择整条 legacy 或 engine runtime；同一 run 不允许跨 runtime。
+- 先以 lightweight 跑通“start 前已确认 intake -> `start` -> 首次 `drive` 自动登记 intake receipt/digest -> Seal 内部自动 terminal cleanup -> Complete”；清理中的终结 intent 只投影 `FINALIZING_CLEANUP`/`WAIT`，对账完成后才返回 Complete；terminal summary 标记 `unverified=true`。start 绑定 requirement source/revision 与完整登记工件集，首次 drive 不重复询问或等待确认事件，不通过公开 `workflow cleanup` 推进或删除活动 run。
+- 阶段 0 冻结的 stable driver 仍只写既有确认状态；固定 launcher 从已确认 formal run 状态和登记集 requirement/solution 工件派生 `intakeConfirmationReceipt.json`，并按原相对路径注入候选 test project。候选 `start` 唯一从 `--intake-receipt <path>`（或等价 host config 指针）读取 typed 回执，并以当前注入工件重算 binding。回执缺失、旧回执配当前工件或任一 binding 不一致均在首写前返回 `INVALID_INTAKE_CONFIRMATION` 且零写入；候选不生成回执、不读 stable run state、不驱动正式 run，stable driver 不新增 writer/公共入口。
+- 本阶段的 `granularity_review` 已登记为单一 Batch `phase-3-engine-vertical-loop`：S1 façade/admission/runtime 选择 → S2 `StartRequest`/intake receipt/canonical digest/envelope → S3 `drive`/`submit`/六类 `NextResult` → S4 terminal cleanup/`Complete`/replay → S5 installed 隔离、legacy 回归与 negative fixtures。五段共享未冻结的 façade、`state.json`、`Store/CAS`、typed protocol、envelope 和 cleanup 接口，不能独立验收或回滚，故不拆 Batch；一个 Batch 只派发一个全新的零上下文开发代理，Subtask 间连续执行、不换代理。验证档位为 full，选定 blackbox、whitebox、complexity-gate、implementation-quality-gate，并在批边界执行项目声明的构建、测试、installed harness、package/canary、stable smoke、digest/namespace、registry/fencing、cleanup 检查。
+- 在 engine protocol 的 whitebox/test-only sequence harness 中完成 Ask、Ready、HostAction、Wait、Operator、Complete 六类外部边界的最小真实闭环；阶段 3 installed-candidate 黑盒只覆盖 lightweight 可公开到达的 Complete、façade 读写、版本/身份/旧入口负向和 legacy 回归，其余五类公开路径留到阶段 4 regular。
+- façade 按 run envelope 选择整条 legacy 或 engine runtime；同一 run 不允许跨 runtime。candidate 的未迁移旧 workflow 写入口统一显式 unsupported/zero-write，不得误落 stable handler。
+- `start` 不新增 runtime、identity 或 digest 参数：候选 installed target 由 admission/launcher registry 的 target identity/package digest 固定选择 engine 并创建 envelope，stable driver 继续选择 legacy；缺失、冲突或未登记的 admission 在写前返回 `UNREGISTERED_INSTALL`。后续所有 façade 调用只信任 envelope 的 owning runtime，不能中途切换。
 - 隔离候选运行 engine lightweight；固定稳定插件继续承担当前开发流程与 legacy 正常入口。
 - engine loader 在任何写入前严格校验 `workflowDefinitionVersion` 和 `stateSchemaVersion`；缺失或不匹配返回 `UNSUPPORTED_RUN_VERSION`。仅 `diagnose` 可使用最小 raw/envelope parser 只读报告，terminal summary 必须保留 writer、schema、definition 和 package digest。
-- 以同一 run 交替尝试 legacy 写入口、engine `submit` 和公开 cleanup，证明旧入口不能绕过唯一 handler，公开 cleanup 不能删除 engine 活动 run。
+- 以同一 run 交替尝试 legacy `requirement`/`cleanup` 写入口、engine `submit` 和公开 cleanup：legacy 入口只对 stable legacy run 保持原语义，对 engine run 明确拒绝且零写入；engine 的唯一写入仍是 typed `submit`，公开 cleanup 不能删除 engine 活动 run。
 
 Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径；regular、split 和多 VCS 尚未宣称由 engine 支持。
+
+### 阶段 3.5a：QA 覆盖契约 checkpoint（阶段 4 Batch A，非独立正式阶段）
+
+本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal 或另一套 QA
+状态机。它只冻结阶段 4 接入所需的最小 QA 覆盖契约，详见
+`refactor-plan/stage-3-5a-qa-coverage-contract.md`：有限 `AcceptanceManifest`、显式
+case↔point 双向多对多映射、逐 point/逐 case review、由 manifest/map digest 投影的
+approved whitelist，以及与当前 `ValidationCandidate` 绑定的 expected/actual execution
+结果。未知、缺失、重复、orphan、仅集合级 PASS、`FULL` 对账不全或 `AFFECTED` 的执行/
+继承/未执行集合不全都必须在结构层拒绝；`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。
+
+3.5a 只交付 schema、validator、digest/白名单投影和 fixtures，不改 legacy `QACase`
+完整结构、不新增公开命令或通用框架，也不设置固定用例数、覆盖率阈值或强制测试工具
+组合。一个代理连续完成 Batch A 的内聚子任务；阶段 4 由新代理完成 Batch B 接入 regular
+QA/candidate E2E，两个批次不并行。
 
 ### 阶段 4：Git 非分片 regular 全流程
 
@@ -210,6 +252,7 @@ Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径�
 
 - 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线。
 - 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和三轮规则。
+- QA 接入必须消费阶段 3.5a 的覆盖契约：每个适用 acceptance point 都有经批准的 case 映射、逐项 review 决定，以及绑定当前 `ValidationCandidate` 的执行证据；不能用集合级 PASS 或旧候选结果补齐缺项。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
 - 在一个真实宿主上跑 Git 非分片 full canary，覆盖至少一次 FAIL -> repair -> 新候选 -> 重验 -> Seal。
