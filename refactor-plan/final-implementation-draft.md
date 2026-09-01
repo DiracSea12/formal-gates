@@ -392,14 +392,15 @@ repair 的生产改动先形成新 `Dn`，再从它重建/对账 whitebox worksp
 
 黑盒 case review、白盒 test/case review、merge QA case review 使用同一确定性 `PreWaveReviewPolicy`，并持久化 typed `ReviewScopeMode`：首次建立基线为 `FULL`，后续新增、修改或 ImpactSet 受影响项为 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。QA case/test review 与 execution 均逐项使用 approved whitelist；缺失、未知、重复条目或仅总体 PASS 的结果拒绝，只有每项明确 `PASS` 才进入持久化 approved whitelist。按 run/child、review kind、requirement revision 与 route/topology scope 分别计数。第 1、2 次语义 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask fresh redesign、重试/fresh review、改需求、对精确 case-set/candidate 带理由 waiver/skip，或 abort。PASS 关闭/重置 series，runtime error 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（关联留痕），不因 P2 建议本身触发新 review 轮；自拟扩展仍需 fresh review。
 
-覆盖契约先把同一次需求/方案确认中登记的有限 `requiredSources` 与当前 revision、
-route/topology scope 一起冻结，再生成有限验收点集合 `AcceptanceManifest`，并用
-source↔point↔case 映射建立双向追踪：每个适用 source 有 point 或带 PASS 证据的非 QA 验证
-处置，每个 point 有 approved case，每个 case 有 point 归属。review 同时返回逐适用 source、
-逐 point、逐 case 决策和未绑定条目；仅有集合级 PASS 不足以通过。execution 冻结 expected
-case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。
-source inventory/manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开
-为 `sourceID → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同
+覆盖契约把同一次需求/方案确认中的有限 `requiredSources` 直接作为唯一权威交付义务列表，
+不从自然语言另行转抄。source 在确认时只分 QA/非 QA；路线与 topology 确定后由各已选 QA
+kind 的设计者直接在该 kind 的 `AcceptanceManifest` 中记录负责的 source。Controller 聚合
+校验每个 QA source 至少出现在一个已选 kind 的 manifest，非 QA source 只能使用带 PASS 证据的
+替代验证处置。一个 source 可映射多个 point/case；多 kind 出现时所有已声明分支都必须通过。
+review 按 kind 返回逐 manifest source、逐 point、逐 case 决策和未绑定条目；仅有集合级 PASS 不足以通过。
+execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/
+`AFFECTED` 都必须完整对账。`requiredSources` binding/manifest/map/whitelist digest 与当前
+`ValidationCandidate` 精确绑定，摘要展开为 `sourceID → reviewKind → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同
 `EXECUTED_PASS`。Controller/validator 负责结构校验，覆盖率、mutation、property-based test
 和 fuzz 只作辅助信号，不设固定阈值。
 

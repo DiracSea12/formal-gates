@@ -97,6 +97,8 @@ func run(program string, args []string, streams IO) (int, error) {
 		return runGate(program, args[1:], streams)
 	case "canary":
 		return runCanary(program, args[1:], streams)
+	case "coverage":
+		return runCoverage(program, args[1:], streams)
 	default:
 		printUsage(streams.Stdout, program)
 		return 1, fmt.Errorf("unknown command: %s", args[0])
@@ -1893,7 +1895,11 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+}
+
+func printCoverageUsage(w io.Writer, program string) {
+	fmt.Fprintf(w, "Usage: %s coverage <subcommand>\n\nSubcommands:\n  validate             validate a coverage contract JSON document from stdin\n  project-whitelist    project an approved whitelist from contract/reviews JSON on stdin\n  reconcile-execution  reconcile execution JSON against a contract and whitelist on stdin\n\nAll commands emit JSON on stdout; contract failures return a non-zero exit code and {code,path,message}.\n", program)
 }
 
 func printRegistryUsage(w io.Writer, program string) {

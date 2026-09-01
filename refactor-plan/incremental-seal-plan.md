@@ -233,16 +233,19 @@ Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径�
 
 本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal 或另一套 QA
 状态机。它只冻结阶段 4 接入所需的最小 QA 覆盖契约，详见
-`refactor-plan/stage-3-5a-qa-coverage-contract.md`：已确认需求/方案中有限的
-`requiredSources`、有限 `AcceptanceManifest`、显式 source↔point↔case 映射、逐适用 source/
-逐 point/逐 case review、由 source inventory/manifest/map digest 投影的 approved whitelist，
+`refactor-plan/stage-3-5a-qa-coverage-contract.md`：已确认需求/方案中作为唯一权威义务列表
+且带稳定 ID 的有限 `requiredSources`、由已选 QA kind 设计者直接记录 source 的有限
+`AcceptanceManifest`、显式 source↔point↔case 多对多映射、逐 manifest source/point/case
+review、由 `requiredSources` binding/manifest/map digest 投影的 approved whitelist，
 以及与当前 `ValidationCandidate` 绑定的 expected/actual execution 结果。未知、缺失、重复、
 orphan、仅集合级 PASS、`FULL` 对账不全或 `AFFECTED` 的执行/继承/未执行集合不全都必须在
 结构层拒绝；`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。
 
-3.5a 只交付 schema、validator、digest/白名单投影和 fixtures，不改 legacy `QACase`
-完整结构、不新增公开命令或通用框架，也不设置固定用例数、覆盖率阈值或强制测试工具
-组合。一个代理连续完成 Batch A 的内聚子任务；阶段 4 由新代理完成 Batch B 接入 regular
+3.5a 交付 schema、validator、digest/白名单投影、fixtures 和薄 `coverage` CLI 适配层，不改
+legacy `QACase` 完整结构、不接入 engine 状态机、不新增通用框架，也不设置固定用例数、覆盖率
+阈值或强制测试工具组合。公开入口固定为 `formal-gates coverage validate`、`coverage
+project-whitelist`、`coverage reconcile-execution`，只做 JSON 编解码和函数转发。一个代理连续
+完成 Batch A 的内聚子任务；阶段 4 由新代理完成 Batch B 接入 regular
 QA/candidate E2E，两个批次不并行。
 
 ### 阶段 4：Git 非分片 regular 全流程
@@ -253,11 +256,12 @@ QA/candidate E2E，两个批次不并行。
 
 - 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线。
 - 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和三轮规则。
-- QA 接入必须消费阶段 3.5a 的覆盖契约：同一次需求/方案确认中登记 `requiredSources`，
-  每个适用 source 都有 acceptance point 或带 PASS 证据的非 QA 验证处置，每个 point 都有
-  经批准的 case 映射，并形成逐适用 source/point/case review 与绑定当前
+- QA 接入必须消费阶段 3.5a 的覆盖契约：同一次需求/方案确认中的 `requiredSources` 是唯一
+  权威义务列表；每个 QA source 由至少一个已选 QA kind 的 `AcceptanceManifest` 覆盖，非 QA source 使用带
+  PASS 证据的替代验证处置；复杂 source 可对应多个 point/case，多 kind 认领的全部分支都
+  必须通过，并形成逐 manifest source/point/case review 与绑定当前
   `ValidationCandidate` 的执行证据；不能用集合级 PASS 或旧候选结果补齐缺项。engine
-  `State`/envelope、QA 派发和结果校验共同持久化并核对 source inventory/manifest/map/
+  `State`/envelope、QA 派发和结果校验共同持久化并核对 `requiredSources` binding/manifest/map/
   whitelist digest，不另建覆盖状态机。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
