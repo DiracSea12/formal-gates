@@ -1,0 +1,735 @@
+{
+  "runId": "stage-3-5a-qa-coverage-contract",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "4b5fc8ab3b82972422e4f8414538e4b050c7b5e3d6a5eb4cd13058c31d6e1a57",
+  "basePromptRevision": "3f35c560a7a0951355638c8b3ce158640fe722f5309f47c1a4826505d710872c",
+  "catalogRevision": "0ab49ab184c33d4d20fd8f298851fdca2aef86e12f15e421569b8d12ded0bf7d",
+  "vcs": "git",
+  "baseSnapshot": "0699d75b65a0db350221e7db3c7100ffd4830482",
+  "currentSnapshot": "7d9e85ef7d6d306c469ebe4812353ab34cb78195",
+  "requirementArtifacts": [
+    {
+      "path": "openspec/changes/orchestration-pipeline-engine/master-requirements.md",
+      "revision": "b8a27a150697aab656077510b4204c5efc4c657bbd1cb34a14fc8f77a3042d4a"
+    },
+    {
+      "path": "refactor-plan/incremental-seal-plan.md",
+      "revision": "4fcdc47de800eee43c87a826ea970d546910f107c5644817c730bd06ec0ba15b"
+    },
+    {
+      "path": "refactor-plan/stage-3-5a-qa-coverage-contract.md",
+      "revision": "4b5fc8ab3b82972422e4f8414538e4b050c7b5e3d6a5eb4cd13058c31d6e1a57"
+    },
+    {
+      "path": "refactor-plan/stage-3-5a-solution.md",
+      "revision": "4641d1d11a7bc520e3d4fa6a85dbd77402a45913a63481748437d292a492dc7c"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "3.5a 是一个纯逻辑闭环；类型、映射、摘要、白名单和 execution 对账共享未冻结接口，拆成多个 Batch 会增加交接和版本漂移，无法独立验收或回滚，因此不拆。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "7d9e85ef7d6d306c469ebe4812353ab34cb78195",
+      "sourceSnapshot": "220a94b87a4c668d812b4d81a3215ffb09a1a0f2",
+      "compared": "0699d75b65a0db350221e7db3c7100ffd4830482..b5991d516b00f29741010f73825f6ecd58041acf",
+      "findings": [
+        {
+          "severity": "P3",
+          "message": "P3: CanonicalJSON/CanonicalDigest 与 package-level ValidateReviews 是未被当前适配层需要的导出便利包装；可在后续收缩 API，但不影响正常行为。",
+          "locations": [
+            "internal/engine/coverage/contract.go:834"
+          ]
+        }
+      ],
+      "message": "实现覆盖已确认契约，新增纯逻辑包与薄 coverage CLI 的范围和复杂度总体相称；未发现阻塞性复杂度问题。",
+      "dispatchId": "dispatch-96a096bbc004af0964fb2b30"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "7d9e85ef7d6d306c469ebe4812353ab34cb78195",
+      "sourceSnapshot": "220a94b87a4c668d812b4d81a3215ffb09a1a0f2",
+      "compared": "0699d75b65a0db350221e7db3c7100ffd4830482..220a94b87a4c668d812b4d81a3215ffb09a1a0f2",
+      "message": "四个维度均完成独立审查；实现、边界、摘要/候选绑定及逐 edge execution 完整性均通过，未发现范围内 P0/P1 问题。",
+      "dispatchId": "dispatch-8fc0bd0a7531ffb075efe8c9"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "7d9e85ef7d6d306c469ebe4812353ab34cb78195",
+    "cases": [
+      {
+        "caseId": "CASE-020",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 coverage validate、project-whitelist、reconcile-execution；再置换输入顺序重跑",
+        "observation": "基线与置换输入均成功；三类摘要和 whitelist digest 一致，条目排序稳定，FULL 对账 valid=true",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist；删除 REQ-3.5A-002 的 manifest source 与 edge 后重跑",
+        "observation": "变体均拒绝并返回 MISSING_COVERAGE，路径在 manifests 下且消息指出 REQ-3.5A-002",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate；分别注入未知 source、point、case 的 edge",
+        "observation": "均拒绝并返回 UNKNOWN_ID 或 ORPHAN_EDGE，未自动创建或修复对象",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate；分别注入重复 source、point、case、edge",
+        "observation": "每种重复均稳定返回 DUPLICATE_ID",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate；分别制造 orphan source、point、case",
+        "observation": "均返回 MISSING_COVERAGE，孤儿对象不被当作覆盖",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate；逐一修改 run、child、requirement、solution binding",
+        "observation": "每种绑定变体均返回 INVALID_BINDING，定位到 manifests[0].binding",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist；修改 review kind 及 route/topology review binding",
+        "observation": "manifest kind 或 review binding 变体均返回 INVALID_BINDING",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist；把 manifest source 改为 NON_QA",
+        "observation": "返回 INVALID_SOURCE，非 QA source 不可混入 QA manifest",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist；双 kind 基线分别删除一个 manifest",
+        "observation": "均返回 MISSING_COVERAGE，所选 kind 缺 manifest 时不通过",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 project-whitelist；制造 WHITEBOX FAIL、缺 decision，并保留 BLACKBOX PASS",
+        "observation": "WHITEBOX FAIL 返回 REVIEW_NOT_PASS；缺 decision 返回 INCOMPLETE_REVIEW；BLACKBOX PASS 不会掩盖失败",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist；修改 case mode/附加字段并测试 MERGE",
+        "observation": "非法 case binding 返回 INVALID_CASE_BINDING；合法 MERGE 通过且 whitelist 有 2 条 MERGE entry",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 project-whitelist；仅给 collection setStatus=PASS，逐项决策不完整并重复测试",
+        "observation": "两次均返回 INCOMPLETE_REVIEW，集合级 PASS 不掩盖逐项缺失",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-032",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 project-whitelist；分别制造缺失、重复、未知及 FAIL/PENDING/UNKNOWN review",
+        "observation": "分别返回 INCOMPLETE_REVIEW、DUPLICATE_ID、UNKNOWN_ID、REVIEW_NOT_PASS",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-033",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 project-whitelist；重复生成并篡改 whitelist，再注入 FAIL review",
+        "observation": "重复生成 digest 字节一致；篡改返回 DIGEST_MISMATCH；FAIL review 返回 REVIEW_NOT_PASS",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-034",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist；构造 NON_QA alternativeVerification 及缺字段/状态/重复变体",
+        "observation": "完整理由、方法、PASS、证据基线通过；缺失或未知字段拒绝，重复返回 DUPLICATE_ID",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-035",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 reconcile-execution；分别篡改 requiredSources、manifest、map、whitelist digest 与 candidate",
+        "observation": "四类 digest 变体均返回 DIGEST_MISMATCH；candidate id/digest 变体返回 CANDIDATE_MISMATCH",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-036",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 reconcile-execution；FULL 基线及缺记录、FAIL/PENDING/UNKNOWN/AUTHORIZED_SKIP 变体",
+        "observation": "基线 valid=true；集合缺失返回 EXECUTION_SET_MISMATCH；非 EXECUTED_PASS 返回 EXECUTION_NOT_PASS",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-037",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 validate/project-whitelist/reconcile-execution；FULL 与合法 AFFECTED 及 NOT_EXECUTED/继承证据变体",
+        "observation": "FULL/AFFECTED 基线 valid=true；NOT_EXECUTED 仍不是 PASS；缺记录/集合不一致返回 EXECUTION_SET_MISMATCH；缺复用证据或当前候选继承返回 EXECUTION_NOT_PASS",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-038",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "公开 reconcile-execution；FULL/AFFECTED 基线与 AUTHORIZED_SKIP 变体",
+        "observation": "两种基线 valid=true；skip 返回 EXECUTION_NOT_PASS，FULL 诊断不带 AUTHORIZED_SKIP，AFFECTED 诊断保留该状态",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-001",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxRequiredSourcesRejectMalformedInventory$' -count=1",
+        "observation": "malformed inventory rejected with ValidationErrors",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxMultiKindManifestsCoverSharedSource$' -count=1",
+        "observation": "shared source is covered for both selected review kinds and whitelist edges are distinct",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxManifestGraphRejectsOrphanObjects$' -count=1",
+        "observation": "orphan, unknown, duplicate and non-QA manifest graph objects are rejected",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxCoverageQueriesDeriveStableReverseViews$' -count=1",
+        "observation": "reverse queries are sorted and deduplicated and returned maps are isolated",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxCoverageMapRejectsDriftAndDuplicates$' -count=1",
+        "observation": "coverage map accepts the baseline and rejects binding drift, edge kind mismatch, missing, unknown and duplicate edges",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxCaseBindingVariantsAreClosed$' -count=1",
+        "observation": "case binding variants are accepted only for the closed approved forms",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxAlternativeVerificationRequiresEvidenceClosure$' -count=1",
+        "observation": "NON_QA alternative verification requires closed evidence",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxReviewProjectionRequiresCompletePassDecisions$' -count=1",
+        "observation": "review projection rejects incomplete or non-PASS decisions",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxCanonicalDigestsIgnoreInputOrder$' -count=1",
+        "observation": "canonical digests are stable when input order changes",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxFullExecutionRequiresExactExecutedPartition$' -count=1",
+        "observation": "FULL execution requires the exact executed partition",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxAffectedExecutionRequiresInheritanceEvidence$' -count=1",
+        "observation": "AFFECTED execution requires valid inheritance evidence",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxExecutionRejectsStaleDigestOrCandidateBinding$' -count=1",
+        "observation": "stale digest or candidate binding is rejected",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxWhitelistProjectionDigestDetectsMutation$' -count=1",
+        "observation": "whitelist projection digest changes when the projection is mutated",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxExportedCoverageAdaptersDelegateConsistently$' -count=1",
+        "observation": "exported adapters delegate consistently to canonical validation",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/whitebox_qa -run '^TestStage35AWhiteboxManifestSelectionAndScopeBinding$' -count=1",
+        "observation": "selected review kind and manifest scope remain bound to the declared candidate",
+        "oracleResult": "PASS",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 54507880,
+    "inputCacheHitTokens": 51727616,
+    "inputCacheMissTokens": 2780264,
+    "outputTokens": 285891,
+    "dispatches": {
+      "dispatch-022f018ffb63f1f4b21fd744": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1554944,
+        "inputCacheMissTokens": 113653,
+        "outputTokens": 11739,
+        "totalInputTokens": 1668597,
+        "source": "transcript"
+      },
+      "dispatch-0615dd15da2064bdc20bfa49": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-117499b84e1cb8c416837e4b": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 4345344,
+        "inputCacheMissTokens": 150677,
+        "outputTokens": 13761,
+        "totalInputTokens": 4496021,
+        "source": "transcript"
+      },
+      "dispatch-29cc0dae5239fa440d6e45a0": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2a3200a34c88c6a9ac6a5f03": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 4445952,
+        "inputCacheMissTokens": 261142,
+        "outputTokens": 20034,
+        "totalInputTokens": 4707094,
+        "source": "transcript"
+      },
+      "dispatch-2f8e8cfce1802c75effd3291": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-300118a932559e416fbbe975": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-36c2e01277bcfda62b1b4f9a": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 879872,
+        "inputCacheMissTokens": 81497,
+        "outputTokens": 8044,
+        "totalInputTokens": 961369,
+        "source": "transcript"
+      },
+      "dispatch-3f5c022a0166be535d9c70b0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-461d13f491684b25c5290c90": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1213184,
+        "inputCacheMissTokens": 81054,
+        "outputTokens": 7624,
+        "totalInputTokens": 1294238,
+        "source": "transcript"
+      },
+      "dispatch-464955a87e71c686fae0121d": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4b4250f96a38032d0f063ad8": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4d0459bc54cb00ab327fe171": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-509ea6144ce3e6dc50b81b05": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 4126208,
+        "inputCacheMissTokens": 148541,
+        "outputTokens": 32988,
+        "totalInputTokens": 4274749,
+        "source": "transcript"
+      },
+      "dispatch-533e0a8f4cb69f8e747005df": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 6524416,
+        "inputCacheMissTokens": 333334,
+        "outputTokens": 26571,
+        "totalInputTokens": 6857750,
+        "source": "transcript"
+      },
+      "dispatch-5b0bd7a7171629b57773afd7": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-60cfeaf512318873af822729": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 1730048,
+        "inputCacheMissTokens": 102375,
+        "outputTokens": 12234,
+        "totalInputTokens": 1832423,
+        "source": "transcript"
+      },
+      "dispatch-661540399f7c834e2eef46b1": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-6f63b75a72594db3fe3218b4": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 1846272,
+        "inputCacheMissTokens": 127739,
+        "outputTokens": 13715,
+        "totalInputTokens": 1974011,
+        "source": "transcript"
+      },
+      "dispatch-700f0bcc58ac3631544b5c21": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-8fc0bd0a7531ffb075efe8c9": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 8717312,
+        "inputCacheMissTokens": 397770,
+        "outputTokens": 42838,
+        "totalInputTokens": 9115082,
+        "source": "transcript"
+      },
+      "dispatch-913d7e790d53bfabd7aa308d": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 876544,
+        "inputCacheMissTokens": 85403,
+        "outputTokens": 13865,
+        "totalInputTokens": 961947,
+        "source": "transcript"
+      },
+      "dispatch-96a096bbc004af0964fb2b30": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 3103488,
+        "inputCacheMissTokens": 188083,
+        "outputTokens": 17362,
+        "totalInputTokens": 3291571,
+        "source": "transcript"
+      },
+      "dispatch-a2f8a3eca771d5acf0d05283": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-ad4c72fca4d9548b415907b1": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2635264,
+        "inputCacheMissTokens": 125218,
+        "outputTokens": 11232,
+        "totalInputTokens": 2760482,
+        "source": "transcript"
+      },
+      "dispatch-b066d236ff0f5bad50e50c81": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2328576,
+        "inputCacheMissTokens": 107519,
+        "outputTokens": 13611,
+        "totalInputTokens": 2436095,
+        "source": "transcript"
+      },
+      "dispatch-b1200589a2fde865359bd808": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 2247168,
+        "inputCacheMissTokens": 133359,
+        "outputTokens": 8574,
+        "totalInputTokens": 2380527,
+        "source": "transcript"
+      },
+      "dispatch-b4ad0440e53d48b71a57a4e0": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 1179904,
+        "inputCacheMissTokens": 123780,
+        "outputTokens": 9712,
+        "totalInputTokens": 1303684,
+        "source": "transcript"
+      },
+      "dispatch-bc371d2ba659a6ef99677f01": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 3398656,
+        "inputCacheMissTokens": 159264,
+        "outputTokens": 18068,
+        "totalInputTokens": 3557920,
+        "source": "transcript"
+      },
+      "dispatch-bc3b7221da906e3e65ad5b8a": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-be6483cb86d34b947e88e207": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c03af132f1cb3e3f36ed3965": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-c8515d1753f31c647fb22b71": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-dd259f58327302076b4824ec": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-e75d822a4ff160ece7842ccd": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 574464,
+        "inputCacheMissTokens": 59856,
+        "outputTokens": 3919,
+        "totalInputTokens": 634320,
+        "source": "transcript"
+      },
+      "dispatch-ef00b347eb2bf328f54f1de0": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f36e77ef12df8efa39dc5cfe": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-f71deb000e3d3711ae3352f0": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}
