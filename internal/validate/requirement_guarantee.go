@@ -26,9 +26,10 @@ const (
 )
 
 // RequirementGuarantee is the explicit, persisted activation envelope for the
-// REQ/AC guarantee. A nil envelope means that this run never activated the new
-// contract; callers must never infer activation from its route, artifact count,
-// filename, or document shape.
+// REQ/AC guarantee. New non-lightweight runs with one structured formal
+// requirement freeze this envelope atomically at initial confirmation. A nil
+// envelope remains authoritative for lightweight, multi-artifact, and existing
+// pre-envelope runs; callers never infer activation later from route or shape.
 type RequirementGuarantee struct {
 	Activation          string                           `json:"activation"`
 	ActivationSource    string                           `json:"activationSource"`
@@ -477,13 +478,10 @@ func validateGuaranteeEnvelope(state RunState) error {
 	return nil
 }
 
-// requireExplicitGuaranteeForQASelection closes the only ambiguous route
-// boundary introduced by the structured single-file requirement flow. A run
-// with exactly one formal requirement artifact must have frozen that artifact
-// explicitly before selecting any QA kind; otherwise nil would mean both
-// "legacy/non-guaranteed" and "the operator forgot --activate-guarantee" and
-// the latter could bypass the REQ/AC closure. Multi-artifact legacy runs stay
-// outside this change's guarantee contract and retain their existing behavior.
+// requireExplicitGuaranteeForQASelection keeps an existing pre-envelope run
+// from selecting QA without first entering the explicit guarantee contract.
+// New single-artifact runs freeze the envelope during initial confirmation;
+// multi-artifact runs retain their existing behavior.
 func requireExplicitGuaranteeForQASelection(state RunState, selected []string) error {
 	if len(state.RequirementArtifacts) != 1 {
 		return nil
@@ -498,7 +496,7 @@ func requireExplicitGuaranteeForQASelection(state RunState, selected []string) e
 	if !qaSelected || state.RequirementGuarantee != nil {
 		return nil
 	}
-	return fmt.Errorf("a QA-enabled route with one formal requirement artifact requires explicit REQ/AC guarantee activation; run workflow requirement --confirmed --activate-guarantee before Product Review")
+	return fmt.Errorf("a QA-enabled route with one formal requirement artifact requires a frozen REQ/AC guarantee envelope from requirement confirmation")
 }
 
 func requirementIndex(projection *FrozenRequirementProjection) (map[string]FrozenRequirement, map[string]struct {
@@ -809,11 +807,13 @@ func marshalWithoutDigest(value any) (string, error) {
 }
 
 type guaranteeCaseEvidence struct {
-	Kind      coverage.ReviewKind
-	Case      QACase
-	Review    GuaranteeReviewRecord
-	HasReview bool
-	Qualified string
+	Kind         coverage.ReviewKind
+	Case         QACase
+	Review       GuaranteeReviewRecord
+	HasReview    bool
+	Execution    QAExecutionResult
+	HasExecution bool
+	Qualified    string
 }
 
 type SliceGuaranteeRecord struct {
@@ -826,6 +826,7 @@ type SliceGuaranteeRecord struct {
 	RouteMode           string                           `json:"routeMode"`
 	CasesByMode         map[string][]QACase              `json:"casesByMode"`
 	ReviewsByMode       map[string]GuaranteeReviewRecord `json:"reviewsByMode"`
+	ExecutionByMode     map[string]QAExecutionResult     `json:"executionByMode,omitempty"`
 	Digest              string                           `json:"digest"`
 }
 
@@ -851,6 +852,7 @@ func saveSliceGuaranteeRecord(root string, state RunState) error {
 		RouteMode:           state.RouteMode,
 		CasesByMode:         state.QACasesByMode,
 		ReviewsByMode:       state.RequirementGuarantee.ReviewsByMode,
+		ExecutionByMode:     state.QAExecutionByMode,
 	}
 	digest, err := marshalWithoutDigest(record)
 	if err != nil {
@@ -941,10 +943,15 @@ func collectLocalGuaranteeEvidence(state RunState, qualify bool, merge bool) []g
 }
 
 func collectGuaranteeEvidence(root string, state RunState) ([]guaranteeCaseEvidence, bool, error) {
+	return collectGuaranteeEvidenceAllowMissing(root, state, false)
+}
+
+func collectGuaranteeEvidenceAllowMissing(root string, state RunState, allowMissing bool) ([]guaranteeCaseEvidence, bool, error) {
 	if !state.RetainedOverall || state.Slicing == nil || state.Slicing.Decision != "split" {
 		return collectLocalGuaranteeEvidence(state, false, false), false, nil
 	}
 	var evidence []guaranteeCaseEvidence
+	var missing []string
 	sliceNotGuaranteed := false
 	owners := map[string]bool{}
 	for _, owner := range state.Slicing.ACResponsibilities {
@@ -960,6 +967,10 @@ func collectGuaranteeEvidence(root string, state RunState) ([]guaranteeCaseEvide
 	for _, owner := range ownerIDs {
 		record, err := loadSliceGuaranteeRecord(root, state.RunID, owner)
 		if err != nil {
+			if os.IsNotExist(err) {
+				missing = append(missing, owner)
+				continue
+			}
 			return evidence, sliceNotGuaranteed, fmt.Errorf("sealed guarantee evidence for responsibility slice %s is missing: %w", owner, err)
 		}
 		if record.RequirementRevision != state.RequirementRevision || record.ManifestDigest != state.RequirementGuarantee.ManifestDigest {
@@ -977,9 +988,14 @@ func collectGuaranteeEvidence(root string, state RunState) ([]guaranteeCaseEvide
 			for _, testCase := range record.CasesByMode[key] {
 				kind := coverageKind(testCase.Mode, false)
 				review, ok := record.ReviewsByMode[key]
-				evidence = append(evidence, guaranteeCaseEvidence{Kind: kind, Case: testCase, Review: review, HasReview: ok, Qualified: qualifiedGuaranteeCaseID(owner, kind, testCase.ID)})
+				execution, hasExecution := record.ExecutionByMode[key]
+				hasExecution = hasExecution && execution.Snapshot == record.Snapshot
+				evidence = append(evidence, guaranteeCaseEvidence{Kind: kind, Case: testCase, Review: review, HasReview: ok, Execution: execution, HasExecution: hasExecution, Qualified: qualifiedGuaranteeCaseID(owner, kind, testCase.ID)})
 			}
 		}
+	}
+	if len(missing) != 0 && !allowMissing && !sliceNotGuaranteed {
+		return evidence, sliceNotGuaranteed, fmt.Errorf("sealed guarantee evidence for responsibility slice %s is missing: %w", missing[0], os.ErrNotExist)
 	}
 	evidence = append(evidence, collectLocalGuaranteeEvidence(state, true, true)...)
 	return evidence, sliceNotGuaranteed, nil
@@ -1396,11 +1412,20 @@ func deriveRequirementGuarantee(root string, state RunState) RequirementGuarante
 	if g.Projection == nil {
 		return report
 	}
-	evidence, sliceNotGuaranteed, evidenceErr := collectGuaranteeEvidence(root, state)
-	setRequirementGuaranteeItems(&report, state, evidence, nil)
+	// Waiver/not-guaranteed permits missing slice evidence, but valid sidecars
+	// that do exist remain part of the itemized owner/case/review/execution view.
 	if g.Activation == guaranteeWaived || g.Activation == guaranteeNotGuaranteed || g.Activation == guaranteeFrozen || g.Activation == guaranteeBlocked {
+		evidence := collectLocalGuaranteeEvidence(state, false, state.RetainedOverall)
+		if state.RetainedOverall && state.Slicing != nil && state.Slicing.Decision == "split" {
+			if available, _, err := collectGuaranteeEvidenceAllowMissing(root, state, true); err == nil {
+				evidence = available
+			}
+		}
+		setRequirementGuaranteeItems(&report, state, evidence, nil)
 		return report
 	}
+	evidence, sliceNotGuaranteed, evidenceErr := collectGuaranteeEvidence(root, state)
+	setRequirementGuaranteeItems(&report, state, evidence, nil)
 	if err := validateGuaranteeEnvelope(state); err != nil {
 		report.Status, report.Reason = guaranteeBlocked, err.Error()
 		return report
@@ -1541,6 +1566,19 @@ func guaranteeCaseExecutionStatus(state RunState, item guaranteeCaseEvidence, ex
 			}
 		}
 		return aggregateGuaranteeStatus(statuses)
+	}
+	if item.HasExecution {
+		for _, record := range item.Execution.Cases {
+			if record.CaseID != item.Case.ID {
+				continue
+			}
+			if record.Outcome == "FAIL" {
+				return "FAIL"
+			}
+			if record.Outcome == "PASS" && record.Origin != "inherited" {
+				return "PASS"
+			}
+		}
 	}
 
 	result, caseID := qaModeResult(state, item.Case.Mode), item.Case.ID
@@ -1747,8 +1785,8 @@ func masterFinalGuaranteeCases(root string, state RunState) ([]QACase, error) {
 // owned by its normal QACasesByMode table and are materialized separately, so
 // merge-interaction cases keep their established representation while slice
 // case IDs are scope-qualified and cannot collide.
-func approvedSliceBlackboxCases(root string, state RunState) ([]QACase, error) {
-	evidence, _, err := collectGuaranteeEvidence(root, state)
+func approvedSliceBlackboxCases(root string, state RunState, allowMissing bool) ([]QACase, error) {
+	evidence, _, err := collectGuaranteeEvidenceAllowMissing(root, state, allowMissing)
 	if err != nil {
 		return nil, err
 	}

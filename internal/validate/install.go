@@ -297,16 +297,9 @@ func Install(options InstallOptions) (InstallReport, error) {
 		// Validate the existing bridge before changing any host target.  A
 		// malformed registry is an unregistered install, not a reason to leave
 		// a partially installed runtime behind.
-		if doc, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
+		if _, loadErr := LoadRegistry(registryPath); loadErr != nil && !os.IsNotExist(loadErr) {
 			return InstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
-		} else if loadErr == nil {
-			if fenceErr := rejectActiveWorkflowRuns("install", targets, options, doc.Records); fenceErr != nil {
-				return InstallReport{}, fenceErr
-			}
 		}
-	}
-	if fenceErr := rejectActiveWorkflowRuns("install", targets, options, nil); fenceErr != nil {
-		return InstallReport{}, fenceErr
 	}
 
 	transactionParent := filepath.Dir(registryPath)
@@ -673,7 +666,7 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		// different generations.
 		if doc, loadErr := LoadRegistry(registryPath); loadErr == nil {
 			activeRegistryRecords = append([]RegistryRecord(nil), doc.Records...)
-			if fenceErr := rejectActiveWorkflowRuns("uninstall", targets, InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath}, doc.Records); fenceErr != nil {
+			if fenceErr := rejectActiveWorkflowRunsForUninstall(targets, options, doc.Records); fenceErr != nil {
 				return UninstallReport{}, fenceErr
 			}
 			for index := range targets {
@@ -686,7 +679,7 @@ func Uninstall(options UninstallOptions) (UninstallReport, error) {
 		} else if !os.IsNotExist(loadErr) {
 			return UninstallReport{}, fmt.Errorf("registry admission bridge is unavailable: %w", loadErr)
 		}
-	} else if fenceErr := rejectActiveWorkflowRuns("uninstall", targets, InstallOptions{Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath}, nil); fenceErr != nil {
+	} else if fenceErr := rejectActiveWorkflowRunsForUninstall(targets, options, nil); fenceErr != nil {
 		return UninstallReport{}, fenceErr
 	}
 	transactionParent := filepath.Dir(registryPath)
@@ -952,16 +945,17 @@ func installRegistryPath(options InstallOptions) string {
 	return ""
 }
 
-// rejectActiveWorkflowRuns inventories the state roots owned by the affected
-// registry records before an install or uninstall can replace runtime bytes or
-// advance admission identity. An active run keeps the current target and its
-// launcher authoritative until the run reaches a terminal state.
-func rejectActiveWorkflowRuns(operation string, targets []installTarget, options InstallOptions, records []RegistryRecord) error {
+// rejectActiveWorkflowRunsForUninstall inventories the state roots owned by the
+// affected registry records before uninstall removes runtime bytes.
+func rejectActiveWorkflowRunsForUninstall(targets []installTarget, options UninstallOptions, records []RegistryRecord) error {
+	installOptions := InstallOptions{
+		Host: options.Host, Scope: options.Scope, Project: options.Project, RegistryPath: options.RegistryPath,
+	}
 	targetPaths := map[string]bool{}
 	stateRoots := map[string]bool{}
 	for _, target := range targets {
 		targetPaths[canonicalRegistryPath(target.targetPath)] = true
-		desired := installRegistryRecord(target, options)
+		desired := installRegistryRecord(target, installOptions)
 		if desired.StateRoot != "" {
 			stateRoots[canonicalRegistryPath(desired.StateRoot)] = true
 		}
@@ -980,17 +974,17 @@ func rejectActiveWorkflowRuns(operation string, targets []installTarget, options
 	for stateRoot := range stateRoots {
 		matches, err := filepath.Glob(filepath.Join(stateRoot, "tmp", "*", "state.json"))
 		if err != nil {
-			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
+			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", stateRoot, err)
 		}
 		candidateMatches, err := filepath.Glob(filepath.Join(stateRoot, "engine", "*", "state.json"))
 		if err != nil {
-			return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, stateRoot, err)
+			return fmt.Errorf("uninstall active-run inventory failed for %s: %w", stateRoot, err)
 		}
 		matches = append(matches, candidateMatches...)
 		for _, statePath := range matches {
 			data, readErr := os.ReadFile(statePath)
 			if readErr != nil {
-				return fmt.Errorf("%s active-run inventory failed for %s: %w", operation, statePath, readErr)
+				return fmt.Errorf("uninstall active-run inventory failed for %s: %w", statePath, readErr)
 			}
 			var probe struct {
 				RunID   string `json:"runId"`
@@ -1009,7 +1003,7 @@ func rejectActiveWorkflowRuns(operation string, targets []installTarget, options
 			if probe.RunID == "" {
 				probe.RunID = probe.Content.RunID
 			}
-			return fmt.Errorf("active workflow run %q at %s fences %s", probe.RunID, statePath, operation)
+			return fmt.Errorf("active workflow run %q at %s fences uninstall", probe.RunID, statePath)
 		}
 	}
 	return nil

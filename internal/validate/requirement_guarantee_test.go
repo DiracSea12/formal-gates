@@ -255,6 +255,63 @@ func advanceGuaranteeSnapshot(t *testing.T, root, pkg string, state RunState, na
 	return state
 }
 
+func TestRequirementGuaranteeGitSquashRequiresFinalCandidateQA(t *testing.T) {
+	root, pkg, state := readyGuaranteeRoute(t, "guarantee-squash-final-candidate", false)
+	state = recordSlicing(t, root, pkg, state, "no-split")
+	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID})
+	state = recordGuaranteeDesignAndReview(t, root, pkg, state, "", []QACaseInput{{Mode: "blackbox", Description: "both confirmed outcomes", Procedure: "run the documented public command", Oracle: "both outcomes pass", AcceptanceCriteria: []string{"AC-001", "AC-009"}}})
+
+	development := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
+	writeTestFile(t, filepath.Join(root, "delivery-one.txt"), "first delivery commit\n")
+	commitAll(t, root, "first delivery commit")
+	writeTestFile(t, filepath.Join(root, "delivery-two.txt"), "second delivery commit\n")
+	commitAll(t, root, "second delivery commit")
+	state, err := AdvanceSnapshot(root, pkg, state.RunID, development, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preSquashCandidate := state.CurrentSnapshot
+	execution := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, execution, passingExecution(state.allQACases()), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RequirementGuarantee.Report.Status != "pass" {
+		t.Fatalf("pre-squash guarantee setup did not pass: %#v", state.RequirementGuarantee.Report)
+	}
+
+	if _, err := Seal(root, pkg, state.RunID, nil, false, "squashed guaranteed delivery"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
+		t.Fatalf("pre-squash QA was accepted as final-candidate evidence: %v", err)
+	}
+	checkpoint, err := LoadRunStateForShow(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.CurrentSnapshot == preSquashCandidate || checkpoint.qaExecution("").Snapshot != preSquashCandidate {
+		t.Fatalf("Seal rebound pre-squash QA evidence: current=%s execution=%#v", checkpoint.CurrentSnapshot, checkpoint.qaExecution(""))
+	}
+	if checkpoint.RequirementGuarantee.Report.Status == "pass" {
+		t.Fatalf("pre-squash QA still passed for the final candidate: %#v", checkpoint.RequirementGuarantee.Report)
+	}
+
+	checkpoint, err = RecordExecutionScope(root, pkg, checkpoint.RunID, "", "FULL", nil, "rerun every approved case on the final squashed candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution = prepareDispatch(t, root, pkg, checkpoint.RunID, "qa-execution")
+	checkpoint, err = RecordQAExecution(root, pkg, checkpoint.RunID, execution, passingExecution(checkpoint.allQACases()), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := Seal(root, pkg, checkpoint.RunID, nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.RequirementGuarantee == nil || summary.RequirementGuarantee.Report.Status != "pass" || summary.QA.Snapshot != summary.CurrentSnapshot {
+		t.Fatalf("final Seal is not covered by final-candidate QA: %#v", summary)
+	}
+}
+
 func TestRequirementConfirmationPrecheckAndProductCompletenessGate(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	writeTestFile(t, filepath.Join(root, "requirements.md"), "not a structured requirement\n")
@@ -431,7 +488,7 @@ func TestRequirementGuaranteeRouteArtifactAndRevisionBehavior(t *testing.T) {
 		}
 	})
 
-	t.Run("formal confirmation does not infer activation without the explicit flag", func(t *testing.T) {
+	t.Run("formal confirmation freezes the guarantee envelope without the compatibility flag", func(t *testing.T) {
 		root, pkg := workflowFixture(t)
 		writeTestFile(t, filepath.Join(root, "requirements.md"), guaranteeRequirementDocument(""))
 		commitAll(t, root, "structured requirement")
@@ -447,8 +504,8 @@ func TestRequirementGuaranteeRouteArtifactAndRevisionBehavior(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if state.RequirementGuarantee != nil {
-			t.Fatalf("formal confirmation inferred a guarantee activation: %#v", state.RequirementGuarantee)
+		if state.RequirementGuarantee == nil || state.RequirementGuarantee.Activation != guaranteeFrozen {
+			t.Fatalf("formal confirmation did not freeze an explicit guarantee envelope: %#v", state.RequirementGuarantee)
 		}
 	})
 

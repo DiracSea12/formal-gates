@@ -25,9 +25,9 @@ type RunState struct {
 	RequirementRevision  string                `json:"requirementRevision"`
 	RequirementConfirmed bool                  `json:"requirementConfirmed"`
 	RequirementArtifacts []RequirementArtifact `json:"requirementArtifacts"`
-	// RequirementGuarantee is present only when the existing requirement
-	// confirmation command explicitly activated the REQ/AC guarantee. Its
-	// absence is authoritative: activation is never guessed from other fields.
+	// RequirementGuarantee is frozen by initial confirmation of one structured
+	// formal requirement (or by the retained explicit compatibility flag). Its
+	// absence is authoritative and is never backfilled from other fields.
 	RequirementGuarantee *RequirementGuarantee `json:"requirementGuarantee,omitempty"`
 	BasePromptRevision   string                `json:"basePromptRevision"`
 	CatalogRevision      string                `json:"catalogRevision"`
@@ -280,8 +280,9 @@ type SkipAuthorization struct {
 }
 
 // SnapshotOverride 记录快照黑盒门的手动放行授权。黑盒 qa-review 未 PASS 时用户经
-// workflow snapshot --user-requested 显式授权带风险继续；授权延续到后续修复快照（放行
-// 后未批准黑盒用例验证状态视为 PASS），直到黑盒 review 真正 PASS 或需求作废重置才清除。
+// workflow snapshot --user-requested 显式授权带风险继续；授权只绕过并延续快照前 review
+// 门，未批准用例不进入需执行集，也不生成或冒充 PASS 记录。授权直到黑盒 review 真正 PASS
+// 或需求作废重置才清除。
 // Snapshot 字段记录授权发放时点的快照（溯源），不用于绑定失效。Origin 固定为 USER。
 type SnapshotOverride struct {
 	Origin   string `json:"origin"`

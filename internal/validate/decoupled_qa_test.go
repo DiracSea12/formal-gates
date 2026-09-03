@@ -143,8 +143,8 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 	bbCases := state.qaModeCases("blackbox")
 	wbCases := state.qaModeCases("whitebox")
 	// Wave 1：黑盒 FAIL、白盒 FAIL、质量 FAIL → 全部记录，波次完成。
-	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: bbCases[0].ID, Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}})
-	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: wbCases[0].ID, Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}})
+	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: bbCases[0].ID, Outcome: "FAIL", Procedure: "ran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior was broken", OracleResult: "the captured output differed from the approved oracle"}})
+	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: wbCases[0].ID, Outcome: "FAIL", Procedure: "ran the bound whitebox test on the current candidate", Observation: "the named test failed with captured diagnostics", OracleResult: "the captured test result differed from the approved oracle"}})
 	state = recordGateResult(t, root, pkg, state, "quality", "pm-prior-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("wave 1 count=%d", state.CompletedReviewWaves)
@@ -217,7 +217,7 @@ func TestPerModeIndependentBlockerAndSealParsing(t *testing.T) {
 	bbCases := state.qaModeCases("blackbox")
 	wbCases := state.qaModeCases("whitebox")
 	// 黑盒 FAIL、白盒 PASS、质量 PASS：波次完成但存在黑盒阻塞项。
-	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: bbCases[0].ID, Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"}})
+	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: bbCases[0].ID, Outcome: "FAIL", Procedure: "ran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior was broken", OracleResult: "the captured output differed from the approved oracle"}})
 	state = recordModeQA(t, root, pkg, state, "whitebox", passingExecution(wbCases))
 	state = recordGateResult(t, root, pkg, state, "quality", "pm-seal-quality", "PASS", "", nil)
 	if state.qaExecution("blackbox").Status != "FAIL" || state.qaExecution("whitebox").Status != "PASS" {

@@ -14,6 +14,16 @@ import (
 )
 
 type PortableCanaryOptions struct{ Root string }
+
+const (
+	canaryDeliveryContents  = "delivery\n"
+	canaryBlackboxProcedure = "git show HEAD:delivery.txt"
+	canaryBlackboxOracle    = `stdout equals "delivery"`
+	canaryWhiteboxProcedure = "git show HEAD:whitebox_delivered_test.go"
+	canaryWhiteboxMarker    = "func TestWhiteboxDirectBehavior(t *testing.T) {}"
+	canaryWhiteboxOracle    = `stdout contains "func TestWhiteboxDirectBehavior(t *testing.T) {}"`
+)
+
 type CanaryCheck struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -348,7 +358,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed", AcceptanceCriteria: []string{"AC-001"}}}, "")
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "blackbox", Description: "the delivery marker is committed in the candidate", Procedure: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, AcceptanceCriteria: []string{"AC-001"}}}, "")
 	if err != nil {
 		return err
 	}
@@ -380,7 +390,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior", AcceptanceCriteria: []string{"AC-001"}}}, "")
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "the delivered whitebox test declaration is committed in the candidate", Procedure: canaryWhiteboxProcedure, Oracle: canaryWhiteboxOracle, Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior", AcceptanceCriteria: []string{"AC-001"}}}, "")
 	if err != nil {
 		return err
 	}
@@ -406,7 +416,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(root, "delivery.txt"), []byte("delivery\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "delivery.txt"), []byte(canaryDeliveryContents), 0o600); err != nil {
 		return err
 	}
 	if err := commitCanaryGit(root, "delivery"); err != nil {
@@ -429,7 +439,11 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 		}
 		results := make([]QAResultInput, 0, len(state.qaModeCases(mode)))
 		for _, testCase := range state.qaModeCases(mode) {
-			results = append(results, QAResultInput{CaseID: testCase.ID, Outcome: "PASS", Procedure: "ran the approved " + mode + " check", Observation: "passed", OracleResult: "matched"})
+			result, err := canaryExecutionResult(root, testCase)
+			if err != nil {
+				return fmt.Errorf("execute portable canary case %s: %w", testCase.ID, err)
+			}
+			results = append(results, result)
 		}
 		state, err = RecordQAExecution(root, packageRoot, state.RunID, dispatchID, results, "")
 		if err != nil {
@@ -458,6 +472,47 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	}
 	_, err = Seal(root, packageRoot, state.RunID, nil, false, "")
 	return err
+}
+
+func canaryExecutionResult(root string, testCase QACase) (QAResultInput, error) {
+	runner := execNativeCommandRunner{}
+	result := QAResultInput{CaseID: testCase.ID, Outcome: "PASS"}
+	switch testCase.Mode {
+	case "blackbox":
+		if testCase.Procedure != canaryBlackboxProcedure || testCase.Oracle != canaryBlackboxOracle {
+			return QAResultInput{}, fmt.Errorf("blackbox case procedure/oracle does not match the executable canary check")
+		}
+		output, err := runner.Run(root, "git", "show", "HEAD:delivery.txt")
+		if err != nil {
+			return QAResultInput{}, err
+		}
+		expected := strings.TrimSpace(canaryDeliveryContents)
+		matches := output == expected
+		if !matches {
+			return QAResultInput{}, fmt.Errorf("delivery.txt content mismatch: expected %q, got %q", expected, output)
+		}
+		result.Procedure = canaryBlackboxProcedure
+		result.Observation = fmt.Sprintf("git show HEAD:delivery.txt stdout=%q", output)
+		result.OracleResult = fmt.Sprintf("expected stdout=%q; actual stdout=%q; equal=%t", expected, output, matches)
+	case "whitebox":
+		if testCase.Procedure != canaryWhiteboxProcedure || testCase.Oracle != canaryWhiteboxOracle {
+			return QAResultInput{}, fmt.Errorf("whitebox case procedure/oracle does not match the executable canary check")
+		}
+		output, err := runner.Run(root, "git", "show", "HEAD:whitebox_delivered_test.go")
+		if err != nil {
+			return QAResultInput{}, err
+		}
+		matches := strings.Contains(output, canaryWhiteboxMarker)
+		if !matches {
+			return QAResultInput{}, fmt.Errorf("whitebox test declaration missing from candidate: expected stdout to contain %q, got %q", canaryWhiteboxMarker, output)
+		}
+		result.Procedure = canaryWhiteboxProcedure
+		result.Observation = "git show HEAD:whitebox_delivered_test.go stdout:\n" + output
+		result.OracleResult = fmt.Sprintf("expected stdout to contain %q; contains=%t", canaryWhiteboxMarker, matches)
+	default:
+		return QAResultInput{}, fmt.Errorf("unsupported portable canary QA mode %q", testCase.Mode)
+	}
+	return result, nil
 }
 
 func initializeCanaryGit(root string) error {

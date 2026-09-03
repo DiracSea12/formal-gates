@@ -275,10 +275,11 @@ func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runI
 // Seal aggregates the run. For git runs whose base→current range holds more than
 // one commit, the range is squashed into a single commit (git reset --soft base +
 // a fresh commit with --squash-message) as the last VCS operation, preserving the
-// final tree. The summary's current snapshot records the squashed commit, the base
-// stays unchanged, gate-review compared records keep history, and the squashed
-// message is authored by the main agent (host-provided). Single-commit or empty
-// ranges are not rewritten; SVN/P4 are never squashed.
+// final tree. The squashed commit becomes a new final candidate: existing QA and
+// gate evidence keeps its original binding, the first call persists that candidate
+// and requests revalidation, and a later call completes Seal after current-candidate
+// evidence exists. Single-commit or empty ranges are not rewritten; SVN/P4 are
+// never squashed.
 func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string, opts ...SealOptions) (RunSummary, error) {
 	options := SealOptions{}
 	if len(opts) > 0 {
@@ -402,9 +403,23 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			if err != nil {
 				return RunSummary{}, err
 			}
-			// 最终树不变，所有审查结果对最终树仍成立：快照引用重绑到压缩后的提交，
-			// 门审查 compared 记录保持历史（不重写）。
-			rebindCurrentSnapshot(&state, newSnapshot)
+			// The squashed commit is the final candidate, not the candidate named by
+			// the existing QA/gate evidence. Keep those bindings unchanged, persist
+			// the new current candidate, and require fresh verification before a
+			// subsequent Seal can complete.
+			state.CurrentSnapshot = newSnapshot
+			state.PreRepairSnapshot = ""
+			staleAllDispatches(&state)
+			for id, authorization := range state.SkipAuthorizations {
+				if isSealScopedAuthorization(authorization) {
+					delete(state.SkipAuthorizations, id)
+				}
+			}
+			refreshRequirementGuarantee(root, &state)
+			if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
+				return RunSummary{}, err
+			}
+			return RunSummary{}, fmt.Errorf("git Seal created final squashed candidate %s; rerun every selected QA mode and gate on this candidate, then retry Seal", newSnapshot)
 		}
 	}
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
@@ -428,12 +443,10 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 		}
 	}
 	// Persist the post-squash snapshot and merged cost projection while the run
-	// is still ACTIVE, then make the terminal state durable before its summary.
-	// A summary failure can be resumed without reopening normal mutations.
-	if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
-		return RunSummary{}, err
-	}
-	state.Status = "SEALED"
+	// is still ACTIVE. All fallible Seal artifacts are written before terminal
+	// cleanup so a materialization/finalization failure never leaves a durable
+	// SEALED run state. Repeating Seal is safe because these derived writes are
+	// atomic and deterministic.
 	if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
 		return RunSummary{}, err
 	}
@@ -441,13 +454,14 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	// .gates/results/<run-id>.blackbox-cases.md，与 seal ledger 同目录、同交付行为
 	// （三 VCS 一致）。分片实例封板不产独立 ledger 文件、不物化。物化读 run-state
 	// （单一来源），不依赖隔离工作区残留；CLI 完成、不经 agent 手动合回。
-	// 放在 SEALED 持久化之后、completeTerminalRun 收尾之前；物化失败时 SEALED
-	// 状态已持久化，重跑 Seal 的幂等守卫会直接 resume completeTerminalRun，因此
-	// 物化失败必须在此返回而非静默忽略。
 	if !sliceInstance {
 		if err := materializeBlackboxCases(root, state); err != nil {
 			return RunSummary{}, err
 		}
+	}
+	state.Status = "SEALED"
+	if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
+		return RunSummary{}, err
 	}
 	return completeTerminalRun(root, state)
 }
@@ -511,7 +525,8 @@ func materializeBlackboxCases(root string, state RunState) error {
 	// definitions before terminal cleanup removes the sidecars; preserve the
 	// master's existing local blackbox/merge materialization above.
 	if state.RetainedOverall && state.Slicing != nil && state.Slicing.Decision == "split" && state.RequirementGuarantee != nil {
-		sliceCases, err := approvedSliceBlackboxCases(root, state)
+		allowMissing := state.RequirementGuarantee.Activation == guaranteeWaived || state.RequirementGuarantee.Activation == guaranteeNotGuaranteed || state.RequirementGuarantee.Report.Status == guaranteeNotGuaranteed
+		sliceCases, err := approvedSliceBlackboxCases(root, state, allowMissing)
 		if err != nil {
 			return err
 		}
@@ -577,10 +592,9 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 	return completeTerminalRun(root, state)
 }
 
-// completeTerminalRun persists the retained summary after terminal state is
-// durable, then removes the temporary run. If summary persistence fails, the
-// terminal state and any cost sidecars remain; repeating the same Seal or Abort
-// call resumes here without reopening the workflow to other mutations.
+// completeTerminalRun resumes summary persistence and cleanup from a durable
+// terminal checkpoint. Seal reaches this point only after all materialization
+// succeeds; a summary or cleanup interruption leaves SEALED state for retry.
 func completeTerminalRun(root string, state RunState) (RunSummary, error) {
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if !sliceInstance {

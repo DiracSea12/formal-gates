@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/definition"
@@ -97,12 +96,12 @@ func bc06InstallCandidateActiveState(t *testing.T, project, runID string) string
 	return path
 }
 
-// TestPhase3BC06InstallFencesActiveLegacyAndCandidateRuns verifies that an
-// install which would replace the registered runtime is rejected while either
-// runtime has an active run. The candidate fixture is produced through the
-// façade so its nested content.phase is the real engine state shape; the
-// legacy fixture uses the documented ACTIVE RunState shape.
-func TestPhase3BC06InstallFencesActiveLegacyAndCandidateRuns(t *testing.T) {
+// TestPhase3BC06InstallAllowsActiveLegacyAndCandidateRuns verifies that an
+// install can replace the registered runtime while either state shape has an
+// active run, without rewriting that run. The candidate fixture is produced
+// through the façade so its nested content.phase is the real engine state
+// shape; the legacy fixture uses the documented ACTIVE RunState shape.
+func TestPhase3BC06InstallAllowsActiveLegacyAndCandidateRuns(t *testing.T) {
 	cases := []struct {
 		name       string
 		runID      string
@@ -122,29 +121,26 @@ func TestPhase3BC06InstallFencesActiveLegacyAndCandidateRuns(t *testing.T) {
 			source := bc06InstallSource(t)
 			registry := filepath.Join(t.TempDir(), "registry.json")
 			launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
-			_, err = Install(InstallOptions{
+			report, err := Install(InstallOptions{
 				Source: source, Host: "claude", Scope: "project", Project: project,
 				RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
 			})
-			if err == nil {
-				t.Error("install unexpectedly changed registry while an active run existed")
-			} else {
-				for _, want := range []string{"active workflow run", testCase.runID, "fences install"} {
-					if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(want)) {
-						t.Errorf("install error=%q, want substring %q", err, want)
-					}
-				}
+			if err != nil {
+				t.Fatalf("install with active run %s failed: %v", testCase.runID, err)
+			}
+			if len(report.Targets) != 1 || report.Targets[0].Smoke != "PASS" {
+				t.Fatalf("install report=%#v", report)
 			}
 			afterState, readErr := os.ReadFile(statePath)
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
 			if string(afterState) != string(beforeState) {
-				t.Fatal("active run state changed during rejected install")
+				t.Fatal("install changed the active run state")
 			}
 			for _, path := range []string{registry, filepath.Join(project, ".claude", "skills", "formal-gates"), launcher} {
-				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-					t.Errorf("rejected install left mutation at %s: %v", path, statErr)
+				if _, statErr := os.Stat(path); statErr != nil {
+					t.Errorf("successful install did not create %s: %v", path, statErr)
 				}
 			}
 		})

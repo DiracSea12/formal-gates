@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestInstallFencesActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testing.T) {
+func TestInstallAllowsActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testing.T) {
 	source := copyPackageFixture(t)
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
@@ -19,13 +19,27 @@ func TestInstallFencesActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testi
 	if err := os.WriteFile(activeState, []byte(`{"runId":"active-run","status":"ACTIVE"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	beforeState, err := os.ReadFile(activeState)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := Install(InstallOptions{
+	report, err := Install(InstallOptions{
 		Source: source, Host: "claude", Scope: "project", Project: project,
 		RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), `active workflow run "active-run"`) || !strings.Contains(err.Error(), "fences install") {
-		t.Fatalf("install did not fence active run: %v", err)
+	if err != nil {
+		t.Fatalf("install with an active run failed: %v", err)
+	}
+	if len(report.Targets) != 1 || report.Targets[0].Smoke != "PASS" {
+		t.Fatalf("install report=%#v", report)
+	}
+	afterState, err := os.ReadFile(activeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterState) != string(beforeState) {
+		t.Fatal("install changed the active run state")
 	}
 
 	bootstrapProject := t.TempDir()
@@ -51,6 +65,82 @@ func TestInstallFencesActiveWorkflowRunAndBootstrapKeepsLegacySemantics(t *testi
 		Force: true, SkipHooks: true,
 	}); err != nil {
 		t.Fatalf("bootstrap was unexpectedly fenced by an active run: %v", err)
+	}
+}
+
+func TestInstallIgnoresActiveRunFromRelatedRegistryRecord(t *testing.T) {
+	source := copyPackageFixture(t)
+	hostHome := t.TempDir()
+	t.Setenv("HOME", hostHome)
+	registry := filepath.Join(t.TempDir(), "registry.json")
+	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
+	options := InstallOptions{
+		Source: source, Host: "claude", Scope: "global",
+		RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
+	}
+	if _, err := Install(options); err != nil {
+		t.Fatalf("initial install: %v", err)
+	}
+	document, err := LoadRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Records) != 1 {
+		t.Fatalf("registry records=%d want=1", len(document.Records))
+	}
+
+	project := t.TempDir()
+	stateRoot := filepath.Join(project, ".gates")
+	related := document.Records[0]
+	related.ID += "-project-related"
+	related.ProjectRoot = project
+	related.StateRoot = stateRoot
+	related.ResourceRoot = filepath.Join(project, ".formal-gates-resources")
+	related.CanonicalPaths = make(map[string]string, len(document.Records[0].CanonicalPaths))
+	for key, value := range document.Records[0].CanonicalPaths {
+		related.CanonicalPaths[key] = value
+	}
+	related.CanonicalPaths["projectRoot"] = canonicalRegistryPath(related.ProjectRoot)
+	related.CanonicalPaths["stateRoot"] = canonicalRegistryPath(related.StateRoot)
+	related.CanonicalPaths["resourceRoot"] = canonicalRegistryPath(related.ResourceRoot)
+	registryUnlock, err := acquireRegistryLock(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := loadRegistryForCommit(registry)
+	if err == nil {
+		_, err = commitRegistryRecordsUnlocked(registry, current, []RegistryRecord{related})
+	}
+	registryUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	activeState := filepath.Join(stateRoot, "tmp", "related-active", "state.json")
+	if err := os.MkdirAll(filepath.Dir(activeState), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(activeState, []byte(`{"runId":"related-active","status":"ACTIVE"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beforeState, err := os.ReadFile(activeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Install(options)
+	if err != nil {
+		t.Fatalf("reinstall with a related active run failed: %v", err)
+	}
+	if len(report.Targets) != 1 || report.Targets[0].Smoke != "PASS" {
+		t.Fatalf("reinstall report=%#v", report)
+	}
+	afterState, err := os.ReadFile(activeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterState) != string(beforeState) {
+		t.Fatal("reinstall changed the related active run state")
 	}
 }
 

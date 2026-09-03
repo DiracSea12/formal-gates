@@ -1046,8 +1046,10 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		if confirmed && !isLightweight(*state) && state.Actions["requirements-clarification"].Status != "PASS" {
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
 		}
+		initialConfirmation := confirmed && !state.RequirementConfirmed
 		state.RequirementConfirmed = confirmed
-		if options.ActivateGuarantee {
+		freezeGuarantee := options.ActivateGuarantee || (initialConfirmation && !isLightweight(*state) && len(artifacts) == 1)
+		if freezeGuarantee {
 			if state.RequirementGuarantee == nil {
 				for _, action := range preDevelopmentReviewActions {
 					if state.PreDevelopmentReviewSeries[action].Completed != 0 {
@@ -2084,8 +2086,8 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		}
 		// 快照黑盒门（等两边都完成）：黑盒 qa-review PASS 且 开发完成才可快照。黑盒
 		// qa-review 未 PASS 且此前没有用户放行时，只有用户显式授权可手动放行并记录授权
-		// 来源；已放行（SnapshotOverride 非空）后未批准的黑盒用例验证状态视为 PASS，
-		// 后续修复快照不再重复被挡。黑盒 review 真正 PASS 时清除放行授权。
+		// 来源；已放行（SnapshotOverride 非空）后只延续绕过快照前 review 门，未批准用例
+		// 不进入需执行集、也不生成或冒充 PASS 记录。黑盒 review 真正 PASS 时清除放行授权。
 		blackboxSelected := isSelected(*state, blackboxQAID)
 		if blackboxSelected && !blackboxReviewPassed(*state) && state.SnapshotOverride == nil {
 			if !userRequested {

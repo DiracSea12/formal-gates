@@ -181,8 +181,8 @@ func blackboxReviewPassed(state RunState) bool {
 // snapshotBlackboxReleased reports whether the user has explicitly authorized a
 // snapshot while the blackbox review gate is unmet. The authorization persists
 // for the rest of the run (until a requirement invalidation clears it): once the
-// user releases the gate, the unapproved blackbox cases are treated as PASS, so
-// subsequent repair snapshots are not blocked again by the same unapproved cases.
+// user releases the gate, subsequent repair snapshots are not blocked again by
+// the same unapproved cases. The release is not an execution PASS for those cases.
 func snapshotBlackboxReleased(state RunState) bool {
 	return state.SnapshotOverride != nil
 }
@@ -234,8 +234,8 @@ func pendingQACases(cases []QACase, mode string) []QACase {
 
 // qaExecutionRequiredCases is the case set QA Execution must cover. Normally the
 // complete approved case set; after a user-authorized snapshot release of the
-// blackbox gate, only the approved cases are executed and the unapproved blackbox
-// cases are treated as PASS (the origin is recorded by the snapshot override).
+// blackbox gate, only the approved cases are executed and unapproved blackbox
+// cases remain absent from execution results (the release lives in SnapshotOverride).
 // When the dispatch carries a mode, the required set is filtered to that mode so
 // blackbox and whitebox execution each dispatch independently and run in parallel
 // (执行按 mode 分流). An empty mode keeps the merged set for
@@ -955,7 +955,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			return nil
 		}
 		// 需执行集：正常流程为完整用例集；快照黑盒门经用户授权放行后只覆盖已批准用例，
-		// 未批准的（黑盒）用例不计入需执行集、验证状态视为 PASS（授权来源由快照放行记录）。
+		// 未批准的（黑盒）用例不进入需执行集，也不生成或修改执行结果。
 		// 按派发 mode 过滤：黑盒/白盒各自独立派发、并行执行时，每次
 		// 记录只覆盖该派发对应 mode 的需执行集。
 		required := qaExecutionRequiredCases(*state, dispatch.Mode)
@@ -990,6 +990,9 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 					return fmt.Errorf("QA result %s %s is required", item.CaseID, name)
 				}
 			}
+			if err := validateQAExecutionEvidence(item); err != nil {
+				return err
+			}
 			byID[item.CaseID] = item
 		}
 		// 执行结果按 mode 分开存储——每个 mode 的结果只含本 mode 的用例记录，黑盒/
@@ -1002,16 +1005,6 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 				return fmt.Errorf("QA result is missing for %s", testCase.ID)
 			}
 			recorded = append(recorded, QAResultRecord{CaseID: item.CaseID, Mode: testCase.Mode, Outcome: item.Outcome, Procedure: strings.TrimSpace(item.Procedure), Observation: strings.TrimSpace(item.Observation), OracleResult: strings.TrimSpace(item.OracleResult), Origin: "executed"})
-		}
-		// 快照放行后未获批准的黑盒用例：经用户授权跳过、验证状态视为 PASS（记录授权来源）。
-		// 仅黑盒或合并（空 mode）派发补记这些跳过；白盒派发不补记黑盒用例。
-		if snapshotBlackboxReleased(*state) && (dispatch.Mode == "" || dispatch.Mode == "blackbox") {
-			for _, testCase := range state.qaModeCases("blackbox") {
-				if testCase.ReviewStatus == "PASS" {
-					continue
-				}
-				recorded = append(recorded, QAResultRecord{CaseID: testCase.ID, Mode: testCase.Mode, Outcome: "PASS", Procedure: "skipped", Observation: "authorized skip (user snapshot release)", OracleResult: "authorized PASS", Origin: "executed"})
-			}
 		}
 		// AFFECTED 重跑下未覆盖的已批准用例继承上一轮 PASS——追加 inherited 记录
 		// （恒 PASS、不参与 FAIL 聚合），观察记录继承来源快照，供审计与聚合区分。
@@ -1059,6 +1052,32 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		completeReviewWaveIfReady(state)
 		return nil
 	})
+}
+
+func validateQAExecutionEvidence(item QAResultInput) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "procedure", value: item.Procedure},
+		{name: "observation", value: item.Observation},
+		{name: "oracle result", value: item.OracleResult},
+	}
+	protocolSentinels := map[string]bool{
+		"p": true, "o": true, "m": true,
+		"procedure": true, "observation": true, "oracle": true,
+		"run": true, "executed": true, "ok": true, "success": true,
+		"pass": true, "passed": true, "matched": true,
+		"skipped": true, "authorized pass": true, "observed success": true,
+		"compared": true, "executed blackbox": true, "executed whitebox": true,
+	}
+	for _, field := range fields {
+		normalized := strings.ToLower(strings.Join(strings.Fields(field.value), " "))
+		if protocolSentinels[normalized] {
+			return fmt.Errorf("QA result %s %s is a reserved protocol sentinel, not per-case execution evidence", item.CaseID, field.name)
+		}
+	}
+	return nil
 }
 
 func qaExecutionRecordMode(state RunState, requested string) string {
@@ -1331,6 +1350,9 @@ func qaModeRecordedAtCurrent(state RunState, mode string) bool {
 	key, result := qaModeResultKey(state, mode)
 	if result.Snapshot != state.CurrentSnapshot || result.Status == "" || result.Status == "PENDING" {
 		return false
+	}
+	if mode == "blackbox" && snapshotBlackboxReleased(state) && len(qaExecutionRequiredCases(state, mode)) == 0 {
+		return true
 	}
 	if mode != "" && key == "" {
 		return qaResultHasMode(result, mode)

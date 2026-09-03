@@ -34,8 +34,10 @@ git diff --binary <base-commit> <current-commit> --
 
 Seal 时若基线→当前含 >1 条提交，git run 会把该范围压缩为单条提交（`git reset --soft
 <base>` + 以 `--squash-message` 重新提交，保留最终树），作为 seal 的最后一步 VCS 操
-作；压缩前工作树必须干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩后的中间提交成
-为 dangling（接受此审计性影响），durable 审计证据为最终树与压缩前一致 + 摘要记录。
+作；压缩前工作树必须干净。压缩提交是新的最终 candidate，CLI 保留旧 QA/门结果的原始
+快照绑定并停止本次 Seal；全部选中 QA mode 与门在最终 candidate 上重验后，再次 Seal 才
+完成。单条提交或空范围不操作；SVN/P4 不压缩。压缩后的中间提交成为 dangling（接受此审
+计性影响），durable 审计证据绑定最终压缩提交及其重验结果。
 
 ## SVN
 

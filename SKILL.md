@@ -119,7 +119,10 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
    执行结果（重跑）时，host 在进入执行前询问用户"全量重跑 vs 只跑受影响"并给推荐，scope
    决策命令形式（`qa-execution-scope` 与 FULL/AFFECTED 记录）由 CLI 强制、唯一持有在
    `references/formal-flow.md`「开发后审查」；首次执行不要求、默认全量。黑盒/白盒各自独
-   立。执行本步前必读 `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并验证
+   立。CLI 只按归一化后的完整字段精确拒绝协议哨兵（如 `skipped`、`authorized PASS` 和
+   约定的简短占位值），不按子串、句式或自然语言语义判断证据真假；证据真实性由执行代理
+   提示词与主代理核验。未执行或环境不可用记 `RUNTIME_ERROR`。执行本步前必读
+   `references/formal-flow.md`「开发后审查」；分片 >= 2 时的合并验证
    细节也见该节。
 8. **修复。** 出现 QA FAIL 或 P0/P1 门发现项时，整个轮次退回修复，此时同轮的 P2/P3 一并
    处理。P2/P3 只豁免重审、不豁免修复：仅含 P2/P3 时同样进入修复——开发后 QA review 与
@@ -141,11 +144,15 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
    （范围外 P3、未吸收建议）一次性列出展示给用户，由用户决定是否处理；展示不阻塞、
    不逐条问询。Git run 在基线→当前含 >1 条提交时，
    seal 自动把该范围压缩为单条提交（保留最终树，作为 seal 最后一步 VCS 操作，压缩前工
-   作树必须干净），压缩消息经 `--squash-message` 传入；单条/空范围不操作、SVN/P4 不压
-   缩。黑盒已批准用例在 seal 时**落盘合并回主干**：`qa-design` 期间只镜像在隔离工作区
+   作树必须干净），压缩消息经 `--squash-message` 传入；该提交成为新的最终 candidate，
+   旧 QA/门证据保持原绑定，须在最终 candidate 上重验后再次 Seal；单条/空范围不操作、
+   SVN/P4 不压缩。黑盒已批准用例在 seal 时**落盘合并回主干**：`qa-design` 期间只镜像在隔离工作区
    （`.gates/cases/blackbox.md`），封板时写出到主干
    `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一）作为交付物；分片实例不
-   落盘、成本投影并入主干最终封板（机制见 `references/formal-flow.md`「成本计量」）。执
+   落盘、成本投影并入主干最终封板；物化成功后先持久化 `SEALED`，摘要或清理中断从该
+   终态继续。显式放弃保证的 retained master 允许 slice guarantee sidecar 缺失，但仍读取
+   并保留已经存在的有效 sidecar（机制见
+   `references/formal-flow.md`「成本计量」）。执
    行本步前必读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 
 - `workflow show`：查看当前流程状态。
@@ -242,7 +249,7 @@ QA 审查者输入 = 已确认需求 + CLI 组装的完整候选用例集，不�
 结果一旦记录为 PASS 或 FAIL，对该快照即为最终结论，只有 PENDING 和 RUNTIME_ERROR
 可重跑。审查返回的结果只是候选输入。主代理记录/展示 PASS/FAIL 前必须显式核查：需求
 是否匹配、是否在正常使用边界内、结果契约是否满足；对 FAIL 或阻塞项再核查流程状态、
-范围、严重度、因果关系和引用证据，并验证端到端复现。任何一项不通过即丢弃该发现项—
+范围、严重度（定级是否合理，是否需要复审）、因果关系和引用证据，并验证端到端复现。任何一项不通过即丢弃该发现项—
 —不记录、不展示为阻塞、不改变需求或实现。这是编排层面的核查，不是又一道门或另一轮
 审查。
 
@@ -305,5 +312,17 @@ CLI 用启动时选定的 Git/SVN/P4 原生命令解析和验证快照标识；h
 ## 成本计量
 
 每次独立派发的 token 用量按其 host 转写文件精确计量，写入 run 状态的单一 `cost` 投影；
-成本数据仅展示、不影响任何判定，`workflow seal`/`show` 的输出携带该投影（`cost` 字段）。
+在能确定“启动基线→终态快照”区间时补记启动该 run 的主代理用量，主代理
+记录不伪装成 dispatch，也不参与实时派发止损。缺少可核对来源时标为 `unavailable`，不猜
+数字。该投影不改写已记录的 PASS/FAIL。阶段 4 的 engine 接入再由同一投影驱动后续派发止损，
+并在 `submit → source resolve/backfill → usage → guard → refill` 顺序下阻止超额调用；source
+尚未就绪进入 Wait，source 明确不可用时仍受派发次数上限约束；不另建账本。
+派发额度只由 engine 根据 canonical expected `TaskKey`、已确认 route/topology 和有限 retry
+policy 计算；外部派发缺显式策略时默认首次执行加一次自动重试。主代理、host、用户和 AI
+均不能提交底层数字；计算 basis/账目重算不一致时零派发并报告 `BLOCKED_BUG`。超限后的
+继续只解锁一个按既有 admission capacity 裁剪的 Ready batch，重试只增加当前逻辑动作的
+一个 retry slot。TaskKey 只能来自 closed-world definition、已确认计划和当前 workflow policy
+预授权后由 Controller 机械派生的 obligation/repair slot；其他按现有流程要求用户确认的扩张
+必须先绑定对应 revision/typed Ask。代理结果、receipt 或 resume 不能直接新增额度。
+`workflow seal`/`show` 的输出携带该投影（`cost` 字段）。
 计量机制全文见 `references/formal-flow.md`「成本计量」。

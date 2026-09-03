@@ -242,4 +242,3 @@ jq -e '.code=="EXECUTION_NOT_PASS" and (.message|contains("AUTHORIZED_SKIP")|not
 jq -e '.code=="EXECUTION_NOT_PASS" and (.message|contains("AUTHORIZED_SKIP"))' "$ROOT/evidence/affected-skip.json" >/dev/null
 oracle: validate, project-whitelist, FULL baseline and legal AFFECTED baseline exit 0 with valid=true; FULL and AFFECTED AUTHORIZED_SKIP mutations exit EXECUTION_NOT_PASS, and only the AFFECTED diagnostic contains AUTHORIZED_SKIP; neither returns valid=true.
 review status: PASS
-

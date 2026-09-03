@@ -29,7 +29,8 @@ func fixtureContract() (CoverageContract, []ReviewResult) {
 		Cases:   []AcceptanceCase{{CaseID: "C-3", Mode: CaseWhitebox, TestRef: "internal/engine/coverage/contract_test.go::TestContractDigestOrder", Oracle: "equal digest"}},
 		Edges:   []CoverageEdge{{SourceID: "REQ-1", PointID: "P-3", CaseID: "C-3"}},
 	}
-	c := CoverageContract{RequiredSources: required, SelectedKinds: []ReviewKind{ReviewBlackbox, ReviewWhitebox}, Manifests: []AcceptanceManifest{blackbox, whitebox}, AlternativeVerifications: []AlternativeVerification{{SourceID: "SOL-1", Reason: "no applicable QA point", Method: "go test", Status: StatusPass, Evidence: "evidence digest"}}}
+	candidate := ValidationCandidate{Identity: "candidate-1"}
+	c := CoverageContract{RequiredSources: required, SelectedKinds: []ReviewKind{ReviewBlackbox, ReviewWhitebox}, Manifests: []AcceptanceManifest{blackbox, whitebox}, AlternativeVerifications: []AlternativeVerification{{SourceID: "SOL-1", Reason: "no applicable QA point", Method: "go test", Status: StatusPass, Evidence: "evidence digest"}}, Candidate: &candidate}
 	reviews := []ReviewResult{
 		{Binding: blackboxBinding, Scope: ScopeFull, SourceDecisions: []ReviewDecision{{ID: "REQ-1", Status: StatusPass}}, PointDecisions: []ReviewDecision{{ID: "P-1", Status: StatusPass}, {ID: "P-2", Status: StatusPass}}, CaseDecisions: []ReviewDecision{{ID: "C-1", Status: StatusPass}, {ID: "C-2", Status: StatusPass}}, SetStatus: StatusPass},
 		{Binding: whiteboxBinding, Scope: ScopeFull, SourceDecisions: []ReviewDecision{{ID: "REQ-1", Status: StatusPass}}, PointDecisions: []ReviewDecision{{ID: "P-3", Status: StatusPass}}, CaseDecisions: []ReviewDecision{{ID: "C-3", Status: StatusPass}}, SetStatus: StatusPass},
@@ -117,11 +118,19 @@ func TestContractExecutionFullAndAffected(t *testing.T) {
 	for _, entry := range w.Entries {
 		full.Records = append(full.Records, ExecutionRecord{ReviewKind: entry.ReviewKind, SourceID: entry.SourceID, PointID: entry.PointID, CaseID: entry.CaseID, Result: ExecutedPass, Provenance: ProvenanceExecuted})
 	}
-	if err := c.ValidateExecution(w, full); err != nil {
-		t.Fatalf("full execution should validate: %v", err)
+	withoutCandidate := c
+	withoutCandidate.Candidate = nil
+	var validationErr *ValidationError
+	if err := withoutCandidate.ValidateExecution(w, full); !errors.As(err, &validationErr) || validationErr.Code != CodeCandidateMismatch || validationErr.Path != "contract.candidate" {
+		t.Fatalf("execution without an independent current candidate = %v", err)
 	}
-	candidate := ValidationCandidate{Identity: "candidate-1"}
-	c.Candidate = &candidate
+	mismatchedCandidate := c
+	otherCandidate := ValidationCandidate{Identity: "candidate-other"}
+	mismatchedCandidate.Candidate = &otherCandidate
+	validationErr = nil
+	if err := mismatchedCandidate.ValidateExecution(w, full); !errors.As(err, &validationErr) || validationErr.Code != CodeCandidateMismatch || validationErr.Path != "execution.binding.candidate" {
+		t.Fatalf("execution with a mismatched current candidate = %v", err)
+	}
 	if err := c.ValidateExecution(w, full); err != nil {
 		t.Fatalf("bound full execution should validate: %v", err)
 	}
@@ -173,7 +182,7 @@ func TestContractExecutionRequiresPassForEveryMappedCase(t *testing.T) {
 			ManifestDigest:        manifestDigest,
 			MapDigest:             mapDigest,
 			WhitelistDigest:       whitelistDigest,
-			Candidate:             ValidationCandidate{Identity: "candidate-current"},
+			Candidate:             ValidationCandidate{Identity: "candidate-1"},
 			Scope:                 ScopeAffected,
 			ExpectedCaseIDs:       []string{"C-1", "C-2", "C-3"},
 			ActualCaseIDs:         []string{"C-1", "C-2", "C-3"},
@@ -232,7 +241,7 @@ func TestContractAffectedAuthorizedSkipDiagnosticNamesStatus(t *testing.T) {
 			ManifestDigest:        manifestDigest,
 			MapDigest:             mapDigest,
 			WhitelistDigest:       whitelistDigest,
-			Candidate:             ValidationCandidate{Identity: "candidate-current"},
+			Candidate:             ValidationCandidate{Identity: "candidate-1"},
 			Scope:                 ScopeAffected,
 			ExpectedCaseIDs:       []string{"C-1", "C-2", "C-3"},
 			ActualCaseIDs:         []string{"C-1", "C-2", "C-3"},

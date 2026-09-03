@@ -389,3 +389,74 @@
 - 关联 receipt：`.gates/results/phase-2-post-integration.json`，其中同时绑定阶段 2 两个封板
   candidate snapshot 与该集成 identity，并列出验证命令及结果。阶段 3 从该实现基线开始；本
   文件本次修订只补录事实，不改变阶段 2 实现。
+
+## 阶段 3：最小纵向 engine 闭环（封板基线记录）
+
+### 1. 阶段编号、run ID、sealed commit 与主线集成 commit
+
+- 阶段编号：3（增量 Seal 阶段，对应“最小纵向 engine 闭环”）。
+- 首次 run：`phase-3-engine-vertical-loop`，base snapshot
+  `1cbdf4bee4d1079f2464612ae61ce54214d4753b`，封板候选快照
+  `f54f9e34ca108b8459cd85befec86e115856d202`。
+- 修复重跑 run：`phase-3-engine-vertical-loop-rerun-001`，同一 base snapshot，最终封板候选
+  快照 `96a774f346184352259296e142c04cb5bd64a88d`；该重跑结果作为阶段 3 的最终候选基线。
+- 两个 run 的结果文件均记录 `status=SEALED`；当前主线 `HEAD` 为
+  `7c07cf254b9000575b5455120dc8ee84abceebc5`（`chore: consolidate refactor history`）。
+  当前 `.gates/results/` 未发现单独的阶段 3 promotion/post-integration receipt，因此不把
+  `HEAD` 另行表述为已产生阶段 3 集成 receipt。
+
+### 2. 包摘要、installed-target digest、state schema version、workflow definition version、definition digest
+
+- 阶段 3 engine envelope 按方案绑定 `writer`、`stateSchemaVersion`、
+  `workflowDefinitionVersion`、`definitionSource`、`definitionDigest`、`packageDigest` 和
+  `installedTargetIdentity`；写入前执行精确版本与身份校验。
+- 当前实现的 `stateSchemaVersion` 为 `1`，`workflowDefinitionVersion` 为 `2`；候选启动所需的
+  owning-runtime `packageDigest` 与 `installedTargetIdentity` 来自 launcher/admission，不能由用户
+  参数覆盖。
+- 本阶段结果未形成可独立引用的持久 installed-target/package digest receipt；不在此补写具体
+  owning-runtime 摘要。
+
+### 3. 固定稳定插件摘要和候选安装摘要
+
+- 阶段 3 继续由固定 stable driver 驱动正式 run；其登记 source identity 沿用阶段计划中的
+  `be6a787e50856c26689a77c7c3f4fa69c6a675fa`。
+- 最终候选以重跑 Seal 快照 `96a774f346184352259296e142c04cb5bd64a88d` 为准；候选验证使用隔离的
+  test project、host config、state/resource namespace。
+- 候选安装过程的临时 receipt 不作为持久阶段摘要；不能把临时安装路径或测试 digest 扩张成
+  已发布的全局安装 identity。
+
+### 4. 本阶段公开能力矩阵与唯一 writer
+
+- 阶段 3 交付 engine façade 的 `start`、`drive`、`submit`、`show`、`status`、`next`、
+  `diagnose` 路由；candidate 只公开 lightweight 的可用端到端路径，regular、split 和多 VCS
+  仍未宣称迁移完成。
+- engine run 的写入只进入隔离 candidate namespace；`submit` 是 start 后唯一外部事件写入口，
+  legacy 写入口对 engine run 明确拒绝且零写入。stable legacy runtime 的既有语义保持不变。
+- 阶段 3 技术审已登记为单一 Batch `phase-3-engine-vertical-loop`；其 Subtask 依赖、接口和
+  回滚边界不拆成多个 Batch。
+
+### 5. 正常入口 smoke、新增能力 E2E、QA/gates 与 canary 证据
+
+- 最终重跑结果 `.gates/results/phase-3-engine-vertical-loop-rerun-001.json` 记录 QA 共 26
+  个 case：blackbox 15/15 PASS、whitebox 11/11 PASS。
+- 选定的 `complexity-gate` 与 `implementation-quality-gate` 均在最终候选快照上记录 PASS；
+  结果文件中的 `merge-gate` 为未选定的 `PENDING` 条目，不将其表述为本阶段已执行的门。
+- 结果记录的正常路径覆盖 candidate lightweight start/drive/read/replay、intake receipt 绑定、
+  版本/身份/旧入口负向、candidate/legacy 隔离，以及终结清理对账；实现质量结果同时记录
+  `go build ./...`、`go vet ./...` 和 `go test ./...` 通过。
+- 本节不把阶段 4 regular、真实完整宿主 canary 或最终全局切换写成阶段 3 证据。
+
+### 6. 资源 cleanup receipt
+
+- 最终重跑 QA 观察到 terminal cleanup receipt 为 reconciled、`residue=false`，事务 intent 清理
+  完成，terminal replay 保持只读。
+- 当前阶段结果未形成一份独立于 engine terminal cleanup 的全局资源清单/cleanup receipt；本记录
+  只登记上述可查证的 candidate cleanup 事实，不扩张为所有宿主资源均已验证无残留。
+
+### 7. 下一阶段 worktree 的精确 post-integration canonical base 与关联 receipt
+
+- 本次记录写入前的主线 `HEAD` 为 `7c07cf254b9000575b5455120dc8ee84abceebc5`；本记录尚未
+  提交。下一阶段开发应以包含本封板记录的下一个干净提交作为工作树 canonical base，并保留与
+  阶段 3 最终候选 `96a774f346184352259296e142c04cb5bd64a88d` 及其重跑结果文件的关联。
+- 当前未发现独立阶段 3 post-integration receipt；如后续产生主线集成或 promotion receipt，应在
+  本节追加其完整 identity，不以提交标题或路径推定等价关系。

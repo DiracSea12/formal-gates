@@ -50,40 +50,37 @@ const cliGuaranteeRequirement = `# 正式需求
 用户确认。
 `
 
-func TestCLIFormalConfirmationDoesNotInferGuaranteeWithoutFlag(t *testing.T) {
+func TestCLIFormalConfirmationFreezesExplicitGuaranteeEnvelopeWithoutFlag(t *testing.T) {
 	root, pkg := cliWorkflowFixture(t)
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliGuaranteeRequirement)
 	cliGit(t, root, "add", "requirements.md")
 	cliGit(t, root, "commit", "-m", "structured requirement")
 
-	state := decodeSemanticState(t, runCLI(t, "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "explicit-guarantee", "--requirement", "requirements.md", "--vcs", "git", "--split", "no"))
-	state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
-	state = decodeSemanticState(t, runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed"))
-	if state.RequirementGuarantee != nil {
-		t.Fatalf("confirmation without --activate-guarantee inferred an activation: %#v", state.RequirementGuarantee)
-	}
-	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
-	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
-	state = decodeSemanticState(t, runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "one bounded delivery"))
-
-	for _, args := range [][]string{
-		{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full"},
-		{"workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "blackbox"},
-	} {
-		if errText := failingCLI(t, args...); !strings.Contains(errText, "explicit REQ/AC guarantee activation") {
-			t.Fatalf("QA route without explicit guarantee activation returned %q", errText)
+	readyForRoute := func(runID string) validate.RunState {
+		state := decodeSemanticState(t, runCLI(t, "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", runID, "--requirement", "requirements.md", "--vcs", "git", "--split", "no"))
+		state = cliRecordAction(t, root, pkg, state, "requirements-clarification", "PASS")
+		state = decodeSemanticState(t, runCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed"))
+		if state.RequirementGuarantee == nil || state.RequirementGuarantee.Activation != "frozen" || state.RequirementGuarantee.Projection == nil {
+			t.Fatalf("initial confirmation did not freeze an explicit envelope: %#v", state.RequirementGuarantee)
 		}
+		product := cliPrepareAction(t, root, pkg, state.RunID, "product-review")
+		args := []string{"workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "product-review", "--dispatch", product, "--status", "PASS", "--item", "REQ-001 obligation-to-AC completeness", "--item-status", "PASS"}
+		args = append(args, cliOperatorVerificationArgs()...)
+		state = decodeSemanticState(t, runCLI(t, args...))
+		state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
+		return decodeSemanticState(t, runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "one bounded delivery"))
 	}
-	state = decodeSemanticState(t, runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality"))
-	if errText := failingCLI(t, "workflow", "route-add", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "blackbox"); !strings.Contains(errText, "explicit REQ/AC guarantee activation") {
-		t.Fatalf("adding QA without explicit guarantee activation returned %q", errText)
+
+	withoutQA := readyForRoute("automatic-not-guaranteed")
+	withoutQA = decodeSemanticState(t, runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", withoutQA.RunID, "--mode", "custom", "--gate", "quality"))
+	if withoutQA.RequirementGuarantee == nil || withoutQA.RequirementGuarantee.Activation != "not-guaranteed" {
+		t.Fatalf("custom route without QA did not retain an explicit not-guaranteed envelope: %#v", withoutQA.RequirementGuarantee)
 	}
-	if errText := failingCLI(t, "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--confirmed", "--activate-guarantee"); !strings.Contains(errText, "must be activated before Product Review") {
-		t.Fatalf("late guarantee activation returned %q", errText)
-	}
-	state = decodeSemanticState(t, runCLI(t, "workflow", "show", "--root", root, "--run-id", state.RunID))
-	if state.RequirementGuarantee != nil || state.SelectedGates[0] != "quality" {
-		t.Fatalf("rejected QA activation changed route or guarantee state: %#v", state)
+
+	withQA := readyForRoute("automatic-active-guarantee")
+	withQA = decodeSemanticState(t, runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", withQA.RunID, "--mode", "custom", "--gate", "blackbox"))
+	if withQA.RequirementGuarantee == nil || withQA.RequirementGuarantee.Activation != "active" {
+		t.Fatalf("QA route did not activate the frozen guarantee envelope: %#v", withQA.RequirementGuarantee)
 	}
 
 	lightweight := decodeSemanticState(t, runCLI(t, "workflow", "start", "--root", root, "--package-root", pkg, "--run-id", "lightweight-no-guarantee", "--requirement", "requirements.md", "--vcs", "git", "--route", "lightweight"))

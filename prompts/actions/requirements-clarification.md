@@ -36,7 +36,8 @@ revision，并等待用户明确确认。该文件是本 run 的验收输入与�
 绑定待确认 revision；若用户修改已绑定内容，按现有修订规则同时声明 `--meaning changed`
 后再预检。用户确认所呈现的同一 revision 后，本动作返回 PASS；编排层必须先用
 `record-action` 记录该 PASS，再对同一 revision 执行
-`workflow requirement --confirmed --activate-guarantee`。不得在 PASS 记录前执行确认命令，
+`workflow requirement --confirmed`；单一结构化正式需求会在该确认中原子冻结保证
+envelope（`--activate-guarantee` 作为兼容写法仍可接受）。不得在 PASS 记录前执行确认命令，
 因为正式确认入口以本动作 PASS 为前置。返回契约由 CLI 以 [Result contract] 块注入，本提
 示词不重复其语义。
 

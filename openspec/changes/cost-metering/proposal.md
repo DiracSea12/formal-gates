@@ -33,8 +33,22 @@ Scope: Claude Code and Codex hosts. Both expose `agent_transcript_path` on
 SubagentStop; their transcript formats differ (Claude: per-message
 `message.usage`; Codex: `token_count` events with incremental
 `last_token_usage`). Each host gets its own transcript parser adapter.
-Hosts without a parseable transcript (Cursor) are marked UNAVAILABLE. Cost
-data never changes a PASS/FAIL decision and never blocks anything.
+Hosts without a parseable transcript (Cursor) are marked UNAVAILABLE. The
+projection does not rewrite an already recorded PASS/FAIL decision. The
+separate 3.5b runtime guard may read reliable usage to stop a future
+dispatch; it does not create a second ledger.
 
-Out of scope: token estimation or guessing of any kind, USD conversion,
-budgets or alerts, and gate-file front matter.
+The original metering implementation records dispatched gates/actions. The
+3.5b follow-up extends the same projection with one optional owner entry for
+each run when that run's already-captured owner transcript can be measured as
+an exact start-to-terminal delta; it never counts the whole conversation as
+run cost. The owner entry is report-only for the live dispatch guard. A child
+keeps its owner entry in its own receipt/sidecar; phase 5's retained master
+adds it once under a childRunID-keyed aggregation, while the master's own
+owner entry remains separate. This is not a second ledger or a generic billing
+namespace. Missing identity, unsupported format, overlapping run intervals,
+or an unreliable delta remains UNAVAILABLE.
+
+Out of scope for this metering module: token estimation or guessing of any
+kind, provider pricing tables, budget policy, alerts, and gate-file front
+matter. Runtime stop policy belongs to the 3.5b checkpoint.

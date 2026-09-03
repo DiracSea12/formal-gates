@@ -21,7 +21,8 @@ func coverageCLIFixture(t *testing.T) (coverage.CoverageContract, []coverage.Rev
 		Cases:   []coverage.AcceptanceCase{{CaseID: "CASE-CLI", Mode: coverage.CaseBlackbox, PublicEntry: "formal-gates coverage validate", Preconditions: "valid JSON contract", Steps: "pipe contract JSON to the command", Oracle: "JSON result has ok true"}},
 		Edges:   []coverage.CoverageEdge{{ReviewKind: coverage.ReviewBlackbox, SourceID: "REQ-CLI", PointID: "POINT-CLI", CaseID: "CASE-CLI"}},
 	}
-	contract := coverage.CoverageContract{RequiredSources: required, SelectedKinds: []coverage.ReviewKind{coverage.ReviewBlackbox}, Manifests: []coverage.AcceptanceManifest{manifest}}
+	candidate := coverage.ValidationCandidate{Identity: "candidate-cli"}
+	contract := coverage.CoverageContract{RequiredSources: required, SelectedKinds: []coverage.ReviewKind{coverage.ReviewBlackbox}, Manifests: []coverage.AcceptanceManifest{manifest}, Candidate: &candidate}
 	reviews := []coverage.ReviewResult{{Binding: manifestBinding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "REQ-CLI", Status: coverage.StatusPass}}, PointDecisions: []coverage.ReviewDecision{{ID: "POINT-CLI", Status: coverage.StatusPass}}, CaseDecisions: []coverage.ReviewDecision{{ID: "CASE-CLI", Status: coverage.StatusPass}}, SetStatus: coverage.StatusPass}}
 	whitelist, err := contract.ValidateReviews(reviews)
 	if err != nil {
@@ -138,6 +139,69 @@ func TestCLICoverageProjectWhitelistAndReconcile(t *testing.T) {
 	}
 	if !reconciled.OK || !reconciled.Result.Valid || reconciled.Result.Binding.Candidate.Identity != "candidate-cli" {
 		t.Fatalf("unexpected reconciliation response: %+v", reconciled)
+	}
+}
+
+func TestCLICoverageExecutionRequiresMatchingContractCandidate(t *testing.T) {
+	contract, _, whitelist, execution := coverageCLIFixture(t)
+	for _, test := range []struct {
+		name   string
+		mutate func(*coverage.CoverageContract)
+		path   string
+	}{
+		{name: "missing", mutate: func(contract *coverage.CoverageContract) { contract.Candidate = nil }, path: "contract.candidate"},
+		{name: "mismatched", mutate: func(contract *coverage.CoverageContract) {
+			candidate := coverage.ValidationCandidate{Identity: "different-candidate"}
+			contract.Candidate = &candidate
+		}, path: "execution.binding.candidate"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.mutate(&contract)
+			payload, err := json.Marshal(struct {
+				Contract  coverage.CoverageContract  `json:"contract"`
+				Whitelist coverage.ApprovedWhitelist `json:"whitelist"`
+				Execution coverage.ExecutionReport   `json:"execution"`
+			}{contract, whitelist, execution})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout bytes.Buffer
+			if code := Run("formal-gates", []string{"coverage", "reconcile-execution"}, IO{Stdin: bytes.NewReader(payload), Stdout: &stdout}); code == 0 {
+				t.Fatalf("reconcile-execution unexpectedly succeeded: %s", stdout.String())
+			}
+			var response coverageErrorEnvelope
+			if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+				t.Fatalf("decode execution error: %v (%s)", err, stdout.String())
+			}
+			if response.Code != coverage.CodeCandidateMismatch || response.Path != test.path {
+				t.Fatalf("candidate error = %+v", response)
+			}
+		})
+		contract, _, whitelist, execution = coverageCLIFixture(t)
+	}
+}
+
+func TestCLICoverageValidateAndProjectDoNotRequireCandidate(t *testing.T) {
+	contract, reviews, _, _ := coverageCLIFixture(t)
+	contract.Candidate = nil
+	validatePayload, err := json.Marshal(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var validateOut bytes.Buffer
+	if code := Run("formal-gates", []string{"coverage", "validate"}, IO{Stdin: bytes.NewReader(validatePayload), Stdout: &validateOut}); code != 0 {
+		t.Fatalf("coverage validate required a candidate: %s", validateOut.String())
+	}
+	projectPayload, err := json.Marshal(struct {
+		Contract coverage.CoverageContract `json:"contract"`
+		Reviews  []coverage.ReviewResult   `json:"reviews"`
+	}{contract, reviews})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projectOut bytes.Buffer
+	if code := Run("formal-gates", []string{"coverage", "project-whitelist"}, IO{Stdin: bytes.NewReader(projectPayload), Stdout: &projectOut}); code != 0 {
+		t.Fatalf("coverage project-whitelist required a candidate: %s", projectOut.String())
 	}
 }
 

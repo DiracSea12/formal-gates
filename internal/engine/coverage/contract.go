@@ -1065,7 +1065,10 @@ func (c CoverageContract) ValidateExecution(whitelist ApprovedWhitelist, report 
 	if !nonempty(report.Binding.Candidate.Identity, "candidate") {
 		return invalid(CodeCandidateMismatch, "execution.binding.candidate.identity", "candidate identity is required")
 	}
-	if c.Candidate != nil && *c.Candidate != report.Binding.Candidate {
+	if c.Candidate == nil {
+		return invalid(CodeCandidateMismatch, "contract.candidate", "current validation candidate is required for execution reconciliation")
+	}
+	if *c.Candidate != report.Binding.Candidate {
 		return invalid(CodeCandidateMismatch, "execution.binding.candidate", "execution candidate does not match the current validation candidate")
 	}
 	if report.Binding.Scope != ScopeFull && report.Binding.Scope != ScopeAffected {

@@ -720,7 +720,7 @@ func runWorkflowRequirement(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "run id")
 	source := fs.String("source", "", "requirement source path; defaults to the current source")
 	confirmed := fs.Bool("confirmed", false, "mark this exact requirement revision confirmed")
-	activateGuarantee := fs.Bool("activate-guarantee", false, "explicitly freeze this confirmed requirement revision and activate the REQ/AC QA guarantee when the selected route uses QA")
+	activateGuarantee := fs.Bool("activate-guarantee", false, "compatibility spelling for explicitly freezing the REQ/AC envelope; initial confirmation of one structured formal requirement freezes it automatically")
 	meaning := fs.String("meaning", "", "semantic effect for a changed revision: preserved or changed")
 	var artifacts stringListFlag
 	fs.Var(&artifacts, "requirement-artifact", "complete additional requirement artifact set; repeat as needed")
@@ -1251,11 +1251,11 @@ func runQAExecution(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow qa-execution", streams)
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
-	runtimeError := fs.String("runtime-error", "", "QA execution runtime error")
+	runtimeError := fs.String("runtime-error", "", "QA execution runtime error when cases were not actually executable; cannot be combined with case results")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	results := []validate.QAResultInput{}
 	newQAResultStart(fs, &results)
-	for _, item := range []struct{ name, field, usage string }{{"outcome", "outcome", "PASS or FAIL"}, {"procedure", "procedure", "executed procedure"}, {"observation", "observation", "observed result"}, {"oracle-result", "oracle-result", "oracle comparison"}} {
+	for _, item := range []struct{ name, field, usage string }{{"outcome", "outcome", "PASS or FAIL"}, {"procedure", "procedure", "actual per-case executed procedure (not skipped/placeholder text)"}, {"observation", "observation", "actual per-case observed result"}, {"oracle-result", "oracle-result", "case-specific comparison with the approved oracle"}} {
 		newQAResultField(fs, item.name, item.usage, item.field, &results)
 	}
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {

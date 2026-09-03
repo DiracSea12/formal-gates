@@ -105,7 +105,7 @@ func TestCLIAuthorizeRepairInlineQAScope(t *testing.T) {
 		executionDispatch := cliOpenDispatch(state, "action", "qa-execution")
 		runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", executionDispatch, "--reviewer", "cli-auth-exec-"+suffix)
 		runCLI(t, "workflow", "qa-execution", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", executionDispatch,
-			"--case-result", "CASE-001", "--outcome", "PASS", "--procedure", "ran tests", "--observation", "passed", "--oracle-result", "matched",
+			"--case-result", "CASE-001", "--outcome", "PASS", "--procedure", "ran the bound whitebox test on the current candidate", "--observation", "the named test completed with exit status 0", "--oracle-result", "the observed test result matched every approved oracle assertion",
 			"--case-result", "CASE-002", "--outcome", "FAIL", "--procedure", "ran CLI", "--observation", "output mismatched", "--oracle-result", "expected success")
 		state, _ = validate.LoadRunState(root, state.RunID)
 		gateDispatch := cliPrepareGate(t, root, pkg, state.RunID, "quality")

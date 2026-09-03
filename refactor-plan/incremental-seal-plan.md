@@ -86,7 +86,8 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 4. engine run 不由 legacy 命令续跑；legacy run 不由 engine 改写。
 5. 过渡 façade 只是开发期脚手架，最终阶段必须删除。
 
-每阶段开始候选升级验证前，候选环境中不得存在需要由下一 definition/schema 继续写入的活动 run。严格版本拒绝只在这一前提下不会破坏正常恢复。
+候选升级和最终安装不等待活动 run 排空。安装不迁移、兼容或续跑旧
+generation 的 run；切换后旧 token/lease 由常规 admission 与版本校验拒绝。
 
 每个阶段还必须生成一份命令路由矩阵，逐项覆盖当前和最终公共面的全部 workflow 子命令：`start`、`show`、`status`、`next`、`diagnose`、`resume`、`abort`、`reset`、`requirement`、`route-candidates`、`slicing`、`settle-findings`、`route`、`route-add`、`qa-worktree`、`prepare-gate`、`prepare-action`、`claim-dispatch`、`record-action`、`record-gate`、`qa-design`、`qa-review`、`qa-execution`、`qa-execution-scope`、`snapshot`、`cleanup`、`carry`、`authorize-repair`、`seal` 以及新 `drive/submit`。矩阵逐项明确 runtime、唯一 writer、schema/definition 版本、允许的状态变化、错误码和是否只读。保留的兼容入口只能调用对应 engine handler；不支持的入口必须显式拒绝；任何直接写 state、绕过 `submit` 或公开删除活动 run 的路径都必须有 negative test。`diagnose` 的 raw read 是唯一例外，不得被当作 workflow writer。
 
@@ -118,9 +119,9 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 它只机械校验和执行已确认的分块计划。各阶段的具体 Batch/Subtask 清单在该阶段的需求入口
 中登记，阶段 3 的清单见 `refactor-plan/stage-3-requirements.md`。
 
-### 2.4 全局安装切换与活动 run fencing
+### 2.4 全局安装切换与活动 run 处置
 
-固定稳定插件跨阶段继续驱动 formal-gates，因此最终切换不是单个测试项目的局部操作。每次候选升级或最终全局切换前，必须从登记的所有项目 root、host home、state/resource root 和安装 scope 建立可复核的活动 run inventory；不能只扫描当前候选项目的 `.gates/tmp`。
+固定稳定插件跨阶段继续驱动 formal-gates，因此最终切换不是单个测试项目的局部操作。安装入口不扫描、等待或阻断任何活动 run；只要安装包、目标路径、registry 与原子事务校验通过，任何时候都可以安装。已存在的 run 不迁移、不转换、不作兼容保证，也不因安装而被改写。
 
 registry 不是某个项目的 `.gates/tmp`，而是由安装清单钉死的、跨 global/project scope 共用的用户级 registry root；候选验证通过显式配置使用完全不同的 registry namespace。每个安装 target、host hook、项目 root、state/resource root 和 runtime identity 都必须有 registry record，record 的 canonical paths 与 scope 是可机械校验的。阶段 0 必须先交付 admission bridge/launcher：所有文档化的 global/project 安装 target 和 host hook 都指向该 launcher，真实 immutable runtime 放在 launcher 管理的 sibling 路径，不能再暴露未登记的绝对旧 binary。首次 bootstrap 的公开入口固定为冻结 stable driver 提供的 `install --bootstrap` 维护动作；它只建立 registry/launcher record 和 bootstrap receipt，不创建 workflow state。
 
@@ -130,8 +131,7 @@ bootstrap/migration 必须覆盖现有 global 安装和受支持的 project root
 
 ```text
 OPEN(E, stable)
-  -> DRAINING(E, stable)       # 禁止新 stable lease，已有 lease 可受控排空
-  -> SWITCHING(E+1, candidate)  # 排空完成后才推进 generation，只有 cutover token 可写
+  -> SWITCHING(E+1, candidate)  # 只有 cutover token 可写；不等待活动 run
   -> OPEN(E+2, candidate)
 ```
 
@@ -143,16 +143,16 @@ SWITCHING(E+1, candidate)
   -> OPEN(E+3, stable)
 ```
 
-因此已 fence 的 token 永久 stale；回退后重新开放的是新 generation 的 stable lease，不是旧 token。候选在全局切换前不得创建活动 run；若 smoke 或崩溃恢复发现意外活动候选 run，先阻断并 reconcile，不能静默回退。
+因此已 fence 的 token 永久 stale；回退后重新开放的是新 generation 的 stable lease，不是旧 token。切换前后的活动 run 不阻断安装，它们的旧 token 也不能绕过新 generation 继续写入。
 
 每个状态转换都遵循以下锁与排空规则：
 
 1. writer 先取得 registry admission lock、校验 token/lease，再取得单 run state lock，按相反顺序释放；不能先持有 state lock 再等待 registry lock。
-2. cutover 先取得 install/uninstall lock，再在短临界区取得 registry lock 写入状态；不得持有 registry lock 等待活动 run 排空或等待外部 smoke。`DRAINING` 期间只拒绝新的 stable lease，已有 lease 可以完成或正式 abort；排空超时进入 Wait。
-3. 排空确认 zero stable leases、active runs、未完成 intent、UNKNOWN receipt 和 host/lifecycle attempts 后，才推进到 `SWITCHING(E+1)`。推进后所有旧 token 返回稳定的 `STALE_FENCING_TOKEN` 并进入 reconcile；inventory 后才开始的旧 writer 不得取得许可。
-4. 只有 `OPEN(E+2, candidate)` 并再次核对全 inventory 后，才允许 candidate 首次 `start`。必须有并发故障测试覆盖：排空前的旧 lease、排空后的旧 start、切换后迟到的旧 commit、candidate smoke 失败、进程崩溃恢复以及回退 generation 仍单调递增。
+2. cutover 先取得 install/uninstall lock，再在短临界区取得 registry lock 写入状态；不得持有 registry lock 等待外部 smoke。
+3. 未完成的安装 intent 或 UNKNOWN transaction receipt 必须先 reconcile，但 stable lease、active run 和 host/lifecycle attempt 不是安装前置条件。推进到 `SWITCHING(E+1)` 后，所有旧 token 返回稳定的 `STALE_FENCING_TOKEN`。
+4. 只有 `OPEN(E+2, candidate)` 并核对新 registry identity 后，才允许 candidate 新建 run。必须有并发故障测试覆盖：切换中的新 start、切换后迟到的旧 commit、candidate smoke 失败、进程崩溃恢复以及回退 generation 仍单调递增。
 
-若 registry 无法穷举、出现竞态或有未对账状态，切换进入 Operator/Wait，不得继续安装或静默降级。
+若 registry 自身不可用、安装事务出现竞态或有未对账状态，切换进入 Operator/Wait；无法穷举活动 run 不得单独阻断安装。
 
 ## 3. 八个正式阶段
 
@@ -233,20 +233,58 @@ Seal 后状态：候选已经有第一条真正可用的 engine 端到端路径�
 
 本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal 或另一套 QA
 状态机。它只冻结阶段 4 接入所需的最小 QA 覆盖契约，详见
-`refactor-plan/stage-3-5a-qa-coverage-contract.md`：已确认需求/方案中作为唯一权威义务列表
-且带稳定 ID 的有限 `requiredSources`、由已选 QA kind 设计者直接记录 source 的有限
-`AcceptanceManifest`、显式 source↔point↔case 多对多映射、逐 manifest source/point/case
-review、由 `requiredSources` binding/manifest/map digest 投影的 approved whitelist，
+`refactor-plan/stage-3-5a-qa-coverage-contract.md`：已确认需求/方案中有限的
+`requiredSources`、有限 `AcceptanceManifest`、显式 source↔point↔case 映射、逐 source/
+逐 point/逐 case review、由 source inventory/manifest/map digest 投影的 approved whitelist，
 以及与当前 `ValidationCandidate` 绑定的 expected/actual execution 结果。未知、缺失、重复、
 orphan、仅集合级 PASS、`FULL` 对账不全或 `AFFECTED` 的执行/继承/未执行集合不全都必须在
 结构层拒绝；`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。
 
-3.5a 交付 schema、validator、digest/白名单投影、fixtures 和薄 `coverage` CLI 适配层，不改
-legacy `QACase` 完整结构、不接入 engine 状态机、不新增通用框架，也不设置固定用例数、覆盖率
-阈值或强制测试工具组合。公开入口固定为 `formal-gates coverage validate`、`coverage
-project-whitelist`、`coverage reconcile-execution`，只做 JSON 编解码和函数转发。一个代理连续
-完成 Batch A 的内聚子任务；阶段 4 由新代理完成 Batch B 接入 regular
+3.5a 只交付 schema、validator、digest/白名单投影和 fixtures，不改 legacy `QACase`
+完整结构、不新增公开命令或通用框架，也不设置固定用例数、覆盖率阈值或强制测试工具
+组合。一个代理连续完成 Batch A 的内聚子任务；阶段 4 由新代理完成 Batch B 接入 regular
 QA/candidate E2E，两个批次不并行。
+
+### 阶段 3.5b：成本记录与运行时派发止损 checkpoint（非独立正式阶段）
+
+本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal、公开命令或第二
+套账本，详见 `refactor-plan/stage-3-5b-runtime-guardrails.md`。它冻结两件事的最小合同：
+（1）保留现有子代理 dispatch 计量，并用 `workflow start` 已保存的 owner transcript 做
+启动/终态快照差值，在可核对时补记主代理用量；（2）规定 engine 派发止损、成本回填和
+恢复入口的统一顺序。3.5b 当前代码只交付 legacy owner 计量，以及无 I/O、无状态写入的
+engine-side guard allowance/basis 纯计算核心与 fixtures；阶段 4 才把它们接入 engine
+`State`/envelope、source bridge、签发/恢复入口、typed Ask 和公开展示。`internal/cost`
+仍是独立解析/计量包，`report.cost` 仍只做报告；阶段 4 接入前不宣称 engine 已具备运行时
+止损能力。
+
+request 额度只由 engine Controller 从 canonical expected external `TaskKey` 集、已确认
+route/topology、compiled definition 和有限 retry policy 机械得出；用户、host 和 AI 都不填写
+或估算底层数字。TaskKey 只能由 closed-world definition 及已确认、持久化的
+Batch/route/topology、批准 QA、已选 gate 或已成立 obligation 派生。当前已确认 workflow
+policy 预授权的 obligation/repair slot 由 Controller 机械加入；其他新增槽位若按现有流程
+要求用户确认，必须先绑定对应 revision/typed Ask。代理输出/receipt/resume 不得直接扩容。
+产品审和技术审各自的前三个 completed semantic review round 也是 workflow policy
+预授权上限：只有 finding 处置实际要求 fresh review 时才按 action/revision/round 生成一个
+distinct `TaskKey`，并非启动时一次性创建三项。达到三轮后，typed Ask 每次只能为对应
+action 增加一个 fresh-review slot；该槽位与 `MaxAttempts` 的瞬态 retry 余量分别计算，不能
+互相转换。revision/invalidation 不重置语义轮数，显式 reset 或新 run 才重建；split child
+继承 master 的整体产品/技术审，不自行增加 series。
+外部 agent/host 派发
+没有显式策略时使用 canonical `MaxAttempts=2`（首次 +
+一次自动重试）；显式策略必须有限。`MaxAttempts` 是逻辑动作的总执行次数，额外 retry 余量
+为 `max(0, MaxAttempts-1)`；绑定/快照/责任变化形成新计划时按新 basis 重算，不沿用旧 retry
+池。计算 basis/result 与已用 action/Attempt 账目随同一 guard 投影持久化，签发前重算不一致
+即 `BLOCKED_BUG` 且零派发。token cap 只接受项目/安装级维护配置，缺失或 usage 不可靠时标为
+unavailable，但 request/attempt 止损仍生效。只重试已分类的 `TRANSIENT_ENGINE_ERROR`，且
+所有恢复入口（含 `ResumeAgent`、`RecoveryNewAttempt`、HostAction retry）共用同一 guard；
+欠费、配额、权限和参数错误不循环，也不静默换 provider/model。额度或 retry 耗尽必须是
+typed Ask：继续只解锁一个按既有 admission capacity 裁剪的 canonical Ready batch，重试只
+增加当前逻辑动作的一个 retry slot，二者不接受自由数字且不能预先累积；Wait 只用于容量、
+运行中、依赖、可能迟到的 receipt/lifecycle 或 retryable I/O。
+3.5b 不做价格库、USD 账单、provider fallback、动态调参或新状态机。
+
+3.5b 完成后，阶段 4 才接入 regular QA/candidate E2E；3.5a 与 3.5b 均须在阶段 4 前完成，
+但不建立实现耦合，也不是新的正式阶段。
 
 ### 阶段 4：Git 非分片 regular 全流程
 
@@ -254,15 +292,25 @@ QA/candidate E2E，两个批次不并行。
 
 范围：
 
-- 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线。
-- 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和三轮规则。
-- QA 接入必须消费阶段 3.5a 的覆盖契约：同一次需求/方案确认中的 `requiredSources` 是唯一
-  权威义务列表；每个 QA source 由至少一个已选 QA kind 的 `AcceptanceManifest` 覆盖，非 QA source 使用带
-  PASS 证据的替代验证处置；复杂 source 可对应多个 point/case，多 kind 认领的全部分支都
-  必须通过，并形成逐 manifest source/point/case review 与绑定当前
+- 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线；在 engine `State`/Controller 中接管按 master run + action kind 持久化的 `PreDevelopmentReviewSeries`，两个动作各自前三轮自动、超限 typed Ask 逐轮授权，legacy `internal/validate` 过渡字段不得继续作为第二权威。
+- 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和开发后三轮规则；产品/技术审语义轮次、三类 pre-wave review series、开发后 repair wave 与 TaskKey `MaxAttempts` 四类计数必须保持独立。
+- QA 接入必须消费阶段 3.5a 的覆盖契约：同一次需求/方案确认中登记
+  `requiredSources`，每个适用 source 都有 acceptance point 或显式非 QA 验证处置，每个 point
+  都有经批准的 case 映射，并形成逐 source/point/case review 与绑定当前
   `ValidationCandidate` 的执行证据；不能用集合级 PASS 或旧候选结果补齐缺项。engine
-  `State`/envelope、QA 派发和结果校验共同持久化并核对 `requiredSources` binding/manifest/map/
-  whitelist digest，不另建覆盖状态机。
+  `State`/envelope、QA 派发和结果校验共同持久化并核对 source inventory/manifest/map/
+  whitelist digest，不另建覆盖状态机。case review 逐条核验公开路径、setup、环境可执行性
+  和 oracle；执行结果只接受真实逐用例 procedure/observation/comparison，拒绝 skipped、
+  授权 PASS 及模板/占位证据，环境不可用时记录 `RUNTIME_ERROR`。不为对抗性虚假
+  Operator 声明引入自然语言语义证明器。
+- QA/开发/门的外部派发统一经过 3.5b engine guard。阶段 4 的 engine `submit` 必须在同一
+  写事务内完成“接纳结果/回执 → source resolve/backfill → usage 更新 → guard 判断 → refill”；
+  lifecycle stop 尚未到达时保持 `COST_PENDING` 并返回 Wait，source 明确不可用时记
+  `UNAVAILABLE` 后继续使用 request/attempt guard。达到额度时只返回 typed Ask，不由主代理
+  自行决定是否继续。owner source bridge、engine `State`/envelope 的 cost/guard 投影和
+  `show/status/next` 展示也在阶段 4 一并接入，不从 legacy `validate` 旁路补账；owner
+  终态差值只作报告，不参与 in-flight guard。额度投影同时绑定 basis digest；相同输入重算
+  不一致、账目无法对齐或将要超发时以 `BLOCKED_BUG` 零派发。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
 - 在一个真实宿主上跑 Git 非分片 full canary，覆盖至少一次 FAIL -> repair -> 新候选 -> 重验 -> Seal。
@@ -277,9 +325,16 @@ Seal 后状态：隔离候选可用于 Git 非分片 regular 的完整正式流�
 范围：
 
 - 实现精确 topology、child 创建、`sliceID -> childRunID` map、继承、逐 child route 和级联控制。
-- 实现 `SLICE_READY`、包含最终白盒测试的 child identity、durable receipt、case/cost 汇总。
+- 实现 `SLICE_READY`、包含最终白盒测试的 child identity、durable receipt、case/cost 汇总；
+  dispatch 条目沿用 `<childRunID>/<dispatchID>` namespace 去重，child owner 以 `childRunID`
+  一次性幂等汇总到 master cost projection，不重新估算 child 限额。主干 owner 与 child
+  owner 仍分别保留在各自 run 的 receipt/sidecar；master 自身 `Owner` 不被 child 覆盖，且
+  不引入通用 billing schema。
 - 实现 Git child worktree、主线集成、冲突窄 agent 边界、合并 QA、合并门、AffectedChildSet 和主线 repair。
 - 实现 child/master 的 reset、abort、需求变化、cleanup 和崩溃恢复。
+- retained master 的 Seal 只在 active guarantee 下读取并物化 slice guarantee sidecar；显式
+  waiver/not-guaranteed 不再要求该 sidecar。物化、摘要和清理失败时持久状态保持非
+  `SEALED`，修正故障后可重试。
 - 跑 Git 分片 master/child/merge full canary，同时回归 Git 非分片 full。
 
 Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流程；SVN、P4 和剩余宿主仍不宣称完成。
@@ -293,6 +348,8 @@ Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流�
 - 按同一 VCS adapter 契约实现 SVN 的 working copy、revision/property、integrate/commit、candidate identity、receipt 和 cleanup。
 - 按同一 VCS adapter 契约实现 P4 的 client/workspace、changelist/filetype/view、integrate/submit、candidate identity、receipt 和 cleanup。
 - 完成 Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的 provider identity、bridge、dispatch、lifecycle、resume/terminate 和 receipt 对账。
+- 各 host 明确 transcript/usage 能力；无法核对的 owner 或 dispatch 记 `UNAVAILABLE`，仍受
+  request/attempt guard，不为 host 单独引入预算算法。
 - 每个 host canary 必须使用候选专属 host home/config、hook/managed-rule 路径和 state/resource roots，并记录 canonical-path disjoint proof；不能调用固定全局 binary、全局 hook 或稳定 host home。
 - DSH canary 必须使用隔离 `DSH_HOME` 和候选 Cordis bridge，使 binary 解析为 required DeepSeek provider；project-local DSH 的 `ProviderDefault/UNAVAILABLE` 不能作为 lifecycle full canary 证据，provider/bridge mismatch 必须硬拒绝。
 - SVN、P4 和不同宿主可在本阶段内部使用独立 worktree/working copy/client 并行开发，但必须在同一候选 join 后统一审查和 Seal。
@@ -311,11 +368,13 @@ Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 
 - 将仍需的旧能力内收为 engine handler 后，删除旧公开推进命令、别名、运行时兼容 decoder/migration、legacy mode、authority handoff、legacy QA、过渡 façade 和公开 cleanup；保留仅供 `diagnose` 使用的最小 raw/envelope parser、terminal summary fallback，以及维护面允许保留的 hook/lifecycle/canary 和 `write_block` 辅助边界。
 - 最终清理扫描必须确认 executable definition 中不存在 `MISSING_ENGINE_ADAPTER` 或 `BLOCKED_BUG` marker 伪装成可执行路径；`REQUEST_REQUIREMENT_CHANGE` 的两阶段 barrier、`REVIEW_FINDING_FIX` 的新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据都必须绑定最终 candidate。
 - 在最终公共面真正可用后，同步切换 `SKILL.md`、README、references、prompts、catalog 和测试；不得保留指导用户调用已删除入口的文档。
+- 同步清理成本口径：保留“精确或 unavailable、无估算、无第二账本”，并更新 owner 报告、
+  engine source bridge/guard、额度 Ask/Wait、retry 算术和分片 owner 汇总的说明。
 - 根据阶段 0 建立的 requirements-precedence/supersession 清单，更新或标记所有仍把 `prepare-*`、`record-*`、`qa-worktree`、公开 `cleanup` 等旧入口写成当前公共面的旧 OpenSpec/root 文档；历史文档保留可追溯性，但不能继续作为已确认的当前实现契约。
 - 从主线集成后的唯一 post-integration canonical revision 构建不可变隔离安装副本，并以 promotion/integration receipt 绑定到清理完成的 sealed candidate；若 digest 不等价，必须先重验并取得新的 Seal。
 - 在该 post-integration revision 的包摘要和 installed-target digest 上重新运行 Git/SVN/P4 × 非分片/分片六格和五宿主 Git 非分片 canary；允许按总需求定义复用一个 Git 非分片单元格，最低十条完整 canary。每条都必须覆盖产品/技术审、并行开发+黑盒设计、whitebox authoring/review、candidate freeze、view reuse/受影响重跑、FAIL -> repair -> 新候选、promotion 中断恢复、receipt/result、无残留 cleanup 和 Seal。
 - 完成前置产品审、技术审、QA 和选定 gates，但在主线集成前不 Seal；final-release run 保持 ACTIVE，集成后用受支持的 `workflow resume --adopt-external --reason` receipt 绑定 post-integration canonical identity，重建候选，重新执行安装 smoke、cleanup 核对、全部最终 canary 和切换前 QA，并将这些结果绑定同一个 final-release run。无法安全 rebind 时新建 final-release run，前置结果全部降为非权威说明。
-- 只有 post-integration candidate 的全部最终证据、全局 registry bootstrap/inventory receipt 和所有 abort/complete/UNKNOWN 处置记录成立后，才由基线 stable driver 执行阶段 7 唯一的 final-release Seal；随后按全局 inventory/fencing 协议冻结新旧 writer，确认不存在会被新版本拒绝的活动旧版本 run，再执行一次覆盖 runtime、hook/config、managed-rule、release/current pointer 的原子全局切换；切换成功且逐 host 的 binary、pointer、hook/config、managed-rule、provider/bridge post-switch smoke 全部通过后才退役固定稳定包。
+- 只有 post-integration candidate 的全部最终证据、全局 registry bootstrap/transaction receipt 和所有 UNKNOWN 事务处置记录成立后，才由基线 stable driver 执行阶段 7 唯一的 final-release Seal；随后直接执行一次覆盖 runtime、hook/config、managed-rule、release/current pointer 的原子全局切换，不等待活动 run 终结。切换成功且逐 host 的 binary、pointer、hook/config、managed-rule、provider/bridge post-switch smoke 全部通过后才退役固定稳定包。
 
 Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终证据绑定同一不可变候选；旧稳定包在切换确认后退役。
 
@@ -326,6 +385,10 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 ```text
 阶段 0 -> 阶段 1 -> 阶段 2 -> 阶段 3 -> 阶段 4 -> 阶段 5 -> 阶段 6 -> 阶段 7
 ```
+
+阶段 3 完成后，须完成 3.5a、3.5b 两个非正式 checkpoint，才能开始阶段 4；它们不改变
+上述正式阶段依赖，也不各自产生独立 Seal。两者是否并行由各自拆分决定，不能因编号强行
+建立实现依赖。
 
 不并行推进会改变 schema、definition 或公共写入口的正式阶段。允许的并行只发生在同一正式阶段内部，并由该阶段统一 join、验证和 Seal，例如：
 
@@ -359,13 +422,13 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 5. 本阶段新增能力在不可变候选安装中由实际 installed binary 执行，并在独立测试项目、host config、state/resource namespace 中完成端到端验证。
 6. 本阶段承诺支持的既有 engine 路径完成回归；未承诺支持的路径明确拒绝或继续由绑定的 legacy runtime 处理，不出现半迁移。
 7. 对本阶段实际交付的 executable/diagnostic surface 绑定 state writer（若有）、schema/definition version、definition digest、候选提交、集成后 canonical identity、包摘要和测试证据；相关的 `UNSUPPORTED_RUN_VERSION`、raw `diagnose` 和 terminal summary fallback 负向测试通过。未实现的最终 surface 必须显式拒绝或保持绑定的 legacy/Shadow 语义，不得用缺省实现冒充完成。阶段 1 的 `MISSING_ENGINE_ADAPTER` 只能留在 diagnostic-only fixture，不能编译或签发 Ready/HostAction；“最终 executable definition 无 marker”、全部 typed request/change/fix 和 `FULL/AFFECTED` freshness 证据属于阶段 7 的附加条件。
-8. 通过覆盖本阶段所触及 scope 的 inventory/fencing 和 registry bootstrap receipt 确认没有本阶段候选无法恢复的活动 run、未完成 intent、未对账 UNKNOWN receipt、未登记 target/root 或登记资源残留；阶段 7 再扩展为最终全局 inventory，不能在早期阶段以尚未存在的 engine writer 证明最终切换已完成。
+8. 通过覆盖本阶段所触及 scope 的 transaction/fencing 和 registry bootstrap receipt 确认没有未完成 intent、未对账 UNKNOWN receipt、未登记 target/root 或登记资源残留。活动 run 不参与安装准入；阶段 7 只扩展最终全局 registry/transaction 对账，不能在早期阶段以尚未存在的 engine writer 证明最终切换已完成。
 9. 阶段 worktree 的变更已提交，正式审查和 QA 基于该候选完成，阶段 Seal 成功；阶段 7 的前置审查只能是 provisional，最终 Seal 必须在 post-integration final-release run 中完成。
 10. 阶段 0–6 的 sealed candidate identity 已通过 integration/promotion receipt 绑定到 post-integration canonical identity；阶段 7 则要求 final-release Seal、全部最终 canary 和 post-integration identity 直接绑定，不能用先 Seal 的旧 run 代替。
 11. 当前阶段实际暴露的 workflow/维护入口 route matrix 已逐项绑定到本阶段允许的 legacy、Shadow、隔离 engine 或明确 unsupported surface；直接写 state、绕过 `submit`、绕过 freshness 或公开 cleanup 的 negative tests 通过。本阶段实际 writer 的 epoch/fencing token 或 legacy launcher invocation lease 有 stale-token/lease rejection 和并发窗口测试；阶段 7 才要求当前与最终公共面的完整矩阵及全部 writer 路径。
 12. 本阶段涉及的 runtime、hook/config、managed-rule、pointer、provider/bridge 和 recovery journal 故障窗口有可恢复证据；阶段 0 验证安装/registry bootstrap，阶段 1–6 验证候选 namespace，阶段 7 才执行最终原子全局切换和逐 host post-switch smoke。
 
-阶段 7 在上述共同条件之外还必须同时满足：最终 executable definition 不存在 `MISSING_ENGINE_ADAPTER/BLOCKED_BUG` marker；`REQUEST_REQUIREMENT_CHANGE` 两阶段 barrier、`REVIEW_FINDING_FIX` 新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据齐全；当前/最终完整 route matrix 和所有 engine writer/legacy launcher fencing 路径通过；最终九条 canary、registry inventory、原子全局切换、逐 host post-switch smoke 和旧 stable 退役证据全部绑定同一 post-integration candidate。
+阶段 7 在上述共同条件之外还必须同时满足：最终 executable definition 不存在 `MISSING_ENGINE_ADAPTER/BLOCKED_BUG` marker；`REQUEST_REQUIREMENT_CHANGE` 两阶段 barrier、`REVIEW_FINDING_FIX` 新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据齐全；当前/最终完整 route matrix 和所有 engine writer/legacy launcher fencing 路径通过；最终十条 canary、registry inventory、原子全局切换、逐 host post-switch smoke 和旧 stable 退役证据全部绑定同一 post-integration candidate。
 
 阶段记录至少保存：
 
@@ -383,8 +446,8 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 2. 阶段未 Seal，不创建下一阶段正式基线。
 3. 阶段 Seal 后的后续开发失败，回到最近 sealed commit 和对应不可变候选；不从未提交 worktree 恢复。
 4. 最终全局切换前，候选始终在隔离目录验证；不通过覆盖现有安装来“试一下”。
-5. 最终原子换位失败时，按 `SWITCHING -> ROLLING_BACK -> OPEN` 的单调 generation 协议恢复旧稳定 runtime、hook/config、managed-rule、release/current pointer；绝不把 registry epoch/generation 写回旧值。只有 rollback smoke 和新的 stable generation 成功后才允许再次 start，且新版本尚未创建 run 前才允许回退安装指针。
-6. 新版本一旦创建活动 run，不通过旧版本继续写该 run；需要回退时先按新版本完成或正式终止活动 run。
+5. 最终原子换位失败时，按 `SWITCHING -> ROLLING_BACK -> OPEN` 的单调 generation 协议恢复旧稳定 runtime、hook/config、managed-rule、release/current pointer；绝不把 registry epoch/generation 写回旧值。只有 rollback smoke 和新的 stable generation 成功后才允许再次 start。
+6. 安装或回退均不等待活动 run；旧 generation 的 run 不由新或回退后的 runtime 迁移、兼容或继续写入。
 
 ## 7. 文档关系与旧主需求处理
 

@@ -50,10 +50,25 @@ total tokens and per-gate tokens.
 ## RQ-007 - Decoupled, pluggable cost module
 
 Cost metering SHALL live in a standalone package with per-provider parser
-adapters selected by host name. Cost data SHALL never change a PASS/FAIL
-decision or block any transition.
+adapters selected by host name. Cost data SHALL NOT rewrite an already
+recorded PASS/FAIL decision. The separate 3.5b runtime guard MAY consume
+reliable recorded usage to block a future dispatch; it SHALL NOT introduce a
+second accounting ledger.
+
+The 3.5b owner extension SHALL use the same package and projection: it may add
+one optional owner entry only when a start-to-terminal transcript delta is
+exactly identifiable. It SHALL mark missing identity, unsupported format,
+rewritten/overlapping intervals as unavailable rather than counting the full
+conversation or guessing. The owner entry is local to the run that owns the
+transcript and is report-only for live dispatch guarding. In phase 5, a
+retained master SHALL aggregate each child owner once by childRunID while
+retaining the master's own owner entry separately; repeated child receipts
+SHALL be idempotent. Engine runs receive this projection through the phase-4
+engine source bridge; the bridge and its submit/backfill/refill order are not
+implemented by a second accounting path.
 
 ## RQ-008 - Boundary
 
-This change SHALL NOT add token estimation, USD conversion, budgets, alerts,
-or gate-file front matter.
+This metering change SHALL NOT add token estimation, guessed usage, provider
+pricing tables, budget policy, alerts, or gate-file front matter. Runtime stop
+policy is a separate 3.5b checkpoint and is not a second cost ledger.

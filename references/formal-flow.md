@@ -83,7 +83,9 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --source <requirement-file> \
   [--requirement-artifact <requirement-or-solution-file> ... | \
-   --clear-requirement-artifacts] --confirmed --activate-guarantee
+   --clear-requirement-artifacts] --confirmed [--activate-guarantee]
+# 单一结构化正式需求在首次确认时原子冻结显式 guarantee envelope；
+# --activate-guarantee 保留为兼容写法。lightweight 不进入保证链路。
 # Resume 报告修订已改变之后，对它的语义影响做分类。
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --meaning <preserved|changed>
@@ -130,6 +132,10 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 快照重绑新修订（开发开始后需同时传 `--confirmed`）；meaning changed → 作废全部结果、回需
 求澄清重新登记；需求修订或 start-readiness FAIL 时，黑盒 QA 用例增量修订——只增删改确实受
 影响的用例（未受影响保持 PASS）：
+- 修订按实际影响分类，不按修改的章节或文件名分类。只修改技术方案、且不改变用户可见
+  行为、需求范围和验收标准时，使用 `meaning-preserved`，保留产品审 PASS，不重新派发
+  产品审；受影响、原本未通过或尚未完成的 start-readiness 仍须重做。改变上述产品含义、
+  或者无法确认是否改变时，才使用 `meaning changed` 并重新进入产品审。
 - 开发开始后做 meaning-preserved 需求重绑时，CLI 要求用户确认信号：`workflow
   requirement` 必须**同时传 `--confirmed`**，否则被拒。
 - 需求文档被改动导致 revision 漂移后，第一个依赖需求修订的流程命令即被拒，提示先
@@ -214,10 +220,19 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 范围外 P3 维持仅作建议、不形成修复义务（封板时一次性展示）。
 
 # Part 2 技术审：承接技术方案选择与对齐，并一并完成 `granularity_review`。技术审必须
+# 以用户确认后的技术档案为审查对象；代码只用于核实既有能力、依赖和边界事实，不把当前
+# 候选代码本身当成提前代码审查的对象。技术审只评估宏观技术方案，以及会影响实际开发的
+# 逻辑、架构、依赖或责任边界错误；不得因函数/结构体/字段/CLI 参数命名、文件组织、代码
+# 写法、具体算法、测试代码质量或等价实现偏好阻塞。只有具体细节已经导致公开行为冲突、
+# 接口无法对接、架构无法落地或核心验收无法完成时，才按实际影响报告技术阻塞项。
 # 依据独立交付物/DoD、稳定接口/责任/状态边界、依赖与副作用/恢复边界、可管理的上下文与
 # 交接成本判断大块（Batch）或小块（Subtask）；不能仅按编号、commit、文件/行数、阶段、
 # 层、角色或时间段切分。大块是唯一开发代理换人边界；同一大块内的小块共享开发上下文，
-# 不单独派发。输出还必须包含不拆或改拆的理由。发现项同样分级 P0/P1/P2/P3，复审规则同产品审。
+# 不单独派发。输出还必须包含不拆或改拆的理由，并在同一 `granularity_review` 中留痕最小
+# 范围边界：允许修改的入口或路径、本批次交付物、明确非目标和验收条件。该边界只能从
+# 已确认需求与方案提取，不新增需求；不单独派发审查或新增状态。开发快照完成后按该边界
+# 对照实际 diff，越界先按需求、方案或批次契约变化处置，不得静默吸收。发现项同样分级
+# P0/P1/P2/P3，复审规则与产品审相同。
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness
 formal-gates workflow record-action --root <repo> --package-root <package> \
@@ -302,8 +317,9 @@ seal，分片实例不落盘，成本并入主干封板）。黑盒 review 连�
 当前阻塞项并由用户决策处置；选项包括 abort 重建、走需求修订，或经 `workflow snapshot
 --user-requested --reason '<reason>'` 显式授权手动放行（非自动）。放行不限于 3-FAIL
 时点——黑盒 review 长时间未返回或反复 RUNTIME_ERROR 致快照门被挡时也可显式放行。放行
-后未获批准的黑盒用例经用户授权跳过、验证状态视为 PASS（记录授权来源），qa-execution
-只覆盖已批准用例。
+后 qa-execution 仍只覆盖已批准用例；未获批准的黑盒用例不写入 execution results，更不
+得补造成 `skipped/authorized PASS`。授权只改变是否允许继续固定快照，不等同于该用例
+获得审查或执行 PASS。
 
 ## 开发与快照
 
@@ -377,6 +393,12 @@ formal-gates workflow record-gate --root <repo> --package-root <package> \
   [--finding '<message>' --severity <P0|P1|P2|P3> --location '<path:line>']
 # --compared 是审查者实际比较的快照对；与指定的基线到当前范围不匹配时结果被丢弃。
 # RUNTIME_ERROR 不要求 --compared。
+# qa-review 对每个尚未批准 case 逐条核对公开路径、setup/前置、当前环境可执行性、证据
+# 留存和 oracle 与已确认需求的一致性；要求真实新 Codex task/fresh reviewer 而当前环境
+# 不具备该能力的 case 不得批准。qa-execution 的机械校验只按归一化后的完整字段精确拒绝
+# 协议哨兵（如 skipped、authorized PASS 和约定的简短占位值），不使用子串、句式或自然语言
+# 语义判断证据真假；真实性由执行代理提示词与主代理核验。未执行或环境不可用整轮记录
+# RUNTIME_ERROR，不伪装 PASS。对抗性虚假 Operator 声明服从项目边界。
 ```
 
 分片 >= 2 时，保留总任务实例在合并后自动附加合并门与合并 QA 作为其合并后验证，只
@@ -418,8 +440,9 @@ formal-gates workflow authorize-repair --root <repo> --package-root <package> \
 # SEAL-USER 授权。
 # Git run 在基线→当前含 >1 条提交时，seal 自动把该范围压缩为单条提交（git reset
 # --soft 基线 + 重新提交，保留最终树），作为 seal 的最后一步 VCS 操作；压缩前要求工作
-# 树干净；单条提交或空范围不操作；SVN/P4 不压缩。压缩消息由主代理经 --squash-message
-# 传入。Seal 同时把已批准黑盒用例从隔离工作区落盘合并回主干
+# 树干净。压缩提交是新的最终 candidate：CLI 不改绑旧 QA/门结果，持久化新 candidate 后
+# 要求全部选中 QA mode 与门在其上重验，再次 Seal 才完成封板。单条提交或空范围不操作；
+# SVN/P4 不压缩。压缩消息由主代理经 --squash-message 传入。Seal 同时把已批准黑盒用例从隔离工作区落盘合并回主干
 # `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一写主干），作为本 run 的
 # 黑盒用例交付物；分片实例不落盘。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
@@ -464,20 +487,45 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
   或预算用尽后经用户决定跳过/作废；不是仅保持可见、放任不修。
 - Seal 前把所有留档未处置的建议级发现项（范围外 P3、未吸收建议）一次性列出展示给用户，
   由用户决定是否处理；展示不阻塞、不逐条问询。
+- Seal 的黑盒用例等物化全部成功后持久化 `SEALED` 终态，再写封板摘要并清理临时状态；
+  物化失败时持久 state 保持 `ACTIVE` 且不写摘要，摘要或清理中断时保留 `SEALED` 并可由
+  重复 Seal 继续。retained master 已显式 waiver/not-guaranteed 时允许 slice guarantee
+  sidecar 缺失，但已经存在的有效 sidecar 仍读取并保留其逐项 owner/case/review/execution
+  证据及已批准分片用例；正常 active guarantee 仍要求完整 sidecar 集合。
 
 ## 成本计量
 
-run 状态的单一 `cost` 投影（`RunState.Cost` / 摘要 `cost` 字段，实现见 `internal/cost/`）
-在结果记录时为每条独立派发（门或动作）按其 host 转写文件精确计量 token 用量：run 合计 +
-每条派发一项。数字只来自 host 转写解析（claude/codex 适配器），无转写或解析失败的派发记
-为 unavailable、不捏造数值；分类为输入缓存命中/未命中与输出，`totalInputTokens` 只统计输
-入侧、输出单独记录不计入合计。成本数据仅展示、不影响任何判定或记录结果。`workflow
-seal`/`show` 的输出携带该投影（`cost` 字段）。
+run 状态的单一 `cost` 投影（legacy 为 `RunState.Cost`，engine 为同一投影在其权威
+`state.json`/envelope 中的承载，实现见 `internal/cost/`）在结果记录时为每条独立派发（门或
+动作）按其 host 转写文件精确计量 token 用量：run 合计 + 每条派发一项。阶段 3.5b 另在
+能够核对 `workflow start` 保存的 owner transcript 时，记录启动基线到 Seal/Abort 终态快照的
+主代理用量；它是产生该记录的 run 的独立 owner 条目，不冒充派发，也不参与实时派发止损。
+数字只来自 host 转写解析（claude/codex 适配器），无转写、provider 未绑定、区间不可靠或
+解析失败时记为 unavailable、不捏造数值；分类为输入缓存命中/未命中与输出，
+`totalInputTokens` 只统计输入侧、输出单独记录不计入合计。阶段 4 的 engine source bridge
+按 `actionID/correlation` 解析 lifecycle sidecar：source 尚未就绪时返回 `COST_PENDING`，
+允许引擎进入现有 Wait；source 明确不可用时记 `UNAVAILABLE`，仍由 request/attempt guard
+止损。只有完成 backfill/usage 后才执行 guard，再决定 refill；`show/status/next` 读取同一
+投影，不另建账本。
+
+request/attempt 额度只由 engine Controller 从 canonical expected external `TaskKey`、已确认
+route/topology、compiled definition 和有限 retry policy 机械计算；外部 agent/host 派发没有
+显式策略时使用 canonical `MaxAttempts=2`（首次 + 一次自动重试）。计算 basis digest、结果
+和已用 action/Attempt 账目随同一 guard 投影持久化并在签发前重算；不一致时
+`BLOCKED_BUG` 且零派发。主代理、host、用户和 AI 都不能提交底层额度数字。额度耗尽后的
+Ask 中，“继续”只解锁一个按既有 admission capacity 裁剪的 canonical Ready batch，
+“重试”只增加当前逻辑动作的一个 retry slot，不能输入自由数字或预先累积。
+expected `TaskKey` 只能来自 closed-world definition 及已确认、持久化的
+Batch/route/topology、批准 QA、已选 gate 或已成立 obligation。当前已确认 workflow policy
+预授权的 obligation/repair slot 由 Controller 机械加入；其他新增槽位若按现有流程要求用户
+确认，先绑定对应 revision/typed Ask。代理输出、receipt 或 resume 不能直接扩大额度。
 
 分片场景下，切片实例的封板不产出独立封板文件，成本投影写入主干 temp run 下的 sidecar
 （`.gates/tmp/<主干run-id>/slice-costs/`，gitignored、不入交付 diff），主干（保留总任务
-实例）最终封板时把各切片成本并入主干封板文件（派发条目以 `<切片run-id>/<派发id>` 命名
-空间并入）后消费清除。非分片 run 的封板行为不变。
+实例）最终封板时把各切片的 dispatch 成本并入主干封板文件（派发条目以
+`<切片run-id>/<派发id>` 命名空间并入）后消费清除。child owner 明细仍归属于各自 run；
+阶段 5 的 master projection 以 `childRunID` 一次性幂等汇总 child owner，master 自身
+`Owner` 不被覆盖。非分片 run 的封板行为不变。
 
 按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法
 运行时，使用命令的 `--runtime-error` 或 `--status RUNTIME_ERROR --message ...` 形

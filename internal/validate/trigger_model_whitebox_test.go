@@ -356,7 +356,7 @@ func TestRenamedArtifactsDropLightweightWording(t *testing.T) {
 func TestRequirementsClarificationPromptRecordsPassBeforeConfirmationCommand(t *testing.T) {
 	clarification := readWorktreeFile(t, "prompts/actions/requirements-clarification.md")
 	passFirst := strings.Index(clarification, "先用\n`record-action` 记录该 PASS")
-	confirmAfter := strings.Index(clarification, "再对同一 revision 执行\n`workflow requirement --confirmed --activate-guarantee`")
+	confirmAfter := strings.Index(clarification, "再对同一 revision 执行\n`workflow requirement --confirmed`")
 	if passFirst < 0 || confirmAfter < 0 || passFirst >= confirmAfter {
 		t.Fatalf("requirements clarification prompt does not record PASS before confirmation:\n%s", clarification)
 	}

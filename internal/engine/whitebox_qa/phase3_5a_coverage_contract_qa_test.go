@@ -95,6 +95,8 @@ func stage35aWhitelistAndFullReport(t *testing.T) (coverage.CoverageContract, co
 		ExpectedCaseIDs:       []string{"CASE-A", "CASE-B"},
 		ActualCaseIDs:         []string{"CASE-A", "CASE-B"},
 	}}
+	current := report.Binding.Candidate
+	c.Candidate = &current
 	for _, entry := range w.Entries {
 		report.Records = append(report.Records, coverage.ExecutionRecord{ReviewKind: entry.ReviewKind, SourceID: entry.SourceID, PointID: entry.PointID, CaseID: entry.CaseID, Result: coverage.ExecutedPass, Provenance: coverage.ProvenanceExecuted})
 	}
@@ -638,8 +640,8 @@ func TestStage35AWhiteboxAffectedExecutionRequiresInheritanceEvidence(t *testing
 	}
 }
 
-// Execution is bound to all contract/whitelist digests and, when supplied,
-// the current candidate identity and digest. Any stale binding invalidates the
+// Execution is bound to all contract/whitelist digests and the independently
+// supplied current candidate identity and digest. Any stale binding invalidates the
 // report before edge reconciliation.
 func TestStage35AWhiteboxExecutionRejectsStaleDigestOrCandidateBinding(t *testing.T) {
 	cases := []struct {
@@ -673,12 +675,11 @@ func TestStage35AWhiteboxExecutionRejectsStaleDigestOrCandidateBinding(t *testin
 			r.Binding.Candidate.Digest = "sha256:other"
 		}, code: coverage.CodeCandidateMismatch},
 		{name: "candidate identity required", mutate: func(_ *coverage.CoverageContract, r *coverage.ExecutionReport) { r.Binding.Candidate.Identity = "" }, code: coverage.CodeCandidateMismatch},
+		{name: "current candidate required", mutate: func(c *coverage.CoverageContract, _ *coverage.ExecutionReport) { c.Candidate = nil }, code: coverage.CodeCandidateMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, w, report := stage35aWhitelistAndFullReport(t)
-			current := report.Binding.Candidate
-			c.Candidate = &current
 			tc.mutate(&c, &report)
 			stage35aCode(t, c.ValidateExecution(w, report), tc.code)
 		})
@@ -753,6 +754,8 @@ func TestStage35AWhiteboxExportedCoverageAdaptersDelegateConsistently(t *testing
 		t.Fatalf("whitelist adapters diverged: method=%+v project=%+v package=%+v", want, gotProject, gotValidate)
 	}
 	_, w, report := stage35aWhitelistAndFullReport(t)
+	current := report.Binding.Candidate
+	c.Candidate = &current
 	if err := coverage.ValidateExecution(c, w, report); err != nil {
 		t.Fatalf("package ValidateExecution: %v", err)
 	}

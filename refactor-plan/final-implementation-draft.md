@@ -152,7 +152,7 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 
 | FailureClass | 唯一合法去向 |
 | --- | --- |
-| `TRANSIENT_ENGINE_ERROR` | 声明式 retry/backoff，耗尽后 Wait 或显式失败 |
+| `TRANSIENT_ENGINE_ERROR` | 绑定未变时按有限 retry/backoff 自动恢复；外部派发缺显式策略时用 canonical `MaxAttempts=2`，耗尽后 typed Ask 或显式失败 |
 | `BUSINESS_REJECT` | definition 中声明的业务边 |
 | `USER_ACTION_REQUIRED` | Ask 或 Wait |
 | `SIDE_EFFECT_UNKNOWN` | observe/reconcile，再到 Wait 或 Operator |
@@ -223,6 +223,8 @@ compiler 只检查它能机械证明的事情（registry ID 存在/唯一/kind �
 普通修改请求只提醒一次可使用 formal-gates；复杂请求在完整需求/方案确认后、动手前再提醒一次。提醒均不需要用户回应，也不阻塞直接处理。
 
 用户主动提出 formal-gates 后直接进入受理，不再重复问“是否进入正式流程”。主代理逐项澄清需求和重大技术选择，然后单独请求确认完整整合后的需求与方案；只有确认后才能 `start`。`start` 后首个 `drive` 自动登记 intake receipt/digest，不再次询问同一份确认。
+
+regular 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定格式。AI 直接把对齐结果写入唯一的正式 UTF-8 Markdown 需求案，不另建草稿或人工维护的覆盖清单；自然语言正文保留，`## 需求点` 下按固定 `REQ → 要求/验收条件/来源` 与唯一 `AC` 结构声明全部必须实现、会改变产品/流程行为或必须进入 QA 保证的义务。确定性预检只校验结构、字段、唯一性与边界，预检通过后仍由用户确认当前完整文件和 revision。纯实现位置、代码边界或未来迁移约束若不改变产品/流程行为，留在方案正文并由技术审、diff、代码审查或实现质量门验证，不伪装成必须 QA 的 `AC`。lightweight 继续只登记需求后 Seal，不写该正式需求案。
 
 受理确认的 typed `intakeConfirmationReceipt` 以固定 stable driver 已写入的确认状态为权威来源；
 固定 launcher 从该状态和登记的 requirement/solution 工件派生回执并落到 formal run evidence，再按
@@ -384,7 +386,12 @@ QA/门返回开发后新细节时，Controller 先用 FailureClass、producing t
 - `wave < 3` 且有已完成处置的 obligation：自动派开发 worker 修复，P2/P3-only 也不问用户；派发任务一律要求 worker 报告完整自测（构建+全量测试+受影响项自跑），P2/P3-only 修复更须写明无复审兜底、自测最严。未定处置 Ask 是最高优先级例外。
 - `wave >= 3` 且有 obligation：一个 Ask 同时提供恰好一轮额外修复、再试 QA、逐 obligation waiver、用户需求变化、abort；额外轮仍失败则重复同型 Ask。
 - QA review/execution scope follows the persisted typed `ReviewScopeMode`: first baseline `FULL`, then `AFFECTED` only for new, modified, or ImpactSet-affected items; product review, technical review, and ordinary quality gates remain `FULL`. Scope is not user-selected during the first three waves.
-- RUNTIME_ERROR 不算 finding、不计 wave；安全重试自动进行，长期不可恢复才 Ask retry/skip/change/abort。
+- RUNTIME_ERROR 不算 finding、不计 wave；绑定未变时按有限策略自动重试，外部派发缺显式
+  策略时使用 canonical `MaxAttempts=2`（首次 + 一次自动重试），额外次数统一按
+  `max(0, MaxAttempts-1)` 计算；任何无界策略均非法。额度或 retry 耗尽必须由 Ask 提供有限
+  继续、重试、跳过或 abort：继续只解锁一个按既有 admission capacity 裁剪的 canonical
+  Ready batch，重试只增加当前逻辑动作的一个 retry slot，均不接受自由数字；Wait 只用于
+  容量、运行中、依赖、迟到 receipt/lifecycle 或 retryable I/O。
 
 waiver 必须绑定当前 validation candidate、request、精确 obligation ID 和理由；PENDING 不可 waiver，后续候选不继承旧 waiver。
 
@@ -406,17 +413,20 @@ repair 的生产改动先形成新 `Dn`，再从它重建/对账 whitebox worksp
 
 黑盒 case review、白盒 test/case review、merge QA case review 使用同一确定性 `PreWaveReviewPolicy`，并持久化 typed `ReviewScopeMode`：首次建立基线为 `FULL`，后续新增、修改或 ImpactSet 受影响项为 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。QA case/test review 与 execution 均逐项使用 approved whitelist；缺失、未知、重复条目或仅总体 PASS 的结果拒绝，只有每项明确 `PASS` 才进入持久化 approved whitelist。按 run/child、review kind、requirement revision 与 route/topology scope 分别计数。第 1、2 次语义 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask fresh redesign、重试/fresh review、改需求、对精确 case-set/candidate 带理由 waiver/skip，或 abort。PASS 关闭/重置 series，runtime error 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（关联留痕），不因 P2 建议本身触发新 review 轮；自拟扩展仍需 fresh review。
 
-覆盖契约把同一次需求/方案确认中的有限 `requiredSources` 直接作为唯一权威交付义务列表，
-不从自然语言另行转抄。source 在确认时只分 QA/非 QA；路线与 topology 确定后由各已选 QA
-kind 的设计者直接在该 kind 的 `AcceptanceManifest` 中记录负责的 source。Controller 聚合
-校验每个 QA source 至少出现在一个已选 kind 的 manifest，非 QA source 只能使用带 PASS 证据的
-替代验证处置。一个 source 可映射多个 point/case；多 kind 出现时所有已声明分支都必须通过。
-review 按 kind 返回逐 manifest source、逐 point、逐 case 决策和未绑定条目；仅有集合级 PASS 不足以通过。
-execution 冻结 expected case ID set，并列出实际执行、合法继承和未执行条目；`FULL`/
-`AFFECTED` 都必须完整对账。`requiredSources` binding/manifest/map/whitelist digest 与当前
-`ValidationCandidate` 精确绑定，摘要展开为 `sourceID → reviewKind → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同
-`EXECUTED_PASS`。Controller/validator 负责结构校验，覆盖率、mutation、property-based test
-和 fuzz 只作辅助信号，不设固定阈值。
+覆盖契约先把同一次需求/方案确认中登记的有限 `requiredSources` 与当前 revision、
+route/topology scope 一起冻结，再生成有限验收点集合 `AcceptanceManifest`，并用
+source↔point↔case 映射建立双向追踪。标准需求案适配器直接把每个 `REQ` 投影为
+`RequiredSource(PRODUCT_REQUIREMENT, QA)`、每个 `AC` 投影为 `AcceptancePoint`、已设计 QA case
+投影为 `AcceptanceCase`，关系只由 `CoverageEdge` 表达；标准需求案中的全部 `AC` 都必须有
+approved case，不允许使用“非 QA 验证处置”绕过。其他合法 source 才可按自身协议使用显式
+非 QA 处置。review 必须显式返回完整 `SourceDecisions`、`PointDecisions`、`CaseDecisions` 和未绑定
+集合；不得由 case PASS 自动推导或补写 source/point PASS，三层全部逐项 PASS 后才能生成
+whitelist。仅有集合级 PASS 不足以通过。execution 冻结 expected case ID set，并列出
+实际执行、合法继承和未执行条目；`FULL`/`AFFECTED` 都必须完整对账。source inventory/
+manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘要展开为
+`sourceID → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。
+Controller/validator 负责结构校验，覆盖率、mutation、property-based test 和 fuzz 只作辅助
+信号，不设固定阈值。
 
 ## 8. 分片、主线合并与 VCS
 
@@ -508,8 +518,10 @@ provider identity、bridge installed/available 和 lifecycle paired status 分�
 
 中断与 UNKNOWN 分开处理：
 
-- 客观瞬态且 bindings 未变：自动 resume 原 Attempt；
-- 任务/snapshot/责任变化或已知非瞬态：自动新 Attempt，旧 Attempt terminate/stale；
+- 客观瞬态且 bindings 未变：在该 Attempt 的有限 retry 余量内自动 resume；外部派发无显式
+  策略时使用 canonical `MaxAttempts=2`，耗尽后进入 typed Ask；
+- 任务/snapshot/责任变化或已知非瞬态：自动新 Attempt，旧 Attempt terminate/stale；新 Attempt
+  使用重新计算的计划槽位，不冒充同绑定 retry；
 - bindings 未变但原因未知：Ask resume/fresh/abort；
 - receipt UNKNOWN：先查 lifecycle，唯一匹配自动 attach，多重/无匹配进 Operator，绝不盲目 respawn。
 
@@ -545,7 +557,6 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 - 为最终公共命令面、旧 run 拒绝、用户节点、StepSpec/失败分类、parallel frontier、产品/技术审独立三轮、开发后三轮和 split receipts 建 contract fixtures。
 - 冻结当前正常使用中仍需由内部 handler 承接的业务语义，不冻结旧命令形态或兼容行为。
 - 阶段 0 的分发事务先由冻结 stable driver 调用 `install --bootstrap` 建立 registry；bootstrap 不创建 workflow state。安装、admission bridge、Go installer、Shell/PowerShell 共享同一 native owner，按 `switched -> installed-path post-switch/pre-commit smoke -> atomic runtime/pointer/config+registry commit -> journal committed` 顺序执行，失败由同一 journal 对账并恢复旧 runtime/config/registry。
-- 只为未来版本化 engine/candidate surface 冻结 state/definition version envelope 与缺失/不匹配 fixture；stable driver 和既有 legacy run 继续沿用当前 state 格式及写入语义，严格版本拒绝在 engine surface 可用后才生效。
 
 ### 阶段 1：纯决策内核
 
