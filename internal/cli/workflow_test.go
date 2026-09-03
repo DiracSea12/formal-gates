@@ -528,6 +528,7 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			requirementsDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "requirements-clarification")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", requirementsDispatch, "--status", "PASS")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "requirement", "--root", root, "--package-root", pkg, "--run-id", runID, "--confirmed")
+			clearCLITestRequirementGuarantee(t, root, runID)
 
 			productDispatch := prepareInstalledAction(t, binary, root, pkg, runID, "product-review")
 			productIdentity := tc.name + "-product-review"
@@ -535,7 +536,9 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			runInstalledCLI(t, binary, productCaptureDir, productEnvironment, productStartPayload, "lifecycle", "capture", "--provider", tc.provider, "--event", tc.startEvent)
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", runID, "--dispatch", productDispatch, "--reviewer", productIdentity)
 			runInstalledCLI(t, binary, productCaptureDir, productEnvironment, productStopPayload, "lifecycle", "capture", "--provider", tc.provider, "--event", tc.stopEvent)
-			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "product-review", "--dispatch", productDispatch, "--status", "PASS")
+			productRecordArgs := []string{"workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "product-review", "--dispatch", productDispatch, "--status", "PASS"}
+			productRecordArgs = append(productRecordArgs, cliOperatorVerificationArgs()...)
+			runInstalledCLI(t, binary, root, nil, "", productRecordArgs...)
 
 			dispatchID := prepareInstalledAction(t, binary, root, pkg, runID, "start-readiness")
 			identity := tc.name + "-agent"
@@ -548,7 +551,9 @@ func TestCLIInstalledHostsResolveLifecycleEventsToActiveWorkflowRoot(t *testing.
 			if !strings.Contains(verification, `"outcome": "VERIFIED"`) || !strings.Contains(verification, `"provider": "`+tc.provider+`"`) {
 				t.Fatalf("unexpected lifecycle verification: %s", verification)
 			}
-			runInstalledCLI(t, binary, root, nil, "", "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "start-readiness", "--dispatch", dispatchID, "--status", "PASS")
+			readinessRecordArgs := []string{"workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", "start-readiness", "--dispatch", dispatchID, "--status", "PASS"}
+			readinessRecordArgs = append(readinessRecordArgs, cliOperatorVerificationArgs()...)
+			runInstalledCLI(t, binary, root, nil, "", readinessRecordArgs...)
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", runID, "--decision", "no-split", "--note", "single coherent bounded unit")
 			runInstalledCLI(t, binary, root, nil, "", "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", runID, "--mode", "custom", "--gate", "implementation-quality-gate")
 			state := installedWorkflowState(t, binary, root, runID)
@@ -646,14 +651,52 @@ func startCLIWorkflow(t *testing.T, root, pkg, id string) validate.RunState {
 	return state
 }
 
+func clearCLITestRequirementGuarantee(t *testing.T, root, runID string) {
+	t.Helper()
+	state, err := validate.LoadRunState(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.RequirementGuarantee = nil
+	if err := validate.SaveRunState(root, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func cliRecordAction(t *testing.T, root, pkg string, state validate.RunState, action, status string) validate.RunState {
 	t.Helper()
+	if action == "product-review" && len(state.RequirementArtifacts) > 1 {
+		clearCLITestRequirementGuarantee(t, root, state.RunID)
+		var err error
+		state, err = validate.LoadRunState(root, state.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	dispatchID := cliPrepareAction(t, root, pkg, state.RunID, action)
-	out := runCLI(t, "workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", action, "--dispatch", dispatchID, "--status", status)
+	args := []string{"workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", action, "--dispatch", dispatchID, "--status", status}
+	if action == "product-review" || action == "start-readiness" {
+		args = append(args, cliOperatorVerificationArgs()...)
+	}
+	if action == "product-review" && state.RequirementGuarantee != nil && state.RequirementGuarantee.Projection != nil {
+		for _, requirement := range state.RequirementGuarantee.Projection.Requirements {
+			args = append(args, "--item", requirement.ID+" obligation-to-AC completeness", "--item-status", "PASS")
+		}
+	}
+	out := runCLI(t, args...)
 	if err := json.Unmarshal([]byte(out), &state); err != nil {
 		t.Fatal(err)
 	}
 	return state
+}
+
+func cliOperatorVerificationArgs() []string {
+	checks := []string{"requirement-match", "normal-entry", "evidence", "locations", "scope", "severity", "binding", "completeness"}
+	args := make([]string, 0, len(checks)*2+2)
+	for _, check := range checks {
+		args = append(args, "--operator-check", check)
+	}
+	return append(args, "--operator-evidence", "verified candidate against the bound requirement, normal entry path, evidence, locations, scope, severity, dispatch binding, and completeness")
 }
 
 func cliPrepareAction(t *testing.T, root, pkg, runID, action string) string {
@@ -730,7 +773,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	root := t.TempDir()
-	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "requirement\n")
+	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Requirement."))
 	mustWriteCLI(t, filepath.Join(root, "design.md"), "design\n")
 	// 白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
 	// 引用（<文件>::<函数>）的定位目标。与 internal/validate 的 whiteboxDeliveredTestCode
@@ -752,6 +795,10 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	}
 	mustWriteCLI(t, filepath.Join(pkg, "gates", "quality.md"), "quality checks\n")
 	return root, pkg
+}
+
+func cliStructuredRequirement(requirement string) string {
+	return "## 需求点\n\n### REQ-001：Test requirement\n\n#### 要求\n\n" + requirement + "\n\n#### 验收条件\n\n- AC-001：The test requirement is satisfied.\n\n#### 来源\n\nTest fixture.\n"
 }
 
 func environmentWithOverrides(environment []string, overrides map[string]string) []string {
@@ -1028,7 +1075,7 @@ func TestCLIRequirementRebindRejectedWithInFlightDispatch(t *testing.T) {
 	}
 	_ = dispatchID
 	// 需求文档已改动，但存在在途审查派发 → 重绑被拒。
-	mustWriteCLI(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Changed requirement."))
 	cliGit(t, root, "add", "--all")
 	cliGit(t, root, "commit", "-m", "change requirement")
 	var stderr bytes.Buffer

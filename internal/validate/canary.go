@@ -259,7 +259,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 		defer os.RemoveAll(root)
 	}
 	requirement := filepath.Join(root, "requirement.md")
-	if err := os.WriteFile(requirement, []byte("confirmed behavior\n"), 0o600); err != nil {
+	if err := os.WriteFile(requirement, []byte("# Canary requirement\n\n## 需求点\n\n### REQ-001：Confirmed behavior\n\n#### 要求\n\nThe installed workflow must complete its verified route.\n\n#### 验收条件\n\n- AC-001：The installed workflow reaches Seal through the public runtime.\n\n#### 来源\n\nPortable canary contract.\n"), 0o600); err != nil {
 		return err
 	}
 	if err := initializeCanaryGit(root); err != nil {
@@ -280,7 +280,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", nil)
+	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", nil, RequirementUpdateOptions{ActivateGuarantee: true})
 	if err != nil {
 		return err
 	}
@@ -293,7 +293,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", ReviewItemInput{Key: guaranteeProductReviewKey("REQ-001"), Status: "PASS"})
 	if err != nil {
 		return err
 	}
@@ -320,35 +320,80 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design", "", false, ""); err != nil {
+	// The full route owns separate blackbox and whitebox review authorities. Keep
+	// the canary on those public per-mode paths so an explicitly active guarantee
+	// proves that both review kinds contribute approved REQ/AC evidence.
+	qaWorktree, err := os.MkdirTemp("", "formal-gates-canary-qa-")
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(qaWorktree); err != nil {
+		return err
+	}
+	runner := execNativeCommandRunner{}
+	if _, err := runner.Run(root, "git", "worktree", "add", "--detach", qaWorktree, state.BaseSnapshot); err != nil {
+		return err
+	}
+	defer func() { _, _ = runner.Run(root, "git", "worktree", "remove", "--force", qaWorktree) }()
+	state, err = RegisterQAWorktree(root, packageRoot, state.RunID, qaWorktree)
+	if err != nil {
+		return err
+	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design", "blackbox", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
 	dispatchID = openDispatchID(state, "action", "qa-design")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-design")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-blackbox-design")
 	if err != nil {
 		return err
 	}
-	// 白盒设计者交付的结构测试代码——canary 仓库带一个测试文件，作为白盒用例测试
-	// 引用的定位目标（<文件>::<函数>）；CLI 记录时只校验引用非空/1:1，存在性由 qa-review
-	// 读代码核对、qa-execution 实际运行验证。
-	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
-		return err
-	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior"}, {Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed"}}, "")
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "blackbox", Description: "confirmed behavior", Procedure: "exercise the public command", Oracle: "the behavior is observed", AcceptanceCriteria: []string{"AC-001"}}}, "")
 	if err != nil {
 		return err
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "", false, ""); err != nil {
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "blackbox", false, ""); err != nil {
 		return err
 	}
 	state, _ = LoadRunState(root, state.RunID)
 	dispatchID = openDispatchID(state, "action", "qa-review")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-reviewer")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-blackbox-reviewer")
 	if err != nil {
 		return err
 	}
-	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-001", Outcome: "PASS"}, {CaseID: "CASE-002", Outcome: "PASS"}}, "", nil)
+	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-001", Outcome: "PASS"}}, "", nil, QAReviewRecordOptions{SourceDecisions: []string{"REQ-001=PASS"}, PointDecisions: []string{"AC-001=PASS"}, CaseDecisions: []string{"CASE-001=PASS"}})
+	if err != nil {
+		return err
+	}
+
+	// The whitebox designer contributes a test locator in the delivery snapshot;
+	// review and execution later bind that case to the same confirmed AC.
+	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
+		return err
+	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design", "whitebox", false, ""); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID = openDispatchID(state, "action", "qa-design")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-whitebox-design")
+	if err != nil {
+		return err
+	}
+	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "direct behavior", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior", AcceptanceCriteria: []string{"AC-001"}}}, "")
+	if err != nil {
+		return err
+	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "whitebox", false, ""); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID = openDispatchID(state, "action", "qa-review")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-whitebox-reviewer")
+	if err != nil {
+		return err
+	}
+	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-002", Outcome: "PASS"}}, "", nil, QAReviewRecordOptions{SourceDecisions: []string{"REQ-001=PASS"}, PointDecisions: []string{"AC-001=PASS"}, CaseDecisions: []string{"CASE-002=PASS"}})
 	if err != nil {
 		return err
 	}
@@ -372,18 +417,24 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 		status, _ := (execNativeCommandRunner{}).Run(root, "git", "status", "--porcelain=v1", "--untracked-files=all")
 		return fmt.Errorf("%w (git status: %s)", err, strings.TrimSpace(status))
 	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution", "", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "qa-execution")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-qa-execution")
-	if err != nil {
-		return err
-	}
-	state, err = RecordQAExecution(root, packageRoot, state.RunID, dispatchID, []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran direct check", Observation: "passed", OracleResult: "matched"}, {CaseID: "CASE-002", Outcome: "PASS", Procedure: "exercised public command", Observation: "observed", OracleResult: "matched"}}, "")
-	if err != nil {
-		return err
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution", mode, false, ""); err != nil {
+			return err
+		}
+		state, _ = LoadRunState(root, state.RunID)
+		dispatchID = openDispatchID(state, "action", "qa-execution")
+		state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-"+mode+"-execution")
+		if err != nil {
+			return err
+		}
+		results := make([]QAResultInput, 0, len(state.qaModeCases(mode)))
+		for _, testCase := range state.qaModeCases(mode) {
+			results = append(results, QAResultInput{CaseID: testCase.ID, Outcome: "PASS", Procedure: "ran the approved " + mode + " check", Observation: "passed", OracleResult: "matched"})
+		}
+		state, err = RecordQAExecution(root, packageRoot, state.RunID, dispatchID, results, "")
+		if err != nil {
+			return err
+		}
 	}
 	for index, gate := range catalog.Gates {
 		// 合并门是条件自动门：只在分片 >= 2 的保留总任务实例自动附加，不进入正常

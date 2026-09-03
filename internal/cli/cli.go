@@ -492,7 +492,7 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 		run, err := facadeRun.Show()
 		return printValue(streams.Stdout, run, err)
 	}
-	state, err := validate.LoadRunState(*root, *runID)
+	state, err := validate.LoadRunStateForShow(*root, *runID)
 	if err != nil {
 		if _, stateStatErr := os.Stat(validate.RunStatePath(*root, *runID)); os.IsNotExist(stateStatErr) {
 			summary, summaryErr := validate.LoadRunSummary(*root, *runID)
@@ -720,6 +720,7 @@ func runWorkflowRequirement(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "run id")
 	source := fs.String("source", "", "requirement source path; defaults to the current source")
 	confirmed := fs.Bool("confirmed", false, "mark this exact requirement revision confirmed")
+	activateGuarantee := fs.Bool("activate-guarantee", false, "explicitly freeze this confirmed requirement revision and activate the REQ/AC QA guarantee when the selected route uses QA")
 	meaning := fs.String("meaning", "", "semantic effect for a changed revision: preserved or changed")
 	var artifacts stringListFlag
 	fs.Var(&artifacts, "requirement-artifact", "complete additional requirement artifact set; repeat as needed")
@@ -742,7 +743,7 @@ func runWorkflowRequirement(args []string, streams IO) (int, error) {
 	} else if artifacts != nil {
 		artifactSet = artifacts
 	}
-	state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, artifactSet)
+	state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, artifactSet, validate.RequirementUpdateOptions{ActivateGuarantee: *activateGuarantee})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -768,6 +769,8 @@ func runWorkflowSlicing(args []string, streams IO) (int, error) {
 	parallel := fs.String("parallel", "", "parallel suggestion (which subtasks may run concurrently)")
 	note := fs.String("note", "", "reason trace; required for no-split (建议不拆原因)")
 	master := fs.String("master", "", "retained-overall master run id for a slice instance split decision")
+	acOwners := stringListFlag{}
+	fs.Var(&acOwners, "ac-owner", "complete AC primary-responsibility assignment <AC-ID>=<slice-run-id|master-merge>; repeat for every AC on a guaranteed split")
 	// --user-confirm：拆分决定与启动拆分声明冲突时的用户确认声明修订——--split no 的 run
 	// 记 split 自升保留总任务实例（不重启）、保留总任务实例记 no-split 降级解死端；修订理由
 	// 必填（--note）。切片实例（--master）不可经修订脱钩；绑定点仍是本次记录（记录后不重切）。
@@ -778,7 +781,7 @@ func runWorkflowSlicing(args []string, streams IO) (int, error) {
 	if err := rejectEngineEntry(*root, *runID); err != nil {
 		return 1, err
 	}
-	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master, validate.SlicingAmendOptions{UserConfirm: *userConfirm})
+	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master, validate.SlicingAmendOptions{UserConfirm: *userConfirm, ACResponsibilities: acOwners})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -791,11 +794,36 @@ func runWorkflowSettleFindings(args []string, streams IO) (int, error) {
 	fs.Var(&confirm, "confirm", "finding the user confirms as a real problem (需修订); repeat as needed")
 	dismiss := stringListFlag{}
 	fs.Var(&dismiss, "dismiss", "finding the user dismisses as not a problem (作废); repeat as needed")
+	dispatch := fs.String("dispatch", "", "exact semantic review dispatch binding for a correction")
+	resultDigest := fs.String("result-digest", "", "exact immutable raw review result digest")
+	requirementRevision := fs.String("requirement-revision", "", "exact requirement revision bound to the raw result")
+	findingID := fs.String("finding-id", "", "stable finding id; omit only for whole-result invalidation")
+	decision := fs.String("decision", "", "CONFIRM, DISMISS, RESEVERITIZE, INVALIDATE_FINDING, or INVALIDATE_RESULT")
+	severity := fs.String("severity", "", "new P0/P1/P2/P3 severity for RESEVERITIZE")
+	invalidity := fs.String("invalidity", "", "INVALID, INCOMPLETE, STALE, or MISBOUND for INVALIDATE_RESULT")
+	supersedes := fs.String("supersedes", "", "current adjudication/correction id that this correction supersedes")
+	reason := fs.String("reason", "", "non-empty semantic correction reason")
+	source := fs.String("source", "", "non-empty user authorization source")
+	userAuthorized := fs.Bool("user-authorized", false, "explicit user authorization for the semantic disposition/correction")
+	expectedRevision := fs.Int("expected-effective-revision", -1, "CAS revision of the current effective review status")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
 	if err := rejectEngineEntry(*root, *runID); err != nil {
 		return 1, err
+	}
+	if strings.TrimSpace(*decision) != "" {
+		if len(confirm) != 0 || len(dismiss) != 0 {
+			return 1, fmt.Errorf("exact correction flags cannot be combined with --confirm/--dismiss")
+		}
+		state, err := validate.RecordReviewCorrection(*root, *pkg, *runID, validate.ReviewCorrectionInput{
+			Action: *action, DispatchID: *dispatch, ResultDigest: *resultDigest,
+			RequirementRevision: *requirementRevision, FindingID: *findingID,
+			Decision: *decision, Severity: *severity, Invalidity: *invalidity,
+			Supersedes: *supersedes, Reason: *reason, Source: *source,
+			UserAuthorized: *userAuthorized, ExpectedEffectiveRevision: *expectedRevision,
+		})
+		return printValue(streams.Stdout, state, err)
 	}
 	state, err := validate.RecordSettledFindings(*root, *pkg, *runID, *action, confirm, dismiss)
 	return printValue(streams.Stdout, state, err)
@@ -1071,11 +1099,12 @@ func runWorkflowSeal(args []string, streams IO) (int, error) {
 	skips := stringListFlag{}
 	fs.Var(&skips, "skip", "selected non-passing gate explicitly authorized to skip")
 	userRequested := fs.Bool("user-requested", false, "user explicitly requests the FAIL skips before the review-wave limit is exhausted")
+	guaranteeWaiverReason := fs.String("guarantee-waiver-reason", "", "required audit reason when --skip requirement-guarantee explicitly waives an incomplete REQ/AC guarantee")
 	squashMessage := fs.String("squash-message", "", "combined commit message when seal squashes the git base-to-current range")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	summary, err := validate.Seal(*root, *pkg, *runID, skips, *userRequested, *squashMessage)
+	summary, err := validate.Seal(*root, *pkg, *runID, skips, *userRequested, *squashMessage, validate.SealOptions{GuaranteeWaiverReason: *guaranteeWaiverReason})
 	return workflowResult(streams, *root, *runID, summary, err)
 }
 
@@ -1115,6 +1144,9 @@ func runRecordAction(args []string, streams IO) (int, error) {
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	userRequested := fs.Bool("user-requested", false, "user explicitly requests an override of the review rule (records the authorization source)")
 	userReason := fs.String("user-reason", "", "user reason for the override")
+	operatorChecks := stringListFlag{}
+	fs.Var(&operatorChecks, "operator-check", "repeat for requirement-match, normal-entry, evidence, locations, scope, severity, binding, and completeness")
+	operatorEvidence := fs.String("operator-evidence", "", "concise evidence that the Operator performed every declared verification check")
 	findings := newFindingFlags(fs)
 	items := []validate.ReviewItemInput{}
 	newReviewItemStart(fs, &items)
@@ -1123,7 +1155,8 @@ func runRecordAction(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordAction(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings, *userRequested, *userReason, items...)
+	verification := validate.OperatorVerification{Checks: append([]string{}, operatorChecks...), Evidence: *operatorEvidence}
+	state, err := validate.RecordActionWithOperatorVerification(*root, *pkg, *runID, *action, *dispatch, *status, *message, *findings, *userRequested, *userReason, verification, items...)
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -1159,6 +1192,8 @@ func runQADesign(args []string, streams IO) (int, error) {
 	newQACaseField(fs, "procedure", "procedure for the current QA case", "procedure", &cases)
 	newQACaseField(fs, "oracle", "oracle for the current QA case", "oracle", &cases)
 	newQACaseField(fs, "test", "whitebox test reference <file>::<function> locating the delivered test implementing the current QA case (RQ-013 binding; required for whitebox cases, unique per case)", "test", &cases)
+	newQACaseListField(fs, "ac", "primary AC id covered by the current case; repeat for every primary binding", &cases, false)
+	newQACaseListField(fs, "additional-ac", "additional AC id covered by the current case without changing primary split responsibility; repeat as needed", &cases, true)
 	// --remove-case / --replace-all 是增量记录之外的显式操作：前者按 id 删除（可重复），
 	// 后者整体替换本 mode 用例集（替换空集即清空该 mode），二者互斥。
 	removeCases := stringListFlag{}
@@ -1185,11 +1220,30 @@ func runQAReview(args []string, streams IO) (int, error) {
 	newQAReviewStart(fs, &decisions)
 	newQAReviewField(fs, "outcome", "PASS or FAIL", "outcome", &decisions)
 	newQAReviewField(fs, "reason", "required reason for FAIL", "reason", &decisions)
+	sourceDecisions := stringListFlag{}
+	pointDecisions := stringListFlag{}
+	caseDecisions := stringListFlag{}
+	unboundSources := stringListFlag{}
+	unboundPoints := stringListFlag{}
+	unboundCases := stringListFlag{}
+	fs.Var(&sourceDecisions, "source-decision", "explicit complete REQ/source review decision <REQ-ID>=<PASS|FAIL|PENDING>; repeat for every source")
+	fs.Var(&pointDecisions, "point-decision", "explicit complete AC/point review decision <AC-ID>=<PASS|FAIL|PENDING>; repeat for every point")
+	fs.Var(&caseDecisions, "case-decision", "explicit complete case review decision <CASE-ID>=<PASS|FAIL|PENDING>; repeat for every case")
+	fs.Var(&unboundSources, "unbound-source", "REQ/source id found unbound by the review; repeat as needed")
+	fs.Var(&unboundPoints, "unbound-point", "AC/point id found unbound by the review; repeat as needed")
+	fs.Var(&unboundCases, "unbound-case", "case id found unbound by the review; repeat as needed")
 	findings := newFindingFlags(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQAReview(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *findings)
+	state, err := validate.RecordQAReview(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *findings, validate.QAReviewRecordOptions{
+		SourceDecisions: sourceDecisions,
+		PointDecisions:  pointDecisions,
+		CaseDecisions:   caseDecisions,
+		UnboundSources:  unboundSources,
+		UnboundPoints:   unboundPoints,
+		UnboundCases:    unboundCases,
+	})
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -1616,6 +1670,24 @@ type itemFieldFlag[T any] struct {
 	setField      func(*T, string)
 }
 
+// itemListFieldFlag appends a repeatable value to the most recently started
+// item. Unlike itemFieldFlag, repeated uses are intentional.
+type itemListFieldFlag[T any] struct {
+	items       *[]T
+	followFlag  string
+	followLabel string
+	appendValue func(*T, string)
+}
+
+func (f *itemListFieldFlag[T]) String() string { return "" }
+func (f *itemListFieldFlag[T]) Set(v string) error {
+	if len(*f.items) == 0 {
+		return fmt.Errorf("%s must follow --%s", f.followLabel, f.followFlag)
+	}
+	f.appendValue(&(*f.items)[len(*f.items)-1], v)
+	return nil
+}
+
 func (f *itemFieldFlag[T]) String() string { return "" }
 func (f *itemFieldFlag[T]) Set(v string) error {
 	if len(*f.items) == 0 {
@@ -1662,6 +1734,21 @@ func newQACaseField(fs *flag.FlagSet, name, usage, field string, cases *[]valida
 			p.Oracle = v
 		}
 	})
+}
+
+func newQACaseListField(fs *flag.FlagSet, name, usage string, cases *[]validate.QACaseInput, additional bool) {
+	fs.Var(&itemListFieldFlag[validate.QACaseInput]{
+		items:       cases,
+		followFlag:  "case",
+		followLabel: "case AC binding",
+		appendValue: func(item *validate.QACaseInput, value string) {
+			if additional {
+				item.AdditionalAcceptanceCriteria = append(item.AdditionalAcceptanceCriteria, value)
+			} else {
+				item.AcceptanceCriteria = append(item.AcceptanceCriteria, value)
+			}
+		},
+	}, name, usage)
 }
 
 func newQAReviewStart(fs *flag.FlagSet, items *[]validate.QAReviewInput) {

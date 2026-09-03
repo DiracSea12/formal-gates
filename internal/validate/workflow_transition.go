@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"formal-gates/internal/engine/coverage"
 )
 
 func requireTransition(state RunState, operation, target string) error {
@@ -113,6 +115,16 @@ func requireStartReadinessTransition(state RunState) error {
 }
 
 func requireQADesignTransition(state RunState, target string) error {
+	if state.RequirementGuarantee != nil {
+		if len(state.RequirementArtifacts) != 1 {
+			return fmt.Errorf("QA-enabled requirement guarantee requires exactly one formal requirement artifact before QA design")
+		}
+	}
+	if state.RouteMode != "" {
+		if err := guaranteeReadyForQA(state); err != nil {
+			return err
+		}
+	}
 	if state.RouteMode == "" {
 		// 快速路径：黑盒 QA 设计在拆分决定与路线确认前与 start-readiness 并行开始，
 		// 此时路线尚未确认、QA 也未被选中；设计是黑盒且是固有取舍，最终路线不含黑盒
@@ -235,6 +247,20 @@ func requireSnapshotTransition(state RunState) error {
 func requireQAExecutionTransition(state RunState, target string) error {
 	if !isSelectedQA(state) {
 		return fmt.Errorf("QA is not selected")
+	}
+	if err := guaranteeReadyForQA(state); err != nil {
+		return err
+	}
+	if state.RequirementGuarantee != nil {
+		if scope, ok := state.ExecutionScopes[target]; ok && scope.Decision == "AFFECTED" {
+			return fmt.Errorf("an active requirement guarantee requires FULL QA execution; AFFECTED/inherited scope is not accepted")
+		}
+		if !isMergeVerification(state) {
+			review, ok := state.RequirementGuarantee.ReviewsByMode[target]
+			if !ok || review.Review.SetStatus != coverage.StatusPass || review.Whitelist == nil {
+				return fmt.Errorf("QA execution requires explicit PASS decisions for every REQ/source, AC/point, and case in mode %q", target)
+			}
+		}
 	}
 	if !hasDevelopmentSnapshot(state) {
 		return fmt.Errorf("an immutable development snapshot is required before QA Execution")
@@ -509,7 +535,7 @@ func dispatchTaskUnchanged(root string, state RunState, catalog PromptCatalog, d
 		route.CurrentSnapshot = state.BaseSnapshot
 	}
 	route.DispatchID, route.DispatchAttempt, route.ReviewWave = dispatch.ID, dispatch.Attempt, dispatch.ReviewWave
-	prompt, err := composeDispatchPrompt(state, catalog, route, dispatch)
+	prompt, err := composeDispatchPrompt(root, state, catalog, route, dispatch)
 	if err != nil {
 		return false, err
 	}

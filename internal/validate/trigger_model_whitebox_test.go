@@ -349,6 +349,20 @@ func TestRenamedArtifactsDropLightweightWording(t *testing.T) {
 	assertLacksText(t, clarification, "轻量澄清兜底")
 }
 
+// Case: requirements clarification must return its user-confirmed PASS before
+// the controller invokes the confirmation command whose precondition is that
+// recorded PASS. The prompt must not instruct the action to call the command
+// first, which would leave the public workflow in a circular wait.
+func TestRequirementsClarificationPromptRecordsPassBeforeConfirmationCommand(t *testing.T) {
+	clarification := readWorktreeFile(t, "prompts/actions/requirements-clarification.md")
+	passFirst := strings.Index(clarification, "先用\n`record-action` 记录该 PASS")
+	confirmAfter := strings.Index(clarification, "再对同一 revision 执行\n`workflow requirement --confirmed --activate-guarantee`")
+	if passFirst < 0 || confirmAfter < 0 || passFirst >= confirmAfter {
+		t.Fatalf("requirements clarification prompt does not record PASS before confirmation:\n%s", clarification)
+	}
+	assertHasText(t, clarification, "不得在 PASS 记录前执行确认命令")
+}
+
 // Case: a lightweight run can go start (--route lightweight) → 需求登记 → Seal
 // in three steps, skipping the slicing decision, route selection, development
 // snapshot and every verification gate, and its seal record is explicitly marked

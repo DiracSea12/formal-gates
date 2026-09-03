@@ -68,6 +68,9 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 		t.Fatalf("artifact order=%v", got)
 	}
 	state = confirmAndRoute(t, root, pkg, state, "custom", []string{"quality"})
+	if state.RequirementGuarantee != nil {
+		t.Fatalf("ordinary multi-artifact confirmation inferred a guarantee: %#v", state.RequirementGuarantee)
+	}
 	prepareDispatch(t, root, pkg, state.RunID, "development-worker")
 	state, _ = LoadRunState(root, state.RunID)
 	if !developmentStarted(state) {
@@ -323,7 +326,8 @@ func TestQAKindsAndIncrementalReviewApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reviewPrompt, "Accepted coverage context") || strings.Count(reviewPrompt, "mode: whitebox") != 0 || !strings.Contains(reviewPrompt, "mode: blackbox") {
+	pendingAt := strings.Index(reviewPrompt, "Return one decision for every pending case below:")
+	if pendingAt < 0 || !strings.Contains(reviewPrompt[:pendingAt], "Accepted coverage context") || !strings.Contains(reviewPrompt[:pendingAt], "mode: whitebox") || strings.Contains(reviewPrompt[pendingAt:], "mode: whitebox") || !strings.Contains(reviewPrompt[pendingAt:], "mode: blackbox") {
 		t.Fatalf("retry prompt did not separate accepted and pending cases: %s", reviewPrompt)
 	}
 	state, _ = LoadRunState(root, state.RunID)
@@ -1115,7 +1119,7 @@ func TestResumeAndAbortNormalLifecycle(t *testing.T) {
 		if err != nil || report.ClassificationRequired {
 			t.Fatalf("unchanged run did not resume: report=%#v err=%v", report, err)
 		}
-		writeTestFile(t, filepath.Join(root, "requirements.md"), "revised requirement\n")
+		writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised requirement."))
 		report, err = ResumeReport(root, pkg, state.RunID)
 		if err != nil || !report.ClassificationRequired {
 			t.Fatalf("normal requirement edit was not reported on Resume: report=%#v err=%v", report, err)
@@ -1575,7 +1579,7 @@ func TestPostDevelopmentPreservedRebindKeepsPass(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "preserved", "custom", []string{"quality"})
 	state = recordGateResult(t, root, pkg, state, "quality", "preserved-quality", "PASS", "", nil)
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised meaning-preserved requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised meaning-preserved requirement."))
 	commitAll(t, root, "revised requirement")
 	state, err := UpdateRequirement(root, pkg, state.RunID, "", true, "preserved", nil)
 	if err != nil {
@@ -2285,15 +2289,31 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	if got := state.SettledFindings["product-review"]; len(got) != 2 {
 		t.Fatalf("settled findings not recorded: %#v", state.SettledFindings)
 	}
-	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, "")
+	// Dismissing every blocker now projects effective PASS immediately. A new
+	// review is unnecessary and therefore requires the existing explicit
+	// user-requested re-review override; use it here only to verify settled input
+	// injection remains intact.
+	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review", "", true, "user requests an explicit verification re-review")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "settled finding one") || !strings.Contains(prompt, "Do not re-raise") {
 		t.Fatalf("settled findings not injected into product-review prompt: %s", prompt)
 	}
-	// 驳回的 P0/P1 不阻塞：重录一轮 PASS 可直接通过（无未处置的阻塞项）。
-	state = recordProductReview(t, root, pkg, state)
+	// 消费上面显式请求的复审派发；正常推进并不需要这轮空审查。
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchID = openDispatchID(state, "action", "product-review")
+	state, err = ClaimDispatch(root, pkg, state.RunID, dispatchID, "settled-product-reviewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	state = recordReadiness(t, root, pkg, state)
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
 	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "settled technical decision"}}, false, "")
@@ -2304,7 +2324,7 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt, err = PrepareAction(root, pkg, state.RunID, "start-readiness", "", false, "")
+	prompt, err = PrepareAction(root, pkg, state.RunID, "start-readiness", "", true, "user requests an explicit verification re-review")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2324,7 +2344,7 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised requirement."))
 	commitAll(t, root, "revised requirement")
 	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
 	if err != nil {
@@ -2761,7 +2781,13 @@ func sliceMaster(t *testing.T, root, pkg, id string) string {
 func recordProductReview(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	var items []ReviewItemInput
+	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Projection != nil {
+		for _, requirement := range state.RequirementGuarantee.Projection.Requirements {
+			items = append(items, ReviewItemInput{Key: guaranteeProductReviewKey(requirement.ID), Status: "PASS"})
+		}
+	}
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", items...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2927,7 +2953,7 @@ func passingExecution(cases []QACase) []QAResultInput {
 func workflowFixture(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Requirement."))
 	writeTestFile(t, filepath.Join(root, "design.md"), "design\n")
 	// 测试仓库与实际仓库一致地忽略运行期临时状态：否则 .gates/tmp/ 会被误跟踪进
 	// "基线到当前"交付 diff，认领后等状态写入会让工作树变脏。.gates/results 是 seal
@@ -3389,7 +3415,7 @@ func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
 		t.Fatalf("disposing the blocked round failed: %v", err)
 	}
 	// 修订需求（语义保留）后派发重审轮并返回 PASS：标记清除，PASS 可记录。
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "revised meaning-preserved requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised meaning-preserved requirement."))
 	commitAll(t, root, "revise requirement (preserved)")
 	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil)
 	if err != nil {
@@ -3426,14 +3452,13 @@ func TestReviewRuleDismissedP0P1DoesNotBlock(t *testing.T) {
 	if state.NeedsReReview["product-review"] != "" {
 		t.Fatalf("dismissed P0/P1 must not set the marker: %#v", state.NeedsReReview)
 	}
-	// 驳回的 P0/P1 不阻塞：新轮可记录 PASS（即使携带已驳回的 P0/P1 也不阻塞）。
-	next := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", []FindingInput{{Severity: "P0", Message: "voided problem"}}, false, "")
-	if err != nil {
-		t.Fatalf("dismissed P0/P1 blocked PASS: %v", err)
-	}
+	// 驳回唯一 blocker 后 effective status 直接变为 PASS；不得为了改写聚合状态
+	// 再空跑一轮 review。
 	if state.Actions["product-review"].Status != "PASS" {
-		t.Fatalf("review with dismissed P0/P1 did not pass: %#v", state.Actions["product-review"])
+		t.Fatalf("dismissed P0/P1 did not project PASS directly: %#v", state.Actions["product-review"])
+	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "authoritative PASS") {
+		t.Fatalf("an unnecessary empty re-review was prepared after blocker dismissal: %v", err)
 	}
 }
 
@@ -3920,11 +3945,11 @@ func TestAuthorizeRepairCarriesForwardAffected(t *testing.T) {
 	}
 }
 
-// TestPriorQAExecutionPreservedUntilReplaced verifies an authoritative FAIL
-// result survives a repair snapshot advance into PriorQAExecution (its FAIL case set
-// stays rerun-detectable), a RUNTIME_ERROR is not preserved, a new authoritative
-// record replaces the prior one, and a RUNTIME_ERROR record does not evict it.
-func TestPriorQAExecutionPreservedUntilReplaced(t *testing.T) {
+// TestPriorQAExecutionPreservedForAudit verifies an authoritative FAIL result
+// survives a repair snapshot advance into PriorQAExecution (its FAIL case set
+// stays rerun-detectable), a new authoritative record replaces the current result
+// while retaining the prior audit, and a RUNTIME_ERROR record does not evict it.
+func TestPriorQAExecutionPreservedForAudit(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "prior-preserved")
 	// 权威 FAIL 结果保留到 PriorQAExecution。
@@ -3936,7 +3961,8 @@ func TestPriorQAExecutionPreservedUntilReplaced(t *testing.T) {
 	if _, ok := qaExecutionPriorResultedBase(state, ""); !ok {
 		t.Fatal("prior FAIL result was not rerun-detectable")
 	}
-	// 新一轮权威记录取代 PriorQAExecution。
+	// 新一轮权威记录替换当前结果，同时保留上一快照审计。
+	priorSnapshot := state.PreRepairSnapshot
 	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
 	if err != nil {
 		t.Fatal(err)
@@ -3946,8 +3972,8 @@ func TestPriorQAExecutionPreservedUntilReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.priorQAExecution("") != nil {
-		t.Fatalf("new authoritative record did not replace PriorQAExecution: %#v", state.priorQAExecution(""))
+	if prior := state.priorQAExecution(""); prior == nil || prior.Status != "FAIL" || prior.Snapshot != priorSnapshot {
+		t.Fatalf("new authoritative record lost the prior audit: %#v", prior)
 	}
 	// 质量门记录在本快照使波次完整，才能推进下一修复快照。
 	state = recordGateResult(t, root, pkg, state, "quality", "prior-preserved-quality-2", "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
@@ -4233,7 +4259,9 @@ func TestSliceRequiresRecordedMatchingMasterDecision(t *testing.T) {
 
 func TestSliceReviewInheritanceRequiresMatchingArtifacts(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	master, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifact-master", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", RetainedOverall: true, Split: "yes"})
+	writeTestFile(t, filepath.Join(root, "slice-design.md"), "slice-specific design\n")
+	commitAll(t, root, "add alternate slice design")
+	master, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifact-master", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"design.md"}, VCS: "git", RetainedOverall: true, Split: "yes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4242,7 +4270,11 @@ func TestSliceReviewInheritanceRequiresMatchingArtifacts(t *testing.T) {
 	master = recordReadiness(t, root, pkg, master)
 	master = recordSlicing(t, root, pkg, master, "split")
 
-	slice := confirmRequirement(t, root, pkg, mustStartSlice(t, root, pkg, "artifact-slice", master.RunID))
+	slice, err := Start(StartOptions{Root: root, PackageRoot: pkg, RunID: "artifact-slice", Flow: "formal", RequirementSource: "requirements.md", RequirementArtifacts: []string{"slice-design.md"}, VCS: "git", Split: "yes", MasterRunID: master.RunID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice = confirmRequirement(t, root, pkg, slice)
 	if _, err := RecordSlicing(root, pkg, slice.RunID, "split", master.Slicing.SplitCount, master.Slicing.Slices, master.Slicing.Parallel, "", master.RunID); err == nil || !strings.Contains(err.Error(), "artifact set differs") {
 		t.Fatalf("slice inherited reviews for a different artifact set: %v", err)
 	}
@@ -4277,7 +4309,7 @@ func TestRequirementRebindRejectedWhileReviewDispatchInFlight(t *testing.T) {
 	// 准备并认领一轮 product-review，不记录结果（在途审查派发）。prepareDispatch 对
 	// product-review 自动认领，返回已认领的派发 id。
 	prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
 	before := stateBytes(t, root, state.RunID)
 	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err == nil || !strings.Contains(err.Error(), "has not recorded its result") {
@@ -4306,7 +4338,7 @@ func TestRequirementRebindRejectedWhileReviewDispatchOpen(t *testing.T) {
 	if dispatch := state.Dispatches[dispatchID]; dispatch.Status != "OPEN" || !dispatch.ReviewerRequired {
 		t.Fatalf("expected an OPEN reviewer dispatch, got %#v", dispatch)
 	}
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "commit requirement drift while review is open")
 	before := stateBytes(t, root, state.RunID)
 	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err == nil || !strings.Contains(err.Error(), "has not recorded its result") {
@@ -4339,7 +4371,7 @@ func TestRecordInFlightDispatchResultAllowedUnderDrift(t *testing.T) {
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "drift-record-inflight"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review") // 在途审查派发（已认领）
 	// 需求文档改动（工作树、未提交）→ 漂移。
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	// 新 prepare 仍被漂移硬阻断（需求 6 第 1 条不受影响）。
 	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "需求文档已改动") {
 		t.Fatalf("prepare under drift was not blocked: %v", err)
@@ -4364,7 +4396,7 @@ func TestRequirementRebindAllowedAfterInFlightResultRecorded(t *testing.T) {
 	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
 	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
 		t.Fatal(err)

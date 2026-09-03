@@ -907,6 +907,10 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 		state.NeedsReReview = map[string]string{}
 		state.ReReviewDispatch = map[string]string{}
 		state.ReviewOverrides = map[string]string{}
+		// workflow reset is the explicit lifecycle boundary that establishes a
+		// fresh automatic quota and fresh raw/adjudication/effective ledgers for
+		// both pre-development semantic review actions.
+		state.PreDevelopmentReviewSeries = newPreDevelopmentReviewSeries()
 		state.SnapshotOverride = nil
 		state.BlackboxReviewFails = 0
 		state.CompletedReviewWaves = 0
@@ -930,6 +934,7 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 			"carry results",
 			"dispatches (stuck OPEN/CLAIMED cleared)",
 			"settled findings, review items, re-review marks",
+			"pre-development review series, raw candidates, adjudications, corrections, and extra-round grants",
 		}
 		result.State = *state
 		return nil
@@ -937,7 +942,14 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 	return result, err
 }
 
-func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect string, artifactPaths []string) (RunState, error) {
+func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, semanticEffect string, artifactPaths []string, opts ...RequirementUpdateOptions) (RunState, error) {
+	options := RequirementUpdateOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	if options.ActivateGuarantee && !confirmed {
+		return RunState{}, fmt.Errorf("--activate-guarantee requires --confirmed in the existing requirement confirmation step")
+	}
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentCatalog(*state, packageRoot)
 		if err != nil {
@@ -963,6 +975,21 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 		revision := artifactRevision(artifacts, source)
 		changed := revision != state.RequirementRevision || source != state.RequirementSource || !sameArtifactSet(artifacts, state.RequirementArtifacts)
 		semanticEffect = strings.ToLower(strings.TrimSpace(semanticEffect))
+		// A single formal requirement artifact is the canonical REQ/AC intake.
+		// Initial registration, confirmation, meaning-changing revision, and an
+		// already-activated guarantee run its deterministic structural precheck.
+		// A legacy multi-artifact run may still promote one artifact under the
+		// existing meaning-preserved path without retroactively changing formats.
+		precheckSingleArtifact := confirmed || semanticEffect == "changed" || state.RequirementGuarantee != nil || (!changed && semanticEffect == "")
+		if !isLightweight(*state) && len(artifacts) == 1 && precheckSingleArtifact {
+			projection, err := frozenProjection(root, source)
+			if err != nil {
+				return err
+			}
+			if projection.ContentDigest != revision {
+				return fmt.Errorf("the presented requirement revision %s does not match the current file digest %s", revision, projection.ContentDigest)
+			}
+		}
 		if changed {
 			if semanticEffect != "preserved" && semanticEffect != "changed" {
 				return fmt.Errorf("changed requirement requires semantic effect preserved or changed")
@@ -982,9 +1009,25 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 				return fmt.Errorf("meaning-preserved requirement rebinding after development starts requires user confirmation")
 			}
 			state.RequirementSource, state.RequirementRevision, state.RequirementArtifacts = source, revision, artifacts
+			guaranteeWasActivated := state.RequirementGuarantee != nil
+			if guaranteeWasActivated {
+				invalidateGuaranteeRevision(state)
+			}
 			if semanticEffect == "preserved" {
-				if !state.RequirementConfirmed {
+				if !state.RequirementConfirmed && !guaranteeWasActivated {
 					return fmt.Errorf("meaning can be preserved only for a previously confirmed requirement")
+				}
+				if guaranteeWasActivated {
+					if !confirmed {
+						return fmt.Errorf("an activated REQ/AC guarantee requires the changed requirement revision to be explicitly reconfirmed")
+					}
+					state.RequirementConfirmed = true
+					if err := activateFrozenGuarantee(root, state); err != nil {
+						return err
+					}
+					if state.RouteMode != "" {
+						updateGuaranteeForRoute(state)
+					}
 				}
 				rebindCurrentSnapshot(state, liveSnapshot)
 				return nil
@@ -1004,6 +1047,21 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			return fmt.Errorf("Requirements Clarification must pass before requirement confirmation")
 		}
 		state.RequirementConfirmed = confirmed
+		if options.ActivateGuarantee {
+			if state.RequirementGuarantee == nil {
+				for _, action := range preDevelopmentReviewActions {
+					if state.PreDevelopmentReviewSeries[action].Completed != 0 {
+						return fmt.Errorf("the REQ/AC guarantee must be activated before Product Review; %s already has a completed semantic review round", action)
+					}
+				}
+			}
+			if err := activateFrozenGuarantee(root, state); err != nil {
+				return err
+			}
+			if state.RouteMode != "" {
+				updateGuaranteeForRoute(state)
+			}
+		}
 		return nil
 	})
 }
@@ -1025,6 +1083,9 @@ func RouteCandidates(root, packageRoot, runID string) ([]string, error) {
 
 func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
+		if err := validateGuaranteeEnvelope(*state); err != nil {
+			return err
+		}
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
@@ -1058,6 +1119,9 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 				return fmt.Errorf("custom route must select a non-empty proper subset; use full for the complete list")
 			}
 		}
+		if err := requireExplicitGuaranteeForQASelection(*state, selected); err != nil {
+			return err
+		}
 		state.RouteMode = mode
 		state.SelectedGates = append([]string{}, selected...)
 		state.SkipAuthorizations = map[string]SkipAuthorization{}
@@ -1068,12 +1132,16 @@ func SetRoute(root, packageRoot, runID, mode string, selected []string) (RunStat
 			}
 		}
 		discardUnmatchedQADesign(state)
+		updateGuaranteeForRoute(state)
 		return nil
 	})
 }
 
 func AddRouteGates(root, packageRoot, runID string, additions []string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
+		if err := validateGuaranteeEnvelope(*state); err != nil {
+			return err
+		}
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
 			return err
@@ -1089,6 +1157,10 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 		if err != nil {
 			return err
 		}
+		prospective := append(append([]string{}, state.SelectedGates...), normalized...)
+		if err := requireExplicitGuaranteeForQASelection(*state, prospective); err != nil {
+			return err
+		}
 		chosen := selectedSet(*state)
 		for _, id := range normalized {
 			if chosen[id] {
@@ -1101,6 +1173,7 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 			delete(state.SkipAuthorizations, id)
 		}
 		state.SelectedGates = orderedSelection(chosen, candidates)
+		updateGuaranteeForRoute(state)
 		return nil
 	})
 }
@@ -1109,7 +1182,8 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 // `workflow slicing --user-confirm`：拆分决定与启动声明冲突时，允许把启动拆分声明
 // 修订为与决定一致（须带修订理由 note），绑定点仍是本次 slicing 记录（记录后不重切）。
 type SlicingAmendOptions struct {
-	UserConfirm bool
+	UserConfirm        bool
+	ACResponsibilities []string
 }
 
 // RecordSlicing records the run's formal split decision. The decision is binary
@@ -1123,7 +1197,11 @@ type SlicingAmendOptions struct {
 // With SlicingAmendOptions.UserConfirm the start declaration may be amended to
 // match the decision (see SlicingAmendOptions).
 func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, slices []string, parallel, note, masterRunID string, opts ...SlicingAmendOptions) (RunState, error) {
-	amend := len(opts) > 0 && opts[0].UserConfirm
+	options := SlicingAmendOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	amend := options.UserConfirm
 	return openRecord(root, packageRoot, runID, false, false, func(state *RunState, catalog PromptCatalog) error {
 		if _, err := requireNativeCurrent(root, *state); err != nil {
 			return err
@@ -1217,12 +1295,22 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 				return fmt.Errorf("slice split topology does not match master %q", strings.TrimSpace(masterRunID))
 			}
 			state.Slicing = &Slicing{
-				Decision:         master.Slicing.Decision,
-				SplitCount:       master.Slicing.SplitCount,
-				Slices:           append([]string{}, master.Slicing.Slices...),
-				Parallel:         master.Slicing.Parallel,
-				MasterRunID:      strings.TrimSpace(masterRunID),
-				InheritedReviews: []string{"product-review", "start-readiness"},
+				Decision:           master.Slicing.Decision,
+				SplitCount:         master.Slicing.SplitCount,
+				Slices:             append([]string{}, master.Slicing.Slices...),
+				Parallel:           master.Slicing.Parallel,
+				MasterRunID:        strings.TrimSpace(masterRunID),
+				InheritedReviews:   []string{"product-review", "start-readiness"},
+				ACResponsibilities: copyStringMap(master.Slicing.ACResponsibilities),
+			}
+			if err := inheritRequirementGuarantee(master, state); err != nil {
+				return fmt.Errorf("slice guarantee projection does not match master %q: %w", strings.TrimSpace(masterRunID), err)
+			}
+			// A slice that re-records its revision-invalidated responsibility map may
+			// already have a confirmed route. Reactivate the newly inherited projection
+			// against that route; the initial pre-route slicing path remains frozen.
+			if state.RouteMode != "" {
+				updateGuaranteeForRoute(state)
 			}
 			return nil
 		}
@@ -1251,11 +1339,19 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			if !mergeGateDiscovered {
 				return fmt.Errorf("merge gate %q is not discovered in the package catalog", mergeGateID)
 			}
-			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel)}
+			if err := requireExplicitGuaranteeForQASelection(*state, []string{mergeQAID}); err != nil {
+				return err
+			}
+			responsibilities, err := validateACResponsibilities(*state, slices, options.ACResponsibilities)
+			if err != nil {
+				return err
+			}
+			state.Slicing = &Slicing{Decision: decision, SplitCount: splitCount, Slices: slices, Parallel: strings.TrimSpace(parallel), ACResponsibilities: responsibilities}
 			state.RouteMode = "merge"
 			state.SelectedGates = []string{mergeQAID, mergeGateID}
 			state.SkipAuthorizations = map[string]SkipAuthorization{}
 			state.QAExecutionByMode = map[string]QAExecutionResult{}
+			updateGuaranteeForRoute(state)
 			return nil
 		}
 		if strings.TrimSpace(note) == "" {
@@ -1306,19 +1402,18 @@ func sameOrderedStrings(left, right []string) bool {
 	return true
 }
 
-// RecordSettledFindings records the user's per-item disposition of findings from
-// a product-review / start-readiness review. Confirm (确认问题：真问题、需修订) and
-// dismiss (驳回问题：不是问题、作废) are both recorded and injected into the next
-// dispatch so the reviewer does not re-raise them (reviewer-side enforcement of
-// the double guarantee). Confirming a P0/P1 finding sets the "需重审" marker
-// (NeedsReReview): the CLI then refuses to record PASS until a re-review round
-// returns PASS. A dismissed P0/P1 is void and does not block. A meaning-changing
-// requirement revision clears the settled list because the revised premise may
-// legitimately re-raise an item.
+// RecordSettledFindings is the established shorthand for a user's exact
+// per-item confirm/dismiss operation. The typed adjudication/correction ledger
+// is authoritative; SettledFindings and NeedsReReview are rebuilt from its
+// latest effective decisions for prompt and transition compatibility. A later
+// decision therefore replaces, rather than accumulates beside, an older one.
 func RecordSettledFindings(root, packageRoot, runID, actionID string, confirm, dismiss []string) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		if actionID != "product-review" && actionID != "start-readiness" {
 			return fmt.Errorf("settled findings are recorded for product-review or start-readiness only")
+		}
+		if _, err := requireCurrentCatalog(*state, packageRoot); err != nil {
+			return err
 		}
 		if len(confirm) == 0 && len(dismiss) == 0 {
 			return fmt.Errorf("at least one settled finding is required")
@@ -1331,42 +1426,12 @@ func RecordSettledFindings(root, packageRoot, runID, actionID string, confirm, d
 				}
 			}
 		}
-		if state.NeedsReReview == nil {
-			state.NeedsReReview = map[string]string{}
-		}
-		severityByMessage := map[string]string{}
-		for _, finding := range state.Actions[actionID].Findings {
-			if strings.TrimSpace(finding.Message) != "" {
-				severityByMessage[strings.TrimSpace(finding.Message)] = finding.Severity
-			}
-		}
-		settle := func(message, disposition string) error {
-			message = strings.TrimSpace(message)
-			if message == "" {
-				return fmt.Errorf("settled finding message is required")
-			}
-			if severity, ok := severityByMessage[message]; !ok || severity == "" {
-				return fmt.Errorf("finding %q is not in the recorded %s result", message, actionID)
-			}
-			if state.SettledFindings == nil {
-				state.SettledFindings = map[string][]SettledFinding{}
-			}
-			state.SettledFindings[actionID] = append(state.SettledFindings[actionID], SettledFinding{Message: message, Disposition: disposition})
-			// 确认的 P0/P1 置位"需重审"标记；驳回或确认的 P2/P3 不置位。
-			if disposition == "confirm" && (severityByMessage[message] == "P0" || severityByMessage[message] == "P1") {
-				state.NeedsReReview[actionID] = message
-			}
-			return nil
-		}
-		for _, message := range confirm {
-			if err := settle(message, "confirm"); err != nil {
-				return err
-			}
-		}
-		for _, message := range dismiss {
-			if err := settle(message, "dismiss"); err != nil {
-				return err
-			}
+		// settle-findings is the established public user-disposition operation.
+		// It now appends exact-bound adjudication/correction receipts and lets the
+		// effective status projection change immediately; raw evidence remains
+		// immutable in PreDevelopmentReviewSeries.
+		if err := settleSemanticReviewFindings(state, actionID, confirm, dismiss); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -1586,14 +1651,15 @@ func openRecord(root, packageRoot, runID string, checkPending, skipDrift bool, c
 // native snapshot is verified on the main worktree or the QA isolation worktree,
 // and an optional target/catalog check that runs after dispatch resolution.
 type recordDispatchOptions struct {
-	targetKind             string                        // dispatch target kind: "action" or "gate"
-	target                 string                        // dispatch target id
-	transitionOp           string                        // transition operation
-	transitionTarget       func(PreparedDispatch) string // transition target (dispatch.Mode for QA)
-	requireMainNative      bool                          // verify main-worktree native == current
-	requireIsolationNative bool                          // verify QA isolation-worktree native == base
-	requireLifecycle       bool                          // verify lifecycle pairing
-	preCheck               func(*RunState, PromptCatalog) error
+	targetKind              string                        // dispatch target kind: "action" or "gate"
+	target                  string                        // dispatch target id
+	transitionOp            string                        // transition operation
+	transitionTarget        func(PreparedDispatch) string // transition target (dispatch.Mode for QA)
+	requireMainNative       bool                          // verify main-worktree native == current
+	requireIsolationNative  bool                          // verify QA isolation-worktree native == base
+	requireLifecycle        bool                          // verify lifecycle pairing
+	allowUserReviewOverride bool                          // prepared user-requested semantic re-review may record over current PASS
+	preCheck                func(*RunState, PromptCatalog) error
 }
 
 // openDispatchRecord opens a Record* state mutation for a dispatch-bound write
@@ -1629,7 +1695,10 @@ func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts record
 			}
 		}
 		if err := requireTransition(*state, opts.transitionOp, opts.transitionTarget(dispatch)); err != nil {
-			return err
+			allowOverride := opts.allowUserReviewOverride && dispatch.UserRequested && isPreDevelopmentReviewAction(dispatch.Target) && state.Actions[dispatch.Target].Status == "PASS"
+			if !allowOverride {
+				return err
+			}
 		}
 		if opts.requireIsolationNative {
 			if err := requireDispatchNativeCurrent(root, *state, dispatch); err != nil {
@@ -1650,17 +1719,31 @@ func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts record
 // the review-rule enforcement (only the user can break the rule); its source is
 // recorded in ReviewOverrides.
 func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, items ...ReviewItemInput) (RunState, error) {
+	verification := legacyOperatorVerification()
+	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, items...)
+}
+
+// RecordActionWithOperatorVerification is the public CLI path for semantic
+// pre-development reviews. Unlike the in-process compatibility wrapper above,
+// it requires the Operator to submit the actual verification checks and
+// evidence that make a reviewer candidate eligible for recording.
+func RecordActionWithOperatorVerification(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
+	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, items...)
+}
+
+func recordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
 	// record-action status 严格大小写校验：pass 之类的小写不宽容记录，必须精确
 	// PASS / FAIL / RUNTIME_ERROR（trim 后）。
 	if raw := strings.TrimSpace(status); raw != "PASS" && raw != "FAIL" && raw != "RUNTIME_ERROR" {
 		return RunState{}, fmt.Errorf("record-action status must be exactly PASS, FAIL, or RUNTIME_ERROR (case-sensitive); got %q", status)
 	}
 	return openDispatchRecord(root, packageRoot, runID, dispatchID, recordDispatchOptions{
-		targetKind:        "action",
-		target:            actionID,
-		transitionOp:      actionID,
-		transitionTarget:  func(PreparedDispatch) string { return "" },
-		requireMainNative: true,
+		targetKind:              "action",
+		target:                  actionID,
+		transitionOp:            actionID,
+		transitionTarget:        func(PreparedDispatch) string { return "" },
+		requireMainNative:       true,
+		allowUserReviewOverride: true,
 		preCheck: func(state *RunState, catalog PromptCatalog) error {
 			if _, ok := catalog.Action(actionID); !ok {
 				return fmt.Errorf("unknown action prompt %q", actionID)
@@ -1678,14 +1761,30 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			if err := enforceReviewRule(state, actionID, dispatch.ID, status, findings, userRequested, userReason); err != nil {
 				return err
 			}
-			// 增量审查：record-action 下发逐项判定。所有 PENDING 项必须全判；对已 PASS
-			// 项下发判定被拒；FAIL 项必须带 finding（reason）。
-			if err := recordReviewItems(state, actionID, dispatch.ID, items); err != nil {
-				return err
+			// Runtime failures are dispatch retries, not semantic review results:
+			// they neither require item decisions nor consume the structured
+			// product-review completeness round. Only complete PASS/FAIL candidates
+			// update either projection.
+			if strings.ToUpper(strings.TrimSpace(status)) != "RUNTIME_ERROR" {
+				// 增量审查：record-action 下发逐项判定。所有 PENDING 项必须全判；对已 PASS
+				// 项下发判定被拒；FAIL 项必须带 finding（reason）。
+				if err := recordReviewItems(state, actionID, dispatch.ID, items); err != nil {
+					return err
+				}
+				if actionID == "product-review" {
+					if err := requireGuaranteeProductReviewResult(*state, strings.ToUpper(strings.TrimSpace(status))); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		backfillDispatchCost(root, state, dispatch)
 		result, err := semanticActionResult(actionID, status, message, findings, state)
+		if err != nil {
+			return err
+		}
+		result.DispatchID = dispatch.ID
+		result, err = recordSemanticReviewCandidate(state, actionID, dispatch, result, verification)
 		if err != nil {
 			return err
 		}
@@ -2021,6 +2120,12 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 // dropped, non-PASS selected gates return to PENDING, and the Carry action is
 // re-opened when reopenCarry is set and prior passing gates are eligible.
 func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA, reopenCarry bool) {
+	// An active REQ/AC guarantee binds every PASS to the exact candidate. A
+	// repair/adoption creates a new candidate, so its old QA results remain only
+	// as PriorQAExecution audit evidence and can never stay current for Carry.
+	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive {
+		preserveQA = false
+	}
 	// 修复快照推进不得抹掉上一快照的权威结果（PASS/FAIL，含快照与 FAIL 用例集）。
 	// 在把每个 mode 的 QAExecution 重置为 PENDING 前，若其为权威结果且已落在旧快照，先保留
 	// 到该 mode 的 PriorQAExecutionByMode，供重跑识别与 AFFECTED 子集判定
@@ -2563,6 +2668,11 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 		}
 	}
 	state.Actions = pendingRequirementActions()
+	// Meaning-changing rebinding invalidates the current effective transition,
+	// but it does not erase completed semantic rounds, raw evidence, correction
+	// receipts, or action-specific grant history. Those are reset only by the
+	// explicit workflow reset/new-run lifecycle boundary.
+	markPreDevelopmentReviewsStale(state, "REQUIREMENT_REVISION_INVALIDATION")
 	// 语义变更作废全部结果时，per-mode review/design 权威结果一并作废——qa-review /
 	// qa-design 已移出 Actions（按 mode 存储），失效路径只重置 Actions 会让 per-mode
 	// 旧 PASS 残留，快照黑盒门读到旧 PASS 仍放行。这里清空两个按 mode 的权威结果 map，并把

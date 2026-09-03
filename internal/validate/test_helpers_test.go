@@ -51,6 +51,10 @@ func useTestWorkingDirectory(t *testing.T, directory string) {
 	})
 }
 
+func testRequirementDocument(requirement string) string {
+	return "## 需求点\n\n### REQ-001：Test requirement\n\n#### 要求\n\n" + requirement + "\n\n#### 验收条件\n\n- AC-001：The test requirement is satisfied.\n\n#### 来源\n\nTest fixture.\n"
+}
+
 // stubLifecycle replaces the global workflowLifecycle verifier with an isolated
 // stub for the duration of the test and restores the prior verifier on cleanup.
 // It is the single converged stub for the workflow's lifecycle seam; tests that

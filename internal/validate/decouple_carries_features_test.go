@@ -32,7 +32,7 @@ func TestInvalidateResetsPerModeReviewDesignAndCaseStatus(t *testing.T) {
 		}
 	}
 	// 语义变更（meaning changed）：作废全部结果。先改写需求文档使修订生效。
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
 	state, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
 	if err != nil {
@@ -256,7 +256,7 @@ func TestIncrementalReviewAllPassedTableAllowsEmptyDecision(t *testing.T) {
 	}
 
 	// 第二轮：无 --scope 的复审 prepare——逐项表非空全 PASS → "无待定项可判"提示。
-	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, "")
+	prompt, err := PrepareAction(root, pkg, state.RunID, "product-review", "", true, "user explicitly requests an additional verification review")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestIncrementalReviewMeaningChangedClearsTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(root, "requirements.md"), "changed requirement\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
 	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
 	if err != nil {

@@ -117,8 +117,11 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
 5. 是否重审：没审出问题 → 直接通过；认同的问题里不存在 P0/P1 → 修订后不重审、直接
    进入下一步；存在 P0/P1 → 修订后重审。产品审不产生终态 FAIL，需求是否成立由用户
    决定。
-6. 记录：`workflow record-action --action product-review --status PASS`（有候选发现项
-   待处置时记 FAIL + 发现项）。Part 1 全部通过后进入 Part 2。
+6. Operator 逐项核验需求匹配、正常入口、证据、位置、范围、严重度、绑定与完整性后，
+   用完整 `--operator-check` 集及本次 `--operator-evidence` 记录：
+   `workflow record-action --action product-review --status PASS`（有候选发现项待处置时记
+   FAIL + 发现项）。Part 1 全部通过后进入 Part 2；完整参数见
+   `references/formal-flow.md`「开发之前」。
 
 ## 7. 技术审（Step 4 Part 2）
 
@@ -126,7 +129,9 @@ list`。本次请求：「给 tdo 增加 `tdo archive` 子命令，把已完成�
    派发全新零上下文审查者，`claim-dispatch` 认领（生命周期检查点同上）。
 2. 处置与重审规则同产品审；start-readiness 的 FAIL 发现项同样只是候选输入。若
    start-readiness FAIL 触发黑盒 QA 用例增量修订，按第 5 步的修订规则执行。
-3. 记录：`workflow record-action --action start-readiness --status PASS`。
+3. Operator 完成并提交同一组显式核验后记录：
+   `workflow record-action --action start-readiness --status PASS`；完整参数见
+   `references/formal-flow.md`「开发之前」。
 
 ## 8. 拆分决定（Step 3 前半）
 

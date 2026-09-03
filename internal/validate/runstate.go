@@ -25,6 +25,10 @@ type RunState struct {
 	RequirementRevision  string                `json:"requirementRevision"`
 	RequirementConfirmed bool                  `json:"requirementConfirmed"`
 	RequirementArtifacts []RequirementArtifact `json:"requirementArtifacts"`
+	// RequirementGuarantee is present only when the existing requirement
+	// confirmation command explicitly activated the REQ/AC guarantee. Its
+	// absence is authoritative: activation is never guessed from other fields.
+	RequirementGuarantee *RequirementGuarantee `json:"requirementGuarantee,omitempty"`
 	BasePromptRevision   string                `json:"basePromptRevision"`
 	CatalogRevision      string                `json:"catalogRevision"`
 	PromptHashes         map[string]string     `json:"promptHashes,omitempty"`
@@ -142,6 +146,12 @@ type RunState struct {
 	// ReviewOverrides 记录用户对 product-review / start-readiness 复审规则的显式破例
 	// 来源（动作 → 用户理由），与 --user-requested 对应；需求语义变更时一并清除。
 	ReviewOverrides map[string]string `json:"reviewOverrides,omitempty"`
+	// PreDevelopmentReviewSeries is the only authority for product-review and
+	// start-readiness semantic rounds, raw candidates, user adjudications,
+	// correction receipts, and separately projected effective status. New runs
+	// always carry exactly these two action keys; missing/partial state is a hard
+	// schema error and is never reconstructed from attempts or Actions.
+	PreDevelopmentReviewSeries map[string]PreDevelopmentReviewSeries `json:"preDevelopmentReviewSeries"`
 	// ReviewItemsByAction 按动作逐项存储需求项的审查结论（增量审查，格式无关）：
 	// action（product-review / start-readiness）→ 需求项键 → ReviewItem{Status}。动作级
 	// Actions[actionID] 保留为聚合结果（下游判断不变）。增量判定沿 meaning-preserved 修订
@@ -180,6 +190,9 @@ type Slicing struct {
 	Note             string   `json:"note,omitempty"`             // 原因留痕，no-split 时必填（建议不拆原因）
 	MasterRunID      string   `json:"masterRunID,omitempty"`      // 切片实例引用的保留总任务 run id
 	InheritedReviews []string `json:"inheritedReviews,omitempty"` // 切片实例继承的整体级审查来源（product-review/start-readiness）
+	// ACResponsibilities freezes the one-and-only primary responsibility scope
+	// for every acceptance condition in an explicitly activated guarantee.
+	ACResponsibilities map[string]string `json:"acResponsibilities,omitempty"`
 }
 
 type PreparedDispatch struct {
@@ -205,6 +218,11 @@ type PreparedDispatch struct {
 	// 校验内容 hash == PromptHash；认领（派发）时兜底再次校验文件内容与 prepare
 	// 记录一致，不一致即硬阻断。旧派发（本功能上线前准备）无本字段，不强制。
 	PromptFile string `json:"promptFile,omitempty"`
+	// ReviewAuthorizationID binds a product-review/start-readiness dispatch to
+	// the single action-specific user authorization that opened this extra
+	// semantic round. Runtime retries may share the same authorization.
+	ReviewAuthorizationID string `json:"reviewAuthorizationId,omitempty"`
+	UserRequested         bool   `json:"userRequested,omitempty"`
 }
 
 type ActionResult struct {
@@ -271,9 +289,10 @@ type SnapshotOverride struct {
 	Message  string `json:"message,omitempty"`
 }
 
-// SettledFinding 记录用户对 pre-development 审查发现项的一次已拍板处置。确认问题
-// （认为是真问题、需修订）或驳回问题（认为不是问题、作废）由 Disposition 区分；
-// 确认的 P0/P1 驱动"需重审"标记，驳回的发现项不阻塞。
+// SettledFinding is the legacy prompt-context projection of the latest typed
+// adjudication/correction for one pre-development finding. It is not an
+// independent authority: confirm/dismiss/re-severity is rebuilt from the
+// immutable review ledgers, and a superseded decision is replaced in place.
 type SettledFinding struct {
 	Message     string `json:"message"`
 	Disposition string `json:"disposition"`
@@ -310,6 +329,10 @@ type QACase struct {
 	// qa-review（读代码核对）与 qa-execution（实际运行）验证，使"测 A 的测试给 B 用例标
 	// PASS"可被发现。黑盒用例不需要（黑盒执行实际使用产品、无结构测试绑定）。
 	Test string `json:"test,omitempty"`
+	// AcceptanceCriteria are the case's primary AC bindings. Additional bindings
+	// are duplicate evidence only and never change split responsibility.
+	AcceptanceCriteria           []string `json:"acceptanceCriteria,omitempty"`
+	AdditionalAcceptanceCriteria []string `json:"additionalAcceptanceCriteria,omitempty"`
 	// ReviewStatus 由 qa-review 轮置位（PASS/FAIL/PENDING）。PENDING 之外还有一条
 	// 置为 PASS 的路径：ApprovedSource（见下）。
 	ReviewStatus string `json:"reviewStatus"`
@@ -331,26 +354,28 @@ type QADesignChange struct {
 }
 
 type RunSummary struct {
-	RunID                string                       `json:"runId"`
-	Flow                 string                       `json:"flow"`
-	Status               string                       `json:"status"`
-	RequirementRevision  string                       `json:"requirementRevision"`
-	BasePromptRevision   string                       `json:"basePromptRevision"`
-	CatalogRevision      string                       `json:"catalogRevision"`
-	VCS                  string                       `json:"vcs"`
-	BaseSnapshot         string                       `json:"baseSnapshot"`
-	CurrentSnapshot      string                       `json:"currentSnapshot"`
-	RequirementArtifacts []RequirementArtifact        `json:"requirementArtifacts"`
-	Slicing              *Slicing                     `json:"slicing,omitempty"`
-	RouteMode            string                       `json:"routeMode"`
-	SelectedGates        []string                     `json:"selectedGates"`
-	SkipAuthorizations   map[string]SkipAuthorization `json:"skipAuthorizations"`
-	CompletedReviewWaves int                          `json:"completedReviewWaves"`
-	ExtraReviewWaves     int                          `json:"extraReviewWaves"`
-	Gates                map[string]GateResult        `json:"gates"`
-	QA                   QAExecutionResult            `json:"qaExecution"`
-	Cost                 *cost.RunCost                `json:"cost,omitempty"`
-	QAOnlyRerun          *QAOnlyRerunRecord           `json:"qaOnlyRerun,omitempty"`
+	RunID                      string                                `json:"runId"`
+	Flow                       string                                `json:"flow"`
+	Status                     string                                `json:"status"`
+	RequirementRevision        string                                `json:"requirementRevision"`
+	BasePromptRevision         string                                `json:"basePromptRevision"`
+	CatalogRevision            string                                `json:"catalogRevision"`
+	VCS                        string                                `json:"vcs"`
+	BaseSnapshot               string                                `json:"baseSnapshot"`
+	CurrentSnapshot            string                                `json:"currentSnapshot"`
+	RequirementArtifacts       []RequirementArtifact                 `json:"requirementArtifacts"`
+	Slicing                    *Slicing                              `json:"slicing,omitempty"`
+	RouteMode                  string                                `json:"routeMode"`
+	SelectedGates              []string                              `json:"selectedGates"`
+	SkipAuthorizations         map[string]SkipAuthorization          `json:"skipAuthorizations"`
+	CompletedReviewWaves       int                                   `json:"completedReviewWaves"`
+	ExtraReviewWaves           int                                   `json:"extraReviewWaves"`
+	PreDevelopmentReviewSeries map[string]PreDevelopmentReviewSeries `json:"preDevelopmentReviewSeries"`
+	Gates                      map[string]GateResult                 `json:"gates"`
+	QA                         QAExecutionResult                     `json:"qaExecution"`
+	Cost                       *cost.RunCost                         `json:"cost,omitempty"`
+	QAOnlyRerun                *QAOnlyRerunRecord                    `json:"qaOnlyRerun,omitempty"`
+	RequirementGuarantee       *RequirementGuarantee                 `json:"requirementGuarantee,omitempty"`
 	// Unverified 是轻量 run（routeMode=lightweight）的封板标注：轻量路线不做任何验证、
 	// 只留记录，封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。非轻量
 	// run 为空（omitempty 不输出）。
@@ -371,7 +396,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, PreDevelopmentReviewSeries: newPreDevelopmentReviewSeries(), ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -482,6 +507,13 @@ func saveRunState(root string, state RunState, registryHeld bool) error {
 	if state.QADesignChangesByMode == nil {
 		state.QADesignChangesByMode = map[string]QADesignChange{}
 	}
+	if state.RequirementGuarantee != nil && state.RequirementGuarantee.ReviewsByMode == nil {
+		return fmt.Errorf("requirement guarantee state is incomplete or damaged: reviewsByMode is missing")
+	}
+	if err := validatePreDevelopmentReviewState(state); err != nil {
+		return err
+	}
+	refreshRequirementGuarantee(root, &state)
 	// 写盘前先置空自身、以 json.MarshalIndent 规范化序列化、对规范化内容计算 sha256，
 	// 回填 StateIntegrity 后再写盘。LoadRunState 校验时按同样方式置空重算比对，任何非 CLI
 	// 的手工改写都会破坏一致性而硬拒绝。
@@ -748,8 +780,11 @@ func LoadRunState(root, runID string) (RunState, error) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return RunState{}, fmt.Errorf("state JSON is invalid: %w", err)
 	}
-	for _, required := range []string{"qaReviewByMode", "qaDesignByMode"} {
+	for _, required := range []string{"qaReviewByMode", "qaDesignByMode", "preDevelopmentReviewSeries"} {
 		if _, ok := fields[required]; !ok {
+			if required == "preDevelopmentReviewSeries" {
+				return RunState{}, fmt.Errorf("run state format does not match the current schema: missing required field %q (pre-development semantic review state is not backfilled or guessed)", required)
+			}
 			return RunState{}, fmt.Errorf("run state format does not match the current schema: missing required field %q (a run state without the per-mode QA review/design fields is not supported)", required)
 		}
 	}
@@ -791,6 +826,9 @@ func LoadRunState(root, runID string) (RunState, error) {
 			return RunState{}, fmt.Errorf("run state integrity check failed: state was modified outside the CLI")
 		}
 		state.StateIntegrity = stored
+	}
+	if err := validatePreDevelopmentReviewState(state); err != nil {
+		return RunState{}, err
 	}
 	return state, nil
 }
@@ -861,15 +899,6 @@ func (state *RunState) setPriorQAExecution(mode string, result QAExecutionResult
 	}
 	prior := result
 	state.PriorQAExecutionByMode[mode] = &prior
-}
-
-// deletePriorQAExecution clears the dispatch mode's preserved prior authoritative
-// execution result only (an authoritative result record replaces its own mode's
-// prior; other modes' priors stay).
-func (state *RunState) deletePriorQAExecution(mode string) {
-	if state.PriorQAExecutionByMode != nil {
-		delete(state.PriorQAExecutionByMode, mode)
-	}
 }
 
 // qaExecutionModes returns the dispatch modes that hold a stored QA execution
@@ -1104,7 +1133,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 }
 
 func runSummary(state RunState) RunSummary {
-	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun}
+	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee}
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"

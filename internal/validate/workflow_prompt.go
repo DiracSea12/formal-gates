@@ -45,6 +45,18 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 	}
 	reviewerRequired := actionID != "requirements-clarification"
 	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+		if actionID == "product-review" {
+			// An activated structured requirement makes every REQ's obligation→AC
+			// completeness a mandatory, enumerated product-review item. The normal
+			// incremental table supplies the existing all-items-must-be-decided gate.
+			ensureGuaranteeProductReviewItems(state)
+		}
+		// Check the action-specific semantic capacity before the ordinary
+		// already-PASS transition guard so an exhausted fourth round reports the
+		// required user decision instead of masquerading as a generic rerun error.
+		if err := requirePreDevelopmentReviewPreparation(*state, actionID, userRequested, userReason); err != nil {
+			return "", err
+		}
 		// prepare 时声明本次审查范围——声明项置 PENDING 待判，未声明项保持既有
 		// 结论不动（已 PASS 项保持 PASS、任何轮不可改）。
 		if (actionID == "product-review" || actionID == "start-readiness") && len(scope) != 0 {
@@ -106,7 +118,14 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 				}
 			}
 		}
-		detail, err := actionPromptDetail(*state, catalog, actionID, mode)
+		// Product Review and Start Readiness own independent semantic-round
+		// series. The first three completed rounds use automatic capacity; every
+		// later round must bind this exact dispatch to one action-scoped user
+		// authorization. An unconsumed authorization survives runtime retry.
+		if err := authorizePreDevelopmentReviewDispatch(state, actionID, route.DispatchID, userRequested, userReason); err != nil {
+			return "", err
+		}
+		detail, err := actionPromptDetail(root, *state, catalog, actionID, mode)
 		if err != nil {
 			return "", err
 		}
@@ -201,7 +220,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if err != nil {
 			return err
 		}
-		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode}
+		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested}
 		return nil
 	})
 	return prompt, err
@@ -251,9 +270,12 @@ func verifyIsolatedRequirementRevisions(state RunState, worktree string) error {
 	return nil
 }
 
-func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode string) (string, error) {
+func actionPromptDetail(root string, state RunState, catalog PromptCatalog, actionID, mode string) (string, error) {
 	if actionID == "qa-design" {
 		var lines []string
+		if state.RequirementGuarantee != nil {
+			lines = append(lines, "This run has an explicit REQ/AC guarantee. Every case must declare one or more primary AC bindings with repeatable --ac <AC-ID>. A slice may use primary bindings only for ACs assigned to that slice; use --additional-ac <AC-ID> for useful extra coverage that does not change primary responsibility.")
+		}
 		if isMergeVerification(state) {
 			lines = append(lines, "Merge QA: design cross-slice interaction cases for the merged snapshot. The case set may be empty when the slices are essentially independent (leave a trace noting that instead of forcing cases).")
 		} else if state.RouteMode == "" {
@@ -298,10 +320,15 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		// 按派发 mode 读取该 mode 的用例组装审查输入。
 		modeCases := state.qaModeCases(mode)
 		pendingCases := pendingQACases(modeCases, mode)
-		accepted := []string{"Accepted coverage context; do not return new decisions for these cases:"}
+		accepted := []string{"Accepted coverage context; do not return new --case/--outcome decisions for these cases:"}
+		if state.RequirementGuarantee != nil {
+			accepted = append(accepted, "The REQ/AC guarantee requires an explicit coverage review record for this QA mode. Submit one --source-decision <REQ-ID>=<PASS|FAIL|PENDING> and one --point-decision <AC-ID>=<PASS|FAIL|PENDING> for every REQ/AC represented by this mode's cases, plus one --case-decision <CASE-ID>=<PASS|FAIL|PENDING> for every case. Completeness across selected QA modes is checked from their union. Also submit every unbound id with --unbound-source, --unbound-point, or --unbound-case. Case decisions must match the corresponding --case/--outcome decisions.")
+		}
 		pending := []string{"Return one decision for every pending case below:"}
 		// 增量契约上下文（改动 2）：向审查者注入本设计轮的变更清单，让它聚焦本轮
-		// 新增/修改/删除的用例；存量 PASS 用例只在上面作为上下文列出、不得重判。
+		// 新增/修改/删除的用例；存量 PASS 用例以完整元数据作为上下文列出、不得重判
+		// case outcome。保留 AC 绑定与白盒测试引用，使 guarantee review 能针对完整
+		// 合并集提交显式 source/point/case decisions。
 		if change, ok := state.QADesignChangesByMode[mode]; ok {
 			var parts []string
 			if len(change.Added) != 0 {
@@ -324,7 +351,7 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		}
 		for _, testCase := range modeCases {
 			if testCase.ReviewStatus == "PASS" {
-				accepted = append(accepted, fmt.Sprintf("%s: %s", testCase.ID, testCase.Description))
+				accepted = append(accepted, formatQACase(testCase, true))
 			}
 		}
 		for _, testCase := range pendingCases {
@@ -342,6 +369,13 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 	if actionID == "qa-execution" {
 		// 按派发 mode 过滤需执行集，黑盒/白盒各自独立派发、并行执行。
 		required := qaExecutionRequiredCases(state, mode)
+		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && state.RetainedOverall && state.Slicing != nil && state.Slicing.Decision == "split" {
+			var err error
+			required, err = masterFinalGuaranteeCases(root, state)
+			if err != nil {
+				return "", err
+			}
+		}
 		var lines []string
 		for _, testCase := range required {
 			lines = append(lines, formatQACase(testCase, false))
@@ -366,13 +400,26 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 		return strings.Join(lines, "\n"), nil
 	}
 	if actionID == "product-review" || actionID == "start-readiness" {
+		guaranteePrefix := ""
+		if actionID == "product-review" && state.RequirementGuarantee != nil && state.RequirementGuarantee.Projection != nil {
+			var obligations []string
+			obligations = append(obligations, "For every REQ below, enumerate every independently omissible mandatory obligation in its 要求 prose and verify that at least one concrete AC in the same REQ carries it. Return one explicit item decision for each listed REQ; any uncovered obligation is FAIL, and list all uncovered obligations in this round.")
+			for _, req := range state.RequirementGuarantee.Projection.Requirements {
+				var acIDs []string
+				for _, ac := range req.AcceptanceConditions {
+					acIDs = append(acIDs, ac.ID+": "+ac.Text)
+				}
+				obligations = append(obligations, req.ID+" 要求: "+req.Requirement+"\nAC: "+strings.Join(acIDs, "; "))
+			}
+			guaranteePrefix = strings.Join(obligations, "\n\n")
+		}
 		// 增量审查：prepare-action --scope 声明的需求项组成审查输入——PENDING 项
 		// "必须判定"、已 PASS 项 "accepted context 不得重判"。与 QA 增量的语义一致：只审新增/
 		// 变更的需求项，已审查通过的存量部分由 CLI 保留、不重审。格式无关，不解析文档结构。
 		if items := state.ReviewItemsByAction[actionID]; len(items) != 0 {
 			var lines []string
 			if settled := state.SettledFindings[actionID]; len(settled) != 0 {
-				lines = append(lines, "Findings and decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on. Dispositions: 确认问题 (confirm, treated as a real problem being fixed) or 驳回问题 (dismiss, voided).")
+				lines = append(lines, "Findings and the latest decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on. Dispositions show the current confirm, dismiss, or corrected severity only; superseded decisions are omitted.")
 				for _, settledItem := range settled {
 					lines = append(lines, "- ["+settledItem.Disposition+"] "+settledItem.Message)
 				}
@@ -394,17 +441,20 @@ func actionPromptDetail(state RunState, catalog PromptCatalog, actionID, mode st
 			}
 			if len(pending) == 1 {
 				lines = append(lines, "There are no pending items to decide in this incremental review. Review the declared scope and return no item decisions; set-level coverage omission for a declared item is P1 and blocks; P2 findings are suggestions that do not block this round's verdict.")
-				return strings.Join(lines, "\n"), nil
+				return strings.TrimSpace(guaranteePrefix + "\n\n" + strings.Join(lines, "\n")), nil
 			}
 			lines = append(lines, strings.Join(pending, "\n"), strings.Join(accepted, "\n"))
-			return strings.Join(lines, "\n\n"), nil
+			return strings.TrimSpace(guaranteePrefix + "\n\n" + strings.Join(lines, "\n\n")), nil
 		}
 		if settled := state.SettledFindings[actionID]; len(settled) != 0 {
-			lines := []string{"Findings and decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on. Dispositions: 确认问题 (confirm, treated as a real problem being fixed) or 驳回问题 (dismiss, voided)."}
+			lines := []string{"Findings and the latest decisions the user has already settled. Do not re-raise them; re-raise one only if a requirement revision changed the premise it relied on. Dispositions show the current confirm, dismiss, or corrected severity only; superseded decisions are omitted."}
 			for _, item := range settled {
 				lines = append(lines, "- ["+item.Disposition+"] "+item.Message)
 			}
-			return strings.Join(lines, "\n"), nil
+			return strings.TrimSpace(guaranteePrefix + "\n\n" + strings.Join(lines, "\n")), nil
+		}
+		if guaranteePrefix != "" {
+			return guaranteePrefix, nil
 		}
 	}
 	return "", nil
@@ -493,7 +543,7 @@ func verifyCanonicalPromptFile(state RunState, dispatch PreparedDispatch) error 
 // would produce, mirroring the detail computation of prepareDevelopmentAction
 // and the actionPromptDetail injection of PrepareAction without re-running the
 // transition guards (they are not part of the task text).
-func composeDispatchPrompt(state RunState, catalog PromptCatalog, route PromptRoute, dispatch PreparedDispatch) (string, error) {
+func composeDispatchPrompt(root string, state RunState, catalog PromptCatalog, route PromptRoute, dispatch PreparedDispatch) (string, error) {
 	if dispatch.TargetKind == "gate" {
 		return ComposeGatePrompt(catalog, dispatch.Target, route)
 	}
@@ -505,7 +555,7 @@ func composeDispatchPrompt(state RunState, catalog PromptCatalog, route PromptRo
 		}
 		return ComposeActionPrompt(catalog, "development-worker", route, detail)
 	}
-	detail, err := actionPromptDetail(state, catalog, dispatch.Target, dispatch.Mode)
+	detail, err := actionPromptDetail(root, state, catalog, dispatch.Target, dispatch.Mode)
 	if err != nil {
 		return "", err
 	}

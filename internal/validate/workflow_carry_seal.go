@@ -142,11 +142,30 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 		if !isQAMode(id) {
 			continue
 		}
+		// Active guarantees require a FULL execution on the current candidate.
+		// Prior PASS results remain audit evidence but are never eligible for the
+		// snapshot-rebinding Carry shortcut, even before a scope is recorded.
+		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive {
+			continue
+		}
 		// 直取该 mode 的执行结果（不再经过只返回 current-snapshot 结果的
 		// qaModeResult / qaModeResultKey），使修复快照（PreRepairSnapshot）之前已 PASS 的
 		// QA mode 可被 main-agent Carry 继承；单派发/legacy 合并流程经 "" 键回退取合并结果。
-		result := qaModeCarryResult(state, qaDispatchMode(id))
+		mode := qaDispatchMode(id)
+		key, result := qaModeCarryResultKey(state, mode)
 		if result.Status != "PASS" {
+			continue
+		}
+		// A scope decision bound to this exact prior result is an explicit
+		// request to execute the mode again. Carry must not override that
+		// decision by rebinding the old PASS to the current snapshot. Merged
+		// execution stores its scope under the empty key; per-mode execution
+		// stores it under the concrete dispatch mode.
+		scopeMode := mode
+		if key == "" {
+			scopeMode = ""
+		}
+		if scope, ok := state.ExecutionScopes[scopeMode]; ok && scope.BaseSnapshot == result.Snapshot && (scope.Decision == "FULL" || scope.Decision == "AFFECTED") {
 			continue
 		}
 		eligible := state.PreRepairSnapshot != "" && result.Snapshot == state.PreRepairSnapshot
@@ -260,7 +279,11 @@ func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runI
 // stays unchanged, gate-review compared records keep history, and the squashed
 // message is authored by the main agent (host-provided). Single-commit or empty
 // ranges are not rewritten; SVN/P4 are never squashed.
-func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string) (RunSummary, error) {
+func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string, opts ...SealOptions) (RunSummary, error) {
+	options := SealOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -311,7 +334,37 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	if before != state.CurrentSnapshot {
 		return RunSummary{}, fmt.Errorf("native VCS identity does not match the current snapshot before aggregation")
 	}
-	if err := authorizeSealSkips(&state, skips, userRequested); err != nil {
+	normalSkips := make([]string, 0, len(skips))
+	guaranteeSkip := false
+	for _, raw := range skips {
+		if strings.TrimSpace(raw) == guaranteeSealSkipID {
+			if guaranteeSkip {
+				return RunSummary{}, fmt.Errorf("duplicate Seal skip %q", guaranteeSealSkipID)
+			}
+			guaranteeSkip = true
+			continue
+		}
+		normalSkips = append(normalSkips, raw)
+	}
+	if guaranteeSkip {
+		if !userRequested {
+			return RunSummary{}, fmt.Errorf("waiving the requirement guarantee requires --user-requested")
+		}
+		refreshRequirementGuarantee(root, &state)
+		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Report.Status == "pass" {
+			return RunSummary{}, fmt.Errorf("the requirement guarantee already passed and cannot be skipped")
+		}
+		if err := authorizeRequirementGuaranteeWaiver(root, &state, options.GuaranteeWaiverReason); err != nil {
+			return RunSummary{}, err
+		}
+	}
+	if err := authorizeSealSkips(&state, normalSkips, userRequested); err != nil {
+		return RunSummary{}, err
+	}
+	if err := requireRequirementGuaranteeComplete(root, &state); err != nil {
+		if saveErr := saveRunState(root, state, admissionUnlock != nil); saveErr != nil {
+			return RunSummary{}, saveErr
+		}
 		return RunSummary{}, err
 	}
 	if err := requireTransition(state, "seal", ""); err != nil {
@@ -363,6 +416,9 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
 				return RunSummary{}, err
 			}
+		}
+		if err := saveSliceGuaranteeRecord(root, state); err != nil {
+			return RunSummary{}, err
 		}
 	} else {
 		// 主干（保留总任务实例）/单 run：把已封板切片的成本并入最终封板文件。
@@ -449,6 +505,17 @@ func materializeBlackboxCases(root string, state RunState) error {
 		if testCase.ReviewStatus == "PASS" {
 			approved = append(approved, testCase)
 		}
+	}
+	// A retained master keeps slice cases in immutable sidecars rather than in
+	// its own QACasesByMode. Materialize those authoritative approved blackbox
+	// definitions before terminal cleanup removes the sidecars; preserve the
+	// master's existing local blackbox/merge materialization above.
+	if state.RetainedOverall && state.Slicing != nil && state.Slicing.Decision == "split" && state.RequirementGuarantee != nil {
+		sliceCases, err := approvedSliceBlackboxCases(root, state)
+		if err != nil {
+			return err
+		}
+		approved = append(approved, sliceCases...)
 	}
 	if len(approved) == 0 {
 		return nil
@@ -619,12 +686,19 @@ func isSealScopedAuthorization(authorization SkipAuthorization) bool {
 }
 
 func requireSelectedResultsResolved(state RunState) error {
+	guaranteeWaivesQA := state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeWaived
 	// seal 前按选中 mode 校验各 mode 均已记录执行，避免单个 mode
 	// 记录 PASS 而另一 mode 被静默跳过。
-	if !selectedQAModesRecorded(state) {
+	if !guaranteeWaivesQA && !selectedQAModesRecorded(state) {
 		return fmt.Errorf("QA Execution has not recorded every selected QA mode at the current snapshot")
 	}
 	for id := range selectedSet(state) {
+		// An explicit requirement-guarantee waiver itemizes the unresolved QA
+		// review/execution closure and is itself the Seal authorization for the
+		// selected QA modes. Non-QA gates still require their ordinary skips.
+		if guaranteeWaivesQA && isQAMode(id) {
+			continue
+		}
 		status := selectedResultStatus(state, id)
 		if status == "PENDING" || status == "" {
 			return fmt.Errorf("selected gate %q is PENDING", id)

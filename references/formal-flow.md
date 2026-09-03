@@ -70,13 +70,20 @@ Resume 默认把逐门 catalog delta 报告为 `catalogDelta`；目录变化与�
 ```bash
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action requirements-clarification
+# 主代理把完整需求与方案直接写入本 run 绑定的唯一正式需求文件后，先用不带
+# --confirmed 的登记调用执行结构预检并绑定待确认 revision；随后向用户展示文件全文与
+# 该精确 revision。用户要求修订时更新同一文件，并按现有修订规则加
+# --meaning changed 后重复此步。
+formal-gates workflow requirement --root <repo> --package-root <package> \
+  --run-id <id> --source <requirement-file>
+# 仅在用户明确确认刚才展示的同一 revision 后，记录动作 PASS 并确认该 revision。
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action requirements-clarification --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR>
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --source <requirement-file> \
   [--requirement-artifact <requirement-or-solution-file> ... | \
-   --clear-requirement-artifacts] --confirmed
+   --clear-requirement-artifacts] --confirmed --activate-guarantee
 # Resume 报告修订已改变之后，对它的语义影响做分类。
 formal-gates workflow requirement --root <repo> --package-root <package> \
   --run-id <id> --meaning <preserved|changed>
@@ -92,7 +99,7 @@ formal-gates workflow slicing --root <repo> --package-root <package> \
   --run-id <id> --decision <split|no-split> [--count <n>] \
   [--slice '<slice-definition>' ...] [--parallel '<parallel-suggestion>'] \
   [--note '<reason>'] [--master <retained-overall-master-run-id>] \
-  [--user-confirm]
+  [--ac-owner <AC-ID>=<slice-run-id|master-merge> ...] [--user-confirm]
 # 拆分建议对所有正式 run 必填呈现并留痕，含：拆分理由、如何拆、哪些子任务可并行、
 # 以及改拆后果说明（若改拆，黑盒 QA 设计按新拆分拓扑展开、已覆盖用例复用）。粒度判断
 # 由 Part 2 `start-readiness` 技术审一并完成，不另派独立的粒度审查代理；技术审输出
@@ -175,7 +182,15 @@ formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2|P3>]
+  [--finding '<message>' --severity <P0|P1|P2|P3>] \
+  --operator-check requirement-match --operator-check normal-entry \
+  --operator-check evidence --operator-check locations --operator-check scope \
+  --operator-check severity --operator-check binding --operator-check completeness \
+  --operator-evidence '<Operator 对本候选逐项核验的简明证据>'
+# 上述 operator 参数用于 PASS/FAIL 语义候选；RUNTIME_ERROR 不产生候选，不带这些参数。
+# Operator 必须在记录前实际核验：结果符合已确认需求、正常入口可复现、证据与位置充分、
+# 范围和严重度正确、dispatch/revision 绑定正确、结果逐项完整。CLI 拒绝缺项、重复项、未知
+# 项或空证据；固定套话不能替代本次核验事实。
 # 产品审的发现项是候选输入，复审规则由 CLI 强制（仅适用于 product-review 与
 # start-readiness，只有用户可破例）：仅含 P2/P3 → 该轮即记录 PASS 且 P2/P3 建议随 PASS
 # 可见、不阻塞、无需重审，但 P2/P3 建议仍须由用户逐项处置（确认→并入需求/开发范围；驳回→作废）、
@@ -208,7 +223,12 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action start-readiness --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2|P3>]
+  [--finding '<message>' --severity <P0|P1|P2|P3>] \
+  --operator-check requirement-match --operator-check normal-entry \
+  --operator-check evidence --operator-check locations --operator-check scope \
+  --operator-check severity --operator-check binding --operator-check completeness \
+  --operator-evidence '<Operator 对本候选逐项核验的简明证据>'
+# PASS/FAIL 必须带完整 Operator 核验；RUNTIME_ERROR 不带，规则同上。
 # 技术审的 FAIL 发现项同样是候选输入，由用户逐项处置：确认问题 → 修订需求/方案后强制
 # 重审；驳回问题 → 作废、不阻塞、不改需求/方案。复审规则与产品审相同。
 
@@ -231,11 +251,13 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
   --dispatch <dispatch-id> --case '<description>' --mode <blackbox|whitebox> \
   --procedure '<public procedure>' --oracle '<expected result>' \
+  --ac <AC-ID> [--ac <AC-ID> ...] \
   [--test '<file>::<function>']   # 白盒用例必填：文件定位的测试引用，唯一、不被两用例共用
 # 增量语义：只返回本轮变更——新增用例不带 id（CLI 分配）；修改既有用例须带既有 id：
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
   --dispatch <dispatch-id> --case '<新描述>' --case-id <CASE-id> --mode <blackbox|whitebox> \
-  --procedure '<procedure>' --oracle '<expected result>' [--test '<file>::<function>']
+  --procedure '<procedure>' --oracle '<expected result>' --ac <AC-ID> [--ac <AC-ID> ...] \
+  [--test '<file>::<function>']
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
   --dispatch <dispatch-id> --remove-case <CASE-id>   # 删除既有用例
 formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
@@ -255,6 +277,9 @@ formal-gates workflow prepare-action --root <repo> --package-root <package> \
 formal-gates workflow qa-review --root <repo> --package-root <package> \
   --run-id <id> --dispatch <dispatch-id> \
   --case CASE-001 --outcome <PASS|FAIL> [--reason '<required for FAIL>'] \
+  --source-decision <REQ-ID>=<PASS|FAIL|PENDING> \
+  --point-decision <AC-ID>=<PASS|FAIL|PENDING> \
+  --case-decision <CASE-ID>=<PASS|FAIL|PENDING> \
   [--finding '<set-level finding>' --severity <P1|P2> --location '<path:line>']
 # 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式，含被选中
 # 模式零用例）判 P1、阻塞、必须补用例；P2 不阻塞、不触发重审，但不豁免修改——host 按

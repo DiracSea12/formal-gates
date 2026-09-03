@@ -134,9 +134,8 @@ func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
 }
 
 // TestPerModePriorSurvivesOtherModeRecord covers recording one mode's new
-// authoritative result must clear only that mode's prior authoritative result, never
-// the other mode's (workflow.go RecordQAExecution defect) — the other mode's rerun
-// recognition stays intact.
+// authoritative result retains both that mode's bounded prior audit and the other
+// mode's prior. The other mode's rerun recognition stays intact.
 func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := perModeReadyDelivery(t, root, pkg, "per-mode-prior")
@@ -155,14 +154,15 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 	if state.priorQAExecution("blackbox") == nil || state.priorQAExecution("whitebox") == nil {
 		t.Fatalf("per-mode priors were not preserved: %#v", state.PriorQAExecutionByMode)
 	}
-	// 黑盒 FULL scope 重跑 PASS：只清黑盒自己的 prior，白盒 prior 保留。
+	blackboxPriorSnapshot := state.priorQAExecution("blackbox").Snapshot
+	// 黑盒 FULL scope 重跑 PASS：当前结果被替换，黑盒与白盒 prior 审计都保留。
 	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	state = recordModeQA(t, root, pkg, state, "blackbox", passingExecution(bbCases))
-	if state.priorQAExecution("blackbox") != nil {
-		t.Fatalf("blackbox rerun did not clear its own prior: %#v", state.PriorQAExecutionByMode["blackbox"])
+	if prior := state.priorQAExecution("blackbox"); prior == nil || prior.Status != "FAIL" || prior.Snapshot != blackboxPriorSnapshot {
+		t.Fatalf("blackbox rerun lost its own prior audit: %#v", prior)
 	}
 	if state.priorQAExecution("whitebox") == nil {
 		t.Fatalf("blackbox rerun cleared the whitebox prior: %#v", state.PriorQAExecutionByMode)
@@ -328,6 +328,90 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 	}
 	if state.qaExecution("blackbox").Snapshot != state.CurrentSnapshot || state.qaExecution("whitebox").Snapshot != state.CurrentSnapshot {
 		t.Fatalf("carry did not rebind per-mode QA snapshots: blackbox=%#v whitebox=%#v", state.qaExecution("blackbox"), state.qaExecution("whitebox"))
+	}
+}
+
+// TestExplicitPerModeRerunScopePreventsCarryInheritance covers the ownership
+// boundary between an explicit QA rerun decision and Carry. Once FULL is bound
+// to the old PASS snapshot, Carry cannot turn that PASS into a current result;
+// qa-execution remains dispatchable, replaces the mode's current result, and
+// retains the prior result as audit.
+func TestExplicitPerModeRerunScopePreventsCarryInheritance(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := perModeReadyDelivery(t, root, pkg, "scoped-rerun-carry")
+	bbCases := state.qaModeCases("blackbox")
+	state = recordModeQA(t, root, pkg, state, "blackbox", passingExecution(bbCases))
+	state = recordGateResult(t, root, pkg, state, "quality", "scoped-rerun-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = advanceRepair(t, root, pkg, state, "scoped-rerun")
+	priorSnapshot := state.PreRepairSnapshot
+
+	var err error
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "rerun the complete blackbox set")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := eligibleMainCarryResults(state, false); len(got) != 0 {
+		t.Fatalf("explicit FULL rerun remained eligible for Carry: %v", got)
+	}
+	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior"); err == nil || !strings.Contains(err.Error(), "no prior passing selected results") {
+		t.Fatalf("Carry accepted a mode with an explicit rerun scope: %v", err)
+	}
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := state.qaExecution("blackbox"); result.Snapshot != priorSnapshot {
+		t.Fatalf("rejected Carry rebound the old PASS: %#v", result)
+	}
+
+	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "blackbox", false, "")
+	if err != nil {
+		t.Fatalf("explicit FULL rerun could not prepare qa-execution: %v", err)
+	}
+	if strings.TrimSpace(prompt) == "" {
+		t.Fatal("qa-execution rerun prompt is empty")
+	}
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := openDispatchID(state, "action", "qa-execution")
+	if _, err := ClaimDispatch(root, pkg, state.RunID, dispatch, "scoped-rerun-executor"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordQAExecution(root, pkg, state.RunID, dispatch, passingExecution(bbCases), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := state.qaExecution("blackbox"); result.Status != "PASS" || result.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("new execution did not replace the current mode result: %#v", result)
+	}
+	if prior := state.priorQAExecution("blackbox"); prior == nil || prior.Status != "PASS" || prior.Snapshot != priorSnapshot {
+		t.Fatalf("new execution lost the prior audit: %#v", prior)
+	}
+}
+
+func TestQAExecutionRuntimeErrorCanRetrySameMode(t *testing.T) {
+	root, pkg := workflowFixture(t)
+	state := perModeReadyDelivery(t, root, pkg, "runtime-retry")
+	bbCases := state.qaModeCases("blackbox")
+	dispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
+	var err error
+	state, err = RecordQAExecution(root, pkg, state.RunID, dispatch, nil, "temporary execution host outage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if qaExecutionModeResulted(state, "blackbox") {
+		t.Fatalf("RUNTIME_ERROR became an authoritative result: %#v", state.qaExecution("blackbox"))
+	}
+
+	retry := prepareDispatch(t, root, pkg, state.RunID, "qa-execution", "blackbox")
+	state, err = RecordQAExecution(root, pkg, state.RunID, retry, passingExecution(bbCases), "")
+	if err != nil {
+		t.Fatalf("same-mode retry after RUNTIME_ERROR failed: %v", err)
+	}
+	if result := state.qaExecution("blackbox"); result.Status != "PASS" || result.Snapshot != state.CurrentSnapshot {
+		t.Fatalf("retry did not replace RUNTIME_ERROR with PASS: %#v", result)
 	}
 }
 
