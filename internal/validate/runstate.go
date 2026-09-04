@@ -124,7 +124,14 @@ type RunState struct {
 	Gates                 map[string]GateResult       `json:"gates"`
 	Carry                 map[string]CarryResult      `json:"carry"`
 	Dispatches            map[string]PreparedDispatch `json:"dispatches"`
-	Cost                  *cost.RunCost               `json:"cost,omitempty"`
+	// DispatchObligations is the closed legacy-workflow projection of logical
+	// external work. A TaskKey survives retry dispatch ids; its bounded policy is
+	// therefore the only place where an invalid/runtime attempt can gain another
+	// slot. RejectedResults and ReviewDeltaReceipts are append-only receipts.
+	DispatchObligations map[string]DispatchObligation `json:"dispatchObligations,omitempty"`
+	RejectedResults     []RejectedResultReceipt       `json:"rejectedResults,omitempty"`
+	ReviewDeltaReceipts []ReviewDeltaReceipt          `json:"reviewDeltaReceipts,omitempty"`
+	Cost                *cost.RunCost                 `json:"cost,omitempty"`
 	// QAWorktree 是黑盒 QA 的隔离工作区路径（Git 为从基线分支的 linked worktree，
 	// SVN/P4 为签出到基线版本的工作副本/客户端工作区）。它从基线快照创建、恒等于
 	// 基线，始终不含本次开发代码；黑盒 qa-design/qa-review 的原生标识校验与派发源
@@ -223,6 +230,13 @@ type PreparedDispatch struct {
 	// semantic round. Runtime retries may share the same authorization.
 	ReviewAuthorizationID string `json:"reviewAuthorizationId,omitempty"`
 	UserRequested         bool   `json:"userRequested,omitempty"`
+	// TaskKey identifies the logical obligation while Signature identifies the
+	// exact authoritative input. Retries receive a new dispatch id but preserve
+	// both values. ResultStatus distinguishes immutable PASS/FAIL from a runtime
+	// or invalid-result attempt without overloading lifecycle Status.
+	TaskKey      string `json:"taskKey,omitempty"`
+	Signature    string `json:"signature,omitempty"`
+	ResultStatus string `json:"resultStatus,omitempty"`
 }
 
 type ActionResult struct {
@@ -268,9 +282,28 @@ type QAExecutionScope struct {
 }
 
 type Finding struct {
-	Severity  string   `json:"severity,omitempty"`
-	Message   string   `json:"message"`
-	Locations []string `json:"locations,omitempty"`
+	ID                string              `json:"id,omitempty"`
+	Severity          string              `json:"severity,omitempty"`
+	SeverityRationale string              `json:"severityRationale,omitempty"`
+	Category          string              `json:"category,omitempty"`
+	Requirement       string              `json:"requirement,omitempty"`
+	NormalPath        string              `json:"normalPath,omitempty"`
+	ActualError       string              `json:"actualError,omitempty"`
+	DeferralImpact    string              `json:"deferralImpact,omitempty"`
+	Verification      FindingVerification `json:"verification,omitempty"`
+	Message           string              `json:"message"`
+	Locations         []string            `json:"locations,omitempty"`
+}
+
+// FindingVerification is intentionally per finding. One batch-level operator
+// paragraph cannot stand in for independent scope, severity, causality,
+// reproduction, and (for Start Readiness) classification checks.
+type FindingVerification struct {
+	Scope          string `json:"scope,omitempty"`
+	Severity       string `json:"severity,omitempty"`
+	Causality      string `json:"causality,omitempty"`
+	Reproduction   string `json:"reproduction,omitempty"`
+	Classification string `json:"classification,omitempty"`
 }
 
 type SkipAuthorization struct {
@@ -377,6 +410,9 @@ type RunSummary struct {
 	Cost                       *cost.RunCost                         `json:"cost,omitempty"`
 	QAOnlyRerun                *QAOnlyRerunRecord                    `json:"qaOnlyRerun,omitempty"`
 	RequirementGuarantee       *RequirementGuarantee                 `json:"requirementGuarantee,omitempty"`
+	DispatchObligations        map[string]DispatchObligation         `json:"dispatchObligations,omitempty"`
+	RejectedResults            []RejectedResultReceipt               `json:"rejectedResults,omitempty"`
+	ReviewDeltaReceipts        []ReviewDeltaReceipt                  `json:"reviewDeltaReceipts,omitempty"`
 	// Unverified 是轻量 run（routeMode=lightweight）的封板标注：轻量路线不做任何验证、
 	// 只留记录，封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。非轻量
 	// run 为空（omitempty 不输出）。
@@ -397,7 +433,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, PreDevelopmentReviewSeries: newPreDevelopmentReviewSeries(), ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
+	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, DispatchObligations: map[string]DispatchObligation{}, RejectedResults: []RejectedResultReceipt{}, ReviewDeltaReceipts: []ReviewDeltaReceipt{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, PreDevelopmentReviewSeries: newPreDevelopmentReviewSeries(), ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -465,6 +501,15 @@ func saveRunState(root string, state RunState, registryHeld bool) error {
 	}
 	if state.Dispatches == nil {
 		state.Dispatches = map[string]PreparedDispatch{}
+	}
+	if state.DispatchObligations == nil {
+		state.DispatchObligations = map[string]DispatchObligation{}
+	}
+	if state.RejectedResults == nil {
+		state.RejectedResults = []RejectedResultReceipt{}
+	}
+	if state.ReviewDeltaReceipts == nil {
+		state.ReviewDeltaReceipts = []ReviewDeltaReceipt{}
 	}
 	if state.RequirementArtifacts == nil {
 		state.RequirementArtifacts = []RequirementArtifact{}
@@ -1134,7 +1179,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 }
 
 func runSummary(state RunState) RunSummary {
-	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee}
+	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts}
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"

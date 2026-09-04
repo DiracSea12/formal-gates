@@ -110,7 +110,9 @@ type RequirementGuaranteeItemReport struct {
 }
 
 type RequirementUpdateOptions struct {
-	ActivateGuarantee bool
+	ActivateGuarantee   bool
+	ReviewDelta         *ReviewDeltaPackage
+	ImpactAuthorization *RequirementImpactAuthorization
 }
 
 type QAReviewRecordOptions struct {
@@ -120,6 +122,10 @@ type QAReviewRecordOptions struct {
 	UnboundSources  []string
 	UnboundPoints   []string
 	UnboundCases    []string
+	// StrictFindingContract is set by the public CLI. Direct in-process callers
+	// predating the structured A1 finding contract retain their compatibility
+	// path unless they opt into the production validation explicitly.
+	StrictFindingContract bool
 }
 
 type SealOptions struct {

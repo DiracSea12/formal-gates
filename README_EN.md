@@ -116,6 +116,12 @@ Every phase has a standard procedure, an explicit executor, and a written record
 **What is recorded** — adjudicated findings and the approved test cases.
 **In one line** — before coding, review "whether it should be done, whether it is minimal, and what counts as correct."
 
+Each finding records its severity rationale, category, normal path, impact, and evidence. An incomplete
+result produces only a `REJECTED_INVALID_RESULT` receipt and retries within the bounded budget of the
+same `TaskKey`; it cannot pollute PASS/FAIL. When a confirmed finding drives a requirement revision, the
+complete `review-delta` is previewed first. A meaning-changing revision also previews invalidated PASSes
+and rollback impact, then commits the requirement revision and state transition atomically after confirmation.
+
 ### 5. Development
 
 **What happens** — a dev agent implements within the confirmed scope in an independent session, fully isolated from every reviewer; new or changed delivery paths are added to the VCS first, the complete base-to-current change is checked before returning, and the agent self-tests before delivery.

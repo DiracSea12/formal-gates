@@ -110,7 +110,9 @@ func TestCLIAuthorizeRepairInlineQAScope(t *testing.T) {
 		state, _ = validate.LoadRunState(root, state.RunID)
 		gateDispatch := cliPrepareGate(t, root, pkg, state.RunID, "quality")
 		runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", gateDispatch, "--reviewer", "cli-auth-quality-"+suffix)
-		runCLI(t, "workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot+".."+state.CurrentSnapshot, "--finding", "still blocked", "--severity", "P1")
+		gateArgs := []string{"workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot + ".." + state.CurrentSnapshot, "--finding", "still blocked", "--severity", "P1"}
+		gateArgs = append(gateArgs, cliP1FindingEvidence("delivery.txt:1", true)...)
+		runCLI(t, gateArgs...)
 	}
 	// 波 1：首次执行不问 scope。
 	recordFailingWave("1")

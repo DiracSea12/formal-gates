@@ -111,7 +111,12 @@ formal-gates workflow slicing --root <repo> --package-root <package> \
 # 不单独重跑（切片实例在记录拆分决定时继承整体级 product-review/start-readiness）。
 # 用户已拍板（settled）的发现项清单：注入下一次 product-review / start-readiness
 # 派发，审查者不再重提（需求修订改变前提时例外）。对每个发现项，用户逐项处置为确认
-# 问题（confirm，认为是真问题、需修订）或驳回问题（dismiss，认为不是问题、作废）。
+# 问题（confirm，认为是真问题、需修订）或驳回问题（dismiss，认为不是问题、作废）。调用
+# settle-findings 前，主代理必须在同一条决策消息中逐项展示 finding ID、严重等级、逐条定级
+# 理由，并用人话说明问题是什么、正常路径会发生什么错误、实际后果和建议怎么处理。只报
+# ID/等级、只说“存在 P0/P1”或直接询问是否确认，均不得登记处置；缺少任一部分时，先前
+# 用户回复不能作为授权，必须完整重述问题后重新取得决定。同等级发现可以分组展示，但每条
+# finding 与其说明、理由和处置选项的映射必须无歧义。
 formal-gates workflow settle-findings --root <repo> --package-root <package> \
   --run-id <id> --action <product-review|start-readiness> \
   [--confirm '<settled-message>' ...] [--dismiss '<settled-message>' ...]
@@ -143,6 +148,19 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
   更新已变更的 revision）。**记录在途派发结果**（该派发按旧 revision prepare、结果属
   旧 revision）豁免该漂移硬阻断：先记录在途审查/门派发结果、再重绑，恢复路径可执行
   （避免漂移硬阻断与在途派发重绑守卫互锁成死锁）。
+- 已确认 product-review/start-readiness finding 推动修订时，主代理必须以编辑前完整 base
+  文本生成穷尽的 review-delta JSON（base/candidate revision、finding 来源、每个 hunk 的
+  影响与核验、受影响 action），先运行只读 `workflow review-delta-preview --input <json>`，
+  再把预览返回的 digest 和用户对完整 delta 的确认写回 JSON，以 `workflow requirement
+  --review-delta <json>` 应用。CLI 只校验结构、revision/finding/hunk/确认绑定并保存摘要
+  回执，不保存 base 文本或 diff，也不自行判断语义是否变化。
+- `meaning preserved` 保留 product-review PASS，只把 delta 明示受影响的、尚未通过的
+  start-readiness 投影置 PENDING。`meaning changed` 必须先用只读 `workflow
+  requirement-impact-preview` 展示 base/candidate revision、四类含义影响、将失效的 PASS、
+  回滚步骤和剩余产品审容量；应用时同时提交 preview digest、其 state revision 和用户确认。
+  一次确认可在 review-delta 的 `REVIEW_DELTA_AND_REQUIREMENT_IMPACT` scope 下同时覆盖两份
+  预览。digest/revision/确认任一缺失或过期均零写入；全部匹配时需求 revision、delta/impact
+  回执、产品审回退及依赖结果失效在一次原子状态转换中提交。
 
 拆分与路线细节（SKILL 第 3 步的执行机制）：
 - 路线跳过授权：custom 未选中的部分获得路线跳过授权（`ROUTE` 来源），Seal 期间不会
@@ -150,8 +168,12 @@ formal-gates workflow route-add --root <repo> --package-root <package> \
 - 后续新增需要用户明确指示；开发开始之后不能再加入 QA。
 - 分片 >= 2 时保留总任务实例自动附加合并门与合并 QA，不涉常规路线选择。
 
-重复 prepare：对同一 action/gate 重复 prepare 会生成 attempt+1 的新派发，旧的
-OPEN/CLAIMED 派发静默标 STALE（源快照失效），以当前返回的派发 ID 为准。
+重复 prepare：完整 signature 绑定类型、target/mode、base/current、需求 revision、QA
+用例集、catalog/prompt revision 与 action identity。相同 OPEN 返回既有规范提示词；相同
+CLAIMED 仍走中断续用判定；已有 PASS 时拒绝，已有 FAIL 时指向该类型的既有处置路径。
+只有 RUNTIME_ERROR/REJECTED_INVALID_RESULT 可在同一 TaskKey 自动重试，默认共两次
+attempt；耗尽后 `workflow authorize-retry --task-key ... --state-revision ... --reason ...`
+只允许用户追加一次最终 attempt。
 
 **派发提示词以 CLI 写出的规范文件为唯一权威源**（需求 6 硬阻断）：`prepare-action` /
 `prepare-gate` 生成提示词时，把完整提示词内容（含 dispatch id、需求 revision、
@@ -188,7 +210,12 @@ formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
 formal-gates workflow record-action --root <repo> --package-root <package> \
   --run-id <id> --action product-review --dispatch <dispatch-id> \
   --status <PASS|FAIL|RUNTIME_ERROR> \
-  [--finding '<message>' --severity <P0|P1|P2|P3>] \
+  [--finding '<message>' --severity <P0|P1|P2|P3> \
+   --severity-rationale '<why this exact severity>' --category <category> \
+   --requirement <REQ-ID> --normal-path '<documented normal path>' \
+   --deferral-impact '<impact if deferred>' --location '<path>:<line>' \
+   --verify-scope '<scope check>' --verify-severity '<severity check>' \
+   --verify-causality '<causality check>' --verify-reproduction '<reproduction check>'] \
   --operator-check requirement-match --operator-check normal-entry \
   --operator-check evidence --operator-check locations --operator-check scope \
   --operator-check severity --operator-check binding --operator-check completeness \
@@ -197,6 +224,11 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # Operator 必须在记录前实际核验：结果符合已确认需求、正常入口可复现、证据与位置充分、
 # 范围和严重度正确、dispatch/revision 绑定正确、结果逐项完整。CLI 拒绝缺项、重复项、未知
 # 项或空证据；固定套话不能替代本次核验事实。
+# start-readiness 每条 finding 还必须带 --category 与 --verify-classification；只有
+# REQUIREMENT_CONFLICT、RESPONSIBILITY_OR_DEPENDENCY、MISSING_CORE_ACCEPTANCE_ENTRY 可定
+# P0/P1，IMPLEMENTATION_DETAIL/OTHER 最高 P2。门审 P0/P1 另需 --actual-error。
+# P0/P1 缺少逐 finding 定级理由、正常路径、当前错误、证据位置、延期影响或逐项核验时，
+# CLI 非零返回但只原子追加 REJECTED_INVALID_RESULT 回执；正式结果投影不变。
 # 产品审的发现项是候选输入，复审规则由 CLI 强制（仅适用于 product-review 与
 # start-readiness，只有用户可破例）：仅含 P2/P3 → 该轮即记录 PASS 且 P2/P3 建议随 PASS
 # 可见、不阻塞、无需重审，但 P2/P3 建议仍须由用户逐项处置（确认→并入需求/开发范围；驳回→作废）、

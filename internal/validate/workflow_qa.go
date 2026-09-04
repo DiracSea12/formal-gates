@@ -528,18 +528,19 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		requireIsolationNative: true,
 		requireLifecycle:       true,
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
-		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(cases) != 0 || len(options.RemoveCases) != 0 || options.ReplaceAll {
 				return fmt.Errorf("QA Design runtime error cannot include cases")
 			}
+			backfillDispatchCost(root, state, dispatch)
 			// 只重置本派发 mode 的执行结果，另一 mode 的执行结果不受影响。
 			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
 			// qa-design 权威结果按 mode 独立记录。
 			state.setQADesign(dispatch.Mode, ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID})
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			return nil
 		}
+		backfillDispatchCost(root, state, dispatch)
 		// 显式操作互斥：整体替换与按 id 删除语义冲突，不能同时给出。
 		if options.ReplaceAll && len(options.RemoveCases) != 0 {
 			return fmt.Errorf("--replace-all cannot be combined with --remove-case")
@@ -798,7 +799,7 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				return err
 			}
 		}
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, "PASS", "")
 		return nil
 	})
 }
@@ -816,16 +817,27 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		requireIsolationNative: true,
 		requireLifecycle:       true,
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
-		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(decisions) != 0 || len(setFindings) != 0 {
 				return fmt.Errorf("QA Review runtime error cannot include case decisions or findings")
 			}
+			backfillDispatchCost(root, state, dispatch)
 			// review RUNTIME_ERROR 按 mode 独立记录。
 			state.setQAReview(dispatch.Mode, ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID})
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			return nil
 		}
+		strictSetFindings := make([]Finding, 0, len(setFindings))
+		if options.StrictFindingContract {
+			for _, input := range setFindings {
+				finding, err := strictFinding(input, "qa-review", false, root, *state)
+				if err != nil {
+					return rejectInvalidResult(state, dispatch, err)
+				}
+				strictSetFindings = append(strictSetFindings, finding)
+			}
+		}
+		backfillDispatchCost(root, state, dispatch)
 		// 待定用例集按派发 mode 限定：黑盒 review 只决定黑盒待定用例、白盒 review 只决定
 		// 白盒待定用例，各派发为单 mode、不混合。mode 为空（快速路径/合并 QA）时覆盖全部
 		// 待定用例。被选中模式零用例时待定集为空，只做集合覆盖判定。与提示词组装
@@ -873,7 +885,7 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		// 阻塞、必须补用例；P2 不阻塞、不触发重审，但不是无需修改——host 经 qa-design
 		// --per-suggestion 按建议直接吸收修订（见 RecordQADesign 的前置校验）。
 		// P0 不接受（集合层面不判终态致命）。
-		for _, input := range setFindings {
+		for index, input := range setFindings {
 			severity := strings.ToUpper(strings.TrimSpace(input.Severity))
 			if severity != "P1" && severity != "P2" {
 				return fmt.Errorf("QA Review set finding severity must be P1 or P2")
@@ -888,7 +900,13 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 				}
 				locations = append(locations, strings.TrimSpace(location))
 			}
-			findings = append(findings, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
+			finding := Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations}
+			if options.StrictFindingContract {
+				finding = strictSetFindings[index]
+			} else {
+				finding.ID = findingStableID(finding)
+			}
+			findings = append(findings, finding)
 			if severity == "P1" {
 				status = "FAIL"
 			}
@@ -899,7 +917,13 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			}
 			if !(len(modeCases) == 0 && isMergeVerification(*state)) && state.RequirementGuarantee.ReviewsByMode[dispatch.Mode].Review.SetStatus != coverage.StatusPass {
 				status = "FAIL"
-				findings = append(findings, Finding{Severity: "P1", Message: "explicit REQ/source, AC/point, and case review decisions did not all PASS"})
+				requirement := "confirmed requirement"
+				if state.RequirementGuarantee.Projection != nil && len(state.RequirementGuarantee.Projection.Requirements) != 0 {
+					requirement = state.RequirementGuarantee.Projection.Requirements[0].ID
+				}
+				finding := Finding{Severity: "P1", SeverityRationale: "The deterministic coverage projection shows a confirmed acceptance path without a complete approved source/point/case decision; P2 is insufficient because the run would otherwise claim coverage for an unapproved acceptance path.", Requirement: requirement, NormalPath: "approve the complete QA case set for the confirmed requirement", DeferralImpact: "development could proceed while a confirmed acceptance path has no approved QA coverage", Verification: FindingVerification{Scope: "checked the selected QA mode", Severity: "confirmed the missing approval blocks the documented coverage guarantee", Causality: "the incomplete decision projection directly prevents a complete whitelist", Reproduction: "recomputed the production guarantee review projection"}, Message: "explicit REQ/source, AC/point, and case review decisions did not all PASS", Locations: []string{state.RequirementSource}}
+				finding.ID = findingStableID(finding)
+				findings = append(findings, finding)
 			}
 		}
 		// review 权威结果按 mode 独立记录；FAIL 只把本 mode 的设计重置为 PENDING，
@@ -920,7 +944,7 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		}
 		// 把决定的审查状态写回读取时同一存储键（per-mode 键或合并 "" 回退）。
 		state.setQACasesForReview(dispatch.Mode, storageKey, modeCases)
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, status, "")
 		return nil
 	})
 }
@@ -950,7 +974,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			state.setQAExecution(recordMode, QAExecutionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), Snapshot: state.CurrentSnapshot})
 			// RUNTIME_ERROR 不是权威结果，不得驱逐存续的上一轮结果（P2-乙确认）：下一轮
 			// 重跑的 base 仍取本 mode 的 PriorQAExecution，所以这里不清空本 mode 的 prior。
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			completeReviewWaveIfReady(state)
 			return nil
 		}
@@ -1048,7 +1072,8 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		// 本轮权威结果（PASS/FAIL）替换当前 mode 的结果，但保留该 mode 的上一快照
 		// PriorQAExecution 作为有界审计。下一次快照推进会把这里的新权威结果覆盖成
 		// 新的 immediate prior；另一个 mode 的 current/prior 始终不受影响。
-		completeDispatch(state, dispatch.ID)
+		finalStatus := state.qaExecution(recordMode).Status
+		finishDispatchAttempt(state, dispatch.ID, finalStatus, "")
 		completeReviewWaveIfReady(state)
 		return nil
 	})

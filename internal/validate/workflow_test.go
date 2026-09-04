@@ -210,7 +210,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	}
 	second := openDispatchID(state, "action", "qa-review")
 	// prepare 不再作废——用户授权的重开新派发生成后，旧 CLAIMED 派发仍在途。
-	if first == second || state.Dispatches[first].Status != "CLAIMED" || state.Dispatches[second].Attempt != 2 {
+	if first == second || state.Dispatches[first].Status != "CLAIMED" || state.Dispatches[second].Attempt != 1 || state.Dispatches[second].TaskKey == state.Dispatches[first].TaskKey {
 		t.Fatalf("user-authorized retry did not create a fresh dispatch with the claimed prior still in flight: %#v", state.Dispatches)
 	}
 	before = stateBytes(t, root, state.RunID)
@@ -3501,7 +3501,27 @@ func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
 	// 修订需求（语义保留）后派发重审轮并返回 PASS：标记清除，PASS 可记录。
 	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised meaning-preserved requirement."))
 	commitAll(t, root, "revise requirement (preserved)")
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil)
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	series := state.PreDevelopmentReviewSeries["product-review"]
+	candidate, ok := semanticCandidateByDigest(series, series.EffectiveReviewStatus.ResultDigest)
+	if !ok || len(candidate.Findings) != 1 {
+		t.Fatalf("confirmed finding candidate missing: %#v", series)
+	}
+	delta, err := PreviewReviewDelta(root, pkg, state.RunID, "", nil, ReviewDeltaPackage{
+		Sources:         []ReviewDeltaSource{{Action: "product-review", FindingID: candidate.Findings[0].ID, Decision: "CONFIRM"}},
+		Hunks:           []ReviewDeltaHunk{{ID: "HUNK-001", Affected: []string{"REQ-001"}, SourceFindingIDs: []string{candidate.Findings[0].ID}, Disposition: "CONFIRM", Impact: "correct the confirmed finding", Verification: "compared the complete base and candidate and found no unrelated hunks"}},
+		AffectedActions: []string{"product-review"}, ConfirmationScope: "REVIEW_DELTA",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta.AffectedActions = []string{"start-readiness"}
+	delta.Digest = reviewDeltaDigest(delta)
+	delta.UserConfirmation = "user confirms the complete displayed review delta"
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", true, "preserved", nil, RequirementUpdateOptions{ReviewDelta: &delta})
 	if err != nil {
 		t.Fatal(err)
 	}

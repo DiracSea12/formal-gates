@@ -50,6 +50,9 @@ epoch/generation）。
 | abort | legacy | stable driver legacy runtime（`validate.Abort`，cli.go:430-452） | legacy state 无版本 envelope；终止后写 terminal summary | 终止 run：写 `.gates/results/<run>.json`（ABORTED）并清理 `.gates/tmp/<run>` | `--user-confirm` 二段确认缺失即拒（确认前不调 validate.Abort）；终止校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-020（abort 产出 terminal summary）；cli `workflow_test.go` abort 用例 |
 | reset | legacy | stable driver legacy runtime（`validate.ResetRun`，cli.go:454-470） | legacy state 无版本 envelope | 重建 run（reset/rebuild 本 run 状态） | 重建校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` reset 用例；validate `workflow_test.go` ResetRun 覆盖 |
 | requirement | legacy | stable driver legacy runtime（`validate.UpdateRequirement`，cli.go:472-496） | legacy state 无版本 envelope | 需求确认（--confirmed）与需求变化/工件集登记（写） | 需求源/工件校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012（真实宿主会话需求登记）；cli `workflow_test.go` requirement 用例 |
+| review-delta-preview | legacy | 无（只读 `validate.PreviewReviewDelta`） | legacy state revision + base/candidate requirement revision + finding/hunk bindings | 无；计算完整 review-delta digest 并返回待确认预览 | stale/misbound finding、hunk、revision 或候选结构错误 | 是 | legacy | legacy | 计划未枚举 | `review_governance_test.go` meaning-preserved/meaning-changed 用例；cli help/route-matrix 普查 |
+| requirement-impact-preview | legacy | 无（只读 `validate.PreviewRequirementImpact`） | legacy state integrity revision + review-delta/candidate revision | 无；展示含义维度、失效 PASS、回滚与产品审容量并生成 digest | 空影响、旧 revision、候选结构错误 | 是 | legacy | legacy | 计划未枚举 | `review_governance_test.go` read-only/atomic apply 用例；cli help/route-matrix 普查 |
+| authorize-retry | legacy | stable driver legacy runtime（`validate.AuthorizeDispatchRetry`） | TaskKey + 当前 state integrity revision | 仅在默认两次 attempt 耗尽后，为同一 TaskKey 追加一次最终 attempt 并记录非空用户理由 | stale revision、未耗尽、重复授权、未知 TaskKey | 否 | legacy | legacy | 计划未枚举 | `review_governance_test.go` finite retry 用例；cli help/route-matrix 普查 |
 | route-candidates | legacy | 无（只读计算 `validate.RouteCandidates`，cli.go:498-507） | 同 show（读侧） | 无 | 加载/候选计算错误文本 | 是 | legacy | legacy | 计划内 | cli `workflow_test.go` route-candidates 用例；P0-JSON CASE-011（公开入口 help 面） |
 | slicing | legacy | stable driver legacy runtime（`validate.RecordSlicing`，cli.go:509-529） | legacy state 无版本 envelope | 拆分决定留痕（no-split 需理由、split 需拓扑/总实例参数）；`--user-confirm` 确认（RQ 后置项：拆分绑定仍发生在本命令，属 legacy 维持，阶段 4/5 迁移） | 决定参数校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012（真实 subagent 走 req-clar→…→slicing→route）；cli `workflow_test.go` slicing 用例 |
 | settle-findings | legacy | stable driver legacy runtime（`validate.RecordSettledFindings`，cli.go:531-545） | legacy state 无版本 envelope | 审查 findings 处置（confirm/dismiss 留痕） | 处置参数校验错误文本 | 否 | legacy | legacy | 计划内 | validate `workflow_test.go`、`phase0_round12/15_whitebox_qa_test.go` SettleFindings 覆盖 |
@@ -103,6 +106,9 @@ epoch/generation）。
 | abort | legacy | 无 |
 | reset | legacy | 无 |
 | requirement | legacy | 无 |
+| review-delta-preview | legacy | 无 |
+| requirement-impact-preview | legacy | 无 |
+| authorize-retry | legacy | 无 |
 | route-candidates | legacy | 无 |
 | slicing | legacy | 无 |
 | settle-findings | legacy | 无 |
@@ -243,7 +249,8 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
 ### 阶段 3 未迁移旧入口的 engine 分流
 
 `resume`、`abort`、`reset`、`route`、`route-add`、`slicing`、`settle-findings`、`qa-worktree`、
-`prepare-*`、`claim-dispatch`、`record-*`、`snapshot`、`carry`、`authorize-repair`、`seal` 等
+`prepare-*`、`claim-dispatch`、`record-*`、`snapshot`、`carry`、`authorize-retry`、
+`authorize-repair`、`seal` 等
 未在本阶段启用 engine handler 的入口，先按 run envelope 分流：命中 candidate engine run 时统一返回
 `UNSUPPORTED_ENGINE_ENTRY` 且 state/receipt/mtime 零变化；命中 stable legacy run 时继续走既有 legacy
 语义。它们不得因 run ID 相同而落到另一 runtime，也不得成为 engine 的第二 writer。

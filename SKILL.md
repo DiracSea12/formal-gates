@@ -46,7 +46,7 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
 
 ## 正式流程
 
-九步顺序只由 `SKILL.md` 定义。受理确认后进入正式流程；路线（`full`/`custom`）在拆
+九步顺序只由 `SKILL.md` 定义。用户明确确认完整需求与方案后进入正式流程；路线（`full`/`custom`）在拆
 分决定之后确认——单一 run 确认一次、拆后逐切片各确认一次。每步的步骤级执行机制统一
 持有在 `references/formal-flow.md` 对应段，由各步按需加载。首次走完整流程前，先
 读 `references/example-run.md` 完整走查一遍。
@@ -93,7 +93,11 @@ description: 用于 formal-gates 正式流程（对齐、审查、发布、Seal�
    CLI 强制、完整机制唯一持有在
    `references/formal-flow.md`「开发之前」；执行本步前必读该节（含双速调度细节）。Part
    1 全部通过后进入 Part 2。用户已拍板的发现项不再重提。产品审不产生终态 FAIL，需求是
-   否成立由用户决定。
+   否成立由用户决定。请求用户处置 finding 前，主代理必须在同一条消息中逐项用人话讲清
+   问题是什么、正常路径会发生什么错误、实际后果、建议怎么处理，并同时给出 finding ID、
+   严重等级和逐条定级理由；只报 ID/等级、只说“存在 P0/P1”或直接询问是否确认均不构成
+   有效展示，不得据此调用 `settle-findings`。漏掉任一部分时，先前用户回复不得作为处置
+   授权，必须完整重述问题后重新取得决定。
 5. **开发。** 运行 `development-worker` 准备命令，记录开发开始并锁定路线。黑盒 QA 与
    开发并行：开发开始不再要求黑盒 qa-review PASS，黑盒 qa-design/qa-review/返修在独立
    QA 隔离工作区（恒等于基线、不含本次开发代码）中与开发并发推进；工作区创建/登记/校
@@ -187,6 +191,13 @@ seal 后恢复）→ 重走需求澄清（有已确认需求则重确认并登�
 `catalogDelta`）；外部 VCS 改动用 `resume --adopt-external` 重绑；需求修订用
 `requirement --meaning preserved|changed` 分类。
 
+若修订由已确认的 product-review/start-readiness finding 驱动，先从编辑前完整文本制作
+穷尽 review-delta 并运行只读 `review-delta-preview`，把预览与用户确认绑定后才能更新
+revision。`meaning preserved` 保留产品审 PASS，只重置 delta 明示受影响的技术审；
+`meaning changed` 还必须先运行只读 `requirement-impact-preview` 展示含义影响、失效 PASS、
+回滚步骤和剩余产品审容量，再以 preview digest + 当前 state revision + 用户确认原子应用。
+CLI 不判断文本含义，也不保存 base 文本/diff，只保存核验摘要与确认绑定。
+
 **独立派发**
 
 需求澄清与继承判定由主代理直接完成并记录理由，不单独准备继承判定提示词。其余独立派
@@ -217,6 +228,12 @@ host 启动后，用 `workflow claim-dispatch` 把每个独立派发绑定到 ho
 捕获其 stop 事件与中断原因），再认领新派发即放行（前派发标 STALE）。认领时会把同功能
 旧 OPEN 空票（未认领、无子代理）自动作废清掉；被作废但审查者已认领/已产出结果的派发
 仍可记录其结果，不重审。
+
+每个派发同时记录完整 signature 与逻辑 `TaskKey`。相同 OPEN 派发直接续用规范提示词；
+无效结果只追加 `REJECTED_INVALID_RESULT` 回执并结束 attempt，不写正式 finding/PASS/FAIL。
+同一 TaskKey 默认最多两次 attempt；耗尽后只能由用户以当前 state revision 和非空理由授权
+一次最终 attempt。结果为 PASS 时同 signature 不再派发；FAIL 按对应职责的既有处置路径
+推进。提示词、需求 revision、base/current、QA 用例集或实际处置上下文变化会形成新的绑定。
 
 会改变派发状态的 workflow 命令与生命周期 hook（子代理启动/停止）会自动检测并行性：当前
 阶段应并行任务集（开发后 = 黑盒 QA 执行 + 白盒 QA + 各已选门；修复轮 = 各门重审 + QA
@@ -315,7 +332,7 @@ CLI 用启动时选定的 Git/SVN/P4 原生命令解析和验证快照标识；h
 在能确定“启动基线→终态快照”区间时补记启动该 run 的主代理用量，主代理
 记录不伪装成 dispatch，也不参与实时派发止损。缺少可核对来源时标为 `unavailable`，不猜
 数字。该投影不改写已记录的 PASS/FAIL。阶段 4 的 engine 接入再由同一投影驱动后续派发止损，
-并在 `submit → source resolve/backfill → usage → guard → refill` 顺序下阻止超额调用；source
+并在“事件提交 → source resolve/backfill → usage → guard → refill”顺序下阻止超额调用；source
 尚未就绪进入 Wait，source 明确不可用时仍受派发次数上限约束；不另建账本。
 派发额度只由 engine 根据 canonical expected `TaskKey`、已确认 route/topology 和有限 retry
 policy 计算；外部派发缺显式策略时默认首次执行加一次自动重试。主代理、host、用户和 AI

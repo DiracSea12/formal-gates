@@ -71,11 +71,18 @@ type SemanticReviewCandidate struct {
 // SemanticReviewFinding gives every raw finding a stable identity independent
 // of later user disposition or severity correction.
 type SemanticReviewFinding struct {
-	ID        string   `json:"id"`
-	Digest    string   `json:"digest"`
-	Severity  string   `json:"severity"`
-	Message   string   `json:"message"`
-	Locations []string `json:"locations,omitempty"`
+	ID                string              `json:"id"`
+	Digest            string              `json:"digest"`
+	Severity          string              `json:"severity"`
+	SeverityRationale string              `json:"severityRationale,omitempty"`
+	Category          string              `json:"category,omitempty"`
+	Requirement       string              `json:"requirement,omitempty"`
+	NormalPath        string              `json:"normalPath,omitempty"`
+	ActualError       string              `json:"actualError,omitempty"`
+	DeferralImpact    string              `json:"deferralImpact,omitempty"`
+	Verification      FindingVerification `json:"verification,omitempty"`
+	Message           string              `json:"message"`
+	Locations         []string            `json:"locations,omitempty"`
 }
 
 // OperatorVerification records the explicit checks performed before a semantic
@@ -161,6 +168,7 @@ type ReviewAdjudication struct {
 	FindingID           string `json:"findingId"`
 	Decision            string `json:"decision"`
 	Severity            string `json:"severity,omitempty"`
+	SeverityRationale   string `json:"severityRationale,omitempty"`
 	OldValue            string `json:"oldValue"`
 	NewValue            string `json:"newValue"`
 	Reason              string `json:"reason"`
@@ -181,6 +189,7 @@ type ReviewCorrectionReceipt struct {
 	FindingID           string `json:"findingId,omitempty"`
 	Decision            string `json:"decision"`
 	Severity            string `json:"severity,omitempty"`
+	SeverityRationale   string `json:"severityRationale,omitempty"`
 	Invalidity          string `json:"invalidity,omitempty"`
 	Supersedes          string `json:"supersedes,omitempty"`
 	OldValue            string `json:"oldValue"`
@@ -215,6 +224,7 @@ type ReviewCorrectionInput struct {
 	FindingID                 string
 	Decision                  string
 	Severity                  string
+	SeverityRationale         string
 	Invalidity                string
 	Supersedes                string
 	Reason                    string
@@ -384,8 +394,14 @@ func validatePreDevelopmentReviewSeries(runID, action string, series PreDevelopm
 		if adjudication.Decision == "RESEVERITIZE" && adjudication.Severity != "P0" && adjudication.Severity != "P1" && adjudication.Severity != "P2" && adjudication.Severity != "P3" {
 			return fail("adjudication severity is invalid")
 		}
+		if adjudication.Decision == "RESEVERITIZE" && (adjudication.Severity == "P0" || adjudication.Severity == "P1") && rationalePlaceholder(adjudication.SeverityRationale) {
+			return fail("blocking adjudication lacks an independent severity rationale")
+		}
 		if adjudication.Decision != "RESEVERITIZE" && adjudication.Severity != "" {
 			return fail("non-severity adjudication carries a severity")
+		}
+		if adjudication.Decision != "RESEVERITIZE" && adjudication.SeverityRationale != "" {
+			return fail("non-severity adjudication carries a severity rationale")
 		}
 		expectedOld := reviewDecisionValue("", finding.Severity)
 		expectedNew := reviewDecisionValue(adjudication.Decision, correctedSeverity(ReviewCorrectionInput{Decision: adjudication.Decision, Severity: adjudication.Severity}, finding.Severity))
@@ -423,8 +439,14 @@ func validatePreDevelopmentReviewSeries(runID, action string, series PreDevelopm
 			if correction.Decision == "RESEVERITIZE" && correction.Severity != "P0" && correction.Severity != "P1" && correction.Severity != "P2" && correction.Severity != "P3" {
 				return fail("correction severity is invalid")
 			}
+			if correction.Decision == "RESEVERITIZE" && (correction.Severity == "P0" || correction.Severity == "P1") && rationalePlaceholder(correction.SeverityRationale) {
+				return fail("blocking severity correction lacks an independent rationale")
+			}
 			if correction.Decision != "RESEVERITIZE" && correction.Severity != "" {
 				return fail("non-severity correction carries a severity")
+			}
+			if correction.Decision != "RESEVERITIZE" && correction.SeverityRationale != "" {
+				return fail("non-severity correction carries a severity rationale")
 			}
 			previousValue := decisionNewValues[correction.Supersedes]
 			previousSeverity := reviewDecisionValueSeverity(previousValue)
@@ -432,7 +454,7 @@ func validatePreDevelopmentReviewSeries(runID, action string, series PreDevelopm
 			if correction.OldValue != previousValue || correction.NewValue != expectedNew {
 				return fail("correction old/new values do not match the superseded decision")
 			}
-		} else if correction.FindingID != "" || correction.Supersedes != "" || correction.Severity != "" || (correction.Invalidity != "INVALID" && correction.Invalidity != "INCOMPLETE" && correction.Invalidity != "STALE" && correction.Invalidity != "MISBOUND") {
+		} else if correction.FindingID != "" || correction.Supersedes != "" || correction.Severity != "" || correction.SeverityRationale != "" || (correction.Invalidity != "INVALID" && correction.Invalidity != "INCOMPLETE" && correction.Invalidity != "STALE" && correction.Invalidity != "MISBOUND") {
 			return fail("whole-result invalidation receipt is malformed")
 		} else if correction.OldValue != "VALID_RESULT:"+candidate.RawStatus || correction.NewValue != "INVALID_RESULT:"+correction.Invalidity {
 			return fail("whole-result invalidation old/new values are inconsistent")
@@ -633,7 +655,7 @@ func recordSemanticReviewCandidate(state *RunState, action string, dispatch Prep
 	previousEffective := series.EffectiveReviewStatus
 	findings := make([]SemanticReviewFinding, 0, len(result.Findings))
 	for _, raw := range result.Findings {
-		finding := SemanticReviewFinding{Severity: raw.Severity, Message: raw.Message, Locations: append([]string{}, raw.Locations...)}
+		finding := SemanticReviewFinding{Severity: raw.Severity, SeverityRationale: raw.SeverityRationale, Category: raw.Category, Requirement: raw.Requirement, NormalPath: raw.NormalPath, ActualError: raw.ActualError, DeferralImpact: raw.DeferralImpact, Verification: raw.Verification, Message: raw.Message, Locations: append([]string{}, raw.Locations...)}
 		finding.Digest = semanticFindingDigest(finding)
 		finding.ID = "finding-" + shortDigest(finding.Digest)
 		findings = append(findings, finding)
@@ -679,7 +701,7 @@ func recordSemanticReviewCandidate(state *RunState, action string, dispatch Prep
 		series.EffectiveReviewStatus.DownstreamImpact = append([]string{}, previousEffective.DownstreamImpact...)
 	}
 	state.PreDevelopmentReviewSeries[action] = series
-	return projectedActionResult(candidate, series.EffectiveReviewStatus), nil
+	return projectedActionResult(series, candidate, series.EffectiveReviewStatus), nil
 }
 
 func RecordReviewCorrection(root, packageRoot, runID string, input ReviewCorrectionInput) (RunState, error) {
@@ -695,6 +717,7 @@ func applyReviewCorrection(state *RunState, input ReviewCorrectionInput) error {
 	input.Action = strings.TrimSpace(input.Action)
 	input.Decision = strings.ToUpper(strings.TrimSpace(input.Decision))
 	input.Severity = strings.ToUpper(strings.TrimSpace(input.Severity))
+	input.SeverityRationale = strings.TrimSpace(input.SeverityRationale)
 	input.Invalidity = strings.ToUpper(strings.TrimSpace(input.Invalidity))
 	input.Reason = strings.TrimSpace(input.Reason)
 	input.Source = strings.TrimSpace(input.Source)
@@ -732,7 +755,7 @@ func applyReviewCorrection(state *RunState, input ReviewCorrectionInput) error {
 		if input.FindingID != "" {
 			return fmt.Errorf("whole-result invalidation does not accept a finding id")
 		}
-		if input.Severity != "" || strings.TrimSpace(input.Supersedes) != "" {
+		if input.Severity != "" || input.SeverityRationale != "" || strings.TrimSpace(input.Supersedes) != "" {
 			return fmt.Errorf("whole-result invalidation does not accept severity or supersedes")
 		}
 		if input.Invalidity != "INVALID" && input.Invalidity != "INCOMPLETE" && input.Invalidity != "STALE" && input.Invalidity != "MISBOUND" {
@@ -778,6 +801,12 @@ func applyReviewCorrection(state *RunState, input ReviewCorrectionInput) error {
 	if input.Decision != "RESEVERITIZE" && input.Severity != "" {
 		return fmt.Errorf("severity is accepted only for RESEVERITIZE")
 	}
+	if input.Decision == "RESEVERITIZE" && (input.Severity == "P0" || input.Severity == "P1") && rationalePlaceholder(input.SeverityRationale) {
+		return fmt.Errorf("re-severity to %s requires an independent non-placeholder severity rationale", input.Severity)
+	}
+	if input.Decision != "RESEVERITIZE" && input.SeverityRationale != "" {
+		return fmt.Errorf("severity rationale is accepted only for RESEVERITIZE")
+	}
 	latestID := latestFindingDecisionID(series, candidate.ResultDigest, finding.ID)
 	if latestID == "" {
 		if strings.TrimSpace(input.Supersedes) != "" {
@@ -801,7 +830,7 @@ func applyReviewCorrection(state *RunState, input ReviewCorrectionInput) error {
 	}
 	refreshPreDevelopmentReviewSeries(&series)
 	state.PreDevelopmentReviewSeries[input.Action] = series
-	state.Actions[input.Action] = projectedActionResult(candidate, series.EffectiveReviewStatus)
+	state.Actions[input.Action] = projectedActionResult(series, candidate, series.EffectiveReviewStatus)
 	syncSemanticReviewLegacyProjection(state, input.Action)
 	if previousStatus == "PASS" && series.EffectiveReviewStatus.Status == "FAIL" {
 		invalidateSemanticReviewDependents(state, input.Action, series.EffectiveReviewStatus.Source)
@@ -1116,13 +1145,13 @@ func effectiveFindingDecision(series PreDevelopmentReviewSeries, resultDigest st
 }
 
 func reviewAdjudication(state RunState, candidate SemanticReviewCandidate, finding SemanticReviewFinding, input ReviewCorrectionInput, revision int) ReviewAdjudication {
-	adjudication := ReviewAdjudication{RunID: state.RunID, Action: input.Action, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, FindingID: finding.ID, Decision: input.Decision, Severity: input.Severity, OldValue: reviewDecisionValue("", finding.Severity), NewValue: reviewDecisionValue(input.Decision, correctedSeverity(input, finding.Severity)), Reason: input.Reason, Source: input.Source, UserAuthorized: input.UserAuthorized, EffectiveRevision: revision}
+	adjudication := ReviewAdjudication{RunID: state.RunID, Action: input.Action, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, FindingID: finding.ID, Decision: input.Decision, Severity: input.Severity, SeverityRationale: input.SeverityRationale, OldValue: reviewDecisionValue("", finding.Severity), NewValue: reviewDecisionValue(input.Decision, correctedSeverity(input, finding.Severity)), Reason: input.Reason, Source: input.Source, UserAuthorized: input.UserAuthorized, EffectiveRevision: revision}
 	adjudication.ID = "review-adjudication-" + shortDigest(digestValue(adjudication))
 	return adjudication
 }
 
 func correctionReceipt(state RunState, candidate SemanticReviewCandidate, input ReviewCorrectionInput, revision int, oldValue, newValue string) ReviewCorrectionReceipt {
-	receipt := ReviewCorrectionReceipt{RunID: state.RunID, Action: input.Action, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, FindingID: input.FindingID, Decision: input.Decision, Severity: input.Severity, Invalidity: input.Invalidity, Supersedes: input.Supersedes, OldValue: oldValue, NewValue: newValue, Reason: input.Reason, Source: input.Source, UserAuthorized: input.UserAuthorized, EffectiveRevision: revision}
+	receipt := ReviewCorrectionReceipt{RunID: state.RunID, Action: input.Action, DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest, RequirementRevision: candidate.RequirementRevision, FindingID: input.FindingID, Decision: input.Decision, Severity: input.Severity, SeverityRationale: input.SeverityRationale, Invalidity: input.Invalidity, Supersedes: input.Supersedes, OldValue: oldValue, NewValue: newValue, Reason: input.Reason, Source: input.Source, UserAuthorized: input.UserAuthorized, EffectiveRevision: revision}
 	receipt.ID = "review-correction-" + shortDigest(digestValue(receipt))
 	return receipt
 }
@@ -1195,12 +1224,30 @@ func authorizationIndex(series PreDevelopmentReviewSeries, id string) int {
 	return -1
 }
 
-func projectedActionResult(candidate SemanticReviewCandidate, effective EffectiveReviewStatus) ActionResult {
+func projectedActionResult(series PreDevelopmentReviewSeries, candidate SemanticReviewCandidate, effective EffectiveReviewStatus) ActionResult {
 	findings := make([]Finding, 0, len(candidate.Findings))
 	for _, finding := range candidate.Findings {
-		findings = append(findings, Finding{Severity: finding.Severity, Message: finding.Message, Locations: append([]string{}, finding.Locations...)})
+		_, severity, _ := effectiveFindingDecision(series, candidate.ResultDigest, finding)
+		rationale := effectiveFindingRationale(series, candidate.ResultDigest, finding)
+		findings = append(findings, Finding{ID: finding.ID, Severity: severity, SeverityRationale: rationale, Category: finding.Category, Requirement: finding.Requirement, NormalPath: finding.NormalPath, ActualError: finding.ActualError, DeferralImpact: finding.DeferralImpact, Verification: finding.Verification, Message: finding.Message, Locations: append([]string{}, finding.Locations...)})
 	}
 	return ActionResult{Status: effective.Status, Message: candidate.Message, Findings: findings, DispatchID: candidate.DispatchID}
+}
+
+func effectiveFindingRationale(series PreDevelopmentReviewSeries, resultDigest string, finding SemanticReviewFinding) string {
+	rationale := finding.SeverityRationale
+	latestRevision := -1
+	for _, adjudication := range series.Adjudications {
+		if adjudication.ResultDigest == resultDigest && adjudication.FindingID == finding.ID && adjudication.EffectiveRevision > latestRevision && adjudication.SeverityRationale != "" {
+			rationale, latestRevision = adjudication.SeverityRationale, adjudication.EffectiveRevision
+		}
+	}
+	for _, correction := range series.Corrections {
+		if correction.ResultDigest == resultDigest && correction.FindingID == finding.ID && correction.EffectiveRevision > latestRevision && correction.SeverityRationale != "" {
+			rationale, latestRevision = correction.SeverityRationale, correction.EffectiveRevision
+		}
+	}
+	return rationale
 }
 
 func semanticReviewDownstreamImpact(action string) []string {
@@ -1222,10 +1269,10 @@ func semanticFindingDigest(finding SemanticReviewFinding) string {
 		locations = nil
 	}
 	return digestValue(struct {
-		Severity  string
-		Message   string
-		Locations []string
-	}{finding.Severity, finding.Message, locations})
+		Severity, SeverityRationale, Category, Requirement, NormalPath, ActualError, DeferralImpact, Message string
+		Verification                                                                                         FindingVerification
+		Locations                                                                                            []string
+	}{finding.Severity, finding.SeverityRationale, finding.Category, finding.Requirement, finding.NormalPath, finding.ActualError, finding.DeferralImpact, finding.Message, finding.Verification, locations})
 }
 
 func semanticReviewCandidateDigest(runID string, candidate SemanticReviewCandidate) string {

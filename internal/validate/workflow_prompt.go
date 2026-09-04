@@ -15,7 +15,11 @@ import (
 // dispatch for the same gate is interrupted, the CLI forces a resume unless the
 // user authorizes a fresh dispatch (the source is recorded in ReviewOverrides).
 func PrepareGate(root, packageRoot, runID, gateID string, userRequested bool, userReason string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	actionInput := digestValue(struct {
+		UserRequested bool
+		UserReason    string
+	}{userRequested, strings.TrimSpace(userReason)})
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return "", err
 		}
@@ -44,7 +48,25 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 		return prepareDevelopmentAction(root, packageRoot, runID, userRequested, userReason)
 	}
 	reviewerRequired := actionID != "requirements-clarification"
-	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	normalizedScope := append([]string{}, scope...)
+	for index := range normalizedScope {
+		normalizedScope[index] = strings.TrimSpace(normalizedScope[index])
+	}
+	sort.Strings(normalizedScope)
+	actionInput := ""
+	if isPreDevelopmentReviewAction(actionID) {
+		// User authorization opens capacity for the same semantic obligation; it
+		// does not create a different TaskKey, so an interrupted/invalid retry can
+		// reuse the authorization and remain in one finite-attempt budget.
+		actionInput = digestValue(struct{ Scope []string }{normalizedScope})
+	} else {
+		actionInput = digestValue(struct {
+			Scope         []string
+			UserRequested bool
+			UserReason    string
+		}{normalizedScope, userRequested, strings.TrimSpace(userReason)})
+	}
+	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if actionID == "product-review" {
 			// An activated structured requirement makes every REQ's obligation→AC
 			// completeness a mandatory, enumerated product-review item. The normal
@@ -136,7 +158,7 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 // prepareBoundPrompt composes and registers a prepared dispatch. mode selects the
 // QA isolation binding for qa-design/qa-review blackbox dispatches; userRequested
 // carries the explicit user override signal for the review-rule enforcement.
-func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason string, compose func(*RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
+func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason, actionInput string, compose func(*RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
 	prompt := ""
 	_, err := mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
@@ -165,6 +187,16 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if (target == "qa-design" || target == "qa-review") && developmentStarted(*state) && mode == "" {
 			return fmt.Errorf("%s dispatch requires --mode blackbox or whitebox after development starts", target)
 		}
+		// Signature/TaskKey reuse runs after the existing resume and mode guards:
+		// an interrupted CLAIMED dispatch still follows the three-way resume rule,
+		// while an unchanged OPEN obligation returns its canonical prompt.
+		taskKey, signature := dispatchIdentity(*state, catalog, targetKind, target, mode, actionInput)
+		if existingPrompt, reused, err := duplicateDispatchPrompt(*state, signature); err != nil {
+			return err
+		} else if reused {
+			prompt = existingPrompt
+			return nil
+		}
 		blackbox := mode == "blackbox" && (target == "qa-design" || target == "qa-review")
 		if blackbox {
 			if err := requireIsolatedCurrent(root, *state); err != nil {
@@ -179,8 +211,11 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if targetKind == "gate" {
 			wave = currentGateReviewWave(*state)
 		}
-		attempt := nextDispatchAttempt(*state, targetKind, target, wave)
 		dispatchID, err := newDispatchID()
+		if err != nil {
+			return err
+		}
+		attempt, err := registerDispatchAttempt(state, dispatchID, taskKey, signature, targetKind, target, mode)
 		if err != nil {
 			return err
 		}
@@ -220,7 +255,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if err != nil {
 			return err
 		}
-		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested}
+		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested, TaskKey: taskKey, Signature: signature}
 		return nil
 	})
 	return prompt, err
@@ -461,7 +496,11 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 }
 
 func prepareDevelopmentAction(root, packageRoot, runID string, userRequested bool, userReason string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	actionInput := digestValue(struct {
+		UserRequested bool
+		UserReason    string
+	}{userRequested, strings.TrimSpace(userReason)})
+	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}

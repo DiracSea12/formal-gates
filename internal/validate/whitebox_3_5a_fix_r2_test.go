@@ -1194,7 +1194,8 @@ func TestWhitebox35AFixR2FindingDismissalAndSupersedingCorrectionReprojectWithou
 	if err := applyReviewCorrection(&state, ReviewCorrectionInput{
 		Action: "product-review", DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest,
 		RequirementRevision: candidate.RequirementRevision, FindingID: blocking.ID, Decision: "RESEVERITIZE", Severity: "P1",
-		Supersedes: latest, Reason: "user restores blocking severity", Source: "user correction", UserAuthorized: true,
+		SeverityRationale: "The restored finding blocks the confirmed normal path and therefore requires P1 treatment.",
+		Supersedes:        latest, Reason: "user restores blocking severity", Source: "user correction", UserAuthorized: true,
 		ExpectedEffectiveRevision: series.EffectiveReviewStatus.Revision,
 	}); err != nil {
 		t.Fatalf("superseding correction: %v", err)

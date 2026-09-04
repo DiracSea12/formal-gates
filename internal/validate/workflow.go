@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,9 +52,16 @@ type StartOptions struct {
 }
 
 type FindingInput struct {
-	Severity  string
-	Message   string
-	Locations []string
+	Severity          string
+	SeverityRationale string
+	Category          string
+	Requirement       string
+	NormalPath        string
+	ActualError       string
+	DeferralImpact    string
+	Verification      FindingVerification
+	Message           string
+	Locations         []string
 }
 
 // ReviewItemInput 是 record-action 对 product-review / start-readiness 逐项下发的
@@ -896,6 +904,9 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 		}
 		state.Carry = map[string]CarryResult{}
 		state.Dispatches = map[string]PreparedDispatch{}
+		state.DispatchObligations = map[string]DispatchObligation{}
+		state.RejectedResults = []RejectedResultReceipt{}
+		state.ReviewDeltaReceipts = []ReviewDeltaReceipt{}
 		state.QACasesByMode = map[string][]QACase{}
 		state.QAExecutionByMode = map[string]QAExecutionResult{}
 		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
@@ -991,6 +1002,7 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			}
 		}
 		if changed {
+			impactBaseState := *state
 			if semanticEffect != "preserved" && semanticEffect != "changed" {
 				return fmt.Errorf("changed requirement requires semantic effect preserved or changed")
 			}
@@ -1000,6 +1012,17 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			// 判定，不新增 returned 状态。
 			if err := requireNoUnrecordedInFlightDispatch(*state); err != nil {
 				return err
+			}
+			reviewDriven := options.ReviewDelta != nil || hasConfirmedReviewFinding(*state)
+			var deltaReceipt ReviewDeltaReceipt
+			if reviewDriven {
+				if !confirmed {
+					return fmt.Errorf("a review-driven requirement revision requires --confirmed with its review-delta confirmation")
+				}
+				deltaReceipt, err = validateReviewDelta(*state, revision, options.ReviewDelta)
+				if err != nil {
+					return err
+				}
 			}
 			liveSnapshot, err := resolveNativeSnapshot(root, state.VCS)
 			if err != nil {
@@ -1029,11 +1052,68 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 						updateGuaranteeForRoute(state)
 					}
 				}
+				if reviewDriven {
+					for _, action := range deltaReceipt.AffectedActions {
+						if action == "product-review" {
+							return fmt.Errorf("meaning-preserved cannot invalidate product-review; use meaning-changed with a confirmed impact preview if product meaning changed")
+						}
+					}
+					state.ReviewDeltaReceipts = append(state.ReviewDeltaReceipts, deltaReceipt)
+					for _, action := range deltaReceipt.AffectedActions {
+						if action == "start-readiness" {
+							state.Actions[action] = ActionResult{Status: "PENDING"}
+							markPreDevelopmentReviewActionStale(state, action, deltaReceipt.ID)
+						}
+					}
+				}
 				rebindCurrentSnapshot(state, liveSnapshot)
 				return nil
 			}
+			if reviewDriven {
+				if options.ImpactAuthorization == nil {
+					return fmt.Errorf("meaning-changed requires a bound requirement-impact preview and user confirmation")
+				}
+				authorization := options.ImpactAuthorization
+				if authorization.StateRevision != state.StateIntegrity {
+					return fmt.Errorf("meaning-changed requirement-impact state revision is stale")
+				}
+				preview, err := requirementImpactPreview(impactBaseState, revision, deltaReceipt.DeltaDigest, authorization.Impact)
+				if err != nil {
+					return err
+				}
+				if authorization.PreviewDigest == "" || authorization.PreviewDigest != preview.Digest {
+					return fmt.Errorf("meaning-changed requirement-impact preview digest is stale or misbound")
+				}
+				confirmation := strings.TrimSpace(authorization.UserConfirmation)
+				if confirmation == "" && options.ReviewDelta.ConfirmationScope == "REVIEW_DELTA_AND_REQUIREMENT_IMPACT" && options.ReviewDelta.ImpactPreviewDigest == preview.Digest {
+					confirmation = strings.TrimSpace(options.ReviewDelta.UserConfirmation)
+				}
+				if confirmation == "" {
+					return fmt.Errorf("meaning-changed requires explicit user confirmation of the displayed rollback impact")
+				}
+				deltaReceipt.ImpactPreviewDigest = preview.Digest
+				deltaReceipt.ImpactStateRevision = authorization.StateRevision
+				deltaReceipt.ImpactConfirmationSource = confirmation
+				deltaReceipt.Impact = &preview.Impact
+				deltaReceipt.ID = ""
+				deltaReceipt.ID = "review-delta-" + shortDigest(digestValue(deltaReceipt))
+			}
 			state.CurrentSnapshot = liveSnapshot
 			invalidateRequirementResults(state, catalog.GateIDs())
+			if reviewDriven {
+				state.RequirementConfirmed = true
+				state.Actions["requirements-clarification"] = ActionResult{Status: "PASS", Message: "review-delta and requirement-impact confirmation accepted"}
+				state.ReviewDeltaReceipts = append(state.ReviewDeltaReceipts, deltaReceipt)
+				if guaranteeWasActivated {
+					if err := activateFrozenGuarantee(root, state); err != nil {
+						return err
+					}
+					if state.RouteMode != "" {
+						updateGuaranteeForRoute(state)
+					}
+				}
+				return nil
+			}
 			state.RequirementConfirmed = false
 			if confirmed {
 				return fmt.Errorf("a meaning-changing requirement must return to Requirements Clarification")
@@ -1722,7 +1802,7 @@ func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts record
 // recorded in ReviewOverrides.
 func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, items ...ReviewItemInput) (RunState, error) {
 	verification := legacyOperatorVerification()
-	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, items...)
+	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, false, items...)
 }
 
 // RecordActionWithOperatorVerification is the public CLI path for semantic
@@ -1730,10 +1810,10 @@ func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 // it requires the Operator to submit the actual verification checks and
 // evidence that make a reviewer candidate eligible for recording.
 func RecordActionWithOperatorVerification(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
-	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, items...)
+	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, true, items...)
 }
 
-func recordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
+func recordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, strict bool, items ...ReviewItemInput) (RunState, error) {
 	// record-action status 严格大小写校验：pass 之类的小写不宽容记录，必须精确
 	// PASS / FAIL / RUNTIME_ERROR（trim 后）。
 	if raw := strings.TrimSpace(status); raw != "PASS" && raw != "FAIL" && raw != "RUNTIME_ERROR" {
@@ -1756,12 +1836,17 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			return nil
 		},
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+		var preparedResult *ActionResult
 		if actionID == "start-readiness" || actionID == "product-review" {
 			if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 				return err
 			}
-			if err := enforceReviewRule(state, actionID, dispatch.ID, status, findings, userRequested, userReason); err != nil {
-				return err
+			if strict {
+				normalized, converted, err := validateStrictSemanticResult(actionID, status, message, findings, false, root, *state)
+				if err != nil {
+					return rejectInvalidResult(state, dispatch, err)
+				}
+				preparedResult = &ActionResult{Status: normalized, Message: strings.TrimSpace(message), Findings: converted}
 			}
 			// Runtime failures are dispatch retries, not semantic review results:
 			// they neither require item decisions nor consume the structured
@@ -1770,20 +1855,37 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			if strings.ToUpper(strings.TrimSpace(status)) != "RUNTIME_ERROR" {
 				// 增量审查：record-action 下发逐项判定。所有 PENDING 项必须全判；对已 PASS
 				// 项下发判定被拒；FAIL 项必须带 finding（reason）。
+				originalItems := state.ReviewItemsByAction[actionID]
 				if err := recordReviewItems(state, actionID, dispatch.ID, items); err != nil {
+					if strict {
+						return rejectInvalidResult(state, dispatch, &ResultContractError{Reason: err.Error(), Fields: []string{"reviewItems"}})
+					}
 					return err
 				}
 				if actionID == "product-review" {
 					if err := requireGuaranteeProductReviewResult(*state, strings.ToUpper(strings.TrimSpace(status))); err != nil {
+						if strict {
+							state.ReviewItemsByAction[actionID] = originalItems
+							return rejectInvalidResult(state, dispatch, &ResultContractError{Reason: err.Error(), Fields: []string{"productReviewCompleteness"}})
+						}
 						return err
 					}
 				}
 			}
+			if err := enforceReviewRule(state, actionID, dispatch.ID, status, findings, userRequested, userReason); err != nil {
+				return err
+			}
 		}
 		backfillDispatchCost(root, state, dispatch)
-		result, err := semanticActionResult(actionID, status, message, findings, state)
-		if err != nil {
-			return err
+		result := ActionResult{}
+		var err error
+		if preparedResult != nil {
+			result = *preparedResult
+		} else {
+			result, err = semanticActionResult(actionID, status, message, findings, state)
+			if err != nil {
+				return err
+			}
 		}
 		result.DispatchID = dispatch.ID
 		result, err = recordSemanticReviewCandidate(state, actionID, dispatch, result, verification)
@@ -1792,7 +1894,7 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		}
 		result.DispatchID = dispatch.ID
 		state.Actions[actionID] = result
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, result.Status, result.Message)
 		return nil
 	})
 }
@@ -1802,7 +1904,10 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 // 项下发判定被拒（除非主代理下次 prepare 显式重新声明变更）；FAIL 项必须携带 finding。
 // 未声明 scope（该动作无逐项表）时不做逐项约束，回到全量审查路径。
 func recordReviewItems(state *RunState, actionID, dispatchID string, items []ReviewItemInput) error {
-	table := state.ReviewItemsByAction[actionID]
+	table := map[string]ReviewItem{}
+	for key, value := range state.ReviewItemsByAction[actionID] {
+		table[key] = value
+	}
 	if len(table) == 0 {
 		return nil
 	}
@@ -1853,6 +1958,7 @@ func recordReviewItems(state *RunState, actionID, dispatchID string, items []Rev
 			return fmt.Errorf("review item %q is pending and must be judged (all pending items require a decision)", key)
 		}
 	}
+	state.ReviewItemsByAction[actionID] = table
 	return nil
 }
 
@@ -1932,6 +2038,17 @@ func settledMessagesByDisposition(state RunState, actionID, disposition string) 
 }
 
 func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared string, findings []FindingInput) (RunState, error) {
+	return recordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared, findings, false)
+}
+
+// RecordGateWithEvidence is the public CLI path. The compatibility RecordGate
+// wrapper remains for trusted in-process callers created before the structured
+// finding contract.
+func RecordGateWithEvidence(root, packageRoot, runID, gateID, dispatchID, status, message, compared string, findings []FindingInput) (RunState, error) {
+	return recordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared, findings, true)
+}
+
+func recordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared string, findings []FindingInput, strict bool) (RunState, error) {
 	return openDispatchRecord(root, packageRoot, runID, dispatchID, recordDispatchOptions{
 		targetKind:        "gate",
 		target:            gateID,
@@ -1946,6 +2063,14 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 			return nil
 		},
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+		var preparedResult *GateResult
+		if strict {
+			normalized, converted, err := validateStrictSemanticResult("", status, message, findings, true, root, *state)
+			if err != nil {
+				return rejectInvalidResult(state, dispatch, err)
+			}
+			preparedResult = &GateResult{Status: normalized, Message: strings.TrimSpace(message), Snapshot: state.CurrentSnapshot, Findings: converted}
+		}
 		backfillDispatchCost(root, state, dispatch)
 		existing := state.Gates[gateID]
 		if semanticResultRecorded(existing.Status, existing.Snapshot, state.CurrentSnapshot) && !gatePromptChanged(*state, catalog, gateID) {
@@ -1957,9 +2082,15 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 				return fmt.Errorf("gate review reported compared %q but the requested base-to-current range is %q", compared, want)
 			}
 		}
-		result, err := semanticGateResult(status, message, findings, state)
-		if err != nil {
-			return err
+		result := GateResult{}
+		var err error
+		if preparedResult != nil {
+			result = *preparedResult
+		} else {
+			result, err = semanticGateResult(status, message, findings, state)
+			if err != nil {
+				return err
+			}
 		}
 		if err := rejectFrozenArtifactFindings(*state, result.Findings); err != nil {
 			return err
@@ -1974,7 +2105,7 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 		if gate, ok := catalog.Gate(gateID); ok && state.PromptHashes != nil {
 			state.PromptHashes["gate:"+gateID] = composedGatePromptHash(catalog, gate.Content)
 		}
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, result.Status, result.Message)
 		completeReviewWaveIfReady(state)
 		return nil
 	})
@@ -2220,7 +2351,14 @@ func mutateRun(root, runID string, change func(*RunState) error) (RunState, erro
 		return RunState{}, err
 	}
 	if err := change(&state); err != nil {
-		return RunState{}, err
+		var committed *committedStateError
+		if !errors.As(err, &committed) {
+			return RunState{}, err
+		}
+		if saveErr := SaveRunState(root, state); saveErr != nil {
+			return RunState{}, saveErr
+		}
+		return state, committed.err
 	}
 	if err := SaveRunState(root, state); err != nil {
 		return RunState{}, err
@@ -2430,9 +2568,7 @@ func requireDispatchNativeCurrent(root string, state RunState, dispatch Prepared
 }
 
 func completeDispatch(state *RunState, dispatchID string) {
-	dispatch := state.Dispatches[dispatchID]
-	dispatch.Status = "COMPLETED"
-	state.Dispatches[dispatchID] = dispatch
+	finishDispatchAttempt(state, dispatchID, "PASS", "")
 }
 
 // staleOpenDispatches supersedes the prior OPEN empty tickets of the same target
@@ -2586,7 +2722,9 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 		} else if severity != "" {
 			return "", nil, fmt.Errorf("severity is accepted only for discovered-gate findings or product/start-readiness review findings")
 		}
-		converted = append(converted, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
+		finding := Finding{Severity: severity, SeverityRationale: strings.TrimSpace(input.SeverityRationale), Category: strings.ToUpper(strings.TrimSpace(input.Category)), Requirement: strings.TrimSpace(input.Requirement), NormalPath: strings.TrimSpace(input.NormalPath), ActualError: strings.TrimSpace(input.ActualError), DeferralImpact: strings.TrimSpace(input.DeferralImpact), Verification: input.Verification, Message: strings.TrimSpace(input.Message), Locations: locations}
+		finding.ID = findingStableID(finding)
+		converted = append(converted, finding)
 	}
 	// 门的 PASS 只允许 P2/P3；product-review/start-readiness 的 PASS 允许携带发现项（仅
 	// P2/P3 或已驳回的 P0/P1，由 enforceReviewRule 逐项判定），FAIL 两者都必须含 P0/P1。

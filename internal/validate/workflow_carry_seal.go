@@ -86,7 +86,7 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 				return fmt.Errorf("Carry runtime error cannot include decisions")
 			}
 			state.Actions["carry"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID}
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			completeReviewWaveIfReady(state)
 			return nil
 		}
@@ -120,7 +120,7 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 			}
 		}
 		state.Actions["carry"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, "PASS", "")
 		resolveCarryBoundary(state)
 		return nil
 	})

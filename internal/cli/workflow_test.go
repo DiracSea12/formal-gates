@@ -267,7 +267,9 @@ func TestCLIQARerunScopeDecision(t *testing.T) {
 	state, _ = validate.LoadRunState(root, state.RunID)
 	gateDispatch := cliPrepareGate(t, root, pkg, state.RunID, "quality")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", gateDispatch, "--reviewer", "gate-quality")
-	runCLI(t, "workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot+".."+state.CurrentSnapshot, "--finding", "normal workflow fails", "--severity", "P1")
+	gateArgs := []string{"workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot + ".." + state.CurrentSnapshot, "--finding", "normal workflow fails", "--severity", "P1"}
+	gateArgs = append(gateArgs, cliP1FindingEvidence("delivery.txt:1", true)...)
+	runCLI(t, gateArgs...)
 
 	// 修复快照（无先通过的已选门，无需 Carry 处置）。开发/修复派发的认领身份一次性，
 	// 修复派发用独立身份手动准备并认领。

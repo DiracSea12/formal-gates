@@ -344,43 +344,47 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 // record/prepare/carry-family subcommands reuse shared runners; the state-changing
 // subcommands each own their flag parsing and validate call.
 var workflowSubcommands = map[string]func(args []string, streams IO) (int, error){
-	"start":              runWorkflowStart,
-	"show":               runWorkflowShow,
-	"status":             runWorkflowStatus,
-	"next":               runWorkflowNext,
-	"drive":              runWorkflowDrive,
-	"submit":             runWorkflowSubmit,
-	"diagnose":           runWorkflowDiagnose,
-	"resume":             runWorkflowResume,
-	"abort":              runWorkflowAbort,
-	"reset":              runWorkflowReset,
-	"requirement":        runWorkflowRequirement,
-	"route-candidates":   runWorkflowRouteCandidates,
-	"slicing":            runWorkflowSlicing,
-	"settle-findings":    runWorkflowSettleFindings,
-	"route":              runWorkflowRoute,
-	"route-add":          runWorkflowRouteAdd,
-	"qa-worktree":        runWorkflowQAWorktree,
-	"prepare-gate":       runWorkflowPrepareGate,
-	"prepare-action":     runWorkflowPrepareAction,
-	"claim-dispatch":     runWorkflowClaimDispatch,
-	"record-action":      runRecordAction,
-	"record-gate":        runRecordGate,
-	"qa-design":          runQADesign,
-	"qa-review":          runQAReview,
-	"qa-execution":       runQAExecution,
-	"qa-execution-scope": runWorkflowQAExecutionScope,
-	"snapshot":           runWorkflowSnapshot,
-	"cleanup":            runWorkflowCleanup,
-	"future":             runWorkflowFuture,
-	"carry":              runCarry,
-	"authorize-repair":   runWorkflowAuthorizeRepair,
-	"seal":               runWorkflowSeal,
+	"start":                      runWorkflowStart,
+	"show":                       runWorkflowShow,
+	"status":                     runWorkflowStatus,
+	"next":                       runWorkflowNext,
+	"drive":                      runWorkflowDrive,
+	"submit":                     runWorkflowSubmit,
+	"diagnose":                   runWorkflowDiagnose,
+	"resume":                     runWorkflowResume,
+	"abort":                      runWorkflowAbort,
+	"reset":                      runWorkflowReset,
+	"requirement":                runWorkflowRequirement,
+	"review-delta-preview":       runWorkflowReviewDeltaPreview,
+	"requirement-impact-preview": runWorkflowRequirementImpactPreview,
+	"authorize-retry":            runWorkflowAuthorizeRetry,
+	"route-candidates":           runWorkflowRouteCandidates,
+	"slicing":                    runWorkflowSlicing,
+	"settle-findings":            runWorkflowSettleFindings,
+	"route":                      runWorkflowRoute,
+	"route-add":                  runWorkflowRouteAdd,
+	"qa-worktree":                runWorkflowQAWorktree,
+	"prepare-gate":               runWorkflowPrepareGate,
+	"prepare-action":             runWorkflowPrepareAction,
+	"claim-dispatch":             runWorkflowClaimDispatch,
+	"record-action":              runRecordAction,
+	"record-gate":                runRecordGate,
+	"qa-design":                  runQADesign,
+	"qa-review":                  runQAReview,
+	"qa-execution":               runQAExecution,
+	"qa-execution-scope":         runWorkflowQAExecutionScope,
+	"snapshot":                   runWorkflowSnapshot,
+	"cleanup":                    runWorkflowCleanup,
+	"future":                     runWorkflowFuture,
+	"carry":                      runCarry,
+	"authorize-repair":           runWorkflowAuthorizeRepair,
+	"seal":                       runWorkflowSeal,
 }
 
 var workflowLegacyWriteEntry = map[string]bool{
 	"resume": true, "abort": true, "reset": true, "requirement": true,
-	"slicing": true, "settle-findings": true, "route": true, "route-add": true,
+	"authorize-retry": true,
+	"slicing":         true, "settle-findings": true, "route": true, "route-add": true,
 	"qa-worktree": true, "prepare-gate": true, "prepare-action": true,
 	"claim-dispatch": true, "record-action": true, "record-gate": true,
 	"qa-design": true, "qa-review": true, "qa-execution": true,
@@ -722,6 +726,14 @@ func runWorkflowRequirement(args []string, streams IO) (int, error) {
 	confirmed := fs.Bool("confirmed", false, "mark this exact requirement revision confirmed")
 	activateGuarantee := fs.Bool("activate-guarantee", false, "compatibility spelling for explicitly freezing the REQ/AC envelope; initial confirmation of one structured formal requirement freezes it automatically")
 	meaning := fs.String("meaning", "", "semantic effect for a changed revision: preserved or changed")
+	reviewDeltaPath := fs.String("review-delta", "", "main-agent verified review-delta JSON package for a review-driven revision")
+	impactPreviewDigest := fs.String("impact-preview-digest", "", "digest from workflow requirement-impact-preview for meaning-changed")
+	impactStateRevision := fs.String("impact-state-revision", "", "stateRevision from workflow requirement-impact-preview")
+	impactUserConfirmation := fs.String("impact-user-confirmation", "", "user confirmation source covering the displayed rollback impact")
+	productGoalImpact := fs.String("product-goal-impact", "", "meaning-changed product-goal impact used by the bound preview")
+	scopeImpact := fs.String("scope-impact", "", "meaning-changed scope impact used by the bound preview")
+	externalBehaviorImpact := fs.String("external-behavior-impact", "", "meaning-changed external-behavior impact used by the bound preview")
+	acceptanceImpact := fs.String("acceptance-impact", "", "meaning-changed acceptance-criteria impact used by the bound preview")
 	var artifacts stringListFlag
 	fs.Var(&artifacts, "requirement-artifact", "complete additional requirement artifact set; repeat as needed")
 	clearArtifacts := fs.Bool("clear-requirement-artifacts", false, "replace the set with the primary requirement only")
@@ -743,8 +755,72 @@ func runWorkflowRequirement(args []string, streams IO) (int, error) {
 	} else if artifacts != nil {
 		artifactSet = artifacts
 	}
-	state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, artifactSet, validate.RequirementUpdateOptions{ActivateGuarantee: *activateGuarantee})
+	var delta *validate.ReviewDeltaPackage
+	if strings.TrimSpace(*reviewDeltaPath) != "" {
+		loaded, err := validate.LoadReviewDeltaPackage(*reviewDeltaPath)
+		if err != nil {
+			return 1, err
+		}
+		delta = &loaded
+	}
+	var impactAuthorization *validate.RequirementImpactAuthorization
+	if *impactPreviewDigest != "" || *impactStateRevision != "" || *impactUserConfirmation != "" || *productGoalImpact != "" || *scopeImpact != "" || *externalBehaviorImpact != "" || *acceptanceImpact != "" {
+		impactAuthorization = &validate.RequirementImpactAuthorization{PreviewDigest: *impactPreviewDigest, StateRevision: *impactStateRevision, UserConfirmation: *impactUserConfirmation, Impact: validate.RequirementImpactInput{ProductGoal: *productGoalImpact, Scope: *scopeImpact, ExternalBehavior: *externalBehaviorImpact, AcceptanceCriteria: *acceptanceImpact}}
+	}
+	state, err := validate.UpdateRequirement(*root, *pkg, *runID, *source, *confirmed, *meaning, artifactSet, validate.RequirementUpdateOptions{ActivateGuarantee: *activateGuarantee, ReviewDelta: delta, ImpactAuthorization: impactAuthorization})
 	return printValue(streams.Stdout, state, err)
+}
+
+func runWorkflowRequirementImpactPreview(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow requirement-impact-preview", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	source := fs.String("source", "", "candidate requirement source; defaults to the current source")
+	reviewDeltaDigest := fs.String("review-delta-digest", "", "digest of the complete review-delta package")
+	productGoalImpact := fs.String("product-goal-impact", "", "changed product goal, if any")
+	scopeImpact := fs.String("scope-impact", "", "changed scope, if any")
+	externalBehaviorImpact := fs.String("external-behavior-impact", "", "changed external behavior, if any")
+	acceptanceImpact := fs.String("acceptance-impact", "", "changed acceptance criteria, if any")
+	var artifacts stringListFlag
+	fs.Var(&artifacts, "requirement-artifact", "complete additional requirement artifact set; repeat as needed")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	preview, err := validate.PreviewRequirementImpact(*root, *pkg, *runID, *source, artifacts, *reviewDeltaDigest, validate.RequirementImpactInput{ProductGoal: *productGoalImpact, Scope: *scopeImpact, ExternalBehavior: *externalBehaviorImpact, AcceptanceCriteria: *acceptanceImpact})
+	return printValue(streams.Stdout, preview, err)
+}
+
+func runWorkflowReviewDeltaPreview(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow review-delta-preview", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	source := fs.String("source", "", "candidate requirement source; defaults to the current source")
+	inputPath := fs.String("input", "", "review-delta JSON package containing sources, hunks, affected actions, and confirmation scope")
+	var artifacts stringListFlag
+	fs.Var(&artifacts, "requirement-artifact", "complete additional requirement artifact set; repeat as needed")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	input, err := validate.LoadReviewDeltaPackage(*inputPath)
+	if err != nil {
+		return 1, err
+	}
+	preview, err := validate.PreviewReviewDelta(*root, *pkg, *runID, *source, artifacts, input)
+	return printValue(streams.Stdout, preview, err)
+}
+
+func runWorkflowAuthorizeRetry(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow authorize-retry", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	taskKey := fs.String("task-key", "", "exhausted logical TaskKey")
+	stateRevision := fs.String("state-revision", "", "exact current state revision from workflow show")
+	reason := fs.String("reason", "", "non-empty user reason for the one final attempt")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.AuthorizeDispatchRetry(*root, *pkg, *runID, *taskKey, *stateRevision, *reason)
+	return workflowResult(streams, *root, *runID, state, err)
 }
 
 func runWorkflowRouteCandidates(args []string, streams IO) (int, error) {
@@ -800,6 +876,7 @@ func runWorkflowSettleFindings(args []string, streams IO) (int, error) {
 	findingID := fs.String("finding-id", "", "stable finding id; omit only for whole-result invalidation")
 	decision := fs.String("decision", "", "CONFIRM, DISMISS, RESEVERITIZE, INVALIDATE_FINDING, or INVALIDATE_RESULT")
 	severity := fs.String("severity", "", "new P0/P1/P2/P3 severity for RESEVERITIZE")
+	severityRationale := fs.String("severity-rationale", "", "independent rationale required when RESEVERITIZE sets P0/P1")
 	invalidity := fs.String("invalidity", "", "INVALID, INCOMPLETE, STALE, or MISBOUND for INVALIDATE_RESULT")
 	supersedes := fs.String("supersedes", "", "current adjudication/correction id that this correction supersedes")
 	reason := fs.String("reason", "", "non-empty semantic correction reason")
@@ -819,7 +896,7 @@ func runWorkflowSettleFindings(args []string, streams IO) (int, error) {
 		state, err := validate.RecordReviewCorrection(*root, *pkg, *runID, validate.ReviewCorrectionInput{
 			Action: *action, DispatchID: *dispatch, ResultDigest: *resultDigest,
 			RequirementRevision: *requirementRevision, FindingID: *findingID,
-			Decision: *decision, Severity: *severity, Invalidity: *invalidity,
+			Decision: *decision, Severity: *severity, SeverityRationale: *severityRationale, Invalidity: *invalidity,
 			Supersedes: *supersedes, Reason: *reason, Source: *source,
 			UserAuthorized: *userAuthorized, ExpectedEffectiveRevision: *expectedRevision,
 		})
@@ -1173,7 +1250,7 @@ func runRecordGate(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordGate(*root, *pkg, *runID, *gate, *dispatch, *status, *message, *compared, *findings)
+	state, err := validate.RecordGateWithEvidence(*root, *pkg, *runID, *gate, *dispatch, *status, *message, *compared, *findings)
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -1237,12 +1314,13 @@ func runQAReview(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordQAReview(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *findings, validate.QAReviewRecordOptions{
-		SourceDecisions: sourceDecisions,
-		PointDecisions:  pointDecisions,
-		CaseDecisions:   caseDecisions,
-		UnboundSources:  unboundSources,
-		UnboundPoints:   unboundPoints,
-		UnboundCases:    unboundCases,
+		SourceDecisions:       sourceDecisions,
+		PointDecisions:        pointDecisions,
+		CaseDecisions:         caseDecisions,
+		UnboundSources:        unboundSources,
+		UnboundPoints:         unboundPoints,
+		UnboundCases:          unboundCases,
+		StrictFindingContract: true,
 	})
 	return workflowResult(streams, *root, *runID, state, err)
 }
@@ -1586,10 +1664,72 @@ func (f *findingSeverity) Set(v string) error {
 	(*f.items)[last].Severity = v
 	return nil
 }
+
+type findingField struct {
+	items *[]validate.FindingInput
+	name  string
+}
+
+func (f *findingField) String() string { return "" }
+func (f *findingField) Set(v string) error {
+	if len(*f.items) == 0 {
+		return fmt.Errorf("--%s must follow --finding", f.name)
+	}
+	item := &(*f.items)[len(*f.items)-1]
+	set := func(target *string) error {
+		if *target != "" {
+			return fmt.Errorf("duplicate --%s for current finding", f.name)
+		}
+		*target = v
+		return nil
+	}
+	switch f.name {
+	case "severity-rationale":
+		return set(&item.SeverityRationale)
+	case "category":
+		return set(&item.Category)
+	case "requirement":
+		return set(&item.Requirement)
+	case "normal-path":
+		return set(&item.NormalPath)
+	case "actual-error":
+		return set(&item.ActualError)
+	case "deferral-impact":
+		return set(&item.DeferralImpact)
+	case "verify-scope":
+		return set(&item.Verification.Scope)
+	case "verify-severity":
+		return set(&item.Verification.Severity)
+	case "verify-causality":
+		return set(&item.Verification.Causality)
+	case "verify-reproduction":
+		return set(&item.Verification.Reproduction)
+	case "verify-classification":
+		return set(&item.Verification.Classification)
+	default:
+		return fmt.Errorf("unknown finding field %s", f.name)
+	}
+}
+
 func newFindingFlags(fs *flag.FlagSet) *[]validate.FindingInput {
 	items := []validate.FindingInput{}
 	fs.Var(&findingStart{&items}, "finding", "start a finding with its message")
 	fs.Var(&findingSeverity{&items}, "severity", "P0, P1, P2, or P3 for the current gate finding")
+	for _, field := range []struct{ name, usage string }{
+		{"severity-rationale", "independent severity rationale for the current finding"},
+		{"category", "start-readiness category: REQUIREMENT_CONFLICT, RESPONSIBILITY_OR_DEPENDENCY, MISSING_CORE_ACCEPTANCE_ENTRY, IMPLEMENTATION_DETAIL, or OTHER"},
+		{"requirement", "confirmed REQ id bound to the current finding"},
+		{"normal-path", "documented normal-use or acceptance path"},
+		{"actual-error", "current actual error (required for gate P0/P1)"},
+		{"deferral-impact", "why deferral misdirects development or fails delivery"},
+		{"verify-scope", "main-agent per-finding scope verification"},
+		{"verify-severity", "main-agent per-finding severity verification"},
+		{"verify-causality", "main-agent per-finding causality verification"},
+		{"verify-reproduction", "main-agent per-finding reproduction verification"},
+		{"verify-classification", "main-agent start-readiness classification verification"},
+	} {
+		fs.Var(&findingField{items: &items, name: field.name}, field.name, field.usage)
+	}
 	fs.Var(&findingLocation{&items}, "location", "repository location for the current finding")
 	return &items
 }
@@ -1982,7 +2122,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -1997,7 +2137,7 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printFutureUsage(w io.Writer, program string) error {

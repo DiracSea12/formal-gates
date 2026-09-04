@@ -316,6 +316,7 @@ func TestCLICorrectionInvalidatesRequirementGuaranteeReview(t *testing.T) {
 
 	product := prepareSemanticCLI(t, root, pkg, state.RunID, "product-review", false, "")
 	recordArgs := []string{"workflow", "record-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "product-review", "--dispatch", product, "--status", "FAIL", "--finding", "guarantee blocker", "--severity", "P1", "--item", "REQ-001 obligation-to-AC completeness", "--item-status", "PASS"}
+	recordArgs = append(recordArgs, cliP1FindingEvidence("requirements.md:1", false)...)
 	recordArgs = append(recordArgs, cliOperatorVerificationArgs()...)
 	state = decodeSemanticState(t, runCLI(t, recordArgs...))
 	series := state.PreDevelopmentReviewSeries["product-review"]
@@ -403,6 +404,9 @@ func recordSemanticCLI(t *testing.T, root, pkg, runID, action, dispatch, status,
 			args = append(args, "--message", message)
 		} else {
 			args = append(args, "--finding", message, "--severity", severity)
+			if severity == "P0" || severity == "P1" {
+				args = append(args, cliP1FindingEvidence("requirements.md:1", false)...)
+			}
 		}
 	}
 	if action == "product-review" {
@@ -426,6 +430,9 @@ func exactCorrectionArgs(root, pkg, runID string, candidate validate.SemanticRev
 	}
 	if severity != "" {
 		args = append(args, "--severity", severity)
+		if severity == "P0" || severity == "P1" {
+			args = append(args, "--severity-rationale", "The corrected finding blocks the confirmed normal path and independently warrants this severity.")
+		}
 	}
 	if invalidity != "" {
 		args = append(args, "--invalidity", invalidity)
@@ -434,6 +441,26 @@ func exactCorrectionArgs(root, pkg, runID string, candidate validate.SemanticRev
 		args = append(args, "--supersedes", supersedes)
 	}
 	return append(args, extras...)
+}
+
+func cliP1FindingEvidence(location string, gate bool) []string {
+	args := []string{
+		"--severity-rationale", "The documented normal path is blocked, so this finding independently warrants P1.",
+		"--category", "REQUIREMENT_CONFLICT",
+		"--requirement", "REQ-001",
+		"--normal-path", "run the documented public workflow from a clean checkout",
+		"--deferral-impact", "users remain blocked from completing the documented workflow",
+		"--verify-scope", "checked the complete requested scope",
+		"--verify-severity", "confirmed that the normal path is blocked",
+		"--verify-causality", "traced the observed failure to the cited evidence",
+		"--verify-reproduction", "reproduced the failure on the current candidate",
+		"--verify-classification", "confirmed this is a requirement conflict rather than an implementation preference",
+		"--location", location,
+	}
+	if gate {
+		args = append(args, "--actual-error", "the public command exits nonzero before producing the required result")
+	}
+	return args
 }
 
 func decodeSemanticState(t *testing.T, output string) validate.RunState {
