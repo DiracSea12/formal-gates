@@ -61,6 +61,13 @@ type RunState struct {
 	// 其它对话放行。transcript_path 为主键，session_id 兜底。旧 run 缺失时为空。
 	OwnerTranscript string `json:"ownerTranscript,omitempty"`
 	OwnerSession    string `json:"ownerSession,omitempty"`
+	// Owner accounting is optional for old states. The baseline fixes the
+	// source bytes and parsed usage at start; overlap survives another run's
+	// cleanup, and completion is saved with the terminal cost exactly once.
+	OwnerProvider       string                   `json:"ownerProvider,omitempty"`
+	OwnerCostBaseline   *cost.TranscriptSnapshot `json:"ownerCostBaseline,omitempty"`
+	OwnerCostOverlapped bool                     `json:"ownerCostOverlapped,omitempty"`
+	OwnerCostCompleted  bool                     `json:"ownerCostCompleted,omitempty"`
 	// QAOnlyRerun records an explicit user-authorized handoff from a terminal
 	// formal run into a new QA/gate rerun. It is distinct from a reviewer PASS:
 	// the upstream product/start/development stages were skipped by the user,

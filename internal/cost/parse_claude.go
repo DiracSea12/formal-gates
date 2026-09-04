@@ -2,6 +2,7 @@ package cost
 
 import (
 	"encoding/json"
+	"io"
 )
 
 // parseClaudeTranscript sums per-message usage over the assistant lines of a
@@ -9,10 +10,10 @@ import (
 // be duplicated across rewrites, so lines are deduped by their uuid.
 // Unknown line shapes and missing optional fields are skipped, never fatal;
 // a transcript with no assistant line carrying usage is a structural failure.
-func parseClaudeTranscript(path string) (Usage, error) {
+func parseClaudeTranscript(reader io.Reader) (Usage, error) {
 	total := Usage{}
 	seen := map[string]bool{}
-	err := scanTranscriptLines(path, func(line []byte) bool {
+	err := scanTranscriptLines(reader, func(line []byte) bool {
 		var entry struct {
 			Type    string `json:"type"`
 			UUID    string `json:"uuid"`

@@ -116,7 +116,7 @@ func Start(options StartOptions) (RunState, error) {
 
 func startRegular(options StartOptions) (RunState, error) {
 	root := lifecycle.CleanRoot(options.Root)
-	ownerTranscript, ownerSession := consumeStartOwner(root)
+	ownerTranscript, ownerSession, ownerProvider := consumeStartOwner(root)
 	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
 		if strings.TrimSpace(value) == "" {
 			return RunState{}, fmt.Errorf("%s is required", name)
@@ -325,11 +325,24 @@ func startRegular(options StartOptions) (RunState, error) {
 	state.SplitMasterRunID = master
 	state.OwnerTranscript = ownerTranscript
 	state.OwnerSession = ownerSession
+	state.OwnerProvider = ownerProvider
 	// 轻量路线在 start 即声明：routeMode 置 lightweight（免拆分决定、免路线确认、
 	// 免开发快照直达 Seal），不记录拆分声明。
 	if isLightweight {
 		state.RouteMode = "lightweight"
 		state.SplitDeclaration = ""
+	}
+	// Start and terminal accounting share this short lock so two active runs
+	// cannot miss each other's owner interval while one is being cleaned up.
+	ownerUnlock, err := lockOwnerCost(root)
+	if err != nil {
+		_ = os.RemoveAll(RunDir(root, runID))
+		return RunState{}, err
+	}
+	defer ownerUnlock()
+	if err := beginOwnerCost(root, &state); err != nil {
+		_ = os.RemoveAll(RunDir(root, runID))
+		return RunState{}, err
 	}
 	if err := SaveRunState(root, state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))

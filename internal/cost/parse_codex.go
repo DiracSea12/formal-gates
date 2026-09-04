@@ -3,6 +3,7 @@ package cost
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 )
 
 // codexTokenUsage mirrors the per-request usage object Codex writes into
@@ -23,7 +24,7 @@ type codexTokenUsage struct {
 // (timestamp, model, usage tuple). Unknown line shapes and missing optional
 // fields are skipped, never fatal; a transcript with no parseable usage is a
 // structural failure.
-func parseCodexTranscript(path string) (Usage, error) {
+func parseCodexTranscript(reader io.Reader) (Usage, error) {
 	type event struct {
 		Timestamp string          `json:"timestamp"`
 		Type      string          `json:"type"`
@@ -32,7 +33,7 @@ func parseCodexTranscript(path string) (Usage, error) {
 	total := Usage{}
 	seen := map[string]bool{}
 	previousTotal := map[string]codexTokenUsage{}
-	err := scanTranscriptLines(path, func(line []byte) bool {
+	err := scanTranscriptLines(reader, func(line []byte) bool {
 		var record event
 		if err := json.Unmarshal(line, &record); err != nil {
 			return false // unknown line shape: skip, never fatal

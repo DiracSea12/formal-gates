@@ -2,9 +2,31 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRunHookPassesOwnerProviderToStartBridge(t *testing.T) {
+	root := t.TempDir()
+	payload := fmt.Sprintf(`{"tool_name":"Bash","tool_input":{"command":%q},"transcript_path":"/owner.jsonl","session_id":"owner"}`, "formal-gates workflow start --root "+fmt.Sprintf("%q", root)+" --split no")
+	var out, errOut bytes.Buffer
+	code := Run("formal-gates", []string{"hook", "decide", "--provider", "codex"}, IO{Stdin: strings.NewReader(payload), Stdout: &out, Stderr: &errOut})
+	if code != 0 {
+		t.Fatalf("hook failed: %s", errOut.String())
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".gates", "tmp", "start-owner.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source map[string]string
+	if err := json.Unmarshal(data, &source); err != nil || source["provider"] != "codex" || source["transcript"] != "/owner.jsonl" {
+		t.Fatalf("lost explicit owner provider: %s, %v", data, err)
+	}
+}
 
 func TestRunHookUsesCodexJSONDecisionProtocol(t *testing.T) {
 	payload := `{"command":"formal-gates workflow record-gate --gate quality --status PASS --run-id run"}`

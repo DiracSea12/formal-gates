@@ -1,8 +1,8 @@
-// Package cost meters exact token usage of dispatched subagents.
+// Package cost meters exact token usage of dispatched subagents and run owners.
 //
 // The ledger lives in the run state's single `cost` projection: run totals
-// plus one entry per dispatched gate or action. Numbers come exclusively
-// from host transcript parsing; a dispatch with no parseable transcript is
+// plus one entry per dispatched gate or action and an optional owner entry.
+// Numbers come exclusively from host transcript parsing; an unverifiable source is
 // marked unavailable and never receives a fabricated value.
 package cost
 
@@ -16,7 +16,7 @@ const (
 )
 
 // RunCost is the cost projection of a run: per-dispatch entries and the
-// run totals accumulated from them. Token categories follow the host pricing
+// run totals accumulated from them and this run's owner. Token categories follow the host pricing
 // rules: input with cache hit, input without cache hit, and output.
 // TotalInputTokens is the input-side total (cache hit + cache miss); output
 // is recorded separately and never added into the total. Cache write tokens
@@ -27,6 +27,7 @@ type RunCost struct {
 	InputCacheMissTokens int64                   `json:"inputCacheMissTokens"`
 	OutputTokens         int64                   `json:"outputTokens"`
 	Dispatches           map[string]DispatchCost `json:"dispatches"`
+	Owner                *OwnerCost              `json:"owner,omitempty"`
 }
 
 // DispatchCost is the exact metered token usage of one dispatched gate or
@@ -63,10 +64,16 @@ func Record(run *RunCost, dispatchID string, entry DispatchCost) {
 		return
 	}
 	run.Dispatches[dispatchID] = entry
-	run.InputCacheHitTokens += entry.InputCacheHitTokens
-	run.InputCacheMissTokens += entry.InputCacheMissTokens
-	run.OutputTokens += entry.OutputTokens
-	run.TotalInputTokens += entry.TotalInputTokens
+	run.addTokens(entry.TotalInputTokens, entry.InputCacheHitTokens, entry.InputCacheMissTokens, entry.OutputTokens)
+}
+
+// addTokens is shared by dispatch and owner recording. Output stays separate
+// from the input total; neither path changes the other path's entries.
+func (run *RunCost) addTokens(input, hit, miss, output int64) {
+	run.TotalInputTokens += input
+	run.InputCacheHitTokens += hit
+	run.InputCacheMissTokens += miss
+	run.OutputTokens += output
 }
 
 // Merge folds another run's cost ledger into this one, namespacing the
@@ -87,13 +94,6 @@ func Merge(run *RunCost, ns string, other *RunCost) {
 		if ns != "" {
 			key = ns + "/" + id
 		}
-		if _, recorded := run.Dispatches[key]; recorded {
-			continue
-		}
-		run.Dispatches[key] = entry
-		run.InputCacheHitTokens += entry.InputCacheHitTokens
-		run.InputCacheMissTokens += entry.InputCacheMissTokens
-		run.OutputTokens += entry.OutputTokens
-		run.TotalInputTokens += entry.TotalInputTokens
+		Record(run, key, entry)
 	}
 }

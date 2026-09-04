@@ -1596,7 +1596,7 @@ func runHook(program string, args []string, streams IO) (int, error) {
 	if strings.TrimSpace(string(payload)) == "" {
 		return 1, fmt.Errorf("hook decide requires a JSON decision payload on stdin (e.g. the host PreToolUse payload); got empty input")
 	}
-	decision, err := validate.Hook(payload)
+	decision, err := validate.Hook(payload, *provider)
 	if err != nil {
 		return 1, err
 	}

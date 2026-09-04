@@ -281,6 +281,11 @@ func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runI
 // evidence exists. Single-commit or empty ranges are not rewritten; SVN/P4 are
 // never squashed.
 func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string, opts ...SealOptions) (RunSummary, error) {
+	ownerUnlock, err := lockOwnerCost(root)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer ownerUnlock()
 	options := SealOptions{}
 	if len(opts) > 0 {
 		options = opts[0]
@@ -424,14 +429,6 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	}
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance {
-		// 分片实例：封板不产出独立封板文件；成本投影写入 sidecar，供主干
-		// （保留总任务实例）最终封板时并入主干封板文件。成本为空（从未记录派发
-		// 用量）时不写 sidecar，主干无从并入、也无须清理。
-		if state.Cost != nil {
-			if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
-				return RunSummary{}, err
-			}
-		}
 		if err := saveSliceGuaranteeRecord(root, state); err != nil {
 			return RunSummary{}, err
 		}
@@ -456,6 +453,15 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	// （单一来源），不依赖隔离工作区残留；CLI 完成、不经 agent 手动合回。
 	if !sliceInstance {
 		if err := materializeBlackboxCases(root, state); err != nil {
+			return RunSummary{}, err
+		}
+	}
+	// Freeze the owner interval only after materialization succeeds. A failed
+	// pre-terminal Seal can be retried with a later end snapshot; a durable
+	// terminal checkpoint never meters again during summary/cleanup recovery.
+	finishOwnerCost(&state)
+	if sliceInstance {
+		if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
 			return RunSummary{}, err
 		}
 	}
@@ -543,6 +549,11 @@ func materializeBlackboxCases(root string, state RunState) error {
 }
 
 func finishRun(root, runID, status string) (RunSummary, error) {
+	ownerUnlock, err := lockOwnerCost(root)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer ownerUnlock()
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -572,6 +583,7 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 	if err := requireActive(state); err != nil {
 		return RunSummary{}, err
 	}
+	finishOwnerCost(&state)
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance && state.Cost != nil {
 		// 分片实例：中止同样不产出独立封板文件；已记录的成本投影写入 sidecar，
