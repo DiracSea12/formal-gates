@@ -460,3 +460,31 @@
   阶段 3 最终候选 `96a774f346184352259296e142c04cb5bd64a88d` 及其重跑结果文件的关联。
 - 当前未发现独立阶段 3 post-integration receipt；如后续产生主线集成或 promotion receipt，应在
   本节追加其完整 identity，不以提交标题或路径推定等价关系。
+
+## 审查收敛与阶段 3.5b checkpoint（2026-09-05，开发自测）
+
+- 对应 run：`review-convergence-3-5b`；本次 B2 开发派发为
+  `dispatch-0b3d21456f3bc8ee957bf98c`，范围为 REQ-013 至 REQ-015。
+- 验收输入是 `refactor-plan/review-convergence-and-stage-3-5b-requirement.md`，确认 revision
+  `40e516d4ac329a4391dabc971f61a508f9478524238c9b39064482a3781f0b54`。
+  本 checkpoint 追加在实施与下述验证完成后，未追溯改写历史阶段记录或 ADR-001/002。
+- 已验证的实现快照：`403b9e52aad40609e782cbcc0a11473d5bef8012`。该树包含此前 Batch A
+  的审查治理/收敛实现、B1 owner 计量（`ddcf5e01b4c4f04da1b3821a31f7ad85a57db808`）以及
+  B2 的生产 guard 纯计算、公开只读 `workflow guard-preview`、输入 schema/fixture 和未来计划同步。
+- B2 复用 engine `runtime.TaskKey`，校验声明的 closed-world definition、确认 revision、
+  provenance 和有限 retry；默认 MaxAttempts=2，重复 TaskKey 只计一次。独立核对的示例
+  request/retry/total allowance 为 3/4/7，digest 为
+  `sha256:692f7b9bb402a8762c0f1ccffdfbaab6c7e9f48964e2f4ca54b2236e45e1bcef`。
+- 项目自测全部通过：`go test ./...`、`go test -race ./internal/validate ./internal/cli`、
+  `go test -tags=phase0whitebox ./internal/validate`、`go vet ./...`、
+  `go build -o bin/formal-gates ./cmd/formal-gates`、package validate、portable canary（44 项）。
+  三组回归分别在该实现快照的独立 Git 工作树执行，安装相关测试使用已构建的产物；canary
+  使用独立、静止的候选目录。生产核心已知答案/确定性/无 I/O 与 CLI 黑盒/零状态写入测试通过。
+- engine 权威总需求、最终方案、3.5b 子计划、增量计划与 route matrix 已同步 Operator
+  adjudication、无效结果义务/有限 retry、FROZEN/review-ready、唯一返修、门审 P2 carry/P3
+  advisory、QA Review P2/P3 吸收，以及 requirement impact 用户授权的阶段 4–7 接入合同。
+- 本次 engine 代码改动仅为纯 guard 包及其测试；guard-preview.runtimeIntegration 固定
+  `NOT_INSTALLED`。engine State/source bridge/运行时 guard/typed Ask 仍留阶段 4，修复摘要
+  engine allowance 仍为 `UNAVAILABLE`；owner cost 与 token cap 继续按各自来源/配置判断。
+- 这是开发实现与项目自测记录，不是正式 QA、门审或 Seal 结论。最终候选的正式验证和 Seal
+  由编排层继续推进；本 run 仍由已安装稳定 CLI 编排，候选尚未正式安装。
