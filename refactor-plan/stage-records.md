@@ -396,8 +396,11 @@
 
 - 阶段编号：3（增量 Seal 阶段，对应“最小纵向 engine 闭环”）。
 - 首次 run：`phase-3-engine-vertical-loop`，base snapshot
-  `1cbdf4bee4d1079f2464612ae61ce54214d4753b`，封板候选快照
-  `f54f9e34ca108b8459cd85befec86e115856d202`。
+  `1cbdf4bee4d1079f2464612ae61ce54214d4753b`；其封板候选快照只以
+  `.gates/results/phase-3-engine-vertical-loop.json` 的 `currentSnapshot` 字段为准——
+  该提交对象未保留在历史整理（`7c07cf254b9000575b5455120dc8ee84abceebc5`）之后的主线
+  或归档 tag 中，已不可作为全哈希 git 指针引用，本文件因此不内联该哈希；首次 run 的
+  lineage 以该封板结果文件为唯一权威记录。
 - 修复重跑 run：`phase-3-engine-vertical-loop-rerun-001`，同一 base snapshot，最终封板候选
   快照 `96a774f346184352259296e142c04cb5bd64a88d`；该重跑结果作为阶段 3 的最终候选基线。
 - 两个 run 的结果文件均记录 `status=SEALED`；当前主线 `HEAD` 为
