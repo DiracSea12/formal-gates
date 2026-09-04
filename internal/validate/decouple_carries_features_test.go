@@ -105,10 +105,13 @@ func TestStateIntegrityRoundTripRejectsHandEditAndSkipsLegacy(t *testing.T) {
 	}
 }
 
-// TestStateIntegrityWriteIsFast covers <5ms hashing budget: the sha256
-// computation over the normalized state must stay cheap. The full write also
-// includes fsync + atomic replace, which is dominated by the filesystem, so the
-// bound is measured on the hash path rather than the disk write.
+// TestStateIntegrityWriteIsFast covers the documented <5ms-per-hash budget
+// (RQ-009): the sha256 computation over the normalized state must stay cheap.
+// The full write also includes fsync + atomic replace, which is dominated by
+// the filesystem, so the bound is measured on the hash path rather than the
+// disk write. 100 hashes therefore allow 500ms; a tighter 100ms bound
+// conflated 1ms average with the budget and flaked under -race on loaded CI
+// runners (187ms observed, still ~1.9ms per hash).
 func TestStateIntegrityWriteIsFast(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := mustStart(t, root, pkg, "integrity-fast")
@@ -121,7 +124,7 @@ func TestStateIntegrityWriteIsFast(t *testing.T) {
 		}
 		stateIntegrityHashBytes(data)
 	}
-	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("state integrity hashing too slow: %s for 100 hashes", elapsed)
 	}
 }
