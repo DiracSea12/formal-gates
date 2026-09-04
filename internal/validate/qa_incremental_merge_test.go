@@ -34,8 +34,13 @@ func TestQADesignIncrementalMergeSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state, err = ThawQACaseSet(root, pkg, state.RunID, "", "EXTERNAL_BEHAVIOR", "documented workflow behavior changed", state.RequirementRevision, []string{"CASE-002"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// 默认增量：只新增一个用例；未提及的 3 个既有用例（含 PASS）自动保留。
+	// 默认增量：只新增一个用例；未受解冻影响的既有 PASS 自动保留，明确受影响的
+	// CASE-002 保持 PENDING，等待新的完整 QA Review。
 	design = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err = RecordQADesign(root, pkg, state.RunID, design, []QACaseInput{
 		{Mode: "blackbox", Description: "recovery workflow succeeds", Procedure: "trigger recovery and rerun", Oracle: "state restored"},
@@ -48,13 +53,13 @@ func TestQADesignIncrementalMergeSemantics(t *testing.T) {
 	}
 	for _, testCase := range state.qaCases("") {
 		switch testCase.ID {
-		case "CASE-001", "CASE-002", "CASE-003":
+		case "CASE-001", "CASE-003":
 			if testCase.ReviewStatus != "PASS" {
 				t.Fatalf("unmentioned PASS case %s was reopened: %#v", testCase.ID, testCase)
 			}
-		case "CASE-004":
+		case "CASE-002", "CASE-004":
 			if testCase.ReviewStatus != "PENDING" {
-				t.Fatalf("new case not PENDING: %#v", testCase)
+				t.Fatalf("affected or new case not PENDING: %#v", testCase)
 			}
 		default:
 			t.Fatalf("unexpected id %q: %#v", testCase.ID, testCase)

@@ -451,8 +451,8 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 修复快照推进后旧快照的权威 QA 结果存续，重新派发 qa-execution 属重跑，
-	// 必须已记录覆盖本次重跑的 scope 决策（FULL 全量重跑）才能 prepare。
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	// 必须已记录覆盖本次重跑的 AFFECTED 决策才能 prepare。
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001", "CASE-002"}, "the implementation repair affects both approved paths")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3768,7 +3768,7 @@ func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
 // TestQAExecutionFirstRunNoScopeAndRerunEnforced verifies a first QA
 // execution needs no scope decision, while a rerun (a prior authoritative result at
 // an earlier snapshot survives the repair snapshot advance) is CLI-enforced to carry
-// a scope decision before prepare, and a FULL decision reruns the complete approved set.
+// a scope decision before prepare, and an AFFECTED decision fixes the subset before dispatch.
 func TestQAExecutionFirstRunNoScopeAndRerunEnforced(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "rerun-enforced")
@@ -3787,21 +3787,21 @@ func TestQAExecutionFirstRunNoScopeAndRerunEnforced(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, ""); err == nil || !strings.Contains(err.Error(), "requires a scope decision") {
 		t.Fatalf("rerun without a scope decision was not rejected: %v", err)
 	}
-	// 记录 FULL scope（BaseSnapshot = 上一轮权威结果快照）后重跑放行，需执行集为全部已批准。
-	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	// 记录 AFFECTED scope（BaseSnapshot = 上一轮权威结果快照）后重跑放行。
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001", "CASE-002"}, "both approved paths are affected")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sc := state.ExecutionScopes[""]; sc.Decision != "FULL" || sc.Origin != "USER" || sc.Source != scopeSourcePrepare || sc.BaseSnapshot != state.PreRepairSnapshot {
-		t.Fatalf("recorded FULL scope=%#v", sc)
+	if sc := state.ExecutionScopes[""]; sc.Decision != "AFFECTED" || sc.Origin != "MAIN_AGENT" || sc.Source != scopeSourcePrepare || sc.BaseSnapshot != state.PreRepairSnapshot {
+		t.Fatalf("recorded AFFECTED scope=%#v", sc)
 	}
 	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, "")
 	if err != nil {
-		t.Fatalf("FULL scope did not allow the rerun prepare: %v", err)
+		t.Fatalf("AFFECTED scope did not allow the rerun prepare: %v", err)
 	}
 	for _, testCase := range state.allQACases() {
 		if !strings.Contains(prompt, testCase.ID) {
-			t.Fatalf("FULL rerun prompt omitted approved case %s: %s", testCase.ID, prompt)
+			t.Fatalf("AFFECTED rerun prompt omitted selected case %s: %s", testCase.ID, prompt)
 		}
 	}
 }
@@ -4067,12 +4067,12 @@ func TestPriorQAExecutionPreservedForAudit(t *testing.T) {
 	}
 	// 新一轮权威记录替换当前结果，同时保留上一快照审计。
 	priorSnapshot := state.PreRepairSnapshot
-	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-002"}, "the failed case is affected")
 	if err != nil {
 		t.Fatal(err)
 	}
 	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(qaExecutionRequiredCases(state, "")), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4086,7 +4086,7 @@ func TestPriorQAExecutionPreservedForAudit(t *testing.T) {
 	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "PASS" {
 		t.Fatalf("PASS was not preserved before the runtime record: %#v", state.priorQAExecution(""))
 	}
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, "the next repair affects this case")
 	if err != nil {
 		t.Fatal(err)
 	}

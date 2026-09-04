@@ -237,8 +237,8 @@ func TestWhiteboxSealMaterializesApprovedBlackboxCasesToLedgerDir(t *testing.T) 
 }
 
 // TestWhiteboxIncrementalRetainsUnmentionedPassingCases verifies 改动 2 的默认增量：
-// qa-design 只返回变更，未提及用例及其 PASS 状态自动保留（不再清除），新增用例由 CLI
-// 分配 id、ReviewStatus PENDING，本轮新增留痕记入 QADesignChangesByMode。
+// 合法 THAW 后 qa-design 只返回变更，未受影响且未提及用例的 PASS 自动保留；新增用例由
+// CLI 分配 id、ReviewStatus PENDING，本轮新增留痕记入 QADesignChangesByMode。
 func TestWhiteboxIncrementalRetainsUnmentionedPassingCases(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "wb-inc-retain"), "full", nil)
@@ -256,7 +256,11 @@ func TestWhiteboxIncrementalRetainsUnmentionedPassingCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 第二轮只新增一个用例，两个既有用例未提及。
+	state, err = ThawQACaseSet(root, pkg, state.RunID, "", "EXTERNAL_BEHAVIOR", "the documented recovery behavior was added", "external-behavior-r2", []string{"CASE-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 第二轮只新增一个用例；CASE-001 已由 THAW 显式重开，CASE-002 未受影响且未提及。
 	design = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err = RecordQADesign(root, pkg, state.RunID, design, []QACaseInput{
 		{Mode: "blackbox", Description: "recovery workflow", Procedure: "trigger recovery", Oracle: "state restored"},
@@ -272,10 +276,11 @@ func TestWhiteboxIncrementalRetainsUnmentionedPassingCases(t *testing.T) {
 	for _, testCase := range cases {
 		byID[testCase.ID] = testCase
 	}
-	for _, id := range []string{"CASE-001", "CASE-002"} {
-		if c := byID[id]; c.ReviewStatus != "PASS" {
-			t.Fatalf("unmentioned PASS case %s was reopened: %#v", id, c)
-		}
+	if c := byID["CASE-001"]; c.ReviewStatus != "PENDING" {
+		t.Fatalf("THAW-affected case was not reopened: %#v", c)
+	}
+	if c := byID["CASE-002"]; c.ReviewStatus != "PASS" {
+		t.Fatalf("unaffected unmentioned PASS case was reopened: %#v", c)
 	}
 	if c := byID["CASE-003"]; c.ReviewStatus != "PENDING" {
 		t.Fatalf("new case not PENDING: %#v", c)
@@ -306,6 +311,10 @@ func TestWhiteboxCaseIDModifyUpdatesAndReopensExisting(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	state, err = ThawQACaseSet(root, pkg, state.RunID, "", "EXTERNAL_BEHAVIOR", "the documented workflow now includes retries", "external-behavior-r2", []string{"CASE-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	design = prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	state, err = RecordQADesign(root, pkg, state.RunID, design, []QACaseInput{
 		{CaseID: "CASE-001", Mode: "blackbox", Description: "public workflow with retries", Procedure: "run the public CLI twice", Oracle: "observable success"},

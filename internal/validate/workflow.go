@@ -1670,6 +1670,7 @@ func ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIde
 		}
 		dispatch.ReviewerIdentity, dispatch.Status = effective, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
+		markReviewWaveDispatchClaimed(state, dispatch)
 		return nil
 	})
 }
@@ -2187,6 +2188,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 				state.Carry[carryAdoptKey] = adoption
 				state.CurrentSnapshot = currentSnapshot
 			}
+			bindFrozenCaseSetsToSnapshot(state)
 			state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
 			completeDispatch(state, developmentDispatch.ID)
 			return nil
@@ -2198,6 +2200,8 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		// 白盒审查/执行/门审尚未开始）。
 		if whiteboxTestCodeAdvancement(*state) {
 			state.CurrentSnapshot = currentSnapshot
+			invalidateActiveReviewWave(state, "whitebox test/case-set snapshot advanced")
+			bindFrozenCaseSetsToSnapshot(state)
 			return nil
 		}
 		var developmentDispatch PreparedDispatch
@@ -2242,6 +2246,15 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			state.PreRepairSnapshot = ""
 		}
 		resetSnapshotReviewSurface(state, oldSnapshot, isRepair, isRepair)
+		bindFrozenCaseSetsToSnapshot(state)
+		if isRepair && state.ActiveReviewWaveID != "" {
+			wave := state.ReviewWaves[state.ActiveReviewWaveID]
+			if wave.RepairPlan != nil && wave.RepairPlan.Status == "DISPATCHED" {
+				wave.RepairPlan.Status = "SNAPSHOTTED"
+				wave.RepairPlan.RepairSnapshot = state.CurrentSnapshot
+				state.ReviewWaves[wave.ID] = wave
+			}
+		}
 		return nil
 	})
 }
@@ -2256,7 +2269,7 @@ func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA,
 	// An active REQ/AC guarantee binds every PASS to the exact candidate. A
 	// repair/adoption creates a new candidate, so its old QA results remain only
 	// as PriorQAExecution audit evidence and can never stay current for Carry.
-	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive {
+	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && len(state.QACaseSets) == 0 {
 		preserveQA = false
 	}
 	// 修复快照推进不得抹掉上一快照的权威结果（PASS/FAIL，含快照与 FAIL 用例集）。
@@ -2295,7 +2308,7 @@ func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA,
 	}
 }
 
-func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []QAScopeInput) (RunState, error) {
+func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []QAScopeInput, authorizations ...RepairAuthorizationInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
@@ -2313,10 +2326,32 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []
 		if !hasRepairableBlocker(*state) && !hasSuggestionRecommendation(*state) {
 			return fmt.Errorf("no recorded result requires another repair")
 		}
+		effectiveScopes := append([]QAScopeInput{}, scopes...)
+		if convergenceEnabled(*state) {
+			if len(authorizations) != 1 {
+				return fmt.Errorf("extra repair authorization requires exactly one bound repair-preview digest and state revision")
+			}
+			preview := repairAuthorizationPreviewFromState(*state, authorizations[0].Estimate)
+			if err := validateRepairAuthorizationPreview(*state, preview, authorizations[0]); err != nil {
+				return err
+			}
+			provided := map[string]bool{}
+			for _, scope := range effectiveScopes {
+				provided[strings.TrimSpace(scope.Mode)] = true
+			}
+			for _, mode := range qaRerunModes(*state) {
+				if current, ok := state.ExecutionScopes[mode]; ok && current.BaseSnapshot == state.CurrentSnapshot {
+					continue
+				}
+				if !provided[mode] {
+					effectiveScopes = append(effectiveScopes, QAScopeInput{Mode: mode, Decision: "AFFECTED", CaseIDs: append([]string{}, authorizations[0].Estimate.QACases[mode]...), Reason: "affected QA subset bound by repair-preview"})
+				}
+			}
+		}
 		// 轮次上限用尽后每一轮额外修复都须显式授权（carry-forward 不授予轮次，
 		// 见 bundleRerunScopes）；QA 被选中且当前快照存在某 mode 的权威 FAIL 结果（该 mode
 		// 将重跑）时，scope 决策在同一个交互中打包询问/记录（多 mode 各自一份、可不同）。
-		if err := bundleRerunScopes(state, scopes); err != nil {
+		if err := bundleRerunScopes(state, effectiveScopes); err != nil {
 			return err
 		}
 		state.ExtraReviewWaves += cycles
@@ -2358,12 +2393,16 @@ func mutateRun(root, runID string, change func(*RunState) error) (RunState, erro
 		if saveErr := SaveRunState(root, state); saveErr != nil {
 			return RunState{}, saveErr
 		}
-		return state, committed.err
+		persisted, loadErr := LoadRunState(root, runID)
+		if loadErr != nil {
+			return RunState{}, loadErr
+		}
+		return persisted, committed.err
 	}
 	if err := SaveRunState(root, state); err != nil {
 		return RunState{}, err
 	}
-	return state, nil
+	return LoadRunState(root, runID)
 }
 
 // requireRunID rejects a missing run id up front so state-loading/locking paths
@@ -2799,6 +2838,8 @@ func suffixIsDigits(value string) bool {
 }
 
 func invalidateRequirementResults(state *RunState, gateIDs []string) {
+	invalidateActiveReviewWave(state, "meaning-changed requirement revision invalidated the review-ready binding")
+	state.QACaseSets = map[string]QACaseSetState{}
 	routeMode := state.RouteMode
 	selected := append([]string{}, state.SelectedGates...)
 	routeSkips := map[string]SkipAuthorization{}
@@ -2827,6 +2868,8 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 			updated := make([]QACase, 0, len(cases))
 			for _, testCase := range cases {
 				testCase.ReviewStatus = "PENDING"
+				testCase.ApprovedSource = ""
+				testCase.SuggestionIDs = nil
 				updated = append(updated, testCase)
 			}
 			reset[mode] = updated
@@ -3065,7 +3108,17 @@ func hasSuggestionRecommendation(state RunState) bool {
 			continue
 		}
 		for _, finding := range result.Findings {
-			if finding.Severity == "P2" || finding.Severity == "P3" {
+			if finding.Severity == "P2" {
+				resolved := false
+				for _, credential := range state.P2CompletionCredentials {
+					if credential.GateID == id && credential.RepairSnapshot == state.CurrentSnapshot {
+						resolved = true
+						break
+					}
+				}
+				if resolved {
+					continue
+				}
 				return true
 			}
 		}
@@ -3098,7 +3151,7 @@ func runtimeErrorsAuthorizedForRepair(state RunState) bool {
 }
 
 func repairInput(state RunState) string {
-	lines := []string{"Repair the complete recorded wave below. P2/P3 recommendations are included whenever this wave has a blocker or the user explicitly requested their repair."}
+	lines := []string{"Repair the complete recorded wave below. Gate P2 is mandatory and joins the unified repair; gate P3 remains a Seal advisory."}
 	// 收集每个 FAIL 的选中 QA mode 的发现项（黑盒/白盒各自独立，合并单派发按
 	// mode 生效）。
 	if isSelectedQA(state) {
@@ -3120,6 +3173,9 @@ func repairInput(state RunState) string {
 			continue
 		}
 		for _, finding := range state.Gates[id].Findings {
+			if finding.Severity == "P3" {
+				continue
+			}
 			lines = append(lines, fmt.Sprintf("%s %s: %s", id, finding.Severity, finding.Message))
 		}
 	}
@@ -3131,6 +3187,10 @@ func effectiveReviewWaveLimit(state RunState) int {
 }
 
 func completeReviewWaveIfReady(state *RunState) {
+	if convergenceEnabled(*state) {
+		maybeCollectReviewWave(state)
+		return
+	}
 	if len(state.SelectedGates) == 0 || state.Actions["development-worker"].Status != developmentComplete || !reviewWaveRecorded(*state) {
 		clearResolvedCarryBoundary(state)
 		return

@@ -421,7 +421,7 @@ func TestRequirementGuaranteeNonSplitPassAndWaiver(t *testing.T) {
 	})
 }
 
-func TestActiveGuaranteeRepairRequiresCurrentCandidateFullExecution(t *testing.T) {
+func TestActiveGuaranteeRepairUsesAffectedThenFinalFull(t *testing.T) {
 	root, pkg, state := readyGuaranteeRoute(t, "guarantee-repair-full", false)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID, "quality"})
@@ -442,31 +442,34 @@ func TestActiveGuaranteeRepairRequiresCurrentCandidateFullExecution(t *testing.T
 	if state.PreRepairSnapshot != oldSnapshot {
 		t.Fatalf("pre-repair snapshot = %q, want %q", state.PreRepairSnapshot, oldSnapshot)
 	}
-	if current := state.qaExecution(""); current.Status != "PENDING" {
-		t.Fatalf("old guarantee QA result stayed current after repair: %#v", current)
+	if current := state.qaExecution(""); current.Status != "PASS" || current.Snapshot != oldSnapshot {
+		t.Fatalf("old guarantee QA PASS was not retained for bounded inheritance: %#v", current)
 	}
 	prior := state.priorQAExecution("")
 	if prior == nil || prior.Status != "PASS" || prior.Snapshot != oldSnapshot {
 		t.Fatalf("old guarantee QA result was not retained only as prior evidence: %#v", prior)
 	}
-	if eligible := eligibleMainCarryResults(state, false); len(eligible) != 0 {
-		t.Fatalf("active guarantee exposed prior QA PASS to Carry: %v", eligible)
-	}
-	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "implementation repair does not alter behavior"); err == nil || !strings.Contains(err.Error(), "no prior passing selected results") {
-		t.Fatalf("active guarantee accepted QA Carry before scope: %v", err)
-	}
-	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, "rerun one case"); err == nil || !strings.Contains(err.Error(), "requires FULL QA execution") {
-		t.Fatalf("active guarantee accepted AFFECTED repair execution: %v", err)
-	}
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "rerun every approved case on the repaired candidate")
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, "the repaired path affects this case")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.ExecutionScopes[""].Decision != "FULL" {
-		t.Fatalf("FULL repair execution scope was not recorded: %#v", state.ExecutionScopes)
+	if state.ExecutionScopes[""].Decision != "AFFECTED" || state.ExecutionScopes[""].Origin != "MAIN_AGENT" {
+		t.Fatalf("AFFECTED repair execution scope was not recorded: %#v", state.ExecutionScopes)
+	}
+	execution = prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, execution, passingExecution(qaExecutionRequiredCases(state, "")), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "run the final full regression on this candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecutionScopes[""].Decision != "FULL" || state.qaExecution("").Status != "PENDING" {
+		t.Fatalf("final FULL regression did not reopen the current candidate: scope=%#v execution=%#v", state.ExecutionScopes[""], state.qaExecution(""))
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, ""); err != nil {
-		t.Fatalf("current-candidate FULL QA execution was not dispatchable: %v", err)
+		t.Fatalf("final-candidate FULL QA execution was not dispatchable: %v", err)
 	}
 }
 

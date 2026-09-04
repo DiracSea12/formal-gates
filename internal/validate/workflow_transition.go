@@ -115,6 +115,9 @@ func requireStartReadinessTransition(state RunState) error {
 }
 
 func requireQADesignTransition(state RunState, target string) error {
+	if caseSet, ok := state.QACaseSets[target]; ok && caseSet.Status == caseSetFrozen {
+		return fmt.Errorf("the %s QA case-set is FROZEN at version %s; ordinary implementation repair cannot reopen QA design (use workflow qa-thaw for a documented product/acceptance change)", target, caseSet.Version)
+	}
 	if state.RequirementGuarantee != nil {
 		if len(state.RequirementArtifacts) != 1 {
 			return fmt.Errorf("QA-enabled requirement guarantee requires exactly one formal requirement artifact before QA design")
@@ -252,8 +255,13 @@ func requireQAExecutionTransition(state RunState, target string) error {
 		return err
 	}
 	if state.RequirementGuarantee != nil {
+		// A frozen case-set fixes the stage-3.5b rule: intermediate repairs use
+		// AFFECTED even under an active guarantee.  Seal still requires the
+		// production guarantee report's final FULL execution on the candidate.
 		if scope, ok := state.ExecutionScopes[target]; ok && scope.Decision == "AFFECTED" {
-			return fmt.Errorf("an active requirement guarantee requires FULL QA execution; AFFECTED/inherited scope is not accepted")
+			if caseSet := state.QACaseSets[target]; caseSet.Status != caseSetFrozen || state.PreRepairSnapshot == "" {
+				return fmt.Errorf("AFFECTED QA execution is accepted only for an intermediate repair with a FROZEN case-set")
+			}
 		}
 		if !isMergeVerification(state) {
 			review, ok := state.RequirementGuarantee.ReviewsByMode[target]

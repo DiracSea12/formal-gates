@@ -362,7 +362,16 @@ func qaCaseSetVersion(state RunState, mode string) string {
 	return digestValue(state.qaCases(mode))
 }
 
-func dispatchWorkflowContext(state RunState, targetKind, target string) string {
+func dispatchWorkflowContext(state RunState, targetKind, target, mode string) string {
+	if targetKind == "action" && target == "qa-execution" {
+		return digestValue(state.ExecutionScopes[mode])
+	}
+	if targetKind == "action" && target == "development-worker" && state.ActiveReviewWaveID != "" {
+		wave := state.ReviewWaves[state.ActiveReviewWaveID]
+		if wave.RepairPlan != nil {
+			return digestValue(wave.RepairPlan)
+		}
+	}
 	if targetKind == "action" && isPreDevelopmentReviewAction(target) {
 		series := state.PreDevelopmentReviewSeries[target]
 		return digestValue(struct {
@@ -380,7 +389,7 @@ func dispatchIdentity(state RunState, catalog PromptCatalog, targetKind, target,
 		TargetKind, Target, Mode, BaseSnapshot, CurrentSnapshot string
 		RequirementRevision, CaseSetVersion, CatalogRevision    string
 		PromptRevision, ActionInput, WorkflowContext            string
-	}{targetKind, target, mode, state.BaseSnapshot, state.CurrentSnapshot, state.RequirementRevision, qaCaseSetVersion(state, mode), catalog.CatalogRevision, dispatchPromptRevision(state, catalog, targetKind, target), actionInput, dispatchWorkflowContext(state, targetKind, target)}
+	}{targetKind, target, mode, state.BaseSnapshot, state.CurrentSnapshot, state.RequirementRevision, qaCaseSetVersion(state, mode), catalog.CatalogRevision, dispatchPromptRevision(state, catalog, targetKind, target), actionInput, dispatchWorkflowContext(state, targetKind, target, mode)}
 	taskKey := "task-" + shortDigest(digestValue(base))
 	signature := "dispatch-signature-" + shortDigest(digestValue(struct {
 		Base           any
@@ -406,11 +415,28 @@ func duplicateDispatchPrompt(state RunState, signature string) (string, bool, er
 				return "", false, fmt.Errorf("dispatch signature %s already has an authoritative PASS on dispatch %s", signature, dispatch.ID)
 			}
 			if dispatch.ResultStatus == "FAIL" {
-				return "", false, fmt.Errorf("dispatch signature %s already has an authoritative FAIL on dispatch %s; follow the existing %s remediation path", signature, dispatch.ID, dispatch.Target)
+				return "", false, fmt.Errorf("dispatch signature %s already has an authoritative FAIL on dispatch %s; %s", signature, dispatch.ID, duplicateFailureNextStep(state, dispatch))
 			}
 		}
 	}
 	return "", false, nil
+}
+
+func duplicateFailureNextStep(state RunState, dispatch PreparedDispatch) string {
+	if dispatch.TargetKind == "action" {
+		switch dispatch.Target {
+		case "product-review", "start-readiness":
+			return "settle the existing findings, revise the requirement/solution as needed, and use the action's bounded re-review path"
+		case "qa-review":
+			return "revise the bound QA case-set with QA Design, then use the bounded QA Review path for the changed case-set"
+		case "qa-execution":
+			return "wait for the frozen review-wave expected-set to finish and complete main-agent adjudication before preparing its one unified repair"
+		}
+	}
+	if dispatch.TargetKind == "gate" {
+		return "wait for the frozen review-wave expected-set to finish and complete main-agent adjudication before preparing its one unified repair"
+	}
+	return "follow the existing " + dispatch.Target + " remediation path"
 }
 
 func registerDispatchAttempt(state *RunState, dispatchID, taskKey, signature, targetKind, target, mode string) (int, error) {
@@ -474,6 +500,7 @@ func finishDispatchAttempt(state *RunState, dispatchID, resultStatus, failure st
 	}
 	obligation.BasisDigest = dispatchObligationDigest(obligation)
 	state.DispatchObligations[dispatch.TaskKey] = obligation
+	recordReviewWaveAttempt(state, dispatch, resultStatus, failure)
 }
 
 func dispatchObligationDigest(obligation DispatchObligation) string {

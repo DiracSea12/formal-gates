@@ -116,10 +116,10 @@ func TestCLIAuthorizeRepairInlineQAScope(t *testing.T) {
 	}
 	// 波 1：首次执行不问 scope。
 	recordFailingWave("1")
-	// 波 2..3：每波修复后记录合并 FULL scope 再重跑。
+	// 波 2..3：每波普通修复后记录固定 AFFECTED scope 再重跑。
 	for wave := 2; wave <= 3; wave++ {
 		cliRepairDispatch(t, root, pkg, state.RunID, fmt.Sprintf("%d", wave))
-		runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "FULL")
+		runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "AFFECTED", "--cases", "CASE-001,CASE-002", "--reason", "both paths are affected by this repair")
 		recordFailingWave(fmt.Sprintf("%d", wave))
 	}
 	// 上限用尽：authorize-repair 缺 scope 被拒。
@@ -127,14 +127,14 @@ func TestCLIAuthorizeRepairInlineQAScope(t *testing.T) {
 	if code := Run("formal-gates", []string{"workflow", "authorize-repair", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--cycles", "1"}, IO{Stderr: &stderr}); code == 0 || !strings.Contains(stderr.String(), "requires a scope decision") {
 		t.Fatalf("authorize-repair without a rerun scope was accepted: code=%d err=%s", code, stderr.String())
 	}
-	// 内联合并空 mode scope（--qa-scope =FULL）：记录 Source=AUTHORIZE_REPAIR、授权一轮。
-	runCLI(t, "workflow", "authorize-repair", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--cycles", "1", "--qa-scope", "=FULL", "--qa-reason", "=rerun the full merged set")
+	// 内联合并空 mode AFFECTED scope：记录 Source=AUTHORIZE_REPAIR、授权一轮。
+	runCLI(t, "workflow", "authorize-repair", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--cycles", "1", "--qa-scope", "=AFFECTED", "--qa-cases", "=CASE-001,CASE-002", "--qa-reason", "=both paths remain affected")
 	state, _ = validate.LoadRunState(root, state.RunID)
 	if state.ExtraReviewWaves != 1 {
 		t.Fatalf("extra waves=%d want=1", state.ExtraReviewWaves)
 	}
 	sc := state.ExecutionScopes[""]
-	if sc.Decision != "FULL" || sc.Source != "AUTHORIZE_REPAIR" || sc.Origin != "USER" || sc.BaseSnapshot != state.CurrentSnapshot {
+	if sc.Decision != "AFFECTED" || sc.Source != "AUTHORIZE_REPAIR" || sc.Origin != "MAIN_AGENT" || sc.BaseSnapshot != state.CurrentSnapshot {
 		t.Fatalf("merged inline scope=%#v", sc)
 	}
 }

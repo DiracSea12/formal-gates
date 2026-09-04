@@ -938,6 +938,7 @@ func invalidateSemanticReviewDependents(state *RunState, action, source string) 
 			for _, testCase := range cases {
 				testCase.ReviewStatus = "PENDING"
 				testCase.ApprovedSource = ""
+				testCase.SuggestionIDs = nil
 				updated = append(updated, testCase)
 			}
 			reset[mode] = updated

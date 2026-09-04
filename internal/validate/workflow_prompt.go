@@ -187,6 +187,9 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if (target == "qa-design" || target == "qa-review") && developmentStarted(*state) && mode == "" {
 			return fmt.Errorf("%s dispatch requires --mode blackbox or whitebox after development starts", target)
 		}
+		if err := requireReviewWaveDispatch(*state, targetKind, target, mode); err != nil {
+			return err
+		}
 		// Signature/TaskKey reuse runs after the existing resume and mode guards:
 		// an interrupted CLAIMED dispatch still follows the three-way resume rule,
 		// while an unchanged OPEN obligation returns its canonical prompt.
@@ -208,7 +211,9 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 			}
 		}
 		wave := 0
-		if targetKind == "gate" {
+		if state.ActiveReviewWaveID != "" && (targetKind == "gate" || (targetKind == "action" && target == "qa-execution")) {
+			wave = state.ReviewWaves[state.ActiveReviewWaveID].Number
+		} else if targetKind == "gate" {
 			wave = currentGateReviewWave(*state)
 		}
 		dispatchID, err := newDispatchID()
@@ -256,6 +261,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 			return err
 		}
 		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested, TaskKey: taskKey, Signature: signature}
+		bindDispatchToReviewWave(state, state.Dispatches[dispatchID])
 		return nil
 	})
 	return prompt, err
@@ -496,6 +502,11 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 }
 
 func prepareDevelopmentAction(root, packageRoot, runID string, userRequested bool, userReason string) (string, error) {
+	if current, err := LoadRunState(root, runID); err == nil && convergenceEnabled(current) && (current.Actions["development-worker"].Status == developmentComplete || current.Actions["development-worker"].Status == developmentVerified) {
+		if _, err := mutateRun(root, runID, func(state *RunState) error { return ensureUnifiedRepairPlan(state) }); err != nil {
+			return "", err
+		}
+	}
 	actionInput := digestValue(struct {
 		UserRequested bool
 		UserReason    string
@@ -504,13 +515,22 @@ func prepareDevelopmentAction(root, packageRoot, runID string, userRequested boo
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
+		status := state.Actions["development-worker"].Status
+		if convergenceEnabled(*state) && (status == developmentComplete || status == developmentVerified) {
+			if err := ensureUnifiedRepairPlan(state); err != nil {
+				return "", err
+			}
+		}
 		if err := requireTransition(*state, "development-worker", ""); err != nil {
 			return "", err
 		}
 		detail := ""
-		status := state.Actions["development-worker"].Status
 		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
-			detail = repairInput(*state)
+			if convergenceDetail, ok := convergenceRepairInput(*state); ok {
+				detail = convergenceDetail
+			} else {
+				detail = repairInput(*state)
+			}
 		}
 		prompt, err := ComposeActionPrompt(catalog, "development-worker", route, detail)
 		if err != nil {

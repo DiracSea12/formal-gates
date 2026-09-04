@@ -297,11 +297,11 @@ func TestCLIQARerunScopeDecision(t *testing.T) {
 	if code == 0 || !strings.Contains(stderr.String(), "must be FULL or AFFECTED") {
 		t.Fatalf("invalid scope decision was accepted: code=%d err=%s", code, stderr.String())
 	}
-	// 记录 FULL scope 后重跑放行。
-	runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "FULL", "--reason", "rerun the complete set")
+	// 普通返修记录 AFFECTED scope 后重跑放行。
+	runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "AFFECTED", "--cases", "CASE-001,CASE-002", "--reason", "both approved paths are affected")
 	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution")
 	state, _ = validate.LoadRunState(root, state.RunID)
-	if sc := state.ExecutionScopes[""]; sc.Decision != "FULL" || sc.Origin != "USER" || sc.Source != "PREPARE" {
+	if sc := state.ExecutionScopes[""]; sc.Decision != "AFFECTED" || sc.Origin != "MAIN_AGENT" || sc.Source != "PREPARE" {
 		t.Fatalf("recorded scope=%#v", sc)
 	}
 }

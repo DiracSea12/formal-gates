@@ -136,14 +136,14 @@ and rollback impact, then commits the requirement revision and state transition 
 
 ### 7. Post-development review
 
-**What happens** — testing and every gate review run in parallel. Testing runs only the approved cases; each gate (a file under `gates/`, one gate per file) reviews the complete change in a brand-new independent session, without interference. Results are validated by the main agent and recorded as PASS / FAIL.
+**What happens** — once the final snapshot contains white-box tests and every selected QA case-set is frozen, one review wave freezes the complete expected set and prepares testing plus every gate in parallel. Tests run approved cases; gates review the complete change without receiving QA case text. After every target terminates, the main agent verifies, adjudicates, and consolidates the findings.
 **Who does it** — an independent test executor plus one brand-new independent reviewer per gate.
 **What is recorded** — gate verdicts and test results, validated by the main agent.
 **In one line** — every gate faces the same complete change with a fresh session; nobody can coast on memory.
 
 ### 8. Repair
 
-**What happens** — a test failure or a P0/P1 finding (a severe problem that must be fixed) sends the whole round back for repair (the round's P2/P3 minor suggestions are handled together). PASS conclusions that the repair can't affect are inherited directly; any gate that is re-run always sees the **complete change** (the full start-to-current delivery, never just the small repair delta), and testing re-runs all approved cases on the new snapshot. At most three automatic review rounds; after that every repair needs your explicit authorization.
+**What happens** — all QA failures, valid P0/P1 findings, and gate P2 findings from one review wave enter one repair. A gate P2 must be fixed, but after a full build, the full project test suite, and affected-case self-runs, its PASS is carried without another gate review. Gate P3 findings are not repaired and are shown once before seal. QA Review P2/P3 suggestions must instead be absorbed by stable suggestion ID before the case-set freezes. Ordinary intermediate repairs run a fixed affected QA subset; a requirement-guarantee route also runs FULL QA on the final candidate before seal. Once automatic rounds are exhausted, a state-bound read-only preview precedes explicit authorization.
 **Who does it** — the main agent pins the pre-repair marker, dispatches a dev agent to repair, then re-snapshots and re-reviews.
 **What is recorded** — the repair change and a new snapshot; the pre-repair version is kept as the basis for inheritance decisions.
 **In one line** — small repairs don't re-test what didn't change; big ones go through an independent judgment.

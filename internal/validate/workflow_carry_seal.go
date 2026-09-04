@@ -145,7 +145,7 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 		// Active guarantees require a FULL execution on the current candidate.
 		// Prior PASS results remain audit evidence but are never eligible for the
 		// snapshot-rebinding Carry shortcut, even before a scope is recorded.
-		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive {
+		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && len(state.QACaseSets) == 0 {
 			continue
 		}
 		// 直取该 mode 的执行结果（不再经过只返回 current-snapshot 结果的

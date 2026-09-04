@@ -373,11 +373,17 @@ var workflowSubcommands = map[string]func(args []string, streams IO) (int, error
 	"qa-review":                  runQAReview,
 	"qa-execution":               runQAExecution,
 	"qa-execution-scope":         runWorkflowQAExecutionScope,
+	"qa-thaw":                    runWorkflowQAThaw,
+	"prepare-review-wave":        runWorkflowPrepareReviewWave,
+	"adjudicate-wave":            runWorkflowAdjudicateWave,
+	"resolve-wave-target":        runWorkflowResolveWaveTarget,
 	"snapshot":                   runWorkflowSnapshot,
 	"cleanup":                    runWorkflowCleanup,
 	"future":                     runWorkflowFuture,
 	"carry":                      runCarry,
 	"authorize-repair":           runWorkflowAuthorizeRepair,
+	"repair-preview":             runWorkflowRepairPreview,
+	"complete-p2-repair":         runWorkflowCompleteP2Repair,
 	"seal":                       runWorkflowSeal,
 }
 
@@ -388,8 +394,10 @@ var workflowLegacyWriteEntry = map[string]bool{
 	"qa-worktree": true, "prepare-gate": true, "prepare-action": true,
 	"claim-dispatch": true, "record-action": true, "record-gate": true,
 	"qa-design": true, "qa-review": true, "qa-execution": true,
-	"qa-execution-scope": true, "snapshot": true, "cleanup": true,
+	"qa-execution-scope": true, "qa-thaw": true, "prepare-review-wave": true,
+	"adjudicate-wave": true, "resolve-wave-target": true, "snapshot": true, "cleanup": true,
 	"carry": true, "authorize-repair": true, "seal": true,
+	"complete-p2-repair": true,
 }
 
 func workflowFlag(args []string, name, fallback string) string {
@@ -1147,6 +1155,117 @@ func runWorkflowCleanup(args []string, streams IO) (int, error) {
 	return printValue(streams.Stdout, result, err)
 }
 
+func runWorkflowQAThaw(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow qa-thaw", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	mode := fs.String("mode", "", "blackbox or whitebox QA mode")
+	category := fs.String("category", "", "REQUIREMENT_MEANING, EXTERNAL_BEHAVIOR, SUCCESS_FAILURE_CRITERIA, or CASE_EXECUTABILITY")
+	reason := fs.String("reason", "", "why the frozen case-set is no longer valid")
+	sourceRevision := fs.String("source-revision", "", "requirement/behavior revision that caused the thaw")
+	cases := stringListFlag{}
+	fs.Var(&cases, "case-id", "affected case id; repeat for every case reopened")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.ThawQACaseSet(*root, *pkg, *runID, *mode, *category, *reason, *sourceRevision, cases)
+	return workflowResult(streams, *root, *runID, state, err)
+}
+
+// runWorkflowPrepareReviewWave is the public acceptance surface for
+// REQ-003/AC-009: callers get the complete frozen expected-set, with every
+// eligible ticket prepared for parallel claim.
+func runWorkflowPrepareReviewWave(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow prepare-review-wave", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	wave, err := validate.PrepareReviewWave(*root, *pkg, *runID)
+	return workflowResult(streams, *root, *runID, wave, err)
+}
+
+func runWorkflowAdjudicateWave(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow adjudicate-wave", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	inputPath := fs.String("input", "", "JSON file containing the complete NEW/SAME_AS/DISMISSED finding adjudication")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	input, err := validate.LoadReviewWaveAdjudication(*inputPath)
+	if err != nil {
+		return 1, err
+	}
+	state, err := validate.AdjudicateReviewWave(*root, *pkg, *runID, input)
+	return workflowResult(streams, *root, *runID, state, err)
+}
+
+func runWorkflowResolveWaveTarget(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow resolve-wave-target", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	target := fs.String("target", "", "exact review-wave target key from workflow show")
+	stateRevision := fs.String("state-revision", "", "exact current state revision")
+	reason := fs.String("reason", "", "user reason for ending collection without a PASS")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.DisposeReviewWaveTarget(*root, *pkg, *runID, *target, *stateRevision, *reason)
+	return workflowResult(streams, *root, *runID, state, err)
+}
+
+func repairEstimateFlags(fs *flag.FlagSet) (*stringListFlag, *stringListFlag, map[string]*validate.QAScopeInput) {
+	buildTargets := &stringListFlag{}
+	testTargets := &stringListFlag{}
+	qaInputs := map[string]*validate.QAScopeInput{}
+	fs.Var(buildTargets, "build-target", "build target expected in the authorized repair; repeat as needed")
+	fs.Var(testTargets, "test-target", "project test target expected in the authorized repair; repeat as needed")
+	fs.Var(&qaScopeValue{byMode: qaInputs, field: "cases"}, "qa-case", "expected QA rerun cases <mode>=<id,...>; repeat per mode")
+	return buildTargets, testTargets, qaInputs
+}
+
+func repairEstimate(buildTargets, testTargets stringListFlag, qaInputs map[string]*validate.QAScopeInput) validate.RepairRerunEstimate {
+	qaCases := map[string][]string{}
+	for mode, input := range qaInputs {
+		qaCases[mode] = append([]string{}, input.CaseIDs...)
+	}
+	return validate.RepairRerunEstimate{BuildTargets: append([]string{}, buildTargets...), TestTargets: append([]string{}, testTargets...), QACases: qaCases}
+}
+
+// runWorkflowRepairPreview is read-only by contract.  It exposes the bound
+// authorization summary without creating a receipt, revision or repair wave.
+func runWorkflowRepairPreview(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow repair-preview", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	buildTargets, testTargets, qaInputs := repairEstimateFlags(fs)
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	preview, err := validate.PreviewRepairAuthorization(*root, *pkg, *runID, repairEstimate(*buildTargets, *testTargets, qaInputs))
+	return printValue(streams.Stdout, preview, err)
+}
+
+func runWorkflowCompleteP2Repair(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow complete-p2-repair", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	waveID := fs.String("wave", "", "source review-wave id")
+	build := stringListFlag{}
+	tests := stringListFlag{}
+	cases := stringListFlag{}
+	fs.Var(&build, "build-evidence", "completed build evidence; repeat as needed")
+	fs.Var(&tests, "test-evidence", "full project-test evidence; repeat as needed")
+	fs.Var(&cases, "affected-case", "affected QA case self-run evidence; repeat as needed")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.CompleteGateP2Repair(*root, *pkg, *runID, *waveID, build, tests, cases)
+	return workflowResult(streams, *root, *runID, state, err)
+}
+
 func runWorkflowAuthorizeRepair(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow authorize-repair", streams)
 	root, pkg := rootFlags(fs)
@@ -1158,6 +1277,9 @@ func runWorkflowAuthorizeRepair(args []string, streams IO) (int, error) {
 	fs.Var(&qaScopeValue{byMode: scopeInputs, field: "scope"}, "qa-scope", "QA rerun scope decision <mode>=<FULL|AFFECTED>; empty <mode> selects the merged QA set; repeat per mode")
 	fs.Var(&qaScopeValue{byMode: scopeInputs, field: "cases"}, "qa-cases", "AFFECTED subset <mode>=<id,...>; empty <mode> selects the merged QA set; repeat per mode")
 	fs.Var(&qaScopeValue{byMode: scopeInputs, field: "reason"}, "qa-reason", "scope decision reason <mode>=<reason>; empty <mode> selects the merged QA set; repeat per mode")
+	previewDigest := fs.String("preview-digest", "", "digest returned by workflow repair-preview")
+	stateRevision := fs.String("state-revision", "", "state revision returned by workflow repair-preview")
+	buildTargets, testTargets, previewQAInputs := repairEstimateFlags(fs)
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -1165,7 +1287,11 @@ func runWorkflowAuthorizeRepair(args []string, streams IO) (int, error) {
 	for _, item := range scopeInputs {
 		scopes = append(scopes, *item)
 	}
-	state, err := validate.AuthorizeExtraRepair(*root, *pkg, *runID, *cycles, scopes)
+	var authorization []validate.RepairAuthorizationInput
+	if *previewDigest != "" || *stateRevision != "" {
+		authorization = append(authorization, validate.RepairAuthorizationInput{PreviewDigest: *previewDigest, StateRevision: *stateRevision, Estimate: repairEstimate(*buildTargets, *testTargets, previewQAInputs)})
+	}
+	state, err := validate.AuthorizeExtraRepair(*root, *pkg, *runID, *cycles, scopes, authorization...)
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -1276,14 +1402,16 @@ func runQADesign(args []string, streams IO) (int, error) {
 	removeCases := stringListFlag{}
 	fs.Var(&removeCases, "remove-case", "remove an existing CASE id from this mode (repeatable; the id must exist)")
 	replaceAll := fs.Bool("replace-all", false, "replace this mode's whole QA case set with the submitted cases (an empty submission clears the mode)")
-	// --per-suggestion 吸收该 mode 最近一次 qa-review 记录在案的 P2 集合级建议：本轮
-	// 新增/修改用例直接置为已批准（SUGGESTION_APPLIED 溯源），不派新 qa-review；要求该
-	// mode 最近一次 qa-review 结果为 PASS 且含 P2 集合级发现项，不能与 --replace-all 同用。
-	perSuggestion := fs.Bool("per-suggestion", false, "absorb the mode's recorded P2 set-level qa-review suggestions directly: cases submitted this round are recorded approved (SUGGESTION_APPLIED provenance) without a new qa-review round; requires the mode's latest qa-review PASS with P2 set findings; cannot combine with --replace-all")
+	// --per-suggestion 吸收该 mode 最近一次 qa-review 记录在案的 P2/P3 集合级建议：每项
+	// 必须通过 --suggestion-id 精确绑定；新增/修改/删除用例保留 SUGGESTION_APPLIED 溯源，
+	// 不派新 qa-review，不能与 --replace-all 同用。
+	perSuggestion := fs.Bool("per-suggestion", false, "absorb the mode's stable P2/P3 qa-review suggestions without another review; requires the bound qa-review PASS and --suggestion-id for every absorbed suggestion; cannot combine with --replace-all")
+	suggestionIDs := stringListFlag{}
+	fs.Var(&suggestionIDs, "suggestion-id", "stable P2/P3 suggestion id absorbed by this design change; repeat for every absorbed suggestion")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{RemoveCases: removeCases, ReplaceAll: *replaceAll, PerSuggestion: *perSuggestion})
+	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{RemoveCases: removeCases, ReplaceAll: *replaceAll, PerSuggestion: *perSuggestion, SuggestionIDs: suggestionIDs})
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -2122,7 +2250,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -2137,7 +2265,7 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-execution|qa-execution-scope|snapshot|future|carry|authorize-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printFutureUsage(w io.Writer, program string) error {

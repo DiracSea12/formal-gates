@@ -19,6 +19,7 @@ import (
 
 type RunState struct {
 	RunID                string                `json:"runId"`
+	StartedAt            string                `json:"startedAt,omitempty"`
 	Flow                 string                `json:"flow"`
 	Status               string                `json:"status"`
 	RequirementSource    string                `json:"requirementSource"`
@@ -131,7 +132,16 @@ type RunState struct {
 	DispatchObligations map[string]DispatchObligation `json:"dispatchObligations,omitempty"`
 	RejectedResults     []RejectedResultReceipt       `json:"rejectedResults,omitempty"`
 	ReviewDeltaReceipts []ReviewDeltaReceipt          `json:"reviewDeltaReceipts,omitempty"`
-	Cost                *cost.RunCost                 `json:"cost,omitempty"`
+	// QACaseSets and ReviewWaves are the post-development convergence
+	// projection.  They freeze QA identity before review execution and keep one
+	// immutable expected-set / repair plan per review-ready snapshot.
+	QACaseSets              map[string]QACaseSetState    `json:"qaCaseSets,omitempty"`
+	ReviewWaves             map[string]ReviewWave        `json:"reviewWaves,omitempty"`
+	ActiveReviewWaveID      string                       `json:"activeReviewWaveId,omitempty"`
+	PostReviewFindings      map[string]PostReviewFinding `json:"postReviewFindings,omitempty"`
+	Problems                map[string]CanonicalProblem  `json:"problems,omitempty"`
+	P2CompletionCredentials []P2CompletionCredential     `json:"p2CompletionCredentials,omitempty"`
+	Cost                    *cost.RunCost                `json:"cost,omitempty"`
 	// QAWorktree 是黑盒 QA 的隔离工作区路径（Git 为从基线分支的 linked worktree，
 	// SVN/P4 为签出到基线版本的工作副本/客户端工作区）。它从基线快照创建、恒等于
 	// 基线，始终不含本次开发代码；黑盒 qa-design/qa-review 的原生标识校验与派发源
@@ -376,15 +386,19 @@ type QACase struct {
 	// 未另派 qa-review；空值表示由常规 review 轮批准。错误用例由 qa-execution
 	// 执行时暴露并走正常修复轮兜底。
 	ApprovedSource string `json:"approvedSource,omitempty"`
+	// SuggestionIDs binds suggestion-approved additions or revisions to the
+	// exact P2/P3 records absorbed by that QA Design round.
+	SuggestionIDs []string `json:"suggestionIds,omitempty"`
 }
 
 // QADesignChange 记录一轮 qa-design 增量记录对本 mode 用例集的变更：Added/Modified/
 // Removed 分别是本轮新增、修改、删除的用例 id。qa-review 提示词把它注入"本轮变更"上下文，
 // 使审查看到本轮的变更（新增/修改/删除）而不必靠对比两份完整集合。
 type QADesignChange struct {
-	Added    []string `json:"added,omitempty"`
-	Modified []string `json:"modified,omitempty"`
-	Removed  []string `json:"removed,omitempty"`
+	Added         []string `json:"added,omitempty"`
+	Modified      []string `json:"modified,omitempty"`
+	Removed       []string `json:"removed,omitempty"`
+	SuggestionIDs []string `json:"suggestionIds,omitempty"`
 }
 
 type RunSummary struct {
@@ -413,6 +427,11 @@ type RunSummary struct {
 	DispatchObligations        map[string]DispatchObligation         `json:"dispatchObligations,omitempty"`
 	RejectedResults            []RejectedResultReceipt               `json:"rejectedResults,omitempty"`
 	ReviewDeltaReceipts        []ReviewDeltaReceipt                  `json:"reviewDeltaReceipts,omitempty"`
+	ReviewWaves                map[string]ReviewWave                 `json:"reviewWaves,omitempty"`
+	PostReviewFindings         map[string]PostReviewFinding          `json:"postReviewFindings,omitempty"`
+	Problems                   map[string]CanonicalProblem           `json:"problems,omitempty"`
+	P2CompletionCredentials    []P2CompletionCredential              `json:"p2CompletionCredentials,omitempty"`
+	GateP3Advisories           []PostReviewFinding                   `json:"gateP3Advisories,omitempty"`
 	// Unverified 是轻量 run（routeMode=lightweight）的封板标注：轻量路线不做任何验证、
 	// 只留记录，封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。非轻量
 	// run 为空（omitempty 不输出）。
@@ -433,7 +452,7 @@ func NewRunState(runID, flow, requirementSource, requirementRevision, vcs, baseS
 	for _, id := range gateIDs {
 		gates[id] = GateResult{Status: "PENDING"}
 	}
-	return RunState{RunID: runID, Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, DispatchObligations: map[string]DispatchObligation{}, RejectedResults: []RejectedResultReceipt{}, ReviewDeltaReceipts: []ReviewDeltaReceipt{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, PreDevelopmentReviewSeries: newPreDevelopmentReviewSeries(), ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
+	return RunState{RunID: runID, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), Flow: flow, Status: "ACTIVE", RequirementSource: requirementSource, RequirementRevision: requirementRevision, RequirementConfirmed: confirmed, RequirementArtifacts: artifacts, BasePromptRevision: basePromptRevision, CatalogRevision: catalogRevision, VCS: vcs, BaseSnapshot: baseSnapshot, CurrentSnapshot: currentSnapshot, SelectedGates: []string{}, SkipAuthorizations: map[string]SkipAuthorization{}, Actions: pendingRequirementActions(), QACasesByMode: map[string][]QACase{}, QAExecutionByMode: map[string]QAExecutionResult{}, ExecutionScopes: map[string]QAExecutionScope{}, PriorQAExecutionByMode: map[string]*QAExecutionResult{}, QAReviewByMode: map[string]ActionResult{}, QADesignByMode: map[string]ActionResult{}, QADesignChangesByMode: map[string]QADesignChange{}, Gates: gates, Carry: map[string]CarryResult{}, Dispatches: map[string]PreparedDispatch{}, DispatchObligations: map[string]DispatchObligation{}, RejectedResults: []RejectedResultReceipt{}, ReviewDeltaReceipts: []ReviewDeltaReceipt{}, QACaseSets: map[string]QACaseSetState{}, ReviewWaves: map[string]ReviewWave{}, PostReviewFindings: map[string]PostReviewFinding{}, Problems: map[string]CanonicalProblem{}, P2CompletionCredentials: []P2CompletionCredential{}, NeedsReReview: map[string]string{}, ReReviewDispatch: map[string]string{}, ReviewOverrides: map[string]string{}, PreDevelopmentReviewSeries: newPreDevelopmentReviewSeries(), ReviewItemsByAction: map[string]map[string]ReviewItem{}, SettledFindings: map[string][]SettledFinding{}}
 }
 
 func pendingRequirementActions() map[string]ActionResult {
@@ -511,6 +530,7 @@ func saveRunState(root string, state RunState, registryHeld bool) error {
 	if state.ReviewDeltaReceipts == nil {
 		state.ReviewDeltaReceipts = []ReviewDeltaReceipt{}
 	}
+	ensureConvergenceState(&state)
 	if state.RequirementArtifacts == nil {
 		state.RequirementArtifacts = []RequirementArtifact{}
 	}
@@ -1179,7 +1199,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 }
 
 func runSummary(state RunState) RunSummary {
-	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts}
+	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts, ReviewWaves: state.ReviewWaves, PostReviewFindings: state.PostReviewFindings, Problems: state.Problems, P2CompletionCredentials: state.P2CompletionCredentials, GateP3Advisories: unresolvedGateP3(state)}
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"

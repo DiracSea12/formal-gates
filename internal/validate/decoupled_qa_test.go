@@ -118,9 +118,14 @@ func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
 	if state.qaExecution("blackbox").Status != "PASS" || len(state.qaExecution("blackbox").Cases) != len(blackboxCases) {
 		t.Fatalf("blackbox execution not recorded: %#v", state.qaExecution("blackbox"))
 	}
-	// 白盒设计轮（改写白盒用例）：不得清除黑盒执行结果。
+	// 对外结构发生变化，先按受支持类别解冻白盒用例。解冻和后续白盒设计不得清除
+	// 已记录的黑盒执行结果。
+	whiteboxCase := state.qaModeCases("whitebox")[0]
+	state, err := ThawQACaseSet(root, pkg, state.RunID, "whitebox", "EXTERNAL_BEHAVIOR", "documented structure changed", state.RequirementRevision, []string{whiteboxCase.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	var err error
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure revised", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructureRevised"}}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -155,8 +160,8 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 		t.Fatalf("per-mode priors were not preserved: %#v", state.PriorQAExecutionByMode)
 	}
 	blackboxPriorSnapshot := state.priorQAExecution("blackbox").Snapshot
-	// 黑盒 FULL scope 重跑 PASS：当前结果被替换，黑盒与白盒 prior 审计都保留。
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "")
+	// 普通返修固定按 AFFECTED 重跑；当前结果被替换，黑盒与白盒 prior 审计都保留。
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{bbCases[0].ID}, "blackbox failure is affected")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +337,7 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 }
 
 // TestExplicitPerModeRerunScopePreventsCarryInheritance covers the ownership
-// boundary between an explicit QA rerun decision and Carry. Once FULL is bound
+// boundary between an explicit QA rerun decision and Carry. Once AFFECTED is bound
 // to the old PASS snapshot, Carry cannot turn that PASS into a current result;
 // qa-execution remains dispatchable, replaces the mode's current result, and
 // retains the prior result as audit.
@@ -346,12 +351,12 @@ func TestExplicitPerModeRerunScopePreventsCarryInheritance(t *testing.T) {
 	priorSnapshot := state.PreRepairSnapshot
 
 	var err error
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "rerun the complete blackbox set")
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{bbCases[0].ID}, "the repaired path affects this blackbox case")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := eligibleMainCarryResults(state, false); len(got) != 0 {
-		t.Fatalf("explicit FULL rerun remained eligible for Carry: %v", got)
+		t.Fatalf("explicit AFFECTED rerun remained eligible for Carry: %v", got)
 	}
 	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior"); err == nil || !strings.Contains(err.Error(), "no prior passing selected results") {
 		t.Fatalf("Carry accepted a mode with an explicit rerun scope: %v", err)
@@ -366,7 +371,7 @@ func TestExplicitPerModeRerunScopePreventsCarryInheritance(t *testing.T) {
 
 	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "blackbox", false, "")
 	if err != nil {
-		t.Fatalf("explicit FULL rerun could not prepare qa-execution: %v", err)
+		t.Fatalf("explicit AFFECTED rerun could not prepare qa-execution: %v", err)
 	}
 	if strings.TrimSpace(prompt) == "" {
 		t.Fatal("qa-execution rerun prompt is empty")

@@ -818,18 +818,17 @@ func TestWhitebox35AFixR2GuaranteeRejectsMissingCoverageReviewAndNonCurrentOrNon
 	}
 }
 
-func TestWhitebox35AFixR2ActiveGuaranteeRejectsAffectedScopeAndWaiverAuditsUnresolvedItems(t *testing.T) {
+func TestWhitebox35AFixR2ActiveGuaranteeUsesAffectedScopeAndWaiverAuditsUnresolvedItems(t *testing.T) {
 	state := whitebox35AFixR2GuaranteedState(t)
 	state.QACasesByMode = map[string][]QACase{whiteboxQAID: {{ID: "CASE-030", Mode: "whitebox", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}}
+	state.QACaseSets = map[string]QACaseSetState{whiteboxQAID: {Mode: whiteboxQAID, Status: caseSetFrozen, Version: "frozen-v1", BoundSnapshot: state.CurrentSnapshot}}
+	state.PreRepairSnapshot = "prior"
 	prior := QAExecutionResult{Status: "FAIL", Snapshot: "prior", Cases: []QAResultRecord{{CaseID: "CASE-030", Mode: "whitebox", Outcome: "FAIL"}}}
-	if err := recordExecutionScope(&state, whiteboxQAID, "AFFECTED", []string{"CASE-030"}, "targeted rerun", scopeSourcePrepare, "prior", prior); err == nil || !strings.Contains(err.Error(), "requires FULL QA execution") {
-		t.Fatalf("AFFECTED scope error = %v", err)
+	if err := recordExecutionScope(&state, whiteboxQAID, "AFFECTED", []string{"CASE-030"}, "targeted rerun", scopeSourcePrepare, "prior", prior); err != nil {
+		t.Fatalf("AFFECTED scope rejected: %v", err)
 	}
-	if err := recordExecutionScope(&state, whiteboxQAID, "FULL", nil, "full rerun", scopeSourcePrepare, "prior", prior); err != nil {
-		t.Fatalf("FULL scope rejected: %v", err)
-	}
-	if state.ExecutionScopes[whiteboxQAID].Decision != "FULL" || len(state.ExecutionScopes[whiteboxQAID].CaseIDs) != 0 {
-		t.Fatalf("FULL scope record = %#v", state.ExecutionScopes[whiteboxQAID])
+	if state.ExecutionScopes[whiteboxQAID].Decision != "AFFECTED" || len(state.ExecutionScopes[whiteboxQAID].CaseIDs) != 1 {
+		t.Fatalf("AFFECTED scope record = %#v", state.ExecutionScopes[whiteboxQAID])
 	}
 
 	if err := authorizeRequirementGuaranteeWaiver(t.TempDir(), &state, ""); err == nil || !strings.Contains(err.Error(), "requires --guarantee-waiver-reason") {

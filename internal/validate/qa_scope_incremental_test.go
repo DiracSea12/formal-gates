@@ -97,14 +97,25 @@ func TestScopeBaseMismatchRejectedAtPrepareAndFallsBackToFull(t *testing.T) {
 	}
 }
 
-// TestFULLRerunWithoutAffectedUsesFullSet asserts that a FULL rerun scope yields
-// the full approved required set (no subset).
+// TestFinalFULLAfterAffectedUsesFullSet asserts that an ordinary repair first
+// runs AFFECTED, then can reopen the same immutable final candidate for the
+// guarantee's mandatory FULL regression.
 func TestFULLRerunWithoutAffectedUsesFullSet(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "full-no-affected")
 	state = failingQAExecution(t, root, pkg, state, map[string]bool{"CASE-002": true}, "full1")
 	state = advanceRepairWithCarry(t, root, pkg, state, "full1-repair")
-	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, ""); err != nil {
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-002"}, "the repair changes the failed behavior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, dispatch, passingExecution(qaExecutionRequiredCases(state, "")), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "final candidate regression")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if required := qaExecutionRequiredCases(state, ""); len(required) != len(state.qaModeCases("")) {
@@ -223,9 +234,8 @@ func TestNoRepairableBlockerWhenNothingFailed(t *testing.T) {
 	}
 }
 
-// TestReviewCompletionAllowsDesignReRecord asserts after a qa-review round
-// completes (PASS), re-recording qa-design for the same mode is allowed (the design
-// is unlocked once no review dispatch is in flight).
+// TestReviewCompletionRequiresThawBeforeDesignReRecord asserts PASS freezes the
+// set and only a documented product/acceptance change can reopen QA Design.
 func TestReviewCompletionAllowsDesignReRecord(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := beginQA(t, root, pkg, "review-rerecord")
@@ -235,12 +245,19 @@ func TestReviewCompletionAllowsDesignReRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "", false, ""); err == nil || !strings.Contains(err.Error(), "case-set is FROZEN") {
+		t.Fatalf("frozen case-set allowed ordinary design re-record: %v", err)
+	}
+	state, err = ThawQACaseSet(root, pkg, state.RunID, "", "SUCCESS_FAILURE_CRITERIA", "the documented oracle changed", state.RequirementRevision, []string{"CASE-002"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	// 增量契约：重记录提交新增用例（既有两个用例未提及自动保留）；若原样重提
 	// baselineCases() 会被语义重复检查拒绝。
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "additional coverage", Procedure: "run the delivered additional test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxAdditional"}}, "")
 	if err != nil {
-		t.Fatalf("design re-record after review completion was rejected: %v", err)
+		t.Fatalf("design re-record after legal thaw was rejected: %v", err)
 	}
 	if state.qaDesign("").Status != "PASS" {
 		t.Fatalf("design re-record did not pass: %#v", state.qaDesign(""))
