@@ -344,6 +344,7 @@ func runWorkflow(program string, args []string, streams IO) (int, error) {
 // record/prepare/carry-family subcommands reuse shared runners; the state-changing
 // subcommands each own their flag parsing and validate call.
 var workflowSubcommands = map[string]func(args []string, streams IO) (int, error){
+	"guard-preview":              runWorkflowGuardPreview,
 	"start":                      runWorkflowStart,
 	"show":                       runWorkflowShow,
 	"status":                     runWorkflowStatus,
@@ -2250,7 +2251,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -2265,7 +2266,7 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printFutureUsage(w io.Writer, program string) error {

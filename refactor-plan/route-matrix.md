@@ -41,6 +41,7 @@ epoch/generation）。
 
 | 入口 | runtime | 唯一 writer | schema/definition 版本绑定 | 允许的状态变化 | 错误码 | 是否只读 | 阶段 0 绑定 | 阶段 1 绑定 | 计划枚举 | 机器证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| guard-preview | 3.5b engine 纯计算（`guard.Calculate`） | 无（只读输入文件） | basis schemaVersion=1；definition、确认 revision、provenance 与有限 retry | 无；非权威计算预览，runtimeIntegration=NOT_INSTALLED | 文件不可读、JSON/schema/身份/retry/provenance 冲突：rc=1 + 可定位错误 | 是 | unsupported | unsupported | 计划内 | `TestGuardPreviewBinary`；生产核心已知答案与 digest 测试 |
 | start | legacy | stable driver legacy runtime（`validate.Start`，cli.go:358-378） | legacy state 无版本 envelope，绑定 admission epoch/generation；不迁移不回写（P0-JSON CASE-024） | 创建 run：写 `.gates/tmp/<run>/state.json`（ACTIVE）与需求工件；首次写前要求已提交 bootstrap receipt。**--split 现状**：legacy start 仍带 `--split` 拆分意向声明（cli.go:370），与 §2.3 目标态（start 不接受拆分意向，拆分唯一绑定于 start-readiness PASS 后的拓扑确认）相反，属 legacy 维持项，阶段 3/4 迁移时改写并留修订记录 | UNREGISTERED_INSTALL（无 bootstrap receipt/登记失效，写前拒绝）、LOCK_HELD、参数校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-002/059/061；validate `TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation`（CASE-042）、`TestWhiteboxPhase0Round16FirstStartRequiresCommittedBootstrapReceipt`（CASE-061） |
 | show | legacy | 无（只读加载 `validate.LoadRunState`，cli.go:380-389） | 同上（读侧不引入新字段） | 无 | 加载错误文本（run 不存在/state 损坏） | 是 | legacy | legacy | 计划内 | P0-JSON CASE-020/024（installed binary show rc=0） |
 | status | candidate engine（阶段 3 installed façade） | 无（只读 engine projection） | engine 六字段 envelope；终态可读 terminal summary | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | legacy | legacy | 计划内 | `TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
@@ -83,6 +84,27 @@ epoch/generation）。
 | submit | candidate engine（阶段 3 installed façade） | engine submit handler（唯一 engine writer） | engine 六字段 envelope + typed event/request/freshness 绑定 | 接纳 typed event 后继续确定性决策；同 ID 同 digest 幂等 | `UNSUPPORTED_RUN_VERSION`、`STALE_REQUEST`、`DIGEST_MISMATCH`、`INVALID_EVENT`、`REVISION_CONFLICT` | 否 | legacy | legacy | 计划内 | `TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite`；阶段 3 逐入口覆盖表为当前绑定 |
 | submit-result | 无（不提供第二事件写入口） | 无 | 无 | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit-result` | 是（拒绝即无写入） | unsupported | unsupported | 计划未枚举 | `TestCLIWorkflowFutureRejectsSubmitAlias`；阶段 3 只允许 typed `workflow submit`，`submit-result` 是明确禁止的第二写通道；route-matrix 反向普查的 unsupported negative probe |
 | future | legacy（阶段 0 冻结的 versioned future surface 契约入口，非 workflow state writer） | future writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:3db87c9c…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 future 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`future submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowFutureRejectsSubmitAlias` |
+
+## 阶段 3.5b → 4 迁移合同
+
+guard-preview 当前只读输入并调用生产 guard.Calculate，schema/fixture 见
+`references/guard-preview.md`；无 workflow writer、无 State/source bridge/运行时 guard/typed Ask
+写路径，runtimeIntegration=NOT_INSTALLED。阶段 4 才报告权威 engine 集成状态，并把修复授权
+摘要中的 engine allowance 换成权威 projection；owner cost/token cap 的 UNAVAILABLE 各按
+来源/区间/配置独立判定。
+
+| 能力 | 当前归属 → 阶段 4 唯一归属 | 绑定与迁移约束 |
+| --- | --- | --- |
+| finding 核实/归并 | legacy Operator → engine Operator semantic adjudication | raw finding、逐条 severity rationale、范围/严重度/因果/复现、finding/problem ID、NEW/SAME_AS/DISMISSED 历史；Controller 不判语义/根因/重复，仅校验完整性与绑定；仅核实后处置仍不唯一才 Ask |
+| review-ready/wave | legacy convergence → engine Controller | 白盒最终 FROZEN case-set 绑定最终含测试快照；一次冻结 expected-set/digest 并准备所有 QA execution/门；收齐且核实完成后每快照唯一返修 |
+| P2/P3/QA | legacy convergence → engine Controller | 门审 P2 修复/carry 不复审，P3 Seal advisory；QA Review P2/P3 suggestion ID 吸收后 FROZEN、不复审；普通返修 AFFECTED，保证最终 FULL；合法 THAW 条件不变 |
+| 无效结果/retry | legacy dispatch obligation → engine Attempt/Controller | 非 wave/wave 共用 RUNTIME_ERROR/REJECTED_INVALID_RESULT；有限 retry 复用 TaskKey，耗尽 RETRY_EXHAUSTED，用户只能绑定 state revision 一次性追加一个 attempt；不增基础槽位 |
+| signature/授权摘要 | legacy preview → engine typed Ask | OPEN 续用、相同有效 PASS signature 不重派；额外修复完整 findings/problems/理由/历史/额度/QA/cost 摘要，授权绑定 digest + state revision |
+| guard basis | 3.5b 纯计算 → engine Controller | 基础 source 按 REQ-013；finding 派生 source 仅为核实完成且 wave 收齐后的有效 obligation/唯一 repair TaskKey；raw finding/result/receipt/resume 不扩容，需确认 revision 扩张先确认 |
+| requirement impact | legacy preview/登记 → engine typed Ask/原子转换 | meaning-preserved 无回退 Ask 且保留产品审 PASS；meaning-changed 接纳 revision 前绑定影响预览/state revision/base/candidate，仅用户确认事件可回退；legacy 写入口不得成为第二 writer 或绕过校验 |
+
+阶段 5–7 继承同一 finding/problem ID、归并、唯一返修、P3 advisory 与 QA 冻结合同。
+本表记录未来接入约束，不宣称阶段 4 已实现或本 run 已完成正式 QA/门审/Seal。
 
 ## 3.5a coverage 公开验收面
 

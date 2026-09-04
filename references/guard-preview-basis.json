@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "requirement": {"id": "example", "revision": "req-1", "confirmedRevision": "req-1"},
+  "batch": {"id": "B2", "revision": "batch-1", "confirmedRevision": "batch-1"},
+  "route": {"id": "custom", "revision": "route-1", "confirmedRevision": "route-1"},
+  "topology": {"id": "single", "revision": "topology-1", "confirmedRevision": "topology-1"},
+  "definition": {
+    "id": "example-workflow", "revision": "definition-1",
+    "externalSteps": ["review/gate", "development/worker", "host/transport"]
+  },
+  "approvedQA": [],
+  "selectedGates": [{"id": "quality", "revision": "gate-1"}],
+  "establishedObligations": [],
+  "establishedRepairs": [],
+  "externalTasks": [
+    {"taskKey": "development/worker/B2", "provenance": {"kind": "BATCH", "id": "B2", "revision": "batch-1"}, "maxAttempts": 1},
+    {"taskKey": "review/gate/quality", "provenance": {"kind": "SELECTED_GATE", "id": "quality", "revision": "gate-1"}},
+    {"taskKey": "host/transport", "provenance": {"kind": "DEFINITION", "id": "example-workflow", "revision": "definition-1"}, "maxAttempts": 4}
+  ]
+}

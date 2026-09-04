@@ -288,6 +288,15 @@ The `formal-gates workflow ...` commands are run by the flow driver (your AI age
 
 ---
 
+### Read-only dispatch allowance preview
+
+`formal-gates workflow guard-preview --input <basis.json>` calls the production guard
+calculator and prints the normalized basis, request/retry/total allowances and stable
+digest. See the [input schema and runnable example](references/guard-preview.md).
+It creates no run and writes no state; success only means internally consistent input,
+not authenticated confirmations or legitimate tasks. Stage 3.5b always reports
+`runtimeIntegration=NOT_INSTALLED`; runtime enforcement belongs to stage 4.
+
 ## FAQ
 
 **Do I need to understand these terms before using it?**

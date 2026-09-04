@@ -89,7 +89,7 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 候选升级和最终安装不等待活动 run 排空。安装不迁移、兼容或续跑旧
 generation 的 run；切换后旧 token/lease 由常规 admission 与版本校验拒绝。
 
-每个阶段还必须生成一份命令路由矩阵，逐项覆盖当前和最终公共面的全部 workflow 子命令：`start`、`show`、`status`、`next`、`diagnose`、`resume`、`abort`、`reset`、`requirement`、`route-candidates`、`slicing`、`settle-findings`、`route`、`route-add`、`qa-worktree`、`prepare-gate`、`prepare-action`、`claim-dispatch`、`record-action`、`record-gate`、`qa-design`、`qa-review`、`qa-execution`、`qa-execution-scope`、`snapshot`、`cleanup`、`carry`、`authorize-repair`、`seal` 以及新 `drive/submit`。矩阵逐项明确 runtime、唯一 writer、schema/definition 版本、允许的状态变化、错误码和是否只读。保留的兼容入口只能调用对应 engine handler；不支持的入口必须显式拒绝；任何直接写 state、绕过 `submit` 或公开删除活动 run 的路径都必须有 negative test。`diagnose` 的 raw read 是唯一例外，不得被当作 workflow writer。
+每个阶段还必须生成一份命令路由矩阵，逐项覆盖当前和最终公共面的全部 workflow 子命令：`start`、`show`、`status`、`next`、`diagnose`、`guard-preview`、`resume`、`abort`、`reset`、`requirement`、`route-candidates`、`slicing`、`settle-findings`、`route`、`route-add`、`qa-worktree`、`prepare-gate`、`prepare-action`、`claim-dispatch`、`record-action`、`record-gate`、`qa-design`、`qa-review`、`qa-execution`、`qa-execution-scope`、`snapshot`、`cleanup`、`carry`、`authorize-repair`、`seal` 以及新 `drive/submit`。矩阵逐项明确 runtime、唯一 writer、schema/definition 版本、允许的状态变化、错误码和是否只读。保留的兼容入口只能调用对应 engine handler；不支持的入口必须显式拒绝；任何直接写 state、绕过 `submit` 或公开删除活动 run 的路径都必须有 negative test。`diagnose` 的 raw read 是唯一例外，不得被当作 workflow writer。
 
 同一矩阵还要覆盖 top-level 维护/transport 面：`hook`、`lifecycle capture/verify`、`canary`、`gate`、`install`、`uninstall` 和 `package`，以及 registry `admission/register/reconcile`、cutover、rollback 的受支持维护动作或内部 owner handler。逐项标明它是只读、只写外部 observation/receipt，还是委托 engine `submit`；生命周期事件可以写 observation buffer，但不得直接改变 workflow state，install/package 不得拥有 workflow writer。每个 registry/cutover 动作都必须记录 owner、generation/token、receipt schema、恢复入口和权限边界。所有这些入口都必须经过 registry launcher/lease 或 per-operation token，并有“绕过 submit、绕过 freshness、绕过 scope/host 隔离”的 negative tests。
 
@@ -247,12 +247,15 @@ QA/candidate E2E，两个批次不并行。
 
 ### 阶段 3.5b：成本记录与运行时派发止损 checkpoint（非独立正式阶段）
 
-本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal、公开命令或第二
+本 checkpoint 不计入八个正式阶段，不新增 `RunPhase`、formal run、Seal、公开写命令或第二
 套账本，详见 `refactor-plan/stage-3-5b-runtime-guardrails.md`。它冻结两件事的最小合同：
 （1）保留现有子代理 dispatch 计量，并用 `workflow start` 已保存的 owner transcript 做
 启动/终态快照差值，在可核对时补记主代理用量；（2）规定 engine 派发止损、成本回填和
 恢复入口的统一顺序。3.5b 当前代码只交付 legacy owner 计量，以及无 I/O、无状态写入的
-engine-side guard allowance/basis 纯计算核心与 fixtures；阶段 4 才把它们接入 engine
+engine-side guard allowance/basis 纯计算核心、fixtures 和公开只读
+`workflow guard-preview --input <basis.json>`（见 `references/guard-preview.md`）。成功只说明
+声明自洽，不认证真实 run/确认/合法任务，不创建 run、不写状态；runtimeIntegration 固定
+NOT_INSTALLED。阶段 4 才把它们接入 engine
 `State`/envelope、source bridge、签发/恢复入口、typed Ask 和公开展示。`internal/cost`
 仍是独立解析/计量包，`report.cost` 仍只做报告；阶段 4 接入前不宣称 engine 已具备运行时
 止损能力。
@@ -290,10 +293,40 @@ typed Ask：继续只解锁一个按既有 admission capacity 裁剪的 canonica
 
 目标是在一个真实宿主上完成 Git no-split regular 的完整 engine 交权。
 
+本阶段必须继承合并需求 REQ-015（engine 主需求 §7.2.1、§8.3–8.4 和最终方案 §7）：
+Operator semantic adjudication 持有 raw finding、逐条 severity rationale、范围/严重度/因果/
+复现证据、finding/problem ID 与 NEW/SAME_AS/DISMISSED 历史；Controller 只校验结构、
+引用/版本绑定与机械路由，不自动判真假、严重度、根因或重复。仅核实后处置仍不唯一才
+Ask，产品/技术审 confirm/dismiss 保留。白盒测试与建议吸收变化全部提交、case-set FROZEN
+且绑定最终 review-ready 快照后，一次冻结 expected-set/digest 并并行准备所有 QA execution/
+门；收齐 wave 和核实后，每快照唯一返修只接 QA FAIL、有效 P0/P1 与门审 P2。
+门审 P2 carry 不复审，P3 Seal advisory；QA Review P2/P3 以 suggestion ID 吸收后冻结且不
+复审；普通返修保持 FROZEN、固定 AFFECTED 执行，保证最终候选 Seal 前 FULL。仅需求含义/
+对外行为/判据/稳定可执行性变化可 THAW，临时环境失败用 RUNTIME_ERROR。
+
+非 wave 与 wave 的无效结果均终结原 attempt 并保留拒绝字段/原因，默认同 TaskKey 最多
+两次，耗尽 RETRY_EXHAUSTED；一次性用户追加 attempt 绑定 state revision 与非空理由，
+只改有限 retry policy/digest，不增基础槽位。追加再失败不扩张。相同 OPEN signature 续用、
+相同有效 PASS 不重派。finding 派生 guard source 只接 adjudication 完成且 wave 收齐后的
+有效 obligation/唯一 repair TaskKey；基础 source 保持 REQ-013。raw finding/result/receipt/
+resume 均不扩容，需确认的扩张先绑定确认 revision，预授权 repair 机械加入。
+
+额外返修 Ask 展示完整 findings/problems、逐条理由/归并、历史修复/验证、QA scope、
+已用/剩余额度、dispatch signature/TaskKey 与 cost/guard 可用性；授权绑定完整摘要 digest
+和 state revision。阶段 4 把 guard-preview.runtimeIntegration 从 NOT_INSTALLED 切换为
+权威 engine 集成状态，把修复摘要 engine allowance 从 UNAVAILABLE 切换为权威 projection；
+owner cost 与 token cap 的 UNAVAILABLE 各按自身来源/配置独立判断。
+
+requirement impact 迁移到 engine 唯一 writer：meaning-preserved 不发回退 Ask、保留产品审
+PASS；meaning-changed 在接纳新 revision 前 typed Ask，绑定影响预览 digest、state revision、
+base/candidate revision，展示回退后果/失效 PASS/额度。仅用户确认事件可授权原子回退，不
+重置额度或自动授权新产品审；旧 legacy 入口不得绕过。review-delta 内容确认与影响授权可
+共用一次覆盖两者的明确用户决定。
+
 范围：
 
 - 迁移 intake、产品审、技术审、start-readiness、start-readiness PASS 后的拓扑确认（no-split 需理由留痕）和 full/custom 路线；在 engine `State`/Controller 中接管按 master run + action kind 持久化的 `PreDevelopmentReviewSeries`，两个动作各自前三轮自动、超限 typed Ask 逐轮授权，legacy `internal/validate` 过渡字段不得继续作为第二权威。
-- 迁移开发、黑盒/白盒 QA、普通门、完整候选 freeze、validation-view reuse、promotion、repair 和开发后三轮规则；产品/技术审语义轮次、三类 pre-wave review series、开发后 repair wave 与 TaskKey `MaxAttempts` 四类计数必须保持独立。
+- 迁移开发、黑盒/白盒 QA、普通门、最终 FROZEN case-set/review-ready 屏障、完整候选 freeze、promotion、唯一 repair 和开发后三轮规则；产品/技术审语义轮次、三类 pre-wave review series、开发后 repair wave 与 TaskKey `MaxAttempts` 四类计数必须保持独立。
 - QA 接入必须消费阶段 3.5a 的覆盖契约：同一次需求/方案确认中登记
   `requiredSources`，每个适用 source 都有 acceptance point 或显式非 QA 验证处置，每个 point
   都有经批准的 case 映射，并形成逐 source/point/case review 与绑定当前
@@ -378,6 +411,9 @@ Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 
 
 Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终证据绑定同一不可变候选；旧稳定包在切换确认后退役。
 
+阶段 5–7 继承阶段 4 的 finding/problem ID、归并、唯一返修、门审 P3 advisory、QA 冻结/THAW
+和 requirement impact 用户授权合同；adapter 不重解释语义、不增加第二 writer。
+
 ## 4. 阶段依赖与并行边界
 
 正式阶段的主依赖为：
@@ -416,7 +452,7 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 每个阶段都要完整走该阶段自己的 formal-gates 流程并 Seal，但 Seal 的证据只要求本阶段已承诺的能力，不把尚未实现的最终公共面倒灌到早期阶段。以下 1–6、8–10 是所有阶段的共同条件；7、11、12 按“本阶段实际 surface”验收，最终公共面附加条件只在阶段 7 生效：
 
 1. 阶段需求、技术方案、范围和路线已按该阶段 formal-gates run 单独确认。
-2. 所有范围内 P0/P1/P2/P3 obligation 已按项目规则闭环，不存在未处置的阻塞结果。
+2. QA FAIL、有效 P0/P1 与门审 P2 obligation 按规则闭环；门审 P3 只 Seal advisory，QA Review P2/P3 冻结前吸收，不存在未处置的阻塞结果。
 3. `go test ./...`、package validation 和 portable canary 通过。
 4. 固定稳定插件的文档化正常入口 smoke 通过，且其安装内容未指向阶段开发 worktree；候选 `Lstat`/realpath、source/installed digest 和 host-path disjoint proof 通过。
 5. 本阶段新增能力在不可变候选安装中由实际 installed binary 执行，并在独立测试项目、host config、state/resource namespace 中完成端到端验证。

@@ -283,6 +283,13 @@ $HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <
 
 ---
 
+### 派发额度只读预览
+
+`formal-gates workflow guard-preview --input <basis.json>` 用生产 guard 核心输出规范化 basis、
+基础/重试/总额度与稳定 digest。完整 [输入 schema 与示例](references/guard-preview.md) 可直接
+用于 CLI 黑盒验证。它不创建 run、不写状态；成功只表示输入自洽，不认证真实确认或任务
+合法性。阶段 3.5b 固定输出 `runtimeIntegration=NOT_INSTALLED`，运行时止损留在阶段 4。
+
 ## 常见问题
 
 **我需要先读懂这些术语才能用吗？**
