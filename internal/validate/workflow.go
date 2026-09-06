@@ -883,6 +883,10 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 	var result ResetResult
 	_, err := mutateRun(root, runID, func(state *RunState) error {
 		result.RunID = state.RunID
+		if err := normalizeLegacyDevelopmentPlan(state); err != nil {
+			return err
+		}
+		previousRequirementRevision := state.RequirementRevision
 		catalog, err := requireCurrentCatalog(*state, packageRoot)
 		if err != nil {
 			return err
@@ -906,17 +910,32 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 		if dev, ok := state.Actions["development-worker"]; ok {
 			actions["development-worker"] = dev
 		}
+		if state.DevelopmentBatchPlan != nil && actions["development-worker"].Status != developmentComplete && actions["development-worker"].Status != developmentVerified {
+			actions["development-worker"] = ActionResult{Status: developmentPending}
+		}
 		state.Actions = actions
 		state.RequirementConfirmed = false
 		state.RequirementSource = source
 		state.RequirementRevision = revision
 		state.RequirementArtifacts = artifacts
+		if state.DevelopmentBatchPlan != nil && revision != previousRequirementRevision {
+			invalidateLegacyDevelopmentPlan(state)
+			state.Actions["development-worker"] = ActionResult{Status: developmentPending}
+		}
 		state.Gates = map[string]GateResult{}
 		for _, id := range catalog.GateIDs() {
 			state.Gates[id] = GateResult{Status: "PENDING"}
 		}
 		state.Carry = map[string]CarryResult{}
-		state.Dispatches = map[string]PreparedDispatch{}
+		completedBatches := map[string]PreparedDispatch{}
+		if state.DevelopmentBatchPlan != nil {
+			for id, dispatch := range state.Dispatches {
+				if dispatch.Target == "development-worker" && dispatch.BatchID != "" && dispatch.Status == "COMPLETED" {
+					completedBatches[id] = dispatch
+				}
+			}
+		}
+		state.Dispatches = completedBatches
 		state.DispatchObligations = map[string]DispatchObligation{}
 		state.RejectedResults = []RejectedResultReceipt{}
 		state.ReviewDeltaReceipts = []ReviewDeltaReceipt{}
@@ -954,6 +973,7 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 			"pre-repair snapshot boundary",
 			"split declaration and retained-overall / master binding",
 			"development action status",
+			"completed legacy development batch dispatches when the requirement revision is unchanged",
 			"route decision (route mode and selected gates)",
 		}
 		result.Reset = []string{
@@ -964,7 +984,7 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 			"gates and QA design / review / execution results",
 			"QA case-set freezes, review waves, canonical problems and P2 completion credentials",
 			"carry results",
-			"dispatches (stuck OPEN/CLAIMED cleared)",
+			"non-completed dispatches (stuck OPEN/CLAIMED cleared)",
 			"settled findings, review items, re-review marks",
 			"pre-development review series, raw candidates, adjudications, corrections, and extra-round grants",
 		}
@@ -1096,6 +1116,9 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 					}
 				}
 				rebindCurrentSnapshot(state, liveSnapshot)
+				if state.DevelopmentBatchPlan != nil {
+					state.DevelopmentBatchPlan.RequirementRevision = state.RequirementRevision
+				}
 				return nil
 			}
 			// Every meaning-changing revision rolls back effective results, including
@@ -2127,12 +2150,22 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 	})
 }
 
+type developmentBatchSnapshotInput struct {
+	BatchID      string
+	Verification string
+	Handoff      string
+}
+
 // AdvanceSnapshot records the development or repair snapshot. The snapshot gate
 // requires development complete 且 黑盒 qa-review PASS（两边都完成）；黑盒 review 未
 // PASS 时快照被挡。userRequested 是用户显式的手动放行授权（类比 --user-requested），
 // 记录授权来源到 SnapshotOverride，使黑盒门未通过时带风险继续；未获批准的黑盒用例
 // 验证状态视为 PASS、qa-execution 只覆盖已批准用例。
 func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested bool, reason string) (RunState, error) {
+	return advanceSnapshot(root, packageRoot, runID, dispatchID, userRequested, reason, developmentBatchSnapshotInput{})
+}
+
+func advanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested bool, reason string, batchInput developmentBatchSnapshotInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
@@ -2140,6 +2173,14 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		}
 		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
 			return err
+		}
+		if err := normalizeLegacyDevelopmentPlan(state); err != nil {
+			return err
+		}
+		if batchInput.BatchID == "" {
+			if err := guardFinalDevelopmentBatchSnapshot(*state, dispatchID); err != nil {
+				return err
+			}
 		}
 		currentSnapshot, err := resolveNativeSnapshot(root, state.VCS)
 		if err != nil {
@@ -2206,6 +2247,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			bindFrozenCaseSetsToSnapshot(state)
 			state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
 			completeDispatch(state, developmentDispatch.ID)
+			completeFinalDevelopmentBatch(state, developmentDispatch.ID, currentSnapshot)
 			return nil
 		}
 		// 白盒测试代码推进路径（方案 A）：host 已提交白盒设计者交付的结构测试代码，
@@ -2234,6 +2276,15 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			}
 			backfillDispatchCost(root, state, developmentDispatch)
 		}
+		if batchInput.BatchID != "" {
+			if state.RetainedOverall {
+				return fmt.Errorf("a retained overall snapshot cannot record a legacy development batch")
+			}
+			if err := requireDispatchSourceAncestorOfHead(root, *state, developmentDispatch); err != nil {
+				return err
+			}
+			return completeIntermediateDevelopmentBatch(state, developmentDispatch, currentSnapshot, batchInput)
+		}
 		// 快照黑盒门（等两边都完成）：黑盒 qa-review PASS 且 开发完成才可快照。黑盒
 		// qa-review 未 PASS 且此前没有用户放行时，只有用户显式授权可手动放行并记录授权
 		// 来源；已放行（SnapshotOverride 非空）后只延续绕过快照前 review 门，未批准用例
@@ -2254,6 +2305,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
 		if developmentDispatch.ID != "" {
 			completeDispatch(state, developmentDispatch.ID)
+			completeFinalDevelopmentBatch(state, developmentDispatch.ID, currentSnapshot)
 		}
 		if isRepair {
 			state.PreRepairSnapshot = oldSnapshot
@@ -2903,6 +2955,7 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	// meaning-changed 语义变更清空逐项审查表，全量重审；meaning-preserved 重绑
 	// 不清表（rebindCurrentSnapshot 不触碰本表）。
 	state.ReviewItemsByAction = map[string]map[string]ReviewItem{}
+	invalidateLegacyDevelopmentPlan(state)
 	state.Gates = map[string]GateResult{}
 	for _, id := range gateIDs {
 		state.Gates[id] = GateResult{Status: "PENDING"}

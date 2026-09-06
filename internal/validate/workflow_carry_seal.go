@@ -609,6 +609,10 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 // terminal checkpoint. Seal reaches this point only after all materialization
 // succeeds; a summary or cleanup interruption leaves SEALED state for retry.
 func completeTerminalRun(root string, state RunState) (RunSummary, error) {
+	// Abort and terminal retries can reach this point without preparing an action.
+	if err := normalizeLegacyDevelopmentPlan(&state); err != nil {
+		return RunSummary{}, err
+	}
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if !sliceInstance {
 		if err := SaveRunSummary(root, state); err != nil {

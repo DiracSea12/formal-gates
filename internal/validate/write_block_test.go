@@ -444,6 +444,31 @@ func writeRunStateForWriteBlock(t *testing.T, root, runStatus, developmentStatus
 	}
 }
 
+func TestWriteBlockTreatsPendingBetweenLegacyBatchesAsStarted(t *testing.T) {
+	root := t.TempDir()
+	runDir := filepath.Join(root, ".gates", "tmp", "batch-boundary")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]any{
+		"status":     "ACTIVE",
+		"actions":    map[string]any{"development-worker": map[string]any{"status": developmentPending}},
+		"dispatches": map[string]any{"d1": map[string]any{"status": "COMPLETED", "batchId": "A1"}},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(runDir, "state.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	active, started, err := readHookRunWritePhase(path)
+	if err != nil || !active || !started {
+		t.Fatalf("batch boundary phase = active %v started %v err %v", active, started, err)
+	}
+}
+
 // TestExplicitBashWriteTargetsSkipsRedirectTargets covers the P1 fix: 重定向目标
 // 不能被当成 cp/install/mv/tee/touch/mkdir/rm 的实参。cp internal/code.go
 // internal/out.go > /dev/null 的真目标必须是 internal/out.go，而不是重定向目标

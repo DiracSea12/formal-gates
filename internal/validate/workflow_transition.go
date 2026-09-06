@@ -332,7 +332,7 @@ func requireSealTransition(state RunState) error {
 }
 
 func developmentStarted(state RunState) bool {
-	return state.Actions["development-worker"].Status != developmentPending
+	return state.Actions["development-worker"].Status != developmentPending || hasCompletedDevelopmentBatch(state)
 }
 
 // isLightweight reports whether the run is on the lightweight route, declared at

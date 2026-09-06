@@ -442,14 +442,27 @@ func readHookRunWritePhase(statePath string) (active bool, started bool, err err
 		return false, false, err
 	}
 	var probe struct {
-		Status  string                  `json:"status"`
-		Actions map[string]ActionResult `json:"actions"`
+		Status     string                  `json:"status"`
+		Actions    map[string]ActionResult `json:"actions"`
+		Dispatches map[string]struct {
+			Status  string `json:"status"`
+			BatchID string `json:"batchId,omitempty"`
+		} `json:"dispatches"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return false, false, err
 	}
 	developmentStatus := strings.TrimSpace(probe.Actions["development-worker"].Status)
-	return probe.Status == "ACTIVE", developmentStatus != "" && developmentStatus != developmentPending, nil
+	started = developmentStatus != "" && developmentStatus != developmentPending
+	if !started {
+		for _, dispatch := range probe.Dispatches {
+			if dispatch.Status == "COMPLETED" && strings.TrimSpace(dispatch.BatchID) != "" {
+				started = true
+				break
+			}
+		}
+	}
+	return probe.Status == "ACTIVE", started, nil
 }
 
 // registeredHookArtifacts 读取 run 状态文件的 RequirementArtifacts 路径。

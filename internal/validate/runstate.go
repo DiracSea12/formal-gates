@@ -77,14 +77,19 @@ type RunState struct {
 	// the registry bridge that admitted this run. Empty values preserve the
 	// documented legacy state shape; production writes still require the
 	// invoking executable to be an active registered stable launcher.
-	AdmissionRegistry    string                       `json:"admissionRegistry,omitempty"`
-	AdmissionRecordID    string                       `json:"admissionRecordId,omitempty"`
-	AdmissionRoot        string                       `json:"admissionRoot,omitempty"`
-	AdmissionTarget      string                       `json:"admissionTarget,omitempty"`
-	AdmissionEpoch       uint64                       `json:"admissionEpoch,omitempty"`
-	AdmissionGeneration  uint64                       `json:"admissionGeneration,omitempty"`
-	AdmissionLease       string                       `json:"admissionLease,omitempty"`
-	AdmissionToken       string                       `json:"admissionToken,omitempty"`
+	AdmissionRegistry   string `json:"admissionRegistry,omitempty"`
+	AdmissionRecordID   string `json:"admissionRecordId,omitempty"`
+	AdmissionRoot       string `json:"admissionRoot,omitempty"`
+	AdmissionTarget     string `json:"admissionTarget,omitempty"`
+	AdmissionEpoch      uint64 `json:"admissionEpoch,omitempty"`
+	AdmissionGeneration uint64 `json:"admissionGeneration,omitempty"`
+	AdmissionLease      string `json:"admissionLease,omitempty"`
+	AdmissionToken      string `json:"admissionToken,omitempty"`
+	// DevelopmentBatchPlan is a compatibility bridge for active runs that were
+	// already registered by the short-lived serial-batch hotfix. New plans cannot
+	// be created through this build. The plan is immutable; progress is derived
+	// only from the existing development dispatch records.
+	DevelopmentBatchPlan *DevelopmentBatchPlan        `json:"developmentBatchPlan,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
 	SettledFindings      map[string][]SettledFinding  `json:"settledFindings,omitempty"`
@@ -247,6 +252,12 @@ type PreparedDispatch struct {
 	// semantic round. Runtime retries may share the same authorization.
 	ReviewAuthorizationID string `json:"reviewAuthorizationId,omitempty"`
 	UserRequested         bool   `json:"userRequested,omitempty"`
+	// Batch fields are used only while an already-registered legacy serial plan
+	// is being completed. Dispatch status remains the sole progress authority.
+	BatchID            string `json:"batchId,omitempty"`
+	CompletionSnapshot string `json:"completionSnapshot,omitempty"`
+	Verification       string `json:"verification,omitempty"`
+	Handoff            string `json:"handoff,omitempty"`
 	// TaskKey identifies the logical obligation while Signature identifies the
 	// exact authoritative input. Retries receive a new dispatch id but preserve
 	// both values. ResultStatus distinguishes immutable PASS/FAIL from a runtime
@@ -431,6 +442,7 @@ type RunSummary struct {
 	Cost                       *cost.RunCost                         `json:"cost,omitempty"`
 	QAOnlyRerun                *QAOnlyRerunRecord                    `json:"qaOnlyRerun,omitempty"`
 	RequirementGuarantee       *RequirementGuarantee                 `json:"requirementGuarantee,omitempty"`
+	DevelopmentBatches         []DevelopmentBatchRecord              `json:"developmentBatches,omitempty"`
 	DispatchObligations        map[string]DispatchObligation         `json:"dispatchObligations,omitempty"`
 	RejectedResults            []RejectedResultReceipt               `json:"rejectedResults,omitempty"`
 	ReviewDeltaReceipts        []ReviewDeltaReceipt                  `json:"reviewDeltaReceipts,omitempty"`
@@ -1206,7 +1218,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 }
 
 func runSummary(state RunState) RunSummary {
-	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts, ReviewWaves: state.ReviewWaves, PostReviewFindings: state.PostReviewFindings, Problems: state.Problems, P2CompletionCredentials: state.P2CompletionCredentials, GateP3Advisories: unresolvedGateP3(state)}
+	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DevelopmentBatches: developmentBatchSummary(state), DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts, ReviewWaves: state.ReviewWaves, PostReviewFindings: state.PostReviewFindings, Problems: state.Problems, P2CompletionCredentials: state.P2CompletionCredentials, GateP3Advisories: unresolvedGateP3(state)}
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"

@@ -1136,10 +1136,23 @@ func runWorkflowSnapshot(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
 	dispatch := fs.String("dispatch", "", "prepared Development or Repair dispatch id")
+	batchID := fs.String("batch-id", "", "current non-final batch id from an already-registered legacy serial plan")
+	verification := fs.String("verification", "", "verification evidence for an intermediate legacy batch")
+	handoff := fs.String("handoff", "", "handoff summary for the next legacy batch")
 	userRequested := fs.Bool("user-requested", false, "user explicitly releases the blackbox QA gate when it has not passed (records the authorization source)")
 	reason := fs.String("reason", "", "user reason for the manual blackbox gate release")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if strings.TrimSpace(*batchID) != "" {
+		if *userRequested {
+			return 1, fmt.Errorf("--user-requested applies only to the final development snapshot")
+		}
+		state, err := validate.AdvanceDevelopmentBatch(*root, *pkg, *runID, *dispatch, *batchID, *verification, *handoff)
+		return workflowResult(streams, *root, *runID, state, err)
+	}
+	if strings.TrimSpace(*verification) != "" || strings.TrimSpace(*handoff) != "" {
+		return 1, fmt.Errorf("--verification and --handoff require --batch-id")
 	}
 	state, err := validate.AdvanceSnapshot(*root, *pkg, *runID, *dispatch, *userRequested, *reason)
 	return workflowResult(streams, *root, *runID, state, err)

@@ -483,6 +483,13 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 前一 Batch 完成 DoD、验证和交接后，才准备下一 Batch 的新开发代理；契约、接口、依赖
 # 或 DoD 改变时暂停并重新做粒度审查。
 
+# 兼容说明：下列形式只用于完成短期旧补丁已经登记、且仍处于 ACTIVE 的串行计划；本版本
+# 不提供新计划登记入口，也不把该兼容桥当作 ADR-002 的完整 engine 接入。非最终 Batch
+# 只推进开发快照并解锁下一批，不打开开发后审查面，也不等待黑盒 QA Review。
+formal-gates workflow snapshot --root <repo> --package-root <package> \
+  --run-id <id> --dispatch <development-dispatch-id> --batch-id <batch-id> \
+  --verification '<evidence>' --handoff '<next-batch handoff>'
+
 # 记录开发后或修复后的不可变标识。快照门：开发完成 且 黑盒 qa-review PASS 两边都
 # 完成才允许固定快照，任一边未完成快照被挡；黑盒 review 未 PASS 时只有用户显式授权可手动
 # 放行（--user-requested + --reason，记录授权来源，非自动）。

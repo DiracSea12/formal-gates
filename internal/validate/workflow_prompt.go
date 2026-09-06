@@ -298,7 +298,13 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if err != nil {
 			return err
 		}
-		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested, TaskKey: taskKey, Signature: signature}
+		dispatch := PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested, TaskKey: taskKey, Signature: signature}
+		if targetKind == "action" && target == "development-worker" {
+			if _, batch, ok := activeDevelopmentBatch(*state); ok {
+				dispatch.BatchID = batch.ID
+			}
+		}
+		state.Dispatches[dispatchID] = dispatch
 		bindDispatchToReviewWave(state, state.Dispatches[dispatchID])
 		return nil
 	})
@@ -561,6 +567,9 @@ func prepareDevelopmentAction(root, packageRoot, runID string, userRequested boo
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
 		}
+		if err := normalizeLegacyDevelopmentPlan(state); err != nil {
+			return "", err
+		}
 		status := state.Actions["development-worker"].Status
 		if convergenceEnabled(*state) && (status == developmentComplete || status == developmentVerified) {
 			if err := ensureUnifiedRepairPlan(state); err != nil {
@@ -577,6 +586,8 @@ func prepareDevelopmentAction(root, packageRoot, runID string, userRequested boo
 			} else {
 				detail = repairInput(*state)
 			}
+		} else {
+			detail = developmentBatchPromptDetail(*state)
 		}
 		prompt, err := ComposeActionPrompt(catalog, "development-worker", route, detail)
 		if err != nil {
@@ -657,6 +668,8 @@ func composeDispatchPrompt(root string, state RunState, catalog PromptCatalog, r
 		status := state.Actions["development-worker"].Status
 		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
 			detail = repairInput(state)
+		} else {
+			detail = developmentBatchPromptDetail(state)
 		}
 		return ComposeActionPrompt(catalog, "development-worker", route, detail)
 	}
