@@ -93,6 +93,12 @@ generation 的 run；切换后旧 token/lease 由常规 admission 与版本校�
 
 同一矩阵还要覆盖 top-level 维护/transport 面：`hook`、`lifecycle capture/verify`、`canary`、`gate`、`install`、`uninstall` 和 `package`，以及 registry `admission/register/reconcile`、cutover、rollback 的受支持维护动作或内部 owner handler。逐项标明它是只读、只写外部 observation/receipt，还是委托 engine `submit`；生命周期事件可以写 observation buffer，但不得直接改变 workflow state，install/package 不得拥有 workflow writer。每个 registry/cutover 动作都必须记录 owner、generation/token、receipt schema、恢复入口和权限边界。所有这些入口都必须经过 registry launcher/lease 或 per-operation token，并有“绕过 submit、绕过 freshness、绕过 scope/host 隔离”的 negative tests。
 
+执行前准入矩阵同时列出原生子代理派发/恢复工具、工作流模型 CLI/API 和已声明 QA 操作的
+实际调用入口、前置校验点与绑定字段。要求见最终实施方案 §9.1.1、§12.1 第 14 项：执行前
+拒绝必须证明底层调用数为零，事后登记拒绝不能替代。本合同在 3.5c Seal 后补充：阶段 4
+接入 Controller 并验证首个真实宿主，阶段 6 覆盖五宿主，阶段 7 验证最终安装态；不追溯
+宣称 3.5c 或既有只读 guard-preview 已具有该能力。
+
 矩阵的 `start` 行不得引入任何拆分意向声明（无 `--split` 参数）：`start` 不接受也不冻结拆分意向；拆分绑定唯一发生在 start-readiness PASS 后的拓扑确认——split 需精确拓扑、no-split 需理由留痕，确认前用户可改变意向、确认后不得重切（变更走用户需求变化、reset/rebuild 或 abort）。阶段 4/5 的 no-split/split 出口都以该拓扑确认时点为准，不得恢复启动时声明，也不得用宽泛的“拆分决定”替代该唯一绑定点。
 
 ### 2.3.1 开发分块计划的引擎接入
@@ -364,6 +370,17 @@ base/candidate revision，展示回退后果/失效 PASS/额度。仅用户确�
   终态差值只作报告，不参与 in-flight guard。额度投影同时绑定 basis digest；相同输入重算
   不一致、账目无法对齐或将要超发时以 `BLOCKED_BUG` 零派发。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
+- Controller 唯一计算 QA 重跑与 FULL/AFFECTED：消费实际 guarantee、项目/路线规则、修复
+  类型和候选身份；纯门审 P2 无其他 FULL 义务时只签发 AFFECTED/合法继承。主代理理由、
+  final 标记、host override 和普通“继续”不产生 FULL、取消或 Seal 跳过授权。实际用户例外
+  经 typed Ask 绑定当前 run/revision/candidate/mode/scope，一次有效，不改默认规则。
+- 使用现有 pendingActions、CAS/intent 和 guard，为首个真实宿主接入执行前认领与校验，
+  绑定 actionID/TaskKey/Attempt、provider、payload、scope 和精确 case set；原生派发、模型
+  命令和 QA 操作的越界/无签发/重放/过期请求均须零调用。合法任务内请求沿用任务绑定，
+  不新增逐请求 TaskKey、第二账本或 daemon；未接入宿主不得宣称已具备该保证。
+- 验证 RUNTIME_ERROR 在合法有限重试/用户追加 Attempt 后能完整登记结果，原错误可追溯、
+  权威 PASS/FAIL 不被覆盖；非法执行尝试不污染已有通过结果、不增加审查轮次、不要求
+  Seal 跳过。该恢复路径与准入正反例一并纳入首个宿主 canary。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
 - 在一个真实宿主上跑 Git 非分片 full canary，覆盖至少一次 FAIL -> repair -> 新候选 -> 重验 -> Seal。
 - 对所有仍保留的 legacy 公开写命令执行 route matrix：每个命令只能转发到对应 engine handler 或明确返回 unsupported；不得直接写 engine state、调用公开 cleanup 或绕过 `submit`。同一 run 交替调用旧入口与 engine 入口的 negative tests 必须证明 writer/schema/definition 绑定不可改变。
@@ -400,6 +417,11 @@ Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流�
 - 按同一 VCS adapter 契约实现 SVN 的 working copy、revision/property、integrate/commit、candidate identity、receipt 和 cleanup。
 - 按同一 VCS adapter 契约实现 P4 的 client/workspace、changelist/filetype/view、integrate/submit、candidate identity、receipt 和 cleanup。
 - 完成 Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的 provider identity、bridge、dispatch、lifecycle、resume/terminate 和 receipt 对账。
+- 对五宿主逐项完成执行前准入矩阵，使用实际工具前 hook/执行器覆盖原生派发/恢复、工作流
+  模型 CLI/API 和已声明 QA 操作，不能保留同类裸入口绕过。逐宿主运行最终方案 §12.1
+  第 14 项的零调用反例和合法 AFFECTED、真实最终 FULL、一次用户例外正例；记录实际
+  provider/入口/绑定/拒绝位置与底层调用数。入口能力不足必须明确 unsupported 并拒绝进入
+  该执行模式，不能用仅登记时拒绝、提示词自律或 hook 已配置替代实机证据。
 - 各 host 明确 transcript/usage 能力；无法核对的 owner 或 dispatch 记 `UNAVAILABLE`，仍受
   request/attempt guard，不为 host 单独引入预算算法。
 - 每个 host canary 必须使用候选专属 host home/config、hook/managed-rule 路径和 state/resource roots，并记录 canonical-path disjoint proof；不能调用固定全局 binary、全局 hook 或稳定 host home。
@@ -419,6 +441,9 @@ Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 
 
 - 将仍需的旧能力内收为 engine handler 后，删除旧公开推进命令、别名、运行时兼容 decoder/migration、legacy mode、authority handoff、legacy QA、过渡 façade 和公开 cleanup；保留仅供 `diagnose` 使用的最小 raw/envelope parser、terminal summary fallback，以及维护面允许保留的 hook/lifecycle/canary 和 `write_block` 辅助边界。
 - 最终清理扫描必须确认 executable definition 中不存在 `MISSING_ENGINE_ADAPTER` 或 `BLOCKED_BUG` marker 伪装成可执行路径；`REQUEST_REQUIREMENT_CHANGE` 的两阶段 barrier、`REVIEW_FINDING_FIX` 的新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据都必须绑定最终 candidate。
+- 最终安装态逐项核对执行前准入矩阵，全部受支持入口的零调用反例和合法正例绑定同一
+  post-integration candidate/installed target；原生派发和命令入口无工作流旁路。复用既有
+  canary 单元格承载验证，不因该要求新增审查角色、轮次或可自由扩大范围的 QA 入口。
 - 在最终公共面真正可用后，同步切换 `SKILL.md`、README、references、prompts、catalog 和测试；不得保留指导用户调用已删除入口的文档。
 - 同步清理成本口径：保留“精确或 unavailable、无估算、无第二账本”，并更新 owner 报告、
   engine source bridge/guard、额度 Ask/Wait、retry 算术和分片 owner 汇总的说明。
@@ -485,6 +510,10 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 12. 本阶段涉及的 runtime、hook/config、managed-rule、pointer、provider/bridge 和 recovery journal 故障窗口有可恢复证据；阶段 0 验证安装/registry bootstrap，阶段 1–6 验证候选 namespace，阶段 7 才执行最终原子全局切换和逐 host post-switch smoke。
 
 阶段 7 在上述共同条件之外还必须同时满足：最终 executable definition 不存在 `MISSING_ENGINE_ADAPTER/BLOCKED_BUG` marker；`REQUEST_REQUIREMENT_CHANGE` 两阶段 barrier、`REVIEW_FINDING_FIX` 新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据齐全；当前/最终完整 route matrix 和所有 engine writer/legacy launcher fencing 路径通过；最终十条 canary、registry inventory、原子全局切换、逐 host post-switch smoke 和旧 stable 退役证据全部绑定同一 post-integration candidate。
+
+执行前准入属于阶段 4 首宿主、阶段 6 五宿主和阶段 7 最终安装态的退出条件：已编码流程
+规则必须在实际执行前强制，越界调用为零，合法操作无需逐步确认；未覆盖入口不得标记
+支持。该结论不等于保证模型判断或实现语义永远正确，仍保留既有 Operator 核实职责。
 
 阶段记录至少保存：
 

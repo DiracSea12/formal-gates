@@ -1,0 +1,651 @@
+{
+  "runId": "stage-3-5c-qa-efficiency",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319",
+  "basePromptRevision": "b5fa77191e0fed2361799a2781ca080a3bd3ccbe9094396471aa312bb06f3bfc",
+  "catalogRevision": "c8095b748c56ef854da12e9bb85568d7b7531c374f6b8d50085589e09938ff2f",
+  "vcs": "git",
+  "baseSnapshot": "fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e",
+  "currentSnapshot": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+  "requirementArtifacts": [
+    {
+      "path": "refactor-plan/stage-3-5c-requirement.md",
+      "revision": "2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "技术审已记录 single Batch B1：S1 共同说明/增量审查/建议处置 → S2 批量/脚本/进度续跑 → S3 白盒复用/最终候选/Seal → S4 文档合同/综合验证/成本对比/隔离交付。共享 QA 契约、审批及执行状态和最终候选身份，没有独立交付/切换边界，保持同一开发代理连续执行。改拆将增加契约、状态、候选和隔离验证交接成本；如出现实质范围/行为/验收/架构变化，再按既有确认规则处理。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {},
+  "completedReviewWaves": 3,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "sourceSnapshot": "aae428b396a7df7c8b19037e0fb578f70e8add23",
+      "compared": "fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e..47df6b3f6a1d74a45e49c073e383f356c1506bb1",
+      "dispatchId": "dispatch-98606ef83f56124480e1907a"
+    },
+    "implementation-quality-gate": {
+      "status": "PASS",
+      "snapshot": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "sourceSnapshot": "aae428b396a7df7c8b19037e0fb578f70e8add23",
+      "compared": "fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e..aae428b396a7df7c8b19037e0fb578f70e8add23",
+      "findings": [
+        {
+          "severity": "P2",
+          "message": "共享步骤在合法的空 mode → blackbox 快速路径中丢失：预开发 qa-design 未指定 mode 保存共同说明及 blackbox case；启动开发后按规则 qa-review --mode blackbox，用例由合并键回退而共享定义未回退。提示词缺共同过程；提交共享判定报 all 0 pending shared steps，不提交报 shared step fixture is not approved。通过显式 blackbox 重新登记共同定义可恢复，故为 P2。根因是共享查询、审查与提示词未采用与用例相同的实际存储键。主代理在 aae 独立验证 checkout 经公共 CLI Run() 和全新临时 fixtures 复现并验证规避；不手改 state，未修改候选。证据 /tmp/formal-gates-stage35c-repair1-evidence/root-fastmode-repro/receipt.json 及 raw.log。REQ-001 范围内，正常路径，因果与 P2 定级已核实；本轮新问题 NEW，与上轮三个根因不同。纯门审 P2 按已授权流程必须修复、不复审本门。",
+          "locations": [
+            "internal/validate/qa_efficiency.go:19",
+            "internal/validate/qa_efficiency.go:102",
+            "internal/validate/workflow_prompt.go:416"
+          ]
+        }
+      ],
+      "dispatchId": "dispatch-9b9b23be2c2764f29778afa3"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "PASS",
+    "snapshot": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "cases": [
+      {
+        "caseId": "CASE-001",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "在新隔离 manual run 真实 Codex qa-design；登记共享 show/read 与三用例，向 CASE-002 注入 SEALED oracle；实际独立审查后修正，再改单条、采纳并修改共享说明，逐次实际独立重审。核对每次实际 Git 身份与完整 canonical 输入。",
+        "observation": "初审 CASE-002 FAIL、001/003 PASS；修正只待审002，单条修改只待审001；共享修改使001/002待审，003保持PASS；所有后续必要审查完成。主项目增加 fixture Go 开发文件时 QA 工作区 HEAD 仍为 fbf9941563142c028b911a70dda93de9c66a019d，diff/untracked为空。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/case001-009-audit.json; /tmp/stage35c-blackbox-fba9c6eb/manual/commands.jsonl; /tmp/stage35c-blackbox-fba9c6eb/model; /tmp/stage35c-blackbox-fba9c6eb/manual/evidence-gates-before-seal",
+        "oracleResult": "唯一共享内容及稳定引用成立；错误 oracle 被拒；受影响范围精确，覆盖双向完整；设计与审查实际隔离均成立。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-002",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "复核本候选单次 stage 构建和公开 copy 批次的逐命令 stdout/stderr/exit/order。",
+        "observation": "1 次构建、1 次模板准备、4 个干净副本；修改副本为 changed，其余独立读取 original；重复输出目录实际 exit 1、依赖步骤未执行，其后的独立读取成功；新增逻辑任务数0。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-10380f57/batch/results.json; /tmp/stage35c-blackbox-10380f57/batch/commands.jsonl; /tmp/stage35c-blackbox-10380f57/stage.json",
+        "oracleResult": "候选与准备复用、独立状态隔离及失败后继续均满足。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-003",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "按公开 fixture 构造受理与已批准用例等高成本前置；核对 observe_show.py 四次真实 CLI 调用及同版本记录，使用 SEALED 已知错误 oracle 验证失败。",
+        "observation": "前置构造不含 show 的目标结果；四次实际脚本退出为0、1、0、0；错误样例明确 AssertionError，登记结果保留 FAIL；同一 observe-show-v1 用于适用副本/续跑，未重新做设计审批。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-10380f57/execution_fixtures.py; /tmp/stage35c-blackbox-10380f57/observe_show.py; /tmp/stage35c-blackbox-10380f57/progress/commands.jsonl",
+        "oracleResult": "构造与实跑分离；关键判据能发现已知错误，失败未吞掉；未变脚本合法复用。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-004",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "逐例真实 PASS/FAIL checkpoint；第三条正常 SIGINT，第四条不启动；登记中断后续跑只调用第三、四条。",
+        "observation": "中断明确 pendingCases=[CASE-003,CASE-004]；原001 PASS、002 FAIL完整保存，最终四条为PASS/FAIL/PASS/PASS，整组FAIL。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-10380f57/progress/checkpoint.json; /tmp/stage35c-blackbox-10380f57/progress/partial-command.json; /tmp/stage35c-blackbox-10380f57/progress/interrupted.json; /tmp/stage35c-blackbox-10380f57/progress/completed.json",
+        "oracleResult": "半途及未启动条目不能继承PASS；只补缺项且原FAIL未被覆盖。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-005",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "核对四个独立正常变更场景：原生候选提交、qa-thaw/qa-design改单条、实际脚本版本变化、实际locale环境变化；通过公开续跑入口重跑。",
+        "observation": "四维均产生 binding 失效原因和实际重跑命令；单条修改保留无关CASE-002；候选/工具/环境绑定按公开全局影响规则使旧结果失效。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-10380f57/candidate-change/commands.jsonl; /tmp/stage35c-blackbox-10380f57/case-change/commands.jsonl; /tmp/stage35c-blackbox-10380f57/physical-tool-change/commands.jsonl; /tmp/stage35c-blackbox-10380f57/physical-environment-change/commands.jsonl",
+        "oracleResult": "被影响的旧结果未直接当成新候选通过证据；允许复用者保留并有原因，无任意扩大。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-006",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "核对缺失/重复/未知结果实际登记，授权跳过记录，以及正常中断恢复至有限重试上限并授权最终attempt。",
+        "observation": "三种错误分别明确报告 missing CASE-004、duplicate CASE-001、unknown CASE-999；同TaskKey第1/2次后RETRY_EXHAUSTED(2/2)，授权第3次仍同TaskKey；授权跳过保持RUNTIME_ERROR及skipAuthorizations，未计为执行PASS。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-10380f57/set-integrity/commands.jsonl; /tmp/stage35c-blackbox-10380f57/authorized-skip/authorized-skip.json; /tmp/stage35c-blackbox-10380f57/coverage/commands.jsonl",
+        "oracleResult": "expected-set、skip语义和既有有限额度均保留，没有新编号扩容。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-007",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "复核两个独立最小项目在本候选中的真实白盒设计派发、按顺序独立判断行为/oracle后读取断言的原生记录、真实go test与提交/快照。",
+        "observation": "A独立绑定并运行既有3条有效测试，filesChanged为空、原快照不变。B既有全绿但错误positive断言、缺zero分支被识别；修正后TestPositive真实失败，样例实现修复后3条真实通过，修改测试提交7fcd167进入测试快照。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/case007-audit.json; /tmp/stage35c-blackbox-10380f57/whitebox-a/design-recorded.json; /tmp/stage35c-blackbox-10380f57/whitebox-b/tests-snapshot.json; /tmp/stage35c-blackbox-10380f57/whitebox-b/commands.jsonl; /tmp/stage35c-blackbox-10380f57/model/dispatch-7ff024cf00ac1c5b2b56be4a; /tmp/stage35c-blackbox-10380f57/model/dispatch-4b2e93c7e1d638e69ede4361",
+        "oracleResult": "有效覆盖真正复用，错误断言/缺口未因全绿放行；测试引用和实际执行对应；用例未要求追加QA Review或Seal，未额外补跑。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-008",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "复核公开qa-review/qa-suggestion三种处置；未处置时推进冻结拒绝，补齐后冻结；独立未知ID/缺理由输入。",
+        "observation": "三条稳定ID保持对应，ACCEPT/DEFER/DECLINE均有理由；剩PENDING时REVIEWED_PENDING_SUGGESTIONS并拒绝review-wave，全处置后FROZEN且允许推进；未知ID、缺理由退出1。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-10380f57/suggestions/commands.jsonl; /tmp/stage35c-blackbox-10380f57/suggestions-freeze/one-undisposed.json; /tmp/stage35c-blackbox-10380f57/suggestions-freeze/frozen.json",
+        "oracleResult": "不强迫延期/不采纳修改用例；非法或未处置不能完成，覆盖通过后可冻结。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-009",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "新建独立缺覆盖、缺准备、错误oracle场景并分别真实Codex qa-review；缺陷保留时尝试建议处置；共享路径建议采纳后正常编辑并重审；复用当前候选门/产品/技术建议路径真实证据。",
+        "observation": "A的AC-003无用例被定位；B的cat因输入未准备实际退出1；C的SEALED oracle违反ACTIVE需求；三组审查FAIL、建议处置后仍DRAFT。共享变化使001/002重审而003继承。门P2/P3仍以gate来源保留，QA建议入口不能替代其处置；产品/技术仍使用settle-findings。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/case001-009-audit.json; /tmp/stage35c-blackbox-fba9c6eb/missing-coverage/defect-disposition.json; /tmp/stage35c-blackbox-fba9c6eb/missing-steps/defect-disposition.json; /tmp/stage35c-blackbox-fba9c6eb/manual/defect-disposition.json; /tmp/stage35c-blackbox-10380f57/gate-policy-wave/commands.jsonl; /tmp/stage35c-blackbox-10380f57/gate-policy-wave/adjudicated.json",
+        "oracleResult": "三类独立拒绝均有证据且不能被可选建议绕过；case FAIL未自动升级P1，缺完整验收覆盖的P1有独立理由；采纳影响范围及原门/前置审规则保留。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-010",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "在manual Git fixture按公开开发/白盒设计登记与snapshot链生成实现及补测提交，实跑结构测试；prepare-candidate后完成黑白盒FULL。再正常提交影响read路径的实现修改，尝试Seal，采纳外部提交并整理，尝试AFFECTED，完成强制FULL后Seal。开发/前置review生命周期是明确标注的隔离fixture材料，目标CLI、Git、测试与Seal均真实运行。",
+        "observation": "白盒测试已提交并纳入最终候选；验证后改HEAD不能Seal。最终候选AFFECTED被明确拒绝：仅中间返修允许该范围；本次按最终FULL继续；黑白盒重新完整执行后Seal成功，前后HEAD相同且blackbox-cases产物生成。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/manual/commands.jsonl; /tmp/stage35c-blackbox-fba9c6eb/manual/whitebox-test-snapshot.json; /tmp/stage35c-blackbox-fba9c6eb/manual/final-candidate.json; /tmp/stage35c-blackbox-fba9c6eb/manual/changed-candidate-seal-rejected.json; /tmp/stage35c-blackbox-fba9c6eb/manual/final-affected-blackbox-rejected.json; /tmp/stage35c-blackbox-fba9c6eb/manual/final-affected-whitebox-rejected.json; /tmp/stage35c-blackbox-fba9c6eb/manual/final-full-blackbox.json; /tmp/stage35c-blackbox-fba9c6eb/manual/final-full-whitebox.json; /tmp/stage35c-blackbox-fba9c6eb/manual/seal-identities.json",
+        "oracleResult": "最终整理先于最后必需验证，变化不能直接继承旧完整通过；最终FULL及同一identity Seal成立。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-011",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "核对本候选真实stage/build，旧live-final与本轮三个新namespace实际安装、公开package validate、四个新增QA入口实跑、原生宿主调用和运行路径清单。",
+        "observation": "安装启动器与已构建候选逐字节一致；包内无软链，host/config/state/registry均位于各自隔离路径。稳定formal-gates registry/hooks/launcher/manifest一致；长会话中的全局Codex config有原生project trust元数据变化，未声称全文件不变，也未归为候选写入。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/case011-install-audit.json; /tmp/stage35c-blackbox-fba9c6eb/manual/installed-package-validation.json; /tmp/stage35c-blackbox-fba9c6eb/stable-comparison.json; /tmp/stage35c-blackbox-10380f57/live-final/installation.json; /tmp/stage35c-blackbox-10380f57/live-final/commands.jsonl; /tmp/formal-gates-stage35c-p2-evidence/native-project-trust-observation.json",
+        "oracleResult": "已提交候选实际安装且能力可用，无全局formal-gates切换或正式run驱动；原生宿主元数据与产品安装写入范围如实区分。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-012",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "逐项读取候选SKILL/formal-flow/中英README/QA提示词/路由矩阵/阶段4计划；对照当前实际CLI证据；复核coverage合同与engine smoke实际调用输出。",
+        "observation": "共同说明、增量审查、三种建议处置、绑定续跑、白盒复用、最终候选顺序与公开入口相符；coverage完整对账保留；engine envelope writer=engine/schema=1/definition=2，未回落legacy；阶段4 regular迁移仍为后续范围。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/case012-document-map.md; /tmp/stage35c-blackbox-10380f57/coverage/commands.jsonl; /tmp/stage35c-blackbox-10380f57/coverage/contract.json; /tmp/stage35c-blackbox-10380f57/engine-smoke.json",
+        "oracleResult": "公开材料和当前能力一致；保留覆盖、单一cost、有限额度及黑盒隔离边界。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-013",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "复核优化前固定源码与当前候选的六阶段真实Codex原始调用；重新执行只读对账脚本，按response ID与原生task时间逐请求核对既有cost；比较相同两用例与两个已知缺陷、准备/中断/Seal重复次数。",
+        "observation": "两版均gpt-6-astra/xhigh；六阶段四类token和task墙钟都有实际来源并完全对账。逻辑QA派发6→3，真实show观察5→2；两条用例和wrong-oracle/incomplete-set均保留。总墙钟239.370→143.178秒，含工具等待、排除turn间空闲；总输入168995→210033，未宣称token必然减少。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reconciled-comparison.json; /tmp/stage35c-blackbox-fba9c6eb/reconcile_reused.py; /tmp/stage35c-blackbox-10380f57/live-final.log; /tmp/stage35c-blackbox-10380f57/live-final/codex; /tmp/formal-gates-stage35c-codex/baseline-installed",
+        "oracleResult": "全部必需计量完整，无unavailable/估算补零；可避免重复减少且覆盖/缺陷发现不减少，满足不要求固定倍率的oracle。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-014",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "核对本候选已有完整构建/full/race/phase0whitebox/vet/package/canary/diff原始命令与结束状态；逐套检查指定历史测试run/pass；复用本轮CASE-031最低层正反例，原生Git读取声明base/delivered与当前历史文档。",
+        "observation": "所有检查exit0且绑定517de91；历史checkpoint在full/race/phase0whitebox均RUN并PASS。低层正常追加及后续工作树变化通过；stage runtime路径越界、历史内容改写分别被原规则拒绝；原历史base→delivered前缀保留，delivered之后存在文档变化。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/case014-audit.json; /tmp/formal-gates-stage35c-p2-evidence/verification.json; /tmp/formal-gates-stage35c-p2-evidence/checks; /var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-031.log",
+        "oracleResult": "AC-020三个映射齐全、正常对照与两项独立拒绝有直接低层输出；最终candidate identity不变，无跳过/未完成。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-015",
+        "mode": "blackbox",
+        "outcome": "PASS",
+        "procedure": "逐请求对账本候选真实宿主来源与现有cost；核对尚未绑定、真实来源绑定后和临时来源重放同一真实事件后的公开结果。",
+        "observation": "未绑定QA来源时无已完成必需计量；绑定后从真实rollout取得110580输入/97280缓存/13300非缓存/4028输出。临时副本含重复真实request事件，按response ID唯一计数；再次stop/刷新前后cost完全一致；六阶段来源及timing另独立对账。 原始证据：/tmp/stage35c-blackbox-fba9c6eb/reused-audit.json; /tmp/stage35c-blackbox-fba9c6eb/reconciled-comparison.json; /tmp/stage35c-blackbox-10380f57/manual/cost-before-source.json; /tmp/stage35c-blackbox-10380f57/manual/cost-after-source.json; /tmp/stage35c-blackbox-10380f57/manual/cost-after-replay.json; /tmp/stage35c-blackbox-10380f57/model/dispatch-ee06c2814b9910c63628bf96/duplicate-source.jsonl",
+        "oracleResult": "真实source→既有cost路径、派发/阶段/请求归属及缓存分类正确；重复事件和再次处理不重复累计，缺来源未冒充完成。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-016",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentSharedApprovalInvalidation$' -count=1 -v",
+        "observation": "目标测试 RUN/PASS；相同共同内容保留原记录和逐例审批，变更 prepare 后 A/B 为 PENDING、A 批准来源清除、C 完整继承，共同记录总数仍为 2；未知引用校验返回错误。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-016.log",
+        "oracleResult": "相同内容继承、变更引用者失效、独立用例保留及未知引用拒绝的指定结构断言通过。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-017",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentSharedReviewExactSet$' -count=1 -v",
+        "observation": "missing、unknown、empty reason、duplicate、approved redecision 五分支均 PASS；合法 FAIL 被保存，已有批准理由 prior decision 保留。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-017.log",
+        "oracleResult": "无效决策集合均拒绝；合法 FAIL 和既有逐记录批准不相互覆盖。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-018",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentFixtureBuildAndCopy$' -count=1 -v",
+        "observation": "指定测试 PASS；真实 stage/copy、两个副本二进制执行、干净状态隔离、已有目录拒绝、未知提交拒绝与已提交编译错误检查均通过。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-018.log",
+        "oracleResult": "stage 绑定临时真实提交且 buildCount=1；两个副本均输出 immutable candidate；归档/构建失败不报告准备成功。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-019",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentCheckpointResumePreservesResults$' -count=1 -v",
+        "observation": "指定测试及 already complete、unknown、duplicate new 子例均 PASS；初始两条完整结果、pending 仅 C；补 C 后保留 B 的 FAIL；PENDING/AUTHORIZED_SKIP 历史行被排除。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-019.log",
+        "oracleResult": "完整 PASS/FAIL 可复用且仅补缺项；重复、未知与非完成结果没有被计为完整执行。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-020",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentProgressBindingsAndEvidence$' -count=1 -v",
+        "observation": "candidate、requirement、tool、environment、one case、shared prerequisite、incomplete evidence、sentinel evidence 八分支均 PASS；仅审查元数据改变仍复用两行；缺 tool 被拒。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-020.log",
+        "oracleResult": "全局改变失效全部旧行，局部改变/坏证据仅排除 A 并保留 B 的完整 FAIL；失效原因数与受影响集合相符。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-021",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentSuggestionDispositionAndFreeze$' -count=1 -v",
+        "observation": "ACCEPT/DEFER/DECLINE 及 unknown、missing reason、invalid decision 六子例均 PASS；全部处置前未冻结、处置完成后绑定当前候选冻结；影响 A 的采纳令 A/模式审查 PENDING，B 仍 PASS。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-021.log",
+        "oracleResult": "三类有理由处置有效，无效输入拒绝；未处置建议和待批准 A 均不能被冻结绕过。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-022",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentWhiteboxSnapshotReuse$' -count=1 -v",
+        "observation": "指定测试 PASS；已登记且无变动的测试通过并保持 HEAD；未提交测试变动及已提交但未登记的快照均拒绝；登记新快照后通过。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-022.log",
+        "oracleResult": "复用不强制新建测试或提交；候选外测试不能直接获准审查。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-023",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentPrepareCandidateIdentity$' -count=1 -v",
+        "observation": "指定测试 PASS；缺 message 被拒且 HEAD 不变；PrepareCandidate 实际将基线后的两提交整理为一提交，tree 相同而 candidate 改变；旧 QA/quality 为 PENDING，case-v1 保留重绑；重复调用不推进。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-023.log",
+        "oracleResult": "先整理候选、使旧验证失效、保留冻结用例身份与幂等性全部符合指定断言。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-024",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentSealPreservesVerifiedIdentity$' -count=1 -v",
+        "observation": "1 commits 与 2 commits 两子例均 PASS；单提交 Seal 成功且黑盒产物含 materialized independent case；多提交 Seal 返回含 prepare-candidate 的错误；两者 HEAD 均不变。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-024.log",
+        "oracleResult": "Seal 保留已验证候选并物化产物；未整理多提交被拒，未使用传入 squash message 生成新候选。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-025",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/coverage -run '^TestQA35CIndependentEngineSharedCoverage$' -count=1 -v",
+        "observation": "正常合同产生 2 条批准边；missing shared review、failed case with approved common step、missing per-case review、unknown shared reference、missing coverage edge、duplicate whitebox binding、empty whitebox binding 七子例均 PASS；共享 procedure 改变后 manifest digest 改变。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-025.log",
+        "oracleResult": "共同批准不替代逐 source/point/case 审查、覆盖和唯一非空白盒引用；可执行共同内容参与身份绑定。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-026",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/engine/coverage -run '^TestQA35CIndependentEngineExecutionPartition$' -count=1 -v",
+        "observation": "FULL 正常报告与有来源/理由的 AFFECTED 继承通过；new candidate、missing row、duplicate row、unknown row、fail row、pending row、authorized skip、inherited on FULL 八子例均 PASS；移除 AFFECTED 继承证据后拒绝。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-026.log",
+        "oracleResult": "expected-set、候选身份、完整 PASS 与 FULL/AFFECTED 继承边界均保持；授权跳过没有计作 PASS。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-027",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/cost -run '^TestQA35CIndependentCodexRequestsAndMirrors$' -count=1 -v",
+        "observation": "指定测试 PASS；结构 JSONL 中重复 response-a 及旧镜像未重复累计，首组缓存/非缓存/输出为 50/130/20；相同计数的不同 response 得 60/160/24。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-027.log",
+        "oracleResult": "按 response ID 去重而非按数值合并；reasoning 输出未被额外叠加。仅为结构样例验证。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-028",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/cost -run '^TestQA35CIndependentCodexUpgradeAndLegacyCounters$' -count=1 -v",
+        "observation": "matching first request mirror、older prefix then new request、legacy cumulative repeated timestamp 三子例均 PASS，均断言缓存/非缓存/输出为 50/130/20；只有 session metadata 的输入被拒。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-028.log",
+        "oracleResult": "升级衔接保留有效旧前缀并消除首请求镜像重复；无 usage 不被作为测得零。仅为结构样例验证。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-029",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/cost -run '^TestQA35CIndependentCodexNativeTaskTiming$' -count=1 -v",
+        "observation": "指定测试 PASS；原生任务边界断言 StartedAt=2026-09-01T00:00:00Z、CompletedAt=2026-09-01T00:00:26Z、WallTimeMillis=10000；追加未结束任务后计时返回错误。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-029.log",
+        "oracleResult": "4 秒完成任务与 6 秒中止任务相加，重复边界与 16 秒轮间闲置不累计；未完成任务无完整计时。仅为结构样例验证。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-030",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentCodexSourceProjection$' -count=1 -v",
+        "observation": "指定测试 PASS；真实 lifecycle 绑定/采集与 backfill 调用取得 fixture rollout 路径，缓存30、非缓存60、总输入90、输出8、原生时间4000ms；两次 backfill 后总输入仍90；未绑定项 unavailable 且无 timing。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-030.log",
+        "oracleResult": "Codex 来源解析、单一 cost 投影和幂等性符合指定断言；缺少来源不伪造完成计量。仅为结构样例验证。",
+        "origin": "executed"
+      },
+      {
+        "caseId": "CASE-031",
+        "mode": "whitebox",
+        "outcome": "PASS",
+        "procedure": "go test ./internal/validate -run '^TestQA35CIndependentHistoricalCheckpointOracle$' -count=1 -v",
+        "observation": "四个外层子例均 PASS。实际执行提取的原历史检查函数：固定快照正常追加且随后改写工作树时 PASS；三个负例分别实际输出 stage 4 runtime touched: internal/engine/runtime/check.go、ADR changed: refactor-plan/ADR-001.md、stage record history changed instead of checkpoint append。 原始日志：/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-p2-whitebox-0zpe6ucy/CASE-031.log",
+        "oracleResult": "固定同一快照对消除后续工作树干扰，且阶段、ADR、历史正文三项既有拒绝规则保留；负例确因对应规则失败，没有用编译错误替代。",
+        "origin": "executed"
+      }
+    ]
+  },
+  "cost": {
+    "totalInputTokens": 0,
+    "inputCacheHitTokens": 0,
+    "inputCacheMissTokens": 0,
+    "outputTokens": 0,
+    "dispatches": {
+      "dispatch-0ab7483551df13b4aaf54110": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-0d1da8aa132a5cdbd1553c39": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-10380f573c86d67264a446ef": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-15f71bbee5cdd771c942d46d": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1dd0924c5c974371c8a4a210": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-299c98eb4e7ada20b6f4e15a": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-2c2566e670a3dcbbf4848c38": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-3fdbeee2a5ea492aa3dbf1c9": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-441291fdab0d604928c2dcba": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-4a55dc0483fbcb8116650da8": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-59cf64d8d68eab6c412834a0": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-5bbcaaa1fe1c589ca4d963ce": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-671ef61785a7bbde2720d489": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-683c8d49c5761bafd8b5ae74": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7540c50bf0227e334e9828da": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-7c87ab80fc0904d4bea2d83b": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-94ad58c8fa7c61a24eb82abd": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-960dbae80eae447912251b7c": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-98606ef83f56124480e1907a": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9a69b1d1d46176f79e82f238": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9b9b23be2c2764f29778afa3": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9d2aa161f6cb04590f8d2d38": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-9f709d7e298ade5110256c2c": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a14f3bbff2117e35dccb7f38": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-a95de8f630d6390889e528e8": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-be184e02d4a3b2ef7a96b260": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-cb42af60f339a817f5c648d7": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-d16b1e3864e4250dc8761e73": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fa5d9b2b806ec5a5bd6697b6": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fa78ad6981a546ec711ab1f4": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fba9c6eb08e67c69ab9d2d95": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fc078c7b326fbc58ac94c4c2": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fe5e98b16a01d4c5b48f60bc": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  }
+}

@@ -1,0 +1,671 @@
+{
+  "stage": "3.5c",
+  "runId": "stage-3-5c-qa-efficiency",
+  "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+  "requirementRevision": "2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319",
+  "seal": {
+    "command": [
+      "/tmp/formal-gates-stage35c-driver-retry-proposal/bin/formal-gates",
+      "workflow",
+      "seal",
+      "--root",
+      "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c",
+      "--package-root",
+      "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stable-driver-phase-0-v2",
+      "--run-id",
+      "stage-3-5c-qa-efficiency"
+    ],
+    "exitCode": 0,
+    "stderr": "",
+    "before": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "after": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "candidateUnchanged": true,
+    "stateRemoved": true,
+    "driverExceptionApproval": "/tmp/formal-gates-stage35c-p2-evidence/driver-exception-approval.json",
+    "sealedAt": "2026-09-06T20:44:23.669910+00:00",
+    "summary": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c/.gates/results/stage-3-5c-qa-efficiency.json"
+  },
+  "driverException": {
+    "status": "APPLIED_TO_RESULT_REGISTRATION_AND_SEAL_ONLY",
+    "scope": "One record-time predicate excludes RUNTIME_ERROR from PASS/FAIL authoritative-result guard. Public prepare authorization, scope, lifecycle, immutable source and exact case validation remain required.",
+    "originalDriver": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stable-driver-phase-0-v2/bin/formal-gates",
+    "originalDriverSHA256": "ffd74d409fd0dd202a7c9233bfa63f496063cd46ed5386bb0d265cfe16d87f9f",
+    "proposedDriver": "/tmp/formal-gates-stage35c-driver-retry-proposal/bin/formal-gates",
+    "proposedDriverSHA256": "f17013781fc65367b420e624db8ca5ab8983021fe4e4efe9407f27e04defb8c0",
+    "patch": "/tmp/formal-gates-stage35c-driver-retry-proposal/proposal-evidence/retry-only.patch",
+    "originalReproduction": "/tmp/formal-gates-stage35c-driver-retry-proposal/proposal-evidence/original.log",
+    "verification": "/tmp/formal-gates-stage35c-driver-retry-proposal/proposal-evidence/patched.log",
+    "buildExit": 0,
+    "approval": {
+      "userMessage": "继续",
+      "context": "Immediately follows explicit statement that Seal awaits approval of temporary driver retry repair, with reviewed one-line patch and tests already presented. Interpreted as direction to proceed with that concrete repair exception.",
+      "scope": "Use separate tested temporary driver for result registration and Seal only; original fixed driver/package inputs, candidate, and global installation unchanged. No Seal skip and no new QA.",
+      "proposal": "/tmp/formal-gates-stage35c-driver-retry-proposal/proposal-evidence/proposal.json",
+      "recordedAt": "2026-09-06T20:43:55.385645+00:00"
+    },
+    "unifiedDiff": "--- frozen/internal/validate/workflow_qa.go\n+++ proposed/internal/validate/workflow_qa.go\n@@ -834,7 +834,7 @@\n \t\t// 按派发 mode 分流，黑盒/白盒各自独立派发、并行执行——同一\n \t\t// snapshot 下每个 mode 各记录一次，同 mode 已出权威结果时才挡后续同 mode 派发\n \t\t// （按 mode 独立）。\n-\t\tif qaExecutionModeResulted(*state, dispatch.Mode) {\n+\t\tif result := state.qaExecution(dispatch.Mode); semanticResultRecorded(result.Status, result.Snapshot, state.CurrentSnapshot) {\n \t\t\treturn fmt.Errorf(\"QA Execution already has an authoritative %s result for this mode\", state.qaExecution(dispatch.Mode).Status)\n \t\t}\n \t\tif strings.TrimSpace(runtimeError) != \"\" {\n"
+  },
+  "verification": {
+    "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "checks": {
+      "phase0whitebox": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "phase0whitebox",
+        "label": "phase0whitebox",
+        "cwd": "/tmp/formal-gates-stage35c-p2-validation",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-tags=phase0whitebox",
+          "-timeout=30m",
+          "./internal/validate"
+        ],
+        "startedAt": "2026-09-06T19:30:18.970394+00:00",
+        "completedAt": "2026-09-06T19:38:58.796875+00:00",
+        "wallSeconds": 519.8276517079794,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/phase0whitebox.log"
+      },
+      "canary": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "canary",
+        "label": "canary",
+        "cwd": "/tmp/formal-gates-stage35c-p2-evidence/source",
+        "command": [
+          "/tmp/formal-gates-stage35c-p2-evidence/source/bin/formal-gates",
+          "canary",
+          "portable",
+          "--root",
+          "/tmp/formal-gates-stage35c-p2-evidence/source",
+          "--format",
+          "json"
+        ],
+        "startedAt": "2026-09-06T19:30:19.033785+00:00",
+        "completedAt": "2026-09-06T19:31:20.887798+00:00",
+        "wallSeconds": 61.85215499997139,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/canary.log"
+      },
+      "full": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "full",
+        "label": "full",
+        "cwd": "/tmp/formal-gates-stage35c-p2-validation",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-timeout=30m",
+          "./..."
+        ],
+        "startedAt": "2026-09-06T19:30:19.060609+00:00",
+        "completedAt": "2026-09-06T19:37:57.688844+00:00",
+        "wallSeconds": 458.6293115839944,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/full.log"
+      },
+      "package": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "package",
+        "label": "package",
+        "cwd": "/tmp/formal-gates-stage35c-p2-evidence/source",
+        "command": [
+          "/tmp/formal-gates-stage35c-p2-evidence/source/bin/formal-gates",
+          "package",
+          "validate",
+          "--root",
+          "/tmp/formal-gates-stage35c-p2-evidence/source"
+        ],
+        "startedAt": "2026-09-06T19:30:19.013319+00:00",
+        "completedAt": "2026-09-06T19:30:19.891826+00:00",
+        "wallSeconds": 0.8778828330105171,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/package.log"
+      },
+      "race": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "race",
+        "label": "race",
+        "cwd": "/tmp/formal-gates-stage35c-p2-validation",
+        "command": [
+          "go",
+          "test",
+          "-json",
+          "-count=1",
+          "-race",
+          "-timeout=30m",
+          "./internal/validate",
+          "./internal/cli",
+          "./internal/cost",
+          "./internal/lifecycle"
+        ],
+        "startedAt": "2026-09-06T19:30:18.995118+00:00",
+        "completedAt": "2026-09-06T19:47:24.218215+00:00",
+        "wallSeconds": 1025.2483160420088,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/race.log"
+      },
+      "vet": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "vet",
+        "label": "vet",
+        "cwd": "/tmp/formal-gates-stage35c-p2-validation",
+        "command": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "startedAt": "2026-09-06T19:30:18.956357+00:00",
+        "completedAt": "2026-09-06T19:30:24.140961+00:00",
+        "wallSeconds": 5.184384124993812,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/vet.log"
+      },
+      "build": {
+        "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "name": "build",
+        "label": "build",
+        "cwd": "/tmp/formal-gates-stage35c-p2-evidence/source",
+        "command": [
+          "go",
+          "build",
+          "-o",
+          "bin/formal-gates",
+          "./cmd/formal-gates"
+        ],
+        "startedAt": "2026-09-06T19:29:53.669149+00:00",
+        "completedAt": "2026-09-06T19:29:55.201396+00:00",
+        "wallSeconds": 1.5315889159683138,
+        "exit": 0,
+        "headBefore": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "headAfter": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+        "log": "/tmp/formal-gates-stage35c-p2-evidence/checks/build.log"
+      }
+    },
+    "requiredChecksStatus": "PASS"
+  },
+  "blackbox": {
+    "status": "PASS_RECORDED_AND_SEALED",
+    "checkedAt": "2026-09-06T20:41:41.586523+00:00",
+    "dispatchId": "dispatch-fba9c6eb08e67c69ab9d2d95",
+    "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "requirementRevision": "2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319",
+    "cases": [
+      "CASE-001",
+      "CASE-002",
+      "CASE-003",
+      "CASE-004",
+      "CASE-005",
+      "CASE-006",
+      "CASE-007",
+      "CASE-008",
+      "CASE-009",
+      "CASE-010",
+      "CASE-011",
+      "CASE-012",
+      "CASE-013",
+      "CASE-014",
+      "CASE-015"
+    ],
+    "results": "15/15 PASS",
+    "scopeBasis": "Explicit user exception: 先seal再改。至于黑盒，我忍了，这次破例允许你跑完",
+    "semanticResult": "/tmp/stage35c-blackbox-fba9c6eb/semantic-results.json",
+    "checks": [
+      "exact registered case set",
+      "candidate and requirement binding",
+      "clean candidate worktree",
+      "procedure/observation/oracle and original evidence paths",
+      "new shared-review and defect audit",
+      "actual native invocation completion",
+      "actual changed-candidate and AFFECTED refusal receipts",
+      "fixture final validation and Seal identity equality",
+      "owned fixture cleanup 5 successful commands"
+    ],
+    "evidenceReuse": "Complete previously verified operations on the same candidate only; no aggregate PASS inherited from cancelled dispatch",
+    "recorded": true,
+    "sealed": true
+  },
+  "p2Completion": {
+    "runId": "stage-3-5c-qa-efficiency",
+    "requirementRevision": "2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319",
+    "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "preRepair": "aae428b396a7df7c8b19037e0fb578f70e8add23",
+    "problem": {
+      "sourceDispatch": "dispatch-9b9b23be2c2764f29778afa3",
+      "severity": "P2",
+      "description": "共享步骤在合法的空 mode → blackbox 快速路径中丢失：预开发 qa-design 未指定 mode 保存共同说明及 blackbox case；启动开发后按规则 qa-review --mode blackbox，用例由合并键回退而共享定义未回退。提示词缺共同过程；提交共享判定报 all 0 pending shared steps，不提交报 shared step fixture is not approved。通过显式 blackbox 重新登记共同定义可恢复，故为 P2。根因是共享查询、审查与提示词未采用与用例相同的实际存储键。主代理在 aae 独立验证 checkout 经公共 CLI Run() 和全新临时 fixtures 复现并验证规避；不手改 state，未修改候选。证据 /tmp/formal-gates-stage35c-repair1-evidence/root-fastmode-repro/receipt.json 及 raw.log。REQ-001 范围内，正常路径，因果与 P2 定级已核实；本轮新问题 NEW，与上轮三个根因不同。纯门审 P2 按已授权流程必须修复、不复审本门。"
+    },
+    "workerEvidence": "/tmp/formal-gates-stage35c-p2-worker-evidence/handoff.json",
+    "completeBuildAndProjectTests": "/tmp/formal-gates-stage35c-p2-evidence/verification.json",
+    "affectedPublicRegression": "/tmp/formal-gates-stage35c-p2-evidence/root-p2-regression/receipt.json",
+    "independentGateCarry": {
+      "dispatch": "dispatch-960dbae80eae447912251b7c",
+      "agent": "/root/stage35c_p2_carry",
+      "compared": "aae428b396a7df7c8b19037e0fb578f70e8add23..517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "decisions": {
+        "complexity-gate": "INHERIT",
+        "implementation-quality-gate": "INHERIT"
+      },
+      "claimNote": "Root found identity claim had not been performed by child. First result-record attempt rejected OPEN without mutation; root bound actual returned host identity before official record. Review source remained immutable throughout."
+    },
+    "qaApplicability": {
+      "reviewer": "/root/stage35c_p2_carry",
+      "compared": "aae428b396a7df7c8b19037e0fb578f70e8add23..517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "affected": [
+        "CASE-014"
+      ],
+      "inherit": [
+        "CASE-001",
+        "CASE-002",
+        "CASE-003",
+        "CASE-004",
+        "CASE-005",
+        "CASE-006",
+        "CASE-007",
+        "CASE-008",
+        "CASE-009",
+        "CASE-010",
+        "CASE-011",
+        "CASE-012",
+        "CASE-013",
+        "CASE-015"
+      ],
+      "reasons": [
+        "原 manual 全程显式 blackbox；原 whitebox 全程显式 whitebox；live-final 全程默认 mode。没有原黑盒场景跨默认 mode 到显式 blackbox，原被测行为不受本 P2 修复影响。",
+        "CASE-014 明确要求当前交付候选的项目检查及历史原始断言，须核对当前已完成凭据。",
+        "新默认 mode 到 blackbox 正常路径修复由反事实回归和 root 公开 CLI 实跑验证。"
+      ],
+      "sourceSnapshot": "aae428b396a7df7c8b19037e0fb578f70e8add23"
+    },
+    "schedulingCorrection": {
+      "invalidBasis": "错误按 requirement guarantee 派 FULL；本 run 无 requirementGuarantee，纯 P2 QA 按既有 AC-018 必须 AFFECTED。",
+      "cancelledDispatch": "dispatch-10380f573c86d67264a446ef",
+      "closure": "/tmp/stage35c-blackbox-10380f57/closure.json",
+      "cleanup": "/tmp/stage35c-blackbox-10380f57/cleanup-receipts/receipt.json",
+      "whitebox": "误派的白盒已完成且记录 16 PASS；保留实际证据，不再执行",
+      "correctedQA": "dispatch-fd01e3b5d4f275c83b375915"
+    },
+    "gateRereview": false,
+    "status": "SEALED",
+    "affectedQA": {
+      "status": "PASS",
+      "case": "CASE-014",
+      "reviewer": "/root/stage35c_p2_affected_receipts",
+      "dispatch": "dispatch-fd01e3b5d4f275c83b375915",
+      "evidence": "/tmp/formal-gates-stage35c-p2-evidence/affected-semantic-result.json",
+      "formalRecord": "REJECTED: QA Execution already has an authoritative RUNTIME_ERROR result for this mode"
+    },
+    "sealAttempt": "/tmp/formal-gates-stage35c-p2-evidence/seal-attempt.json",
+    "authorizedFullBlackbox": {
+      "status": "PASS_RECORDED_AND_SEALED",
+      "checkedAt": "2026-09-06T20:41:41.586523+00:00",
+      "dispatchId": "dispatch-fba9c6eb08e67c69ab9d2d95",
+      "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "requirementRevision": "2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319",
+      "cases": [
+        "CASE-001",
+        "CASE-002",
+        "CASE-003",
+        "CASE-004",
+        "CASE-005",
+        "CASE-006",
+        "CASE-007",
+        "CASE-008",
+        "CASE-009",
+        "CASE-010",
+        "CASE-011",
+        "CASE-012",
+        "CASE-013",
+        "CASE-014",
+        "CASE-015"
+      ],
+      "results": "15/15 PASS",
+      "scopeBasis": "Explicit user exception: 先seal再改。至于黑盒，我忍了，这次破例允许你跑完",
+      "semanticResult": "/tmp/stage35c-blackbox-fba9c6eb/semantic-results.json",
+      "checks": [
+        "exact registered case set",
+        "candidate and requirement binding",
+        "clean candidate worktree",
+        "procedure/observation/oracle and original evidence paths",
+        "new shared-review and defect audit",
+        "actual native invocation completion",
+        "actual changed-candidate and AFFECTED refusal receipts",
+        "fixture final validation and Seal identity equality",
+        "owned fixture cleanup 5 successful commands"
+      ],
+      "evidenceReuse": "Complete previously verified operations on the same candidate only; no aggregate PASS inherited from cancelled dispatch",
+      "recorded": true,
+      "sealed": true
+    },
+    "previousBlocker": "固定旧 driver 允许显式重新准备 RUNTIME_ERROR 的 QA 派发，但 RecordQAExecution 仍无条件拒绝该 mode 现存 RUNTIME_ERROR；Seal 实际拒绝并要求 blackbox 的明确跳过授权。未编辑 state、未更换 driver、未 Seal、未合入 main。",
+    "seal": {
+      "command": [
+        "/tmp/formal-gates-stage35c-driver-retry-proposal/bin/formal-gates",
+        "workflow",
+        "seal",
+        "--root",
+        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c",
+        "--package-root",
+        "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stable-driver-phase-0-v2",
+        "--run-id",
+        "stage-3-5c-qa-efficiency"
+      ],
+      "exitCode": 0,
+      "stderr": "",
+      "before": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "after": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "candidateUnchanged": true,
+      "stateRemoved": true,
+      "driverExceptionApproval": "/tmp/formal-gates-stage35c-p2-evidence/driver-exception-approval.json",
+      "sealedAt": "2026-09-06T20:44:23.669910+00:00",
+      "summary": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c/.gates/results/stage-3-5c-qa-efficiency.json"
+    },
+    "driverException": {
+      "userMessage": "继续",
+      "context": "Immediately follows explicit statement that Seal awaits approval of temporary driver retry repair, with reviewed one-line patch and tests already presented. Interpreted as direction to proceed with that concrete repair exception.",
+      "scope": "Use separate tested temporary driver for result registration and Seal only; original fixed driver/package inputs, candidate, and global installation unchanged. No Seal skip and no new QA.",
+      "proposal": "/tmp/formal-gates-stage35c-driver-retry-proposal/proposal-evidence/proposal.json",
+      "recordedAt": "2026-09-06T20:43:55.385645+00:00"
+    }
+  },
+  "codexMeasurement": {
+    "scope": "Codex only; real native request usage and completed task wall intervals, not formal run total or estimated model inference latency",
+    "metrics": {
+      "baseline": {
+        "stages": {
+          "qa-design": {
+            "dispatches": 2,
+            "input": 37436,
+            "cache": 12160,
+            "miss": 25276,
+            "output": 2088,
+            "millis": 82089,
+            "hostCalls": 2,
+            "requests": 2,
+            "starts": [
+              "2026-09-06T16:55:30.911Z",
+              "2026-09-06T16:56:37.42Z"
+            ],
+            "ends": [
+              "2026-09-06T16:56:01.834Z",
+              "2026-09-06T16:57:28.586Z"
+            ]
+          },
+          "qa-execution": {
+            "dispatches": 3,
+            "input": 112960,
+            "cache": 55808,
+            "miss": 57152,
+            "output": 1493,
+            "millis": 126917,
+            "hostCalls": 3,
+            "requests": 6,
+            "starts": [
+              "2026-09-06T16:58:07.916Z",
+              "2026-09-06T16:57:32.421Z",
+              "2026-09-06T16:59:21.902Z"
+            ],
+            "ends": [
+              "2026-09-06T16:59:18.817Z",
+              "2026-09-06T16:58:01.572Z",
+              "2026-09-06T16:59:48.767Z"
+            ]
+          },
+          "qa-review": {
+            "dispatches": 1,
+            "input": 18599,
+            "cache": 0,
+            "miss": 18599,
+            "output": 714,
+            "millis": 30364,
+            "hostCalls": 1,
+            "requests": 1,
+            "starts": [
+              "2026-09-06T16:56:04.511Z"
+            ],
+            "ends": [
+              "2026-09-06T16:56:34.875Z"
+            ]
+          }
+        },
+        "modelObservationCount": 5
+      },
+      "candidate": {
+        "stages": {
+          "qa-review": {
+            "dispatches": 1,
+            "input": 37414,
+            "cache": 18432,
+            "miss": 18982,
+            "output": 812,
+            "millis": 30779,
+            "hostCalls": 1,
+            "requests": 2,
+            "starts": [
+              "2026-09-06T19:35:36.838Z"
+            ],
+            "ends": [
+              "2026-09-06T19:36:07.617Z"
+            ]
+          },
+          "qa-design": {
+            "dispatches": 1,
+            "input": 94058,
+            "cache": 65024,
+            "miss": 29034,
+            "output": 1507,
+            "millis": 58911,
+            "hostCalls": 1,
+            "requests": 4,
+            "starts": [
+              "2026-09-06T19:34:36.192Z"
+            ],
+            "ends": [
+              "2026-09-06T19:35:35.103Z"
+            ]
+          },
+          "qa-execution": {
+            "dispatches": 1,
+            "input": 78561,
+            "cache": 57344,
+            "miss": 21217,
+            "output": 1235,
+            "millis": 53488,
+            "hostCalls": 2,
+            "requests": 4,
+            "starts": [
+              "2026-09-06T19:36:10.476Z"
+            ],
+            "ends": [
+              "2026-09-06T19:37:05.486Z"
+            ]
+          }
+        },
+        "modelObservationCount": 2
+      }
+    },
+    "rawReconciliation": {
+      "candidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+      "status": "PASS",
+      "method": "Independent raw native response-id usage and completed task intervals reconciled exactly to existing cost projection; model comparison completed before extra FULL was stopped. No new model calls.",
+      "comparison": "/tmp/stage35c-blackbox-10380f57/reconciled-comparison.json",
+      "entries": [
+        {
+          "side": "baseline",
+          "stage": "qa-design",
+          "dispatch": "dispatch-45ec81d3fd56b00d4faeb694",
+          "source": "/tmp/formal-gates-stage35c-codex/baseline-installed/codex/dispatch-45ec81d3fd56b00d4faeb694/rollout.jsonl",
+          "requests": 1,
+          "totalInputTokens": 18810,
+          "inputCacheHitTokens": 0,
+          "outputTokens": 818,
+          "inputCacheMissTokens": 18810,
+          "millis": 30923
+        },
+        {
+          "side": "baseline",
+          "stage": "qa-execution",
+          "dispatch": "dispatch-8aa8df1e288406b2057ca988",
+          "source": "/tmp/formal-gates-stage35c-codex/baseline-installed/codex/dispatch-8aa8df1e288406b2057ca988/rollout.jsonl",
+          "requests": 2,
+          "totalInputTokens": 37923,
+          "inputCacheHitTokens": 18944,
+          "outputTokens": 451,
+          "inputCacheMissTokens": 18979,
+          "millis": 70901
+        },
+        {
+          "side": "baseline",
+          "stage": "qa-execution",
+          "dispatch": "dispatch-9967bd3b2fa632e663829d73",
+          "source": "/tmp/formal-gates-stage35c-codex/baseline-installed/codex/dispatch-9967bd3b2fa632e663829d73/rollout.jsonl",
+          "requests": 2,
+          "totalInputTokens": 37545,
+          "inputCacheHitTokens": 18432,
+          "outputTokens": 523,
+          "inputCacheMissTokens": 19113,
+          "millis": 29151
+        },
+        {
+          "side": "baseline",
+          "stage": "qa-review",
+          "dispatch": "dispatch-b223c183366ab16d7486305e",
+          "source": "/tmp/formal-gates-stage35c-codex/baseline-installed/codex/dispatch-b223c183366ab16d7486305e/rollout.jsonl",
+          "requests": 1,
+          "totalInputTokens": 18599,
+          "inputCacheHitTokens": 0,
+          "outputTokens": 714,
+          "inputCacheMissTokens": 18599,
+          "millis": 30364
+        },
+        {
+          "side": "baseline",
+          "stage": "qa-execution",
+          "dispatch": "dispatch-deafe535080f3e064eefcd28",
+          "source": "/tmp/formal-gates-stage35c-codex/baseline-installed/codex/dispatch-deafe535080f3e064eefcd28/rollout.jsonl",
+          "requests": 2,
+          "totalInputTokens": 37492,
+          "inputCacheHitTokens": 18432,
+          "outputTokens": 519,
+          "inputCacheMissTokens": 19060,
+          "millis": 26865
+        },
+        {
+          "side": "baseline",
+          "stage": "qa-design",
+          "dispatch": "dispatch-edb35d3ae6a9f76868cab7e2",
+          "source": "/tmp/formal-gates-stage35c-codex/baseline-installed/codex/dispatch-edb35d3ae6a9f76868cab7e2/rollout.jsonl",
+          "requests": 1,
+          "totalInputTokens": 18626,
+          "inputCacheHitTokens": 12160,
+          "outputTokens": 1270,
+          "inputCacheMissTokens": 6466,
+          "millis": 51166
+        },
+        {
+          "side": "candidate",
+          "stage": "qa-review",
+          "dispatch": "dispatch-0097b3bd22a9c672fba2d0fb",
+          "source": "/tmp/stage35c-blackbox-10380f57/live-final/codex/dispatch-0097b3bd22a9c672fba2d0fb/rollout.jsonl",
+          "requests": 2,
+          "totalInputTokens": 37414,
+          "inputCacheHitTokens": 18432,
+          "outputTokens": 812,
+          "inputCacheMissTokens": 18982,
+          "millis": 30779
+        },
+        {
+          "side": "candidate",
+          "stage": "qa-design",
+          "dispatch": "dispatch-584bd1708c36f2685af09862",
+          "source": "/tmp/stage35c-blackbox-10380f57/live-final/codex/dispatch-584bd1708c36f2685af09862/rollout.jsonl",
+          "requests": 4,
+          "totalInputTokens": 94058,
+          "inputCacheHitTokens": 65024,
+          "outputTokens": 1507,
+          "inputCacheMissTokens": 29034,
+          "millis": 58911
+        },
+        {
+          "side": "candidate",
+          "stage": "qa-execution",
+          "dispatch": "dispatch-8e5644516538d5d794095197",
+          "source": "/tmp/stage35c-blackbox-10380f57/live-final/codex/dispatch-8e5644516538d5d794095197/rollout.jsonl",
+          "requests": 4,
+          "totalInputTokens": 78561,
+          "inputCacheHitTokens": 57344,
+          "outputTokens": 1235,
+          "inputCacheMissTokens": 21217,
+          "millis": 53488
+        }
+      ]
+    }
+  },
+  "stableSmoke": {
+    "source": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stable-driver-phase-0-v2",
+    "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-stable-smoke.d504c757/project/.codex/skills/formal-gates",
+    "environment": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-stable-smoke.d504c757/home",
+    "sourceRuntimeDigest": "f768d82514fcf66c060deebea223bc8ec7738340a470919bd20254a70122e2c1",
+    "installedRuntimeDigest": "f768d82514fcf66c060deebea223bc8ec7738340a470919bd20254a70122e2c1",
+    "digestScope": [
+      "SKILL.md",
+      "README.md",
+      "README_EN.md",
+      "formal-gates.manifest.json",
+      "bin",
+      "agents",
+      "prompts",
+      "gates",
+      "references"
+    ],
+    "digestAlgorithm": "SHA256 of compact JSON sorted [relative path, file SHA256] pairs",
+    "sourceFiles": 25,
+    "installedFiles": 25,
+    "runtimeSmokeExit": 0,
+    "sourcePackageValidationExit": 0,
+    "installExit": 0,
+    "installedSourcePackageValidation": {
+      "exit": 1,
+      "reason": "source-package validator requires source-only files; frozen runtime installer documents copying runtime entries only"
+    },
+    "sourceBinarySHA256": "ffd74d409fd0dd202a7c9233bfa63f496063cd46ed5386bb0d265cfe16d87f9f",
+    "cleanup": {
+      "command": [
+        "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-stable-smoke.d504c757/home/.local/bin/formal-gates",
+        "uninstall",
+        "--host",
+        "codex",
+        "--scope",
+        "project",
+        "--project",
+        "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-stage35c-stable-smoke.d504c757/project"
+      ],
+      "exit": 0,
+      "installedTargetRemoved": true
+    }
+  },
+  "candidatePackageDigest": "e82835ad232bfae306f50b837d018e7e32fd7d1c2debd995d06cdeb74a463fb7",
+  "installedTargetDigest": "0b9eb462966437c0c70121ef9001ccd3890566f3ba48f2b7924e0d64950a4587",
+  "engineIdentity": {
+    "writer": "engine for existing lightweight/diagnostic surfaces; stage35c QA remains legacy",
+    "stateSchemaVersion": 1,
+    "workflowDefinitionVersion": 2,
+    "definitionDigest": "sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f"
+  },
+  "blackboxArtifactNormalization": "Mainline copy removes only trailing blank lines to satisfy git diff --check; original Seal-generated artifact preserved with run evidence."
+}

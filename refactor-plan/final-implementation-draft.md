@@ -53,6 +53,13 @@ route-add/reselect、需求变化、reset、abort、adopt-external、主动复�
 
 Operator 只能核实事实和提出候选动作，不能替用户授权。
 
+QA 是否重跑、采用 `FULL` 还是 `AFFECTED`，只由 Controller 根据真实激活的 requirement
+guarantee、当前项目/路线规则、已核实的修复类型、候选绑定和已接纳的用户例外决定。
+“最终候选”本身不证明已启用 guarantee；主代理的理由文本、host override 或普通“继续”
+消息不能创建 FULL、取消任务或 Seal 跳过授权。用户明确允许的一次例外须通过对应 typed Ask
+绑定 run、revision、candidate、mode 和 scope；不改变后续轮次的默认规则。合法操作由宿主
+自动执行，不为每个步骤增加确认。
+
 ## 3. 确定性内核
 
 ### 3.1 三段式决策
@@ -365,6 +372,8 @@ case-set 或目标集变化使旧 wave 失效，不能改 expected-set 制造收
 - QA Review P1 修订后 fresh review；集合级 P2/P3 按稳定 suggestion ID 吸收并留来源、不复审。
   全部吸收且覆盖通过才 FROZEN；无建议则 PASS 后立即冻结。
 - 普通返修只 AFFECTED 执行冻结用例；requirement guarantee 的最终候选 Seal 前须 FULL。
+  纯门审 P2 且既无实际 FULL 义务、也无已绑定用户例外时，不签发 FULL；完整项目测试不等于全量
+  黑盒重跑。非保证路线按自身已登记规则计算，主代理不能因“更稳妥”扩大范围。
   只有需求含义、对外行为、成功/失败判据或稳定可执行性变化才能 THAW；临时环境失败是
   RUNTIME_ERROR。合法 QA artifact 修订重新装配并冻结候选，至少重跑改过测试和共享依赖项。
 - 既有三轮自动审查与额外授权上限保持；完整 expected-set 终结才计 wave，装配、pre-wave
@@ -390,6 +399,10 @@ wave 收齐后的有效 obligation/唯一 repair TaskKey。预授权 repair 机�
 阶段 4 才接 State/source bridge/IssueFromPlan/refill/retry/typed Ask，将修复摘要 engine
 allowance 从 UNAVAILABLE 切换为权威 projection，guard-preview 的 runtimeIntegration 改用
 权威 engine 集成状态；owner cost 与 token cap 的 UNAVAILABLE 各按来源/配置独立判断。
+
+获准重试的 RUNTIME_ERROR 必须能沿同一 TaskKey 完成“签发新 Attempt → 实际执行 → 接纳
+完整结果”；不得出现允许签发却因旧 RUNTIME_ERROR 拒绝结果的死端。旧错误与 Attempt
+留痕，已有权威 PASS/FAIL 不被重试覆盖，也不以 Seal 跳过替代合法重试完成。
 
 ### 7.1 完整候选与晚提升
 
@@ -517,6 +530,29 @@ provider identity、bridge installed/available 和 lifecycle paired status 分�
 - bindings 未变但原因未知：Ask resume/fresh/abort；
 - receipt UNKNOWN：先查 lifecycle，唯一匹配自动 attach，多重/无匹配进 Operator，绝不盲目 respawn。
 
+### 9.1.1 真实执行前准入
+
+签发与结果接纳之间必须有执行前校验。宿主通过已有 adapter/bridge，在调用原生子代理 API、
+启动工作流模型 CLI/API 请求或执行已声明 QA 操作之前，向引擎核对并认领当前签发动作。
+校验绑定 actionID、TaskKey/Attempt、run/revision、candidate、provider、payload digest、
+scope 与精确 case set；使用现有 `pendingActions`、锁/CAS、intent 和 guard，不建立第二账本
+或常驻守护进程。一个 QA 任务内的模型请求沿用该任务绑定，不逐请求创造 TaskKey。
+
+未签发、越出用例范围、过期、已取消、已认领/消费的重复动作，或没有合法流程义务的请求，
+必须在启动前拒绝，实际子代理/模型/QA 操作调用数为零。恢复已有任务走签发的 resume 与
+既有 UNKNOWN 对账协议，不把拒绝重新解释为一次 fresh dispatch。已在合法任务内完成的
+结果保持原绑定；拒绝一次越界请求不得污染既有 PASS、消耗审查轮次或迫使用户跳过 Seal。
+
+受支持宿主的正常文档化入口必须覆盖原生派发工具、恢复入口和能发起该工作流模型/QA
+操作的命令入口；通过实际工具调用前 hook 或宿主执行器统一接入。不能只包住 formal-gates
+命令，同时保留主代理可直接发起同类工作流操作的裸入口。矩阵逐项列出入口、前置校验点、
+参数绑定和实际拒绝证据；仅有 result/receipt 登记拒绝或提示词要求不算执行前强制。
+
+宿主无法覆盖其中某入口时，应明确报告该执行前准入能力不支持，并拒绝进入承诺该保证的
+执行模式；不得回退为模型自律或宣称已完成适配。保证范围是已编码的流程规则和验证过的
+宿主入口，不包含模型语义判断永远正确；影响分析仍由既有 Operator 核实。普通任务外工具
+操作、恶意用户改写宿主/状态等不扩入本项目范围。
+
 ### 9.2 本地副作用
 
 start、prompt/artifact、blackbox/whitebox QA worktree、case mirror/materialize、完整候选 freeze/promotion、Git/SVN/P4 workspace/集成/提交、snapshot、Git squash、child receipt/cost、terminal summary、cleanup、abort 全部采用 StepSpec 与：
@@ -613,6 +649,13 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 11. Git/SVN/P4 的 provider/status/diff/track/integrate/commit/snapshot、whitebox workspace、candidate freeze/reuse/promotion、adopt-external、resource cleanup、typed artifacts、错误对账，以及代理无法执行 VCS 写操作。
 12. 版本缺失/不匹配严格拒绝；diagnose 原始只读；终态 summary 回落。
 13. 正常入口与常见误操作黑盒；范围外对抗输入、手工状态编辑、权限/不可变文件和未支持 OS 只作 P3 建议。
+14. 执行前准入通过真实宿主入口验证：纯 P2、未启用 guarantee 且无用户例外时请求 FULL；
+    仅改 final/reason/override；扩大已签发 case set；不带 actionID 直接调用原生派发工具或
+    工作流模型命令；重放已消费动作；使用取消/过期 Attempt。各反例均在底层调用前拒绝，
+    以调用计数/宿主记录证明零执行，不能只断言结果登记失败。正例覆盖合法 AFFECTED、
+    有真实最终 FULL 义务、绑定的一次用户例外和合法 resume；它们必须能实际运行。
+    RUNTIME_ERROR 获批重试须能接纳结果且保留原错误，PASS/FAIL 重放保护和已有通过结果
+    不受非法尝试污染。执行前能力缺失须明确拒绝；测试不另建真实预算或语义真伪证明器。
 
 ### 12.2 确定性崩溃测试
 

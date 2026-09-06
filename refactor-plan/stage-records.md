@@ -491,3 +491,43 @@
   engine allowance 仍为 `UNAVAILABLE`；owner cost 与 token cap 继续按各自来源/配置判断。
 - 这是开发实现与项目自测记录，不是正式 QA、门审或 Seal 结论。最终候选的正式验证和 Seal
   由编排层继续推进；本 run 仍由已安装稳定 CLI 编排，候选尚未正式安装。
+
+## 阶段 3.5c：QA 执行效率与 Codex 计量修复（2026-09-07，已 Seal）
+
+- run：`stage-3-5c-qa-efficiency`；确认需求 revision：
+  `2d0a3623b50d70a1fa5d2968b05dd8f8e91f7bad32e7214d7ba1de327bc6f319`。
+  base 为 `fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e`，sealed candidate 为
+  `517de91f1b480ec969bd91385c29ce38d8bc2841`；Seal 前后 HEAD 相同，未再次 squash。
+- [正式封板结果](../.gates/results/stage-3-5c-qa-efficiency.json) 为 `SEALED`，
+  黑盒 15/15、白盒 16/16 PASS；复杂度门、实现质量门的原 PASS 经独立 carry 绑定到候选。
+  carry 保留原审查快照与比较范围，不冒充在 P2 修复后重新审门；未选 merge-gate 不计通过。
+  [已批准黑盒用例](../.gates/results/stage-3-5c-qa-efficiency.blackbox-cases.md) 已物化。
+- 完整构建、全量项目测试、race、phase0whitebox、vet、package validation、portable canary
+  44/44 和差异检查通过。历史 checkpoint 在 full/race/tag 三套检查中实际 RUN/PASS；
+  正常追加及后续工作树变化可通过，阶段越界、ADR 改写、历史正文改写仍被原判据拒绝。
+- 最后一个纯门审 P2 是默认 mode → 显式 blackbox 时共享步骤读取未采用用例实际存储键。
+  修复经公开 CLI 正反例和受影响回归验证，门按规则 carry，不复审、不增加审查轮次。
+  主代理曾无依据地派发 FULL 并取消，造成 RUNTIME_ERROR；该错误记录保留。随后用户明确
+  破例允许完成 FULL，本次 15/15 使用该授权，不能作为以后纯 P2 自动 FULL 的规则依据。
+- 固定 driver 存在“允许准备获批 RUNTIME_ERROR 重试、却拒绝登记结果”的故障。用户在
+  审阅一行修复、原版复现及修复验证后指示继续，最后登记和 Seal 使用独立临时修复版，
+  `--package-root` 仍指向原固定包。原 driver、候选代码和全局安装未被替换；没有 Seal 跳过。
+  [交付凭据](../.gates/results/stage-3-5c-delivery.json) 保存原/临时 binary 摘要、修复与授权来源。
+- Codex 的请求用量按原生 response ID 去重后投影到既有 cost，耗时取已完成原生 task 区间，
+  包含工具等待、排除 turn 间空闲。优化前后设计/审查/执行六个阶段的四类 token 与耗时均
+  有实际来源，无 unavailable 或估算补零；本次修复不扩展其他宿主计量。
+  两版同用 `gpt-6-astra/xhigh`，逻辑 QA 派发 6→3、实际 show 观察 5→2；
+  总耗时 239.370→143.178 秒，总输入 168995→210033，缓存命中 67968→140800，
+  非缓存输入 101027→69233，输出 4295→3554。不要求或宣称 token 必然减少。
+- 候选 source package digest：`e82835ad232bfae306f50b837d018e7e32fd7d1c2debd995d06cdeb74a463fb7`；
+  Codex installed-target digest：`0b9eb462966437c0c70121ef9001ccd3890566f3ba48f2b7924e0d64950a4587`。
+  engine schema=1、definition=2，definition digest 为
+  `sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f`。
+  本阶段 QA 仍由 legacy 承载；既有 engine lightweight/diagnostic 路径保持，regular engine
+  迁移与执行前准入留后续阶段。候选只在独立 namespace 安装验证，全局稳定入口未切换。
+- Seal 后先将候选 fast-forward 到本地 main，再修改最终实施方案和增量计划，补充执行前
+  准入及零调用验收。该文档修改不属于 sealed candidate 的已实现能力；阶段 4 首宿主、
+  阶段 6 五宿主、阶段 7 最终安装态分别验收。历史阶段正文与 ADR 未追溯重写。
+- [主线集成凭据](../.gates/results/stage-3-5c-post-integration.json) 在集成提交后记录精确
+  post-integration identity、包身份核对、验证复用依据和自有资源 cleanup；下一阶段基线
+  取该凭据中的 identity。本次不创建下一阶段 worktree、不推送远端、不切换全局安装。
