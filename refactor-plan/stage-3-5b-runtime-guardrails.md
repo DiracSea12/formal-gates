@@ -1,8 +1,8 @@
 # 阶段 3.5b：成本记录与运行时派发止损（非独立正式阶段）
 
-状态：阶段 4 前完成的 checkpoint。不新增 `RunPhase`、formal run、Seal、公开命令或第二
-套账本。3.5b 本身交付 legacy owner 计量和 engine-side 纯 guard 计算核心；engine 状态接入、
-派发拦截、公开投影和真实运行时验收由阶段 4 完成。未完成阶段 4 接入前不宣称当前 engine
+状态：阶段 4 前完成的 checkpoint。不新增 `RunPhase`、formal run、Seal、公开写命令或第二
+套账本。新增的公开只读 `workflow guard-preview --input <basis.json>` 由合并需求 REQ-014 授权。3.5b 本身交付 legacy owner 计量和 engine-side 纯 guard 计算核心；engine 状态接入、
+派发拦截、权威运行时投影和真实运行时验收由阶段 4 完成。未完成阶段 4 接入前不宣称当前 engine
 已具备运行时止损能力。
 
 ## 先说结论
@@ -26,21 +26,25 @@
 2. 在 engine 侧增加无 I/O、无状态写入的纯 guard calculation：从 canonical external
    `TaskKey`、有限 retry policy 和已确认 basis 计算 request/retry allowance 与
    `budgetBasisDigest`，并用已知答案 fixtures 验证。该核心不读取 transcript，也不签发任务。
+   公开只读 `workflow guard-preview` 仅负责 JSON 读入/错误定位与输出，调用生产核心，不复制
+   算法、不创建 run、不写状态、不认证真实确认或合法任务。完整 schema/可执行 fixture 见
+   `references/guard-preview.md`，3.5b 固定 `runtimeIntegration=NOT_INSTALLED`。
 
 阶段 4 才负责把上述能力接入 engine `State`/envelope、source bridge、`IssueFromPlan`、
 `refill`、全部 recovery/HostAction retry、typed Ask、`show/status/next` 和真实宿主 E2E。
 3.5b 只冻结这些接入点的合同，不提前实现它们；项目/安装级 token cap 的配置读取、持久化
 和运行时拦截也留在阶段 4。
 
-## 已核实的现状
+## checkpoint 输入时的现状（实施前基线）
 
 - `internal/cost` 不依赖 `validate`；`validate` 只在结果记录时调用 parser 并回填
   `RunState.Cost`，依赖方向适合保留。
-- 当前 `RunCost.Dispatches` 只覆盖 gate/action 派发，主代理没有成本条目。
+- 实施前 `RunCost.Dispatches` 只覆盖 gate/action 派发；本 run 的 B1 已在同一 `RunCost`
+  增加可选 Owner 记录与基线/终态差值，自身 owner 汇总已实现，child/master 汇总仍留阶段 5。
 - `RunState` 已保存 `OwnerTranscript`/`OwnerSession`；它们由 `workflow start` 的 hook
-  sidecar 捕获，具备补记 owner 用量所需的身份入口，但当前没有用量基线。
+  sidecar 捕获，具备补记 owner 用量所需的身份入口，；B1 已增加用量基线、provider 绑定与终态计量。
 - engine 已有 `Drive`、`IssueFromPlan`、`refill`、`Attempt.MaxAttempts` 和恢复记录；
-  3.5b 应接这些已有边界，不再造一套调度或重试状态机。
+  阶段 4 将接这些已有边界，不再造调度或重试状态机。
 - 当前 `AgentStep` 的 retry 可选、`HostActionStep` 没有 retry 字段，且无声明的
   `Attempt.MaxAttempts=0` 仍会保留自动恢复路径。3.5b 不能把这个零值继续解释成无界，也
   不为每种 step 增加配置字段；阶段 4 由 engine guard 对外部 agent/host 派发应用同一个
@@ -81,7 +85,7 @@
 - 现有子代理 backfill 仍在结果记录时执行，并保持按 dispatch 幂等；owner 记录也必须
   幂等。两者都不改写已记录的 PASS/FAIL。
 - owner 记录只属于产生它的 run：主干保留自己的 owner，child 在自己的 receipt/sidecar
-  保留自己的 owner。3.5b 的实时止损只约束 engine 可控制的外部派发；owner 条目是终态
+  保留自己的 owner。阶段 4 的实时止损只约束 engine 可控制的外部派发；owner 条目是终态
   报告，不参与 in-flight 硬中断。若将来要求 owner 也参与实时 token cap，必须另行增加
   明确的快照点，不能把终态差值冒充实时用量。
 - 阶段 5 必须满足主需求中 master 汇总 child cost 的约束：child 明细仍留在各自 receipt/
@@ -148,13 +152,50 @@ engine 状态、派发时序、恢复入口、Ask 或公开展示的要求是阶
 - **主代理实时性**：owner transcript 只能在已有快照点参与后续派发判断，不能宣称对正在
   生成的当前主代理消息做 in-flight 硬中断；外部派发的预检查仍必须生效。
 
+## 审查收敛与阶段 4 basis 接入合同
+
+合并需求 REQ-015 覆盖旧审查语义；权威细节见 engine 主需求 §7.2.1、§8.3–8.4 和最终方案 §7。
+Operator semantic adjudication 保存 raw finding、逐条 severity rationale、范围/严重度/因果/
+复现证据、finding/problem ID、NEW/SAME_AS/DISMISSED 裁决与历史；Controller 只校验完整性、
+引用/版本绑定和机械路由，不判断语义真假、根因、严重度或重复。核实不属于用户 Ask，仅在
+已核实 finding 的处置仍不唯一时才 Ask；产品/技术审 confirm/dismiss 规则保持。
+
+白盒最终 FROZEN case-set 绑定最终含测试快照后才 review-ready，随后冻结 expected-set/digest，
+全部 QA execution/门并行；COLLECTING 未收齐或核实未完成时不建立返修。每快照唯一返修只收
+QA FAIL、有效 P0/P1 与门审 P2；门审 P2 carry 不复审，门审 P3 只作 Seal advisory。
+QA Review P2/P3 以 suggestion ID 吸收后冻结且不复审；普通返修不解冻，只 AFFECTED 执行，
+保证最终候选 Seal 前 FULL；THAW 仅限需求/对外行为/判据/稳定可执行性变化。
+
+非 wave 与 wave 的 RUNTIME_ERROR/REJECTED_INVALID_RESULT 共用有效义务和有限重派：
+复用 TaskKey，默认 MaxAttempts=2；耗尽 RETRY_EXHAUSTED 后停止自动/普通重派，仅允许用户
+绑定 state revision 和非空理由一次性追加一个 attempt，改变 retry policy/digest、不增基础
+槽位。追加再失败不继续扩容，按已有错误处置、abort/cleanup 或确认真实改变绑定的新计划
+处理。dispatch signature 绑定具体输入，OPEN 续用、相同有效 PASS 不重复派发。
+
+finding/返修派生 basis 只接受 adjudication 完成、wave 收齐后的有效 obligation/唯一 repair
+TaskKey；基础来源仍为 closed-world definition、确认 requirement/Batch/route/topology、
+批准 QA 与所选 gate。预授权 repair 可机械加入，需确认的新 revision 在确认前不扩容；
+raw finding、普通 result/receipt/resume 不增 TaskKey。
+
+额外返修 Ask 必须显示完整版本绑定摘要（findings/problems、逐条理由、归并、历史修复/验证、
+QA scope、已用/剩余轮数、dispatch signature/TaskKey、engine allowance、owner cost、
+token cap），授权绑定摘要 digest 与 state revision，过期即拒绝。
+3.5b 的 guard-preview.runtimeIntegration 固定 NOT_INSTALLED，修复摘要 engine allowance
+仍 UNAVAILABLE；阶段 4 分别切换为权威 engine 集成状态和额度 projection。
+owner cost 和 token cap 的 UNAVAILABLE 继续由各自来源、区间或配置条件独立决定。
+
+阶段 4 需求 revision 转换由 engine 单一 writer：meaning-preserved 不产生回退 Ask 且保留
+产品审 PASS；meaning-changed 接纳前必须 typed Ask 展示完整影响预览，绑定 state revision、
+base/candidate revision 与 digest，只有用户确认事件授权原子回退。完整 review-delta 与影响
+预览可共用一次明确确认；legacy 写入口不能绕过该边界。
+
 ## 限额如何定、用户看到什么
 
 - **谁计算**：只由 engine Controller 计算；compiler/definition 决定哪些 step 是外部派发及其
   retry policy，已确认计划提供 canonical expected `TaskKey` 集。主代理、host、用户和 AI
   都不是计算权威。
-- **怎么算**：request 额度 = 当前已确认计划中 distinct external `TaskKey` 槽位数 + 各逻辑
-  动作 `max(0, MaxAttempts-1)` 的有限瞬态 retry 余量。外部派发未显式声明时按 canonical
+- **怎么算**：requestAllowance = 当前已确认计划中 distinct external `TaskKey` 槽位数；
+  retryAllowance = 各逻辑动作 `max(0, MaxAttempts-1)` 之和；totalAllowance 为两者之和。外部派发未显式声明时按 canonical
   `MaxAttempts=2` 计算。绑定/快照/责任变化形成新计划时，只按新 basis 重算尚未消费的槽位，
   不沿用旧 retry 池，也不重复赠送已消费槽位。不同任务的差异来自 route/topology/任务集，
   不是让用户猜一个统一数字。AI 提出的拆分或路线建议只有在按现有流程确认并持久化后才进入
@@ -193,6 +234,9 @@ engine 状态、派发时序、恢复入口、Ask 或公开展示的要求是阶
   测试文档，删除“成本永远只展示、永不参与后续派发”的过时表述；保留“精确或
   unavailable、无估算、无第二账本”的边界。
 
+阶段 5–7 同时继承同一 finding/problem ID、归并、唯一返修、P3 advisory、QA 冻结/THAW
+与 requirement impact 授权语义，不重新解释主代理裁决。
+
 ## 3.5b 当前 checkpoint 验收
 
 - cost parser 仍可独立测试；engine/validate 不反向进入 parser 包。
@@ -207,7 +251,9 @@ engine 状态、派发时序、恢复入口、Ask 或公开展示的要求是阶
   external `TaskKey` 被拒绝；现有流程要求用户确认却未取得对应 revision 的 task-set 扩张不得
   增加额度，已由当前 workflow policy 预授权的 obligation/repair slot 不重复询问用户。
 - 本 checkpoint 不修改 engine `State`/envelope，不接入 source bridge、`IssueFromPlan`、
-  `refill`、recovery、HostAction retry、typed Ask 或公开展示；这些属于阶段 4。
+  `refill`、recovery、HostAction retry、typed Ask 或权威运行时展示；这些属于阶段 4。
+- 正式构建产物的 guard-preview 黑盒自测直接使用文档 fixture/JSON 输出，覆盖成功、常见
+  无效输入和零状态写入；规范化完整 basis/digest 稳定，明确 NOT_INSTALLED。
 
 ## 阶段 4 保留验收
 

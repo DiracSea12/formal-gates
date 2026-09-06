@@ -115,6 +115,9 @@ func requireStartReadinessTransition(state RunState) error {
 }
 
 func requireQADesignTransition(state RunState, target string) error {
+	if caseSet, ok := state.QACaseSets[target]; ok && caseSet.Status == caseSetFrozen {
+		return fmt.Errorf("the %s QA case-set is FROZEN at version %s; ordinary implementation repair cannot reopen QA design (use workflow qa-thaw for a documented product/acceptance change)", target, caseSet.Version)
+	}
 	if state.RequirementGuarantee != nil {
 		if len(state.RequirementArtifacts) != 1 {
 			return fmt.Errorf("QA-enabled requirement guarantee requires exactly one formal requirement artifact before QA design")
@@ -159,6 +162,11 @@ func requireQAReviewTransition(state RunState, target string) error {
 	if !isSelectedQA(state) {
 		return fmt.Errorf("QA is not selected")
 	}
+	// A case FAIL also invalidates QA Design and changes the dispatch signature.
+	// Preserve the actionable FAIL guidance before the generic design check.
+	if state.qaReview(target).Status == "FAIL" {
+		return fmt.Errorf("QA Review already has an authoritative FAIL result; revise the bound QA case-set with QA Design, then use the bounded QA Review path for the changed case-set")
+	}
 	// 黑盒 review 不再被"开发已开始"阻止（与开发并发）；零用例可流到 review 的集合
 	// 覆盖判定（被选中模式零用例是覆盖缺失，判 P1 阻塞）。判定只受本 mode
 	// 的 design/review 结果约束（target=mode），另一 mode 的 review FAIL 不阻止本 mode。
@@ -166,7 +174,7 @@ func requireQAReviewTransition(state RunState, target string) error {
 		return fmt.Errorf("a complete QA case set is required before QA Review")
 	}
 	if status := state.qaReview(target).Status; status == "PASS" || status == "FAIL" {
-		return fmt.Errorf("QA Review already has an authoritative %s result for the current case set", status)
+		return fmt.Errorf("QA Review already has an authoritative %s result for the current case set; this review is complete, continue to the next workflow step", status)
 	}
 	return nil
 }
@@ -252,8 +260,13 @@ func requireQAExecutionTransition(state RunState, target string) error {
 		return err
 	}
 	if state.RequirementGuarantee != nil {
+		// A frozen case-set fixes the stage-3.5b rule: intermediate repairs use
+		// AFFECTED even under an active guarantee.  Seal still requires the
+		// production guarantee report's final FULL execution on the candidate.
 		if scope, ok := state.ExecutionScopes[target]; ok && scope.Decision == "AFFECTED" {
-			return fmt.Errorf("an active requirement guarantee requires FULL QA execution; AFFECTED/inherited scope is not accepted")
+			if caseSet := state.QACaseSets[target]; caseSet.Status != caseSetFrozen || state.PreRepairSnapshot == "" {
+				return fmt.Errorf("AFFECTED QA execution is accepted only for an intermediate repair with a FROZEN case-set")
+			}
 		}
 		if !isMergeVerification(state) {
 			review, ok := state.RequirementGuarantee.ReviewsByMode[target]

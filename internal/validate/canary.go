@@ -286,7 +286,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "")
+	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "", OperatorVerification{Checks: append([]string{}, requiredOperatorVerificationChecks...), Evidence: "Synthetic portable canary: the fixed REQ-001/AC-001 fixture exercises the workflow, with no reviewer findings."})
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", ReviewItemInput{Key: guaranteeProductReviewKey("REQ-001"), Status: "PASS"})
+	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", OperatorVerification{Checks: append([]string{}, requiredOperatorVerificationChecks...), Evidence: "Synthetic portable canary: the fixed REQ-001/AC-001 fixture exercises the workflow, with no reviewer findings."}, ReviewItemInput{Key: guaranteeProductReviewKey("REQ-001"), Status: "PASS"})
 	if err != nil {
 		return err
 	}
@@ -316,7 +316,7 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		return err
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", OperatorVerification{Checks: append([]string{}, requiredOperatorVerificationChecks...), Evidence: "Synthetic portable canary: the fixed REQ-001/AC-001 fixture exercises the workflow, with no reviewer findings."})
 	if err != nil {
 		return err
 	}
@@ -376,8 +376,8 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 		return err
 	}
 
-	// The whitebox designer contributes a test locator in the delivery snapshot;
-	// review and execution later bind that case to the same confirmed AC.
+	// The canary commits its test and delivery files in one candidate. Review
+	// follows that commit and snapshot registration, so its tests are immutable.
 	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
 		return err
 	}
@@ -391,19 +391,6 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 		return err
 	}
 	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "the delivered whitebox test declaration is committed in the candidate", Procedure: canaryWhiteboxProcedure, Oracle: canaryWhiteboxOracle, Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior", AcceptanceCriteria: []string{"AC-001"}}}, "")
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "whitebox", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "qa-review")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-whitebox-reviewer")
-	if err != nil {
-		return err
-	}
-	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-002", Outcome: "PASS"}}, "", nil, QAReviewRecordOptions{SourceDecisions: []string{"REQ-001=PASS"}, PointDecisions: []string{"AC-001=PASS"}, CaseDecisions: []string{"CASE-002=PASS"}})
 	if err != nil {
 		return err
 	}
@@ -426,6 +413,19 @@ func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot
 	if err != nil {
 		status, _ := (execNativeCommandRunner{}).Run(root, "git", "status", "--porcelain=v1", "--untracked-files=all")
 		return fmt.Errorf("%w (git status: %s)", err, strings.TrimSpace(status))
+	}
+	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "whitebox", false, ""); err != nil {
+		return err
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID = openDispatchID(state, "action", "qa-review")
+	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-whitebox-reviewer")
+	if err != nil {
+		return err
+	}
+	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-002", Outcome: "PASS"}}, "", nil, QAReviewRecordOptions{SourceDecisions: []string{"REQ-001=PASS"}, PointDecisions: []string{"AC-001=PASS"}, CaseDecisions: []string{"CASE-002=PASS"}})
+	if err != nil {
+		return err
 	}
 	for _, mode := range []string{"blackbox", "whitebox"} {
 		if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution", mode, false, ""); err != nil {

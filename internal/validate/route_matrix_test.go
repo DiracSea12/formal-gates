@@ -34,7 +34,7 @@ import (
 // refactor-plan/incremental-seal-plan.md 的枚举双向锁定：任何一侧增删都会使
 // TestPlanCommandEnumerationMatchesFixedLists 失败。
 var fixedPlanWorkflowSubcommands = []string{
-	"start", "show", "status", "next", "diagnose", "resume", "abort", "reset",
+	"start", "show", "status", "next", "diagnose", "guard-preview", "resume", "abort", "reset",
 	"requirement", "route-candidates", "slicing", "settle-findings", "route",
 	"route-add", "qa-worktree", "prepare-gate", "prepare-action",
 	"claim-dispatch", "record-action", "record-gate", "qa-design", "qa-review",
@@ -426,6 +426,14 @@ func TestRouteMatrixWorkflowFace(t *testing.T) {
 		// §2.3：不支持的入口必须显式拒绝或不存在，不得缺省冒充——unsupported 行不得
 		// 出现在实际注册表中；反之实际注册的入口不得绑 unsupported。
 		isUnsupported := row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported"
+		if entry == "guard-preview" {
+			// This public calculator was added in 3.5b. Its stage 0/1 cells must
+			// preserve absence at those stages, while its current binding is read-only.
+			if !isUnsupported || row[runtimeCol] != "3.5b engine 纯计算（`guard.Calculate`）" || row[writerCol] != "无（只读输入文件）" || row[readOnlyCol] != "是" {
+				t.Fatal("guard-preview must preserve historical absence and declare its current read-only 3.5b binding")
+			}
+			isUnsupported = false
+		}
 		if isUnsupported && actual[entry] {
 			t.Fatalf("workflow row %q is bound unsupported but the subcommand is actually registered in workflowSubcommands", entry)
 		}
@@ -1073,7 +1081,8 @@ func TestRouteMatrixUnsupportedFacesExplicitlyRejectedByPublicCLI(t *testing.T) 
 
 	unsupportedWorkflow := []string{}
 	for _, row := range workflowTable.rows {
-		if row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported" {
+		// guard-preview's current 3.5b binding is checked by TestRouteMatrixWorkflowFace.
+		if row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported" && matrixRowEntry(row[entryCol]) != "guard-preview" {
 			unsupportedWorkflow = append(unsupportedWorkflow, matrixRowEntry(row[entryCol]))
 		}
 	}
@@ -1175,7 +1184,7 @@ func TestRouteMatrixPublicUsageMatchesRegistryAndMatrixRows(t *testing.T) {
 	for _, row := range table.rows {
 		entry := matrixRowEntry(row[entryCol])
 		matrixEntries[entry] = true
-		if row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported" {
+		if row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported" && entry != "guard-preview" {
 			unsupported[entry] = true
 		}
 	}

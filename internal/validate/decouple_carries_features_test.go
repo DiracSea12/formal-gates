@@ -11,12 +11,8 @@ import (
 	"time"
 )
 
-// TestInvalidateResetsPerModeReviewDesignAndCaseStatus covers a
-// meaning-changed requirement invalidation must void the per-mode review/design
-// authoritative results AND reset every mode's case ReviewStatus back to PENDING,
-// so the snapshot blackbox gate does not read a stale per-mode PASS and release
-// (the defect fixes — invalidate only reset Actions, which no longer carry
-// qa-review/qa-design after).
+// A meaning change invalidates aggregate QA authority while retaining frozen
+// case approvals for the explicitly affected qa-thaw subset.
 func TestInvalidateResetsPerModeReviewDesignAndCaseStatus(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := perModeReadyDelivery(t, root, pkg, "invalidate-per-mode")
@@ -34,7 +30,7 @@ func TestInvalidateResetsPerModeReviewDesignAndCaseStatus(t *testing.T) {
 	// 语义变更（meaning changed）：作废全部结果。先改写需求文档使修订生效。
 	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
-	state, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
+	state, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,10 +40,11 @@ func TestInvalidateResetsPerModeReviewDesignAndCaseStatus(t *testing.T) {
 	if state.qaReview("whitebox").Status != "" || state.qaDesign("whitebox").Status != "" {
 		t.Fatalf("whitebox per-mode authority not voided: review=%#v design=%#v", state.qaReview("whitebox"), state.qaDesign("whitebox"))
 	}
-	// 各 mode 用例 ReviewStatus 置回 PENDING：快照黑盒门读到旧 PASS 不放行。
+	// Individual approvals remain available for selective thaw, but their old
+	// aggregate review cannot release the snapshot gate.
 	for _, testCase := range append(state.qaModeCases("blackbox"), state.qaModeCases("whitebox")...) {
-		if testCase.ReviewStatus != "PENDING" {
-			t.Fatalf("case %s reviewStatus not reset to PENDING after invalidation: %#v", testCase.ID, testCase)
+		if testCase.ReviewStatus != "PASS" {
+			t.Fatalf("case %s approval was erased before selective thaw: %#v", testCase.ID, testCase)
 		}
 	}
 	// 快照黑盒门不放行：没有旧 PASS 可用。
@@ -188,11 +185,20 @@ func TestIncrementalReviewScopedItemsJudgedAndAcceptedProtected(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 只判 item-A：item-B 仍是 PENDING → 拒绝（所有 PENDING 必须全判）。
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", ReviewItemInput{Key: "item-A", Status: "PASS"}); err == nil || !strings.Contains(err.Error(), "item-B") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification(), ReviewItemInput{Key: "item-A", Status: "PASS"}); err == nil || !strings.Contains(err.Error(), "item-B") {
 		t.Fatalf("partial item judgment was accepted: %v", err)
 	}
 	// 全判：item-A PASS、item-B FAIL（带 finding）。
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "item-B premised wrong"}}, false, "", ReviewItemInput{Key: "item-A", Status: "PASS"}, ReviewItemInput{Key: "item-B", Status: "FAIL", Reason: "item-B premised wrong"})
+	// The incomplete result closed the first attempt; prepare and claim its retry.
+	if _, err := PrepareAction(root, pkg, state.RunID, "product-review", "", false, "", "item-A", "item-B"); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = LoadRunState(root, state.RunID)
+	dispatchID = openDispatchID(state, "action", "product-review")
+	if _, err := ClaimDispatch(root, pkg, state.RunID, dispatchID, "inc-product-review-retry"); err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "item-B premised wrong", "requirements.md:1")}, false, "", fixtureOperatorVerification(), ReviewItemInput{Key: "item-A", Status: "PASS"}, ReviewItemInput{Key: "item-B", Status: "FAIL", Reason: "item-B premised wrong"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +211,7 @@ func TestIncrementalReviewScopedItemsJudgedAndAcceptedProtected(t *testing.T) {
 	state2, _ = LoadRunState(root, state2.RunID)
 	dispatchID2 := openDispatchID(state2, "action", "product-review")
 	state2, _ = ClaimDispatch(root, pkg, state2.RunID, dispatchID2, "inc-product-review-fail")
-	if _, err := RecordAction(root, pkg, state2.RunID, "product-review", dispatchID2, "FAIL", "", nil, false, "", ReviewItemInput{Key: "item-X", Status: "FAIL"}); err == nil || !strings.Contains(err.Error(), "finding") {
+	if _, err := RecordAction(root, pkg, state2.RunID, "product-review", dispatchID2, "FAIL", "", nil, false, "", fixtureOperatorVerification(), ReviewItemInput{Key: "item-X", Status: "FAIL"}); err == nil || !strings.Contains(err.Error(), "finding") {
 		t.Fatalf("FAIL item without a finding was accepted: %v", err)
 	}
 	// PASS 项不可被重判（除非主代理下次 prepare 显式重新声明变更）。
@@ -218,7 +224,7 @@ func TestIncrementalReviewScopedItemsJudgedAndAcceptedProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", ReviewItemInput{Key: "item-A", Status: "FAIL", Reason: "re-open"}); err == nil || !strings.Contains(err.Error(), "cannot be re-judged") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification(), ReviewItemInput{Key: "item-A", Status: "FAIL", Reason: "re-open"}); err == nil || !strings.Contains(err.Error(), "cannot be re-judged") {
 		t.Fatalf("re-judging an accepted PASS item was accepted: %v", err)
 	}
 }
@@ -242,7 +248,7 @@ func TestIncrementalReviewAllPassedTableAllowsEmptyDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "needs tweak"}}, false, "", ReviewItemInput{Key: "item-A", Status: "PASS"})
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "needs tweak", "requirements.md:1")}, false, "", fixtureOperatorVerification(), ReviewItemInput{Key: "item-A", Status: "PASS"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +276,7 @@ func TestIncrementalReviewAllPassedTableAllowsEmptyDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 审查者按提示不下发任何 --item：record-action PASS 必须被接受（修复前的死路是被拒）。
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatalf("record with empty item decisions on an all-passed table was rejected: %v", err)
 	}
 }
@@ -291,13 +297,13 @@ func TestIncrementalReviewMeaningChangedClearsTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", ReviewItemInput{Key: "item-A", Status: "PASS"})
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification(), ReviewItemInput{Key: "item-A", Status: "PASS"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}

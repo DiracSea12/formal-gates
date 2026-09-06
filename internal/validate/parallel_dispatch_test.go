@@ -90,10 +90,10 @@ func TestClaimRejectsParallelSameFunction(t *testing.T) {
 	}
 }
 
-// TestClaimCleansUpOldOpenEmptyTickets covers claiming a fresh
-// dispatch automatically stales old OPEN empty tickets of the same function (no
-// subagent / no start event) so they never block a claim.
-func TestClaimCleansUpOldOpenEmptyTickets(t *testing.T) {
+// TestPrepareReusesSameOpenTaskKey covers A1 signature idempotence: repeating
+// prepare for the same still-OPEN logical obligation returns that canonical
+// dispatch instead of creating another empty ticket.
+func TestPrepareReusesSameOpenTaskKey(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "open-cleanup", "custom", []string{"quality"})
 	// 第一张 OPEN 空票（未认领、无子代理）。
@@ -102,22 +102,21 @@ func TestClaimCleansUpOldOpenEmptyTickets(t *testing.T) {
 	if loaded.Dispatches[first].Status != "OPEN" {
 		t.Fatalf("first dispatch must be OPEN: %#v", loaded.Dispatches[first])
 	}
-	// 同功能第二张票：OPEN 空票不触发续用强制，prepare 也不作废第一张。
+	// 相同 signature 的第二次 prepare 直接返回第一张票的规范提示词。
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	loaded, _ = LoadRunState(root, state.RunID)
-	fresh := openDispatchID(loaded, "gate", "quality")
-	if fresh == "" || fresh == first {
-		t.Fatalf("fresh gate dispatch was not prepared: %#v", loaded.Dispatches)
+	reused := openDispatchID(loaded, "gate", "quality")
+	if reused != first {
+		t.Fatalf("same OPEN obligation was not reused: %#v", loaded.Dispatches)
 	}
-	// 认领新派发：同功能旧 OPEN 空票自动作废清掉，认领不被挡。
-	if _, err := ClaimDispatch(root, pkg, state.RunID, fresh, "gate-reviewer"); err != nil {
+	if _, err := ClaimDispatch(root, pkg, state.RunID, reused, "gate-reviewer"); err != nil {
 		t.Fatal(err)
 	}
 	loaded, _ = LoadRunState(root, state.RunID)
-	if loaded.Dispatches[first].Status != "STALE" || loaded.Dispatches[fresh].Status != "CLAIMED" {
-		t.Fatalf("old OPEN ticket was not cleaned up at claim: %#v", loaded.Dispatches)
+	if loaded.Dispatches[first].Status != "CLAIMED" || len(loaded.DispatchObligations[loaded.Dispatches[first].TaskKey].DispatchIDs) != 1 {
+		t.Fatalf("reused OPEN ticket did not preserve one attempt: %#v", loaded.Dispatches)
 	}
 }
 

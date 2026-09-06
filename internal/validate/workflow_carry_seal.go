@@ -86,7 +86,7 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 				return fmt.Errorf("Carry runtime error cannot include decisions")
 			}
 			state.Actions["carry"] = ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID}
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			completeReviewWaveIfReady(state)
 			return nil
 		}
@@ -120,7 +120,7 @@ func RecordCarry(root, packageRoot, runID, dispatchID string, decisions []CarryI
 			}
 		}
 		state.Actions["carry"] = ActionResult{Status: "PASS", DispatchID: dispatch.ID}
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, "PASS", "")
 		resolveCarryBoundary(state)
 		return nil
 	})
@@ -145,7 +145,7 @@ func eligibleMainCarryResults(state RunState, catalogChanged bool) []string {
 		// Active guarantees require a FULL execution on the current candidate.
 		// Prior PASS results remain audit evidence but are never eligible for the
 		// snapshot-rebinding Carry shortcut, even before a scope is recorded.
-		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive {
+		if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && len(state.QACaseSets) == 0 {
 			continue
 		}
 		// 直取该 mode 的执行结果（不再经过只返回 current-snapshot 结果的
@@ -281,6 +281,11 @@ func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runI
 // evidence exists. Single-commit or empty ranges are not rewritten; SVN/P4 are
 // never squashed.
 func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string, opts ...SealOptions) (RunSummary, error) {
+	ownerUnlock, err := lockOwnerCost(root)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer ownerUnlock()
 	options := SealOptions{}
 	if len(opts) > 0 {
 		options = opts[0]
@@ -408,6 +413,7 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			// the new current candidate, and require fresh verification before a
 			// subsequent Seal can complete.
 			state.CurrentSnapshot = newSnapshot
+			bindFrozenCaseSetsToSnapshot(&state)
 			state.PreRepairSnapshot = ""
 			staleAllDispatches(&state)
 			for id, authorization := range state.SkipAuthorizations {
@@ -424,14 +430,6 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	}
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance {
-		// 分片实例：封板不产出独立封板文件；成本投影写入 sidecar，供主干
-		// （保留总任务实例）最终封板时并入主干封板文件。成本为空（从未记录派发
-		// 用量）时不写 sidecar，主干无从并入、也无须清理。
-		if state.Cost != nil {
-			if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
-				return RunSummary{}, err
-			}
-		}
 		if err := saveSliceGuaranteeRecord(root, state); err != nil {
 			return RunSummary{}, err
 		}
@@ -456,6 +454,15 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	// （单一来源），不依赖隔离工作区残留；CLI 完成、不经 agent 手动合回。
 	if !sliceInstance {
 		if err := materializeBlackboxCases(root, state); err != nil {
+			return RunSummary{}, err
+		}
+	}
+	// Freeze the owner interval only after materialization succeeds. A failed
+	// pre-terminal Seal can be retried with a later end snapshot; a durable
+	// terminal checkpoint never meters again during summary/cleanup recovery.
+	finishOwnerCost(&state)
+	if sliceInstance {
+		if err := SaveSliceCost(root, state.SplitMasterRunID, SliceCostRecord{RunID: state.RunID, Cost: state.Cost}); err != nil {
 			return RunSummary{}, err
 		}
 	}
@@ -543,6 +550,11 @@ func materializeBlackboxCases(root string, state RunState) error {
 }
 
 func finishRun(root, runID, status string) (RunSummary, error) {
+	ownerUnlock, err := lockOwnerCost(root)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer ownerUnlock()
 	path := RunStatePath(root, runID)
 	release, err := acquireStateLock(path)
 	if err != nil {
@@ -572,6 +584,7 @@ func finishRun(root, runID, status string) (RunSummary, error) {
 	if err := requireActive(state); err != nil {
 		return RunSummary{}, err
 	}
+	finishOwnerCost(&state)
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
 	if sliceInstance && state.Cost != nil {
 		// 分片实例：中止同样不产出独立封板文件；已记录的成本投影写入 sidecar，
@@ -700,6 +713,19 @@ func isSealScopedAuthorization(authorization SkipAuthorization) bool {
 }
 
 func requireSelectedResultsResolved(state RunState) error {
+	if wave, ok := state.ReviewWaves[state.ActiveReviewWaveID]; ok && wave.Status != reviewWaveComplete {
+		// A gate PASS can still carry mandatory P2 work. Result collection alone
+		// does not prove that adjudication and its repair/carry are finished.
+		advisoriesOnly := wave.Status == reviewWaveAdjudicating
+		for _, finding := range state.PostReviewFindings {
+			if finding.WaveID == wave.ID && postReviewFindingRequiresRepair(finding) {
+				advisoriesOnly = false
+			}
+		}
+		if !advisoriesOnly {
+			return fmt.Errorf("review-wave %s is %s; finish adjudication and required repair completion before Seal", wave.ID, wave.Status)
+		}
+	}
 	guaranteeWaivesQA := state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeWaived
 	// seal 前按选中 mode 校验各 mode 均已记录执行，避免单个 mode
 	// 记录 PASS 而另一 mode 被静默跳过。
@@ -740,6 +766,13 @@ func selectedResultStatus(state RunState, id string) string {
 	if isQAMode(id) {
 		// QA 模式的状态按该 mode 的有效执行结果读取（per-mode 或合并单派发）。
 		return qaModeResult(state, qaDispatchMode(id)).Status
+	}
+	if state.Gates[id].Status == "FAIL" {
+		for _, wave := range state.ReviewWaves {
+			if wave.Snapshot == state.CurrentSnapshot && wave.Status != reviewWaveInvalidated && adjudicatedTargetPassed(state, wave, reviewWaveTargetKey("gate", id, "")) {
+				return "PASS"
+			}
+		}
 	}
 	return state.Gates[id].Status
 }

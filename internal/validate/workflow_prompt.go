@@ -15,7 +15,11 @@ import (
 // dispatch for the same gate is interrupted, the CLI forces a resume unless the
 // user authorizes a fresh dispatch (the source is recorded in ReviewOverrides).
 func PrepareGate(root, packageRoot, runID, gateID string, userRequested bool, userReason string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	actionInput := digestValue(struct {
+		UserRequested bool
+		UserReason    string
+	}{userRequested, strings.TrimSpace(userReason)})
+	return prepareBoundPrompt(root, packageRoot, runID, gateID, "gate", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute, _ bool, _ string) (string, error) {
 		if err := requireTransition(*state, "gate", gateID); err != nil {
 			return "", err
 		}
@@ -44,7 +48,25 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 		return prepareDevelopmentAction(root, packageRoot, runID, userRequested, userReason)
 	}
 	reviewerRequired := actionID != "requirements-clarification"
-	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	normalizedScope := append([]string{}, scope...)
+	for index := range normalizedScope {
+		normalizedScope[index] = strings.TrimSpace(normalizedScope[index])
+	}
+	sort.Strings(normalizedScope)
+	actionInput := ""
+	if isPreDevelopmentReviewAction(actionID) {
+		// The review scope is an input. Explicit re-review is additionally bound
+		// to its prior semantic result in prepareBoundPrompt; retries retain that
+		// same anchor and finite-attempt budget.
+		actionInput = digestValue(struct{ Scope []string }{normalizedScope})
+	} else {
+		actionInput = digestValue(struct {
+			Scope         []string
+			UserRequested bool
+			UserReason    string
+		}{normalizedScope, userRequested, strings.TrimSpace(userReason)})
+	}
+	return prepareBoundPrompt(root, packageRoot, runID, actionID, "action", reviewerRequired, mode, userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute, userRequested bool, userReason string) (string, error) {
 		if actionID == "product-review" {
 			// An activated structured requirement makes every REQ's obligation→AC
 			// completeness a mandatory, enumerated product-review item. The normal
@@ -77,7 +99,7 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 			state.ReviewItemsByAction[actionID] = items
 		}
 		overridePassRound := userRequested && (actionID == "product-review" || actionID == "start-readiness") && state.Actions[actionID].Status == "PASS"
-		if !overridePassRound {
+		if !overridePassRound && actionID != "qa-review" {
 			// qa-design / qa-review / qa-execution 的 transition 判定都按派发 mode
 			// 传递 target，使 requireTransition 能读对应 mode 的 review/design 结果。
 			target := ""
@@ -88,15 +110,11 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 			if err := requireTransition(*state, actionID, target); err != nil {
 				return "", err
 			}
-		} else if state.ReviewOverrides == nil {
+		} else if overridePassRound && state.ReviewOverrides == nil {
 			state.ReviewOverrides = map[string]string{}
 		}
 		if overridePassRound {
-			reason := strings.TrimSpace(userReason)
-			if reason == "" {
-				reason = "user requested a re-review of an already-passed review round"
-			}
-			state.ReviewOverrides[actionID] = reason
+			state.ReviewOverrides[actionID] = strings.TrimSpace(userReason)
 		}
 		// 黑盒/白盒各自独立派发、并行执行，同一 snapshot 下每个 mode
 		// 的 qa-execution 各记录一次；同 mode 已出权威结果时才挡后续同 mode 派发。
@@ -136,7 +154,10 @@ func PrepareAction(root, packageRoot, runID, actionID, mode string, userRequeste
 // prepareBoundPrompt composes and registers a prepared dispatch. mode selects the
 // QA isolation binding for qa-design/qa-review blackbox dispatches; userRequested
 // carries the explicit user override signal for the review-rule enforcement.
-func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason string, compose func(*RunState, PromptCatalog, PromptRoute) (string, error)) (string, error) {
+func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, reviewerRequired bool, mode string, userRequested bool, userReason, actionInput string, compose func(*RunState, PromptCatalog, PromptRoute, bool, string) (string, error)) (string, error) {
+	if userRequested && strings.TrimSpace(userReason) == "" {
+		return "", fmt.Errorf("explicit re-review requires a non-empty --user-reason")
+	}
 	prompt := ""
 	_, err := mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
@@ -150,20 +171,72 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 				return err
 			}
 		}
-		// 续用强制：同一职责、源快照不变、任务内容不变且未带 --user-requested
-		// 时，拒绝 prepare 同目标新派发，指示恢复原代理继续同一派发；用户显式授权
-		// 时记录来源后放行新派发。
+		// 开发开始后 qa-design/qa-review 派发 mode 必填：省略 --mode 会静默绑主工作区、
+		// 黑盒代理可读开发代码、隔离被绕过。快速路径（开发尚未开始，路线未确认时的预演
+		// 设计）空 mode 合法，仅开发开始后必填。
+		if (target == "qa-design" || target == "qa-review") && developmentStarted(*state) && mode == "" {
+			return fmt.Errorf("%s dispatch requires --mode blackbox or whitebox after development starts", target)
+		}
+		if targetKind == "action" && target == "qa-review" {
+			// A completed review remains authoritative after its isolation worktree
+			// is normally cleaned up. Report that result before checking the tree.
+			if err := requireTransition(*state, target, mode); err != nil {
+				return err
+			}
+			if err := requireWhiteboxReviewSnapshot(root, *state, mode); err != nil {
+				return err
+			}
+		}
+		// Identical pending or claimed work returns its canonical ticket before
+		// considering replacement-agent or new-wave preparation rules.
+		if targetKind == "action" && isPreDevelopmentReviewAction(target) {
+			if err := requirePreDevelopmentReviewPreparation(*state, target, userRequested, userReason); err != nil {
+				return err
+			}
+			// An explicit re-review names the prior semantic result. That anchor
+			// remains stable across runtime/invalid retries of the authorized round.
+			reason := strings.TrimSpace(userReason)
+			if !userRequested {
+				reason = state.ReviewOverrides[target]
+			}
+			overrideInput := digestValue(struct{ Input, Result, Reason string }{actionInput, state.PreDevelopmentReviewSeries[target].EffectiveReviewStatus.ResultDigest, reason})
+			if !userRequested && reason != "" {
+				_, retrySignature := dispatchIdentity(*state, catalog, targetKind, target, mode, overrideInput)
+				for _, prior := range state.Dispatches {
+					if prior.Signature == retrySignature && prior.UserRequested && (prior.Status == "OPEN" || prior.Status == "CLAIMED" || prior.ResultStatus == "RUNTIME_ERROR" || prior.ResultStatus == "REJECTED_INVALID_RESULT") {
+						userRequested, userReason = true, reason
+						break
+					}
+				}
+			}
+			if userRequested {
+				actionInput = overrideInput
+				recordReviewOverride(state, target, userReason)
+			}
+		}
+		taskKey, signature := dispatchIdentity(*state, catalog, targetKind, target, mode, actionInput)
+		if existingPrompt, reused, err := duplicateDispatchPrompt(*state, signature); err != nil {
+			return err
+		} else if reused {
+			prompt = existingPrompt
+			return nil
+		}
 		if err := requireResumeInterrupted(root, *state, catalog, targetKind, target, mode); err != nil {
 			if !userRequested {
 				return err
 			}
 			recordReviewOverride(state, target, userReason)
 		}
-		// 开发开始后 qa-design/qa-review 派发 mode 必填：省略 --mode 会静默绑主工作区、
-		// 黑盒代理可读开发代码、隔离被绕过。快速路径（开发尚未开始，路线未确认时的预演
-		// 设计）空 mode 合法，仅开发开始后必填。
-		if (target == "qa-design" || target == "qa-review") && developmentStarted(*state) && mode == "" {
-			return fmt.Errorf("%s dispatch requires --mode blackbox or whitebox after development starts", target)
+		if targetKind == "action" && target == "qa-execution" {
+			wave := state.ReviewWaves[state.ActiveReviewWaveID]
+			if wave.RepairPlan != nil && wave.RepairPlan.Status == "P2_COMPLETED" && wave.RepairPlan.RepairSnapshot == state.CurrentSnapshot && wave.Snapshot != state.CurrentSnapshot {
+				if err := initializeReviewWaveState(state); err != nil {
+					return err
+				}
+			}
+		}
+		if err := requireReviewWaveDispatch(*state, targetKind, target, mode); err != nil {
+			return err
 		}
 		blackbox := mode == "blackbox" && (target == "qa-design" || target == "qa-review")
 		if blackbox {
@@ -176,11 +249,16 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 			}
 		}
 		wave := 0
-		if targetKind == "gate" {
+		if state.ActiveReviewWaveID != "" && (targetKind == "gate" || (targetKind == "action" && target == "qa-execution")) {
+			wave = state.ReviewWaves[state.ActiveReviewWaveID].Number
+		} else if targetKind == "gate" {
 			wave = currentGateReviewWave(*state)
 		}
-		attempt := nextDispatchAttempt(*state, targetKind, target, wave)
 		dispatchID, err := newDispatchID()
+		if err != nil {
+			return err
+		}
+		attempt, err := registerDispatchAttempt(state, dispatchID, taskKey, signature, targetKind, target, mode)
 		if err != nil {
 			return err
 		}
@@ -190,7 +268,7 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 			route.CurrentSnapshot = state.BaseSnapshot
 		}
 		route.DispatchID, route.DispatchAttempt, route.ReviewWave = dispatchID, attempt, wave
-		prompt, err = compose(state, catalog, route)
+		prompt, err = compose(state, catalog, route, userRequested, userReason)
 		if err != nil {
 			return err
 		}
@@ -220,7 +298,8 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 		if err != nil {
 			return err
 		}
-		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested}
+		state.Dispatches[dispatchID] = PreparedDispatch{ID: dispatchID, Target: target, TargetKind: targetKind, Attempt: attempt, ReviewWave: wave, PromptHash: promptHash, PromptFile: promptFile, RequirementRevision: state.RequirementRevision, CatalogRevision: state.CatalogRevision, SourceSnapshot: source, ReviewerRequired: reviewerRequired, Status: "OPEN", Mode: mode, ReviewAuthorizationID: reviewAuthorizationForDispatch(*state, target, dispatchID), UserRequested: userRequested, TaskKey: taskKey, Signature: signature}
+		bindDispatchToReviewWave(state, state.Dispatches[dispatchID])
 		return nil
 	})
 	return prompt, err
@@ -291,6 +370,14 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 		}
 		// 设计轮只动本派发 mode 的用例，提示词只列该 mode 的既有用例。
 		modeCases := state.qaModeCases(mode)
+		if caseSet := state.QACaseSets[mode]; caseSet.Status == caseSetReviewed {
+			lines = append(lines, "Absorb the following pending suggestions from PASS QA Review "+caseSet.ReviewDispatchID+". Choose the test method independently and return bounded --per-suggestion changes with the exact --suggestion-id for each item; every pending suggestion must be absorbed before freeze. This path does not request another QA Review.")
+			for _, suggestion := range caseSet.Suggestions {
+				if suggestion.Status != "ABSORBED" {
+					lines = append(lines, fmt.Sprintf("- %s [%s]: %s (locations: %s)", suggestion.ID, suggestion.Severity, suggestion.Message, strings.Join(suggestion.Locations, ", ")))
+				}
+			}
+		}
 		if len(modeCases) != 0 {
 			// 增量契约（改动 2）：qa-design 只返回变更——新增用例不带 id（CLI 分配）、修改
 			// 用例用 --case-id 引用既有 id、删除用例用 --remove-case 列出 id；未提及用例及
@@ -461,17 +548,35 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 }
 
 func prepareDevelopmentAction(root, packageRoot, runID string, userRequested bool, userReason string) (string, error) {
-	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, func(state *RunState, catalog PromptCatalog, route PromptRoute) (string, error) {
+	if current, err := LoadRunState(root, runID); err == nil && convergenceEnabled(current) && (current.Actions["development-worker"].Status == developmentComplete || current.Actions["development-worker"].Status == developmentVerified) {
+		if _, err := mutateRun(root, runID, func(state *RunState) error { return ensureUnifiedRepairPlan(state) }); err != nil {
+			return "", err
+		}
+	}
+	actionInput := digestValue(struct {
+		UserRequested bool
+		UserReason    string
+	}{userRequested, strings.TrimSpace(userReason)})
+	return prepareBoundPrompt(root, packageRoot, runID, "development-worker", "action", true, "", userRequested, userReason, actionInput, func(state *RunState, catalog PromptCatalog, route PromptRoute, _ bool, _ string) (string, error) {
 		if state.RetainedOverall {
 			return "", fmt.Errorf("a retained overall run keeps implementation and repair ownership in slice runs; record merged slice snapshots with workflow snapshot")
+		}
+		status := state.Actions["development-worker"].Status
+		if convergenceEnabled(*state) && (status == developmentComplete || status == developmentVerified) {
+			if err := ensureUnifiedRepairPlan(state); err != nil {
+				return "", err
+			}
 		}
 		if err := requireTransition(*state, "development-worker", ""); err != nil {
 			return "", err
 		}
 		detail := ""
-		status := state.Actions["development-worker"].Status
 		if status == developmentComplete || status == developmentVerified || status == developmentRepairPrepared {
-			detail = repairInput(*state)
+			if convergenceDetail, ok := convergenceRepairInput(*state); ok {
+				detail = convergenceDetail
+			} else {
+				detail = repairInput(*state)
+			}
 		}
 		prompt, err := ComposeActionPrompt(catalog, "development-worker", route, detail)
 		if err != nil {

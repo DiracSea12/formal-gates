@@ -23,6 +23,7 @@ func TestPerSuggestionAbsorbApprovesCasesWithoutNewReview(t *testing.T) {
 	if review := state.qaReview(""); review.Status != "PASS" {
 		t.Fatalf("review result after P2-only round=%#v", review)
 	}
+	suggestionID := state.QACaseSets[""].Suggestions[0].ID
 	// 吸收轮：新增一个用例 + 实质修改既有黑盒用例 + 原样重交既有白盒用例（无实质吸收，
 	// 不打溯源）。
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
@@ -30,7 +31,7 @@ func TestPerSuggestionAbsorbApprovesCasesWithoutNewReview(t *testing.T) {
 		{CaseID: "CASE-002", Mode: "blackbox", Description: "public workflow succeeds at the boundary", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"},
 		{Mode: "blackbox", Description: "boundary case absorbed from the P2 suggestion", Procedure: "run the public command at the boundary", Oracle: "observable boundary behavior"},
 		{CaseID: "CASE-001", Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"},
-	}, "", QADesignRecordOptions{PerSuggestion: true})
+	}, "", QADesignRecordOptions{PerSuggestion: true, SuggestionIDs: []string{suggestionID}})
 	if err != nil {
 		t.Fatalf("per-suggestion absorption was rejected: %v", err)
 	}
@@ -63,9 +64,8 @@ func TestPerSuggestionAbsorbApprovesCasesWithoutNewReview(t *testing.T) {
 	}
 }
 
-// TestPerSuggestionRequiresRecordedP2Finding asserts the absorption flag is
-// rejected when the mode's latest qa-review PASSed without any recorded P2
-// set-level finding (nothing to absorb), and when the review FAILed.
+// TestPerSuggestionRequiresRecordedP2Finding asserts a clean PASS freezes the
+// case-set immediately, so there is no suggestion-absorption round to enter.
 func TestPerSuggestionRequiresRecordedP2Finding(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := beginQA(t, root, pkg, "per-suggestion-no-p2")
@@ -75,10 +75,9 @@ func TestPerSuggestionRequiresRecordedP2Finding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	_, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "unbacked absorb", Procedure: "run the public command", Oracle: "observable success"}}, "", QADesignRecordOptions{PerSuggestion: true})
-	if err == nil || !strings.Contains(err.Error(), "requires at least one recorded P2 set-level finding") {
-		t.Fatalf("absorption without a recorded P2 finding was accepted: %v", err)
+	_, err = PrepareAction(root, pkg, state.RunID, "qa-design", "", false, "")
+	if err == nil || !strings.Contains(err.Error(), "case-set is FROZEN") {
+		t.Fatalf("absorption after a clean frozen review was accepted: %v", err)
 	}
 }
 
@@ -92,7 +91,7 @@ func TestPerSuggestionRejectedOnFailedReviewOrReplaceAll(t *testing.T) {
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "ps-reviewer-fail")
 	var err error
 	// 各用例 PASS + 集合级 P1 覆盖遗漏 → 审查动作 FAIL。
-	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "missing failure-path coverage"}})
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{fixtureBlockingFinding("P1", "missing failure-path coverage", "requirements.md:1")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -97,14 +97,14 @@ func genericHookExitCode(decision HookDecision) int {
 	return 0
 }
 
-func Hook(payload []byte) (HookDecision, error) {
+func Hook(payload []byte, providers ...string) (HookDecision, error) {
 	var decoded any
 	if err := json.Unmarshal(trimJSONBOM(payload), &decoded); err != nil {
 		return HookDecision{}, err
 	}
 
 	// 捕获 workflow start 的发起对话身份（owner 作用域），先于一切判定。
-	captureStartOwner(decoded)
+	captureStartOwner(decoded, providers...)
 
 	// 主代理/审查类代理写阻断：对代码与 run 状态的直接写入（Edit/Write/MultiEdit、
 	// git commit、写文件 Bash）在活动正式 run 下按调用者身份阻断；formal-gates CLI 命令

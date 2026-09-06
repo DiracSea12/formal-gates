@@ -137,7 +137,7 @@ func startGuaranteeRun(t *testing.T, id string, retained bool) (string, string, 
 		t.Fatal(err)
 	}
 	dispatch := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
-	state, err = RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func passGuaranteeProductReview(t *testing.T, root, pkg string, state RunState) 
 	for _, req := range state.RequirementGuarantee.Projection.Requirements {
 		items = append(items, ReviewItemInput{Key: guaranteeProductReviewKey(req.ID), Status: "PASS"})
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatch, "PASS", "", nil, false, "", items...)
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatch, "PASS", "", nil, false, "", fixtureOperatorVerification(), items...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestRequirementConfirmationPrecheckAndProductCompletenessGate(t *testing.T)
 		t.Fatal(err)
 	}
 	dispatch := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
-	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "", nil); err == nil || !strings.Contains(err.Error(), "precheck failed") {
@@ -349,7 +349,7 @@ func TestRequirementConfirmationPrecheckAndProductCompletenessGate(t *testing.T)
 		t.Fatal(err)
 	}
 	bad := []ReviewItemInput{{Key: guaranteeProductReviewKey("REQ-001"), Status: "FAIL", Reason: "second mandatory obligation has no AC"}}
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatch, "PASS", "", nil, false, "", bad...); err == nil || !strings.Contains(err.Error(), "cannot PASS") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatch, "PASS", "", nil, false, "", fixtureOperatorVerification(), bad...); err == nil || !strings.Contains(err.Error(), "cannot PASS") {
 		t.Fatalf("product review passed an uncovered obligation: %v", err)
 	}
 }
@@ -421,7 +421,7 @@ func TestRequirementGuaranteeNonSplitPassAndWaiver(t *testing.T) {
 	})
 }
 
-func TestActiveGuaranteeRepairRequiresCurrentCandidateFullExecution(t *testing.T) {
+func TestActiveGuaranteeRepairUsesAffectedThenFinalFull(t *testing.T) {
 	root, pkg, state := readyGuaranteeRoute(t, "guarantee-repair-full", false)
 	state = recordSlicing(t, root, pkg, state, "no-split")
 	state = setRoute(t, root, pkg, state, "custom", []string{blackboxQAID, "quality"})
@@ -433,7 +433,7 @@ func TestActiveGuaranteeRepairRequiresCurrentCandidateFullExecution(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	state = recordGateResult(t, root, pkg, state, "quality", "guarantee-repair-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair the implementation"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "guarantee-repair-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repair the implementation", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 || state.Actions["development-worker"].Status != developmentVerified {
 		t.Fatalf("blocking review wave did not open a repair round: %#v", state.Actions["development-worker"])
 	}
@@ -442,31 +442,34 @@ func TestActiveGuaranteeRepairRequiresCurrentCandidateFullExecution(t *testing.T
 	if state.PreRepairSnapshot != oldSnapshot {
 		t.Fatalf("pre-repair snapshot = %q, want %q", state.PreRepairSnapshot, oldSnapshot)
 	}
-	if current := state.qaExecution(""); current.Status != "PENDING" {
-		t.Fatalf("old guarantee QA result stayed current after repair: %#v", current)
+	if current := state.qaExecution(""); current.Status != "PASS" || current.Snapshot != oldSnapshot {
+		t.Fatalf("old guarantee QA PASS was not retained for bounded inheritance: %#v", current)
 	}
 	prior := state.priorQAExecution("")
 	if prior == nil || prior.Status != "PASS" || prior.Snapshot != oldSnapshot {
 		t.Fatalf("old guarantee QA result was not retained only as prior evidence: %#v", prior)
 	}
-	if eligible := eligibleMainCarryResults(state, false); len(eligible) != 0 {
-		t.Fatalf("active guarantee exposed prior QA PASS to Carry: %v", eligible)
-	}
-	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "implementation repair does not alter behavior"); err == nil || !strings.Contains(err.Error(), "no prior passing selected results") {
-		t.Fatalf("active guarantee accepted QA Carry before scope: %v", err)
-	}
-	if _, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, "rerun one case"); err == nil || !strings.Contains(err.Error(), "requires FULL QA execution") {
-		t.Fatalf("active guarantee accepted AFFECTED repair execution: %v", err)
-	}
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "rerun every approved case on the repaired candidate")
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, "the repaired path affects this case")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.ExecutionScopes[""].Decision != "FULL" {
-		t.Fatalf("FULL repair execution scope was not recorded: %#v", state.ExecutionScopes)
+	if state.ExecutionScopes[""].Decision != "AFFECTED" || state.ExecutionScopes[""].Origin != "MAIN_AGENT" {
+		t.Fatalf("AFFECTED repair execution scope was not recorded: %#v", state.ExecutionScopes)
+	}
+	execution = prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
+	state, err = RecordQAExecution(root, pkg, state.RunID, execution, passingExecution(qaExecutionRequiredCases(state, "")), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "run the final full regression on this candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ExecutionScopes[""].Decision != "FULL" || state.qaExecution("").Status != "PENDING" {
+		t.Fatalf("final FULL regression did not reopen the current candidate: scope=%#v execution=%#v", state.ExecutionScopes[""], state.qaExecution(""))
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, ""); err != nil {
-		t.Fatalf("current-candidate FULL QA execution was not dispatchable: %v", err)
+		t.Fatalf("final-candidate FULL QA execution was not dispatchable: %v", err)
 	}
 }
 
@@ -497,7 +500,7 @@ func TestRequirementGuaranteeRouteArtifactAndRevisionBehavior(t *testing.T) {
 			t.Fatal(err)
 		}
 		dispatch := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
-		if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, ""); err != nil {
+		if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 			t.Fatal(err)
 		}
 		state, err = UpdateRequirement(root, pkg, state.RunID, "", true, "", nil)
@@ -559,11 +562,20 @@ func TestRequirementGuaranteeFullRouteUsesUnionAcrossQAModes(t *testing.T) {
 	state = advanceGuaranteeSnapshot(t, root, pkg, state, "full-union")
 
 	const whiteboxTestFile = "whitebox_delivered_test.go"
+	design := prepareDispatch(t, root, pkg, state.RunID, "qa-design", whiteboxQAID)
 	writeTestFile(t, filepath.Join(root, whiteboxTestFile), whiteboxDeliveredTestCode)
-	state = recordGuaranteeDesignAndReview(t, root, pkg, state, whiteboxQAID, []QACaseInput{{Mode: "whitebox", Description: "second structure", Procedure: "run structure test", Oracle: "second passes", Test: whiteboxTestFile + "::TestWhiteboxStructure", AcceptanceCriteria: []string{"AC-009"}}})
+	state, err := RecordQADesign(root, pkg, state.RunID, design, []QACaseInput{{Mode: "whitebox", Description: "second structure", Procedure: "run structure test", Oracle: "second passes", Test: whiteboxTestFile + "::TestWhiteboxStructure", AcceptanceCriteria: []string{"AC-009"}}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	commitAll(t, root, "whitebox guarantee test")
-	var err error
 	state, err = AdvanceSnapshot(root, pkg, state.RunID, "", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "full-union-whitebox-review", whiteboxQAID)
+	decisions, options := guaranteeReviewInputs(state, whiteboxQAID)
+	state, err = RecordQAReview(root, pkg, state.RunID, review, decisions, "", nil, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +677,7 @@ func TestRequirementGuaranteeSplitMasterFinalFullExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	dispatch := prepareDispatch(t, root, pkg, slice.RunID, "requirements-clarification")
-	slice, err = RecordAction(root, pkg, slice.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, "")
+	slice, err = RecordAction(root, pkg, slice.RunID, "requirements-clarification", dispatch, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}

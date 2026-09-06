@@ -43,7 +43,10 @@ func stubCodexTranscript(t *testing.T, transcript string) {
 // given reviewer identity so the lifecycle binding carries that identity.
 func prepareClaimedAction(t *testing.T, root, pkg string, state RunState, target, reviewer string) string {
 	t.Helper()
-	if _, err := PrepareAction(root, pkg, state.RunID, target, "", false, ""); err != nil {
+	// A routed fixture already completed readiness. Cost recording is tested
+	// on an explicitly requested additional review, not an automatic duplicate.
+	repeat := state.Actions[target].Status == "PASS"
+	if _, err := PrepareAction(root, pkg, state.RunID, target, "", repeat, "isolated cost fixture requests an additional review"); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := LoadRunState(root, state.RunID)
@@ -62,7 +65,7 @@ func TestCostBackfillParsesCapturedTranscript(t *testing.T) {
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-backfill"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
 	stubCodexTranscript(t, writeCostFixture(t))
-	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +97,7 @@ func TestProductReviewCostBackfillParsesCapturedTranscript(t *testing.T) {
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "cost-product-review"))
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "product-review", "cost-product-review")
 	stubCodexTranscript(t, writeCostFixture(t))
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +115,7 @@ func TestCostBackfillMarksUnavailableWithoutTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-unavailable"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
-	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +138,7 @@ func TestCostBackfillIgnoresUnparseableTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubCodexTranscript(t, fixture)
-	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +154,7 @@ func TestCostBackfillIsIdempotentPerDispatch(t *testing.T) {
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-idempotent"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
 	stubCodexTranscript(t, writeCostFixture(t))
-	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}

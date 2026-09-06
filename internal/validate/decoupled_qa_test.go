@@ -118,9 +118,14 @@ func TestWhiteboxDesignDoesNotClearBlackboxExecution(t *testing.T) {
 	if state.qaExecution("blackbox").Status != "PASS" || len(state.qaExecution("blackbox").Cases) != len(blackboxCases) {
 		t.Fatalf("blackbox execution not recorded: %#v", state.qaExecution("blackbox"))
 	}
-	// 白盒设计轮（改写白盒用例）：不得清除黑盒执行结果。
+	// 对外结构发生变化，先按受支持类别解冻白盒用例。解冻和后续白盒设计不得清除
+	// 已记录的黑盒执行结果。
+	whiteboxCase := state.qaModeCases("whitebox")[0]
+	state, err := ThawQACaseSet(root, pkg, state.RunID, "whitebox", "EXTERNAL_BEHAVIOR", "documented structure changed", state.RequirementRevision, []string{whiteboxCase.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "whitebox")
-	var err error
 	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "whitebox", Description: "structure revised", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxStructureRevised"}}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +150,7 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 	// Wave 1：黑盒 FAIL、白盒 FAIL、质量 FAIL → 全部记录，波次完成。
 	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: bbCases[0].ID, Outcome: "FAIL", Procedure: "ran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior was broken", OracleResult: "the captured output differed from the approved oracle"}})
 	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: wbCases[0].ID, Outcome: "FAIL", Procedure: "ran the bound whitebox test on the current candidate", Observation: "the named test failed with captured diagnostics", OracleResult: "the captured test result differed from the approved oracle"}})
-	state = recordGateResult(t, root, pkg, state, "quality", "pm-prior-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "pm-prior-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("wave 1 count=%d", state.CompletedReviewWaves)
 	}
@@ -155,8 +160,8 @@ func TestPerModePriorSurvivesOtherModeRecord(t *testing.T) {
 		t.Fatalf("per-mode priors were not preserved: %#v", state.PriorQAExecutionByMode)
 	}
 	blackboxPriorSnapshot := state.priorQAExecution("blackbox").Snapshot
-	// 黑盒 FULL scope 重跑 PASS：当前结果被替换，黑盒与白盒 prior 审计都保留。
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "")
+	// 普通返修固定按 AFFECTED 重跑；当前结果被替换，黑盒与白盒 prior 审计都保留。
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{bbCases[0].ID}, "blackbox failure is affected")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +311,7 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 	// 两个 mode 均 PASS 执行 + 一个门 FAIL → 波次完成 → 修复快照。
 	state = recordModeQA(t, root, pkg, state, "blackbox", passingExecution(bbCases))
 	state = recordModeQA(t, root, pkg, state, "whitebox", passingExecution(wbCases))
-	state = recordGateResult(t, root, pkg, state, "quality", "pm-carry-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "pm-carry-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("wave 1 count=%d", state.CompletedReviewWaves)
 	}
@@ -332,7 +337,7 @@ func TestPerModeCarryInheritsPreRepairPASS(t *testing.T) {
 }
 
 // TestExplicitPerModeRerunScopePreventsCarryInheritance covers the ownership
-// boundary between an explicit QA rerun decision and Carry. Once FULL is bound
+// boundary between an explicit QA rerun decision and Carry. Once AFFECTED is bound
 // to the old PASS snapshot, Carry cannot turn that PASS into a current result;
 // qa-execution remains dispatchable, replaces the mode's current result, and
 // retains the prior result as audit.
@@ -341,17 +346,17 @@ func TestExplicitPerModeRerunScopePreventsCarryInheritance(t *testing.T) {
 	state := perModeReadyDelivery(t, root, pkg, "scoped-rerun-carry")
 	bbCases := state.qaModeCases("blackbox")
 	state = recordModeQA(t, root, pkg, state, "blackbox", passingExecution(bbCases))
-	state = recordGateResult(t, root, pkg, state, "quality", "scoped-rerun-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "scoped-rerun-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	state = advanceRepair(t, root, pkg, state, "scoped-rerun")
 	priorSnapshot := state.PreRepairSnapshot
 
 	var err error
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "FULL", nil, "rerun the complete blackbox set")
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{bbCases[0].ID}, "the repaired path affects this blackbox case")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := eligibleMainCarryResults(state, false); len(got) != 0 {
-		t.Fatalf("explicit FULL rerun remained eligible for Carry: %v", got)
+		t.Fatalf("explicit AFFECTED rerun remained eligible for Carry: %v", got)
 	}
 	if _, err := RecordCarry(root, pkg, state.RunID, "", nil, "", true, "repair does not touch QA behavior"); err == nil || !strings.Contains(err.Error(), "no prior passing selected results") {
 		t.Fatalf("Carry accepted a mode with an explicit rerun scope: %v", err)
@@ -366,7 +371,7 @@ func TestExplicitPerModeRerunScopePreventsCarryInheritance(t *testing.T) {
 
 	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "blackbox", false, "")
 	if err != nil {
-		t.Fatalf("explicit FULL rerun could not prepare qa-execution: %v", err)
+		t.Fatalf("explicit AFFECTED rerun could not prepare qa-execution: %v", err)
 	}
 	if strings.TrimSpace(prompt) == "" {
 		t.Fatal("qa-execution rerun prompt is empty")

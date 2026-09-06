@@ -156,7 +156,7 @@ func whitebox35AFixR2CompleteGuaranteeState(t *testing.T) RunState {
 func whitebox35AFixR2RecordCandidate(t *testing.T, state *RunState, action, dispatchID, status string, findings []Finding, authorizationID string) SemanticReviewCandidate {
 	t.Helper()
 	dispatch := PreparedDispatch{ID: dispatchID, Target: action, RequirementRevision: state.RequirementRevision, ReviewAuthorizationID: authorizationID}
-	projected, err := recordSemanticReviewCandidate(state, action, dispatch, ActionResult{Status: status, Message: dispatchID + " result", Findings: findings})
+	projected, err := recordSemanticReviewCandidate(state, action, dispatch, ActionResult{Status: status, Message: dispatchID + " result", Findings: findings}, fixtureOperatorVerification())
 	if err != nil {
 		t.Fatalf("record semantic review candidate %s: %v", dispatchID, err)
 	}
@@ -818,18 +818,17 @@ func TestWhitebox35AFixR2GuaranteeRejectsMissingCoverageReviewAndNonCurrentOrNon
 	}
 }
 
-func TestWhitebox35AFixR2ActiveGuaranteeRejectsAffectedScopeAndWaiverAuditsUnresolvedItems(t *testing.T) {
+func TestWhitebox35AFixR2ActiveGuaranteeUsesAffectedScopeAndWaiverAuditsUnresolvedItems(t *testing.T) {
 	state := whitebox35AFixR2GuaranteedState(t)
 	state.QACasesByMode = map[string][]QACase{whiteboxQAID: {{ID: "CASE-030", Mode: "whitebox", AcceptanceCriteria: []string{"AC-001"}, ReviewStatus: "PASS"}}}
+	state.QACaseSets = map[string]QACaseSetState{whiteboxQAID: {Mode: whiteboxQAID, Status: caseSetFrozen, Version: "frozen-v1", BoundSnapshot: state.CurrentSnapshot}}
+	state.PreRepairSnapshot = "prior"
 	prior := QAExecutionResult{Status: "FAIL", Snapshot: "prior", Cases: []QAResultRecord{{CaseID: "CASE-030", Mode: "whitebox", Outcome: "FAIL"}}}
-	if err := recordExecutionScope(&state, whiteboxQAID, "AFFECTED", []string{"CASE-030"}, "targeted rerun", scopeSourcePrepare, "prior", prior); err == nil || !strings.Contains(err.Error(), "requires FULL QA execution") {
-		t.Fatalf("AFFECTED scope error = %v", err)
+	if err := recordExecutionScope(&state, whiteboxQAID, "AFFECTED", []string{"CASE-030"}, "targeted rerun", scopeSourcePrepare, "prior", prior); err != nil {
+		t.Fatalf("AFFECTED scope rejected: %v", err)
 	}
-	if err := recordExecutionScope(&state, whiteboxQAID, "FULL", nil, "full rerun", scopeSourcePrepare, "prior", prior); err != nil {
-		t.Fatalf("FULL scope rejected: %v", err)
-	}
-	if state.ExecutionScopes[whiteboxQAID].Decision != "FULL" || len(state.ExecutionScopes[whiteboxQAID].CaseIDs) != 0 {
-		t.Fatalf("FULL scope record = %#v", state.ExecutionScopes[whiteboxQAID])
+	if state.ExecutionScopes[whiteboxQAID].Decision != "AFFECTED" || len(state.ExecutionScopes[whiteboxQAID].CaseIDs) != 1 {
+		t.Fatalf("AFFECTED scope record = %#v", state.ExecutionScopes[whiteboxQAID])
 	}
 
 	if err := authorizeRequirementGuaranteeWaiver(t.TempDir(), &state, ""); err == nil || !strings.Contains(err.Error(), "requires --guarantee-waiver-reason") {
@@ -1106,7 +1105,7 @@ func TestWhitebox35AFixR2ReviewRoundLimitIsActionScopedAndRuntimeRetryReusesOneA
 	}
 	authorizationID := reviewAuthorizationForDispatch(state, "product-review", "product-4-runtime")
 	beforeRuntime := state.PreDevelopmentReviewSeries["product-review"].Completed
-	result, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "product-4-runtime", RequirementRevision: state.RequirementRevision, ReviewAuthorizationID: authorizationID}, ActionResult{Status: "RUNTIME_ERROR", Message: "temporary service error"})
+	result, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "product-4-runtime", RequirementRevision: state.RequirementRevision, ReviewAuthorizationID: authorizationID}, ActionResult{Status: "RUNTIME_ERROR", Message: "temporary service error"}, fixtureOperatorVerification())
 	if err != nil || result.Status != "RUNTIME_ERROR" {
 		t.Fatalf("runtime result = %#v, %v", result, err)
 	}
@@ -1194,7 +1193,8 @@ func TestWhitebox35AFixR2FindingDismissalAndSupersedingCorrectionReprojectWithou
 	if err := applyReviewCorrection(&state, ReviewCorrectionInput{
 		Action: "product-review", DispatchID: candidate.DispatchID, ResultDigest: candidate.ResultDigest,
 		RequirementRevision: candidate.RequirementRevision, FindingID: blocking.ID, Decision: "RESEVERITIZE", Severity: "P1",
-		Supersedes: latest, Reason: "user restores blocking severity", Source: "user correction", UserAuthorized: true,
+		SeverityRationale: "The restored finding blocks the confirmed normal path and therefore requires P1 treatment.",
+		Supersedes:        latest, Reason: "user restores blocking severity", Source: "user correction", UserAuthorized: true,
 		ExpectedEffectiveRevision: series.EffectiveReviewStatus.Revision,
 	}); err != nil {
 		t.Fatalf("superseding correction: %v", err)

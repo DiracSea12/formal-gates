@@ -18,7 +18,7 @@ func TestPreDevelopmentReviewSeriesRejectsPartialAndTamperedProjection(t *testin
 		t.Fatalf("partial series was accepted: %v", err)
 	}
 
-	result, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "dispatch-unit", Target: "product-review", RequirementRevision: "req-rev"}, ActionResult{Status: "PASS", Findings: []Finding{{Severity: "P2", Message: "advisory"}}})
+	result, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "dispatch-unit", Target: "product-review", RequirementRevision: "req-rev"}, ActionResult{Status: "PASS", Findings: []Finding{{Severity: "P2", Message: "advisory"}}}, fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestPreDevelopmentReviewSeriesRejectsPartialAndTamperedProjection(t *testin
 func TestPreDevelopmentReviewCorrectionProjectionKeepsOneRound(t *testing.T) {
 	state := NewRunState("correction-unit", "formal", "requirements.md", "req-rev", "git", "base", "current", "prompt", "catalog", true, nil, nil)
 	dispatch := PreparedDispatch{ID: "dispatch-correction", Target: "product-review", RequirementRevision: "req-rev"}
-	result, err := recordSemanticReviewCandidate(&state, "product-review", dispatch, ActionResult{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "candidate blocker"}}})
+	result, err := recordSemanticReviewCandidate(&state, "product-review", dispatch, ActionResult{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "candidate blocker"}}}, fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestPreDevelopmentReviewCorrectionProjectionKeepsOneRound(t *testing.T) {
 func TestConfirmedBlockingFindingRequiresChangedRequirementBeforeFreshReview(t *testing.T) {
 	state := NewRunState("confirmed-blocker-unit", "formal", "requirements.md", "req-rev", "git", "base", "current", "prompt", "catalog", true, nil, nil)
 	dispatch := PreparedDispatch{ID: "dispatch-confirmed-blocker", Target: "product-review", RequirementRevision: state.RequirementRevision}
-	result, err := recordSemanticReviewCandidate(&state, "product-review", dispatch, ActionResult{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "confirmed requirement defect"}}})
+	result, err := recordSemanticReviewCandidate(&state, "product-review", dispatch, ActionResult{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "confirmed requirement defect"}}}, fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,13 +107,13 @@ func TestConfirmedBlockingFindingRequiresChangedRequirementBeforeFreshReview(t *
 func TestHistoricalWholeResultInvalidationPreservesCurrentEffectiveCandidate(t *testing.T) {
 	t.Run("superseded candidate", func(t *testing.T) {
 		state := NewRunState("historical-correction", "formal", "requirements.md", "req-rev", "git", "base", "current", "prompt", "catalog", true, nil, nil)
-		firstResult, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "dispatch-first", Target: "product-review", RequirementRevision: "req-rev"}, ActionResult{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "first blocker"}}})
+		firstResult, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "dispatch-first", Target: "product-review", RequirementRevision: "req-rev"}, ActionResult{Status: "FAIL", Findings: []Finding{{Severity: "P1", Message: "first blocker"}}}, fixtureOperatorVerification())
 		if err != nil {
 			t.Fatal(err)
 		}
 		state.Actions["product-review"] = firstResult
 		first := state.PreDevelopmentReviewSeries["product-review"].RawCandidates[0]
-		secondResult, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "dispatch-second", Target: "product-review", RequirementRevision: "req-rev"}, ActionResult{Status: "PASS", Findings: []Finding{}})
+		secondResult, err := recordSemanticReviewCandidate(&state, "product-review", PreparedDispatch{ID: "dispatch-second", Target: "product-review", RequirementRevision: "req-rev"}, ActionResult{Status: "PASS", Findings: []Finding{}}, fixtureOperatorVerification())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestHistoricalWholeResultInvalidationPreservesCurrentEffectiveCandidate(t *
 
 	t.Run("candidate from prior requirement revision", func(t *testing.T) {
 		state := NewRunState("historical-revision-correction", "formal", "requirements.md", "old-rev", "git", "base", "current", "prompt", "catalog", true, nil, nil)
-		result, err := recordSemanticReviewCandidate(&state, "start-readiness", PreparedDispatch{ID: "dispatch-old-revision", Target: "start-readiness", RequirementRevision: "old-rev"}, ActionResult{Status: "PASS", Findings: []Finding{}})
+		result, err := recordSemanticReviewCandidate(&state, "start-readiness", PreparedDispatch{ID: "dispatch-old-revision", Target: "start-readiness", RequirementRevision: "old-rev"}, ActionResult{Status: "PASS", Findings: []Finding{}}, fixtureOperatorVerification())
 		if err != nil {
 			t.Fatal(err)
 		}
