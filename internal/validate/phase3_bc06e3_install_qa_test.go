@@ -29,7 +29,10 @@ func bc06InstallSource(t *testing.T) string {
 	bc06InstallWriteFile(t, filepath.Join(root, "README.md"), "runtime fixture\n", 0o600)
 	bc06InstallWriteFile(t, filepath.Join(root, "README_EN.md"), "runtime fixture\n", 0o600)
 	bc06InstallWriteFile(t, filepath.Join(root, "formal-gates.manifest.json"), bc06InstallManifest, 0o600)
-	bc06InstallWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "#!/bin/sh\nexit 0\n", 0o700)
+	// 宽松 smoke 策略的进程内夹具标记（见 phase0_install.go
+	// runInstalledBinarySmokeWithPolicy）：安装现在会一路走到安装后 smoke，POSIX
+	// shebang 桩在 Windows 上会被 fork/exec 当作损坏的 PE 拒绝。
+	bc06InstallWriteFile(t, filepath.Join(root, "bin", nativeBinaryName()), "binary\n", 0o700)
 	for _, entry := range []string{"agents/agent.md", "prompts/action.md", "gates/gate.md", "references/reference.md"} {
 		bc06InstallWriteFile(t, filepath.Join(root, filepath.FromSlash(entry)), entry+"\n", 0o600)
 	}
