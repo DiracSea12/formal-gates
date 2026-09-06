@@ -815,8 +815,9 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
   修复，直到共享审查轮次上限耗尽或用户主动要求才可授权跳过。
 - 路线跳过和 Seal 跳过都会记录在摘要里。
 - 已授权的 Seal 跳过在当前快照仍被其他结果阻塞时继续有效，但不延续到后续修复快照。
-- 门审 P2 必须已有绑定 problem、修复快照和 completion/carry 凭据；门审 P3 不修复、不阻塞，
-  Seal 前一次性展示且不逐条询问。QA Review P2/P3 必须已吸收，不能以 advisory 留到 Seal。
+- 门审 P2 必须已有绑定 problem、修复快照和 completion/carry 凭据；门审 P3 不触发返修、不阻塞。
+  Seal 前核对已有 P3 在最终快照是否仍存在，仅一次性提醒仍存在且未处置的项；已消失的项
+  不再提醒。只核对已有发现，不新增审查或返修，也不逐条询问。QA Review P2/P3 必须已吸收，不能以 advisory 留到 Seal。
 - Seal 的黑盒用例等物化全部成功后持久化 `SEALED` 终态，再写封板摘要并清理临时状态；
   物化失败时持久 state 保持 `ACTIVE` 且不写摘要，摘要或清理中断时保留 `SEALED` 并可由
   重复 Seal 继续。retained master 已显式 waiver/not-guaranteed 时允许 slice guarantee
