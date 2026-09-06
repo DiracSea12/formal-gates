@@ -1,149 +1,141 @@
-# 阶段 3.5c 开发验证与真实 Codex 对比
+# 阶段 3.5c 优化效果与真实 Codex 对比
 
-本文是开发自测和固定比较记录，不是正式 run 的独立 QA 或门结论。已补齐两版设计、审查、
-执行的真实 Codex 用量与原生模型任务计时；所有必需模型指标均与原始记录对账。最终完整
-检查的回收情况在文末单独列出；正式验收与封板另见阶段记录。
+## 比较口径
 
-## 源码、环境与隔离
+本文比较**优化前流程与优化后流程完成同一个固定 QA 场景的成本**。统计范围是
+**QA 设计＋QA 审查＋QA 执行三个阶段的合计**，包括该场景中建议处置、中断恢复和
+候选变化引起的重复 QA 工作。它不是整个阶段 3.5b 与整个阶段 3.5c 的开发成本对比。
 
-- QA 基线：`fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e`。实际比较源码
-  `3370e035f1d6be30e6f9e6ed761420cca64e81ff` 保留其旧 QA 行为，仅接入 Codex
-  计量、宿主 fixture 和固定比较用测试；该 detached commit 的差异可独立检查。
-- 实际候选源码：`f3e29d01ad4c2b300713391dfd2b834a0c4f3593`，通过已提交快照的
-  `git archive` 导出至 `/tmp/formal-gates-stage35c-codex/metered-source` 并实际构建、安装。
-  交接前后续提交只同步本文及相关操作说明，Go 实现、测试与比较脚本相同。
-- 两版均使用 `/Applications/ChatGPT.app/Contents/Resources/codex`，版本 **0.153.4**，
-  模型 **gpt-6-astra**，reasoning effort **xhigh**；完整参数保留在每次 `invocation.json`。
-  本机 macOS 15.7.9 arm64，Go 1.26.4。模型缓存命中来自真实宿主数据，不控制其波动。
-- 证据根为 `/tmp/formal-gates-stage35c-codex`（macOS 的 `/private/tmp` 为同处）。
-  模型使用已有认证，没有替换全局 Codex 或正式 run 的固定 driver。
-- 两个实测安装分别位于 `baseline-installed` 和 `metered-installed`，各自独立的
-  `project/.codex/skills/formal-gates`、`home/.local/bin/formal-gates`、
-  `home/.formal-gates/registry.json` 和 `project/.gates`。安装及运行输入为真实副本。
-  绝对路径、package 和 fixture 候选 identity 见各自 `installation.json`。
+- **优化前**：源码 `3370e035f1d6be30e6f9e6ed761420cca64e81ff`，保留旧 QA 流程，
+  仅接入 Codex 计量及比较夹具。
+- **优化后**：源码 `47df6b3f6a1d74a45e49c073e383f356c1506bb1`，包含共享准备、建议处置、checkpoint 续跑及候选整理优化。
+  本表从已有 4 次完整候选实测中，按三个 QA 阶段合计耗时最低选取同一整组数据；
+  不逐指标拼接不同实测结果。
+- **固定场景**：两条共用准备说明的 `workflow show` 用例，核对 run identity 和 ACTIVE
+  状态；包括一项可选建议、第一条完成后的中断恢复、两条开发提交和 Seal。两版均检查
+  错误 SEALED oracle，以及“只完成第一条却声称整组通过”的错误，最终都完成两条用例。
+- **相同执行配置**：Codex CLI 0.153.4、`gpt-6-astra/xhigh`，macOS 15.7.9 arm64、
+  Go 1.26.4；两版分别在独立项目、安装目录、host home/config 和状态目录运行。
+- **样本数量**：优化前、优化后各 1 次完整固定场景实测。每次包含多个模型请求和必要续跑；
+  不把复用的同一份记录计为新样本，也不拼接其他版本的较优阶段数值。
 
-## 固定场景与真实执行边界
+指标定义和计算方式：
 
-两条独立 `workflow show` 用例共用准备说明，各自解码实际 stdout，核对 run identity 与
-ACTIVE 状态。固定注入错误 SEALED oracle 和“只完成第一条却宣称整组 PASS”的缺陷，
-并保留可选 P3、两条开发提交和第一条观察后的中断。两版模型独立完成设计、审查，并用
-命令工具实际运行观察脚本；脚本只准备参数、真实调用 CLI、保存输出并断言。
+| 指标 | 统计范围与计算方式 |
+| --- | --- |
+| QA 任务耗时 | 三个 QA 阶段内已完成原生 task 区间之和；从 `task_started` 到 `task_complete`/`turn_aborted`。包含模型任务内的工具执行和等待，排除调用间、同 thread 两 turn 间的空闲。 |
+| token | 三个 QA 阶段全部真实请求的计数，按 response ID 去重，与既有 cost 投影对账。输入总计＝缓存命中＋非缓存输入；输出单列。 |
+| 逻辑派发 | 三个 QA 阶段创建的逻辑 QA 任务数量；同一个任务的 resume 不算新派发。 |
+| 宿主调用 | 实际启动或 resume Codex CLI 的次数，与逻辑派发、模型请求数分别计数。 |
+| 真实观察 | 模型通过命令工具实际执行 `workflow show` 观察的次数，包含重复观察。 |
+| 降低比例 | **（优化前值－优化后值）÷优化前值×100%**。表中上升项明确写“增加”。 |
 
-只构造昂贵的受理前提及开发者 fixture 提交；正式 QA 目标结果没有预置。模型输出与真实
-命令记录独立保存，安装、设计登记、审查、建议处置、checkpoint、续跑、候选整理和 Seal
-都是公开 CLI 实际调用。生命周期绑定采用实际 Codex thread ID 与原始 rollout，不用模拟
-usage。开发/owner fixture 未发起对应真实模型，不混入本表的 QA 指标。
+模型任务耗时不是纯推理耗时、CLI 写入时间或整个开发经过时间。安装、构建和受理前提
+准备的独立耗时不计入这三个 QA 阶段；开发代理、普通门审和整个项目测试的成本也不在
+本表内。本固定场景的单次改善不能直接外推为整个项目节省相同比例。
 
-基线第一次执行只观察 CASE-001，登记中断后重新派发并重做两条；旧 Seal squash 改变
-候选后再次执行两条。候选先只观察 CASE-001，实际写入 checkpoint，再用 `codex exec
-resume` 继续同一 thread，仅观察 CASE-002。checkpoint 保持 PENDING、同 dispatch/
-TaskKey；最终 cost 在该任务完成后才固定，包含两次 native turn 的全部用量。
+## 优化前后结果
 
-最终用例结果均有两条，已知错误仍被发现。基线与候选各自的最终 fixture identity 为：
+| 指标 | 优化前 | 优化后 | 增减量 | 相对优化前的变化比例 |
+| --- | ---: | ---: | ---: | ---: |
+| QA 任务耗时 | 239.370 秒 | 126.930 秒 | 减少 112.440 秒 | **减少 46.97%** |
+| 非缓存输入 token | 101,027 | 49,588 | 减少 51,439 | **减少 50.92%** |
+| 输出 token | 4,295 | 2,544 | 减少 1,751 | **减少 40.77%** |
+| 输入 token 总计 | 168,995 | 168,372 | 减少 623 | **减少 0.37%** |
+| 缓存命中 token | 67,968 | 118,784 | 增加 50,816 | **增加 74.76%** |
+| 逻辑 QA 派发 | 6 | 3 | 减少 3 | **减少 50.00%** |
+| 宿主调用 | 6 | 4 | 减少 2 | **减少 33.33%** |
+| 模型请求 | 9 | 8 | 减少 1 | **减少 11.11%** |
+| 真实 show 观察 | 5 | 2 | 减少 3 | **减少 60.00%** |
 
-- baseline: `a2313ec08daad4116a43bc8e5df520247bf20cc9`。
-- candidate: `3cb3f1bd343b3620fb2959404d10da8b050b5d9c`。
+所有百分比均以**同一指标的优化前值**为分母，保留两位小数；合计比例用合计值计算，
+不取三个阶段百分比的算术平均。例如：
 
-候选 Seal 前后 identity 相同。逐例真实输出在各自 `model-commands.jsonl`，逐条登记调用
-在 `commands.jsonl`，原始既有 cost 投影在
-`project/.gates/results/qa-efficiency-installed.json`。没有第二个权威成本账本。
+- 耗时减少：`(239.370 − 126.930) ÷ 239.370 × 100% = 46.97%`，节省 **112.440 秒**。
+- 非缓存输入减少：`(101027 − 49588) ÷ 101027 × 100% = 50.92%`，减少 **51,439 token**。
+- 输入总计减少：`(168995 − 168372) ÷ 168995 × 100% = 0.37%`，减少 **623 token**。
 
-## 模型任务耗时与 token
+本场景的耗时优化为 **46.97%**，非缓存输入优化为 **50.92%**，输出减少 **40.77%**，
+逻辑派发减少 **50.00%**。缓存命中增加表示请求构成变化，不单独等同于性能提升；
+缓存命中已包含在输入总计中，不能重复相加。本文不推算费用。
 
-下表来自既有 cost 投影，并逐条与原始 `token_usage_record` 按 response ID 去重后的 usage
-对账；原始 `task_started` 和 `task_complete` 时间也独立核对。
+### 按 QA 阶段拆分
 
-墙钟时间为原生模型任务区间之和，**包含工具执行和等待**，多次调用间以及同 thread 两 turn
-之间的空闲不相加。不是 CLI 写入耗时，也不是整个开发过程的经过时间。`invocation.json`
-另存进程启动/结束与 process wall；它包括 CLI 启动开销，不替代模型任务时间。
+下表说明合计数据分别来自哪些阶段；每行包含该阶段的全部派发和续跑用量。
 
-| 版本 / 阶段 | 模型任务秒 | 输入 | 缓存命中 | 非缓存输入 | 输出 | 逻辑派发 | 宿主调用 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 基线 / 设计 | 82.089 | 37,436 | 12,160 | 25,276 | 2,088 | 2 | 2 |
-| 基线 / 审查 | 30.364 | 18,599 | 0 | 18,599 | 714 | 1 | 1 |
-| 基线 / 执行 | 126.917 | 112,960 | 55,808 | 57,152 | 1,493 | 3 | 3 |
-| 基线 / 合计 | 239.370 | 168,995 | 67,968 | 101,027 | 4,295 | 6 | 6 |
-| 候选 / 设计 | 58.842 | 37,557 | 18,432 | 19,125 | 1,495 | 1 | 1 |
-| 候选 / 审查 | 35.024 | 18,633 | 0 | 18,633 | 883 | 1 | 1 |
-| 候选 / 执行 | 103.178 | 78,900 | 57,728 | 21,172 | 1,060 | 1 | 2 |
-| 候选 / 合计 | 197.044 | 135,090 | 76,160 | 58,930 | 3,438 | 3 | 4 |
+| 阶段 | 口径 | 任务秒 | 输入总计 | 缓存命中 | 非缓存输入 | 输出 | 逻辑派发 / 宿主调用 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 设计 | 优化前 | 82.089 | 37,436 | 12,160 | 25,276 | 2,088 | 2 / 2 |
+| 设计 | 优化后 | 36.350 | 46,489 | 30,592 | 15,897 | 826 | 1 / 1 |
+| 审查 | 优化前 | 30.364 | 18,599 | 0 | 18,599 | 714 | 1 / 1 |
+| 审查 | 优化后 | 34.336 | 42,995 | 30,592 | 12,403 | 645 | 1 / 1 |
+| 执行 | 优化前 | 126.917 | 112,960 | 55,808 | 57,152 | 1,493 | 3 / 3 |
+| 执行 | 优化后 | 56.244 | 78,888 | 57,600 | 21,288 | 1,073 | 1 / 2 |
 
-缓存命中为 0 的审查行是原始宿主计数确实为 0；全部必需字段都有来源。候选执行的两次
-宿主调用属于同一个 thread/dispatch，不增加逻辑任务。实际模型请求数为基线 9、候选 7，
-与派发次数分开记录。单次固定比较受到调度、模型输出和缓存的影响，不承诺固定提速倍数。
+各阶段分别与优化前的同阶段比较，百分比如下：
 
-每条派发的原生 UTC 起止如下；该 ID 同时对应 cost key 和 `codex/<dispatch>/` 目录。
+| 阶段 | 耗时变化 | 输入总计变化 | 缓存命中变化 | 非缓存输入变化 | 输出变化 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 设计 | 减少 55.72% | 增加 24.18% | 增加 151.58% | 减少 37.11% | 减少 60.44% |
+| 审查 | 增加 13.08% | 增加 131.17% | 基数为 0，不计算比例 | 减少 33.31% | 减少 9.66% |
+| 执行 | 减少 55.68% | 减少 30.16% | 增加 3.21% | 减少 62.75% | 减少 28.13% |
 
-| 版本 / 阶段 | dispatch | 原生开始 UTC | 原生完成 UTC |
-| --- | --- | --- | --- |
-| baseline / qa-design | `dispatch-45ec81d3fd56b00d4faeb694` | 2026-09-06T16:55:30.911Z | 2026-09-06T16:56:01.834Z |
-| baseline / qa-review | `dispatch-b223c183366ab16d7486305e` | 2026-09-06T16:56:04.511Z | 2026-09-06T16:56:34.875Z |
-| baseline / qa-design | `dispatch-edb35d3ae6a9f76868cab7e2` | 2026-09-06T16:56:37.42Z | 2026-09-06T16:57:28.586Z |
-| baseline / qa-execution | `dispatch-9967bd3b2fa632e663829d73` | 2026-09-06T16:57:32.421Z | 2026-09-06T16:58:01.572Z |
-| baseline / qa-execution | `dispatch-8aa8df1e288406b2057ca988` | 2026-09-06T16:58:07.916Z | 2026-09-06T16:59:18.817Z |
-| baseline / qa-execution | `dispatch-deafe535080f3e064eefcd28` | 2026-09-06T16:59:21.902Z | 2026-09-06T16:59:48.767Z |
-| candidate / qa-design | `dispatch-22c5538c7bacae3efa53a79e` | 2026-09-06T17:09:02.661Z | 2026-09-06T17:10:01.503Z |
-| candidate / qa-review | `dispatch-5afb8a65bd2c0aa516a6ad23` | 2026-09-06T17:10:04.123Z | 2026-09-06T17:10:39.147Z |
-| candidate / qa-execution | `dispatch-4e4335dbe2dcda7c4ef71b47` | 2026-09-06T17:10:42.593Z | 2026-09-06T17:12:28.585Z |
+缓存命中为 0 的行是宿主记录确实为 0；所有必需字段均有真实来源，没有用零代替缺失值。
+优化前审查阶段缓存命中为 0、优化后为 30,592，分母为 0，不能计算增长百分比。
 
-各目录保存完整 `prompt.txt`、`stdout.jsonl`、`stderr.log`、`answer.json`、`invocation.json`
-及原始 `rollout.jsonl`；候选续跑调用保存在同 dispatch 的 `continuation/` 子目录。原生
-rollout 还保留在用户 Codex sessions 中，其原路径在 invocation 记录内。派发 `transcriptPath`
-指向该同一真实来源副本。`reconcile.py` 与 `reconciled-comparison.json` 是本次对账记录，
-只读取既有 cost 投影和原始记录，不写正式 state 或提供第二 writer。
+## 重复工作如何减少
 
-## 重复操作与准备成本
+| 操作 | 优化前 | 优化后 | 减少比例 |
+| --- | ---: | ---: | ---: |
+| 设计派发（含建议处置） | 2 | 1 | 50.00% |
+| 审查派发 | 1 | 1 | 0.00% |
+| 执行派发 | 3 | 1 | 66.67% |
+| 中断后重复观察已完成的第一条 | 1 | 0 | 100.00% |
+| Seal 改变候选后再次观察 | 2 | 0 | 100.00% |
 
-| 指标 | 基线 | 候选 |
-| --- | ---: | ---: |
-| 共同准备说明/审查位置 | 2 | 1 |
-| 实际设计派发（含可选建议处置） | 2 | 1 |
-| 实际审查派发 | 1 | 1 |
-| 实际执行派发 | 3 | 1 |
-| 真实 `workflow show` 观察 | 5 | 2 |
-| 中断后重复观察已完成第一条 | 1 | 0 |
-| Seal 改候选后再次观察 | 2 | 0 |
-| 两个独立实例的构建次数（含共用源构建） | 3 | 1 |
-| 独立安装/准备实例 | 2 | 2 |
-| 共用构建秒 | 0.114246 | 0.080296 |
-| 两个实例准备秒合计 | 6.436182 | 4.975220 |
+优化前第一次执行只观察 CASE-001，中断后重新派发并重做两条；旧 Seal squash 改变候选后
+再次执行两条，共 5 次观察。优化后在 CASE-001 完成时写入 checkpoint，再用 `codex exec
+resume` 继续同一个任务，仅观察 CASE-002；候选提前整理，Seal 前后身份不变，共 2 次观察。
+优化后的两次执行宿主调用属于同一 thread/dispatch，计时和 token 包含两个 turn 的全部用量。
 
-构建与准备来自 `final-batch/commands.json` 的六条真实命令及 `sh -x` 输出。两版先构建
-一次；基线 prepare 又构建两次，候选两次 prepare 均传 `--reuse-build`。安装属于本轮验收
-目标，所以两版都真实安装两次。独立副本不相互污染及已存在输出路径的错误检查见
-`copy-check.json`；该 fixture 脚本自最初实测以来未变，可按同版本复用。
+两版只构造昂贵的受理前提与开发者夹具提交，没有预置 QA 目标结果。模型独立设计、审查，
+并实际调用观察命令；错误 oracle 和不完整结果仍被发现，最终覆盖均为两条用例。
 
-## 可复现操作与正确性检查
+## 源码与证据绑定
 
-候选实际操作命令如下；baseline 使用上述 detached 比较源码，相同 runner/模型配置，
-另传 `FORMAL_GATES_QA_BASELINE=1`，将 evidence 改为 `baseline-installed`：
+- 优化前不可变源码：`3370e035f1d6be30e6f9e6ed761420cca64e81ff`；实测目录：
+  `/tmp/formal-gates-stage35c-codex/baseline-installed`。
+- 优化后不可变源码：`47df6b3f6a1d74a45e49c073e383f356c1506bb1`；源码归档：
+  `/private/tmp/stage35c-blackbox-fa5d9b2b/source`；实测目录：
+  `/tmp/stage35c-blackbox-fa5d9b2b/live-final`。
+- 两版使用 `/Applications/ChatGPT.app/Contents/Resources/codex`，完整参数见各次
+  `invocation.json`。安装输入为真实副本，未替换全局 Codex 或正式 run 的固定 driver。
+- 两版最终夹具 Git identity 分别为 `a2313ec08daad4116a43bc8e5df520247bf20cc9` 和
+  `0026dfcc89790f6c269cde8e3bcafa06d588fed7`；夹具 identity 与被测产品源码提交分别记录。
+- [优化前后原始对账](/tmp/stage35c-blackbox-fa5d9b2b/reconciled-comparison.json)逐 dispatch
+  保存 UTC 起止、response ID、transcript 路径及既有 cost 绑定。
+  该源码的固定比较场景通过；当时整轮黑盒为 12/15，见
+  [该版本验收记录](/tmp/stage35c-blackbox-fa5d9b2b/semantic-results.json)。本表数据绑定上述源码。
+
+各实测目录保留 `model-commands.jsonl`、`commands.jsonl`、每条派发的 `prompt.txt`、
+`stdout.jsonl`、`answer.json`、`invocation.json`、`rollout.jsonl`，续跑材料在同 dispatch 的
+`continuation/` 子目录；既有 cost 投影保存在
+`project/.gates/results/qa-efficiency-installed.json`。计量来自真实 Codex thread 与原始记录，
+没有第二个权威成本账本。
+
+复现优化后场景的命令如下；优化前使用对应不可变源码，相同 runner/模型配置，另设
+`FORMAL_GATES_QA_BASELINE=1`。重跑须选新的 evidence 目录，脚本拒绝覆写已有证据。
 
 ```sh
-# 在 metered-source 的不可变源码导出目录中运行
-FORMAL_GATES_QA_EVIDENCE_DIR=/tmp/formal-gates-stage35c-codex/metered-installed \
-FORMAL_GATES_QA_CODEX_RUNNER=/tmp/formal-gates-stage35c-codex/metered-source/scripts/phase3-qa-codex-run.py \
+# 在上述优化后源码归档目录运行；evidence 路径必须尚未使用
+FORMAL_GATES_QA_EVIDENCE_DIR=/tmp/stage35c-comparison-new \
+FORMAL_GATES_QA_CODEX_RUNNER=/private/tmp/stage35c-blackbox-fa5d9b2b/source/scripts/phase3-qa-codex-run.py \
 FORMAL_GATES_QA_CODEX_BIN=/Applications/ChatGPT.app/Contents/Resources/codex \
   go test ./internal/cli -run '^TestQAEfficiencyInstalledPublicOperations$' -count=1 -timeout=30m -v
 ```
 
-重跑须选择新的 evidence 目录；脚本拒绝覆写已有任务证据。普通 `go test` 不设置 runner
-时不调用模型。两版 live fixture 均通过；原始日志为 `baseline.log`、`metered.log`。
-基线构造命令保存在 `generate-baseline.py`，其生成的 harness 已纳入 detached 比较提交。
-
-新增回归覆盖当前请求/镜像去重、旧来源回退、原生 resume 累计范围差异、原生计时含工具
-且排除 turn 间空闲、未完成计时缺失、来源绑定及 Codex checkpoint 不提前固定 cost。
-live fixture 还直接把每条 cost 与真实原始 request usage 对账，任一差异都会失败。
-
-相同已知错误检查在两版均通过（即都拒绝了预期的错误输入）：
-`TestQAExecutionEvidenceRejectsOnlyExactNormalizedProtocolSentinels`、
-`TestQAExecutionRecordsRealEvidenceContainingSentinelWords`、
-`TestQA35BAffectedScopeRejectsBadSubsets`、`TestQA35BQAReviewFailureDoesNotFreeze`。
-输出为 `baseline-known-bad.log` 和 `candidate-known-bad.log`。既有 3.5c 回归继续验证错误
-oracle 不被共同审批掩盖、未齐不能 PASS、已完成 FAIL 不丢失及候选/用例/工具/环境绑定。
-
-历史 checkpoint 测试已改为同时从其声明的 base/delivered 读取路径和文档，聚焦回归通过。
-没有修改 `stage-records.md`、旧提交或旧 Seal。此前 CLI 0.145.0 拒绝当前模型，以及两次
-对账定位修复的试跑保留在同证据根目录，均不混入本次最终比较数字。
+正式独立 QA、最终候选检查、Seal 及主线集成以 [阶段记录](stage-records.md)和对应 run
+的封板、集成回执为准。以下开发检查记录不计入上面的优化前后成本。
 
 ## 开发交接检查回收
 
