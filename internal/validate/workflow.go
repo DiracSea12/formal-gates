@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,9 +52,16 @@ type StartOptions struct {
 }
 
 type FindingInput struct {
-	Severity  string
-	Message   string
-	Locations []string
+	Severity          string
+	SeverityRationale string
+	Category          string
+	Requirement       string
+	NormalPath        string
+	ActualError       string
+	DeferralImpact    string
+	Verification      FindingVerification
+	Message           string
+	Locations         []string
 }
 
 // ReviewItemInput 是 record-action 对 product-review / start-readiness 逐项下发的
@@ -108,7 +116,7 @@ func Start(options StartOptions) (RunState, error) {
 
 func startRegular(options StartOptions) (RunState, error) {
 	root := lifecycle.CleanRoot(options.Root)
-	ownerTranscript, ownerSession := consumeStartOwner(root)
+	ownerTranscript, ownerSession, ownerProvider := consumeStartOwner(root)
 	for name, value := range map[string]string{"flow": options.Flow, "requirement": options.RequirementSource, "VCS": options.VCS} {
 		if strings.TrimSpace(value) == "" {
 			return RunState{}, fmt.Errorf("%s is required", name)
@@ -317,11 +325,24 @@ func startRegular(options StartOptions) (RunState, error) {
 	state.SplitMasterRunID = master
 	state.OwnerTranscript = ownerTranscript
 	state.OwnerSession = ownerSession
+	state.OwnerProvider = ownerProvider
 	// 轻量路线在 start 即声明：routeMode 置 lightweight（免拆分决定、免路线确认、
 	// 免开发快照直达 Seal），不记录拆分声明。
 	if isLightweight {
 		state.RouteMode = "lightweight"
 		state.SplitDeclaration = ""
+	}
+	// Start and terminal accounting share this short lock so two active runs
+	// cannot miss each other's owner interval while one is being cleaned up.
+	ownerUnlock, err := lockOwnerCost(root)
+	if err != nil {
+		_ = os.RemoveAll(RunDir(root, runID))
+		return RunState{}, err
+	}
+	defer ownerUnlock()
+	if err := beginOwnerCost(root, &state); err != nil {
+		_ = os.RemoveAll(RunDir(root, runID))
+		return RunState{}, err
 	}
 	if err := SaveRunState(root, state); err != nil {
 		_ = os.RemoveAll(RunDir(root, runID))
@@ -896,6 +917,16 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 		}
 		state.Carry = map[string]CarryResult{}
 		state.Dispatches = map[string]PreparedDispatch{}
+		state.DispatchObligations = map[string]DispatchObligation{}
+		state.RejectedResults = []RejectedResultReceipt{}
+		state.ReviewDeltaReceipts = []ReviewDeltaReceipt{}
+		state.QACaseSets = map[string]QACaseSetState{}
+		state.QADesignChangesByMode = map[string]QADesignChange{}
+		state.ReviewWaves = map[string]ReviewWave{}
+		state.ActiveReviewWaveID = ""
+		state.PostReviewFindings = map[string]PostReviewFinding{}
+		state.Problems = map[string]CanonicalProblem{}
+		state.P2CompletionCredentials = []P2CompletionCredential{}
 		state.QACasesByMode = map[string][]QACase{}
 		state.QAExecutionByMode = map[string]QAExecutionResult{}
 		state.PriorQAExecutionByMode = map[string]*QAExecutionResult{}
@@ -931,6 +962,7 @@ func ResetRun(root, packageRoot, runID string) (ResetResult, error) {
 			"product review",
 			"start readiness",
 			"gates and QA design / review / execution results",
+			"QA case-set freezes, review waves, canonical problems and P2 completion credentials",
 			"carry results",
 			"dispatches (stuck OPEN/CLAIMED cleared)",
 			"settled findings, review items, re-review marks",
@@ -991,6 +1023,15 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			}
 		}
 		if changed {
+			impactBaseState := *state
+			preservedCases := map[string][]QACase{}
+			if semanticEffect == "changed" {
+				for mode, cases := range state.QACasesByMode {
+					if caseSet := state.QACaseSets[mode]; caseSet.Status == caseSetFrozen || caseSet.Status == caseSetThawed {
+						preservedCases[mode] = append([]QACase{}, cases...)
+					}
+				}
+			}
 			if semanticEffect != "preserved" && semanticEffect != "changed" {
 				return fmt.Errorf("changed requirement requires semantic effect preserved or changed")
 			}
@@ -1000,6 +1041,17 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 			// 判定，不新增 returned 状态。
 			if err := requireNoUnrecordedInFlightDispatch(*state); err != nil {
 				return err
+			}
+			reviewDriven := options.ReviewDelta != nil || hasConfirmedReviewFinding(*state)
+			var deltaReceipt ReviewDeltaReceipt
+			if reviewDriven {
+				if !confirmed {
+					return fmt.Errorf("a review-driven requirement revision requires --confirmed with its review-delta confirmation")
+				}
+				deltaReceipt, err = validateReviewDelta(*state, revision, options.ReviewDelta)
+				if err != nil {
+					return err
+				}
 			}
 			liveSnapshot, err := resolveNativeSnapshot(root, state.VCS)
 			if err != nil {
@@ -1029,11 +1081,79 @@ func UpdateRequirement(root, packageRoot, runID, source string, confirmed bool, 
 						updateGuaranteeForRoute(state)
 					}
 				}
+				if reviewDriven {
+					for _, action := range deltaReceipt.AffectedActions {
+						if action == "product-review" {
+							return fmt.Errorf("meaning-preserved cannot invalidate product-review; use meaning-changed with a confirmed impact preview if product meaning changed")
+						}
+					}
+					state.ReviewDeltaReceipts = append(state.ReviewDeltaReceipts, deltaReceipt)
+					for _, action := range deltaReceipt.AffectedActions {
+						if action == "start-readiness" {
+							state.Actions[action] = ActionResult{Status: "PENDING"}
+							markPreDevelopmentReviewActionStale(state, action, deltaReceipt.ID)
+						}
+					}
+				}
 				rebindCurrentSnapshot(state, liveSnapshot)
 				return nil
 			}
+			// Every meaning-changing revision rolls back effective results, including
+			// an ordinary user proposal with no review finding. Bind authorization
+			// to the pre-change state before allowing that rollback.
+			{
+				if options.ImpactAuthorization == nil {
+					return fmt.Errorf("meaning-changed requires a bound requirement-impact preview and user confirmation")
+				}
+				authorization := options.ImpactAuthorization
+				if authorization.StateRevision != state.StateIntegrity {
+					return fmt.Errorf("meaning-changed requirement-impact state revision is stale")
+				}
+				preview, err := requirementImpactPreview(impactBaseState, revision, deltaReceipt.DeltaDigest, authorization.Impact)
+				if err != nil {
+					return err
+				}
+				if authorization.PreviewDigest == "" || authorization.PreviewDigest != preview.Digest {
+					return fmt.Errorf("meaning-changed requirement-impact preview digest is stale or misbound")
+				}
+				confirmation := strings.TrimSpace(authorization.UserConfirmation)
+				if confirmation == "" && options.ReviewDelta != nil && options.ReviewDelta.ConfirmationScope == "REVIEW_DELTA_AND_REQUIREMENT_IMPACT" && options.ReviewDelta.ImpactPreviewDigest == preview.Digest {
+					confirmation = strings.TrimSpace(options.ReviewDelta.UserConfirmation)
+				}
+				if confirmation == "" {
+					return fmt.Errorf("meaning-changed requires explicit user confirmation of the displayed rollback impact")
+				}
+				if !reviewDriven {
+					deltaReceipt.BaseRevision = preview.BaseRevision
+					deltaReceipt.CandidateRevision = preview.CandidateRevision
+					deltaReceipt.ConfirmationScope = "REQUIREMENT_IMPACT"
+				}
+				deltaReceipt.ImpactPreviewDigest = preview.Digest
+				deltaReceipt.ImpactStateRevision = authorization.StateRevision
+				deltaReceipt.ImpactConfirmationSource = confirmation
+				deltaReceipt.Impact = &preview.Impact
+				deltaReceipt.ID = ""
+				deltaReceipt.ID = "review-delta-" + shortDigest(digestValue(deltaReceipt))
+			}
 			state.CurrentSnapshot = liveSnapshot
 			invalidateRequirementResults(state, catalog.GateIDs())
+			for mode, cases := range preservedCases {
+				state.QACasesByMode[mode] = cases
+			}
+			state.ReviewDeltaReceipts = append(state.ReviewDeltaReceipts, deltaReceipt)
+			if reviewDriven {
+				state.RequirementConfirmed = true
+				state.Actions["requirements-clarification"] = ActionResult{Status: "PASS", Message: "review-delta and requirement-impact confirmation accepted"}
+				if guaranteeWasActivated {
+					if err := activateFrozenGuarantee(root, state); err != nil {
+						return err
+					}
+					if state.RouteMode != "" {
+						updateGuaranteeForRoute(state)
+					}
+				}
+				return nil
+			}
 			state.RequirementConfirmed = false
 			if confirmed {
 				return fmt.Errorf("a meaning-changing requirement must return to Requirements Clarification")
@@ -1590,6 +1710,7 @@ func ClaimDispatchWithProvider(root, packageRoot, runID, dispatchID, reviewerIde
 		}
 		dispatch.ReviewerIdentity, dispatch.Status = effective, "CLAIMED"
 		state.Dispatches[dispatchID] = dispatch
+		markReviewWaveDispatchClaimed(state, dispatch)
 		return nil
 	})
 }
@@ -1653,6 +1774,8 @@ func openRecord(root, packageRoot, runID string, checkPending, skipDrift bool, c
 // native snapshot is verified on the main worktree or the QA isolation worktree,
 // and an optional target/catalog check that runs after dispatch resolution.
 type recordDispatchOptions struct {
+	lateResultStatus        string // audit-only outcome of a superseded wave attempt
+	lateResultMessage       string
 	targetKind              string                        // dispatch target kind: "action" or "gate"
 	target                  string                        // dispatch target id
 	transitionOp            string                        // transition operation
@@ -1673,7 +1796,13 @@ type recordDispatchOptions struct {
 // change receives the loaded catalog and resolved dispatch and performs the
 // record-specific write.
 func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts recordDispatchOptions, change func(*RunState, PromptCatalog, PreparedDispatch) error) (RunState, error) {
-	return openRecord(root, packageRoot, runID, true, targetRecordsViaRecordCommand(opts.targetKind, opts.target), func(state *RunState, catalog PromptCatalog) error {
+	return openRecord(root, packageRoot, runID, false, targetRecordsViaRecordCommand(opts.targetKind, opts.target), func(state *RunState, catalog PromptCatalog) error {
+		if audited, err := auditLateReviewResult(state, dispatchID, opts.targetKind, opts.target, opts.lateResultStatus, opts.lateResultMessage); audited || err != nil {
+			return err
+		}
+		if err := requireNoPendingInheritance(root, *state, catalog); err != nil {
+			return err
+		}
 		dispatch, err := requirePreparedDispatch(*state, dispatchID, opts.targetKind, opts.target)
 		if err != nil {
 			return err
@@ -1720,20 +1849,7 @@ func openDispatchRecord(root, packageRoot, runID, dispatchID string, opts record
 // clarification result. userRequested is the explicit user override signal for
 // the review-rule enforcement (only the user can break the rule); its source is
 // recorded in ReviewOverrides.
-func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, items ...ReviewItemInput) (RunState, error) {
-	verification := legacyOperatorVerification()
-	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, items...)
-}
-
-// RecordActionWithOperatorVerification is the public CLI path for semantic
-// pre-development reviews. Unlike the in-process compatibility wrapper above,
-// it requires the Operator to submit the actual verification checks and
-// evidence that make a reviewer candidate eligible for recording.
-func RecordActionWithOperatorVerification(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
-	return recordAction(root, packageRoot, runID, actionID, dispatchID, status, message, findings, userRequested, userReason, verification, items...)
-}
-
-func recordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
+func RecordAction(root, packageRoot, runID, actionID, dispatchID, status, message string, findings []FindingInput, userRequested bool, userReason string, verification OperatorVerification, items ...ReviewItemInput) (RunState, error) {
 	// record-action status 严格大小写校验：pass 之类的小写不宽容记录，必须精确
 	// PASS / FAIL / RUNTIME_ERROR（trim 后）。
 	if raw := strings.TrimSpace(status); raw != "PASS" && raw != "FAIL" && raw != "RUNTIME_ERROR" {
@@ -1746,9 +1862,13 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 		transitionTarget:        func(PreparedDispatch) string { return "" },
 		requireMainNative:       true,
 		allowUserReviewOverride: true,
+		requireLifecycle:        actionID == "development-worker",
 		preCheck: func(state *RunState, catalog PromptCatalog) error {
 			if _, ok := catalog.Action(actionID); !ok {
 				return fmt.Errorf("unknown action prompt %q", actionID)
+			}
+			if actionID == "development-worker" && strings.TrimSpace(status) == "RUNTIME_ERROR" && strings.TrimSpace(message) != "" && len(findings) == 0 {
+				return nil
 			}
 			if actionID != "requirements-clarification" && actionID != "start-readiness" && actionID != "product-review" {
 				return fmt.Errorf("action %q has a dedicated workflow command and cannot use record-action", actionID)
@@ -1756,13 +1876,32 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			return nil
 		},
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
-		if actionID == "start-readiness" || actionID == "product-review" {
+		if actionID == "development-worker" {
+			// A failed attempt does not complete development or replace its
+			// prepared repair obligation. The next prepare reuses that TaskKey.
+			backfillDispatchCost(root, state, dispatch)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(message))
+			return nil
+		}
+		var normalized string
+		var converted []Finding
+		var err error
+		if isPreDevelopmentReviewAction(actionID) {
 			if err := requireLifecycleVerification(root, *state, dispatch); err != nil {
 				return err
 			}
-			if err := enforceReviewRule(state, actionID, dispatch.ID, status, findings, userRequested, userReason); err != nil {
+			normalized, converted, err = validateStrictSemanticResult(actionID, status, message, findings, false, root, *state)
+			if err != nil {
+				return rejectInvalidResult(state, dispatch, err)
+			}
+		} else {
+			// Requirements Clarification records ungraded clarification results.
+			normalized, converted, err = validateSemanticResult(actionID, status, message, findings, false)
+			if err != nil {
 				return err
 			}
+		}
+		if actionID == "start-readiness" || actionID == "product-review" {
 			// Runtime failures are dispatch retries, not semantic review results:
 			// they neither require item decisions nor consume the structured
 			// product-review completeness round. Only complete PASS/FAIL candidates
@@ -1770,29 +1909,30 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 			if strings.ToUpper(strings.TrimSpace(status)) != "RUNTIME_ERROR" {
 				// 增量审查：record-action 下发逐项判定。所有 PENDING 项必须全判；对已 PASS
 				// 项下发判定被拒；FAIL 项必须带 finding（reason）。
+				originalItems := state.ReviewItemsByAction[actionID]
 				if err := recordReviewItems(state, actionID, dispatch.ID, items); err != nil {
-					return err
+					return rejectInvalidResult(state, dispatch, &ResultContractError{Reason: err.Error(), Fields: []string{"reviewItems"}})
 				}
 				if actionID == "product-review" {
-					if err := requireGuaranteeProductReviewResult(*state, strings.ToUpper(strings.TrimSpace(status))); err != nil {
-						return err
+					if err := requireGuaranteeProductReviewResult(*state, strings.ToUpper(strings.TrimSpace(status)), findings...); err != nil {
+						state.ReviewItemsByAction[actionID] = originalItems
+						return rejectInvalidResult(state, dispatch, &ResultContractError{Reason: err.Error(), Fields: []string{"productReviewCompleteness"}})
 					}
 				}
 			}
+			if err := enforceReviewRule(state, actionID, dispatch.ID, status, findings, userRequested, userReason); err != nil {
+				return err
+			}
 		}
 		backfillDispatchCost(root, state, dispatch)
-		result, err := semanticActionResult(actionID, status, message, findings, state)
-		if err != nil {
-			return err
-		}
-		result.DispatchID = dispatch.ID
+		result := ActionResult{Status: normalized, Message: strings.TrimSpace(message), Findings: converted, DispatchID: dispatch.ID}
 		result, err = recordSemanticReviewCandidate(state, actionID, dispatch, result, verification)
 		if err != nil {
 			return err
 		}
 		result.DispatchID = dispatch.ID
 		state.Actions[actionID] = result
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, result.Status, result.Message)
 		return nil
 	})
 }
@@ -1802,7 +1942,10 @@ func recordAction(root, packageRoot, runID, actionID, dispatchID, status, messag
 // 项下发判定被拒（除非主代理下次 prepare 显式重新声明变更）；FAIL 项必须携带 finding。
 // 未声明 scope（该动作无逐项表）时不做逐项约束，回到全量审查路径。
 func recordReviewItems(state *RunState, actionID, dispatchID string, items []ReviewItemInput) error {
-	table := state.ReviewItemsByAction[actionID]
+	table := map[string]ReviewItem{}
+	for key, value := range state.ReviewItemsByAction[actionID] {
+		table[key] = value
+	}
 	if len(table) == 0 {
 		return nil
 	}
@@ -1853,6 +1996,7 @@ func recordReviewItems(state *RunState, actionID, dispatchID string, items []Rev
 			return fmt.Errorf("review item %q is pending and must be judged (all pending items require a decision)", key)
 		}
 	}
+	state.ReviewItemsByAction[actionID] = table
 	return nil
 }
 
@@ -1933,6 +2077,8 @@ func settledMessagesByDisposition(state RunState, actionID, disposition string) 
 
 func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, compared string, findings []FindingInput) (RunState, error) {
 	return openDispatchRecord(root, packageRoot, runID, dispatchID, recordDispatchOptions{
+		lateResultStatus:  strings.ToUpper(strings.TrimSpace(status)),
+		lateResultMessage: message,
 		targetKind:        "gate",
 		target:            gateID,
 		transitionOp:      "gate",
@@ -1946,6 +2092,10 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 			return nil
 		},
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
+		normalized, converted, err := validateStrictSemanticResult("", status, message, findings, true, root, *state)
+		if err != nil {
+			return rejectInvalidResult(state, dispatch, err)
+		}
 		backfillDispatchCost(root, state, dispatch)
 		existing := state.Gates[gateID]
 		if semanticResultRecorded(existing.Status, existing.Snapshot, state.CurrentSnapshot) && !gatePromptChanged(*state, catalog, gateID) {
@@ -1957,10 +2107,7 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 				return fmt.Errorf("gate review reported compared %q but the requested base-to-current range is %q", compared, want)
 			}
 		}
-		result, err := semanticGateResult(status, message, findings, state)
-		if err != nil {
-			return err
-		}
+		result := GateResult{Status: normalized, Message: strings.TrimSpace(message), Snapshot: state.CurrentSnapshot, Findings: converted}
 		if err := rejectFrozenArtifactFindings(*state, result.Findings); err != nil {
 			return err
 		}
@@ -1974,7 +2121,7 @@ func RecordGate(root, packageRoot, runID, gateID, dispatchID, status, message, c
 		if gate, ok := catalog.Gate(gateID); ok && state.PromptHashes != nil {
 			state.PromptHashes["gate:"+gateID] = composedGatePromptHash(catalog, gate.Content)
 		}
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, result.Status, result.Message)
 		completeReviewWaveIfReady(state)
 		return nil
 	})
@@ -2056,6 +2203,7 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 				state.Carry[carryAdoptKey] = adoption
 				state.CurrentSnapshot = currentSnapshot
 			}
+			bindFrozenCaseSetsToSnapshot(state)
 			state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
 			completeDispatch(state, developmentDispatch.ID)
 			return nil
@@ -2067,6 +2215,8 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		// 白盒审查/执行/门审尚未开始）。
 		if whiteboxTestCodeAdvancement(*state) {
 			state.CurrentSnapshot = currentSnapshot
+			invalidateActiveReviewWave(state, "whitebox test/case-set snapshot advanced")
+			bindFrozenCaseSetsToSnapshot(state)
 			return nil
 		}
 		var developmentDispatch PreparedDispatch
@@ -2111,6 +2261,15 @@ func AdvanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			state.PreRepairSnapshot = ""
 		}
 		resetSnapshotReviewSurface(state, oldSnapshot, isRepair, isRepair)
+		bindFrozenCaseSetsToSnapshot(state)
+		if isRepair && state.ActiveReviewWaveID != "" {
+			wave := state.ReviewWaves[state.ActiveReviewWaveID]
+			if wave.RepairPlan != nil && wave.RepairPlan.Status == "DISPATCHED" {
+				wave.RepairPlan.Status = "SNAPSHOTTED"
+				wave.RepairPlan.RepairSnapshot = state.CurrentSnapshot
+				state.ReviewWaves[wave.ID] = wave
+			}
+		}
 		return nil
 	})
 }
@@ -2125,7 +2284,7 @@ func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA,
 	// An active REQ/AC guarantee binds every PASS to the exact candidate. A
 	// repair/adoption creates a new candidate, so its old QA results remain only
 	// as PriorQAExecution audit evidence and can never stay current for Carry.
-	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive {
+	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && len(state.QACaseSets) == 0 {
 		preserveQA = false
 	}
 	// 修复快照推进不得抹掉上一快照的权威结果（PASS/FAIL，含快照与 FAIL 用例集）。
@@ -2164,7 +2323,7 @@ func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA,
 	}
 }
 
-func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []QAScopeInput) (RunState, error) {
+func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []QAScopeInput, authorizations ...RepairAuthorizationInput) (RunState, error) {
 	return mutateRun(root, runID, func(state *RunState) error {
 		catalog, err := requireCurrentDefinitions(root, *state, packageRoot)
 		if err != nil {
@@ -2182,10 +2341,32 @@ func AuthorizeExtraRepair(root, packageRoot, runID string, cycles int, scopes []
 		if !hasRepairableBlocker(*state) && !hasSuggestionRecommendation(*state) {
 			return fmt.Errorf("no recorded result requires another repair")
 		}
+		effectiveScopes := append([]QAScopeInput{}, scopes...)
+		if convergenceEnabled(*state) {
+			if len(authorizations) != 1 {
+				return fmt.Errorf("extra repair authorization requires exactly one bound repair-preview digest and state revision")
+			}
+			preview := repairAuthorizationPreviewFromState(*state, authorizations[0].Estimate)
+			if err := validateRepairAuthorizationPreview(*state, preview, authorizations[0]); err != nil {
+				return err
+			}
+			provided := map[string]bool{}
+			for _, scope := range effectiveScopes {
+				provided[strings.TrimSpace(scope.Mode)] = true
+			}
+			for _, mode := range qaRerunModes(*state) {
+				if current, ok := state.ExecutionScopes[mode]; ok && current.BaseSnapshot == state.CurrentSnapshot {
+					continue
+				}
+				if !provided[mode] {
+					effectiveScopes = append(effectiveScopes, QAScopeInput{Mode: mode, Decision: "AFFECTED", CaseIDs: append([]string{}, authorizations[0].Estimate.QACases[mode]...), Reason: "affected QA subset bound by repair-preview"})
+				}
+			}
+		}
 		// 轮次上限用尽后每一轮额外修复都须显式授权（carry-forward 不授予轮次，
 		// 见 bundleRerunScopes）；QA 被选中且当前快照存在某 mode 的权威 FAIL 结果（该 mode
 		// 将重跑）时，scope 决策在同一个交互中打包询问/记录（多 mode 各自一份、可不同）。
-		if err := bundleRerunScopes(state, scopes); err != nil {
+		if err := bundleRerunScopes(state, effectiveScopes); err != nil {
 			return err
 		}
 		state.ExtraReviewWaves += cycles
@@ -2220,12 +2401,23 @@ func mutateRun(root, runID string, change func(*RunState) error) (RunState, erro
 		return RunState{}, err
 	}
 	if err := change(&state); err != nil {
-		return RunState{}, err
+		var committed *committedStateError
+		if !errors.As(err, &committed) {
+			return RunState{}, err
+		}
+		if saveErr := SaveRunState(root, state); saveErr != nil {
+			return RunState{}, saveErr
+		}
+		persisted, loadErr := LoadRunState(root, runID)
+		if loadErr != nil {
+			return RunState{}, loadErr
+		}
+		return persisted, committed.err
 	}
 	if err := SaveRunState(root, state); err != nil {
 		return RunState{}, err
 	}
-	return state, nil
+	return LoadRunState(root, runID)
 }
 
 // requireRunID rejects a missing run id up front so state-loading/locking paths
@@ -2430,9 +2622,7 @@ func requireDispatchNativeCurrent(root string, state RunState, dispatch Prepared
 }
 
 func completeDispatch(state *RunState, dispatchID string) {
-	dispatch := state.Dispatches[dispatchID]
-	dispatch.Status = "COMPLETED"
-	state.Dispatches[dispatchID] = dispatch
+	finishDispatchAttempt(state, dispatchID, "PASS", "")
 }
 
 // staleOpenDispatches supersedes the prior OPEN empty tickets of the same target
@@ -2520,22 +2710,6 @@ func newDispatchID() (string, error) {
 	return "dispatch-" + hex.EncodeToString(value[:]), nil
 }
 
-func semanticActionResult(actionID, status, message string, findings []FindingInput, state *RunState) (ActionResult, error) {
-	normalized, converted, err := validateSemanticResult(actionID, status, message, findings, false)
-	if err != nil {
-		return ActionResult{}, err
-	}
-	return ActionResult{Status: normalized, Message: strings.TrimSpace(message), Findings: converted}, nil
-}
-
-func semanticGateResult(status, message string, findings []FindingInput, state *RunState) (GateResult, error) {
-	normalized, converted, err := validateSemanticResult("", status, message, findings, true)
-	if err != nil {
-		return GateResult{}, err
-	}
-	return GateResult{Status: normalized, Message: strings.TrimSpace(message), Snapshot: state.CurrentSnapshot, Findings: converted}, nil
-}
-
 func validateSemanticResult(actionID, status, message string, findings []FindingInput, gateResult bool) (string, []Finding, error) {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
@@ -2586,7 +2760,9 @@ func validateSemanticResult(actionID, status, message string, findings []Finding
 		} else if severity != "" {
 			return "", nil, fmt.Errorf("severity is accepted only for discovered-gate findings or product/start-readiness review findings")
 		}
-		converted = append(converted, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
+		finding := Finding{Severity: severity, SeverityRationale: strings.TrimSpace(input.SeverityRationale), Category: strings.ToUpper(strings.TrimSpace(input.Category)), Requirement: strings.TrimSpace(input.Requirement), NormalPath: strings.TrimSpace(input.NormalPath), ActualError: strings.TrimSpace(input.ActualError), DeferralImpact: strings.TrimSpace(input.DeferralImpact), Verification: input.Verification, Message: strings.TrimSpace(input.Message), Locations: locations}
+		finding.ID = findingStableID(finding)
+		converted = append(converted, finding)
 	}
 	// 门的 PASS 只允许 P2/P3；product-review/start-readiness 的 PASS 允许携带发现项（仅
 	// P2/P3 或已驳回的 P0/P1，由 enforceReviewRule 逐项判定），FAIL 两者都必须含 P0/P1。
@@ -2661,6 +2837,14 @@ func suffixIsDigits(value string) bool {
 }
 
 func invalidateRequirementResults(state *RunState, gateIDs []string) {
+	invalidateActiveReviewWave(state, "meaning-changed requirement revision invalidated the review-ready binding")
+	for mode, caseSet := range state.QACaseSets {
+		// Keep the prior frozen identity so qa-thaw can select the affected
+		// cases after registration. It is not a review-ready binding for the
+		// changed requirement, and cannot authorize execution in that state.
+		caseSet.BoundSnapshot = ""
+		state.QACaseSets[mode] = caseSet
+	}
 	routeMode := state.RouteMode
 	selected := append([]string{}, state.SelectedGates...)
 	routeSkips := map[string]SkipAuthorization{}
@@ -2675,10 +2859,9 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	// receipts, or action-specific grant history. Those are reset only by the
 	// explicit workflow reset/new-run lifecycle boundary.
 	markPreDevelopmentReviewsStale(state, "REQUIREMENT_REVISION_INVALIDATION")
-	// 语义变更作废全部结果时，per-mode review/design 权威结果一并作废——qa-review /
-	// qa-design 已移出 Actions（按 mode 存储），失效路径只重置 Actions 会让 per-mode
-	// 旧 PASS 残留，快照黑盒门读到旧 PASS 仍放行。这里清空两个按 mode 的权威结果 map，并把
-	// 各 mode 用例的 ReviewStatus 置回 PENDING，使门读到旧 PASS 不放行、须对新需求重新设计/重审。
+	// Aggregate QA decisions belonged to the prior requirement. Keep only
+	// frozen/thawed case approvals for selective revision; qa-thaw and the
+	// subsequent review decide the affected cases under the new requirement.
 	state.QAReviewByMode = map[string]ActionResult{}
 	state.QADesignByMode = map[string]ActionResult{}
 	// 需求作废重置：一并清空按 mode 的增量变更留痕（本轮新增/修改/删除列表随结果作废）。
@@ -2686,9 +2869,15 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	if len(state.QACasesByMode) != 0 {
 		reset := map[string][]QACase{}
 		for mode, cases := range state.QACasesByMode {
+			if caseSet := state.QACaseSets[mode]; caseSet.Status == caseSetFrozen || caseSet.Status == caseSetThawed {
+				reset[mode] = cases
+				continue
+			}
 			updated := make([]QACase, 0, len(cases))
 			for _, testCase := range cases {
 				testCase.ReviewStatus = "PENDING"
+				testCase.ApprovedSource = ""
+				testCase.SuggestionIDs = nil
 				updated = append(updated, testCase)
 			}
 			reset[mode] = updated
@@ -2721,8 +2910,6 @@ func invalidateRequirementResults(state *RunState, gateIDs []string) {
 	state.RouteMode = routeMode
 	state.SelectedGates = selected
 	state.SkipAuthorizations = routeSkips
-	state.CompletedReviewWaves = 0
-	state.ExtraReviewWaves = 0
 	staleAllDispatches(state)
 }
 
@@ -2893,6 +3080,9 @@ func selectedQAModesRecorded(state RunState) bool {
 }
 
 func hasRepairableBlocker(state RunState) bool {
+	if wave, ok := state.ReviewWaves[state.ActiveReviewWaveID]; ok && wave.Snapshot == state.CurrentSnapshot && wave.Status == reviewWaveReadyForRepair && len(reviewWaveRepairProblemIDs(state, wave.ID)) != 0 {
+		return true
+	}
 	// 任一选中 QA mode 当前快照有权威 FAIL 结果即阻塞（黑盒/白盒各自独立，合并
 	// 单派发结果按 mode 生效）。
 	if isSelectedQA(state) {
@@ -2927,7 +3117,17 @@ func hasSuggestionRecommendation(state RunState) bool {
 			continue
 		}
 		for _, finding := range result.Findings {
-			if finding.Severity == "P2" || finding.Severity == "P3" {
+			if finding.Severity == "P2" {
+				resolved := false
+				for _, credential := range state.P2CompletionCredentials {
+					if credential.GateID == id && credential.RepairSnapshot == state.CurrentSnapshot {
+						resolved = true
+						break
+					}
+				}
+				if resolved {
+					continue
+				}
 				return true
 			}
 		}
@@ -2960,7 +3160,7 @@ func runtimeErrorsAuthorizedForRepair(state RunState) bool {
 }
 
 func repairInput(state RunState) string {
-	lines := []string{"Repair the complete recorded wave below. P2/P3 recommendations are included whenever this wave has a blocker or the user explicitly requested their repair."}
+	lines := []string{"Repair the complete recorded wave below. Gate P2 is mandatory and joins the unified repair; gate P3 remains a Seal advisory."}
 	// 收集每个 FAIL 的选中 QA mode 的发现项（黑盒/白盒各自独立，合并单派发按
 	// mode 生效）。
 	if isSelectedQA(state) {
@@ -2982,6 +3182,9 @@ func repairInput(state RunState) string {
 			continue
 		}
 		for _, finding := range state.Gates[id].Findings {
+			if finding.Severity == "P3" {
+				continue
+			}
 			lines = append(lines, fmt.Sprintf("%s %s: %s", id, finding.Severity, finding.Message))
 		}
 	}
@@ -2993,6 +3196,10 @@ func effectiveReviewWaveLimit(state RunState) int {
 }
 
 func completeReviewWaveIfReady(state *RunState) {
+	if convergenceEnabled(*state) {
+		maybeCollectReviewWave(state)
+		return
+	}
 	if len(state.SelectedGates) == 0 || state.Actions["development-worker"].Status != developmentComplete || !reviewWaveRecorded(*state) {
 		clearResolvedCarryBoundary(state)
 		return

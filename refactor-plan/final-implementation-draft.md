@@ -28,6 +28,7 @@ formal-gates 从“主代理阅读流程规范并选择下一条命令”改成�
 2. `workflow drive`：无外部事件，推进到下一外部边界。
 3. `workflow submit`：唯一外部事件写入口。
 4. `workflow show`、`status`、`next`、`diagnose`：严格只读。
+5. `workflow guard-preview --input <basis.json>`：公开只读、非权威的生产 guard 计算预览（schema/fixture 见 `references/guard-preview.md`），不创建 run、不写状态、不认证真实确认或任务合法性。3.5b 固定 `runtimeIntegration=NOT_INSTALLED`；阶段 4 才从权威 engine 状态呈现运行时集成。
 
 安装、卸载、hook、lifecycle、canary 与脱离 run 的快速 gate 检查仍属维护面，但不能写 workflow 状态。`drive --event`、`submit-result`、公开 `cleanup` 及所有旧推进命令全部删除；旧能力若仍需要，只能成为引擎内部 handler。
 
@@ -241,7 +242,7 @@ regular 受理不要求用户原始输入采用 OpenSpec、PRD 或其他固定�
 1. lightweight/regular（尚未明确时）；
 2. 高置信拆分建议的精确拓扑，包括边界、数量、依赖和并行度；
 3. regular 非分片 run 和每个 child 的 full/custom 路线；
-4. 经 Operator 核实成立的产品审/技术审每条 P0–P3 finding 的 confirm/dismiss，以及对已接纳 review finding/adjudication 的语义纠正；Ask 已附唯一完整 remedy 时 confirm 同时批准 remedy，存在多个用户拥有的修法或纠正选项时继续澄清并确认更新后的完整需求/方案。
+4. 经 Operator 核实成立的产品审/技术审每条 P0–P3 finding 的 confirm/dismiss，以及对已接纳 review finding/adjudication 的语义纠正；Ask 已附唯一完整 remedy 时 confirm 同时批准 remedy，存在多个用户拥有的修法或纠正选项时继续澄清并按 §5.1 确认完整候选的 review-delta。
 
 child 路线可在界面批量接受统一默认，但状态中逐 child 保存独立决定。低置信不拆或不确定由引擎自动记录 no-split 理由，不制造无意义 Ask。
 
@@ -257,7 +258,7 @@ child 路线可在界面批量接受统一默认，但状态中逐 child 保存�
 - 黑盒、白盒和 merge QA 三类 pre-wave review 各自三连 FAIL 或长期不可用；
 - 用户主动要求的 review override、已 PASS 复审、fresh dispatch、QA 重跑、提前精确 waiver；
 - 用户主动要求纠正已接纳的产品审/技术审 finding、严重度或 adjudication；
-- QA/门新细节无法由结构化事实唯一处置时的 `VALIDATION_DETAIL_DISPOSITION`；
+- 开发后 QA/门 finding 经 Operator semantic adjudication 核实严重度、范围、根因与重复关系后，实际处置仍有多个合法分支时才 `VALIDATION_DETAIL_DISPOSITION` Ask；核实不是用户 Ask；
 - 开发后 `wave >= 3` 的统一处置；
 - 长期 RUNTIME_ERROR；
 - master/child 破坏性级联。
@@ -268,7 +269,7 @@ child 路线可在界面批量接受统一默认，但状态中逐 child 保存�
 
 ### 4.4 产品审和技术审
 
-reviewer 输出只是候选。Operator 对每条 P0/P1/P2/P3 核实需求前提、正常入口、复现、证据、因果、严重度和范围；无效或范围外候选直接丢弃。有效 finding 获得稳定 ID+digest，再逐项 Ask。Ask 同时记录 finding disposition 与 remedy authorization：若附带唯一、完整、无用户选择空间的 remedy，confirm 绑定两者 digest；若用户只确认问题或仍有多个有意义的产品/重大技术选项，先继续澄清、取得选择并确认更新后的完整整合文本，不能由代理自行选修法。纯机械同步不重复 Ask。
+reviewer 输出只是候选。Operator 对每条 P0/P1/P2/P3 核实需求前提、正常入口、复现、证据、因果、严重度和范围；无效或范围外候选直接丢弃。有效 finding 获得稳定 ID+digest，再逐项 Ask。Ask 同时记录 finding disposition 与 remedy authorization：若附带唯一、完整、无用户选择空间的 remedy，confirm 绑定两者 digest；若用户只确认问题或仍有多个有意义的产品/重大技术选项，先继续澄清、取得选择并按 §5.1 确认完整候选的 review-delta，不能由代理自行选修法。纯机械同步不重复 Ask。
 
 审查状态分为三层 typed data：不可变的 `RawReviewCandidate`（绑定 action/TaskKey/dispatch/result digest 与需求 revision）、逐 finding 的 `ReviewAdjudication` 及可 supersede 它的 `ReviewCorrectionReceipt`、由 Controller 纯函数计算的 `EffectiveReviewStatus`。原始 candidate 只作证据，不得由 Operator、host 或 submit 直接写成权威 PASS/FAIL；只有完成结构/binding/完整性校验并经 Operator 核实后的 finding 才进入 adjudication。用户确认的语义纠正通过带 freshness 的 typed Ask/submit 写入 correction receipt；程序可直接拒绝错误 binding、incomplete 或 stale candidate，但不能代替用户改产品/重大技术判断。
 
@@ -305,6 +306,13 @@ Controller 按 master/整体 run 和审查动作分别持久化两条独立的 `
 
 用户需求变化不增加或清零 run 级 repair wave，也不清零产品审/技术审的 `PreDevelopmentReviewSeries`；被变化打断、未形成完整有效结果的旧 revision 审查不计语义轮，被变化打断、未形成完整 expected set 的旧 revision wave 不计开发后 wave。分片由 master 统一接收和级联：未受影响 child 可 carry，受影响 child 重建或重验；已进入主线集成时，普通增量由主线开发 worker 实现，拓扑变化才重建受影响 child/map/receipt。
 
+### 5.1 需求内容确认与回退授权
+
+审查来源的修订由主代理在编辑前保留并核对与上一确认 revision 匹配的完整 base，生成穷尽 review-delta 并逐 hunk 核实来源。用户只确认变更包；完整 candidate revision 绑定为新需求，未变内容继承。首次受理仍确认全文，主动查看全文不改变增量确认范围。Controller 不持有第二份 base/diff 账本，不允许无关 hunk 混入。
+
+需求影响由 Operator 建议，Controller 不判断自然语言含义。`meaning-preserved` 不产生回退 Ask，保留产品审 PASS，只重做实际受影响、未通过或尚未完成的技术审；正文变化仍按 review-delta 确认。`meaning-changed` 在接纳 revision 转换前必须生成绑定 state revision、base/candidate revision、影响预览 digest 的 typed Ask，展示目标/范围/对外行为/验收变化、失效 PASS、回退步骤、产品审已用/剩余额度和授权状态。只有用户确认事件才能原子登记新 revision、作废旧产品审 PASS、置产品审 PENDING 并使下游失效；不重置额度、不自动授权新产品审。缺失、过期或不匹配时零状态变化。一次决定明确覆盖 review-delta 与回退后果即可共用授权。阶段 4 engine 是唯一 writer，legacy 入口不得绕过校验。
+
+
 ## 6. 强制最大并行
 
 完整 eligible frontier 由 `expectedTasks` 计算，引擎和宿主必须满足以下不变量：
@@ -319,81 +327,69 @@ Controller 按 master/整体 run 和审查动作分别持久化两条独立的 `
 
 - 开发期：开发 worker + 黑盒 QA 用例设计/审查；
 - 分片开发期：各 slice 开发 + 合并 QA 跨片用例设计/审查；
-- 开发实现快照后：whitebox authoring/design/review 与所有声明为 production-only validation view 的黑盒执行/selected gates 同时 eligible；后者先生成 provisional result；
-- 完整候选冻结后：白盒执行、尚未运行和 validation view 已变化/UNKNOWN 的任务同时 eligible；旧/新 view 精确相等的 provisional result 由 receipt 直接纳入最终候选 expected set；
+- 开发实现快照 Dn/S1 后：只解锁白盒设计/authoring；白盒测试提交为 Qn/S2，QA Review 与 P2/P3 吸收若修改测试继续提交，直至所有 mode 的最终 case-set FROZEN 且绑定含测试快照；
+- 最终 review-ready 候选就绪后：一次冻结 expected-set/digest，全部 eligible QA execution 与 selected gates 同时准备并最大并行，均绑定该最终候选；
 - 合并后：合并 QA 执行 + 合并门；
 - 修复后：所有受影响且依赖满足的验证再次最大 fan-out。
 
-投机执行不是提前冒充权威结果：它只有在最终候选形成后、由 Controller 机械证明声明 validation view 精确相等时才成为权威证据；不同或 UNKNOWN 只重跑受影响项。最大并行约束所有当前确实有机会进入最终 expected set 的任务，不能因等待白盒编写而闲置生产验证容量。
+review-ready 是执行屏障：之前不提前签发黑盒执行或门，也不用 provisional 结果代替最终候选验证。普通实现返修沿用 FROZEN 用例，不重新设计。
 
 ## 7. 开发后 QA、门与三轮
 
-```mermaid
-flowchart TD
-    D["开发 / 生产返修"] --> DS["实现快照 Dn"]
-    DS --> WB{"路线选择白盒?"}
-    WB -- "是" --> A["adapter 创建独立白盒 workspace"]
-    DS --> PV["生产 view 黑盒 / 门并行执行（provisional）"]
-    A --> WQD["白盒设计并编写结构测试"]
-    WQD --> QW["adapter 冻结完整候选 Qn"]
-    QW --> WQR{"白盒 QA 审查 PASS?"}
-    WQR -- "否" --> WQD
-    WQR -- "是" --> C{"生产 validation view 相等?"}
-    PV --> C
-    C -- "是" --> REUSE["机械复用 provisional 结果"]
-    C -- "否或 UNKNOWN" --> RERUN["只重跑受影响任务"]
-    WB -- "否" --> QN["装配并冻结完整候选 Qn"]
-    QN --> C
-    WQR -- "是" --> WQE["Qn 上白盒 QA 执行"]
-    REUSE --> J["Qn 完整 expected set join"]
-    RERUN --> J
-    WQE --> J
-    J --> ND{"存在需处置的新细节?"}
-    ND -- "否" --> O{"存在 RepairObligation?"}
-    ND -- "是" --> UD{"结构化事实能唯一确定处置?"}
-    UD -- "否或 UNKNOWN" --> VA["最高优先级 Ask：直接返修 / 修 QA artifact / 改需求 / 作废"]
-    UD -- "是" --> DX{"应用处置"}
-    VA --> DX
-    DX -- "直接返修" --> O
-    DX -- "作废" --> O
-    DX -- "修 QA artifact" --> QAD["相关证据 stale，修订 QA artifact"]
-    QAD --> QAF["adapter 物化并冻结新候选 Qn+1"]
-    QAF --> QAR{"fresh review PASS?"}
-    QAR -- "否" --> QAD
-    QAR -- "是" --> QAI["重算 reuse/affected；至少重跑改过的测试"]
-    QAI --> J
-    DX -- "按需求修改重走流程" --> RC["requirement-change barrier"]
-    O -- "否" --> P["adapter 精确提升 Qn 到主线"]
-    P --> SEAL["清理资源后自动 Seal / child 进入 SLICE_READY"]
-    O -- "是，wave < 3" --> R["自动返修并装配新候选"]
-    R --> DS
-    O -- "是，wave >= 3" --> UA["统一用户 Ask"]
-    UA -- "额外一轮" --> R
-    UA -- "再试 QA" --> BQE
-    UA -- "精确 waiver" --> O
-    UA -- "需求变化" --> RC
-    UA -- "abort" --> AB["ABORTED"]
+```text
+开发快照 Dn/S1 → 白盒设计并提交测试 Qn/S2
+             → QA Review / P2/P3 吸收，变动继续提交
+             → 全部 case-set FROZEN + 最终 review-ready 快照
+             → 冻结 expected-set/digest，QA execution 与门整批并行
+             → COLLECTING 收齐 → Operator 逐条核实/归并
+             → 无 obligation：提升/Seal；有 obligation：同快照唯一返修
 ```
 
-QA/门返回开发后新细节时，Controller 先用 FailureClass、producing task kind、artifact ownership 与 typed receipt 计算合法处置集，不派 AI 判根因。唯一分支机械执行；多分支或 UNKNOWN 时，`VALIDATION_DETAIL_DISPOSITION` Ask 让用户在 `DIRECT_REPAIR`、`QA_ARTIFACT_REPAIR`、`REQUEST_REQUIREMENT_CHANGE`、`DISMISS` 中选择。pending 时不形成 obligation、当前 batch 标记 `AWAITING_DISPOSITION` 且不计 wave。直接返修才形成 obligation 并结算本轮；需求修改进入用户主动变化 barrier；作废不形成 obligation。这个 Ask 的优先级高于前三轮不问用户。
+开发后 raw finding 由 Operator semantic adjudication 核实需求、正常失败场景、模块、根因、后果；
+保存独立 severity rationale、范围/严重度/因果/复现证据、finding/problem ID、
+NEW/SAME_AS/DISMISSED 裁决及历史。Controller 只做结构完整性、引用/版本绑定和机械路由，
+不判断语义真假、严重度是否成立、根因或重复关系。P1 理由须说明需求、正常路径、实际后果和
+为何 P2 不足，P0 还须证明需求不成立、核心验收无可用路径或交付受阻；条目 FAIL、批量套话
+不能代替逐条理由。产品/技术审 finding 的 confirm/dismiss Ask 保持原规则。
 
-`QA_ARTIFACT_REPAIR` 不能回旧 `Qn` join。Controller 使旧 artifact/result/binding stale，在对应隔离 workspace 修订；adapter 把修订后的用例、测试和辅助 artifact 物化进新不可变 `Qn+1`，再由 fresh review 审查该候选。review 通过后，Controller 依据 `Qn → Qn+1` 差异和依赖图重算 reuse/affected：改过的测试至少重跑自身；公共 helper、fixture、harness、配置或发现规则变化时重跑所有依赖测试；UNKNOWN 按受影响。黑盒、门和其他测试只有 view digest 精确相等才凭 receipt 沿用。新 expected set 只绑定 `Qn+1`，全部 terminal 后再 join；artifact 修订不增加 development repair wave，替代候选只结算一次 logical wave。无法证明 QA-only 则转直接返修或重新 Ask。
+仅已核实 finding 的处置仍不唯一时才 Ask；核实本身属于 Operator。wave 目标未收齐、
+PENDING/在途或运行错误未明确处置时不得返修。所有目标终结且 adjudication 完成后才生成
+有效 obligation：QA FAIL、有效 P0/P1 与门审 P2 汇入同一快照唯一返修计划，同根因归并同一
+problem。同一逻辑返修运行错误只重试同一 TaskKey，不能生成第二份返修计划。route、
+case-set 或目标集变化使旧 wave 失效，不能改 expected-set 制造收齐；晚到结果只留审计，
+错误的明确处置不伪装成 PASS。
 
-处置唯一确定或用户选择直接返修后，经正常入口与范围核实的 QA FAIL、gate P0/P1/P2/P3 形成 `RepairObligation`。gate 有 P2/P3 时权威结果仍可为 PASS，但 obligation 与 gate status 分离；范围外 P3 只作建议，不形成 obligation。
+- 门审 P2 必修、不复审、不增加审查轮次。纯门审 P2 worker 必须完整构建、全量测试、逐项
+  自跑受影响用例，以绑定修复快照的完成/carry 凭据继承 gate PASS。
+- 门审 P3 不修复，只在 Seal 前一次性 advisory；范围外 P3 同样不形成 obligation。
+- QA Review P1 修订后 fresh review；集合级 P2/P3 按稳定 suggestion ID 吸收并留来源、不复审。
+  全部吸收且覆盖通过才 FROZEN；无建议则 PASS 后立即冻结。
+- 普通返修只 AFFECTED 执行冻结用例；requirement guarantee 的最终候选 Seal 前须 FULL。
+  只有需求含义、对外行为、成功/失败判据或稳定可执行性变化才能 THAW；临时环境失败是
+  RUNTIME_ERROR。合法 QA artifact 修订重新装配并冻结候选，至少重跑改过测试和共享依赖项。
+- 既有三轮自动审查与额外授权上限保持；完整 expected-set 终结才计 wave，装配、pre-wave
+  review、未收齐、未完成裁决、未处置错误不计，纯门审 P2 修复不计。
+- 额外返修先只读 preview，Ask 展示 state revision、需求/快照/wave、完整 findings/problems、
+  逐条理由/归并、历史修复/验证、QA scope、已用/剩余轮数、dispatch signature/TaskKey、
+  engine allowance、owner cost 和 token cap 可用性。授权绑定摘要 digest 与 state revision，
+  任一绑定变化使旧授权失效，一次只授权一轮。
 
-首次在同一完整 candidate 上的 expected set 为 wave 1；每个修复 candidate 的完整 expected set 再计一轮。白盒候选装配/review、`AWAITING_DISPOSITION`、PENDING、RUNTIME_ERROR、缺 receipt 和被需求变化打断的不完整轮都不计数。
+非 wave 与 wave action/QA/gate 共用无效结果义务生命周期：RUNTIME_ERROR 或
+REJECTED_INVALID_RESULT 结束原 attempt；拒绝回执记录字段/原因，不写有效 finding、
+PASS/FAIL/problem/basis。有效义务复用 TaskKey，默认 MaxAttempts=2；wave 重派还须
+COLLECTING 且目标未处置。耗尽进入 RETRY_EXHAUSTED，展示原因与已用/总次数，停止普通和
+自动重派。用户绑定 state revision、非空理由只能一次性追加一个 attempt；它只改变 retry
+policy 与 budgetBasisDigest，不增加基础槽位。再次失败只能既有显式错误处置、abort/cleanup，
+或确认真正改变 binding/snapshot/责任的新计划，不能无限授权。
 
-- `wave < 3` 且有已完成处置的 obligation：自动派开发 worker 修复，P2/P3-only 也不问用户；派发任务一律要求 worker 报告完整自测（构建+全量测试+受影响项自跑），P2/P3-only 修复更须写明无复审兜底、自测最严。未定处置 Ask 是最高优先级例外。
-- `wave >= 3` 且有 obligation：一个 Ask 同时提供恰好一轮额外修复、再试 QA、逐 obligation waiver、用户需求变化、abort；额外轮仍失败则重复同型 Ask。
-- QA review/execution scope follows the persisted typed `ReviewScopeMode`: first baseline `FULL`, then `AFFECTED` only for new, modified, or ImpactSet-affected items; product review, technical review, and ordinary quality gates remain `FULL`. Scope is not user-selected during the first three waves.
-- RUNTIME_ERROR 不算 finding、不计 wave；绑定未变时按有限策略自动重试，外部派发缺显式
-  策略时使用 canonical `MaxAttempts=2`（首次 + 一次自动重试），额外次数统一按
-  `max(0, MaxAttempts-1)` 计算；任何无界策略均非法。额度或 retry 耗尽必须由 Ask 提供有限
-  继续、重试、跳过或 abort：继续只解锁一个按既有 admission capacity 裁剪的 canonical
-  Ready batch，重试只增加当前逻辑动作的一个 retry slot，均不接受自由数字；Wait 只用于
-  容量、运行中、依赖、迟到 receipt/lifecycle 或 retryable I/O。
-
-waiver 必须绑定当前 validation candidate、request、精确 obligation ID 和理由；PENDING 不可 waiver，后续候选不继承旧 waiver。
+dispatch signature 绑定具体输入，TaskKey 绑定逻辑义务；相同 OPEN 续用，相同有效 PASS
+signature 不重复派发。guard 基础 source 为 closed-world definition、确认 requirement/
+Batch/route/topology、批准 QA、所选 gate；finding 派生 source 仅来自 adjudication 完成且
+wave 收齐后的有效 obligation/唯一 repair TaskKey。预授权 repair 机械加入，需确认的扩张先
+确认 revision。raw finding、普通 result/receipt/resume 不扩容。3.5b 只纯计算与只读预览；
+阶段 4 才接 State/source bridge/IssueFromPlan/refill/retry/typed Ask，将修复摘要 engine
+allowance 从 UNAVAILABLE 切换为权威 projection，guard-preview 的 runtimeIntegration 改用
+权威 engine 集成状态；owner cost 与 token cap 的 UNAVAILABLE 各按来源/配置独立判断。
 
 ### 7.1 完整候选与晚提升
 
@@ -401,17 +397,12 @@ waiver 必须绑定当前 validation candidate、request、精确 obligation ID 
 
 VCS adapter 输出 `Dn→Qn` 全部 added/modified/deleted/renamed 路径与内容摘要；`TestOwnershipResolver` 结合项目/测试框架配置、路径/命名规则、测试发现和生产构建输入分类。名字带 `test` 不是充分条件，名字不带 `test` 也不自动排除；只有全部差异均 test-owned，且生产代码、运行配置、生产依赖、构建输入与 provider 元数据投影相等，才证明 production validation view 未变，UNKNOWN 按受影响处理。
 
-黑盒和允许提前运行的门在 `Dn` 上声明并绑定各自的 validation view 后即可与白盒 authoring/review 并行。黑盒 view 覆盖被测生产代码/制品、运行配置、生产依赖、工具和环境；实现质量门 view 只覆盖生产实现及需求/方案上下文，测试代码质量由白盒 review 独占。最终 `Qn` 形成后，`ValidationViewReuseReceipt` 记录 D/Q identity、diff、resolver/version、两端 view digest 和 affected task set：相等则 provisional result 机械映射到 `Qn`，不同或 UNKNOWN 则只重跑受影响任务。不得由 agent 口头声明 test-only/carry。
-
-白盒 review 读取完整 `Qn`；FAIL 只回设计/装配形成新候选，不计开发后 wave。其连续失败受统一 pre-wave policy 约束。若白盒 agent 需要修改生产代码或无法证明 test-only，必须转回 development/repair 形成新 `Dn`。最终 expected set 统一归属于 `Qn`，由 Q 上直接结果和有精确 reuse receipt 的 provisional result 构成。
+白盒 Review 独占测试质量，测试变化（包括建议吸收）先由 adapter 提交；最终 FROZEN case-set
+绑定含全部测试的 review-ready Qn 后才允许 QA execution 和门。门不接收 QA 用例正文、
+逐用例执行证据或测试实现细节，仍审基线到最终快照完整 diff。合法 THAW 后的候选替换使
+旧 wave 失效，新的 expected-set 只绑定新候选；普通实现返修保持冻结用例，按 AFFECTED 执行。
 
 完整 wave 无 obligation 后，adapter 才把整个 `Qn` 提升到主线。Git 能 fast-forward 时保留同一 identity；SVN/P4 或其他 Git integration 产生最终身份 `F` 时，只有 typed `CandidatePromotionReceipt` 证明 source/target identity、预期 target base、完整路径与 provider 元数据、operation id、无冲突，以及 `validatedDigest(Qn) == finalDigest(F)`，整组结果才可映射到 `F`。这不是逐门 carry。若出现冲突、转换、目标漂移、UNKNOWN 或 digest 不等价，先 reconcile，再把实际结果冻结成新候选并重跑受影响验证。
-
-repair 的生产改动先形成新 `Dn`，再从它重建/对账 whitebox workspace；测试改动仍走独立白盒设计链。新 `Qn` 冻结后按持久化 `ReviewScopeMode` 计算：首次基线 FULL，后续新增/修改/ImpactSet 受影响项 AFFECTED；产品审、技术审和普通质量门始终 FULL。每个 child 在 `SLICE_READY` 前先完成同样的候选提升，使 receipt 直接绑定已包含白盒测试的最终 child identity。
-
-开发后处置中的 QA artifact 修订也走完整候选链：旧 `Qn` → 隔离修订/fresh review → adapter 冻结 `Qn+1` → 重算 view/reuse/affected → 至少执行变更测试及所有受依赖影响测试 → `Qn+1` join。不得把“不是生产返修”解释为可跳过新候选。
-
-黑盒 case review、白盒 test/case review、merge QA case review 使用同一确定性 `PreWaveReviewPolicy`，并持久化 typed `ReviewScopeMode`：首次建立基线为 `FULL`，后续新增、修改或 ImpactSet 受影响项为 `AFFECTED`；产品审、技术审和普通质量门始终为 `FULL`。QA case/test review 与 execution 均逐项使用 approved whitelist；缺失、未知、重复条目或仅总体 PASS 的结果拒绝，只有每项明确 `PASS` 才进入持久化 approved whitelist。按 run/child、review kind、requirement revision 与 route/topology scope 分别计数。第 1、2 次语义 FAIL 自动重新设计并使用 fresh reviewer；第 3 次 FAIL 或长期不可用才 Ask fresh redesign、重试/fresh review、改需求、对精确 case-set/candidate 带理由 waiver/skip，或 abort。PASS 关闭/重置 series，runtime error 不累计；这些尝试不计开发后 wave。case review 的集合级 P2 建议按 apply=resolved 吸收：按建议实现的用例修订视同已批准（关联留痕），不因 P2 建议本身触发新 review 轮；自拟扩展仍需 fresh review。
 
 覆盖契约先把同一次需求/方案确认中登记的有限 `requiredSources` 与当前 revision、
 route/topology scope 一起冻结，再生成有限验收点集合 `AcceptanceManifest`，并用
@@ -427,6 +418,7 @@ manifest/map/whitelist digest 与当前 `ValidationCandidate` 精确绑定，摘
 `sourceID → pointID → caseID → result`，`AUTHORIZED_SKIP` 不等同 `EXECUTED_PASS`。
 Controller/validator 负责结构校验，覆盖率、mutation、property-based test 和 fuzz 只作辅助
 信号，不设固定阈值。
+
 
 ## 8. 分片、主线合并与 VCS
 
@@ -466,11 +458,11 @@ flowchart TD
     CRV --> MG
     MQE --> MJ["merge join"]
     MG --> MJ
-    MJ --> MUD{"存在无法唯一处置的新细节?"}
+    MJ --> MUD{"Operator 核实后处置仍不唯一?"}
     MUD -- "否" --> MO{"存在 obligation?"}
-    MUD -- "是" --> MVA["最高优先级 disposition Ask"]
+    MUD -- "是" --> MVA["核实后处置 Ask"]
     MVA -- "直接返修 / 作废" --> MO
-    MVA -- "修 QA artifact" --> MQR["修订并 fresh review 受影响 QA artifact"]
+    MVA -- "合法 THAW 后修 QA artifact" --> MQR["修订并按 QA Review/P2/P3 吸收规则冻结"]
     MQR --> MFC["adapter 冻结新主线候选 Mn+1"]
     MFC --> MRS["重算 reuse/affected；至少重跑改过的测试"]
     MRS --> MRJ["affected/UNKNOWN 重跑；其余精确复用"]
@@ -486,7 +478,7 @@ flowchart TD
     MA -- "精确 waiver / abort" --> ME["重新判定或终止"]
 ```
 
-合并后始终跑合并 QA 与合并门。无法唯一确定新细节处置时，先执行最高优先级 `VALIDATION_DETAIL_DISPOSITION` Ask；用户选直接返修后才由主线开发 worker 修复，不回 child、不重新 Seal child、不重复路线或澄清。用户选修 QA artifact 时，必须在主线物化修改并冻结新候选，至少 fresh review/重跑改过的 merge 测试或用例，共享组件变化时扩大到所有依赖项；随后重新计算 merge gate、merge QA 和 child obligation 的 reuse/affected，不能直接回旧候选执行。每次冲突处置/主线 repair 后，Controller 用 topology ownership、VCS diff 和 child receipt 的 validation view 计算 `AffectedChildSet`：只改 integration-owned glue/跨片接缝且 child view 全部精确相等时，仍只重跑合并双验证；改变 child-owned 内容或 UNKNOWN 时，在同一最终主线候选上额外补跑对应 child 受影响的黑盒、白盒与普通门义务，再与合并双验证 join。合并流程使用同一 wave 计数规则：处置完成后 `wave >= 3` 才作三轮 Ask。
+合并后始终跑合并 QA 与合并门。Operator 完成新细节语义核实后实际处置仍不唯一时，才执行 `VALIDATION_DETAIL_DISPOSITION` Ask；用户选直接返修后才由主线开发 worker 修复，不回 child、不重新 Seal child、不重复路线或澄清。用户选修 QA artifact 时，必须在主线物化修改并冻结新候选，至少 fresh review/重跑改过的 merge 测试或用例，共享组件变化时扩大到所有依赖项；随后重新计算 merge gate、merge QA 和 child obligation 的 reuse/affected，不能直接回旧候选执行。每次冲突处置/主线 repair 后，Controller 用 topology ownership、VCS diff 和 child receipt 的 validation view 计算 `AffectedChildSet`：只改 integration-owned glue/跨片接缝且 child view 全部精确相等时，仍只重跑合并双验证；改变 child-owned 内容或 UNKNOWN 时，在同一最终主线候选上额外补跑对应 child 受影响的黑盒、白盒与普通门义务，再与合并双验证 join。合并流程使用同一 wave 计数规则：处置完成后 `wave >= 3` 才作三轮 Ask。
 
 ### 8.3 VCS adapter
 
@@ -520,8 +512,8 @@ provider identity、bridge installed/available 和 lifecycle paired status 分�
 
 - 客观瞬态且 bindings 未变：在该 Attempt 的有限 retry 余量内自动 resume；外部派发无显式
   策略时使用 canonical `MaxAttempts=2`，耗尽后进入 typed Ask；
-- 任务/snapshot/责任变化或已知非瞬态：自动新 Attempt，旧 Attempt terminate/stale；新 Attempt
-  使用重新计算的计划槽位，不冒充同绑定 retry；
+- 新的有效义务或经确认的新计划改变 binding/snapshot/责任时，才使用新 TaskKey 和计划槽位，
+  旧 Attempt terminate/stale；非瞬态错误本身不生成新义务，也不能借 fresh attempt 扩容；
 - bindings 未变但原因未知：Ask resume/fresh/abort；
 - receipt UNKNOWN：先查 lifecycle，唯一匹配自动 attach，多重/无匹配进 Operator，绝不盲目 respawn。
 
@@ -616,7 +608,7 @@ Seal/Abort 终结路径先写 durable intent/可恢复 summary，再自动清理
 6. 同 action/event/request 幂等、不同 digest 拒绝、并发 submit、旧 Attempt 和 result-before-receipt。
 7. 任意非终态节点触发用户需求变化，含 Phase A 权威写屏障/quarantine、确认后 ImpactSet、unknown=affected、Phase B 恢复/refill、增量复审和 wave 不误计。
 8. 产品/技术审 P0–P3 confirm/dismiss、finding/remedy 授权绑定、raw candidate/adjudication/correction/effective status 分层、错误 finding/严重度/裁决的 typed 纠正、原始证据保留和 supersede、全部 blocker 驳回后无空审查直接 PASS、纠正导致的下游精确 stale；P0/P1 新鲜复审、P2/P3 无级别强制复审；两个动作分别只自动完成前三轮，只有有效完整审查计轮，finding 后续裁决不重复/回退计轮、整轮 invalid 才排除，revision/invalidation 不清零，达到上限后 typed Ask 每次只增加一个 action-specific fresh-review TaskKey，split child 不另开 series，并证明该语义轮次与同 TaskKey 的 `MaxAttempts` retry 完全独立。
-9. 三类 pre-wave review 独立计数、集合级 P2 建议按 apply=resolved 吸收（建议实现即视同批准、自拟扩展仍需 fresh review）；whitebox workspace/新测试识别/完整候选 freeze/review；production validation 与白盒 authoring 并行、view 等价 reuse；验证细节唯一处置/歧义 Ask 四分支与最高优先级；QA artifact 修改后 ordinary/child/merge 都冻结替代候选、至少 fresh review/重跑变更测试、共享依赖扩大、重新计算 reuse/affected 后新候选 join；开发后 wave 1–3、P2/P3-only 自动修（派发自测要求已注入任务）、`wave >= 3` 统一 Ask；ReviewScopeMode 首次基线 FULL、后续新增/修改/ImpactSet 受影响项 AFFECTED，产品审/技术审/普通质量门始终 FULL。
+9. 三类 pre-wave review、逐条 Operator adjudication/P0/P1 rationale、finding/problem ID 与归并历史、FROZEN/review-ready 屏障、wave 收集与唯一返修、门审 P2 carry 不复审/P3 advisory、QA Review P2/P3 吸收与合法 THAW、非 wave/wave 无效结果/RETRY_EXHAUSTED/一次性追加 attempt、dispatch signature 和完整授权摘要均有可复现测试；阶段 5–7 使用同一语义。
 10. 拓扑绑定唯一时点（start 无拆分意向声明；start-readiness 后确认、确认前可改、确认后不重切）、split map、包含白盒测试的 child 最终 identity、SLICE_READY、durable receipt、child abort、级联、case/cost 汇总、adapter 集成、语义冲突窄 agent 边界、AffectedChildSet 与主线精确补验。
 11. Git/SVN/P4 的 provider/status/diff/track/integrate/commit/snapshot、whitebox workspace、candidate freeze/reuse/promotion、adopt-external、resource cleanup、typed artifacts、错误对账，以及代理无法执行 VCS 写操作。
 12. 版本缺失/不匹配严格拒绝；diagnose 原始只读；终态 summary 回落。
@@ -649,7 +641,7 @@ VCS 六格全部跑通：
 3. 可程序化动作不落入 agent；engine/VCS adapter 故障不动态降级 agent；AGENT/HOST 均有合法、可审计理由。
 4. 并行任务无漏派、无选择性忽略、无容量闲置；未形成完整候选的验证不会被错误标为 eligible，完整候选就绪后全部验证立即并发。
 5. HostAction、本地副作用和所有确定性崩溃窗可恢复或明确进入 Operator。
-6. 用户节点、验证细节歧义处置的最高优先级 Ask、任意时点需求变化、审查来源规则和三轮规则全部有可复现证据。
+6. 用户节点、Operator 核实后处置仍不唯一的 Ask、任意时点需求变化、审查来源规则和三轮规则全部有可复现证据。
 7. Git/SVN/P4 六格与五宿主 canary 全部绑定同一最终 candidate revision/安装副本并 PASS。
 8. 最终树不存在旧 run 兼容、迁移、旧公开入口、双写入口、legacy 回退或 cleanup 后门。
 9. 独立产品审、技术审、QA 和所有选定门按 formal-gates 完成，当前开发 run Seal。

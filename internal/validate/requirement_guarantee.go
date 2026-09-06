@@ -110,7 +110,9 @@ type RequirementGuaranteeItemReport struct {
 }
 
 type RequirementUpdateOptions struct {
-	ActivateGuarantee bool
+	ActivateGuarantee   bool
+	ReviewDelta         *ReviewDeltaPackage
+	ImpactAuthorization *RequirementImpactAuthorization
 }
 
 type QAReviewRecordOptions struct {
@@ -545,7 +547,7 @@ func ensureGuaranteeProductReviewItems(state *RunState) {
 	state.ReviewItemsByAction["product-review"] = table
 }
 
-func requireGuaranteeProductReviewResult(state RunState, status string) error {
+func requireGuaranteeProductReviewResult(state RunState, status string, findings ...FindingInput) error {
 	if state.RequirementGuarantee == nil {
 		return nil
 	}
@@ -558,7 +560,19 @@ func requireGuaranteeProductReviewResult(state RunState, status string) error {
 			return fmt.Errorf("Product Review must decide the requirement-obligation-to-AC completeness of %s", req.ID)
 		}
 		if item.Status == "FAIL" && status == "PASS" {
-			return fmt.Errorf("Product Review cannot PASS while %s has an uncovered mandatory obligation", req.ID)
+			// An item records the coverage gap; the associated finding determines
+			// its consequence. A finite P2/P3 gap may accompany an overall PASS.
+			// The ordinary semantic-result validator still rejects active P0/P1.
+			advisory := false
+			for _, finding := range findings {
+				severity := strings.ToUpper(strings.TrimSpace(finding.Severity))
+				if severity == "P2" || severity == "P3" {
+					advisory = true
+				}
+			}
+			if !advisory {
+				return fmt.Errorf("Product Review cannot PASS while %s has an uncovered mandatory obligation without a P2/P3 finding", req.ID)
+			}
 		}
 	}
 	return nil
@@ -633,6 +647,7 @@ func invalidateGuaranteeRevision(state *RunState) {
 		for i := range cases {
 			cases[i].ReviewStatus = "PENDING"
 			cases[i].ApprovedSource = ""
+			cases[i].SuggestionIDs = nil
 		}
 		state.QACasesByMode[mode] = cases
 	}
@@ -1187,6 +1202,7 @@ func recordGuaranteeReview(state *RunState, mode string, cases []QACase, options
 	}
 	review := coverage.ReviewResult{
 		Binding: manifest.Binding, Scope: coverage.ScopeFull,
+		SetStatus:       coverage.StatusFail,
 		SourceDecisions: sortedDecisionMap(sourceValues), PointDecisions: sortedDecisionMap(pointValues), CaseDecisions: sortedDecisionMap(caseValues),
 		UnboundSources: copyStringSlice(options.UnboundSources), UnboundPoints: unboundPoints, UnboundCases: copyStringSlice(options.UnboundCases),
 	}
@@ -1220,6 +1236,146 @@ func recordGuaranteeReview(state *RunState, mode string, cases []QACase, options
 		record.Whitelist = &whitelist
 	}
 	state.RequirementGuarantee.ReviewsByMode[mode] = record
+	return nil
+}
+
+// refreshGuaranteeReviewAfterSuggestion rebuilds the deterministic review
+// projection after a PASS review's P2/P3 suggestions are absorbed.  The
+// suggestion path is itself the approval source for changed cases, so missing
+// source/point/case decisions are added as PASS only for this bounded update;
+// obsolete decisions are removed before the whitelist is projected again.
+func refreshGuaranteeReviewAfterSuggestion(state *RunState, mode string) error {
+	if state.RequirementGuarantee == nil {
+		return nil
+	}
+	cases := state.qaModeCases(mode)
+	manifest, err := localGuaranteeManifest(*state, mode, cases)
+	if err != nil {
+		return err
+	}
+	record, ok := state.RequirementGuarantee.ReviewsByMode[mode]
+	if !ok || record.Review.SetStatus != coverage.StatusPass {
+		return fmt.Errorf("suggestion absorption requires a complete PASS guarantee review for mode %q", mode)
+	}
+	kind := manifest.Binding.ReviewKind
+	// Rebuilding only from the remaining cases would erase evidence that an
+	// accepted AC has just lost its last case. Keep that obligation visible
+	// while checking approved coverage across the selected modes.
+	covered := map[string]bool{}
+	for _, testCase := range cases {
+		if testCase.ReviewStatus == "PASS" {
+			for _, acID := range guaranteeAllACs(testCase) {
+				covered[acID] = true
+			}
+		}
+	}
+	for _, selected := range state.SelectedGates {
+		if !isQAMode(selected) {
+			continue
+		}
+		selectedMode := qaDispatchMode(selected)
+		selectedReview := state.RequirementGuarantee.ReviewsByMode[selectedMode]
+		if selectedReview.Review.SetStatus != coverage.StatusPass || selectedReview.Whitelist == nil {
+			continue
+		}
+		for _, testCase := range state.qaModeCases(selectedMode) {
+			if testCase.ReviewStatus == "PASS" {
+				for _, acID := range guaranteeAllACs(testCase) {
+					covered[acID] = true
+				}
+			}
+		}
+	}
+	for _, point := range record.Review.PointDecisions {
+		acID := strings.TrimPrefix(point.ID, string(kind)+"::")
+		if point.Status == coverage.StatusPass && !covered[acID] {
+			return fmt.Errorf("suggestion absorption would remove the last approved coverage for %s", acID)
+		}
+	}
+	expectedSources, expectedPoints := guaranteeReviewDecisionIDs(*state, kind, cases)
+	sourceValues := map[string]coverage.DecisionStatus{}
+	for _, id := range expectedSources {
+		sourceValues[id] = coverage.StatusPass
+	}
+	pointValues := map[string]coverage.DecisionStatus{}
+	for _, id := range expectedPoints {
+		pointValues[id] = coverage.StatusPass
+	}
+	caseValues := map[string]coverage.DecisionStatus{}
+	for _, testCase := range cases {
+		if testCase.ReviewStatus != "PASS" {
+			return fmt.Errorf("suggestion absorption left case %s without PASS approval", testCase.ID)
+		}
+		caseValues[testCase.ID] = coverage.StatusPass
+	}
+	review := coverage.ReviewResult{Binding: manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: sortedDecisionMap(sourceValues), PointDecisions: sortedDecisionMap(pointValues), CaseDecisions: sortedDecisionMap(caseValues), SetStatus: coverage.StatusPass}
+	required := make([]coverage.RequiredSource, 0, len(manifest.Sources))
+	for _, sourceID := range manifest.Sources {
+		required = append(required, coverage.RequiredSource{SourceID: sourceID, Category: coverage.ProductRequirement, Applicability: coverage.QAApplicability})
+	}
+	contract := coverage.CoverageContract{RequiredSources: coverage.RequiredSources{Binding: manifest.Binding.SourceBinding, Sources: required}, SelectedKinds: []coverage.ReviewKind{kind}, Manifests: []coverage.AcceptanceManifest{manifest}}
+	whitelist, err := coverage.ProjectWhitelist(contract, []coverage.ReviewResult{review})
+	if err != nil {
+		return err
+	}
+	record.Review = review
+	record.Whitelist = &whitelist
+	state.RequirementGuarantee.ReviewsByMode[mode] = record
+	return nil
+}
+
+// validateGuaranteeCaseSetFreeze is the final mechanical gate before a case
+// set receives a FROZEN version.  It checks the current source/point/case
+// mapping and whitelist rather than trusting an earlier set-level PASS.
+func validateGuaranteeCaseSetFreeze(state *RunState, mode string) error {
+	if state.RequirementGuarantee == nil {
+		return nil
+	}
+	cases := state.qaModeCases(mode)
+	// A retained master may legitimately have no merge-interaction cases when
+	// every acceptance condition is owned by a slice.  The existing guarantee
+	// contract deliberately records no local review projection for that empty
+	// set; slice sidecars provide the final source/point/case evidence instead.
+	if len(cases) == 0 && isMergeVerification(*state) {
+		return nil
+	}
+	manifest, err := localGuaranteeManifest(*state, mode, cases)
+	if err != nil {
+		return err
+	}
+	record, ok := state.RequirementGuarantee.ReviewsByMode[mode]
+	if !ok || record.Review.SetStatus != coverage.StatusPass || record.Whitelist == nil {
+		return fmt.Errorf("QA case-set %q cannot freeze without a complete approved source/point/case whitelist", mode)
+	}
+	expectedSources, expectedPoints := guaranteeReviewDecisionIDs(*state, manifest.Binding.ReviewKind, cases)
+	sourceValues := map[string]coverage.DecisionStatus{}
+	for _, decision := range record.Review.SourceDecisions {
+		sourceValues[decision.ID] = decision.Status
+	}
+	pointValues := map[string]coverage.DecisionStatus{}
+	for _, decision := range record.Review.PointDecisions {
+		pointValues[decision.ID] = decision.Status
+	}
+	caseValues := map[string]coverage.DecisionStatus{}
+	for _, decision := range record.Review.CaseDecisions {
+		caseValues[decision.ID] = decision.Status
+	}
+	caseIDs := make([]string, 0, len(cases))
+	for _, testCase := range cases {
+		caseIDs = append(caseIDs, testCase.ID)
+	}
+	if err := exactDecisionSet(sourceValues, expectedSources, "source"); err != nil {
+		return err
+	}
+	if err := exactDecisionSet(pointValues, expectedPoints, "point"); err != nil {
+		return err
+	}
+	if err := exactDecisionSet(caseValues, caseIDs, "case"); err != nil {
+		return err
+	}
+	if !allDecisionPass(record.Review.SourceDecisions) || !allDecisionPass(record.Review.PointDecisions) || !allDecisionPass(record.Review.CaseDecisions) || len(record.Review.UnboundSources)+len(record.Review.UnboundPoints)+len(record.Review.UnboundCases) != 0 {
+		return fmt.Errorf("QA case-set %q has an unbound or non-PASS source/point/case decision", mode)
+	}
 	return nil
 }
 

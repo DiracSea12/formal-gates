@@ -241,14 +241,17 @@ func TestCLIQARerunScopeDecision(t *testing.T) {
 	state = cliRecordAction(t, root, pkg, state, "product-review", "PASS")
 	state = cliRecordAction(t, root, pkg, state, "start-readiness", "PASS")
 	runCLI(t, "workflow", "slicing", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "no-split", "--note", "single coherent bounded unit")
-	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "full")
+	runCLI(t, "workflow", "route", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "custom", "--gate", "quality", "--gate", "blackbox")
 	state, _ = validate.LoadRunState(root, state.RunID)
+	qaTree := filepath.Join(t.TempDir(), "qa")
+	cliGit(t, root, "worktree", "add", "--detach", qaTree, state.BaseSnapshot)
+	runCLI(t, "workflow", "qa-worktree", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--worktree", qaTree)
 
-	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design")
+	designDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-design", "blackbox")
 	runCLI(t, "workflow", "qa-design", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", designDispatch,
-		"--case", "direct rules", "--mode", "whitebox", "--procedure", "go test ./...", "--oracle", "tests pass", "--test", "whitebox_delivered_test.go::TestWhiteboxDirectRules",
+		"--case", "first public workflow", "--mode", "blackbox", "--procedure", "run the first documented CLI", "--oracle", "observable success",
 		"--case", "public workflow", "--mode", "blackbox", "--procedure", "run documented CLI", "--oracle", "observable success")
-	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review")
+	reviewDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-review", "blackbox")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch, "--reviewer", "qa-session")
 	runCLI(t, "workflow", "qa-review", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", reviewDispatch,
 		"--case", "CASE-001", "--outcome", "PASS", "--case", "CASE-002", "--outcome", "PASS")
@@ -259,15 +262,19 @@ func TestCLIQARerunScopeDecision(t *testing.T) {
 	cliGit(t, root, "commit", "-m", "delivery")
 	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", developmentDispatch)
 
-	// 首轮：黑盒用例 FAIL → 进入修复。
-	executionDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-execution")
+	// 首轮：冻结目标集，收齐结果并裁决后进入修复。
+	runCLI(t, "workflow", "prepare-review-wave", "--root", root, "--package-root", pkg, "--run-id", state.RunID)
+	executionDispatch := cliPrepareAction(t, root, pkg, state.RunID, "qa-execution", "blackbox")
 	runCLI(t, "workflow", "qa-execution", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", executionDispatch,
-		"--case-result", "CASE-001", "--outcome", "PASS", "--procedure", "ran the bound whitebox test on the current candidate", "--observation", "the named test completed with exit status 0", "--oracle-result", "the observed test result matched every approved oracle assertion",
+		"--case-result", "CASE-001", "--outcome", "PASS", "--procedure", "ran the first documented CLI on the current candidate", "--observation", "the command completed with exit status 0", "--oracle-result", "the output matched the approved oracle",
 		"--case-result", "CASE-002", "--outcome", "FAIL", "--procedure", "ran CLI", "--observation", "output mismatched", "--oracle-result", "expected success")
 	state, _ = validate.LoadRunState(root, state.RunID)
 	gateDispatch := cliPrepareGate(t, root, pkg, state.RunID, "quality")
 	runCLI(t, "workflow", "claim-dispatch", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", gateDispatch, "--reviewer", "gate-quality")
-	runCLI(t, "workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot+".."+state.CurrentSnapshot, "--finding", "normal workflow fails", "--severity", "P1")
+	gateArgs := []string{"workflow", "record-gate", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--gate", "quality", "--dispatch", gateDispatch, "--status", "FAIL", "--compared", state.BaseSnapshot + ".." + state.CurrentSnapshot, "--finding", "normal workflow fails", "--severity", "P1"}
+	gateArgs = append(gateArgs, cliP1FindingEvidence("delivery.txt:1", true)...)
+	state = decodeSemanticState(t, runCLI(t, gateArgs...))
+	state = repairCLIAdjudicate(t, root, pkg, state, "NEW", "")
 
 	// 修复快照（无先通过的已选门，无需 Carry 处置）。开发/修复派发的认领身份一次性，
 	// 修复派发用独立身份手动准备并认领。
@@ -283,23 +290,26 @@ func TestCLIQARerunScopeDecision(t *testing.T) {
 	cliGit(t, root, "commit", "-m", "repair")
 	runCLI(t, "workflow", "snapshot", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--dispatch", repairDispatch)
 
-	// 重跑未记录 scope → prepare-action 拒绝。
+	// 重跑未记录 scope → 整波准备和单独 prepare-action 都拒绝。
+	if message := failingCLI(t, "workflow", "prepare-review-wave", "--root", root, "--package-root", pkg, "--run-id", state.RunID); !strings.Contains(message, "requires a scope decision") {
+		t.Fatalf("wave preparation missed the scope barrier: %s", message)
+	}
 	var stderr bytes.Buffer
-	code := Run("formal-gates", []string{"workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution"}, IO{Stderr: &stderr})
+	code := Run("formal-gates", []string{"workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution", "--mode", "blackbox"}, IO{Stderr: &stderr})
 	if code == 0 || !strings.Contains(stderr.String(), "requires a scope decision") {
 		t.Fatalf("rerun without a scope decision was accepted: code=%d err=%s", code, stderr.String())
 	}
 	// 非法的 scope 决策被拒。
 	stderr.Reset()
-	code = Run("formal-gates", []string{"workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "BOGUS"}, IO{Stderr: &stderr})
+	code = Run("formal-gates", []string{"workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "blackbox", "--decision", "BOGUS"}, IO{Stderr: &stderr})
 	if code == 0 || !strings.Contains(stderr.String(), "must be FULL or AFFECTED") {
 		t.Fatalf("invalid scope decision was accepted: code=%d err=%s", code, stderr.String())
 	}
-	// 记录 FULL scope 后重跑放行。
-	runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--decision", "FULL", "--reason", "rerun the complete set")
-	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution")
+	// 普通返修记录 AFFECTED scope 后重跑放行。
+	runCLI(t, "workflow", "qa-execution-scope", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--mode", "blackbox", "--decision", "AFFECTED", "--cases", "CASE-001,CASE-002", "--reason", "both approved paths are affected")
+	runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", state.RunID, "--action", "qa-execution", "--mode", "blackbox")
 	state, _ = validate.LoadRunState(root, state.RunID)
-	if sc := state.ExecutionScopes[""]; sc.Decision != "FULL" || sc.Origin != "USER" || sc.Source != "PREPARE" {
+	if sc := state.ExecutionScopes["blackbox"]; sc.Decision != "AFFECTED" || sc.Origin != "MAIN_AGENT" || sc.Source != "PREPARE" {
 		t.Fatalf("recorded scope=%#v", sc)
 	}
 }
@@ -699,9 +709,13 @@ func cliOperatorVerificationArgs() []string {
 	return append(args, "--operator-evidence", "verified candidate against the bound requirement, normal entry path, evidence, locations, scope, severity, dispatch binding, and completeness")
 }
 
-func cliPrepareAction(t *testing.T, root, pkg, runID, action string) string {
+func cliPrepareAction(t *testing.T, root, pkg, runID, action string, modes ...string) string {
 	t.Helper()
-	prompt := runCLI(t, "workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", action)
+	args := []string{"workflow", "prepare-action", "--root", root, "--package-root", pkg, "--run-id", runID, "--action", action}
+	if len(modes) != 0 {
+		args = append(args, "--mode", modes[0])
+	}
+	prompt := runCLI(t, args...)
 	state, err := validate.LoadRunState(root, runID)
 	if err != nil {
 		t.Fatal(err)

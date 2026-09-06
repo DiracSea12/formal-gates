@@ -41,9 +41,13 @@ type QADesignRecordOptions struct {
 	ReplaceAll  bool
 	// PerSuggestion 按 P2 集合级建议直接吸收：本轮新增/修改用例置为已批准
 	// （ApprovedSource=SUGGESTION_APPLIED），不重置 review、不要求新 qa-review 轮。
-	// 仅当该 mode 最近一次 qa-review 权威结果为 PASS 且含 P2 集合级发现项时允许；
-	// 与 ReplaceAll 互斥（整体替换丢弃已批准用例，不属于吸收）。
+	// 仅当该 mode 最近一次 qa-review 权威结果为 PASS 且含 P2/P3 集合级建议时允许；
+	// 与 ReplaceAll 互斥（整体替换丢弃已批准用例，不属于逐条吸收）。
 	PerSuggestion bool
+	// SuggestionIDs binds every absorption to the stable P2/P3 suggestion IDs
+	// emitted by the PASS QA Review.  A free-form "per suggestion" update with
+	// no IDs is not sufficient to close or freeze the case-set.
+	SuggestionIDs []string
 }
 
 type QAReviewInput struct{ CaseID, Outcome, Reason string }
@@ -172,10 +176,7 @@ func blackboxReviewPassed(state RunState) bool {
 	}
 	// 有黑盒用例时整个审查判定仍须通过：集合层面 P1 覆盖遗漏使审查动作 FAIL 时，即使
 	// 各用例单独均 PASS 也阻挡快照；唯一绕过是用户授权放行（AdvanceSnapshot 处理）。
-	if state.qaReview("blackbox").Status == "FAIL" {
-		return false
-	}
-	return true
+	return state.qaReview("blackbox").Status == "PASS"
 }
 
 // snapshotBlackboxReleased reports whether the user has explicitly authorized a
@@ -362,6 +363,11 @@ func qaExecutionRerunSource(state RunState, mode string) (QAExecutionResult, str
 		return prior, prior.Snapshot, true
 	}
 	current := state.qaExecution(mode)
+	if current.Status == "PASS" && current.Snapshot == state.CurrentSnapshot && state.ExecutionScopes[mode].Decision == "AFFECTED" {
+		// The targeted intermediate run is authoritative for this immutable
+		// candidate, but an active guarantee still needs one final FULL pass.
+		return current, state.CurrentSnapshot, true
+	}
 	if current.Status == "FAIL" && current.Snapshot == state.CurrentSnapshot {
 		return current, state.CurrentSnapshot, true
 	}
@@ -472,6 +478,9 @@ func formatQACase(testCase QACase, includeReview bool) string {
 		// 为何不经 qa-review 即已批准。
 		if strings.TrimSpace(testCase.ApprovedSource) != "" {
 			value += " (" + testCase.ApprovedSource + ")"
+			if len(testCase.SuggestionIDs) != 0 {
+				value += " [" + strings.Join(testCase.SuggestionIDs, ", ") + "]"
+			}
 		}
 	}
 	return value
@@ -528,31 +537,28 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		requireIsolationNative: true,
 		requireLifecycle:       true,
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
-		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(cases) != 0 || len(options.RemoveCases) != 0 || options.ReplaceAll {
 				return fmt.Errorf("QA Design runtime error cannot include cases")
 			}
+			backfillDispatchCost(root, state, dispatch)
 			// 只重置本派发 mode 的执行结果，另一 mode 的执行结果不受影响。
 			state.setQAExecution(dispatch.Mode, QAExecutionResult{Status: "PENDING"})
 			// qa-design 权威结果按 mode 独立记录。
 			state.setQADesign(dispatch.Mode, ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID})
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			return nil
 		}
+		backfillDispatchCost(root, state, dispatch)
 		// 显式操作互斥：整体替换与按 id 删除语义冲突，不能同时给出。
 		if options.ReplaceAll && len(options.RemoveCases) != 0 {
 			return fmt.Errorf("--replace-all cannot be combined with --remove-case")
 		}
-		// --per-suggestion 前置校验：P2/P3 只豁免重审、不豁免修复，qa-review 的集合级
-		// P2 建议按本标志直接吸收（本轮新增/修改用例置为已批准、留 SUGGESTION_APPLIED
-		// 溯源），不派新 qa-review。吸收只信任"该 mode 最近一次 qa-review 权威结果为
-		// PASS 且记录了 P2 集合级发现项"的现状；整体替换丢弃已批准用例、不属于吸收，
-		// 拒绝组合。错误用例由 qa-execution 执行时暴露并走正常修复轮兜底。
+		// --per-suggestion 前置校验：qa-review 的集合级 P2/P3 建议按稳定 suggestion ID
+		// 逐条吸收（本轮新增/修改/删除用例直接批准并留 SUGGESTION_APPLIED 溯源），不派
+		// 新 qa-review。吸收只信任该 mode 最近一次 qa-review 的权威 PASS；整体替换会丢弃
+		// 已批准用例、不属于逐条吸收，因此拒绝组合。
 		if options.PerSuggestion {
-			if state.RequirementGuarantee != nil {
-				return fmt.Errorf("--per-suggestion cannot approve a case in an activated requirement guarantee because source, point, and case decisions must be explicit")
-			}
 			if options.ReplaceAll {
 				return fmt.Errorf("--per-suggestion cannot be combined with --replace-all")
 			}
@@ -560,15 +566,15 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			if review.Status != "PASS" {
 				return fmt.Errorf("--per-suggestion requires the mode's latest qa-review result to be PASS with recorded P2 set-level findings")
 			}
-			hasP2Finding := false
+			hasSuggestion := false
 			for _, finding := range review.Findings {
-				if finding.Severity == "P2" {
-					hasP2Finding = true
+				if finding.Severity == "P2" || finding.Severity == "P3" {
+					hasSuggestion = true
 					break
 				}
 			}
-			if !hasP2Finding {
-				return fmt.Errorf("--per-suggestion requires at least one recorded P2 set-level finding in the mode's latest qa-review result")
+			if !hasSuggestion {
+				return fmt.Errorf("--per-suggestion requires at least one recorded P2/P3 set-level finding in the mode's latest qa-review result")
 			}
 		}
 		// 设计轮只对本派发 mode 的用例列表做增量合并——从该 mode 自己的存储列表取
@@ -690,9 +696,12 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 					base[idx].ReviewStatus = "PASS"
 					if caseChanged {
 						base[idx].ApprovedSource = "SUGGESTION_APPLIED"
+						base[idx].SuggestionIDs = appendUniqueStrings(base[idx].SuggestionIDs, options.SuggestionIDs...)
 					}
 				} else {
 					base[idx].ReviewStatus = "PENDING"
+					base[idx].ApprovedSource = ""
+					base[idx].SuggestionIDs = nil
 				}
 				modifiedIDs = append(modifiedIDs, caseID)
 				continue
@@ -716,6 +725,7 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			if options.PerSuggestion {
 				normalized.ReviewStatus = "PASS"
 				normalized.ApprovedSource = "SUGGESTION_APPLIED"
+				normalized.SuggestionIDs = append([]string{}, options.SuggestionIDs...)
 			} else {
 				normalized.ReviewStatus = "PENDING"
 			}
@@ -774,6 +784,13 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 		state.setQADesign(dispatch.Mode, ActionResult{Status: "PASS", Message: message, DispatchID: dispatch.ID})
 		if !options.PerSuggestion {
 			state.setQAReview(dispatch.Mode, ActionResult{Status: "PENDING"})
+			ensureConvergenceState(state)
+			caseSet := state.QACaseSets[dispatch.Mode]
+			caseSet.Mode, caseSet.Status = dispatch.Mode, caseSetDraft
+			caseSet.Version, caseSet.BoundSnapshot, caseSet.ReviewDispatchID = "", "", ""
+			caseSet.PendingSnapshotAdvance = false
+			caseSet.Suggestions = nil
+			state.QACaseSets[dispatch.Mode] = caseSet
 			if state.RequirementGuarantee != nil {
 				delete(state.RequirementGuarantee.ReviewsByMode, dispatch.Mode)
 			}
@@ -788,7 +805,16 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 			removedIDs = append(removedIDs, id)
 		}
 		sort.Strings(removedIDs)
-		state.QADesignChangesByMode[dispatch.Mode] = QADesignChange{Added: addedIDs, Modified: modifiedIDs, Removed: removedIDs}
+		state.QADesignChangesByMode[dispatch.Mode] = QADesignChange{Added: addedIDs, Modified: modifiedIDs, Removed: removedIDs, SuggestionIDs: append([]string{}, options.SuggestionIDs...)}
+		if options.PerSuggestion {
+			changed := len(addedIDs) != 0 || substantiveRevised || len(removedIDs) != 0
+			if err := absorbQAReviewSuggestions(state, dispatch, options.SuggestionIDs, changed); err != nil {
+				return err
+			}
+			if dispatch.Mode == "blackbox" && state.QACaseSets[dispatch.Mode].Status == caseSetFrozen {
+				state.QAWorktree = ""
+			}
+		}
 		// 黑盒设计轮：把 run-state 的黑盒用例 mirror 写入隔离工作区的用例文件
 		// （.gates/cases/blackbox.md），供黑盒 qa-review 读取审查。仅 blackbox mode、仅
 		// 隔离工作区已登记时写入；mirror 是 run-state 的派生视图（单一来源），每轮设计
@@ -798,7 +824,7 @@ func RecordQADesign(root, packageRoot, runID, dispatchID string, cases []QACaseI
 				return err
 			}
 		}
-		completeDispatch(state, dispatch.ID)
+		finishDispatchAttempt(state, dispatch.ID, "PASS", "")
 		return nil
 	})
 }
@@ -815,17 +841,43 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		transitionTarget:       func(dispatch PreparedDispatch) string { return dispatch.Mode },
 		requireIsolationNative: true,
 		requireLifecycle:       true,
+		preCheck: func(state *RunState, _ PromptCatalog) error {
+			return requireWhiteboxReviewSnapshot(root, *state, state.Dispatches[dispatchID].Mode)
+		},
 	}, func(state *RunState, catalog PromptCatalog, dispatch PreparedDispatch) error {
-		backfillDispatchCost(root, state, dispatch)
 		if strings.TrimSpace(runtimeError) != "" {
 			if len(decisions) != 0 || len(setFindings) != 0 {
 				return fmt.Errorf("QA Review runtime error cannot include case decisions or findings")
 			}
+			backfillDispatchCost(root, state, dispatch)
 			// review RUNTIME_ERROR 按 mode 独立记录。
 			state.setQAReview(dispatch.Mode, ActionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), DispatchID: dispatch.ID})
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			return nil
 		}
+		setResultFindings := make([]Finding, 0, len(setFindings))
+		findingRoot := root
+		if isBlackboxQADispatch(dispatch) {
+			findingRoot = state.QAWorktree
+		}
+		for _, input := range setFindings {
+			if strings.TrimSpace(input.Message) == "" {
+				return rejectInvalidResult(state, dispatch, fmt.Errorf("QA Review finding message is required"))
+			}
+			severity := strings.ToUpper(strings.TrimSpace(input.Severity))
+			if severity != "P1" && severity != "P2" && severity != "P3" {
+				return rejectInvalidResult(state, dispatch, fmt.Errorf("QA Review set finding severity must be P1, P2, or P3"))
+			}
+			finding, err := strictFinding(input, "qa-review", false, findingRoot, *state)
+			if err != nil {
+				return rejectInvalidResult(state, dispatch, err)
+			}
+			setResultFindings = append(setResultFindings, finding)
+		}
+		if err := validateIndependentRationales(setResultFindings); err != nil {
+			return rejectInvalidResult(state, dispatch, err)
+		}
+		backfillDispatchCost(root, state, dispatch)
 		// 待定用例集按派发 mode 限定：黑盒 review 只决定黑盒待定用例、白盒 review 只决定
 		// 白盒待定用例，各派发为单 mode、不混合。mode 为空（快速路径/合并 QA）时覆盖全部
 		// 待定用例。被选中模式零用例时待定集为空，只做集合覆盖判定。与提示词组装
@@ -873,23 +925,9 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 		// 阻塞、必须补用例；P2 不阻塞、不触发重审，但不是无需修改——host 经 qa-design
 		// --per-suggestion 按建议直接吸收修订（见 RecordQADesign 的前置校验）。
 		// P0 不接受（集合层面不判终态致命）。
-		for _, input := range setFindings {
-			severity := strings.ToUpper(strings.TrimSpace(input.Severity))
-			if severity != "P1" && severity != "P2" {
-				return fmt.Errorf("QA Review set finding severity must be P1 or P2")
-			}
-			if strings.TrimSpace(input.Message) == "" {
-				return fmt.Errorf("QA Review finding message is required")
-			}
-			locations := make([]string, 0, len(input.Locations))
-			for _, location := range input.Locations {
-				if err := validateFindingLocation(location); err != nil {
-					return err
-				}
-				locations = append(locations, strings.TrimSpace(location))
-			}
-			findings = append(findings, Finding{Severity: severity, Message: strings.TrimSpace(input.Message), Locations: locations})
-			if severity == "P1" {
+		for _, finding := range setResultFindings {
+			findings = append(findings, finding)
+			if finding.Severity == "P1" {
 				status = "FAIL"
 			}
 		}
@@ -899,12 +937,12 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 			}
 			if !(len(modeCases) == 0 && isMergeVerification(*state)) && state.RequirementGuarantee.ReviewsByMode[dispatch.Mode].Review.SetStatus != coverage.StatusPass {
 				status = "FAIL"
-				findings = append(findings, Finding{Severity: "P1", Message: "explicit REQ/source, AC/point, and case review decisions did not all PASS"})
 			}
 		}
 		// review 权威结果按 mode 独立记录；FAIL 只把本 mode 的设计重置为 PENDING，
 		// 另一 mode 的设计/执行/审查判定不受影响。
-		state.setQAReview(dispatch.Mode, ActionResult{Status: status, Findings: findings, DispatchID: dispatch.ID})
+		reviewResult := ActionResult{Status: status, Findings: findings, DispatchID: dispatch.ID}
+		state.setQAReview(dispatch.Mode, reviewResult)
 		if status == "FAIL" {
 			state.setQADesign(dispatch.Mode, ActionResult{Status: "PENDING"})
 			// review FAIL 只重置本派发 mode 的执行结果，另一 mode 的结果不受影响。
@@ -914,19 +952,55 @@ func RecordQAReview(root, packageRoot, runID, dispatchID string, decisions []QAR
 				state.BlackboxReviewFails++
 			}
 		} else if dispatch.Mode == "blackbox" {
-			// 黑盒 qa-review PASS 自动清空隔离工作区、清零连续 FAIL 计数。
-			state.QAWorktree = ""
+			// 连续 FAIL 计数在 PASS 时清零；隔离工作区要保留到 P2/P3
+			// suggestion 全部吸收并真正 FROZEN，不能在有待吸收建议时提前清空。
 			state.BlackboxReviewFails = 0
 		}
 		// 把决定的审查状态写回读取时同一存储键（per-mode 键或合并 "" 回退）。
 		state.setQACasesForReview(dispatch.Mode, storageKey, modeCases)
-		completeDispatch(state, dispatch.ID)
+		if err := recordQAReviewCaseSet(state, dispatch.Mode, reviewResult, dispatch); err != nil {
+			return err
+		}
+		if dispatch.Mode == "blackbox" && state.QACaseSets[dispatch.Mode].Status == caseSetFrozen {
+			state.QAWorktree = ""
+		}
+		finishDispatchAttempt(state, dispatch.ID, status, "")
 		return nil
 	})
 }
 
+// Use the existing VCS snapshot checks: review must see committed test code at
+// the registered snapshot, both when preparing and when recording the result.
+func requireWhiteboxReviewSnapshot(root string, state RunState, mode string) error {
+	if mode != whiteboxQAID {
+		return nil
+	}
+	resolver, err := resolverForVCS(state.VCS, nil)
+	if err != nil {
+		return err
+	}
+	if err := resolver.VerifyReady(root); err != nil {
+		return fmt.Errorf("whitebox QA Review requires committed test code; commit the tests and register the snapshot with workflow snapshot: %w", err)
+	}
+	if _, err := requireNativeCurrent(root, state); err != nil {
+		return fmt.Errorf("whitebox QA Review requires the committed test snapshot to be registered with workflow snapshot: %w", err)
+	}
+	return nil
+}
+
 func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QAResultInput, runtimeError string) (RunState, error) {
+	auditStatus := "PASS"
+	for _, result := range results {
+		if strings.ToUpper(strings.TrimSpace(result.Outcome)) != "PASS" {
+			auditStatus = "FAIL"
+		}
+	}
+	if strings.TrimSpace(runtimeError) != "" {
+		auditStatus = "RUNTIME_ERROR"
+	}
 	return openDispatchRecord(root, packageRoot, runID, dispatchID, recordDispatchOptions{
+		lateResultStatus:  auditStatus,
+		lateResultMessage: runtimeError,
 		targetKind:        "action",
 		target:            "qa-execution",
 		transitionOp:      "qa-execution",
@@ -950,7 +1024,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 			state.setQAExecution(recordMode, QAExecutionResult{Status: "RUNTIME_ERROR", Message: strings.TrimSpace(runtimeError), Snapshot: state.CurrentSnapshot})
 			// RUNTIME_ERROR 不是权威结果，不得驱逐存续的上一轮结果（P2-乙确认）：下一轮
 			// 重跑的 base 仍取本 mode 的 PriorQAExecution，所以这里不清空本 mode 的 prior。
-			completeDispatch(state, dispatch.ID)
+			finishDispatchAttempt(state, dispatch.ID, "RUNTIME_ERROR", strings.TrimSpace(runtimeError))
 			completeReviewWaveIfReady(state)
 			return nil
 		}
@@ -1040,7 +1114,7 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		state.setQAExecution(recordMode, QAExecutionResult{Status: status, Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings, Message: message})
 		if status == "PASS" && state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && selectedQAModesRecorded(*state) {
 			refreshRequirementGuarantee(root, state)
-			if state.RequirementGuarantee.Report.Status != "pass" {
+			if state.RequirementGuarantee.Report.Status != "pass" && !hasIntermediateQAExecution(*state) {
 				findings = append(findings, Finding{Severity: "P1", Message: "REQ/AC guarantee is incomplete: " + state.RequirementGuarantee.Report.Reason})
 				state.setQAExecution(recordMode, QAExecutionResult{Status: "FAIL", Snapshot: state.CurrentSnapshot, Cases: recorded, Findings: findings, Message: message})
 			}
@@ -1048,7 +1122,8 @@ func RecordQAExecution(root, packageRoot, runID, dispatchID string, results []QA
 		// 本轮权威结果（PASS/FAIL）替换当前 mode 的结果，但保留该 mode 的上一快照
 		// PriorQAExecution 作为有界审计。下一次快照推进会把这里的新权威结果覆盖成
 		// 新的 immediate prior；另一个 mode 的 current/prior 始终不受影响。
-		completeDispatch(state, dispatch.ID)
+		finalStatus := state.qaExecution(recordMode).Status
+		finishDispatchAttempt(state, dispatch.ID, finalStatus, "")
 		completeReviewWaveIfReady(state)
 		return nil
 	})
@@ -1203,14 +1278,22 @@ func bundleRerunScopes(state *RunState, scopes []QAScopeInput) error {
 func recordExecutionScope(state *RunState, mode, decision string, caseIDs []string, reason, source, baseSnapshot string, prior QAExecutionResult) error {
 	mode = strings.TrimSpace(mode)
 	decision = strings.ToUpper(strings.TrimSpace(decision))
-	if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && decision == "AFFECTED" {
-		return fmt.Errorf("an active requirement guarantee requires FULL QA execution; AFFECTED/inherited scope is not accepted")
-	}
 	if mode != "blackbox" && mode != "whitebox" && mode != "" {
 		return fmt.Errorf("invalid QA execution scope mode %q (want blackbox, whitebox, or empty for the merged set)", mode)
 	}
 	if decision != "FULL" && decision != "AFFECTED" {
 		return fmt.Errorf("QA execution scope decision must be FULL or AFFECTED")
+	}
+	current := state.qaExecution(mode)
+	previousScope := state.ExecutionScopes[mode]
+	finalFull := decision == "FULL" && ((current.Status == "PASS" && current.Snapshot == state.CurrentSnapshot && previousScope.Decision == "AFFECTED") ||
+		(strings.TrimSpace(baseSnapshot) != "" && baseSnapshot != state.CurrentSnapshot && state.PreRepairSnapshot == ""))
+	if caseSet := state.QACaseSets[mode]; caseSet.Status == caseSetFrozen && strings.TrimSpace(baseSnapshot) != "" {
+		if decision != "AFFECTED" && !finalFull {
+			return fmt.Errorf("ordinary intermediate repair of a FROZEN QA case-set uses AFFECTED; FULL is reserved for the final candidate regression")
+		}
+	} else if state.RequirementGuarantee != nil && state.RequirementGuarantee.Activation == guaranteeActive && decision == "AFFECTED" {
+		return fmt.Errorf("AFFECTED QA execution requires an intermediate repair with a FROZEN case-set")
 	}
 	normalized := []string{}
 	seen := map[string]bool{}
@@ -1259,7 +1342,37 @@ func recordExecutionScope(state *RunState, mode, decision string, caseIDs []stri
 	if state.ExecutionScopes == nil {
 		state.ExecutionScopes = map[string]QAExecutionScope{}
 	}
-	state.ExecutionScopes[mode] = QAExecutionScope{Decision: decision, Mode: mode, BaseSnapshot: baseSnapshot, CaseIDs: normalized, Reason: strings.TrimSpace(reason), Origin: "USER", Source: source}
+	// A successful AFFECTED run is intentionally not enough to close an active
+	// requirement guarantee.  Recording FULL on that same immutable candidate
+	// starts the final regression: retain the targeted result as audit evidence
+	// and reopen only this mode so the full dispatch can be prepared.
+	if finalFull {
+		if wave, ok := state.ReviewWaves[state.ActiveReviewWaveID]; ok && wave.Snapshot == state.CurrentSnapshot {
+			if wave.Status != reviewWaveComplete {
+				return fmt.Errorf("final FULL regression requires the intermediate review-wave to be COMPLETE")
+			}
+			// FULL is a new execution input for this mode on the same candidate.
+			// Keep the frozen target set and counted wave, retain the prior result
+			// below, and reopen only this target for final verification. A real
+			// FULL failure can then use the normal collection/adjudication path.
+			key := reviewWaveTargetKey("action", "qa-execution", mode)
+			target := wave.Expected[key]
+			target.Key, target.Kind, target.Target, target.Mode = key, "action", "qa-execution", mode
+			target.Status, target.DispatchID, target.TaskKey, target.ResultStatus = reviewTargetUnprepared, "", "", ""
+			wave.Expected[key] = target
+			wave.Status = reviewWaveCollecting
+			state.ReviewWaves[wave.ID] = wave
+		}
+		state.setPriorQAExecution(mode, current)
+		state.setQAExecution(mode, QAExecutionResult{Status: "PENDING"})
+		baseSnapshot = current.Snapshot
+		prior = current
+	}
+	origin := "USER"
+	if decision == "AFFECTED" && state.QACaseSets[mode].Status == caseSetFrozen {
+		origin = "MAIN_AGENT"
+	}
+	state.ExecutionScopes[mode] = QAExecutionScope{Decision: decision, Mode: mode, BaseSnapshot: baseSnapshot, CaseIDs: normalized, Reason: strings.TrimSpace(reason), Origin: origin, Source: source}
 	return nil
 }
 
@@ -1273,16 +1386,31 @@ func RecordExecutionScope(root, packageRoot, runID, mode, decision string, caseI
 		if mode != "blackbox" && mode != "whitebox" && mode != "" {
 			return fmt.Errorf("非法 mode %q：qa-execution-scope 的 mode 只支持 blackbox、whitebox 或空（合并集）", mode)
 		}
-		// scope 决策按 mode 校验该 mode 的 design/review 前置（target=mode）。
-		if err := requireTransition(*state, "qa-execution", mode); err != nil {
-			return err
-		}
 		prior, base, ok := qaExecutionRerunSource(*state, mode)
 		if !ok {
 			return fmt.Errorf("this mode has no authoritative QA execution result to rerun, so a scope decision is not required (a first execution defaults to the full approved set)")
 		}
-		return recordExecutionScope(state, mode, decision, caseIDs, reason, scopeSourcePrepare, base, prior)
+		// Validate the requested scope, not the old AFFECTED scope left by the
+		// completed intermediate wave. mutateRun discards all edits if either
+		// scope validation or the mode's execution prerequisites fail.
+		if err := recordExecutionScope(state, mode, decision, caseIDs, reason, scopeSourcePrepare, base, prior); err != nil {
+			return err
+		}
+		return requireTransition(*state, "qa-execution", mode)
 	})
+}
+
+func hasIntermediateQAExecution(state RunState) bool {
+	for _, id := range state.SelectedGates {
+		if !isQAMode(id) {
+			continue
+		}
+		mode := qaDispatchMode(id)
+		if state.QACaseSets[mode].Status == caseSetFrozen && state.ExecutionScopes[mode].Decision == "AFFECTED" {
+			return true
+		}
+	}
+	return false
 }
 
 // isBlackboxQADispatch reports whether the dispatch is a blackbox qa-design or

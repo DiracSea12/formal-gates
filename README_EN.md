@@ -116,6 +116,12 @@ Every phase has a standard procedure, an explicit executor, and a written record
 **What is recorded** — adjudicated findings and the approved test cases.
 **In one line** — before coding, review "whether it should be done, whether it is minimal, and what counts as correct."
 
+Each finding records its severity rationale, category, normal path, impact, and evidence. An incomplete
+result produces only a `REJECTED_INVALID_RESULT` receipt and retries within the bounded budget of the
+same `TaskKey`; it cannot pollute PASS/FAIL. When a confirmed finding drives a requirement revision, the
+complete `review-delta` is previewed first. A meaning-changing revision also previews invalidated PASSes
+and rollback impact, then commits the requirement revision and state transition atomically after confirmation.
+
 ### 5. Development
 
 **What happens** — a dev agent implements within the confirmed scope in an independent session, fully isolated from every reviewer; new or changed delivery paths are added to the VCS first, the complete base-to-current change is checked before returning, and the agent self-tests before delivery.
@@ -130,14 +136,16 @@ Every phase has a standard procedure, an explicit executor, and a written record
 
 ### 7. Post-development review
 
-**What happens** — testing and every gate review run in parallel. Testing runs only the approved cases; each gate (a file under `gates/`, one gate per file) reviews the complete change in a brand-new independent session, without interference. Results are validated by the main agent and recorded as PASS / FAIL.
+**What happens** — once the final snapshot contains white-box tests and every selected QA case-set is frozen, one review wave freezes the complete expected set and prepares testing plus every gate in parallel. Tests run approved cases; gates review the complete change without receiving QA case text. After every target terminates, the main agent verifies, adjudicates, and consolidates the findings.
 **Who does it** — an independent test executor plus one brand-new independent reviewer per gate.
 **What is recorded** — gate verdicts and test results, validated by the main agent.
 **In one line** — every gate faces the same complete change with a fresh session; nobody can coast on memory.
 
 ### 8. Repair
 
-**What happens** — a test failure or a P0/P1 finding (a severe problem that must be fixed) sends the whole round back for repair (the round's P2/P3 minor suggestions are handled together). PASS conclusions that the repair can't affect are inherited directly; any gate that is re-run always sees the **complete change** (the full start-to-current delivery, never just the small repair delta), and testing re-runs all approved cases on the new snapshot. At most three automatic review rounds; after that every repair needs your explicit authorization.
+Development or repair runtime failures finish their attempt through `record-action --action development-worker --status RUNTIME_ERROR --message ...`. Retries keep the original TaskKey and finite attempt allowance. Identical OPEN/PENDING/CLAIMED preparation requests return the original ticket.
+
+**What happens** — all QA failures, valid P0/P1 findings, and gate P2 findings from one review wave enter one repair. A gate P2 must be fixed, but after a full build, the full project test suite, and affected-case self-runs, its PASS is carried without another gate review. Gate P3 findings are not repaired and are shown once before seal. QA Review P2/P3 suggestions must instead be absorbed by stable suggestion ID before the case-set freezes. Ordinary intermediate repairs run a fixed affected QA subset; a requirement-guarantee route also runs FULL QA on the final candidate before seal. Once automatic rounds are exhausted, a state-bound read-only preview precedes explicit authorization.
 **Who does it** — the main agent pins the pre-repair marker, dispatches a dev agent to repair, then re-snapshots and re-reviews.
 **What is recorded** — the repair change and a new snapshot; the pre-repair version is kept as the basis for inheritance decisions.
 **In one line** — small repairs don't re-test what didn't change; big ones go through an independent judgment.
@@ -281,6 +289,15 @@ As a user you only need to do three things:
 The `formal-gates workflow ...` commands are run by the flow driver (your AI agent), not typed by humans.
 
 ---
+
+### Read-only dispatch allowance preview
+
+`formal-gates workflow guard-preview --input <basis.json>` calls the production guard
+calculator and prints the normalized basis, request/retry/total allowances and stable
+digest. See the [input schema and runnable example](references/guard-preview.md).
+It creates no run and writes no state; success only means internally consistent input,
+not authenticated confirmations or legitimate tasks. Stage 3.5b always reports
+`runtimeIntegration=NOT_INSTALLED`; runtime enforcement belongs to stage 4.
 
 ## FAQ
 

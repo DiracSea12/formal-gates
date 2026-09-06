@@ -61,10 +61,10 @@ func TestCaptureAndConsumeStartOwner(t *testing.T) {
 		"transcript_path": "/t/owner.jsonl",
 		"session_id":      "owner-session",
 	}
-	captureStartOwner(payload)
-	tr, se := consumeStartOwner(root)
-	if tr != "/t/owner.jsonl" || se != "owner-session" {
-		t.Fatalf("capture/consume mismatch: got (%q,%q)", tr, se)
+	captureStartOwner(payload, "codex")
+	tr, se, provider := consumeStartOwner(root)
+	if tr != "/t/owner.jsonl" || se != "owner-session" || provider != "codex" {
+		t.Fatalf("capture/consume mismatch: got (%q,%q,%q)", tr, se, provider)
 	}
 	if _, err := os.Stat(ownerSidecarPath(root)); !os.IsNotExist(err) {
 		t.Fatalf("sidecar not removed after consume")

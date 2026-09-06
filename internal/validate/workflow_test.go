@@ -78,6 +78,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	}
 	before := stateBytes(t, root, state.RunID)
 	writeTestFile(t, filepath.Join(root, "design.md"), "changed design\n")
+	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed product scope."))
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "`workflow requirement --meaning preserved|changed` 更新修订") {
 		t.Fatalf("changed frozen artifact was accepted: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestNativeStartRegistersAndFreezesRequirementArtifacts(t *testing.T) {
 	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil); err == nil || !strings.Contains(err.Error(), "requires user confirmation") {
 		t.Fatalf("post-development preserved rebind without user confirmation was accepted: %v", err)
 	}
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +193,13 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 认领未出结果且快照/任务不变时，CLI 强制续用原代理，拒绝默认重派发。
+	// AC-040: unchanged claimed work returns the original canonical prompt.
 	before := stateBytes(t, root, state.RunID)
-	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err == nil || !strings.Contains(err.Error(), "resume the original agent") {
-		t.Fatalf("claimed interrupted dispatch was not forced to resume: %v", err)
+	if repeated, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", false, ""); err != nil || repeated != prompt {
+		t.Fatalf("claimed dispatch was not reused: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {
-		t.Fatal("rejected resume changed state")
+		t.Fatal("ticket reuse changed state")
 	}
 	// 只有用户显式授权（--user-requested）才可放行新派发，来源记入 ReviewOverrides。
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-review", "", true, "user reopened the review"); err != nil {
@@ -210,7 +211,7 @@ func TestReviewDispatchClaimsAreFreshBoundAndReserved(t *testing.T) {
 	}
 	second := openDispatchID(state, "action", "qa-review")
 	// prepare 不再作废——用户授权的重开新派发生成后，旧 CLAIMED 派发仍在途。
-	if first == second || state.Dispatches[first].Status != "CLAIMED" || state.Dispatches[second].Attempt != 2 {
+	if first == second || state.Dispatches[first].Status != "CLAIMED" || state.Dispatches[second].Attempt != 1 || state.Dispatches[second].TaskKey == state.Dispatches[first].TaskKey {
 		t.Fatalf("user-authorized retry did not create a fresh dispatch with the claimed prior still in flight: %#v", state.Dispatches)
 	}
 	before = stateBytes(t, root, state.RunID)
@@ -426,7 +427,7 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	quality := prepareAndClaim(t, root, pkg, state.RunID, "quality", "quality-initial")
-	state, err = RecordGate(root, pkg, state.RunID, "quality", quality, "FAIL", "", comparedRange(state), []FindingInput{{Severity: "P1", Message: "normal workflow fails", Locations: []string{"internal/cli/cli.go:1"}}})
+	state, err = RecordGate(root, pkg, state.RunID, "quality", quality, "FAIL", "", comparedRange(state), []FindingInput{fixtureBlockingFinding("P1", "normal workflow fails", "delivery-repair.txt:1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,8 +452,8 @@ func TestRepairUsesNativeSnapshotAndPreparedCarryBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 修复快照推进后旧快照的权威 QA 结果存续，重新派发 qa-execution 属重跑，
-	// 必须已记录覆盖本次重跑的 scope 决策（FULL 全量重跑）才能 prepare。
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	// 必须已记录覆盖本次重跑的 AFFECTED 决策才能 prepare。
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001", "CASE-002"}, "the implementation repair affects both approved paths")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +477,7 @@ func TestGateFindingCannotTargetFrozenAcceptanceArtifact(t *testing.T) {
 	state := readyDelivery(t, root, pkg, "excluded-finding")
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "excluded-reviewer")
 	before := stateBytes(t, root, state.RunID)
-	_, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "FAIL", "", comparedRange(state), []FindingInput{{Severity: "P1", Message: "rewrite the requirement", Locations: []string{"requirements.md:1"}}})
+	_, err := RecordGate(root, pkg, state.RunID, "quality", dispatchID, "FAIL", "", comparedRange(state), []FindingInput{fixtureBlockingFinding("P1", "rewrite the requirement", "requirements.md:1")})
 	if err == nil || !strings.Contains(err.Error(), "not a review target") {
 		t.Fatalf("frozen acceptance artifact finding was accepted: %v", err)
 	}
@@ -489,7 +490,7 @@ func TestSetLevelQAReviewFindingFailsWithoutReopeningPassingCases(t *testing.T) 
 	root, pkg := workflowFixture(t)
 	state := beginQA(t, root, pkg, "set-finding")
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "set-reviewer")
-	state, err := RecordQAReview(root, pkg, state.RunID, dispatchID, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "missing failure-path coverage"}})
+	state, err := RecordQAReview(root, pkg, state.RunID, dispatchID, passingReviewDecisions(state), "", []FindingInput{fixtureBlockingFinding("P1", "missing failure-path coverage", "requirements.md:1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +535,7 @@ func TestBlackboxReviewActionFailBlocksSnapshotWithAllCasesPass(t *testing.T) {
 	}
 	// 集合层面 P1 覆盖遗漏：各用例判 PASS，但审查动作整体 FAIL（qa-design 重开）。
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "review-action-fail-reviewer")
-	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "missing failure-path coverage"}})
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{fixtureBlockingFinding("P1", "missing failure-path coverage", "requirements.md:1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +573,7 @@ func TestQADesignAcceptsRemovalOnlyDuplicateCorrection(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "duplicate-reviewer")
-	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Severity: "P1", Message: "remove duplicated direct coverage"}})
+	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{fixtureBlockingFinding("P1", "remove duplicated direct coverage", "requirements.md:1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +619,7 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 
 	// FAIL 含发现项（P0/P1/P2/P3 分级）：仍阻塞，但不构成不可恢复的终态。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "requirement does not target a real user problem"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "requirement does not target a real user problem", "requirements.md:1")}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -629,9 +630,9 @@ func TestProductReviewPreDevelopmentGatingAndFailRecovery(t *testing.T) {
 		t.Fatalf("start-readiness prepared after product review FAIL: %v", err)
 	}
 
-	// 重新派发并记录 PASS 后下游解锁。
-	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	// A fresh review of the same failed input requires an explicit request.
+	dispatchID = repairExplicitReview(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +665,7 @@ func TestProductReviewAcceptRecordsPassOnHeldDispatch(t *testing.T) {
 	}
 
 	// 用户接受后，直接在 A 上记录 PASS，下游解锁。
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +900,7 @@ func TestLateRouteGateRepairStartsAFreshAttemptInTheNextWave(t *testing.T) {
 	if dispatch := state.Dispatches[dispatchID]; dispatch.ReviewWave != 1 || dispatch.Attempt != 1 {
 		t.Fatalf("supplemental review binding=%#v", dispatch)
 	}
-	state, err = RecordGate(root, pkg, state.RunID, "architecture", dispatchID, "FAIL", "", comparedRange(state), []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state, err = RecordGate(root, pkg, state.RunID, "architecture", dispatchID, "FAIL", "", comparedRange(state), []FindingInput{fixtureBlockingFinding("P1", "repair required", ".gitignore:1")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +927,7 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "wave-limit", "custom", []string{"architecture", "quality"})
 	state = recordGateResult(t, root, pkg, state, "architecture", "wave-architecture-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "wave-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "wave-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("initial review wave count=%d", state.CompletedReviewWaves)
 	}
@@ -950,7 +951,7 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("wave-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("wave-quality-%d", wave), "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 		if state.CompletedReviewWaves != wave {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
@@ -987,7 +988,7 @@ func TestReviewWaveLimitAndCarryScope(t *testing.T) {
 func TestRuntimeAuthorizationPersistsUntilRepairSnapshot(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "runtime-authorization", "custom", []string{"architecture", "quality"})
-	state = recordGateResult(t, root, pkg, state, "architecture", "runtime-architecture", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repairable blocker"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "runtime-architecture", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repairable blocker", ".gitignore:1")})
 	state = recordGateResult(t, root, pkg, state, "quality", "runtime-quality", "RUNTIME_ERROR", "review unavailable", nil)
 	if state.CompletedReviewWaves != 0 {
 		t.Fatalf("runtime-error wave was counted: %#v", state)
@@ -1019,7 +1020,7 @@ func TestSealUserRequestedFailSkipBypassesWaveLimit(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "seal-user-requested", "custom", []string{"architecture", "quality"})
 	state = recordGateResult(t, root, pkg, state, "architecture", "user-architecture", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "user-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "cannot repair now"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "user-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "cannot repair now", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("blocking wave was not completed: %#v", state)
 	}
@@ -1043,7 +1044,7 @@ func TestSealFailSkipAfterWaveLimitKeepsSealOrigin(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "seal-limit-origin", "custom", []string{"architecture", "quality"})
 	state = recordGateResult(t, root, pkg, state, "architecture", "limit-architecture-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "limit-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "limit-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("completed waves=%d want=1", state.CompletedReviewWaves)
 	}
@@ -1055,7 +1056,7 @@ func TestSealFailSkipAfterWaveLimitKeepsSealOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("limit-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("limit-quality-%d", wave), "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 		if state.CompletedReviewWaves != wave {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
@@ -1068,7 +1069,7 @@ func TestSealFailSkipAfterWaveLimitKeepsSealOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = recordGateResult(t, root, pkg, state, "architecture", "limit-architecture-final", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "limit-quality-final", "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked on the final candidate"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "limit-quality-final", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked on the final candidate", ".gitignore:1")})
 	summary, err := Seal(root, pkg, state.RunID, []string{"quality"}, false, "squashed delivery")
 	if err != nil {
 		t.Fatal(err)
@@ -1331,7 +1332,7 @@ func TestChangedGateStaysReDispatchableAfterMainAgentCarry(t *testing.T) {
 func TestMidFlightGateChangeDisposableAfterIndependentCarry(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "mid-flight-dispose", "custom", []string{"architecture", "quality"})
-	state = recordGateResult(t, root, pkg, state, "architecture", "mid-architecture-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "mid-architecture-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repair required", ".gitignore:1")})
 	state = recordGateResult(t, root, pkg, state, "quality", "mid-quality-1", "PASS", "", nil)
 	state = advanceRepair(t, root, pkg, state, "mid-flight")
 	carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
@@ -1418,7 +1419,7 @@ func TestAdoptExternalChangeRebindsAndCarries(t *testing.T) {
 func TestAdoptedDevelopmentCommitCanCompleteSnapshotRegistration(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "adopted-development", "custom", []string{"quality"})
-	state = recordGateResult(t, root, pkg, state, "quality", "adopted-development-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "adopted-development-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repair required", ".gitignore:1")})
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -1498,7 +1499,7 @@ func TestPreDevelopmentAdoptRebindsWithoutRepairBoundary(t *testing.T) {
 	// pre-dev 直接吸收（该谓词只认 PENDING/PREPARED，不认 REPAIR_PREPARED）。先记录
 	// 首个阻塞波（quality FAIL）完成首波审查并把 development-worker 置 REPAIR_PREPARED，
 	// 再提交外部改动后采纳，断言边界被建立。
-	state = recordGateResult(t, root, pkg, state, "quality", "predev-adopt-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker requires repair"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "predev-adopt-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker requires repair", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 || state.Actions["development-worker"].Status != developmentVerified {
 		t.Fatalf("blocking review wave was not completed: %#v", state)
 	}
@@ -2275,26 +2276,27 @@ func TestPreDevelopmentReviewFindingsCarrySeverity(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "review-severity"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P0", Message: "blocking"}, {Severity: "P2", Message: "minor"}, {Severity: "P3", Message: "trivial"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P0", "blocking", "requirements.md:1"), {Severity: "P2", Message: "minor"}, {Severity: "P3", Message: "trivial"}}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.Actions["product-review"].Findings[0].Severity != "P0" || state.Actions["product-review"].Findings[1].Severity != "P2" || state.Actions["product-review"].Findings[2].Severity != "P3" {
 		t.Fatalf("severity not retained: %#v", state.Actions["product-review"].Findings)
 	}
-	next := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P4", Message: "bad"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
+	next := repairExplicitReview(t, root, pkg, state.RunID, "product-review")
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", next, "FAIL", "", []FindingInput{{Severity: "P4", Message: "bad"}}, false, "", fixtureOperatorVerification()); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("invalid severity accepted: %v", err)
 	}
-	// P4 的 FAIL 未被记录，next 派发仍认领未出结果；补记合法 PASS 完成它，使
-	// 放行下一次准备（否则强制续用 next）。
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", nil, false, "")
+	// Invalid results close their attempt; retry the same bounded review before
+	// submitting a complete PASS candidate.
+	next = repairExplicitReview(t, root, pkg, state.RunID, "product-review")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", next, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
 	readiness := recordReadiness(t, root, pkg, state)
-	dispatchID = prepareDispatch(t, root, pkg, readiness.RunID, "start-readiness")
-	if _, err := RecordAction(root, pkg, readiness.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "technical gap"}}, false, ""); err != nil {
+	dispatchID = repairExplicitReview(t, root, pkg, readiness.RunID, "start-readiness")
+	if _, err := RecordAction(root, pkg, readiness.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "technical gap", "requirements.md:1")}, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatalf("start-readiness severity rejected: %v", err)
 	}
 }
@@ -2309,7 +2311,7 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	// 处置登记引用该动作已记录的审查结果：先记录一次 FAIL（含 P1 与 P2 发现项），再逐项
 	// 驳回。驳回的 P0/P1 不阻塞；确认的 P0/P1 才会置位"需重审"标记。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "settled finding one"}, {Severity: "P2", Message: "settled finding two"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "settled finding one", "requirements.md:1"), {Severity: "P2", Message: "settled finding two"}}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2341,13 +2343,13 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
 	state = recordReadiness(t, root, pkg, state)
-	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "settled technical decision"}}, false, "")
+	dispatchID = repairExplicitReview(t, root, pkg, state.RunID, "start-readiness")
+	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "settled technical decision", "requirements.md:1")}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2371,13 +2373,13 @@ func TestSettledFindingsAreInjectedAndClearedOnMeaningChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised requirement."))
 	commitAll(t, root, "revised requirement")
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil)
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2708,18 +2710,19 @@ func TestPreDevelopmentReviewFindingsRequireSeverity(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "severity-required"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded finding"}}, false, "", fixtureOperatorVerification()); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("ungraded product-review finding accepted: %v", err)
 	}
-	// 无严重度的 FAIL 未被记录，dispatchID 派发仍认领未出结果；补记合法 PASS 完成它，
-	// 使放行下一次准备。
+	// The invalid result closes this attempt under the current evidence contract.
+	// Its bounded retry can submit the complete PASS result.
+	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "product-review")
 	var err error
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
 	dispatchID = prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, ""); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
+	if _, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "FAIL", "", []FindingInput{{Message: "ungraded technical finding"}}, false, "", fixtureOperatorVerification()); err == nil || !strings.Contains(err.Error(), "severity must be P0, P1, P2, or P3") {
 		t.Fatalf("ungraded start-readiness finding accepted: %v", err)
 	}
 }
@@ -2790,7 +2793,7 @@ func confirmAndRouteBase(t *testing.T, root, pkg string, state RunState, mode st
 func confirmRequirement(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
-	state, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2857,7 +2860,7 @@ func recordProductReview(t *testing.T, root, pkg string, state RunState) RunStat
 			items = append(items, ReviewItemInput{Key: guaranteeProductReviewKey(requirement.ID), Status: "PASS"})
 		}
 	}
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", items...)
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification(), items...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2949,7 +2952,7 @@ func advanceRepair(t *testing.T, root, pkg string, state RunState, suffix string
 func recordReadiness(t *testing.T, root, pkg string, state RunState) RunState {
 	t.Helper()
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3398,7 +3401,7 @@ func TestSnapshotReleasePersistsToRepairSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 质量门 FAIL 产生阻塞波，进入修复轮。
-	state = recordGateResult(t, root, pkg, state, "quality", "release-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "release-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repair required", ".gitignore:1")})
 	// 修复快照（非用户放行）：此前授权只延续绕过快照前 review 门；未批准黑盒用例仍不
 	// 进入需执行集，也不生成或冒充 PASS 记录。
 	state = advanceRepair(t, root, pkg, state, "release")
@@ -3416,7 +3419,7 @@ func TestSealSquashesGitRangeToSingleCommit(t *testing.T) {
 	state := readyDeliveryForRoute(t, root, pkg, "seal-squash", "custom", []string{"quality"})
 	// 首轮质量门 FAIL（阻塞），使一轮修复合法：修复提交构成基线→当前的第二条提交，
 	// seal 时才触发压缩。
-	state = recordGateResult(t, root, pkg, state, "quality", "squash-quality-fail", "FAIL", "", []FindingInput{{Severity: "P1", Message: "delivery needs repair"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "squash-quality-fail", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "delivery needs repair", ".gitignore:1")})
 	state = advanceRepair(t, root, pkg, state, "squash")
 	state = recordGateResult(t, root, pkg, state, "quality", "squash-quality-pass", "PASS", "", nil)
 	before := gitHead(t, root)
@@ -3459,7 +3462,7 @@ func TestReviewRuleOnlyP2P3RecordsPassWithVisibleFindings(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "only-p2"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", []FindingInput{{Severity: "P2", Message: "minor wording suggestion"}, {Severity: "P3", Message: "trivial style note"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", []FindingInput{{Severity: "P2", Message: "minor wording suggestion"}, {Severity: "P3", Message: "trivial style note"}}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3476,12 +3479,13 @@ func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "confirm-p01"))
 	first := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{{Severity: "P1", Message: "real user problem"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "real user problem", "requirements.md:1")}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 在确认处置之前派发一轮新 review（该轮不是重审轮）。
-	second := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	// The explicit extra review starts before the finding is confirmed; it is
+	// not the revision-bound review that later clears NeedsReReview.
+	second := repairExplicitReview(t, root, pkg, state.RunID, "product-review")
 	state, err = RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"real user problem"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -3490,18 +3494,38 @@ func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
 		t.Fatalf("confirmed P0/P1 did not set the needs-re-review marker: %#v", state.NeedsReReview)
 	}
 	// 该轮在标记置位前派发，不是重审轮：记录 PASS 被拒。
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "awaits a re-review") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, false, "", fixtureOperatorVerification()); err == nil || !strings.Contains(err.Error(), "awaits a re-review") {
 		t.Fatalf("direct PASS before re-review was accepted: %v", err)
 	}
 	// 需求 6 第 5 条：重绑前必须先把在途审查派发的结果记录掉。该轮被重审规则挡下、
 	// 无法产出可记录的 PASS（须等重审轮），以 RUNTIME_ERROR 结束该轮后释放重绑通路。
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "RUNTIME_ERROR", "round superseded by the confirmed-P0/P1 re-review requirement", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", second, "RUNTIME_ERROR", "round superseded by the confirmed-P0/P1 re-review requirement", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatalf("disposing the blocked round failed: %v", err)
 	}
 	// 修订需求（语义保留）后派发重审轮并返回 PASS：标记清除，PASS 可记录。
 	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Revised meaning-preserved requirement."))
 	commitAll(t, root, "revise requirement (preserved)")
-	state, err = UpdateRequirement(root, pkg, state.RunID, "", false, "preserved", nil)
+	state, err = LoadRunState(root, state.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	series := state.PreDevelopmentReviewSeries["product-review"]
+	candidate, ok := semanticCandidateByDigest(series, series.EffectiveReviewStatus.ResultDigest)
+	if !ok || len(candidate.Findings) != 1 {
+		t.Fatalf("confirmed finding candidate missing: %#v", series)
+	}
+	delta, err := PreviewReviewDelta(root, pkg, state.RunID, "", nil, ReviewDeltaPackage{
+		Sources:         []ReviewDeltaSource{{Action: "product-review", FindingID: candidate.Findings[0].ID, Decision: "CONFIRM"}},
+		Hunks:           []ReviewDeltaHunk{{ID: "HUNK-001", Affected: []string{"REQ-001"}, SourceFindingIDs: []string{candidate.Findings[0].ID}, Disposition: "CONFIRM", Impact: "correct the confirmed finding", Verification: "compared the complete base and candidate and found no unrelated hunks"}},
+		AffectedActions: []string{"product-review"}, ConfirmationScope: "REVIEW_DELTA",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta.AffectedActions = []string{"start-readiness"}
+	delta.Digest = reviewDeltaDigest(delta)
+	delta.UserConfirmation = "user confirms the complete displayed review delta"
+	state, err = UpdateRequirement(root, pkg, state.RunID, "", true, "preserved", nil, RequirementUpdateOptions{ReviewDelta: &delta})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3510,7 +3534,7 @@ func TestReviewRuleConfirmedP0P1RejectsPassBeforeReReview(t *testing.T) {
 	if state.ReReviewDispatch["product-review"] != rereview {
 		t.Fatalf("re-review dispatch not tagged: %#v", state.ReReviewDispatch)
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", rereview, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", rereview, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatalf("re-review PASS was rejected: %v", err)
 	}
@@ -3525,7 +3549,7 @@ func TestReviewRuleDismissedP0P1DoesNotBlock(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "dismiss-p01"))
 	first := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{{Severity: "P0", Message: "voided problem"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{fixtureBlockingFinding("P0", "voided problem", "requirements.md:1")}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3553,16 +3577,16 @@ func TestReviewRuleUserOverrideBypassesAndRecordsOrigin(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "override-p01"))
 	first := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{{Severity: "P1", Message: "confirmed blocker"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", first, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "confirmed blocker", "requirements.md:1")}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := prepareDispatch(t, root, pkg, state.RunID, "product-review")
+	second := repairExplicitReview(t, root, pkg, state.RunID, "product-review")
 	state, err = RecordSettledFindings(root, pkg, state.RunID, "product-review", []string{"confirmed blocker"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, true, "user decides to proceed anyway")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", second, "PASS", "", nil, true, "user decides to proceed anyway", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatalf("user-requested override was rejected: %v", err)
 	}
@@ -3626,7 +3650,7 @@ func failingQAExecution(t *testing.T, root, pkg string, state RunState, failing 
 		t.Fatal(err)
 	}
 	state = recordGateResult(t, root, pkg, state, "architecture", "failing-arch-"+suffix, "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "failing-quality-"+suffix, "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "failing-quality-"+suffix, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	if state.CompletedReviewWaves == 0 {
 		t.Fatalf("blocking wave was not completed: %#v", state)
 	}
@@ -3748,7 +3772,7 @@ func TestQADesignPerModeDoesNotClearOtherMode(t *testing.T) {
 // TestQAExecutionFirstRunNoScopeAndRerunEnforced verifies a first QA
 // execution needs no scope decision, while a rerun (a prior authoritative result at
 // an earlier snapshot survives the repair snapshot advance) is CLI-enforced to carry
-// a scope decision before prepare, and a FULL decision reruns the complete approved set.
+// a scope decision before prepare, and an AFFECTED decision fixes the subset before dispatch.
 func TestQAExecutionFirstRunNoScopeAndRerunEnforced(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDelivery(t, root, pkg, "rerun-enforced")
@@ -3767,21 +3791,21 @@ func TestQAExecutionFirstRunNoScopeAndRerunEnforced(t *testing.T) {
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, ""); err == nil || !strings.Contains(err.Error(), "requires a scope decision") {
 		t.Fatalf("rerun without a scope decision was not rejected: %v", err)
 	}
-	// 记录 FULL scope（BaseSnapshot = 上一轮权威结果快照）后重跑放行，需执行集为全部已批准。
-	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	// 记录 AFFECTED scope（BaseSnapshot = 上一轮权威结果快照）后重跑放行。
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001", "CASE-002"}, "both approved paths are affected")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sc := state.ExecutionScopes[""]; sc.Decision != "FULL" || sc.Origin != "USER" || sc.Source != scopeSourcePrepare || sc.BaseSnapshot != state.PreRepairSnapshot {
-		t.Fatalf("recorded FULL scope=%#v", sc)
+	if sc := state.ExecutionScopes[""]; sc.Decision != "AFFECTED" || sc.Origin != "MAIN_AGENT" || sc.Source != scopeSourcePrepare || sc.BaseSnapshot != state.PreRepairSnapshot {
+		t.Fatalf("recorded AFFECTED scope=%#v", sc)
 	}
 	prompt, err := PrepareAction(root, pkg, state.RunID, "qa-execution", "", false, "")
 	if err != nil {
-		t.Fatalf("FULL scope did not allow the rerun prepare: %v", err)
+		t.Fatalf("AFFECTED scope did not allow the rerun prepare: %v", err)
 	}
 	for _, testCase := range state.allQACases() {
 		if !strings.Contains(prompt, testCase.ID) {
-			t.Fatalf("FULL rerun prompt omitted approved case %s: %s", testCase.ID, prompt)
+			t.Fatalf("AFFECTED rerun prompt omitted selected case %s: %s", testCase.ID, prompt)
 		}
 	}
 }
@@ -3894,7 +3918,7 @@ func TestQAExecutionScopePerModeIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	state = recordGateResult(t, root, pkg, state, "architecture", "per-mode-arch", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "per-mode-quality", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "per-mode-quality", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	state = advanceRepairWithCarry(t, root, pkg, state, "per-mode-repair")
 	// 各自独立：黑盒记录 AFFECTED 只放行黑盒重跑，白盒仍被挡。
 	state, err = RecordExecutionScope(root, pkg, state.RunID, "blackbox", "AFFECTED", []string{"CASE-002"}, "")
@@ -3928,7 +3952,7 @@ func TestAuthorizeRepairBundlesQARerunScope(t *testing.T) {
 	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "ran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior was broken", OracleResult: "the captured output differed from the approved oracle"}})
 	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran the bound whitebox test on the current candidate", Observation: "the named test completed with exit status 0", OracleResult: "the observed result matched every approved oracle assertion"}})
 	state = recordGateResult(t, root, pkg, state, "architecture", "auth-arch-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "auth-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "auth-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	if state.CompletedReviewWaves != 1 {
 		t.Fatalf("wave 1 count=%d", state.CompletedReviewWaves)
 	}
@@ -3945,7 +3969,7 @@ func TestAuthorizeRepairBundlesQARerunScope(t *testing.T) {
 		}
 		state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "reran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior remained broken", OracleResult: "the captured output still differed from the approved oracle"}})
 		state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "reran the bound whitebox test on the current candidate", Observation: "the named test again completed with exit status 0", OracleResult: "the observed result matched every approved oracle assertion"}})
-		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("auth-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("auth-quality-%d", wave), "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 		if state.CompletedReviewWaves != wave {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
@@ -3989,7 +4013,7 @@ func TestAuthorizeRepairCarriesForwardAffected(t *testing.T) {
 	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "ran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior was broken", OracleResult: "the captured output differed from the approved oracle"}})
 	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran the bound whitebox test on the current candidate", Observation: "the named test completed with exit status 0", OracleResult: "the observed result matched every approved oracle assertion"}})
 	state = recordGateResult(t, root, pkg, state, "architecture", "auth-carry-arch-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "auth-carry-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "auth-carry-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	// 自动轮次 2..3：每轮用户主动选择 AFFECTED（Source=PREPARE）后按 mode 重跑子集。
 	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
 		state = advanceRepairWithCarry(t, root, pkg, state, fmt.Sprintf("auth-carry-%d", wave))
@@ -4004,7 +4028,7 @@ func TestAuthorizeRepairCarriesForwardAffected(t *testing.T) {
 		}
 		state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "reran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior remained broken", OracleResult: "the captured output still differed from the approved oracle"}})
 		state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "reran the bound whitebox test on the current candidate", Observation: "the named test again completed with exit status 0", OracleResult: "the observed result matched every approved oracle assertion"}})
-		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("auth-carry-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("auth-carry-quality-%d", wave), "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 		if state.CompletedReviewWaves != wave {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
@@ -4047,12 +4071,12 @@ func TestPriorQAExecutionPreservedForAudit(t *testing.T) {
 	}
 	// 新一轮权威记录替换当前结果，同时保留上一快照审计。
 	priorSnapshot := state.PreRepairSnapshot
-	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	state, err := RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-002"}, "the failed case is affected")
 	if err != nil {
 		t.Fatal(err)
 	}
 	qaDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-execution")
-	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(state.allQACases()), "")
+	state, err = RecordQAExecution(root, pkg, state.RunID, qaDispatch, passingExecution(qaExecutionRequiredCases(state, "")), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4060,13 +4084,13 @@ func TestPriorQAExecutionPreservedForAudit(t *testing.T) {
 		t.Fatalf("new authoritative record lost the prior audit: %#v", prior)
 	}
 	// 质量门记录在本快照使波次完整，才能推进下一修复快照。
-	state = recordGateResult(t, root, pkg, state, "quality", "prior-preserved-quality-2", "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "prior-preserved-quality-2", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 	// RUNTIME_ERROR 记录不清空存续的上一轮结果。
 	state = advanceRepairWithCarry(t, root, pkg, state, "prior-preserved-runtime")
 	if state.priorQAExecution("") == nil || state.priorQAExecution("").Status != "PASS" {
 		t.Fatalf("PASS was not preserved before the runtime record: %#v", state.priorQAExecution(""))
 	}
-	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "FULL", nil, "")
+	state, err = RecordExecutionScope(root, pkg, state.RunID, "", "AFFECTED", []string{"CASE-001"}, "the next repair affects this case")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4113,7 +4137,7 @@ func TestAuthorizeRepairCarryForwardDoesNotGrantWave(t *testing.T) {
 	state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "ran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior was broken", OracleResult: "the captured output differed from the approved oracle"}})
 	state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "ran the bound whitebox test on the current candidate", Observation: "the named test completed with exit status 0", OracleResult: "the observed result matched every approved oracle assertion"}})
 	state = recordGateResult(t, root, pkg, state, "architecture", "no-auto-arch-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "no-auto-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "no-auto-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	for wave := 2; wave <= automaticReviewWaveLimit; wave++ {
 		state = advanceRepairWithCarry(t, root, pkg, state, fmt.Sprintf("no-auto-wave-%d", wave))
 		var err error
@@ -4127,7 +4151,7 @@ func TestAuthorizeRepairCarryForwardDoesNotGrantWave(t *testing.T) {
 		}
 		state = recordModeQA(t, root, pkg, state, "blackbox", []QAResultInput{{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "reran the documented blackbox command on the bound candidate", Observation: "captured output showed the behavior remained broken", OracleResult: "the captured output still differed from the approved oracle"}})
 		state = recordModeQA(t, root, pkg, state, "whitebox", []QAResultInput{{CaseID: "CASE-001", Outcome: "PASS", Procedure: "reran the bound whitebox test on the current candidate", Observation: "the named test again completed with exit status 0", OracleResult: "the observed result matched every approved oracle assertion"}})
-		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("no-auto-quality-%d", wave), "FAIL", "", []FindingInput{{Severity: "P1", Message: "still blocked"}})
+		state = recordGateResult(t, root, pkg, state, "quality", fmt.Sprintf("no-auto-quality-%d", wave), "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "still blocked", ".gitignore:1")})
 	}
 	// 携带 FULL 内联 scope 授权一次：仅增加一个轮次，不会因记录 scope 而自动多授权。
 	state, err := AuthorizeExtraRepair(root, pkg, state.RunID, 1, []QAScopeInput{{Mode: "blackbox", Decision: "FULL"}, {Mode: "whitebox", Decision: "FULL"}})
@@ -4150,7 +4174,7 @@ func TestRecordActionLifecycleRejectionGivesActionableHint(t *testing.T) {
 	workflowLifecycle = stub
 	t.Cleanup(func() { workflowLifecycle = priorLifecycle })
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "capture hooks") {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification()); err == nil || !strings.Contains(err.Error(), "capture hooks") {
 		t.Fatalf("expected an actionable capture-hooks hint, got: %v", err)
 	}
 }
@@ -4160,7 +4184,7 @@ func TestSettledFindingsRejectsConfirmAndDismissOverlap(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "settle-overlap"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{{Severity: "P1", Message: "same finding"}}, false, "")
+	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "same finding", "requirements.md:1")}, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4194,10 +4218,10 @@ func TestRecordActionStatusIsCaseSensitive(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := mustStart(t, root, pkg, "case-status")
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "requirements-clarification")
-	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "pass", "", nil, false, ""); err == nil || !strings.Contains(err.Error(), "case-sensitive") {
+	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "pass", "", nil, false, "", fixtureOperatorVerification()); err == nil || !strings.Contains(err.Error(), "case-sensitive") {
 		t.Fatalf("lowercase status was accepted: %v", err)
 	}
-	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "requirements-clarification", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatalf("exact PASS was rejected: %v", err)
 	}
 }
@@ -4434,10 +4458,10 @@ func TestRequirementRebindRejectedWhileReviewDispatchOpen(t *testing.T) {
 	if _, err := ClaimDispatch(root, pkg, state.RunID, dispatchID, "rebind-open-reviewer"); err != nil {
 		t.Fatalf("claiming the old revision dispatch under drift failed: %v", err)
 	}
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatalf("recording the old revision dispatch under drift failed: %v", err)
 	}
-	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID)); err != nil {
 		t.Fatalf("rebinding after recording the OPEN dispatch failed: %v", err)
 	}
 }
@@ -4461,11 +4485,11 @@ func TestRecordInFlightDispatchResultAllowedUnderDrift(t *testing.T) {
 		t.Fatalf("prepare under drift was not blocked: %v", err)
 	}
 	// 记录在途派发结果被豁免漂移硬阻断（结果属于旧 revision）。
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatalf("recording the in-flight dispatch result under drift failed: %v", err)
 	}
 	// 在途派发已记录后，重绑放行。
-	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID)); err != nil {
 		t.Fatalf("rebinding after recording the in-flight result failed: %v", err)
 	}
 }
@@ -4477,12 +4501,12 @@ func TestRequirementRebindAllowedAfterInFlightResultRecorded(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "rebind-recorded"))
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, ""); err != nil {
+	if _, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification()); err != nil {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(root, "requirements.md"), testRequirementDocument("Changed requirement."))
 	commitAll(t, root, "change requirement")
-	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil); err != nil {
+	if _, err := UpdateRequirement(root, pkg, state.RunID, "", false, "changed", nil, repairImpactOptions(t, root, pkg, state.RunID)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -4647,7 +4671,7 @@ func TestResetAllowsWholeReviewRedoAfterDevelopment(t *testing.T) {
 	}
 	// 重做整体审：product-review 先（reset 后开发已完成，须放行）。
 	reviewDispatch := prepareDispatch(t, root, pkg, state.RunID, "product-review")
-	state, err = RecordAction(root, pkg, state.RunID, "product-review", reviewDispatch, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "product-review", reviewDispatch, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatalf("redo Product Review after reset was blocked: %v", err)
 	}
@@ -4656,7 +4680,7 @@ func TestResetAllowsWholeReviewRedoAfterDevelopment(t *testing.T) {
 	}
 	// 再重做 start-readiness（产品审已 PASS，须放行）。
 	readinessDispatch := prepareDispatch(t, root, pkg, state.RunID, "start-readiness")
-	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", readinessDispatch, "PASS", "", nil, false, "")
+	state, err = RecordAction(root, pkg, state.RunID, "start-readiness", readinessDispatch, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatalf("redo Start Readiness after reset was blocked: %v", err)
 	}

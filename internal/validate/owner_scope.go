@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 // 本文件是「写墙 owner 作用域」的完整实现：把写墙收窄到「启动 formal-gates 的那个
@@ -69,7 +71,7 @@ func isWorkflowStartCommand(command string) bool {
 // captureStartOwner 在「主线程 + workflow start」时把发起对话身份写入 sidecar。任何一步
 // 不满足（非主线程、非 start、无身份字段、无 --root）都静默跳过——宁可丢失 owner 也不
 // 污染 sidecar 或干扰判定。
-func captureStartOwner(decoded any) {
+func captureStartOwner(decoded any, providers ...string) {
 	if hookAgentType(decoded) != "" {
 		return
 	}
@@ -89,7 +91,15 @@ func captureStartOwner(decoded any) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	data, _ := json.Marshal(map[string]string{"transcript": transcript, "session": session})
+	// Use the host already selected by hook decide --provider. Transcript file
+	// names and session IDs do not establish which parser owns the format.
+	provider := ""
+	if len(providers) > 0 && strings.TrimSpace(providers[0]) != "" {
+		if descriptor, err := host.Lookup(providers[0]); err == nil {
+			provider = descriptor.ID
+		}
+	}
+	data, _ := json.Marshal(map[string]string{"transcript": transcript, "session": session, "provider": provider})
 	_ = os.WriteFile(ownerSidecarPath(root), data, 0o600)
 }
 
@@ -105,21 +115,22 @@ func workflowStartRoot(command string) string {
 
 // consumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次
 // start），返回其中记录的 owner 身份。无 sidecar 或解析失败返回空串。
-func consumeStartOwner(root string) (transcript, session string) {
+func consumeStartOwner(root string) (transcript, session, provider string) {
 	path := ownerSidecarPath(root)
 	data, err := os.ReadFile(path)
 	_ = os.Remove(path)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	var probe struct {
 		Transcript string `json:"transcript"`
 		Session    string `json:"session"`
+		Provider   string `json:"provider"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	return strings.TrimSpace(probe.Transcript), strings.TrimSpace(probe.Session)
+	return strings.TrimSpace(probe.Transcript), strings.TrimSpace(probe.Session), strings.TrimSpace(probe.Provider)
 }
 
 // readRunOwner 读取 run 状态文件里的 owner 字段（旧 run 缺失时返回空串）。

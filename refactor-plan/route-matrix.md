@@ -41,6 +41,7 @@ epoch/generation）。
 
 | 入口 | runtime | 唯一 writer | schema/definition 版本绑定 | 允许的状态变化 | 错误码 | 是否只读 | 阶段 0 绑定 | 阶段 1 绑定 | 计划枚举 | 机器证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| guard-preview | 3.5b engine 纯计算（`guard.Calculate`） | 无（只读输入文件） | basis schemaVersion=1；definition、确认 revision、provenance 与有限 retry | 无；非权威计算预览，runtimeIntegration=NOT_INSTALLED | 文件不可读、JSON/schema/身份/retry/provenance 冲突：rc=1 + 可定位错误 | 是 | unsupported | unsupported | 计划内 | `TestGuardPreviewBinary`；生产核心已知答案与 digest 测试 |
 | start | legacy | stable driver legacy runtime（`validate.Start`，cli.go:358-378） | legacy state 无版本 envelope，绑定 admission epoch/generation；不迁移不回写（P0-JSON CASE-024） | 创建 run：写 `.gates/tmp/<run>/state.json`（ACTIVE）与需求工件；首次写前要求已提交 bootstrap receipt。**--split 现状**：legacy start 仍带 `--split` 拆分意向声明（cli.go:370），与 §2.3 目标态（start 不接受拆分意向，拆分唯一绑定于 start-readiness PASS 后的拓扑确认）相反，属 legacy 维持项，阶段 3/4 迁移时改写并留修订记录 | UNREGISTERED_INSTALL（无 bootstrap receipt/登记失效，写前拒绝）、LOCK_HELD、参数校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-002/059/061；validate `TestWhiteboxPhase0WorkflowAdmissionPrecedesStateCreation`（CASE-042）、`TestWhiteboxPhase0Round16FirstStartRequiresCommittedBootstrapReceipt`（CASE-061） |
 | show | legacy | 无（只读加载 `validate.LoadRunState`，cli.go:380-389） | 同上（读侧不引入新字段） | 无 | 加载错误文本（run 不存在/state 损坏） | 是 | legacy | legacy | 计划内 | P0-JSON CASE-020/024（installed binary show rc=0） |
 | status | candidate engine（阶段 3 installed façade） | 无（只读 engine projection） | engine 六字段 envelope；终态可读 terminal summary | 无 | `UNSUPPORTED_RUN_VERSION`、`CORRUPT_STATE`、run 不存在 | 是 | legacy | legacy | 计划内 | `TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
@@ -50,30 +51,60 @@ epoch/generation）。
 | abort | legacy | stable driver legacy runtime（`validate.Abort`，cli.go:430-452） | legacy state 无版本 envelope；终止后写 terminal summary | 终止 run：写 `.gates/results/<run>.json`（ABORTED）并清理 `.gates/tmp/<run>` | `--user-confirm` 二段确认缺失即拒（确认前不调 validate.Abort）；终止校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-020（abort 产出 terminal summary）；cli `workflow_test.go` abort 用例 |
 | reset | legacy | stable driver legacy runtime（`validate.ResetRun`，cli.go:454-470） | legacy state 无版本 envelope | 重建 run（reset/rebuild 本 run 状态） | 重建校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` reset 用例；validate `workflow_test.go` ResetRun 覆盖 |
 | requirement | legacy | stable driver legacy runtime（`validate.UpdateRequirement`，cli.go:472-496） | legacy state 无版本 envelope | 需求确认（--confirmed）与需求变化/工件集登记（写） | 需求源/工件校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012（真实宿主会话需求登记）；cli `workflow_test.go` requirement 用例 |
+| review-delta-preview | legacy | 无（只读 `validate.PreviewReviewDelta`） | legacy state revision + base/candidate requirement revision + finding/hunk bindings | 无；计算完整 review-delta digest 并返回待确认预览 | stale/misbound finding、hunk、revision 或候选结构错误 | 是 | legacy | legacy | 计划未枚举 | `review_governance_test.go` meaning-preserved/meaning-changed 用例；cli help/route-matrix 普查 |
+| requirement-impact-preview | legacy | 无（只读 `validate.PreviewRequirementImpact`） | legacy state integrity revision + review-delta/candidate revision | 无；展示含义维度、失效 PASS、回滚与产品审容量并生成 digest | 空影响、旧 revision、候选结构错误 | 是 | legacy | legacy | 计划未枚举 | `review_governance_test.go` read-only/atomic apply 用例；cli help/route-matrix 普查 |
+| authorize-retry | legacy | stable driver legacy runtime（`validate.AuthorizeDispatchRetry`） | TaskKey + 当前 state integrity revision | 仅在默认两次 attempt 耗尽后，为同一 TaskKey 追加一次最终 attempt 并记录非空用户理由 | stale revision、未耗尽、重复授权、未知 TaskKey | 否 | legacy | legacy | 计划未枚举 | `review_governance_test.go` finite retry 用例；cli help/route-matrix 普查 |
+| prepare-review-wave | legacy | stable driver convergence runtime（`validate.PrepareReviewWave`） | 当前 immutable snapshot + FROZEN case-set versions + expected-set digest | 初始化当前 review-ready 快照唯一 wave，并一次准备全部 eligible QA execution/门 dispatch | 非 review-ready、case-set 未冻结/未绑定、同快照 expected-set 漂移 | 否 | legacy | legacy | 计划未枚举 | `review_convergence_test.go` S1 屏障、expected-set 与统一返修用例 |
+| adjudicate-wave | legacy | stable driver convergence runtime（`validate.AdjudicateReviewWave`） | wave id + state revision + 每 finding 五维核实/NEW、SAME_AS、DISMISSED 裁决 | 持久化 finding/problem 账本并把已收齐 wave 推进至 READY_FOR_REPAIR 或 COMPLETE | stale revision、遗漏 finding、五维/引用/理由不完整、无效 problem 绑定 | 否 | legacy | legacy | 计划未枚举 | `review_convergence_test.go` finding 归并与唯一返修用例 |
+| resolve-wave-target | legacy | stable driver convergence runtime（`validate.DisposeReviewWaveTarget`） | target key + state revision + 用户处置理由 | 仅把 RUNTIME_ERROR、REJECTED_INVALID_RESULT 或 RETRY_EXHAUSTED 目标显式终结为 DISPOSED，不记 PASS | stale revision、PENDING/在途/正常终态目标、空理由 | 否 | legacy | legacy | 计划未枚举 | `review_convergence_test.go` review-wave 收集屏障用例 |
+| repair-preview | legacy | 无（只读 `validate.PreviewRepairAuthorization`） | 当前 state revision + 预计 build/test/QA 重跑范围 | 无；返回完整额外返修授权摘要与 digest，engine allowance 固定 UNAVAILABLE | run/catalog 加载错误 | 是 | legacy | legacy | 计划未枚举 | `review_convergence_test.go` read-only/state-bound preview 用例 |
+| complete-p2-repair | legacy | stable driver convergence runtime（`validate.CompleteGateP2Repair`） | wave id + repair snapshot + 完整 build/test/affected-case 证据 | 生成 gate P2 completion/carry 凭据、把对应 problem 标记 RESOLVED，不派门重审 | 非纯 gate P2、错误 repair snapshot、缺少最高强度自测证据 | 否 | legacy | legacy | 计划未枚举 | `review_convergence_test.go` pure-P2 carry 用例 |
 | route-candidates | legacy | 无（只读计算 `validate.RouteCandidates`，cli.go:498-507） | 同 show（读侧） | 无 | 加载/候选计算错误文本 | 是 | legacy | legacy | 计划内 | cli `workflow_test.go` route-candidates 用例；P0-JSON CASE-011（公开入口 help 面） |
 | slicing | legacy | stable driver legacy runtime（`validate.RecordSlicing`，cli.go:509-529） | legacy state 无版本 envelope | 拆分决定留痕（no-split 需理由、split 需拓扑/总实例参数）；`--user-confirm` 确认（RQ 后置项：拆分绑定仍发生在本命令，属 legacy 维持，阶段 4/5 迁移） | 决定参数校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012（真实 subagent 走 req-clar→…→slicing→route）；cli `workflow_test.go` slicing 用例 |
 | settle-findings | legacy | stable driver legacy runtime（`validate.RecordSettledFindings`，cli.go:531-545） | legacy state 无版本 envelope | 审查 findings 处置（confirm/dismiss 留痕） | 处置参数校验错误文本 | 否 | legacy | legacy | 计划内 | validate `workflow_test.go`、`phase0_round12/15_whitebox_qa_test.go` SettleFindings 覆盖 |
 | route | legacy | stable driver legacy runtime（`validate.SetRoute`，cli.go:547-559） | legacy state 无版本 envelope | 路线与门选择登记（full/custom/lightweight） | 路线/门目录校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012；cli `workflow_test.go` route 用例 |
 | route-add | legacy | stable driver legacy runtime（`validate.AddRouteGates`，cli.go:561-572） | legacy state 无版本 envelope | 追加路线门 | 门 id 校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` route-add 用例 |
 | qa-worktree | legacy | stable driver legacy runtime（`validate.RegisterQAWorktree`，cli.go:574-584） | legacy state 无版本 envelope | 登记 QA 隔离工作区 | worktree 路径校验错误文本 | 否 | legacy | legacy | 计划内 | validate `workflow_test.go`、`qa_incremental_merge_test.go`、`phase0_round12/15_whitebox_qa_test.go` RegisterQAWorktree 覆盖 |
+| qa-thaw | legacy | stable driver convergence runtime（`validate.ThawQACaseSet`） | FROZEN case-set + 四类变化类别 + reason/source revision + affected case ids | THAW 对应 mode；只使受影响用例、执行与 carry 失效，保留未受影响批准状态 | 非法类别、非 FROZEN、空理由/revision、未知 case id | 否 | legacy | legacy | 计划未枚举 | `review_convergence_test.go` FROZEN/THAW 回归用例 |
 | prepare-gate | legacy | stable driver legacy runtime（`validate.PrepareGate`，cli.go:586-597） | legacy state 无版本 envelope | 组装门审派发：登记 dispatch 与提示词工件（不改 run 主推进位） | 未过 admission 写前拒绝（UNREGISTERED_INSTALL）；门 id/状态校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-062（prepare-action 同族 admission 先于提示词落盘）；cli `workflow_test.go` prepare-gate 用例 |
 | prepare-action | legacy | stable driver legacy runtime（`validate.PrepareAction`，cli.go:599-618） | legacy state 无版本 envelope | 登记 OPEN dispatch、写派发提示词文件（PromptFile/PromptHash 绑定） | UNREGISTERED_INSTALL（写前拒绝，无提示词文件残留）；action id 校验错误 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012（真实宿主 subagent 生命周期）、CASE-062；`TestWhiteboxPhase0Round16MutateRunAdmissionPrecedesPromptArtifact` |
 | claim-dispatch | legacy | stable driver legacy runtime（`validate.ClaimDispatchWithProvider`，cli.go:620-638） | legacy state 无版本 envelope | 认领 dispatch（审查者/provider 身份绑定） | 身份/dispatch 状态校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012（真实成对 SubagentStart/Stop→lifecycle verify VERIFIED）；cli `workflow_test.go` claim-dispatch 用例 |
 | record-action | legacy | stable driver legacy runtime（`validate.RecordAction`，cli.go:849-856） | legacy state 无版本 envelope | 记录 action 结果（PASS/FAIL、findings、dispatch 闭合） | 结果/findings 校验错误文本 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-012；cli `workflow_test.go` record-action 用例 |
 | record-gate | legacy | stable driver legacy runtime（`validate.RecordGate`，cli.go:858-873） | legacy state 无版本 envelope | 记录门审结果（status/message/findings/compared 范围） | 门审结果校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` record-gate 用例；P0-JSON 各 gate 记录路径 |
-| qa-design | legacy | stable driver legacy runtime（`validate.RecordQADesign`，cli.go:875-904） | legacy state 无版本 envelope | 登记/修订 QA 用例集（--case-id/--remove-case/--replace-all/--per-suggestion） | 用例输入校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` qa-design 用例；P0-JSON qaExecution 全链 |
-| qa-review | legacy | stable driver legacy runtime（`validate.RecordQAReview`，cli.go:906-922） | legacy state 无版本 envelope | 登记 QA 审查决定（逐用例判定） | 决定输入校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` qa-review 用例 |
+| qa-design | legacy | stable driver legacy runtime（`validate.RecordQADesign`） | case-set status/version + stable suggestion ids | 登记/修订 QA 用例集；PASS 后按 suggestion id 吸收 P2/P3，全部吸收并重算覆盖后 FROZEN | 用例输入、无关/遗漏/重复 suggestion、FROZEN 普通重设计 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go`；validate `review_convergence_test.go` suggestion/freeze 用例 |
+| qa-review | legacy | stable driver legacy runtime（`validate.RecordQAReview`） | 完整 case-set + review dispatch | 登记逐用例判定；P1 阻塞，P2/P3 生成稳定建议；无建议 PASS 立即 FROZEN | 决定/严重度/覆盖校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go`；validate `review_convergence_test.go` |
 | qa-execution | legacy | stable driver legacy runtime（`validate.RecordQAExecution`，cli.go:924-940） | legacy state 无版本 envelope | 登记 QA 执行结果（逐用例 outcome/oracle） | 结果输入校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` qa-execution 用例 |
-| qa-execution-scope | legacy | stable driver legacy runtime（`validate.RecordExecutionScope`，cli.go:725-744） | legacy state 无版本 envelope | FULL/AFFECTED 范围决定留痕（AFFECTED 需用例子集与理由） | 范围决定校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` qa-execution-scope 用例；validate `qa_scope_incremental_test.go` |
+| qa-execution-scope | legacy | stable driver legacy runtime（`validate.RecordExecutionScope`） | FROZEN case-set + prior execution snapshot + selected cases | 普通中间返修固定 AFFECTED；guarantee 最终候选可重开 FULL | 非批准/遗漏 prior FAIL case、普通返修 FULL、非中间返修 AFFECTED | 否 | legacy | legacy | 计划内 | cli `scope_test.go`；validate `qa_scope_incremental_test.go`、`review_convergence_test.go` |
 | snapshot | legacy | stable driver legacy runtime（`validate.AdvanceSnapshot`，cli.go:746-758） | legacy state 无版本 envelope | 组间开发快照推进（--dispatch 绑定；--user-requested 显式放行黑盒门并留授权来源） | 推进前提校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` snapshot 用例；P1-JSON（阶段 1 批次日志 221e75b 组间快照实践） |
 | cleanup | legacy | stable driver legacy runtime（`validate.CleanupTempRuns`/`CleanupTempRun`，cli.go:760-771） | legacy state 无版本 envelope | 删除终态 run 的 `.gates/tmp` 目录（`--run <id>` 可显式删指定 run） | UNREGISTERED_INSTALL（登记失效时删除被拒）；unsafe run id（`../`）拒绝 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-063；`TestWhiteboxPhase0Round16CleanupRunAdmitsRunBinding`；cli `workflow_test.go` cleanup 用例。注：engine 活动 run 不可被公开 cleanup 删除的 negative test 属阶段 3+（当前无 engine run） |
 | carry | legacy | stable driver legacy runtime（`validate.RecordCarry`，cli.go:942-959） | legacy state 无版本 envelope | carry 处置决定留痕（含主代理接管理由） | 处置输入校验错误文本 | 否 | legacy | legacy | 计划内 | validate `decoupled_qa_test.go`、`repro_carry_regression_test.go`；cli `workflow_carry_seal.go` |
-| authorize-repair | legacy | stable driver legacy runtime（`validate.AuthorizeExtraRepair`，cli.go:773-793） | legacy state 无版本 envelope | 授权额外修复轮（轮次/QA 范围授权留痕） | 授权参数校验错误文本 | 否 | legacy | legacy | 计划内 | cli `workflow_test.go` authorize-repair 用例；P0-JSON skipAuthorizations 机制 |
-| seal | legacy | stable driver legacy runtime（`validate.Seal`，cli.go:795-808） | legacy state 无版本 envelope；Seal 写 terminal summary（.gates/results/<run>.json，SEALED）并支持 squash 集成 | 终态封板：admission/identity 校验先于 git squash；写封板产物（含黑盒用例交付物） | admission 失败不产生 committed seal；门未过需 --user-requested 授权留痕 | 否 | legacy | legacy | 计划内 | P0-JSON CASE-045；`TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash`；cli `workflow_test.go` seal 用例 |
+| authorize-repair | legacy | stable driver legacy runtime（`validate.AuthorizeExtraRepair`） | repair-preview digest + state revision + 同一 rerun estimate | 授权一轮额外返修；convergence run 自动按预览范围记录固定 AFFECTED | 旧/缺失 digest/revision、estimate 漂移、轮次未耗尽、无返修义务 | 否 | legacy | legacy | 计划内 | validate `review_convergence_test.go` preview/authorization 用例；legacy cli `scope_test.go` |
+| seal | legacy | stable driver legacy runtime（`validate.Seal`） | 当前 candidate + selected results + gate-P2 credentials + final guarantee FULL | 终态封板并写黑盒用例/summary；门审 P3 一次性 advisory；支持 squash final-candidate 重验 | admission/identity、未完成结果、缺 P2 凭据或 guarantee final FULL | 否 | legacy | legacy | 计划内 | `review_convergence_test.go` P2/P3/final FULL；`TestWhiteboxPhase0SealFencesAdmissionBeforeGitSquash` |
 | drive | candidate engine（阶段 3 installed façade） | engine Controller/drive handler（唯一 engine writer） | engine 六字段 envelope；`definitionSource`/`definitionDigest`/package/installed identity 精确匹配 | `Observe → Decide → SelectIssued`；lightweight 自动终结并保留 terminal summary | `UNSUPPORTED_RUN_VERSION`、`REVISION_CONFLICT`、`BUSINESS_REJECT`、声明的 engine failure class | 否 | legacy | legacy | 计划内 | `TestPhase3ProtocolIntakeReceiptIsExactlyOnce`、`TestPhase3FacadeOpenTerminalSummaryReplayIsReadOnly`；阶段 3 逐入口覆盖表为当前绑定 |
 | submit | candidate engine（阶段 3 installed façade） | engine submit handler（唯一 engine writer） | engine 六字段 envelope + typed event/request/freshness 绑定 | 接纳 typed event 后继续确定性决策；同 ID 同 digest 幂等 | `UNSUPPORTED_RUN_VERSION`、`STALE_REQUEST`、`DIGEST_MISMATCH`、`INVALID_EVENT`、`REVISION_CONFLICT` | 否 | legacy | legacy | 计划内 | `TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite`；阶段 3 逐入口覆盖表为当前绑定 |
 | submit-result | 无（不提供第二事件写入口） | 无 | 无 | 无（拒绝路径不写任何状态） | rc=1 + `unknown workflow subcommand: submit-result` | 是（拒绝即无写入） | unsupported | unsupported | 计划未枚举 | `TestCLIWorkflowFutureRejectsSubmitAlias`；阶段 3 只允许 typed `workflow submit`，`submit-result` 是明确禁止的第二写通道；route-matrix 反向普查的 unsupported negative probe |
 | future | legacy（阶段 0 冻结的 versioned future surface 契约入口，非 workflow state writer） | future writer（`validate.GenerateFutureEnvelope`/`WriteFutureState`/`DiagnoseFutureState`，cli.go:642-723；generate/view 只读，write 写 `--path` 目标文档） | envelope 跟随 checked-in `definitions/workflow.json` 制品派生（`LoadFutureDefinition`）：阶段 0 为 version "1"/digest sha256:9ec68cd7…（phase0.go 冻结常量）；阶段 1 起制品 bump 为 version "2"/digest sha256:3db87c9c…（engine `definition/identity_gen.go` 同源生成） | 无 workflow 状态变化：generate 输出/可选落盘 envelope；write 写版本化 future 文档（四字段 envelope+payload）；view 只读诊断 | UNSUPPORTED_RUN_VERSION（9 种非法 envelope 写前拒绝，目标 0 bytes）；`future submit` 等未知 action 显式拒绝 | 否（write 写目标文档；generate/view 只读） | legacy | legacy | 计划未枚举 | P0-JSON CASE-009/011/021/022/023；`TestWhiteboxPhase0Round11VersionEnvelopeRejectsBeforeWrite`（CASE-035）；cli `TestCLIWorkflowFutureRejectsSubmitAlias` |
+
+## 阶段 3.5b → 4 迁移合同
+
+guard-preview 当前只读输入并调用生产 guard.Calculate，schema/fixture 见
+`references/guard-preview.md`；无 workflow writer、无 State/source bridge/运行时 guard/typed Ask
+写路径，runtimeIntegration=NOT_INSTALLED。阶段 4 才报告权威 engine 集成状态，并把修复授权
+摘要中的 engine allowance 换成权威 projection；owner cost/token cap 的 UNAVAILABLE 各按
+来源/区间/配置独立判定。
+
+| 能力 | 当前归属 → 阶段 4 唯一归属 | 绑定与迁移约束 |
+| --- | --- | --- |
+| finding 核实/归并 | legacy Operator → engine Operator semantic adjudication | raw finding、逐条 severity rationale、范围/严重度/因果/复现、finding/problem ID、NEW/SAME_AS/DISMISSED 历史；Controller 不判语义/根因/重复，仅校验完整性与绑定；仅核实后处置仍不唯一才 Ask |
+| review-ready/wave | legacy convergence → engine Controller | 白盒最终 FROZEN case-set 绑定最终含测试快照；一次冻结 expected-set/digest 并准备所有 QA execution/门；收齐且核实完成后每快照唯一返修 |
+| P2/P3/QA | legacy convergence → engine Controller | 门审 P2 修复/carry 不复审，P3 Seal advisory；QA Review P2/P3 suggestion ID 吸收后 FROZEN、不复审；普通返修 AFFECTED，保证最终 FULL；合法 THAW 条件不变 |
+| 无效结果/retry | legacy dispatch obligation → engine Attempt/Controller | 非 wave/wave 共用 RUNTIME_ERROR/REJECTED_INVALID_RESULT；有限 retry 复用 TaskKey，耗尽 RETRY_EXHAUSTED，用户只能绑定 state revision 一次性追加一个 attempt；不增基础槽位 |
+| signature/授权摘要 | legacy preview → engine typed Ask | OPEN 续用、相同有效 PASS signature 不重派；额外修复完整 findings/problems/理由/历史/额度/QA/cost 摘要，授权绑定 digest + state revision |
+| guard basis | 3.5b 纯计算 → engine Controller | 基础 source 按 REQ-013；finding 派生 source 仅为核实完成且 wave 收齐后的有效 obligation/唯一 repair TaskKey；raw finding/result/receipt/resume 不扩容，需确认 revision 扩张先确认 |
+| requirement impact | legacy preview/登记 → engine typed Ask/原子转换 | meaning-preserved 无回退 Ask 且保留产品审 PASS；meaning-changed 接纳 revision 前绑定影响预览/state revision/base/candidate，仅用户确认事件可回退；legacy 写入口不得成为第二 writer 或绕过校验 |
+
+阶段 5–7 继承同一 finding/problem ID、归并、唯一返修、P3 advisory 与 QA 冻结合同。
+本表记录未来接入约束，不宣称阶段 4 已实现或本 run 已完成正式 QA/门审/Seal。
 
 ## 3.5a coverage 公开验收面
 
@@ -103,6 +134,9 @@ epoch/generation）。
 | abort | legacy | 无 |
 | reset | legacy | 无 |
 | requirement | legacy | 无 |
+| review-delta-preview | legacy | 无 |
+| requirement-impact-preview | legacy | 无 |
+| authorize-retry | legacy | 无 |
 | route-candidates | legacy | 无 |
 | slicing | legacy | 无 |
 | settle-findings | legacy | 无 |
@@ -243,7 +277,8 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
 ### 阶段 3 未迁移旧入口的 engine 分流
 
 `resume`、`abort`、`reset`、`route`、`route-add`、`slicing`、`settle-findings`、`qa-worktree`、
-`prepare-*`、`claim-dispatch`、`record-*`、`snapshot`、`carry`、`authorize-repair`、`seal` 等
+`prepare-*`、`claim-dispatch`、`record-*`、`snapshot`、`carry`、`authorize-retry`、
+`authorize-repair`、`seal` 等
 未在本阶段启用 engine handler 的入口，先按 run envelope 分流：命中 candidate engine run 时统一返回
 `UNSUPPORTED_ENGINE_ENTRY` 且 state/receipt/mtime 零变化；命中 stable legacy run 时继续走既有 legacy
 语义。它们不得因 run ID 相同而落到另一 runtime，也不得成为 engine 的第二 writer。

@@ -396,7 +396,7 @@ func TestLightweightRouteSealsWithoutVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "")
+	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
 	}

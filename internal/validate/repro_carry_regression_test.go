@@ -24,7 +24,7 @@ func TestReproQACarryRegression(t *testing.T) {
 	if state.qaExecution("").Snapshot != state.CurrentSnapshot {
 		t.Fatalf("QA execution snapshot=%s want=%s", state.qaExecution("").Snapshot, state.CurrentSnapshot)
 	}
-	state = recordGateResult(t, root, pkg, state, "architecture", "repro-arch", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "repro-arch", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	state = advanceRepair(t, root, pkg, state, "repro-repair")
 	if got := eligibleMainCarryResults(state, false); !reflect.DeepEqual(got, []string{blackboxQAID}) {
 		t.Fatalf("eligible carry results=%v want=[blackbox]", got)
@@ -48,7 +48,7 @@ func TestReproQACarryRegression(t *testing.T) {
 func TestReproFAILResultPromptChangeReDispatches(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "repro-fail-redispatch", "custom", []string{"architecture"})
-	state = recordGateResult(t, root, pkg, state, "architecture", "repro-fail-arch", "FAIL", "", []FindingInput{{Severity: "P1", Message: "blocker"}})
+	state = recordGateResult(t, root, pkg, state, "architecture", "repro-fail-arch", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "blocker", ".gitignore:1")})
 	writeTestFile(t, filepath.Join(pkg, "gates", "architecture.md"), "new architecture checks\n")
 	// FAIL 结果提示词变化 → 重派即处置，不允许卡死在待决继承。
 	if _, err := PrepareGate(root, pkg, state.RunID, "architecture", false, ""); err != nil {
@@ -65,34 +65,18 @@ func TestReproFAILResultPromptChangeReDispatches(t *testing.T) {
 // objective transient API interruption reason forces a resume with the explicit
 // cause in the message, a recorded non-objective reason opens a fresh dispatch,
 // and a missing/unknown reason forces the user decision branch.
-func TestReproResumeThreeBranch(t *testing.T) {
-	t.Run("objective reason forces resume", func(t *testing.T) {
-		root, pkg := workflowFixture(t)
-		state := readyDeliveryForRoute(t, root, pkg, "resume-objective", "custom", []string{"quality"})
-		stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "HTTP 429")
-		prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-		if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "objective transient API cause") || !strings.Contains(err.Error(), "resume the original agent") {
-			t.Fatalf("objective interruption reason did not force resume with the cause: %v", err)
-		}
-	})
-	t.Run("non-objective reason opens fresh dispatch", func(t *testing.T) {
-		root, pkg := workflowFixture(t)
-		state := readyDeliveryForRoute(t, root, pkg, "resume-user-abort", "custom", []string{"quality"})
-		stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "user abort")
-		prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-		if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
-			t.Fatalf("non-objective interruption reason was still forced to resume: %v", err)
-		}
-	})
-	t.Run("unknown reason forces user decision", func(t *testing.T) {
-		root, pkg := workflowFixture(t)
-		state := readyDeliveryForRoute(t, root, pkg, "resume-unknown", "custom", []string{"quality"})
-		stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", "未知")
-		prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-		if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "the user must decide") {
-			t.Fatalf("unknown interruption reason did not force the user decision branch: %v", err)
-		}
-	})
+func TestReproResumeKeepsIdenticalTicket(t *testing.T) {
+	for _, reason := range []string{"HTTP 429", "user abort", "未知", ""} {
+		t.Run(reason, func(t *testing.T) {
+			root, pkg := workflowFixture(t)
+			state := readyDeliveryForRoute(t, root, pkg, "resume-unchanged", "custom", []string{"quality"})
+			stubLifecycle(t, lifecycle.Verification{Outcome: lifecycle.Verified}, "", reason)
+			dispatch := prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
+			if prompt, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil || !strings.Contains(prompt, dispatch) {
+				t.Fatalf("unchanged ticket was not reused for interruption %q: %v", reason, err)
+			}
+		})
+	}
 }
 
 // TestReproDevelopmentWorkerUserRequested covers prepare
@@ -104,9 +88,9 @@ func TestReproDevelopmentWorkerUserRequested(t *testing.T) {
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "dev-user-requested"), "custom", []string{"quality"})
 	// prepareDispatch 已为 development-worker 完成认领（reviewer-required）。
 	dispatchID := prepareDispatch(t, root, pkg, state.RunID, "development-worker")
-	// 无 --user-requested：中断的已认领开发派发必须被拦下强制续用。
-	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err == nil || !strings.Contains(err.Error(), "resume the original agent") {
-		t.Fatalf("interrupted development dispatch was not forced to resume: %v", err)
+	// Unchanged preparation reuses the original claimed development ticket.
+	if prompt, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", false, ""); err != nil || !strings.Contains(prompt, dispatchID) {
+		t.Fatalf("interrupted development dispatch was not reused: %v", err)
 	}
 	// --user-requested：用户显式授权重开，来源记入 ReviewOverrides，新派发生效。
 	if _, err := PrepareAction(root, pkg, state.RunID, "development-worker", "", true, "user reopened the development worker"); err != nil {
@@ -257,7 +241,7 @@ func TestReproINHERITKeepsAuthoritativeGuard(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "inherit-guard", "custom", []string{"architecture", "quality"})
 	state = recordGateResult(t, root, pkg, state, "architecture", "inherit-arch-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "inherit-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "inherit-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repair required", ".gitignore:1")})
 	state = advanceRepair(t, root, pkg, state, "inherit")
 	// 独立 Carry INHERIT：保留旧结论，结果在当前快照仍权威。
 	carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
@@ -281,7 +265,7 @@ func TestReproRERUNResetsForReDispatch(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "rerun-reset", "custom", []string{"architecture", "quality"})
 	state = recordGateResult(t, root, pkg, state, "architecture", "rerun-arch-1", "PASS", "", nil)
-	state = recordGateResult(t, root, pkg, state, "quality", "rerun-quality-1", "FAIL", "", []FindingInput{{Severity: "P1", Message: "repair required"}})
+	state = recordGateResult(t, root, pkg, state, "quality", "rerun-quality-1", "FAIL", "", []FindingInput{fixtureBlockingFinding("P1", "repair required", ".gitignore:1")})
 	state = advanceRepair(t, root, pkg, state, "rerun")
 	carryDispatch := prepareDispatch(t, root, pkg, state.RunID, "carry")
 	state, err := RecordCarry(root, pkg, state.RunID, carryDispatch, []CarryInput{{GateID: "architecture", Decision: "RERUN", Message: "architecture needs a fresh review"}}, "", false, "")

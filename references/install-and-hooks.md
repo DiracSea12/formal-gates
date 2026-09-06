@@ -121,7 +121,10 @@ $HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <
 $HOME/.local/bin/formal-gates hook decide
 ```
 
-Codex 的安装命令会附加 `--provider codex`。Codex 要求阻断结果通过 JSON 的
+Codex 的安装命令会附加 `--provider codex`，Claude Code 附加 `--provider claude-code`；
+两者的 owner 计量由此绑定同一启动 transcript 的解析器。既有 Claude 安装通过普通更新
+替换旧 hook 后获得该来源字段；缺 provider 的 run 仍将 owner 记为 unavailable。
+Codex 要求阻断结果通过 JSON 的
 `decision: "block"` 返回，同时 hook 进程退出码必须为 0；Claude Code、Cursor 和
 DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON 决策。ZCode 使用
 嵌套的 `hookSpecificOutput`/`permissionDecision` 决策对象，允许时不输出 JSON，拒绝时

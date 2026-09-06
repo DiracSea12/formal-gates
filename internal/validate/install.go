@@ -1962,7 +1962,9 @@ func configureGenericInstallHook(target installTarget) (bool, error) {
 	}
 	hooks := hookObject(config)
 	gateArgs := []string{"hook", "decide"}
-	if descriptor.Hook.Protocol == host.ProtocolCodex {
+	// Metered hosts must bind their transcript parser even when their hook
+	// response uses the generic protocol (Claude Code).
+	if descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.CostProvider != "" {
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}
 	gateCommand := nativeInstallCommand(targetLauncherPath(target), gateArgs...)
@@ -2215,7 +2217,7 @@ func installerHookCommands(target installTarget) map[string]bool {
 		}
 	}
 	gateArgs := []string{"hook", "decide"}
-	if descriptor, err := host.Lookup(target.host); err == nil && descriptor.Hook.Protocol == host.ProtocolCodex {
+	if descriptor, err := host.Lookup(target.host); err == nil && (descriptor.Hook.Protocol == host.ProtocolCodex || descriptor.CostProvider != "") {
 		add("hook", "decide")
 		gateArgs = append(gateArgs, "--provider", descriptor.ID)
 	}

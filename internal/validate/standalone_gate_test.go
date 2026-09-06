@@ -135,12 +135,12 @@ func TestSharedReviewerContractInjectedIntoReviewersOnly(t *testing.T) {
 // TestResumeGuardForcesResumeOrUserAuthorizationForGates covers the
 // gate prepare path: an unchanged claimed dispatch is forced to resume, while a
 // user-authorized fresh dispatch is allowed and its source recorded.
-func TestResumeGuardForcesResumeOrUserAuthorizationForGates(t *testing.T) {
+func TestResumeReusesGateOrHonorsExplicitReplacement(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "resume-gate", "custom", []string{"quality"})
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "resume the original agent") {
-		t.Fatalf("unchanged claimed dispatch was not forced to resume: %v", err)
+	if prompt, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil || !strings.Contains(prompt, dispatchID) {
+		t.Fatalf("unchanged claimed dispatch was not reused: %v", err)
 	}
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", true, "user reopened the gate"); err != nil {
 		t.Fatalf("user-authorized fresh dispatch was rejected: %v", err)
@@ -175,8 +175,8 @@ func TestResumeGuardAllowsNewDispatchWhenTaskContentMoved(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := readyDeliveryForRoute(t, root, pkg, "resume-task-changed", "custom", []string{"quality"})
 	dispatchID := prepareAndClaim(t, root, pkg, state.RunID, "quality", "interrupted-quality")
-	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err == nil || !strings.Contains(err.Error(), "resume the original agent") {
-		t.Fatalf("unchanged claimed dispatch was not forced to resume: %v", err)
+	if prompt, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil || !strings.Contains(prompt, dispatchID) {
+		t.Fatalf("unchanged claimed dispatch was not reused: %v", err)
 	}
 	writeTestFile(t, filepath.Join(pkg, "gates", "quality.md"), "new quality checks\n")
 	if _, err := PrepareGate(root, pkg, state.RunID, "quality", false, ""); err != nil {
