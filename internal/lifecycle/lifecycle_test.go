@@ -558,3 +558,27 @@ func useProvider(t *testing.T, provider string) {
 	executablePath = func() (string, error) { return path, nil }
 	t.Cleanup(func() { executablePath = prior })
 }
+
+func TestCodexCLIRolloutBinding(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderCodex)
+	if err := BeginRun(root, "codex-cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindDispatch(root, "codex-cli", "dispatch", "real-thread"); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"SubagentStart", "SubagentStop"} {
+		if _, err := Capture(root, ProviderCodex, event, []byte(`{"thread_id":"real-thread","transcript_path":"/tmp/rollout.jsonl"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider, path, err := DispatchTranscriptPath(root, "codex-cli", "dispatch")
+	if err != nil || provider != ProviderCodex || path != "/tmp/rollout.jsonl" {
+		t.Fatalf("binding %s %s %v", provider, path, err)
+	}
+	verification, err := VerifyDispatch(root, "codex-cli", "dispatch")
+	if err != nil || verification.Outcome != Verified {
+		t.Fatalf("lifecycle %+v %v", verification, err)
+	}
+}

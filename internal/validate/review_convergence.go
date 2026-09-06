@@ -45,8 +45,9 @@ var qaThawCategories = map[string]bool{
 
 // QASuggestion is a stable, review-bound P2/P3 suggestion.  Its ID is not a
 // semantic duplicate detector; it is only an immutable reference for the QA
-// designer's explicit absorption record.
+// operator's reasoned disposition record; it does not approve changed cases.
 type QASuggestion struct {
+	Reason               string   `json:"reason,omitempty"`
 	ID                   string   `json:"id"`
 	Severity             string   `json:"severity"`
 	Message              string   `json:"message"`
@@ -69,6 +70,7 @@ type QAThawRecord struct {
 // slice.  Ordinary implementation snapshots only rebind BoundSnapshot; they do
 // not mint a new Version or reopen QA design.
 type QACaseSetState struct {
+	SharedSteps            []QASharedStep `json:"sharedSteps,omitempty"`
 	Mode                   string         `json:"mode"`
 	Status                 string         `json:"status"`
 	Version                string         `json:"version,omitempty"`
@@ -263,11 +265,13 @@ func convergenceEnabled(state RunState) bool {
 }
 
 func caseSetVersion(state RunState, mode string) string {
+	storageKey := qaSharedStepStorageKey(state, mode)
 	return digestValue(struct {
 		RequirementRevision string
 		Mode                string
 		Cases               []QACase
-	}{state.RequirementRevision, mode, state.qaModeCases(mode)})
+		SharedSteps         []QASharedStep
+	}{state.RequirementRevision, mode, state.qaModeCases(mode), state.QACaseSets[storageKey].SharedSteps})
 }
 
 func suggestionID(dispatchID string, finding Finding, index int) string {
@@ -283,7 +287,6 @@ func recordQAReviewCaseSet(state *RunState, mode string, result ActionResult, di
 	current := state.QACaseSets[mode]
 	current.Mode = mode
 	current.ReviewDispatchID = dispatch.ID
-	current.Suggestions = nil
 	for index, finding := range result.Findings {
 		if finding.Severity != "P2" && finding.Severity != "P3" {
 			continue
@@ -302,13 +305,17 @@ func recordQAReviewCaseSet(state *RunState, mode string, result ActionResult, di
 		state.QACaseSets[mode] = current
 		return nil
 	}
-	if len(current.Suggestions) != 0 {
-		current.Status = caseSetReviewed
-		current.Version = ""
-		current.BoundSnapshot = ""
-		current.PendingSnapshotAdvance = false
-		state.QACaseSets[mode] = current
-		return nil
+	// A revised case set retains the dispositions from its previous review.
+	// Only an unresolved suggestion should hold up the newly approved set.
+	for _, suggestion := range current.Suggestions {
+		if !qaSuggestionDisposed(suggestion) {
+			current.Status = caseSetReviewed
+			current.Version = ""
+			current.BoundSnapshot = ""
+			current.PendingSnapshotAdvance = false
+			state.QACaseSets[mode] = current
+			return nil
+		}
 	}
 	if err := freezeQACaseSet(state, mode, &current, false); err != nil {
 		return err
@@ -318,14 +325,20 @@ func recordQAReviewCaseSet(state *RunState, mode string, result ActionResult, di
 }
 
 func freezeQACaseSet(state *RunState, mode string, current *QACaseSetState, pendingSnapshotAdvance bool) error {
+	storageKey := qaSharedStepStorageKey(*state, mode)
+	for _, step := range state.QACaseSets[storageKey].SharedSteps {
+		if step.ReviewStatus != "PASS" {
+			return fmt.Errorf("QA shared step %s is not approved", step.ID)
+		}
+	}
 	for _, testCase := range state.qaModeCases(mode) {
 		if testCase.ReviewStatus != "PASS" {
 			return fmt.Errorf("QA case-set %q cannot freeze while case %s is %s", mode, testCase.ID, testCase.ReviewStatus)
 		}
 	}
 	for _, suggestion := range current.Suggestions {
-		if suggestion.Status != "ABSORBED" {
-			return fmt.Errorf("QA case-set %q cannot freeze while suggestion %s is not absorbed", mode, suggestion.ID)
+		if !qaSuggestionDisposed(suggestion) {
+			return fmt.Errorf("QA case-set %q cannot freeze while suggestion %s is not disposed with a reason", mode, suggestion.ID)
 		}
 	}
 	if err := validateGuaranteeCaseSetFreeze(state, mode); err != nil {
@@ -339,70 +352,6 @@ func freezeQACaseSet(state *RunState, mode string, current *QACaseSetState, pend
 	} else {
 		current.BoundSnapshot = state.CurrentSnapshot
 	}
-	return nil
-}
-
-func absorbQAReviewSuggestions(state *RunState, dispatch PreparedDispatch, suggestionIDs []string, changed bool) error {
-	ensureConvergenceState(state)
-	current, ok := state.QACaseSets[dispatch.Mode]
-	if !ok || current.Status != caseSetReviewed || current.ReviewDispatchID == "" {
-		return fmt.Errorf("suggestion absorption requires a PASS QA Review with pending P2/P3 suggestions")
-	}
-	if !changed {
-		return fmt.Errorf("suggestion absorption must add, modify, or remove at least one QA case")
-	}
-	wanted := map[string]bool{}
-	for _, raw := range suggestionIDs {
-		id := strings.TrimSpace(raw)
-		if id == "" || wanted[id] {
-			return fmt.Errorf("suggestion absorption contains an empty or duplicate suggestion id")
-		}
-		wanted[id] = true
-	}
-	if len(wanted) == 0 {
-		return fmt.Errorf("suggestion absorption requires at least one --suggestion-id")
-	}
-	for _, suggestion := range current.Suggestions {
-		if suggestion.Status != "ABSORBED" && !wanted[suggestion.ID] {
-			return fmt.Errorf("suggestion absorption omitted pending suggestion %s", suggestion.ID)
-		}
-	}
-	for index := range current.Suggestions {
-		suggestion := &current.Suggestions[index]
-		if !wanted[suggestion.ID] {
-			continue
-		}
-		if suggestion.Status == "ABSORBED" {
-			return fmt.Errorf("suggestion %s was already absorbed", suggestion.ID)
-		}
-		suggestion.Status = "ABSORBED"
-		suggestion.AbsorbedByDispatchID = dispatch.ID
-		delete(wanted, suggestion.ID)
-	}
-	if len(wanted) != 0 {
-		ids := make([]string, 0, len(wanted))
-		for id := range wanted {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		return fmt.Errorf("suggestion ids do not belong to the bound QA Review: %s", strings.Join(ids, ", "))
-	}
-	allAbsorbed := true
-	for _, suggestion := range current.Suggestions {
-		if suggestion.Status != "ABSORBED" {
-			allAbsorbed = false
-			break
-		}
-	}
-	if allAbsorbed {
-		if err := refreshGuaranteeReviewAfterSuggestion(state, dispatch.Mode); err != nil {
-			return err
-		}
-		if err := freezeQACaseSet(state, dispatch.Mode, &current, dispatch.Mode == whiteboxQAID); err != nil {
-			return err
-		}
-	}
-	state.QACaseSets[dispatch.Mode] = current
 	return nil
 }
 
@@ -493,7 +442,29 @@ func ThawQACaseSet(root, packageRoot, runID, mode, category, reason, sourceRevis
 		state.setQACasesForReview(mode, storageKey, cases)
 		state.setQADesign(mode, ActionResult{Status: "PENDING"})
 		state.setQAReview(mode, ActionResult{Status: "PENDING"})
-		state.deleteQAExecution(mode)
+		// Thaw revokes the named cases, including an external criterion change
+		// whose text has not been revised yet. Keep unrelated unfinished-run
+		// evidence for the existing candidate/case/tool/environment reuse check.
+		retainQAProgress(state, mode)
+		progress := state.qaExecution(mode)
+		if progress.Tool == "" {
+			state.deleteQAExecution(mode)
+		} else {
+			for _, id := range caseIDs {
+				wanted[strings.TrimSpace(id)] = true
+			}
+			var retained []QAResultRecord
+			for _, row := range progress.Cases {
+				if wanted[row.CaseID] {
+					progress.InvalidationReasons = appendUniqueStrings(progress.InvalidationReasons, row.CaseID+": QA case-set thawed: "+thaw.ID)
+					progress.PendingCases = appendUniqueStrings(progress.PendingCases, row.CaseID)
+				} else {
+					retained = append(retained, row)
+				}
+			}
+			progress.Cases = retained
+			state.setQAExecution(mode, progress)
+		}
 		delete(state.PriorQAExecutionByMode, mode)
 		delete(state.ExecutionScopes, mode)
 		delete(state.Carry, qaSelectionID(mode))

@@ -356,8 +356,9 @@ func verifyIsolatedRequirementRevisions(state RunState, worktree string) error {
 }
 
 func actionPromptDetail(root string, state RunState, catalog PromptCatalog, actionID, mode string) (string, error) {
+	sharedKey := qaSharedStepStorageKey(state, mode)
 	if actionID == "qa-design" {
-		var lines []string
+		lines := []string{formatQASharedSteps(state.QACaseSets[sharedKey].SharedSteps)}
 		if state.RequirementGuarantee != nil {
 			lines = append(lines, "This run has an explicit REQ/AC guarantee. Every case must declare one or more primary AC bindings with repeatable --ac <AC-ID>. A slice may use primary bindings only for ACs assigned to that slice; use --additional-ac <AC-ID> for useful extra coverage that does not change primary responsibility.")
 		}
@@ -370,16 +371,16 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 		} else if mode == "blackbox" {
 			lines = append(lines, "This is a blackbox QA design round: design real QA behavior cases from the current confirmed requirement document. Work in the QA isolation worktree; the current requirement document (revision registered by the run) is injected there as working-tree state. Base every case on the current requirement document, not on any baseline product documentation. '实际使用产品' is the execution-phase description: after the snapshot you execute cases against the built product on the main worktree. In this design phase, the runnable product is not yet built, so base the cases on the injected current requirement.")
 		} else if mode == "whitebox" {
-			lines = append(lines, "This is a whitebox QA design round: read the implementation on the main worktree, independently design structure test cases (unit, system, integration) by responsibility, and directly write the structural test code you deliver. Every whitebox case must bind the test implementing it with a --test \"<file>::<function>\" reference (file path locating the delivered test code file, function name locating the test inside it; both opaque strings, the CLI does not parse code): the CLI records the reference and requires it non-empty and unique per case (one test implements one case). Test existence and correspondence are verified by QA Review (reading your delivered code) and QA Execution (running the tests), so the case ID and the executed test are truly bound.")
+			lines = append(lines, "This is a whitebox QA design round: read the implementation on the main worktree, first independently list required behaviors, branches and oracles, then inspect existing test inputs and actual assertions. Reuse effective tests and add or correct only uncovered or incorrect assertions. Independently execute every bound test; commit and advance the snapshot only when tests change. Every whitebox case must bind the test implementing it with a --test \"<file>::<function>\" reference (file path locating the delivered test code file, function name locating the test inside it; both opaque strings, the CLI does not parse code): the CLI records the reference and requires it non-empty and unique per case (one test implements one case). Test existence and correspondence are verified by QA Review (reading the bound existing or changed code) and QA Execution (running the tests), so the case ID and the executed test are truly bound.")
 		} else if modes := selectedQAModes(state); len(modes) != 0 {
 			lines = append(lines, "Selected QA modes: "+strings.Join(modes, "; "))
 		}
 		// 设计轮只动本派发 mode 的用例，提示词只列该 mode 的既有用例。
 		modeCases := state.qaModeCases(mode)
 		if caseSet := state.QACaseSets[mode]; caseSet.Status == caseSetReviewed {
-			lines = append(lines, "Absorb the following pending suggestions from PASS QA Review "+caseSet.ReviewDispatchID+". Choose the test method independently and return bounded --per-suggestion changes with the exact --suggestion-id for each item; every pending suggestion must be absorbed before freeze. This path does not request another QA Review.")
+			lines = append(lines, "Dispose the following optional suggestions from PASS QA Review "+caseSet.ReviewDispatchID+". Record each stable ID with workflow qa-suggestion --decision ACCEPT|DEFER|DECLINE --reason. ACCEPT changes to shared paths, executability or acceptance meaning must name all --affected-case IDs and receive normal design/review; unchanged optional items do not require another review.")
 			for _, suggestion := range caseSet.Suggestions {
-				if suggestion.Status != "ABSORBED" {
+				if !qaSuggestionDisposed(suggestion) {
 					lines = append(lines, fmt.Sprintf("- %s [%s]: %s (locations: %s)", suggestion.ID, suggestion.Severity, suggestion.Message, strings.Join(suggestion.Locations, ", ")))
 				}
 			}
@@ -413,7 +414,7 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 		// 按派发 mode 读取该 mode 的用例组装审查输入。
 		modeCases := state.qaModeCases(mode)
 		pendingCases := pendingQACases(modeCases, mode)
-		accepted := []string{"Accepted coverage context; do not return new --case/--outcome decisions for these cases:"}
+		accepted := []string{formatQASharedSteps(state.QACaseSets[sharedKey].SharedSteps), "Review each pending shared step once using --shared-step/--shared-outcome/--shared-reason; inherit unchanged approved steps. Still decide every pending case including its differences, oracle and coverage.", "Accepted coverage context; do not return new --case/--outcome decisions for these cases:"}
 		if state.RequirementGuarantee != nil {
 			accepted = append(accepted, "The REQ/AC guarantee requires an explicit coverage review record for this QA mode. Submit one --source-decision <REQ-ID>=<PASS|FAIL|PENDING> and one --point-decision <AC-ID>=<PASS|FAIL|PENDING> for every REQ/AC represented by this mode's cases, plus one --case-decision <CASE-ID>=<PASS|FAIL|PENDING> for every case. Completeness across selected QA modes is checked from their union. Also submit every unbound id with --unbound-source, --unbound-point, or --unbound-case. Case decisions must match the corresponding --case/--outcome decisions.")
 		}
@@ -469,7 +470,14 @@ func actionPromptDetail(root string, state RunState, catalog PromptCatalog, acti
 				return "", err
 			}
 		}
-		var lines []string
+		lines := []string{formatQASharedSteps(state.QACaseSets[sharedKey].SharedSteps)}
+		progress := state.qaExecution(mode)
+		if progress.Tool != "" && !qaExecutionModeResulted(state, mode) {
+			lines = append(lines, fmt.Sprintf("Saved execution progress: status %s; interruption %s; tool %s; environment %s; unfinished %s. Reconcile candidate, case/shared-step version, tool and relevant environment before reuse. Complete rows keep PASS/FAIL; submit only unfinished or invalidated rows. Existing TaskKey and bounded attempt rules continue.", progress.Status, progress.Message, progress.Tool, progress.Environment, strings.Join(progress.PendingCases, ", ")))
+			for _, row := range progress.Cases {
+				lines = append(lines, fmt.Sprintf("Completed %s: %s; procedure: %s; observation: %s; oracle: %s; binding: %s", row.CaseID, row.Outcome, row.Procedure, row.Observation, row.OracleResult, row.Binding))
+			}
+		}
 		for _, testCase := range required {
 			lines = append(lines, formatQACase(testCase, false))
 		}

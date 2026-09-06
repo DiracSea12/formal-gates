@@ -275,14 +275,20 @@ type ActionResult struct {
 }
 
 type QAExecutionResult struct {
-	Status   string           `json:"status,omitempty"`
-	Message  string           `json:"message,omitempty"`
-	Snapshot string           `json:"snapshot,omitempty"`
-	Cases    []QAResultRecord `json:"cases,omitempty"`
-	Findings []Finding        `json:"findings,omitempty"`
+	Tool                string           `json:"tool,omitempty"`
+	Environment         string           `json:"environment,omitempty"`
+	PendingCases        []string         `json:"pendingCases,omitempty"`
+	ReuseReasons        []string         `json:"reuseReasons,omitempty"`
+	InvalidationReasons []string         `json:"invalidationReasons,omitempty"`
+	Status              string           `json:"status,omitempty"`
+	Message             string           `json:"message,omitempty"`
+	Snapshot            string           `json:"snapshot,omitempty"`
+	Cases               []QAResultRecord `json:"cases,omitempty"`
+	Findings            []Finding        `json:"findings,omitempty"`
 }
 
 type QAResultRecord struct {
+	Binding      string `json:"binding,omitempty"`
 	CaseID       string `json:"caseId"`
 	Mode         string `json:"mode"`
 	Outcome      string `json:"outcome"`
@@ -379,11 +385,12 @@ type CarryResult struct {
 }
 
 type QACase struct {
-	ID          string `json:"id"`
-	Mode        string `json:"mode"`
-	Description string `json:"description"`
-	Procedure   string `json:"procedure"`
-	Oracle      string `json:"oracle"`
+	SharedSteps []string `json:"sharedSteps,omitempty"`
+	ID          string   `json:"id"`
+	Mode        string   `json:"mode"`
+	Description string   `json:"description"`
+	Procedure   string   `json:"procedure"`
+	Oracle      string   `json:"oracle"`
 	// Test 是白盒用例对应的测试引用 = "<文件路径>::<函数名>"：文件路径定位到
 	// 交付测试代码所在文件、函数名定位到该文件里的测试，两者都是不透明字符串、CLI 不解析
 	// 代码内容。用例文档自包含——读文档即知该测试在哪个文件、叫什么。CLI 记录时只校验引用
@@ -398,11 +405,9 @@ type QACase struct {
 	// ReviewStatus 由 qa-review 轮置位（PASS/FAIL/PENDING）。PENDING 之外还有一条
 	// 置为 PASS 的路径：ApprovedSource（见下）。
 	ReviewStatus string `json:"reviewStatus"`
-	// ApprovedSource 溯源非 review 轮置位的批准：SUGGESTION_APPLIED 表示该用例是
-	// 按该 mode 最近一次 qa-review 记录在案的 P2 集合级建议、经 qa-design
-	// --per-suggestion 直接吸收置为已批准（P2/P3 只豁免重审、不豁免修复），
-	// 未另派 qa-review；空值表示由常规 review 轮批准。错误用例由 qa-execution
-	// 执行时暴露并走正常修复轮兜底。
+	// ApprovedSource retains prior-run approval provenance; changed cases now
+	// always receive an independent review before approval.
+
 	ApprovedSource string `json:"approvedSource,omitempty"`
 	// SuggestionIDs binds suggestion-approved additions or revisions to the
 	// exact P2/P3 records absorbed by that QA Design round.

@@ -6,6 +6,7 @@ import (
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/cost"
+	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
 
@@ -35,6 +36,14 @@ func backfillDispatchCost(root string, state *RunState, dispatch PreparedDispatc
 				TotalInputTokens:     usage.InputCacheHitTokens + usage.InputCacheMissTokens,
 				Source:               cost.SourceTranscript,
 			}
+		}
+	}
+	// Codex source and native timing are optional display metadata. Missing
+	// timing never invents zero model time or changes another provider's behavior.
+	if descriptor, lookupErr := host.Lookup(provider); lookupErr == nil && descriptor.CostProvider == host.Codex && transcriptPath != "" {
+		entry.TranscriptPath = transcriptPath
+		if timing, timingErr := cost.CodexTaskTiming(transcriptPath); timingErr == nil {
+			entry.Timing = &timing
 		}
 	}
 	cost.Record(state.Cost, dispatch.ID, entry)

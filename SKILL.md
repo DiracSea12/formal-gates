@@ -114,9 +114,9 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
    黑盒 qa-review PASS 两边都完成**、`--user-requested` 手动放行、开发/修复派发认领放
    宽）统一持有在 `references/formal-flow.md`「开发与快照」；执行本步前必读该节。
 7. **开发后审查。** 先形成 review-ready 快照：无白盒 QA 时为开发快照加全部已选 mode 的
-   `FROZEN` case-set；有白盒 QA 时，开发快照 S1 只供白盒设计，host 提交白盒测试形成 S2，
-   QA Review 和建议吸收造成的测试变化也继续提交，直到最终快照含测试且全部 case-set
-   `FROZEN`。随后只用一次 `prepare-review-wave` 冻结 expected-set/digest，并一次准备全部
+   `FROZEN` case-set；有白盒 QA 时，先独立判断覆盖再复用已有测试；只有测试变动才提交并推进快照。
+   全部 case-set `FROZEN` 后，在最后必需验证前运行 `prepare-candidate --squash-message`
+   整理 Git 多条提交并固定最终候选。随后只用一次 `prepare-review-wave` 冻结 expected-set/digest，并一次准备全部
    eligible QA execution 与门并行派发。每个门只看基线到该最终快照的完整 diff，不接收 QA
    用例正文或执行证据。wave 的所有目标终结、错误被明确处置且 findings 经主代理逐条核实并
    `NEW`/`SAME_AS`/`DISMISSED` 裁决、归并为 canonical problems 前，不得创建返修。
@@ -126,19 +126,18 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
    同一快照不得创建第二份逻辑返修。门审 P2 必须修复但不复审、不增加审查轮次；纯门审 P2
    修复要求完整构建、全量项目测试和受影响用例逐项自跑，随后用结构化完成/carry 凭据把原
    gate PASS 带到修复快照。门审 P3 不触发返修，只在 Seal 前一次性展示届时仍存在的项。QA Review 的 P1 阻塞
-   且修改后重审；其 P2/P3 必须按稳定 suggestion ID 吸收后才可冻结，但吸收不复审。普通
+   且修改后重审；其可选 P2/P3 按稳定 suggestion ID 登记采纳/延期/不采纳及理由后可冻结；
+   采纳改变共同路径、可执行性或验收含义时重审受影响部分。普通
    代码返修不解冻 QA，用固定 `AFFECTED` 子集执行；启用 requirement guarantee 时最终候选
    Seal 前再完成 `FULL`，非保证路线沿用自身规则。轮次上限用尽后的额外返修先执行只读
    `repair-preview`，实际 `authorize-repair` 必须绑定预览 digest 与 state revision。完整规则
    和命令唯一持有在 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
 9. **Seal。** 汇总前后各确认一次当前 VCS 标识。封板前核对已有门审 P3 与范围外 P3
    在最终快照是否仍存在，只把仍存在且未处置的项一次性提醒用户；已消失的项不再提醒。
-   该核对不新增审查或返修，不阻塞、不逐条问询。QA Review P2/P3 在 FROZEN 前已全部吸收，
-   不能作为 Seal advisory 留到此处。Git run 在基线→当前含 >1 条提交时，
-   seal 自动把该范围压缩为单条提交（保留最终树，作为 seal 最后一步 VCS 操作，压缩前工
-   作树必须干净），压缩消息经 `--squash-message` 传入；该提交成为新的最终 candidate，
-   旧 QA/门证据保持原绑定，须在最终 candidate 上重验后再次 Seal；单条/空范围不操作、
-   SVN/P4 不压缩。黑盒已批准用例在 seal 时**落盘合并回主干**：`qa-design` 期间只镜像在隔离工作区
+   该核对不新增审查或返修，不阻塞、不逐条问询。QA Review P2/P3 在 FROZEN 前已全部按理由处置，
+   不能作为 Seal advisory 留到此处。Git 多条提交在最终验证前用 `workflow prepare-candidate`
+   整理；单条/空范围不操作，SVN/P4 不压缩。Seal 只检查同一候选身份、固化证据与物化产物，
+   不再 squash 或生成新候选；后续候选变化仍按既有 AFFECTED/最终 FULL 规则处理。黑盒已批准用例在 seal 时**落盘合并回主干**：`qa-design` 期间只镜像在隔离工作区
    （`.gates/cases/blackbox.md`），封板时写出到主干
    `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一）作为交付物；分片实例不
    落盘、成本投影并入主干最终封板；物化成功后先持久化 `SEALED`，摘要或清理中断从该
@@ -246,7 +245,7 @@ QA 审查和每个门审查必须创建全新的零上下文审查者，记录�
 
 QA 审查者共同输入 = 已确认需求 + CLI 组装的完整候选用例集，不含开发者解释或其他
 审查者结论。黑盒审查不读取生产代码、实现 diff 或测试；白盒审查读取当前绑定快照的
-实现及本 QA 新编写的结构测试，核对充分性与用例对应关系。门任务 = `prompts/reviewer-base.md` + `gates/<id>.md` + 需
+实现及本 QA 绑定的已有或新增结构测试，核对充分性与用例对应关系。门任务 = `prompts/reviewer-base.md` + `gates/<id>.md` + 需
 求路线 + VCS 路线 + 结果契约，由 CLI 组装；提示词缺失即运行时错误中止派发。门审覆盖
 完整"基线到当前"（重跑轮显式声明、不限于返修增量）；审查者报告 `compared` 快照对，
 不匹配即丢弃。
@@ -298,9 +297,11 @@ QA 设计为**真增量**：`qa-design` 只返回本轮变更——新增用例�
 例）。未提及的既有用例与其 review PASS 状态**自动保留，遗漏绝不清除**；`--case-id` 与
 `--remove-case` 不能与 `--replace-all` 同轮混用。语义重复（同 mode 同描述/过程/预期）的
 无 id 提交报错并提示改用修改语义。`qa-review` 审查的是完整合并集（提示词注入本轮变更清
-单：新增/修改/删除）。qa-review 的集合级 P2/P3 建议带稳定 suggestion ID；总体 PASS 后经
-`qa-design --per-suggestion --suggestion-id <id>` 逐条吸收，新增、修改或删除用例均保留
-`SUGGESTION_APPLIED` 来源并直接获批、不派新 qa-review。全部建议吸收且确定性覆盖校验通过
+单：新增/修改/删除）。共同准备/操作说明以 `--shared-step/--shared-procedure` 保存一次，
+每条用例用 `--use-step` 引用并保留差异和 oracle；共享部分审一次，变更时全部引用者重审。
+qa-review 的可选 P2/P3 带稳定 suggestion ID；总体 PASS 后用 `qa-suggestion --decision
+ACCEPT|DEFER|DECLINE --reason` 逐项处置。采纳若影响验收含义或可执行性，列出全部
+`--affected-case` 并重审。全部建议已处置且确定性覆盖校验通过
 后 case-set 才进入 `FROZEN`；无建议时 PASS 后立即冻结。冻结后普通实现修改不得重新设计，
 只有需求含义、对外行为、成功/失败判据或稳定可执行性变化可用 `qa-thaw` 解冻；临时环境
 不可用只记 `RUNTIME_ERROR`。某 mode 的 `qa-design` 记录后、该 mode 的 `qa-review` 派发尚未准
@@ -344,4 +345,13 @@ policy 计算；外部派发缺显式策略时默认首次执行加一次自动�
 预授权后由 Controller 机械派生的 obligation/repair slot；其他按现有流程要求用户确认的扩张
 必须先绑定对应 revision/typed Ask。代理结果、receipt 或 resume 不能直接新增额度。
 `workflow seal`/`show` 的输出携带该投影（`cost` 字段）。
+Codex 优先按原始 response ID 计量当前请求记录，忽略重复镜像；同任务 checkpoint 不提前
+固定 cost，续跑完成才记录完整用量。Codex 条目保留 rollout 来源和原生任务起止/墙钟时间，
+包含工具等待。3.5c 必需模型对比须补齐真实 token 与用时才算完成，其他 provider 保持原行为。
 计量机制全文见 `references/formal-flow.md`「成本计量」。
+
+同一次 QA execution 可用 `--checkpoint --tool <版本> --environment <身份>` 分次保存完整
+PASS/FAIL 行。中断保留原因与未完成项；续跑绑定候选、用例/共同说明、工具和环境，只复用
+证据完整且绑定未变的结果。整体未齐不能 PASS，最终 expected-set 与覆盖校验不变；仍沿用
+同 TaskKey、生命周期和有限重试额度。同候选批量执行复用构建与非验收准备，独立用例用
+干净副本；有序场景声明依赖，一条失败只阻止依赖项。详细命令见 `references/formal-flow.md`。

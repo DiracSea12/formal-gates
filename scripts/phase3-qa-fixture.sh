@@ -7,7 +7,9 @@ set -eu
 
 usage() {
   cat >&2 <<'EOF'
-usage: phase3-qa-fixture.sh prepare --project-root DIR --home DIR --source DIR --candidate BIN --receipt PATH [--old-confirmed-at]
+usage: phase3-qa-fixture.sh prepare --project-root DIR --home DIR --source DIR --candidate BIN --receipt PATH [--old-confirmed-at] [--reuse-build]
+       phase3-qa-fixture.sh stage --source DIR --snapshot COMMIT --output DIR
+       phase3-qa-fixture.sh copy --source DIR --output DIR
        phase3-qa-fixture.sh mutate --input PATH --output PATH --field FIELD
        phase3-qa-fixture.sh mutate-envelope --input-project DIR --output-project DIR --run-id ID --field FIELD
 
@@ -25,7 +27,7 @@ sha256_file() {
 }
 
 prepare() {
-  project= home= source= candidate= receipt= old_confirmed=0
+  project= home= source= candidate= receipt= old_confirmed=0 reuse_build=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --project-root) project=$2; shift 2 ;;
@@ -34,6 +36,7 @@ prepare() {
       --candidate) candidate=$2; shift 2 ;;
       --receipt) receipt=$2; shift 2 ;;
       --old-confirmed-at) old_confirmed=1; shift ;;
+      --reuse-build) reuse_build=1; shift ;;
       *) usage ;;
     esac
   done
@@ -46,7 +49,13 @@ prepare() {
   mkdir -p "$staged"
   cp -R "$source"/. "$staged"/
   mkdir -p "$staged/bin"
-  (cd "$source" && go build -o "$staged/bin/formal-gates" ./cmd/formal-gates)
+  if [ "$reuse_build" -eq 1 ]; then
+    # stage exported and built this immutable source once. Reuse only that exact
+    # payload; a case that tests building itself must omit --reuse-build.
+    cmp "$source/bin/formal-gates" "$candidate" >/dev/null
+  else
+    (cd "$source" && go build -o "$staged/bin/formal-gates" ./cmd/formal-gates)
+  fi
   # Install maintenance is only accepted through the stable launcher path.
   # Keep the candidate target under test separate, while making the launcher
   # explicit inside this isolated HOME.
@@ -174,10 +183,58 @@ print(json.dumps({'runRoot': str(pathlib.Path(project)), 'runId': run_id, 'mutat
 PY
 }
 
+# A batch owns one committed source export/build. Each independent case gets a
+# real directory copy of a pristine fixture; ordered scenarios intentionally use
+# the same copy and stop dependent operations after a failure. This helper does
+# not prepopulate assertions or target success, and never edits formal state.
+stage() {
+  source= snapshot= output=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --source) source=$2; shift 2 ;;
+      --snapshot) snapshot=$2; shift 2 ;;
+      --output) output=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "$source" ] && [ -n "$snapshot" ] && [ -n "$output" ] || usage
+  [ ! -e "$output" ] || { echo 'fixture: output must be a new directory' >&2; exit 1; }
+  identity=$(git -C "$source" rev-parse --verify "$snapshot^{commit}")
+  mkdir -p "$output"
+  # Write the archive before extracting, so a failed git command cannot be
+  # hidden by a successful last command in a POSIX pipeline.
+  git -C "$source" archive --format=tar --output="$output/source.tar" "$identity"
+  tar -xf "$output/source.tar" -C "$output"
+  rm "$output/source.tar"
+  mkdir -p "$output/bin"
+  (cd "$output" && go build -o bin/formal-gates ./cmd/formal-gates)
+  python3 - "$identity" "$output" <<'PY_STAGE'
+import json,pathlib,sys
+print(json.dumps({'snapshot':sys.argv[1], 'source':str(pathlib.Path(sys.argv[2]).resolve()), 'buildCount':1}))
+PY_STAGE
+}
+
+copy_fixture() {
+  source= output=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --source) source=$2; shift 2 ;;
+      --output) output=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "$source" ] && [ -n "$output" ] || usage
+  [ ! -e "$output" ] || { echo 'fixture: output must be a new directory' >&2; exit 1; }
+  mkdir -p "$output"
+  cp -R "$source"/. "$output"/
+}
+
 [ "$#" -gt 0 ] || usage
 command=$1
 shift
 case "$command" in
+  stage) stage "$@" ;;
+  copy) copy_fixture "$@" ;;
   prepare) prepare "$@" ;;
   mutate) mutate "$@" ;;
   mutate-envelope) mutate_envelope "$@" ;;

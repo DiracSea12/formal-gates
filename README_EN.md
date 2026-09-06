@@ -145,7 +145,7 @@ and rollback impact, then commits the requirement revision and state transition 
 
 Development or repair runtime failures finish their attempt through `record-action --action development-worker --status RUNTIME_ERROR --message ...`. Retries keep the original TaskKey and finite attempt allowance. Identical OPEN/PENDING/CLAIMED preparation requests return the original ticket.
 
-**What happens** — all QA failures, valid P0/P1 findings, and gate P2 findings from one review wave enter one repair. A gate P2 must be fixed, but after a full build, the full project test suite, and affected-case self-runs, its PASS is carried without another gate review. Gate P3 findings are not repaired and are shown once before seal. QA Review P2/P3 suggestions must instead be absorbed by stable suggestion ID before the case-set freezes. Ordinary intermediate repairs run a fixed affected QA subset; a requirement-guarantee route also runs FULL QA on the final candidate before seal. Once automatic rounds are exhausted, a state-bound read-only preview precedes explicit authorization.
+**What happens** — all QA failures, valid P0/P1 findings, and gate P2 findings from one review wave enter one repair. A gate P2 must be fixed, but after a full build, the full project test suite, and affected-case self-runs, its PASS is carried without another gate review. Gate P3 findings are not repaired and are shown once before seal. Optional QA Review P2/P3 suggestions can be accepted, deferred or declined by stable ID with a reason before freeze. Acceptance changes to shared paths, executability or oracle meaning require review of affected cases. Ordinary intermediate repairs run a fixed affected QA subset; a requirement-guarantee route also runs FULL QA on the final candidate before seal. Once automatic rounds are exhausted, a state-bound read-only preview precedes explicit authorization.
 **Who does it** — the main agent pins the pre-repair marker, dispatches a dev agent to repair, then re-snapshots and re-reviews.
 **What is recorded** — the repair change and a new snapshot; the pre-repair version is kept as the basis for inheritance decisions.
 **In one line** — small repairs don't re-test what didn't change; big ones go through an independent judgment.
@@ -358,3 +358,14 @@ bin/formal-gates canary portable --root . --format json
 - Report bugs and improvement ideas via GitHub issues.
 
 **License**: [MIT](LICENSE).
+
+QA can share preparation and operation instructions, preserve unaffected case approvals, independently
+inspect and reuse existing whitebox tests, and checkpoint complete PASS/FAIL rows in the same run.
+Incomplete execution never passes; independent batch cases start from clean copies. Organize Git commits
+with `workflow prepare-candidate --squash-message` before mandatory final validation; Seal materializes
+the same validated candidate without rewriting it. See the [QA operation examples](references/formal-flow.md#qa-共同步骤批量与同次续跑).
+
+Codex metering deduplicates current request records and cumulative mirrors. The existing cost entry
+retains the rollout source and native model-task start/end and wall time, including tool waits.
+The stage comparison requires real metrics; see [metering](references/formal-flow.md#成本计量)
+and the [validation record](refactor-plan/stage-3-5c-validation.md).

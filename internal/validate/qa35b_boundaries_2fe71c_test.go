@@ -52,11 +52,12 @@ func TestQA35BGuaranteeIntermediateAffectedAndFinalFull(t *testing.T) {
 func TestQA35BSuggestionDeletionCannotRemoveLastACCoverage(t *testing.T) {
 	_, s := qa35bCompleteGuarantee(t)
 	qa35bOK(t, recordQAReviewCaseSet(&s, "whitebox", ActionResult{Status: "PASS", Findings: []Finding{{ID: "suggestion", Severity: "P3", Message: "simplify duplicate coverage while preserving both ACs"}}}, PreparedDispatch{ID: "review-two"}))
-	id := s.QACaseSets["whitebox"].Suggestions[0].ID
+	caseSet := s.QACaseSets["whitebox"]
+	caseSet.Suggestions[0].Status, caseSet.Suggestions[0].Reason = "ACCEPT", "simplify duplicate coverage"
 	// Removing the sole AC-002 case is an ordinary mistaken interpretation of a
 	// simplification suggestion. Freeze must detect the missing approved edge.
 	s.QACasesByMode["whitebox"] = s.QACasesByMode["whitebox"][:1]
-	err := absorbQAReviewSuggestions(&s, PreparedDispatch{ID: "designer", Mode: "whitebox"}, []string{id}, true)
+	err := freezeQACaseSet(&s, "whitebox", &caseSet, false)
 	if err == nil || s.QACaseSets["whitebox"].Status == "FROZEN" {
 		t.Fatalf("last AC coverage removed without rejection: %v", err)
 	}

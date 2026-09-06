@@ -234,14 +234,14 @@ func TestSealMaterializesApprovedBlackboxCases(t *testing.T) {
 	// 黑盒设计 + review PASS（隔离工作区）。
 	design := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "blackbox")
 	state, err = RecordQADesign(root, pkg, state.RunID, design, []QACaseInput{
-		{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success"},
-		{Mode: "blackbox", Description: "recovery workflow", Procedure: "trigger recovery", Oracle: "state restored"},
-	}, "")
+		{Mode: "blackbox", Description: "public workflow", Procedure: "run the public CLI", Oracle: "observable success", SharedSteps: []string{"fixture"}},
+		{Mode: "blackbox", Description: "recovery workflow", Procedure: "trigger recovery", Oracle: "state restored", SharedSteps: []string{"fixture"}},
+	}, "", QADesignRecordOptions{SharedSteps: []QASharedStep{{ID: "fixture", Procedure: "copy a clean fixture before each public workflow"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	review := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "seal-bb-reviewer", "blackbox")
-	state, err = RecordQAReview(root, pkg, state.RunID, review, passingReviewDecisions(state), "", nil)
+	state, err = RecordQAReview(root, pkg, state.RunID, review, passingReviewDecisions(state), "", nil, QAReviewRecordOptions{SharedSteps: []QAReviewInput{{CaseID: "fixture", Outcome: "PASS", Reason: "clean fixture preparation checked once for both cases"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +298,9 @@ func TestSealMaterializesApprovedBlackboxCases(t *testing.T) {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("materialized file missing %q:\n%s", want, data)
 		}
+	}
+	if strings.Count(string(data), "copy a clean fixture before each public workflow") != 1 || strings.Count(string(data), "shared steps: fixture") != 2 || !strings.Contains(string(data), "clean fixture preparation checked once for both cases") {
+		t.Fatalf("materialized cases omitted or duplicated the shared definition/review: %s", data)
 	}
 	if strings.Contains(string(data), "mode: whitebox") {
 		t.Fatalf("materialized file leaked whitebox cases:\n%s", data)

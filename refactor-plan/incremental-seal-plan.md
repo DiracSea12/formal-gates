@@ -286,8 +286,24 @@ typed Ask：继续只解锁一个按既有 admission capacity 裁剪的 canonica
 运行中、依赖、可能迟到的 receipt/lifecycle 或 retryable I/O。
 3.5b 不做价格库、USD 账单、provider fallback、动态调参或新状态机。
 
-3.5b 完成后，阶段 4 才接入 regular QA/candidate E2E；3.5a 与 3.5b 均须在阶段 4 前完成，
-但不建立实现耦合，也不是新的正式阶段。
+3.5a 与 3.5b 完成后，先落实下述 3.5c 的 QA 提效，再由阶段 4 接入 regular QA/candidate
+E2E；这些 checkpoint 不增加正式阶段，也不因编号为 3.5a 与 3.5b 强加实现耦合。
+
+### 阶段 3.5c：QA 提效（黑盒优先，兼顾白盒）
+
+计划详见 [阶段 3.5c：QA 提效](stage-3-5c-qa-efficiency.md)。本 checkpoint 接在 3.5a、
+3.5b 之后、阶段 4 之前，不新增 `RunPhase` 或另一套 QA 状态机；当前为计划，尚未实施。
+
+核心改动为：黑盒共同准备和操作说明只审一次，每条用例仍分别判断；重复步骤交给现有
+脚本和测试工具批量实跑，各用例保持隔离；保存本次执行已完整完成的条目，绑定未变时
+补跑剩余部分；白盒先独立判断覆盖，再复用有效测试、补齐缺口。高成本前置状态可手动
+构造，但待测操作、属于验收目标的安装和真实宿主交互仍须实跑。
+
+QA Review 的可选建议允许采纳、延期或不采纳并记录理由，不再强制改用例才能冻结；
+真实验收缺口继续阻塞。最终提交整理在最后一轮必需验证之前完成，Seal 只固化最终
+候选的结果。3.5a 的完整覆盖、逐条结论和集合对账，3.5b 的成本与有限重试，以及现有
+`AFFECTED`、最终必需 `FULL` 均保留。阶段 4 接入时按此更新相应 QA 语义；当前已安装
+规则与历史 Seal 不因计划落档被改写，固定稳定 driver 的冻结和切换仍按本总计划执行。
 
 ### 阶段 4：Git 非分片 regular 全流程
 
@@ -297,12 +313,15 @@ typed Ask：继续只解锁一个按既有 admission capacity 裁剪的 canonica
 Operator semantic adjudication 持有 raw finding、逐条 severity rationale、范围/严重度/因果/
 复现证据、finding/problem ID 与 NEW/SAME_AS/DISMISSED 历史；Controller 只校验结构、
 引用/版本绑定与机械路由，不自动判真假、严重度、根因或重复。仅核实后处置仍不唯一才
-Ask，产品/技术审 confirm/dismiss 保留。白盒测试与建议吸收变化全部提交、case-set FROZEN
-且绑定最终 review-ready 快照后，一次冻结 expected-set/digest 并并行准备所有 QA execution/
+Ask，产品/技术审 confirm/dismiss 保留。白盒按 3.5c 复用或补测；实际产生的测试和用例相关
+代码变化全部提交、case-set FROZEN 且绑定最终 review-ready 快照后，一次冻结 expected-set/
+digest 并并行准备所有 QA execution/
 门；收齐 wave 和核实后，每快照唯一返修只接 QA FAIL、有效 P0/P1 与门审 P2。
-门审 P2 carry 不复审，P3 Seal advisory；QA Review P2/P3 以 suggestion ID 吸收后冻结且不
-复审；普通返修保持 FROZEN、固定 AFFECTED 执行，保证最终候选 Seal 前 FULL。仅需求含义/
-对外行为/判据/稳定可执行性变化可 THAW，临时环境失败用 RUNTIME_ERROR。
+门审 P2 carry 不复审，P3 Seal advisory；QA Review 可选 P2/P3 以 suggestion ID 按 3.5c
+记录采纳、延期或不采纳及理由后冻结；采纳导致用例含义或共同路径变化时重查受影响部分。
+普通返修保持 FROZEN、固定 AFFECTED 执行，保证最终候选 Seal 前 FULL；最终提交整理须先于
+最后一轮必需验证，Seal 不再改变该候选。本次执行中断可保留完整条目并按 3.5c 受控续跑。
+仅需求含义/对外行为/判据/稳定可执行性变化可 THAW，临时环境失败用 RUNTIME_ERROR。
 
 非 wave 与 wave 的无效结果均终结原 attempt 并保留拒绝字段/原因，默认同 TaskKey 最多
 两次，耗尽 RETRY_EXHAUSTED；一次性用户追加 attempt 绑定 state revision 与非空理由，
@@ -422,9 +441,10 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 阶段 0 -> 阶段 1 -> 阶段 2 -> 阶段 3 -> 阶段 4 -> 阶段 5 -> 阶段 6 -> 阶段 7
 ```
 
-阶段 3 完成后，须完成 3.5a、3.5b 两个非正式 checkpoint，才能开始阶段 4；它们不改变
-上述正式阶段依赖，也不各自产生独立 Seal。两者是否并行由各自拆分决定，不能因编号强行
-建立实现依赖。
+阶段 3 完成后，须完成 3.5a、3.5b，再完成 3.5c QA 提效，才能开始阶段 4；它们不改变
+上述八个正式阶段的编号。checkpoint 名称本身不新增 formal run 或 Seal；若合并受理为
+正式任务，按该任务的流程留痕。3.5a、3.5b 是否并行由各自拆分决定；3.5c 则在两者的
+覆盖、冻结、计量与重试合同之上优化 QA，阶段 4 继承其交付语义。
 
 不并行推进会改变 schema、definition 或公共写入口的正式阶段。允许的并行只发生在同一正式阶段内部，并由该阶段统一 join、验证和 Seal，例如：
 
@@ -452,7 +472,7 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 每个阶段都要完整走该阶段自己的 formal-gates 流程并 Seal，但 Seal 的证据只要求本阶段已承诺的能力，不把尚未实现的最终公共面倒灌到早期阶段。以下 1–6、8–10 是所有阶段的共同条件；7、11、12 按“本阶段实际 surface”验收，最终公共面附加条件只在阶段 7 生效：
 
 1. 阶段需求、技术方案、范围和路线已按该阶段 formal-gates run 单独确认。
-2. QA FAIL、有效 P0/P1 与门审 P2 obligation 按规则闭环；门审 P3 只 Seal advisory，QA Review P2/P3 冻结前吸收，不存在未处置的阻塞结果。
+2. QA FAIL、有效 P0/P1 与门审 P2 obligation 按规则闭环；门审 P3 只 Seal advisory。3.5c 实施后的 QA Review 可选 P2/P3 在冻结前按该计划登记处置，不强制改用例；此前记录保留原规则。不存在未处置的阻塞结果。
 3. `go test ./...`、package validation 和 portable canary 通过。
 4. 固定稳定插件的文档化正常入口 smoke 通过，且其安装内容未指向阶段开发 worktree；候选 `Lstat`/realpath、source/installed digest 和 host-path disjoint proof 通过。
 5. 本阶段新增能力在不可变候选安装中由实际 installed binary 执行，并在独立测试项目、host config、state/resource namespace 中完成端到端验证。
@@ -505,3 +525,8 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 任何引用总体方案阶段号的需求、任务或验收记录都必须同时注明本文增量 Seal 阶段号；只有增量阶段 7 Seal 后，才可宣称主需求的总体阶段 5/6 和本次最终交付完成。
 
 每个阶段另建自己的 requirements/design/tasks 文档，只登记该阶段新增或迁移的能力、明确依赖的上一 sealed baseline、阶段内不做的内容和本阶段退出条件。阶段文档不能修改或缩小总需求；若实际实施需要改变已确认的总需求或重大技术选择，必须先走需求变化流程，而不是在子阶段静默改写。
+
+3.5c 候选的公开路径为 `qa-design/qa-review` 的 shared-step 引用、`qa-suggestion` 的理由
+处置、`qa-execution --checkpoint` 的绑定续跑，以及最后必需验证前的 `prepare-candidate`。
+操作示例见 `references/formal-flow.md`；验证记录见 `stage-3-5c-validation.md`。
+阶段候选能力不修改固定 driver、本正式 run、既有 Seal 或全局安装。

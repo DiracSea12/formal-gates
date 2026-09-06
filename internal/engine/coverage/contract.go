@@ -145,6 +145,7 @@ const (
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
 type AcceptanceCase struct {
+	SharedSteps   []string `json:"sharedSteps,omitempty"`
 	CaseID        string   `json:"caseId"`
 	Mode          CaseMode `json:"mode"`
 	PublicEntry   string   `json:"publicEntry,omitempty"`
@@ -172,12 +173,19 @@ func executionEdgeKey(kind ReviewKind, sourceID, pointID, caseID string) string 
 // AcceptanceManifest is one selected kind's source, point, case, and edge
 // declaration.  A source may occur in multiple manifests; every occurrence is
 // independently reviewed and executed.
+// SharedStep holds reusable preparation/operations; cases still own their oracle.
+type SharedStep struct {
+	ID        string `json:"id"`
+	Procedure string `json:"procedure"`
+}
+
 type AcceptanceManifest struct {
-	Binding ManifestBinding   `json:"binding"`
-	Sources []string          `json:"sources"`
-	Points  []AcceptancePoint `json:"points"`
-	Cases   []AcceptanceCase  `json:"cases"`
-	Edges   []CoverageEdge    `json:"edges"`
+	SharedSteps []SharedStep      `json:"sharedSteps,omitempty"`
+	Binding     ManifestBinding   `json:"binding"`
+	Sources     []string          `json:"sources"`
+	Points      []AcceptancePoint `json:"points"`
+	Cases       []AcceptanceCase  `json:"cases"`
+	Edges       []CoverageEdge    `json:"edges"`
 }
 
 // CoverageMap is a named projection of a manifest's edge relation.  It does
@@ -320,15 +328,16 @@ type ReviewDecision struct {
 // decisions.  SetStatus is retained for diagnostics but cannot replace the
 // item-level decisions.
 type ReviewResult struct {
-	Binding         ManifestBinding  `json:"binding"`
-	Scope           ScopeMode        `json:"scope"`
-	SourceDecisions []ReviewDecision `json:"sourceDecisions"`
-	PointDecisions  []ReviewDecision `json:"pointDecisions"`
-	CaseDecisions   []ReviewDecision `json:"caseDecisions"`
-	UnboundSources  []string         `json:"unboundSources,omitempty"`
-	UnboundPoints   []string         `json:"unboundPoints,omitempty"`
-	UnboundCases    []string         `json:"unboundCases,omitempty"`
-	SetStatus       DecisionStatus   `json:"setStatus,omitempty"`
+	SharedStepDecisions []ReviewDecision `json:"sharedStepDecisions,omitempty"`
+	Binding             ManifestBinding  `json:"binding"`
+	Scope               ScopeMode        `json:"scope"`
+	SourceDecisions     []ReviewDecision `json:"sourceDecisions"`
+	PointDecisions      []ReviewDecision `json:"pointDecisions"`
+	CaseDecisions       []ReviewDecision `json:"caseDecisions"`
+	UnboundSources      []string         `json:"unboundSources,omitempty"`
+	UnboundPoints       []string         `json:"unboundPoints,omitempty"`
+	UnboundCases        []string         `json:"unboundCases,omitempty"`
+	SetStatus           DecisionStatus   `json:"setStatus,omitempty"`
 }
 
 // WhitelistEntry is an approved source-point-case edge.
@@ -602,9 +611,24 @@ func (c CoverageContract) Validate() error {
 			seenPointIDs[point.PointID] = struct{}{}
 			pointByID[point.PointID] = point
 		}
+		sharedIDs := map[string]bool{}
+		for _, step := range manifest.SharedSteps {
+			if strings.TrimSpace(step.ID) == "" || strings.TrimSpace(step.Procedure) == "" {
+				return invalid(CodeInvalidCaseBinding, path+".sharedSteps", "shared step id and procedure are required")
+			}
+			if sharedIDs[step.ID] {
+				return invalid(CodeDuplicateID, path+".sharedSteps", "duplicate shared step")
+			}
+			sharedIDs[step.ID] = true
+		}
 		caseByID := make(map[string]AcceptanceCase, len(manifest.Cases))
 		for ci, qaCase := range manifest.Cases {
 			cpath := fmt.Sprintf("%s.cases[%d]", path, ci)
+			for _, id := range qaCase.SharedSteps {
+				if !sharedIDs[id] {
+					return invalid(CodeUnknownID, cpath+".sharedSteps", "unknown shared step")
+				}
+			}
 			if !nonempty(qaCase.CaseID, "case") || !nonempty(qaCase.Oracle, "oracle") {
 				return invalid(CodeInvalidCaseBinding, cpath, "case ID and oracle are required")
 			}
@@ -796,6 +820,8 @@ func (c CoverageContract) ManifestDigest() (string, error) {
 		sort.Strings(manifests[i].Sources)
 		sort.Slice(manifests[i].Points, func(a, b int) bool { return manifests[i].Points[a].PointID < manifests[i].Points[b].PointID })
 		sort.Slice(manifests[i].Cases, func(a, b int) bool { return manifests[i].Cases[a].CaseID < manifests[i].Cases[b].CaseID })
+		manifests[i].SharedSteps = append([]SharedStep(nil), manifests[i].SharedSteps...)
+		sort.Slice(manifests[i].SharedSteps, func(a, b int) bool { return manifests[i].SharedSteps[a].ID < manifests[i].SharedSteps[b].ID })
 		manifests[i].Edges = nil
 	}
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].Binding.ReviewKind < manifests[j].Binding.ReviewKind })
@@ -879,6 +905,13 @@ func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhite
 		}
 		seenKinds[review.Binding.ReviewKind] = struct{}{}
 		if err := validateDecisions(review.SourceDecisions, manifest.Sources, path+".sourceDecisions", "source"); err != nil {
+			return ApprovedWhitelist{}, err
+		}
+		sharedIDs := make([]string, len(manifest.SharedSteps))
+		for i, step := range manifest.SharedSteps {
+			sharedIDs[i] = step.ID
+		}
+		if err := validateDecisions(review.SharedStepDecisions, sharedIDs, path+".sharedStepDecisions", "shared step"); err != nil {
 			return ApprovedWhitelist{}, err
 		}
 		pointIDs := make([]string, len(manifest.Points))

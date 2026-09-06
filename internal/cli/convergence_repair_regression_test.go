@@ -259,9 +259,7 @@ func TestRepairCLIResolvedProblemDoesNotReopen(t *testing.T) {
 	if s.Problems[problem].Status != "RESOLVED" || s.Problems[problem].ResolvedAt != s.CurrentSnapshot {
 		t.Fatal("successful repair verification did not resolve the canonical problem")
 	}
-	if failure := failingCLI(t, "workflow", "seal", "--root", root, "--package-root", pkg, "--run-id", s.RunID, "--squash-message", "final candidate"); !strings.Contains(failure, "final squashed candidate") {
-		t.Fatalf("unexpected final-candidate transition: %s", failure)
-	}
+	runCLI(t, "workflow", "prepare-candidate", "--root", root, "--package-root", pkg, "--run-id", s.RunID, "--squash-message", "final candidate")
 	s = decodeSemanticState(t, runCLI(t, "workflow", "show", "--root", root, "--run-id", s.RunID))
 	s = repairCLIGate(t, root, pkg, s, "P2")
 	s = repairCLIAdjudicate(t, root, pkg, s, "SAME_AS", problem)

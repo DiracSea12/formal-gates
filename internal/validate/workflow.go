@@ -2351,7 +2351,7 @@ func resetSnapshotReviewSurface(state *RunState, oldSnapshot string, preserveQA,
 			state.setPriorQAExecution(mode, result)
 		}
 		if !preserveQA || result.Status != "PASS" || result.Snapshot != oldSnapshot {
-			state.setQAExecution(mode, QAExecutionResult{Status: "PENDING"})
+			retainQAProgress(state, mode)
 		}
 	}
 	state.Carry = map[string]CarryResult{}

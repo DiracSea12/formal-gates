@@ -40,6 +40,17 @@ type DispatchCost struct {
 	OutputTokens         int64  `json:"outputTokens"`
 	TotalInputTokens     int64  `json:"totalInputTokens"`
 	Source               string `json:"source"` // "transcript" | "unavailable"
+	// Codex retains the exact source and native task timing on this same entry.
+	TranscriptPath string      `json:"transcriptPath,omitempty"`
+	Timing         *TaskTiming `json:"timing,omitempty"`
+}
+
+// TaskTiming is the active model-task wall time, including tool waits. Start
+// and completion identify the outer boundaries; separate-turn idle is excluded.
+type TaskTiming struct {
+	StartedAt      string `json:"startedAt"`
+	CompletedAt    string `json:"completedAt"`
+	WallTimeMillis int64  `json:"wallTimeMillis"`
 }
 
 // Usage is the exact metered token usage parsed from one host transcript,

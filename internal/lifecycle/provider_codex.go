@@ -39,7 +39,7 @@ func codexShapeAdapter(name string) providerAdapter {
 			return normalizeNamedEvent(name, eventName, "SubagentStart", "SubagentStop")
 		},
 		identity: func(_ string, payload any) string {
-			return payloadIdentity(payload, []string{"subagentId", "subagent_id", "agentId", "agent_id", "taskId", "task_id"})
+			return payloadIdentity(payload, []string{"subagentId", "subagent_id", "agentId", "agent_id", "taskId", "task_id", "thread_id", "session_id"})
 		},
 		correlation: func(_ string, _ any) string { return "" },
 		projectRoots: func(payload any) []string {
@@ -47,7 +47,7 @@ func codexShapeAdapter(name string) providerAdapter {
 			return appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
 		},
 		transcriptPath: func(payload any) string {
-			return payloadScalar(payload, []string{"agent_transcript_path"}, 0)
+			return payloadScalar(payload, []string{"agent_transcript_path", "transcript_path", "rollout_path"}, 0)
 		},
 		reason: payloadReason,
 	}

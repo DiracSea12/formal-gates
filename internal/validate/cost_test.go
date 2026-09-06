@@ -64,7 +64,8 @@ func TestCostBackfillParsesCapturedTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-backfill"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
-	stubCodexTranscript(t, writeCostFixture(t))
+	transcript := writeCostFixture(t)
+	stubCodexTranscript(t, transcript)
 	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +77,7 @@ func TestCostBackfillParsesCapturedTranscript(t *testing.T) {
 	// Priced categories only: hit = cached (10+15), miss = input minus
 	// cached (90+135), output = output_tokens (30+50); the cache write (3)
 	// is not a priced category and is not recorded.
-	want := cost.DispatchCost{Target: "start-readiness", Kind: "action", InputCacheHitTokens: 25, InputCacheMissTokens: 225, OutputTokens: 80, TotalInputTokens: 250, Source: cost.SourceTranscript}
+	want := cost.DispatchCost{Target: "start-readiness", Kind: "action", InputCacheHitTokens: 25, InputCacheMissTokens: 225, OutputTokens: 80, TotalInputTokens: 250, Source: cost.SourceTranscript, TranscriptPath: transcript}
 	if entry != want {
 		t.Fatalf("entry=%+v want %+v", entry, want)
 	}
@@ -96,7 +97,8 @@ func TestProductReviewCostBackfillParsesCapturedTranscript(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmRequirement(t, root, pkg, mustStart(t, root, pkg, "cost-product-review"))
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "product-review", "cost-product-review")
-	stubCodexTranscript(t, writeCostFixture(t))
+	transcript := writeCostFixture(t)
+	stubCodexTranscript(t, transcript)
 	state, err := RecordAction(root, pkg, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +107,7 @@ func TestProductReviewCostBackfillParsesCapturedTranscript(t *testing.T) {
 	if !ok {
 		t.Fatalf("dispatch cost entry missing: %#v", state.Cost)
 	}
-	want := cost.DispatchCost{Target: "product-review", Kind: "action", InputCacheHitTokens: 25, InputCacheMissTokens: 225, OutputTokens: 80, TotalInputTokens: 250, Source: cost.SourceTranscript}
+	want := cost.DispatchCost{Target: "product-review", Kind: "action", InputCacheHitTokens: 25, InputCacheMissTokens: 225, OutputTokens: 80, TotalInputTokens: 250, Source: cost.SourceTranscript, TranscriptPath: transcript}
 	if entry != want {
 		t.Fatalf("entry=%+v want %+v", entry, want)
 	}
@@ -143,7 +145,7 @@ func TestCostBackfillIgnoresUnparseableTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := state.Cost.Dispatches[dispatchID]
-	want := cost.DispatchCost{Target: "start-readiness", Kind: "action", Source: cost.SourceUnavailable}
+	want := cost.DispatchCost{Target: "start-readiness", Kind: "action", Source: cost.SourceUnavailable, TranscriptPath: fixture}
 	if entry != want {
 		t.Fatalf("unparseable transcript must be unavailable: %+v", entry)
 	}
@@ -153,7 +155,8 @@ func TestCostBackfillIsIdempotentPerDispatch(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "cost-idempotent"), "custom", []string{"quality"})
 	dispatchID := prepareClaimedAction(t, root, pkg, state, "start-readiness", "cost-readiness")
-	stubCodexTranscript(t, writeCostFixture(t))
+	transcript := writeCostFixture(t)
+	stubCodexTranscript(t, transcript)
 	state, err := RecordAction(root, pkg, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", fixtureOperatorVerification())
 	if err != nil {
 		t.Fatal(err)
@@ -239,5 +242,29 @@ func TestSealedSummaryCarriesCostProjection(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"cost"`) {
 		t.Fatalf("seal summary file lacks cost: %s", data)
+	}
+}
+
+func TestCodexBackfillPersistsNativeTimingAndSource(t *testing.T) {
+	root := t.TempDir()
+	transcript := filepath.Join(root, "rollout.jsonl")
+	data := `{"timestamp":"2026-09-06T16:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}
+{"type":"token_usage_record","payload":{"response_id":"real-response","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20},"thread_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}}
+{"timestamp":"2026-09-06T16:00:02.125Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one"}}
+`
+	if err := os.WriteFile(transcript, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stubCodexTranscript(t, transcript)
+	state := RunState{RunID: "codex-timing"}
+	dispatch := PreparedDispatch{ID: "dispatch", Target: "qa-execution", TargetKind: "action"}
+	backfillDispatchCost(root, &state, dispatch)
+	entry := state.Cost.Dispatches[dispatch.ID]
+	if entry.Source != cost.SourceTranscript || entry.TranscriptPath != transcript || entry.Timing == nil || entry.Timing.WallTimeMillis != 2125 || entry.TotalInputTokens != 100 || entry.InputCacheHitTokens != 40 || entry.InputCacheMissTokens != 60 || entry.OutputTokens != 20 {
+		t.Fatalf("entry=%+v", entry)
+	}
+	backfillDispatchCost(root, &state, dispatch)
+	if state.Cost.TotalInputTokens != 100 {
+		t.Fatal("repeated completion charged twice")
 	}
 }

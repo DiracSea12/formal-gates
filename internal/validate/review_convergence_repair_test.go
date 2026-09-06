@@ -913,7 +913,7 @@ func TestRepairBlackboxFindingAndSuggestionInputsUseIsolation(t *testing.T) {
 			}
 			prompt, err := PrepareAction(root, pkg, state.RunID, "qa-design", "blackbox", false, "")
 			suggestion := state.QACaseSets["blackbox"].Suggestions[0]
-			if err != nil || !strings.Contains(prompt, suggestion.ID) || !strings.Contains(prompt, suggestion.Message) || !strings.Contains(prompt, finding.Locations[0]) || !strings.Contains(prompt, "--per-suggestion") {
+			if err != nil || !strings.Contains(prompt, suggestion.ID) || !strings.Contains(prompt, suggestion.Message) || !strings.Contains(prompt, finding.Locations[0]) || !strings.Contains(prompt, "workflow qa-suggestion --decision ACCEPT|DEFER|DECLINE --reason") {
 				t.Fatalf("suggestion dispatch omitted its exact input: %v\n%s", err, prompt)
 			}
 		})

@@ -375,6 +375,8 @@ var workflowSubcommands = map[string]func(args []string, streams IO) (int, error
 	"qa-execution":               runQAExecution,
 	"qa-execution-scope":         runWorkflowQAExecutionScope,
 	"qa-thaw":                    runWorkflowQAThaw,
+	"qa-suggestion":              runWorkflowQASuggestion,
+	"prepare-candidate":          runWorkflowPrepareCandidate,
 	"prepare-review-wave":        runWorkflowPrepareReviewWave,
 	"adjudicate-wave":            runWorkflowAdjudicateWave,
 	"resolve-wave-target":        runWorkflowResolveWaveTarget,
@@ -395,7 +397,7 @@ var workflowLegacyWriteEntry = map[string]bool{
 	"qa-worktree": true, "prepare-gate": true, "prepare-action": true,
 	"claim-dispatch": true, "record-action": true, "record-gate": true,
 	"qa-design": true, "qa-review": true, "qa-execution": true,
-	"qa-execution-scope": true, "qa-thaw": true, "prepare-review-wave": true,
+	"qa-execution-scope": true, "qa-thaw": true, "qa-suggestion": true, "prepare-candidate": true, "prepare-review-wave": true,
 	"adjudicate-wave": true, "resolve-wave-target": true, "snapshot": true, "cleanup": true,
 	"carry": true, "authorize-repair": true, "seal": true,
 	"complete-p2-repair": true,
@@ -1329,7 +1331,7 @@ func runWorkflowSeal(args []string, streams IO) (int, error) {
 	fs.Var(&skips, "skip", "selected non-passing gate explicitly authorized to skip")
 	userRequested := fs.Bool("user-requested", false, "user explicitly requests the FAIL skips before the review-wave limit is exhausted")
 	guaranteeWaiverReason := fs.String("guarantee-waiver-reason", "", "required audit reason when --skip requirement-guarantee explicitly waives an incomplete REQ/AC guarantee")
-	squashMessage := fs.String("squash-message", "", "combined commit message when seal squashes the git base-to-current range")
+	squashMessage := fs.String("squash-message", "", "deprecated here: use workflow prepare-candidate --squash-message before final verification")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -1412,7 +1414,11 @@ func runQADesign(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "run id")
 	runtimeError := fs.String("runtime-error", "", "QA Design runtime error")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
+	shared := []validate.QASharedStep{}
+	newItemStartFlag(fs, "shared-step", "start a reusable shared step with a stable id", &shared, func(v string) validate.QASharedStep { return validate.QASharedStep{ID: v} })
+	newItemFieldFlag(fs, "shared-procedure", "common preparation and operation instructions", &shared, "procedure", "shared-step", "shared step field", "shared step", func(p *validate.QASharedStep, v string) { p.Procedure = v })
 	cases := []validate.QACaseInput{}
+	fs.Var(&itemListFieldFlag[validate.QACaseInput]{items: &cases, followFlag: "case", followLabel: "shared step reference", appendValue: func(p *validate.QACaseInput, v string) { p.SharedSteps = append(p.SharedSteps, v) }}, "use-step", "shared step id used by this case; repeat as needed")
 	newQACaseStart(fs, &cases)
 	// --case-id 是增量契约的修改引用：给当前用例标一个既有 CASE id，表示本轮修改该用例
 	// （id 必须已存在且属于本派发 mode）。不带 --case-id 的用例是新增（CLI 分配全局唯一 id）。
@@ -1428,16 +1434,13 @@ func runQADesign(args []string, streams IO) (int, error) {
 	removeCases := stringListFlag{}
 	fs.Var(&removeCases, "remove-case", "remove an existing CASE id from this mode (repeatable; the id must exist)")
 	replaceAll := fs.Bool("replace-all", false, "replace this mode's whole QA case set with the submitted cases (an empty submission clears the mode)")
-	// --per-suggestion 吸收该 mode 最近一次 qa-review 记录在案的 P2/P3 集合级建议：每项
-	// 必须通过 --suggestion-id 精确绑定；新增/修改/删除用例保留 SUGGESTION_APPLIED 溯源，
-	// 不派新 qa-review，不能与 --replace-all 同用。
-	perSuggestion := fs.Bool("per-suggestion", false, "absorb the mode's stable P2/P3 qa-review suggestions without another review; requires the bound qa-review PASS and --suggestion-id for every absorbed suggestion; cannot combine with --replace-all")
+	perSuggestion := fs.Bool("per-suggestion", false, "retired direct approval option; use workflow qa-suggestion for reasoned disposition")
 	suggestionIDs := stringListFlag{}
-	fs.Var(&suggestionIDs, "suggestion-id", "stable P2/P3 suggestion id absorbed by this design change; repeat for every absorbed suggestion")
+	fs.Var(&suggestionIDs, "suggestion-id", "retired design absorption binding; use workflow qa-suggestion")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{RemoveCases: removeCases, ReplaceAll: *replaceAll, PerSuggestion: *perSuggestion, SuggestionIDs: suggestionIDs})
+	state, err := validate.RecordQADesign(*root, *pkg, *runID, *dispatch, cases, *runtimeError, validate.QADesignRecordOptions{SharedSteps: shared, RemoveCases: removeCases, ReplaceAll: *replaceAll, PerSuggestion: *perSuggestion, SuggestionIDs: suggestionIDs})
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -1447,6 +1450,10 @@ func runQAReview(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "run id")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
 	runtimeError := fs.String("runtime-error", "", "QA Review runtime error")
+	shared := []validate.QAReviewInput{}
+	newItemStartFlag(fs, "shared-step", "start a decision for a pending shared step", &shared, func(v string) validate.QAReviewInput { return validate.QAReviewInput{CaseID: v} })
+	newItemFieldFlag(fs, "shared-outcome", "PASS or FAIL", &shared, "outcome", "shared-step", "shared review field", "shared step", func(p *validate.QAReviewInput, v string) { p.Outcome = v })
+	newItemFieldFlag(fs, "shared-reason", "shared step review basis", &shared, "reason", "shared-step", "shared review field", "shared step", func(p *validate.QAReviewInput, v string) { p.Reason = v })
 	decisions := []validate.QAReviewInput{}
 	newQAReviewStart(fs, &decisions)
 	newQAReviewField(fs, "outcome", "PASS or FAIL", "outcome", &decisions)
@@ -1468,6 +1475,7 @@ func runQAReview(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	state, err := validate.RecordQAReview(*root, *pkg, *runID, *dispatch, decisions, *runtimeError, *findings, validate.QAReviewRecordOptions{
+		SharedSteps:     shared,
 		SourceDecisions: sourceDecisions,
 		PointDecisions:  pointDecisions,
 		CaseDecisions:   caseDecisions,
@@ -1482,8 +1490,11 @@ func runQAExecution(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow qa-execution", streams)
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
-	runtimeError := fs.String("runtime-error", "", "QA execution runtime error when cases were not actually executable; cannot be combined with case results")
+	runtimeError := fs.String("runtime-error", "", "interruption reason; complete rows may be saved with tool/environment identities")
 	dispatch := fs.String("dispatch", "", "prepared dispatch id returned in the task")
+	checkpoint := fs.Bool("checkpoint", false, "save completed rows without finishing this dispatch")
+	tool := fs.String("tool", "", "execution tool/script immutable version")
+	environment := fs.String("environment", "", "relevant execution environment identity")
 	results := []validate.QAResultInput{}
 	newQAResultStart(fs, &results)
 	for _, item := range []struct{ name, field, usage string }{{"outcome", "outcome", "PASS or FAIL"}, {"procedure", "procedure", "actual per-case executed procedure (not skipped/placeholder text)"}, {"observation", "observation", "actual per-case observed result"}, {"oracle-result", "oracle-result", "case-specific comparison with the approved oracle"}} {
@@ -1492,7 +1503,7 @@ func runQAExecution(args []string, streams IO) (int, error) {
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	state, err := validate.RecordQAExecution(*root, *pkg, *runID, *dispatch, results, *runtimeError)
+	state, err := validate.RecordQAExecution(*root, *pkg, *runID, *dispatch, results, *runtimeError, validate.QAExecutionRecordOptions{Checkpoint: *checkpoint, Tool: *tool, Environment: *environment})
 	return workflowResult(streams, *root, *runID, state, err)
 }
 
@@ -2275,7 +2286,7 @@ func parseFlagSetAllowPositional(fs *flag.FlagSet, args []string, help io.Writer
 	return parseFlagSetParsed(fs, args, help)
 }
 func printUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
+	fmt.Fprintf(w, "Usage: %s <command>\n\nCommands:\n  package validate|route-candidates|baseline\n  registry admit|show\n  install\n  uninstall\n  workflow start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-suggestion|prepare-candidate|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n  coverage validate|project-whitelist|reconcile-execution\n  gate run <ids...>|report\n  hook decide\n  lifecycle capture|verify\n  canary portable|fault-matrix|codex-hook|codex-hook-probe\n", program)
 }
 
 func printCoverageUsage(w io.Writer, program string) {
@@ -2290,7 +2301,7 @@ func printRegistryUsage(w io.Writer, program string) {
 // 而不是回落到顶层 usage（P2 修复）。叶子命令（如 workflow show --help）仍打印该子命令
 // 自己的 flag usage。
 func printWorkflowUsage(w io.Writer, program string) {
-	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
+	fmt.Fprintf(w, "Usage: %s workflow <subcommand>\n\nSubcommands:\n  start|drive|submit|show|status|next|diagnose|guard-preview|resume|abort|reset|requirement|review-delta-preview|requirement-impact-preview|authorize-retry|route-candidates|route|route-add|slicing|settle-findings|qa-worktree|prepare-gate|prepare-action|prepare-review-wave|claim-dispatch|record-action|record-gate|qa-design|qa-review|qa-thaw|qa-suggestion|prepare-candidate|qa-execution|qa-execution-scope|adjudicate-wave|resolve-wave-target|snapshot|future|carry|repair-preview|authorize-repair|complete-p2-repair|seal|cleanup\n\nRun `%s workflow <subcommand> --help` for a subcommand's flags.\n", program, program)
 }
 
 func printFutureUsage(w io.Writer, program string) error {
@@ -2356,4 +2367,33 @@ func lifecycleEventHelp() string {
 		}
 	}
 	return strings.Join(events, "|")
+}
+
+func runWorkflowQASuggestion(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow qa-suggestion", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	mode := fs.String("mode", "", "QA mode")
+	id := fs.String("suggestion-id", "", "stable QA Review suggestion id")
+	decision := fs.String("decision", "", "ACCEPT, DEFER or DECLINE")
+	reason := fs.String("reason", "", "required disposition reason")
+	cases := stringListFlag{}
+	fs.Var(&cases, "affected-case", "case changed in meaning, shared path or executability by ACCEPT; repeat for all affected cases")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.RecordQASuggestion(*root, *pkg, *runID, *mode, *id, *decision, *reason, cases)
+	return workflowResult(streams, *root, *runID, state, err)
+}
+
+func runWorkflowPrepareCandidate(args []string, streams IO) (int, error) {
+	fs := newFlagSet("workflow prepare-candidate", streams)
+	root, pkg := rootFlags(fs)
+	runID := fs.String("run-id", "", "run id")
+	message := fs.String("squash-message", "", "combined commit message, before final QA/gate validation")
+	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
+		return code, err
+	}
+	state, err := validate.PrepareCandidate(*root, *pkg, *runID, *message)
+	return workflowResult(streams, *root, *runID, state, err)
 }

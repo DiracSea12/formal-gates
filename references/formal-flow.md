@@ -353,7 +353,7 @@ formal-gates workflow record-action --root <repo> --package-root <package> \
 # 处置并由 settle-findings 记录后才推进。确认 P2/P3 本身不置 `NeedsReReview`；若确认后修改
 # 需求并造成语义变化，再由需求修订规则决定重审。开发后 QA Review 使用独立规则：逐用例
 # FAIL/集合级 P1 阻塞并要求修改后重审；集合级 P2/P3 不阻塞 PASS，但必须按稳定 suggestion
-# ID 全部吸收后 case-set 才可 FROZEN，吸收不复审。开发后 gate 的 P2 必须进入统一返修，
+# ID 全部按采纳/延期/不采纳及理由处置后可 FROZEN；采纳涉及验收语义时重审受影响用例。开发后 gate 的 P2 必须进入统一返修，
 # 修复后用 completion/carry 凭据继承原 PASS、不复审也不增加轮次；gate P3 不返修，只在
 # Seal 前集中展示。两类 P2/P3 不得混用处置规则。
 
@@ -418,13 +418,11 @@ formal-gates workflow qa-design --root <repo> --package-root <package> --run-id 
 #  --case-id/--remove-case 引用的 id 必须存在于同 mode，否则报错；--replace-all 替换整个用
 #  例集（空集即清空该 mode）；三者不能同轮混用。未提及的既有用例及其 review PASS 状态自动
 #  保留、遗漏绝不清除。语义重复（同 mode 同描述/过程/预期）的无 id 提交报错并提示改用修改。
-# 按该 mode 最近一次 qa-review 记录在案的 P2/P3 集合级建议逐条吸收：每项必须引用稳定
-# suggestion ID；本轮新增、修改或删除用例直接置为已批准并留 SUGGESTION_APPLIED 溯源，
-# 不派新 qa-review。要求绑定 qa-review 为 PASS；遗漏、重复、无关引用以及使验收点失去批准
-# 覆盖的修改均被拒绝。全部建议吸收并重算覆盖完整后，case-set 才进入 FROZEN。
-formal-gates workflow qa-design --root <repo> --package-root <package> --run-id <id> \
-  --dispatch <dispatch-id> [--case ... | --case-id <id> ... | --remove-case <id>] \
-  --per-suggestion --suggestion-id <suggestion-id> [--suggestion-id <suggestion-id> ...]
+# 可选建议按稳定 ID 及理由处置；采纳改变共同路径、可执行性或验收含义时列出全部受影响
+# case，重新设计/审查这些部分。其余审批继承。未知 ID、缺理由、未处置条目不能冻结。
+formal-gates workflow qa-suggestion --root <repo> --package-root <package> --run-id <id> \
+  --mode <blackbox|whitebox> --suggestion-id <id> --decision <ACCEPT|DEFER|DECLINE> \
+  --reason '<disposition reason>' [--affected-case <CASE-id> ...]
 formal-gates workflow prepare-action --root <repo> --package-root <package> \
   --run-id <id> --action qa-review --mode <blackbox|whitebox>
 formal-gates workflow qa-review --root <repo> --package-root <package> \
@@ -436,7 +434,7 @@ formal-gates workflow qa-review --root <repo> --package-root <package> \
   [--finding '<set-level finding>' --severity <P1|P2|P3> --location '<path:line>']
 # 集合层面发现项按严重度分类：覆盖遗漏（用例集未覆盖需求验收点/被选中模式，含被选中
 # 模式零用例）判 P1、阻塞、必须补用例；P2/P3 是带稳定 ID 的非阻塞建议，PASS 后必须经
-# qa-design --per-suggestion 逐条吸收才可冻结，但吸收不触发重审。不设机械化质量
+# qa-suggestion 按理由逐条处置才可冻结；验收语义变化需重审受影响部分。不设机械化质量
 # 下限，用例集充分性由 qa-review 的 set-level 覆盖判定承担。
 # qa-review 审查完整合并集（未提及的既有用例自动保留在集中）；提示词注入本轮变更清单
 # （Added/Modified/Removed）。黑盒 qa-review 的提示词工作区指向隔离工作区，用例文件在
@@ -770,16 +768,16 @@ formal-gates workflow complete-p2-repair --root <repo> --package-root <package> 
 # 只有当每个被选中的结果都通过、或已获得允许的授权之后，才 Seal。FAIL 跳过需要共享
 # 审查轮次上限耗尽；用户主动要求跳过时加 --user-requested，可提前跳过并记录为
 # SEAL-USER 授权。
-# Git run 在基线→当前含 >1 条提交时，seal 自动把该范围压缩为单条提交（git reset
-# --soft 基线 + 重新提交，保留最终树），作为 seal 的最后一步 VCS 操作；压缩前要求工作
-# 树干净。压缩提交是新的最终 candidate：CLI 不改绑旧 QA/门结果，持久化新 candidate 后
-# 要求全部选中 QA mode 与门在其上重验，再次 Seal 才完成封板。单条提交或空范围不操作；
-# SVN/P4 不压缩。压缩消息由主代理经 --squash-message 传入。Seal 同时把已批准黑盒用例从隔离工作区落盘合并回主干
+# 最后一轮必需 QA/门验证之前，先确定最终候选；Git 多条提交整理成一条，工作树须干净。
+# 单条或空范围不重写，SVN/P4 不压缩。已有验证不因内容相同自动改绑；必要时重开最终 FULL。
+formal-gates workflow prepare-candidate --root <repo> --package-root <package> --run-id <id> \
+  --squash-message '<combined commit message>'
+# 此后派发最后必需 QA/门验证。Seal 核对同一身份、固化结果，不再更改候选。
+# Seal 把已批准黑盒用例从 run-state 落盘到主干
 # `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一写主干），作为本 run 的
 # 黑盒用例交付物；分片实例不落盘。
 formal-gates workflow seal --root <repo> --package-root <package> --run-id <id> \
-  [--skip <selected-non-passing-gate> ...] [--user-requested] \
-  [--squash-message '<combined commit message>']
+  [--skip <selected-non-passing-gate> ...] [--user-requested]
 
 # 轻量路线（--route lightweight 启动）的封板：跳过全部验证门（无开发快照、无
 # product-review / start-readiness PASS 要求、无路线确认、无拆分决定），封板摘要/记录
@@ -817,7 +815,7 @@ Seal 跳过规则（SKILL 第 9 步的执行机制）：
 - 已授权的 Seal 跳过在当前快照仍被其他结果阻塞时继续有效，但不延续到后续修复快照。
 - 门审 P2 必须已有绑定 problem、修复快照和 completion/carry 凭据；门审 P3 不触发返修、不阻塞。
   Seal 前核对已有 P3 在最终快照是否仍存在，仅一次性提醒仍存在且未处置的项；已消失的项
-  不再提醒。只核对已有发现，不新增审查或返修，也不逐条询问。QA Review P2/P3 必须已吸收，不能以 advisory 留到 Seal。
+  不再提醒。只核对已有发现，不新增审查或返修，也不逐条询问。QA Review P2/P3 必须已按理由处置，不能以 advisory 留到 Seal。
 - Seal 的黑盒用例等物化全部成功后持久化 `SEALED` 终态，再写封板摘要并清理临时状态；
   物化失败时持久 state 保持 `ACTIVE` 且不写摘要，摘要或清理中断时保留 `SEALED` 并可由
   重复 Seal 继续。retained master 已显式 waiver/not-guaranteed 时允许 slice guarantee
@@ -838,6 +836,20 @@ run 状态的单一 `cost` 投影（legacy 为 `RunState.Cost`，engine 为同�
 允许引擎进入现有 Wait；source 明确不可用时记 `UNAVAILABLE`，仍由 request/attempt guard
 止损。只有完成 backfill/usage 后才执行 guard，再决定 refill；`show/status/next` 读取同一
 投影，不另建账本。
+
+Codex 派发的 stop payload 可传 `agent_transcript_path`、`transcript_path` 或
+`rollout_path`；身份支持原有 agent ID 及真实 CLI 的 `thread_id`/`session_id`。将实际
+`codex exec --json` 返回的 thread ID 用于 `claim-dispatch --reviewer`，再把该任务的真实
+rollout 路径随 `lifecycle capture --provider codex --event SubagentStop` 输入即可接通。
+不构造 usage 数字。当前优先读取 `token_usage_record` 的逐请求 usage，并按 response ID 去重；
+出现新版请求记录后不再累计旧 `token_count` 镜像，避免 CLI resume 后两者累计范围不同而
+重复收费。仅含旧事件的来源保留累计差值和 timestamp 去重。Codex cost 条目保存
+`transcriptPath` 与 `timing`（`startedAt`、`completedAt`、`wallTimeMillis`）。计时来自
+rollout 的 `task_started` 到 `task_complete`/`turn_aborted`，包括任务内工具等待，多 turn
+时累计各任务时段而排除 turn 间空闲；未完成或无可核对边界时省略 timing，不能解释为零。
+Codex checkpoint 不固定派发 cost；同任务续跑结束后才从完整 rollout 固定用量和计时。
+其他 provider 保持原行为。3.5c 必需对比的 Codex token 和模型用时须有真实来源，采集不全
+时对比仍未完成，必须修复或补跑。固定实测入口见阶段验证记录；普通测试不会启动模型。
 
 request/attempt 额度只由 engine Controller 从 canonical expected external `TaskKey`、已确认
 route/topology、compiled definition 和有限 retry policy 机械计算；外部 agent/host 派发没有
@@ -861,3 +873,46 @@ Batch/route/topology、批准 QA、已选 gate 或已成立 obligation。当前�
 按需重复 `--case`、`--case-result`、发现项和继承判定门分组。当某个代理或原生比较无法
 运行时，使用命令的 `--runtime-error` 或 `--status RUNTIME_ERROR --message ...` 形
 式；不要伪造语义结果。
+
+### QA 共同步骤、批量与同次续跑
+
+设计可在一次 `qa-design` 中添加 `--shared-step fixture --shared-procedure '<共同准备/操作>'`，
+每条 case 跟随 `--use-step fixture`，自己的 `--procedure` 写特殊前提和差异，`--oracle` 写
+独立判据。用相同 shared ID 改内容会撤销所有引用者审批；只改单条 case 不撤销无关审批。
+`qa-review` 用 `--shared-step fixture --shared-outcome PASS --shared-reason '<核验依据>'`
+审一次共同部分，仍逐条判定全部待审 case。已批准共享步骤和用例可合法继承，覆盖映射完整对账。
+
+白盒先独立列行为、分支和 oracle，再读已有测试输入和真实断言。有效测试绑定复用并独立
+执行；仅错误或缺口补测。有测试变化才提交推进快照，没有变化无需新文件。黑盒设计/审查仍
+在基线隔离环境，不能读实现、白盒或开发者解释。短脚本只做准备、调用、取证、断言，新增或
+修改时以已知错误样例检查关键判据；同版本未变脚本不再完整审批。
+
+同一已提交候选可先运行 `scripts/phase3-qa-fixture.sh stage --source <repo> --snapshot <commit>
+--output <新目录>` 导出并构建一次。`prepare ... --source <导出目录> --candidate <目录>/bin/formal-gates
+--reuse-build` 复用同一个二进制。干净、未绑定运行路径的前置模板用 `copy --source <模板>
+--output <新用例目录>` 为独立用例复制；路径绑定的安装/运行仍按其公开步骤在新路径建立。
+有序场景显式列依赖，共用同一用例副本；失败停止依赖操作，其他独立用例继续。构建、安装、
+启动、真实宿主交互本身是验收目标时，对应步骤必须在本轮真实执行，不能复用代替。
+
+```sh
+formal-gates workflow qa-execution --root <repo> --package-root <package> --run-id <id> \
+  --dispatch <dispatch-id> --checkpoint --tool '<script/tool immutable version>' \
+  --environment '<relevant environment identity>' \
+  --case-result CASE-001 --outcome PASS --procedure '<actual command>' \
+  --observation '<captured output>' --oracle-result '<actual comparison>'
+# attempt 结束但整组未完成时保留已完成行与中断原因；沿用有限重试，不新增逻辑任务。
+formal-gates workflow qa-execution --root <repo> --package-root <package> --run-id <id> \
+  --dispatch <dispatch-id> --tool '<same tool version>' --environment '<same identity>' \
+  --runtime-error '<interruption reason and unfinished scope>'
+# 续跑检查状态中的候选、用例、工具、环境、已完成证据与 pendingCases；变化影响部分失效。
+# 最终调用不带 --checkpoint，提交剩余完整行；不能重复提交已有有效行，不能把跳过记为 PASS。
+```
+
+进度保存不完成 dispatch，不增加 TaskKey/attempt；runtime error 结束当前 attempt，重派沿用
+既有生命周期与 3.5b 限额。最终合并保留 FAIL，缺失、重复、未知输入被拒，授权跳过仍由既有
+授权和 coverage expected-set 契约记录，不能当作 PASS。`workflow show` 输出 pendingCases、
+reuseReasons、invalidationReasons，结果未齐保持 PENDING/RUNTIME_ERROR。
+
+设计、审查、执行的命令耗时与模型任务耗时分开记录；token 与派发次数只引用现有
+cost 投影。普通计量保留 unavailable 语义；3.5c 必需 Codex 对比须补齐真实来源才算完成。固定场景比较覆盖与缺陷发现、共享审查次数、构建/准备次数
+和中断重跑量，不承诺固定提速倍数。阶段 4 接入同一语义；3.5c 仍使用既有 QA writer。

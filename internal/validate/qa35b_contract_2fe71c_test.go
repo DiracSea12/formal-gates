@@ -140,7 +140,7 @@ func TestQA35BHumanWorkflowContractOwners(t *testing.T) {
 	qa35bContains(t, filepath.Join(pkg, "references/formal-flow.md"), "同一", "缺少任一部分", "用户回复不能作为授权", "review-ready", "prepare-review-wave", "suggestion", "AFFECTED", "FULL", "有限 attempt", "review-delta", "requirement-impact", "state-revision")
 	qa35bContains(t, filepath.Join(pkg, "prompts/reviewer-base.md"), "每条 P0/P1", "逐", "P2", "正常", "acceptance-surface")
 	qa35bContains(t, filepath.Join(pkg, "prompts/actions/start-readiness.md"), "实现偏好最高为 P2", "category")
-	qa35bContains(t, filepath.Join(pkg, "prompts/actions/qa-design.md"), "不得依赖已有测试", "独立设计用例并直接编写结构测试代码")
+	qa35bContains(t, filepath.Join(pkg, "prompts/actions/qa-design.md"), "先独立确定应验证的行为、分支和 oracle", "复用真正有效的覆盖")
 	qa35bContains(t, filepath.Join(pkg, "prompts/actions/qa-execution.md"), "AFFECTED", "FULL", "RUNTIME_ERROR")
 	for _, name := range []string{"complexity-gate.md", "implementation-quality-gate.md"} {
 		qa35bContains(t, filepath.Join(pkg, "gates", name), "acceptance-surface")
@@ -219,7 +219,8 @@ func TestQA35BCheckpointDoesNotImplementStage4OrRewriteHistory(t *testing.T) {
 		}
 	}
 	old := qa35bGit(t, pkg, "show", base+":refactor-plan/stage-records.md")
-	current := qa35bRead(t, filepath.Join(pkg, "refactor-plan/stage-records.md"))
+	// Compare the document from the same immutable pair as the path checks.
+	current := qa35bGit(t, pkg, "show", delivered+":refactor-plan/stage-records.md")
 	if !strings.HasPrefix(current, old) || len(current) <= len(old) {
 		t.Fatal("stage record history changed instead of checkpoint append")
 	}

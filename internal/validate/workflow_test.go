@@ -1061,8 +1061,8 @@ func TestSealFailSkipAfterWaveLimitKeepsSealOrigin(t *testing.T) {
 			t.Fatalf("completed waves=%d want=%d", state.CompletedReviewWaves, wave)
 		}
 	}
-	if _, err := Seal(root, pkg, state.RunID, []string{"quality"}, false, "squashed delivery"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
-		t.Fatalf("multi-commit Seal did not pause on the final squashed candidate: %v", err)
+	if _, err := PrepareCandidate(root, pkg, state.RunID, "squashed delivery"); err != nil {
+		t.Fatal(err)
 	}
 	state, err := LoadRunState(root, state.RunID)
 	if err != nil {
@@ -1940,8 +1940,8 @@ func TestSliceSealWritesNoLedgerAndMasterMergesCost(t *testing.T) {
 		t.Fatalf("master recorded no cost projection")
 	}
 	masterOwn := master.Cost.TotalInputTokens
-	if _, err := Seal(root, pkg, master.RunID, nil, false, "squashed delivery with slices"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
-		t.Fatalf("multi-commit master did not pause for final-candidate verification: %v", err)
+	if _, err := PrepareCandidate(root, pkg, master.RunID, "squashed delivery with slices"); err != nil {
+		t.Fatal(err)
 	}
 	master, err = LoadRunState(root, master.RunID)
 	if err != nil {
@@ -2440,8 +2440,8 @@ func TestWhiteboxQADesignsAndReviewsAfterDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
-		t.Fatalf("multi-commit Seal did not pause on the final squashed candidate: %v", err)
+	if _, err := PrepareCandidate(root, pkg, state.RunID, "squashed delivery"); err != nil {
+		t.Fatal(err)
 	}
 	state, err = LoadRunState(root, state.RunID)
 	if err != nil {
@@ -2541,8 +2541,8 @@ func TestFullRouteDesignsWhiteboxAfterDevelopment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Seal(root, pkg, state.RunID, nil, false, "squashed delivery"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
-		t.Fatalf("multi-commit Seal did not pause on the final squashed candidate: %v", err)
+	if _, err := PrepareCandidate(root, pkg, state.RunID, "squashed delivery"); err != nil {
+		t.Fatal(err)
 	}
 	state, err = LoadRunState(root, state.RunID)
 	if err != nil {
@@ -3427,8 +3427,8 @@ func TestSealSquashesGitRangeToSingleCommit(t *testing.T) {
 	if countBefore <= 1 {
 		t.Fatalf("test setup expected >1 commits in base..head, got %d", countBefore)
 	}
-	if _, err := Seal(root, pkg, state.RunID, nil, false, "squashed combined delivery"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
-		t.Fatalf("first Seal did not stop for final-candidate verification: %v", err)
+	if _, err := PrepareCandidate(root, pkg, state.RunID, "squashed combined delivery"); err != nil {
+		t.Fatal(err)
 	}
 	after := gitHead(t, root)
 	if count := commitCount(t, root, state.BaseSnapshot, after); count != 1 {
@@ -3875,7 +3875,7 @@ func TestQAExecutionAffectedInheritance(t *testing.T) {
 	if _, err := RecordQAExecution(root, pkg, state.RunID, qaDispatch, []QAResultInput{
 		{CaseID: "CASE-001", Outcome: "PASS", Procedure: "p", Observation: "o", OracleResult: "m"},
 		{CaseID: "CASE-002", Outcome: "FAIL", Procedure: "p", Observation: "broken", OracleResult: "mismatch"},
-	}, ""); err == nil || !strings.Contains(err.Error(), "must cover") {
+	}, ""); err == nil || !strings.Contains(err.Error(), "unknown QA result") {
 		t.Fatalf("AFFECTED execution with an over-wide result was accepted: %v", err)
 	}
 	if stateBytes(t, root, state.RunID) != before {

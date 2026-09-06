@@ -280,14 +280,14 @@ func TestRequirementGuaranteeGitSquashRequiresFinalCandidateQA(t *testing.T) {
 		t.Fatalf("pre-squash guarantee setup did not pass: %#v", state.RequirementGuarantee.Report)
 	}
 
-	if _, err := Seal(root, pkg, state.RunID, nil, false, "squashed guaranteed delivery"); err == nil || !strings.Contains(err.Error(), "rerun every selected QA mode and gate") {
-		t.Fatalf("pre-squash QA was accepted as final-candidate evidence: %v", err)
+	if _, err := PrepareCandidate(root, pkg, state.RunID, "squashed guaranteed delivery"); err != nil {
+		t.Fatal(err)
 	}
 	checkpoint, err := LoadRunStateForShow(root, state.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint.CurrentSnapshot == preSquashCandidate || checkpoint.qaExecution("").Snapshot != preSquashCandidate {
+	if checkpoint.CurrentSnapshot == preSquashCandidate || checkpoint.priorQAExecution("").Snapshot != preSquashCandidate {
 		t.Fatalf("Seal rebound pre-squash QA evidence: current=%s execution=%#v", checkpoint.CurrentSnapshot, checkpoint.qaExecution(""))
 	}
 	if checkpoint.RequirementGuarantee.Report.Status == "pass" {
@@ -787,7 +787,7 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 		guarantee.ReviewsByMode = map[string]GuaranteeReviewRecord{}
 		sliceBinding := *master.Slicing
 		sliceBinding.MasterRunID = master.RunID
-		testCase := QACase{ID: "CASE-001", Mode: blackboxQAID, Description: owner + " behavior", Procedure: "run slice", Oracle: "slice passes", AcceptanceCriteria: []string{acID}, ReviewStatus: "PASS"}
+		testCase := QACase{ID: "CASE-001", Mode: blackboxQAID, Description: owner + " behavior", Procedure: "run slice", Oracle: "slice passes", AcceptanceCriteria: []string{acID}, ReviewStatus: "PASS", SharedSteps: []string{"fixture"}}
 		slice := RunState{
 			RunID:                owner,
 			SplitMasterRunID:     master.RunID,
@@ -796,6 +796,7 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 			RouteMode:            "custom",
 			Slicing:              &sliceBinding,
 			QACasesByMode:        map[string][]QACase{blackboxQAID: {testCase}},
+			QACaseSets:           map[string]QACaseSetState{blackboxQAID: {SharedSteps: []QASharedStep{{ID: "fixture", Procedure: "prepare clean " + owner + " fixture", ReviewStatus: "PASS", ReviewReason: "checked " + owner + " preparation once"}}}},
 			RequirementGuarantee: &guarantee,
 		}
 		decisions, options := guaranteeReviewInputs(slice, blackboxQAID)
@@ -807,6 +808,13 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 		}
 		if err := saveSliceGuaranteeRecord(root, slice); err != nil {
 			t.Fatal(err)
+		}
+		record, err := os.ReadFile(sliceGuaranteePath(root, master.RunID, owner))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(record), "prepare clean "+owner+" fixture") != 1 || !strings.Contains(string(record), "checked "+owner+" preparation once") {
+			t.Fatalf("slice sidecar lost or duplicated its shared design/review: %s", record)
 		}
 	}
 
@@ -823,6 +831,12 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 	if len(finalCases) != 2 {
 		t.Fatalf("qualified final case count = %d, want 2: %#v", len(finalCases), finalCases)
 	}
+	for index, testCase := range finalCases {
+		owner, other := master.Slicing.Slices[index], master.Slicing.Slices[1-index]
+		if !strings.Contains(testCase.Procedure, "prepare clean "+owner+" fixture") || strings.Contains(testCase.Procedure, "prepare clean "+other+" fixture") || len(testCase.SharedSteps) != 0 {
+			t.Fatalf("master derived case lost or crossed same-id shared procedures: %#v", testCase)
+		}
+	}
 	// Reproduce the public candidate that carried a concrete mode on the final
 	// retained-master execution dispatch. Its local merge design/review remains
 	// authoritative under the merged key; only the transition aliases are set.
@@ -831,6 +845,15 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 	if err := SaveRunState(root, master); err != nil {
 		t.Fatal(err)
 	}
+	prompt, err := PrepareAction(root, pkg, master.RunID, "qa-execution", blackboxQAID, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range master.Slicing.Slices {
+		if !strings.Contains(prompt, "prepare clean "+owner+" fixture") {
+			t.Fatalf("master execution prompt omitted %s shared procedure: %s", owner, prompt)
+		}
+	}
 	execution := prepareDispatch(t, root, pkg, master.RunID, "qa-execution", blackboxQAID)
 	master, err = RecordQAExecution(root, pkg, master.RunID, execution, passingExecution(finalCases), "")
 	if err != nil {
@@ -838,6 +861,23 @@ func TestRequirementGuaranteeRetainedMasterAcceptsCompleteTwoSliceFinalExecution
 	}
 	if master.RequirementGuarantee.Report.Status != "pass" || master.qaExecution("").Status != "PASS" {
 		t.Fatalf("complete retained-master execution did not close the guarantee: QA=%#v guarantee=%#v", master.qaExecution(""), master.RequirementGuarantee.Report)
+	}
+	gate := prepareAndClaim(t, root, pkg, master.RunID, mergeGateID, "two-slice-merge-review")
+	master, err = RecordGate(root, pkg, master.RunID, mergeGateID, gate, "PASS", "", comparedRange(master), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Seal(root, pkg, master.RunID, nil, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	materialized, err := os.ReadFile(filepath.Join(root, ".gates", "results", master.RunID+".blackbox-cases.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range master.Slicing.Slices {
+		if strings.Count(string(materialized), "prepare clean "+owner+" fixture") != 1 {
+			t.Fatalf("master Seal omitted or crossed %s shared procedure: %s", owner, materialized)
+		}
 	}
 }
 

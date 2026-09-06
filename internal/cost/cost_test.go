@@ -66,7 +66,7 @@ func TestParseClaudeTranscriptSumsDedupedAssistantUsage(t *testing.T) {
 	}
 }
 
-func TestParseCodexTranscriptPrefersLastUsageAndDeltasCumulative(t *testing.T) {
+func TestParseCodexTranscriptDeltasCumulativeAndDeduplicatesLastMirror(t *testing.T) {
 	usage, err := ParseTranscript("codex", writeFixture(t, codexFixture))
 	if err != nil {
 		t.Fatal(err)
@@ -197,5 +197,57 @@ func TestRunCostJSONRoundTripAndOmission(t *testing.T) {
 	}
 	if strings.Contains(string(data), "cost") {
 		t.Fatalf("nil cost projection was not omitted: %s", data)
+	}
+}
+
+// Current Codex writes each response as well as a legacy total+last mirror.
+// Replayed request records and later rate-limit refreshes must add no tokens.
+func TestParseCodexCurrentRequestsAndMirrors(t *testing.T) {
+	modern := `{"timestamp":"2026-09-06T16:43:02Z","type":"token_usage_record","payload":{"response_id":"resp-1","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20},"thread_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}}` + "\n"
+	mirror := `{"timestamp":"2026-09-06T16:43:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}}}` + "\n"
+	second := `{"timestamp":"2026-09-06T16:43:04Z","type":"token_usage_record","payload":{"response_id":"resp-2","usage":{"input_tokens":25,"cached_input_tokens":10,"output_tokens":7},"thread_token_usage":{"input_tokens":125,"cached_input_tokens":50,"output_tokens":27}}}` + "\n"
+	for name, content := range map[string]string{
+		"modern and mirrors":   modern + mirror + strings.ReplaceAll(mirror, "16:43:03", "16:43:09") + second + modern,
+		"legacy before modern": mirror + modern + second,
+		"current records only": modern + second + modern,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParseTranscript("codex", writeFixture(t, content))
+			if err != nil || got != (Usage{50, 75, 27}) {
+				t.Fatalf("usage=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestCodexTaskTimingIncludesToolsAndExcludesIdle(t *testing.T) {
+	events := `{"timestamp":"2026-09-06T16:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}
+{"timestamp":"2026-09-06T16:00:01Z","type":"response_item","payload":{"type":"function_call"}}
+{"timestamp":"2026-09-06T16:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one"}}
+{"timestamp":"2026-09-06T16:10:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two"}}
+{"timestamp":"2026-09-06T16:10:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"two"}}
+`
+	got, err := CodexTaskTiming(writeFixture(t, events))
+	if err != nil || got != (TaskTiming{"2026-09-06T16:00:00Z", "2026-09-06T16:10:02Z", 5000}) {
+		t.Fatalf("timing=%+v err=%v", got, err)
+	}
+	for _, content := range []string{"{}\n", events + `{"timestamp":"2026-09-06T16:11:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"unfinished"}}` + "\n"} {
+		if got, err := CodexTaskTiming(writeFixture(t, content)); err == nil || got != (TaskTiming{}) {
+			t.Fatalf("unfinished timing=%+v err=%v", got, err)
+		}
+	}
+}
+
+func TestCodexResumeDoesNotMixThreadAndProcessCounters(t *testing.T) {
+	transcript := `{"type":"token_usage_record","payload":{"response_id":"before-resume","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20},"thread_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}}}
+{"type":"token_usage_record","payload":{"response_id":"after-resume-1","usage":{"input_tokens":25,"cached_input_tokens":10,"output_tokens":7},"thread_token_usage":{"input_tokens":125,"cached_input_tokens":50,"output_tokens":27}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":25,"cached_input_tokens":10,"output_tokens":7}}}}
+{"type":"token_usage_record","payload":{"response_id":"after-resume-2","usage":{"input_tokens":30,"cached_input_tokens":20,"output_tokens":8},"thread_token_usage":{"input_tokens":155,"cached_input_tokens":70,"output_tokens":35}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":55,"cached_input_tokens":30,"output_tokens":15}}}}
+`
+	got, err := ParseTranscript("codex", writeFixture(t, transcript))
+	if err != nil || got != (Usage{70, 85, 35}) {
+		t.Fatalf("resume usage=%+v err=%v", got, err)
 	}
 }

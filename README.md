@@ -144,7 +144,7 @@ formal-gates 用一套覆盖全过程的流程回应这两个问题：
 
 开发或返修代理运行失败时，用 `record-action --action development-worker --status RUNTIME_ERROR --message ...` 结束该次派发；重试沿用原 TaskKey 和有限 attempt 额度。相同 OPEN/PENDING/CLAIMED 的准备请求返回原票据。
 
-**做什么**：同一 review-wave 的测试失败、有效 P0/P1 和门审 P2 只进入一份统一返修。门审 P2 必须修，但凭完整构建、全量项目测试和受影响用例自跑完成后直接 carry，不重新门审；门审 P3 不修，只在封板前展示。QA Review 的 P2/P3 则必须按建议 ID 吸收后才能冻结用例集。普通中间返修固定只跑受影响 QA；启用 requirement guarantee 时，最终候选封板前再做全量回归。自动轮次用尽后的额外返修，先展示绑定当前状态的只读摘要，再由你明确授权。
+**做什么**：同一 review-wave 的测试失败、有效 P0/P1 和门审 P2 只进入一份统一返修。门审 P2 必须修，但凭完整构建、全量项目测试和受影响用例自跑完成后直接 carry，不重新门审；门审 P3 不修，只在封板前展示。QA Review 的可选 P2/P3 按建议 ID 登记采纳、延期或不采纳及理由后可冻结；采纳改变验收含义或可执行性时重审受影响用例。普通中间返修固定只跑受影响 QA；启用 requirement guarantee 时，最终候选封板前再做全量回归。自动轮次用尽后的额外返修，先展示绑定当前状态的只读摘要，再由你明确授权。
 **谁来做**：主代理固定修复前的标记、派开发代理修复，然后重新快照并重审。
 **留什么**：修复改动与新的快照；修复前的版本留作继承判断的依据。
 **一句话**：小修不重测没变的东西，大改走独立判断。
@@ -351,3 +351,12 @@ bin/formal-gates canary portable --root . --format json
 - Bug 或改进建议请通过 GitHub issues 提交。
 
 **许可**：[MIT](LICENSE)。
+
+QA 支持复用共同准备/操作说明、逐例增量审批、已有白盒测试的独立检查与复跑，以及同次执行
+的检查点续跑。完整 PASS/FAIL 保留在原 run，未完成项不能 PASS；独立用例以干净副本批量运行。
+Git 最终提交整理用 `workflow prepare-candidate --squash-message`，在最后必需验证之前完成；
+Seal 固化同一候选身份。可调用参数、fixture 和续跑示例见 [正式流程](references/formal-flow.md#qa-共同步骤批量与同次续跑)。
+
+Codex 用量支持当前请求记录与累计事件去重，现有 cost 条目保留 rollout 来源和模型任务起止/
+墙钟时间（含工具等待）。本阶段真实 Codex 对比必须补齐这些指标；操作与计时边界见
+[成本计量](references/formal-flow.md#成本计量)和[验证记录](refactor-plan/stage-3-5c-validation.md)。

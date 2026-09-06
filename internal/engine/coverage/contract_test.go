@@ -305,3 +305,36 @@ func TestContractDigestProjectionDoesNotMutateInput(t *testing.T) {
 		t.Fatal("digest changed caller-owned manifest ordering")
 	}
 }
+
+func TestSharedPreparationKeepsIndependentCasesAndReview(t *testing.T) {
+	c, reviews := fixtureContract()
+	c.Manifests[0].SharedSteps = []SharedStep{{ID: "fixture", Procedure: "create clean project and capture command output"}}
+	for i := range c.Manifests[0].Cases {
+		c.Manifests[0].Cases[i].SharedSteps = []string{"fixture"}
+	}
+	if _, err := c.ValidateReviews(reviews); err == nil {
+		t.Fatal("shared preparation missing review accepted")
+	}
+	reviews[0].SharedStepDecisions = []ReviewDecision{{ID: "fixture", Status: StatusPass}}
+	approved, err := c.ValidateReviews(reviews)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approved.Entries) != 5 {
+		t.Fatal("shared preparation reduced expected coverage")
+	}
+	digest, _ := c.ManifestDigest()
+	c.Manifests[0].SharedSteps[0].Procedure = "changed preparation"
+	changed, _ := c.ManifestDigest()
+	if changed == digest {
+		t.Fatal("shared edit did not change version")
+	}
+	reviews[0].CaseDecisions[1].Status = StatusFail
+	if _, err := c.ValidateReviews(reviews); err == nil {
+		t.Fatal("shared approval concealed incorrect case")
+	}
+	c.Manifests[0].Cases[0].SharedSteps = []string{"unknown"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown reference accepted")
+	}
+}

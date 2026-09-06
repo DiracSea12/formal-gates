@@ -598,6 +598,7 @@ func installHostCLI(t *testing.T, provider, project string) (string, string) {
 	host := map[string]string{
 		lifecycle.ProviderClaude: "claude",
 		lifecycle.ProviderCursor: "cursor",
+		lifecycle.ProviderCodex:  "codex",
 	}[provider]
 	if host == "" {
 		t.Fatalf("unsupported installed-host fixture provider %q", provider)

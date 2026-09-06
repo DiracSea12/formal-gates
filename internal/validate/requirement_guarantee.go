@@ -116,6 +116,7 @@ type RequirementUpdateOptions struct {
 }
 
 type QAReviewRecordOptions struct {
+	SharedSteps     []QAReviewInput
 	SourceDecisions []string
 	PointDecisions  []string
 	CaseDecisions   []string
@@ -840,6 +841,7 @@ type SliceGuaranteeRecord struct {
 	Snapshot            string                           `json:"snapshot"`
 	RouteMode           string                           `json:"routeMode"`
 	CasesByMode         map[string][]QACase              `json:"casesByMode"`
+	SharedStepsByMode   map[string][]QASharedStep        `json:"sharedStepsByMode,omitempty"`
 	ReviewsByMode       map[string]GuaranteeReviewRecord `json:"reviewsByMode"`
 	ExecutionByMode     map[string]QAExecutionResult     `json:"executionByMode,omitempty"`
 	Digest              string                           `json:"digest"`
@@ -866,6 +868,7 @@ func saveSliceGuaranteeRecord(root string, state RunState) error {
 		Snapshot:            state.CurrentSnapshot,
 		RouteMode:           state.RouteMode,
 		CasesByMode:         state.QACasesByMode,
+		SharedStepsByMode:   qaSharedStepsByMode(state),
 		ReviewsByMode:       state.RequirementGuarantee.ReviewsByMode,
 		ExecutionByMode:     state.QAExecutionByMode,
 	}
@@ -949,6 +952,7 @@ func collectLocalGuaranteeEvidence(state RunState, qualify bool, merge bool) []g
 			qualified := testCase.ID
 			if qualify {
 				qualified = qualifiedGuaranteeCaseID(state.RunID, kind, testCase.ID)
+				testCase = inlineQASharedSteps(testCase, state.QACaseSets[key].SharedSteps)
 			}
 			review, ok := state.RequirementGuarantee.ReviewsByMode[key]
 			evidence = append(evidence, guaranteeCaseEvidence{Kind: kind, Case: testCase, Review: review, HasReview: ok, Qualified: qualified})
@@ -1001,6 +1005,7 @@ func collectGuaranteeEvidenceAllowMissing(root string, state RunState, allowMiss
 		sort.Strings(keys)
 		for _, key := range keys {
 			for _, testCase := range record.CasesByMode[key] {
+				testCase = inlineQASharedSteps(testCase, record.SharedStepsByMode[key])
 				kind := coverageKind(testCase.Mode, false)
 				review, ok := record.ReviewsByMode[key]
 				execution, hasExecution := record.ExecutionByMode[key]
@@ -1239,94 +1244,6 @@ func recordGuaranteeReview(state *RunState, mode string, cases []QACase, options
 	return nil
 }
 
-// refreshGuaranteeReviewAfterSuggestion rebuilds the deterministic review
-// projection after a PASS review's P2/P3 suggestions are absorbed.  The
-// suggestion path is itself the approval source for changed cases, so missing
-// source/point/case decisions are added as PASS only for this bounded update;
-// obsolete decisions are removed before the whitelist is projected again.
-func refreshGuaranteeReviewAfterSuggestion(state *RunState, mode string) error {
-	if state.RequirementGuarantee == nil {
-		return nil
-	}
-	cases := state.qaModeCases(mode)
-	manifest, err := localGuaranteeManifest(*state, mode, cases)
-	if err != nil {
-		return err
-	}
-	record, ok := state.RequirementGuarantee.ReviewsByMode[mode]
-	if !ok || record.Review.SetStatus != coverage.StatusPass {
-		return fmt.Errorf("suggestion absorption requires a complete PASS guarantee review for mode %q", mode)
-	}
-	kind := manifest.Binding.ReviewKind
-	// Rebuilding only from the remaining cases would erase evidence that an
-	// accepted AC has just lost its last case. Keep that obligation visible
-	// while checking approved coverage across the selected modes.
-	covered := map[string]bool{}
-	for _, testCase := range cases {
-		if testCase.ReviewStatus == "PASS" {
-			for _, acID := range guaranteeAllACs(testCase) {
-				covered[acID] = true
-			}
-		}
-	}
-	for _, selected := range state.SelectedGates {
-		if !isQAMode(selected) {
-			continue
-		}
-		selectedMode := qaDispatchMode(selected)
-		selectedReview := state.RequirementGuarantee.ReviewsByMode[selectedMode]
-		if selectedReview.Review.SetStatus != coverage.StatusPass || selectedReview.Whitelist == nil {
-			continue
-		}
-		for _, testCase := range state.qaModeCases(selectedMode) {
-			if testCase.ReviewStatus == "PASS" {
-				for _, acID := range guaranteeAllACs(testCase) {
-					covered[acID] = true
-				}
-			}
-		}
-	}
-	for _, point := range record.Review.PointDecisions {
-		acID := strings.TrimPrefix(point.ID, string(kind)+"::")
-		if point.Status == coverage.StatusPass && !covered[acID] {
-			return fmt.Errorf("suggestion absorption would remove the last approved coverage for %s", acID)
-		}
-	}
-	expectedSources, expectedPoints := guaranteeReviewDecisionIDs(*state, kind, cases)
-	sourceValues := map[string]coverage.DecisionStatus{}
-	for _, id := range expectedSources {
-		sourceValues[id] = coverage.StatusPass
-	}
-	pointValues := map[string]coverage.DecisionStatus{}
-	for _, id := range expectedPoints {
-		pointValues[id] = coverage.StatusPass
-	}
-	caseValues := map[string]coverage.DecisionStatus{}
-	for _, testCase := range cases {
-		if testCase.ReviewStatus != "PASS" {
-			return fmt.Errorf("suggestion absorption left case %s without PASS approval", testCase.ID)
-		}
-		caseValues[testCase.ID] = coverage.StatusPass
-	}
-	review := coverage.ReviewResult{Binding: manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: sortedDecisionMap(sourceValues), PointDecisions: sortedDecisionMap(pointValues), CaseDecisions: sortedDecisionMap(caseValues), SetStatus: coverage.StatusPass}
-	required := make([]coverage.RequiredSource, 0, len(manifest.Sources))
-	for _, sourceID := range manifest.Sources {
-		required = append(required, coverage.RequiredSource{SourceID: sourceID, Category: coverage.ProductRequirement, Applicability: coverage.QAApplicability})
-	}
-	contract := coverage.CoverageContract{RequiredSources: coverage.RequiredSources{Binding: manifest.Binding.SourceBinding, Sources: required}, SelectedKinds: []coverage.ReviewKind{kind}, Manifests: []coverage.AcceptanceManifest{manifest}}
-	whitelist, err := coverage.ProjectWhitelist(contract, []coverage.ReviewResult{review})
-	if err != nil {
-		return err
-	}
-	record.Review = review
-	record.Whitelist = &whitelist
-	state.RequirementGuarantee.ReviewsByMode[mode] = record
-	return nil
-}
-
-// validateGuaranteeCaseSetFreeze is the final mechanical gate before a case
-// set receives a FROZEN version.  It checks the current source/point/case
-// mapping and whitelist rather than trusting an earlier set-level PASS.
 func validateGuaranteeCaseSetFreeze(state *RunState, mode string) error {
 	if state.RequirementGuarantee == nil {
 		return nil

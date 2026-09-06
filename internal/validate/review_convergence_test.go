@@ -46,7 +46,7 @@ func blackboxFrozenDelivery(t *testing.T, id string, selected []string) (string,
 	return root, pkg, state
 }
 
-func TestQAReviewSuggestionsMustBeAbsorbedBeforeFreeze(t *testing.T) {
+func TestQAReviewSuggestionsMustBeDisposedBeforeFreeze(t *testing.T) {
 	root, pkg := workflowFixture(t)
 	state := confirmAndRoute(t, root, pkg, mustStart(t, root, pkg, "suggestion-freeze"), "custom", []string{blackboxQAID})
 	worktree := createQAWorktree(t, root, state)
@@ -69,19 +69,20 @@ func TestQAReviewSuggestionsMustBeAbsorbedBeforeFreeze(t *testing.T) {
 	if caseSet.Status != caseSetReviewed || len(caseSet.Suggestions) != 2 || caseSet.Version != "" {
 		t.Fatalf("suggested PASS review froze too early: %#v", caseSet)
 	}
-	caseID := state.qaModeCases("blackbox")[0].ID
-	first := prepareDispatch(t, root, pkg, state.RunID, "qa-design", "blackbox")
-	before := stateBytes(t, root, state.RunID)
-	if _, err := RecordQADesign(root, pkg, state.RunID, first, []QACaseInput{{CaseID: caseID, Mode: "blackbox", Description: "public command", Procedure: "run it", Oracle: "exit zero and documented output"}}, "", QADesignRecordOptions{PerSuggestion: true, SuggestionIDs: []string{caseSet.Suggestions[0].ID}}); err == nil || stateBytes(t, root, state.RunID) != before {
-		t.Fatalf("omitted suggestion was accepted or partly written: %v", err)
+	state, err = RecordQASuggestion(root, pkg, state.RunID, "blackbox", caseSet.Suggestions[0].ID, "DEFER", "existing approved oracle covers the requirement", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	state, err = RecordQADesign(root, pkg, state.RunID, first, []QACaseInput{{CaseID: caseID, Mode: "blackbox", Description: "public command", Procedure: "run the documented setup and command", Oracle: "exit zero and documented output"}}, "", QADesignRecordOptions{PerSuggestion: true, SuggestionIDs: []string{caseSet.Suggestions[0].ID, caseSet.Suggestions[1].ID}})
+	if state.QACaseSets["blackbox"].Status == caseSetFrozen {
+		t.Fatal("unhandled second suggestion froze")
+	}
+	state, err = RecordQASuggestion(root, pkg, state.RunID, "blackbox", caseSet.Suggestions[1].ID, "DECLINE", "existing setup remains executable", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	caseSet = state.QACaseSets["blackbox"]
 	if caseSet.Status != caseSetFrozen || caseSet.Version == "" {
-		t.Fatalf("fully absorbed suggestion set did not freeze: %#v", caseSet)
+		t.Fatalf("fully disposed suggestion set did not freeze: %#v", caseSet)
 	}
 	if _, err := PrepareAction(root, pkg, state.RunID, "qa-design", "blackbox", false, ""); err == nil {
 		t.Fatal("ordinary QA design reopened a FROZEN case-set")

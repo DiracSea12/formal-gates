@@ -387,9 +387,16 @@ func dispatchPromptRevision(state RunState, catalog PromptCatalog, targetKind, t
 
 func qaCaseSetVersion(state RunState, mode string) string {
 	if mode == "" {
-		return digestValue(state.QACasesByMode)
+		return digestValue(struct {
+			Cases  map[string][]QACase
+			Shared map[string][]QASharedStep
+		}{state.QACasesByMode, qaSharedStepsByMode(state)})
 	}
-	return digestValue(state.qaCases(mode))
+	storageKey := qaSharedStepStorageKey(state, mode)
+	return digestValue(struct {
+		Cases  []QACase
+		Shared []QASharedStep
+	}{state.qaModeCases(mode), state.QACaseSets[storageKey].SharedSteps})
 }
 
 func dispatchWorkflowContext(state RunState, targetKind, target, mode string) string {

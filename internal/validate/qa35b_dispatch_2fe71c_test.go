@@ -433,64 +433,35 @@ func qa35bSuggestions(t *testing.T) RunState {
 	return s
 }
 
-func TestQA35BSuggestionsDelayFreezeUntilAbsorbed(t *testing.T) {
+// Stage 3.5c keeps the stable suggestion/freeze boundary, but accepts reasoned
+// optional dispositions without manufacturing changed tests or a new snapshot.
+func TestQA35BSuggestionsDelayFreezeUntilDisposed(t *testing.T) {
 	s := qa35bSuggestions(t)
 	c := s.QACaseSets["whitebox"]
-	if c.Status != caseSetReviewed || c.Version != "" || c.Suggestions[0].ID == c.Suggestions[1].ID || c.Suggestions[1].Severity != "P3" {
-		t.Fatalf("%+v", c)
+	if c.Status != caseSetReviewed || len(c.Suggestions) != 2 || c.Suggestions[0].ID == c.Suggestions[1].ID {
+		t.Fatal("stable suggestions missing")
 	}
-	d := PreparedDispatch{ID: "designer", Mode: "whitebox"}
-	if err := absorbQAReviewSuggestions(&s, d, []string{c.Suggestions[0].ID}, true); err == nil {
-		t.Fatal("AC-027 requires omitted suggestion IDs to be rejected")
+	if err := freezeQACaseSet(&s, "whitebox", &c, false); err == nil {
+		t.Fatal("pending suggestions froze")
 	}
-	qa35bOK(t, absorbQAReviewSuggestions(&s, d, []string{c.Suggestions[0].ID, c.Suggestions[1].ID}, true))
-	frozen := s.QACaseSets["whitebox"]
-	if frozen.Status != "FROZEN" || !frozen.PendingSnapshotAdvance || frozen.BoundSnapshot != "" || frozen.Version == "" {
-		t.Fatalf("%+v", frozen)
+	c.Suggestions[0].Status, c.Suggestions[0].Reason = "DEFER", "existing coverage sufficient"
+	if err := freezeQACaseSet(&s, "whitebox", &c, false); err == nil {
+		t.Fatal("omitted pending suggestion froze")
 	}
-	for _, suggestion := range frozen.Suggestions {
-		if suggestion.Status != "ABSORBED" || suggestion.AbsorbedByDispatchID != "designer" || suggestion.ReviewDispatchID != "review" {
-			t.Fatalf("%+v", suggestion)
-		}
+	c.Suggestions[1].Status = "DECLINE"
+	if err := freezeQACaseSet(&s, "whitebox", &c, false); err == nil {
+		t.Fatal("missing disposition reason froze")
 	}
+	c.Suggestions[1].Reason = "existing evidence is explicit"
+	qa35bOK(t, freezeQACaseSet(&s, "whitebox", &c, false))
+	if c.Status != caseSetFrozen || c.PendingSnapshotAdvance || c.BoundSnapshot != s.CurrentSnapshot {
+		t.Fatal("optional disposition required a needless snapshot")
+	}
+	s.QACaseSets["whitebox"] = c
 	s.CurrentSnapshot = "with-tests"
 	bindFrozenCaseSetsToSnapshot(&s)
-	if s.QACaseSets["whitebox"].BoundSnapshot != "with-tests" || s.QACaseSets["whitebox"].PendingSnapshotAdvance || s.QACaseSets["whitebox"].Version != frozen.Version {
+	if s.QACaseSets["whitebox"].Version != c.Version || s.QACaseSets["whitebox"].BoundSnapshot != "with-tests" {
 		t.Fatal("snapshot binding failed")
-	}
-}
-
-func TestQA35BInvalidSuggestionAbsorptionIsRejected(t *testing.T) {
-	for _, name := range []string{"no-pass", "no-change", "missing-id", "duplicate-id", "unrelated-id", "already-absorbed"} {
-		t.Run(name, func(t *testing.T) {
-			s := qa35bSuggestions(t)
-			c := s.QACaseSets["whitebox"]
-			ids := []string{c.Suggestions[0].ID, c.Suggestions[1].ID}
-			changed := true
-			d := PreparedDispatch{ID: "designer", Mode: "whitebox"}
-			switch name {
-			case "no-pass":
-				c.Status = caseSetDraft
-				s.QACaseSets["whitebox"] = c
-			case "no-change":
-				changed = false
-			case "missing-id":
-				ids = nil
-			case "duplicate-id":
-				ids = append(ids, ids[0])
-			case "unrelated-id":
-				ids = []string{"other-review"}
-			case "already-absorbed":
-				qa35bOK(t, absorbQAReviewSuggestions(&s, d, ids, true))
-			}
-			before := digestValue(s)
-			if err := absorbQAReviewSuggestions(&s, d, ids, changed); err == nil {
-				t.Fatal("invalid absorption accepted")
-			}
-			if digestValue(s) != before {
-				t.Fatal("invalid absorption changed the prior case-set state")
-			}
-		})
 	}
 }
 

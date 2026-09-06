@@ -272,14 +272,7 @@ func acceptCatalogHashes(state *RunState, catalog PromptCatalog) {
 
 func Abort(root, runID string) (RunSummary, error) { return finishRun(root, runID, "ABORTED") }
 
-// Seal aggregates the run. For git runs whose base→current range holds more than
-// one commit, the range is squashed into a single commit (git reset --soft base +
-// a fresh commit with --squash-message) as the last VCS operation, preserving the
-// final tree. The squashed commit becomes a new final candidate: existing QA and
-// gate evidence keeps its original binding, the first call persists that candidate
-// and requests revalidation, and a later call completes Seal after current-candidate
-// evidence exists. Single-commit or empty ranges are not rewritten; SVN/P4 are
-// never squashed.
+// Seal verifies and materializes the already validated immutable candidate.
 func Seal(root, packageRoot, runID string, skips []string, userRequested bool, squashMessage string, opts ...SealOptions) (RunSummary, error) {
 	ownerUnlock, err := lockOwnerCost(root)
 	if err != nil {
@@ -300,8 +293,7 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	if err != nil {
 		return RunSummary{}, err
 	}
-	// Seal may rewrite the repository (Git squash) before its terminal state is
-	// persisted. Keep the admission registry lock through terminal summary and
+	// Keep the admission registry lock through terminal summary and
 	// cleanup as well: a retry after a crash at SEALED is still a workflow write
 	// and must not bypass an installation that has since been disabled.
 	var admissionUnlock func()
@@ -311,9 +303,8 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			return RunSummary{}, err
 		}
 		defer admissionUnlock()
-		// Re-admit immediately after taking the lock and before any VCS or
-		// sidecar mutation.  Checking only at the final state save would allow an
-		// already-disabled record to reach the Git squash first.
+		// Re-admit immediately after taking the lock and before sidecar mutation.
+		// A disabled installation must not materialize terminal artifacts.
 		if err := verifyRunStateAdmissionLocked(root, state); err != nil {
 			return RunSummary{}, err
 		}
@@ -386,46 +377,13 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 	if after != state.CurrentSnapshot {
 		return RunSummary{}, fmt.Errorf("native VCS identity does not match the current snapshot after aggregation")
 	}
-	// 压缩提交（仅 Git、自动）：校验通过后、落 summary 前执行，作为 seal 的最后一步
-	// VCS 操作。压缩前确认工作树干净；单条提交或空范围不操作。
 	if state.VCS == "git" {
 		count, err := gitCommitCountInRange(root, state.BaseSnapshot, state.CurrentSnapshot)
 		if err != nil {
 			return RunSummary{}, err
 		}
 		if count > 1 {
-			if err := verifySnapshotReady(root, state.VCS); err != nil {
-				return RunSummary{}, fmt.Errorf("seal git squash requires a clean working tree: %w", err)
-			}
-			message := strings.TrimSpace(squashMessage)
-			if message == "" {
-				return RunSummary{}, fmt.Errorf("seal git squash requires --squash-message for the combined commit")
-			}
-			if err := squashGitRangeToBase(root, state.BaseSnapshot, message); err != nil {
-				return RunSummary{}, err
-			}
-			newSnapshot, err := resolveNativeSnapshot(root, state.VCS)
-			if err != nil {
-				return RunSummary{}, err
-			}
-			// The squashed commit is the final candidate, not the candidate named by
-			// the existing QA/gate evidence. Keep those bindings unchanged, persist
-			// the new current candidate, and require fresh verification before a
-			// subsequent Seal can complete.
-			state.CurrentSnapshot = newSnapshot
-			bindFrozenCaseSetsToSnapshot(&state)
-			state.PreRepairSnapshot = ""
-			staleAllDispatches(&state)
-			for id, authorization := range state.SkipAuthorizations {
-				if isSealScopedAuthorization(authorization) {
-					delete(state.SkipAuthorizations, id)
-				}
-			}
-			refreshRequirementGuarantee(root, &state)
-			if err := saveRunState(root, state, admissionUnlock != nil); err != nil {
-				return RunSummary{}, err
-			}
-			return RunSummary{}, fmt.Errorf("git Seal created final squashed candidate %s; rerun every selected QA mode and gate on this candidate, then retry Seal", newSnapshot)
+			return RunSummary{}, fmt.Errorf("organize the final candidate with workflow prepare-candidate --squash-message before mandatory QA/gate verification and Seal")
 		}
 	}
 	sliceInstance := strings.TrimSpace(state.SplitMasterRunID) != ""
@@ -440,7 +398,7 @@ func Seal(root, packageRoot, runID string, skips []string, userRequested bool, s
 			return RunSummary{}, err
 		}
 	}
-	// Persist the post-squash snapshot and merged cost projection while the run
+	// Persist the verified candidate and merged cost projection while the run
 	// is still ACTIVE. All fallible Seal artifacts are written before terminal
 	// cleanup so a materialization/finalization failure never leaves a durable
 	// SEALED run state. Repeating Seal is safe because these derived writes are
@@ -522,7 +480,8 @@ func mergeSliceCosts(root string, state *RunState) error {
 // calls this); a run with no approved blackbox cases writes nothing.
 func materializeBlackboxCases(root string, state RunState) error {
 	var approved []QACase
-	for _, testCase := range state.qaModeCases("blackbox") {
+	storageKey, cases := state.qaModeCasesWithKey("blackbox")
+	for _, testCase := range cases {
 		if testCase.ReviewStatus == "PASS" {
 			approved = append(approved, testCase)
 		}
@@ -546,7 +505,7 @@ func materializeBlackboxCases(root string, state RunState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return writeAtomic(path, []byte(blackboxCasesMarkdown(state.RunID, approved)), 0o600)
+	return writeAtomic(path, []byte(blackboxCasesMarkdown(state.RunID, approved, state.QACaseSets[storageKey].SharedSteps...)), 0o600)
 }
 
 func finishRun(root, runID, status string) (RunSummary, error) {

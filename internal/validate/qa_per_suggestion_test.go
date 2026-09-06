@@ -5,62 +5,21 @@ import (
 	"testing"
 )
 
-// TestPerSuggestionAbsorbApprovesCasesWithoutNewReview drives the full flow:
-// a qa-review round PASSes while recording a P2 set-level suggestion, then a
-// qa-design record with PerSuggestion absorbs it — the added and modified cases
-// are recorded approved (SUGGESTION_APPLIED provenance) without any new
-// qa-review dispatch, and the mode's review result stays PASS with the P2
-// finding preserved as absorption provenance.
-func TestPerSuggestionAbsorbApprovesCasesWithoutNewReview(t *testing.T) {
+// The former direct-approval path must not bypass independent review of changed
+// case meaning. Optional dispositions now use the explicit reasoned operation.
+func TestPerSuggestionCannotApproveChangedCases(t *testing.T) {
 	root, pkg := workflowFixture(t)
-	state := beginQA(t, root, pkg, "per-suggestion-absorb")
-	reviewDispatch := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "ps-reviewer")
-	var err error
-	state, err = RecordQAReview(root, pkg, state.RunID, reviewDispatch, passingReviewDecisions(state), "", []FindingInput{{Severity: "P2", Message: "suggest an additional boundary case"}})
+	state := beginQA(t, root, pkg, "per-suggestion-bypass")
+	review := prepareAndClaim(t, root, pkg, state.RunID, "qa-review", "ps-review")
+	state, err := RecordQAReview(root, pkg, state.RunID, review, passingReviewDecisions(state), "", []FindingInput{{Severity: "P2", Message: "optional boundary improvement"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if review := state.qaReview(""); review.Status != "PASS" {
-		t.Fatalf("review result after P2-only round=%#v", review)
-	}
-	suggestionID := state.QACaseSets[""].Suggestions[0].ID
-	// 吸收轮：新增一个用例 + 实质修改既有黑盒用例 + 原样重交既有白盒用例（无实质吸收，
-	// 不打溯源）。
-	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
-	state, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{
-		{CaseID: "CASE-002", Mode: "blackbox", Description: "public workflow succeeds at the boundary", Procedure: "run the documented public CLI against a built snapshot", Oracle: "observable output succeeds"},
-		{Mode: "blackbox", Description: "boundary case absorbed from the P2 suggestion", Procedure: "run the public command at the boundary", Oracle: "observable boundary behavior"},
-		{CaseID: "CASE-001", Mode: "whitebox", Description: "direct rules pass", Procedure: "run the delivered structure test", Oracle: "the test passes", Test: "whitebox_delivered_test.go::TestWhiteboxDirectRules"},
-	}, "", QADesignRecordOptions{PerSuggestion: true, SuggestionIDs: []string{suggestionID}})
-	if err != nil {
-		t.Fatalf("per-suggestion absorption was rejected: %v", err)
-	}
-	for _, testCase := range state.qaModeCases("") {
-		if testCase.ReviewStatus != "PASS" {
-			t.Fatalf("case %s is not approved after absorption: %#v", testCase.ID, testCase)
-		}
-	}
-	byID := map[string]QACase{}
-	for _, testCase := range state.qaModeCases("") {
-		byID[testCase.ID] = testCase
-	}
-	if byID["CASE-002"].ApprovedSource != "SUGGESTION_APPLIED" {
-		t.Fatalf("modified case provenance=%q want SUGGESTION_APPLIED", byID["CASE-002"].ApprovedSource)
-	}
-	if byID["CASE-003"].ApprovedSource != "SUGGESTION_APPLIED" {
-		t.Fatalf("absorbed case provenance=%q want SUGGESTION_APPLIED", byID["CASE-003"].ApprovedSource)
-	}
-	// 原样重交（无实质吸收）不打溯源，状态保持 review 批准。
-	if byID["CASE-001"].ApprovedSource != "" || byID["CASE-001"].ReviewStatus != "PASS" {
-		t.Fatalf("unchanged resubmission was stamped as absorbed: %#v", byID["CASE-001"])
-	}
-	// 吸收轮不重置 review：P2 建议留作溯源，权威结果保持 PASS（不派新 qa-review）。
-	if review := state.qaReview(""); review.Status != "PASS" || len(review.Findings) == 0 {
-		t.Fatalf("absorption reset the review result: %#v", review)
-	}
-	// 派发提示词里的用例展示带溯源（读文档即知为何不经 qa-review 即已批准）。
-	if rendered := formatQACase(byID["CASE-003"], true); !strings.Contains(rendered, "review status: PASS (SUGGESTION_APPLIED)") {
-		t.Fatalf("rendered absorbed case lacks provenance: %s", rendered)
+	dispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
+	before := stateBytes(t, root, state.RunID)
+	_, err = RecordQADesign(root, pkg, state.RunID, dispatch, []QACaseInput{{CaseID: "CASE-002", Mode: "blackbox", Description: "changed case", Procedure: "changed command", Oracle: "new oracle"}}, "", QADesignRecordOptions{PerSuggestion: true, SuggestionIDs: []string{state.QACaseSets[""].Suggestions[0].ID}})
+	if err == nil || !strings.Contains(err.Error(), "qa-suggestion") || stateBytes(t, root, state.RunID) != before {
+		t.Fatal("direct approval bypass survived")
 	}
 }
 
@@ -97,11 +56,11 @@ func TestPerSuggestionRejectedOnFailedReviewOrReplaceAll(t *testing.T) {
 	}
 	designDispatch := prepareDispatch(t, root, pkg, state.RunID, "qa-design")
 	_, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "absorb on FAIL", Procedure: "run the public command", Oracle: "observable success"}}, "", QADesignRecordOptions{PerSuggestion: true})
-	if err == nil || !strings.Contains(err.Error(), "latest qa-review result to be PASS") {
+	if err == nil || !strings.Contains(err.Error(), "qa-suggestion") {
 		t.Fatalf("absorption on a FAILed review was accepted: %v", err)
 	}
 	_, err = RecordQADesign(root, pkg, state.RunID, designDispatch, []QACaseInput{{Mode: "blackbox", Description: "replace absorb", Procedure: "run the public command", Oracle: "observable success"}}, "", QADesignRecordOptions{PerSuggestion: true, ReplaceAll: true})
-	if err == nil || !strings.Contains(err.Error(), "cannot be combined with --replace-all") {
+	if err == nil || !strings.Contains(err.Error(), "qa-suggestion") {
 		t.Fatalf("absorption with --replace-all was accepted: %v", err)
 	}
 }
