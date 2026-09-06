@@ -1,9 +1,14 @@
 # 阶段 3.5b：成本记录与运行时派发止损（非独立正式阶段）
 
-状态：阶段 4 前完成的 checkpoint。不新增 `RunPhase`、formal run、Seal、公开写命令或第二
-套账本。新增的公开只读 `workflow guard-preview --input <basis.json>` 由合并需求 REQ-014 授权。3.5b 本身交付 legacy owner 计量和 engine-side 纯 guard 计算核心；engine 状态接入、
+状态：已随 `review-convergence-3-5b` 合并任务 Seal（2026-09-07 核对；该 run 的授权跳过仍按
+原结果保留，不等同全部 QA 实跑 PASS）。checkpoint 不新增 `RunPhase` 或第二套账本，guard
+本身不新增公开写命令。新增的公开只读 `workflow guard-preview --input <basis.json>` 由合并需求 REQ-014 授权。3.5b 本身交付 legacy owner 计量和 engine-side 纯 guard 计算核心；engine 状态接入、
 派发拦截、权威运行时投影和真实运行时验收由阶段 4 完成。未完成阶段 4 接入前不宣称当前 engine
 已具备运行时止损能力。
+
+当前 QA 与计量扩展另见 3.5c 正式需求和主需求 §8.4.2：阶段 4 承接共享步骤和 checkpoint，
+source bridge 保留不提前结算、Codex 请求去重、真实来源和任务 timing。阶段 4 接入、阶段 5
+child/master 汇总仍使用同一投影；历史 checkpoint 输入现状只描述当时基线。
 
 ## 先说结论
 
@@ -163,7 +168,8 @@ Operator semantic adjudication 保存 raw finding、逐条 severity rationale、
 白盒最终 FROZEN case-set 绑定最终含测试快照后才 review-ready，随后冻结 expected-set/digest，
 全部 QA execution/门并行；COLLECTING 未收齐或核实未完成时不建立返修。每快照唯一返修只收
 QA FAIL、有效 P0/P1 与门审 P2；门审 P2 carry 不复审，门审 P3 只作 Seal advisory。
-QA Review P2/P3 以 suggestion ID 吸收后冻结且不复审；普通返修不解冻，只 AFFECTED 执行，
+QA Review 可选 P2/P3 以 suggestion ID 登记采纳/延期/不采纳及理由后冻结；采纳改变共同路径、
+可执行性或验收含义时重审受影响部分。普通返修不解冻，只 AFFECTED 执行，
 保证最终候选 Seal 前 FULL；THAW 仅限需求/对外行为/判据/稳定可执行性变化。
 
 非 wave 与 wave 的 RUNTIME_ERROR/REJECTED_INVALID_RESULT 共用有效义务和有限重派：

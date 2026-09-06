@@ -1,0 +1,611 @@
+{
+  "stage": "3.5c",
+  "status": "INTEGRATED",
+  "recordedAt": "2026-09-06T20:54:36.105702+00:00",
+  "runId": "stage-3-5c-qa-efficiency",
+  "sealedCandidate": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+  "postIntegrationIdentity": "9518a5c43d133794bc47e632351eaf7c142a203e",
+  "nextStageBase": "9518a5c43d133794bc47e632351eaf7c142a203e",
+  "integration": {
+    "commit": "9518a5c43d133794bc47e632351eaf7c142a203e",
+    "parent": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "paths": [
+      "refactor-plan/final-implementation-draft.md",
+      "refactor-plan/incremental-seal-plan.md",
+      "refactor-plan/stage-records.md",
+      ".gates/results/stage-3-5c-qa-efficiency.json",
+      ".gates/results/stage-3-5c-qa-efficiency.blackbox-cases.md",
+      ".gates/results/stage-3-5c-delivery.json"
+    ],
+    "unrelatedInputsPreserved": true,
+    "historyAppendOnly": true
+  },
+  "sealReceipt": {
+    "command": [
+      "/tmp/formal-gates-stage35c-driver-retry-proposal/bin/formal-gates",
+      "workflow",
+      "seal",
+      "--root",
+      "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c",
+      "--package-root",
+      "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stable-driver-phase-0-v2",
+      "--run-id",
+      "stage-3-5c-qa-efficiency"
+    ],
+    "exitCode": 0,
+    "stderr": "",
+    "before": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "after": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+    "candidateUnchanged": true,
+    "stateRemoved": true,
+    "driverExceptionApproval": "/tmp/formal-gates-stage35c-p2-evidence/driver-exception-approval.json",
+    "sealedAt": "2026-09-06T20:44:23.669910+00:00",
+    "summary": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c/.gates/results/stage-3-5c-qa-efficiency.json"
+  },
+  "verification": {
+    "equivalence": {
+      "sourceAndTestsUnchanged": true,
+      "gitDelta": [
+        ".gates/results/stage-3-5c-delivery.json",
+        ".gates/results/stage-3-5c-qa-efficiency.blackbox-cases.md",
+        ".gates/results/stage-3-5c-qa-efficiency.json",
+        "refactor-plan/final-implementation-draft.md",
+        "refactor-plan/incremental-seal-plan.md",
+        "refactor-plan/stage-records.md"
+      ],
+      "sealedPackageDigest": "e82835ad232bfae306f50b837d018e7e32fd7d1c2debd995d06cdeb74a463fb7",
+      "postIntegrationPackageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+      "packageChangedEntries": [
+        "bin/formal-gates",
+        "refactor-plan/final-implementation-draft.md",
+        "refactor-plan/incremental-seal-plan.md",
+        "refactor-plan/stage-records.md"
+      ],
+      "validationScope": "Rebuilt committed post-integration archive; package validation and portable installed canary. Completed sealed-candidate full/race/tag/vet and independent QA retained on their original binding; no new model QA."
+    },
+    "build": {
+      "snapshot": "9518a5c43d133794bc47e632351eaf7c142a203e",
+      "source": "/tmp/formal-gates-stage35c-post-integration/source",
+      "command": [
+        "go",
+        "build",
+        "-o",
+        "bin/formal-gates",
+        "./cmd/formal-gates"
+      ],
+      "exitCode": 0,
+      "durationSeconds": 0.27570295333862305,
+      "stdout": "",
+      "stderr": ""
+    },
+    "package": {
+      "command": [
+        "/tmp/formal-gates-stage35c-post-integration/source/bin/formal-gates",
+        "package",
+        "validate",
+        "--root",
+        "/tmp/formal-gates-stage35c-post-integration/source"
+      ],
+      "exitCode": 0,
+      "durationSeconds": 0.6333169937133789,
+      "snapshot": "9518a5c43d133794bc47e632351eaf7c142a203e",
+      "log": "/tmp/formal-gates-stage35c-post-integration/package.log",
+      "stderr": "/tmp/formal-gates-stage35c-post-integration/package.stderr"
+    },
+    "canary": {
+      "command": [
+        "/tmp/formal-gates-stage35c-post-integration/source/bin/formal-gates",
+        "canary",
+        "portable",
+        "--root",
+        "/tmp/formal-gates-stage35c-post-integration/source",
+        "--format",
+        "json"
+      ],
+      "exitCode": 0,
+      "durationSeconds": 30.954132080078125,
+      "snapshot": "9518a5c43d133794bc47e632351eaf7c142a203e",
+      "log": "/tmp/formal-gates-stage35c-post-integration/canary.log",
+      "stderr": "/tmp/formal-gates-stage35c-post-integration/canary.stderr"
+    },
+    "portableCanaryChecks": [
+      {
+        "name": "package-validate",
+        "status": "PASS"
+      },
+      {
+        "name": "prompt-catalog",
+        "status": "PASS"
+      },
+      {
+        "name": "hook-blocks-legacy-command",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-installed-binary-regression",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-bootstrap",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-installed-binary-canary",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-candidate-install-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-candidate-workflow-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-installed-binary-fault-recovery",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime",
+        "status": "PASS"
+      },
+      {
+        "name": "install-claude-native-runtime-uninstall",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-installed-binary-regression",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-bootstrap",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-installed-binary-canary",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-candidate-install-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-candidate-workflow-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-installed-binary-fault-recovery",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime",
+        "status": "PASS"
+      },
+      {
+        "name": "install-codex-native-runtime-uninstall",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-installed-binary-regression",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-bootstrap",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-installed-binary-canary",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-candidate-install-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-candidate-workflow-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-installed-binary-fault-recovery",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime",
+        "status": "PASS"
+      },
+      {
+        "name": "install-cursor-native-runtime-uninstall",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-installed-binary-regression",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-bootstrap",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-installed-binary-canary",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-candidate-install-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-candidate-workflow-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-installed-binary-fault-recovery",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime",
+        "status": "PASS"
+      },
+      {
+        "name": "install-dsh-native-runtime-uninstall",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-installed-binary-regression",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-bootstrap",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-installed-binary-canary",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-candidate-install-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-candidate-workflow-fenced",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-installed-binary-fault-recovery",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime",
+        "status": "PASS"
+      },
+      {
+        "name": "install-zcode-native-runtime-uninstall",
+        "status": "PASS"
+      },
+      {
+        "name": "write-block-hook",
+        "status": "PASS"
+      }
+    ],
+    "installed": [
+      {
+        "host": "claude",
+        "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/.claude/skills/formal-gates",
+        "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/stable-release",
+        "vcsIdentity": "package:43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "packageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "installedDigest": "43832c010ab4aca7442566c4881d7bb44ce49a62ae056d9558f0268a4f09043b",
+        "canonicalPaths": {
+          "hookConfig": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/.claude/settings.json",
+          "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.local/bin/formal-gates",
+          "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/CLAUDE.md",
+          "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime",
+          "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+          "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/stable-release",
+          "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/.formal-gates-resources",
+          "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/.claude/skills",
+          "sourceRoot": "/private/tmp/formal-gates-stage35c-post-integration/source",
+          "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/.gates",
+          "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-claude-native-runtime/.claude/skills/formal-gates"
+        },
+        "disjoint": {
+          "/tmp/formal-gates-stage35c-post-integration/source": "/private/tmp/formal-gates-stage35c-post-integration/source"
+        },
+        "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+        "registryRecordId": "claude-project-f21f9dadd5b8",
+        "registryEpoch": 1
+      },
+      {
+        "host": "codex",
+        "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/.codex/skills/formal-gates",
+        "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/stable-release",
+        "vcsIdentity": "package:43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "packageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "installedDigest": "43832c010ab4aca7442566c4881d7bb44ce49a62ae056d9558f0268a4f09043b",
+        "canonicalPaths": {
+          "hookConfig": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/.codex/hooks.json",
+          "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.local/bin/formal-gates",
+          "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/AGENTS.md",
+          "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime",
+          "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+          "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/stable-release",
+          "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/.formal-gates-resources",
+          "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/.codex/skills",
+          "sourceRoot": "/private/tmp/formal-gates-stage35c-post-integration/source",
+          "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/.gates",
+          "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-codex-native-runtime/.codex/skills/formal-gates"
+        },
+        "disjoint": {
+          "/tmp/formal-gates-stage35c-post-integration/source": "/private/tmp/formal-gates-stage35c-post-integration/source"
+        },
+        "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+        "registryRecordId": "codex-project-a26b83cc4b90",
+        "registryEpoch": 3
+      },
+      {
+        "host": "cursor",
+        "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.cursor/formal-gates",
+        "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/stable-release",
+        "vcsIdentity": "package:43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "packageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "installedDigest": "43832c010ab4aca7442566c4881d7bb44ce49a62ae056d9558f0268a4f09043b",
+        "canonicalPaths": {
+          "hookConfig": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.cursor/hooks.json",
+          "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.local/bin/formal-gates",
+          "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.cursor/rules/formal-gates.mdc",
+          "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime",
+          "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+          "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/stable-release",
+          "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.formal-gates-resources",
+          "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.cursor",
+          "sourceRoot": "/private/tmp/formal-gates-stage35c-post-integration/source",
+          "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.gates",
+          "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-cursor-native-runtime/.cursor/formal-gates"
+        },
+        "disjoint": {
+          "/tmp/formal-gates-stage35c-post-integration/source": "/private/tmp/formal-gates-stage35c-post-integration/source"
+        },
+        "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+        "registryRecordId": "cursor-project-706dc71ee9f5",
+        "registryEpoch": 5
+      },
+      {
+        "host": "dsh",
+        "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/.dsh/skills/formal-gates",
+        "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/stable-release",
+        "vcsIdentity": "package:43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "packageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "installedDigest": "43832c010ab4aca7442566c4881d7bb44ce49a62ae056d9558f0268a4f09043b",
+        "canonicalPaths": {
+          "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.local/bin/formal-gates",
+          "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/AGENTS.md",
+          "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime",
+          "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+          "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/stable-release",
+          "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/.formal-gates-resources",
+          "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/.dsh/skills",
+          "sourceRoot": "/private/tmp/formal-gates-stage35c-post-integration/source",
+          "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/.gates",
+          "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-dsh-native-runtime/.dsh/skills/formal-gates"
+        },
+        "disjoint": {
+          "/tmp/formal-gates-stage35c-post-integration/source": "/private/tmp/formal-gates-stage35c-post-integration/source"
+        },
+        "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+        "registryRecordId": "dsh-project-c6624316bc45",
+        "registryEpoch": 7
+      },
+      {
+        "host": "zcode",
+        "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/.zcode/skills/formal-gates",
+        "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/stable-release",
+        "vcsIdentity": "package:43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "packageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+        "installedDigest": "43832c010ab4aca7442566c4881d7bb44ce49a62ae056d9558f0268a4f09043b",
+        "canonicalPaths": {
+          "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.local/bin/formal-gates",
+          "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/AGENTS.md",
+          "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime",
+          "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+          "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/stable-release",
+          "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/.formal-gates-resources",
+          "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/.zcode/skills",
+          "sourceRoot": "/private/tmp/formal-gates-stage35c-post-integration/source",
+          "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/.gates",
+          "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/install-zcode-native-runtime/.zcode/skills/formal-gates"
+        },
+        "disjoint": {
+          "/tmp/formal-gates-stage35c-post-integration/source": "/private/tmp/formal-gates-stage35c-post-integration/source"
+        },
+        "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-3214584588/stable-home/.formal-gates/registry.json",
+        "registryRecordId": "zcode-project-1090fa4eaba1",
+        "registryEpoch": 9
+      }
+    ],
+    "sourcePackageDigest": "43454595f675271732fb648145f9855355b2f6242b8045091713b93a8771cac4",
+    "fullProjectTestsAndIndependentQA": "PASS on sealed candidate as recorded in stage-3-5c-delivery.json; source/test tree unchanged, no post-doc QA rerun."
+  },
+  "cleanup": {
+    "worktrees": {
+      "scope": "Only seven stage35c owned registered worktrees; immutable commit refs and raw external evidence retained",
+      "startedAt": 1788728016.825697,
+      "worktrees": [
+        {
+          "path": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c",
+          "head": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/formal-gates-stage-3-5c",
+          "untrackedBackedUp": [
+            ".gates/results/stage-3-5c-qa-efficiency.blackbox-cases.md",
+            ".gates/results/stage-3-5c-qa-efficiency.json"
+          ],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        },
+        {
+          "path": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c-qa",
+          "head": "fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/formal-gates-stage-3-5c-qa",
+          "untrackedBackedUp": [
+            ".gates/cases/blackbox.md",
+            "refactor-plan/stage-3-5c-qa-efficiency.md",
+            "refactor-plan/stage-3-5c-requirement.md"
+          ],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-3-5c-qa"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        },
+        {
+          "path": "/tmp/formal-gates-stage35c-final-validation",
+          "head": "47df6b3f6a1d74a45e49c073e383f356c1506bb1",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/formal-gates-stage35c-final-validation",
+          "untrackedBackedUp": [],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/tmp/formal-gates-stage35c-final-validation"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        },
+        {
+          "path": "/tmp/formal-gates-stage35c-repair1-validation",
+          "head": "aae428b396a7df7c8b19037e0fb578f70e8add23",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/formal-gates-stage35c-repair1-validation",
+          "untrackedBackedUp": [],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/tmp/formal-gates-stage35c-repair1-validation"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        },
+        {
+          "path": "/tmp/formal-gates-stage35c-p2-validation",
+          "head": "517de91f1b480ec969bd91385c29ce38d8bc2841",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/formal-gates-stage35c-p2-validation",
+          "untrackedBackedUp": [],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/tmp/formal-gates-stage35c-p2-validation"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        },
+        {
+          "path": "/tmp/formal-gates-stage35c-validation/baseline-git",
+          "head": "fd9983e06fbcdf042aa3bf6f839e03a8aab58d5e",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/baseline-git",
+          "untrackedBackedUp": [
+            "internal/cli/qa_efficiency_test.go"
+          ],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/tmp/formal-gates-stage35c-validation/baseline-git"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        },
+        {
+          "path": "/tmp/formal-gates-stage35c-codex/baseline-source",
+          "head": "3370e035f1d6be30e6f9e6ed761420cca64e81ff",
+          "backup": "/tmp/formal-gates-stage35c-post-integration/worktree-backups/baseline-source",
+          "untrackedBackedUp": [],
+          "command": [
+            "git",
+            "worktree",
+            "remove",
+            "--force",
+            "/tmp/formal-gates-stage35c-codex/baseline-source"
+          ],
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "removed": true
+        }
+      ],
+      "status": "PASS",
+      "completedAt": 1788728017.911166
+    },
+    "fixtureReceipts": [
+      {
+        "receipt": "/tmp/stage35c-blackbox-5bbcaaa1/cleanup-receipts/receipt.json",
+        "status": "PASS",
+        "namespaces": 19,
+        "commands": 33
+      },
+      {
+        "receipt": "/tmp/stage35c-blackbox-10380f57/cleanup-receipts/receipt.json",
+        "status": "PASS",
+        "namespaces": 18,
+        "commands": 34
+      },
+      {
+        "receipt": "/tmp/formal-gates-stage35c-codex/cleanup-receipts/receipt.json",
+        "status": "PASS",
+        "namespaces": 8,
+        "commands": 13
+      },
+      {
+        "receipt": "/tmp/formal-gates-stage35c-codex/baseline-cleanup-receipts/receipt.json",
+        "status": "PASS",
+        "namespaces": 1,
+        "commands": 1
+      },
+      {
+        "receipt": "/tmp/stage35c-blackbox-fba9c6eb/cleanup-receipts/receipt.json",
+        "status": "PASS",
+        "namespaces": 3,
+        "commands": 5
+      }
+    ],
+    "finalPortableInstalledTargetsRemoved": true
+  },
+  "originalDriverUnchanged": true,
+  "unrelatedUserInputsPreserved": [
+    "refactor-plan/review-convergence-and-stage-3-5b-requirement.md",
+    ".gates/results/3-5a-fix-r2.blackbox-cases.md",
+    ".gates/results/3-5a-fix-r2.json",
+    ".gates/results/3-5a-fix.json",
+    ".gates/results/review-convergence-3-5b.blackbox-cases.md",
+    ".gates/results/review-convergence-3-5b.json"
+  ],
+  "remotePushed": false,
+  "globalInstallationSwitched": false,
+  "nextStageWorktreeCreated": false,
+  "receiptPolicy": "This post-commit receipt binds the immutable integration commit; it is a separate local result artifact, not a new implementation or Seal."
+}

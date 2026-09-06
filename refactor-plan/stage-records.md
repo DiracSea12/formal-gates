@@ -531,3 +531,25 @@
 - [主线集成凭据](../.gates/results/stage-3-5c-post-integration.json) 在集成提交后记录精确
   post-integration identity、包身份核对、验证复用依据和自有资源 cleanup；下一阶段基线
   取该凭据中的 identity。本次不创建下一阶段 worktree、不推送远端、不切换全局安装。
+
+## 3.5 系列当前状态索引（2026-09-07 核对）
+
+本索引追加当前可核对结果，不改写前面的开发自测记录，也不把 SEALED 自动等同于全部
+QA 实跑 PASS；授权跳过、carry 和例外仍以各 run 原结果为准。
+
+| checkpoint/任务 | run 状态 | 结果中的 currentSnapshot | 原结果 |
+| --- | --- | --- | --- |
+| 3.5a 覆盖契约 | SEALED | `7d9e85ef7d6d306c469ebe4812353ab34cb78195` | [覆盖契约](../.gates/results/stage-3-5a-qa-coverage-contract.json) |
+| 3.5a-fix 重跑 | SEALED | `5082fe63a23dc4eb920b0d24b74d35dfe2dfe79b` | [3-5a-fix-r2](../.gates/results/3-5a-fix-r2.json) |
+| 审查收敛与 3.5b | SEALED | `99c7b0cdafa0c3db1edd05d616d084993dd3e000` | [review-convergence-3-5b](../.gates/results/review-convergence-3-5b.json) |
+| 3.5c QA 提效与 Codex 计量 | SEALED | `517de91f1b480ec969bd91385c29ce38d8bc2841` | [stage-3-5c-qa-efficiency](../.gates/results/stage-3-5c-qa-efficiency.json) |
+
+3.5a-fix 的早期 `3-5a-fix` run 为 ABORTED，以 r2 的独立结果登记完成，不覆盖早期记录。
+3.5b 原结果保留授权跳过，不能从本表推导其所有 QA 条目实跑通过。当前 checkpoint 的
+legacy 交付不表示固定 stable driver 已升级；coverage/guard 是纯函数基座，regular engine、
+运行时 guard、执行前准入与全局安装切换仍按后续阶段验收。
+
+3.5c 的 [post-integration receipt](../.gates/results/stage-3-5c-post-integration.json) 记录
+`9518a5c43d133794bc47e632351eaf7c142a203e`。后续总计划文档修改不属于该 sealed candidate
+或该 receipt 的已验证内容；下一阶段使用包含已接受文档修改的干净提交，并保留其与该
+post-integration identity 的后继关系，不把未提交工作树作为 canonical base。

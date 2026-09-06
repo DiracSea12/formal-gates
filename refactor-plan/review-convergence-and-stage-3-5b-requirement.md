@@ -93,6 +93,9 @@ Batch B：
 
 ## 非目标
 
+- 不维护旧版本状态、finding 格式/摘要或旧内部调用合同的兼容层，结果登记统一遵循
+  当前证据合同。当前版本仍在使用的
+  流程运行时、dispatch 计量和来源不可用处理不是旧版兼容层，不因此删除或改变。
 - 不增加 legacy 的用户级或项目级累计限额配置，不实现 `max_dispatches`、
   `max_elapsed_minutes` 或 token cap 的 legacy 拦截。
 - 不实现 `workflow show` 或每次准备派发时的完整实时成本面板。
@@ -285,8 +288,8 @@ workflow start 成功时，在可取得稳定 transcript/provider 身份的情�
 provider 和完成标记持久化在同一 legacy RunState；Seal 或 Abort 时读取同一来源，记录终态
 快照减启动基线的差值。`RunCost.Owner` 是可选独立字段，顶层 token 总计包含 dispatch 与本
 run owner 且各自只累计一次。缺来源、provider 不支持、文件截断或重写、区间无法确定、多个
-活动 run 共用重叠区间时记 `UNAVAILABLE` 且数字为零。重复终态操作必须幂等，旧状态缺少新增
-字段仍可读取，计量不得改写 action、gate、QA 或 dispatch 结果。本 Batch 只记录各 run 自身
+活动 run 共用重叠区间时记 `UNAVAILABLE` 且数字为零。重复终态操作必须幂等，不要求读取旧版本
+状态或保留旧格式/摘要兼容，计量不得改写 action、gate、QA 或 dispatch 结果。本 Batch 只记录各 run 自身
 owner；child/master owner 汇总留到阶段 5。`internal/cost` 继续保持独立解析/计量包，不反向
 依赖 validate 或 engine，并保留 parser 独立测试。
 
@@ -585,7 +588,7 @@ catalog/prompt revision 和动作专属输入身份生成权威 signature，并�
 
 #### 验收条件
 
-- AC-040：完全相同 signature 已有 OPEN/PENDING/CLAIMED 时只返回既有 dispatch，不创建并行重复项；已有 PASS 时再次准备失败且不创建新 dispatch。
+- AC-040：完全相同 signature 已有 OPEN/PENDING/CLAIMED 时只返回既有 dispatch，不创建并行重复项；已有 PASS 时再次准备失败且不创建新 dispatch，拒绝信息明确说明已有最终结果，不要求重建已正常清理的 QA 工作区。
 - AC-041：完全相同 signature 已有 FAIL 时不创建新 dispatch，并按派发类型返回既有合法待办：product-review/start-readiness 返回 finding 处置、需求修订与对应重审状态；QA Review 返回 QA Design 修改、case-set 版本变化与对应重审状态；只有开发后 QA execution/gate 的有效 FAIL 在所属 review-wave 收齐且主代理完成核实、裁决和归并后，才指向该快照统一返修。已 DISMISSED 或已归并到 RESOLVED problem 的原始 FAIL 不触发任何新任务。上述分流不得增加或重置自动轮次、attempt、review-wave/repair-wave 额度，也不得替代适用的用户授权。
 - AC-042：RUNTIME_ERROR 或 REJECTED_INVALID_RESULT 结束当前 attempt 后，只要逻辑义务仍有效且有限 attempt 尚有余量，action、QA 或 gate 都允许用新 dispatch 复用原 TaskKey 并保留前次错误；该重试不要求义务属于 wave，wave 成员才额外要求 wave 仍为 COLLECTING 且目标未处置。余量耗尽时进入可展示的 RETRY_EXHAUSTED 并拒绝普通重派；用户可用非空理由和 state revision 为同一 TaskKey 追加一次且仅一次单 attempt，更新 retry policy/basis digest 但不创建新义务。追加 attempt 仍失败后，必需 action/QA Review 保持未通过；wave 成员只能显式结束收集且不得记为 PASS，必须终止 run 或由已确认的新计划改变 binding/snapshot/责任后形成新 TaskKey。处置后晚到结果只留审计记录。
 - AC-043：用户明确重审必须提交非空原因并形成 override 审计记录，不能覆盖或删除原最终结果；若该动作仍有自动额度则正常消耗，自动额度耗尽时必须先取得适用的额外审查授权。需要额外返修时仍须使用绑定最新摘要 digest/state revision 的 `authorize-repair`，重复派发或 override 不能绕过任一上限与授权。
@@ -623,15 +626,16 @@ catalog/prompt revision 和动作专属输入身份生成权威 signature，并�
 
 在能确定 owner transcript/provider 和启动到终态区间时，记录 owner 用量差值；无法精确核对
 时记录 UNAVAILABLE。owner 与 dispatch 分开、终态记录幂等，并继续使用现有单一 cost 投影
-和 token 合计逻辑；新增元数据持久化于同一 legacy RunState，旧状态保持可读。
+和 token 合计逻辑；新增元数据持久化于同一 legacy RunState，不要求旧版本状态可读，
+也不为旧 finding 格式、摘要或旧内部调用合同保留兼容分支。
 
 #### 验收条件
 
-- AC-050：workflow start 在来源稳定时把 owner 基线、provider 身份和完成标记持久化于同一 legacy RunState，Seal/Abort 记录同一来源的终态差值，不包含启动前历史用量；旧状态缺少新增字段仍可读取。
+- AC-050：workflow start 在来源稳定时把 owner 基线、provider 身份和完成标记持久化于同一 legacy RunState，Seal/Abort 记录同一来源的终态差值，不包含启动前历史用量；当前版本正常生成的状态可读，不要求读取旧版本状态，且不保留仅为旧 finding 格式/摘要或旧内部调用合同服务的兼容分支。
 - AC-051：缺基线、缺终态来源、不支持 provider、文件截断重写或重叠活动区间时 owner 状态为 UNAVAILABLE、数字为零且不写估算 token。
 - AC-052：重复 Seal/Abort 或恢复后再次终态处理不重复累计 owner 用量，也不改写 dispatch 明细或任何 action、gate、QA 最终结果。
 - AC-053：owner 记录位于现有 RunCost 的可选独立字段，不伪装成 dispatch、不增加第二套 ledger；顶层 token 总计精确包含 dispatch 与本 run owner 且各自只计一次，child/master owner 汇总留到阶段 5。
-- AC-054：已有 dispatch 计量、缺失/不可解析处理和汇总结果保持兼容；`internal/cost` 不反向依赖 validate/engine，parser 可独立测试，`report.cost` 继续只负责报告。
+- AC-054：保留当前版本的 dispatch 计量、缺失/不可解析处理和汇总行为，不要求旧版本格式或调用合同兼容；`internal/cost` 不反向依赖 validate/engine，parser 可独立测试，`report.cost` 继续只负责报告。
 
 #### 来源
 

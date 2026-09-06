@@ -1,9 +1,10 @@
 # 阶段 3.5a：QA 覆盖契约（非独立正式阶段）
 
-状态：计划 checkpoint，尚未执行。
+状态：覆盖契约 checkpoint 已 Seal（2026-09-07 核对）。正式 run 为
+`stage-3-5a-qa-coverage-contract`；结果与候选身份见 stage-records 的同日状态索引。
 
-3.5a 是阶段 4 的 Batch A，不新增 `RunPhase`、formal run、Seal 或另一套 QA
-状态机。它只冻结阶段 4 regular QA 接入前必须具备的覆盖契约。
+3.5a 是阶段 4 QA 接入前的覆盖契约基座，不新增正式阶段编号、`RunPhase` 或另一套 QA
+状态机；本次正式受理任务已单独 Seal。regular engine 接入仍留阶段 4。
 
 ## 目标与判定边界
 
@@ -98,10 +99,15 @@ source inventory/manifest/map/whitelist digest、候选 identity 或 expected/ac
 - 只覆盖文档化的正常使用和常见误操作；其余边界继续服从
   `prompts/reviewer-base.md`。
 - 3.5a 只交付 typed schema、validator、digest/whitelist 投影和 fixtures；不改 legacy
-  `QACase` 完整结构，不新增公开命令、独立 source registry、数据库、事件溯源或通用测试
-  框架；`requiredSources` 是现有已确认需求/方案工件的一部分。
+  `QACase` 完整结构；按已确认技术方案提供只读 `coverage validate`、`coverage project-whitelist`、
+  `coverage reconcile-execution` 薄 CLI。不新增独立 source registry、数据库、事件溯源或通用
+  测试框架；`requiredSources` 是现有已确认需求/方案工件的一部分。
 - 代码覆盖率、branch coverage、mutation、property-based test 和 fuzz 只可作为发现薄弱点的
   辅助信号；不设固定用例数、固定百分比或强制工具组合，也不把这些指标当成语义覆盖证明。
 
 Checkpoint 完成条件是：上述契约、结构校验和 fixtures 可复现通过，并在阶段 4 任务书中
 登记 regular QA/candidate 接入边界；不得表述为已完成阶段 4 或已完成 QA 全流程。
+
+后续交付关系：3.5a-fix 在 legacy 复用本 coverage 核心，增加标准单文件 REQ/AC 保证及分片
+责任；3.5c 扩展共享步骤与逐共享审批。阶段 4/5 的当前接入合同以主需求 §8.4.1–8.4.2、
+最终方案和增量计划为准，历史 checkpoint 的不可变结果不被后续扩展重写。

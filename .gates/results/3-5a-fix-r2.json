@@ -1,0 +1,610 @@
+{
+  "runId": "3-5a-fix-r2",
+  "flow": "formal",
+  "status": "SEALED",
+  "requirementRevision": "2cdbc14b708849c1fc411ec5edb9afdd23a2651095bb305d9fa6d347d37dc8d3",
+  "basePromptRevision": "3f35c560a7a0951355638c8b3ce158640fe722f5309f47c1a4826505d710872c",
+  "catalogRevision": "920933ef45bf8b441be18a45144dc0660e060ae91a67cfbaf494da8cdd368f92",
+  "vcs": "git",
+  "baseSnapshot": "5dd4363e4894516677868622d6f4bd3db86121ff",
+  "currentSnapshot": "5082fe63a23dc4eb920b0d24b74d35dfe2dfe79b",
+  "requirementArtifacts": [
+    {
+      "path": "refactor-plan/stage-3-5a-fix-requirement.md",
+      "revision": "2cdbc14b708849c1fc411ec5edb9afdd23a2651095bb305d9fa6d347d37dc8d3"
+    }
+  ],
+  "slicing": {
+    "decision": "no-split",
+    "note": "技术审建议在同一 formal run 内顺序执行两个独立 Batch：B1 交付 REQ-001..006 的结构化需求案与 QA 覆盖/执行保证，B2 交付 REQ-007..008 的审查轮次上限与状态纠正。两者各有独立 DoD/回滚边界并各用全新开发代理，但共享同一 run-state/最终 QA/Seal 收口；拆成多个 formal run 会引入无需求依据的跨 run 状态与合并成本。B1 完成并冻结共享状态接口后再交接 B2。"
+  },
+  "routeMode": "full",
+  "selectedGates": [
+    "blackbox",
+    "whitebox",
+    "complexity-gate",
+    "implementation-quality-gate"
+  ],
+  "skipAuthorizations": {
+    "implementation-quality-gate": {
+      "origin": "SEAL",
+      "status": "RUNTIME_ERROR",
+      "snapshot": "5082fe63a23dc4eb920b0d24b74d35dfe2dfe79b"
+    }
+  },
+  "completedReviewWaves": 2,
+  "extraReviewWaves": 0,
+  "gates": {
+    "complexity-gate": {
+      "status": "PASS",
+      "snapshot": "5082fe63a23dc4eb920b0d24b74d35dfe2dfe79b",
+      "sourceSnapshot": "6ff5c6bdb3290a94b9105bc3c79bf015f3f97609",
+      "compared": "5dd4363e4894516677868622d6f4bd3db86121ff..6ff5c6bdb3290a94b9105bc3c79bf015f3f97609",
+      "message": "完整 base→current 复杂度审查通过；无 P0/P1/P2/P3。新增概念均对应已确认需求并复用现有 coverage contract；全量 Go 测试、go vet 与 diff 检查通过。",
+      "dispatchId": "dispatch-b3938f1842efdcc6d7794c6d"
+    },
+    "implementation-quality-gate": {
+      "status": "RUNTIME_ERROR",
+      "snapshot": "5082fe63a23dc4eb920b0d24b74d35dfe2dfe79b",
+      "compared": "not-compared",
+      "message": "用户明确禁止再次进行实现质量复审，因此本派发未执行，未比较任何快照。",
+      "dispatchId": "dispatch-d85942ccc285a91673bb7108"
+    },
+    "merge-gate": {
+      "status": "PENDING"
+    }
+  },
+  "qaExecution": {
+    "status": "RUNTIME_ERROR",
+    "snapshot": "5082fe63a23dc4eb920b0d24b74d35dfe2dfe79b",
+    "message": "Artifact correction: the historical merged QA execution cannot be accepted as an authoritative result. The ledger contained 41 blackbox rows for 40 approved definitions, including CASE-017 as skipped/authorized PASS; CASE-011 required a real new Codex task unavailable to that executor; CASE-028 exposed a real Seal defect; and the remaining blackbox rows plus the whitebox rows used generic text without retained per-case commands or observations. No replacement execution evidence was invented. A fresh executable case review and actual QA run are required."
+  },
+  "cost": {
+    "totalInputTokens": 424771663,
+    "inputCacheHitTokens": 413222016,
+    "inputCacheMissTokens": 11549647,
+    "outputTokens": 1729563,
+    "dispatches": {
+      "dispatch-10cdc62c632ff5ae5cf9ed78": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-1305fedf086e7a15d7e3517e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 678656,
+        "inputCacheMissTokens": 63437,
+        "outputTokens": 7772,
+        "totalInputTokens": 742093,
+        "source": "transcript"
+      },
+      "dispatch-1482150177780962b00f7d1d": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1300992,
+        "inputCacheMissTokens": 113370,
+        "outputTokens": 21270,
+        "totalInputTokens": 1414362,
+        "source": "transcript"
+      },
+      "dispatch-17599c6ef144affaf2a2fb27": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 18919936,
+        "inputCacheMissTokens": 378447,
+        "outputTokens": 54794,
+        "totalInputTokens": 19298383,
+        "source": "transcript"
+      },
+      "dispatch-1b46a4c4df0c1f715b9a75a9": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 353792,
+        "inputCacheMissTokens": 97090,
+        "outputTokens": 11017,
+        "totalInputTokens": 450882,
+        "source": "transcript"
+      },
+      "dispatch-1bbcd35d32cb20e977e1f04b": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 4931200,
+        "inputCacheMissTokens": 354268,
+        "outputTokens": 22690,
+        "totalInputTokens": 5285468,
+        "source": "transcript"
+      },
+      "dispatch-2405951d2b14b83fde11f118": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 6955648,
+        "inputCacheMissTokens": 155508,
+        "outputTokens": 27968,
+        "totalInputTokens": 7111156,
+        "source": "transcript"
+      },
+      "dispatch-2681895acaf06ca724e4ede6": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 8334720,
+        "inputCacheMissTokens": 357008,
+        "outputTokens": 35859,
+        "totalInputTokens": 8691728,
+        "source": "transcript"
+      },
+      "dispatch-26eb5470969cd18ee9b70db3": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 2296320,
+        "inputCacheMissTokens": 153819,
+        "outputTokens": 24112,
+        "totalInputTokens": 2450139,
+        "source": "transcript"
+      },
+      "dispatch-2db09afc7e5d96407f1d719c": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 387840,
+        "inputCacheMissTokens": 70641,
+        "outputTokens": 7147,
+        "totalInputTokens": 458481,
+        "source": "transcript"
+      },
+      "dispatch-2e4c85e5982adcbac1ff1396": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 5580544,
+        "inputCacheMissTokens": 331023,
+        "outputTokens": 35695,
+        "totalInputTokens": 5911567,
+        "source": "transcript"
+      },
+      "dispatch-313f9909bf016eca51383c49": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 475392,
+        "inputCacheMissTokens": 33389,
+        "outputTokens": 9048,
+        "totalInputTokens": 508781,
+        "source": "transcript"
+      },
+      "dispatch-372f72c4aead797e111c19a1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 41508480,
+        "inputCacheMissTokens": 588697,
+        "outputTokens": 79962,
+        "totalInputTokens": 42097177,
+        "source": "transcript"
+      },
+      "dispatch-3b73ec49601e7c5dbfaf4d3d": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 2762496,
+        "inputCacheMissTokens": 172705,
+        "outputTokens": 32442,
+        "totalInputTokens": 2935201,
+        "source": "transcript"
+      },
+      "dispatch-3c561154a6bf743d9163aa6f": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 48558336,
+        "inputCacheMissTokens": 966110,
+        "outputTokens": 124319,
+        "totalInputTokens": 49524446,
+        "source": "transcript"
+      },
+      "dispatch-44a6f1c23c4ad91aff55ac16": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 7035904,
+        "inputCacheMissTokens": 229652,
+        "outputTokens": 21978,
+        "totalInputTokens": 7265556,
+        "source": "transcript"
+      },
+      "dispatch-495e07c4155724792765e5a3": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 333824,
+        "inputCacheMissTokens": 56835,
+        "outputTokens": 24855,
+        "totalInputTokens": 390659,
+        "source": "transcript"
+      },
+      "dispatch-4ae121e94f3ffc617e38a5aa": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 114176,
+        "inputCacheMissTokens": 13285,
+        "outputTokens": 1832,
+        "totalInputTokens": 127461,
+        "source": "transcript"
+      },
+      "dispatch-4bde8520622ad7ab64fe02fb": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 11279872,
+        "inputCacheMissTokens": 239879,
+        "outputTokens": 41940,
+        "totalInputTokens": 11519751,
+        "source": "transcript"
+      },
+      "dispatch-4d467b59a10d73a26156b53c": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 9372800,
+        "inputCacheMissTokens": 371350,
+        "outputTokens": 39963,
+        "totalInputTokens": 9744150,
+        "source": "transcript"
+      },
+      "dispatch-4e559e79f7b5a4b84a086207": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 6660096,
+        "inputCacheMissTokens": 187200,
+        "outputTokens": 56768,
+        "totalInputTokens": 6847296,
+        "source": "transcript"
+      },
+      "dispatch-4f4b9630d7cc030c3aec7666": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 1046528,
+        "inputCacheMissTokens": 107456,
+        "outputTokens": 6099,
+        "totalInputTokens": 1153984,
+        "source": "transcript"
+      },
+      "dispatch-5366cf59c547567974f54415": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-56948e15d7cd09b8a967df05": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 7166208,
+        "inputCacheMissTokens": 254848,
+        "outputTokens": 19311,
+        "totalInputTokens": 7421056,
+        "source": "transcript"
+      },
+      "dispatch-582fa384e1a70c6521c92d27": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 649984,
+        "inputCacheMissTokens": 111953,
+        "outputTokens": 7261,
+        "totalInputTokens": 761937,
+        "source": "transcript"
+      },
+      "dispatch-60d530b42fb9ed8fc29407dc": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 13839872,
+        "inputCacheMissTokens": 222813,
+        "outputTokens": 34105,
+        "totalInputTokens": 14062685,
+        "source": "transcript"
+      },
+      "dispatch-633c7f78ce920db6268e73cf": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 966400,
+        "inputCacheMissTokens": 115490,
+        "outputTokens": 7909,
+        "totalInputTokens": 1081890,
+        "source": "transcript"
+      },
+      "dispatch-642c3e908e6d69ac268e7921": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 35735552,
+        "inputCacheMissTokens": 802799,
+        "outputTokens": 164723,
+        "totalInputTokens": 36538351,
+        "source": "transcript"
+      },
+      "dispatch-687381b387dd646ac0895b95": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 409344,
+        "inputCacheMissTokens": 66300,
+        "outputTokens": 25112,
+        "totalInputTokens": 475644,
+        "source": "transcript"
+      },
+      "dispatch-76a5753f0b7d713d6587252b": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 34656640,
+        "inputCacheMissTokens": 583232,
+        "outputTokens": 190885,
+        "totalInputTokens": 35239872,
+        "source": "transcript"
+      },
+      "dispatch-7a2ca61a892cd70a13d88eb7": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 543104,
+        "inputCacheMissTokens": 55901,
+        "outputTokens": 6626,
+        "totalInputTokens": 599005,
+        "source": "transcript"
+      },
+      "dispatch-7abb2014cc983948a6e9fd36": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 12639232,
+        "inputCacheMissTokens": 239160,
+        "outputTokens": 39943,
+        "totalInputTokens": 12878392,
+        "source": "transcript"
+      },
+      "dispatch-7b56ad5ab0bff35cd998d046": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 536576,
+        "inputCacheMissTokens": 157598,
+        "outputTokens": 10417,
+        "totalInputTokens": 694174,
+        "source": "transcript"
+      },
+      "dispatch-7e2976c6f174176df687bfd6": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-887dcd479f1cab75e2ea4439": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-898c29cea1462107ad79e724": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 113920,
+        "inputCacheMissTokens": 12655,
+        "outputTokens": 1609,
+        "totalInputTokens": 126575,
+        "source": "transcript"
+      },
+      "dispatch-8b8b25dd7f38e45a9769cb8f": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 385792,
+        "inputCacheMissTokens": 61047,
+        "outputTokens": 17343,
+        "totalInputTokens": 446839,
+        "source": "transcript"
+      },
+      "dispatch-8c141825fc8da1e57846495e": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 512768,
+        "inputCacheMissTokens": 81605,
+        "outputTokens": 16712,
+        "totalInputTokens": 594373,
+        "source": "transcript"
+      },
+      "dispatch-8d324f8bc9452d306b141541": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 4750848,
+        "inputCacheMissTokens": 222385,
+        "outputTokens": 29910,
+        "totalInputTokens": 4973233,
+        "source": "transcript"
+      },
+      "dispatch-940c9b03dc768330915bc411": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 8467712,
+        "inputCacheMissTokens": 335724,
+        "outputTokens": 29175,
+        "totalInputTokens": 8803436,
+        "source": "transcript"
+      },
+      "dispatch-9865d90b826d96a67a33da2a": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 2940544,
+        "inputCacheMissTokens": 182257,
+        "outputTokens": 15650,
+        "totalInputTokens": 3122801,
+        "source": "transcript"
+      },
+      "dispatch-994117caa80acd057f9562a3": {
+        "target": "qa-design",
+        "kind": "action",
+        "inputCacheHitTokens": 3900160,
+        "inputCacheMissTokens": 198733,
+        "outputTokens": 41686,
+        "totalInputTokens": 4098893,
+        "source": "transcript"
+      },
+      "dispatch-a957057590f35e9cc1f7ad0a": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-abb6c73b47835ac339bf81f4": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 3895552,
+        "inputCacheMissTokens": 112953,
+        "outputTokens": 16444,
+        "totalInputTokens": 4008505,
+        "source": "transcript"
+      },
+      "dispatch-af3f3a9ed82d3d54e58d40de": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 36849024,
+        "inputCacheMissTokens": 593366,
+        "outputTokens": 72504,
+        "totalInputTokens": 37442390,
+        "source": "transcript"
+      },
+      "dispatch-af86135add4e53707a8ef852": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 8294144,
+        "inputCacheMissTokens": 201241,
+        "outputTokens": 19290,
+        "totalInputTokens": 8495385,
+        "source": "transcript"
+      },
+      "dispatch-b3938f1842efdcc6d7794c6d": {
+        "target": "complexity-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 6413184,
+        "inputCacheMissTokens": 191694,
+        "outputTokens": 18655,
+        "totalInputTokens": 6604878,
+        "source": "transcript"
+      },
+      "dispatch-b4e7a01b88ea1f400dbbe13f": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 3763584,
+        "inputCacheMissTokens": 125043,
+        "outputTokens": 17647,
+        "totalInputTokens": 3888627,
+        "source": "transcript"
+      },
+      "dispatch-b531aa3f417cc3fd5729a7d5": {
+        "target": "carry",
+        "kind": "action",
+        "inputCacheHitTokens": 3147776,
+        "inputCacheMissTokens": 106963,
+        "outputTokens": 13383,
+        "totalInputTokens": 3254739,
+        "source": "transcript"
+      },
+      "dispatch-c08e51665c78eb1fd427cf6e": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 6127872,
+        "inputCacheMissTokens": 292521,
+        "outputTokens": 31658,
+        "totalInputTokens": 6420393,
+        "source": "transcript"
+      },
+      "dispatch-c311a099dc025729a9dae052": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 1205504,
+        "inputCacheMissTokens": 88965,
+        "outputTokens": 19826,
+        "totalInputTokens": 1294469,
+        "source": "transcript"
+      },
+      "dispatch-cc8c5e3efe0a231e5ae9ce79": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 318464,
+        "inputCacheMissTokens": 53512,
+        "outputTokens": 15026,
+        "totalInputTokens": 371976,
+        "source": "transcript"
+      },
+      "dispatch-d2567100144122734bf1aead": {
+        "target": "qa-execution",
+        "kind": "action",
+        "inputCacheHitTokens": 320768,
+        "inputCacheMissTokens": 25350,
+        "outputTokens": 7155,
+        "totalInputTokens": 346118,
+        "source": "transcript"
+      },
+      "dispatch-d3f654dfcb8851c865965a35": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 10685696,
+        "inputCacheMissTokens": 337903,
+        "outputTokens": 38194,
+        "totalInputTokens": 11023599,
+        "source": "transcript"
+      },
+      "dispatch-d7cbb9103da27840dcd54e4a": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 185856,
+        "inputCacheMissTokens": 39558,
+        "outputTokens": 16531,
+        "totalInputTokens": 225414,
+        "source": "transcript"
+      },
+      "dispatch-d85942ccc285a91673bb7108": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 411776,
+        "inputCacheMissTokens": 41514,
+        "outputTokens": 3055,
+        "totalInputTokens": 453290,
+        "source": "transcript"
+      },
+      "dispatch-eb8542bc75ae7d76fa87dbfd": {
+        "target": "qa-review",
+        "kind": "action",
+        "inputCacheHitTokens": 3635456,
+        "inputCacheMissTokens": 136410,
+        "outputTokens": 22310,
+        "totalInputTokens": 3771866,
+        "source": "transcript"
+      },
+      "dispatch-f1e0d5711b0ce2ac90af4086": {
+        "target": "implementation-quality-gate",
+        "kind": "gate",
+        "inputCacheHitTokens": 6723200,
+        "inputCacheMissTokens": 260259,
+        "outputTokens": 32168,
+        "totalInputTokens": 6983459,
+        "source": "transcript"
+      },
+      "dispatch-fb4d449e2a82b27b5fe81d7a": {
+        "target": "requirements-clarification",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "dispatch-fbd96c54ff6163daa031f3ba": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 14141952,
+        "inputCacheMissTokens": 196726,
+        "outputTokens": 39810,
+        "totalInputTokens": 14338678,
+        "source": "transcript"
+      }
+    }
+  }
+}

@@ -159,12 +159,13 @@ func TestQA35BFutureEnginePlansInheritConvergenceContract(t *testing.T) {
 	qa35bContract(t, filepath.Join(pkg, "refactor-plan/stage-3-5b-runtime-guardrails.md"),
 		"不判断语义真假、根因、严重度或重复", "已核实 finding 的处置仍不唯一时才 Ask", "产品/技术审 confirm/dismiss 规则保持",
 		"白盒最终 FROZEN case-set 绑定最终含测试快照后才 review-ready", "COLLECTING 未收齐或核实未完成时不建立返修",
-		"门审 P2 carry 不复审，门审 P3 只作 Seal advisory", "QA Review P2/P3 以 suggestion ID 吸收后冻结且不复审",
+		"门审 P2 carry 不复审，门审 P3 只作 Seal advisory", "QA Review 可选 P2/P3 以 suggestion ID 登记采纳/延期/不采纳及理由后冻结",
+		"采纳改变共同路径、可执行性或验收含义时重审受影响部分",
 		"保证最终候选 Seal 前 FULL", "THAW 仅限需求/对外行为/判据/稳定可执行性变化",
 		"非 wave 与 wave 的 RUNTIME_ERROR/REJECTED_INVALID_RESULT", "复用 TaskKey，默认 MaxAttempts=2", "一次性追加一个 attempt",
 		"raw finding、普通 result/receipt/resume 不增 TaskKey", "owner cost 和 token cap 的 UNAVAILABLE 继续由各自来源、区间或配置条件独立决定",
 		"阶段 4 需求 revision 转换由 engine 单一 writer", "只有用户确认事件授权原子回退", "legacy 写入口不能绕过该边界")
-	qa35bContract(t, filepath.Join(pkg, "refactor-plan/incremental-seal-plan.md"), "requirement impact 迁移到 engine 唯一 writer", "仅用户确认事件可授权原子回退", "重置额度或自动授权新产品审；旧 legacy 入口不得绕过")
+	qa35bContract(t, filepath.Join(pkg, "refactor-plan/incremental-seal-plan.md"), "requirement impact 迁移到 engine 唯一 writer", "仅用户确认事件可原子登记新 revision、用户保留清单及其余结果的回退", "不重置额度或自动授权新产品审；旧 legacy 入口不得绕过")
 	qa35bContract(t, filepath.Join(pkg, "openspec/changes/orchestration-pipeline-engine/master-requirements.md"), "阶段 5–7 继承同一 finding/problem ID、归并、唯一返修、P3 advisory 和 QA 冻结语义")
 }
 

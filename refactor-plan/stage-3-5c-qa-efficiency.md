@@ -1,8 +1,11 @@
 # 阶段 3.5c：QA 提效（黑盒优先，兼顾白盒）
 
-> 状态：2026-09-06 按用户要求落为 3.5c 计划，尚未实施。
+> 状态：2026-09-06 落为计划，2026-09-07 已 Seal。正式确认来源为
+> [stage-3-5c-requirement.md](stage-3-5c-requirement.md)，交付事实见
+> [stage-records.md](stage-records.md) 与 [验证记录](stage-3-5c-validation.md)。
 > 定位：接在 3.5a、3.5b 之后、阶段 4 之前的补充 checkpoint，不增加八个正式阶段之外的阶段编号或运行时 `RunPhase`。
-> 本文登记后续开发范围与验收要求；本次落档不启动正式 run，不改写已有 Seal 或当前运行规则。
+> 本文保留原计划与分析来源；候选 QA 改进及 Codex 计量已交付，regular engine 与运行时
+> 执行前准入仍待后续阶段接入，固定 driver 和全局安装不随该 checkpoint 更新。
 
 ## 1. 要解决什么
 

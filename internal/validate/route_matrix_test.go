@@ -36,16 +36,19 @@ import (
 var fixedPlanWorkflowSubcommands = []string{
 	"start", "show", "status", "next", "diagnose", "guard-preview", "resume", "abort", "reset",
 	"requirement", "route-candidates", "slicing", "settle-findings", "route",
+	"review-delta-preview", "requirement-impact-preview", "authorize-retry",
 	"route-add", "qa-worktree", "prepare-gate", "prepare-action",
 	"claim-dispatch", "record-action", "record-gate", "qa-design", "qa-review",
 	"qa-execution", "qa-execution-scope", "snapshot", "cleanup", "carry",
+	"qa-thaw", "qa-suggestion", "prepare-candidate", "prepare-review-wave",
+	"adjudicate-wave", "resolve-wave-target", "repair-preview", "complete-p2-repair",
 	"authorize-repair", "seal", "drive", "submit",
 }
 
 // §2.3 第二段枚举的维护/registry 面（lifecycle 与 registry 按动作粒度展开），
 // 外加 §2.4 明文枚举的 `install --bootstrap` 公开维护动作。
 var fixedPlanMaintenanceEntries = []string{
-	"hook", "lifecycle capture", "lifecycle verify", "canary", "gate",
+	"hook", "lifecycle capture", "lifecycle verify", "canary", "gate", "coverage",
 	"install", "install --bootstrap", "uninstall", "package",
 	"registry admission", "registry register", "registry reconcile",
 	"cutover", "rollback",
