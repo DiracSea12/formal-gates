@@ -40,14 +40,10 @@ func deepseekGlobalInstallPrefix() string {
 // isProjectDshInstall reports whether path is a project-local DSH skill binary
 // rather than a global DSH-home install.
 func isProjectDshInstall(path string) bool {
-	path = strings.TrimSpace(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	return isNormalizedProjectDshInstall(normalizeProviderExecutablePath(path))
+}
+
+func isNormalizedProjectDshInstall(normalized string) bool {
 	if !strings.Contains(normalized, "/.dsh/skills/formal-gates/bin/") {
 		return false
 	}
@@ -58,8 +54,7 @@ func isProjectDshInstall(path string) bool {
 func deepseekAdapter() providerAdapter {
 	return providerAdapter{
 		name: ProviderDeepSeek,
-		executableMatches: func(path string) bool {
-			normalized := normalizeProviderExecutablePath(path)
+		executableMatches: func(normalized string) bool {
 			prefix := deepseekGlobalInstallPrefix()
 			return prefix != "" && strings.HasPrefix(normalized, prefix)
 		},

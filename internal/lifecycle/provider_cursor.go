@@ -8,8 +8,8 @@ import (
 func cursorAdapter() providerAdapter {
 	return providerAdapter{
 		name: ProviderCursor,
-		executableMatches: func(path string) bool {
-			return strings.Contains(normalizeProviderExecutablePath(path), "/.cursor/formal-gates/bin/")
+		executableMatches: func(normalized string) bool {
+			return strings.Contains(normalized, "/.cursor/formal-gates/bin/")
 		},
 		agentPrefixes:   []string{"cursor"},
 		environmentKeys: []string{"CURSOR_TRACE_ID", "CURSOR_RUNTIME"},

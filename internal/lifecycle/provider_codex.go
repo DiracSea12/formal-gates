@@ -11,8 +11,8 @@ import "strings"
 // lifecycle events.
 func codexAdapter() providerAdapter {
 	adapter := codexShapeAdapter(ProviderCodex)
-	adapter.executableMatches = func(path string) bool {
-		return strings.Contains(normalizeProviderExecutablePath(path), "/.codex/skills/formal-gates/bin/")
+	adapter.executableMatches = func(normalized string) bool {
+		return strings.Contains(normalized, "/.codex/skills/formal-gates/bin/")
 	}
 	adapter.agentPrefixes = []string{"codex"}
 	adapter.environmentKeys = []string{"CODEX_HOME", "CODEX_CLI_PATH"}

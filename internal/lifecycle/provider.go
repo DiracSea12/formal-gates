@@ -30,6 +30,8 @@ type providerAdapter struct {
 	// Identity signals are declared by the adapter that owns the host
 	// integration. The detector below only scans these declarations; it does
 	// not contain a second host-specific switch.
+	// executableMatches consumes a normalized absolute path, so scanning
+	// adapters does not repeat filesystem resolution for the same executable.
 	executableMatches func(string) bool
 	agentPrefixes     []string
 	environmentKeys   []string
@@ -145,19 +147,20 @@ func currentProvider() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	normalized := normalizeProviderExecutablePath(path)
 	// ZCode currently ignores project-level hook configuration. A project-local
 	// skill therefore has no active lifecycle bridge and remains lenient, just
 	// like the existing project-local DSH install.
-	if isProjectZCodeInstall(path) {
+	if isNormalizedProjectZCodeInstall(normalized) {
 		return ProviderDefault, nil
 	}
-	if provider := providerFromExecutable(path); provider != ProviderDefault {
+	if provider := providerFromNormalizedExecutable(normalized); provider != ProviderDefault {
 		return provider, nil
 	}
 	// A project-local DSH skill has no active lifecycle bridge (DSH auto-loads
 	// no project-level cordis.patch.yml), so it stays on the lenient default
 	// provider even when the driving DSH process exports DSH_HOME.
-	if isProjectDshInstall(path) {
+	if isNormalizedProjectDshInstall(normalized) {
 		return ProviderDefault, nil
 	}
 	// The stage-0 launcher is deliberately one fixed user-level path for every
@@ -251,12 +254,24 @@ func providerFromRegistryDetailed(executable string) (string, bool) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		return "", false
 	}
-	executable = canonicalProviderPath(executable)
+	// Admissions commonly share one launcher and project root. Resolve each
+	// path once per detection, keeping filesystem changes visible to the next
+	// call without repeating symlink traversal for every registry record.
+	canonicalPaths := make(map[string]string)
+	canonicalPath := func(path string) string {
+		if resolved, ok := canonicalPaths[path]; ok {
+			return resolved
+		}
+		resolved := canonicalProviderPath(path)
+		canonicalPaths[path] = resolved
+		return resolved
+	}
+	executable = canonicalPath(executable)
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		return "", false
 	}
-	workingDirectory = canonicalProviderPath(workingDirectory)
+	workingDirectory = canonicalPath(workingDirectory)
 	bestHost := ""
 	bestRoot := ""
 	bestRootLength := -1
@@ -275,14 +290,14 @@ func providerFromRegistryDetailed(executable string) (string, bool) {
 		if launcher == "" && record.Canonical != nil {
 			launcher = record.Canonical["launcher"]
 		}
-		if canonicalProviderPath(launcher) != executable {
+		if canonicalPath(launcher) != executable {
 			continue
 		}
 		root := record.ProjectRoot
 		if root == "" && record.Canonical != nil {
 			root = record.Canonical["projectRoot"]
 		}
-		root = canonicalProviderPath(root)
+		root = canonicalPath(root)
 		if root == "" || !providerPathContains(root, workingDirectory) {
 			continue
 		}
@@ -348,8 +363,12 @@ func providerPathContains(root, path string) bool {
 }
 
 func providerFromExecutable(path string) string {
+	return providerFromNormalizedExecutable(normalizeProviderExecutablePath(path))
+}
+
+func providerFromNormalizedExecutable(normalized string) string {
 	for _, registered := range installedAdapters() {
-		if matcher := registered.adapter.executableMatches; matcher != nil && matcher(path) {
+		if matcher := registered.adapter.executableMatches; matcher != nil && matcher(normalized) {
 			return registered.descriptor.ID
 		}
 	}

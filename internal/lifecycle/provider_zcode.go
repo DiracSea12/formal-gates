@@ -22,14 +22,10 @@ func zcodeGlobalInstallPrefix() string {
 // isProjectZCodeInstall reports whether path is a project-local ZCode skill
 // binary rather than the global user-level install.
 func isProjectZCodeInstall(path string) bool {
-	path = strings.TrimSpace(path)
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	normalized := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	return isNormalizedProjectZCodeInstall(normalizeProviderExecutablePath(path))
+}
+
+func isNormalizedProjectZCodeInstall(normalized string) bool {
 	if !strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") {
 		return false
 	}
@@ -46,9 +42,8 @@ func isProjectZCodeInstall(path string) bool {
 func zcodeAdapter() providerAdapter {
 	return providerAdapter{
 		name: ProviderZCode,
-		executableMatches: func(path string) bool {
-			normalized := normalizeProviderExecutablePath(path)
-			return strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") && !isProjectZCodeInstall(path)
+		executableMatches: func(normalized string) bool {
+			return strings.Contains(normalized, "/.zcode/skills/formal-gates/bin/") && !isNormalizedProjectZCodeInstall(normalized)
 		},
 		agentPrefixes:   []string{"zcode", "z-code"},
 		environmentKeys: []string{"ZCODE_PLUGIN_ROOT", "ZCODE_PLUGIN_ID", "ZCODE_PLUGIN_NAME"},

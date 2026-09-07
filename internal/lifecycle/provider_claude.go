@@ -8,8 +8,8 @@ import (
 func claudeAdapter() providerAdapter {
 	return providerAdapter{
 		name: ProviderClaude,
-		executableMatches: func(path string) bool {
-			return strings.Contains(normalizeProviderExecutablePath(path), "/.claude/skills/formal-gates/bin/")
+		executableMatches: func(normalized string) bool {
+			return strings.Contains(normalized, "/.claude/skills/formal-gates/bin/")
 		},
 		agentPrefixes:   []string{"claude-code"},
 		environmentKeys: []string{"CLAUDE_CODE_ENTRYPOINT"},
