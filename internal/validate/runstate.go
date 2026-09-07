@@ -85,10 +85,8 @@ type RunState struct {
 	AdmissionGeneration uint64 `json:"admissionGeneration,omitempty"`
 	AdmissionLease      string `json:"admissionLease,omitempty"`
 	AdmissionToken      string `json:"admissionToken,omitempty"`
-	// DevelopmentBatchPlan is a compatibility bridge for active runs that were
-	// already registered by the short-lived serial-batch hotfix. New plans cannot
-	// be created through this build. The plan is immutable; progress is derived
-	// only from the existing development dispatch records.
+	// DevelopmentBatchPlan holds the confirmed batch contract. Progress is
+	// derived only from the existing development dispatch records.
 	DevelopmentBatchPlan *DevelopmentBatchPlan        `json:"developmentBatchPlan,omitempty"`
 	PreRepairSnapshot    string                       `json:"preRepairSnapshot,omitempty"`
 	Slicing              *Slicing                     `json:"slicing,omitempty"`
@@ -448,6 +446,7 @@ type RunSummary struct {
 	QAOnlyRerun                *QAOnlyRerunRecord                    `json:"qaOnlyRerun,omitempty"`
 	RequirementGuarantee       *RequirementGuarantee                 `json:"requirementGuarantee,omitempty"`
 	DevelopmentBatches         []DevelopmentBatchRecord              `json:"developmentBatches,omitempty"`
+	DevelopmentPlan            *DevelopmentPlanBinding               `json:"developmentPlan,omitempty"`
 	DispatchObligations        map[string]DispatchObligation         `json:"dispatchObligations,omitempty"`
 	RejectedResults            []RejectedResultReceipt               `json:"rejectedResults,omitempty"`
 	ReviewDeltaReceipts        []ReviewDeltaReceipt                  `json:"reviewDeltaReceipts,omitempty"`
@@ -1224,6 +1223,7 @@ func SaveSliceCost(root, masterRunID string, record SliceCostRecord) error {
 
 func runSummary(state RunState) RunSummary {
 	summary := RunSummary{RunID: state.RunID, Flow: state.Flow, Status: state.Status, RequirementRevision: state.RequirementRevision, RequirementArtifacts: state.RequirementArtifacts, Slicing: state.Slicing, BasePromptRevision: state.BasePromptRevision, CatalogRevision: state.CatalogRevision, VCS: state.VCS, BaseSnapshot: state.BaseSnapshot, CurrentSnapshot: state.CurrentSnapshot, RouteMode: state.RouteMode, SelectedGates: state.SelectedGates, SkipAuthorizations: state.SkipAuthorizations, CompletedReviewWaves: state.CompletedReviewWaves, ExtraReviewWaves: state.ExtraReviewWaves, PreDevelopmentReviewSeries: state.PreDevelopmentReviewSeries, Gates: state.Gates, QA: qaOverallResult(state), Cost: state.Cost, QAOnlyRerun: state.QAOnlyRerun, RequirementGuarantee: state.RequirementGuarantee, DevelopmentBatches: developmentBatchSummary(state), DispatchObligations: state.DispatchObligations, RejectedResults: state.RejectedResults, ReviewDeltaReceipts: state.ReviewDeltaReceipts, ReviewWaves: state.ReviewWaves, PostReviewFindings: state.PostReviewFindings, Problems: state.Problems, P2CompletionCredentials: state.P2CompletionCredentials, GateP3Advisories: unresolvedGateP3(state)}
+	summary.DevelopmentPlan = developmentPlanBinding(state)
 	// 轻量 run 的封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证封板区分。
 	if state.RouteMode == "lightweight" {
 		summary.Unverified = "本 run 未经任何验证"

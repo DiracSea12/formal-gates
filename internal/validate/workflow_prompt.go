@@ -214,6 +214,14 @@ func prepareBoundPrompt(root, packageRoot, runID, target, targetKind string, rev
 				recordReviewOverride(state, target, userReason)
 			}
 		}
+		if targetKind == "action" && target == "development-worker" {
+			if err := normalizeLegacyDevelopmentPlan(state); err != nil {
+				return err
+			}
+			if _, batch, ok := activeDevelopmentBatch(*state); ok && state.DevelopmentBatchPlan.Version == 1 {
+				actionInput = digestValue(struct{ Input, Plan, Batch string }{actionInput, state.DevelopmentBatchPlan.Digest, batch.ID})
+			}
+		}
 		taskKey, signature := dispatchIdentity(*state, catalog, targetKind, target, mode, actionInput)
 		if existingPrompt, reused, err := duplicateDispatchPrompt(*state, signature); err != nil {
 			return err

@@ -86,6 +86,12 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
    切片继承整体审查结果、不重跑。执行本步前必读
    `references/formal-flow.md`「需求、拆分决定与路线」；完整拆分流程见
    `references/sliced-runs.md`。
+
+   批次计划使用可直接编辑的 JSON，在开发前经
+   `workflow slicing --batch-plan <plan.json> --user-confirm` 绑定；允许单批，
+   不为批次另建 run。格式、结构校验、派发绑定与续跑规则见
+   `references/development-plan.md`。每个批次完成后记录实际 DoD、验证和交接，
+   全部开发完成后进入既有 QA/门审流程。
 4. **正式开发之前（两段式）。** 先派发 Part 1 产品审（`product-review`），用独立零上
    下文审查者审已实例化并确认的需求文档：需求本身及其细节是否合理。复审规则（决策级铁
    律：P0/P1/P2/P3 分级；仅含 P2/P3 可记录 PASS、含 P0/P1 记录 FAIL；用户逐项处置：确认

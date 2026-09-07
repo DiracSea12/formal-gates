@@ -858,6 +858,7 @@ func runWorkflowSlicing(args []string, streams IO) (int, error) {
 	master := fs.String("master", "", "retained-overall master run id for a slice instance split decision")
 	acOwners := stringListFlag{}
 	fs.Var(&acOwners, "ac-owner", "complete AC primary-responsibility assignment <AC-ID>=<slice-run-id|master-merge>; repeat for every AC on a guaranteed split")
+	batchPlan := fs.String("batch-plan", "", "JSON development plan: reason, subtasks and ordered batches; requires --user-confirm before development")
 	// --user-confirm：拆分决定与启动拆分声明冲突时的用户确认声明修订——--split no 的 run
 	// 记 split 自升保留总任务实例（不重启）、保留总任务实例记 no-split 降级解死端；修订理由
 	// 必填（--note）。切片实例（--master）不可经修订脱钩；绑定点仍是本次记录（记录后不重切）。
@@ -868,7 +869,15 @@ func runWorkflowSlicing(args []string, streams IO) (int, error) {
 	if err := rejectEngineEntry(*root, *runID); err != nil {
 		return 1, err
 	}
-	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master, validate.SlicingAmendOptions{UserConfirm: *userConfirm, ACResponsibilities: acOwners})
+	var developmentPlan *validate.DevelopmentPlanInput
+	if strings.TrimSpace(*batchPlan) != "" {
+		var err error
+		developmentPlan, err = validate.ReadDevelopmentPlan(*batchPlan)
+		if err != nil {
+			return 1, err
+		}
+	}
+	state, err := validate.RecordSlicing(*root, *pkg, *runID, *decision, *count, slices, *parallel, *note, *master, validate.SlicingAmendOptions{UserConfirm: *userConfirm, ACResponsibilities: acOwners, DevelopmentPlan: developmentPlan})
 	return printValue(streams.Stdout, state, err)
 }
 
@@ -1138,19 +1147,16 @@ func runWorkflowSnapshot(args []string, streams IO) (int, error) {
 	root, pkg := rootFlags(fs)
 	runID := fs.String("run-id", "", "run id")
 	dispatch := fs.String("dispatch", "", "prepared Development or Repair dispatch id")
-	batchID := fs.String("batch-id", "", "current non-final batch id from an already-registered legacy serial plan")
-	verification := fs.String("verification", "", "verification evidence for an intermediate legacy batch")
-	handoff := fs.String("handoff", "", "handoff summary for the next legacy batch")
+	batchID := fs.String("batch-id", "", "current registered development batch id (new plans require this for every batch, including the final one)")
+	verification := fs.String("verification", "", "completed definition-of-done and validation evidence for this batch")
+	handoff := fs.String("handoff", "", "completed handoff: decisions, known issues and next task")
 	userRequested := fs.Bool("user-requested", false, "user explicitly releases the blackbox QA gate when it has not passed (records the authorization source)")
 	reason := fs.String("reason", "", "user reason for the manual blackbox gate release")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
 	if strings.TrimSpace(*batchID) != "" {
-		if *userRequested {
-			return 1, fmt.Errorf("--user-requested applies only to the final development snapshot")
-		}
-		state, err := validate.AdvanceDevelopmentBatch(*root, *pkg, *runID, *dispatch, *batchID, *verification, *handoff)
+		state, err := validate.AdvanceDevelopmentBatch(*root, *pkg, *runID, *dispatch, *batchID, *verification, *handoff, validate.DevelopmentBatchSnapshotOptions{UserRequested: *userRequested, Reason: *reason})
 		return workflowResult(streams, *root, *runID, state, err)
 	}
 	if strings.TrimSpace(*verification) != "" || strings.TrimSpace(*handoff) != "" {

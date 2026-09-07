@@ -5,29 +5,39 @@ import (
 	"strings"
 )
 
-// DevelopmentBatchPlan decodes plans already written by the short-lived
-// serial-batch hotfix. This build deliberately has no plan-registration API:
-// full Batch/Subtask/TaskKey planning remains owned by the engine migration.
-// Legacy Current/Status fields are accepted once, projected into dispatches,
-// and then cleared so dispatch status is the only progress authority.
+// DevelopmentBatchPlan binds the confirmed work contract. Dispatch records are
+// the only progress authority; Current/Status remain solely for old run decoding.
 type DevelopmentBatchPlan struct {
 	Digest              string `json:"digest,omitempty"`
 	UserReason          string `json:"userReason,omitempty"`
 	RequirementRevision string `json:"requirementRevision,omitempty"`
 	// Keep the legacy zero value on the wire: integrity is checked before migration.
-	Current int                      `json:"current"`
-	Batches []DevelopmentBatchRecord `json:"batches"`
+	Current                 int                      `json:"current"`
+	Batches                 []DevelopmentBatchRecord `json:"batches"`
+	Version                 int                      `json:"version,omitempty"`
+	TechnicalReviewDispatch string                   `json:"technicalReviewDispatch,omitempty"`
+	ReviewMasterRunID       string                   `json:"reviewMasterRunId,omitempty"`
 }
 
 type DevelopmentBatchRecord struct {
-	ID           string `json:"id"`
-	Task         string `json:"task"`
-	DoD          string `json:"dod"`
-	Status       string `json:"status,omitempty"`
-	DispatchID   string `json:"dispatchId,omitempty"`
-	Snapshot     string `json:"snapshot,omitempty"`
-	Verification string `json:"verification,omitempty"`
-	Handoff      string `json:"handoff,omitempty"`
+	ID              string               `json:"id"`
+	Task            string               `json:"task"`
+	DoD             string               `json:"dod"`
+	Status          string               `json:"status,omitempty"`
+	DispatchID      string               `json:"dispatchId,omitempty"`
+	Snapshot        string               `json:"snapshot,omitempty"`
+	Verification    string               `json:"verification,omitempty"`
+	Handoff         string               `json:"handoff,omitempty"`
+	Subtasks        []DevelopmentSubtask `json:"subtasks,omitempty"`
+	DependsOn       []string             `json:"dependsOn,omitempty"`
+	Interfaces      string               `json:"interfaces,omitempty"`
+	StateBoundary   string               `json:"stateBoundary,omitempty"`
+	Risks           string               `json:"risks,omitempty"`
+	Validation      []string             `json:"validation,omitempty"`
+	Recovery        string               `json:"recovery,omitempty"`
+	HandoffContract string               `json:"handoffContract,omitempty"`
+	ContextCost     string               `json:"contextCost,omitempty"`
+	TaskKey         string               `json:"taskKey,omitempty"`
 }
 
 // normalizeLegacyDevelopmentPlan performs the one-way compatibility migration
@@ -36,6 +46,12 @@ type DevelopmentBatchRecord struct {
 func normalizeLegacyDevelopmentPlan(state *RunState) error {
 	plan := state.DevelopmentBatchPlan
 	if plan == nil {
+		return nil
+	}
+	if plan.Version == 1 {
+		if plan.RequirementRevision != state.RequirementRevision {
+			return fmt.Errorf("development batch plan requirement revision is stale")
+		}
 		return nil
 	}
 	if strings.TrimSpace(plan.Digest) == "" || strings.TrimSpace(plan.UserReason) == "" || len(plan.Batches) < 2 {
@@ -176,6 +192,21 @@ func developmentBatchPromptDetail(state RunState) string {
 	}
 	plan := state.DevelopmentBatchPlan
 	detail := fmt.Sprintf("Previously confirmed legacy serial development batch %d/%d (%s). Work only on this batch; do not begin a later batch.\n\nTask:\n%s\n\nDefinition of done:\n%s", index+1, len(plan.Batches), batch.ID, batch.Task, batch.DoD)
+	if plan.Version == 1 {
+		detail = fmt.Sprintf("Confirmed development batch %d/%d (%s), plan %s. Work only on this batch. Subtasks are ordered steps within this dispatch, not separate agent tasks.\n\nTask:\n%s\n\nDefinition of done:\n%s", index+1, len(plan.Batches), batch.ID, plan.Digest, batch.Task, batch.DoD)
+		for i, subtask := range batch.Subtasks {
+			detail += fmt.Sprintf("\n%d. [%s] %s", i+1, subtask.ID, subtask.Task)
+		}
+		detail += fmt.Sprintf("\n\nDependencies: %s\nInterfaces: %s\nState boundary: %s\nRisks: %s\nValidation:\n%s\nRecovery: %s\nHandoff contract: %s\nContext cost: %s", strings.Join(batch.DependsOn, ", "), batch.Interfaces, batch.StateBoundary, batch.Risks, strings.Join(batch.Validation, "\n"), batch.Recovery, batch.HandoffContract, batch.ContextCost)
+		for _, dependency := range batch.DependsOn {
+			if index > 0 && dependency == plan.Batches[index-1].ID {
+				continue
+			}
+			if predecessor, found := developmentDispatchForBatch(state, dependency); found {
+				detail += fmt.Sprintf("\n\nDependency %s handoff:\n%s", dependency, predecessor.Handoff)
+			}
+		}
+	}
 	if index > 0 {
 		if previous, found := developmentDispatchForBatch(state, plan.Batches[index-1].ID); found && strings.TrimSpace(previous.Handoff) != "" {
 			detail += "\n\nPrevious batch handoff:\n" + strings.TrimSpace(previous.Handoff)
@@ -191,12 +222,21 @@ func requireDevelopmentBatchDispatch(state RunState, dispatch PreparedDispatch, 
 	return nil
 }
 
-func AdvanceDevelopmentBatch(root, packageRoot, runID, dispatchID, batchID, verification, handoff string) (RunState, error) {
+type DevelopmentBatchSnapshotOptions struct {
+	UserRequested bool
+	Reason        string
+}
+
+func AdvanceDevelopmentBatch(root, packageRoot, runID, dispatchID, batchID, verification, handoff string, options ...DevelopmentBatchSnapshotOptions) (RunState, error) {
 	input := developmentBatchSnapshotInput{BatchID: strings.TrimSpace(batchID), Verification: strings.TrimSpace(verification), Handoff: strings.TrimSpace(handoff)}
 	if input.Verification == "" || input.Handoff == "" {
-		return RunState{}, fmt.Errorf("an intermediate batch snapshot requires --verification and --handoff")
+		return RunState{}, fmt.Errorf("a batch snapshot requires --verification and --handoff")
 	}
-	return advanceSnapshot(root, packageRoot, runID, dispatchID, false, "", input)
+	option := DevelopmentBatchSnapshotOptions{}
+	if len(options) > 0 {
+		option = options[0]
+	}
+	return advanceSnapshot(root, packageRoot, runID, dispatchID, option.UserRequested, option.Reason, input)
 }
 
 func completeIntermediateDevelopmentBatch(state *RunState, dispatch PreparedDispatch, snapshot string, input developmentBatchSnapshotInput) error {
@@ -238,7 +278,7 @@ func guardFinalDevelopmentBatchSnapshot(state RunState, dispatchID string) error
 	return requireDevelopmentBatchDispatch(state, dispatch, batch)
 }
 
-func completeFinalDevelopmentBatch(state *RunState, dispatchID, snapshot string) {
+func completeFinalDevelopmentBatch(state *RunState, dispatchID, snapshot string, inputs ...developmentBatchSnapshotInput) {
 	dispatch, ok := state.Dispatches[dispatchID]
 	if !ok || dispatch.BatchID == "" {
 		return
@@ -246,6 +286,10 @@ func completeFinalDevelopmentBatch(state *RunState, dispatchID, snapshot string)
 	dispatch.CompletionSnapshot = snapshot
 	dispatch.Verification = "final development snapshot recorded; QA and gate evidence is stored in the run summary"
 	dispatch.Handoff = "post-development QA and technical gates"
+	if len(inputs) > 0 && inputs[0].BatchID != "" {
+		dispatch.Verification = inputs[0].Verification
+		dispatch.Handoff = inputs[0].Handoff
+	}
 	state.Dispatches[dispatchID] = dispatch
 }
 
@@ -255,9 +299,11 @@ func developmentBatchSummary(state RunState) []DevelopmentBatchRecord {
 	}
 	result := make([]DevelopmentBatchRecord, 0, len(state.DevelopmentBatchPlan.Batches))
 	for _, spec := range state.DevelopmentBatchPlan.Batches {
-		record := DevelopmentBatchRecord{ID: spec.ID, Task: spec.Task, DoD: spec.DoD, Status: "PENDING"}
+		record := spec
+		record.Status = "PENDING"
 		if dispatch, ok := developmentDispatchForBatch(state, spec.ID); ok {
 			record.DispatchID = dispatch.ID
+			record.TaskKey = dispatch.TaskKey
 			if dispatch.Status == "COMPLETED" {
 				record.Status = "COMPLETE"
 			} else if dispatch.Status == "OPEN" || dispatch.Status == "CLAIMED" {

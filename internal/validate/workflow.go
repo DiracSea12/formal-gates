@@ -1329,6 +1329,7 @@ func AddRouteGates(root, packageRoot, runID string, additions []string) (RunStat
 type SlicingAmendOptions struct {
 	UserConfirm        bool
 	ACResponsibilities []string
+	DevelopmentPlan    *DevelopmentPlanInput
 }
 
 // RecordSlicing records the run's formal split decision. The decision is binary
@@ -1356,6 +1357,14 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			return fmt.Errorf("slicing decision must be split or no-split")
 		}
 		if slicingRecorded(*state) {
+			// Requirement changes retain the run topology and route, but invalidate
+			// its batch contract. Rebind that contract after the new review without
+			// pretending that the already-confirmed run topology was re-cut.
+			if options.DevelopmentPlan != nil && state.Slicing.Decision == decision &&
+				state.Slicing.SplitCount == splitCount && sameOrderedStrings(state.Slicing.Slices, slices) &&
+				state.Slicing.Parallel == strings.TrimSpace(parallel) && state.Slicing.MasterRunID == strings.TrimSpace(masterRunID) {
+				return bindDevelopmentPlan(root, state, options.DevelopmentPlan, options.UserConfirm)
+			}
 			return fmt.Errorf("the slicing decision is already recorded and is the binding point; it is not re-cut")
 		}
 		// 需求 4：启动声明与拆分决定互相校验，杜绝"启动时说 no、拆分时说 split"或反向的
@@ -1457,7 +1466,7 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			if state.RouteMode != "" {
 				updateGuaranteeForRoute(state)
 			}
-			return nil
+			return bindDevelopmentPlan(root, state, options.DevelopmentPlan, options.UserConfirm)
 		}
 		if !actionPassedOrAbsent(*state, "product-review") {
 			return fmt.Errorf("Product Review must pass before the slicing decision")
@@ -1466,6 +1475,9 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			return fmt.Errorf("Start Readiness must pass before the slicing decision")
 		}
 		if decision == "split" {
+			if options.DevelopmentPlan != nil {
+				return fmt.Errorf("register development batches in each implementing slice, not the retained overall run")
+			}
 			if splitCount < 2 {
 				return fmt.Errorf("a split requires at least two slices")
 			}
@@ -1503,7 +1515,7 @@ func RecordSlicing(root, packageRoot, runID, decision string, splitCount int, sl
 			return fmt.Errorf("a no-split decision requires the mandatory reason note (建议不拆原因)")
 		}
 		state.Slicing = &Slicing{Decision: decision, Note: strings.TrimSpace(note)}
-		return nil
+		return bindDevelopmentPlan(root, state, options.DevelopmentPlan, options.UserConfirm)
 	})
 }
 
@@ -2178,6 +2190,9 @@ func advanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			return err
 		}
 		if batchInput.BatchID == "" {
+			if _, batch, active := activeDevelopmentBatch(*state); active && state.DevelopmentBatchPlan.Version == 1 {
+				return fmt.Errorf("development batch %s requires --batch-id, --verification and --handoff, including the final batch", batch.ID)
+			}
 			if err := guardFinalDevelopmentBatchSnapshot(*state, dispatchID); err != nil {
 				return err
 			}
@@ -2283,7 +2298,19 @@ func advanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 			if err := requireDispatchSourceAncestorOfHead(root, *state, developmentDispatch); err != nil {
 				return err
 			}
-			return completeIntermediateDevelopmentBatch(state, developmentDispatch, currentSnapshot, batchInput)
+			index, batch, active := activeDevelopmentBatch(*state)
+			if !active || batch.ID != batchInput.BatchID {
+				return fmt.Errorf("batch id %q is not the current development batch", batchInput.BatchID)
+			}
+			if state.DevelopmentBatchPlan.Version != 1 || index < len(state.DevelopmentBatchPlan.Batches)-1 {
+				if userRequested {
+					return fmt.Errorf("--user-requested applies only to the final development snapshot")
+				}
+				return completeIntermediateDevelopmentBatch(state, developmentDispatch, currentSnapshot, batchInput)
+			}
+			if err := requireDevelopmentBatchDispatch(*state, developmentDispatch, batch); err != nil {
+				return err
+			}
 		}
 		// 快照黑盒门（等两边都完成）：黑盒 qa-review PASS 且 开发完成才可快照。黑盒
 		// qa-review 未 PASS 且此前没有用户放行时，只有用户显式授权可手动放行并记录授权
@@ -2305,7 +2332,7 @@ func advanceSnapshot(root, packageRoot, runID, dispatchID string, userRequested 
 		state.Actions["development-worker"] = ActionResult{Status: developmentComplete, DispatchID: developmentDispatch.ID}
 		if developmentDispatch.ID != "" {
 			completeDispatch(state, developmentDispatch.ID)
-			completeFinalDevelopmentBatch(state, developmentDispatch.ID, currentSnapshot)
+			completeFinalDevelopmentBatch(state, developmentDispatch.ID, currentSnapshot, batchInput)
 		}
 		if isRepair {
 			state.PreRepairSnapshot = oldSnapshot
