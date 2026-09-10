@@ -19,17 +19,6 @@ import (
 	"formal-gates/internal/engine/decision"
 )
 
-// ---- 夹具定义（六变体全覆盖 + 并行组 + 混合 authority） ----
-//
-// 图（A → B 表示 B 依赖 A）：
-//
-//	s.parse(n0) ─→ s.persist(n0)
-//	            └→ s.ask(n1) / s.dispatch(n1) / s.review(n1)
-//	            └→ s.fan(n2) ─→ s.left(n2) ─→ s.join(n2) ─→ s.cost(n3)
-//	                          └→ s.right(n1? no: n2) ↗
-//
-// s.left/s.right 均在 n2；s.cost 在 n3 且依赖 s.join 与 s.ask。
-
 const fxDefVersion = authoring.DefinitionVersion("1")
 
 // fxOrdinals 是夹具图的确定性 Kahn 拓扑序（(nodeID, stepID) 字典序选点）。

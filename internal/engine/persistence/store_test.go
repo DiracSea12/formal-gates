@@ -236,7 +236,7 @@ func TestSaveNeverWritesOnUnsupportedEnvelope(t *testing.T) {
 		value any
 	}{
 		{"writer legacy", "writer", "legacy"},
-		{"schema 2", "stateSchemaVersion", "2"},
+		{"prior schema 1", "stateSchemaVersion", "1"},
 		{"definition version 1", "workflowDefinitionVersion", "1"},
 		{"definition digest other", "definitionDigest", "sha256:0123"},
 		{"package digest stale", "packageDigest", "sha256:stale"},

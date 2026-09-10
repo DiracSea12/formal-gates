@@ -1,16 +1,12 @@
 package validate
 
-// Stage 0 keeps the legacy workflow writer untouched while exposing the small
-// immutable surfaces needed by a future engine/candidate installation.  These
-// helpers deliberately do not migrate legacy state: the stable driver continues
-// to read and write its existing envelope, while a versioned candidate must opt
-// into the exact envelope below before it can write anything.
-
+// Shared package identity and installation registry utilities. Workflow state
+// belongs exclusively to the engine envelope and persistence implementation.
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
+
 	"fmt"
 	"io/fs"
 	"os"
@@ -21,219 +17,8 @@ import (
 )
 
 const (
-	// CurrentStateSchemaVersion and CurrentWorkflowDefinitionVersion are the
-	// initial contract values for the not-yet-authoritative engine surface.
-	// Bumping either value is an intentional contract change and requires a new
-	// candidate package; legacy RunState values are not rewritten.
-	CurrentStateSchemaVersion        = "1"
-	CurrentWorkflowDefinitionVersion = "1"
-	UnsupportedRunVersionCode        = "UNSUPPORTED_RUN_VERSION"
-	RegistrySchemaVersion            = 1
-	CurrentWorkflowDefinitionSource  = "definitions/workflow.json"
-	CurrentWorkflowDefinitionDigest  = "sha256:9ec68cd758cf9bad5bd8beefedac51755442c521ffe5e8276e805e82e66faa4c"
+	RegistrySchemaVersion = 1
 )
-
-type VersionEnvelope struct {
-	Writer                    string `json:"writer,omitempty"`
-	StateSchemaVersion        string `json:"stateSchemaVersion"`
-	WorkflowDefinitionVersion string `json:"workflowDefinitionVersion"`
-	DefinitionSource          string `json:"definitionSource"`
-	DefinitionDigest          string `json:"definitionDigest"`
-	PackageDigest             string `json:"packageDigest,omitempty"`
-}
-
-type UnsupportedRunVersionError struct {
-	Field    string
-	Expected string
-	Observed string
-}
-
-func (e *UnsupportedRunVersionError) Error() string {
-	return fmt.Sprintf("%s: %s expected %q, got %q", UnsupportedRunVersionCode, e.Field, e.Expected, e.Observed)
-}
-
-func (e *UnsupportedRunVersionError) Is(target error) bool {
-	_, ok := target.(*UnsupportedRunVersionError)
-	return ok
-}
-
-// ValidateVersionEnvelope is the write barrier for a versioned candidate.  It
-// requires all fields that identify the definition, then compares both version
-// values exactly.  Callers should run it before opening or modifying a state
-// file; it has no migration or repair side effects.
-func ValidateVersionEnvelope(envelope VersionEnvelope) error {
-	checks := []struct {
-		field, observed, expected string
-	}{
-		{"writer", envelope.Writer, "engine"},
-		{"stateSchemaVersion", envelope.StateSchemaVersion, CurrentStateSchemaVersion},
-		{"workflowDefinitionVersion", envelope.WorkflowDefinitionVersion, CurrentWorkflowDefinitionVersion},
-	}
-	for _, check := range checks {
-		if strings.TrimSpace(check.observed) == "" || check.observed != check.expected {
-			return &UnsupportedRunVersionError{Field: check.field, Expected: check.expected, Observed: check.observed}
-		}
-	}
-	if strings.TrimSpace(envelope.DefinitionSource) == "" || strings.TrimSpace(envelope.DefinitionDigest) == "" {
-		return &UnsupportedRunVersionError{Field: "definition", Expected: "source and digest", Observed: "missing"}
-	}
-	// Definition source and digest form one immutable identity.  Candidate
-	// writers must use the exact pair from the currently installed definition;
-	// accepting a merely non-empty pair would allow a stale definition to write
-	// a state file that the current reader cannot interpret.
-	if envelope.DefinitionSource != CurrentWorkflowDefinitionSource || envelope.DefinitionDigest != CurrentWorkflowDefinitionDigest {
-		return &UnsupportedRunVersionError{Field: "definition", Expected: CurrentWorkflowDefinitionSource + " @ " + CurrentWorkflowDefinitionDigest, Observed: envelope.DefinitionSource + " @ " + envelope.DefinitionDigest}
-	}
-	return nil
-}
-
-func IsUnsupportedRunVersion(err error) bool {
-	var target *UnsupportedRunVersionError
-	return errors.As(err, &target)
-}
-
-// WriteVersionedState is the future engine/candidate write entrypoint.  The
-// envelope is validated before the destination is opened, so an unsupported
-// writer cannot create or truncate a state file.  Legacy workflow state does
-// not call this helper and therefore keeps its existing format unchanged.
-func WriteVersionedState(path string, envelope VersionEnvelope, value any) error {
-	if err := ValidateVersionEnvelope(envelope); err != nil {
-		return err
-	}
-	return writeVersionedStateDocument(path, envelope, value)
-}
-
-func writeVersionedStateDocument(path string, envelope VersionEnvelope, value any) error {
-	document := map[string]any{}
-	if envelope.PackageDigest != "" {
-		document["packageDigest"] = envelope.PackageDigest
-	}
-	if fields, ok := value.(map[string]any); ok {
-		for key, item := range fields {
-			document[key] = item
-		}
-	} else if value != nil {
-		document["payload"] = value
-	}
-	// Identity fields are owned by the validated envelope.  Applying them last
-	// prevents a caller's payload map from silently downgrading the writer or
-	// definition after the write barrier has passed.
-	document["writer"] = envelope.Writer
-	document["stateSchemaVersion"] = envelope.StateSchemaVersion
-	document["workflowDefinitionVersion"] = envelope.WorkflowDefinitionVersion
-	document["definitionSource"] = envelope.DefinitionSource
-	document["definitionDigest"] = envelope.DefinitionDigest
-	return writeJSONAtomically(path, document)
-}
-
-type DiagnoseReport struct {
-	Path             string          `json:"path"`
-	JSONReadable     bool            `json:"jsonReadable"`
-	DetectedVersions map[string]any  `json:"detectedVersions,omitempty"`
-	Supported        VersionEnvelope `json:"supported"`
-	Summary          map[string]any  `json:"summary,omitempty"`
-	Integrity        string          `json:"integrity"`
-	Recommendation   string          `json:"recommendation,omitempty"`
-}
-
-// DiagnoseState is intentionally raw and read-only.  It never calls the
-// normal loader, never writes a repaired state, and preserves a terminal
-// summary when the full envelope is from an older or newer version.
-func DiagnoseState(path string) (DiagnoseReport, error) {
-	return DiagnoseStateWithSupported(path, VersionEnvelope{
-		Writer: "engine", StateSchemaVersion: CurrentStateSchemaVersion,
-		WorkflowDefinitionVersion: CurrentWorkflowDefinitionVersion,
-		DefinitionSource:          CurrentWorkflowDefinitionSource,
-		DefinitionDigest:          CurrentWorkflowDefinitionDigest,
-	})
-}
-
-// DiagnoseStateWithSupported is the candidate-aware form used by an installed
-// CLI whose compiled engine definition is newer than the stage-0 frozen future
-// contract. It remains raw and read-only; only the reported supported identity
-// and exact envelope comparison differ.
-func DiagnoseStateWithSupported(path string, supported VersionEnvelope) (DiagnoseReport, error) {
-	report := DiagnoseReport{
-		Path:      filepath.Clean(path),
-		Supported: supported,
-		Integrity: "unknown",
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return report, err
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		report.Recommendation = "rebuild the state with the owning writer"
-		return report, nil
-	}
-	report.JSONReadable = true
-	report.Integrity = "readable"
-	if _, writerOK := raw["writer"]; !writerOK {
-		report.Integrity = "unsupported"
-		report.Recommendation = UnsupportedRunVersionCode + ": state has no version envelope; rebuild it with the owning writer"
-	}
-	report.DetectedVersions = map[string]any{}
-	for _, key := range []string{"writer", "stateSchemaVersion", "workflowDefinitionVersion", "definitionSource", "definitionDigest", "packageDigest"} {
-		if value, ok := raw[key]; ok {
-			report.DetectedVersions[key] = value
-		}
-	}
-	if _, writerOK := raw["writer"]; writerOK {
-		envelope := VersionEnvelope{
-			Writer:                    rawString(raw, "writer"),
-			StateSchemaVersion:        rawString(raw, "stateSchemaVersion"),
-			WorkflowDefinitionVersion: rawString(raw, "workflowDefinitionVersion"),
-			DefinitionSource:          rawString(raw, "definitionSource"),
-			DefinitionDigest:          rawString(raw, "definitionDigest"),
-			PackageDigest:             rawString(raw, "packageDigest"),
-		}
-		if err := validateReportedEnvelope(envelope, supported); err != nil {
-			report.Recommendation = err.Error() + "; rebuild it with the owning writer"
-		}
-	}
-	if summary, ok := raw["summary"].(map[string]any); ok {
-		report.Summary = summary
-	} else if status, ok := raw["status"]; ok {
-		// Terminal summaries in old receipts often only contain status and runId.
-		report.Summary = map[string]any{"status": status}
-		if runID, exists := raw["runId"]; exists {
-			report.Summary["runId"] = runID
-		}
-	}
-	if report.Summary == nil {
-		if report.Recommendation == "" {
-			report.Recommendation = "inspect the owning writer before attempting a write"
-		}
-	}
-	return report, nil
-}
-
-func validateReportedEnvelope(observed, supported VersionEnvelope) error {
-	checks := []struct {
-		field, got, want string
-	}{
-		{"writer", observed.Writer, supported.Writer},
-		{"stateSchemaVersion", observed.StateSchemaVersion, supported.StateSchemaVersion},
-		{"workflowDefinitionVersion", observed.WorkflowDefinitionVersion, supported.WorkflowDefinitionVersion},
-		{"definitionSource", observed.DefinitionSource, supported.DefinitionSource},
-		{"definitionDigest", observed.DefinitionDigest, supported.DefinitionDigest},
-	}
-	if strings.TrimSpace(supported.PackageDigest) != "" {
-		checks = append(checks, struct{ field, got, want string }{"packageDigest", observed.PackageDigest, supported.PackageDigest})
-	}
-	for _, check := range checks {
-		if strings.TrimSpace(check.got) == "" || check.got != check.want {
-			return &UnsupportedRunVersionError{Field: check.field, Expected: check.want, Observed: check.got}
-		}
-	}
-	return nil
-}
-
-func rawString(values map[string]any, key string) string {
-	value, _ := values[key].(string)
-	return value
-}
 
 type PackageReceiptReport struct {
 	Root                  string               `json:"root"`
@@ -891,4 +676,50 @@ func writeJSONAtomically(path string, value any) error {
 		return err
 	}
 	return writeAtomic(path, append(data, '\n'), 0o600)
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return replaceCompletedFile(tmpName, path)
+}
+
+func absPath(path string) string {
+	full, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(full)
+}
+
+func digestValue(value any) string {
+	data, _ := json.Marshal(value)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func shortDigest(digest string) string {
+	if len(digest) <= 16 {
+		return digest
+	}
+	return digest[:16]
 }

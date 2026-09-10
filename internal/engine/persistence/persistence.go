@@ -28,11 +28,8 @@
 //   - workflowDefinitionVersion 与 definitionDigest 直接引用
 //     internal/engine/definition 的生成身份常量（identity_gen.go，与
 //     definitions/workflow.json 由同一生成动作产出）；
-//   - stateSchemaVersion 复用 encoder 的引擎侧常量 "1"，语义对齐
-//     internal/validate/phase0.go 的冻结常量 CurrentStateSchemaVersion，
-//     由测试钉死相等；
-//   - 本包不导入 internal/validate：阶段 5 将删除 legacy 实现，engine
-//     包不得反向依赖（与 shadow 包相同的结构性约束）。
+//   - stateSchemaVersion 直接引用 encoder 当前引擎常量；旧版本统一拒绝。
+//   - 本包只依赖 engine 生成身份，不依赖安装维护或旧运行态解码。
 //
 // Windows 平台分叉按阶段决策维持延期：execute 段的原子 rename 收敛在
 // Store.executeCommit 单点，未来平台分层只需替换该调用。
@@ -53,7 +50,7 @@ const (
 	// Writer 是版本信封 writer 字段的唯一合法值：state 只能由 engine 写入。
 	Writer = "engine"
 
-	// UnsupportedRunVersionCode 与 phase0 冻结错误码同值（测试钉死）：
+	// UnsupportedRunVersionCode 保留版本拒绝错误码：
 	// 版本身份缺失或不精确匹配的统一拒绝码。
 	UnsupportedRunVersionCode = "UNSUPPORTED_RUN_VERSION"
 	// StateIntegrityCode 是完整性摘要不符（内容被篡改或损坏）的拒绝码。

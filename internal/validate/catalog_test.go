@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
+
 	"testing"
 )
 
@@ -117,101 +117,6 @@ func TestGateDiscoveryRejectsInvalidDirectEntries(t *testing.T) {
 	}
 }
 
-func TestGatePromptContainsEachPromptExactlyOnce(t *testing.T) {
-	root := promptPackage(t, map[string]string{"quality": "UNIQUE_GATE_CHECK"})
-	writeTestFile(t, filepath.Join(root, "prompts", "reviewer-base.md"), "UNIQUE_SHARED_RULE\n")
-	catalog, err := LoadPromptCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prompt, err := ComposeGatePrompt(catalog, "quality", PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", DispatchID: "dispatch-test", DispatchAttempt: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, marker := range []string{"UNIQUE_SHARED_RULE", "UNIQUE_GATE_CHECK"} {
-		if strings.Count(prompt, marker) != 1 {
-			t.Fatalf("marker %q count=%d\n%s", marker, strings.Count(prompt, marker), prompt)
-		}
-	}
-	if !strings.Contains(prompt, `"status":"PASS|FAIL|RUNTIME_ERROR"`) || !strings.Contains(prompt, "RUNTIME_ERROR requires a non-empty message") {
-		t.Fatalf("gate prompt is missing its runtime-error result contract:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, `"severity":"P0|P1|P2|P3"`) || !strings.Contains(prompt, "PASS permits no findings or P2/P3-only findings") {
-		t.Fatalf("gate prompt is missing its severity contract:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "catalog revision: "+catalog.CatalogRevision) {
-		t.Fatalf("gate prompt is missing its catalog revision:\n%s", prompt)
-	}
-	for _, forbidden := range []string{"previous finding", "repair explanation", "target verdict"} {
-		if strings.Contains(strings.ToLower(prompt), forbidden) {
-			t.Fatalf("prompt contains prior-review context %q", forbidden)
-		}
-	}
-}
-
-func TestGatePromptDeclaresFullScopeOnRerunRound(t *testing.T) {
-	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "base", CurrentSnapshot: "current", DispatchID: "dispatch-test", DispatchAttempt: 1}
-	first, err := ComposeGatePrompt(catalog, "quality", base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(first, "重审") {
-		t.Fatalf("first-round gate prompt declared a rerun scope:\n%s", first)
-	}
-	base.ReviewWave = 2
-	base.PreRepairSnapshot = "pre"
-	rerun, err := ComposeGatePrompt(catalog, "quality", base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, marker := range []string{"返修后第 2 轮重审", "你的范围是完整的 base→current", "pre-repair"} {
-		if !strings.Contains(rerun, marker) {
-			t.Fatalf("rerun gate prompt missing full-scope declaration %q:\n%s", marker, rerun)
-		}
-	}
-}
-
-func TestGateResultContractIncludesComparedPair(t *testing.T) {
-	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prompt, err := ComposeGatePrompt(catalog, "quality", PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", DispatchID: "dispatch-test", DispatchAttempt: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(prompt, `"compared":"base..current"`) {
-		t.Fatalf("gate result contract is missing the compared snapshot pair:\n%s", prompt)
-	}
-}
-
-func TestActionPromptsDescribeTheirSemanticReturn(t *testing.T) {
-	root := promptPackage(t, map[string]string{"quality": "checks"})
-	catalog, err := LoadPromptCatalog(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := PromptRoute{RequirementSource: "requirements.md", RequirementRevision: "rev", CatalogRevision: catalog.CatalogRevision, Worktree: "/repo", VCS: "git", BaseSnapshot: "a", CurrentSnapshot: "b", PreRepairSnapshot: "old"}
-	for action, want := range map[string]string{"requirements-clarification": "user confirms", "qa-design": "blackbox or whitebox", "qa-review": "decision for every supplied pending case", "qa-execution": "case ID, PASS or FAIL outcome", "carry": "INHERIT or RERUN", "development-worker": "delivery path names", "start-readiness": "PASS when there are no P0/P1 findings", "product-review": "candidate inputs for the user's per-item decision"} {
-		prompt, err := ComposeActionPrompt(catalog, action, route, "input")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("%s prompt missing %q\n%s", action, want, prompt)
-		}
-		if strings.Count(prompt, "catalog revision: "+catalog.CatalogRevision) != 1 {
-			t.Fatalf("%s prompt does not contain exactly one catalog revision:\n%s", action, prompt)
-		}
-	}
-}
-
 func TestActionCatalogIsFixedWhileGatesRemainFileDriven(t *testing.T) {
 	for _, mutate := range []func(string){
 		func(root string) {
@@ -253,48 +158,5 @@ func writeTestFile(t *testing.T, path, text string) {
 	}
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// TestRequirementRevisionNormalizesCRLF 保证需求工件哈希跨平台稳定：Windows 上 git
-// 检出按 autocrlf 把工作树行尾转 CRLF，隔离工作区与主工作区行尾不一致会导致注入
-// 哈希校验误报。规范化后 CRLF 与 LF 内容哈希一致。
-func TestRequirementRevisionNormalizesCRLF(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "design.md")
-	writeTestFile(t, path, "line one\r\nline two\n")
-	crlf, err := RequirementRevision(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, path, "line one\nline two\n")
-	lf, err := RequirementRevision(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if crlf != lf {
-		t.Fatalf("CRLF revision %s does not equal LF revision %s", crlf, lf)
-	}
-}
-
-func TestCatalogDeltaReportsRemovedGate(t *testing.T) {
-	root, pkg := workflowFixture(t)
-	state := mustStart(t, root, pkg, "removed-gate")
-	if err := os.Remove(filepath.Join(pkg, "gates", "architecture.md")); err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := LoadPromptCatalog(pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	delta := catalogDelta(state, catalog)
-	found := false
-	for _, id := range delta {
-		if id == "gate:architecture" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("catalogDelta did not report removed gate; got %v", delta)
 	}
 }

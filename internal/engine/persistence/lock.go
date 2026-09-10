@@ -78,29 +78,38 @@ func (s *Store) acquireLock() (func(), error) {
 	}
 }
 
-// lockIsStale 判定锁是否可抢占：内容不可解析、持有进程已死，或进程
-// 存活但锁文件超过 lockStaleAge 未刷新（视为持有者已失联）。
+// lockIsStale 判定锁是否可抢占：已完整登记的持有进程死亡，或锁已超过
+// lockStaleAge。未完成写入的 owner 行必须等到超时，避免夺走正在创建的锁。
 func lockIsStale(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	expired := time.Since(info.ModTime()) > lockStaleAge
+	// O_EXCL creates the visible file before WriteString publishes its owner.
+	// Another process can observe empty or partial bytes in that interval. An
+	// incomplete owner is recoverable only after the existing stale age, never
+	// while a fresh creator may still be acquiring this transaction lock.
+	if !strings.HasSuffix(string(data), "\n") {
+		return expired
+	}
 	fields := strings.Fields(string(data))
 	if (len(fields) != 1 && len(fields) != 2) || !strings.HasPrefix(fields[0], "pid=") {
-		return true
+		return expired
 	}
 	if len(fields) == 2 && !strings.HasPrefix(fields[1], "token=") {
-		return true
+		return expired
 	}
 	pid, err := strconv.Atoi(strings.TrimPrefix(fields[0], "pid="))
 	if err != nil || pid <= 0 {
-		return true
+		return expired
 	}
 	if !coordination.ProcessAlive(pid) {
 		return true
 	}
-	if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStaleAge {
-		return true
-	}
-	return false
+	return expired
 }

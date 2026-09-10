@@ -9,22 +9,11 @@ import (
 	"formal-gates/internal/host"
 )
 
-// 本文件是「写墙 owner 作用域」的完整实现：把写墙收窄到「启动 formal-gates 的那个
-// 对话」，其它对话放行（子代理仍按 agent_type 维持现有逻辑，与 owner 无关）。三部分
-// 集中在此，不散落到其它文件：
-//   1. 捕获 —— 主线程执行 workflow start 的 PreToolUse 时，hook 把发起对话身份写入
-//      sidecar（<root>/.gates/tmp/start-owner.json）。
-//   2. 持久化 —— Start 读 sidecar 记进 run state 的 ownerTranscript/ownerSession。
-//   3. 比对 —— 写墙主线程分支按 payload 身份与 owner 是否匹配收窄。
-// 身份主键用 transcript_path（Claude Code / Codex 稳定、内嵌会话 UUID），session_id
-// 兜底（Cursor 用 conversation_id 并入 session 兜底）；三键都读 snake/camel 多候选名。
-// owner 未知时保守拦截，保证这是纯收窄、不回退保护。
-
 const startOwnerSidecarName = "start-owner.json"
 
 // ownerSidecarPath 返回 hook 写、Start 读的桥接文件路径。
 func ownerSidecarPath(root string) string {
-	return filepath.Join(root, ".gates", "tmp", startOwnerSidecarName)
+	return filepath.Join(root, ".gates", startOwnerSidecarName)
 }
 
 // hookOwnerIdentity 从 PreToolUse 载荷提取发起对话身份：transcript_path 为主键、
@@ -113,40 +102,13 @@ func workflowStartRoot(command string) string {
 	return ""
 }
 
-// consumeStartOwner 由 Start 调用：读 sidecar 并立即删除（成不成都删，避免污染下次
-// start），返回其中记录的 owner 身份。无 sidecar 或解析失败返回空串。
-func consumeStartOwner(root string) (transcript, session, provider string) {
-	path := ownerSidecarPath(root)
-	data, err := os.ReadFile(path)
-	_ = os.Remove(path)
-	if err != nil {
-		return "", "", ""
-	}
-	var probe struct {
-		Transcript string `json:"transcript"`
-		Session    string `json:"session"`
-		Provider   string `json:"provider"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", "", ""
-	}
-	return strings.TrimSpace(probe.Transcript), strings.TrimSpace(probe.Session), strings.TrimSpace(probe.Provider)
-}
-
 // readRunOwner 读取 run 状态文件里的 owner 字段（旧 run 缺失时返回空串）。
-func readRunOwner(statePath string) (transcript, session string) {
-	data, err := os.ReadFile(statePath)
-	if err != nil {
+func readRunOwner(path string) (transcript, session string) {
+	state, err := readHookEngineState(path)
+	if err != nil || state.Regular == nil {
 		return "", ""
 	}
-	var probe struct {
-		OwnerTranscript string `json:"ownerTranscript"`
-		OwnerSession    string `json:"ownerSession"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", ""
-	}
-	return strings.TrimSpace(probe.OwnerTranscript), strings.TrimSpace(probe.OwnerSession)
+	return state.Regular.OwnerTranscript, state.Regular.OwnerSession
 }
 
 // ownerIdentity 是某个活动 run 的 owner 身份（启动对话 transcript / session）。

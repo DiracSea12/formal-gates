@@ -1,6 +1,6 @@
 # formal-gates 分阶段 Seal 开发计划
 
-> 状态：开发计划已确认采用“固定稳定插件驱动 + 阶段候选隔离验证 + 最终一次全局切换”。
+> 状态：2026-09-07 用户修订为“固定稳定插件驱动 + 阶段候选隔离验证 + 阶段 4 交付后全局切换 + 阶段 7 升级最终版”。
 > 总需求基线：`openspec/changes/orchestration-pipeline-engine/master-requirements.md`。
 > 总体目标架构：`refactor-plan/final-implementation-draft.md`。
 > 本文只定义交付切片、阶段环境和退出条件，不启动任何 formal-gates run；每个阶段开始前仍须独立完成该阶段的需求受理、方案确认与路线选择。
@@ -15,9 +15,9 @@
 2. 本阶段候选在隔离安装和隔离测试项目中可正常使用，不依赖开发 worktree 中尚未提交的内容。
 3. 本阶段没有把未完成的公共面、文档或状态格式泄漏到固定稳定插件。
 4. 若下一阶段开发失败，可回到最近一个已 Seal 的源码和候选包，不需要修复半安装的全局插件。
-5. 最终阶段以前不替换全局稳定安装、不退役旧运行时，也不把早期阶段的 canary 证据拼接成最终交付证据。
+5. 阶段 0–3 不替换全局稳定安装；阶段 4 交付后发布到全局，阶段 5/6 保持该版本，阶段 7 再升级最终完整版本。旧逻辑的源码清理仍在阶段 7；早期 canary 不拼接成最终交付证据。
 
-自狗粮硬规则：从阶段 0 启动到增量阶段 7 的最终 Seal 完成之前，所有阶段正式 run 的 `workflow start`、需求登记、开发/审查/QA 编排和 Seal 都由阶段 0 冻结的基线版本项目安装（固定 stable driver）执行。候选 binary 只能在候选隔离测试项目中作为被测对象运行，不能驱动自己的 formal-gates run、写稳定 registry 或签发权威 Seal；最终 Seal 的 receipt 也必须由基线 stable driver 写出。只有最终 Seal、主线集成/promotion receipt 和最终 canary 全部成立后，才允许把全局入口切换到候选。
+自狗粮硬规则：阶段 0–3 保留各自历史 driver 绑定。阶段 4 按用户 2026-09-07“用当前版本开发”的决定，使用本阶段需求案登记的精确当前版本作为固定 driver，以新 run ID 绑定；不让当前版续写不兼容的旧状态，也不让阶段 4 候选签发自己的权威 Seal。阶段 4 Seal、主线集成及必要重验完成后，通过既有安装事务把全局入口切换到该发布包；切换与实际全局入口检查成功后，从同一精确包冻结阶段 4 stable driver，驱动阶段 5–7 的正式 run。阶段 5–7 的开发驱动使用 Codex/Git no-split engine 路径，新增 split/VCS/宿主能力仍只由隔离候选作为被测对象执行。每个 run 的 driver 在创建时固定，候选不得驱动自己的正式 run、写稳定 registry 或签发自己的权威 Seal；阶段 7 final-release Seal 由冻结的阶段 4 driver 写出，再把全局入口从阶段 4 升级到最终版。
 
 ## 2. 环境模型
 
@@ -27,7 +27,7 @@
 
 | 环境 | 用途 | 约束 |
 | --- | --- | --- |
-| 固定稳定驱动环境 | 驱动本次重构各阶段的 formal-gates 流程 | 使用阶段 0 冻结的基线版本项目安装；`prompts/`、`gates/` 和其他运行输入不得软链接回开发工作区；直到阶段 7 最终 Seal 完成前保持不变 |
+| 固定稳定驱动环境 | 驱动本次重构各阶段的 formal-gates 流程 | 阶段 0–3 保留历史绑定；阶段 4 使用该阶段需求案锁定的当前版本；阶段 4 发布后，阶段 5–7 使用同一发布包的冻结阶段 4 安装。每个正式 run 内不换 driver；`prompts/`、`gates/` 和其他输入不得软链接回开发区 |
 | 阶段开发 worktree | 编辑、提交和审查本阶段源码 | 基于上一阶段 sealed commit 创建；只承载本阶段授权范围；不得直接充当权威候选安装 |
 | 候选验证环境 | 安装并运行本阶段候选插件 | 从已提交的候选快照复制或打包到独立目录；使用独立测试项目、host home/config、状态目录和资源登记；候选是被测对象，不得成为正式 run 的 driver 或 Seal writer；不得读取开发 worktree 或固定稳定环境的可变内容 |
 
@@ -54,12 +54,12 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
 
 ### 2.2 阶段基线与推进
 
-阶段 0–6 固定执行以下推进顺序；最终全局切换也必须以主线集成后的 canonical identity 为输入，阶段 7 的唯一例外见下文：
+阶段 0–6 固定执行以下源码推进顺序；阶段 4 与阶段 7 的全局发布都以主线集成后的 canonical identity 为输入，阶段 4 增加交付后发布步骤，阶段 7 的最终 Seal 顺序例外见下文：
 
 ```text
 上一阶段 post-integration canonical identity（首阶段为冻结的初始 VCS identity）
     -> 创建本阶段分支与开发 worktree
-    -> 用阶段 0 冻结的基线版本（固定 stable driver）启动本阶段 formal-gates run
+    -> 用本阶段固定 stable driver 启动正式 run（阶段 0–3 保留历史绑定，阶段 4 用已锁定的当前版本，阶段 5–7 用阶段 4 包）
     -> 开发、审查、QA、修复
     -> 从已提交候选构建隔离安装
     -> 在隔离测试项目验证新增能力和既有正常路径
@@ -67,14 +67,15 @@ Git 阶段使用 linked worktree；SVN 阶段使用独立 working copy；P4 阶�
     -> 记录 sealed commit、包摘要和证据
     -> 集成到主线并取得 promotion/integration receipt
     -> 如集成改变树或包摘要，基于 post-integration identity 重建/重验候选
+    -> 若为阶段 4：全局切换、实际入口检查与历史功能逐项回归通过，再冻结阶段 4 driver
     -> 以 post-integration canonical identity 创建下一阶段 worktree
 ```
 
 一个阶段未 Seal 时，不得让下一阶段基于其未完成 worktree 开发。阶段 worktree 在 Seal、主线集成和证据核对完成前保留；完成后按正式流程清理。sealed candidate identity 与 post-integration identity 必须分别记录并以 promotion/integration receipt 关联；若集成产生新的提交、revision 或 changelist，下一阶段绑定后者而不是猜测前者仍等价。
 
-候选隔离测试可以执行候选自己的 `workflow` surface 来验证功能，但这类 run、receipt 和 summary 只能落在候选 namespace，不能被基线 stable driver 的正式 run 读取为权威状态；阶段 7 最终 Seal 之前，所有 formal-gates 受理、审查、QA、修复和 Seal 仍回到基线 stable driver。
+候选隔离测试可以执行候选自己的 `workflow` surface 来验证功能，但这类 run、receipt 和 summary 只能落在候选 namespace，不能被本阶段 stable driver 的正式 run 读取为权威状态。阶段 4 发布前使用本阶段已锁定的当前版本 driver，发布后新建的阶段 5–7 正式 run 使用阶段 4 driver；不能在一个活动 run 中换 writer。旧阶段 0 driver 的阶段 4 run 保留原绑定，当前版新建 run；旧记录的结束/清理使用原版支持的流程，不手改迁移或伪造终态。
 
-阶段 0–6 使用上面的通用顺序；阶段 7 是唯一的最终发布顺序例外：前置开发、审查和候选验证可以先完成，但不得先 Seal；final-release run 在集成期间保持 ACTIVE，先把已审计树集成到主线并取得 post-integration canonical identity，再由基线 stable driver 通过受支持的 `workflow resume --adopt-external --reason` receipt 绑定该 identity，重建最终候选、运行全部最终 canary 和切换前 QA，最后才执行阶段 7 唯一的 final-release Seal。前置验证结果只能作为 provisional evidence，不能与 post-integration 结果拼接成最终证据；若 run 无法安全 rebind，必须新建 final-release run，且不得继承前置验证结果。
+阶段 0–6 使用上面的通用顺序；阶段 7 是唯一的最终 Seal 顺序例外：前置开发、审查和候选验证可以先完成，但不得先 Seal；final-release run 在集成期间保持 ACTIVE，先把已审计树集成到主线并取得 post-integration canonical identity，再由阶段 4 stable driver 经 availableActions/REQUEST → adopt-external Ask → typed submit 的授权 receipt 绑定该 identity，重建最终候选、运行全部最终 canary 和切换前 QA，最后才执行阶段 7 唯一的 final-release Seal。前置验证结果只能作为 provisional evidence，不能与 post-integration 结果拼接成最终证据；若 run 无法安全 rebind，必须新建 final-release run，且不得继承前置验证结果。
 
 ### 2.3 唯一写入者与版本绑定
 
@@ -118,7 +119,11 @@ generation 的 run；切换后旧 token/lease 由常规 admission 与版本校�
 3. 每次 `development-worker` 派发必须带 `batch_id`，一个 Batch 只能有一次开发派发；其
    `subtask_id` 仅表示该派发内的顺序步骤，不得单独派发、换代理或 reset。
 4. 前一 Batch 的成员任务、DoD、验证和交接完成后，下一 Batch 才进入 eligible frontier，
-   并允许派发新的零上下文开发代理。Batch 契约、接口、依赖或 DoD 改变时，旧计划失效，
+   并允许派发新的零上下文开发代理。同批未完成时 engine/adapter 强制恢复原身份；
+   仅实际恢复/查询取得明确不可恢复事实并完成旧执行/副作用对账，才签发同批替换。
+   自测失败、RUNTIME_ERROR、retry、重编号或重复计划不能解除绑定；复用既有状态与
+   intent/receipt，不另建代理状态机。阶段 4 按 AC-061 实跑合法续用、替换及违规新建零调用。
+   Batch 契约、接口、依赖或 DoD 改变时，旧计划失效，
    必须重新做粒度审并取得用户确认。
 
 引擎不负责从自然语言判断最佳拆法，也不按编号、commit 数、文件/行数或阶段名自动切块；
@@ -250,7 +255,7 @@ orphan、仅集合级 PASS、`FULL` 对账不全或 `AFFECTED` 的执行/继承/
 3.5a 已交付 schema、validator、digest/白名单投影、fixtures 和三个只读 coverage CLI；
 该 checkpoint 不改 legacy `QACase` 完整结构，不新增状态机或通用框架，也不设置固定用例数、
 覆盖率阈值或强制测试工具组合。后续 3.5a-fix 已在 legacy 接入单文件 REQ/AC 保证、
-显式 activation、分片责任与最终 FULL；阶段 4/5 迁移这些能力，不重新设计第二套覆盖核心。
+显式 activation、分片责任与完整用例义务；阶段 4/5 迁移这些能力，不重新设计第二套覆盖核心。
 覆盖基座与后续消费接入保持先后依赖，不并行实施。
 
 ### 阶段 3.5b：成本记录与运行时派发止损 checkpoint（非独立正式阶段）
@@ -312,7 +317,7 @@ E2E；这些 checkpoint 不增加正式阶段，也不因编号为 3.5a 与 3.5b
 QA Review 的可选建议允许采纳、延期或不采纳并记录理由，不再强制改用例才能冻结；
 真实验收缺口继续阻塞。最终提交整理在最后一轮必需验证之前完成，Seal 只固化最终
 候选的结果。3.5a 的完整覆盖、逐条结论和集合对账，3.5b 的成本与有限重试，以及现有
-`AFFECTED`、最终必需 `FULL` 均保留。阶段 4 接入时按此更新相应 QA 语义；当前已安装
+`AFFECTED`、首次必要 `FULL` 均保留。阶段 4 接入时按此更新相应 QA 语义；当前已安装
 规则与历史 Seal 不因计划落档被改写，固定稳定 driver 的冻结和切换仍按本总计划执行。
 
 ### 阶段 4：Git 非分片 regular 全流程
@@ -329,7 +334,7 @@ digest 并并行准备所有 QA execution/
 门；收齐 wave 和核实后，每快照唯一返修只接 QA FAIL、有效 P0/P1 与门审 P2。
 门审 P2 carry 不复审，P3 Seal advisory；QA Review 可选 P2/P3 以 suggestion ID 按 3.5c
 记录采纳、延期或不采纳及理由后冻结；采纳导致用例含义或共同路径变化时重查受影响部分。
-普通返修保持 FROZEN、固定 AFFECTED 执行，保证最终候选 Seal 前 FULL；最终提交整理须先于
+普通返修保持 FROZEN、固定 AFFECTED 执行，本轮必需 QA 与门全部有效 PASS（含合法继承）即可 Seal，不追加保证模式最终 FULL；最终提交整理须先于
 最后一轮必需验证，Seal 不再改变该候选。本次执行中断可保留完整条目并按 3.5c 受控续跑。
 仅需求含义/对外行为/判据/稳定可执行性变化可 THAW，临时环境失败用 RUNTIME_ERROR。
 
@@ -385,9 +390,16 @@ base/candidate revision，展示回退后果/建议失效 PASS/额度，并允�
   终态差值只作报告，不参与 in-flight guard。额度投影同时绑定 basis digest；相同输入重算
   不一致、账目无法对齐或将要超发时以 `BLOCKED_BUG` 零派发。
 - source bridge 保留已交付 Codex transcriptPath、原生 response ID 去重、task timing（含工具等待、不含 turn 间空闲）；checkpoint 不提前固定 dispatch cost，续跑终结后从完整来源结算。以现有 cost/source bridge 回归验收，缺来源仍 unavailable，不扩展其他 provider，不要求重新执行 3.5c 的前后模型 benchmark。
+- 本阶段接入项目/安装级 token cap 配置、生效值/来源持久化与运行时止损；次数仍有余额但
+  已结算派发用量到顶时也停止自动签发/refill/恢复重试。重启保留用量/限制，配置错误不能
+  静默禁用 cap。全部用户可配置项（含既有设置）均方便用户手改和 AI 修改，配置位置、字段、
+  默认值、覆盖关系、生效时点及有效来源明确，使用同一校验，符合主需求 §6.5。
+- 从公开路径验证跨产品/技术复审的顺序与新零上下文代理，以及一个 QA/门 FAIL 或
+  RUNTIME_ERROR 后独立兄弟任务继续、容量和 source/guard 允许时自动补位；不能用单一 QA
+  任务内的用例隔离代替工作流任务间隔离。
 - 实现任意非终态需求变化、finding/remedy 处置、adopt-external、reset、abort、中断和资源 cleanup；typed contract 至少覆盖 `REQUEST_REQUIREMENT_CHANGE`、`REVIEW_FINDING_FIX`、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR`，并固定 `ReviewScopeMode` 的 `FULL`/`AFFECTED` barrier 和“新鲜复审”要求。
-- Controller 唯一计算 QA 重跑与 FULL/AFFECTED：消费实际 guarantee、项目/路线规则、修复
-  类型和候选身份；纯门审 P2 无其他 FULL 义务时只签发 AFFECTED/合法继承。主代理理由、
+- Controller 唯一计算 QA 重跑与 FULL/AFFECTED：消费项目/路线规则、修复
+  类型和候选身份；guarantee ACTIVE 本身不产生额外 FULL。纯门审 P2 无其他 FULL 义务时只签发 AFFECTED/合法继承。主代理理由、
   final 标记、host override 和普通“继续”不产生 FULL、取消或 Seal 跳过授权。实际用户例外
   经 typed Ask 绑定当前 run/revision/candidate/mode/scope，一次有效，不改默认规则。
 - 使用现有 pendingActions、CAS/intent 和 guard，为首个真实宿主接入执行前认领与校验，
@@ -397,12 +409,20 @@ base/candidate revision，展示回退后果/建议失效 PASS/额度，并允�
 - 验证 RUNTIME_ERROR 在合法有限重试/用户追加 Attempt 后能完整登记结果，原错误可追溯、
   权威 PASS/FAIL 不被覆盖；非法执行尝试不污染已有通过结果、不增加审查轮次、不要求
   Seal 跳过。该恢复路径与准入正反例一并纳入首个宿主 canary。
+- 首宿主还须验收单个操作内部固定步骤的程序化顺序：Git 范围校验 → track → commit →
+  snapshot 与已声明 QA 的准备 → 操作 → 采集。主代理/子代理的跳步、倒序、重复或前置失败
+  后继续请求在底层执行前拒绝，调用数为零；中断只恢复未完成步骤。复用原子 handler 或
+  StepSpec/intent，不以提示词、阶段顺序测试、事后拒绝或新增逐语句 TaskKey 代替。
 - 验证需求变更时全部/部分保留、无显式保留、含义改变且 affected/unknown 的 PASS 仍可保留、在途任务不阻塞需求接纳、迟到结果不覆盖决定及连续修订；验证产品/技术审、QA 审查/执行、普通门的授权继承能推进至 Seal，原证据与授权可追溯。本阶段覆盖 Git 非分片，阶段 5 扩展 child/merge。
 - 完成 Git provider 的 status/diff/track/commit/snapshot/squash、whitebox workspace、candidate promotion 和 cleanup。
 - 在一个真实宿主上跑 Git 非分片 full canary，覆盖至少一次 FAIL -> repair -> 新候选 -> 重验 -> Seal。
-- 对所有仍保留的 legacy 公开写命令执行 route matrix：每个命令只能转发到对应 engine handler 或明确返回 unsupported；不得直接写 engine state、调用公开 cleanup 或绕过 `submit`。同一 run 交替调用旧入口与 engine 入口的 negative tests 必须证明 writer/schema/definition 绑定不可改变。
+- 按用户 2026-09-08 决定，在阶段 4 删除旧 workflow 公开命令、别名、兼容转发、legacy writer/QA/轮次/授权、旧运行态 decoder/migration、legacy mode、authority handoff 和旧流程 cleanup/门禁后门。仍承诺业务语义内收 engine handler；共享维护与纯解析能力保留。检查源码、注册表与最终安装包无第二路径，旧命令统一按未知命令拒绝；历史 run 只作最小原始只读诊断，不迁移或续写。
 
-Seal 后状态：隔离候选可用于 Git 非分片 regular 的完整正式流程；fixed stable driver 和 legacy run 仍不受影响。
+阶段 4 发布顺序：隔离安装中的全部阶段 QA/canary PASS → 本阶段固定 driver Seal → 主线集成及必要重建/重验 → 既有安装事务全局切换 → 实际全局入口 smoke/准入核验及历史功能逐项回归 → 发布 receipt 与阶段 4 driver 冻结。安装使用已验证的精确 post-integration 包，runtime、hook/config、managed-rule、pointer 与 registry 一起切换；失败按 §6 回退，不新增安装机制。Seal 前通过隔离目标验证发布合同，实际切换后的结果作为交付后发布核验记录，不倒写 Seal 前 QA。
+
+历史功能回归按阶段 4 REQ-022/AC-079–081 执行：从阶段 0、1、2、3、3.5a/fix/b/c 原需求和交付结果建立逐项清单，记录当前入口、用例、结果和证据。Seal 前在隔离候选验证，全局切换后再通过真实全局入口复验；内部合同与破坏性安装测试使用绑定同一发布包的对应隔离环境并注明。已迁移功能验证 engine 的替代路径，明确替代/后续待交付项注明来源，不能把历史 Seal、授权跳过或本次未测写成新版 PASS。仍承诺提供的能力有回归阻塞或缺必需证据时不完成发布、不启用后续 driver，按既有安装失败合同回退并修复。
+
+发布后状态：全局插件为阶段 4 版本，Codex/Git no-split regular 经 engine 运行；阶段 5–7 的正式 run 使用冻结的该版本。本阶段开发驱动退出日常驱动，原稳定安装仅按安装失败回退合同保留；旧 run 不迁移、不交给新 writer 续写。同步 SKILL/README/入口说明与阶段 4 实际能力，未支持的 engine 路径明确拒绝；不提前宣称 split、SVN/P4 或其余宿主完成。
 
 ### 阶段 5：Git 分片、child 与 merge 闭环
 
@@ -411,7 +431,7 @@ Seal 后状态：隔离候选可用于 Git 非分片 regular 的完整正式流�
 范围：
 
 - 实现精确 topology、child 创建、`sliceID -> childRunID` map、继承、逐 child route 和级联控制。
-- master 冻结完整 REQ/AC 投影与 AC → 唯一主责任范围（child/master merge），在任何 child QA 设计前拒绝遗漏/重复/未知责任及 revision 不一致；child 只报告自身范围。receipt 按 scope + QA 类型 + case ID 保存批准用例及 AC 绑定，master 汇总去重；任一责任 child 无 QA 或 waived 时整体 not-guaranteed。保证启用时，最终合并候选 FULL 覆盖全部批准用例，不能只跑 merge 接缝或 AffectedChildSet；普通返修仍 AFFECTED，明确用户保留按主需求 §7.2.2。
+- master 冻结完整 REQ/AC 投影与 AC → 唯一主责任范围（child/master merge），在任何 child QA 设计前拒绝遗漏/重复/未知责任及 revision 不一致；child 只报告自身范围。receipt 按 scope + QA 类型 + case ID 保存批准用例及 AC 绑定，master 汇总去重；任一责任 child 无 QA 或 waived 时整体 not-guaranteed。保证启用时，合并候选须具备全部批准用例的有效结果；首次必要 FULL 与普通返修 AFFECTED 保留，本轮必需验证全部有效 PASS 后不追加最终 FULL，明确用户保留按主需求 §7.2.2。
 - 将阶段 4 的用户验证保留决定扩展至 master/child/merge；由 master 统一接收并级联，验证任意已通过 child/merge 验证可被明确保留并满足对应 join/Seal 条件，未完成的实际集成仍须完成。
 - 实现 `SLICE_READY`、包含最终白盒测试的 child identity、durable receipt、case/cost 汇总；
   dispatch 条目沿用 `<childRunID>/<dispatchID>` namespace 去重，child owner 以 `childRunID`
@@ -438,7 +458,7 @@ Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流�
 - 完成 Claude Code、Codex、Cursor、DeepSeek Harness、ZCode 的 provider identity、bridge、dispatch、lifecycle、resume/terminate 和 receipt 对账。
 - 对五宿主逐项完成执行前准入矩阵，使用实际工具前 hook/执行器覆盖原生派发/恢复、工作流
   模型 CLI/API 和已声明 QA 操作，不能保留同类裸入口绕过。逐宿主运行最终方案 §12.1
-  第 14 项的零调用反例和合法 AFFECTED、真实最终 FULL、一次用户例外正例；记录实际
+  第 14 项的零调用反例和合法 AFFECTED、首次必要 FULL、一次用户例外正例；记录实际
   provider/入口/绑定/拒绝位置与底层调用数。入口能力不足必须明确 unsupported 并拒绝进入
   该执行模式，不能用仅登记时拒绝、提示词自律或 hook 已配置替代实机证据。
 - 各 host 明确 transcript/usage 能力；无法核对的 owner 或 dispatch 记 `UNAVAILABLE`，仍受
@@ -450,15 +470,15 @@ Seal 后状态：隔离候选在 Git 上同时支持非分片和分片完整流�
 - 每条证据绑定 provider/bridge、source identity、installed-target/package digest、snapshot、candidate/promotion/cleanup receipt；不能用 hook-only、lifecycle-only、source tree 或旧全局包冒充候选 full canary。
 - 回归 Git 非分片、Git 分片和 fixed stable driver 正常入口。
 
-Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 形态和宿主，但 legacy/过渡 façade 尚未删除，全局安装尚未切换。
+Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 形态和宿主，且阶段 4 已删除的 legacy/过渡 façade 不得重新引入；全局与正式开发 driver 继续使用已发布的阶段 4 包，不自动切到阶段 6 候选。
 
 ### 阶段 7：唯一权威切换与最终发布
 
-目标是从功能完整候选收敛到没有第二权威路径的最终产品，并只在全部最终证据成立后切换一次全局安装。
+目标是从功能完整候选收敛到没有第二权威路径的最终产品，在全部最终证据成立后把全局阶段 4 版本升级为最终完整版本。
 
 范围：
 
-- 将仍需的旧能力内收为 engine handler 后，删除旧公开推进命令、别名、运行时兼容 decoder/migration、legacy mode、authority handoff、legacy QA、过渡 façade 和公开 cleanup；保留仅供 `diagnose` 使用的最小 raw/envelope parser、terminal summary fallback，以及维护面允许保留的 hook/lifecycle/canary 和 `write_block` 辅助边界。
+- 复核阶段 4 已完成的旧逻辑删除没有回流：旧公开推进命令、别名、运行时兼容 decoder/migration、legacy mode、authority handoff、legacy QA、过渡 façade 和公开 cleanup 均不存在。保留当前维护能力与仅供 `diagnose` 使用的最小 raw/envelope parser、terminal summary fallback。
 - 最终清理扫描必须确认 executable definition 中不存在 `MISSING_ENGINE_ADAPTER` 或 `BLOCKED_BUG` marker 伪装成可执行路径；`REQUEST_REQUIREMENT_CHANGE` 的两阶段 barrier、`REVIEW_FINDING_FIX` 的新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据都必须绑定最终 candidate。
 - 最终安装态逐项核对执行前准入矩阵，全部受支持入口的零调用反例和合法正例绑定同一
   post-integration candidate/installed target；原生派发和命令入口无工作流旁路。复用既有
@@ -469,8 +489,8 @@ Seal 后状态：隔离候选已经覆盖最终要求的全部 provider、split 
 - 根据阶段 0 建立的 requirements-precedence/supersession 清单，更新或标记所有仍把 `prepare-*`、`record-*`、`qa-worktree`、公开 `cleanup` 等旧入口写成当前公共面的旧 OpenSpec/root 文档；历史文档保留可追溯性，但不能继续作为已确认的当前实现契约。
 - 先将清理完成、已做前置验证但尚未 Seal 的候选集成到主线，以 promotion/integration receipt 关联集成前候选与 post-integration canonical identity；完成最终候选整理（含必要 squash）后，从最终 identity 构建不可变隔离安装副本。无论 digest 是否等价，均按下项完成全部最终验证；验证中候选变化时重新整理、绑定并重验，全部最终证据就绪前保持未 Seal，不产生中间 Seal。
 - 在该 post-integration revision 的包摘要和 installed-target digest 上重新运行 Git/SVN/P4 × 非分片/分片六格和五宿主 Git 非分片 canary；允许按总需求定义复用一个 Git 非分片单元格，最低十条完整 canary。每条都必须覆盖产品/技术审、并行开发+黑盒设计、whitebox authoring/review、candidate freeze、view reuse/受影响重跑、FAIL -> repair -> 新候选、promotion 中断恢复、receipt/result、无残留 cleanup 和 Seal。
-- 完成前置产品审、技术审、QA 和选定 gates，但在主线集成前不 Seal；final-release run 保持 ACTIVE，集成后用受支持的 `workflow resume --adopt-external --reason` receipt 绑定 post-integration canonical identity，重建候选，重新执行安装 smoke、cleanup 核对、全部最终 canary 和切换前 QA，并将这些结果绑定同一个 final-release run。无法安全 rebind 时新建 final-release run，前置结果全部降为非权威说明。
-- 只有 post-integration candidate 的全部最终证据、全局 registry bootstrap/transaction receipt 和所有 UNKNOWN 事务处置记录成立后，才由基线 stable driver 执行阶段 7 唯一的 final-release Seal；随后直接执行一次覆盖 runtime、hook/config、managed-rule、release/current pointer 的原子全局切换，不等待活动 run 终结。切换成功且逐 host 的 binary、pointer、hook/config、managed-rule、provider/bridge post-switch smoke 全部通过后才退役固定稳定包。
+- 完成前置产品审、技术审、QA 和选定 gates，但在主线集成前不 Seal；final-release run 保持 ACTIVE，集成后由阶段 4 driver 经 availableActions/REQUEST → adopt-external Ask → typed submit receipt 绑定 post-integration canonical identity，重建候选，重新执行安装 smoke、cleanup 核对、全部最终 canary 和切换前 QA，并将这些结果绑定同一个 final-release run。无法安全 rebind 时新建 final-release run，前置结果全部降为非权威说明。
+- 只有 post-integration candidate 的全部最终证据、全局 registry bootstrap/transaction receipt 和所有 UNKNOWN 事务处置记录成立后，才由冻结的阶段 4 stable driver 执行阶段 7 唯一的 final-release Seal；随后把全局阶段 4 包原子升级为最终版，覆盖 runtime、hook/config、managed-rule、release/current pointer，不等待活动 run 终结。切换成功且逐 host 的 binary、pointer、hook/config、managed-rule、provider/bridge post-switch smoke 全部通过后才退役阶段 4 固定驱动包。
 
 Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终证据绑定同一不可变候选；旧稳定包在切换确认后退役。
 
@@ -501,14 +521,16 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 
 ### 阶段内分批推进
 
-各阶段开发按总需求 §8.5"开发分批与组间验证"与 ADR-002 执行：批次计划随拆分决定/路线确认一并产生并留痕（受理不冻结）；探路工作首批 spike、结论留痕不进交付；批内执行项目声明的轻量检查、批边界执行声明的回归命令；验证档位按结构性信号选定并留痕。
+各阶段开发按总需求 §8.5“开发分批与开发后统一门审”执行，沿用 ADR-002 的批次判据：批次计划随拆分决定/路线确认一并产生并留痕（受理不冻结）；批内执行项目声明的轻量检查、批边界执行声明的回归命令。按 2026-09-07 本次修订，插件固定流程直接实现，宿主接入随对应功能实现和验证；不自动安排独立首批探路。只有列明具体未决接口风险、受影响工作、最小实验及通过判据后，才评估是否独立 spike；实验先于依赖其结论的工作，不阻止无依赖工作，结论/证据留痕、实验代码不进交付。历史已完成的 compiler 等 spike 记录保持原状。阶段 4 此前“两批：探路→实现”的建议须重新评估，不自动沿用，也不因驱动缺少批次入口就改为单批或削减产品多批次能力。
 
-引擎承载义务按本文增量 Seal 阶段分配：批次计划登记（作为 TaskKey 的分组与依赖信息，完成状态从成员派生，无新生命周期）进阶段 1 任务模型；组间 `DevelopmentSnapshot` 只读投影进阶段 1，真实组间快照与增量审查随阶段 4 Git regular 完整流程迁移交付（复用该阶段迁移的 ReviewScopeMode/carry/继承判定），阶段 3 只交付最小纵向闭环。Git split 的 master/child 生命周期归阶段 5，SVN/P4 与其分片适配归阶段 6；具体拆分机制见主需求 §8.1。engine 建成前的过渡期由 legacy 快照/审查/carry 修复轮机制承载组间档。
+2026-09-07 用户取消可选组间增量门审：自阶段 4 起代码/质量门统一在本 run 全部开发完成且最终候选 review-ready 后运行，批间不派门、不记录正式门结果或 repair wave；开发前审查与并行黑盒用例审查保持原职责。
+
+引擎承载义务按本文增量 Seal 阶段分配：批次计划登记（作为 TaskKey 的分组与依赖信息，完成状态从成员派生，无新生命周期）进阶段 1 任务模型；阶段 1 的组间 DevelopmentSnapshot 只读投影与阶段 3 最小纵向闭环保留历史交付事实。阶段 4 不再承接原计划的组间增量门审，按最新决定实现开发全部完成后的统一门审；审查时点、范围和结果接纳保持独立代码边界，便于局部迭代，不预建另一套流程或改造底层协议。Git split 的 master/child 生命周期归阶段 5，SVN/P4 与其分片适配归阶段 6；具体拆分机制见主需求 §8.1。既有 legacy/历史 run 不因本条追溯变化。
 
 本次重构的补充约束：
 
 1. 各阶段收口段固定且独立，含隔离安装构建、installed binary 回归与 namespace disjoint proof（三环境模型要求），不得并入开发批次。
-2. 预期生产逻辑多模块扩散或独立验收单元 ≥ 2 的阶段，在拆分决定/路线确认时必须评估组间增量审查档或 split，不得默认单次全量门禁硬扛；评估结论留痕。
+2. 预期生产逻辑多模块扩散或独立验收单元 ≥ 2 的阶段，在拆分决定/路线确认时仍须评估开发分批与 split 并留痕；不得据此恢复组间门审。该规则替代 ADR-002 中评估组间增量审查档的要求，不改变本阶段 Git 非分片的产品范围。
 3. 阶段候选的测试与实现同批推进，不留到收口段补写。
 
 ## 5. 每阶段退出条件与最终退出条件
@@ -522,15 +544,15 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 5. 本阶段新增能力在不可变候选安装中由实际 installed binary 执行，并在独立测试项目、host config、state/resource namespace 中完成端到端验证。
 6. 本阶段承诺支持的既有 engine 路径完成回归；未承诺支持的路径明确拒绝或继续由绑定的 legacy runtime 处理，不出现半迁移。
 7. 对本阶段实际交付的 executable/diagnostic surface 绑定 state writer（若有）、schema/definition version、definition digest、候选提交、集成后 canonical identity、包摘要和测试证据；相关的 `UNSUPPORTED_RUN_VERSION`、raw `diagnose` 和 terminal summary fallback 负向测试通过。未实现的最终 surface 必须显式拒绝或保持绑定的 legacy/Shadow 语义，不得用缺省实现冒充完成。阶段 1 的 `MISSING_ENGINE_ADAPTER` 只能留在 diagnostic-only fixture，不能编译或签发 Ready/HostAction；“最终 executable definition 无 marker”、全部 typed request/change/fix 和 `FULL/AFFECTED` freshness 证据属于阶段 7 的附加条件。
-8. 通过覆盖本阶段所触及 scope 的 transaction/fencing 和 registry bootstrap receipt 确认没有未完成 intent、未对账 UNKNOWN receipt、未登记 target/root 或登记资源残留。活动 run 不参与安装准入；阶段 7 只扩展最终全局 registry/transaction 对账，不能在早期阶段以尚未存在的 engine writer 证明最终切换已完成。
+8. 通过覆盖本阶段所触及 scope 的 transaction/fencing 和 registry bootstrap receipt 确认没有未完成 intent、未对账 UNKNOWN receipt、未登记 target/root 或登记资源残留。活动 run 不参与安装准入；阶段 4 交付后完成自身全局发布的 registry/transaction 对账，阶段 7 再完成最终版本对账，不能把阶段 4 发布当作最终全部能力交付。
 9. 阶段 worktree 的变更已提交，正式审查和 QA 基于该候选完成，阶段 Seal 成功；阶段 7 的前置审查只能是 provisional，最终 Seal 必须在 post-integration final-release run 中完成。
 10. 阶段 0–6 的 sealed candidate identity 已通过 integration/promotion receipt 绑定到 post-integration canonical identity；阶段 7 则要求 final-release Seal、全部最终 canary 和 post-integration identity 直接绑定，不能用先 Seal 的旧 run 代替。
 11. 当前阶段实际暴露的 workflow/维护入口 route matrix 已逐项绑定到本阶段允许的 legacy、Shadow、隔离 engine 或明确 unsupported surface；直接写 state、绕过 `submit`、绕过 freshness 或公开 cleanup 的 negative tests 通过。本阶段实际 writer 的 epoch/fencing token 或 legacy launcher invocation lease 有 stale-token/lease rejection 和并发窗口测试；阶段 7 才要求当前与最终公共面的完整矩阵及全部 writer 路径。
-12. 本阶段涉及的 runtime、hook/config、managed-rule、pointer、provider/bridge 和 recovery journal 故障窗口有可恢复证据；阶段 0 验证安装/registry bootstrap，阶段 1–6 验证候选 namespace，阶段 7 才执行最终原子全局切换和逐 host post-switch smoke。
+12. 本阶段涉及的 runtime、hook/config、managed-rule、pointer、provider/bridge 和 recovery journal 故障窗口有可恢复证据；阶段 0 验证安装/registry bootstrap，阶段 1–6 验证候选 namespace；阶段 4 另在交付后执行全局切换、该版本实际入口检查与阶段 0–3.5 历史功能逐项回归，阶段 7 执行最终版本升级和五宿主 post-switch smoke。实际全局检查记入各次发布 receipt，不要求在 Seal 前覆盖真实全局安装。
 
 阶段 7 在上述共同条件之外还必须同时满足：最终 executable definition 不存在 `MISSING_ENGINE_ADAPTER/BLOCKED_BUG` marker；`REQUEST_REQUIREMENT_CHANGE` 两阶段 barrier、`REVIEW_FINDING_FIX` 新鲜复审、`VALIDATION_DETAIL_DISPOSITION`、`QA_ARTIFACT_REPAIR` 和 `ReviewScopeMode FULL/AFFECTED` 的 freshness 证据齐全；当前/最终完整 route matrix 和所有 engine writer/legacy launcher fencing 路径通过；最终十条 canary、registry inventory、原子全局切换、逐 host post-switch smoke 和旧 stable 退役证据全部绑定同一 post-integration candidate。
 
-执行前准入属于阶段 4 首宿主、阶段 6 五宿主和阶段 7 最终安装态的退出条件：已编码流程
+执行前准入属于阶段 4 首宿主（含发布后的实际全局入口）、阶段 6 五宿主和阶段 7 最终安装态的退出条件：已编码流程
 规则必须在实际执行前强制，越界调用为零，合法操作无需逐步确认；未覆盖入口不得标记
 支持。该结论不等于保证模型判断或实现语义永远正确，仍保留既有 Operator 核实职责。
 
@@ -549,8 +571,8 @@ Seal 后状态：全局插件只保留 engine 唯一权威路径；所有最终�
 1. 阶段开发或候选验证失败，不改变固定稳定驱动插件；修复只发生在该阶段 worktree。
 2. 阶段未 Seal，不创建下一阶段正式基线。
 3. 阶段 Seal 后的后续开发失败，回到最近 sealed commit 和对应不可变候选；不从未提交 worktree 恢复。
-4. 最终全局切换前，候选始终在隔离目录验证；不通过覆盖现有安装来“试一下”。
-5. 最终原子换位失败时，按 `SWITCHING -> ROLLING_BACK -> OPEN` 的单调 generation 协议恢复旧稳定 runtime、hook/config、managed-rule、release/current pointer；绝不把 registry epoch/generation 写回旧值。只有 rollback smoke 和新的 stable generation 成功后才允许再次 start。
+4. 每次全局发布前，候选先在隔离目录验证；阶段 4 与阶段 7 分别在各自 Seal/集成/必需验证完成后安装，不通过覆盖现有安装来“试一下”。
+5. 阶段 4 或阶段 7 原子换位失败时，按 `SWITCHING -> ROLLING_BACK -> OPEN` 的单调 generation 协议恢复该次发布前的稳定 runtime、hook/config、managed-rule、release/current pointer；绝不把 registry epoch/generation 写回旧值。只有 rollback smoke 和新的 stable generation 成功后才允许再次 start。
 6. 安装或回退均不等待活动 run；旧 generation 的 run 不由新或回退后的 runtime 迁移、兼容或继续写入。
 
 ## 7. 文档关系与旧主需求处理
@@ -561,7 +583,7 @@ Seal 不意味着 regular engine、运行时 guard、执行前准入或全局安
 
 `openspec/changes/orchestration-pipeline-engine/master-requirements.md` 保留为总需求、非目标、最终公共面和最终验收口径的权威来源，不因分阶段实施而删除。`refactor-plan/final-implementation-draft.md` 保留为目标架构说明。
 
-阶段 0 另建立 `requirements-precedence/supersession` 清单，枚举所有 `openspec/changes/**/master-requirements.md`、根目录需求和旧 plan 文档，逐项标明 `current-authority`、`orthogonal`、`superseded` 或 `historical` 及其替代文档。只有编排流水线重构以本文主需求为 current authority；其他正交需求仍按自身范围生效，冲突的旧入口文档在阶段 7 前标记 superseded，不靠删除文件消除歧义。
+阶段 0 另建立 `requirements-precedence/supersession` 清单，枚举所有 `openspec/changes/**/master-requirements.md`、根目录需求和旧 plan 文档，逐项标明 `current-authority`、`orthogonal`、`superseded` 或 `historical` 及其替代文档。只有编排流水线重构以本文主需求为 current authority；其他正交需求仍按自身范围生效，冲突的旧入口文档在阶段 4 发布前标记 superseded，不靠删除文件消除歧义。
 
 主需求和方案稿中的“阶段 0–6”是总体实现工作包编号，不是要求实施时只能有七个 Seal，也不与本文的增量 Seal 编号同义。本文把它们细化为八个可独立 Seal、每个 Seal 后仍可继续开发的切片，映射固定如下：
 
@@ -570,9 +592,9 @@ Seal 不意味着 regular engine、运行时 guard、执行前准入或全局安
 | 0 冻结契约 | 0 分发安全与基线冻结 | 同时冻结 contract fixtures、稳定驱动和 registry bootstrap；不改变公开 workflow 语义 |
 | 1 纯决策内核 | 1 纯决策内核与 Shadow | 只读，不产生第二 workflow writer |
 | 2 可靠写入与动作协议 | 2 持久协议与恢复内核 | 仅隔离 namespace/test harness 写入 |
-| 3 完整流程迁移 | 3 最小纵向闭环 + 4 Git regular | 先证明最小 engine 路由，再扩展到 Git 非分片完整流程 |
+| 3 完整流程迁移 | 3 最小纵向闭环 + 4 Git regular | 先证明最小 engine 路由，再扩展到 Git 非分片完整流程；阶段 4 交付后发布全局并成为后续 driver |
 | 4 split 与三 VCS | 5 Git split/child/merge + 6 SVN/P4/五宿主 | 先固定 Git split，再接入其他 VCS/host |
-| 5 删除旧逻辑 + 6 最终 canary/安装 | 7 唯一权威切换与最终发布 | 这两个总体工作包在最终一个 Seal 内严格按“前置验证（不 Seal）→ 主线集成 → 重建最终候选 → 最终 canary → 基线 driver 执行 final-release Seal → 全局切换”顺序完成；阶段 6 增量 Seal 绝不等同于最终交付 |
+| 5 删除旧逻辑 + 6 最终 canary/安装 | 4 完成旧逻辑删除；7 核对无回流并最终发布 | 按“前置验证（不 Seal）→ 主线集成 → 重建最终候选 → 最终 canary → 阶段 4 driver 执行 final-release Seal → 全局从阶段 4 升级最终版”完成；阶段 6 增量 Seal 不等同于最终交付 |
 
 任何引用总体方案阶段号的需求、任务或验收记录都必须同时注明本文增量 Seal 阶段号；只有增量阶段 7 Seal 后，才可宣称主需求的总体阶段 5/6 和本次最终交付完成。
 
@@ -581,4 +603,4 @@ Seal 不意味着 regular engine、运行时 guard、执行前准入或全局安
 3.5c 候选的公开路径为 `qa-design/qa-review` 的 shared-step 引用、`qa-suggestion` 的理由
 处置、`qa-execution --checkpoint` 的绑定续跑，以及最后必需验证前的 `prepare-candidate`。
 操作示例见 `references/formal-flow.md`；验证记录见 `stage-3-5c-validation.md`。
-阶段候选能力不修改固定 driver、本正式 run、既有 Seal 或全局安装。
+上述 3.5c 候选能力不修改其固定 driver、正式 run、既有 Seal 或全局安装；阶段 4 后续发布按本文更新后的时点执行。

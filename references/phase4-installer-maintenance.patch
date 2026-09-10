@@ -1,0 +1,14 @@
+diff --git a/internal/validate/install.go b/internal/validate/install.go
+index eec65b4..0f8d194 100644
+--- a/internal/validate/install.go
++++ b/internal/validate/install.go
+@@ -236,2 +236,7 @@ func Install(options InstallOptions) (InstallReport, error) {
+-		if packageResult := Package(sourceAbs); !packageResult.OK() {
+-			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %s", resultSummary(packageResult))
++		// The package owns its version-specific file contract. The installed
++		// owner still owns the transaction, but its source-file list cannot
++		// validate a different release during either upgrade or restoration.
++		command := exec.Command(filepath.Join(sourceAbs, "bin", nativeBinaryName()), "package", "validate", "--root", sourceAbs)
++		command.Dir = sourceAbs
++		if output, validationErr := command.CombinedOutput(); validationErr != nil {
++			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %w: %s", validationErr, strings.TrimSpace(string(output)))

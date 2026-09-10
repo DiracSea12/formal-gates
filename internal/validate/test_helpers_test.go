@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"formal-gates/internal/lifecycle"
 )
@@ -53,27 +52,4 @@ func useTestWorkingDirectory(t *testing.T, directory string) {
 
 func testRequirementDocument(requirement string) string {
 	return "## 需求点\n\n### REQ-001：Test requirement\n\n#### 要求\n\n" + requirement + "\n\n#### 验收条件\n\n- AC-001：The test requirement is satisfied.\n\n#### 来源\n\nTest fixture.\n"
-}
-
-// stubLifecycle replaces the global workflowLifecycle verifier with an isolated
-// stub for the duration of the test and restores the prior verifier on cleanup.
-// It is the single converged stub for the workflow's lifecycle seam; tests that
-// stub the lifecycle swap global state, so they must stay serial (no t.Parallel)
-// — the suite currently holds that, keep it.
-func stubLifecycle(t *testing.T, verification lifecycle.Verification, transcript, interruptionReason string) *workflowLifecycleStub {
-	t.Helper()
-	stub := &workflowLifecycleStub{verification: verification, transcript: transcript, interruptionReason: interruptionReason}
-	prior := workflowLifecycle
-	workflowLifecycle = stub
-	t.Cleanup(func() { workflowLifecycle = prior })
-	return stub
-}
-
-// stubParallelCooldown pins the global parallel-reminder cooldown for the
-// duration of the test and restores the production value on cleanup.
-func stubParallelCooldown(t *testing.T, duration time.Duration) {
-	t.Helper()
-	prior := parallelCooldown
-	parallelCooldown = duration
-	t.Cleanup(func() { parallelCooldown = prior })
 }

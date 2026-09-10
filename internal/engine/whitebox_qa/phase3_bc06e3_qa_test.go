@@ -116,36 +116,3 @@ func TestPhase3BC06CleanupTerminalCommitsReceiptAndClearsIntent(t *testing.T) {
 		t.Fatalf("cleanup receipt = %+v, want reconciled with residue=false", receipt)
 	}
 }
-
-// TestPhase3BC06CandidateStartRejectsRetainedLegacyResult proves the runtime
-// namespace fence also covers a legacy run whose active directory is already
-// gone but whose retained result still owns the run id.
-func TestPhase3BC06CandidateStartRejectsRetainedLegacyResult(t *testing.T) {
-	root := t.TempDir()
-	runID := "retained-legacy-result"
-	resultPath := filepath.Join(root, ".gates", "results", runID+".json")
-	if err := os.MkdirAll(filepath.Dir(resultPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resultBytes := []byte("{\"runId\":\"retained-legacy-result\",\"status\":\"SEALED\"}\n")
-	if err := os.WriteFile(resultPath, resultBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, err := facade.Start(facade.StartOptions{
-		Root: root, Request: bc06StartRequest(runID), Admission: bc06Admission(),
-	})
-	if err == nil || !strings.Contains(err.Error(), "already has a retained legacy result") {
-		t.Fatalf("candidate start retained-result error = %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(facade.EngineNamespace))); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected candidate start created engine namespace: %v", statErr)
-	}
-	after, err := os.ReadFile(resultPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != string(resultBytes) {
-		t.Fatal("rejected candidate start changed the retained legacy result")
-	}
-}

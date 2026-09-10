@@ -11,10 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	"fmt"
 	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/testkit"
-	"formal-gates/internal/validate"
 )
 
 type installedHarnessReport struct {
@@ -170,7 +172,7 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 		t.Fatalf("installed terminal replay = %+v", replay)
 	}
 
-	runInstalledLegacyRegression(t, candidate, home, root)
+	runInstalledCurrentIntake(t, candidate, home, root)
 
 	final, err := project.Snapshot()
 	if err != nil {
@@ -191,18 +193,59 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 	}
 }
 
-func runInstalledLegacyRegression(t *testing.T, candidate, home, source string) {
+// The installed launcher uses the current typed intake and terminal contract.
+// Historical run state and its writer are not loaded by this regression.
+func runInstalledCurrentIntake(t *testing.T, candidate, home, source string) {
 	t.Helper()
-	project := t.TempDir()
-	write := func(path, content string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(project, path), []byte(content), 0o600); err != nil {
+	// Install a source package carrying this test's freshly built binary. The
+	// repository bin directory is a development output and may be stale or built
+	// concurrently by another package's integration test.
+	staged := t.TempDir()
+	list := exec.Command("git", "ls-files", "-z")
+	list.Dir = source
+	paths, err := list.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range strings.Split(string(paths), "\x00") {
+		if name == "" || strings.HasPrefix(name, ".gates/") || strings.HasPrefix(name, "bin/") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(source, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(filepath.Join(source, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(staged, name)
+		if err = os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(target, data, info.Mode().Perm()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("requirements.md", "requirement\n")
-	write("design.md", "design\n")
-	write(".gitignore", ".codex/\n.gates/tmp/\n.gates/results\n")
+	if err := os.MkdirAll(filepath.Join(staged, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executablePath(filepath.Join(staged, "bin", "formal-gates")), binary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	source = staged
+	project := t.TempDir()
+	requirement := "# Installed intake\n\n## 需求点\n\n### REQ-001：记录\n\n#### 要求\n保留确认需求。\n\n#### 验收条件\n- AC-001：轻量保存未验证记录。\n\n#### 来源\n安装回归。\n"
+	if err := os.WriteFile(filepath.Join(project, "requirements.md"), []byte(requirement), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{{"init"}, {"config", "user.email", "acceptance@example.invalid"}, {"config", "user.name", "Acceptance"}, {"add", "."}, {"commit", "-m", "baseline"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = project
@@ -212,43 +255,53 @@ func runInstalledLegacyRegression(t *testing.T, candidate, home, source string) 
 	}
 	runCandidate(t, candidate, home, project, "install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--skip-hooks", "--force")
 	runCandidate(t, candidate, home, project, "install", "--source", source, "--host", "codex", "--scope", "project", "--project", project, "--binary-target", candidate, "--bootstrap", "--skip-hooks", "--force")
-	installedPackage := filepath.Join(project, ".codex", "skills", "formal-gates")
-	runID := "installed-legacy-regression"
-	runCandidate(t, candidate, home, project, "workflow", "start", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--requirement", "requirements.md", "--requirement-artifact", "design.md", "--vcs", "git", "--split", "no")
-	runCandidate(t, candidate, home, project, "workflow", "prepare-action", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--action", "requirements-clarification")
-	state := installedLegacyState(t, candidate, home, project, runID)
-	dispatchID := ""
-	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind == "action" && dispatch.Target == "requirements-clarification" && dispatch.Status == "OPEN" {
-			dispatchID = id
+	call := func(sub string, extra ...string) []byte {
+		args := []string{"workflow", sub, "--root", project, "--run-id", "installed-current"}
+		return runCandidate(t, candidate, home, project, append(args, extra...)...)
+	}
+	read := func(data []byte) facade.Run {
+		var r facade.Run
+		if err := json.Unmarshal(data, &r); err != nil {
+			t.Fatalf("decode run: %v %s", err, data)
 		}
+		return r
 	}
-	if dispatchID == "" {
-		t.Fatal("installed legacy requirements-clarification dispatch was not prepared")
+	call("start", "--requirement", "requirements.md", "--vcs", "git")
+	r := read(call("drive"))
+	submit := func(v protocol.RegularEvent) {
+		v.ExpectedRevision = r.Revision
+		ev, err := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("installed-%d", r.Revision)), v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(ev)
+		var out struct {
+			Run facade.Run `json:"run"`
+		}
+		if err := json.Unmarshal(runCandidateInput(t, candidate, home, project, string(data), "workflow", "submit", "--root", project, "--run-id", "installed-current"), &out); err != nil {
+			t.Fatal(err)
+		}
+		r = out.Run
 	}
-	runCandidate(t, candidate, home, project, "workflow", "record-action", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--action", "requirements-clarification", "--dispatch", dispatchID, "--status", "PASS")
-	runCandidate(t, candidate, home, project, "workflow", "requirement", "--root", project, "--package-root", installedPackage, "--run-id", runID, "--confirmed")
-	state = installedLegacyState(t, candidate, home, project, runID)
-	if state.Actions["requirements-clarification"].Status != "PASS" || !state.RequirementConfirmed {
-		t.Fatalf("installed legacy requirement flow = %+v", state)
+	for _, q := range []protocol.RegularRequest{{Action: "confirm-requirement"}, {Action: "mode", Mode: "lightweight"}} {
+		submit(protocol.RegularEvent{Operation: "REQUEST", Request: &q})
+		a := r.Regular.Ask
+		submit(protocol.RegularEvent{Operation: "DECIDE", Decision: &protocol.RegularDecision{RequestID: a.ID, Token: a.Token, Digest: a.Digest, Choice: "confirm"}})
 	}
-	runCandidate(t, candidate, home, project, "workflow", "abort", "--root", project, "--run-id", runID, "--user-confirm")
-}
-
-func installedLegacyState(t *testing.T, candidate, home, project, runID string) validate.RunState {
-	t.Helper()
-	output := runCandidate(t, candidate, home, project, "workflow", "show", "--root", project, "--run-id", runID)
-	var state validate.RunState
-	if err := json.Unmarshal(output, &state); err != nil {
-		t.Fatalf("decode installed legacy state: %v\n%s", err, output)
+	r = read(call("drive"))
+	if r.Status != "COMPLETE" || !r.Unverified {
+		t.Fatalf("installed terminal: %+v", r)
 	}
-	return state
 }
 
 func runCandidate(t *testing.T, candidate, home, workdir string, args ...string) []byte {
+	return runCandidateInput(t, candidate, home, workdir, "", args...)
+}
+func runCandidateInput(t *testing.T, candidate, home, workdir, input string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.Command(candidate, args...)
 	cmd.Dir = workdir
+	cmd.Stdin = strings.NewReader(input)
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
 		"USERPROFILE="+home,

@@ -3,74 +3,17 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"formal-gates/internal/lifecycle"
 )
 
-type PromptRoute struct {
-	RequirementSource    string
-	RequirementRevision  string
-	CatalogRevision      string
-	Worktree             string
-	VCS                  string
-	BaseSnapshot         string
-	CurrentSnapshot      string
-	PreRepairSnapshot    string
-	RequirementArtifacts []RequirementArtifact
-	DispatchID           string
-	DispatchAttempt      int
-	ReviewWave           int
-}
-
-func ComposeGatePrompt(catalog PromptCatalog, gateID string, route PromptRoute) (string, error) {
-	gate, ok := catalog.Gate(gateID)
-	if !ok {
-		return "", fmt.Errorf("unknown discovered gate %q", gateID)
-	}
-	if err := validateRoute(route, false); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(route.DispatchID) == "" || route.DispatchAttempt <= 0 {
-		return "", fmt.Errorf("gate dispatch binding is required")
-	}
-	parts := []string{
-		"[Shared reviewer contract]\n" + catalog.Base,
-		fmt.Sprintf("[Gate: %s]\n%s", gate.ID, gate.Content),
-		currentRequirementBlock(route),
-		currentChangeBlock(route, true),
-		dispatchBlock(route),
-		gateResultContract(route.DispatchID),
-	}
-	return strings.Join(parts, "\n\n") + "\n", nil
-}
-
-// gateResultContract renders the [Result contract] block shared by the run-bound
-// gate review and the standalone gate review. dispatchID selects the
-// run-bound form (adds the dispatch id and compared snapshot pair fields and
-// instructions); an empty dispatchID renders the standalone form.
-func gateResultContract(dispatchID string) string {
-	contract := "Return exactly one JSON object matching: {"
-	if dispatchID != "" {
-		contract += fmt.Sprintf("\"dispatchId\":%q,\"compared\":\"base..current\",", dispatchID)
-	}
-	if dispatchID != "" {
-		contract += "\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"severityRationale\":\"independent per-finding rationale\",\"requirement\":\"REQ-nnn\",\"normalPath\":\"documented normal-use path\",\"actualError\":\"current failure\",\"deferralImpact\":\"why P2 is insufficient\",\"verification\":{\"scope\":\"...\",\"severity\":\"...\",\"causality\":\"...\",\"reproduction\":\"...\"},\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. "
-	} else {
-		contract += "\"status\":\"PASS|FAIL|RUNTIME_ERROR\",\"message\":\"...\",\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"message\":\"...\",\"locations\":[\"repository/relative/path:line\"]}]}. "
-	}
-	if dispatchID != "" {
-		contract += "Report the exact snapshot pair you actually compared in compared (base..current). "
-	}
-	contract += "PASS permits no findings or P2/P3-only findings. FAIL requires at least one P0 or P1 finding"
-	if dispatchID != "" {
-		contract += " and may include P2/P3 findings"
-	}
-	contract += ". RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. "
-	if dispatchID != "" {
-		contract += "Return this dispatch ID unchanged. "
-	}
-	return "[Result contract]\n" + contract + "Do not add fields or Markdown fences."
+// standaloneGateContract describes detached review output. These observations
+// cannot be submitted as a formal engine action or advance a run.
+func standaloneGateContract() string {
+	return `[Result contract]
+Return exactly one JSON object matching: {"status":"PASS|FAIL|RUNTIME_ERROR","message":"...","findings":[{"severity":"P0|P1|P2|P3","message":"...","locations":["repository/relative/path:line"]}]}. PASS permits no findings or P2/P3-only findings. FAIL requires at least one P0 or P1 finding. RUNTIME_ERROR requires a non-empty message and an empty findings array. Every finding requires exactly one severity. Do not add fields or Markdown fences.`
 }
 
 // ComposeStandaloneGatePrompt assembles a standalone gate review prompt that
@@ -101,7 +44,7 @@ func ComposeStandaloneGatePrompt(catalog PromptCatalog, gateID, root, vcs, scope
 		"[Shared reviewer contract]\n" + catalog.Base,
 		fmt.Sprintf("[Gate: %s]\n%s", gate.ID, gate.Content),
 		standaloneChangeBlock(root, vcs, base, scope),
-		gateResultContract(""),
+		standaloneGateContract(),
 	}
 	return strings.Join(parts, "\n\n") + "\n", nil
 }
@@ -141,7 +84,7 @@ func ValidateStandaloneGateResult(raw []byte) (StandaloneGateResult, error) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return StandaloneGateResult{}, fmt.Errorf("standalone gate result is not valid JSON: %w", err)
 	}
-	status, _, err := validateSemanticResult("", result.Status, result.Message, result.Findings, true)
+	status, _, err := validateStandaloneGateResult(result.Status, result.Message, result.Findings)
 	if err != nil {
 		return StandaloneGateResult{}, err
 	}
@@ -149,134 +92,133 @@ func ValidateStandaloneGateResult(raw []byte) (StandaloneGateResult, error) {
 	return result, nil
 }
 
-// isReviewerAction reports whether an action is a zero-context reviewer action
-// whose composed prompt carries the shared reviewer contract:
-// product-review、qa-review、start-readiness 三个零上下文审查者动作注入；非审查动作
-// （development-worker、carry、qa-execution、requirements-clarification）不注入，
-// 避免"你是独立审查者、不要编辑仓库文件"的契约段落出现在开发工/执行动作中。
-// qa-design 也不注入：它已是设计写者（白盒写测试代码、黑盒写用例文档），
-// 收到"不要编辑仓库文件"契约会与写角色直接矛盾。
-func isReviewerAction(actionID string) bool {
-	switch actionID {
-	case "product-review", "qa-review", "start-readiness":
-		return true
-	}
-	return false
+type Finding struct {
+	ID                string              `json:"id,omitempty"`
+	Severity          string              `json:"severity,omitempty"`
+	SeverityRationale string              `json:"severityRationale,omitempty"`
+	Category          string              `json:"category,omitempty"`
+	Requirement       string              `json:"requirement,omitempty"`
+	NormalPath        string              `json:"normalPath,omitempty"`
+	ActualError       string              `json:"actualError,omitempty"`
+	DeferralImpact    string              `json:"deferralImpact,omitempty"`
+	Verification      FindingVerification `json:"verification,omitempty"`
+	Message           string              `json:"message"`
+	Locations         []string            `json:"locations,omitempty"`
 }
 
-func ComposeActionPrompt(catalog PromptCatalog, actionID string, route PromptRoute, detail string) (string, error) {
-	action, ok := catalog.Action(actionID)
-	if !ok {
-		return "", fmt.Errorf("unknown action prompt %q", actionID)
+// FindingVerification is intentionally per finding. One batch-level operator
+// paragraph cannot stand in for independent scope, severity, causality,
+// reproduction, and (for Start Readiness) classification checks.
+type FindingVerification struct {
+	Scope          string `json:"scope,omitempty"`
+	Severity       string `json:"severity,omitempty"`
+	Causality      string `json:"causality,omitempty"`
+	Reproduction   string `json:"reproduction,omitempty"`
+	Classification string `json:"classification,omitempty"`
+}
+
+type FindingInput struct {
+	Severity          string
+	SeverityRationale string
+	Category          string
+	Requirement       string
+	NormalPath        string
+	ActualError       string
+	DeferralImpact    string
+	Verification      FindingVerification
+	Message           string
+	Locations         []string
+}
+
+func validateStandaloneGateResult(status, message string, findings []FindingInput) (string, []Finding, error) {
+	status = strings.ToUpper(strings.TrimSpace(status))
+	if status != "PASS" && status != "FAIL" && status != "RUNTIME_ERROR" {
+		return "", nil, fmt.Errorf("status must be PASS, FAIL, or RUNTIME_ERROR")
 	}
-	if err := validateRoute(route, actionID == "carry"); err != nil {
-		return "", err
+	if status == "FAIL" && len(findings) == 0 {
+		return "", nil, fmt.Errorf("FAIL requires at least one finding")
 	}
-	parts := []string{}
-	// 审查类动作注入共享审查者契约，块序与门提示词一致（[Shared reviewer
-	// contract] 头部在前、action 块随后）；其余动作不注入。
-	if isReviewerAction(actionID) {
-		parts = append(parts, "[Shared reviewer contract]\n"+catalog.Base)
-	}
-	parts = append(parts, fmt.Sprintf("[Action: %s]\n%s", action.ID, action.Content))
-	requirement := currentRequirementBlock(route)
-	if actionID == "qa-review" {
-		requirement += "\nworktree: " + route.Worktree
-	}
-	parts = append(parts, requirement)
-	if actionID != "qa-review" {
-		change := currentChangeBlock(route, actionID == "qa-execution")
-		if route.PreRepairSnapshot != "" {
-			change += "\npre-repair snapshot: " + route.PreRepairSnapshot
+	if status == "RUNTIME_ERROR" {
+		if len(findings) != 0 {
+			return "", nil, fmt.Errorf("RUNTIME_ERROR cannot include reviewer findings")
 		}
-		parts = append(parts, change)
-	}
-	if strings.TrimSpace(detail) != "" {
-		parts = append(parts, "[Action input]\n"+strings.TrimSpace(detail))
-	}
-	if route.DispatchID != "" {
-		parts = append(parts, dispatchBlock(route))
-	}
-	parts = append(parts, "[Result contract]\n"+actionResultContract(actionID, route.DispatchID))
-	return strings.Join(parts, "\n\n") + "\n", nil
-}
-
-func actionResultContract(actionID, dispatchID string) string {
-	prefix := ""
-	if dispatchID != "" {
-		prefix = fmt.Sprintf("Return dispatch ID %q unchanged. ", dispatchID)
-	}
-	switch actionID {
-	case "qa-design":
-		return prefix + "Return reusable preparation/operation instructions once with --shared-step ID --shared-procedure text; reference them per case with --use-step ID. Each case retains its differences and oracle. Return only ordered semantic changes. Each new case contains exactly one mode (blackbox or whitebox), description, procedure, and oracle. blackbox covers real QA: verify the requirement by actually using the product through a documented public entry at execution time; whitebox covers structure tests (unit, system, integration) whose sufficiency depends on the implementation and is designed after development by reading it. For every whitebox case, first independently identify behaviors, branches and oracles, then inspect existing inputs and real assertions, reuse effective tests, fill gaps, and name the test implementing that case as a --test \"<file>::<function>\" reference (the delivered test code file and the test function inside it; opaque strings, the CLI does not parse code): the CLI records the reference and requires it non-empty and unique per case (one test implements one case). Test existence and correspondence are verified by QA Review and QA Execution, so the case ID and the executed test are truly bound. Do not assign case IDs; the CLI assigns them. This is an incremental design round: return only your changes. New cases need no id; modified cases reference their existing CASE id via --case-id (the id must exist in the same mode, otherwise the CLI errors); removed cases are deleted via --remove-case with their existing ids. Every prior case you do not mention is retained automatically with its PASS status; an omission never clears a case. Use --replace-all only when the whole case set must change (e.g. the overall workflow changed)."
-	case "qa-execution":
-		return prefix + "Return one semantic result for every supplied case: case ID, PASS or FAIL outcome, executed procedure, observation, and oracle result. blackbox cases run against the built product on the main worktree via a documented public entry; whitebox cases run their direct-owner structure tests. For a checkpoint, return complete PASS/FAIL rows with tool/script and relevant environment identities, an interruption reason and unfinished IDs; no partial row is PASS. The host saves these with qa-execution --checkpoint, or --runtime-error when the attempt ends. Final recording reconciles every expected case."
-	case "qa-review":
-		return prefix + "Return one --shared-step/--shared-outcome/--shared-reason decision for every pending shared step, then one PASS or FAIL decision for every supplied pending case; each FAIL decision requires a reason. Do not return decisions for accepted cases. Return set-level findings separately with severity P1, P2, or P3: a selected mode with zero cases or an unmet acceptance point is a P1 coverage omission that blocks; P2/P3 are non-blocking suggestions and do not by themselves make the aggregate FAIL. Every P1 set finding must independently provide severityRationale, requirement, normalPath, deferralImpact, repository-relative evidence locations, and per-finding Operator verification for scope, severity, causality, and reproduction. The CLI derives the aggregate result. For whitebox cases you may read the implementation to judge structure-test sufficiency; blackbox cases stay zero-context. Return a runtime error separately if review could not run."
-	case "carry":
-		return prefix + "Return exactly one decision for every supplied gate: gate ID, INHERIT or RERUN, and a concise reason. Return a runtime error separately if the native comparison could not run."
-	case "development-worker":
-		return "Perform the development action, track every delivery path in the named VCS before fixing the snapshot, and return the immutable current snapshot plus the delivery path names to the host. Do not return QA cases or a gate verdict."
-	case "product-review":
-		return prefix + "Return PASS when there are no P0/P1 findings, including when P2/P3 findings remain; return FAIL only when at least one P0/P1 finding exists, or a separate runtime error message if review could not run. Findings are candidate inputs for the user's per-item decision. Each finding carries a severity (P0, P1, P2, or P3), a message, and repository-relative locations. Every P0/P1 must independently provide severityRationale, requirement, normalPath, deferralImpact, and per-finding Operator verification for scope, severity, causality, and reproduction; an item FAIL alone does not establish P1. Do not re-raise findings and decisions the user already settled (listed in the action input); re-raise one only if a requirement revision changed its premise. The review itself never produces a terminal FAIL; the user decides whether the requirement stands."
-	case "start-readiness":
-		return prefix + "Return PASS when there are no P0/P1 findings, including when P2/P3 findings remain; return FAIL only when at least one P0/P1 finding exists, or a separate runtime error message if review could not run. Every finding carries a severity (P0, P1, P2, or P3) and one category: REQUIREMENT_CONFLICT, RESPONSIBILITY_OR_DEPENDENCY, MISSING_CORE_ACCEPTANCE_ENTRY, IMPLEMENTATION_DETAIL, or OTHER. Only the first three may be P0/P1; implementation details are at most P2. Every P0/P1 independently provides severityRationale, requirement, normalPath, deferralImpact, repository-relative evidence locations, and per-finding Operator verification for scope, severity, causality, reproduction, and classification."
-	case "requirements-clarification":
-		return prefix + "Return PASS only after the user confirms the requested outcome and consequential solution choices. Return FAIL with findings for unresolved consequential gaps, or a separate runtime error message."
-	default:
-		return prefix + "Return PASS with no findings, FAIL with one or more findings, or a separate runtime error message. Each finding contains a message and optional repository-relative locations."
-	}
-}
-
-func currentRequirementBlock(route PromptRoute) string {
-	lines := []string{fmt.Sprintf("[Current requirement]\nsource: %s\nrevision: %s\ncatalog revision: %s", route.RequirementSource, route.RequirementRevision, route.CatalogRevision)}
-	if len(route.RequirementArtifacts) != 0 {
-		lines = append(lines, "acceptance artifacts:")
-		for _, artifact := range route.RequirementArtifacts {
-			lines = append(lines, fmt.Sprintf("- %s (revision %s)", artifact.Path, artifact.Revision))
+		if strings.TrimSpace(message) == "" {
+			return "", nil, fmt.Errorf("RUNTIME_ERROR requires a message")
 		}
 	}
-	return strings.Join(lines, "\n")
-}
-
-func currentChangeBlock(route PromptRoute, reviewTargets bool) string {
-	lines := []string{fmt.Sprintf("[Current change]\nworktree: %s\nvcs: %s\nbase snapshot: %s\ncurrent snapshot: %s", route.Worktree, route.VCS, route.BaseSnapshot, route.CurrentSnapshot)}
-	if reviewTargets {
-		lines = append(lines, "Use the named VCS directly to inspect the complete base-to-current comparison.", "Excluded review targets (acceptance inputs only):")
-		for _, artifact := range route.RequirementArtifacts {
-			lines = append(lines, "- "+artifact.Path)
+	converted := make([]Finding, 0, len(findings))
+	hasBlocking := false
+	for _, input := range findings {
+		if strings.TrimSpace(input.Message) == "" {
+			return "", nil, fmt.Errorf("finding message is required")
 		}
-		if route.ReviewWave > 1 || route.PreRepairSnapshot != "" {
-			if route.PreRepairSnapshot != "" {
-				lines = append(lines, fmt.Sprintf("这是返修后第 %d 轮重审；上一轮覆盖 base→pre-repair；你的范围是完整的 base→current（pre-repair 快照 %s 仅供参考，不要只审返修增量）。", route.ReviewWave, route.PreRepairSnapshot))
-			} else {
-				lines = append(lines, fmt.Sprintf("这是第 %d 轮重审；你的范围是完整的 base→current，不要只审最近改动。", route.ReviewWave))
+		locations := make([]string, 0, len(input.Locations))
+		for _, location := range input.Locations {
+			if err := validateFindingLocation(location); err != nil {
+				return "", nil, err
 			}
+			locations = append(locations, strings.TrimSpace(location))
 		}
+		severity := strings.ToUpper(strings.TrimSpace(input.Severity))
+		if severity != "P0" && severity != "P1" && severity != "P2" && severity != "P3" {
+			return "", nil, fmt.Errorf("gate finding severity must be P0, P1, P2, or P3")
+		}
+		if severity == "P0" || severity == "P1" {
+			hasBlocking = true
+		}
+		finding := Finding{Severity: severity, SeverityRationale: strings.TrimSpace(input.SeverityRationale), Category: strings.ToUpper(strings.TrimSpace(input.Category)), Requirement: strings.TrimSpace(input.Requirement), NormalPath: strings.TrimSpace(input.NormalPath), ActualError: strings.TrimSpace(input.ActualError), DeferralImpact: strings.TrimSpace(input.DeferralImpact), Verification: input.Verification, Message: strings.TrimSpace(input.Message), Locations: locations}
+		finding.ID = findingStableID(finding)
+		converted = append(converted, finding)
 	}
-	return strings.Join(lines, "\n")
+	if status == "PASS" && hasBlocking {
+		return "", nil, fmt.Errorf("PASS can include only P2/P3 findings")
+	}
+	if status == "FAIL" && !hasBlocking {
+		return "", nil, fmt.Errorf("FAIL requires at least one P0 or P1 finding")
+	}
+	return status, converted, nil
 }
 
-func dispatchBlock(route PromptRoute) string {
-	return fmt.Sprintf("[Dispatch]\nid: %s\nattempt: %d\nreview wave: %d", route.DispatchID, route.DispatchAttempt, route.ReviewWave)
-}
-
-func validateRoute(route PromptRoute, requireRepair bool) error {
-	for name, value := range map[string]string{
-		"requirement source":   route.RequirementSource,
-		"requirement revision": route.RequirementRevision,
-		"catalog revision":     route.CatalogRevision,
-		"worktree":             route.Worktree,
-		"VCS":                  route.VCS,
-		"base snapshot":        route.BaseSnapshot,
-		"current snapshot":     route.CurrentSnapshot,
-	} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%s is required", name)
-		}
+func validateFindingLocation(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("finding location is empty")
 	}
-	if requireRepair && strings.TrimSpace(route.PreRepairSnapshot) == "" {
-		return fmt.Errorf("pre-repair snapshot is required")
+	if strings.Contains(value, `\`) || strings.Contains(value, "://") || strings.HasPrefix(value, "/") || (len(value) > 1 && value[1] == ':') {
+		return fmt.Errorf("finding location must be repository-relative: %s", value)
+	}
+	path := value
+	for count := 0; count < 2; count++ {
+		index := strings.LastIndex(path, ":")
+		if index <= 0 {
+			break
+		}
+		if !suffixIsDigits(path[index+1:]) {
+			break
+		}
+		path = path[:index]
+	}
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("finding location must be repository-relative: %s", value)
 	}
 	return nil
+}
+
+func suffixIsDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func findingStableID(finding Finding) string {
+	copy := finding
+	copy.ID = ""
+	return "finding-" + shortDigest(digestValue(copy))
 }

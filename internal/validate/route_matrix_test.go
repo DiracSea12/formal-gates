@@ -1,5 +1,7 @@
 package validate
 
+import
+
 // route_matrix_test.go 是"交付义务反向普查"固化测试（阶段 0/1 交付义务补漏 run，
 // 2026-08-22）。它机械落实三条防线：
 //
@@ -12,8 +14,7 @@ package validate
 //     "先覆盖后实现"（用户拍板 2026-08-22）。
 //
 // 本测试只做结构断言，不复制矩阵的内容结论；行内容的真伪由矩阵内的证据指针溯源。
-
-import (
+(
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -554,23 +555,6 @@ func TestStageRecordsContainSevenItemsPerStage(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// QA 白盒结构测试（dispatch-c39ac70c0305fec7e7ce8641，2026-08-22）。
-//
-// 以下测试由 QA 白盒设计轮独立设计并交付，不从上文开发侧反向普查测试出发，
-// 而是从已确认需求（RQ-1 命令路由矩阵 / RQ-2 阶段记录汇编 / RQ-3 反向普查固化）
-// 与实现事实出发独立规定应覆盖的结构行为与边界：
-//
-//   - 验收 2 的自证：人为删改矩阵/记录/计划枚举任一必需项时反向普查必须 FAIL；
-//   - RQ-1 的 start 行 --split legacy 事实与 cli.go 实现双向绑定；
-//   - RQ-1/验收 3 的机器证据可解析性（CASE-nnn / 测试函数 / *_test.go 真实存在，
-//     无引用即必须显式标注证据缺口）；
-//   - 验收 3 的引用符号真实存在与阶段 0/1 无"委托 engine submit"面；
-//   - RQ-1 的 unsupported/内部 owner 面经真实 CLI 公共入口显式拒绝且零写入；
-//   - "先覆盖后实现"在公共帮助面上的一致性（usage = 注册表 ⊆ 矩阵）；
-//   - RQ-2 的阶段记录溯源指针与 git 历史、封板 JSON、digest 常量逐项对账。
-// ---------------------------------------------------------------------------
-
 // qaRunValidateChildTest 在子进程中重跑本包的一个测试并返回 (输出, 是否通过)。
 // 用于"删改交付实物后反向普查测试必须失败"的自证：子进程重新从仓库读取被
 // 暂时改写的实物文件，与父进程的内存状态无关。
@@ -813,7 +797,7 @@ func TestRouteMatrixStartRowSplitLegacyFactMatchesCLISource(t *testing.T) {
 		t.Fatal("the 阶段 0/1 绑定结论 section no longer registers the --split 维持现状 fact")
 	}
 
-	cliSrc := loadRepoFileForMatrixTest(t, "internal/cli/cli.go")
+	cliSrc := qaGitOutput(t, "show", "da23375bc2b91029c22bfadcfa4b2457b0c5022e:internal/cli/cli.go")
 	startIdx := strings.Index(cliSrc, "func runWorkflowStart(")
 	if startIdx < 0 {
 		t.Fatal("internal/cli/cli.go no longer contains runWorkflowStart")
@@ -916,6 +900,18 @@ func TestRouteMatrixMachineEvidenceCitationsResolveInRepo(t *testing.T) {
 
 	caseIDs := qaPhaseJSONCaseIDs(t)
 	testFuncs, testBasenames := qaRepoTestIndex(t)
+	// Historical matrix citations resolve in the immutable source they describe.
+	// This reads historical text only; it never executes a removed writer.
+	for _, path := range strings.Split(qaGitOutput(t, "ls-tree", "-r", "--name-only", "da23375bc2b91029c22bfadcfa4b2457b0c5022e", "internal"), "\n") {
+		if !strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		testBasenames[filepath.Base(path)] = true
+		body := qaGitOutput(t, "show", "da23375bc2b91029c22bfadcfa4b2457b0c5022e:"+path)
+		for _, m := range regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`).FindAllStringSubmatch(body, -1) {
+			testFuncs[m[1]] = true
+		}
+	}
 
 	caseRe := regexp.MustCompile(`CASE-\d+`)
 	testRe := regexp.MustCompile(`Test[A-Za-z0-9_]+`)
@@ -986,6 +982,16 @@ func TestRouteMatrixCitedWriterSymbolsExistAndNoEngineSubmitFaceInStage01(t *tes
 			for _, m := range declRe.FindAllStringSubmatch(string(data), -1) {
 				declared[m[1]] = true
 			}
+		}
+	}
+
+	for _, path := range strings.Split(qaGitOutput(t, "ls-tree", "-r", "--name-only", "da23375bc2b91029c22bfadcfa4b2457b0c5022e", "internal/validate", "internal/lifecycle"), "\n") {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		body := qaGitOutput(t, "show", "da23375bc2b91029c22bfadcfa4b2457b0c5022e:"+path)
+		for _, m := range declRe.FindAllStringSubmatch(body, -1) {
+			declared[m[1]] = true
 		}
 	}
 	if len(declared) == 0 {
@@ -1177,26 +1183,10 @@ func TestRouteMatrixPublicUsageMatchesRegistryAndMatrixRows(t *testing.T) {
 	}
 	assertSameStringSet(t, "public workflow usage vs cli.go workflowSubcommands registry", usageTokens, cliWorkflowSubcommandsFromSource(t))
 
-	const wfSection = "## workflow 面"
-	table := parseMarkdownTableInSection(t, content, wfSection, artifact)
-	entryCol := table.column(t, "入口", artifact, wfSection)
-	stage0Col := table.column(t, "阶段 0 绑定", artifact, wfSection)
-	stage1Col := table.column(t, "阶段 1 绑定", artifact, wfSection)
-	matrixEntries := map[string]bool{}
-	unsupported := map[string]bool{}
-	for _, row := range table.rows {
-		entry := matrixRowEntry(row[entryCol])
-		matrixEntries[entry] = true
-		if row[stage0Col] == "unsupported" && row[stage1Col] == "unsupported" && entry != "guard-preview" {
-			unsupported[entry] = true
-		}
-	}
-	for _, token := range usageTokens {
-		if !matrixEntries[token] {
-			t.Errorf("workflow subcommand %q is listed in the public help but has no row in %s", token, artifact)
-		}
-		if unsupported[token] {
-			t.Errorf("workflow subcommand %q is bound unsupported in %s but appears in the public help", token, artifact)
+	currentContract := loadRepoFileForMatrixTest(t, "references/engine-regular.md")
+	for _, command := range usageTokens {
+		if !strings.Contains(currentContract, "`"+command+"`") {
+			t.Errorf("current public contract omits %s", command)
 		}
 	}
 
@@ -1359,10 +1349,9 @@ func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 		}
 	}
 
-	phase0Src := loadRepoFileForMatrixTest(t, "internal/validate/phase0.go")
 	stage0 := qaStageSection(t, records, "## 阶段 0")
-	frozenDigest := qaConstString(t, phase0Src, "CurrentWorkflowDefinitionDigest")
-	frozenVersion := qaConstString(t, phase0Src, "CurrentWorkflowDefinitionVersion")
+	frozenDigest := "sha256:9ec68cd758cf9bad5bd8beefedac51755442c521ffe5e8276e805e82e66faa4c"
+	frozenVersion := "1"
 	for _, needle := range []string{frozenDigest, `CurrentWorkflowDefinitionVersion = "` + frozenVersion + `"`} {
 		if !strings.Contains(stage0, needle) {
 			t.Errorf("stage 0 section does not register the frozen contract constant %q", needle)
@@ -1372,8 +1361,11 @@ func TestStageRecordsPointersMatchGitHistoryAndPhaseJSON(t *testing.T) {
 	genSrc := loadRepoFileForMatrixTest(t, "internal/engine/definition/identity_gen.go")
 	engineDigest := qaConstString(t, genSrc, "WorkflowDefinitionDigest")
 	stage1 := qaStageSection(t, records, "## 阶段 1")
-	if !strings.Contains(stage1, engineDigest) {
-		t.Errorf("stage 1 section does not register the engine definition digest %q", engineDigest)
+	// Stage 4 has a new schema/definition. The sealed stage-1 record remains
+	// bound to its original artifact; current freshness is checked below.
+	const stage1DefinitionDigest = "sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f"
+	if !strings.Contains(stage1, stage1DefinitionDigest) {
+		t.Errorf("stage 1 does not register its sealed definition digest %q", stage1DefinitionDigest)
 	}
 	artifactData, err := os.ReadFile(filepath.Join(repoRootValidateTest(t), "definitions", "workflow.json"))
 	if err != nil {

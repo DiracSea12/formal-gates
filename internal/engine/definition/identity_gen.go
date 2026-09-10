@@ -6,14 +6,12 @@ package definition
 // 本文件与 definitions/workflow.json 由同一生成动作产出（Generate），禁止
 // 人工编辑。期望身份常量供 loader/校验方钉死当前 definition 身份。
 //
-// 衔接：WorkflowDefinitionDigest 是 internal/validate/phase0.go 手工常量
-// CurrentWorkflowDefinitionDigest 的同源替代；phase0 常量按阶段 0 契约保持
-// 不动，读取方在后续批次切换到本常量后移除旧值。
+// WorkflowDefinitionDigest 是当前制品身份的唯一生成来源。
 
 const (
 	// WorkflowDefinitionVersion 是 canonical 制品的 definition 版本信封。
-	WorkflowDefinitionVersion = "2"
+	WorkflowDefinitionVersion = "5"
 	// WorkflowDefinitionDigest 是 canonical 制品字节的 SHA-256 摘要
 	// （sha256: 前缀，与仓库现行格式一致）。
-	WorkflowDefinitionDigest = "sha256:3db87c9c6f3c0321ae55aa4d8196bc935b5a603a3948025352553d8ed1b9248f"
+	WorkflowDefinitionDigest = "sha256:62b5f9ead905a6de313bd939df2fa4b68e2070d51f778d96fc8368986323d72d"
 )

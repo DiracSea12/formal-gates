@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // claudeFixture mirrors the current real Claude Code subagent transcript
@@ -228,7 +229,7 @@ func TestCodexTaskTimingIncludesToolsAndExcludesIdle(t *testing.T) {
 {"timestamp":"2026-09-06T16:10:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"two"}}
 `
 	got, err := CodexTaskTiming(writeFixture(t, events))
-	if err != nil || got != (TaskTiming{"2026-09-06T16:00:00Z", "2026-09-06T16:10:02Z", 5000}) {
+	if err != nil || got != (TaskTiming{StartedAt: "2026-09-06T16:00:00Z", CompletedAt: "2026-09-06T16:10:02Z", WallTimeMillis: 5000}) {
 		t.Fatalf("timing=%+v err=%v", got, err)
 	}
 	for _, content := range []string{"{}\n", events + `{"timestamp":"2026-09-06T16:11:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"unfinished"}}` + "\n"} {
@@ -249,5 +250,16 @@ func TestCodexResumeDoesNotMixThreadAndProcessCounters(t *testing.T) {
 	got, err := ParseTranscript("codex", writeFixture(t, transcript))
 	if err != nil || got != (Usage{70, 85, 35}) {
 		t.Fatalf("resume usage=%+v err=%v", got, err)
+	}
+}
+
+func TestResumedTimingKeepsKnownIntervalsAndReportsMissingStop(t *testing.T) {
+	events := `{"timestamp":"2026-09-06T16:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}
+{"timestamp":"2026-09-06T16:01:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two"}}
+{"timestamp":"2026-09-06T16:01:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"two"}}
+`
+	timing, err := CodexTaskTimingAfter(writeFixture(t, events), time.Time{})
+	if err != nil || timing.IncompleteTurns != 1 || timing.WallTimeMillis != 2000 {
+		t.Fatalf("timing=%+v %v", timing, err)
 	}
 }

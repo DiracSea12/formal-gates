@@ -7,29 +7,19 @@ import (
 
 	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
-	"formal-gates/internal/validate"
 )
 
 // 测试用安装身份（packageDigest 的实际计算随阶段 3+ 安装事务交付，
 // 本批用固定注入值验证信封校验侧）。
 const testPackageDigest = "sha256:test-package-digest"
 
-// TestFrozenConstantAlignment 钉死常量同源与语义对齐：
-//   - stateSchemaVersion 复用的 encoder 引擎侧常量必须等于 phase0 冻结
-//     常量 CurrentStateSchemaVersion（master-requirements §1 语义）；
-//   - UnsupportedRunVersionCode 与 phase0 冻结错误码同值；
-//   - 信封的 definition 版本与摘要直接同源 definition 生成常量。
-//
-// validate 只在测试中导入：生产代码不依赖 legacy（阶段 5 删除 legacy
-// 时不影响本包），测试钉死的是语义对齐本身。
+// Current identity has one engine schema and no legacy decoder alignment.
 func TestFrozenConstantAlignment(t *testing.T) {
-	if encoder.StateSchemaVersion != validate.CurrentStateSchemaVersion {
-		t.Fatalf("engine stateSchemaVersion %q != phase0 frozen %q",
-			encoder.StateSchemaVersion, validate.CurrentStateSchemaVersion)
+	if encoder.StateSchemaVersion != "3" {
+		t.Fatalf("engine schema = %q, want 3", encoder.StateSchemaVersion)
 	}
-	if UnsupportedRunVersionCode != validate.UnsupportedRunVersionCode {
-		t.Fatalf("engine unsupported-run-version code %q != phase0 frozen %q",
-			UnsupportedRunVersionCode, validate.UnsupportedRunVersionCode)
+	if UnsupportedRunVersionCode != "UNSUPPORTED_RUN_VERSION" {
+		t.Fatalf("unsupported-run code = %q", UnsupportedRunVersionCode)
 	}
 	if Writer != "engine" {
 		t.Fatalf("writer constant %q != %q", Writer, "engine")
@@ -97,7 +87,7 @@ func TestValidateEnvelopeImpreciseValues(t *testing.T) {
 	wrong := map[string]func(*Envelope){
 		"writer=legacy":                 func(e *Envelope) { e.Writer = "legacy" },
 		"writer=engine (padded)":        func(e *Envelope) { e.Writer = " engine " },
-		"stateSchemaVersion=2":          func(e *Envelope) { e.StateSchemaVersion = "2" },
+		"stateSchemaVersion=1":          func(e *Envelope) { e.StateSchemaVersion = "1" },
 		"workflowDefinitionVersion=1":   func(e *Envelope) { e.WorkflowDefinitionVersion = "1" },
 		"definitionDigest=other":        func(e *Envelope) { e.DefinitionDigest = "sha256:0000" },
 		"definitionDigest=no-prefix":    func(e *Envelope) { e.DefinitionDigest = strings.TrimPrefix(e.DefinitionDigest, "sha256:") },

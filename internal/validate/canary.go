@@ -9,20 +9,12 @@ import (
 	"runtime"
 	"strings"
 
+	"formal-gates/internal/engine/encoder"
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
 )
 
 type PortableCanaryOptions struct{ Root string }
-
-const (
-	canaryDeliveryContents  = "delivery\n"
-	canaryBlackboxProcedure = "git show HEAD:delivery.txt"
-	canaryBlackboxOracle    = `stdout equals "delivery"`
-	canaryWhiteboxProcedure = "git show HEAD:whitebox_delivered_test.go"
-	canaryWhiteboxMarker    = "func TestWhiteboxDirectBehavior(t *testing.T) {}"
-	canaryWhiteboxOracle    = `stdout contains "func TestWhiteboxDirectBehavior(t *testing.T) {}"`
-)
 
 type CanaryCheck struct {
 	Name   string `json:"name"`
@@ -183,7 +175,7 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	} else {
 		add("package-validate", fmt.Errorf("%s", resultSummary(packageResult)))
 	}
-	catalog, err := LoadPromptCatalog(root)
+	_, err := LoadPromptCatalog(root)
 	add("prompt-catalog", err)
 	decision, err := Hook([]byte(`{"command":"pwsh -File ./scripts/gate-workflow.ps1"}`))
 	if err == nil && decision.PermissionDecision != "deny" {
@@ -201,22 +193,13 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 			recordID := strings.TrimSpace(os.Getenv("FORMAL_GATES_CANARY_RECORD"))
 			if packageRoot == "" || workflowRoot == "" || registry == "" || recordID == "" {
 				add("installed-binary-regression", fmt.Errorf("installed canary is missing its package/workflow/registry binding"))
-			} else if installedCatalog, loadErr := LoadPromptCatalog(packageRoot); loadErr != nil {
+			} else if _, loadErr := LoadPromptCatalog(packageRoot); loadErr != nil {
 				add("installed-binary-regression", loadErr)
 			} else {
-				add("installed-binary-regression", runQuickE2ECanaryAt(packageRoot, installedCatalog, workflowRoot, registry, recordID))
+				add("installed-binary-regression", runInstalledEngineCanary(packageRoot, workflowRoot, registry, recordID))
 			}
 		}
 		return report, result
-	}
-	// A source/candidate binary is read-only with respect to workflow state.
-	// Unit/integration test executables may exercise the legacy in-process path;
-	// shipped canaries run the same workflow later through each installed stable
-	// launcher with an exact registry binding in addInstallChecks.
-	executable, _ := os.Executable()
-	base := filepath.Base(filepath.Clean(executable))
-	if len(catalog.Gates) > 0 && (strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe")) {
-		add("quick-e2e-workflow", runQuickE2ECanary(root, catalog))
 	}
 	tempRoot, err := os.MkdirTemp("", "formal-gates-install-canary-")
 	if err != nil {
@@ -242,326 +225,6 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 		add("write-block-hook", runWriteBlockCanary(writeBlockRoot))
 	}
 	return report, result
-}
-
-// runQuickE2ECanary exercises the quick end-to-end formal workflow (full route)
-// against a temp git repo, from start through requirement registration, slicing,
-// route confirmation, QA design/review/execution, snapshot, gate review and Seal.
-func runQuickE2ECanary(packageRoot string, catalog PromptCatalog) error {
-	return runQuickE2ECanaryAt(packageRoot, catalog, "", "", "")
-}
-
-// runQuickE2ECanaryAt accepts an installed target's exact admission binding.
-// Source-tree canaries leave workflowRoot empty and retain the legacy phase-0
-// path; installed-binary evidence must supply all three registry coordinates.
-func runQuickE2ECanaryAt(packageRoot string, catalog PromptCatalog, workflowRoot, registry, recordID string) error {
-	root := strings.TrimSpace(workflowRoot)
-	removeRoot := false
-	if root == "" {
-		var err error
-		root, err = os.MkdirTemp("", "formal-gates-workflow-canary-")
-		if err != nil {
-			return err
-		}
-		removeRoot = true
-	}
-	if removeRoot {
-		defer os.RemoveAll(root)
-	}
-	requirement := filepath.Join(root, "requirement.md")
-	if err := os.WriteFile(requirement, []byte("# Canary requirement\n\n## 需求点\n\n### REQ-001：Confirmed behavior\n\n#### 要求\n\nThe installed workflow must complete its verified route.\n\n#### 验收条件\n\n- AC-001：The installed workflow reaches Seal through the public runtime.\n\n#### 来源\n\nPortable canary contract.\n"), 0o600); err != nil {
-		return err
-	}
-	if err := initializeCanaryGit(root); err != nil {
-		return err
-	}
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "canary", Flow: "formal", RequirementSource: "requirement.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: recordID})
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "requirements-clarification", "", false, ""); err != nil {
-		return err
-	}
-	state, err = LoadRunState(root, state.RunID)
-	if err != nil {
-		return err
-	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "", OperatorVerification{Checks: append([]string{}, requiredOperatorVerificationChecks...), Evidence: "Synthetic portable canary: the fixed REQ-001/AC-001 fixture exercises the workflow, with no reviewer findings."})
-	if err != nil {
-		return err
-	}
-	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", nil, RequirementUpdateOptions{ActivateGuarantee: true})
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "product-review", "", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID := openDispatchID(state, "action", "product-review")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-product-review")
-	if err != nil {
-		return err
-	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "product-review", dispatchID, "PASS", "", nil, false, "", OperatorVerification{Checks: append([]string{}, requiredOperatorVerificationChecks...), Evidence: "Synthetic portable canary: the fixed REQ-001/AC-001 fixture exercises the workflow, with no reviewer findings."}, ReviewItemInput{Key: guaranteeProductReviewKey("REQ-001"), Status: "PASS"})
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "start-readiness", "", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "start-readiness")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-start-readiness")
-	if err != nil {
-		return err
-	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "start-readiness", dispatchID, "PASS", "", nil, false, "", OperatorVerification{Checks: append([]string{}, requiredOperatorVerificationChecks...), Evidence: "Synthetic portable canary: the fixed REQ-001/AC-001 fixture exercises the workflow, with no reviewer findings."})
-	if err != nil {
-		return err
-	}
-	// 拆分决定在 Part 2（start-readiness）完成后记录；此处走快速路径（不拆），
-	// 记录"建议不拆（原因）"后确认路线。
-	state, err = RecordSlicing(root, packageRoot, state.RunID, "no-split", 0, nil, "", "single coherent bounded unit; no split needed", "")
-	if err != nil {
-		return err
-	}
-	state, err = SetRoute(root, packageRoot, state.RunID, "full", nil)
-	if err != nil {
-		return err
-	}
-	// The full route owns separate blackbox and whitebox review authorities. Keep
-	// the canary on those public per-mode paths so an explicitly active guarantee
-	// proves that both review kinds contribute approved REQ/AC evidence.
-	qaWorktree, err := os.MkdirTemp("", "formal-gates-canary-qa-")
-	if err != nil {
-		return err
-	}
-	if err := os.Remove(qaWorktree); err != nil {
-		return err
-	}
-	runner := execNativeCommandRunner{}
-	if _, err := runner.Run(root, "git", "worktree", "add", "--detach", qaWorktree, state.BaseSnapshot); err != nil {
-		return err
-	}
-	defer func() { _, _ = runner.Run(root, "git", "worktree", "remove", "--force", qaWorktree) }()
-	state, err = RegisterQAWorktree(root, packageRoot, state.RunID, qaWorktree)
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design", "blackbox", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "qa-design")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-blackbox-design")
-	if err != nil {
-		return err
-	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "blackbox", Description: "the delivery marker is committed in the candidate", Procedure: canaryBlackboxProcedure, Oracle: canaryBlackboxOracle, AcceptanceCriteria: []string{"AC-001"}}}, "")
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "blackbox", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "qa-review")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-blackbox-reviewer")
-	if err != nil {
-		return err
-	}
-	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-001", Outcome: "PASS"}}, "", nil, QAReviewRecordOptions{SourceDecisions: []string{"REQ-001=PASS"}, PointDecisions: []string{"AC-001=PASS"}, CaseDecisions: []string{"CASE-001=PASS"}})
-	if err != nil {
-		return err
-	}
-
-	// The canary commits its test and delivery files in one candidate. Review
-	// follows that commit and snapshot registration, so its tests are immutable.
-	if err := os.WriteFile(filepath.Join(root, "whitebox_delivered_test.go"), []byte(whiteboxDeliveredTestCode), 0o600); err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-design", "whitebox", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "qa-design")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-whitebox-design")
-	if err != nil {
-		return err
-	}
-	state, err = RecordQADesign(root, packageRoot, state.RunID, dispatchID, []QACaseInput{{Mode: "whitebox", Description: "the delivered whitebox test declaration is committed in the candidate", Procedure: canaryWhiteboxProcedure, Oracle: canaryWhiteboxOracle, Test: "whitebox_delivered_test.go::TestWhiteboxDirectBehavior", AcceptanceCriteria: []string{"AC-001"}}}, "")
-	if err != nil {
-		return err
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "development-worker", "", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "development-worker")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-development")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(root, "delivery.txt"), []byte(canaryDeliveryContents), 0o600); err != nil {
-		return err
-	}
-	if err := commitCanaryGit(root, "delivery"); err != nil {
-		return err
-	}
-	state, err = AdvanceSnapshot(root, packageRoot, state.RunID, dispatchID, false, "")
-	if err != nil {
-		status, _ := (execNativeCommandRunner{}).Run(root, "git", "status", "--porcelain=v1", "--untracked-files=all")
-		return fmt.Errorf("%w (git status: %s)", err, strings.TrimSpace(status))
-	}
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-review", "whitebox", false, ""); err != nil {
-		return err
-	}
-	state, _ = LoadRunState(root, state.RunID)
-	dispatchID = openDispatchID(state, "action", "qa-review")
-	state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-whitebox-reviewer")
-	if err != nil {
-		return err
-	}
-	state, err = RecordQAReview(root, packageRoot, state.RunID, dispatchID, []QAReviewInput{{CaseID: "CASE-002", Outcome: "PASS"}}, "", nil, QAReviewRecordOptions{SourceDecisions: []string{"REQ-001=PASS"}, PointDecisions: []string{"AC-001=PASS"}, CaseDecisions: []string{"CASE-002=PASS"}})
-	if err != nil {
-		return err
-	}
-	for _, mode := range []string{"blackbox", "whitebox"} {
-		if _, err := PrepareAction(root, packageRoot, state.RunID, "qa-execution", mode, false, ""); err != nil {
-			return err
-		}
-		state, _ = LoadRunState(root, state.RunID)
-		dispatchID = openDispatchID(state, "action", "qa-execution")
-		state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, "canary-"+mode+"-execution")
-		if err != nil {
-			return err
-		}
-		results := make([]QAResultInput, 0, len(state.qaModeCases(mode)))
-		for _, testCase := range state.qaModeCases(mode) {
-			result, err := canaryExecutionResult(root, testCase)
-			if err != nil {
-				return fmt.Errorf("execute portable canary case %s: %w", testCase.ID, err)
-			}
-			results = append(results, result)
-		}
-		state, err = RecordQAExecution(root, packageRoot, state.RunID, dispatchID, results, "")
-		if err != nil {
-			return err
-		}
-	}
-	for index, gate := range catalog.Gates {
-		// 合并门是条件自动门：只在分片 >= 2 的保留总任务实例自动附加，不进入正常
-		// 路线的门审循环。
-		if gate.ID == mergeGateID {
-			continue
-		}
-		if _, err := PrepareGate(root, packageRoot, state.RunID, gate.ID, false, ""); err != nil {
-			return err
-		}
-		state, _ = LoadRunState(root, state.RunID)
-		dispatchID = openDispatchID(state, "gate", gate.ID)
-		state, err = ClaimDispatch(root, packageRoot, state.RunID, dispatchID, fmt.Sprintf("canary-gate-reviewer-%d", index+1))
-		if err != nil {
-			return err
-		}
-		state, err = RecordGate(root, packageRoot, state.RunID, gate.ID, dispatchID, "PASS", "", comparedRange(state), nil)
-		if err != nil {
-			return err
-		}
-	}
-	_, err = Seal(root, packageRoot, state.RunID, nil, false, "")
-	return err
-}
-
-func canaryExecutionResult(root string, testCase QACase) (QAResultInput, error) {
-	runner := execNativeCommandRunner{}
-	result := QAResultInput{CaseID: testCase.ID, Outcome: "PASS"}
-	switch testCase.Mode {
-	case "blackbox":
-		if testCase.Procedure != canaryBlackboxProcedure || testCase.Oracle != canaryBlackboxOracle {
-			return QAResultInput{}, fmt.Errorf("blackbox case procedure/oracle does not match the executable canary check")
-		}
-		output, err := runner.Run(root, "git", "show", "HEAD:delivery.txt")
-		if err != nil {
-			return QAResultInput{}, err
-		}
-		expected := strings.TrimSpace(canaryDeliveryContents)
-		matches := output == expected
-		if !matches {
-			return QAResultInput{}, fmt.Errorf("delivery.txt content mismatch: expected %q, got %q", expected, output)
-		}
-		result.Procedure = canaryBlackboxProcedure
-		result.Observation = fmt.Sprintf("git show HEAD:delivery.txt stdout=%q", output)
-		result.OracleResult = fmt.Sprintf("expected stdout=%q; actual stdout=%q; equal=%t", expected, output, matches)
-	case "whitebox":
-		if testCase.Procedure != canaryWhiteboxProcedure || testCase.Oracle != canaryWhiteboxOracle {
-			return QAResultInput{}, fmt.Errorf("whitebox case procedure/oracle does not match the executable canary check")
-		}
-		output, err := runner.Run(root, "git", "show", "HEAD:whitebox_delivered_test.go")
-		if err != nil {
-			return QAResultInput{}, err
-		}
-		matches := strings.Contains(output, canaryWhiteboxMarker)
-		if !matches {
-			return QAResultInput{}, fmt.Errorf("whitebox test declaration missing from candidate: expected stdout to contain %q, got %q", canaryWhiteboxMarker, output)
-		}
-		result.Procedure = canaryWhiteboxProcedure
-		result.Observation = "git show HEAD:whitebox_delivered_test.go stdout:\n" + output
-		result.OracleResult = fmt.Sprintf("expected stdout to contain %q; contains=%t", canaryWhiteboxMarker, matches)
-	default:
-		return QAResultInput{}, fmt.Errorf("unsupported portable canary QA mode %q", testCase.Mode)
-	}
-	return result, nil
-}
-
-func initializeCanaryGit(root string) error {
-	runner := execNativeCommandRunner{}
-	for _, args := range [][]string{{"init"}, {"config", "user.email", "formal-gates@example.invalid"}, {"config", "user.name", "Formal Gates Canary"}} {
-		if _, err := runner.Run(root, "git", args...); err != nil {
-			return err
-		}
-	}
-	// 与实际仓库 / 测试 fixture 一致地忽略运行期临时状态：否则 .gates/tmp/ 会被快照
-	// 就绪脏检查（检测未跟踪且未忽略文件）拦下。
-	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".gates/tmp/\n"), 0o600); err != nil {
-		return err
-	}
-	return commitCanaryGit(root, "base")
-}
-
-func commitCanaryGit(root, message string) error {
-	runner := execNativeCommandRunner{}
-	if _, err := runner.Run(root, "git", "add", "--all"); err != nil {
-		return err
-	}
-	_, err := runner.Run(root, "git", "commit", "-m", message)
-	return err
-}
-
-func openDispatchID(state RunState, kind, target string) string {
-	// prepare 不再作废旧派发，同功能旧 CLAIMED 派发可能仍在途，且同功能可能同时
-	// 存在多张 OPEN 空票；取新派发必须取 Attempt 最大的 OPEN 票（最新准备），无 OPEN 票时
-	// 才回退到 CLAIMED（在途旧票）。
-	bestID := ""
-	bestAttempt := 0
-	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind != kind || dispatch.Target != target || dispatch.Status != "OPEN" {
-			continue
-		}
-		if dispatch.Attempt >= bestAttempt {
-			bestID, bestAttempt = id, dispatch.Attempt
-		}
-	}
-	if bestID != "" {
-		return bestID
-	}
-	for id, dispatch := range state.Dispatches {
-		if dispatch.TargetKind == kind && dispatch.Target == target && dispatch.Status == "CLAIMED" {
-			return id
-		}
-	}
-	return ""
 }
 
 func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)) []CanaryInstallIdentity {
@@ -661,12 +324,12 @@ func addInstallChecks(root, tempRoot string, addCheck func(string, bool, string)
 			addCheck(tc.name+"-candidate-install-fenced", true, "candidate binary could not claim the stable launcher")
 
 			candidateRunID := "candidate-must-not-start"
-			candidateStart := exec.Command(candidateExecutable, "workflow", "start", "--root", project, "--package-root", report.Targets[0].TargetPath, "--run-id", candidateRunID, "--requirement", "requirement.md", "--vcs", "git", "--route", "lightweight")
+			candidateStart := exec.Command(candidateExecutable, "workflow", "start", "--root", project, "--package-root", report.Targets[0].TargetPath, "--run-id", candidateRunID, "--requirement", "requirement.md", "--vcs", "git")
 			candidateStart.Env = stableEnv
 			if output, candidateErr := candidateStart.CombinedOutput(); candidateErr == nil {
 				addCheck(tc.name+"-candidate-workflow-fenced", false, "candidate binary unexpectedly created workflow state")
 				continue
-			} else if exists(RunDir(project, candidateRunID)) {
+			} else if exists(filepath.Join(project, ".gates", "engine", candidateRunID)) {
 				addCheck(tc.name+"-candidate-workflow-fenced", false, fmt.Sprintf("candidate rejection left a run directory: %s", strings.TrimSpace(string(output))))
 				continue
 			}
@@ -838,27 +501,11 @@ func resultSummary(result Result) string {
 // the same decision the host would receive.
 func runWriteBlockCanary(root string) error {
 	// 一个活动 run 的状态文件：status ACTIVE、登记 requirements.md 与 design.md。
-	runDir := filepath.Join(root, ".gates", "tmp", "write-block-canary")
+	runDir := filepath.Join(root, ".gates", "engine", "write-block-canary")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return err
 	}
-	state := map[string]any{
-		"status": "ACTIVE",
-		"runId":  "write-block-canary",
-		"flow":   "formal",
-		"actions": map[string]any{
-			"development-worker": map[string]any{"status": developmentPrepared},
-		},
-		"gates":              map[string]any{},
-		"carry":              map[string]any{},
-		"dispatches":         map[string]any{},
-		"skipAuthorizations": map[string]any{},
-		"selectedGates":      []string{},
-		"requirementArtifacts": []map[string]string{
-			{"path": "requirements.md", "revision": "r1"},
-			{"path": "design.md", "revision": "r2"},
-		},
-	}
+	state := map[string]any{"writer": "engine", "stateSchemaVersion": encoder.StateSchemaVersion, "content": map[string]any{"regular": map[string]any{"requirement": map[string]any{"path": "requirements.md"}, "preparation": map[string]any{}}, "regularExecutions": map[string]any{"development": map[string]any{"claimed": true, "claim": map[string]any{"task": "entry/development-worker/B1"}}}}}
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err

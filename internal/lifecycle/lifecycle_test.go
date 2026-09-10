@@ -582,3 +582,34 @@ func TestCodexCLIRolloutBinding(t *testing.T) {
 		t.Fatalf("lifecycle %+v %v", verification, err)
 	}
 }
+
+func TestResumedIdentityUsesExplicitDispatchLifecycle(t *testing.T) {
+	root := t.TempDir()
+	useProvider(t, ProviderClaude)
+	payload := []byte(`{"subagent_id":"same-developer"}`)
+	for _, dispatch := range []string{"first", "continuation"} {
+		if err := BindDispatch(root, "run-1", dispatch, "same-developer"); err != nil {
+			t.Fatal(err)
+		}
+		binding := CaptureBinding{RunID: "run-1", DispatchID: dispatch}
+		for _, event := range []string{"SubagentStart", "SubagentStop"} {
+			if _, err := Capture(root, ProviderClaude, event, payload, binding); err != nil {
+				t.Fatal(err)
+			}
+		}
+		v, err := VerifyDispatch(root, "run-1", dispatch)
+		if err != nil || v.Outcome != Verified {
+			t.Fatalf("%s: %+v %v", dispatch, v, err)
+		}
+	}
+	if _, err := Capture(root, ProviderClaude, "SubagentStop", payload); err == nil {
+		t.Fatal("guessed an ambiguous resumed session's dispatch")
+	}
+	if _, err := Capture(root, ProviderClaude, "SubagentStop", []byte(`{"subagent_id":"wrong"}`), CaptureBinding{RunID: "run-1", DispatchID: "continuation"}); err == nil {
+		t.Fatal("accepted wrong native identity")
+	}
+	v, err := VerifyDispatch(root, "run-1", "first")
+	if err != nil || v.Outcome != Verified {
+		t.Fatal("continuation damaged original lifecycle")
+	}
+}

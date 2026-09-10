@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -467,155 +466,6 @@ func TestWhiteboxPhase0Round12BootstrapReceiptBindsExactRegistryIdentity(t *test
 	}
 	if _, err := os.Stat(filepath.Join(project, ".gates")); !os.IsNotExist(err) {
 		t.Fatalf("bootstrap created workflow state before start: %v", err)
-	}
-}
-
-func TestWhiteboxPhase0Round12AdmissionRejectsInvalidRecordsBeforeNamespaceWrites(t *testing.T) {
-	packageRoot := round12RepoRoot(t)
-	cases := []struct {
-		name   string
-		record func(root string) RegistryRecord
-		id     string
-	}{
-		{"incomplete", func(root string) RegistryRecord { return RegistryRecord{ID: "incomplete", Status: "active"} }, "incomplete"},
-		{"conflicting canonical target", func(root string) RegistryRecord {
-			record := round12Record("conflict", packageRoot, filepath.Join(root, "launcher", nativeBinaryName()), "project", "codex", root, "active")
-			record.CanonicalPaths["target"] = canonicalRegistryPath(filepath.Join(root, "other-package"))
-			return record
-		}, "conflict"},
-		{"missing", func(root string) RegistryRecord {
-			return round12Record("present", packageRoot, filepath.Join(root, "launcher", nativeBinaryName()), "project", "codex", root, "active")
-		}, "missing"},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			root := round12GitProject(t)
-			registry := filepath.Join(t.TempDir(), "registry.json")
-			record := test.record(root)
-			before := round12WriteRegistry(t, registry, 7, record)
-			if test.name == "missing" {
-				test.id = "absent"
-			}
-			runID := "round12-" + test.id
-			_, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: runID, Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: test.id})
-			if err == nil || !strings.Contains(err.Error(), "UNREGISTERED_INSTALL") {
-				t.Fatalf("invalid admission was accepted: %v", err)
-			}
-			if got := round12ReadFile(t, registry); !bytes.Equal(got, before) {
-				t.Fatalf("authoritative registry bytes changed on rejected admission: before=%q after=%q", before, got)
-			}
-			if _, err := os.Stat(RunDir(root, runID)); !os.IsNotExist(err) {
-				t.Fatalf("rejected admission created a run directory: %v", err)
-			}
-			if _, err := os.Stat(filepath.Join(root, ".gates")); !os.IsNotExist(err) {
-				t.Fatalf("rejected admission created a workflow namespace: %v", err)
-			}
-		})
-	}
-}
-
-func TestWhiteboxPhase0Round12WorkflowStateUsesNestedProjectBinding(t *testing.T) {
-	packageRoot := round12RepoRoot(t)
-	parent := t.TempDir()
-	nested := filepath.Join(parent, "nested")
-	round12GitProjectAt(t, nested)
-	registry := filepath.Join(t.TempDir(), "registry.json")
-	launcher := filepath.Join(t.TempDir(), "launcher", nativeBinaryName())
-	parentRecord := round12Record("parent", packageRoot, launcher, "project", "codex", parent, "active")
-	nestedRecord := round12Record("nested", packageRoot, launcher, "project", "codex", nested, "active")
-	round12WriteRegistry(t, registry, 12, parentRecord, nestedRecord)
-	phase0WriteBootstrapReceipt(t, registry)
-	if _, err := Start(StartOptions{Root: nested, PackageRoot: packageRoot, RunID: "round12-parent", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: parentRecord.ID}); err == nil || !strings.Contains(err.Error(), "workflow root") {
-		t.Fatalf("less-specific project binding was accepted for nested root: %v", err)
-	}
-	state, err := Start(StartOptions{Root: nested, PackageRoot: packageRoot, RunID: "round12-nested", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: nestedRecord.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadRunState(nested, state.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.AdmissionRecordID != nestedRecord.ID || loaded.AdmissionRoot != nested || loaded.AdmissionTarget != packageRoot || loaded.AdmissionGeneration != nestedRecord.Generation || loaded.AdmissionLease != nestedRecord.Lease || loaded.AdmissionToken != nestedRecord.Token {
-		t.Fatalf("reloaded state lost the nested binding identity: %+v", loaded)
-	}
-}
-
-func TestWhiteboxPhase0Round12GlobalAdmissionDerivesProjectLocalRoots(t *testing.T) {
-	packageRoot := round12RepoRoot(t)
-	hostRoot := t.TempDir()
-	project := round12GitProject(t)
-	otherProject := t.TempDir()
-	registry := filepath.Join(t.TempDir(), "registry.json")
-	launcher := filepath.Join(hostRoot, "bin", nativeBinaryName())
-	global := round12Record("global", packageRoot, launcher, "global", "codex", hostRoot, "active")
-	round12WriteRegistry(t, registry, 20, global)
-	phase0WriteBootstrapReceipt(t, registry)
-	state, err := Start(StartOptions{Root: project, PackageRoot: packageRoot, RunID: "round12-global", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no", AdmissionRegistry: registry, AdmissionRecordID: global.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadRunState(project, state.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.AdmissionRecordID == global.ID || loaded.AdmissionRoot != project || loaded.AdmissionTarget != packageRoot {
-		t.Fatalf("global invocation did not derive a project binding: %+v", loaded)
-	}
-	document, err := LoadRegistry(registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	derived := round12RecordByID(t, document, loaded.AdmissionRecordID)
-	if derived.Target != global.Target || derived.LauncherPath != global.LauncherPath || derived.ProjectRoot != canonicalRegistryPath(project) || derived.StateRoot != canonicalRegistryPath(filepath.Join(project, ".gates")) || derived.ResourceRoot != canonicalRegistryPath(filepath.Join(project, ".formal-gates-resources")) {
-		t.Fatalf("derived global binding has the wrong project-local roots: %+v", derived)
-	}
-	if _, err := os.Stat(filepath.Join(hostRoot, ".gates")); !os.IsNotExist(err) {
-		t.Fatalf("global host namespace received project state: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(hostRoot, ".formal-gates-resources")); !os.IsNotExist(err) {
-		t.Fatalf("global host namespace received project resources: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(otherProject, ".gates")); !os.IsNotExist(err) {
-		t.Fatalf("unrelated project namespace was modified: %v", err)
-	}
-}
-
-func TestWhiteboxPhase0Round12LegacyLifecyclePreservesExistingStateAndNamespaces(t *testing.T) {
-	root := round12GitProject(t)
-	packageRoot := round12RepoRoot(t)
-	resourceSentinel := filepath.Join(t.TempDir(), "resources", "sentinel")
-	registrySentinel := filepath.Join(t.TempDir(), "registry.json")
-	round12WriteFile(t, resourceSentinel, []byte("resource\n"), 0o600)
-	round12WriteFile(t, registrySentinel, []byte("registry\n"), 0o600)
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "round12-legacy", Flow: "formal", RequirementSource: "requirements.md", VCS: "git", Split: "no"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	statePath := RunStatePath(root, state.RunID)
-	beforeState := round12ReadFile(t, statePath)
-	if strings.Contains(string(beforeState), "stateSchemaVersion") || strings.Contains(string(beforeState), "workflowDefinitionVersion") || strings.Contains(string(beforeState), "definitionDigest") {
-		t.Fatalf("legacy state unexpectedly has future envelope fields: %s", beforeState)
-	}
-	if _, err := LoadRunState(root, state.RunID); err != nil {
-		t.Fatal(err)
-	}
-	resume, err := ResumeReport(root, packageRoot, state.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resume.ClassificationRequired || resume.NativeDrifted {
-		t.Fatalf("legacy resume reported an unexpected drift: %+v", resume)
-	}
-	diagnose, err := DiagnoseState(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if diagnose.Summary["status"] != "ACTIVE" || diagnose.Summary["runId"] != state.RunID {
-		t.Fatalf("legacy diagnose lost terminal fallback fields: %+v", diagnose)
-	}
-	if got := round12ReadFile(t, statePath); !bytes.Equal(got, beforeState) || !bytes.Equal(round12ReadFile(t, resourceSentinel), []byte("resource\n")) || !bytes.Equal(round12ReadFile(t, registrySentinel), []byte("registry\n")) {
-		t.Fatal("legacy show/resume/diagnose changed existing state or unrelated namespaces")
 	}
 }
 
@@ -1171,7 +1021,7 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 	for _, entry := range receipt.Entries {
 		entrySet[entry.Path] = true
 	}
-	for _, required := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "definitions/workflow.json", "references/requirements-precedence.md", "prompts/actions/qa-design.md", "gates/implementation-quality-gate.md", "internal/validate/workflow.go"} {
+	for _, required := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "definitions/workflow.json", "references/requirements-precedence.md", "prompts/actions/qa-design.md", "gates/implementation-quality-gate.md", "internal/engine/facade/facade.go"} {
 		if !entrySet[required] {
 			t.Fatalf("installed package inventory omits %s", required)
 		}
@@ -1209,28 +1059,16 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		}
 		stableDocFiles = append(stableDocFiles, matches...)
 	}
-	futureCommandToken := regexp.MustCompile(`(?i)(^|[^[:alnum:]_-])(drive|submit)([^[:alnum:]_-]|$)`)
-	// Keep the legacy stable-document leak check; Stage 3's candidate façade
-	// intentionally exposes these commands in its CLI help.
+	// Stage 4 publishes the current engine contract in the installed package.
 	for _, path := range stableDocFiles {
-		content := string(round12ReadFile(t, path))
-		if token := futureCommandToken.FindString(content); token != "" {
-			t.Fatalf("stable document %s leaks future command token %q", path, token)
+		if len(round12ReadFile(t, path)) == 0 {
+			t.Fatalf("empty installed documentation: %s", path)
 		}
 	}
-	docFiles := append([]string{}, stableDocFiles...)
-	referenceFiles, err := filepath.Glob(filepath.Join(root, "references", "*.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	docFiles = append(docFiles, filepath.Join(root, "references", "requirements-precedence.md"))
-	docFiles = append(docFiles, referenceFiles...)
-	for _, path := range docFiles {
-		content := strings.ToLower(string(round12ReadFile(t, path)))
-		for _, forbidden := range []string{"workflow drive", "workflow submit", "drive/submit", "shadow"} {
-			if strings.Contains(content, forbidden) {
-				t.Fatalf("stable document %s leaks future public surface %q", path, forbidden)
-			}
+	currentContract := string(round12ReadFile(t, filepath.Join(root, "references", "engine-regular.md")))
+	for _, token := range []string{"workflow drive", "workflow submit", "model.run", "qa.prepare", "qa.target", "qa.collect", "UNSUPPORTED_RUN_VERSION"} {
+		if !strings.Contains(currentContract, token) {
+			t.Fatalf("current installed contract omits %s", token)
 		}
 	}
 	var help strings.Builder
@@ -1247,33 +1085,6 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		{[]string{"workflow", "start", "--help"}, "workflow start"},
 		{[]string{"workflow", "show", "--help"}, "workflow show"},
 		{[]string{"workflow", "diagnose", "--help"}, "workflow diagnose"},
-		{[]string{"workflow", "resume", "--help"}, "workflow resume"},
-		{[]string{"workflow", "abort", "--help"}, "workflow abort"},
-		{[]string{"workflow", "reset", "--help"}, "workflow reset"},
-		{[]string{"workflow", "requirement", "--help"}, "workflow requirement"},
-		{[]string{"workflow", "route-candidates", "--help"}, "workflow route-candidates"},
-		{[]string{"workflow", "route", "--help"}, "workflow route"},
-		{[]string{"workflow", "route-add", "--help"}, "workflow route-add"},
-		{[]string{"workflow", "slicing", "--help"}, "workflow slicing"},
-		{[]string{"workflow", "settle-findings", "--help"}, "workflow settle-findings"},
-		{[]string{"workflow", "qa-worktree", "--help"}, "workflow qa-worktree"},
-		{[]string{"workflow", "prepare-gate", "--help"}, "workflow prepare-gate"},
-		{[]string{"workflow", "prepare-action", "--help"}, "workflow prepare-action"},
-		{[]string{"workflow", "claim-dispatch", "--help"}, "workflow claim-dispatch"},
-		{[]string{"workflow", "record-action", "--help"}, "workflow record-action"},
-		{[]string{"workflow", "record-gate", "--help"}, "workflow record-gate"},
-		{[]string{"workflow", "qa-design", "--help"}, "workflow qa-design"},
-		{[]string{"workflow", "qa-review", "--help"}, "workflow qa-review"},
-		{[]string{"workflow", "qa-execution", "--help"}, "workflow qa-execution"},
-		{[]string{"workflow", "qa-execution-scope", "--help"}, "workflow qa-execution-scope"},
-		{[]string{"workflow", "snapshot", "--help"}, "workflow snapshot"},
-		{[]string{"workflow", "cleanup", "--help"}, "workflow cleanup"},
-		{[]string{"workflow", "future", "--help"}, "workflow future"},
-		{[]string{"workflow", "future", "generate", "--help"}, "workflow future generate"},
-		{[]string{"workflow", "future", "view", "--help"}, "workflow future view"},
-		{[]string{"workflow", "carry", "--help"}, "workflow carry"},
-		{[]string{"workflow", "authorize-repair", "--help"}, "workflow authorize-repair"},
-		{[]string{"workflow", "seal", "--help"}, "workflow seal"},
 		{[]string{"registry", "admit", "--help"}, "registry admit"},
 		{[]string{"registry", "show", "--help"}, "registry show"},
 		{[]string{"registry", "--help"}, "subcommands:"},

@@ -133,21 +133,16 @@ DeepSeek Harness 的 Cordis 插件使用原有的拒绝退出码与通用 JSON �
 它从 stdin 接收 host 的 JSON 载荷，并返回与 host 兼容的 allow/block 决策。它是围
 绕 formal-gates 命令的护栏，既不是代码质量的证明，也不能替代显式的流程状态检查。
 
-进入正式开发后，hook 还承担 RQ-011 主代理/审查类代理写阻断：以
-`development-worker` 从 `PENDING` 进入 `PREPARED` 为开发开始边界；在此之前的产品审、
-技术审及文档修订阶段不启用写阻断。开发开始后，PreToolUse 对代码与 run 状态的直接写入
-（Edit/Write/MultiEdit、git commit、写文件 Bash）按调用者身份阻断——主线程（payload
-无 agent 身份）与审查类代理被阻断，formal-gates CLI 命令、只读命令、development-worker、
-qa-design 与主代理对已登记需求/设计文档的编辑放行；未进入开发的活动 run 与无活动 run
-均放行。写墙只在 `status=ACTIVE && development-worker.status!=PENDING` 的区间内生效；
-Seal / Abort 先持久化 `SEALED` / `ABORTED` 再收尾删除临时状态，因此即使收尾失败留下终态
-文件，也会立即解除写阻断，不会永久锁住仓库。角色权限按身份（`agent_type`）而非静态
-文件白名单判定；路径只用于限定活动仓库根的空间边界。代理类型定义见
-`agents/agent-types.md`。Bash 写入判定只看**真实写目标**：命令文本只是
-提到 `.gates` 但只读（grep/ls/cat/find/python3 读、只读 git 查询如 `git status`
-`git log -- <path>`）一律放行；真实写（`git add`/`git commit`、`> .gates/...`、
-`tee .gates/...`）仍阻断，主线程与审查类代理一致。实机阻断仍须在同一 host 上经 live
-canary 验证。
+当前写阻断读取 `.gates/engine/<run-id>/state.json` 的 engine envelope；只接纳当前
+schema，不读取旧 workflow state。至少一个 `development-worker` execution 已认领且
+`regular.terminal` 为空时，对仓库内代码与状态的直接写入按调用者身份阻断。此前的
+产品审、技术审和需求确认阶段不启用该写阻断；终态写入后解除，即使后续 cleanup 尚未完成。
+
+主线程与审查类代理的直接写入被阻断；formal-gates CLI、只读命令、已绑定开发/QA
+设计角色，以及对当前 `regular.requirement.path` 的文档编辑按现有规则处理。原生 identity
+从当前 `regularExecutions` 解析，不再依赖 `claim-dispatch` 或旧派发 sidecar。角色定义见
+[代理类型](../agents/agent-types.md)。真实写入包括 `git add`、`git commit` 和文件重定向；
+只读命令中提到 `.gates` 不构成写入。实机阻断仍须由同一 host 的 live canary 证明。
 
 写墙的空间范围只覆盖承载该活动 run 的仓库根，不是进程级或全局文件锁。即使窗口 cwd
 仍位于活动仓库，Edit/Write/MultiEdit 的目标明确位于仓库外时也直接放行；简单 Bash 写入
@@ -173,36 +168,26 @@ capture 命令从正常的 host 载荷推导项目根（必要时使用 host 的
 因此全局 hook 不依赖其配置目录作为工作目录。`--root` 仍然可用，作为显式的命令行
 覆盖。
 
-生命周期观测只在该项目中至少有一个正式 run 处于活动状态时保留。每个 run 在
-`.gates/tmp/<run-id>/lifecycle` 下拥有自己的待定与已认领观测，因此正常的 Seal 或
-Abort 清理会把它们与该 run 的其余部分一并退役。在没有活动正式 run 时触发的 hook
-不会创建生命周期日志。
+`lifecycle capture` 和 `lifecycle verify` 保留为独立宿主维护/观测命令，参数见各自
+`--help`。它们不签发、认领或推进当前 regular action；没有已有维护 binding 时，verify
+返回 `REJECTED` 与 `dispatch has no lifecycle binding`。没有活动观测上下文时 capture
+不创建日志。维护观测的旧 `.gates/tmp/<run-id>/lifecycle` 目录不作为 engine 状态、动作
+授权或 regular 完成证据，不能通过手工创建目录来启动当前流程。
 
-在 `workflow claim-dispatch` 绑定 host 身份之后，可以在不改变流程状态的情况下检
-视推导出的结果。固定 stable launcher 同时服务多个 host 时，认领必须显式给出
-`--provider <claude-code|codex|cursor|deepseek-harness|zcode>`；同一项目路径下存在冲突的
-active registry host 时不会猜测第一个记录：
+当前 Codex/Git regular 使用原生 app-server bridge。执行方式为：
 
 ```bash
-$HOME/.local/bin/formal-gates workflow claim-dispatch --root <repo> --package-root <package> \
-  --run-id <id> --dispatch <dispatch-id> --reviewer <identity> --provider codex
+formal-gates workflow drive --root <repo> --run-id <id> --action-id <issued-action-id>
+# 已持久化原生身份的受支持中断恢复：
+formal-gates workflow drive --root <repo> --run-id <id> --action-id <issued-action-id> --resume
 ```
 
-省略 `--provider` 只适用于没有歧义的正常开发构建/已登记 host；共享 launcher 的歧义
-会硬阻断，避免把生命周期证据绑定到错误 host。
-
-```bash
-$HOME/.local/bin/formal-gates lifecycle verify --root <repo> --run-id <id> \
-  --dispatch <dispatch-id>
-```
-
-全局安装的 Claude Code、Cursor、Codex、DeepSeek Harness 和 ZCode 都要求其适配器的生命周期事件配对；
-项目级 DSH/ZCode 因宿主不读取项目 hook 配置而保持宽松默认 provider，验证结果为 `UNAVAILABLE`。Codex
-派发独立代理走原生 `spawn_agent`，用返回的 `agent_id` 认领；DeepSeek Harness 的
-Cordis 插件把 `subagent/start`/`subagent/end` 转成同一身份对，claim → lifecycle 配对
-验证即可通过。ZCode 以 `tool_use_id`（或同等调用 ID）关联 Agent/Task 工具调用；这
-证明的是工具调用闭环，子代理“完成”语义仍需同版本实机 canary。未安装二进制（go test、canary portable、本地开发构建）解析为宽松的
-默认 provider，生命周期验证为 `UNAVAILABLE`，此时既有的派发与身份检查仍是权威依据。
+`action-id` 来自 `workflow show` 的 `executions`。执行前由 engine 认领，bridge 从原生
+thread/turn 及本次 process journal 收集启动、完成和 source 事实；调用者不自行填
+`agent_id` 代替原生观察。任务内模型与声明 QA 操作使用同一 action/TaskKey/Attempt
+及动态工具。完整 argv、typed 字段、动态绑定和恢复证据见
+[regular 使用参考](engine-regular.md#任务内部-model-与声明-qa-操作)。
+其他已安装宿主的 hook 维护能力不意味着该宿主已支持阶段 4 regular。
 
 一个设置文件或直接的 `hook decide` 单元测试，只能证明本地决策逻辑。只有当实际目
 标 host 发送了实机 `PreToolUse` 载荷、并且 hook 阻塞了测试命令之后，才可以声明自
@@ -228,6 +213,40 @@ installed: <test-project>/<host-path>/formal-gates
 
 不要一边测试过期的全局包，一边把结果报告成候选版本的结果。包、提示词目录、安装
 和实机 hook 的所有声明，都必须指明实际使用的那份副本。
+
+完整源码包的版本文件清单由该包自带 binary 校验。stable owner 固定执行
+`<source>/bin/formal-gates package validate --root <source>`；这是只读检查，source binary
+不执行安装。复制、installed-path smoke、runtime/pointer/registry 提交和失败恢复仍全部
+由当前 stable owner 的既有事务持有。这样新版恢复旧包时不会要求旧包包含新版源码文件。
+
+`97eef33d866301a2985f510dd486a21196eea3f9` 的旧安装器仍用自身文件清单校验其他版本，
+不能直接安装删除了旧 workflow 文件的阶段 4 包。先从精确旧源码构建维护版本，应用
+[通用安装器补丁](phase4-installer-maintenance.patch)，再由原 stable launcher 安装维护包：
+
+```bash
+git -C <old-source-copy> checkout --detach 97eef33d866301a2985f510dd486a21196eea3f9
+git -C <old-source-copy> apply --unidiff-zero <stage4-source>/references/phase4-installer-maintenance.patch
+git -C <old-source-copy> add internal/validate/install.go
+git -C <old-source-copy> commit -m "Validate install sources with their own package contract"
+cd <old-source-copy>
+go build -o bin/formal-gates ./cmd/formal-gates
+bin/formal-gates package validate --root .
+```
+
+在独立 HOME、project、release root 中按下列顺序演练；`<stable-launcher>` 必须是该隔离
+目标已安装的固定入口。每一步保留精确源码、package/installed identity、registry generation
+和 `<registry>.install.json`，下一步不得覆盖上一步的留存副本。
+
+```bash
+<stable-launcher> install --source <old-source-copy> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
+<stable-launcher> install --source <committed-stage4-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
+<stable-launcher> install --source <original-stable-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
+```
+
+最后一步是提交后恢复原稳定包，仍是一笔新安装事务，generation 不倒退；失败提交则
+按下述原 journal 自动恢复。维护补丁与阶段 4 的 `internal/validate/install.go` 修改相同，
+不增加命令或 workflow 兼容路径。真实全局的维护升级只能在本阶段固定 driver 完成 Seal、
+主线集成及必要重验后执行；Seal 前保持该 driver 及运行绑定不变。
 
 首次使用固定 stable driver 时，先从冻结的已安装 artifact 调用受支持的
 `install --bootstrap` 维护入口。bootstrap 只登记 target、host、project/state/resource

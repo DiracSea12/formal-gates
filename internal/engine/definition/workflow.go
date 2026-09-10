@@ -80,11 +80,14 @@ func Registry() *compiler.Registry {
 	for _, id := range workflowAskKinds {
 		must(id, reg.RegisterAskKind(id))
 	}
+	registerRegular(reg)
 	return reg
 }
 
 // Workflow 经 authoring constructor 构造定义表。每次调用产生全新实例；
 // 表内容是编译期常量，constructor 失败只可能是本表自身缺陷，直接 panic。
+// Workflow retains the phase-1 protocol fixture used by pure kernel and shadow
+// regression tests. Production facade and artifact generation use RegularWorkflow.
 func Workflow() *compiler.Definition {
 	parse, err := authoring.NewLocalStep(header("entry.parse", "entry"), ioWith(),
 		authoring.LocalSpec{Handler: "engine.entry.parse"})

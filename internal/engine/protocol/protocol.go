@@ -33,6 +33,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/cost"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/decision"
@@ -172,6 +173,7 @@ type PendingAsk struct {
 
 // RecordedDecision 是用户经两阶段 Ask 提交的决定（本批只落账不执行）。
 type RecordedDecision struct {
+	Reason    string           `json:"reason,omitempty"`
 	RequestID string           `json:"requestId"`
 	Control   ControlKind      `json:"control"`
 	Step      authoring.StepID `json:"step,omitempty"`
@@ -366,6 +368,9 @@ type LifecycleVerification struct {
 // persistent representation stays on the domain model without a parallel
 // wire projection.
 type State struct {
+	Regular           *RegularState               `json:"regular,omitempty"`
+	Cost              *cost.RunCost               `json:"cost,omitempty"`
+	RegularExecutions map[string]RegularExecution `json:"regularExecutions,omitempty"`
 	decision.State
 	// Run metadata is owned by the engine façade but persisted with the same
 	// authoritative state document so a read never needs a second workflow
@@ -491,6 +496,9 @@ func (s *State) UnmarshalJSON(data []byte) error {
 }
 
 func (s *State) normalizeCollections() {
+	if s.RegularExecutions == nil {
+		s.RegularExecutions = map[string]RegularExecution{}
+	}
 	if s.Completed == nil {
 		s.Completed = []authoring.StepID{}
 	}

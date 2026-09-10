@@ -51,26 +51,6 @@ func TestHookOwnerIdentity(t *testing.T) {
 	}
 }
 
-func TestCaptureAndConsumeStartOwner(t *testing.T) {
-	root := t.TempDir()
-	payload := map[string]any{
-		"tool_name": "Bash",
-		"tool_input": map[string]any{
-			"command": "formal-gates workflow start --root " + filepath.ToSlash(root) + " --split no",
-		},
-		"transcript_path": "/t/owner.jsonl",
-		"session_id":      "owner-session",
-	}
-	captureStartOwner(payload, "codex")
-	tr, se, provider := consumeStartOwner(root)
-	if tr != "/t/owner.jsonl" || se != "owner-session" || provider != "codex" {
-		t.Fatalf("capture/consume mismatch: got (%q,%q,%q)", tr, se, provider)
-	}
-	if _, err := os.Stat(ownerSidecarPath(root)); !os.IsNotExist(err) {
-		t.Fatalf("sidecar not removed after consume")
-	}
-}
-
 func TestCaptureStartOwnerSkipsNonStart(t *testing.T) {
 	root := t.TempDir()
 	// 非 workflow start 命令不应写 sidecar。
@@ -86,21 +66,22 @@ func TestCaptureStartOwnerSkipsNonStart(t *testing.T) {
 }
 
 // writeOwnerRunState 写一个进入开发阶段（dev-worker PREPARED）且带 owner 的活动 run 状态。
-func writeOwnerRunState(t *testing.T, root, ownerTranscript, ownerSession string) {
-	t.Helper()
-	runDir := filepath.Join(root, ".gates", "tmp", "owner-test")
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
+func writeOwnerRunState(t *testing.T, root, transcript, session string) {
+	writeActiveRunState(t, root)
+	path := filepath.Join(root, ".gates", "engine", "wb-test", "state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	state := map[string]any{
-		"status":          "ACTIVE",
-		"runId":           "owner-test",
-		"actions":         map[string]any{"development-worker": map[string]any{"status": "PREPARED"}},
-		"ownerTranscript": ownerTranscript,
-		"ownerSession":    ownerSession,
+	var raw map[string]any
+	if err = json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
 	}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(runDir, "state.json"), append(data, '\n'), 0o600); err != nil {
+	regular := raw["content"].(map[string]any)["regular"].(map[string]any)
+	regular["ownerTranscript"] = transcript
+	regular["ownerSession"] = session
+	data, _ = json.Marshal(raw)
+	if err = os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

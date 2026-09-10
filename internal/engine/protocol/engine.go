@@ -96,6 +96,15 @@ func (e *Engine) load() (uint64, *State, error) {
 	if err := json.Unmarshal(snap.Content, &state); err != nil {
 		return 0, nil, fmt.Errorf("protocol: decode engine state: %w", err)
 	}
+	if state.Regular != nil && state.Regular.Mode == "regular" && state.Regular.Requirement.Confirmed {
+		basis, err := e.regularBasis(&state)
+		if err != nil {
+			return 0, nil, fmt.Errorf("BLOCKED_BUG: invalid authoritative basis: %w", err)
+		}
+		if state.Regular.Guard.Basis.BudgetBasisDigest != "" && (state.Regular.Guard.Basis.BudgetBasisDigest != basis.BudgetBasisDigest || state.Regular.Guard.UsedAttempts != len(state.RegularExecutions)) {
+			return 0, nil, fmt.Errorf("BLOCKED_BUG: stored guard does not match authoritative TaskKeys and attempts")
+		}
+	}
 	return snap.Revision, &state, nil
 }
 
@@ -145,7 +154,7 @@ func (e *Engine) RecordIntakeReceipt(receipt IntakeReceipt, expectedFingerprint 
 		return 0, err
 	}
 	if state == nil {
-		return 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+		return 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist; if this run was cleaned after completion, start a new run with workflow start and a new run ID"}
 	}
 	if state.IntakeReceipt != nil {
 		if !sameIntakeReceipt(*state.IntakeReceipt, receipt) {
@@ -257,6 +266,9 @@ func (e *Engine) Plan() (*decision.Plan, uint64, error) {
 	if state == nil {
 		return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
 	}
+	if state.Regular != nil {
+		e.refreshRegular(state)
+	}
 	plan, err := decision.Decide(&state.State, decision.Observation{}, e.cfg.Definition)
 	if err != nil {
 		return nil, revision, err
@@ -279,6 +291,9 @@ func (e *Engine) Drive(expectedFingerprint string) (*decision.Plan, uint64, erro
 		}
 		if state == nil {
 			return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+		}
+		if state.Regular != nil {
+			return e.driveRegular(state, revision, expectedFingerprint)
 		}
 		plan, err := decision.Decide(&state.State, decision.Observation{}, e.cfg.Definition)
 		if err != nil {
@@ -336,6 +351,9 @@ func (e *Engine) CompleteAll(expectedFingerprint string) (Snapshot, error) {
 	}
 	if state == nil {
 		return Snapshot{}, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if state.Regular != nil && state.Regular.Mode != "lightweight" {
+		return Snapshot{}, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: complete-all is only available to lightweight")
 	}
 	// Terminal completion is a read-only replay. Repeated drive calls after
 	// Complete must not advance revision or rewrite the state document.
@@ -396,6 +414,22 @@ func (e *Engine) IssueFromPlan(plan *decision.Plan, adm decision.Admission, expe
 	}
 	if state == nil {
 		return nil, 0, &RejectedError{Code: CodeNotInitialized, Detail: "engine state does not exist"}
+	}
+	if state.Regular != nil {
+		e.refreshRegular(state)
+		if _, err := e.validatePlan(state, plan); err != nil {
+			return nil, 0, err
+		}
+		issued, err := e.issueRegular(state, plan, revision+1, expectedFingerprint)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(issued) == 0 {
+			return issued, revision, nil
+		}
+		e.refreshRegular(state)
+		n, err := e.commit(state, revision, expectedFingerprint)
+		return issued, n, err
 	}
 	identity, err := e.validatePlan(state, plan)
 	if err != nil {
@@ -574,6 +608,23 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 			}
 		}
 		return record.Acceptance, nil
+	}
+	if state.Regular != nil {
+		// Observe native sources before the pure admission/usage/guard/refill work.
+		// Save re-reads these finite files under the existing transaction lock.
+		commit, err := e.regularCommitter(state, ev, expectedFingerprint)
+		if err != nil {
+			return Acceptance{}, err
+		}
+		acceptance, err := e.admitRegularEvent(ev, state, revision)
+		if err != nil {
+			return Acceptance{}, err
+		}
+		state.Events[string(ev.ID)] = EventRecord{Digest: digest, Acceptance: acceptance}
+		if _, err = commit(state, revision); err != nil {
+			return Acceptance{}, err
+		}
+		return acceptance, nil
 	}
 	nextRevision := revision + 1
 	acceptance, mutated, wrote, reject := e.admit(ev, digest, state, revision, nextRevision, expectedFingerprint)

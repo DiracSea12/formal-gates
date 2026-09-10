@@ -233,8 +233,13 @@ func Install(options InstallOptions) (InstallReport, error) {
 	// for files that are not part of the copied runtime subset.
 	completePackage := isFile(filepath.Join(sourceAbs, "internal", "validate", "runner.go"))
 	if completePackage {
-		if packageResult := Package(sourceAbs); !packageResult.OK() {
-			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %s", resultSummary(packageResult))
+		// The package owns its version-specific file contract. The installed
+		// owner still owns the transaction, but its source-file list cannot
+		// validate a different release during either upgrade or restoration.
+		command := exec.Command(filepath.Join(sourceAbs, "bin", nativeBinaryName()), "package", "validate", "--root", sourceAbs)
+		command.Dir = sourceAbs
+		if output, validationErr := command.CombinedOutput(); validationErr != nil {
+			return InstallReport{}, fmt.Errorf("formal-gates source failed complete package validation: %w: %s", validationErr, strings.TrimSpace(string(output)))
 		}
 	}
 	manifestData, readErr := os.ReadFile(filepath.Join(sourceAbs, "formal-gates.manifest.json"))

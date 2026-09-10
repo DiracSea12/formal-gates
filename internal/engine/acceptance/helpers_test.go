@@ -12,6 +12,7 @@ import (
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/compiler"
+	"formal-gates/internal/engine/definition"
 	"formal-gates/internal/engine/encoder"
 )
 
@@ -247,4 +248,11 @@ func dropBinding(d *compiler.Definition, i int, from string) bool {
 	s.IO.Inputs = out
 	d.Steps[i] = s
 	return removed
+}
+
+// The phase-1 mutation corpus retains its nine-step protocol fixture. Production
+// canonical identity is verified independently by definition.Generate tests.
+func protocolFixtureDigest(t *testing.T) string {
+	_, _, digest := compileWorkflow(t, definition.Workflow(), definition.Registry())
+	return digest
 }

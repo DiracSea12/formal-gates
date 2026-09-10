@@ -24,8 +24,8 @@ import (
 // DefinitionDigest 逐字节不变。
 func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T) {
 	_, canonicalBytes, canonicalDigest := compileWorkflow(t, definition.Workflow(), workflowRegistry(t))
-	if canonicalDigest != definition.WorkflowDefinitionDigest {
-		t.Fatalf("canonical digest = %s, want checked-in identity %s", canonicalDigest, definition.WorkflowDefinitionDigest)
+	if canonicalDigest != protocolFixtureDigest(t) {
+		t.Fatalf("canonical digest = %s, want checked-in identity %s", canonicalDigest, protocolFixtureDigest(t))
 	}
 
 	// 变体一：同一批 HandlerID/封闭 ID 在另一个独立 registry 实例中再注册一次
@@ -79,8 +79,8 @@ func TestAcceptanceDefinitionDigestSeparatedFromImplementationSide(t *testing.T)
 func TestAcceptanceDefinitionDigestSensitiveToDefinitionMutations(t *testing.T) {
 	reg := augmentedRegistry(t)
 	_, canonicalBytes, canonicalDigest := compileWorkflow(t, definition.Workflow(), reg)
-	if canonicalDigest != definition.WorkflowDefinitionDigest {
-		t.Fatalf("canonical digest = %s, want checked-in identity %s (extra unused registrations must not shift bytes)", canonicalDigest, definition.WorkflowDefinitionDigest)
+	if canonicalDigest != protocolFixtureDigest(t) {
+		t.Fatalf("canonical digest = %s, want checked-in identity %s (extra unused registrations must not shift bytes)", canonicalDigest, protocolFixtureDigest(t))
 	}
 
 	// renameJoinAnchor 是 join 语义变异：fan-out 的 join 锚点身份改变
