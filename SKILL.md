@@ -5,12 +5,17 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 
 # Formal Gates
 
-以 VCS 为依托的开发质量管理工作流：CLI 只保存一个临时状态文件，host 负责启动各个独立
-代理，所有快照和 diff 都由仓库原生 VCS 持有。
+本版本以 engine 的已签发动作、typed Ask 和单一状态为流程权威。首个完整 regular
+支持 Codex、Git、no-split；安装维护仍支持已公布宿主。完整字段和可编码示例唯一持有在
+[regular 公开使用合同](references/engine-regular.md)，步骤说明见
+[正式流程](references/formal-flow.md)。旧 workflow 命令、别名、writer 和状态迁移已删除；
+旧 run 只用原始 diagnose，不由本版本续写。历史记录与 Seal 不改写。
 
 ## 范围边界
 
-正式 PASS 的唯一来源是独立代理通过 CLI 返回的已校验结论；若独立代理不可用，把该审查报告为受阻。
+正式 PASS 的唯一来源是独立代理经 CLI 校验接纳的结论；独立代理不可用则报告受阻。
+项目只保证文档化正常使用和常见操作失误，审查边界唯一见
+[prompts/reviewer-base.md](prompts/reviewer-base.md)。不发明需求、任务或公共入口。
 
 ## 开发受理流程
 
@@ -18,346 +23,86 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 主代理收到创建、编辑、移动或删除项目内容的请求时，默认提醒一次：若需走 formal-gates 流程，可直接提出。当需求过大、过复杂（规模、耦合、风险或验证复杂度超过普通直接处理的能力）时，在需求澄清与方案确认完毕、准备开做之际再额外强调一次：检测到复杂需求，建议走 formal-gates 流程。每次新对话开始前，主代理还必须检查工作区 `.gates/tmp/*/state.json`；若发现无法对应当前用户会话的残留状态文件，必须把文件路径和 run 状态与上述提醒一起告知用户，并提醒残留状态可能影响写入。由用户决定将对应任务推进完成、通过支持的 cleanup/abort 结束，或删除对应状态文件；不得把残留状态自动解释为用户已启动 formal-gates，也不得因此擅自进入正式流程。主代理不得自行触发正式流程。非修改性的提问、解释、诊断和 review 不触发。用户明确要求走正式流程（或明确要求触发 formal-gates）时，直接进入完整受理：先澄清需求与重大技术选择；提出方案不等于确认；即使无待澄清问题也要明确说明无待澄清问题；随后把完整需求与方案直接写入唯一正式需求文件，启动受理 run 将该文件绑定，预检后展示文件全文与精确 revision，再单独请求用户确认。确认前不得选择路线或派发后续子代理。确认后在已授权范围内继续执行，不逐步重复请求许可；出现影响范围、公开行为、验收或主要架构的未决事项时才补充澄清，流程规定的确认节点仍须完成。如未明确模式，再选择 lightweight 或 regular，full/custom 在拆分决定之后确认。
 <formal-gates:host-instructions:end>
 
-用户明确要求 formal-gates 后，在写入正式 run 文件或派发正式流程子代理之前，主代理必须：
+主代理先检视工作区，逐项澄清目标、场景、边界、默认值、失败路径、验收与主要技术选择。
+能够由事实和既有决定解决的自行处理；有实质缺口才询问，每次一个决定。无剩余问题时明确
+说明“无待澄清问题”。提出方案不替代用户确认。
 
-1. 检视工作区，确定自己能直接判定的事实。
-2. 需求澄清阶段：先从仓库与已确认记录解决事实问题，沿用仍适用的用户决定。逐维核对
-   目标、场景、范围、默认值、失败路径、验收、约束与取舍；只有未决事项会实质改变范围、
-   公开行为、验收标准或主要架构时才询问用户。一次只问一个有实质影响的决策，讲清背景
-   与选项；范围内的次要实现细节自行决定，不为假设性场景新增澄清项。记录实际问答与
-   “考虑过但放过”项的依据，不把仓库事实或自主实现选择写成用户确认。无剩余实质缺口
-   时结束澄清；“提出方案”、推荐或默认选择不替代下一步的正式需求确认。
-3. 在需求澄清完成后，把完整整合后的需求与技术方案直接写入唯一正式需求文件，启动受
-   理 run 将该文件绑定，运行结构预检并计算精确 revision；预检失败须先修正。随后呈现
-   该文件全文与精确 revision，单独发起确认提问并等待用户明确确认。用户要求修订时更新
-   同一文件、重新预检并重新呈现；不得以聊天草稿、摘要、条目清单或未绑定草稿文件替代。
-   即使第 2 步没有待澄清问题，也必须显式说明“无待澄清问题”，再发起这次确认；不得省
-   略、隐含或把确认混在路线选择中。确认前不选择路线、不派发后续子代理。
-4. 用户明确确认所呈现的同一需求 revision 后，记录需求确认并继续正式流程。若模式尚未明确，选择 `lightweight` 或
-   `regular`；正式路线（`full`/`custom`）本阶段不定，拆分决定之后确认。`lightweight` 不经
-   拆分决定与路线选择：它是正式流程内的轻量路线（`workflow start --route lightweight` →
-   需求登记 → Seal，不验证、只留记录）。
-
-开发中途追加新需求时，暂停受影响的写入，先澄清对齐该需求，重新给出完整方案摘要并取
-得明确确认；已选路线保持不变，除非用户明确要求重选。
-
-最终确认前已把完整需求与技术方案持久化到本 run 绑定的唯一正式需求文件。需求细节澄清并入产品审（Part 1），技术方案选择与对齐并入 start-readiness
-（Part 2）；正式流程第 2 步按 `requirements-clarification` 动作正式登记。
+把完整整合后的需求与技术方案直接写入唯一正式需求文件，以 workflow start 绑定受理 run，
+由 drive 结构预检。向用户展示该文件全文与精确 revision，单独发起确认提问并等待用户明确确认。
+修订时更新同一文件并重新预检、展示和确认。确认前不选择模式、路线或派发独立任务。
+初次确认后以 REQUEST/DECIDE 选择 regular 或 lightweight；后者只保留 unverified 记录。
+regular 路线 full/custom 在技术审和 no-split 计划确认后选择，不能降为 lightweight。
 
 ## 正式流程
 
-九步顺序只由 `SKILL.md` 定义。用户明确确认完整需求与方案后进入正式流程；路线（`full`/`custom`）在拆
-分决定之后确认——单一 run 确认一次、拆后逐切片各确认一次。每步的步骤级执行机制统一
-持有在 `references/formal-flow.md` 对应段，由各步按需加载。首次走完整流程前，先
-读 `references/example-run.md` 完整走查一遍。
-
-1. **启动。** 选一个项目的外部 VCS，冻结原生基线标识，运行 `workflow start`，登记主
-   需求和对应的需求/方案文档。启动必须显式声明 `--split yes|no`（需求 4）：`yes` 时本
-   run 必须是保留总任务实例（`--retained-overall`）或切片实例（`--master <主实例 id>`），
-   `no` 时默认禁止后续记录拆分——但拆分决定记录前可经用户确认修订声明（`workflow
-   slicing --user-confirm`，见第 3 步），预测错了无需重启；未声明拒绝启动。轻量路线用
-   `--route lightweight` 声明（免去
-   拆分声明，三步直达，见「轻量路线」节）。不支持无 VCS 的正式开发流程。执行本步前必读
-   `references/formal-flow.md`「启动与 run 控制」。
-2. **需求澄清登记。** 只登记受理阶段已对齐的需求并记录 PASS（`requirement --confirmed`
-   绑定）；澄清问答、呈现、确认、写需求文件都在受理阶段完成。需求修订按三分支决策：
-   meaning-preserved → 保留既有 PASS、快照重绑新修订；meaning changed → 作废全部结果、
-   回需求澄清重新登记；需求修订或 start-readiness FAIL 时，黑盒 QA 用例增量修订（只增删
-   改确实受影响的用例、未受影响保持 PASS）。三分支决策与 CLI 强制机制全文见
-   `references/formal-flow.md`「需求、拆分决定与路线」；执行本步前必读该节。
-3. **拆分决定与绑定路线。** 在 Part 2 `start-readiness` 技术审中一并完成粒度判断，
-   不另派独立的粒度审查代理；技术审必须输出 `granularity_review`，说明本 run 是单一
-   Batch 还是多个 Batch，并给出 `Batch → Subtask` 映射、依赖/接口/状态边界、风险、
-   DoD/测试、回滚/恢复、交接与上下文成本，以及不拆或改拆的理由和改拆后果说明（若改拆，
-   黑盒 QA 设计按新拆分拓扑增量展开、已有适用用例复用）。`start-readiness`
-   PASS 后记录拆分决定（`workflow slicing`），然后确认路线（`workflow route`；主代理给
-   统一默认推荐、用户拍板）。拆分建议对所有正式 run 必须呈现并留痕；仅高置信要拆时需
-   用户确认拆分方案。拆分决定与启动声明冲突时（`--split no` 要拆、保留实例要不拆），
-   带 `--user-confirm --note <修订理由>` 的 slicing 记录即用户确认的声明修订：no→split
-   自升保留总任务实例（不重启、不重过整体审），split→no 降级解除保留身份（解开死端）；
-   切片实例（`--master`）不可脱钩；修订留痕于 run 状态。
-
-   **大块（Batch）判据：** 必须围绕一个连贯的产品/能力或风险闭环，并具有独立、客观
-   可验收的 DoD/测试、稳定的接口/责任/状态边界，以及可独立回滚或明确恢复协议；依赖
-   屏障和上下文/交接成本可被显式管理。**小块（Subtask）判据：** 只是同一 Batch 的
-   连续实现步骤，共享未冻结的接口或中间状态，不能独立验收/回滚，或交接成本高于切换
-   收益。编号、commit 数、文件数、行数、阶段/层/角色/时间段本身不得作为大块依据；不
-   满足大块条件就留在同一 Batch。大而连贯的单一 run 是正常做法。分片场景下整体级产品审/技术审足够，
-   切片继承整体审查结果、不重跑。执行本步前必读
-   `references/formal-flow.md`「需求、拆分决定与路线」；完整拆分流程见
-   `references/sliced-runs.md`。
-
-   批次计划使用可直接编辑的 JSON，在开发前经
-   `workflow slicing --batch-plan <plan.json> --user-confirm` 绑定；允许单批，
-   不为批次另建 run。格式、结构校验、派发绑定与续跑规则见
-   `references/development-plan.md`。每个批次完成后记录实际 DoD、验证和交接，
-   全部开发完成后进入既有 QA/门审流程。
-4. **正式开发之前（两段式）。** 先派发 Part 1 产品审（`product-review`），用独立零上
-   下文审查者审已实例化并确认的需求文档：需求本身及其细节是否合理。复审规则（决策级铁
-   律：P0/P1/P2/P3 分级；仅含 P2/P3 可记录 PASS、含 P0/P1 记录 FAIL；用户逐项处置：确认
-   P0/P1→修订后需重审、确认 P2/P3→落实修订但无需重审、驳回→作废；主代理无破例权）由
-   CLI 强制、完整机制唯一持有在
-   `references/formal-flow.md`「开发之前」；执行本步前必读该节（含双速调度细节）。Part
-   1 全部通过后进入 Part 2。用户已拍板的发现项不再重提。产品审不产生终态 FAIL，需求是
-   否成立由用户决定。请求用户处置 finding 前，主代理必须在同一条消息中逐项用人话讲清
-   问题是什么、正常路径会发生什么错误、实际后果、建议怎么处理，并同时给出 finding ID、
-   严重等级和逐条定级理由；只报 ID/等级、只说“存在 P0/P1”或直接询问是否确认均不构成
-   有效展示，不得据此调用 `settle-findings`。漏掉任一部分时，先前用户回复不得作为处置
-   授权，必须完整重述问题后重新取得决定。
-5. **开发。** 运行 `development-worker` 准备命令，记录开发开始并锁定路线。黑盒 QA 与
-   开发并行：开发开始不再要求黑盒 qa-review PASS，黑盒 qa-design/qa-review/返修在独立
-   QA 隔离工作区（恒等于基线、不含本次开发代码）中与开发并发推进；工作区创建/登记/校
-   验/清空/重建机制见 `references/formal-flow.md`「开发之前」。黑盒 QA 用例文件在隔离
-   期间只存在于隔离工作区的 `.gates/cases/blackbox.md`（run-state 的派生 mirror，主干不
-   可见），seal 时再合回主干（见第 9 步）。中断后可继续同一个
-   PREPARED 任务，只重新组装提示词，开始边界不变。开发子代理与审查者完全隔离，任务内
-   容见『独立派发』；子代理只做已确认范围内的工作——新增或
-   跟踪每条交付路径时先加入
-   VCS，返回前核查基线到当前的完整 diff。执行本步前必读 `references/formal-flow.md`
-   「开发与快照」。
-6. **固定当前快照。** 实现完成后用原生 VCS 创建不可变标识，运行 `workflow snapshot`
-   记录它；后续审查只能用这个快照，不能用工作树的当前状态。快照门机制（**开发完成 且
-   黑盒 qa-review PASS 两边都完成**、`--user-requested` 手动放行、开发/修复派发认领放
-   宽）统一持有在 `references/formal-flow.md`「开发与快照」；执行本步前必读该节。
-7. **开发后审查。** 先形成 review-ready 快照：无白盒 QA 时为开发快照加全部已选 mode 的
-   `FROZEN` case-set；有白盒 QA 时，先独立判断覆盖再复用已有测试；只有测试变动才提交并推进快照。
-   全部 case-set `FROZEN` 后，在最后必需验证前运行 `prepare-candidate --squash-message`
-   整理 Git 多条提交并固定最终候选。随后只用一次 `prepare-review-wave` 冻结 expected-set/digest，并一次准备全部
-   eligible QA execution 与门并行派发。每个门只看基线到该最终快照的完整 diff，不接收 QA
-   用例正文或执行证据。wave 的所有目标终结、错误被明确处置且 findings 经主代理逐条核实并
-   `NEW`/`SAME_AS`/`DISMISSED` 裁决、归并为 canonical problems 前，不得创建返修。
-   `RUNTIME_ERROR` 和无效结果按同一 TaskKey 有限重试；具体命令与状态机唯一持有在
-   `references/formal-flow.md`「开发后审查」。
-8. **修复。** 同一 review-wave 的 QA FAIL、有效 P0/P1 和门审 P2 只进入一份统一返修计划；
-   同一快照不得创建第二份逻辑返修。门审 P2 必须修复但不复审、不增加审查轮次；纯门审 P2
-   修复要求完整构建、全量项目测试和受影响用例逐项自跑，随后用结构化完成/carry 凭据把原
-   gate PASS 带到修复快照。门审 P3 不触发返修，只在 Seal 前一次性展示届时仍存在的项。QA Review 的 P1 阻塞
-   且修改后重审；其可选 P2/P3 按稳定 suggestion ID 登记采纳/延期/不采纳及理由后可冻结；
-   采纳改变共同路径、可执行性或验收含义时重审受影响部分。普通
-   代码返修不解冻 QA，用固定 `AFFECTED` 子集执行；启用 requirement guarantee 时最终候选
-   Seal 前再完成 `FULL`，非保证路线沿用自身规则。轮次上限用尽后的额外返修先执行只读
-   `repair-preview`，实际 `authorize-repair` 必须绑定预览 digest 与 state revision。完整规则
-   和命令唯一持有在 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
-9. **Seal。** 汇总前后各确认一次当前 VCS 标识。封板前核对已有门审 P3 与范围外 P3
-   在最终快照是否仍存在，只把仍存在且未处置的项一次性提醒用户；已消失的项不再提醒。
-   该核对不新增审查或返修，不阻塞、不逐条问询。QA Review P2/P3 在 FROZEN 前已全部按理由处置，
-   不能作为 Seal advisory 留到此处。Git 多条提交在最终验证前用 `workflow prepare-candidate`
-   整理；单条/空范围不操作，SVN/P4 不压缩。Seal 只检查同一候选身份、固化证据与物化产物，
-   不再 squash 或生成新候选；后续候选变化仍按既有 AFFECTED/最终 FULL 规则处理。黑盒已批准用例在 seal 时**落盘合并回主干**：`qa-design` 期间只镜像在隔离工作区
-   （`.gates/cases/blackbox.md`），封板时写出到主干
-   `.gates/results/<run-id>.blackbox-cases.md`（git/svn/p4 统一）作为交付物；分片实例不
-   落盘、成本投影并入主干最终封板；物化成功后先持久化 `SEALED`，摘要或清理中断从该
-   终态继续。显式放弃保证的 retained master 允许 slice guarantee sidecar 缺失，但仍读取
-   并保留已经存在的有效 sidecar（机制见
-   `references/formal-flow.md`「成本计量」）。执
-   行本步前必读 `references/formal-flow.md`「继承判定、修复授权与 Seal」。
-
-- `workflow show`：查看当前流程状态。
-- `workflow resume`：从中断处继续（备用路径）；中断的派发保持 `PENDING`，已完成结果
-  不受影响。原生 HEAD 已漂移时用 `--adopt-external --reason` 采纳外部改动。
-- `workflow abort`：中止流程，保留中止摘要，清除临时目录。
+1. **启动与预检。** Git 项目有已提交基线，唯一正式文件包含 REQ/AC/来源。start 不接受
+   split 意向；drive 返回全文、revision 和结构投影。
+2. **确认需求。** 用户确认同一完整 revision 后，提交 confirm-requirement REQUEST，
+   再用当前 Ask 的 requestId/token/digest 记录 DECIDE。选择初始 mode。
+3. **产品审、技术审。** 先独立产品审，通过后才独立技术审；每次 fresh review 读取完整
+   最新文档。审查者返回 raw candidate，Operator 逐条核实、定级、裁决，用户处置有效 finding。
+   技术审形成 granularity_review，包括 Batch → Subtask、依赖、接口、状态边界、DoD、
+   验证、恢复和交接。不把文件数、commit 数或编号当作拆分理由。
+4. **计划与路线。** 用户确认当前 planDigest 与 no-split 理由，再确认 full/custom。
+   含 QA 时原子激活需求保证。未接入 split、其他 VCS 或其他宿主 regular 明确 unsupported。
+5. **开发与黑盒并发。** 开发只读已确认任务；黑盒在基线隔离工作区独立设计/审查，不读
+   实现、白盒、开发解释。黑盒未 PASS 不挡开发，但挡最终候选。设计失败后继续按原动作的
+   有限 attempt/语义轮或 typed Ask 处理，不能搁置到开发末期。每 Batch 新原生代理，批内
+   正常返回、自测失败、重试和恢复沿用原身份；替换须真实恢复失败事实与 engine 签发。
+6. **固定候选。** adapter 校验交付 manifest 与范围，track → commit → snapshot。
+   全部 Batch 与黑盒屏障完成后接入独立白盒覆盖/测试；只有测试变动推进快照。全部
+   FROZEN case-set 装配到 review-ready 候选，在最后必需验证之前压缩 Git 多提交范围。
+7. **完整验证 wave。** 冻结唯一 expected-set，按容量并行推进 QA execution 与各门。
+   QA 消费冻结 command 的准备→目标→采集操作；门只读基线至最终候选完整实现 diff。
+   一个 FAIL/运行错误不停止独立兄弟任务。每项 source 结算、usage、guard 后自动补位。
+8. **统一修复。** 全部目标终结、错误处置和 finding 裁决完成后，NEW/SAME_AS/DISMISSED
+   归并 canonical problems，只建一个 repair。普通修复固定 AFFECTED；本轮必需 QA 与门全部有效 PASS（含合法继承）即可 Seal，不因保证激活追加最终 FULL。
+   门审 P2 必须修复，以实跑自测/carry 保留门 PASS，不增加复审轮；门审 P3 只作 Seal advisory。
+9. **Promotion 与 Seal。** 固定同一实际候选的 tree/blob/mode/ref 和需求/QA/验证绑定，
+   promotion 后核对等价 receipt，Seal 不再生成候选。drive 固化终态和清理登记资源。
+   正式 QA、Seal、集成与实际全局切换是各自时点；开发/隔离 canary 通过不表示已发布。
 
 ## 轻量路线
 
-轻量路线是正式流程内的路线（非受理阶段选项）：创建正式 run 但**不做任何验证，只留记录**。
-步骤三步完事：`workflow start --route lightweight` → 需求登记（`requirements-clarification`
-PASS + `requirement --confirmed`）→ **Seal 封板**。不做拆分决定、不选 QA/门路线、不快照，
-跳过 start-readiness、黑盒 QA、白盒 QA、全部门。快照在轻量中无意义（start 时的 base/current
-已固定，轻量无开发成果可冻结）。封板摘要/记录显式标注「本 run 未经任何验证」，与完整验证
-封板区分；可溯源的是该 run 对 start 基线标识的引用与封板记录本身（run 溯源/留痕），不是
-改动内容钉扎——轻量无开发、无验证，无改动内容可溯源。轻量 start 免去强制 `--split` 声明，
-也不接受 `--split yes` / `--retained-overall` / `--master`。
+lightweight 是正式流程内的路线（非受理阶段选项）。用户明确确认完整需求与方案后进入正式流程，
+初次选择 mode lightweight，不经拆分决定与路线选择，不做拆分决定、不选 QA/门路线、不快照。
+记录“本 run 未经任何验证”和 unverified；drive 完成终态。已有 typed receipt 入口必须同时
+给 --intake-receipt 和 --route lightweight。不能将已绑定 regular 的 run 降为轻量。
 
-## 跨步骤不变量
+## 宿主执行纪律
 
-面向用户先说明当前结论、实际影响和待决定事项；进度与最终说明保持简洁。独立代理仍须
-完整满足各自的 CLI 结果契约，不因简洁要求省略逐条判定或证据。因 Skill 规则暂停或请求
-确认时，指出具体文件与条款及其适用原因；不要把自行推断的限制说成流程强制要求。
+主代理只提交事实和明确用户决定。使用 show/next 中实际签发的 actionId、TaskKey、Attempt、
+候选和原生身份；不能手造任务、次数、wave 或扩大授权。唯一事件写入口为 submit；drive
+执行程序拥有的机械动作和实际宿主调用。重复结果重放不重复副作用，UNKNOWN 先对账。
 
-**接手与中途修改**
+任务内 model.run 与声明 QA 操作也经过相同 CAS、intent、guard 和原动作绑定。不得绕过
+formal_gates_operation 使用自由 shell 创建模型或调用 QA 目标。QA command 在设计时冻结，
+执行时不能另选 argv。共同步骤、依赖和 checkpoint 按公开合同使用；实际工具/环境变化先
+提交精确 invalidated checkpoint，再继续原动作的未完成部分。
 
-**接手**（接手被中断的 run，或没有旧 run 的半途工作）= 新建 run（同一主代理续跑用
-`workflow resume`）。流程：构建/测试（明显失败先修）→ 提交未提交改动（不纳入先暂存、
-seal 后恢复）→ 重走需求澄清（有已确认需求则重确认并登记）→ 按是否审已有工作选基线：
-要审（未审过；中断 run 取其原始基线）→ `--base-snapshot <工作起始点>`；信任/部分已
-审/拿不准 → 当前 HEAD（拿不准按要审处理）。需求 = "完成已有工作到规范"或"在现有基
-础上继续 X"。
+独立派发按宿主容量并行，仅从已授权 Ready 集合取任务。同功能在途规则保持；依赖等待
+不产生新角色或审查。开发者与审查者相互隔离。黑盒不接收实现及开发验证结论，白盒/门
+依据其各自授权输入工作。每个新交付路径先在指定 VCS 跟踪，返回不可变快照和完整 diff。
 
-**中途修改**：项目文件改动不自动作废结果，主代理逐结果判定：没触及 → 继承并记录理
-由；受影响或拿不准 → 独立判定或重跑。未选门/action 变化不阻塞（`resume` 报
-`catalogDelta`）；外部 VCS 改动用 `resume --adopt-external` 重绑；需求修订用
-`requirement --meaning preserved|changed` 分类。
+请求用户处置 finding 前，必须在同一条消息逐项展示问题、正常路径错误、后果、建议、
+finding ID、等级和逐条定级理由。缺少任一部分，用户回复不能作为授权。主代理逐条核实
+真实性、范围、严重度、根因和影响；没有独立证据不能冒充正式 PASS。
 
-若修订由已确认的 product-review/start-readiness finding 驱动，先从编辑前完整文本制作
-穷尽 review-delta 并运行只读 `review-delta-preview`，把预览与用户确认绑定后才能更新
-revision。`meaning preserved` 保留产品审 PASS，只重置 delta 明示受影响的技术审；
-`meaning changed` 还必须先运行只读 `requirement-impact-preview` 展示含义影响、失效 PASS、
-回滚步骤和剩余产品审容量，再以 preview digest + 当前 state revision + 用户确认原子应用。
-CLI 不判断文本含义，也不保存 base 文本/diff，只保存核验摘要与确认绑定。
+需求变化先暂停受影响推进，再澄清、展示完整文件和确认。review finding 修订先从编辑前
+完整文本制作穷尽 review-delta；meaning preserved / meaning changed 采用对应影响和保留
+合同。REQUEST/Ask 展示完整预览，DECIDE 精确绑定。CLI 不猜文本含义；保留既有 PASS
+需要明确清单，其他受影响证据失效。历史 raw result 和原授权保留，轮数不清零。
 
-**独立派发**
+产品/技术/QA 各自有限语义轮，运行错误默认同 TaskKey 两次 attempt。超限进入对应 Ask，
+仅增加当前动作的一轮/一次或处置精确义务，不累计授权。黑白盒三连 FAIL/长期不可用必须
+进入完整 qa-recovery Ask，用户可重设、fresh review、需求变更、精确 waiver/skip 或 abort。
 
-仅在当前已授权且已就绪的任务集合内，按宿主可用并发容量推进独立派发；依赖未满足的
-任务等待前置完成，不因可并行而新增 Batch、TaskKey、角色或审查。零上下文要求与同功能
-派发限制照常适用。
+## 维护与成本
 
-需求澄清由主代理直接完成。继承判定按 `references/formal-flow.md`「继承判定、修复授权
-与 Seal」执行：修复不影响任何此前通过的被选验证时由主代理判定并记录理由；否则按门
-独立派发 carry，涉及共享 API、公开行为、配置、依赖、跨门职责或因果不确定时也独立判定。
-需要独立派发的动作或门，调用 `workflow prepare-action` 或 `prepare-gate`，把输出作为完整任务发
-出。开发任务只发给开发工作者，任务内容固定为「已确认范围 + 实现任务」；聊天历史、发
-现项、修复说明、其他审查者结论、预期判定一律留在编排层。
+安装、hooks、打包和 canary 见 [安装维护](references/install-and-hooks.md)；修改本包时
+执行 [本地验证](references/local-validation.md)。安装 hooks 配置不等于实机已生效。
 
-派发提示词以 CLI 写出的规范文件为唯一权威源：`prepare-action` / `prepare-gate` 把完整
-提示词内容写入本 run 规范提示词文件（`.gates/tmp/<run-id>/prompts/<dispatch-id>.md`，
-含 dispatch id、需求 revision、base/current 快照等关键字段），主代理只发指向该文件的薄
-启动消息（如「读取 <文件路径> 执行派发」）、**不得手写/凭记忆拼写提示词内容**，子代理
-读文件执行；派发即消费该规范文件，主代理不得附加评论、解释、先前结论、期望判定、修复
-说明或关注点。`claim-dispatch` 认领时会兜底校验文件内容与 prepare 记录一致，不一致即硬
-阻断、该派发判定为不可用。
-
-host 启动后，用 `workflow claim-dispatch` 把每个独立派发绑定到 host 身份。记录结果
-或调用 `workflow snapshot --dispatch`（开发/修复用）前会先检查生命周期模块；总任务实
-例的集成快照由主代理操作，不加 `--dispatch`。
-
-开发分块只使用技术审已记录的 `granularity_review`：一个 `batch_id` 对应一次开发派发，
-一个 Batch 内的多个 `subtask_id` 只作为同一开发派发中的顺序步骤，不得各自派发或触发
-换代理。只有跨 Batch 且前一 Batch 已完成其 DoD、验证和交接时，才准备并派发新的开发
-代理；若 Batch 的契约、接口、依赖或 DoD 改变，暂停开发并重新做粒度审查。没有明确的
-独立交付物、验收标准和恢复边界时，禁止把 Subtask 升格为 Batch。
-
-`claim-dispatch` 默认拒绝同功能子代理并行：同 target+mode 已有 CLAIMED（在途）派发时，
-再次认领同功能新派发被拒；确需换新子代理时，先直接终结前一个同功能子代理（生命周期会
-捕获其 stop 事件与中断原因），再认领新派发即放行（前派发标 STALE）。认领时会把同功能
-旧 OPEN 空票（未认领、无子代理）自动作废清掉；被作废但审查者已认领/已产出结果的派发
-仍可记录其结果，不重审。
-
-每个派发同时记录完整 signature 与逻辑 `TaskKey`。相同 OPEN/PENDING/CLAIMED 派发直接续用规范提示词；
-无效结果只追加 `REJECTED_INVALID_RESULT` 回执并结束 attempt，不写正式 finding/PASS/FAIL。
-同一 TaskKey 默认最多两次 attempt；耗尽后只能由用户以当前 state revision 和非空理由授权
-一次最终 attempt。结果为 PASS 时同 signature 不再派发；FAIL 按对应职责的既有处置路径
-推进。提示词、需求 revision、base/current、QA 用例集或实际处置上下文变化会形成新的绑定。
-
-会改变派发状态的 workflow 命令与生命周期 hook（子代理启动/停止）会自动检测并行性：当前
-阶段应并行任务集（开发后 = 黑盒 QA 执行 + 白盒 QA + 各已选门；修复轮 = 各门重审 + QA
-执行；开发中 = 开发子代理 + 黑盒 QA 设计/审查）大于当前在途并行数时，CLI 在 stderr 提
-醒主代理"可并行 X 项（列表），当前并行 Y 项，建议补足"（带冷却去重、不污染 stdout 机
-器 JSON）。
-
-QA 审查和每个门审查必须创建全新的零上下文审查者，记录时原样传回派发 ID；同一流程实
-例中每个 host 身份只能用一次。被中断且已认领、未产出结果的派发，先恢复原代理继续完
-成同一派发（保持已认领身份、不分配新身份），宿主无法恢复才重开新派发 + 新零上下文代
-理。
-
-QA 审查者共同输入 = 已确认需求 + CLI 组装的完整候选用例集，不含开发者解释或其他
-审查者结论。黑盒审查不读取生产代码、实现 diff 或测试；白盒审查读取当前绑定快照的
-实现及本 QA 绑定的已有或新增结构测试，核对充分性与用例对应关系。门任务 = `prompts/reviewer-base.md` + `gates/<id>.md` + 需
-求路线 + VCS 路线 + 结果契约，由 CLI 组装；提示词缺失即运行时错误中止派发。门审覆盖
-完整"基线到当前"（重跑轮显式声明、不限于返修增量）；审查者报告 `compared` 快照对，
-不匹配即丢弃。
-
-脱离 run 的快速门检查：`gate run <ids...>` 组装单跑门提示词（工作树 vs HEAD、默认含
-未跟踪新文件、无需求块、复用共享审查者契约故污染检查自动生效），`gate report` 校验并
-展示审查者返回的结果。结果仅展示、不持久化，展示明确标注"脱离 run 的快速检查、非正式
-结论、未持久化"，避免与正式门结论混淆；续用规则不适用于单跑（无持久化派发，中断即重
-跑）。
-
-运行时错误不是审查发现项，保持可见并需重试或用户明确授权跳过。状态询问只能问进度，
-并明确告知审查者继续直到所有检查完成或用户主动指示。
-
-**结果校验与修复上限**
-
-结果一旦记录为 PASS 或 FAIL，对该快照即为最终结论，只有 PENDING 和 RUNTIME_ERROR
-可重跑。审查返回的结果只是候选输入。主代理记录/展示 PASS/FAIL 前必须显式核查：需求
-是否匹配、是否在正常使用边界内、结果契约是否满足；对 FAIL 或阻塞项再核查流程状态、
-范围、严重度（定级是否合理，是否需要复审）、因果关系和引用证据，并验证端到端复现。任何一项不通过即丢弃该发现项—
-—不记录、不展示为阻塞、不改变需求或实现。这是编排层面的核查，不是又一道门或另一轮
-审查。
-
-核查通过后由主代理按需求、正常失败场景、受影响模块、根因和实际后果五个维度逐条裁决，
-再归并 canonical problems。同一 review-wave 的 QA FAIL、有效 P0/P1 与门审 P2 进入唯一
-统一返修；门审 P3 只作 Seal advisory。开发前产品审/技术审以及 QA Review 的 P2/P3 仍按
-各自规则处置，不混入开发后统一返修。
-
-**审查轮次上限：** QA 与所有已选门共享最多三次自动审查轮次（整个交付尝试内）。开发
-后首轮计一次，每个修复后的审查轮次计一次，但须所有必需验证都完成才算，且每个快照最
-多计一次（纯门审 P2 修复不重审、不计轮次）；派发失败、中断、缺少验证、PENDING、
-RUNTIME_ERROR 均不计入。上限用尽后，每次额外修复前向用户展示当前阻塞项与未处置的
-建议并请求授权；每次授权只允许一轮修复/审查、不能累积，
-仍有阻塞则重复该请求。用户也可授权 Seal 跳过或一次需求变更。
-
-**门文件**
-
-开发后审查门就是已安装包 `gates/` 目录下的直接 Markdown 子文件；文件名（不含扩展名）
-即门 ID，按字典序排列。`gates/qa.md` 无效，`qa` 是内置 QA 流程的保留名称；黑盒 QA、
-白盒 QA 与合并验证也是保留名（`blackbox`、`whitebox`、`merge-qa` 不能用作门文件）。
-新增/移除门 = 加/删有效文件并重新安装。不要添加注册表、manifest、front matter、权重、
-依赖图或任何项目级配置。
-
-QA 设计、QA 审查、QA 执行、需求澄清、产品审、开发前技术检查、继承判定、开发和 Seal
-都是流程动作，不是门文件。
-
-QA 设计为**真增量**：`qa-design` 只返回本轮变更——新增用例不带 id（CLI 分配）、修改既有
-用例用 `--case-id <id>`（id 必须存在于同 mode，否则报错）、删除用 `--remove-case <id>`
-（id 必须存在）、整体替换用 `--replace-all`（替换整个用例集；传空集即清空该 mode 的用
-例）。未提及的既有用例与其 review PASS 状态**自动保留，遗漏绝不清除**；`--case-id` 与
-`--remove-case` 不能与 `--replace-all` 同轮混用。语义重复（同 mode 同描述/过程/预期）的
-无 id 提交报错并提示改用修改语义。`qa-review` 审查的是完整合并集（提示词注入本轮变更清
-单：新增/修改/删除）。共同准备/操作说明以 `--shared-step/--shared-procedure` 保存一次，
-每条用例用 `--use-step` 引用并保留差异和 oracle；共享部分审一次，变更时全部引用者重审。
-qa-review 的可选 P2/P3 带稳定 suggestion ID；总体 PASS 后用 `qa-suggestion --decision
-ACCEPT|DEFER|DECLINE --reason` 逐项处置。采纳若影响验收含义或可执行性，列出全部
-`--affected-case` 并重审。全部建议已处置且确定性覆盖校验通过
-后 case-set 才进入 `FROZEN`；无建议时 PASS 后立即冻结。冻结后普通实现修改不得重新设计，
-只有需求含义、对外行为、成功/失败判据或稳定可执行性变化可用 `qa-thaw` 解冻；临时环境
-不可用只记 `RUNTIME_ERROR`。某 mode 的 `qa-design` 记录后、该 mode 的 `qa-review` 派发尚未准
-备时，可再次调用 `qa-design` 增量补全；只有该 mode 的 `qa-review` 派发准备后设计才锁
-定、重记录被拒。黑盒与白盒的用例按 mode 分开存储，`qa-design` 记录轮只新增/更新/删除
-本派发 mode 的用例，不会替换或清除另一 mode 的既有用例（含其 review PASS 状态与已记录
-执行结果）。黑盒用例同时镜像到隔离工作区 `.gates/cases/blackbox.md`（主工作区在封板前
-不可见），seal 时落盘回主干 `.gates/results/<run-id>.blackbox-cases.md`。
-
-**状态与 VCS**
-
-唯一临时状态文件是 `.gates/tmp/<run-id>/state.json`，不要手工编辑；CLI 负责原子更新、
-提示词/目录修订、动作和门的状态、已批准用例、当前快照绑定。CLI 不存储 diff 内容、项
-目文件、证据图、分层产物或第二套版本控制数据。
-
-CLI 用启动时选定的 Git/SVN/P4 原生命令解析和验证快照标识；host 与各代理用同一个 VCS
-做比较。"基线到当前"是完整交付 diff，新执行和重跑的门都用它；"修复前紧邻快照到当前"
-是修复 diff，仅供继承判定使用，在提示词里与门重跑范围明确区分。门审查者必须报告实际
-比较的快照对。VCS 无法复现不可变比较时记录 `RUNTIME_ERROR`，不猜测、不偷偷切换 VCS、
-不自己实现 diff 回退。具体 VCS 操作见 `references/vcs-snapshots.md`。
-
-## 安装与维护
-
-处理安装、host hook、canary、打包或发布检查时，再读 `references/install-and-hooks.md`；
-维护本仓库时再读 `references/local-validation.md`。hook 配置不等于 hook 已运行，须在同
-一个 host 上经实机 canary 验证才能认定阻塞生效。
-
-## 成本计量
-
-每次独立派发的 token 用量按其 host 转写文件精确计量，写入 run 状态的单一 `cost` 投影；
-在能确定“启动基线→终态快照”区间时补记启动该 run 的主代理用量，主代理
-记录不伪装成 dispatch，也不参与实时派发止损。缺少可核对来源时标为 `unavailable`，不猜
-数字。该投影不改写已记录的 PASS/FAIL。阶段 4 的 engine 接入再由同一投影驱动后续派发止损，
-并在“事件提交 → source resolve/backfill → usage → guard → refill”顺序下阻止超额调用；source
-尚未就绪进入 Wait，source 明确不可用时仍受派发次数上限约束；不另建账本。
-派发额度只由 engine 根据 canonical expected `TaskKey`、已确认 route/topology 和有限 retry
-policy 计算；外部派发缺显式策略时默认首次执行加一次自动重试。主代理、host、用户和 AI
-均不能提交底层数字；计算 basis/账目重算不一致时零派发并报告 `BLOCKED_BUG`。超限后的
-继续只解锁一个按既有 admission capacity 裁剪的 Ready batch，重试只增加当前逻辑动作的
-一个 retry slot。TaskKey 只能来自 closed-world definition、已确认计划和当前 workflow policy
-预授权后由 Controller 机械派生的 obligation/repair slot；其他按现有流程要求用户确认的扩张
-必须先绑定对应 revision/typed Ask。代理结果、receipt 或 resume 不能直接新增额度。
-`workflow seal`/`show` 的输出携带该投影（`cost` 字段）。
-Codex 优先按原始 response ID 计量当前请求记录，忽略重复镜像；同任务 checkpoint 不提前
-固定 cost，续跑完成才记录完整用量。Codex 条目保留 rollout 来源和原生任务起止/墙钟时间，
-包含工具等待。3.5c 必需模型对比须补齐真实 token 与用时才算完成，其他 provider 保持原行为。
-计量机制全文见 `references/formal-flow.md`「成本计量」。
-
-同一次 QA execution 可用 `--checkpoint --tool <版本> --environment <身份>` 分次保存完整
-PASS/FAIL 行。中断保留原因与未完成项；续跑绑定候选、用例/共同说明、工具和环境，只复用
-证据完整且绑定未变的结果。整体未齐不能 PASS，最终 expected-set 与覆盖校验不变；仍沿用
-同 TaskKey、生命周期和有限重试额度。同候选批量执行复用构建与非验收准备，独立用例用
-干净副本；有序场景声明依赖，一条失败只阻止依赖项。详细命令见 `references/formal-flow.md`。
+source 可就绪才以原生 transcript 结算同一 cost 投影；source 未就绪 Wait，明确不可用
+标 unavailable。guard 使用实际派发次数和模型用量；owner 终态区间差值只报告，不参与
+in-flight guard。Codex 按原生 response ID 去重，记录真实 token 与 task timing，包含工具
+等待、不含 turn 间空闲。多 run 的 owner 区间重叠或基线不可靠时不猜测数字。

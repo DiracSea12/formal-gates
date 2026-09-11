@@ -178,6 +178,9 @@ func Decide(state *State, obs Observation, cd *compiler.CompiledDefinition) (*Pl
 	if state.DefinitionVersion != cd.Version {
 		return nil, fmt.Errorf("decision: decide: state definition version %q != definition %q", state.DefinitionVersion, cd.Version)
 	}
+	if state.Regular != nil {
+		return decideRegular(state, obs, cd)
+	}
 	// definition digest 经 canonical 编码得出：携带 marker 的
 	// diagnostic-only 定义在此被拒（不得进入 executable plan）。
 	defBytes, err := encoder.Encode(cd)

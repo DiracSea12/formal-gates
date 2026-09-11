@@ -1,0 +1,3735 @@
+{
+  "description": "Current maintained behavior after explicit legacy workflow retirement. Each row identifies its current owner and actual current test execution. Historical results and Seals remain unchanged; no prior PASS is copied as this candidate result.",
+  "sourceDevelopmentBase": "3559cfb16dc87bf5deb1a570ce7e16be02dc83bd",
+  "rows": [
+    {
+      "id": "H0-01",
+      "source": "0 · [RQ-0-01 基线 identity](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_test.go",
+          "test": "TestBuildBaselineReceiptBindsCanonicalPathsAndDigest",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:51.118999+08:00",
+            "elapsedSeconds": 0.01,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round12_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round12BaselineReceiptValidatesManifestPathsAndIdentityBoundaries",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:35.128272+08:00",
+            "elapsedSeconds": 0.02,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H0-02",
+      "source": "0 · [RQ-0-02 稳定驱动冻结](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round12_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round12BootstrapWrappersForwardOnlyToStableOwner",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:43.409406+08:00",
+            "elapsedSeconds": 1.2,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/facade_test.go",
+          "test": "TestStartHonorsAdmissionLockAndRechecksGeneration",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:07.46786+08:00",
+            "elapsedSeconds": 0.18,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H0-03",
+      "source": "0 · [RQ-0-03 package 安全校验](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_test.go",
+          "test": "TestPackageReceiptRejectsSymlinkAndOverlappingRoots",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:51.104141+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round12_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round12ManifestRejectsBeforeAnyTargetOrReceiptWrite",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:42.206263+08:00",
+            "elapsedSeconds": 0.01,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H0-04",
+      "source": "0 · [RQ-0-04 registry admission](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/distribution_repair_test.go",
+          "test": "TestAdmissionRejectsStaleInstalledDigest",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:30.627526+08:00",
+            "elapsedSeconds": 0.6,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_test.go",
+          "test": "TestAdmitRegistryLeavesMachineReadableUnregisteredReceipt",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:51.11138+08:00",
+            "elapsedSeconds": 0.01,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H0-05",
+      "source": "0 · [RQ-0-05 安装事务](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round15_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round15InstallFaultMatrixRecoveryReceiptIdentity",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:48.288041+08:00",
+            "elapsedSeconds": 2.05,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H0-06",
+      "source": "0 · [RQ-0-06 故障恢复](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round12_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round12ReleaseRollbackRestoresAllOuterIdentity",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:42.198143+08:00",
+            "elapsedSeconds": 0.58,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round12_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round12SupportedRestartReconcilesCrashJournalAutomatically",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:41.620868+08:00",
+            "elapsedSeconds": 0.08,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H0-07",
+      "source": "0 · [RQ-0-07 版本与诊断](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/workflow_test.go",
+          "test": "TestCLIWorkflowRetirementAndRawDiagnosis",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.961985+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/facade_test.go",
+          "test": "TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:08.088123+08:00",
+            "elapsedSeconds": 0.63,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H0-08",
+      "source": "0 · [RQ-0-08 候选验证](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0PackageReceiptDeterminismAndIsolation",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:51.122655+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H0-09",
+      "source": "0 · [RQ-0-09 文档与证据优先级](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0PrecedenceInventoryAndStableDocsStayStageZero",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:55.501175+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round12_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:46.236534+08:00",
+            "elapsedSeconds": 2.83,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H0-10",
+      "source": "0 · [RQ-0-10 计划与方案一致性审查](../openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_round15_whitebox_qa_test.go",
+          "test": "TestWhiteboxPhase0Round15StableHelpAndDocsRejectFutureCommandTokens",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:49.621193+08:00",
+            "elapsedSeconds": 1.33,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-01",
+      "source": "1 · [范围与验收 1：Authoring](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/authoring",
+          "file": "internal/engine/authoring/authoring_test.go",
+          "test": "TestNewDurableStep",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.017671+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/authoring",
+          "file": "internal/engine/authoring/authoring_test.go",
+          "test": "TestNewLocalStep",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.017561+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-02",
+      "source": "1 · [范围与验收 2：Closed-world compiler](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/compiler",
+          "file": "internal/engine/compiler/compile_test.go",
+          "test": "TestCompileGolden",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.751764+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/compiler",
+          "file": "internal/engine/compiler/graph_test.go",
+          "test": "TestGraphRejects",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.752496+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/compiler",
+          "file": "internal/engine/compiler/registry_test.go",
+          "test": "TestRegistryResolve",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.753241+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/whitebox_qa",
+          "file": "internal/engine/whitebox_qa/phase3_5a_coverage_contract_qa_test.go",
+          "test": "TestStage35AWhiteboxManifestGraphRejectsOrphanObjects",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:24.690113+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-03",
+      "source": "1 · [范围与验收 3：Canonical 制品](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/encoder",
+          "file": "internal/engine/encoder/encoder_test.go",
+          "test": "TestEncodeDecodeRoundTrip",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:02.055418+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/whitebox_qa",
+          "file": "internal/engine/whitebox_qa/whitebox_encoder_test.go",
+          "test": "TestEncodeDecodeRoundTripPreservesIR",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:26.128052+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/encoder",
+          "file": "internal/engine/encoder/encoder_test.go",
+          "test": "TestEncodeDeterministic",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:02.055139+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-04",
+      "source": "1 · [范围与验收 4：决策核心](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/decision",
+          "file": "internal/engine/decision/decide_test.go",
+          "test": "TestDecideByteStability",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.427663+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/decision",
+          "file": "internal/engine/decision/decide_test.go",
+          "test": "TestDecideKindScenarios",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.427239+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-05",
+      "source": "1 · [范围与验收 5：十条独立验收](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/acceptance",
+          "file": "internal/engine/acceptance/sequence_acceptance_test.go",
+          "test": "TestAcceptanceIllegalCompletionSequencesRejected",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:22.673745+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/acceptance",
+          "file": "internal/engine/acceptance/sequence_acceptance_test.go",
+          "test": "TestAcceptanceLegalCompletionSequenceGolden",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:22.673673+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-06",
+      "source": "1 · [范围与验收 6：只读对照](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [],
+      "isolatedCandidateResult": "SUPERSEDED",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The user explicitly deleted all workflow compatibility code in phase-4 revision 4ac13d5fe624204d15938f4c34c6c2163908ea4cc76ff6040acd231821094e89. The transitional legacy shadow comparison and decoder were removed. No historical PASS is treated as a current execution."
+    },
+    {
+      "id": "H1-07",
+      "source": "1 · [范围与验收 7：MISSING_ENGINE_ADAPTER](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/compiler",
+          "file": "internal/engine/compiler/matrix_test.go",
+          "test": "TestMissingEngineAdapterRouting",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.752953+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-08",
+      "source": "1 · [范围与验收 8：环境缺陷修复](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/acceptance",
+          "file": "internal/engine/acceptance/installed_harness_test.go",
+          "test": "TestAcceptanceInstalledProtocolHarness",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:22.65765+08:00",
+            "elapsedSeconds": 18.63,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H1-09",
+      "source": "1 · [范围与验收 9：Legacy 回归](../openspec/changes/orchestration-pipeline-engine-phase-1/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/regular_test.go",
+          "test": "TestRegularInstalledPublicIntakeToSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.958836+08:00",
+            "elapsedSeconds": 23.61,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "Legacy public writer execution is superseded by explicit retirement. Retained regular behavior is exercised through the installed current CLI; the original historical run remains unchanged."
+    },
+    {
+      "id": "H2-01",
+      "source": "2 · [范围与验收 1：版本 envelope](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveNeverWritesOnUnsupportedEnvelope",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.656358+08:00",
+            "elapsedSeconds": 0.2,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/persistence_test.go",
+          "test": "TestValidateEnvelopeAcceptsExactIdentity",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:19.405872+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-02",
+      "source": "2 · [范围与验收 2：持久化基座](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveAtomicReplaceLeavesNoPartialState",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:21.108991+08:00",
+            "elapsedSeconds": 0.21,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveLoadRoundTrip",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.417708+08:00",
+            "elapsedSeconds": 0.11,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/lock_test.go",
+          "test": "TestLockPreservesUnpublishedOwner",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:03.654037+08:00",
+            "elapsedSeconds": 0.02,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/lock_test.go",
+          "test": "TestSaveConcurrentProcessesPreserveEveryCommit",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:19.350939+08:00",
+            "elapsedSeconds": 15.7,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-03",
+      "source": "2 · [范围与验收 3：提交协议](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestFingerprintAfterWriteCommitsAndReports",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.881619+08:00",
+            "elapsedSeconds": 0.06,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestFingerprintBeforeWriteRejects",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.810048+08:00",
+            "elapsedSeconds": 0.02,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestRevisionCASConflict",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.794325+08:00",
+            "elapsedSeconds": 0.07,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-04",
+      "source": "2 · [范围与验收 4：统一接纳](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/workflow_test.go",
+          "test": "TestCLIWorkflowFutureRejectsSubmitAlias",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.959223+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/testkit",
+          "file": "internal/engine/testkit/testkit_test.go",
+          "test": "TestConcurrentSubmitLeavesOneCanonicalState",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:24.514911+08:00",
+            "elapsedSeconds": 0.2,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/event_test.go",
+          "test": "TestEventUnionInvariant",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:29.009264+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/admission_test.go",
+          "test": "TestFreeUserEventRejectedThroughSubmit",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:10.963045+08:00",
+            "elapsedSeconds": 0.28,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/whitebox_qa",
+          "file": "internal/engine/whitebox_qa/phase2_persistence_protocol_test.go",
+          "test": "TestPhase2WhiteboxConcurrentSubmitConvergesWithoutLostUpdate",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:23.150243+08:00",
+            "elapsedSeconds": 0.25,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/whitebox_qa",
+          "file": "internal/engine/whitebox_qa/phase3_engine_vertical_qa_test.go",
+          "test": "TestPhase3SubmitFencesUnknownKindAndProviderBeforeWrite",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:25.213854+08:00",
+            "elapsedSeconds": 0.06,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/whitebox_qa",
+          "file": "internal/engine/whitebox_qa/phase2_persistence_protocol_repair_qa_test.go",
+          "test": "TestQAPersistenceProtocolConcurrentSubmitConvergesWithoutLostUpdate",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:15.384014+08:00",
+            "elapsedSeconds": 0.34,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/route_matrix_test.go",
+          "test": "TestRouteMatrixCitedWriterSymbolsExistAndNoEngineSubmitFaceInStage01",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:50:03.208646+08:00",
+            "elapsedSeconds": 0.87,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/testkit",
+          "file": "internal/engine/testkit/testkit_test.go",
+          "test": "TestSubmitConcurrentlyHelperDoesNotRaceItsResults",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:24.872144+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/engine_test.go",
+          "test": "TestSubmitFingerprintIntegration",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:29.009182+08:00",
+            "elapsedSeconds": 0.04,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/testkit",
+          "file": "internal/engine/testkit/testkit_test.go",
+          "test": "TestSubmitResponseLossIsIdempotent",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:23.706512+08:00",
+            "elapsedSeconds": 0.28,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-05",
+      "source": "2 · [范围与验收 5：失败分类路由与恢复](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/recover_test.go",
+          "test": "TestRecoverRedoesInterruptedCommit",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:19.665007+08:00",
+            "elapsedSeconds": 0.07,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/admission_test.go",
+          "test": "TestUnknownReceiptRetrySequenceAttachesOnlyUniqueLifecycle",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:10.157066+08:00",
+            "elapsedSeconds": 0.67,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-06",
+      "source": "2 · [范围与验收 6：确定性故障注入](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveFaultBoundariesRecoverDeterministically",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:21.820222+08:00",
+            "elapsedSeconds": 0.72,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-07",
+      "source": "2 · [范围与验收 7：隔离与回归](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/acceptance",
+          "file": "internal/engine/acceptance/installed_harness_test.go",
+          "test": "TestAcceptanceInstalledProtocolHarness",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:22.65765+08:00",
+            "elapsedSeconds": 18.63,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-08",
+      "source": "2 · [范围与验收 8：负向测试](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestLoadRejectsTamperedContent",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.720235+08:00",
+            "elapsedSeconds": 0.07,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveRejectsBadTransactions",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.447458+08:00",
+            "elapsedSeconds": 0.01,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-09",
+      "source": "2 · [范围与验收 9：envelope PackageDigest 执行绑定](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestNewStoreRequiresPackageDigest",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.43873+08:00",
+            "elapsedSeconds": 0.02,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveNeverWritesOnUnsupportedEnvelope",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.656358+08:00",
+            "elapsedSeconds": 0.2,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-10",
+      "source": "2 · [范围与验收 10：交付义务](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/acceptance",
+          "file": "internal/engine/acceptance/installed_harness_test.go",
+          "test": "TestAcceptanceInstalledProtocolHarness",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:22.65765+08:00",
+            "elapsedSeconds": 18.63,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H2-11",
+      "source": "2 · [范围与验收 11：成比例性影响评估](../openspec/changes/orchestration-pipeline-engine-phase-2/master-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/persistence_test.go",
+          "test": "TestFrozenConstantAlignment",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:19.405859+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-01",
+      "source": "3 · [范围与验收 1：实现候选 engine 的 workflow start、drive、submit、show、status、next、 diagnose 路由；start 是唯一 bo](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/regular_test.go",
+          "test": "TestRegularInstalledPublicIntakeToSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.958836+08:00",
+            "elapsedSeconds": 23.61,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-02",
+      "source": "3 · [范围与验收 2：跑通 lightweight 的“start 前已确认 intake → start → 首次 drive 自动登记 intake receipt/digest → engine 自动终结清理](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/regular_test.go",
+          "test": "TestRegularFacadeFreshnessAndLightweightChoice",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:42.88687+08:00",
+            "elapsedSeconds": 0.52,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-03",
+      "source": "3 · [范围与验收 3：在 engine protocol 的 whitebox/test-only sequence harness 中覆盖 Ask、Ready、 HostAction、Wait、Oper](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/acceptance",
+          "file": "internal/engine/acceptance/installed_harness_test.go",
+          "test": "TestAcceptanceInstalledProtocolHarness",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:22.65765+08:00",
+            "elapsedSeconds": 18.63,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/decision",
+          "file": "internal/engine/decision/decide_test.go",
+          "test": "TestDecideKindScenarios",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:46:59.427239+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-04",
+      "source": "3 · [范围与验收 4：engine loader 在任何写入前精确校验 workflowDefinitionVersion、stateSchemaVersion、 definitionSource、defin](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/store_test.go",
+          "test": "TestSaveNeverWritesOnUnsupportedEnvelope",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:20.656358+08:00",
+            "elapsedSeconds": 0.2,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/persistence",
+          "file": "internal/engine/persistence/persistence_test.go",
+          "test": "TestValidateEnvelopeImpreciseValues",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:19.405897+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-05",
+      "source": "3 · [范围与验收 5：由固定 stable driver 驱动本次 formal-gates run；candidate 只能在隔离安装目录、test project、 host config、state/resource](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/phase0_test.go",
+          "test": "TestPackageReceiptRejectsSymlinkAndOverlappingRoots",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:51.104141+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-06",
+      "source": "3 · [范围与验收 6：通过确定性测试覆盖：六类边界由 whitebox/test-only harness 覆盖，候选黑盒按第 3 条的 lightweight 范围执行；旧 requirement/cleanup](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/regular_test.go",
+          "test": "TestRegularChangeSupersedesPendingConfirmation",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:43.795189+08:00",
+            "elapsedSeconds": 0.48,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3-07",
+      "source": "3 · [范围与验收 7：批次计划、Batch → Subtask 映射及代理边界由 Part 2 技术审的 granularity_review 给出并 留痕；一个 Batch 对应一次开发代理派发，Batch 内 ](../refactor-plan/stage-3-requirements.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/development_continuity_test.go",
+          "test": "TestDeveloperContinuationCannotResetByStatusOrRetry",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:18.082345+08:00",
+            "elapsedSeconds": 7.12,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/preparation_test.go",
+          "test": "TestPreparationConcurrentBatchesNoIntermediateGates",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:37.40107+08:00",
+            "elapsedSeconds": 1.96,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-01",
+      "source": "3.5a · [1. AcceptanceManifest](../refactor-plan/stage-3-5a-qa-coverage-contract.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractRejectsMissingQAAndNonQASources",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.177693+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractValidatesManyToManyAndProjectsWhitelist",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.177611+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-02",
+      "source": "3.5a · [2. source ↔ point ↔ case 双向映射](../refactor-plan/stage-3-5a-qa-coverage-contract.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractRejectsCaseVariantAndOrphanEdges",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.177732+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestValidateCoverageMapRejectsMismatchedEdgeReviewKind",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.178344+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-03",
+      "source": "3.5a · [3. review 完整性](../refactor-plan/stage-3-5a-qa-coverage-contract.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestSharedPreparationKeepsIndependentCasesAndReview",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.178769+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/preparation_test.go",
+          "test": "TestQADesignRejectsShellCommandBeforeReviewAndAllowsRevision",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:46.985151+08:00",
+            "elapsedSeconds": 0.91,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-04",
+      "source": "3.5a · [4. execution 完整性与候选绑定](../refactor-plan/stage-3-5a-qa-coverage-contract.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractExecutionFullAndAffected",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.178181+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractExecutionRequiresPassForEveryMappedCase",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.178311+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractRejectsStaleWhitelistProjection",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.178626+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-fix-01",
+      "source": "3.5a-fix · [REQ-001：需求案与结构化需求点合一](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/requirements",
+          "file": "internal/requirements/projection_test.go",
+          "test": "TestRequirementProjectionParserContract",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:11.07602+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-fix-02",
+      "source": "3.5a-fix · [REQ-002：需求案正文保留自然语言，需求点采用固定 Markdown 结构](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/requirements",
+          "file": "internal/requirements/projection_test.go",
+          "test": "TestRequirementProjectionDistinguishesShortACNumberFromEmptyACText",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:11.076049+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/requirements",
+          "file": "internal/requirements/projection_test.go",
+          "test": "TestRequirementProjectionReportsRecognizableIDForEmptyREQTitle",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:11.076035+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-fix-03",
+      "source": "3.5a-fix · [REQ-003：AI 生成、程序预检、用户确认](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularRequestFreshnessAndFrozenDocument",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:48.349539+08:00",
+            "elapsedSeconds": 0.07,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularIntakeReviewRouteAndReplay",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:47.48073+08:00",
+            "elapsedSeconds": 0.5,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5a-fix-04",
+      "source": "3.5a-fix · [REQ-004：预检接入现有确认机制，不增加用户环节](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularIntakeReviewRouteAndReplay",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:47.48073+08:00",
+            "elapsedSeconds": 0.5,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-fix-05",
+      "source": "3.5a-fix · [REQ-005：复用公开流程与既有覆盖协议](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/regular_test.go",
+          "test": "TestRegularInstalledPublicIntakeToSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.958836+08:00",
+            "elapsedSeconds": 23.61,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-fix-06",
+      "source": "3.5a-fix · [REQ-006：每个已确认需求点必须完成 QA 覆盖与执行闭环](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestContractValidatesManyToManyAndProjectsWhitelist",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.177611+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationAffectedKeepsFrozenAndRequiresFinalFull",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:59.471368+08:00",
+            "elapsedSeconds": 1.29,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/regular_test.go",
+          "test": "TestRegularInstalledPublicIntakeToSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.958836+08:00",
+            "elapsedSeconds": 23.61,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5a-fix-07",
+      "source": "3.5a-fix · [REQ-007：产品审和技术审各自具有三轮自动上限](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularThreeRoundsStayIndependent",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:51.748208+08:00",
+            "elapsedSeconds": 0.49,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5a-fix-08",
+      "source": "3.5a-fix · [REQ-008：审查状态可通过正式裁决纠正](../refactor-plan/stage-3-5a-fix-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularCorrectionInvalidatesDependenciesWithoutNewRound",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:52.198528+08:00",
+            "elapsedSeconds": 0.27,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5b-01",
+      "source": "3.5b · [REQ-001：P0/P1 只接受完整且经主代理核实的阻塞证据](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularReviewEvidenceAndTechnicalClassification",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:52.198913+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationRejectsIncompleteCheckpointAndRawObligations",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:58.185286+08:00",
+            "elapsedSeconds": 1.2,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-02",
+      "source": "3.5b · [REQ-002：start-readiness 只有三类问题可以阻塞开工](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularReviewEvidenceAndTechnicalClassification",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:52.198913+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-03",
+      "source": "3.5b · [REQ-003：同一快照收齐结果后只创建一份统一返修](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestCurrentWaveAdjudicationMergeCorrectionAndAdvisory",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.665264+08:00",
+            "elapsedSeconds": 1.09,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationWaveFailureIsolationCheckpointAndRepair",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:56.981951+08:00",
+            "elapsedSeconds": 1.58,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-04",
+      "source": "3.5b · [REQ-004：问题语义归并由主代理判断并由 CLI 持久化](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestCurrentWaveAdjudicationMergeCorrectionAndAdvisory",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.665264+08:00",
+            "elapsedSeconds": 1.09,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularCorrectionInvalidatesDependenciesWithoutNewRound",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:52.198528+08:00",
+            "elapsedSeconds": 0.27,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-05",
+      "source": "3.5b · [REQ-005：门审 P2 返修不复审，门审 P3 只在 Seal 展示](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestCurrentWaveAdjudicationMergeCorrectionAndAdvisory",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.665264+08:00",
+            "elapsedSeconds": 1.09,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationPureP2CarryDoesNotCreateWave",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:05.076435+08:00",
+            "elapsedSeconds": 1.94,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-06",
+      "source": "3.5b · [REQ-006：QA Review P2/P3 吸收完成后冻结用例集](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/preparation_test.go",
+          "test": "TestPreparationCoverageAndSuggestionBarriers",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:40.064943+08:00",
+            "elapsedSeconds": 0.92,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-07",
+      "source": "3.5b · [REQ-007：普通代码返修不重新设计冻结 QA 用例](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationAffectedKeepsFrozenAndRequiresFinalFull",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:59.471368+08:00",
+            "elapsedSeconds": 1.29,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-08",
+      "source": "3.5b · [REQ-008：门审不接收 QA 用例并保护非显然验收接口](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/qa35b_contract_2fe71c_test.go",
+          "test": "TestQA35BAcceptanceSurfaceHasLocalResponsibilityAndGateRule",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:55.504819+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/verification_test.go",
+          "test": "TestVerificationActualFailRepairNewCandidateFullPromotionSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:34.468185+08:00",
+            "elapsedSeconds": 8.42,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-09",
+      "source": "3.5b · [REQ-009：额外返修授权前展示完整且绑定版本的摘要](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestWaveRecoveryOptionsAreExactAndNontransferable",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:10.880333+08:00",
+            "elapsedSeconds": 5.8,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-10",
+      "source": "3.5b · [REQ-010：相同权威输入不重复派发](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularIntakeReviewRouteAndReplay",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:47.48073+08:00",
+            "elapsedSeconds": 0.5,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularConcurrentClaimExactlyOnce",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:48.493668+08:00",
+            "elapsedSeconds": 0.14,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-11",
+      "source": "3.5b · [REQ-011：流程规则文档与自动回归必须和程序一致](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/qa35b_contract_2fe71c_test.go",
+          "test": "TestQA35BHumanWorkflowContractOwners",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:55.501485+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5b-12",
+      "source": "3.5b · [REQ-012：owner 成本在现有单一投影中精确或明确不可用](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/regular_test.go",
+          "test": "TestRegularOwnerTerminalIntervalAndOverlap",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:47.010082+08:00",
+            "elapsedSeconds": 3.21,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/cost",
+          "file": "internal/cost/owner_test.go",
+          "test": "TestOwnerBaselineAndEndMustBeVerifiable",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.371374+08:00",
+            "elapsedSeconds": 0.01,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/cost",
+          "file": "internal/cost/owner_test.go",
+          "test": "TestOwnerAndDispatchTotalsAreIndependentAndIdempotent",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.37206+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-13",
+      "source": "3.5b · [REQ-013：engine guard 纯计算得到有限且稳定的派发额度](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/guard",
+          "file": "internal/engine/guard/qa35b_dispatch_2fe71c_test.go",
+          "test": "TestQA35BGuardDuplicateAndRetryDelta",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:03.234079+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5b-14",
+      "source": "3.5b · [REQ-014：guard-preview 提供可黑盒验收的公开只读入口](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/guard_preview_test.go",
+          "test": "TestGuardPreviewBinary",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:02.697286+08:00",
+            "elapsedSeconds": 3.7,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5b-15",
+      "source": "3.5b · [REQ-015：未来 engine 接入计划继承本需求的新语义](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/qa35b_contract_2fe71c_test.go",
+          "test": "TestQA35BFutureEnginePlansInheritConvergenceContract",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:55.504153+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5b-16",
+      "source": "3.5b · [REQ-016：产品审或技术审修订后只确认变更部分](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularMinorRevisionThenCrossStageInvalidation",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:51.261192+08:00",
+            "elapsedSeconds": 0.53,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-17",
+      "source": "3.5b · [REQ-017：用户处置审查 finding 前必须看到严重等级和理由](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularReviewEvidenceAndTechnicalClassification",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:52.198913+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestWaveRecoveryOptionsAreExactAndNontransferable",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:10.880333+08:00",
+            "elapsedSeconds": 5.8,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-18",
+      "source": "3.5b · [REQ-018：所有正式 P0/P1 必须逐条证明定级成立](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularReviewEvidenceAndTechnicalClassification",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:52.198913+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationRejectsIncompleteCheckpointAndRawObligations",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:58.185286+08:00",
+            "elapsedSeconds": 1.2,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-19",
+      "source": "3.5b · [REQ-019：会回退流程的需求影响登记必须由用户授权](../refactor-plan/review-convergence-and-stage-3-5b-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularRequestFreshnessAndFrozenDocument",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:48.349539+08:00",
+            "elapsedSeconds": 0.07,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationControlsFreezeAndKeepBindings",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:00.648097+08:00",
+            "elapsedSeconds": 1.18,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-runtime-01",
+      "source": "3.5b-runtime · [A. 成本模块保持可维护](../refactor-plan/stage-3-5b-runtime-guardrails.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cost",
+          "file": "internal/cost/cost_test.go",
+          "test": "TestRecordIsIdempotentPerDispatch",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.355934+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/cost",
+          "file": "internal/cost/cost_test.go",
+          "test": "TestParseCodexCurrentRequestsAndMirrors",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.35844+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularTokenCapStopsBeforeRefillAndAllowsOneTask",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:48.283048+08:00",
+            "elapsedSeconds": 0.39,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-runtime-02",
+      "source": "3.5b-runtime · [B. 补记主代理（owner）用量](../refactor-plan/stage-3-5b-runtime-guardrails.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/regular_test.go",
+          "test": "TestRegularOwnerTerminalIntervalAndOverlap",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:47.010082+08:00",
+            "elapsedSeconds": 3.21,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5b-runtime-03",
+      "source": "3.5b-runtime · [C. 引擎中的最小运行时止损合同与纯计算核心](../refactor-plan/stage-3-5b-runtime-guardrails.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/guard",
+          "file": "internal/engine/guard/qa35b_dispatch_2fe71c_test.go",
+          "test": "TestQA35BGuardDuplicateAndRetryDelta",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:03.234079+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/regular_test.go",
+          "test": "TestRegularTokenCapStopsBeforeRefillAndAllowsOneTask",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:48.283048+08:00",
+            "elapsedSeconds": 0.39,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5c-01",
+      "source": "3.5c · [REQ-001：共同说明复用与逐条增量审查](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/preparation_test.go",
+          "test": "TestPreparationIncrementalReviewRetainsUnchangedApprovals",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:41.723042+08:00",
+            "elapsedSeconds": 1.07,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/contract_test.go",
+          "test": "TestSharedPreparationKeepsIndependentCasesAndReview",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.178769+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5c-02",
+      "source": "3.5c · [REQ-002：批量真实执行与状态隔离](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/coverage",
+          "file": "internal/engine/coverage/qa35c_independent_cb42_test.go",
+          "test": "TestQA35CIndependentEngineExecutionPartition",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:00.179903+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationWaveFailureIsolationCheckpointAndRepair",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:56.981951+08:00",
+            "elapsedSeconds": 1.58,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5c-03",
+      "source": "3.5c · [REQ-003：构造前置状态与最小执行脚本](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/qa35c_independent_cb42_test.go",
+          "test": "TestQA35CIndependentFixtureBuildAndCopy",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:59.6359+08:00",
+            "elapsedSeconds": 1.05,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5c-04",
+      "source": "3.5c · [REQ-004：同次未完成执行的进度保存与受控续跑](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestCheckpointChangedEnvironmentRetainsRawFailureAndReruns",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:12.19095+08:00",
+            "elapsedSeconds": 1.31,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestCheckpointMayResumeAgainWithoutNewAttempt",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:13.570433+08:00",
+            "elapsedSeconds": 1.38,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/task_operation_test.go",
+          "test": "TestTaskOperationChangedCheckpointReopensOnlyNamedCase",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:15.575071+08:00",
+            "elapsedSeconds": 6.66,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5c-05",
+      "source": "3.5c · [REQ-005：白盒独立覆盖判断与已有测试复用](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/preparation_test.go",
+          "test": "TestPreparationRealGitCandidates",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:30.672946+08:00",
+            "elapsedSeconds": 17.88,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/preparation_test.go",
+          "test": "TestWhiteboxAuthoringTrialsBeforeFrozenQA",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:42.370055+08:00",
+            "elapsedSeconds": 8.41,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5c-06",
+      "source": "3.5c · [REQ-006：QA 可选建议按理由处置后冻结](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/preparation_test.go",
+          "test": "TestPreparationCoverageAndSuggestionBarriers",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:40.064943+08:00",
+            "elapsedSeconds": 0.92,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5c-07",
+      "source": "3.5c · [REQ-007：最终候选先确定、最后验证、Seal 固化](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/verification_test.go",
+          "test": "TestVerificationActualFailRepairNewCandidateFullPromotionSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:34.468185+08:00",
+            "elapsedSeconds": 8.42,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/preparation_test.go",
+          "test": "TestPreparationGitCommitSuccessBeforeReceipt",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:33.957122+08:00",
+            "elapsedSeconds": 3.28,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/facade",
+          "file": "internal/engine/facade/task_operation_test.go",
+          "test": "TestRepairTaskOperationUsesWorkingEditsAndRecovery",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:26.05075+08:00",
+            "elapsedSeconds": 6.39,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "successorBasis": "The former workflow writer was explicitly retired in the confirmed phase-4 revision. These current engine/maintenance/parser tests exercise the retained behavior through its current owner."
+    },
+    {
+      "id": "H3_5c-08",
+      "source": "3.5c · [REQ-008：隔离交付与阶段 4 同义接入](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cli",
+          "file": "internal/cli/regular_test.go",
+          "test": "TestRegularInstalledPublicIntakeToSeal",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:14.958836+08:00",
+            "elapsedSeconds": 23.61,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/engine/protocol",
+          "file": "internal/engine/protocol/verification_test.go",
+          "test": "TestVerificationControlsFreezeAndKeepBindings",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:48:00.648097+08:00",
+            "elapsedSeconds": 1.18,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    },
+    {
+      "id": "H3_5c-09",
+      "source": "3.5c · [REQ-009：正确性与实际重复成本对比](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/cost",
+          "file": "internal/cost/qa35c_independent_cb42_test.go",
+          "test": "TestQA35CIndependentCodexRequestsAndMirrors",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.377812+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        },
+        {
+          "package": "formal-gates/internal/cost",
+          "file": "internal/cost/qa35c_independent_cb42_test.go",
+          "test": "TestQA35CIndependentCodexNativeTaskTiming",
+          "execution": {
+            "command": "full",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:47:01.378636+08:00",
+            "elapsedSeconds": 0,
+            "log": "/tmp/phase4-b3-430d28c-full.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED",
+      "scopeNote": "Current correctness, shared preparation and timing behavior were executed. The prior paid performance comparison is explicitly not repeated by phase-4 REQ-022; this PASS does not claim a new paid comparison.",
+      "successorBasis": "Current source parsing and timing are rerun. The paid historical model comparison is not repeated under phase-4 REQ-022; its original result remains historical."
+    },
+    {
+      "id": "H3_5c-10",
+      "source": "3.5c · [REQ-010：修复历史 checkpoint 检查的比较范围](../refactor-plan/stage-3-5c-requirement.md)",
+      "tests": [
+        {
+          "package": "formal-gates/internal/validate",
+          "file": "internal/validate/qa35c_independent_cb42_test.go",
+          "test": "TestQA35CIndependentHistoricalCheckpointOracle",
+          "execution": {
+            "command": "phase0",
+            "status": "PASS",
+            "finishedAt": "2026-09-08T06:49:58.582184+08:00",
+            "elapsedSeconds": 3.01,
+            "log": "/tmp/phase4-b3-430d28c-phase0.jsonl"
+          }
+        }
+      ],
+      "isolatedCandidateResult": "PASS",
+      "globalResult": "NOT_PUBLISHED"
+    }
+  ],
+  "sourceSnapshot": "430d28cd10932219b2b18440ad4be252e9094003",
+  "environment": {
+    "platform": "macOS-15.7.9-arm64-arm-64bit",
+    "go": "go version go1.26.4 darwin/arm64",
+    "scope": "source tests and isolated installed package validation; no global publication"
+  },
+  "isolatedValidation": {
+    "full": {
+      "command": "go test ./... -count=1 -json -timeout 30m",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-full.jsonl",
+      "packages": [
+        {
+          "name": "formal-gates/internal/coordination",
+          "elapsedSeconds": 0.965,
+          "finishedAt": "2026-09-08T06:46:59.091585+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/decision",
+          "elapsedSeconds": 1.303,
+          "finishedAt": "2026-09-08T06:46:59.429061+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/compiler",
+          "elapsedSeconds": 1.627,
+          "finishedAt": "2026-09-08T06:46:59.753592+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/coverage",
+          "elapsedSeconds": 2.054,
+          "finishedAt": "2026-09-08T06:47:00.180347+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/authoring",
+          "elapsedSeconds": 2.892,
+          "finishedAt": "2026-09-08T06:47:01.01783+08:00"
+        },
+        {
+          "name": "formal-gates/internal/cost",
+          "elapsedSeconds": 3.253,
+          "finishedAt": "2026-09-08T06:47:01.379109+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/encoder",
+          "elapsedSeconds": 3.891,
+          "finishedAt": "2026-09-08T06:47:02.06039+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/guard",
+          "elapsedSeconds": 3.487,
+          "finishedAt": "2026-09-08T06:47:03.241252+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/runtime",
+          "elapsedSeconds": 3.006,
+          "finishedAt": "2026-09-08T06:47:04.385699+08:00"
+        },
+        {
+          "name": "formal-gates/internal/host",
+          "elapsedSeconds": 1.16,
+          "finishedAt": "2026-09-08T06:47:05.56236+08:00"
+        },
+        {
+          "name": "formal-gates/internal/lifecycle",
+          "elapsedSeconds": 5.093,
+          "finishedAt": "2026-09-08T06:47:10.65571+08:00"
+        },
+        {
+          "name": "formal-gates/internal/requirements",
+          "elapsedSeconds": 0.391,
+          "finishedAt": "2026-09-08T06:47:11.076128+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/definition",
+          "elapsedSeconds": 13.19,
+          "finishedAt": "2026-09-08T06:47:11.316137+08:00"
+        },
+        {
+          "name": "formal-gates/internal/settings",
+          "elapsedSeconds": 0.71,
+          "finishedAt": "2026-09-08T06:47:11.813115+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/gitprep",
+          "elapsedSeconds": 15.814,
+          "finishedAt": "2026-09-08T06:47:15.243877+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/persistence",
+          "elapsedSeconds": 21.684,
+          "finishedAt": "2026-09-08T06:47:21.865319+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/acceptance",
+          "elapsedSeconds": 24.548000000000002,
+          "finishedAt": "2026-09-08T06:47:22.673859+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/testkit",
+          "elapsedSeconds": 22.811,
+          "finishedAt": "2026-09-08T06:47:24.87221+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/whitebox_qa",
+          "elapsedSeconds": 22.89,
+          "finishedAt": "2026-09-08T06:47:26.136311+08:00"
+        },
+        {
+          "name": "formal-gates/internal/validate",
+          "elapsedSeconds": 29.646,
+          "finishedAt": "2026-09-08T06:47:41.66041+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/protocol",
+          "elapsedSeconds": 73.648,
+          "finishedAt": "2026-09-08T06:48:14.665899+08:00"
+        },
+        {
+          "name": "formal-gates/internal/cli",
+          "elapsedSeconds": 76.838,
+          "finishedAt": "2026-09-08T06:48:14.9632+08:00"
+        },
+        {
+          "name": "formal-gates/internal/engine/facade",
+          "elapsedSeconds": 102.29,
+          "finishedAt": "2026-09-08T06:48:41.381424+08:00"
+        }
+      ],
+      "sourceSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "phase0": {
+      "command": "go test -tags=phase0whitebox ./internal/validate -count=1 -json -timeout 30m",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-phase0.jsonl",
+      "packages": [
+        {
+          "name": "formal-gates/internal/validate",
+          "elapsedSeconds": 35.929,
+          "finishedAt": "2026-09-08T06:50:05.56884+08:00"
+        }
+      ],
+      "sourceSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "race": {
+      "command": "go test -race ./internal/validate ./internal/cli -count=1 -json -timeout 30m",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-race.jsonl",
+      "packages": [
+        {
+          "name": "formal-gates/internal/validate",
+          "elapsedSeconds": 21.649,
+          "finishedAt": "2026-09-08T06:49:05.602384+08:00"
+        },
+        {
+          "name": "formal-gates/internal/cli",
+          "elapsedSeconds": 44.824,
+          "finishedAt": "2026-09-08T06:49:28.777162+08:00"
+        }
+      ],
+      "sourceSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "build": {
+      "command": "go build -o bin/formal-gates ./cmd/formal-gates",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-build.log",
+      "productionSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "vet": {
+      "command": "go vet ./...",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-vet.log",
+      "productionSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "package": {
+      "command": "bin/formal-gates package validate --root .",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-package.log",
+      "productionSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "portable": {
+      "command": "bin/formal-gates canary portable --root . --format json",
+      "status": "PASS",
+      "log": "/tmp/phase4-b3-430d28c-portable.json",
+      "scope": "Five isolated host package installations, bootstrap/fencing, current engine intake and lightweight completion, fault rollback and uninstall. This does not claim native full Codex execution on all hosts.",
+      "receipt": {
+        "schemaVersion": 1,
+        "root": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+        "vcsIdentity": "git:430d28cd10932219b2b18440ad4be252e9094003",
+        "packageDigest": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58",
+        "canonicalPaths": {
+          "root": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4"
+        },
+        "digestBinding": {
+          "package": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58"
+        },
+        "installed": [
+          {
+            "host": "claude",
+            "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/.claude/skills/formal-gates",
+            "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/stable-release",
+            "vcsIdentity": "git:430d28cd10932219b2b18440ad4be252e9094003",
+            "packageDigest": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58",
+            "installedDigest": "dbb52e04fea7e429abeae096dacf68ddaeb42d676d393001437a5a55bebbcdac",
+            "canonicalPaths": {
+              "hookConfig": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/.claude/settings.json",
+              "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.local/bin/formal-gates",
+              "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/CLAUDE.md",
+              "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime",
+              "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+              "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/stable-release",
+              "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/.formal-gates-resources",
+              "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/.claude/skills",
+              "sourceRoot": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+              "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/.gates",
+              "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-claude-native-runtime/.claude/skills/formal-gates"
+            },
+            "disjoint": {
+              "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4"
+            },
+            "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+            "registryRecordId": "claude-project-b37cd0671cc4",
+            "registryEpoch": 1
+          },
+          {
+            "host": "codex",
+            "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/.codex/skills/formal-gates",
+            "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/stable-release",
+            "vcsIdentity": "git:430d28cd10932219b2b18440ad4be252e9094003",
+            "packageDigest": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58",
+            "installedDigest": "dbb52e04fea7e429abeae096dacf68ddaeb42d676d393001437a5a55bebbcdac",
+            "canonicalPaths": {
+              "hookConfig": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/.codex/hooks.json",
+              "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.local/bin/formal-gates",
+              "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/AGENTS.md",
+              "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime",
+              "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+              "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/stable-release",
+              "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/.formal-gates-resources",
+              "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/.codex/skills",
+              "sourceRoot": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+              "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/.gates",
+              "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-codex-native-runtime/.codex/skills/formal-gates"
+            },
+            "disjoint": {
+              "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4"
+            },
+            "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+            "registryRecordId": "codex-project-b8ad47f411b5",
+            "registryEpoch": 3
+          },
+          {
+            "host": "cursor",
+            "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.cursor/formal-gates",
+            "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/stable-release",
+            "vcsIdentity": "git:430d28cd10932219b2b18440ad4be252e9094003",
+            "packageDigest": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58",
+            "installedDigest": "dbb52e04fea7e429abeae096dacf68ddaeb42d676d393001437a5a55bebbcdac",
+            "canonicalPaths": {
+              "hookConfig": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.cursor/hooks.json",
+              "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.local/bin/formal-gates",
+              "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.cursor/rules/formal-gates.mdc",
+              "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime",
+              "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+              "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/stable-release",
+              "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.formal-gates-resources",
+              "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.cursor",
+              "sourceRoot": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+              "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.gates",
+              "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-cursor-native-runtime/.cursor/formal-gates"
+            },
+            "disjoint": {
+              "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4"
+            },
+            "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+            "registryRecordId": "cursor-project-34f16ba9c795",
+            "registryEpoch": 5
+          },
+          {
+            "host": "dsh",
+            "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/.dsh/skills/formal-gates",
+            "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/stable-release",
+            "vcsIdentity": "git:430d28cd10932219b2b18440ad4be252e9094003",
+            "packageDigest": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58",
+            "installedDigest": "dbb52e04fea7e429abeae096dacf68ddaeb42d676d393001437a5a55bebbcdac",
+            "canonicalPaths": {
+              "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.local/bin/formal-gates",
+              "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/AGENTS.md",
+              "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime",
+              "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+              "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/stable-release",
+              "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/.formal-gates-resources",
+              "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/.dsh/skills",
+              "sourceRoot": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+              "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/.gates",
+              "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-dsh-native-runtime/.dsh/skills/formal-gates"
+            },
+            "disjoint": {
+              "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4"
+            },
+            "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+            "registryRecordId": "dsh-project-56e515f1f8a9",
+            "registryEpoch": 7
+          },
+          {
+            "host": "zcode",
+            "target": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/.zcode/skills/formal-gates",
+            "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/stable-release",
+            "vcsIdentity": "git:430d28cd10932219b2b18440ad4be252e9094003",
+            "packageDigest": "f73b1e2fd52791419563586a1731f4421541f5dc3d666e8890979de546de6c58",
+            "installedDigest": "dbb52e04fea7e429abeae096dacf68ddaeb42d676d393001437a5a55bebbcdac",
+            "canonicalPaths": {
+              "launcher": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.local/bin/formal-gates",
+              "managedRule": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/AGENTS.md",
+              "projectRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime",
+              "registry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+              "releaseRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/stable-release",
+              "resourceRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/.formal-gates-resources",
+              "runtimeSibling": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/.zcode/skills",
+              "sourceRoot": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+              "stateRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/.gates",
+              "target": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/install-zcode-native-runtime/.zcode/skills/formal-gates"
+            },
+            "disjoint": {
+              "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4": "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4"
+            },
+            "registry": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-install-canary-1877150957/stable-home/.formal-gates/registry.json",
+            "registryRecordId": "zcode-project-8e70b7aec845",
+            "registryEpoch": 9
+          }
+        ],
+        "checks": [
+          {
+            "name": "package-validate",
+            "status": "PASS"
+          },
+          {
+            "name": "prompt-catalog",
+            "status": "PASS"
+          },
+          {
+            "name": "hook-blocks-legacy-command",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-installed-binary-regression",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-bootstrap",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-installed-binary-canary",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-candidate-install-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-candidate-workflow-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-installed-binary-fault-recovery",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime",
+            "status": "PASS"
+          },
+          {
+            "name": "install-claude-native-runtime-uninstall",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-installed-binary-regression",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-bootstrap",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-installed-binary-canary",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-candidate-install-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-candidate-workflow-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-installed-binary-fault-recovery",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime",
+            "status": "PASS"
+          },
+          {
+            "name": "install-codex-native-runtime-uninstall",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-installed-binary-regression",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-bootstrap",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-installed-binary-canary",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-candidate-install-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-candidate-workflow-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-installed-binary-fault-recovery",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime",
+            "status": "PASS"
+          },
+          {
+            "name": "install-cursor-native-runtime-uninstall",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-installed-binary-regression",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-bootstrap",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-installed-binary-canary",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-candidate-install-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-candidate-workflow-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-installed-binary-fault-recovery",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime",
+            "status": "PASS"
+          },
+          {
+            "name": "install-dsh-native-runtime-uninstall",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-installed-binary-regression",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-bootstrap",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-installed-binary-canary",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-candidate-install-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-candidate-workflow-fenced",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-installed-binary-fault-recovery",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime",
+            "status": "PASS"
+          },
+          {
+            "name": "install-zcode-native-runtime-uninstall",
+            "status": "PASS"
+          },
+          {
+            "name": "write-block-hook",
+            "status": "PASS"
+          }
+        ]
+      },
+      "productionSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+    },
+    "crossVersionInstallation": {
+      "root": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1",
+      "commands": [
+        {
+          "label": "original-clone",
+          "argv": [
+            "git",
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "/private/tmp/formal-gates-retention-release-k2bqlcj5",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original"
+          ],
+          "cwd": null,
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-clone.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-clone.stderr"
+        },
+        {
+          "label": "original-checkout",
+          "argv": [
+            "git",
+            "checkout",
+            "--quiet",
+            "--detach",
+            "97eef33d866301a2985f510dd486a21196eea3f9"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-checkout.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-checkout.stderr"
+        },
+        {
+          "label": "original-build",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "bin/formal-gates",
+            "./cmd/formal-gates"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-build.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-build.stderr"
+        },
+        {
+          "label": "original-self-validate",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original/bin/formal-gates",
+            "package",
+            "validate",
+            "--root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-self-validate.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-self-validate.stderr"
+        },
+        {
+          "label": "original-identity",
+          "argv": [
+            "git",
+            "rev-parse",
+            "HEAD"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-identity.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original-identity.stderr"
+        },
+        {
+          "label": "maintenance-clone",
+          "argv": [
+            "git",
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "/private/tmp/formal-gates-retention-release-k2bqlcj5",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance"
+          ],
+          "cwd": null,
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-clone.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-clone.stderr"
+        },
+        {
+          "label": "maintenance-checkout",
+          "argv": [
+            "git",
+            "checkout",
+            "--quiet",
+            "--detach",
+            "97eef33d866301a2985f510dd486a21196eea3f9"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-checkout.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-checkout.stderr"
+        },
+        {
+          "label": "maintenance-apply",
+          "argv": [
+            "git",
+            "apply",
+            "--unidiff-zero",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4/references/phase4-installer-maintenance.patch"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-apply.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-apply.stderr"
+        },
+        {
+          "label": "maintenance-add",
+          "argv": [
+            "git",
+            "add",
+            "internal/validate/install.go"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-add.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-add.stderr"
+        },
+        {
+          "label": "maintenance-commit",
+          "argv": [
+            "git",
+            "commit",
+            "-m",
+            "Validate install sources with their own package contract"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-commit.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-commit.stderr"
+        },
+        {
+          "label": "maintenance-build",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "bin/formal-gates",
+            "./cmd/formal-gates"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-build.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-build.stderr"
+        },
+        {
+          "label": "maintenance-self-validate",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance/bin/formal-gates",
+            "package",
+            "validate",
+            "--root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-self-validate.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-self-validate.stderr"
+        },
+        {
+          "label": "maintenance-identity",
+          "argv": [
+            "git",
+            "rev-parse",
+            "HEAD"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-identity.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance-identity.stderr"
+        },
+        {
+          "label": "candidate-clone",
+          "argv": [
+            "git",
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate"
+          ],
+          "cwd": null,
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-clone.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-clone.stderr"
+        },
+        {
+          "label": "candidate-checkout",
+          "argv": [
+            "git",
+            "checkout",
+            "--quiet",
+            "--detach",
+            "430d28cd10932219b2b18440ad4be252e9094003"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-checkout.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-checkout.stderr"
+        },
+        {
+          "label": "candidate-build",
+          "argv": [
+            "go",
+            "build",
+            "-o",
+            "bin/formal-gates",
+            "./cmd/formal-gates"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-build.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-build.stderr"
+        },
+        {
+          "label": "candidate-self-validate",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate/bin/formal-gates",
+            "package",
+            "validate",
+            "--root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-self-validate.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-self-validate.stderr"
+        },
+        {
+          "label": "candidate-identity",
+          "argv": [
+            "git",
+            "rev-parse",
+            "HEAD"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-identity.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate-identity.stderr"
+        },
+        {
+          "label": "project-init",
+          "argv": [
+            "git",
+            "init",
+            "-q"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project-init.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project-init.stderr"
+        },
+        {
+          "label": "project-add",
+          "argv": [
+            "git",
+            "add",
+            "requirements.md",
+            ".gitignore"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project-add.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project-add.stderr"
+        },
+        {
+          "label": "project-commit",
+          "argv": [
+            "git",
+            "-c",
+            "user.name=Canary",
+            "-c",
+            "user.email=canary@example.test",
+            "commit",
+            "-qm",
+            "isolation baseline"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project-commit.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project-commit.stderr"
+        },
+        {
+          "label": "install-original",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-original.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-original.stderr"
+        },
+        {
+          "label": "bootstrap-original",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original",
+            "--bootstrap"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/bootstrap-original.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/bootstrap-original.stderr"
+        },
+        {
+          "label": "old-active-start",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "workflow",
+            "start",
+            "--root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--package-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/.codex/skills/formal-gates",
+            "--run-id",
+            "old-active",
+            "--requirement",
+            "requirements.md",
+            "--vcs",
+            "git",
+            "--split",
+            "no"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/old-active-start.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/old-active-start.stderr"
+        },
+        {
+          "label": "install-maintenance",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/maintenance"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-maintenance.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-maintenance.stderr"
+        },
+        {
+          "label": "fault-upgrade",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 1,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/fault-upgrade.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/fault-upgrade.stderr"
+        },
+        {
+          "label": "install-stage4",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/candidate"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-stage4.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-stage4.stderr"
+        },
+        {
+          "label": "current-refuses-old-active",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "workflow",
+            "drive",
+            "--root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--run-id",
+            "old-active"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 1,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/current-refuses-old-active.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/current-refuses-old-active.stderr"
+        },
+        {
+          "label": "current-help",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "workflow",
+            "--help"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/current-help.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/current-help.stderr"
+        },
+        {
+          "label": "fault-restore",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 1,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/fault-restore.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/fault-restore.stderr"
+        },
+        {
+          "label": "restore-original",
+          "argv": [
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "install",
+            "--host",
+            "codex",
+            "--scope",
+            "project",
+            "--project",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+            "--binary-target",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.local/bin/formal-gates",
+            "--release-root",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/stable-release",
+            "--force",
+            "--source",
+            "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/original"
+          ],
+          "cwd": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+          "exit": 0,
+          "stdout": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/restore-original.stdout",
+          "stderr": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/restore-original.stderr"
+        }
+      ],
+      "scope": "isolated original stable -> generic maintenance -> stage4 -> original stable; no real global mutation",
+      "originalSource": "97eef33d866301a2985f510dd486a21196eea3f9",
+      "maintenanceSource": "93faae7234c03ba4ac55c74242ea692debd4b4c0",
+      "candidateSource": "430d28cd10932219b2b18440ad4be252e9094003",
+      "installs": [
+        {
+          "label": "install-original",
+          "receipt": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-original-registry.json.install.json",
+          "source": "git:97eef33d866301a2985f510dd486a21196eea3f9",
+          "package": "cb950db942277275d18b88e365a24bfbcd5f639d4509f1f643ca470e7a4230bc",
+          "epoch": 1,
+          "installed": [
+            {
+              "digest": "7b816c386100708c443936f059aaa2d13040f3471be45bc3f2e93fc5e4e641a8",
+              "smoke": "PASS"
+            }
+          ]
+        },
+        {
+          "label": "install-maintenance",
+          "receipt": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-maintenance-registry.json.install.json",
+          "source": "git:93faae7234c03ba4ac55c74242ea692debd4b4c0",
+          "package": "0307e83afb86765224982dc86efdd3943f8a082f9752b83092c7f71345f0589f",
+          "epoch": 2,
+          "installed": [
+            {
+              "digest": "2405dbc165ed15166f7cc11750d635d3fdfe65ab58fe0d7747c92841f8155221",
+              "smoke": "PASS"
+            }
+          ]
+        },
+        {
+          "label": "install-stage4",
+          "receipt": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/install-stage4-registry.json.install.json",
+          "source": "git:430d28cd10932219b2b18440ad4be252e9094003",
+          "package": "2354bda8bd4af92acfc8d73f89fa76f2e00c582c421a144bea8668a9e2eda18a",
+          "epoch": 3,
+          "installed": [
+            {
+              "digest": "58337ce29299ff743ec0a01e9678f245d3a2e1ec4ed59d1fe421fed88937a1c4",
+              "smoke": "PASS"
+            }
+          ]
+        },
+        {
+          "label": "restore-original",
+          "receipt": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/restore-original-registry.json.install.json",
+          "source": "git:97eef33d866301a2985f510dd486a21196eea3f9",
+          "package": "cb950db942277275d18b88e365a24bfbcd5f639d4509f1f643ca470e7a4230bc",
+          "epoch": 4,
+          "installed": [
+            {
+              "digest": "7b816c386100708c443936f059aaa2d13040f3471be45bc3f2e93fc5e4e641a8",
+              "smoke": "PASS"
+            }
+          ]
+        }
+      ],
+      "oldActiveState": {
+        "runId": "old-active",
+        "startedAt": "2026-09-07T22:51:25.134823Z",
+        "flow": "formal",
+        "status": "ACTIVE",
+        "requirementSource": "requirements.md",
+        "requirementRevision": "a234b86bbf34900c54e164dd2a6983c0b407d66afb0d9538e0627aad88b01b27",
+        "requirementConfirmed": false,
+        "requirementArtifacts": [
+          {
+            "path": "requirements.md",
+            "revision": "a234b86bbf34900c54e164dd2a6983c0b407d66afb0d9538e0627aad88b01b27"
+          }
+        ],
+        "basePromptRevision": "a741f48c60cf044aa1920d63a2cd05463f331279c39aaa3157588b37e2cca6ca",
+        "catalogRevision": "83f1b995a4a41709ba96d5abc26be43f42cdcd73ccc41319b10dc01f4d92395d",
+        "promptHashes": {
+          "action:carry": "5d2af622673197f7e110078d9c796fdd5a2bcfb88c9c4a650e8e82a92ef9ddf2",
+          "action:development-worker": "145a23508c7c8f9f05848e574975569e7527f048218b2fdc54ea00f036ad2f54",
+          "action:product-review": "8e43071a5dcedb2ccd43aaa3fdb945d88eb9392a7fc78e660a1bdad76865a243",
+          "action:qa-design": "69ace575d20e3f81f85c91f47f8c75d5cda7ff084041018395e16e05adfa95e4",
+          "action:qa-execution": "012323b6ce855837b5378eb4bdc33ecc8b3a977c3e9cabbde860b0712240425f",
+          "action:qa-review": "c0f64510321a7df16532fe4cd9a65d433159bf8312a18b0abd68bf7afebc852d",
+          "action:requirements-clarification": "022f2ff5774072b0a01400e4e730c9173c9fab425ee856460d2179790a813fde",
+          "action:start-readiness": "3f6d61be58075016cc14e8f2584f273f0fa48d145d0b07bdb75a5fe034dfbb75",
+          "base": "a741f48c60cf044aa1920d63a2cd05463f331279c39aaa3157588b37e2cca6ca",
+          "gate:complexity-gate": "8c5456367039a86a2aa91e508e062dab917ca14283e8c1a967e1ef47ee34a6f8",
+          "gate:implementation-quality-gate": "549efc8bfe1ef2a04616be79a0efd795a32532114a0469ab8005331854b10a33",
+          "gate:merge-gate": "9d111faf1b1c492e83d0a9f757ffe9f1ab4dc192696977f77630b3841a6794ad"
+        },
+        "vcs": "git",
+        "baseSnapshot": "018eca7fc338f65a7cef72b13394b0c1447c4528",
+        "currentSnapshot": "018eca7fc338f65a7cef72b13394b0c1447c4528",
+        "stateIntegrity": "33766379ac7be32e978dbbba5026cc717567a3ef154c1bbb17d958375cc1dd19",
+        "splitDeclaration": "no",
+        "admissionRegistry": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/home/.formal-gates/registry.json",
+        "admissionRecordId": "codex-project-a8036c888f8a",
+        "admissionRoot": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project",
+        "admissionTarget": "/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/phase4-b3-install-maintenance-dv1cufa1/project/.codex/skills/formal-gates",
+        "admissionEpoch": 1,
+        "admissionGeneration": 1,
+        "admissionLease": "lease-1",
+        "admissionToken": "token-1788821484854634000",
+        "selectedGates": [],
+        "skipAuthorizations": {},
+        "completedReviewWaves": 0,
+        "extraReviewWaves": 0,
+        "actions": {
+          "development-worker": {
+            "status": "PENDING"
+          },
+          "product-review": {
+            "status": "PENDING"
+          },
+          "requirements-clarification": {
+            "status": "PENDING"
+          },
+          "start-readiness": {
+            "status": "PENDING"
+          }
+        },
+        "executionScopes": {},
+        "qaReviewByMode": {},
+        "qaDesignByMode": {},
+        "gates": {
+          "complexity-gate": {
+            "status": "PENDING"
+          },
+          "implementation-quality-gate": {
+            "status": "PENDING"
+          },
+          "merge-gate": {
+            "status": "PENDING"
+          }
+        },
+        "carry": {},
+        "dispatches": {},
+        "preDevelopmentReviewSeries": {
+          "product-review": {
+            "action": "product-review",
+            "activationSource": "WORKFLOW_START",
+            "automaticLimit": 3,
+            "completed": 0,
+            "currentLimit": 3,
+            "remainingAutomatic": 3,
+            "remainingCapacity": 3,
+            "nextRoundRequirement": "AUTOMATIC_CAPACITY",
+            "extraAuthorized": 0,
+            "extraConsumed": 0,
+            "authorizations": [],
+            "rawCandidates": [],
+            "adjudications": [],
+            "corrections": [],
+            "effectiveReviewStatus": {
+              "status": "PENDING",
+              "source": "WORKFLOW_START",
+              "revision": 0,
+              "blockingFindingIds": [],
+              "advisoryFindingIds": [],
+              "downstreamImpact": []
+            }
+          },
+          "start-readiness": {
+            "action": "start-readiness",
+            "activationSource": "WORKFLOW_START",
+            "automaticLimit": 3,
+            "completed": 0,
+            "currentLimit": 3,
+            "remainingAutomatic": 3,
+            "remainingCapacity": 3,
+            "nextRoundRequirement": "AUTOMATIC_CAPACITY",
+            "extraAuthorized": 0,
+            "extraConsumed": 0,
+            "authorizations": [],
+            "rawCandidates": [],
+            "adjudications": [],
+            "corrections": [],
+            "effectiveReviewStatus": {
+              "status": "PENDING",
+              "source": "WORKFLOW_START",
+              "revision": 0,
+              "blockingFindingIds": [],
+              "advisoryFindingIds": [],
+              "downstreamImpact": []
+            }
+          }
+        }
+      },
+      "generations": [
+        {
+          "label": "install-original",
+          "epoch": 1,
+          "generations": {
+            "codex-project-a8036c888f8a": 1
+          }
+        },
+        {
+          "label": "install-maintenance",
+          "epoch": 2,
+          "generations": {
+            "codex-project-a8036c888f8a": 2
+          }
+        },
+        {
+          "label": "install-stage4",
+          "epoch": 3,
+          "generations": {
+            "codex-project-a8036c888f8a": 3
+          }
+        },
+        {
+          "label": "restore-original",
+          "epoch": 4,
+          "generations": {
+            "codex-project-a8036c888f8a": 4
+          }
+        }
+      ],
+      "oldActiveBytesUnchanged": true,
+      "faultUpgradeAndRestorePreserveRegistryAndLauncherBytes": true,
+      "status": "PASS",
+      "maintenancePatchRelation": {
+        "path": "references/phase4-installer-maintenance.patch",
+        "oldAndCurrentGitDiffIdentical": true,
+        "oldFilesChanged": [
+          "internal/validate/install.go"
+        ]
+      }
+    }
+  },
+  "evidenceScope": "Current sequential source checks and actual isolated installed package validation. Retained capabilities do not reuse historical PASS. No global publication.",
+  "documentationValidation": {
+    "publicContractCommits": [
+      "3ce5928",
+      "ea7bc131ac841c42156ec94ee0d35e295ac569a7",
+      "d840f4707b916ff5738b48b04aa30e469c0ccd1d",
+      "1de456037403434db9d898aca835ad1a94d1e40f"
+    ],
+    "log": "/tmp/phase4-b3-430d28c-phase0.jsonl",
+    "status": "PASS"
+  },
+  "requirementRevision": "4ac13d5fe624204d15938f4c34c6c2163908ea4cc76ff6040acd231821094e89",
+  "productionSnapshot": "430d28cd10932219b2b18440ad4be252e9094003"
+}

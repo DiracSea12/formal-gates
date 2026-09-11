@@ -257,6 +257,12 @@ func copyPackageFixture(t *testing.T) string {
 	// 要么被格式检查拒绝、要么 fork/exec 报 "%1 is not compatible"；POSIX 上
 	// shebang 桩经解释器执行即可。
 	mustWriteValidateTest(t, filepath.Join(target, "bin", nativeBinaryName()), string(stubBinaryPayload(t)))
+	// Install now invokes the source's validator before copying the package.
+	// This unit fixture must already be executable at that point; permissions
+	// applied later while copying the installed tree cannot prepare its input.
+	if err := os.Chmod(filepath.Join(target, "bin", nativeBinaryName()), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return target
 }
 

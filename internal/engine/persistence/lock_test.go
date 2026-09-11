@@ -1,10 +1,13 @@
 package persistence
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -83,8 +86,8 @@ func TestLockStaleByAge(t *testing.T) {
 	unlock()
 }
 
-// TestLockStaleByGarbage：锁内容不可解析（半个字节、非 pid 格式）视为
-// 崩溃残留，可抢占。
+// TestLockStaleByGarbage：不完整的 owner 行超过创建宽限期后可回收；
+// 新鲜的半写入内容属于正在取得锁的创建者，不能立即视为崩溃残留。
 func TestLockStaleByGarbage(t *testing.T) {
 	store := newTestStore(t)
 	if err := os.MkdirAll(store.dir, 0o700); err != nil {
@@ -94,12 +97,147 @@ func TestLockStaleByGarbage(t *testing.T) {
 		if err := os.WriteFile(store.lockPath(), []byte(content), 0o600); err != nil {
 			t.Fatalf("write lock: %v", err)
 		}
+		old := time.Now().Add(-lockStaleAge - time.Second)
+		if err := os.Chtimes(store.lockPath(), old, old); err != nil {
+			t.Fatal(err)
+		}
 		unlock, err := store.acquireLock()
 		if err != nil {
 			t.Fatalf("acquire over garbage lock %q: %v", content, err)
 		}
 		unlock()
 	}
+}
+
+func TestLockPreservesUnpublishedOwner(t *testing.T) {
+	for _, partial := range []string{"", "pid="} {
+		t.Run(fmt.Sprintf("bytes-%d", len(partial)), func(t *testing.T) {
+			store := newTestStore(t)
+			first, err := os.OpenFile(store.lockPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer first.Close()
+			if _, err := first.WriteString(partial); err != nil {
+				t.Fatal(err)
+			}
+			identity, err := first.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unlock, err := store.acquireLock(); err == nil {
+				unlock()
+				t.Fatal("second writer acquired before the first owner published its PID")
+			} else {
+				var held *LockHeldError
+				if !errors.As(err, &held) {
+					t.Fatal(err)
+				}
+			}
+			current, err := os.Stat(store.lockPath())
+			if err != nil || !os.SameFile(identity, current) {
+				t.Fatal("contender replaced the first creator's inode")
+			}
+		})
+	}
+}
+
+// Independent test-binary processes exercise the same Store.Save file lock as
+// simultaneous installed CLI commands. Every successful commit must survive;
+// only CAS conflicts and an occupied lock may be retried by the callers.
+func TestSaveConcurrentProcessesPreserveEveryCommit(t *testing.T) {
+	const workers, commits = 6, 40
+	if dir := os.Getenv("FORMAL_GATES_TEST_COMMIT_DIRECTORY"); dir != "" {
+		store, err := NewStore(dir, Config{PackageDigest: testPackageDigest})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for n := 0; n < commits; n++ {
+			committed := false
+			for retry := 0; retry < 2000; retry++ {
+				snap, err := store.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var values map[string]int
+				if err := json.Unmarshal(snap.Content, &values); err != nil {
+					t.Fatal(err)
+				}
+				key := os.Getenv("FORMAL_GATES_TEST_COMMIT_WORKER") + ":" + strconv.Itoa(n)
+				values[key] = os.Getpid()
+				_, err = store.Save(Transaction{ExpectedRevision: snap.Revision, ExpectedFingerprint: "stable", CollectFingerprint: staticFingerprint("stable"), Content: values})
+				if err == nil {
+					committed = true
+					break
+				}
+				var held *LockHeldError
+				var conflict *RevisionConflictError
+				if !errors.As(err, &held) && !errors.As(err, &conflict) {
+					t.Fatalf("commit %s failed outside CAS/lock contention: %v", key, err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !committed {
+				t.Fatal("bounded contention retries exhausted")
+			}
+		}
+		return
+	}
+	store := newTestStore(t)
+	if _, err := store.Save(Transaction{ExpectedFingerprint: "stable", CollectFingerprint: staticFingerprint("stable"), Content: map[string]int{}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	done := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSaveConcurrentProcessesPreserveEveryCommit$")
+		cmd.Env = append(os.Environ(), "FORMAL_GATES_TEST_COMMIT_DIRECTORY="+store.dir, "FORMAL_GATES_TEST_COMMIT_WORKER="+strconv.Itoa(i))
+		go func() {
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				err = fmt.Errorf("child writer: %w: %s", err, out)
+			}
+			done <- err
+		}()
+	}
+	for i := 0; i < workers; i++ {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	snap, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]int
+	if err := json.Unmarshal(snap.Content, &values); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Revision != 1+workers*commits || len(values) != workers*commits {
+		t.Fatalf("lost or duplicate commits: revision=%d values=%d", snap.Revision, len(values))
+	}
+	pids := map[int]bool{}
+	for i := 0; i < workers; i++ {
+		for n := 0; n < commits; n++ {
+			key := fmt.Sprintf("%d:%d", i, n)
+			pid, ok := values[key]
+			if !ok {
+				t.Fatalf("missing successful commit %s", key)
+			}
+			pids[pid] = true
+		}
+	}
+	if len(pids) != workers || pids[os.Getpid()] {
+		t.Fatalf("not independent writer processes: %v", pids)
+	}
+	if _, err := os.Stat(store.intentPath()); !os.IsNotExist(err) {
+		t.Fatalf("completed writers left intent: %v", err)
+	}
+	t.Logf("%d independent native processes committed %d distinct values at revision %d; no intent remains", len(pids), len(values), snap.Revision)
 }
 
 // TestLockStaleByDeadProcess：持有进程已退出（真实死亡进程），锁可抢占。

@@ -1,0 +1,54 @@
+{
+  "description": "Continuation evidence for the installed full native canary after the original Go test host timeout. The original timeout remains a FAIL_TIMEOUT; this record covers only the same-run public CLI continuation.",
+  "originalFailureObservation": "/tmp/phase4-b3-native-full-9-failure-observation.json",
+  "originalHarness": {
+    "attempt": 9,
+    "status": "FAIL_TIMEOUT",
+    "elapsedSeconds": 1800.548,
+    "log": "/tmp/phase4-b3-installed-full-native-9.log",
+    "resultJSON": "/tmp/phase4-b3-installed-full-native-9.json",
+    "resultJSONExists": false
+  },
+  "continuation": {
+    "runId": "native-full",
+    "originalPendingRevision": 159,
+    "finalRevision": 182,
+    "finalStatus": "COMPLETE",
+    "candidate": "1d46b65457338337112caacaa82fdc8a0086df52",
+    "finalGuaranteeWave": "wave:sha256:fe9234083c6c0d32cad798520901473ee687b1162aa4722a40fa56445d2b8038",
+    "results": {
+      "blackbox": {
+        "status": "PASS",
+        "identity": "01a07e36-d85f-76d1-9c13-dc07badfdfef",
+        "transcript": "/Users/suxinyang/.codex/sessions/2026/09/08/rollout-2026-09-08T07-31-58-01a07e36-d85f-76d1-9c13-dc07badfdfef.jsonl"
+      },
+      "whitebox": {
+        "status": "PASS",
+        "identity": "01a07e36-d7a0-7d12-81eb-74d3703bae25",
+        "transcript": "/Users/suxinyang/.codex/sessions/2026/09/08/rollout-2026-09-08T07-31-58-01a07e36-d7a0-7d12-81eb-74d3703bae25.jsonl"
+      }
+    },
+    "repairCandidate": "1d46b65457338337112caacaa82fdc8a0086df52",
+    "repairStatus": "PASS",
+    "repairCommit": "1d46b65457338337112caacaa82fdc8a0086df52"
+  },
+  "modelPolicyObserved": {
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "max",
+    "blackboxTranscriptSettings": "verified from native turn_context",
+    "whiteboxTranscriptSettings": "verified from native turn_context"
+  },
+  "driver": {
+    "binary": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestRegularInstalledFullNativeFailRepairToSeal3007301586/001/.local/bin/formal-gates",
+    "projectRoot": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestRegularInstalledFullNativeFailRepairToSeal3007301586/002",
+    "home": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestRegularInstalledFullNativeFailRepairToSeal3007301586/001",
+    "providerAuthHome": "/Users/suxinyang/.codex",
+    "commands": [
+      "workflow drive --root <projectRoot> --run-id native-full --action-id act:entry/blackbox-execution/wave-4:38ea0edbfe0cacdeabdce3777f14a90cfd3f6c463f5c61a5e14b42a01ffcd8a4/attempt-1",
+      "workflow drive --root <projectRoot> --run-id native-full --action-id act:entry/whitebox-execution/wave-4:c5e3ac77697dbb791464464cc438b8f42d6720470bc1618a930fc649a7ea0b3c/attempt-1",
+      "workflow drive --root <projectRoot> --run-id native-full"
+    ],
+    "formalDriverUnchanged": "/Users/suxinyang/.local/bin/formal-gates"
+  },
+  "scope": "Same installed candidate, same workflow run, and already-issued final-guarantee actions. No state file was edited and no new run, review, repair authorization, or product change was introduced. This is development validation evidence, not the authoritative phase-4 QA verdict or Seal."
+}

@@ -1,0 +1,178 @@
+{
+  "date": "2026-09-07",
+  "scope": "B1 developer validation; not a formal QA result",
+  "native": [
+    {
+      "entry": "fresh facade dispatch",
+      "actionId": "act:entry/product-review/review-1/attempt-1",
+      "claim": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "task": "entry/product-review/review-1",
+        "provider": "codex",
+        "requirementRevision": "8c3bec1e28508460a2cf77be1e32acb27bad1e52462bcc0759a66424fde7b91e",
+        "candidate": "24a0029ca9df0db65db45b2fb53389a283893c80",
+        "payloadDigest": "sha256:7eebd1af62b2cefdc792c8085e32e620f63aca0f598c974fde83a62a6386be28",
+        "operation": "spawn"
+      },
+      "nativeIdentity": "01a07b68-c530-76f3-99a7-bff4dd275034",
+      "claimed": true,
+      "resumeClaimed": false,
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "provider": "codex",
+        "identity": "01a07b68-c530-76f3-99a7-bff4dd275034",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T18-27-38-01a07b68-c530-76f3-99a7-bff4dd275034.jsonl",
+        "status": "STOPPED"
+      },
+      "cost": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 14787,
+        "outputTokens": 1364,
+        "totalInputTokens": 14787,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T18-27-38-01a07b68-c530-76f3-99a7-bff4dd275034.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T10:27:39.128Z",
+          "completedAt": "2026-09-07T10:28:26.869Z",
+          "wallTimeMillis": 47741
+        }
+      },
+      "runRevision": 10,
+      "semanticCompleted": 1
+    },
+    {
+      "entry": "interrupted process-group resume",
+      "actionId": "act:entry/product-review/review-1/attempt-1",
+      "claim": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "task": "entry/product-review/review-1",
+        "provider": "codex",
+        "requirementRevision": "8c3bec1e28508460a2cf77be1e32acb27bad1e52462bcc0759a66424fde7b91e",
+        "candidate": "fe51a486a332e8b62f2a8ac5cc7e37c247d06d2c",
+        "payloadDigest": "sha256:5367b971ba7f46b6d9b2b29d8d5c24c8b9f769d0dfed4a21ad327af6073093d7",
+        "operation": "spawn"
+      },
+      "nativeIdentity": "01a07b86-f9fd-7580-9eff-9e9cef7be823",
+      "claimed": true,
+      "resumeClaimed": true,
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "provider": "codex",
+        "identity": "01a07b86-f9fd-7580-9eff-9e9cef7be823",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T19-00-38-01a07b86-f9fd-7580-9eff-9e9cef7be823.jsonl",
+        "status": "STOPPED"
+      },
+      "cost": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 12972,
+        "outputTokens": 926,
+        "totalInputTokens": 12972,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T19-00-38-01a07b86-f9fd-7580-9eff-9e9cef7be823.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T11:00:38.933Z",
+          "completedAt": "2026-09-07T11:01:12.266Z",
+          "wallTimeMillis": 33333
+        }
+      },
+      "runRevision": 12,
+      "semanticCompleted": 1
+    },
+    {
+      "entry": "installed public CLI intake to route-ready",
+      "actionId": "act:entry/product-review/review-1/attempt-1",
+      "claim": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "task": "entry/product-review/review-1",
+        "provider": "codex",
+        "requirementRevision": "b4f38a7ade8f6c844d5f495ac06f8341d428fdf4dc759281054a2006b30117db",
+        "candidate": "18a529a067b84219821139491620a9555bfef395",
+        "payloadDigest": "sha256:757d6524d384de21df65f69136de7b76e352a770fe2371c7d098b0aac74d4bbf",
+        "operation": "spawn"
+      },
+      "nativeIdentity": "01a07b92-61aa-74e3-be34-7359319e1266",
+      "claimed": true,
+      "resumeClaimed": false,
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "provider": "codex",
+        "identity": "01a07b92-61aa-74e3-be34-7359319e1266",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T19-13-06-01a07b92-61aa-74e3-be34-7359319e1266.jsonl",
+        "status": "STOPPED"
+      },
+      "cost": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 15232,
+        "inputCacheMissTokens": 660,
+        "outputTokens": 670,
+        "totalInputTokens": 15892,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T19-13-06-01a07b92-61aa-74e3-be34-7359319e1266.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T11:13:06.318Z",
+          "completedAt": "2026-09-07T11:14:26.56Z",
+          "wallTimeMillis": 80242
+        }
+      },
+      "runRevision": 22,
+      "semanticCompleted": 1
+    }
+  ],
+  "rejections": [
+    {
+      "entry": "installed workflow drive --action-id unissued",
+      "evidence": "TestRegularInstalledPublicIntakeToReady: actual binary returns UNKNOWN_ACTION; revision unchanged before real native product review",
+      "coverage": "unknown action on actual public binary"
+    },
+    {
+      "entry": "Facade.ExecuteCodex completed action",
+      "evidence": "TestRegularCodexNative: second call returns DUPLICATE_ACTION before command construction",
+      "coverage": "fresh native duplicate"
+    },
+    {
+      "entry": "Facade.ExecuteCodex --resume completed action",
+      "evidence": "TestRegularCodexNativeInterruptedResume: second resume returns DUPLICATE_ACTION; one original TaskKey and native identity remain",
+      "coverage": "native resume duplicate"
+    },
+    {
+      "entry": "installed workflow drive --action-id issued while requirement-change Ask pending",
+      "evidence": "TestRegularInstalledPublicIntakeToReady: actual binary returned EVENT_NOT_CURRENT; canceling the Ask allowed the original issued native task to execute once",
+      "coverage": "paused/cancelled authorization before native creation"
+    },
+    {
+      "entry": "actual host interrupted after durable claim and before exec.Start",
+      "hostPid": 35717,
+      "evidence": "TestRegularCodexNativeInterruptedBeforeCall passed: observer killed actual host after atomic claim state replacement; execution directory was absent before and after UNKNOWN recovery; user abort/source reconciliation completed terminal cleanup",
+      "coverage": "pre-call interruption, UNKNOWN zero native calls, cleanup"
+    }
+  ],
+  "contractTests": [
+    "TestRegularRejectsBeforeClaimAndIndependentRetry",
+    "TestRegularConcurrentClaimExactlyOnce",
+    "TestRegularSourceUsageGuardRefillFaultWindows",
+    "TestRegularMinorRevisionThenCrossStageInvalidation",
+    "TestRegularThreeRoundsStayIndependent",
+    "TestRegularTokenCapStopsBeforeRefillAndAllowsOneTask"
+  ],
+  "unsupportedInB1": [
+    "development",
+    "QA",
+    "gates",
+    "split topology",
+    "other providers"
+  ]
+}

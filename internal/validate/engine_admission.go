@@ -13,6 +13,7 @@ import (
 // only as a launcher-derived value; callers do not choose a runtime, target
 // identity, or package digest themselves.
 type EngineAdmission struct {
+	Host          string
 	RegistryPath  string
 	RecordID      string
 	Target        string
@@ -160,7 +161,7 @@ func resolveEngineAdmission(root, packageRoot, requestedRecordID string) (Engine
 	if err := verifyEngineBootstrapReceipt(registryPath, record, packageDigest); err != nil {
 		return EngineAdmission{}, err
 	}
-	return EngineAdmission{RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token}, nil
+	return EngineAdmission{Host: record.Host, RegistryPath: filepath.Clean(registryPath), RecordID: record.ID, Target: filepath.Clean(record.Target), PackageDigest: packageDigest, Generation: record.Generation, Lease: record.Lease, Token: record.Token}, nil
 }
 
 // admissionRecordRootMatch reports whether a record can serve root.  Global
@@ -221,4 +222,61 @@ func verifyEngineBootstrapReceipt(registryPath string, record RegistryRecord, pa
 		}
 	}
 	return fmt.Errorf("UNREGISTERED_INSTALL: registry bootstrap receipt does not contain admitted target %q", record.ID)
+}
+
+// verifyRegistryBindingRecord 校验 record 与 workflow root/package root 及启
+// 动器身份的绑定关系。不含 registry 加载与安装目标摘要核验：二者由调用方
+// 在上游完成，避免同一验证链内重复读盘与重复全树哈希。
+func verifyRegistryBindingRecord(record RegistryRecord, root, packageRoot string) error {
+	canonicalRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	canonicalPackage, err := filepath.Abs(packageRoot)
+	if err != nil {
+		return err
+	}
+	// A project-scope record is bound to one repository root.  A global
+	// installation is intentionally reusable across projects, so its
+	// projectRoot records the host-level installation namespace rather than
+	// the arbitrary repository that is invoking the stable driver.
+	if record.Scope == "project" {
+		if expected := canonicalRegistryPath(record.CanonicalPaths["projectRoot"]); expected != "." && expected != canonicalRegistryPath(canonicalRoot) {
+			return fmt.Errorf("UNREGISTERED_INSTALL: registry project root does not match workflow root")
+		}
+	}
+	if canonicalRegistryPath(record.Target) != canonicalRegistryPath(canonicalPackage) || canonicalRegistryPath(record.CanonicalPaths["target"]) != canonicalRegistryPath(canonicalPackage) {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registry target does not match package root")
+	}
+	// Installed packages are only allowed to drive workflow writes through
+	// the fixed launcher recorded by admission.  A direct invocation of the
+	// candidate binary under the host target has the same package binding but
+	// a different executable identity and is therefore rejected.  In-process test fixtures
+	// may omit a launcher; shipped commands always require the fixed launcher.
+	executable, executableErr := os.Executable()
+	if executableErr != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: cannot resolve invoking launcher: %w", executableErr)
+	}
+	base := filepath.Base(filepath.Clean(executable))
+	if !strings.HasSuffix(base, ".test") && !strings.HasSuffix(base, ".test.exe") && !launcherInvocationMatches(record.LauncherPath) {
+		return fmt.Errorf("UNREGISTERED_INSTALL: workflow must be driven by stable launcher %s", record.LauncherPath)
+	}
+	return nil
+}
+
+func verifyRegisteredTargetIdentity(record RegistryRecord) error {
+	if err := assertInstallSource(record.Target); err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target is not an installed artifact: %w", err)
+	}
+	if strings.TrimSpace(record.InstalledDigest) == "" {
+		return nil
+	}
+	receipt, err := PackageReceipt(record.Target)
+	if err != nil {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target identity cannot be read: %w", err)
+	}
+	if receipt.Digest != record.InstalledDigest {
+		return fmt.Errorf("UNREGISTERED_INSTALL: registered target digest is stale")
+	}
+	return nil
 }

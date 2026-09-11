@@ -39,18 +39,6 @@ func bc06InstallSource(t *testing.T) string {
 	return root
 }
 
-func bc06InstallLegacyActiveState(t *testing.T, project, runID string) string {
-	t.Helper()
-	state := RunState{RunID: runID, Status: "ACTIVE"}
-	data, err := json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(project, ".gates", "tmp", runID, "state.json")
-	bc06InstallWriteFile(t, path, string(data)+"\n", 0o600)
-	return path
-}
-
 func bc06InstallCandidateActiveState(t *testing.T, project, runID string) string {
 	t.Helper()
 	receipt := facade.IntakeConfirmationReceipt{
@@ -97,55 +85,4 @@ func bc06InstallCandidateActiveState(t *testing.T, project, runID string) string
 		t.Fatalf("candidate fixture content.phase=%q, want INTAKE_REGISTERED", probe.Content.Phase)
 	}
 	return path
-}
-
-// TestPhase3BC06InstallAllowsActiveLegacyAndCandidateRuns verifies that an
-// install can replace the registered runtime while either state shape has an
-// active run, without rewriting that run. The candidate fixture is produced
-// through the façade so its nested content.phase is the real engine state
-// shape; the legacy fixture uses the documented ACTIVE RunState shape.
-func TestPhase3BC06InstallAllowsActiveLegacyAndCandidateRuns(t *testing.T) {
-	cases := []struct {
-		name       string
-		runID      string
-		makeActive func(*testing.T, string, string) string
-	}{
-		{name: "legacy-active", runID: "legacy-active", makeActive: bc06InstallLegacyActiveState},
-		{name: "candidate-intake", runID: "candidate-intake", makeActive: bc06InstallCandidateActiveState},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			project := t.TempDir()
-			statePath := testCase.makeActive(t, project, testCase.runID)
-			beforeState, err := os.ReadFile(statePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			source := bc06InstallSource(t)
-			registry := filepath.Join(t.TempDir(), "registry.json")
-			launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())
-			report, err := Install(InstallOptions{
-				Source: source, Host: "claude", Scope: "project", Project: project,
-				RegistryPath: registry, BinaryTarget: launcher, Force: true, SkipHooks: true,
-			})
-			if err != nil {
-				t.Fatalf("install with active run %s failed: %v", testCase.runID, err)
-			}
-			if len(report.Targets) != 1 || report.Targets[0].Smoke != "PASS" {
-				t.Fatalf("install report=%#v", report)
-			}
-			afterState, readErr := os.ReadFile(statePath)
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			if string(afterState) != string(beforeState) {
-				t.Fatal("install changed the active run state")
-			}
-			for _, path := range []string{registry, filepath.Join(project, ".claude", "skills", "formal-gates"), launcher} {
-				if _, statErr := os.Stat(path); statErr != nil {
-					t.Errorf("successful install did not create %s: %v", path, statErr)
-				}
-			}
-		})
-	}
 }

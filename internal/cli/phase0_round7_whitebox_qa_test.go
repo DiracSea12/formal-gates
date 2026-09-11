@@ -1,10 +1,11 @@
 package cli
 
+import
+
 // Independent whitebox QA for the stage-0 public mutation surface. Registry
 // records are owned by the install transaction; the CLI must not expose a
 // second registry writer or allow direct registry-path injection.
-
-import (
+(
 	"bytes"
 	"path/filepath"
 	"strings"

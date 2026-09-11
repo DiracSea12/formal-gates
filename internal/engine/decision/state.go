@@ -26,6 +26,7 @@ import (
 // 阶段 2；本结构只承载 Decide/Observe 所需的最小决策输入。Tasks 中缺省
 // 的键按 QUEUED 解释（依赖满足、尚未签发）。
 type State struct {
+	Regular           *RegularView                           `json:"regularView,omitempty"`
 	DefinitionVersion authoring.DefinitionVersion            `json:"definitionVersion"`
 	Phase             runtime.RunPhase                       `json:"phase"`
 	Completed         []authoring.StepID                     `json:"completed"` // 有序去重，由 CompleteStep 维护
@@ -131,6 +132,7 @@ func (s *State) TransitionTask(key runtime.TaskKey, to runtime.TaskStatus) error
 // stateWire 是 State 的 canonical wire 形态：任务按 TaskKey 字符串排序，
 // 不携带 map 遍历序；Completed 由 CompleteStep 维持有序。
 type stateWire struct {
+	Regular           *RegularView    `json:"regular,omitempty"`
 	DefinitionVersion string          `json:"definitionVersion"`
 	Phase             string          `json:"phase"`
 	Completed         []string        `json:"completed"`
@@ -147,6 +149,7 @@ type stateTaskWire struct {
 // state.json 投影——后者属阶段 2。
 func (s *State) CanonicalBytes() ([]byte, error) {
 	w := stateWire{
+		Regular:           s.Regular,
 		DefinitionVersion: string(s.DefinitionVersion),
 		Phase:             string(s.Phase),
 		Completed:         make([]string, 0, len(s.Completed)),

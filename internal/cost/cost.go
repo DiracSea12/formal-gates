@@ -48,9 +48,10 @@ type DispatchCost struct {
 // TaskTiming is the active model-task wall time, including tool waits. Start
 // and completion identify the outer boundaries; separate-turn idle is excluded.
 type TaskTiming struct {
-	StartedAt      string `json:"startedAt"`
-	CompletedAt    string `json:"completedAt"`
-	WallTimeMillis int64  `json:"wallTimeMillis"`
+	IncompleteTurns int    `json:"incompleteTurns,omitempty"`
+	StartedAt       string `json:"startedAt"`
+	CompletedAt     string `json:"completedAt"`
+	WallTimeMillis  int64  `json:"wallTimeMillis"`
 }
 
 // Usage is the exact metered token usage parsed from one host transcript,

@@ -57,7 +57,11 @@ func BeginRun(root, runID string) error {
 	return file.Close()
 }
 
-func Capture(root, provider, eventName string, payload []byte) (CaptureResult, error) {
+// CaptureBinding lets a resumed session attribute each observed turn to its
+// already-claimed dispatch instead of guessing between historical bindings.
+type CaptureBinding struct{ RunID, DispatchID string }
+
+func Capture(root, provider, eventName string, payload []byte, bindings ...CaptureBinding) (CaptureResult, error) {
 	adapter, err := adapterFor(provider)
 	if err != nil {
 		return CaptureResult{}, err
@@ -106,6 +110,12 @@ func Capture(root, provider, eventName string, payload []byte) (CaptureResult, e
 		}
 	}
 	record := eventRecord{Provider: adapter.name, Event: event, Identity: identity, Correlation: correlation, TranscriptPath: transcriptPath, Reason: reason}
+	if len(bindings) > 0 {
+		if len(bindings) != 1 || strings.TrimSpace(bindings[0].RunID) == "" || strings.TrimSpace(bindings[0].DispatchID) == "" {
+			return CaptureResult{}, fmt.Errorf("lifecycle capture binding requires exactly one run and dispatch")
+		}
+		record.RunID, record.DispatchID = bindings[0].RunID, bindings[0].DispatchID
+	}
 	duplicate := true
 	for _, root := range roots {
 		alreadyExists, err := recordEvent(root, record)

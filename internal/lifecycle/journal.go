@@ -11,6 +11,8 @@ import (
 )
 
 type eventRecord struct {
+	RunID          string `json:"runId,omitempty"`
+	DispatchID     string `json:"dispatchId,omitempty"`
 	Provider       string `json:"provider"`
 	Event          string `json:"event"`
 	Identity       string `json:"identity,omitempty"`
@@ -173,6 +175,16 @@ func bindPendingStops(root string, binding bindingRecord, correlation string) er
 }
 
 func matchingBindings(root string, record eventRecord) ([]bindingRecord, error) {
+	if record.RunID != "" || record.DispatchID != "" {
+		binding, found, err := readBinding(root, record.RunID, record.DispatchID)
+		if err != nil {
+			return nil, err
+		}
+		if !found || binding.Provider != record.Provider || binding.Identity != record.Identity {
+			return nil, fmt.Errorf("explicit lifecycle event must match an already-bound run, dispatch, provider and native identity")
+		}
+		return []bindingRecord{binding}, nil
+	}
 	paths, err := filepath.Glob(filepath.Join(CleanRoot(root), ".gates", "tmp", "*", "lifecycle", "*.json"))
 	if err != nil {
 		return nil, err

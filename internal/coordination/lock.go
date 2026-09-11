@@ -21,8 +21,7 @@ const (
 
 var sequence atomic.Uint64
 
-// AcquireRun serializes creation of a run id across the legacy and candidate
-// namespaces.
+// AcquireRun serializes creation of a run id before engine state exists.
 func AcquireRun(root, runID string) (func(), error) {
 	path := filepath.Join(root, ".gates", "run-locks", runID+".lock")
 	unlock, err := AcquirePath(path, "run start")
@@ -99,20 +98,31 @@ func stale(path string) bool {
 	if err != nil {
 		return false
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	expired := time.Since(info.ModTime()) > staleAge
+	// O_EXCL publishes the file before its owner line is written. A competing
+	// caller must not reclaim that fresh, empty or partial file. If creation
+	// crashed before publishing a complete owner, the existing age limit still
+	// permits recovery without mistaking an in-flight creator for a dead owner.
+	if !strings.HasSuffix(string(data), "\n") {
+		return expired
+	}
 	fields := strings.Fields(string(data))
 	if (len(fields) != 1 && len(fields) != 2) || !strings.HasPrefix(fields[0], "pid=") {
-		return true
+		return expired
 	}
 	if len(fields) == 2 && !strings.HasPrefix(fields[1], "token=") {
-		return true
+		return expired
 	}
 	pid, err := strconv.Atoi(strings.TrimPrefix(fields[0], "pid="))
 	if err != nil || pid <= 0 {
-		return true
+		return expired
 	}
 	if !ProcessAlive(pid) {
 		return true
 	}
-	info, err := os.Stat(path)
-	return err != nil || time.Since(info.ModTime()) > staleAge
+	return expired
 }

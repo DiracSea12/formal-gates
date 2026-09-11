@@ -126,6 +126,16 @@ func parseCodexTranscript(reader io.Reader) (Usage, error) {
 // boundaries. Tool execution and waits inside a task are included; idle time
 // between separate turns is excluded. Any unfinished task leaves timing absent.
 func CodexTaskTiming(path string) (TaskTiming, error) {
+	timing, err := CodexTaskTimingAfter(path, time.Time{})
+	if err == nil && timing.IncompleteTurns > 0 {
+		return TaskTiming{}, fmt.Errorf("Codex transcript contains unfinished tasks")
+	}
+	return timing, err
+}
+
+// CodexTaskTimingAfter excludes turns already settled by an earlier attempt of
+// the same native session. Idle time and the earlier attempt stay out of this one.
+func CodexTaskTimingAfter(path string, after time.Time) (TaskTiming, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return TaskTiming{}, err
@@ -144,7 +154,7 @@ func CodexTaskTiming(path string) (TaskTiming, error) {
 				TurnID string `json:"turn_id"`
 			} `json:"payload"`
 		}
-		if json.Unmarshal(line, &record) != nil || record.Type != "event_msg" || record.Timestamp.IsZero() {
+		if json.Unmarshal(line, &record) != nil || record.Type != "event_msg" || record.Timestamp.IsZero() || !record.Timestamp.After(after) {
 			return false
 		}
 		id := record.Payload.TurnID
@@ -173,10 +183,12 @@ func CodexTaskTiming(path string) (TaskTiming, error) {
 	if err != nil {
 		return TaskTiming{}, err
 	}
-	if len(completed) != len(starts) {
-		return TaskTiming{}, fmt.Errorf("Codex transcript contains unfinished tasks")
+	if len(completed) == 0 {
+		return TaskTiming{}, fmt.Errorf("Codex transcript contains no completed tasks")
 	}
-	return TaskTiming{StartedAt: first.Format(time.RFC3339Nano), CompletedAt: last.Format(time.RFC3339Nano), WallTimeMillis: elapsed.Milliseconds()}, nil
+	// Missing stop events do not erase independently paired completed turns.
+	// Report the unknown intervals explicitly; never estimate their duration.
+	return TaskTiming{IncompleteTurns: len(starts) - len(completed), StartedAt: first.Format(time.RFC3339Nano), CompletedAt: last.Format(time.RFC3339Nano), WallTimeMillis: elapsed.Milliseconds()}, nil
 }
 
 // cumulativeDelta computes the per-field delta between consecutive

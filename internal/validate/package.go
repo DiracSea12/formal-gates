@@ -3,13 +3,13 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"formal-gates/internal/host"
 	"formal-gates/internal/lifecycle"
-	"gopkg.in/yaml.v3"
 )
 
 var requiredFiles = []string{
@@ -23,10 +23,10 @@ var requiredFiles = []string{
 	"internal/cli/cli.go",
 	"internal/validate/catalog.go",
 	"internal/validate/runner.go",
-	"internal/validate/runstate.go",
+	"internal/engine/protocol/regular.go",
 	"internal/validate/install.go",
 	"internal/validate/managed_rules.go",
-	"internal/validate/workflow.go",
+	"internal/engine/facade/facade.go",
 	"internal/validate/canary.go",
 	"internal/host/host.go",
 	"definitions/workflow.json",

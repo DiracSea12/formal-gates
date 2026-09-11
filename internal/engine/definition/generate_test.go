@@ -13,7 +13,6 @@ import (
 
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/encoder"
-	"formal-gates/internal/validate"
 )
 
 // repoRoot 返回仓库根（测试 CWD 是本包目录）。go.mod 存在性校验防止在错误
@@ -39,7 +38,7 @@ func readCheckedIn(t *testing.T, rel string) []byte {
 // compileCanonical 编译定义表得到 canonical IR 与制品字节。
 func compileCanonical(t *testing.T) (*compiler.CompiledDefinition, []byte) {
 	t.Helper()
-	cd, err := compiler.Compile(Workflow(), Registry())
+	cd, err := compiler.Compile(RegularWorkflow(), Registry())
 	if err != nil {
 		t.Fatalf("compile workflow: %v", err)
 	}
@@ -186,7 +185,7 @@ func TestArtifactIndependentOfAssemblyAndRegistrationOrder(t *testing.T) {
 	canonicalDigest := encoder.Digest(canonical)
 
 	// 反向 assembly：同一批步骤逆序输入编译器。
-	reversed := Workflow()
+	reversed := RegularWorkflow()
 	for i, j := 0, len(reversed.Steps)-1; i < j; i, j = i+1, j-1 {
 		reversed.Steps[i], reversed.Steps[j] = reversed.Steps[j], reversed.Steps[i]
 	}
@@ -243,7 +242,8 @@ func TestArtifactIndependentOfAssemblyAndRegistrationOrder(t *testing.T) {
 			t.Fatalf("register handler %q: %v", h.id, err)
 		}
 	}
-	revRegCD, err := compiler.Compile(Workflow(), reg)
+	registerRegular(reg)
+	revRegCD, err := compiler.Compile(RegularWorkflow(), reg)
 	if err != nil {
 		t.Fatalf("compile reversed registry: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestCheckedInArtifactRoundTrip(t *testing.T) {
 	if encoder.Digest(checkedIn) != WorkflowDefinitionDigest {
 		t.Errorf("checked-in digest = %s, identity constant = %s", encoder.Digest(checkedIn), WorkflowDefinitionDigest)
 	}
-	canonical, err := compiler.Compile(Workflow(), Registry())
+	canonical, err := compiler.Compile(RegularWorkflow(), Registry())
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -286,43 +286,20 @@ func TestCheckedInArtifactRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCheckedInArtifactIsFutureDefinition：衔接 internal/validate/future.go
-// 的 LoadFutureDefinition——版本 bump 到 "2" 后，新制品解析路径（读
-// stateSchemaVersion/version 字段）仍然成立：作为新 future 候选被接受，
-// 不触发 "changed bytes without bump" 拒绝，且 digest 与同源常量一致。
-func TestCheckedInArtifactIsFutureDefinition(t *testing.T) {
-	future, err := validate.LoadFutureDefinition(repoRoot(t))
-	if err != nil {
-		t.Fatalf("LoadFutureDefinition rejected the v2 artifact: %v", err)
-	}
-	if future.SchemaVersion != encoder.StateSchemaVersion {
-		t.Errorf("stateSchemaVersion = %q, want %q", future.SchemaVersion, encoder.StateSchemaVersion)
-	}
-	if future.WorkflowVersion != WorkflowDefinitionVersion {
-		t.Errorf("workflowDefinitionVersion = %q, want %q", future.WorkflowVersion, WorkflowDefinitionVersion)
-	}
-	if future.Digest != WorkflowDefinitionDigest {
-		t.Errorf("future digest = %q, identity constant = %q", future.Digest, WorkflowDefinitionDigest)
-	}
-	if future.Source != validate.CurrentWorkflowDefinitionSource {
-		t.Errorf("definition source = %q, want %q", future.Source, validate.CurrentWorkflowDefinitionSource)
-	}
-}
-
 // TestWorkflowStepVersionsBound：定义表每个步骤的版本与信封绑定（编译器
 // 强制；此处固化表本身的约定，防止后续编辑定义表时漂移）。
 func TestWorkflowStepVersionsBound(t *testing.T) {
-	cd, err := compiler.Compile(Workflow(), Registry())
+	cd, err := compiler.Compile(RegularWorkflow(), Registry())
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
 	for _, cs := range cd.Steps {
-		if cs.Header.DefinitionVersion != Version {
-			t.Errorf("step %q definitionVersion = %q, want %q", cs.Header.ID, cs.Header.DefinitionVersion, Version)
+		if cs.Header.DefinitionVersion != RegularVersion {
+			t.Errorf("step %q definitionVersion = %q, want %q", cs.Header.ID, cs.Header.DefinitionVersion, RegularVersion)
 		}
 	}
-	if cd.Version != Version {
-		t.Errorf("definition version = %q, want %q", cd.Version, Version)
+	if cd.Version != RegularVersion {
+		t.Errorf("definition version = %q, want %q", cd.Version, RegularVersion)
 	}
 	if cd.EntryNode != entryNode {
 		t.Errorf("entry node = %q, want %q", cd.EntryNode, entryNode)

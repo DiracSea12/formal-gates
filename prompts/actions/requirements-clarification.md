@@ -25,14 +25,12 @@
 不修改任何项目内容。所有问题解决之后，先把完整需求与决策写入该文件并运行结构预检；
 预检失败时必须留在本动作内修正，不能请求确认。预检通过后呈现该文件全文和精确
 revision，并等待用户明确确认。该文件是本 run 的验收输入与事实来源，也是后续产品审
-（Part 1）的输入对象。最终确认前用不带 `--confirmed` 的 `workflow requirement` 校验并
-绑定待确认 revision；若用户修改已绑定内容，按现有修订规则同时声明 `--meaning changed`
-后再预检。用户确认所呈现的同一 revision 后，本动作返回 PASS；编排层必须先用
-`record-action` 记录该 PASS，再对同一 revision 执行
-`workflow requirement --confirmed`；单一结构化正式需求会在该确认中原子冻结保证
-envelope（`--activate-guarantee` 作为兼容写法仍可接受）。不得在 PASS 记录前执行确认命令，
-因为正式确认入口以本动作 PASS 为前置。返回契约由 CLI 以 [Result contract] 块注入，本提
-示词不重复其语义。
+（Part 1）的输入对象。当前受理通过 `workflow start --requirement <path>` 和首次
+`workflow drive` 绑定并预检文件。预检成功后，以 `workflow submit` 的 `REQUEST`
+提出 `confirm-requirement`，展示全文与精确 revision，等待用户明确确认；再用该 Ask 的
+requestId、token、digest 提交 `DECIDE`。不得在用户确认前提交确认决定。执行参数和
+事件字段以 `references/engine-regular.md` 为准；本动作不调用已退役的旧结果登记命令。
+
 
 **登记集（RQ-011，进入开发后对主代理的写豁免范围）。** 随本 change 登记承载需求与
 方案的文档：逐文件按"改该文件是否改变该 change 的需求/方案"判定，是 → 登记，否

@@ -1,5 +1,10 @@
 # 命令路由矩阵（§2.3 全列名 · 活文档）
 
+2026-09-08 当前交付决定：阶段 4 删除全部旧 workflow 兼容执行路径和旧公开推进命令。
+本文阶段 0–3.5 的 legacy 行仅保留历史事实；阶段 4 当前矩阵必须列 engine 承载或已删除，
+不能列兼容转发/第二 writer。仍承诺的业务语义迁入 engine，共享维护与纯解析能力保留；
+旧 run 仅供最小原始只读诊断。删除不是延期到阶段 7 的工作。
+
 > 义务来源：`refactor-plan/incremental-seal-plan.md` §2.3（唯一写入者与版本绑定）、§5 第 11 项
 > （每阶段退出条件）。本矩阵为阶段 0/1 交付义务补漏实物（2026-08-22），阶段 2 开始按
 > 阶段交付继续维护。
@@ -25,13 +30,28 @@
 > `P1-JSON` = `.gates/results/phase-1-decision-kernel.json`，`CASE-nnn` 为其中 qaExecution
 > 案例；`cli.go` = `internal/cli/cli.go`；白盒测试名前的包名省略 `internal/`。
 
+## 阶段 4 全局发布与后续 driver（2026-09-07 用户修订）
+
+阶段 4 Seal、主线集成与必要重验后，使用既有 install/registry 事务把全局入口切换到阶段 4
+精确包并核验实际入口；成功后从同一包冻结阶段 4 driver，驱动阶段 5–7 的 Codex/Git
+no-split 正式 run。阶段 5/6 候选保持隔离，阶段 7 再升级全局为最终完整版本。
+本阶段须把实际发布的 workflow/维护入口、writer/版本/包身份、准入/拒绝路径、安装事务和
+切换后证据绑定到矩阵；未支持 engine 路径明确拒绝，旧 run 不迁移、不回落另一 writer。
+现有表中的阶段 0/1、3.5 和阶段 3 runtime/证据是历史或当前实现记录，不因为新增发布计划
+而改标为已交付的阶段 4 能力；阶段 4 实现与实际发布后补齐其对应绑定。
+
+发布核验另按阶段 4 REQ-022 为阶段 0、1、2、3、3.5a/fix/b/c 建立逐项回归表，关联本矩阵
+中的当前入口与 writer，以及原需求/交付来源、用例、实际结果和发布身份。迁移功能须验证
+新版对应路径；已替代、延期与未验证不得填为 PASS。全局切换后的实际入口证据与 Seal 前
+隔离验证分开记录，范围内回归阻塞或缺必需证据时不得把本矩阵标为阶段 4 发布完成。
+
 ## workflow 面（§2.3 第一段：全部 workflow 子命令，含 drive/submit）
 
 全部行为 `workflow <subcommand>` 形态，经 `cli.go` 的 `workflowSubcommands` 注册表分发
 （cli.go:327-356）；注册表缺席的入口走 `runWorkflow` default 分支显式拒绝
 （`unknown workflow subcommand: %s`，rc=1，cli.go:318-321）。阶段 0/1 无任何 engine runtime
 公开 workflow 面；阶段 2 虽已交付隔离 engine 协议内核，但没有注册新的公开 workflow 面。
-legacy run 与 stable driver 的 state 仍为 legacy 格式（无版本 envelope，绑定 admission
+本节历史 legacy run 与阶段 0 stable driver 的 state 为 legacy 格式（无版本 envelope，绑定 admission
 epoch/generation）。
 
 本主表的“阶段 0/1 绑定”列保留历史 baseline 词汇；其中 status/next/drive/submit 行虽以
@@ -139,6 +159,9 @@ legacy 3.5 能力指候选 legacy runtime，不表示阶段 0 冻结的 stable d
 | qa-execution --checkpoint | 同 QA TaskKey 的进度事件经 submit | 不终结派发、不增 attempt，完整结果与候选/case/tool/environment 绑定 |
 | coverage validate/project-whitelist/reconcile-execution | 保留 workflow 外只读 CLI，复用同一 coverage 核心 | 输入 contract/review/execution 绑定，无 state writer |
 
+流程推进、解锁条件及操作内部固定顺序由插件程序统一控制；宿主只执行已校验调用并
+回传真实结果，不重新决定路线。宿主接入随对应功能实现与验证，具体未决接口风险才
+按总需求 §8.5 安排实验，不把独立探路设为所有引擎开发的共同前置条件。
 执行前准入由最终方案 §9.1.1 的宿主工具前 hook/执行器调用现有 engine 动作认领与校验；
 矩阵需在阶段 4/6/7 分别补首宿主/五宿主/最终安装态的真实入口、校验位置和零调用证据。
 当前 guard-preview 与上表的 legacy claim/结果登记均不能作为已实现执行前准入的证据。
@@ -236,8 +259,8 @@ top-level 分发见 `cli.go` run() switch（cli.go:75-97）；未列 top-level �
 | registry register | 内部 owner handler（registry 写入面仅归安装事务 owner；CLI 无独立 register 入口） | 安装事务 native owner（`validate.Install`/bootstrap 路径独占） | registry record 的 epoch/generation、lease/token | registry record（canonical paths/scope/runtime sibling 身份）+ bootstrap receipt | 事务 journal 恢复；crash 后 supported restart 自动对账 | 候选不得写 stable registry；绕过 launcher/lease 的直达 runtime sibling 被 admission 拒绝 | install-bootstrap | install-bootstrap | 计划内 | P0-JSON CASE-031；`TestWhiteboxPhase0Round7RegistryMutationSurfaceOwnedByInstaller`（CLI 无独立 bootstrap/register 入口、无 --registry 注入）；CASE-039（`TestWhiteboxPhase0Round12RegistryOwnerPreservesRecordsAcrossInstallAndUninstall`） |
 | registry reconcile | 内部 owner handler（crash journal/未完成 intent 的对账归安装事务 owner） | 安装事务 native owner（journal reconcile 路径） | journal 的 generation/lease/token（RECOVERED 证据含全身份） | recovery receipt（observedFact/interruptedPhase/reconcileAction/recovered） | 支持的重启在新事务前自动对账；journal 清理、epoch 单调 | 不改 workflow state；对账失败留 receipt 并停止 | install-bootstrap | install-bootstrap | 计划内 | P0-JSON CASE-008/051；`TestWhiteboxPhase0Round12SupportedRestartReconcilesCrashJournalAutomatically`（CASE-051）；CASE-048 故障矩阵 |
 | registry show | 只读（加载并打印 registry JSON） | 无（`validate.LoadRegistry`，cli.go:217-224） | 无（读侧） | 无（stdout 输出） | 无需恢复 | 只读；不写 registry、不写 state | legacy | legacy | 计划未枚举 | cli `runRegistry` default 分支显式拒绝未知子命令；registry 加载路径被 CASE-003（admit 拒绝路径 LoadRegistry）与 phase0 测试族间接覆盖 |
-| cutover | 无（generation/authority 切换协议未实现，无公开入口） | 无 | 目标态为 SWITCHING(E+1) 下 cutover token（§2.4，阶段 7 交付） | 无 | 无 | 当前 CLI 无该命令：top-level 显式拒绝 `unknown command`（cli.go:94-96）；普通 stable/candidate start 在切换协议落地前不受 generation 拒绝面约束 | unsupported | unsupported | 计划内 | 反向普查测试断言 top-level 命令面；证据缺口：无既有 negative test（无实现面可测；唯一既有事实是 top-level switch 缺席该命令） |
-| rollback | 内部 owner handler（install/uninstall 事务内 rollbackAll + journal 恢复；非公开命令） | 安装事务 native owner（install.go:387 rollbackAll） | 事务 journal 的 generation/lease/token（epoch 不回退） | failure/recovery receipt（ROLLED_BACK/recovered、stableDigest/generation） | 事务内恢复旧 runtime/pointer/config/hook/rule/registry；reconcile 后旧 stable validate/canary smoke | 不改 workflow state；generation 级 ROLLING_BACK 公开动作不存在（属阶段 7 协议，当前 CLI 无该命令，显式拒绝 unknown command） | install-bootstrap | install-bootstrap | 计划内 | P0-JSON CASE-007/017/018/019；`TestWhiteboxPhase0Round12ReleaseRollbackRestoresAllOuterIdentity`（CASE-052） |
+| cutover | 无（generation/authority 切换协议未实现，无公开入口） | 无 | 目标态为 SWITCHING(E+1) 下 cutover token（§2.4；原阶段 7 安排，现按阶段 4 发布合同及阶段 7 最终升级分别验收，不要求新增公开命令） | 无 | 无 | 当前 CLI 无该命令：top-level 显式拒绝 `unknown command`（cli.go:94-96）；普通 stable/candidate start 在切换协议落地前不受 generation 拒绝面约束 | unsupported | unsupported | 计划内 | 反向普查测试断言 top-level 命令面；证据缺口：无既有 negative test（无实现面可测；唯一既有事实是 top-level switch 缺席该命令） |
+| rollback | 内部 owner handler（install/uninstall 事务内 rollbackAll + journal 恢复；非公开命令） | 安装事务 native owner（install.go:387 rollbackAll） | 事务 journal 的 generation/lease/token（epoch 不回退） | failure/recovery receipt（ROLLED_BACK/recovered、stableDigest/generation） | 事务内恢复旧 runtime/pointer/config/hook/rule/registry；reconcile 后旧 stable validate/canary smoke | 不改 workflow state；generation 级 ROLLING_BACK 公开动作不存在（原阶段 7 安排；现按阶段 4 发布合同及阶段 7 最终升级分别验收，不要求新增公开命令；当前 CLI 无该命令，显式拒绝 unknown command） | install-bootstrap | install-bootstrap | 计划内 | P0-JSON CASE-007/017/018/019；`TestWhiteboxPhase0Round12ReleaseRollbackRestoresAllOuterIdentity`（CASE-052） |
 
 ### 阶段 2 维护/transport 绑定补表
 

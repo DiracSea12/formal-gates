@@ -57,6 +57,7 @@ const (
 	// KindRequestControl：受限 REQUEST_* 事件，创建 pending Ask（不直接
 	// 执行任何控制）。
 	KindRequestControl EventKind = "REQUEST_CONTROL"
+	KindRegular        EventKind = "REGULAR"
 	// KindDecide：用户对 pending Ask 的决定提交（request ID + freshness
 	// token + 选项）。
 	KindDecide EventKind = "DECIDE"
@@ -85,7 +86,7 @@ const (
 // Valid 报告 k 是否属于八值封闭集合。
 func (k EventKind) Valid() bool {
 	switch k {
-	case KindRequestControl, KindDecide, KindTaskProgress, KindSpawnReceipt,
+	case KindRegular, KindRequestControl, KindDecide, KindTaskProgress, KindSpawnReceipt,
 		KindWorkerResult, KindOperatorObservation, KindHostActionReceipt, KindLifecycleEvent:
 		return true
 	}
@@ -211,6 +212,7 @@ const (
 // Event 是提交事件的 tagged union：除本 kind 对应的一个 payload 外其余
 // 必须为 nil（Validate 强制，形态与 decision.NextResult 一致）。
 type Event struct {
+	Regular     *RegularEvent `json:"regular,omitempty"`
 	ID          EventID
 	Kind        EventKind
 	Request     *RequestPayload
@@ -345,6 +347,7 @@ func (e Event) Validate() error {
 		set      bool
 		mismatch string
 	}{
+		{KindRegular, e.Regular != nil, "regular"},
 		{KindRequestControl, e.Request != nil, "request"},
 		{KindDecide, e.Decide != nil, "decide"},
 		{KindTaskProgress, e.Task != nil, "task"},
@@ -360,6 +363,8 @@ func (e Event) Validate() error {
 		}
 	}
 	switch e.Kind {
+	case KindRegular:
+		return e.Regular.validate()
 	case KindRequestControl:
 		if !e.Request.Control.Valid() {
 			return &RejectedError{Code: CodeEventSchemaInvalid, Detail: fmt.Sprintf("request control %q invalid (closed set: RESET, ABORT, RECOVER_ATTEMPT)", e.Request.Control)}
@@ -536,6 +541,7 @@ func (e Event) Validate() error {
 // ---- canonical 编码与 digest（幂等判定的输入） ----
 
 type eventWire struct {
+	Regular     *RegularEvent          `json:"regular,omitempty"`
 	ID          string                 `json:"id"`
 	Kind        string                 `json:"kind"`
 	Request     *requestWire           `json:"request,omitempty"`
@@ -619,7 +625,7 @@ func (e Event) CanonicalBytes() ([]byte, error) {
 	if err := e.Validate(); err != nil {
 		return nil, err
 	}
-	w := eventWire{ID: string(e.ID), Kind: string(e.Kind)}
+	w := eventWire{Regular: e.Regular, ID: string(e.ID), Kind: string(e.Kind)}
 	if e.Request != nil {
 		options := make([]AskOption, 0, len(e.Request.Options))
 		options = append(options, e.Request.Options...)

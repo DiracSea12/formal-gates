@@ -1,9 +1,8 @@
-// Package facade exposes the phase-3 candidate engine surface.  It is kept
-// separate from the stable validate package so legacy workflow runs continue
-// to use their existing writer and state namespace.
+// Package facade is the current workflow entry point and sole run writer.
 package facade
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,11 +11,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 
 	"formal-gates/internal/coordination"
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/compiler"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/definition"
@@ -32,7 +33,6 @@ const (
 	terminalIntentName        = "terminal-summary.intent.json"
 	DefaultDefinitionSource   = "definitions/workflow.json"
 	RuntimeEngine             = "engine"
-	RuntimeLegacy             = "legacy"
 	DefaultProvider           = "engine"
 	UnregisteredInstall       = "UNREGISTERED_INSTALL"
 	UnsupportedEngineEntry    = "UNSUPPORTED_ENGINE_ENTRY"
@@ -59,6 +59,8 @@ const (
 // selects the candidate engine.  Runtime is retained as a read-only projection
 // for diagnostics and is always set to "engine" by Start.
 type StartRequest struct {
+	RequirementPath           string                    `json:"requirementPath,omitempty"`
+	BaseSnapshot              string                    `json:"baseSnapshot,omitempty"`
 	RunID                     string                    `json:"runId"`
 	Route                     string                    `json:"route"`
 	Provider                  string                    `json:"provider,omitempty"`
@@ -78,34 +80,40 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
-	RunID                     string                     `json:"runId"`
-	Runtime                   string                     `json:"runtime"`
-	Route                     string                     `json:"route"`
-	Status                    string                     `json:"status"`
-	Revision                  uint64                     `json:"revision"`
-	Envelope                  Envelope                   `json:"envelope"`
-	IntakeConfirmationReceipt *IntakeConfirmationReceipt `json:"intakeConfirmationReceipt,omitempty"`
-	IntakeReceipt             *IntakeReceipt             `json:"intakeReceipt,omitempty"`
-	Next                      decision.NextResult        `json:"next"`
-	AvailableActions          []string                   `json:"availableActions,omitempty"`
-	SummaryPath               string                     `json:"summaryPath,omitempty"`
-	Unverified                bool                       `json:"unverified,omitempty"`
+	Regular                   *protocol.RegularState               `json:"regular,omitempty"`
+	Cost                      *cost.RunCost                        `json:"cost,omitempty"`
+	Executions                map[string]protocol.RegularExecution `json:"executions,omitempty"`
+	RunID                     string                               `json:"runId"`
+	Runtime                   string                               `json:"runtime"`
+	Route                     string                               `json:"route"`
+	Status                    string                               `json:"status"`
+	Revision                  uint64                               `json:"revision"`
+	Envelope                  Envelope                             `json:"envelope"`
+	IntakeConfirmationReceipt *IntakeConfirmationReceipt           `json:"intakeConfirmationReceipt,omitempty"`
+	IntakeReceipt             *IntakeReceipt                       `json:"intakeReceipt,omitempty"`
+	Next                      decision.NextResult                  `json:"next"`
+	AvailableActions          []string                             `json:"availableActions,omitempty"`
+	SummaryPath               string                               `json:"summaryPath,omitempty"`
+	Unverified                bool                                 `json:"unverified,omitempty"`
 }
 
 // TerminalSummary is retained after the engine reaches Complete.  It is
 // immutable for normal callers and supports terminal replay without reopening
 // the active state writer.
 type TerminalSummary struct {
-	RunID         string              `json:"runId"`
-	Runtime       string              `json:"runtime"`
-	Route         string              `json:"route"`
-	Status        string              `json:"status"`
-	Revision      uint64              `json:"revision"`
-	Envelope      Envelope            `json:"envelope"`
-	IntakeReceipt *IntakeReceipt      `json:"intakeReceipt,omitempty"`
-	Next          decision.NextResult `json:"next"`
-	Unverified    bool                `json:"unverified,omitempty"`
-	CompletedAt   string              `json:"completedAt"`
+	Executions    map[string]protocol.RegularExecution `json:"executions,omitempty"`
+	Regular       *protocol.RegularState               `json:"regular,omitempty"`
+	Cost          *cost.RunCost                        `json:"cost,omitempty"`
+	RunID         string                               `json:"runId"`
+	Runtime       string                               `json:"runtime"`
+	Route         string                               `json:"route"`
+	Status        string                               `json:"status"`
+	Revision      uint64                               `json:"revision"`
+	Envelope      Envelope                             `json:"envelope"`
+	IntakeReceipt *IntakeReceipt                       `json:"intakeReceipt,omitempty"`
+	Next          decision.NextResult                  `json:"next"`
+	Unverified    bool                                 `json:"unverified,omitempty"`
+	CompletedAt   string                               `json:"completedAt"`
 }
 
 type startIntent struct {
@@ -146,6 +154,8 @@ type Admission struct {
 }
 
 type Facade struct {
+	// Private fault seam for process-interruption tests; never exposed by CLI/config.
+	fault      func(persistence.FaultPoint) error
 	root       string
 	runID      string
 	stateDir   string
@@ -179,6 +189,11 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		return nil, Run{}, err
 	}
 	defer runUnlock()
+	ownerUnlock, err := coordination.AcquirePath(filepath.Join(root, ".gates", "owner-cost.lock"), "owner interval")
+	if err != nil {
+		return nil, Run{}, err
+	}
+	defer ownerUnlock()
 	if err := recoverStartIntent(root, req.RunID); err != nil {
 		return nil, Run{}, err
 	}
@@ -193,28 +208,51 @@ func Start(options StartOptions) (*Facade, Run, error) {
 			return nil, Run{}, err
 		}
 	}
-	// Legacy and candidate runtimes share the run-id namespace. Refuse a
-	// candidate writer before creating any engine files when the legacy run
-	// already exists.
-	legacyDir := filepath.Join(root, ".gates", "tmp", req.RunID)
-	if _, statErr := os.Stat(legacyDir); statErr == nil {
-		return nil, Run{}, fmt.Errorf("run %q already exists in legacy runtime", req.RunID)
-	} else if !os.IsNotExist(statErr) {
-		return nil, Run{}, statErr
-	}
-	if _, statErr := os.Stat(filepath.Join(root, ".gates", "results", req.RunID+".json")); statErr == nil {
-		return nil, Run{}, fmt.Errorf("run %q already has a retained legacy result", req.RunID)
-	} else if !os.IsNotExist(statErr) {
-		return nil, Run{}, statErr
-	}
-	if strings.TrimSpace(req.Route) == "" {
-		req.Route = "lightweight"
-	}
-	if req.Route != "lightweight" {
-		return nil, Run{}, fmt.Errorf("engine start: route %q is unsupported in phase 3", req.Route)
-	}
-	if strings.TrimSpace(req.Provider) == "" {
-		req.Provider = DefaultProvider
+	var regularInitial *protocol.RegularState
+	if req.RequirementPath != "" {
+		initial, err := prepareRegular(root, req)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		if options.PackageRoot != "" {
+			entries, readErr := os.ReadDir(filepath.Join(options.PackageRoot, "gates"))
+			if readErr != nil {
+				return nil, Run{}, readErr
+			}
+			initial.CatalogGates = []string{}
+			initial.CatalogGateInstructions = map[string]string{}
+			reviewer, readErr := os.ReadFile(filepath.Join(options.PackageRoot, "prompts", "reviewer-base.md"))
+			if readErr != nil {
+				return nil, Run{}, readErr
+			}
+			initial.ReviewerInstructions = string(reviewer)
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "merge-gate.md" {
+					initial.CatalogGates = append(initial.CatalogGates, strings.TrimSuffix(entry.Name(), ".md"))
+					body, readErr := os.ReadFile(filepath.Join(options.PackageRoot, "gates", entry.Name()))
+					if readErr != nil {
+						return nil, Run{}, readErr
+					}
+					initial.CatalogGateInstructions[strings.TrimSuffix(entry.Name(), ".md")] = string(body)
+				}
+			}
+		}
+		regularInitial = &initial
+		req.Route = ""
+		if req.Provider == "" {
+			req.Provider = "codex"
+		}
+		options.Capacity = initial.Settings.Values.Capacity
+	} else {
+		if strings.TrimSpace(req.Route) == "" {
+			req.Route = "lightweight"
+		}
+		if req.Route != "lightweight" {
+			return nil, Run{}, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: regular requires a single requirement file")
+		}
+		if strings.TrimSpace(req.Provider) == "" {
+			req.Provider = DefaultProvider
+		}
 	}
 	if options.Admission == nil || strings.TrimSpace(options.Admission.PackageDigest) == "" || strings.TrimSpace(options.Admission.InstalledTargetIdentity) == "" {
 		return nil, Run{}, fmt.Errorf("UNREGISTERED_INSTALL: candidate start requires launcher admission")
@@ -242,22 +280,24 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	if strings.TrimSpace(req.DefinitionDigest) == "" {
 		req.DefinitionDigest = definition.WorkflowDefinitionDigest
 	}
-	req.IntakeConfirmationReceipt = canonicalizeIntakeReceipt(req.IntakeConfirmationReceipt)
-	if err := validateConfirmation(req.IntakeConfirmationReceipt, req.DefinitionSource); err != nil {
-		return nil, Run{}, err
-	}
-	if strings.TrimSpace(options.ArtifactRoot) != "" {
-		if err := validateArtifactBindings(options.ArtifactRoot, req.IntakeConfirmationReceipt); err != nil {
+	if regularInitial == nil {
+		req.IntakeConfirmationReceipt = canonicalizeIntakeReceipt(req.IntakeConfirmationReceipt)
+		if err := validateConfirmation(req.IntakeConfirmationReceipt, req.DefinitionSource); err != nil {
 			return nil, Run{}, err
 		}
-	}
-	digest, err := IntakeDigest(req.IntakeConfirmationReceipt)
-	if err != nil {
-		return nil, Run{}, err
-	}
-	req.IntakeConfirmationReceipt.Digest = digest
-	if strings.TrimSpace(options.Request.IntakeConfirmationReceipt.Digest) != "" && options.Request.IntakeConfirmationReceipt.Digest != digest {
-		return nil, Run{}, fmt.Errorf("%s: intake confirmation digest mismatch", InvalidIntakeConfirmation)
+		if strings.TrimSpace(options.ArtifactRoot) != "" {
+			if err := validateArtifactBindings(options.ArtifactRoot, req.IntakeConfirmationReceipt); err != nil {
+				return nil, Run{}, err
+			}
+		}
+		digest, err := IntakeDigest(req.IntakeConfirmationReceipt)
+		if err != nil {
+			return nil, Run{}, err
+		}
+		req.IntakeConfirmationReceipt.Digest = digest
+		if strings.TrimSpace(options.Request.IntakeConfirmationReceipt.Digest) != "" && options.Request.IntakeConfirmationReceipt.Digest != digest {
+			return nil, Run{}, fmt.Errorf("%s: intake confirmation digest mismatch", InvalidIntakeConfirmation)
+		}
 	}
 	if options.Capacity < 0 {
 		return nil, Run{}, fmt.Errorf("engine start: capacity must be non-negative")
@@ -265,7 +305,7 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	cd := options.Definition
 	reg := options.Registry
 	if cd == nil {
-		cd, err = compiler.Compile(definition.Workflow(), definition.Registry())
+		cd, err = compiler.Compile(definition.RegularWorkflow(), definition.Registry())
 		if err != nil {
 			return nil, Run{}, err
 		}
@@ -333,9 +373,15 @@ func Start(options StartOptions) (*Facade, Run, error) {
 		_ = os.RemoveAll(stateDir)
 		return nil, Run{}, err
 	}
-	if err := eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt); err != nil {
+	var initErr error
+	if regularInitial != nil {
+		initErr = eng.InitRegular(view, req.Provider, emptyFingerprint(), req.RunID, *regularInitial)
+	} else {
+		initErr = eng.InitWithMetadata(view, req.Provider, emptyFingerprint(), req.RunID, req.Route, &req.IntakeConfirmationReceipt)
+	}
+	if initErr != nil {
 		_ = os.RemoveAll(stateDir)
-		return nil, Run{}, err
+		return nil, Run{}, initErr
 	}
 	f := &Facade{root: root, runID: req.RunID, stateDir: stateDir, metadata: filepath.Join(stateDir, "request.json"), store: store, engine: eng, envelope: env, definition: cd, capacity: options.Capacity}
 	if err := writeJSONAtomic(f.metadata, req); err != nil {
@@ -380,7 +426,7 @@ func Open(root, runID string) (*Facade, error) {
 	if req.DefinitionDigest != definition.WorkflowDefinitionDigest {
 		return nil, unsupported("definitionDigest", definition.WorkflowDefinitionDigest, req.DefinitionDigest)
 	}
-	cd, err := compiler.Compile(definition.Workflow(), definition.Registry())
+	cd, err := compiler.Compile(definition.RegularWorkflow(), definition.Registry())
 	if err != nil {
 		return nil, err
 	}
@@ -453,6 +499,36 @@ func (f *Facade) Drive() (Run, error) {
 		}
 		return Run{}, err
 	}
+	if snap.State.Regular != nil {
+		if snap.State.Regular.Terminal == "ABORTING" {
+			return f.finishRegularAbort()
+		}
+		if err := f.verifyRegularDocument(nil); err != nil {
+			return Run{}, err
+		}
+		if _, _, err := f.engine.Drive(emptyFingerprint()); err != nil {
+			return Run{}, err
+		}
+		run, err := f.project()
+		if err != nil {
+			return Run{}, err
+		}
+		if run.Status == "COMPLETE" {
+			if err = f.finalizeTerminal(run); err != nil {
+				return Run{}, err
+			}
+		}
+		run, err = f.drivePreparation(run)
+		if err != nil {
+			return Run{}, err
+		}
+		if run.Status == "COMPLETE" {
+			if err = f.finalizeTerminal(run); err != nil {
+				return Run{}, err
+			}
+		}
+		return run, nil
+	}
 	if snap.State.IntakeReceipt == nil {
 		confirmation := snap.State.IntakeConfirmationReceipt
 		if confirmation == nil {
@@ -499,6 +575,42 @@ func (f *Facade) Drive() (Run, error) {
 func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) {
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
+	}
+	if event.Regular != nil && event.Regular.Claim != nil {
+		c := event.Regular.Claim
+		run, err := f.Show()
+		if err != nil {
+			return protocol.Acceptance{}, Run{}, err
+		}
+		x, ok := run.Executions[c.ActionID]
+		if !ok {
+			return protocol.Acceptance{}, Run{}, fmt.Errorf("UNKNOWN_ACTION: no issued execution")
+		}
+		if c.Context == nil {
+			c.Context = x.Claim.Context
+		}
+		if x.Claim.Context == nil && !x.Claimed && x.Identity == "" {
+			captured, err := captureRuntimeContext(c.Provider, run.Regular.Settings.Values)
+			if err != nil {
+				return protocol.Acceptance{}, Run{}, err
+			}
+			if c.Context != nil && !reflect.DeepEqual(c.Context, captured) {
+				return protocol.Acceptance{}, Run{}, fmt.Errorf("RUNTIME_CONTEXT_MISMATCH: first execution must use the adapter-captured context")
+			}
+			c.Context = captured
+		}
+	}
+	if err := f.verifyPreparationReceipt(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyTaskOperationReceipt(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyDeveloperRecovery(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyRegularDocument(&event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
 	}
 	acceptance, err := f.engine.Submit(event, emptyFingerprint())
 	if err != nil {
@@ -575,11 +687,21 @@ func (f *Facade) project() (Run, error) {
 		}
 	}
 	run := Run{RunID: f.runID, Runtime: RuntimeEngine, Route: snap.State.Route, Status: status, Revision: snap.Revision, Envelope: f.envelope, Next: plan.Next, SummaryPath: filepath.Join(f.stateDir, "terminal-summary.json"), Unverified: snap.State.Route == "lightweight"}
+	run.Regular = snap.State.Regular
+	run.Cost = snap.State.Cost
+	run.Executions = snap.State.RegularExecutions
+	if run.Regular != nil && run.Regular.Ask != nil {
+		run.Regular.Ask.Token = protocol.RegularFreshness(snap.Revision, run.Regular.Ask.ID)
+	}
 	run.IntakeConfirmationReceipt = snap.State.IntakeConfirmationReceipt
 	run.IntakeReceipt = snap.State.IntakeReceipt
 	if plan.Next.Kind == decision.KindAsk {
 		run.AvailableActions = []string{"submit"}
 	}
+	if run.Regular != nil && run.Status != "COMPLETE" {
+		run.AvailableActions = protocol.RegularAvailableActions(snap.State)
+	}
+
 	return run, nil
 }
 
@@ -592,7 +714,7 @@ func terminalIntentPath(stateDir string) string {
 }
 
 func summaryForRun(run Run) TerminalSummary {
-	return TerminalSummary{RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: "COMPLETE", Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	return TerminalSummary{Executions: run.Executions, Regular: run.Regular, Cost: run.Cost, RunID: run.RunID, Runtime: run.Runtime, Route: run.Route, Status: "COMPLETE", Revision: run.Revision, Envelope: run.Envelope, IntakeReceipt: run.IntakeReceipt, Next: run.Next, Unverified: run.Unverified, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 }
 
 func (f *Facade) writeSummaryValue(summary TerminalSummary) error {
@@ -646,6 +768,24 @@ func (f *Facade) recoverTerminalIntent() error {
 }
 
 func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
+	if summary.Regular != nil {
+		for _, x := range summary.Executions {
+			if x.Claimed && !x.Finished {
+				return fmt.Errorf("FINALIZING_CLEANUP: native execution is not reconciled")
+			}
+		}
+		if err := f.cleanupPreparationResources(runFromSummary(summary)); err != nil {
+			return err
+		}
+		for _, dir := range []string{"git-operations", "task-operations", "resources"} {
+			if err := os.RemoveAll(filepath.Join(f.stateDir, dir)); err != nil {
+				return err
+			}
+		}
+		if err := os.RemoveAll(filepath.Join(f.stateDir, "executions")); err != nil {
+			return err
+		}
+	}
 	if err := f.store.CleanupTerminal(); err != nil {
 		return err
 	}
@@ -659,8 +799,16 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 }
 
 func (f *Facade) finalizeTerminal(run Run) error {
+	unlock, err := coordination.AcquirePath(filepath.Join(f.root, ".gates", "owner-cost.lock"), "owner interval")
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	summary, err := f.readTerminalIntent()
 	if errors.Is(err, fs.ErrNotExist) {
+		if err = f.settleOwnerReport(run); err != nil {
+			return err
+		}
 		summary = summaryForRun(run)
 		err = writeJSONAtomic(terminalIntentPath(f.stateDir), summary)
 	}
@@ -686,7 +834,7 @@ func (f *Facade) readSummary() (TerminalSummary, error) {
 }
 
 func runFromSummary(summary TerminalSummary) Run {
-	return Run{RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Unverified: summary.Unverified, SummaryPath: ""}
+	return Run{Executions: summary.Executions, Regular: summary.Regular, Cost: summary.Cost, RunID: summary.RunID, Runtime: summary.Runtime, Route: summary.Route, Status: summary.Status, Revision: summary.Revision, Envelope: summary.Envelope, IntakeReceipt: summary.IntakeReceipt, Next: summary.Next, Unverified: summary.Unverified, SummaryPath: ""}
 }
 
 // Diagnose is deliberately raw and read-only.  It reports malformed/old
@@ -1011,11 +1159,14 @@ func unsupported(field, want, got string) error {
 }
 
 func writeJSONAtomic(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(value); err != nil {
 		return err
 	}
-	data = append(data, '\n')
+	data := buf.Bytes()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}

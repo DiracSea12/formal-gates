@@ -2,6 +2,8 @@
 
 package validate
 
+import
+
 // White-box structure tests for the trigger-model V2 change (TRIGGER-MODEL-V2-
 // REQUIREMENT.md). Each test function below implements exactly one whitebox
 // case and is bound to it by the QA CLI via a "--test <file>::<function>"
@@ -16,8 +18,7 @@ package validate
 // requirement → Seal, no verification, record only, seal marked「本 run 未经任何
 // 验证」); and the renamed artifacts (canary quick-e2e-workflow, clarification
 // fallback「快速澄清兜底」) no longer carry the old「轻量」wording.
-
-import (
+(
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -119,7 +120,7 @@ func TestSkillIntakeBodyDeclaresDefaultRemindOnce(t *testing.T) {
 func TestSkillStepFourEntersAfterConfirmation(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
 	assertHasText(t, skill, "用户明确确认完整需求与方案后进入正式流程")
-	assertHasText(t, skill, "正式路线（`full`/`custom`）本阶段不定，拆分决定之后确认")
+	assertHasText(t, skill, "regular 路线 full/custom 在技术审和 no-split 计划确认后选择")
 	assertHasText(t, skill, "不经拆分决定与路线选择")
 	assertLacksText(t, skill, "询问用户是否进入正式流程")
 }
@@ -130,7 +131,7 @@ func TestSkillStepFourEntersAfterConfirmation(t *testing.T) {
 func TestSkillDeclaresLightweightRouteRecordOnly(t *testing.T) {
 	skill := readWorktreeFile(t, "SKILL.md")
 	assertHasText(t, skill, "轻量路线")
-	assertHasText(t, skill, "`workflow start --route lightweight`")
+	assertHasText(t, skill, "--intake-receipt 和 --route lightweight")
 	assertHasText(t, skill, "不做拆分决定、不选 QA/门路线、不快照")
 	assertHasText(t, skill, "本 run 未经任何验证")
 	assertHasText(t, skill, "正式流程内的路线（非受理阶段选项）")
@@ -146,7 +147,7 @@ func TestSkillDropsSessionDeclarationAndHighConfidenceSkip(t *testing.T) {
 	assertLacksText(t, skill, "不走流程")
 	assertLacksText(t, skill, "高置信度判断")
 	assertLacksText(t, skill, "跳过整个受理流程")
-	assertHasText(t, skill, "高置信要拆时需用户确认拆分方案")
+	assertHasText(t, skill, "未接入 split、其他 VCS 或其他宿主 regular 明确 unsupported")
 }
 
 // Case: README.md (CN) must carry the V2 trigger model (default remind once,
@@ -161,7 +162,7 @@ func TestReadmeCnStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, readme, "检测到复杂需求，建议走 formal-gates 流程")
 	assertHasText(t, readme, "不会自行触发")
 	assertHasText(t, readme, "你明确要求时才进入正式流程")
-	assertHasText(t, readme, "formal-gates 什么时候会被触发")
+	assertHasText(t, readme, "何时启用")
 	assertHasText(t, readme, "轻量路线")
 	assertLacksText(t, readme, "由你决定是否进入正式流程")
 	assertLacksText(t, readme, "受理阶段只决定是否进入正式流程")
@@ -177,7 +178,7 @@ func TestReadmeEnStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, readme, "you may directly request the formal-gates flow")
 	assertHasText(t, readme, "detected complex requirements")
 	assertHasText(t, readme, "never self-triggers")
-	assertHasText(t, readme, "When is formal-gates triggered?")
+	assertHasText(t, readme, "When it runs")
 	assertHasText(t, readme, "lightweight")
 	assertLacksText(t, readme, "asks you whether to enter the formal flow")
 	assertLacksText(t, readme, "intake decides only whether to enter")
@@ -194,7 +195,7 @@ func TestExampleRunStatesV2TriggerModel(t *testing.T) {
 	assertHasText(t, example, "若需走 formal-gates 流程，可直接提出")
 	assertHasText(t, example, "检测到复杂需求，建议走 formal-gates 流程")
 	assertHasText(t, example, "在需求澄清与方案确认完毕、准备开做之际再额外强调一次")
-	assertHasText(t, example, "3. 进入正式流程")
+	assertHasText(t, example, "REQUEST(confirm-requirement)")
 	assertLacksText(t, example, "询问用户是否进入正式流程")
 	assertLacksText(t, example, "3. 是否进入正式流程")
 	assertHasText(t, example, "普通请求不进入本示例的正式流程分支")
@@ -207,8 +208,8 @@ func TestExampleRunStatesV2TriggerModel(t *testing.T) {
 func TestFormalFlowDeclaresLightweightRoute(t *testing.T) {
 	flow := readWorktreeFile(t, "references/formal-flow.md")
 	assertHasText(t, flow, "流程顺序只由 `SKILL.md` 拥有")
-	assertHasText(t, flow, "--route lightweight")
-	assertHasText(t, flow, "start → 需求登记 → Seal")
+	assertHasText(t, flow, "mode")
+	assertHasText(t, flow, "drive 自动固化清理")
 	assertHasText(t, flow, "本 run 未经任何验证")
 	assertLacksText(t, flow, "不走流程")
 	assertLacksText(t, flow, "会话声明")
@@ -335,85 +336,24 @@ func TestInstallReproducesV2ModelAtTarget(t *testing.T) {
 	assertLacksText(t, string(managed), "必须先执行 formal-gates 受理流程")
 }
 
-// Case: the renames required by V2 must be in place — the "lightweight-workflow"
-// canary name is now "quick-e2e-workflow" and the "轻量澄清兜底" clarification
-// fallback is now "快速澄清兜底", so the old「轻量」wording is gone from both.
+// The old quick-workflow writer has retired; portable keeps the current installed
+// intake marker while clarification retains its documented trigger wording.
 func TestRenamedArtifactsDropLightweightWording(t *testing.T) {
 	canary := readWorktreeFile(t, "internal/validate/canary.go")
-	assertHasText(t, canary, `add("quick-e2e-workflow"`)
-	assertLacksText(t, canary, `add("lightweight-workflow"`)
-	assertHasText(t, canary, "runQuickE2ECanary")
-	assertLacksText(t, canary, "runLightweightCanary")
+	assertHasText(t, canary, "runInstalledEngineCanary")
+	assertLacksText(t, canary, "runQuickE2ECanary")
 	clarification := readWorktreeFile(t, "prompts/actions/requirements-clarification.md")
 	assertHasText(t, clarification, "快速澄清兜底")
 	assertLacksText(t, clarification, "轻量澄清兜底")
 }
 
-// Case: requirements clarification must return its user-confirmed PASS before
-// the controller invokes the confirmation command whose precondition is that
-// recorded PASS. The prompt must not instruct the action to call the command
-// first, which would leave the public workflow in a circular wait.
+// Current intake exposes its typed Ask after precheck and waits for the user's
+// confirmation before DECIDE; no removed writer is part of the prompt contract.
 func TestRequirementsClarificationPromptRecordsPassBeforeConfirmationCommand(t *testing.T) {
 	clarification := readWorktreeFile(t, "prompts/actions/requirements-clarification.md")
-	passFirst := strings.Index(clarification, "先用\n`record-action` 记录该 PASS")
-	confirmAfter := strings.Index(clarification, "再对同一 revision 执行\n`workflow requirement --confirmed`")
-	if passFirst < 0 || confirmAfter < 0 || passFirst >= confirmAfter {
-		t.Fatalf("requirements clarification prompt does not record PASS before confirmation:\n%s", clarification)
+	for _, token := range []string{"预检成功后", "confirm-requirement", "等待用户明确确认", "requestId、token、digest", "DECIDE"} {
+		assertHasText(t, clarification, token)
 	}
-	assertHasText(t, clarification, "不得在 PASS 记录前执行确认命令")
-}
-
-// Case: a lightweight run can go start (--route lightweight) → 需求登记 → Seal
-// in three steps, skipping the slicing decision, route selection, development
-// snapshot and every verification gate, and its seal record is explicitly marked
-// 「本 run 未经任何验证」.
-func TestLightweightRouteSealsWithoutVerification(t *testing.T) {
-	packageRoot := repoRootValidateTest(t)
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "requirement.md"), []byte("record-only behavior\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := initializeCanaryGit(root); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, RunID: "lightweight-run", Flow: "formal", RequirementSource: "requirement.md", VCS: "git", Route: "lightweight"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.RouteMode != "lightweight" {
-		t.Fatalf("expected lightweight route mode, got %q", state.RouteMode)
-	}
-	if state.SplitDeclaration != "" {
-		t.Fatalf("lightweight start must not record a split declaration, got %q", state.SplitDeclaration)
-	}
-
-	// 需求登记：requirements-clarification PASS + requirement --confirmed。
-	if _, err := PrepareAction(root, packageRoot, state.RunID, "requirements-clarification", "", false, ""); err != nil {
-		t.Fatal(err)
-	}
-	state, err = LoadRunState(root, state.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err = RecordAction(root, packageRoot, state.RunID, "requirements-clarification", openDispatchID(state, "action", "requirements-clarification"), "PASS", "", nil, false, "", fixtureOperatorVerification())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err = UpdateRequirement(root, packageRoot, state.RunID, "", true, "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// 轻量直达 Seal：无拆分决定、无路线确认、无开发快照、无任何验证。
-	summary, err := Seal(root, packageRoot, state.RunID, nil, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if summary.RouteMode != "lightweight" {
-		t.Fatalf("expected sealed lightweight route mode, got %q", summary.RouteMode)
-	}
-	if summary.Unverified != "本 run 未经任何验证" {
-		t.Fatalf("lightweight seal record must be marked unverified, got %q", summary.Unverified)
-	}
+	assertLacksText(t, clarification, "workflow requirement --confirmed")
+	assertLacksText(t, clarification, "record-action")
 }

@@ -18,7 +18,7 @@ func TestRunHookPassesOwnerProviderToStartBridge(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("hook failed: %s", errOut.String())
 	}
-	data, err := os.ReadFile(filepath.Join(root, ".gates", "tmp", "start-owner.json"))
+	data, err := os.ReadFile(filepath.Join(root, ".gates", "start-owner.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,1379 @@
+{
+  "regular": {
+    "preparation": {
+      "planDigest": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+      "bindingDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+      "resources": {
+        "blackbox": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/resources/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0/blackbox",
+        "candidate": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/resources/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0/candidate",
+        "development": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/resources/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0/development"
+      },
+      "batches": {
+        "B1": {
+          "actionId": "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0/attempt-1",
+          "attemptId": "att:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0:23",
+          "provider": "codex",
+          "identity": "01a07c21-08a0-7a71-af2a-ceb1d3bf1d4a",
+          "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+          "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+          "status": "PASS",
+          "message": "Implemented the Go hello command. Required runtime and test validations passed.",
+          "manifest": [
+            "go.mod",
+            "main.go"
+          ],
+          "validation": [
+            {
+              "subtaskId": "S1",
+              "procedure": "Run go run . while capturing stdout and stderr separately; verify exit status, byte count, hexadecimal output, and empty stderr. Then run go test ./....",
+              "observation": "With GOCACHE set to a permitted temporary directory, go run . exited 0 with stdout_bytes=5, stdout_hex=68656c6c6f, and stderr_bytes=0. go test ./... exited 0 and reported package hello with no test files.",
+              "result": "PASS"
+            }
+          ],
+          "handoff": "No unresolved decisions."
+        },
+        "B2": {
+          "actionId": "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0/attempt-1",
+          "attemptId": "att:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0:34",
+          "provider": "codex",
+          "identity": "01a07c22-623e-7572-a129-f53572d48be1",
+          "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+          "candidate": "355a9e8676bd9362b89abb022415a531da636a8b",
+          "status": "PASS",
+          "message": "Added the bound subprocess regression test covering exit status, exact stdout without a newline, and empty stderr. Required validation passes with a writable sandbox cache.",
+          "manifest": [
+            "main_test.go"
+          ],
+          "validation": [
+            {
+              "subtaskId": "S2",
+              "procedure": "Ran `GOCACHE=/tmp/codex-b2-go-cache go test ./...` from the Go module root.",
+              "observation": "GOCACHE=/tmp/codex-b2-go-cache go test ./... exited 0 and reported `ok hello 0.664s`. The initial invocation using Go's default cache was denied by the filesystem sandbox before test setup.",
+              "result": "PASS"
+            }
+          ],
+          "handoff": "No unresolved decisions."
+        }
+      },
+      "commits": {
+        "B1": {
+          "operationId": "git:sha256:35718cea1c46254f2cf0908754756b4bdac0eef296506da7422b9b5b0a8bf222",
+          "before": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+          "after": "355a9e8676bd9362b89abb022415a531da636a8b",
+          "paths": [
+            "go.mod",
+            "main.go"
+          ],
+          "view": {
+            "providerMetadata": {
+              "core.autocrlf": "input",
+              "core.filemode": "true"
+            },
+            "identity": "355a9e8676bd9362b89abb022415a531da636a8b",
+            "tree": "3c567dab2af5f5c9aefcbe048af8985f3fc26815",
+            "entries": [
+              {
+                "path": "go.mod",
+                "mode": "100644",
+                "type": "blob",
+                "object": "38fc96f58694a569c0bf191fe64ed830667560d6"
+              },
+              {
+                "path": "main.go",
+                "mode": "100644",
+                "type": "blob",
+                "object": "4a4e602833dba8627ed82e020a33e095a818d4e9"
+              },
+              {
+                "path": "requirements.md",
+                "mode": "100644",
+                "type": "blob",
+                "object": "cd647f16e2e16ecb89702699228ebcf0be396bf9"
+              }
+            ],
+            "digest": "sha256:0cba83d4c06ad79a90e6e04646af6332fbd5b8b1c142466ba7db4843de31c590"
+          }
+        },
+        "B2": {
+          "operationId": "git:sha256:0a09f2241a6df5d07dae6f405170eb742e8b3366c68bc2fe7eca38008855228f",
+          "before": "355a9e8676bd9362b89abb022415a531da636a8b",
+          "after": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+          "paths": [
+            "main_test.go"
+          ],
+          "view": {
+            "providerMetadata": {
+              "core.autocrlf": "input",
+              "core.filemode": "true"
+            },
+            "identity": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+            "tree": "9e7aed464055ef7a51ee80599ec4d06773c34ebb",
+            "entries": [
+              {
+                "path": "go.mod",
+                "mode": "100644",
+                "type": "blob",
+                "object": "38fc96f58694a569c0bf191fe64ed830667560d6"
+              },
+              {
+                "path": "main.go",
+                "mode": "100644",
+                "type": "blob",
+                "object": "4a4e602833dba8627ed82e020a33e095a818d4e9"
+              },
+              {
+                "path": "main_test.go",
+                "mode": "100644",
+                "type": "blob",
+                "object": "c5c635a08c37f3874eda95c4671ebf5e8fec0d46"
+              },
+              {
+                "path": "requirements.md",
+                "mode": "100644",
+                "type": "blob",
+                "object": "cd647f16e2e16ecb89702699228ebcf0be396bf9"
+              }
+            ],
+            "digest": "sha256:ca920623378dcbba7af6cf3e726076cb7c3fce9412ffa8180ad61416bb5ee316"
+          }
+        }
+      },
+      "developmentSnapshot": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+      "qa": {
+        "blackbox": {
+          "reviewScope": "FULL",
+          "needsRevision": false,
+          "revision": 0,
+          "design": {
+            "manifest": {
+              "sharedSteps": [
+                {
+                  "id": "BLACKBOX:SHARED-001",
+                  "procedure": "Use a process runner that preserves stdout and stderr separately as raw byte sequences and records the exact exit status; do not normalize line endings, trim whitespace, or decode and re-encode output before comparison."
+                }
+              ],
+              "binding": {
+                "runId": "regular",
+                "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+                "solutionRevision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+                "reviewKind": "BLACKBOX",
+                "routeScope": "sha256:b668fcecefce25cceab453fa7d5c93f78e8829ecb8314f922c81d37300cc7771",
+                "topologyScope": "no-split"
+              },
+              "sources": [
+                "requirements.md"
+              ],
+              "points": [
+                {
+                  "pointId": "BLACKBOX:AC-001",
+                  "observableBehavior": "Running the public command `go run .` at the Go module root succeeds and emits only the five UTF-8 bytes for `hello` on stdout, with no newline and no stderr output.",
+                  "oracle": "Exit status equals 0; stdout bytes equal exactly [0x68, 0x65, 0x6c, 0x6c, 0x6f]; stderr is exactly empty."
+                }
+              ],
+              "cases": [
+                {
+                  "sharedSteps": [
+                    "BLACKBOX:SHARED-001"
+                  ],
+                  "caseId": "BLACKBOX:CASE-001",
+                  "mode": "BLACKBOX",
+                  "publicEntry": "go run .",
+                  "preconditions": "A working Go toolchain is available, and the test is started at the root of the supplied Go module baseline workspace.",
+                  "steps": "From the Go module root, execute `go run .` once while capturing stdout and stderr separately as raw bytes and recording the process exit status. Compare all three observations against the case oracle.",
+                  "oracle": "The process exits with status 0; captured stdout is exactly five bytes with hexadecimal value 68 65 6c 6c 6f (UTF-8 text \"hello\" and no trailing newline or other bytes); captured stderr has length 0 bytes."
+                }
+              ],
+              "edges": [
+                {
+                  "sourceId": "requirements.md",
+                  "pointId": "BLACKBOX:AC-001",
+                  "caseId": "BLACKBOX:CASE-001"
+                }
+              ]
+            },
+            "coverageJudgment": "PASS: The confirmed QA source requirements.md was read from the baseline workspace. Its sole acceptance condition, AC-001, is fully covered by one black-box case that invokes the specified public command and independently checks exit status, byte-exact stdout (five UTF-8 bytes 68 65 6c 6c 6f, with no newline), and empty stderr. This is a preparation design; the command was not executed and no implementation evidence was inspected."
+          },
+          "review": {
+            "sharedStepDecisions": [
+              {
+                "id": "BLACKBOX:SHARED-001",
+                "status": "PASS"
+              }
+            ],
+            "binding": {
+              "runId": "regular",
+              "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+              "solutionRevision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+              "reviewKind": "BLACKBOX",
+              "routeScope": "sha256:b668fcecefce25cceab453fa7d5c93f78e8829ecb8314f922c81d37300cc7771",
+              "topologyScope": "no-split"
+            },
+            "scope": "FULL",
+            "sourceDecisions": [
+              {
+                "id": "requirements.md",
+                "status": "PASS"
+              }
+            ],
+            "pointDecisions": [
+              {
+                "id": "BLACKBOX:AC-001",
+                "status": "PASS"
+              }
+            ],
+            "caseDecisions": [
+              {
+                "id": "BLACKBOX:CASE-001",
+                "status": "PASS"
+              }
+            ]
+          },
+          "whitelist": {
+            "requiredSourcesDigest": "sha256:26fa0ff81dcab5543ea55fa3fec5080ade88cc6d89f08bbb9b1749d0513485fd",
+            "manifestDigest": "sha256:3f1c41add149c79d303838de4e5c02e83863d7ca72d1ad6948d2c8aeeb51424c",
+            "mapDigest": "sha256:cbf38bc630cd7a08f4d8c730d4e7135c35390bbea19853b1c8e343890d5599ab",
+            "entries": [
+              {
+                "reviewKind": "BLACKBOX",
+                "sourceId": "requirements.md",
+                "pointId": "BLACKBOX:AC-001",
+                "caseId": "BLACKBOX:CASE-001"
+              }
+            ],
+            "digest": "sha256:235f97af57ffba090d5076f9c8903d1bb90c906c39dbf176777ce85d7e503c45"
+          },
+          "suggestions": [],
+          "frozen": true,
+          "snapshot": "",
+          "manifest": [],
+          "reuse": null
+        }
+      },
+      "receipts": [
+        {
+          "operation": {
+            "id": "git:sha256:dcab102935df942af3f787d151f6156976cd419582013e5f1e45eaf3b8f61585",
+            "kind": "workspaces",
+            "bindingDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+            "before": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+            "target": "",
+            "paths": null,
+            "claimed": true
+          },
+          "resources": {
+            "blackbox": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/resources/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0/blackbox",
+            "development": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/resources/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0/development"
+          },
+          "git": {
+            "operationId": "",
+            "before": "",
+            "after": "",
+            "paths": null,
+            "view": {
+              "providerMetadata": null,
+              "identity": "",
+              "tree": "",
+              "entries": null,
+              "digest": ""
+            }
+          }
+        },
+        {
+          "operation": {
+            "id": "git:sha256:35718cea1c46254f2cf0908754756b4bdac0eef296506da7422b9b5b0a8bf222",
+            "kind": "batch-commit",
+            "bindingDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+            "before": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+            "target": "B1",
+            "paths": [
+              "go.mod",
+              "main.go"
+            ],
+            "claimed": true
+          },
+          "git": {
+            "operationId": "git:sha256:35718cea1c46254f2cf0908754756b4bdac0eef296506da7422b9b5b0a8bf222",
+            "before": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+            "after": "355a9e8676bd9362b89abb022415a531da636a8b",
+            "paths": [
+              "go.mod",
+              "main.go"
+            ],
+            "view": {
+              "providerMetadata": {
+                "core.autocrlf": "input",
+                "core.filemode": "true"
+              },
+              "identity": "355a9e8676bd9362b89abb022415a531da636a8b",
+              "tree": "3c567dab2af5f5c9aefcbe048af8985f3fc26815",
+              "entries": [
+                {
+                  "path": "go.mod",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "38fc96f58694a569c0bf191fe64ed830667560d6"
+                },
+                {
+                  "path": "main.go",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "4a4e602833dba8627ed82e020a33e095a818d4e9"
+                },
+                {
+                  "path": "requirements.md",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "cd647f16e2e16ecb89702699228ebcf0be396bf9"
+                }
+              ],
+              "digest": "sha256:0cba83d4c06ad79a90e6e04646af6332fbd5b8b1c142466ba7db4843de31c590"
+            }
+          }
+        },
+        {
+          "operation": {
+            "id": "git:sha256:0a09f2241a6df5d07dae6f405170eb742e8b3366c68bc2fe7eca38008855228f",
+            "kind": "batch-commit",
+            "bindingDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+            "before": "355a9e8676bd9362b89abb022415a531da636a8b",
+            "target": "B2",
+            "paths": [
+              "main_test.go"
+            ],
+            "claimed": true
+          },
+          "git": {
+            "operationId": "git:sha256:0a09f2241a6df5d07dae6f405170eb742e8b3366c68bc2fe7eca38008855228f",
+            "before": "355a9e8676bd9362b89abb022415a531da636a8b",
+            "after": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+            "paths": [
+              "main_test.go"
+            ],
+            "view": {
+              "providerMetadata": {
+                "core.autocrlf": "input",
+                "core.filemode": "true"
+              },
+              "identity": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+              "tree": "9e7aed464055ef7a51ee80599ec4d06773c34ebb",
+              "entries": [
+                {
+                  "path": "go.mod",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "38fc96f58694a569c0bf191fe64ed830667560d6"
+                },
+                {
+                  "path": "main.go",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "4a4e602833dba8627ed82e020a33e095a818d4e9"
+                },
+                {
+                  "path": "main_test.go",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "c5c635a08c37f3874eda95c4671ebf5e8fec0d46"
+                },
+                {
+                  "path": "requirements.md",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "cd647f16e2e16ecb89702699228ebcf0be396bf9"
+                }
+              ],
+              "digest": "sha256:ca920623378dcbba7af6cf3e726076cb7c3fce9412ffa8180ad61416bb5ee316"
+            }
+          }
+        },
+        {
+          "operation": {
+            "id": "git:sha256:69d67963baa330bed52381bdbe4f3094d190e52cf51aba25f6913245b165f3dd",
+            "kind": "finalize",
+            "bindingDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+            "before": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+            "target": "",
+            "paths": null,
+            "claimed": true
+          },
+          "resources": {
+            "candidate": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/resources/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0/candidate"
+          },
+          "git": {
+            "operationId": "git:sha256:69d67963baa330bed52381bdbe4f3094d190e52cf51aba25f6913245b165f3dd",
+            "before": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+            "after": "c2dfe550a47ded76d7637f5a0a49891ea2a2c98f",
+            "paths": null,
+            "view": {
+              "providerMetadata": {
+                "core.autocrlf": "input",
+                "core.filemode": "true"
+              },
+              "identity": "c2dfe550a47ded76d7637f5a0a49891ea2a2c98f",
+              "tree": "100d2ec6d94f2e5c1c2cdfff1de47d7d11578dfe",
+              "entries": [
+                {
+                  "path": ".gates/results/regular.blackbox-cases.json",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "4833906cefbe3767786decde1a3f39e2beab2f76"
+                },
+                {
+                  "path": "go.mod",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "38fc96f58694a569c0bf191fe64ed830667560d6"
+                },
+                {
+                  "path": "main.go",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "4a4e602833dba8627ed82e020a33e095a818d4e9"
+                },
+                {
+                  "path": "main_test.go",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "c5c635a08c37f3874eda95c4671ebf5e8fec0d46"
+                },
+                {
+                  "path": "requirements.md",
+                  "mode": "100644",
+                  "type": "blob",
+                  "object": "cd647f16e2e16ecb89702699228ebcf0be396bf9"
+                }
+              ],
+              "digest": "sha256:6a63897fed96d8fa8daf9ec9b7130b5624d67197d4a87d304ec0c682715ed9a9"
+            }
+          },
+          "testOwned": [
+            "main_test.go"
+          ],
+          "artifacts": {
+            ".gates/results/regular.blackbox-cases.json": "sha256:e62f568358cb08ed4db243e93b0dbb50873d159f2d878b606d1b4bc45d25e85c",
+            "requirements.md": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01"
+          }
+        }
+      ],
+      "candidate": {
+        "externalArtifacts": {
+          "approvedWhitelist": "sha256:35639bfb9feb7fb169ddd9f59fff71bf1c48b3278e1e0c62a0a1dc5ff084cfc7",
+          "blackboxReuse": "sha256:38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed",
+          "blackboxReview": "sha256:1780ef052f0c07cd245abfc32eafb1aadb1b0fe3af081510d513e87f597794c1",
+          "blackboxSuggestions": "sha256:37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+          "requiredSources": "sha256:1b52950f4084574da9852677f78802ab5ce80ce72fc73b370025400e513542c5"
+        },
+        "candidate": {
+          "identity": "c2dfe550a47ded76d7637f5a0a49891ea2a2c98f",
+          "digest": "sha256:6a63897fed96d8fa8daf9ec9b7130b5624d67197d4a87d304ec0c682715ed9a9"
+        },
+        "baseSnapshot": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+        "developmentSnapshot": "5defc7e4fe64044bc7ceaf9fa70851f03e0bdd38",
+        "planDigest": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+        "bindingDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+        "view": {
+          "providerMetadata": {
+            "core.autocrlf": "input",
+            "core.filemode": "true"
+          },
+          "identity": "c2dfe550a47ded76d7637f5a0a49891ea2a2c98f",
+          "tree": "100d2ec6d94f2e5c1c2cdfff1de47d7d11578dfe",
+          "entries": [
+            {
+              "path": ".gates/results/regular.blackbox-cases.json",
+              "mode": "100644",
+              "type": "blob",
+              "object": "4833906cefbe3767786decde1a3f39e2beab2f76"
+            },
+            {
+              "path": "go.mod",
+              "mode": "100644",
+              "type": "blob",
+              "object": "38fc96f58694a569c0bf191fe64ed830667560d6"
+            },
+            {
+              "path": "main.go",
+              "mode": "100644",
+              "type": "blob",
+              "object": "4a4e602833dba8627ed82e020a33e095a818d4e9"
+            },
+            {
+              "path": "main_test.go",
+              "mode": "100644",
+              "type": "blob",
+              "object": "c5c635a08c37f3874eda95c4671ebf5e8fec0d46"
+            },
+            {
+              "path": "requirements.md",
+              "mode": "100644",
+              "type": "blob",
+              "object": "cd647f16e2e16ecb89702699228ebcf0be396bf9"
+            }
+          ],
+          "digest": "sha256:6a63897fed96d8fa8daf9ec9b7130b5624d67197d4a87d304ec0c682715ed9a9"
+        },
+        "coverage": {
+          "requiredSources": {
+            "binding": {
+              "runId": "regular",
+              "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+              "solutionRevision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72"
+            },
+            "sources": [
+              {
+                "sourceId": "requirements.md",
+                "category": "PRODUCT_REQUIREMENT",
+                "applicability": "QA"
+              }
+            ]
+          },
+          "selectedKinds": [
+            "BLACKBOX"
+          ],
+          "manifests": [
+            {
+              "sharedSteps": [
+                {
+                  "id": "BLACKBOX:SHARED-001",
+                  "procedure": "Use a process runner that preserves stdout and stderr separately as raw byte sequences and records the exact exit status; do not normalize line endings, trim whitespace, or decode and re-encode output before comparison."
+                }
+              ],
+              "binding": {
+                "runId": "regular",
+                "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+                "solutionRevision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+                "reviewKind": "BLACKBOX",
+                "routeScope": "sha256:b668fcecefce25cceab453fa7d5c93f78e8829ecb8314f922c81d37300cc7771",
+                "topologyScope": "no-split"
+              },
+              "sources": [
+                "requirements.md"
+              ],
+              "points": [
+                {
+                  "pointId": "BLACKBOX:AC-001",
+                  "observableBehavior": "Running the public command `go run .` at the Go module root succeeds and emits only the five UTF-8 bytes for `hello` on stdout, with no newline and no stderr output.",
+                  "oracle": "Exit status equals 0; stdout bytes equal exactly [0x68, 0x65, 0x6c, 0x6c, 0x6f]; stderr is exactly empty."
+                }
+              ],
+              "cases": [
+                {
+                  "sharedSteps": [
+                    "BLACKBOX:SHARED-001"
+                  ],
+                  "caseId": "BLACKBOX:CASE-001",
+                  "mode": "BLACKBOX",
+                  "publicEntry": "go run .",
+                  "preconditions": "A working Go toolchain is available, and the test is started at the root of the supplied Go module baseline workspace.",
+                  "steps": "From the Go module root, execute `go run .` once while capturing stdout and stderr separately as raw bytes and recording the process exit status. Compare all three observations against the case oracle.",
+                  "oracle": "The process exits with status 0; captured stdout is exactly five bytes with hexadecimal value 68 65 6c 6c 6f (UTF-8 text \"hello\" and no trailing newline or other bytes); captured stderr has length 0 bytes."
+                }
+              ],
+              "edges": [
+                {
+                  "sourceId": "requirements.md",
+                  "pointId": "BLACKBOX:AC-001",
+                  "caseId": "BLACKBOX:CASE-001"
+                }
+              ]
+            }
+          ],
+          "candidate": {
+            "identity": "c2dfe550a47ded76d7637f5a0a49891ea2a2c98f",
+            "digest": "sha256:6a63897fed96d8fa8daf9ec9b7130b5624d67197d4a87d304ec0c682715ed9a9"
+          }
+        },
+        "whitelist": {
+          "requiredSourcesDigest": "sha256:26fa0ff81dcab5543ea55fa3fec5080ade88cc6d89f08bbb9b1749d0513485fd",
+          "manifestDigest": "sha256:3f1c41add149c79d303838de4e5c02e83863d7ca72d1ad6948d2c8aeeb51424c",
+          "mapDigest": "sha256:cbf38bc630cd7a08f4d8c730d4e7135c35390bbea19853b1c8e343890d5599ab",
+          "entries": [
+            {
+              "reviewKind": "BLACKBOX",
+              "sourceId": "requirements.md",
+              "pointId": "BLACKBOX:AC-001",
+              "caseId": "BLACKBOX:CASE-001"
+            }
+          ],
+          "digest": "sha256:235f97af57ffba090d5076f9c8903d1bb90c906c39dbf176777ce85d7e503c45"
+        },
+        "artifacts": {
+          ".gates/results/regular.blackbox-cases.json": "sha256:e62f568358cb08ed4db243e93b0dbb50873d159f2d878b606d1b4bc45d25e85c",
+          "requirements.md": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01"
+        },
+        "testOwned": [
+          "main_test.go"
+        ],
+        "reviewReady": true
+      },
+      "rework": 0
+    },
+    "requiredSources": {
+      "binding": {
+        "runId": "regular",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "solutionRevision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72"
+      },
+      "sources": [
+        {
+          "sourceId": "requirements.md",
+          "category": "PRODUCT_REQUIREMENT",
+          "applicability": "QA"
+        }
+      ]
+    },
+    "catalogGates": [
+      "complexity-gate",
+      "implementation-quality-gate"
+    ],
+    "requirement": {
+      "path": "requirements.md",
+      "revision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+      "text": "# Task\n\n## 需求点\n\n### REQ-001：显示结果\n\n#### 要求\n在 Go module 根目录执行公开命令 go run .，退出码为 0，stdout 恰好为五个 UTF-8 字节 hello，无换行，stderr 为空。\n\n#### 验收条件\n- AC-001：执行 go run . 后退出码为 0，stdout 恰好为 hello（无换行），stderr 为空。\n\n#### 来源\n用户要求。\n",
+      "projection": {
+        "path": "requirements.md",
+        "contentDigest": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "requirements": [
+          {
+            "id": "REQ-001",
+            "title": "显示结果",
+            "requirement": "在 Go module 根目录执行公开命令 go run .，退出码为 0，stdout 恰好为五个 UTF-8 字节 hello，无换行，stderr 为空。",
+            "source": "用户要求。",
+            "acceptanceConditions": [
+              {
+                "id": "AC-001",
+                "text": "执行 go run . 后退出码为 0，stdout 恰好为 hello（无换行），stderr 为空。",
+                "line": 11
+              }
+            ]
+          }
+        ]
+      },
+      "confirmed": true
+    },
+    "mode": "regular",
+    "baseSnapshot": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+    "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+    "settings": {
+      "values": {
+        "capacity": 4,
+        "codexExecutable": "codex"
+      },
+      "sources": {
+        "capacity": "default",
+        "codexExecutable": "default",
+        "model": "default",
+        "reasoningEffort": "default",
+        "tokenCap": "default"
+      },
+      "files": [
+        "/Users/suxinyang/.config/formal-gates/config.json",
+        "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/config.json"
+      ]
+    },
+    "preDevelopmentReviewSeries": {
+      "product-review": {
+        "action": "product-review",
+        "completed": 1,
+        "sequence": 1,
+        "limit": 3,
+        "extraAttempts": null,
+        "rawCandidates": [
+          {
+            "actionId": "act:entry/product-review/review-1/attempt-1",
+            "attemptId": "att:entry/product-review/review-1:6",
+            "provider": "codex",
+            "identity": "fixture-product-review",
+            "action": "product-review",
+            "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+            "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+            "status": "PASS",
+            "message": "Every stated normal path and acceptance entry inspected",
+            "complete": true,
+            "findings": [],
+            "digest": "sha256:e961b6c0135dbd392f131f2ab3f835bbca07824fc0afb59ad8c8fc9525fc86e3",
+            "quarantined": false
+          }
+        ],
+        "adjudications": [
+          {
+            "action": "product-review",
+            "resultDigest": "sha256:e961b6c0135dbd392f131f2ab3f835bbca07824fc0afb59ad8c8fc9525fc86e3",
+            "findings": [],
+            "completenessEvidence": "Every requirement and normal acceptance path inspected",
+            "revision": 11
+          }
+        ],
+        "corrections": null,
+        "currentDigest": "sha256:e961b6c0135dbd392f131f2ab3f835bbca07824fc0afb59ad8c8fc9525fc86e3",
+        "currentRequirement": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "fresh": false,
+        "kept": false
+      },
+      "start-readiness": {
+        "action": "start-readiness",
+        "completed": 1,
+        "sequence": 1,
+        "limit": 3,
+        "extraAttempts": null,
+        "rawCandidates": [
+          {
+            "actionId": "act:entry/start-readiness/review-1/attempt-1",
+            "attemptId": "att:entry/start-readiness/review-1:11",
+            "provider": "codex",
+            "identity": "fixture-start-readiness",
+            "action": "start-readiness",
+            "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+            "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+            "status": "PASS",
+            "message": "Every stated normal path and acceptance entry inspected",
+            "complete": true,
+            "findings": [],
+            "granularityReview": {
+              "batches": [
+                {
+                  "id": "B1",
+                  "task": "Implement a Go hello command",
+                  "subtasks": [
+                    {
+                      "id": "S1",
+                      "task": "Create go.mod and main.go printing exactly hello; validate by running the Go command"
+                    }
+                  ],
+                  "dependencies": null,
+                  "interfaces": "stdout hello",
+                  "stateBoundary": "command output",
+                  "risks": "wrong output",
+                  "definitionOfDone": "go run . prints hello",
+                  "validation": "go run . and go test ./...",
+                  "recovery": "revert batch commit",
+                  "handoff": "only unresolved decisions",
+                  "contextCost": "single executable"
+                },
+                {
+                  "id": "B2",
+                  "task": "Add a regression test for the committed hello command",
+                  "subtasks": [
+                    {
+                      "id": "S2",
+                      "task": "Add main_test.go with a subprocess test of go run . asserting exit 0, stdout exactly hello with no newline, and empty stderr. Run go test ./...."
+                    }
+                  ],
+                  "dependencies": [
+                    "B1"
+                  ],
+                  "interfaces": "committed command from B1",
+                  "stateBoundary": "test only",
+                  "risks": "assertion may omit stream or newline",
+                  "definitionOfDone": "subprocess regression passes",
+                  "validation": "go test ./...",
+                  "recovery": "revert the test commit",
+                  "handoff": "only unresolved decisions",
+                  "contextCost": "independently rerunnable regression"
+                }
+              ],
+              "rationale": "one output capability",
+              "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+              "digest": ""
+            },
+            "digest": "sha256:6df2e6ff7de93faa20c1c306862c9108b8f937faed1055e5f106e276be57c6d1",
+            "quarantined": false
+          }
+        ],
+        "adjudications": [
+          {
+            "action": "start-readiness",
+            "resultDigest": "sha256:6df2e6ff7de93faa20c1c306862c9108b8f937faed1055e5f106e276be57c6d1",
+            "findings": [],
+            "completenessEvidence": "Every requirement and normal acceptance path inspected",
+            "revision": 16
+          }
+        ],
+        "corrections": null,
+        "currentDigest": "sha256:6df2e6ff7de93faa20c1c306862c9108b8f937faed1055e5f106e276be57c6d1",
+        "currentRequirement": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "fresh": false,
+        "kept": false
+      }
+    },
+    "developmentPlan": {
+      "batches": [
+        {
+          "id": "B1",
+          "task": "Implement a Go hello command",
+          "subtasks": [
+            {
+              "id": "S1",
+              "task": "Create go.mod and main.go printing exactly hello; validate by running the Go command"
+            }
+          ],
+          "dependencies": null,
+          "interfaces": "stdout hello",
+          "stateBoundary": "command output",
+          "risks": "wrong output",
+          "definitionOfDone": "go run . prints hello",
+          "validation": "go run . and go test ./...",
+          "recovery": "revert batch commit",
+          "handoff": "only unresolved decisions",
+          "contextCost": "single executable"
+        },
+        {
+          "id": "B2",
+          "task": "Add a regression test for the committed hello command",
+          "subtasks": [
+            {
+              "id": "S2",
+              "task": "Add main_test.go with a subprocess test of go run . asserting exit 0, stdout exactly hello with no newline, and empty stderr. Run go test ./...."
+            }
+          ],
+          "dependencies": [
+            "B1"
+          ],
+          "interfaces": "committed command from B1",
+          "stateBoundary": "test only",
+          "risks": "assertion may omit stream or newline",
+          "definitionOfDone": "subprocess regression passes",
+          "validation": "go test ./...",
+          "recovery": "revert the test commit",
+          "handoff": "only unresolved decisions",
+          "contextCost": "independently rerunnable regression"
+        }
+      ],
+      "rationale": "one output capability",
+      "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+      "digest": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+      "confirmedRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01"
+    },
+    "topology": "no-split",
+    "topologyReason": "single repository",
+    "route": {
+      "kind": "custom",
+      "qa": [
+        "blackbox"
+      ],
+      "gates": [
+        "implementation-quality-gate"
+      ]
+    },
+    "requirementGuaranteeActivation": {
+      "status": "ACTIVE",
+      "source": "ROUTE_CONFIRMATION",
+      "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+      "projectionDigest": "sha256:01dbfb51208464f07f5836a9f6a4302ee52f0a785e435c4f8c9b6cee8ecf2e27"
+    },
+    "requests": [
+      {
+        "id": "request-2",
+        "kind": "confirm-requirement",
+        "token": "sha256:f1b1d0ee0783ccb6391a53d0975d5f080fe4dd9183ae09824e4a1e3a86412722",
+        "revision": 3,
+        "digest": "sha256:63d9e032da0cbaee61ed8acbfea053aba73c479d08951fa15ebc7ac0a3918b52",
+        "options": [
+          "confirm",
+          "cancel"
+        ],
+        "request": {
+          "requiredSources": [
+            {
+              "sourceId": "requirements.md",
+              "category": "PRODUCT_REQUIREMENT",
+              "applicability": "QA"
+            }
+          ],
+          "action": "confirm-requirement"
+        }
+      },
+      {
+        "id": "request-4",
+        "kind": "mode",
+        "token": "sha256:dbbc4f4e0bf06b7201787e853c075a556cba0f34c80cff34dc71bf9d2bd720a6",
+        "revision": 5,
+        "digest": "sha256:50d159430cc724076b9a80f34c2f34953a95ce5e4c9ad8d5eb0fbcc7a1f0a1c6",
+        "options": [
+          "confirm",
+          "cancel"
+        ],
+        "request": {
+          "action": "mode",
+          "mode": "regular"
+        }
+      },
+      {
+        "id": "request-16",
+        "kind": "topology",
+        "token": "sha256:a6cb0519a9f9d59df5699937119d7377158856fe86cad08cceeeba336293a525",
+        "revision": 17,
+        "digest": "sha256:f74d76c77e60e7b9eb897d078343f5036a5e8e752ac734f2262d819fa8ce045c",
+        "options": [
+          "confirm",
+          "cancel"
+        ],
+        "request": {
+          "action": "topology",
+          "reason": "single repository",
+          "planDigest": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72"
+        }
+      },
+      {
+        "id": "request-18",
+        "kind": "route",
+        "token": "sha256:3652fbce7388b7cb5ad6899261598dc11e291e45bdfdef55a175e218973c421c",
+        "revision": 19,
+        "digest": "sha256:a4dc135958be248c499c3bb6e73e4a905e20088115344fd8e7deee5753a1d9bb",
+        "options": [
+          "confirm",
+          "cancel"
+        ],
+        "request": {
+          "action": "route",
+          "route": {
+            "kind": "custom",
+            "qa": [
+              "blackbox"
+            ],
+            "gates": [
+              "implementation-quality-gate"
+            ]
+          }
+        }
+      }
+    ],
+    "requirementChanges": null,
+    "changePending": false,
+    "guard": {
+      "basis": {
+        "basis": {
+          "schemaVersion": 1,
+          "requirement": {
+            "id": "requirements.md",
+            "revision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+            "confirmedRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01"
+          },
+          "batch": {
+            "id": "batch",
+            "revision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72",
+            "confirmedRevision": "sha256:bcbe5f378abf69855bf786113c7d526bd514710aa42a7e75c104213ea9450c72"
+          },
+          "route": {
+            "id": "route",
+            "revision": "sha256:b668fcecefce25cceab453fa7d5c93f78e8829ecb8314f922c81d37300cc7771",
+            "confirmedRevision": "sha256:b668fcecefce25cceab453fa7d5c93f78e8829ecb8314f922c81d37300cc7771"
+          },
+          "topology": {
+            "id": "topology",
+            "revision": "sha256:7686873f4e0a71a8174d6a6a60763affddab8905f3af2aa659cb05999371d1c0",
+            "confirmedRevision": "sha256:7686873f4e0a71a8174d6a6a60763affddab8905f3af2aa659cb05999371d1c0"
+          },
+          "definition": {
+            "id": "workflow",
+            "revision": "4",
+            "externalSteps": [
+              "entry/blackbox-design",
+              "entry/blackbox-review",
+              "entry/development-worker",
+              "entry/product-review",
+              "entry/start-readiness",
+              "entry/whitebox-design",
+              "entry/whitebox-review"
+            ]
+          },
+          "approvedQA": [],
+          "selectedGates": [],
+          "establishedObligations": [],
+          "establishedRepairs": [],
+          "externalTasks": [
+            {
+              "taskKey": "entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/product-review/review-1",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/product-review/review-2",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/product-review/review-3",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/start-readiness/review-1",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/start-readiness/review-2",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            },
+            {
+              "taskKey": "entry/start-readiness/review-3",
+              "provenance": {
+                "kind": "DEFINITION",
+                "id": "workflow",
+                "revision": "4"
+              },
+              "maxAttempts": 2
+            }
+          ]
+        },
+        "distinctExternalTaskKeys": 10,
+        "requestAllowance": 10,
+        "retryAllowance": 10,
+        "totalAllowance": 20,
+        "budgetBasisDigest": "sha256:c2db58429b95c92205efd20004bc77b8238903d922b924300033875856f1f644"
+      },
+      "usedAttempts": 6,
+      "usedTokens": 263166,
+      "status": "READY",
+      "tokenCapStatus": "UNCONFIGURED"
+    },
+    "rejectedResults": null
+  },
+  "cost": {
+    "totalInputTokens": 256321,
+    "inputCacheHitTokens": 178432,
+    "inputCacheMissTokens": 77889,
+    "outputTokens": 6845,
+    "dispatches": {
+      "act:entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1": {
+        "target": "blackbox-design",
+        "kind": "action",
+        "inputCacheHitTokens": 17152,
+        "inputCacheMissTokens": 18493,
+        "outputTokens": 1661,
+        "totalInputTokens": 35645,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-48-55-01a07c21-099d-7c52-b07f-ba5d1a04e3c5.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T13:48:55.476Z",
+          "completedAt": "2026-09-07T13:49:56.243Z",
+          "wallTimeMillis": 60767
+        }
+      },
+      "act:entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1": {
+        "target": "blackbox-review",
+        "kind": "action",
+        "inputCacheHitTokens": 17792,
+        "inputCacheMissTokens": 19065,
+        "outputTokens": 1180,
+        "totalInputTokens": 36857,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-50-22-01a07c22-5ff6-7d21-a566-d739ca0a52e5.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T13:50:22.958Z",
+          "completedAt": "2026-09-07T13:51:08.836Z",
+          "wallTimeMillis": 45878
+        }
+      },
+      "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0/attempt-1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 71040,
+        "inputCacheMissTokens": 19958,
+        "outputTokens": 2008,
+        "totalInputTokens": 90998,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-48-54-01a07c21-08a0-7a71-af2a-ceb1d3bf1d4a.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T13:48:55.4Z",
+          "completedAt": "2026-09-07T13:50:18.867Z",
+          "wallTimeMillis": 83467
+        }
+      },
+      "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0/attempt-1": {
+        "target": "development-worker",
+        "kind": "action",
+        "inputCacheHitTokens": 72448,
+        "inputCacheMissTokens": 20373,
+        "outputTokens": 1996,
+        "totalInputTokens": 92821,
+        "source": "transcript",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-50-23-01a07c22-623e-7572-a129-f53572d48be1.jsonl",
+        "timing": {
+          "startedAt": "2026-09-07T13:50:23.571Z",
+          "completedAt": "2026-09-07T13:51:51.601Z",
+          "wallTimeMillis": 88030
+        }
+      },
+      "act:entry/product-review/review-1/attempt-1": {
+        "target": "product-review",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      },
+      "act:entry/start-readiness/review-1/attempt-1": {
+        "target": "start-readiness",
+        "kind": "action",
+        "inputCacheHitTokens": 0,
+        "inputCacheMissTokens": 0,
+        "outputTokens": 0,
+        "totalInputTokens": 0,
+        "source": "unavailable"
+      }
+    }
+  },
+  "executions": {
+    "act:entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1": {
+      "claim": {
+        "prerequisiteDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+        "actionId": "act:entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1",
+        "attemptId": "att:entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0:23",
+        "task": "entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0",
+        "provider": "codex",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+        "payloadDigest": "sha256:9e379d082f268632f2fa1f500c73854c91d9a3f30bdf7b4fc9326e3e2411b4d0",
+        "operation": "spawn"
+      },
+      "number": 1,
+      "claimed": true,
+      "resumeClaimed": false,
+      "identity": "01a07c21-099d-7c52-b07f-ba5d1a04e3c5",
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1",
+        "attemptId": "att:entry/blackbox-design/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0:23",
+        "provider": "codex",
+        "identity": "01a07c21-099d-7c52-b07f-ba5d1a04e3c5",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-48-55-01a07c21-099d-7c52-b07f-ba5d1a04e3c5.jsonl",
+        "status": "STOPPED"
+      }
+    },
+    "act:entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1": {
+      "claim": {
+        "prerequisiteDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+        "actionId": "act:entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1",
+        "attemptId": "att:entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0:29",
+        "task": "entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0",
+        "provider": "codex",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+        "payloadDigest": "sha256:576bf2c54c06223d08b1a98b766d349182f1f52c7bd7c4b5114e615edaef2474",
+        "operation": "spawn"
+      },
+      "number": 1,
+      "claimed": true,
+      "resumeClaimed": false,
+      "identity": "01a07c22-5ff6-7d21-a566-d739ca0a52e5",
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0/attempt-1",
+        "attemptId": "att:entry/blackbox-review/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:qa-0-0:29",
+        "provider": "codex",
+        "identity": "01a07c22-5ff6-7d21-a566-d739ca0a52e5",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-50-22-01a07c22-5ff6-7d21-a566-d739ca0a52e5.jsonl",
+        "status": "STOPPED"
+      }
+    },
+    "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0/attempt-1": {
+      "claim": {
+        "prerequisiteDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+        "actionId": "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0/attempt-1",
+        "attemptId": "att:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0:23",
+        "task": "entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0",
+        "provider": "codex",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+        "payloadDigest": "sha256:23ca6fbe17428674b5c8de2141768b96005b9fc4ef04f1ef8336f4c098c5276c",
+        "operation": "spawn"
+      },
+      "number": 1,
+      "claimed": true,
+      "resumeClaimed": false,
+      "identity": "01a07c21-08a0-7a71-af2a-ceb1d3bf1d4a",
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0/attempt-1",
+        "attemptId": "att:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B1-0:23",
+        "provider": "codex",
+        "identity": "01a07c21-08a0-7a71-af2a-ceb1d3bf1d4a",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-48-54-01a07c21-08a0-7a71-af2a-ceb1d3bf1d4a.jsonl",
+        "status": "STOPPED"
+      }
+    },
+    "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0/attempt-1": {
+      "claim": {
+        "prerequisiteDigest": "sha256:d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0",
+        "actionId": "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0/attempt-1",
+        "attemptId": "att:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0:34",
+        "task": "entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0",
+        "provider": "codex",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "candidate": "355a9e8676bd9362b89abb022415a531da636a8b",
+        "payloadDigest": "sha256:91aa5fa86e0125608ed6bf734bd1e8a11bb1ea07cf18cd19db8e2e1e58a899c6",
+        "operation": "spawn"
+      },
+      "number": 1,
+      "claimed": true,
+      "resumeClaimed": false,
+      "identity": "01a07c22-623e-7572-a129-f53572d48be1",
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0/attempt-1",
+        "attemptId": "att:entry/development-worker/d1e07ba81c8a99d700c93e471c261423866478f17037ae90b374733a4266e3f0:B2-0:34",
+        "provider": "codex",
+        "identity": "01a07c22-623e-7572-a129-f53572d48be1",
+        "transcriptPath": "/Users/suxinyang/.codex/sessions/2026/09/07/rollout-2026-09-07T21-50-23-01a07c22-623e-7572-a129-f53572d48be1.jsonl",
+        "status": "STOPPED"
+      }
+    },
+    "act:entry/product-review/review-1/attempt-1": {
+      "claim": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "task": "entry/product-review/review-1",
+        "provider": "codex",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+        "payloadDigest": "sha256:2acc533994e6b43214a3bb18cabd18af21ae5417db9613908d9dfabff9eb6686",
+        "operation": "spawn"
+      },
+      "number": 1,
+      "claimed": true,
+      "resumeClaimed": false,
+      "identity": "fixture-product-review",
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/product-review/review-1/attempt-1",
+        "attemptId": "att:entry/product-review/review-1:6",
+        "provider": "codex",
+        "identity": "fixture-product-review",
+        "status": "UNAVAILABLE",
+        "reason": "Fixture has no provider transcript"
+      }
+    },
+    "act:entry/start-readiness/review-1/attempt-1": {
+      "claim": {
+        "prerequisiteDigest": "sha256:e961b6c0135dbd392f131f2ab3f835bbca07824fc0afb59ad8c8fc9525fc86e3",
+        "actionId": "act:entry/start-readiness/review-1/attempt-1",
+        "attemptId": "att:entry/start-readiness/review-1:11",
+        "task": "entry/start-readiness/review-1",
+        "provider": "codex",
+        "requirementRevision": "1a18269dc0d03d71b6b45e6c6a2f01cc670af9186743c5287de52a36ce68df01",
+        "candidate": "f5c870b9cb684551f84a07d6040547c95ff8e98e",
+        "payloadDigest": "sha256:ee71f48ec9799d4709551668e13eec926ea284695d2aa6d3a200931cbba79e11",
+        "operation": "spawn"
+      },
+      "number": 1,
+      "claimed": true,
+      "resumeClaimed": false,
+      "identity": "fixture-start-readiness",
+      "finished": true,
+      "source": {
+        "actionId": "act:entry/start-readiness/review-1/attempt-1",
+        "attemptId": "att:entry/start-readiness/review-1:11",
+        "provider": "codex",
+        "identity": "fixture-start-readiness",
+        "status": "UNAVAILABLE",
+        "reason": "Fixture has no provider transcript"
+      }
+    }
+  },
+  "runId": "regular",
+  "runtime": "engine",
+  "route": "custom",
+  "status": "ACTIVE",
+  "revision": 48,
+  "envelope": {
+    "writer": "engine",
+    "stateSchemaVersion": "2",
+    "workflowDefinitionVersion": "4",
+    "definitionSource": "definitions/workflow.json",
+    "definitionDigest": "sha256:c9d832c075e81152844e721fd794495f2ca2f80b26ebe8413b0f7ac25dcc65ee",
+    "packageDigest": "sha256:test",
+    "installedTargetIdentity": "test-target"
+  },
+  "next": {
+    "Kind": "ASK",
+    "Ready": null,
+    "HostAction": null,
+    "Ask": {
+      "steps": [
+        "review.ready"
+      ]
+    },
+    "Wait": null,
+    "Operator": null,
+    "Complete": null
+  },
+  "availableActions": [
+    "submit:REQUEST:abort",
+    "submit:REQUEST:requirement-change",
+    "submit:REQUEST:adopt-external",
+    "submit:REQUEST:plan-change",
+    "submit:REQUEST:qa-suggestion",
+    "submit:REQUEST:qa-revise",
+    "submit:REQUEST:development-rework",
+    "submit:REQUEST:preparation-retry",
+    "drive:resume",
+    "submit:REQUEST:reset",
+    "submit:REQUEST:jump",
+    "submit:CORRECT",
+    "submit:REQUEST:review-again",
+    "submit:REQUEST:topology",
+    "submit:REQUEST:route-add",
+    "submit:REQUEST:route-reselect"
+  ],
+  "summaryPath": "/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/TestPreparationNativeConcurrent387458532/001/.gates/engine/regular/terminal-summary.json"
+}
