@@ -292,9 +292,11 @@ func reviewSchema(claim protocol.ExecutionClaim) map[string]any {
 // The invocation receipt is an adapter-owned recovery artifact for the native
 // process, not a workflow writer. UNKNOWN without it never causes a second call.
 type codexProcess struct {
-	PID      int    `json:"pid"`
-	ActionID string `json:"actionId"`
-	Stopped  bool   `json:"stopped"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	CompletedAt string `json:"completedAt,omitempty"`
+	PID         int    `json:"pid"`
+	ActionID    string `json:"actionId"`
+	Stopped     bool   `json:"stopped"`
 }
 
 func (f *Facade) codexJob(actionID string) string {
@@ -554,6 +556,19 @@ func actionInstructions(run Run, paths ...string) (string, error) {
 }
 
 func assemblePrompt(instructions string, input any) (string, error) {
+	// The source document is authoritative; its derived projection repeats the
+	// same requirements and acceptance text. Keep the complete document in the
+	// actual message, including for roles that cannot read files.
+	if payload, ok := input.(map[string]any); ok {
+		copy := make(map[string]any, len(payload))
+		for key, value := range payload {
+			copy[key] = value
+		}
+		if requirement, ok := copy["requirement"].(protocol.RequirementDocument); ok {
+			copy["requirement"] = map[string]any{"path": requirement.Path, "revision": requirement.Revision, "text": requirement.Text, "confirmed": requirement.Confirmed}
+		}
+		input = copy
+	}
 	data, err := json.MarshalIndent(input, "", "  ")
 	if err != nil {
 		return "", err

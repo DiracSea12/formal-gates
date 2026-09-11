@@ -75,7 +75,8 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 		return "", err
 	}
 	defer func() { _ = in.Close(); _ = stopCodexProcess(cmd.Process.Pid); _ = cmd.Wait() }()
-	if err = writeJSONAtomic(filepath.Join(job, "process.json"), codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID}); err != nil {
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err = writeJSONAtomic(filepath.Join(job, "process.json"), codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID, StartedAt: startedAt}); err != nil {
 		return "", err
 	}
 	enc := json.NewEncoder(in)
@@ -294,7 +295,7 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 			if err = os.WriteFile(filepath.Join(job, answerName), []byte(answer), 0600); err != nil {
 				return identity, err
 			}
-			if err = writeJSONAtomic(filepath.Join(job, "process.json"), codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID, Stopped: true}); err != nil {
+			if err = writeJSONAtomic(filepath.Join(job, "process.json"), codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID, Stopped: true, StartedAt: startedAt, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 				return identity, err
 			}
 			return identity, nil

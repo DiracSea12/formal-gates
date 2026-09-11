@@ -12,6 +12,8 @@ import (
 // OwnerCost belongs only to this run. SourceUnavailable carries zero numbers;
 // it means the interval could not be measured, not that no tokens were used.
 type OwnerCost struct {
+	SourceReason         string `json:"sourceReason,omitempty"`
+	TranscriptPath       string `json:"transcriptPath,omitempty"`
 	InputCacheHitTokens  int64  `json:"inputCacheHitTokens"`
 	InputCacheMissTokens int64  `json:"inputCacheMissTokens"`
 	OutputTokens         int64  `json:"outputTokens"`

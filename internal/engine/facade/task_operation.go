@@ -98,6 +98,7 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 		// Persist the call boundary before invoking. If the driver dies between this
 		// marker and native attach, absence of a result is UNKNOWN, not permission to
 		// execute again. This is the same intent discipline as outer dispatch.
+		op.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err = writeJSONAtomic(filepath.Join(job, "request.json"), op); err != nil {
 			return receipt, err
 		}
@@ -121,9 +122,10 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 	return receipt, err
 }
 
-func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job string) protocol.TaskOperationReceipt {
+func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job string) (result protocol.TaskOperationReceipt) {
 	q := op.Request
-	result := protocol.TaskOperationReceipt{ID: op.ID, ActionID: q.Binding.ActionID, RequestDigest: protocol.TaskOperationDigest(q), Status: "FAILED"}
+	result = protocol.TaskOperationReceipt{ID: op.ID, ActionID: q.Binding.ActionID, RequestDigest: protocol.TaskOperationDigest(q), Status: "FAILED", StartedAt: op.StartedAt}
+	defer func() { result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano) }()
 	fail := func(err error) protocol.TaskOperationReceipt {
 		result.Status = "FAILED"
 		result.Message = err.Error()
@@ -254,7 +256,8 @@ func runOperationProcess(cmd *exec.Cmd, job string, result *protocol.TaskOperati
 	if err = cmd.Start(); err != nil {
 		return -1, err
 	}
-	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": false}); err != nil {
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": false, "startedAt": startedAt}); err != nil {
 		_ = stopCodexProcess(cmd.Process.Pid)
 		_ = cmd.Wait()
 		return -1, err
@@ -263,7 +266,7 @@ func runOperationProcess(cmd *exec.Cmd, job string, result *protocol.TaskOperati
 	_ = out.Sync()
 	_ = stderr.Sync()
 	code := cmd.ProcessState.ExitCode()
-	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": true, "exitCode": code}); err != nil {
+	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": true, "exitCode": code, "startedAt": startedAt, "completedAt": time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 		return code, err
 	}
 	if waitErr != nil {

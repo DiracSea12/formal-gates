@@ -397,6 +397,8 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow show", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "run id")
+	summary := fs.Bool("summary", false, "show incremental progress and evidence/message paths")
+	after := fs.Uint64("after-revision", 0, "return operation results accepted after this revision (with --summary)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -406,6 +408,13 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	if facadeRun, ok, err := openEngineIfPresent(*root, *runID); ok {
 		if err != nil {
 			return 1, err
+		}
+		if *summary {
+			progress, err := facadeRun.ProgressSince(*after)
+			return printValue(streams.Stdout, progress, err)
+		}
+		if *after != 0 {
+			return 1, fmt.Errorf("--after-revision requires --summary")
 		}
 		run, err := facadeRun.Show()
 		return printValue(streams.Stdout, run, err)

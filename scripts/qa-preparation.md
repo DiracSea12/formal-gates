@@ -98,3 +98,45 @@ run and are removed at terminal reconciliation. Seal/abort preserve the above
 formal evidence and deliveries, remove run resources, and keep cleanup pending
 on errors. Retrying cleanup preserves the same source record; it does not rerun
 the QA command or copy an active run.
+
+## Public operation handoff index (stage 4a, Git regular, no split)
+
+Use the current action receipt for root/run/action/identity/candidate; the
+candidate in a historical example is never an input. Resume the assigned native
+identity with its original request ID. A changed candidate requires the engine's
+new binding; retained completed cases are not rerun to make an example work.
+
+| Entry | Dependencies and parameters | Applicable version / adaptation |
+| --- | --- | --- |
+| `qa.prepare` | Current action binding, approved case and shared-step commands; uses candidate plus registered repair overlay, toolchain and args | Stage 4a; preferred preparation entry. Do not call historical fixture `prepare`. |
+| `qa.run` | Current action binding, stable requestId; empty caseId for approved pending set, or one approved case; empty prompt | Stage 4a; per-operation receipts and pending semantic judgments remain authoritative. |
+| `qa.checkpoint` | Same native identity; empty caseId; JSON delta cases, exact remaining, message | Stage 4a; copies legal old rows through existing writer. Never rewrite retained PASS. |
+| `phase3-qa-fixture.sh build` | POSIX sh, Go; `--source` engine-prepared candidate directory, `--output` binary path | Stage 4a build entry includes prepared uncommitted overlays. Other fixture entries are historical and are not legal stage-4 preparation recipes. |
+| `phase3-qa-codex-run.py` | Historical Python 3 + installed Codex; `--action`, `--dispatch`, `--root`, `--binary`, `--evidence`, optional `--continue-action` | Stage 3.5c fixed comparison only; contains historical run/case assumptions and starts native work at module scope. Requires adaptation and an approved current task-operation entry before stage-4 use; never import it or execute it for discovery. |
+| `qa-static-check.py` | Python 3; one or more `.py` / `.sh` paths; shell files additionally require POSIX sh | Syntax only: AST parse / `sh -n`; never import or source inspected helpers. Other languages report unsupported and require explicit adaptation. Does not verify runtime dependencies or semantic oracles. |
+| `workflow show --summary` | Current `--root`, `--run-id`; optional `--after-revision` from previous response | Stage 4a; read-only incremental operation results, message paths, raw evidence roots, cost and current observations. No scheduler/result authority. Full `show` remains available. |
+
+Native prompt files listed by the summary are the actual text sent for each
+start/resume. They retain complete mandatory text for text-only roles. The
+requirement's repeated derived projection is omitted from the message; the
+frozen document text, path and revision remain. Task operation directories hold
+request, process and observed receipt plus separate stdout/stderr; use these to
+investigate an exception without copying all old passing results.
+
+Counts refer to issued actions, not estimates of future dynamically issued
+work. `newResults` counts receipt completion rather than semantic PASS. The
+cursor is the accepted state revision, so an operation started before a cursor
+and accepted after it is still new. Older records with no completion revision
+are included only in the initial view. Cost totals are measured subtotals;
+unavailable entries contain null measurements and a source reason when known.
+Command wall intervals include waits and must not be added across concurrent
+work. Missing timestamps remain unavailable. Preparation reuse counts only
+prepare receipts, never the same marker copied into target/collect receipts.
+
+Before handing off a helper, locate its dependencies and syntax-check its source.
+Read its argument declarations rather than importing it to discover functions.
+For example a helper that writes an output at module scope must not run during
+inspection. A real end-to-end target still executes through qa.target after
+approval; syntax PASS is never target or oracle PASS.
+
+`observedNativeCalls` counts only retained process observations; `nativeCallSourcesUnavailable` lists claimed task journals that cannot establish a call count. Repeated-operation entries bind previous/current operation IDs and report candidate/input/checkpoint changes; when no explicit reason is recorded they say unavailable. These do not authorize another execution.

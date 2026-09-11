@@ -565,3 +565,34 @@ B1-S3：人工对照历史比较的范围、候选、配置与选样方法，核
 为本计划。首轮路径校验把 `internal/cost` 目录误当文件而失败，改为允许目录索引后通过；
 同时修正 owner 入口名称为源码实际的 `settleOwnerReport`。这些是文档检查，不是 Go
 测试或原生宿主验收；本批未运行构建、fixture、模型调用或完整流程，未产生新的功能 PASS。
+
+### B4：材料、进度、计量与公共操作的落实核对
+
+| 需求 | 保留的既有入口/证据 | 本批补齐 |
+| --- | --- | --- |
+| REQ-005 | `assemblePrompt`、每次原生启动/续用的 `prompt.txt`、当前候选及身份绑定 | 完整冻结需求文本只带一次，不重复派生 projection；`workflow show --summary` 提供实际消息文件入口。文本限定角色仍收到完整正文。 |
+| REQ-005/006 | task-operation request/process/observed、现有 `PendingQA` 与 checkpoint | 回执接纳 revision 用于只取新增操作；查询无写入，同一快照结合当前原生身份投影剩余/受阻关系。记录 run 起点、准备/收集与命令起止，显示具体 argv、退出码、准备复用与重复操作的实际绑定差异。 |
+| REQ-006 | `internal/cost` 同身份扣除、owner 基线与重叠判定、原生 transcript | 缺失来源保留原因；缺失测量序列化 null，真实测得的零仍是零。摘要仅取既有账本的 measured 小计与缺失来源，不另结算；单项经过时间含等待，不累加重叠时间。 |
+| REQ-007 | 现有 QA design/review 的实际加载入口和增量修订路径 | 增加逐步前态/后态、可达性及退出/输出/语义取证核对，给出 Seal/abort 后继续同 run 的冲突例；公共操作、参数、依赖及版本限制集中在 `scripts/qa-preparation.md`。静态检查 AST / `sh -n` 不启动被检查脚本。 |
+
+开发验证入口：`internal/engine/facade/progress_test.go`（增量游标、当前身份
+pending、候选变化、实际消息路径、等待时间、缺失时间、两种 QA 角色的实际提示词入口、
+终态前置不可达、静态检查副作用与错误脚本）；`internal/cost/json_test.go`（缺失 null
+与真实零的区分及 JSON 恢复）。既有 owner 区间/重叠、续用计量与候选准备变更测试继续
+使用，未重建或重跑历史正式 PASS。
+
+开发自测曾暴露两处已修复的问题：接纳 revision 应由事件边界传入，不能从 State
+读取不存在的字段；新增提示词测试需先给两个角色分配工作区。其失败与后续验证输出
+保留在本 action 的原生记录中。新增 pending 检查还验证了查询必须使用当前原生身份，
+而不是初始 claim 中尚未绑定的 identity。
+
+计量限制：旧记录缺少的时间、调用观察或重复理由明确 unavailable；摘要的 issued-action
+数量不估计未来动态派发任务，操作 COMPLETED 不代表语义 PASS。旧
+`phase3-qa-codex-run.py` 是固定 3.5c 比较脚本，不能导入来发现接口，也不能作为当前
+stage-4 操作直接执行。本批未运行新宿主模型样本，不据局部摘要或静态测试宣称整轮提速。
+
+本批最终验证：`go build ./...`、`go test ./...` 均实际退出 0；最后的进度显示字段
+补充后，`go test ./internal/engine/facade -run 'TestProgress|TestOperationDuration|TestPromptKeeps|TestStaticChecker|TestQAReadiness'`
+退出 0，最终构建再次退出 0。`python3 scripts/qa-static-check.py scripts/qa-static-check.py scripts/phase3-qa-fixture.sh scripts/phase3-qa-codex-run.py`
+对三个文件均报告 syntax-only PASS；`git diff --check` 通过。上述是开发自测，不替代
+后续引擎签发的独立 QA，也不声称新增宿主或完整模型流程已验证。

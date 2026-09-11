@@ -161,6 +161,7 @@ type GuardProjection struct {
 	ContinueTasks  []runtime.TaskKey `json:"continueTasks,omitempty"`
 }
 type RegularState struct {
+	StartedAt               time.Time                              `json:"startedAt,omitempty"`
 	OwnerStartedAt          time.Time                              `json:"ownerStartedAt,omitempty"`
 	OwnerTranscript         string                                 `json:"ownerTranscript,omitempty"`
 	OwnerSession            string                                 `json:"ownerSession,omitempty"`
@@ -685,7 +686,7 @@ func (e *Engine) admitRegularEvent(ev Event, s *State, revision uint64) (Accepta
 	case "TASK_OPERATION_CLAIM":
 		err = e.claimTaskOperation(s, *v.TaskOperation, revision)
 	case "TASK_OPERATION_RECEIPT":
-		err = e.acceptTaskOperation(s, *v.TaskOperationReceipt)
+		err = e.acceptTaskOperation(s, *v.TaskOperationReceipt, revision)
 	case "VERIFICATION_RESULT":
 		status, err = e.acceptVerification(s, *v.VerificationResult, revision)
 	case "WAVE_ADJUDICATE":
@@ -980,7 +981,7 @@ func (e *Engine) sourceRegular(s *State, src ExecutionSource) error {
 }
 
 func settleRegularSource(s *State, src ExecutionSource, x RegularExecution) error {
-	entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "action", Source: cost.SourceUnavailable, TranscriptPath: src.TranscriptPath}
+	entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "action", Source: cost.SourceUnavailable, TranscriptPath: src.TranscriptPath, SourceReason: src.Reason}
 	if src.Status == "STOPPED" {
 		if err := checkTranscriptIdentity(src.TranscriptPath, src.Identity); err != nil {
 			return err
@@ -990,6 +991,7 @@ func settleRegularSource(s *State, src ExecutionSource, x RegularExecution) erro
 			return fmt.Errorf("COST_PENDING: %w; explicitly record UNAVAILABLE only after source diagnosis", err)
 		}
 		entry.Source = cost.SourceTranscript
+		entry.SourceReason = ""
 		entry.TotalInputTokens = usage.InputCacheHitTokens + usage.InputCacheMissTokens
 		entry.InputCacheHitTokens = usage.InputCacheHitTokens
 		entry.InputCacheMissTokens = usage.InputCacheMissTokens

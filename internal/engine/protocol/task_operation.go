@@ -41,18 +41,22 @@ func ResourcesForTask(id string) TaskResources {
 }
 
 type TaskOperation struct {
-	Resources        *TaskResources        `json:"resources,omitempty"`
-	WorkspaceMode    string                `json:"workspaceMode,omitempty"`
-	ID               string                `json:"id"`
-	Request          TaskOperationRequest  `json:"request"`
-	Preparation      []coverage.SharedStep `json:"preparation,omitempty"`
-	Command          *coverage.Command     `json:"command,omitempty"`
-	CheckpointDigest string                `json:"checkpointDigest,omitempty"`
-	ClaimedRevision  uint64                `json:"claimedRevision"`
-	Receipt          *TaskOperationReceipt `json:"receipt,omitempty"`
+	StartedAt         string                `json:"startedAt,omitempty"`
+	Resources         *TaskResources        `json:"resources,omitempty"`
+	WorkspaceMode     string                `json:"workspaceMode,omitempty"`
+	ID                string                `json:"id"`
+	Request           TaskOperationRequest  `json:"request"`
+	Preparation       []coverage.SharedStep `json:"preparation,omitempty"`
+	Command           *coverage.Command     `json:"command,omitempty"`
+	CheckpointDigest  string                `json:"checkpointDigest,omitempty"`
+	CompletedRevision uint64                `json:"completedRevision,omitempty"`
+	ClaimedRevision   uint64                `json:"claimedRevision"`
+	Receipt           *TaskOperationReceipt `json:"receipt,omitempty"`
 }
 
 type TaskOperationReceipt struct {
+	StartedAt         string            `json:"startedAt,omitempty"`
+	CompletedAt       string            `json:"completedAt,omitempty"`
 	Artifacts         map[string]string `json:"artifacts,omitempty"`
 	InputDigest       string            `json:"inputDigest,omitempty"`
 	SharedWorkspace   string            `json:"sharedWorkspace,omitempty"`
@@ -346,7 +350,7 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 	return nil
 }
 
-func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt) error {
+func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt, revision uint64) error {
 	x, ok := s.RegularExecutions[v.ActionID]
 	if !ok {
 		return fmt.Errorf("UNKNOWN_ACTION: task receipt action missing")
@@ -365,7 +369,7 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt) error {
 		return fmt.Errorf("failed task operation needs diagnostic message")
 	}
 	if op.Request.Kind == "model.run" {
-		entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "task-operation", Source: cost.SourceUnavailable, TranscriptPath: v.TranscriptPath}
+		entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "task-operation", Source: cost.SourceUnavailable, TranscriptPath: v.TranscriptPath, SourceReason: "native model transcript unavailable: " + v.Message}
 		if v.TranscriptPath != "" {
 			if err := checkTranscriptIdentity(v.TranscriptPath, v.Identity); err != nil {
 				return err
@@ -375,6 +379,7 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt) error {
 				return fmt.Errorf("COST_PENDING: task model source: %w", err)
 			}
 			entry.Source = cost.SourceTranscript
+			entry.SourceReason = ""
 			entry.InputCacheHitTokens = usage.InputCacheHitTokens
 			entry.InputCacheMissTokens = usage.InputCacheMissTokens
 			entry.TotalInputTokens = usage.InputCacheHitTokens + usage.InputCacheMissTokens
@@ -395,6 +400,7 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt) error {
 		}
 	}
 	op.Receipt = &v
+	op.CompletedRevision = revision + 1
 	x.Operations[v.ID] = op
 	s.RegularExecutions[v.ActionID] = x
 	intent := s.PendingHostActions[v.ID]

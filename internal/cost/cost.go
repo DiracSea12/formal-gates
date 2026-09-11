@@ -41,6 +41,7 @@ type DispatchCost struct {
 	TotalInputTokens     int64  `json:"totalInputTokens"`
 	Source               string `json:"source"` // "transcript" | "unavailable"
 	// Codex retains the exact source and native task timing on this same entry.
+	SourceReason   string      `json:"sourceReason,omitempty"`
 	TranscriptPath string      `json:"transcriptPath,omitempty"`
 	Timing         *TaskTiming `json:"timing,omitempty"`
 }
