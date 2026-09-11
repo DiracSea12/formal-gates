@@ -97,7 +97,7 @@ func (f *Facade) executeCodex(actionID string, resume bool) (Run, error) {
 			return Run{}, err
 		}
 	}
-	if resume && claim.Task.Step == "development-worker" {
+	if resume && claim.Task.Step == "development-worker" && f.subagentParent == "" {
 		var recovery protocol.DeveloperRecovery
 		var recoveryErr error
 		if replacementRecovery {
@@ -163,6 +163,9 @@ func (f *Facade) executeCodex(actionID string, resume bool) (Run, error) {
 	}
 	if err = os.WriteFile(filepath.Join(job, "prompt.txt"), []byte(prompt), 0600); err != nil {
 		return Run{}, err
+	}
+	if f.subagentParent != "" {
+		return f.prepareSubagentDispatch(run, claim, job, workspace, prompt, schema)
 	}
 	identity, nativeErr := f.runNativeBridge(run, claim, resume, job, workspace, prompt, schema)
 	if identity == "" {
@@ -454,6 +457,12 @@ func (f *Facade) finishRegularAbort() (Run, error) {
 			continue
 		}
 		if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
+			continue
+		}
+		if _, nativeErr := f.readSubagentDispatch(id); nativeErr == nil {
+			if _, err := f.CollectSubagent(id); err != nil {
+				return Run{}, fmt.Errorf("SUBAGENT_TERMINATION_REQUIRED: close the bound native subagent %s with close_agent, then collect its actual stopped turn: %w", x.Identity, err)
+			}
 			continue
 		}
 		job := f.codexJob(id)

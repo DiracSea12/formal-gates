@@ -80,6 +80,7 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	Subagent                  *SubagentDispatch `json:"subagent,omitempty"`
 	reviewDecisions           map[string]protocol.RecordedDecision
 	Regular                   *protocol.RegularState               `json:"regular,omitempty"`
 	Cost                      *cost.RunCost                        `json:"cost,omitempty"`
@@ -155,6 +156,7 @@ type Admission struct {
 }
 
 type Facade struct {
+	subagentParent string
 	// Private fault seam for process-interruption tests; never exposed by CLI/config.
 	fault      func(persistence.FaultPoint) error
 	root       string

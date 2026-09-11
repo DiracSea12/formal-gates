@@ -458,9 +458,25 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	runID := fs.String("run-id", "", "engine run id")
 	actionID := fs.String("action-id", "", "execute this issued Codex action")
 	operationPath := fs.String("operation-request", "", "typed internal task operation request JSON path")
+	subagent := fs.Bool("subagent", false, "prepare a native desktop subagent handoff for this issued action")
+	subagentBind := fs.String("subagent-bind", "", "bind the observed native subagent identity")
+	subagentCollect := fs.Bool("subagent-collect", false, "collect the completed result from the bound native transcript")
+	subagentOperation := fs.String("subagent-operation", "", "native subagent task-operation input JSON path")
 	resume := fs.Bool("resume", false, "resume this action through the bound native session")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	nativeModes := 0
+	for _, enabled := range []bool{*subagent, *subagentBind != "", *subagentCollect, *subagentOperation != ""} {
+		if enabled {
+			nativeModes++
+		}
+	}
+	if nativeModes > 1 || (nativeModes > 0 && (*actionID == "" || *operationPath != "")) {
+		return 1, fmt.Errorf("one subagent operation requires --action-id and cannot combine with --operation-request")
+	}
+	if *resume && (*subagentBind != "" || *subagentCollect) {
+		return 1, fmt.Errorf("--resume is only for dispatch continuation or task-operation reconciliation")
 	}
 	f, ok, err := openEngineIfPresent(*root, *runID)
 	if !ok {
@@ -468,6 +484,35 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	}
 	if err != nil {
 		return 1, err
+	}
+	if *subagent {
+		run, err := f.PrepareSubagent(*actionID, os.Getenv("CODEX_THREAD_ID"), *resume)
+		return printValue(streams.Stdout, run, err)
+	}
+	if *subagentBind != "" {
+		run, err := f.BindSubagent(*actionID, *subagentBind)
+		return printValue(streams.Stdout, run, err)
+	}
+	if *subagentCollect {
+		run, err := f.CollectSubagent(*actionID)
+		return printValue(streams.Stdout, run, err)
+	}
+	if *subagentOperation != "" {
+		var q struct {
+			RequestID string `json:"requestId"`
+			Kind      string `json:"kind"`
+			CaseID    string `json:"caseId"`
+			Prompt    string `json:"prompt"`
+		}
+		data, err := os.ReadFile(*subagentOperation)
+		if err != nil {
+			return 1, err
+		}
+		if err = json.Unmarshal(data, &q); err != nil {
+			return 1, err
+		}
+		result, err := f.ExecuteSubagentOperation(*actionID, os.Getenv("CODEX_THREAD_ID"), q.RequestID, q.Kind, q.CaseID, q.Prompt, *resume)
+		return printValue(streams.Stdout, result, err)
 	}
 	if *operationPath != "" {
 		if *actionID != "" {

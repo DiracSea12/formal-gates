@@ -92,6 +92,12 @@ formal_gates_operation 使用自由 shell 创建模型或调用 QA 目标。QA c
 不产生新角色或审查。开发者与审查者相互隔离。黑盒不接收实现及开发验证结论，白盒/门
 依据其各自授权输入工作。每个新交付路径先在指定 VCS 跟踪，返回不可变快照和完整 diff。
 
+Codex 桌面对话提供原生 `spawn_agent` 工具时，新动作优先使用
+`workflow drive --action-id <issued> --subagent`；具体转交、绑定和采集见
+[原生子代理派发](references/engine-regular.md#codex-桌面原生子代理)。只转交 engine
+生成的 prompt，不继承主对话历史，不增加代理或重跑已完成动作。已有 app-server 身份仍
+按原 transport 恢复。没有原生工具时继续使用原 app-server 入口，不伪造侧栏记录。
+
 请求用户处置 finding 前，必须在同一条消息逐项展示问题、正常路径错误、后果、建议、
 finding ID、等级和逐条定级理由。缺少任一部分，用户回复不能作为授权。主代理逐条核实
 真实性、范围、严重度、根因和影响；没有独立证据不能冒充正式 PASS。

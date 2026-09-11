@@ -1,5 +1,34 @@
 # regular 受理、开发、验证与 Seal
 
+## Codex 桌面原生子代理
+
+桌面对话有原生 `spawn_agent` / `send_input` / `wait_agent` 时，新动作使用下列
+transport，使真实子代理关联到当前对话。CLI 仍拥有 CLAIM、SOURCE、操作回执、结果接纳
+和用量；宿主只转交请求及真实身份。无原生工具时保留原 app-server transport。
+
+1. 从 engine 读取已签发动作，以当前 `CODEX_THREAD_ID` 为父身份调用
+   `workflow drive --root <root> --run-id <run> --action-id <issued> --subagent`。
+   只读取响应的 `subagent`，不搬运完整 run。`operation=spawn` 才调用原生
+   `spawn_agent(message=subagent.prompt, fork_context=false)`；不要另加主对话历史。
+2. `operation=resume` 只向返回的 `identity` 使用 `send_input` 转交同一 prompt；
+   已签发开发续轮还需 CLI `--resume`。不得替换身份。原 app-server 身份继续用原入口。
+3. 原生工具返回身份后调用同一 root/run/action 的 `--subagent-bind <identity>`。
+   CLI 验证原生记录里的父子关系及本动作实际输入，然后登记 SOURCE。工作者使用任务操作前
+   也可用自身 `CODEX_THREAD_ID` 绑定；重复绑定不重复派发。
+4. 等原生子代理完成后调用 `--subagent-collect`。CLI 直接从该身份的原生 `task_complete`
+   读取最终 JSON，通过原有结果校验和用量入口接纳；父代理不得代写、改写或补造结果。
+5. 重复准备返回 `operation=observe`，只能查询/等待原身份并采集。派发返回丢失而身份未知时
+   先对账原生工具记录，不重新 spawn。未观察到本轮完成返回 WAIT，不沿用上一轮结果。
+
+任务内需要 `formal_gates_operation` 时，使用同一 CLI 的
+`--action-id <issued> --subagent-operation <request.json>`。请求只含 `requestId`、
+`kind`、`caseId`、`prompt`；绑定由 CLI 从当前状态填入。中断对账以同一请求加 `--resume`，
+不得更换 requestId 重跑目标。角色允许范围、冻结 argv、checkpoint 和 CAS 沿用既有入口。
+
+原生工具继承父对话权限，接口没有单独的工作目录或动态工具注册参数；工作者需显式使用
+派发的 workspace，并遵守原角色输入限制。这不等同于 app-server 的每角色工具裁剪。
+该入口不把独立旧任务补挂成子代理，也不把尚未验证的 UI 渲染宣称为验收完成。
+
 公开入口从单文件受理推进到已确认需求、Batch 计划、no-split 拓扑与 full/custom 路线，
 随后完成开发、Git、QA、唯一验证 wave、统一返修和候选 promotion/Seal。
 已有 lightweight typed receipt 路径继续可重放。
