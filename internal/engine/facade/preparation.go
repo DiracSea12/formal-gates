@@ -385,6 +385,9 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 	}
 	defer unlock()
 
+	if err := f.cleanupQAResources(run); err != nil {
+		return err
+	}
 	isolated := map[string]bool{}
 	for _, execution := range run.Executions {
 		for _, op := range execution.Operations {

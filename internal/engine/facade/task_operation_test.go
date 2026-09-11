@@ -152,7 +152,7 @@ func TestTaskOperationFailedPreparationStopsTarget(t *testing.T) {
 	q := operationRequest(t, f, action, "qa.prepare", "failure")
 	// A normal pre-existing directory with user files is not an empty candidate
 	// workspace. Preparation fails before clone; the target remains uncallable.
-	workspace := filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(protocol.TaskOperationID(q), "hact:task:"))
+	workspace := filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(protocol.TaskOperationID(q), "hact:task:"), "work")
 	if err := os.MkdirAll(workspace, 0700); err != nil {
 		t.Fatal(err)
 	}

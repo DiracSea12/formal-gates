@@ -31,6 +31,9 @@ func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOpe
 	if !executable {
 		return nil
 	}
+	if err := f.createOperationResources(op); err != nil {
+		return err
+	}
 	source := f.root
 	repair := op.Request.Binding.Task.Step == "repair-worker"
 	if repair {
@@ -175,13 +178,13 @@ func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOpe
 		if step.Command == nil {
 			continue
 		}
-		stepJob := filepath.Join(result.SharedWorkspace, ".qa-preparation", fmt.Sprint(i))
+		stepJob := filepath.Join(f.taskOperationDir(op.ID), "preparation", fmt.Sprint(i))
 		if err := os.MkdirAll(stepJob, 0700); err != nil {
 			return err
 		}
 		cmd := exec.CommandContext(ctx, step.Command.Executable, step.Command.Args...)
 		cmd.Dir = result.SharedWorkspace
-		cmd.Env = append(os.Environ(), "FORMAL_GATES_QA_SHARED="+result.SharedWorkspace)
+		cmd.Env = f.operationEnvironment(op, result.SharedWorkspace)
 		observation := protocol.TaskOperationReceipt{}
 		code, err := runOperationProcess(cmd, stepJob, &observation)
 		if err != nil {

@@ -624,6 +624,9 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return protocol.Acceptance{}, Run{}, err
 	}
 	run, err := f.project()
+	if err == nil {
+		err = f.releaseCollectedResources(run)
+	}
 	return acceptance, run, err
 }
 
@@ -792,6 +795,9 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 		if err := os.RemoveAll(filepath.Join(f.stateDir, "executions")); err != nil {
 			return err
 		}
+	}
+	if err := f.cleanupTaskOperationFiles(); err != nil {
+		return fmt.Errorf("FINALIZING_CLEANUP: %w", err)
 	}
 	if err := f.store.CleanupTerminal(); err != nil {
 		return err

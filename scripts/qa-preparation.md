@@ -66,3 +66,35 @@ the immutable action binding; callers cannot replace it in the delta. Malformed
 or conflicting deltas fail before closing the worker. Repair self-tests use the
 same checkpoint storage under their repair scope; these observations do not
 replace a formal QA wave. Their final RepairResult retains checkpointed cases.
+
+## Run-owned resources (stage 4a)
+
+The `qa.prepare` intent binds its run, candidate, action and case to `resources`.
+Work, temporary and output directories live below the run's resource root;
+recovery uses the same intent and never allocates a replacement for a claimed
+operation. Commands and fixture subprocesses inherit:
+
+- `FORMAL_GATES_QA_WORK`, `FORMAL_GATES_QA_TMP` and `FORMAL_GATES_QA_OUTPUT`:
+  case work, temporary files and explicit deliverables.
+- `FORMAL_GATES_QA_RESOURCE_ROOT`, `FORMAL_GATES_QA_RUN`,
+  `FORMAL_GATES_QA_CANDIDATE`, `FORMAL_GATES_QA_TASK`: allocation and binding.
+- `FORMAL_GATES_QA_SHARED` and `FORMAL_GATES_QA_CACHE`: shared preparation and
+  tool cache. Ordinary steps inherit run-shared `GOCACHE`/`GOMODCACHE`;
+  `independent` preparation retains the original cache configuration for real
+  isolation operations. `TMPDIR`, `TMP` and `TEMP` point at allocated temporary
+  space. Fixture arguments remain explicit and can use these environment paths.
+
+Use the output directory only for intended delivery files. Before removing a
+case scene, the adapter saves these files under
+`artifacts/qa-output/<prepare-operation-id-without-prefix>/`. Standard streams,
+exit observations and operation receipts remain under `artifacts/task-operations`; shared
+preparation command evidence is in that operation's `preparation` subdirectory.
+These are the durable evidence surfaces; work and temporary paths are not.
+
+After collection and completion of the owning execution, a case scene is released only when its declared consumers
+have collected and no operation on that case remains pending. Missing consumers
+retain the scene. Shared preparation and caches remain available through the
+run and are removed at terminal reconciliation. Seal/abort preserve the above
+formal evidence and deliveries, remove run resources, and keep cleanup pending
+on errors. Retrying cleanup preserves the same source record; it does not rerun
+the QA command or copy an active run.

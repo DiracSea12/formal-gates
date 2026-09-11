@@ -25,7 +25,23 @@ type TaskOperationRequest struct {
 	Prompt           string         `json:"prompt,omitempty"`
 }
 
+// TaskResources is bound by the prepare intent before any filesystem work.
+// Paths are relative to this run's engine state directory.
+type TaskResources struct {
+	Root   string `json:"root"`
+	Work   string `json:"work"`
+	Temp   string `json:"temp"`
+	Output string `json:"output"`
+	Cache  string `json:"cache"`
+}
+
+func ResourcesForTask(id string) TaskResources {
+	root := "resources/qa-operations/" + strings.TrimPrefix(id, "hact:task:")
+	return TaskResources{Root: root, Work: root + "/work", Temp: root + "/tmp", Output: root + "/output", Cache: "resources/qa-cache"}
+}
+
 type TaskOperation struct {
+	Resources        *TaskResources        `json:"resources,omitempty"`
 	WorkspaceMode    string                `json:"workspaceMode,omitempty"`
 	ID               string                `json:"id"`
 	Request          TaskOperationRequest  `json:"request"`
@@ -319,6 +335,10 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 	}
 	if x.Operations == nil {
 		x.Operations = map[string]TaskOperation{}
+	}
+	if q.Kind == "qa.prepare" {
+		resources := ResourcesForTask(id)
+		op.Resources = &resources
 	}
 	x.Operations[id] = op
 	s.RegularExecutions[q.Binding.ActionID] = x

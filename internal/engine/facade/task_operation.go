@@ -17,7 +17,7 @@ import (
 )
 
 func (f *Facade) taskOperationDir(id string) string {
-	return filepath.Join(f.stateDir, "task-operations", strings.TrimPrefix(id, "hact:task:"))
+	return filepath.Join(f.stateDir, "artifacts", "task-operations", strings.TrimPrefix(id, "hact:task:"))
 }
 
 // ExecuteTaskOperation serves the CLI and native dynamic tool using one path.
@@ -53,6 +53,9 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 			return protocol.TaskOperationReceipt{}, fmt.Errorf("INTENT_MISMATCH: recovery requires the original request")
 		}
 		if op.Receipt != nil {
+			if err := f.releaseCollectedResources(run); err != nil {
+				return *op.Receipt, err
+			}
 			return *op.Receipt, nil
 		}
 	} else {
@@ -111,7 +114,10 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 	if receipt.ID != id || receipt.RequestDigest != protocol.TaskOperationDigest(q) {
 		return receipt, fmt.Errorf("INTENT_MISMATCH: observed result differs")
 	}
-	_, _, err = f.submitAdapterRegular("task-receipt:"+id, protocol.RegularEvent{Operation: "TASK_OPERATION_RECEIPT", TaskOperationReceipt: &receipt})
+	_, run, err = f.submitAdapterRegular("task-receipt:"+id, protocol.RegularEvent{Operation: "TASK_OPERATION_RECEIPT", TaskOperationReceipt: &receipt})
+	if err == nil {
+		err = f.releaseCollectedResources(run)
+	}
 	return receipt, err
 }
 
@@ -127,7 +133,10 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 	defer cancel()
 	switch q.Kind {
 	case "qa.prepare":
-		result.Workspace = filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(op.ID, "hact:task:"))
+		result.Workspace = f.operationResources(op).Work
+		if err := f.createOperationResources(op); err != nil {
+			return fail(err)
+		}
 		if err := f.prepareShared(ctx, run, op, &result); err != nil {
 			return fail(err)
 		}
@@ -185,7 +194,8 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 		}
 		cmd := exec.CommandContext(ctx, op.Command.Executable, op.Command.Args...)
 		cmd.Dir = result.Workspace
-		cmd.Env = append(os.Environ(), "FORMAL_GATES_QA_SHARED="+result.SharedWorkspace)
+		prepare := latestTaskOperation(run.Executions[q.Binding.ActionID], "qa.prepare", q.CaseID)
+		cmd.Env = f.operationEnvironment(*prepare, result.SharedWorkspace)
 		code, err := runOperationProcess(cmd, job, &result)
 		result.ExitCode = code
 		if err != nil {
@@ -274,7 +284,7 @@ func (f *Facade) observeTaskOperation(op protocol.TaskOperation, job string) (pr
 		return r, fmt.Errorf("UNKNOWN: %s; no underlying call repeated: %w", op.ID, err)
 	}
 	if q.Kind == "qa.prepare" {
-		r.Workspace = filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(op.ID, "hact:task:"))
+		r.Workspace = f.operationResources(op).Work
 		if op.WorkspaceMode != "isolated" {
 			head, err := gitprep.Head(r.Workspace)
 			if err != nil {
@@ -366,6 +376,11 @@ func (f *Facade) abortTaskOperations(run Run) error {
 				continue
 			}
 			job := f.taskOperationDir(op.ID)
+			if op.Request.Kind == "qa.prepare" {
+				if err := f.stopPreparationProcesses(job); err != nil {
+					return err
+				}
+			}
 			if op.Request.Kind == "qa.target" || op.Request.Kind == "model.run" {
 				data, err := os.ReadFile(filepath.Join(job, "process.json"))
 				if err != nil {
@@ -409,7 +424,7 @@ func (f *Facade) abortTaskOperations(run Run) error {
 			current, err := f.Show()
 			if err == nil && current.Executions[x.Claim.ActionID].Operations[op.ID].Receipt == nil {
 				receipt, observeErr := f.observeTaskOperation(op, job)
-				if observeErr != nil && (op.Request.Kind == "qa.prepare" || op.Request.Kind == "qa.collect") {
+				if observeErr != nil && op.Request.Kind == "qa.collect" {
 					unlock()
 					return observeErr
 				}

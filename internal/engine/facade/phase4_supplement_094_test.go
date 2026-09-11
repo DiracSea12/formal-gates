@@ -139,7 +139,7 @@ func finishRunningQATarget(t *testing.T, f *Facade, pid int, done <-chan running
 
 func taskOperationDirectoryCount(t *testing.T, f *Facade) int {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(f.stateDir, "task-operations"))
+	entries, err := os.ReadDir(filepath.Join(f.stateDir, "artifacts", "task-operations"))
 	if os.IsNotExist(err) {
 		return 0
 	}

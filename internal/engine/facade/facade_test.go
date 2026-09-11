@@ -270,6 +270,26 @@ func TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary(t *testing.T)
 	if err != nil {
 		t.Fatalf("open terminal intent: %v", err)
 	}
+	// A cleanup error must retain the terminal intent and withhold publication.
+	blocker := filepath.Join(f.stateDir, "artifacts", "task-operations")
+	if err := os.MkdirAll(filepath.Dir(blocker), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blocker, []byte("cleanup path collision"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opened.Drive(); err == nil {
+		t.Fatal("cleanup error reported completion")
+	}
+	if _, err := os.Stat(terminalIntentPath(f.stateDir)); err != nil {
+		t.Fatal("lost pending cleanup", err)
+	}
+	if _, err := os.Stat(terminalSummaryPath(f.stateDir)); !os.IsNotExist(err) {
+		t.Fatal("published before cleanup", err)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
 	recovered, err := opened.Drive()
 	if err != nil || recovered.Status != "COMPLETE" || recovered.Next.Kind != decision.KindComplete {
 		t.Fatalf("recovered terminal run = %+v err=%v", recovered, err)
