@@ -193,7 +193,7 @@ func (s *Store) Load() (*Snapshot, error) {
 // readDocument 读取最终状态文件并完成信封与完整性摘要校验；文件不
 // 存在返回 (nil, nil)（全新目录，revision 视为 0）。
 func (s *Store) readDocument() (*document, error) {
-	data, err := os.ReadFile(s.statePath())
+	data, err := readSharedFile(s.statePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

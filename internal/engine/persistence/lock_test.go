@@ -72,7 +72,7 @@ func TestLockReleaseWhileContenderReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	reader, err := openLockFile(store.lockPath())
+	reader, err := openSharedFile(store.lockPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +89,51 @@ func TestLockReleaseWhileContenderReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	next()
+}
+
+func TestLockDoesNotReclaimOwnerReplacedDuringProcessProbe(t *testing.T) {
+	store := newTestStore(t)
+	old := []byte("pid=123 token=old\n")
+	next := []byte(fmt.Sprintf("pid=%d token=next\n", os.Getpid()))
+	if err := os.WriteFile(store.lockPath(), old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	stale := lockIsStaleWithProcessProbe(store.lockPath(), func(int) bool {
+		// The old process releases, a new writer acquires, then the old
+		// process exits before the liveness query returns.
+		if err := os.Remove(store.lockPath()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.lockPath(), next, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return false
+	})
+	if stale {
+		t.Fatal("a new live owner's lock was classified as stale")
+	}
+}
+
+func TestSaveWhileSnapshotReaderIsOpen(t *testing.T) {
+	store := newTestStore(t)
+	tx := Transaction{ExpectedFingerprint: "stable", CollectFingerprint: staticFingerprint("stable"), Content: map[string]int{"v": 1}}
+	if _, err := store.Save(tx); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openSharedFile(store.statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	tx.ExpectedRevision = 1
+	tx.Content = map[string]int{"v": 2}
+	if _, err := store.Save(tx); err != nil {
+		t.Fatalf("snapshot reader prevented atomic replacement: %v", err)
+	}
+	current, err := store.Load()
+	if err != nil || current.Revision != 2 {
+		t.Fatalf("new snapshot unavailable: %+v %v", current, err)
+	}
 }
 
 // TestLockStaleByAge：持有进程存活但锁文件超过阈值未刷新，视为失联可

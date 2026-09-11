@@ -50,23 +50,19 @@ func buildRepoRootBinary(t *testing.T, root string) {
 	}
 }
 
-// TestWordingCoversSplitSuggestionAndOverallReviewInheritance checks the
-// user-visible wording required by the acceptance evidence: the split suggestion
-// (including the 改拆后果说明) is mandated in SKILL.md and the product-review
-// prompt, and the overall-level review inheritance is documented in SKILL.md and
-// formal-flow.md. It reads the repository documentation verbatim, so any wording
-// change fails it — it lives here, behind the integration build tag, outside the
-// unit suite (`go test ./...`).
-func TestWordingCoversSplitSuggestionAndOverallReviewInheritance(t *testing.T) {
+// TestWordingCoversRegularPlanAndReviewBoundaries verifies the supported stage 4
+// no-split contract in its current documentation owners.
+func TestWordingCoversRegularPlanAndReviewBoundaries(t *testing.T) {
 	checks := []struct {
 		path string
 		want []string
 	}{
-		{"SKILL.md", []string{"改拆后果说明", "整体级产品审/技术审足够", "切片继承整体审查结果"}},
-		{"references/formal-flow.md", []string{"改拆后果说明", "整体级产品审/技术审足够", "切片继承整体审查结果"}},
-		{"references/sliced-runs.md", []string{"改拆后果说明"}},
-		{"prompts/actions/product-review.md", []string{"改拆后果说明"}},
-		{"prompts/actions/qa-design.md", []string{"开发前", "开发后"}},
+		{"SKILL.md", []string{"planDigest", "no-split", "逐条核实", "未接入 split"}},
+		{"references/formal-flow.md", []string{"no-split", "ADJUDICATE", "逐 finding", "PREPARATION_RESULT"}},
+		{"references/sliced-runs.md", []string{"Codex/Git/no-split", "按后续阶段接入", "development-plan.md", "engine-regular.md"}},
+		{"references/development-plan.md", []string{"REQUEST(topology, planDigest, reason)", "Subtask", "计划契约变化", "重新技术审"}},
+		{"prompts/actions/product-review.md", []string{"REQ", "AC", "obligation-to-AC", "只有存在 P0/P1 才返回 FAIL"}},
+		{"prompts/actions/qa-design.md", []string{"基线快照", "白盒", "实际测试", "独立子测试"}},
 	}
 	for _, check := range checks {
 		data, err := os.ReadFile(filepath.Join("..", "..", check.path))

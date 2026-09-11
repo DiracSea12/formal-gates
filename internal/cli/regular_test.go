@@ -224,7 +224,7 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		return string(out)
 	}
 	development := r.Regular.Preparation.Resources["development"]
-	mustWriteCLI(t, filepath.Join(development, "go.mod"), "module example.invalid/installed\n\ngo 1.23\n")
+	mustWriteCLI(t, filepath.Join(development, "go.mod"), "module example.invalid/installed\n\ngo 1.22\n")
 	mustWriteCLI(t, filepath.Join(development, "main.go"), "package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"hello\")}\n")
 	runGo(development, "build", "-o", filepath.Join(t.TempDir(), "hello"), ".")
 	if runGo(development, "run", ".") != "hello\n" {

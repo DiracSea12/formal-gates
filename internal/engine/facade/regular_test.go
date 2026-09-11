@@ -62,6 +62,9 @@ func newRegularFacadePackage(t *testing.T, document, packagePath string, owner .
 		if err := os.MkdirAll(filepath.Join(root, ".gates"), 0700); err != nil {
 			t.Fatal(err)
 		}
+		if fixture := os.Getenv("FORMAL_GATES_TEST_CODEX_EXECUTABLE"); fixture != "" {
+			executable = fixture
+		}
 		data, err := json.Marshal(map[string]string{"codexExecutable": executable})
 		if err != nil {
 			t.Fatal(err)

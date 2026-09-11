@@ -7,7 +7,7 @@ import (
 
 // Contenders must allow the owner to delete its lock while they read it.
 // os.Open omits FILE_SHARE_DELETE on Windows, which can strand a released lock.
-func openLockFile(path string) (*os.File, error) {
+func openSharedFile(path string) (*os.File, error) {
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err

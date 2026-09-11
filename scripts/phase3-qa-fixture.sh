@@ -204,10 +204,10 @@ stage() {
   # Write the archive before extracting, so a failed git command cannot be
   # hidden by a successful last command in a POSIX pipeline.
   git -C "$source" archive --format=tar --output="$output/source.tar" "$identity"
-  tar -xf "$output/source.tar" -C "$output"
+  tar -xf - -C "$output" < "$output/source.tar"
   rm "$output/source.tar"
   mkdir -p "$output/bin"
-  (cd "$output" && go build -o bin/formal-gates ./cmd/formal-gates)
+  (cd "$output" && go build -o bin/ ./cmd/formal-gates)
   python3 - "$identity" "$output" <<'PY_STAGE'
 import json,pathlib,sys
 print(json.dumps({'snapshot':sys.argv[1], 'source':str(pathlib.Path(sys.argv[2]).resolve()), 'buildCount':1}))

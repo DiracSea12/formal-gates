@@ -222,6 +222,7 @@ done
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FORMAL_GATES_TEST_CODEX_EXECUTABLE", filepath.Join(tools, "codex"))
 	t.Setenv("HOME", t.TempDir())
 	f := facadePreparation(t, nil)
 	first := facadeExecution(t, f, "development-worker")

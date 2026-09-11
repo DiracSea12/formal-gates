@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -59,7 +60,7 @@ func (s *Store) acquireLock() (func(), error) {
 				return nil, closeErr
 			}
 			return func() {
-				data, readErr := readLockFile(s.lockPath())
+				data, readErr := readSharedFile(s.lockPath())
 				if readErr == nil && string(data) == owner {
 					_ = os.Remove(s.lockPath())
 				}
@@ -82,7 +83,11 @@ func (s *Store) acquireLock() (func(), error) {
 // lockIsStale 判定锁是否可抢占：已完整登记的持有进程死亡，或锁已超过
 // lockStaleAge。未完成写入的 owner 行必须等到超时，避免夺走正在创建的锁。
 func lockIsStale(path string) bool {
-	data, err := readLockFile(path)
+	return lockIsStaleWithProcessProbe(path, coordination.ProcessAlive)
+}
+
+func lockIsStaleWithProcessProbe(path string, processAlive func(int) bool) bool {
+	data, err := readSharedFile(path)
 	if err != nil {
 		return false
 	}
@@ -109,14 +114,17 @@ func lockIsStale(path string) bool {
 	if err != nil || pid <= 0 {
 		return expired
 	}
-	if !coordination.ProcessAlive(pid) {
-		return true
+	if !processAlive(pid) {
+		// The observed owner may have released its lock and exited while we
+		// queried its PID. Do not reclaim a subsequent writer's lock.
+		current, err := readSharedFile(path)
+		return err == nil && bytes.Equal(current, data)
 	}
 	return expired
 }
 
-func readLockFile(path string) ([]byte, error) {
-	file, err := openLockFile(path)
+func readSharedFile(path string) ([]byte, error) {
+	file, err := openSharedFile(path)
 	if err != nil {
 		return nil, err
 	}

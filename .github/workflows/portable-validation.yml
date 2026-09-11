@@ -46,6 +46,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
+      - name: Enable Git long paths for Windows fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Environment configuration survives fixtures that isolate HOME.
+          "GIT_CONFIG_COUNT=1" >> $env:GITHUB_ENV
+          "GIT_CONFIG_KEY_0=core.longpaths" >> $env:GITHUB_ENV
+          "GIT_CONFIG_VALUE_0=true" >> $env:GITHUB_ENV
       - name: Build native CLI (Windows)
         if: runner.os == 'Windows'
         shell: cmd

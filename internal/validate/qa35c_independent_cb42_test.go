@@ -14,6 +14,7 @@ import
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"strings"
 	"testing"
@@ -140,7 +141,11 @@ func TestQA35CIndependentFixtureBuildAndCopy(t *testing.T) {
 		if string(state) != "clean prerequisite\n" {
 			t.Fatal("copy inherited mutable development or previous-case state")
 		}
-		out, err = exec.Command(filepath.Join(copy, "bin/formal-gates")).CombinedOutput()
+		binary := filepath.Join(copy, "bin", "formal-gates")
+		if runtime.GOOS == "windows" {
+			binary += ".exe"
+		}
+		out, err = exec.Command(binary).CombinedOutput()
 		if err != nil || string(out) != "immutable candidate\n" {
 			t.Fatalf("copied candidate is not independently runnable: %v %s", err, out)
 		}
