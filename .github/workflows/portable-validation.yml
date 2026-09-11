@@ -50,6 +50,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Git still has bounded worktree administration paths on Windows.
+          $testTemp = Join-Path $env:RUNNER_TEMP "t"
+          New-Item -ItemType Directory -Force $testTemp | Out-Null
+          "TEMP=$testTemp" >> $env:GITHUB_ENV
+          "TMP=$testTemp" >> $env:GITHUB_ENV
           # Environment configuration survives fixtures that isolate HOME.
           "GIT_CONFIG_COUNT=1" >> $env:GITHUB_ENV
           "GIT_CONFIG_KEY_0=core.longpaths" >> $env:GITHUB_ENV

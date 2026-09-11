@@ -107,6 +107,7 @@ func TestQA35CIndependentFixtureBuildAndCopy(t *testing.T) {
 	qa35cIndependentOK(t, err)
 	source := t.TempDir()
 	qa35cIndependentGit(t, source, "init", "-q")
+	qa35cIndependentGit(t, source, "config", "core.autocrlf", "false")
 	qa35cIndependentWrite(t, filepath.Join(source, "go.mod"), "module fixture-product\ngo 1.22\n")
 	qa35cIndependentWrite(t, filepath.Join(source, "cmd/formal-gates/main.go"), "package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"immutable candidate\")}\n")
 	qa35cIndependentWrite(t, filepath.Join(source, "state.txt"), "clean prerequisite\n")

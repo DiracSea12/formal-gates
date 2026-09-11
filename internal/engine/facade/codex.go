@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -297,7 +298,12 @@ type codexProcess struct {
 }
 
 func (f *Facade) codexJob(actionID string) string {
-	return filepath.Join(f.stateDir, "executions", strings.ReplaceAll(strings.TrimPrefix(actionID, "act:"), "/", "_"))
+	name := strings.ReplaceAll(strings.TrimPrefix(actionID, "act:"), "/", "_")
+	if runtime.GOOS == "windows" {
+		// Issued batch action IDs contain a colon before the batch ID.
+		name = strings.ReplaceAll(name, ":", "_")
+	}
+	return filepath.Join(f.stateDir, "executions", name)
 }
 func (f *Facade) reconcileCodex(actionID string, x protocol.RegularExecution) (Run, bool, error) {
 	if !x.Claimed {

@@ -565,3 +565,20 @@ func TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexJobDirectoryForIssuedBatchAction(t *testing.T) {
+	f := &Facade{stateDir: t.TempDir()}
+	first := f.codexJob("act:entry/development-worker/digest:B1-0/attempt-1")
+	second := f.codexJob("act:entry/development-worker/digest:B1-0/attempt-2")
+	if first == second {
+		t.Fatal("different attempts share a job directory")
+	}
+	for _, directory := range []string{first, second} {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "process.json"), []byte("{}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
