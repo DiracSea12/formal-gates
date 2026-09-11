@@ -125,6 +125,14 @@ func TestSaveWhileSnapshotReaderIsOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
+	closed := make(chan struct{})
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = reader.Close()
+		close(closed)
+	}()
+	defer func() { <-closed }()
+
 	tx.ExpectedRevision = 1
 	tx.Content = map[string]int{"v": 2}
 	if _, err := store.Save(tx); err != nil {

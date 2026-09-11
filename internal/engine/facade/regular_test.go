@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func newRegularFacadeDocument(t *testing.T, document string, owner ...string) *F
 
 func newRegularFacadePackage(t *testing.T, document, packagePath string, owner ...string) *Facade {
 	t.Helper()
-	root := t.TempDir()
+	root := regularFixtureRoot(t)
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "b1@example.invalid"}, {"config", "user.name", "B1 fixture"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
@@ -251,4 +252,22 @@ func TestRegularOwnerTerminalIntervalAndOverlap(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Keep Windows Git worktree administration paths below Git's internal limit.
+func regularFixtureRoot(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return t.TempDir()
+	}
+	root, err := os.MkdirTemp("", "fg-engine-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	return root
 }

@@ -502,7 +502,7 @@ func (s *Store) writeIntent(intent intentRecord) error {
 // executeCommit 是 execute 段单点：暂存文件原子替换最终状态文件，
 // 随后按平台策略同步目录，使 rename 持久。
 func (s *Store) executeCommit(tempName string) error {
-	if err := os.Rename(filepath.Join(s.dir, tempName), s.statePath()); err != nil {
+	if err := replaceStateFile(filepath.Join(s.dir, tempName), s.statePath()); err != nil {
 		return err
 	}
 	return syncDirectory(s.dir)

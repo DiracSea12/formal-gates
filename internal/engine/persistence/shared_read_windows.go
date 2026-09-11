@@ -1,8 +1,10 @@
 package persistence
 
 import (
+	"errors"
 	"os"
 	"syscall"
+	"time"
 )
 
 // Contenders must allow the owner to delete its lock while they read it.
@@ -19,4 +21,17 @@ func openSharedFile(path string) (*os.File, error) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(handle), path), nil
+}
+
+// Windows may temporarily deny replacement while an existing snapshot reader
+// is closing. Retry only those sharing errors, with a fixed deadline.
+func replaceStateFile(source, target string) error {
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := os.Rename(source, target)
+		if err == nil || (!errors.Is(err, syscall.ERROR_ACCESS_DENIED) && !errors.Is(err, syscall.Errno(32))) || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(time.Millisecond)
+	}
 }

@@ -204,7 +204,7 @@ stage() {
   # Write the archive before extracting, so a failed git command cannot be
   # hidden by a successful last command in a POSIX pipeline.
   git -C "$source" archive --format=tar --output="$output/source.tar" "$identity"
-  tar -xf - -C "$output" < "$output/source.tar"
+  (cd "$output" && tar -xf source.tar)
   rm "$output/source.tar"
   mkdir -p "$output/bin"
   (cd "$output" && go build -o bin/ ./cmd/formal-gates)

@@ -144,7 +144,7 @@ func cliWorkflowFixture(t *testing.T) (string, string) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	root := t.TempDir()
+	root := cliGitFixtureRoot(t)
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("Requirement."))
 	mustWriteCLI(t, filepath.Join(root, "design.md"), "design\n")
 	// 白盒设计者交付的结构测试代码——测试仓库带一个测试文件，作为白盒用例测试
@@ -318,4 +318,23 @@ func TestCLIWorkflowRetirementAndRawDiagnosis(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".gates", "engine")); !os.IsNotExist(err) {
 		t.Fatalf("diagnosis or retired commands created engine state: %v", err)
 	}
+}
+
+// Git for Windows still limits some worktree administration paths even when
+// core.longpaths is enabled. Keep the fixture root independent of the test name.
+func cliGitFixtureRoot(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return t.TempDir()
+	}
+	root, err := os.MkdirTemp("", "fg-cli-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error(err)
+		}
+	})
+	return root
 }
