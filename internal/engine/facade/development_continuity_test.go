@@ -194,7 +194,7 @@ done
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt := protocol.DeveloperRecovery{Identity: "fixture-native", NativeMethod: "thread/resume", NativeResponse: raw}
+	receipt := protocol.DeveloperRecovery{Claim: protocol.ExecutionClaim{Provider: "codex"}, Identity: "fixture-native", NativeMethod: "thread/resume", NativeResponse: raw}
 	if receipt.Outcome() != "RESUMABLE" {
 		t.Fatalf("successful native resume classified %s: %s", receipt.Outcome(), raw)
 	}

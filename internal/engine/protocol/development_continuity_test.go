@@ -156,8 +156,8 @@ func TestDeveloperContinuationChargesOnlyNewNativeTurns(t *testing.T) {
 	if err := os.WriteFile(path, []byte(first), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := &State{Cost: &cost.RunCost{}, RegularExecutions: map[string]RegularExecution{"one": {Identity: "same-session"}, "two": {Identity: "same-session"}}}
-	src := ExecutionSource{ActionID: "one", Identity: "same-session", Status: "STOPPED", TranscriptPath: path}
+	s := &State{Cost: &cost.RunCost{}, RegularExecutions: map[string]RegularExecution{"one": {Identity: "same-session", Claim: ExecutionClaim{Provider: "codex"}}, "two": {Identity: "same-session", Claim: ExecutionClaim{Provider: "codex"}}}}
+	src := ExecutionSource{ActionID: "one", Provider: "codex", Identity: "same-session", Status: "STOPPED", TranscriptPath: path}
 	if err := settleRegularSource(s, src, s.RegularExecutions["one"]); err != nil {
 		t.Fatal(err)
 	}

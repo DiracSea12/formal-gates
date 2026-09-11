@@ -26,3 +26,47 @@ func TestEditableOverlayAndErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeExecutableSettings(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	e, err := Load(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Values.WorkBuddyExecutable != "codebuddy" || e.Values.ZCodeExecutable != "node" || e.Values.ZCodeScript != "" || e.Values.DSHExecutable != "dsh" {
+		t.Fatalf("defaults=%+v", e.Values)
+	}
+	user := filepath.Join(home, ".config", "formal-gates")
+	project := filepath.Join(root, ".gates")
+	if err := os.MkdirAll(user, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(user, "config.json")
+	projectFile := filepath.Join(project, "config.json")
+	if err := os.WriteFile(userFile, []byte(`{"workbuddyExecutable":"/Applications/WorkBuddy.app/codebuddy","zcodeExecutable":"node","zcodeScript":"/Applications/ZCode.app/zcode.cjs","dshExecutable":"/bin/dsh"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectFile, []byte(`{"dshExecutable":"/project/dsh"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e, err = Load(root, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Values.DSHExecutable != "/project/dsh" || e.Sources["dshExecutable"] != projectFile || e.Sources["zcodeScript"] != userFile {
+		t.Fatalf("overlay=%+v", e)
+	}
+	for _, field := range []string{"workbuddyExecutable", "zcodeExecutable", "zcodeScript", "dshExecutable"} {
+		for _, value := range []string{`""`, `"  "`, `null`, `42`} {
+			if err := os.WriteFile(projectFile, []byte(`{"`+field+`":`+value+`}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(root, home); err == nil || !strings.Contains(err.Error(), projectFile) {
+				t.Fatalf("accepted invalid %s=%s: %v", field, value, err)
+			}
+		}
+	}
+}

@@ -596,3 +596,322 @@ stage-4 操作直接执行。本批未运行新宿主模型样本，不据局部
 退出 0，最终构建再次退出 0。`python3 scripts/qa-static-check.py scripts/qa-static-check.py scripts/phase3-qa-fixture.sh scripts/phase3-qa-codex-run.py`
 对三个文件均报告 syntax-only PASS；`git diff --check` 通过。上述是开发自测，不替代
 后续引擎签发的独立 QA，也不声称新增宿主或完整模型流程已验证。
+
+### B5：通用协议入口与尚缺的原生证据
+
+本批尚未完成。通用协议的 `InitRegular` 与 regular 模式确认不再另设 Codex
+名单；公开受理和执行仍由 `nativeRuntimeAdapter` registry 拒绝没有驱动的宿主。
+`regular_provider_test.go` 共用现有协议 fixture，覆盖 Codex、WorkBuddy、ZCode、
+DeepSeek Harness 的 provider 绑定、受理确认、领取、原生身份绑定、磁盘恢复后的
+结果接纳和 COST_PENDING。它是确定性协议测试，不是宿主原生执行证据，也不覆盖
+尚未实现的宿主传输、工具约束和资源消费。
+
+本 native action 的入口检查：PATH 未找到 `workbuddy`、`zcode`，未据此推断
+其他安装位置不存在；`dsh --version` 返回 `0.1.5-rc.1`，
+`dsh --profile headless --help` 仅公布单任务文本输入、最终消息输出和帮助选项。
+未执行模型任务；这些帮助输出不能证明稳定任务身份、同身份续用或结构化结果来源。
+当前受控 `model.run` 按 action 的 provider 绑定选择 adapter，不能用本 Codex
+绑定获取其他宿主的原生任务样例。
+
+B5-S2/S3 仍缺 §10.2 要求的合法原生入口、启动/续用/结束/结果样例和 WorkBuddy
+安装路径证据；不能据此虚构三个驱动。B5-S4 的宿主配置与平台差异验证也未完成。
+原生样例取得后继续本批，完整 regular 验收仍归 B6；保留本批开发者身份。
+
+本次实际自检通过：`go test ./internal/engine/protocol -run
+TestRegularProviderBindingAcrossRecovery -count=1`、`go test
+./internal/engine/protocol`、`go test ./internal/engine/facade -run
+TestNativeRuntimeBoundaryForEveryInstalledHost -count=1`、`go build ./...`、
+`go test ./...` 和 `git diff --check`。未执行三个宿主的原生流程，也未将这些
+本地检查计作 B5-S2/S3/S4 或 B6 的 PASS。
+
+
+#### B5 第三次续用：补充材料核对（2026-09-12）
+
+已读取本 action 固定的六份 SupplementalSources 全文。它们是公开接口或本机发现
+记录，不是新的执行授权，也没有模型任务或真实流程通过证据。前述 PATH 观察保留为
+首次检查事实；新增事实如下：
+
+- WorkBuddy 2.137.1 的随包入口为 `/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy`。
+  帮助公布 `--session-id`、`--resume`、`--output-format stream-json`、`--json-schema`、
+  `--tools`、`--strict-mcp-config`、`--mcp-config` 和模型/推理强度参数。
+  尚缺结果帧及用量字段样例、MCP 操作桥实证，以及正式安装配置文件位置。
+- ZCode 0.16.5 的随包入口为 `node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`。
+  帮助公布 `app-server`、`--resume sess_...`、`--cwd`、`--settings` 和工具名单参数。
+  尚缺 ZCode Protocol 的方法与参数正文、原生结果/身份/用量样例；不能因命令也叫
+  app-server 就套用 Codex 协议。
+- DSH 文档明确 `dsh --profile sdk` 和 `dsh --profile acp` 为受支持的 stdio 入口。
+  ACP 文档列出 session/new、session/list、session/resume、session/close，支持绝对 cwd、
+  MCP 声明及公开 model/reasoning_effort；profile 文档没有包含其链接所指的完整
+  ACP 方法矩阵、MCP 信任模型、更新映射和停止原因正文。未将 headless 帮助的限制
+  推广为整个 DSH 的能力限制。尚需这些协议细节以及受控真实调用样例。
+
+代码核对发现 `native_bridge.go` 实际只由 Codex driver 调用，并使用 Codex 的
+thread/start、thread/resume、动态工具及 app-server 参数。本次移至
+`runtime_bridge_codex.go`，入口名明确为 runCodexBridge；不改变执行行为，不把该
+传输当作新增宿主的共用协议。原生接口缺口缩小但未消失，B5-S2/S3/S4 仍未完成。
+
+本次增量验证通过：`go test ./internal/engine/facade -run
+'Test(TaskOperationNativeBridgeQA|NativeOperationToolMatchesRoleAdmission|RegularCodexNative|DeveloperNativeContinuation|WhiteboxAuthoringTrialsBeforeFrozenQA)'
+-count=1`（退出 0），并完成 `go build ./...` 与 `git diff --check`。
+这些测试仍使用现有本地验证设施，不是 WorkBuddy、ZCode 或 DSH 的原生验证。
+前次全项目测试通过记录保留，本次没有为文件归属和名称调整重跑整套测试。
+
+#### B5 第五次续用：WorkBuddy 配置与用量合同
+
+新增固定材料已补齐 WorkBuddy 配置位置：用户 `~/.codebuddy/settings.json`，项目
+`.codebuddy/settings.json`，项目本地 `.codebuddy/settings.local.json`；启动指令文件
+为 CODEBUDDY.md。SDK 文档给出 AssistantMessage 的 uuid、session_id 和
+message.usage，以及 ResultMessage 和 Usage 类型。这些是公开合同，尚无真实调用样例。
+
+沿 internal/cost 增加 WorkBuddy SDK JSONL assistant 用量解析，并注册 cost-only
+宿主描述；安装和 regular 入口仍未开放。按消息 UUID 去重，仅累计 assistant 的
+input_tokens、output_tokens、cache_read_input_tokens；不再叠加 result 汇总或后台
+TaskUsage.total_tokens，不把缺失必需用量补零。缺失必需身份/用量、负值、重复消息
+用量冲突和混合会话返回 unavailable；可选 cache_read_input_tokens 未给出时为 0。
+保留现有计量口径，cache_creation_input_tokens 不进入已定价类别。
+
+新增 SDK schema fixture 测试覆盖上述边界，并通过现有 CaptureBaseline/MeasureOwner
+验证追加消息只结算新增量。这不是原生观测，不代表宿主成本来源已实机验证。
+
+新增索引给出 ZCode/DSH 安装包实现的定位和短片段，但未包含完整请求/响应 schema；
+索引本身声明片段不是完整合同。后续仍需按本 action 合法输入提供完整协议材料，
+以及允许三宿主真实启动/续用/结束与受控工具调用的执行途径。WorkBuddy 安装配置
+位置与 SDK 用量字段不再列作缺失；三个驱动、安装接线及 B5-S4 仍未完成。
+
+本次实际验证：`go build ./...` 与 `go test ./...` 均退出 0，成本、宿主登记、
+CLI、生命周期及全部现有引擎测试通过；`git diff --check` 通过。用量来源测试的
+数据明确标注为 SDK schema fixture；未执行三宿主原生模型调用，B5 不作整体 PASS。
+
+#### B5 第六次续用：DSH ACP 完整实现核对
+
+本 action 新增 DSH ACP 0.1.5-rc.1 的固定实现和类型材料，已按会话、MCP、
+模型控制、更新及关闭路径核对。三平台本机已安装的说明作为环境事实；不再以缺少
+独立 CLI 或 DSH 会话方法正文作为阻塞原因。未执行原生模型调用。
+
+可据源码确定的适配约束：
+
+- `session/new` 接收绝对 cwd 和 mcpServers，创建并刷新持久会话后返回 sessionId、
+  configOptions。`session/resume` 使用请求中的 sessionId，拒绝活动会话、子代理会话
+  和 cwd 不匹配，成功返回 configOptions；不能要求它再次返回 sessionId。
+- `session/prompt` 的 prompt 为内容块数组；文本输出来自 session/update 的
+  agent_message_chunk，含 messageId。需按会话和请求关联增量消息，并依 engine
+  结果 schema 校验正文。stopReason=end_turn 不是成功 oracle：转换函数也将
+  aborted、blocked 映射为 end_turn；错误分支在实际结算时可返回 JSON-RPC error。
+- `session/cancel` 是通知；`session/close` 是请求，等待活动、输出、可续用后代、
+  持久化刷新及 agent disposal。关闭错误不能当作资源清理成功。恢复会重新建立
+  请求声明的 MCP 连接，不复制另一会话的活动状态。
+- MCP stdio command 必须为绝对路径，环境使用 name/value 数组；HTTP 支持，
+  其他 transport 拒绝。此能力可用于接现有任务操作桥，但仍需实现桥与绑定校验。
+- 模型选项 id 为 model，其 value 为公开 configOptions 给出的 provider/model
+  JSON 数组字符串；reasoning_effort 同样从公开选项选择。不得将任意模型字符串
+  当成可用选项或静默改用其他模型。
+- usage_update 的 used/size 是上下文占用和窗口容量，不能接入计费 token 累加。
+  未取得持久计量事件字段与来源绑定前，DSH 成本继续 unavailable。
+
+尚未解决的接入前提更具体地收敛为：DSH 原生 profile 如何按角色限制内置工具、
+嵌套代理和私人配置，以及所有需要控制的调用实际经过何种入口。ACP 实现只显示
+approval/request 事件转发；不能由此推出所有工具都经过该事件。需要相应现有
+配置合同/实现材料，不能以新 hook 或权限系统补洞。ZCode 完整方法和事件 schema
+仍未提供。当前 action 也仍没有可执行三宿主真实模型探测的受控操作；不得自由
+shell 调用或改写已冻结 QA。故本次仅更新已核实路线，不注册未完成的 DSH driver。
+
+本次无代码修改、无自测失败；只做文档差异检查。attempt-5 的构建与全项目测试
+通过记录保留，未因读取补充材料重跑。
+
+
+#### B5 第七次续用：ZCode 正文核对与接入边界
+
+本次读取动作固定的 ZCode schema、会话处理正文及资料索引，未执行该包或模型。
+据实际 schema/处理调用（不依赖索引中的压缩符号名称）确认：
+
+- 传输封套为 `{id,method,params}` / `{id,result}` / `{id,error}`，通知为
+  `{method,params}`，不是 ACP JSON-RPC 2.0；平台不能共用 Codex/DSH 封套。
+- `session/create` schema 虽含可选 sessionId，实际 `Dn(lCt,...)` 处理明确拒绝
+  未带 importedHistory 的指定 ID。普通启动必须取得宿主返回身份，恢复使用
+  `session/resume`，不能通过指定旧 ID 创建替代会话。
+- create/resume 接受 toolAllowlist/toolDenylist；构建运行配置时分别映射到
+  toolAllowlist/toolDisallowlist。字段存在不等于全部内建工具、子代理、私人配置
+  已受约束，仍需核实实际执行边界。
+- `session/send` 返回 accepted 和 revision，只证明接收；完成事件的 resultType
+  区分 success、cancelled 和各错误终态。适配应按 sessionId、inputId 和事件序号
+  关联恢复观察，不能以 accepted 或事件名 turn.completed 单独判成功。
+- `session/usage` 处理在 sessionStore.queryTaskUsage 不存在时返回全零。
+  因而计量接入必须先证明真实来源存在；仅拿到零响应不能将 unavailable 改为零。
+  有效来源返回 input/output/reasoning/cache 等累计字段，其类别包含关系尚需核实。
+
+用户重申的平台解耦约束沿现有接口执行；集中步骤见
+`references/user-configuration.md` 的 Runtime adapter 接入与平台更新。
+平台协议、配置、身份、结果和用量留在各平台适配文件，公共逻辑复用，不另造框架。
+
+ZCode 方法/schema 正文不再作为笼统缺口。仍未完成的是三个真实驱动、安装接线、
+工具边界核实、用量来源接线及原生验证。当前开发动作的 model.run 沿绑定的 Codex
+provider，未提供切换到三宿主的受控调用能力；本次未自行启动其他模型或调度动作。
+本次仅补充文档，不重跑未修改代码的自测；保留此前测试记录，Batch 继续未完成。
+
+#### B5 第八次续用：适配组件代码与 DSH setup 合同
+
+本次开始补驱动组件：公共任务操作工具定义从 Codex bridge 移到
+`runtime_operation_tool.go`，原有调用继续复用。新增 WorkBuddy 平台文件：
+`runtime_command_workbuddy.go` 按已提供 CLI 合同构造 print/stream-json 命令、
+显式模型与可选 effort、原身份 resume、空内建工具列表、严格 MCP 文件和独立设置来源；
+不设自动模型回退或新增时间/token 预算。`runtime_result_workbuddy.go` 提取原生结果，
+验证会话身份、明确成功终态和 JSON 对象，拒绝混合会话、错误/重复终态、缺失终态及
+截断流。结构化结果优先，保留现有 engine writer 的最终接纳权。
+
+以上是尚未注册的驱动组件，未接通进程执行、MCP 服务端、安装或结果 writer，
+不能视为完整 WorkBuddy 支持。fixture 不启动模型；命令参数检查也不证明宿主实际
+限制生效。定向测试覆盖命令构造、14 个结果场景及既有按角色工具广告契约，退出 0。
+
+按需核对新增 DSH `dsh-tools` 类型正文和 `dsh-agent` setup 类型：
+`restrict` 对全局工具施加相交限制，scoped 注册仍可见；`guard` 可在 agent.ctx
+作用域单调拒绝。create/resume 都有发布前 setup/commit 接口。已有这些能力，
+角色策略装配属于 DSH adapter 待实现工作，不再作为外部合同缺口。
+
+真实跨宿主调用的具体当前边界：`protocol.CurrentTaskOperationBinding` 对完整
+claim 做 DeepEqual，改 provider 会返回 INTENT_MISMATCH；
+`facade/task_operation.go` 的 model.run 按 q.Binding.Provider 选择 adapter，
+`runtime_context.go` 目前只注册 Codex。故不能篡改本 action 的 provider 试跑。
+最小处理是在驱动完成后由有权签发动作的 engine 路径提供该宿主的合法绑定与
+对应验证动作；本开发者继续先做代码与本地 fixture，不自行发起调度。
+
+剩余：完成三个驱动的执行/恢复/工具桥与安装配置接线，消费现有资源、用量与结果
+入口，补共享验证并经合法宿主绑定完成真实入口核验。B5 未完成。
+
+#### B5 第九次续用：公共操作分发与 MCP 传输组件
+
+新增 `runtime_operation_dispatch.go`，Codex 原生工具调用已接入此公共分发函数：
+按当前 engine 记录取 claim/revision，校验原生身份，使用宿主提供的稳定 requestId
+进入既有 RunTaskOperation；不允许传输自行指定 provider、候选或批准范围。
+新增 `runtime_mcp.go` 的 stdio tools 传输组件，复用公共工具 schema，显式携带
+稳定 requestId，保留引擎错误，不将 JSON-RPC 连接内请求编号当成恢复身份。
+本地 fixture 覆盖工具列表、参数传递、相同 ID 重送、引擎拒绝、缺失 ID、错误工具、
+通知不执行操作及损坏流；组件尚未接入可执行 MCP 服务入口或 WorkBuddy 进程。
+
+本次定向测试中的 TestTaskOperationNativeBridgeQA 是 opt-in 测试，本次跳过，
+不是原生 PASS。实际执行通过的定向项是 MCP、公共工具定义和 WorkBuddy fixture。
+主代理补充 CLI 实测：WorkBuddy 2.137.1、ZCode 0.16.5、DSH 0.1.5-rc.1，
+三个 --version 均 exit 0；这是提供的入口证据，本开发动作未重跑或据此宣称会话通过。
+无需因未在 PATH 另装 CLI，安装入口不是当前代码工作的阻塞。
+
+本次最终检查：`go test ./internal/engine/facade -count=1` 退出 0（222.491s）；
+另外新增的 `TestNativeOperationDispatchUsesEngineBinding` 单独实际执行通过（5.801s），
+覆盖错误身份、缺失 ID、损坏参数与 QA 前置拒绝，确认拒绝后未新增 operation。
+`git diff --check` 通过。未开启 opt-in 原生模型测试。
+
+#### B5 第十次续用：MCP 服务入口接线
+
+已将 stdio MCP 组件接入 facade.ServeNativeOperationMCP 和现有 CLI drive 的
+`--operation-mcp` 分支；要求已领取、未完成动作和已观察的原生身份，不创建动作，
+每次工具调用仍经过公共 dispatch 和 RunTaskOperation。冲突参数在打开 run 前拒绝。
+WorkBuddy 平台配置函数生成该 CLI 的单个 stdio MCP server 配置，参数按数组传递，
+不使用 shell 拼接或合并私人 MCP 配置。文档记录默认值与错误。
+
+本地定向 fixture 验证 CLI 参数拒绝、facade 身份检查、合法绑定转交引擎前置拒绝、
+MCP 协议组件和 WorkBuddy 配置数组，均通过；未开启真实模型测试。
+完整三宿主驱动、首次原生启动与身份观察的接线、作者工具配置、安装与计量/资源/
+结果处理及平台原生验收仍待实现，B5 不作 PASS。
+
+#### B5 第十一次续用：WorkBuddy 进程观察、恢复与入口配置
+
+新增 WorkBuddy 进程执行组件：消费已构造命令、显式 workspace/job/action，先将原生
+stdout 持久化再在 system/init 时回传观察身份；记录 stderr、PID、动作、参数、开始/
+结束时间及退出码。解析或附着失败停止本次进程组，不创建替代会话；日志使用独占创建，
+禁止同一 job 被重跑覆盖。仅在成功终态、零退出、日志/结束记录保存成功后写 answer.json。
+新增恢复读取只查既有 process.json 与 stdout.jsonl，缺失退出证据或未停止返回 UNKNOWN，
+非零退出、动作不符、身份冲突不接纳；不启动进程。
+
+本地假进程测试验证：子进程等待身份回调后才输出终态，回调可读到已落盘身份；
+截断输出、原生成功 JSON 后退出 7 均保留失败；重跑相同 job 被拒绝；恢复得到相同答案，
+缺失/未完成退出记录被拒绝。测试子进程是 Go 测试程序，不是宿主或模型。
+
+三个宿主的可执行入口选项已加入 internal/settings 的既有 JSON 合并、来源记录和
+设置快照：workbuddyExecutable、zcodeExecutable、zcodeScript、dshExecutable。
+测试默认值、项目覆盖、来源及错误值；文档注明单位、范围和默认值。
+这些配置与进程组件仍待完整 adapter 消费，未注册新宿主，B5 仍未完成。
+
+随后接通 `runWorkBuddyBridge`：检查当前已领取的宿主、attempt 与运行环境绑定；
+新建时保存请求 session ID，续用只接受已观察身份；生成 MCP 配置后调用进程组件，
+system/init 的实际身份通过原 SOURCE 入口附着。MCP 可在该身份尚未附着时完成初始化
+和工具列表交换，但操作仍因身份未被观察而拒绝，不会将请求 ID 注册为 SOURCE。
+这个启动顺序避免要求 MCP 初始化之前就已有原生 init 事件；没有弱化工具执行绑定。
+桥仍未注册到公共 runtime adapter，也未完成作者工具与累计 transcript/完整生命周期。
+
+本次 `go test ./...` 退出 0（facade 259.894s）；它覆盖进程/恢复及设置改动。
+其后启动顺序与桥接改动另跑 WorkBuddy、MCP、运行环境定向测试及宿主绑定拒绝测试，
+均退出 0。未运行 opt-in 宿主模型测试，不将这些 fixture 视作原生验收。
+
+
+B5 attempt-11 续行：将原 finishCodex 的结果接纳提取到 finishNativeResult，继续使用
+原 preparation/review/verification 与 source writer，传输负责来源证据；构建通过。
+WorkBuddy 命令补角色工具列表及宿主默认模型行为，首次请求身份改用 UUID 格式。
+WorkBuddy 定向组件测试通过（5.103s；默认模型/角色参数相关增量测试 0.526s）。
+ZCode 已增加 app-server 参数、create/resume 请求构造和 turn 结果观察；定向测试通过
+（退出 0）。原生 send accepted 不作为完成，非 success 终态不提供结果。
+这些实现尚未注册为完整 runtime adapter，安装、执行/恢复/资源/计量完整接线仍待完成。
+本 worker 没有启动真实平台模型测试。按用户最新决定，困难平台实跑延期、未验证不记
+PASS；不自行调整正式需求或 Seal 条件，相关变更由主代理处理。MCP 不作为统一产品目标。
+
+本次进一步接线：ZCode 原生请求交换已连通 create/resume、订阅、输入与 close，实际
+输入发送前先执行身份附着回调；fixture 覆盖拒绝附着及 accepted 后 EOF 不得成功。
+WorkBuddy 与 ZCode 共用 runNativeStreamProcess 保存原始输出、stderr、process.json、
+退出码与结果文件。WorkBuddy 回归退出 0；该测试使用自身测试程序，不启动宿主模型。
+DSH 增加原生工具插件与 ACP profile overlay：沿原 ctx.tools.register/restrict/guard，
+通过新 CLI --operation-native 请求路径复用 dispatchNativeOperation 的引擎绑定检查。
+ACP 依赖 formalGatesNativeReady，以保留配置先于原生启动的顺序；不覆盖已有模型配置。
+Node 原生工具注册 fixture 通过（1 test，0 skipped），CLI/配置定向测试通过。
+仍未完成公开 runtime 注册、三宿主完整执行/恢复、累计计量和资源接线、WorkBuddy安装；
+DSH ACP 会话传输尚待实现。现有 DeveloperRecovery.Outcome 仍限定 thread/resume，
+必须在接入公共开发续用前消除该 Codex 假设。未把组件、安装或未执行实跑等同完整支持。
+
+最后一组低成本定向测试（WorkBuddy、ZCode、DSH、NativeMCP、NativeOperationDispatch）
+退出 0，facade 20.082s；go build ./... 与 git diff --check 均退出 0。WorkBuddy 使用
+进程级 bypassPermissions 配合显式工具与严格 MCP 配置，不靠未配置的交互授权才能调用
+已授予操作。真实平台验证仍未执行，完整接入未完成。
+
+### B5 当前实现汇总（attempt-11；覆盖上文各轮组件未接线状态）
+
+本节描述本次实现状态；上文逐轮记录保留为历史，不能把当时未注册的状态当成当前结论。
+
+- B5-S1：通用 runtime adapter 已登记 Codex、WorkBuddy、ZCode、DSH；公共执行、结果 writer、
+  中断观察、白盒覆盖先行及成本结算复用原 engine 契约。宿主原生协议与恢复判断在适配文件。
+  成本入口已消除固定 Codex parser/session_meta 限制；同身份续用保留既有增量结算。
+- B5-S2：WorkBuddy 通过应用自带 CodeBuddy print/stream-json 启动与 resume；只有原生 init
+  确认身份后才 SOURCE，成功结构化 result 与真实进程退出均需满足。角色工具与 MCP 绑定
+  由适配器生成；覆盖回合/纯文本角色不开放工具。恢复使用 ACP session/load 控制查询。
+  安装登记已补技能与 CODEBUDDY.md；不配置未经确认的全局 hook。
+- B5-S3：ZCode 使用现有 app-server；宿主分配身份，工具配置沿相同 session 重载，accepted
+  不作为完成；DSH 使用现有 ACP profile 与原生注册工具，agent 作用域限制按实际 API 配置。
+  两者接通启动、续用、结束、原生结果、模型选项、来源计量、公共资源与中断观察。
+  DSH 原生 completed turn/end 必须存在，单独 ACP end_turn 不足以证明成功。
+- B5-S4：新增入口选项在既有 settings 合并与 run 快照内；默认路径探测不把 PATH 缺失当
+  未安装。文档列出默认值、单位/范围、原生配置错误、安装和来源。不新增独立账本或调度。
+  MCP 仅 WorkBuddy/ZCode 的工具实现手段；DSH 沿直接 CLI，不追求形式统一。
+
+本次修复的实际验证失败：第一次全包 Go 回归 facade 281.294s 后失败，包含旧宿主名单断言、
+缺 provider 的旧恢复 fixture、将安装能力等同全局 hook 的生命周期断言，以及短命进程先关闭
+stdin 导致身份未观察。前三处按实际契约修正测试；后者修正进程适配器，即使写入失败也观察
+并保留已输出身份，最终错误仍保留。随后四项定向回归通过。一次中间编译因将 Provider
+误写为恢复结构顶层字段失败，已改用 Claim.Provider；来源适配提取后的无用 import 也已移除。
+这些失败不删除或改写成 PASS。
+
+新增确定性测试覆盖 ZCode 工具绑定后同身份重载/模型配置/usage 查询、DSH ACP 新建与续用及
+身份附着失败拒绝、三宿主计量来源/增量结算、覆盖结果中断后原样提交且不重跑、模型用量
+缺失不丢弃已完成答案、失败模型保留可得用量及稳定 requestId 显式恢复。
+Node 原生工具 fixture 验证 DSH 使用 agent.ctx.tools.restrict（不是不支持的全局调用）以及
+guard/启动依赖和缺失身份拒绝。测试不调用真实宿主模型。
+
+困难/耗时的平台真实集成实跑按用户明确决定延期：未验证，不记 PASS，不作为本轮 Seal
+阻塞；延期不免除接入实现。正式需求验收变更由主代理记录，本 worker 不改需求文件、不做
+Seal 决策。没有新装 CLI、委派模型、执行 Git 写命令或自行派发工作流。
+
+验证收尾：关闭原生 opt-in 的 `go test ./...` 全部通过（facade 279.772s、protocol
+95.314s、CLI 93.810s、validate 37.564s；这是包耗时，不相加作为整轮耗时）。随后新增加的
+显式恢复测试发现 TaskOperationDigest 包含原接纳 revision，公共桥用当前 revision 会
+导致同请求恢复被拒绝。已修正为恢复时保留原 revision、其余绑定/参数仍由原 digest 校验；
+白盒覆盖结果恢复同样处理。这个新增测试的首次失败也保留为真实发现。
+
+最终受影响定向回归通过：NativeOperation（原回执恢复、重复/改参拒绝）、StreamCoverage、
+NativeMCP/MCP/WorkBuddyMCP，facade 22.958s；此前三平台与 StreamModelSource/覆盖中断
+定向组通过，facade 23.831s。DSH Node 插件测试 1 项通过、无跳过。最终构建和 diff 空白检查
+通过。B5 三宿主接入实现及必要本地验证已完成；真实平台集成仍为上述明确延期的未验证项，
+没有将 CLI 版本、组件 fixture 或安装结果写成真实会话/完整 regular PASS。

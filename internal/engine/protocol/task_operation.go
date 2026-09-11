@@ -371,7 +371,7 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt, revision 
 	if op.Request.Kind == "model.run" {
 		entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "task-operation", Source: cost.SourceUnavailable, TranscriptPath: v.TranscriptPath, SourceReason: "native model transcript unavailable: " + v.Message}
 		if v.TranscriptPath != "" {
-			if err := checkTranscriptIdentity(v.TranscriptPath, v.Identity); err != nil {
+			if err := checkNativeTranscriptIdentity(x.Claim.Provider, v.TranscriptPath, v.Identity); err != nil {
 				return err
 			}
 			usage, err := cost.ParseTranscript(x.Claim.Provider, v.TranscriptPath)
@@ -384,7 +384,7 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt, revision 
 			entry.InputCacheMissTokens = usage.InputCacheMissTokens
 			entry.TotalInputTokens = usage.InputCacheHitTokens + usage.InputCacheMissTokens
 			entry.OutputTokens = usage.OutputTokens
-			if timing, err := cost.CodexTaskTimingAfter(v.TranscriptPath, time.Time{}); err == nil {
+			if timing, err := nativeTranscriptTiming(x.Claim.Provider, v.TranscriptPath, time.Time{}); err == nil {
 				entry.Timing = &timing
 			}
 		}

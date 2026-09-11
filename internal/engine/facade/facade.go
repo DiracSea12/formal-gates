@@ -594,7 +594,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 			c.Context = x.Claim.Context
 		}
 		if x.Claim.Context == nil && !x.Claimed && x.Identity == "" {
-			captured, err := captureRuntimeContext(c.Provider, run.Regular.Settings.Values)
+			captured, err := captureRuntimeContext(c.Provider, run.Regular.Settings.Values, f.stateDir, f.root)
 			if err != nil {
 				return protocol.Acceptance{}, Run{}, err
 			}

@@ -465,11 +465,23 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow drive", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
-	actionID := fs.String("action-id", "", "execute this issued Codex action")
+	actionID := fs.String("action-id", "", "execute this issued native action")
 	operationPath := fs.String("operation-request", "", "typed internal task operation request JSON path")
+	nativeOperationPath := fs.String("operation-native", "", "bound native tool request JSON path")
+	mcp := fs.Bool("operation-mcp", false, "serve bound task operations over MCP stdio")
+	nativeIdentity := fs.String("native-identity", "", "native session identity, verified before task operation execution")
 	resume := fs.Bool("resume", false, "resume this action through the bound native session")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if *mcp && (*actionID == "" || *nativeIdentity == "" || *operationPath != "" || *nativeOperationPath != "" || *resume) {
+		return 1, fmt.Errorf("--operation-mcp requires --action-id and --native-identity; cannot combine with --operation-request or --resume")
+	}
+	if !*mcp && *nativeOperationPath == "" && *nativeIdentity != "" {
+		return 1, fmt.Errorf("--native-identity requires --operation-mcp or --operation-native")
+	}
+	if *nativeOperationPath != "" && (*mcp || *actionID == "" || *nativeIdentity == "" || *operationPath != "" || *resume) {
+		return 1, fmt.Errorf("--operation-native requires --action-id and --native-identity; cannot combine with --operation-mcp, --operation-request or --resume")
 	}
 	f, ok, err := openEngineIfPresent(*root, *runID)
 	if !ok {
@@ -477,6 +489,20 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	}
 	if err != nil {
 		return 1, err
+	}
+	if *mcp {
+		if err := f.ServeNativeOperationMCP(*actionID, *nativeIdentity, streams.Stdin, streams.Stdout); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+	if *nativeOperationPath != "" {
+		data, err := os.ReadFile(*nativeOperationPath)
+		if err != nil {
+			return 1, err
+		}
+		result, err := f.RunNativeOperation(*actionID, *nativeIdentity, data)
+		return printValue(streams.Stdout, result, err)
 	}
 	if *operationPath != "" {
 		if *actionID != "" {

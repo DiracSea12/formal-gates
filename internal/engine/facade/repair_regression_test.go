@@ -208,6 +208,27 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			root := t.TempDir()
 			adapter, err := runtimeAdapter(provider)
+			if provider == host.WorkBuddy || provider == host.ZCode || provider == host.DeepSeek {
+				if err != nil || adapter == nil {
+					t.Fatal("native runtime missing", err)
+				}
+				executable, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				script := filepath.Join(root, "zcode.cjs")
+				if err := os.WriteFile(script, []byte("// capture only; never executed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				binding, err := captureRuntimeContext(provider, settings.Values{WorkBuddyExecutable: executable, ZCodeExecutable: executable, ZCodeScript: script, DSHExecutable: executable}, filepath.Join(root, ".gates", "engine", "run"), root)
+				if err != nil || binding.Provider != provider || binding.Executable != executable || binding.Environment[nativeSourceRoot] == "" || binding.Environment["FORMAL_GATES_ENGINE_ROOT"] != root {
+					t.Fatalf("binding=%+v err=%v", binding, err)
+				}
+				if _, ok := binding.Environment["CODEX_HOME"]; ok {
+					t.Fatal("native host inherited Codex context")
+				}
+				return
+			}
 			if provider == host.Codex {
 				if err != nil || adapter == nil {
 					t.Fatal("supported native runtime missing", err)

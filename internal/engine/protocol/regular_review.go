@@ -417,9 +417,6 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 			return fmt.Errorf("requirement must be prechecked and not already confirmed")
 		}
 	case "mode":
-		if q.Mode == "regular" && s.RunProvider != "codex" {
-			return fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: regular requires the codex provider")
-		}
 		if !r.Requirement.Confirmed || r.Mode != "" || (q.Mode != "regular" && q.Mode != "lightweight") {
 			return fmt.Errorf("mode requires confirmed intake and an initial regular/lightweight choice")
 		}

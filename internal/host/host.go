@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	Claude   = "claude-code"
-	Codex    = "codex"
-	Cursor   = "cursor"
-	DeepSeek = "deepseek-harness"
-	ZCode    = "zcode"
-	Default  = "default"
+	Claude    = "claude-code"
+	Codex     = "codex"
+	Cursor    = "cursor"
+	DeepSeek  = "deepseek-harness"
+	ZCode     = "zcode"
+	WorkBuddy = "workbuddy"
+	Default   = "default"
 )
 
 type HookKind string
@@ -72,6 +73,13 @@ type Descriptor struct {
 
 var descriptors = []Descriptor{
 	{
+		ID: WorkBuddy, InstallName: "workbuddy", ManifestName: "WorkBuddy", Aliases: []string{"workbuddy", "codebuddy", "cbc"}, Installable: true,
+		Paths: PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
+		// Native engine actions carry their tool and lifecycle boundary directly.
+		// Installation supplies the native skill entry; it adds no global hook.
+		CostProvider: WorkBuddy,
+	},
+	{
 		ID:           Claude,
 		InstallName:  "claude",
 		ManifestName: "Claude Code",
@@ -119,6 +127,7 @@ var descriptors = []Descriptor{
 		Paths:           PathLayout{ProjectManaged: "AGENTS.md"},
 		Hook:            HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
 		LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true,
+		CostProvider: DeepSeek,
 	},
 	{
 		ID:           ZCode,
@@ -132,6 +141,7 @@ var descriptors = []Descriptor{
 		},
 		Hook:            HookSpec{Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", LifecycleMatcher: "Agent|Task"},
 		LifecycleEvents: []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}, LifecycleRequired: true,
+		CostProvider: ZCode,
 	},
 	{
 		ID:              Default,

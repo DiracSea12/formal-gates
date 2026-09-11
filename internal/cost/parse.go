@@ -14,8 +14,11 @@ type transcriptParser func(io.Reader) (Usage, error)
 // expose a supported transcript format simply omit an entry and remain
 // UNAVAILABLE instead of fabricating usage.
 var transcriptParsers = map[string]transcriptParser{
-	host.Claude: parseClaudeTranscript,
-	host.Codex:  parseCodexTranscript,
+	host.WorkBuddy: parseWorkBuddyTranscript,
+	host.DeepSeek:  parseDSHTranscript,
+	host.ZCode:     parseZCodeTranscript,
+	host.Claude:    parseClaudeTranscript,
+	host.Codex:     parseCodexTranscript,
 }
 
 // ParseTranscript parses exact token usage from a host transcript file,

@@ -11,29 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"formal-gates/internal/engine/gitprep"
 	"formal-gates/internal/engine/protocol"
 )
 
-// Advertise only operations this role can actually request. Authoring tests run
-// in the existing writable authoring workspace before any frozen QA wave exists;
-// a design trial must never be presented as formal QA execution.
-func nativeOperationTool(step, description string) map[string]any {
-	kinds := []string{"model.run"}
-	caseID := map[string]any{"type": "string", "enum": []string{""}}
-	if step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker" {
-		kinds = append(kinds, "qa.prepare", "qa.target", "qa.collect", "qa.run", "qa.checkpoint")
-		delete(caseID, "enum")
-	}
-	schema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "caseId", "prompt"}, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": kinds}, "caseId": caseID, "prompt": map[string]any{"type": "string"}}}
-	return map[string]any{"type": "function", "name": "formal_gates_operation", "description": description, "inputSchema": schema}
-}
-
-// runNativeBridge hosts Codex's typed dynamic tool. QA execution workers have no shell
+// runCodexBridge hosts Codex's typed dynamic tool. QA execution workers have no shell
 // tool: their only target operation is the frozen argv consumed by the adapter.
 // The same client owns fresh and resumed turns; the provider never chooses a
 // workflow step or rewrites the action/attempt/candidate binding.
-func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, coverageOnly bool) (string, error) {
+func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, coverageOnly bool) (string, error) {
 	toolDescription, err := actionInstructions(run, "actions/development-worker.md#工具说明")
 	if err != nil {
 		return "", err
@@ -235,27 +220,12 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 				Arguments json.RawMessage `json:"arguments"`
 			}
 			callErr := json.Unmarshal(m.Params, &call)
-			var input struct {
-				Kind   string `json:"kind"`
-				CaseID string `json:"caseId"`
-				Prompt string `json:"prompt"`
-			}
-			if callErr == nil {
-				callErr = json.Unmarshal(call.Arguments, &input)
-			}
 			if callErr == nil && (call.Tool != "formal_gates_operation" || call.ThreadID != identity || call.CallID == "") {
 				callErr = fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unbound native tool")
 			}
 			var receipt any
 			if callErr == nil {
-				current, showErr := f.Show()
-				callErr = showErr
-				if callErr == nil {
-					bound := current.Executions[claim.ActionID].Claim
-					bound.Identity = identity
-					q := protocol.TaskOperationRequest{RunID: run.RunID, ExpectedRevision: current.Revision, Binding: bound, RequestID: call.CallID, Kind: input.Kind, CaseID: input.CaseID, Prompt: input.Prompt}
-					receipt, callErr = f.RunTaskOperation(q, false)
-				}
+				receipt, callErr = f.dispatchNativeOperation(claim.ActionID, identity, call.CallID, call.Arguments)
 			}
 			output, _ := json.Marshal(receipt)
 			if callErr != nil {
@@ -312,60 +282,6 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 // The first whitebox turn receives only requirements and production source, with
 // native shell disabled. A durable operation receipt precedes the same identity's
 // test-authoring turn, so existing tests cannot influence the coverage judgment.
-func (f *Facade) runNativeBridge(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any) (string, error) {
-	if claim.Task.Step == "whitebox-design" && !protocol.WhiteboxCoverageReady(run.Executions[claim.ActionID]) {
-		owners, err := gitprep.TestOwnershipResolver(workspace)
-		if err != nil {
-			return "", err
-		}
-		view, err := gitprep.Snapshot(workspace, claim.Candidate)
-		if err != nil {
-			return "", err
-		}
-		production := map[string]string{}
-		for _, entry := range view.Entries {
-			if !owners[entry.Path] && strings.HasSuffix(entry.Path, ".go") {
-				content, err := os.ReadFile(filepath.Join(workspace, entry.Path))
-				if err != nil {
-					return "", err
-				}
-				production[entry.Path] = string(content)
-			}
-		}
-		input, _ := json.Marshal(map[string]any{"requirement": run.Regular.Requirement, "production": production})
-		str := map[string]any{"type": "string"}
-		coverageSchema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"coverageJudgment", "behaviorOracles"}, "properties": map[string]any{"coverageJudgment": str, "behaviorOracles": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"behavior", "oracle"}, "properties": map[string]any{"behavior": str, "oracle": str}}}}}
-		coverageInstructions, err := actionInstructions(run, "actions/qa-design.md#白盒覆盖判断")
-		if err != nil {
-			return "", err
-		}
-		identity, err := f.runNativeBridgeTurn(run, claim, resume, job, job, coverageInstructions+"\n"+string(input), coverageSchema, true)
-		if err != nil {
-			return identity, err
-		}
-		data, err := os.ReadFile(filepath.Join(job, "coverage-answer.json"))
-		if err != nil {
-			return identity, err
-		}
-		current, err := f.Show()
-		if err != nil {
-			return identity, err
-		}
-		bound := current.Executions[claim.ActionID].Claim
-		bound.Identity = identity
-		_, err = f.ExecuteTaskOperation(protocol.TaskOperationRequest{RunID: run.RunID, ExpectedRevision: current.Revision, Binding: bound, RequestID: "coverage-before-tests", Kind: "whitebox.coverage", Prompt: string(data)}, false)
-		if err != nil {
-			return identity, err
-		}
-		if err = os.Rename(filepath.Join(job, "stdout.jsonl"), filepath.Join(job, "coverage-stdout.jsonl")); err != nil {
-			return identity, err
-		}
-		run, err = f.Show()
-		if err != nil {
-			return identity, err
-		}
-		claim.Identity = identity
-		resume = true
-	}
-	return f.runNativeBridgeTurn(run, claim, resume, job, workspace, prompt, schema, false)
+func (f *Facade) runCodexBridge(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any) (string, error) {
+	return f.runNativeBridgeTurns(run, claim, resume, job, workspace, prompt, schema, f.runCodexBridgeTurn)
 }

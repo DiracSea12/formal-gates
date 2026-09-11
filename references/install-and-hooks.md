@@ -40,7 +40,7 @@ $HOME/.local/bin/formal-gates uninstall \
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
-考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
+考文档。它默认配置所选 host 的 formal-gates 命令，并为支持 hook 的 host 配置子代理生命周期 hook。既有的无
 关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置和受理规则都必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
@@ -313,3 +313,18 @@ CI 流程构建 Windows、macOS 和 Linux 二进制、portable-canary 输出和 
 checksum 文件，并可以把它们附加到 GitHub Release。checksum 说明下载到的字节与已
 发布的 CI 产物一致。它们不提供签名、attestation、provenance、registry、
 marketplace 或 `npx` 分发路径。
+
+
+## WorkBuddy 原生入口（阶段 4a）
+
+已有 WorkBuddy 应用包 CLI 可直接使用，不必因为 codebuddy 不在 PATH 再装一份。
+使用已有安装事务：`./install.command --host workbuddy --scope project --project <project> --force`
+或 `--scope global`。项目/全局技能目录为 `.codebuddy/skills/formal-gates`；指导文件分别为
+项目 `CODEBUDDY.md` 与 `~/.codebuddy/CODEBUDDY.md`。安装器不为 WorkBuddy 写全局 hook；
+引擎动作的启动、结束、身份、结果与工具边界由原生 runtime adapter 记录。安装成功
+不代表已经实测平台完整 regular 流程，也不承诺原生流程以外的全局 hook 拦截。
+
+ZCode 与 DSH 继续复用原来的安装位置、宿主配置与生命周期能力；本阶段只增加 regular
+驱动和 action 内工具配置，不替换用户模型/认证设置。可执行入口与模型选项见
+[user-configuration.md](user-configuration.md)。困难平台实跑按用户决定延期，明确未验证；
+公共与协议组件验证继续执行，延期不免除实现，也不作为本轮 Seal 阻塞。

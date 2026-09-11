@@ -177,7 +177,7 @@ func TestLifecycleHookDefinitionsOwnProviderEventsAndCommands(t *testing.T) {
 
 func TestLifecycleFactoryRegistryCoversEveryInstallableHost(t *testing.T) {
 	for _, descriptor := range host.All() {
-		if !descriptor.Installable {
+		if !descriptor.Installable || !descriptor.LifecycleRequired {
 			continue
 		}
 		adapter, err := adapterFor(descriptor.ID)

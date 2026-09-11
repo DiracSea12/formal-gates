@@ -13,12 +13,16 @@ import (
 )
 
 type Values struct {
-	QACapacity      int    `json:"qaCapacity"`
-	TokenCap        *int64 `json:"tokenCap,omitempty"`
-	Capacity        int    `json:"capacity"`
-	CodexExecutable string `json:"codexExecutable"`
-	Model           string `json:"model,omitempty"`
-	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	QACapacity          int    `json:"qaCapacity"`
+	TokenCap            *int64 `json:"tokenCap,omitempty"`
+	Capacity            int    `json:"capacity"`
+	CodexExecutable     string `json:"codexExecutable"`
+	Model               string `json:"model,omitempty"`
+	ReasoningEffort     string `json:"reasoningEffort,omitempty"`
+	WorkBuddyExecutable string `json:"workbuddyExecutable"`
+	ZCodeExecutable     string `json:"zcodeExecutable"`
+	ZCodeScript         string `json:"zcodeScript"`
+	DSHExecutable       string `json:"dshExecutable"`
 }
 type Effective struct {
 	Values  Values            `json:"values"`
@@ -26,19 +30,23 @@ type Effective struct {
 	Files   []string          `json:"files"`
 }
 type input struct {
-	QACapacity      *int    `json:"qaCapacity,omitempty"`
-	TokenCap        *int64  `json:"tokenCap,omitempty"`
-	Capacity        *int    `json:"capacity,omitempty"`
-	CodexExecutable *string `json:"codexExecutable,omitempty"`
-	Model           *string `json:"model,omitempty"`
-	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
+	QACapacity          *int    `json:"qaCapacity,omitempty"`
+	TokenCap            *int64  `json:"tokenCap,omitempty"`
+	Capacity            *int    `json:"capacity,omitempty"`
+	CodexExecutable     *string `json:"codexExecutable,omitempty"`
+	Model               *string `json:"model,omitempty"`
+	ReasoningEffort     *string `json:"reasoningEffort,omitempty"`
+	WorkBuddyExecutable *string `json:"workbuddyExecutable,omitempty"`
+	ZCodeExecutable     *string `json:"zcodeExecutable,omitempty"`
+	ZCodeScript         *string `json:"zcodeScript,omitempty"`
+	DSHExecutable       *string `json:"dshExecutable,omitempty"`
 }
 
 // Load overlays project values over installation/user values field by field.
 // Unknown fields and null are errors: a typo must never silently remove a cap.
 func Load(root, home string) (Effective, error) {
-	e := Effective{Values: Values{QACapacity: 4, Capacity: 4, CodexExecutable: "codex"}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
-	for _, field := range []string{"qaCapacity", "tokenCap", "capacity", "codexExecutable", "model", "reasoningEffort"} {
+	e := Effective{Values: Values{QACapacity: 4, Capacity: 4, CodexExecutable: "codex", WorkBuddyExecutable: "codebuddy", ZCodeExecutable: "node", DSHExecutable: "dsh"}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
+	for _, field := range []string{"qaCapacity", "tokenCap", "capacity", "codexExecutable", "model", "reasoningEffort", "workbuddyExecutable", "zcodeExecutable", "zcodeScript", "dshExecutable"} {
 		e.Sources[field] = "default"
 	}
 	for _, path := range e.Files {
@@ -94,6 +102,25 @@ func Load(root, home string) (Effective, error) {
 				return e, fmt.Errorf("%s: codexExecutable: use a command name or executable path", path)
 			}
 			e.Values.CodexExecutable = *in.CodexExecutable
+		}
+
+		for _, field := range []struct {
+			name   string
+			input  *string
+			target *string
+		}{
+			{"workbuddyExecutable", in.WorkBuddyExecutable, &e.Values.WorkBuddyExecutable},
+			{"zcodeExecutable", in.ZCodeExecutable, &e.Values.ZCodeExecutable},
+			{"zcodeScript", in.ZCodeScript, &e.Values.ZCodeScript},
+			{"dshExecutable", in.DSHExecutable, &e.Values.DSHExecutable},
+		} {
+			if field.input == nil {
+				continue
+			}
+			if strings.TrimSpace(*field.input) == "" {
+				return e, fmt.Errorf("%s: %s: use a nonempty command/path or remove the field", path, field.name)
+			}
+			*field.target = *field.input
 		}
 		if in.Model != nil {
 			if strings.TrimSpace(*in.Model) == "" {

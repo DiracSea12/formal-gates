@@ -29,6 +29,12 @@ func runtimeAdapter(provider string) (nativeRuntimeAdapter, error) {
 	switch provider {
 	case "codex":
 		return codexRuntimeAdapter{}, nil
+	case "workbuddy":
+		return workBuddyRuntimeAdapter{}, nil
+	case "zcode":
+		return zcodeRuntimeAdapter{}, nil
+	case "deepseek-harness":
+		return dshRuntimeAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: no regular runtime adapter for %s", provider)
 	}
@@ -52,12 +58,26 @@ func (f *Facade) ExecuteNative(actionID string, resume bool) (Run, error) {
 	return adapter.execute(f, actionID, resume)
 }
 
-func captureRuntimeContext(provider string, config settings.Values) (*protocol.HostRuntimeContext, error) {
+func captureRuntimeContext(provider string, config settings.Values, stateDirectory ...string) (*protocol.HostRuntimeContext, error) {
 	adapter, err := runtimeAdapter(provider)
 	if err != nil {
 		return nil, err
 	}
-	return adapter.capture(config)
+	binding, err := adapter.capture(config)
+	if err != nil {
+		return nil, err
+	}
+	if len(stateDirectory) > 0 {
+		if managed, ok := adapter.(interface {
+			bindResources(*protocol.HostRuntimeContext, string)
+		}); ok {
+			managed.bindResources(binding, stateDirectory[0])
+			if len(stateDirectory) > 1 {
+				binding.Environment["FORMAL_GATES_ENGINE_ROOT"] = stateDirectory[1]
+			}
+		}
+	}
+	return binding, nil
 }
 
 func runtimeToolConfig(provider string, raw json.RawMessage) (map[string]any, error) {
@@ -83,14 +103,9 @@ func runtimeCommandContext(cmd *exec.Cmd, binding *protocol.HostRuntimeContext) 
 	cmd.Args[0] = binding.Executable
 	cmd.Env = os.Environ()
 	for key, value := range binding.Environment {
-		kept := cmd.Env[:0]
-		for _, pair := range cmd.Env {
-			if !strings.HasPrefix(pair, key+"=") {
-				kept = append(kept, pair)
-			}
-		}
-		cmd.Env = append(kept, key+"="+value)
+		cmd.Env = replaceEnvironment(cmd.Env, key, value)
 	}
+
 	return nil
 }
 
@@ -103,4 +118,14 @@ func findBoundTranscript(identity string, binding *protocol.HostRuntimeContext) 
 		return "", err
 	}
 	return adapter.transcript(identity, binding)
+}
+
+func replaceEnvironment(environment []string, key, value string) []string {
+	kept := environment[:0]
+	for _, pair := range environment {
+		if !strings.HasPrefix(pair, key+"=") {
+			kept = append(kept, pair)
+		}
+	}
+	return append(kept, key+"="+value)
 }

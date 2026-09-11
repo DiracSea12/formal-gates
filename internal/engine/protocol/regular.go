@@ -3,7 +3,6 @@ package protocol
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -309,8 +308,10 @@ func Document(path string, data []byte) RequirementDocument {
 }
 
 func (e *Engine) InitRegular(view *decision.State, provider, fp, runID string, initial RegularState) error {
-	if provider != "codex" {
-		return fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: regular requires codex")
+	// The facade admits providers through the native runtime adapter registry.
+	// Protocol state preserves that binding without owning a second host list.
+	if strings.TrimSpace(provider) == "" {
+		return fmt.Errorf("regular: provider is required")
 	}
 	if _, s, err := e.load(); err != nil {
 		return err
@@ -983,10 +984,10 @@ func (e *Engine) sourceRegular(s *State, src ExecutionSource) error {
 func settleRegularSource(s *State, src ExecutionSource, x RegularExecution) error {
 	entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "action", Source: cost.SourceUnavailable, TranscriptPath: src.TranscriptPath, SourceReason: src.Reason}
 	if src.Status == "STOPPED" {
-		if err := checkTranscriptIdentity(src.TranscriptPath, src.Identity); err != nil {
+		if err := checkNativeTranscriptIdentity(src.Provider, src.TranscriptPath, src.Identity); err != nil {
 			return err
 		}
-		usage, err := cost.ParseTranscript("codex", src.TranscriptPath)
+		usage, err := cost.ParseTranscript(src.Provider, src.TranscriptPath)
 		if err != nil {
 			return fmt.Errorf("COST_PENDING: %w; explicitly record UNAVAILABLE only after source diagnosis", err)
 		}
@@ -1000,7 +1001,7 @@ func settleRegularSource(s *State, src ExecutionSource, x RegularExecution) erro
 		// A resumed native transcript contains all preceding turns. Charge only
 		// usage not already present in the existing per-action cost projection.
 		for id, prior := range s.RegularExecutions {
-			if id == src.ActionID || prior.Identity != src.Identity {
+			if id == src.ActionID || prior.Identity != src.Identity || prior.Claim.Provider != x.Claim.Provider {
 				continue
 			}
 			settled, ok := s.Cost.Dispatches[id]
@@ -1021,7 +1022,7 @@ func settleRegularSource(s *State, src ExecutionSource, x RegularExecution) erro
 		if entry.InputCacheHitTokens < 0 || entry.InputCacheMissTokens < 0 || entry.OutputTokens < 0 {
 			return fmt.Errorf("COST_PENDING: native transcript is smaller than its settled session usage")
 		}
-		if timing, err := cost.CodexTaskTimingAfter(src.TranscriptPath, after); err == nil {
+		if timing, err := nativeTranscriptTiming(src.Provider, src.TranscriptPath, after); err == nil {
 			entry.Timing = &timing
 		}
 	}
@@ -1029,24 +1030,6 @@ func settleRegularSource(s *State, src ExecutionSource, x RegularExecution) erro
 	return nil
 }
 
-func checkTranscriptIdentity(path, identity string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("COST_PENDING: %w", err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		var v struct {
-			Type    string `json:"type"`
-			Payload struct {
-				ID string `json:"id"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal([]byte(line), &v) == nil && v.Type == "session_meta" && v.Payload.ID == identity {
-			return nil
-		}
-	}
-	return fmt.Errorf("INTENT_MISMATCH: transcript session_meta does not identify %s", identity)
-}
 func sortedStrings(input []string) []string {
 	out := append([]string(nil), input...)
 	sort.Strings(out)

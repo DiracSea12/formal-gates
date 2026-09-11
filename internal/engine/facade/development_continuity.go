@@ -91,6 +91,12 @@ func (f *Facade) developerRecoveryPath(action string, interrupted bool) string {
 }
 
 func (f *Facade) observeDeveloperRecovery(run Run, x protocol.RegularExecution, interrupted bool) (protocol.DeveloperRecovery, error) {
+	return f.observeNativeDeveloperRecovery(run, x, interrupted, "thread/resume", func(identity string, binding *protocol.HostRuntimeContext, workspace string) (json.RawMessage, error) {
+		return codexThreadRequest(binding.Executable, "thread/resume", identity, binding, workspace)
+	})
+}
+
+func (f *Facade) observeNativeDeveloperRecovery(run Run, x protocol.RegularExecution, interrupted bool, method string, probe func(string, *protocol.HostRuntimeContext, string) (json.RawMessage, error)) (protocol.DeveloperRecovery, error) {
 	old := x
 	if x.PreviousAction != "" && !interrupted {
 		old = run.Executions[x.PreviousAction]
@@ -137,12 +143,12 @@ func (f *Facade) observeDeveloperRecovery(run Run, x protocol.RegularExecution, 
 		if err != nil {
 			return protocol.DeveloperRecovery{}, err
 		}
-		if err = f.submitSource(protocol.ExecutionSource{ActionID: old.Claim.ActionID, AttemptID: old.Claim.AttemptID, Provider: "codex", Identity: old.Identity, TranscriptPath: path, Status: "STOPPED"}); err != nil {
+		if err = f.submitSource(protocol.ExecutionSource{ActionID: old.Claim.ActionID, AttemptID: old.Claim.AttemptID, Provider: old.Claim.Provider, Identity: old.Identity, TranscriptPath: path, Status: "STOPPED"}); err != nil {
 			return protocol.DeveloperRecovery{}, err
 		}
 	}
-	receipt := protocol.DeveloperRecovery{Claim: x.Claim, Identity: x.Identity, StoppedAction: old.Claim.ActionID, ProcessID: process.PID, WorkspaceView: view.Digest, NativeMethod: "thread/resume"}
-	receipt.NativeResponse, err = codexThreadRequest(run.Regular.Settings.Values.CodexExecutable, receipt.NativeMethod, receipt.Identity, x.Claim.Context, p.Resources["development"])
+	receipt := protocol.DeveloperRecovery{Claim: x.Claim, Identity: x.Identity, StoppedAction: old.Claim.ActionID, ProcessID: process.PID, WorkspaceView: view.Digest, NativeMethod: method}
+	receipt.NativeResponse, err = probe(receipt.Identity, x.Claim.Context, p.Resources["development"])
 	if err != nil {
 		receipt.TransportError = err.Error()
 	}

@@ -206,3 +206,16 @@ func (codexRuntimeAdapter) observeModel(op protocol.TaskOperation, job string, r
 	r.Output = string(answer)
 	return r, nil
 }
+
+func (codexRuntimeAdapter) bridge(f *Facade, run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any) (string, error) {
+	return f.runCodexBridge(run, claim, resume, job, workspace, prompt, schema)
+}
+func (codexRuntimeAdapter) finish(f *Facade, actionID string, claim protocol.ExecutionClaim, identity, job string, waitErr error) (Run, error) {
+	return f.finishCodex(actionID, claim, identity, job, waitErr)
+}
+func (codexRuntimeAdapter) reconcile(f *Facade, actionID string, x protocol.RegularExecution) (Run, bool, error) {
+	return f.reconcileCodex(actionID, x)
+}
+func (codexRuntimeAdapter) observeRecovery(f *Facade, run Run, x protocol.RegularExecution, interrupted bool) (protocol.DeveloperRecovery, error) {
+	return f.observeDeveloperRecovery(run, x, interrupted)
+}
