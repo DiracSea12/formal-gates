@@ -2,6 +2,8 @@ package gitprep
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,9 +33,8 @@ func ValidatePromotion(r PromotionReceipt, source View, base, operation string) 
 // Promote moves the entire already validated candidate, never a test patch. The
 // supported Git path uses fast-forward and keeps identity. A crash after merge
 // can be reconciled from the exact source identity without invoking merge again.
-func Promote(root, source, expectedBase, operation string) (PromotionReceipt, error) {
-	receipt := PromotionReceipt{OperationID: operation, ExpectedTargetBase: expectedBase, Status: "UNKNOWN"}
-	var err error
+func Promote(root, source, expectedBase, operation string) (receipt PromotionReceipt, err error) {
+	receipt = PromotionReceipt{OperationID: operation, ExpectedTargetBase: expectedBase, Status: "UNKNOWN"}
 	receipt.Source, err = Snapshot(root, source)
 	if err != nil {
 		return receipt, err
@@ -92,6 +93,17 @@ func Promote(root, source, expectedBase, operation string) (PromotionReceipt, er
 		// paths before fast-forward; the persisted promotion intent can recover this
 		// boundary. On an ordinary merge error, restore their desired candidate bytes.
 		if len(matching) > 0 {
+			restoreBytes, captureErr := captureMatchingFiles(root, matching)
+			if captureErr != nil {
+				return receipt, captureErr
+			}
+			// Git checkout filters can change confirmed document bytes even
+			// though the canonical blob is identical to the approved candidate.
+			defer func() {
+				if restoreErr := restoreBytes(); restoreErr != nil {
+					err = fmt.Errorf("UNKNOWN: promotion=%v, restore confirmed working bytes: %w", err, restoreErr)
+				}
+			}()
 			if _, err = Git(root, append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, matching...)...); err != nil {
 				return receipt, err
 			}
@@ -112,4 +124,39 @@ func Promote(root, source, expectedBase, operation string) (PromotionReceipt, er
 	receipt.Status = "COMPLETE"
 	receipt.ConflictFree = true
 	return receipt, ValidatePromotion(receipt, receipt.Source, expectedBase, operation)
+}
+
+func captureMatchingFiles(root string, paths []string) (func() error, error) {
+	type file struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}
+	var files []file
+	for _, path := range paths {
+		path = filepath.Join(root, path)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue // A matching deletion has no working bytes to preserve.
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			continue // Symlink targets are materialized directly by Git.
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file{path, data, info.Mode().Perm()})
+	}
+	return func() error {
+		for _, file := range files {
+			if err := os.WriteFile(file.path, file.data, file.mode); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, nil
 }

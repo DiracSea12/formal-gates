@@ -1,9 +1,46 @@
 package gitprep
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestPromotionPreservesConfirmedDocumentBytesAcrossCheckoutFilters(t *testing.T) {
+	root := repository(t)
+	if _, err := Git(root, "config", "core.autocrlf", "true"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "requirements.md", "original requirement\n")
+	if _, err := Git(root, "add", "requirements.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Git(root, "commit", "-qm", "requirement baseline"); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := Head(root)
+	workspace := filepath.Join(t.TempDir(), "candidate")
+	if err := Workspace(root, workspace, base); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("confirmed requirement\nwith another line\n")
+	write(t, workspace, "requirements.md", string(want))
+	commit, err := Commit(workspace, base, "confirmed requirement", []string{"requirements.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "requirements.md", string(want))
+	for _, operation := range []string{"promote", "replay"} {
+		if _, err := Promote(root, commit.After, base, operation); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(root, "requirements.md"))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("confirmed bytes changed after %s: %q %v", operation, got, err)
+		}
+	}
+}
 
 func TestPromotionEntireCandidateAndRecovery(t *testing.T) {
 	root := repository(t)
