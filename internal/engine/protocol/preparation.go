@@ -485,34 +485,52 @@ func preparationAllowance(s *State, b *guard.Basis) {
 		}
 	}
 	for key := range keys {
-		max := 2
+		max := 3
 		for _, old := range r.PreparationHistory {
-			if n := 2 + old.ExtraAttempts[key.String()]; n > max {
+			if n := 3 + old.ExtraAttempts[key.String()]; n > max {
 				max = n
 			}
 		}
 		if p != nil {
-			if n := 2 + p.ExtraAttempts[key.String()]; n > max {
+			if n := 3 + p.ExtraAttempts[key.String()]; n > max {
 				max = n
 			}
 		}
+		max += continuationCredit(s, key)
 		b.ExternalTasks = append(b.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.DefinitionSource, Identity: b.Definition.Identity}, MaxAttempts: &max})
 	}
 }
-func preparationMax(r *RegularState, key runtime.TaskKey) int {
+
+// continuationCredit excludes only accepted normal development returns from the
+// failure allowance. Dispatch identities, source evidence and cost remain intact.
+func continuationCredit(s *State, key runtime.TaskKey) int {
+	if key.Step != "development-worker" {
+		return 0
+	}
+	n := 0
+	for id, x := range s.RegularExecutions {
+		if x.Claim.Task == key && x.Finished && s.Results[id].Outcome == "CONTINUE" {
+			n++
+		}
+	}
+	return n
+}
+
+func preparationMax(s *State, key runtime.TaskKey) int {
+	r := s.Regular
 	if verificationStep(key.Step) {
 		if r.Verification == nil {
-			return 2
+			return 3
 		}
-		return 2 + r.Verification.ExtraAttempts[key.String()]
+		return 3 + r.Verification.ExtraAttempts[key.String()]
 	}
 	if preparationStep(key.Step) {
 		if r.Preparation == nil {
-			return 2
+			return 3
 		}
-		return 2 + r.Preparation.ExtraAttempts[key.String()]
+		return 3 + r.Preparation.ExtraAttempts[key.String()] + continuationCredit(s, key)
 	}
-	return 2 + r.Reviews[string(key.Step)].ExtraAttempts[key.String()]
+	return 3 + r.Reviews[string(key.Step)].ExtraAttempts[key.String()]
 }
 
 func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision uint64) (string, error) {
@@ -532,7 +550,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 	reject := func(err error) (string, error) {
 		at := s.Attempts[x.Claim.Task]
 		at.Attempts = x.Number
-		at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+		at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 		s.Attempts[x.Claim.Task] = at
 		r.PreparationErrors = append(r.PreparationErrors, PreparationError{Result: result, Reason: err.Error(), Revision: revision + 1})
 		return "REJECTED_RESULT", nil
@@ -552,10 +570,10 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 		if strings.TrimSpace(result.Message) == "" {
 			return reject(fmt.Errorf("unfinished development requires its actual continuation or failure reason"))
 		}
-		at := s.Attempts[x.Claim.Task]
-		at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
-		s.Attempts[x.Claim.Task] = at
 		s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, Digest: digestOfCanonical(result)}
+		at := s.Attempts[x.Claim.Task]
+		at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
+		s.Attempts[x.Claim.Task] = at
 		return "ACCEPTED", nil
 	}
 	if result.Status == "FAIL" && step == "blackbox-design" {
@@ -1227,7 +1245,7 @@ func refreshPreparationRecovery(s *State, revision uint64) bool {
 		}
 		reason := "Three consecutive pre-wave review FAIL results require a bounded disposition."
 		if at.RetryExhausted {
-			reason = "The current QA TaskKey exhausted its finite runtime attempts; no third attempt is authorized."
+			reason = "The current QA TaskKey exhausted its finite runtime attempts; no additional attempt is authorized."
 		}
 		ask := &RegularAsk{ID: fmt.Sprintf("qa-recovery:%s:%d", mode, revision), Kind: "qa-recovery", Revision: revision, Request: RegularRequest{Action: "qa-recovery", Target: mode, Reason: reason}, Options: []string{"redesign", "fresh-review", "change-requirement", "waiver", "skip", "abort"}, QA: binding}
 		if at.RetryExhausted {

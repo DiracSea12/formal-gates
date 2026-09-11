@@ -107,7 +107,7 @@ finding ID、等级和逐条定级理由。缺少任一部分，用户回复不�
 合同。REQUEST/Ask 展示完整预览，DECIDE 精确绑定。CLI 不猜文本含义；保留既有 PASS
 需要明确清单，其他受影响证据失效。历史 raw result 和原授权保留，轮数不清零。
 
-产品/技术/QA 各自有限语义轮，运行错误默认同 TaskKey 两次 attempt。超限进入对应 Ask，
+产品/技术/QA 各自有限语义轮，运行错误默认同 TaskKey 三次 attempt。超限进入对应 Ask，
 仅增加当前动作的一轮/一次或处置精确义务，不累计授权。黑白盒三连 FAIL/长期不可用必须
 进入完整 qa-recovery Ask，用户可重设、fresh review、需求变更、精确 waiver/skip 或 abort。
 

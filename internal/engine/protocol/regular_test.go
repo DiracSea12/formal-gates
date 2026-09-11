@@ -177,7 +177,7 @@ func TestRegularRejectsBeforeClaimAndIndependentRetry(t *testing.T) {
 	if s2.Revision != s.Revision {
 		t.Fatal("rejected claim wrote state")
 	}
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		x = currentExecution(t, e, "product-review")
 		claimAndAttach(t, e, x)
 		v := resultFor(x)
@@ -198,7 +198,7 @@ func TestRegularRejectsBeforeClaimAndIndependentRetry(t *testing.T) {
 	}
 	regularChoice(t, e, RegularRequest{Action: "authorize-retry", ReviewAction: "product-review", Reason: "Retry the corrected result contract once."}, "confirm")
 	x = currentExecution(t, e, "product-review")
-	if x.Number != 3 {
+	if x.Number != 4 {
 		t.Fatalf("extra retry number %d", x.Number)
 	}
 }

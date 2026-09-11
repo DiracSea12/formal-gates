@@ -271,7 +271,7 @@ func (e *Engine) acceptRegularReview(s *State, v RawReviewCandidate, revision ui
 	}
 	if reject != nil {
 		r.RejectedResults = append(r.RejectedResults, RejectedReviewResult{Raw: v, ActionID: v.ActionID, AttemptID: v.AttemptID, Digest: v.Digest, Reason: reject.Error(), Revision: revision + 1})
-		max := 2 + r.Reviews[string(x.Claim.Task.Step)].ExtraAttempts[x.Claim.Task.String()]
+		max := 3 + r.Reviews[string(x.Claim.Task.Step)].ExtraAttempts[x.Claim.Task.String()]
 		at.Attempts = x.Number
 		at.RetryExhausted = x.Number >= max
 		s.Attempts[x.Claim.Task] = at

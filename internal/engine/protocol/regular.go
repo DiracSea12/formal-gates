@@ -397,6 +397,21 @@ func (e *Engine) refreshRegular(s *State) {
 	if r == nil {
 		return
 	}
+	// Recompute the scheduling projection from immutable execution history so
+	// resumed runs apply the current failure allowance without resetting history.
+	for key, at := range s.Attempts {
+		last := 0
+		for _, x := range s.RegularExecutions {
+			if x.Claim.Task == key && x.Number > last {
+				last = x.Number
+			}
+		}
+		if last > 0 {
+			at.MaxAttempts = preparationMax(s, key)
+			at.RetryExhausted = s.Tasks[key] == runtime.TaskTerminal && last >= at.MaxAttempts
+			s.Attempts[key] = at
+		}
+	}
 	v := &decision.RegularView{Prechecked: r.Requirement.Projection != nil, Confirmed: r.Requirement.Confirmed, Mode: r.Mode, TopologyConfirmed: r.Topology == "no-split", RouteConfirmed: r.Route != nil, Terminal: r.Terminal != "" && r.Terminal != "ABORTING"}
 	if r.Ask != nil {
 		v.Control = r.Ask.Kind
@@ -522,7 +537,7 @@ func (e *Engine) regularBasis(s *State) (guard.Result, error) {
 		for seq := 1; seq <= series.Limit; seq++ {
 			key := step
 			key.Scope = "review-" + strconv.Itoa(seq)
-			max := 2 + series.ExtraAttempts[key.String()]
+			max := 3 + series.ExtraAttempts[key.String()]
 			b.ExternalTasks = append(b.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.DefinitionSource, Identity: b.Definition.Identity}, MaxAttempts: &max})
 		}
 	}
@@ -585,7 +600,7 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 				number++
 			}
 		}
-		max := preparationMax(r, a.Task)
+		max := preparationMax(s, a.Task)
 		if number > max {
 			return nil, fmt.Errorf("RETRY_EXHAUSTED: %s", a.Task.String())
 		}
@@ -611,7 +626,7 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 		}
 		candidate, prerequisite := preparationClaim(r, a.Task)
 		at.Bindings.Snapshot = candidate
-		at.MaxAttempts = preparationMax(r, a.Task)
+		at.MaxAttempts = preparationMax(s, a.Task)
 		s.Attempts[a.Task] = at
 		c := ExecutionClaim{PrerequisiteDigest: prerequisite, ActionID: a.ActionID, AttemptID: at.ID, Task: a.Task, Provider: s.RunProvider, RequirementRevision: r.Requirement.Revision, Candidate: candidate, Operation: "spawn"}
 		if c.Task.Step == "start-readiness" {
@@ -739,7 +754,7 @@ func (e *Engine) admitRegularEvent(ev Event, s *State, revision uint64) (Accepta
 			s.RegularExecutions[id] = x
 			s.Tasks[x.Claim.Task] = runtime.TaskTerminal
 			at := s.Attempts[x.Claim.Task]
-			at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+			at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 			s.Attempts[x.Claim.Task] = at
 		}
 	}

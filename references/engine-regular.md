@@ -114,7 +114,7 @@ resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答�
 未完成 Batch 的正常返回使用 `CONTINUE`，自测失败使用 `FAIL`，并保留实际剩余项、
 验证与 manifest。后续 attempt 的 `claim.operation` 为 `resume`，必须使用上述
 `--resume` 入口；正常返回、RUNTIME_ERROR、授权增加 attempt 或重新确认改编号的计划
-均不解除原生身份，也不重置已用额度。只有 Batch DoD、验证和交接全部完成并提交后，
+均不解除原生身份，也不重置已用失败额度。已接纳的 `CONTINUE` 不消耗失败额度；真实派发次数、token 和成本仍完整计入记录。只有 Batch DoD、验证和交接全部完成并提交后，
 下一 Batch 才获得新会话。
 
 开发恢复先核对旧进程已停止及开发工作区 HEAD/工作视图，再实际执行 Codex
@@ -129,7 +129,7 @@ Raw candidate 保留原文与 digest。REVIEW_RESULT 不替代 Operator：ADJUDI
 CORRECT 绑定当前 result digest、finding ID、旧/新 decision、旧/新 severity、revision
 和 reason；冲突拒绝，历史保留，新增有效阻塞使依赖失效。
 
-产品/技术 series 各自默认最多三次有效语义审查，每个 TaskKey 默认两次原生 attempt。
+产品/技术 series 各自默认最多三次有效语义审查，每个 TaskKey 默认三次失败 attempt。
 不完整、无效或 RUNTIME_ERROR 不增加语义次数。OPEN 重用当前任务，明确 review-again
 才请求新审查；达到上限后 authorize-round 只加指定 action 一轮，authorize-retry 只加
 当前 exhausted TaskKey 一次。改变需求、保留 PASS 或 adopt 不重置计数。
@@ -230,7 +230,7 @@ VCS 内 artifacts、VCS 外审批/建议/复用证据的 externalArtifacts diges
 
 黑盒有效审查 FAIL 不等待开发完成：前两次连续 FAIL 自动把完整原设计与逐项审查缺口
 交回同模式设计，再派发 fresh 审查；开发中的原会话继续运行。第三次连续 FAIL 或同一
-QA TaskKey 两次运行错误/无效结果后，立即返回 `qa-recovery` typed Ask，包含
+QA TaskKey 三次运行错误/无效结果后，立即返回 `qa-recovery` typed Ask，包含
 `qa.mode/task/requirementRevision/candidate/caseSetDigest/resultDigest/consecutiveFailures/retryExhausted`。
 黑盒与白盒连续 FAIL 计数独立；PASS 清除此模式连续失败数，运行错误不算语义失败。
 

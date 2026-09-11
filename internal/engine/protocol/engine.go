@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/engine/guard"
 	"io"
 	"io/fs"
 	"strconv"
@@ -101,8 +102,26 @@ func (e *Engine) load() (uint64, *State, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("BLOCKED_BUG: invalid authoritative basis: %w", err)
 		}
-		if state.Regular.Guard.Basis.BudgetBasisDigest != "" && (state.Regular.Guard.Basis.BudgetBasisDigest != basis.BudgetBasisDigest || state.Regular.Guard.UsedAttempts != len(state.RegularExecutions)) {
-			return 0, nil, fmt.Errorf("BLOCKED_BUG: stored guard does not match authoritative TaskKeys and attempts")
+		if state.Regular.Guard.Basis.BudgetBasisDigest != "" {
+			matches := state.Regular.Guard.Basis.BudgetBasisDigest == basis.BudgetBasisDigest
+			if !matches {
+				// Recognize only the exact previous two-attempt policy. All
+				// bindings and actual dispatch counts must still validate.
+				legacy := basis.Basis
+				for i := range legacy.ExternalTasks {
+					task := &legacy.ExternalTasks[i]
+					n := *task.MaxAttempts - 1 - continuationCredit(&state, task.TaskKey)
+					task.MaxAttempts = &n
+				}
+				old, err := guard.Calculate(legacy)
+				matches = err == nil && old.BudgetBasisDigest == state.Regular.Guard.Basis.BudgetBasisDigest
+			}
+			if !matches || state.Regular.Guard.UsedAttempts != len(state.RegularExecutions) {
+				return 0, nil, fmt.Errorf("BLOCKED_BUG: stored guard does not match authoritative TaskKeys and attempts")
+			}
+			if state.Regular.Terminal == "" {
+				e.refreshRegular(&state)
+			}
 		}
 	}
 	return snap.Revision, &state, nil

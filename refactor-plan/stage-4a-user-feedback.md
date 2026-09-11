@@ -137,3 +137,13 @@
 - B5 的资料清单已准备为 `refactor-plan/evidence/stage-4a-host-discovery/b5-sources.json`。尚未消耗新的 B5 续轮；等待引擎规定的单次授权后由 CLI 固定资料并恢复原身份。
 
 - 已生成 B5 单次续轮确认：revision 97，request `request-b5-single-continuation-96`，kind `preparation-retry`，仅当前 B5 TaskKey 一次，confirm/cancel；尚未收到用户决定，不能启动第三次。
+
+## 2026-09-12 用户确认的开发续做计数调整
+
+用户要求：已接纳的 CONTINUE 不消耗失败额度，regular 默认失败 attempt 上限由 2 改为 3。实现保留原始执行、动作编号、原生身份与实际成本；无效 CONTINUE 仍消耗失败额度。恢复依据历史重新计算耗尽投影，不手改 state.json。B5 原请求 request-b5-single-continuation-96 已经 CLI DECIDE cancel 接纳（revision 98），没有增加旧的单次重试额度。真实安装需先构建兼容源二进制；仅重新安装源码会复制旧二进制，不能据此声称已生效。
+
+生效证据：兼容源重新构建并经稳定入口安装后，旧预算通过精确旧规则校验再重新投影；当前 run 在 revision 99 自动签发 B5 attempt-3，operation=resume，identity=01a090f8-3294-7d63-bf6d-061b2a44edcf，regular.ask 为空。没有增加 ExtraAttempts，没有重写原始结果。
+
+派发证据：revision 101，B5 attempt-3 claimed=true、finished=false，仍为 Turing 原身份；动作使用已捕获的宿主公开资料。稳定入口、项目安装包及兼容源构建产物二进制 SHA256 一致。验证中真实安装与注册表隔离测试并发引发环境干扰，按串行重跑受影响检查，不将干扰报告为产品缺陷。
+
+最终验证：全项目测试、所需 race（隔离串行）、phase0whitebox、vet、构建、包验证和 44 项 portable 检查通过。B5 attempt-3 原始 CONTINUE 已采集；revision 103 无 Ask，自动签发同 Turing 的 attempt-4，未追加失败次数。attempt-3 完成 Codex bridge 文件隔离增量；跨宿主受控实跑入口/协议正文仍有缺口，不能将计数调整或本次增量宣称为 B5 完成。
