@@ -167,6 +167,7 @@ type RegularState struct {
 	OwnerProvider           string                                 `json:"ownerProvider,omitempty"`
 	OwnerCostBaseline       *cost.TranscriptSnapshot               `json:"ownerCostBaseline,omitempty"`
 	CatalogGateInstructions map[string]string                      `json:"catalogGateInstructions,omitempty"`
+	ActionInstructions      map[string]string                      `json:"actionInstructions,omitempty"`
 	ReviewerInstructions    string                                 `json:"reviewerInstructions,omitempty"`
 	Verification            *Verification                          `json:"verification,omitempty"`
 	VerificationErrors      []VerificationError                    `json:"verificationErrors,omitempty"`

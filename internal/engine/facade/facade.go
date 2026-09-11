@@ -215,6 +215,10 @@ func Start(options StartOptions) (*Facade, Run, error) {
 			return nil, Run{}, err
 		}
 		if options.PackageRoot != "" {
+			initial.ActionInstructions, err = loadActionInstructions(options.PackageRoot)
+			if err != nil {
+				return nil, Run{}, err
+			}
 			entries, readErr := os.ReadDir(filepath.Join(options.PackageRoot, "gates"))
 			if readErr != nil {
 				return nil, Run{}, readErr

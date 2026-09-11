@@ -292,14 +292,28 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 	step := string(claim.Task.Step)
 	mode := strings.Split(step, "-")[0]
 	workspace := p.Resources[mode]
-	payload := map[string]any{"resultContract": map[string]any{"actionId": claim.ActionID, "attemptId": claim.AttemptID, "provider": claim.Provider, "identity": "NATIVE_IDENTITY", "requirementRevision": claim.RequirementRevision, "candidate": claim.Candidate, "status": "PASS or FAIL", "message": "concrete completion or gap", "manifest": []string{}, "validation": []protocol.BatchValidation{}, "handoff": "decision-only handoff", "design": "QADesign for authoring: {coverageJudgment, manifest, alternatives}", "review": "ReviewResult for review: {binding,scope:reviewScope,sourceDecisions,pointDecisions,caseDecisions,sharedStepDecisions}; each decision {id,status:PASS or FAIL}", "suggestions": []protocol.QASuggestion{}, "reuse": []protocol.TestReuse{}}, "binding": claim, "requirement": run.Regular.Requirement, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
-	instructions := "Return a PreparationResult JSON object. Do not delegate or invoke Git write commands. The adapter owns all VCS writes. Use only this workspace and confirmed scope. Report actual checks, never fabricated evidence."
+	payload := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
+	action := step
+	if strings.HasSuffix(step, "-design") {
+		action = "qa-design"
+	} else if strings.HasSuffix(step, "-review") {
+		action = "qa-review"
+	}
+	path := "actions/" + action + ".md"
+	if action == "development-worker" {
+		path += "#开发工作者"
+	} else if action == "qa-design" {
+		path += "#QA 设计"
+	}
+	instructions, err := actionInstructions(run, "actions/development-worker.md#通用执行约定", path)
+	if err != nil {
+		return "", "", err
+	}
 	if step == "development-worker" {
 		workspace = p.Resources["development"]
 		if previous := run.Executions[claim.ActionID].PreviousAction; previous != "" {
 			payload["previousDevelopmentResult"] = run.Executions[previous].PreparationResult
 		}
-		instructions += " Keep this native identity until the entire Batch DoD passes. Return status CONTINUE for an unfinished normal turn, or FAIL for a failed self-test, with actual remaining work in message. Neither result ends the Batch or authorizes another developer. PASS requires every subtask complete and validated."
 		for _, b := range run.Regular.Plan.Batches {
 			if _, done := p.Commits[b.ID]; !done {
 				payload["batch"] = b
@@ -314,33 +328,21 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 				handoffs[id] = result.Handoff
 			}
 		}
-		instructions += " Implement only the bound Batch, keep its Subtasks in this same session. Return exact changed/deleted/new file paths in manifest, one validation per ordered subtask with subtaskId/procedure/observation/result PASS, and a handoff containing only decisions or debt unavailable from committed files."
 	} else if strings.HasSuffix(step, "-design") {
 		payload["reviewKind"] = strings.ToUpper(mode)
 		payload["previousDesign"] = p.QA[mode].PreviousDesign
 		payload["reviewGaps"] = p.QA[mode].RetainedReview
-		instructions += " Independently determine coverage first. Return design with coverageJudgment, manifest (binding, sources, points, cases, edges, sharedSteps) and alternatives. Cover the ACs assigned to this mode; the selected modes together must cover every AC. Each covered AC must be a point whose pointId is REVIEWKIND:AC-ID (for example BLACKBOX:AC-001), with a case edge from the requirement file source. Prefix case IDs with REVIEWKIND: too so modes never collide. Each case has its own oracle; shared preparation is referenced by ID."
-		instructions += " Each case must declare command {executable,args,expectedExitCode} as exact argv for the public target or test. executable is only a program name or file path, without shell quoting or arguments: use executable \"go\" and args [\"test\",\"./...\"], never executable \"go test\". dependencies contains only case IDs declared earlier in this manifest, or [] when there are none; never put shared-step IDs or environment prerequisites in dependencies. Use sharedSteps for shared-step IDs; environment availability is not a case dependency. The runtime prepares the candidate copy and captures output; no shell interpolation occurs."
-		if mode == "blackbox" {
-			instructions += " Do not inspect any development workspace, implementation changes, whitebox work, or developer explanations. This workspace is the original baseline. Return the manifest in JSON without editing project files."
-		} else {
-			instructions += " Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test-owned test/fixture files. Return all file paths in manifest, and reuse records for every case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production changes and unknown ownership return to development."
-		}
 	} else {
 		payload["reviewScope"] = p.QA[mode].ReviewScope
 		payload["design"] = p.QA[mode].Design
 		payload["retainedReview"] = p.QA[mode].RetainedReview
 		payload["existingTestEvidence"] = p.QA[mode].Reuse
-		instructions += " Independently review every source, point, case and shared step without an unchanged retained approval. Review shared preparation once, and assess each changed case oracle separately. Return review with the exact manifest binding, the supplied reviewScope and individual PASS/FAIL decisions. FULL establishes initial approvals; AFFECTED freshly reviews changed items while the engine retains unchanged approvals. Each oracle remains independently checked. Check that command.executable is a single actual program name or path and command.args contains each argument separately; a shell command string in executable is a blocking case defect. Optional suggestions need stable id/severity P2 or P3/problem/cases/changesAcceptance; do not self-dispose suggestions. Real acceptance gaps are FAIL, not optional suggestions. Whitebox Review owns quality of ALL tests, including developer tests, and reads the complete candidate implementation and every case/test reference."
 	}
 	if workspace == "" {
 		return "", "", fmt.Errorf("missing authorized workspace")
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return "", "", err
-	}
-	return instructions + "\n\n" + string(data), workspace, nil
+	prompt, err := assemblePrompt(instructions, payload)
+	return prompt, workspace, err
 }
 
 // Adapter facts may race with another authorized task's result. Only CAS/lock

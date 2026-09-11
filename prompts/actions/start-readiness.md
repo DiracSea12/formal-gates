@@ -1,7 +1,6 @@
 # 开发前技术检查
 
-本阶段只审查已确认需求文档，不执行面向实现 diff 的审查步骤。共享契约中的任务完整性、
-项目边界、证据与结果规则仍适用。
+本阶段只审查输入中的完整已确认需求与技术方案，不执行面向实现 diff 的审查步骤。
 
 本动作承接技术方案选择与对齐（Part 2）。从已确认需求和所提方案出发，独立评估该方
 案是否合理、这项工作是否已准备好进入开发。方案层面的判据是：是否有更简单的既有归
@@ -26,7 +25,7 @@
 后果，以及为何该后果不能只定为 P2；P0 还须说明为何需求无法成立、核心验收无任何可用
 路径或交付被阻塞。obligation 条目 FAIL 只表示覆盖缺口，不能自动推出 P0/P1。
 
-本技术审还必须完成开发粒度判断，输出结构化 `granularity_review`。先判断本 run 是单一
+本技术审还必须完成开发粒度判断，输出结构化 `granularityReview`。先判断本 run 是单一
 Batch 还是多个 Batch，再给出 `Batch → Subtask` 映射及理由。每个 Batch 必须围绕连贯的
 产品/能力或风险闭环，具有独立、客观可验收的 DoD/测试、稳定的接口/责任/状态边界，
 以及可独立回滚或明确恢复协议；依赖屏障和上下文/交接成本必须可显式管理。只共享未冻结
@@ -35,15 +34,18 @@ Batch 作为 Subtask。编号、commit 数、文件/行数、阶段/层/角色/�
 依据。输出必须包含依赖、接口/状态、风险、DoD/测试、回滚/恢复、交接与上下文成本，
 以及不拆或改拆的理由。该判断是建议，不替用户确认拆分决定。
 
-在 `granularity_review` 中同时留痕一份最小范围边界，不另派独立审查：允许修改的入口或
+在 Batch 的 task、interfaces、stateBoundary 和 definitionOfDone 中留痕最小范围边界：允许修改的入口或
 路径、本批次交付物、明确非目标和验收条件。范围边界只能从已确认需求与方案提取，不得
 借此新增需求。开发快照完成后，应以该边界对照实际 diff；发现越界时按需求、方案或批次
 契约变化处置，不得静默吸收进当前 Batch。
 
-只有当所提方案合理、且工作已准备好进入开发时，才返回 PASS。不要把措辞润色、假设性加
-固或等价设计偏好变成阻塞项。
+每条 finding 给出正常路径、具体后果、独立 severityRationale 和完整 remedy。
+category 中只有 requirement-conflict、responsibility-dependency、acceptance-entry 可定为
+技术 P0/P1；implementation-detail 最高 P2。存在 P0/P1 才返回 FAIL；只有 P2/P3 或无
+finding 时返回 PASS 并保留建议。措辞润色、假设性加固或等价设计偏好不阻塞。
 
-复审规则（P0/P1/P2/P3 分级、仅含 P2/P3 可 PASS、含 P0/P1 记 FAIL；确认 P0/P1→修订后需重
-审、确认 P2/P3→落实修订但无需重审、驳回→作废；用户逐项处置、主代理无破例权）
-由 CLI 强制、唯一持有在 `references/formal-flow.md`「开发之前」；本提示词不重复其全文。
-结果契约由 CLI 以 [Result contract] 块注入，本提示词不重复其语义。
+Batch.dependencies contains only other Batch IDs declared in this plan; use [] when there are no cross-batch dependencies.
+Express the order of Subtasks within a Batch through the ordered subtasks array, not dependencies.
+Do not put Subtask IDs, environment prerequisites or explanatory sentences in dependencies.
+
+遵循当前结果 schema，不添加未经声明的字段。流程推进、用户处置和复审次数由 engine 决定。

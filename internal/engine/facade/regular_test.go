@@ -21,6 +21,11 @@ func newRegularFacade(t *testing.T) *Facade {
 
 func newRegularFacadeDocument(t *testing.T, document string, owner ...string) *Facade {
 	t.Helper()
+	return newRegularFacadePackage(t, document, "../../..", owner...)
+}
+
+func newRegularFacadePackage(t *testing.T, document, packagePath string, owner ...string) *Facade {
+	t.Helper()
 	root := t.TempDir()
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "b1@example.invalid"}, {"config", "user.name", "B1 fixture"}} {
 		cmd := exec.Command("git", args...)
@@ -48,7 +53,7 @@ func newRegularFacadeDocument(t *testing.T, document string, owner ...string) *F
 			t.Fatal(err)
 		}
 	}
-	packageRoot, err := filepath.Abs("../../..")
+	packageRoot, err := filepath.Abs(packagePath)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@
   需求文档**为准（不要以基线产品文档为准，后者仍含旧时序与旧表述）；"实际使用产品"是
   执行阶段的描述：快照后对主工作区已构建产品执行。
 - **白盒**：开发后由独立代理读实现设计面向实现结构的测试（单元、系统、集成等职责式定
-  义，不限定具体类型），在开发后的主工作区进行。结构测试充分性依赖实现，白盒设计阶段读
+  义，不限定具体类型），在指定的白盒隔离工作区进行。结构测试充分性依赖实现，白盒设计阶段读
   取实现；开发前无实现可读，白盒设计只在开发后进行。
 
 本次新增或修改的产品入口在开发前按已确认接口契约设计步骤，不要求基线帮助已包含
@@ -43,19 +43,19 @@ fixture、输入、已有前置状态，以及模拟审查结果、授权、生�
 已有测试的输入、真实断言与覆盖对应。有效测试显式绑定并独立运行；仅缺口或错误才新增、
 修正。普通逻辑优先单测，跨模块用集成测试，公开路径由黑盒承担；交叉验证须有不同验证
 目标。不能仅凭测试名、覆盖率或开发者声明放行。没有测试变动时不增加文件或推进快照；
-有变动则提交并纳入最终含测试快照。
+有变动则由 adapter 提交并纳入最终含测试快照。
 
 黑盒仍必须通过文档化产品入口实际使用产物，不能以既有测试套件为主体或主要证据；
 独立的短驱动脚本可调用公共入口、采集真实输出并断言。
 
-每个用例的返回语义字段（mode、描述、步骤、预期判据；白盒用例另写实现它的测试引
-用 `test` = `<文件路径>::<函数名>`，mode 只能是 `blackbox` 或 `whitebox`）由 CLI 以
-[Result contract] 块注入，本提示词不重复其语义。不设逐模式质量下限，用例集充分性由
-QA 审查的 set-level 覆盖判定承担。拆分场景下，只设计本子任务范围内的用例。
+设计结果使用当前 schema 的 design（coverageJudgment、manifest、alternatives）；manifest 中
+包含 binding、sources、points、cases、edges、sharedSteps。所选模式合起来须覆盖全部 AC，
+每个已覆盖 AC 的 pointId 为 REVIEWKIND:AC-ID，例如 BLACKBOX:AC-001；case ID 同样带
+REVIEWKIND 前缀，并以 edge 连接需求来源和验收点。每个 case 有独立 oracle。
 
 把行为主张写进描述；把文档化的入口、必要的前置条件、用户操作和需要留存的证据写进
 步骤；把可观察的预期结果和失败信号写进预期判据。代码检视、模拟输出或开发者自测主
-张都不能替代黑盒的实际使用执行。共同准备和操作用 `--shared-step <id> --shared-procedure <说明>` 保存一份，以 `--use-step <id>` 引用；逐例保留特殊前提、操作差异、证据与 oracle。
+张都不能替代黑盒的实际使用执行。共同准备和操作在 manifest.sharedSteps 保存一份，case.sharedSteps 按 ID 引用；逐例保留特殊前提、操作差异、证据与 oracle。
 
 **每一条黑盒用例都必须写出真实、完整、可照做的执行步骤。** 步骤必须给出实际使用
 的公开入口、命令或调用、必要参数和输入、环境与 fixture 前置、操作顺序，以及需要留
@@ -76,9 +76,8 @@ QA 审查的 set-level 覆盖判定承担。拆分场景下，只设计本子任
 不可变文件或不受支持平台的用例；这里的改写内部状态指制造不受支持的状态破坏，不包括
 上述隔离测试前置的构造。
 
-QA Review 可选建议按稳定 suggestion ID 用 `qa-suggestion --decision ACCEPT|DEFER|DECLINE
---reason <理由>` 处置，不强制修改用例。采纳若改变共同路径、可执行性或验收含义，须列出
-全部受影响 case，正常修订并重审；无变化的审批继承。真实验收缺口和错误 oracle 仍须修正。
+QA Review 可选建议由 engine 按 suggestion ID 接受用户处置，不在本动作调用旧推进命令。
+采纳改变验收含义时由 engine 修订并重审受影响部分；普通代码返修不解冻既有 case-set。
 
 共同说明只设计、审查一份，但每条未批准用例仍须逐条判断；共同说明修改后所有引用者
 重新检查。对 source、验收点、case 的双向映射完整对账，不抽样或按组背书。
@@ -89,3 +88,18 @@ QA Review 可选建议按稳定 suggestion ID 用 `qa-suggestion --decision ACCE
 `FROZEN` case-set 不接受普通 QA Design。只有需求含义、对外行为、成功/失败判据或原用例的
 稳定可执行性变化经编排层合法 THAW 后，才设计受影响用例；普通代码返修和一次性环境不可用
 都不属于 THAW 理由。
+
+## 冻结命令与模式执行
+
+Each case must declare command {executable,args,expectedExitCode} as exact argv for the public target or test. executable is only a program name or file path, without shell quoting or arguments: use executable "go" and args ["test","./..."], never executable "go test". dependencies contains only case IDs declared earlier in this manifest, or [] when there are none; never put shared-step IDs or environment prerequisites in dependencies. Use sharedSteps for shared-step IDs; environment availability is not a case dependency. The runtime prepares the candidate copy and captures output; no shell interpolation occurs.
+
+**blackbox-design：** Do not inspect any development workspace, implementation changes, whitebox work, or developer explanations. This workspace is the original baseline. Return the manifest in JSON without editing project files.
+
+**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test-owned test/fixture files. Return all file paths in manifest, and reuse records for every case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production changes and unknown ownership return to development.
+
+# 白盒覆盖判断
+
+Independently enumerate required behavior and exact oracles from the supplied
+requirement and production source. Existing tests are intentionally unavailable
+until this judgment is recorded. Do not request tools, inspect test files or bind
+existing tests. Return the coverage JSON only.

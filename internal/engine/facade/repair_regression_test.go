@@ -87,7 +87,14 @@ func TestClosedToolConfigDisablesEveryResolvedServerAndPlugin(t *testing.T) {
 }
 
 func TestProductPromptIncludesIndependentObligationChecks(t *testing.T) {
-	prompt := reviewPrompt(Run{Regular: &protocol.RegularState{Requirement: protocol.RequirementDocument{Text: "mandatory body"}}}, protocol.ExecutionClaim{Task: runtime.TaskKey{Step: "product-review"}})
+	instructions, err := loadActionInstructions("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := reviewPrompt(Run{Regular: &protocol.RegularState{ActionInstructions: instructions, Requirement: protocol.RequirementDocument{Text: "mandatory body"}}}, protocol.ExecutionClaim{Task: runtime.TaskKey{Node: "review", Step: "product-review"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, text := range []string{"outside REQ sections", "same REQ", "minor formatting", "mandatory body"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatal(text)

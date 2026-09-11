@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/engine/runtime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -308,8 +309,11 @@ func TestNativeReviewContractUsesClaimAndBatchIDs(t *testing.T) {
 				t.Fatalf("%s %s permits an invented binding: %+v", step, field, spec)
 			}
 		}
-		prompt := reviewPrompt(r, claim)
-		for _, binding := range []string{"action=" + step, "requirementRevision=" + claim.RequirementRevision, "Set identity to NATIVE_IDENTITY"} {
+		prompt, err := reviewPrompt(r, claim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, binding := range []string{`"task": "` + claim.Task.String() + `"`, `"requirementRevision": "` + claim.RequirementRevision + `"`, "Set identity to NATIVE_IDENTITY"} {
 			if !strings.Contains(prompt, binding) {
 				t.Fatalf("prompt omits binding %q", binding)
 			}
@@ -331,6 +335,233 @@ func TestNativeReviewContractUsesClaimAndBatchIDs(t *testing.T) {
 					t.Fatalf("dependency schema omits %q: %s", meaning, desc)
 				}
 			}
+		}
+	}
+}
+
+func copyPromptPackage(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{"prompts", "gates"} {
+		err := filepath.WalkDir(filepath.Join("../../..", dir), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel("../../..", path)
+			if err != nil {
+				return err
+			}
+			target := filepath.Join(root, rel)
+			if entry.IsDir() {
+				return os.MkdirAll(target, 0700)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, data, 0600)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func TestMarkdownInstructionsAreBoundAtStartAndRetainedOnReopen(t *testing.T) {
+	pkg := copyPromptPackage(t)
+	path := filepath.Join(pkg, "prompts", "actions", "product-review.md")
+	firstText := "# Product review\nFirst package instruction: check the public result.\n"
+	if err := os.WriteFile(path, []byte(firstText), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f := newRegularFacadePackage(t, b1Document, pkg)
+	secondText := "# Product review\nSecond package instruction: changed for new runs.\n"
+	if err := os.WriteFile(path, []byte(secondText), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second := newRegularFacadePackage(t, b1Document, pkg)
+	// Reopen after the source file is gone: recovery must depend only on bound state.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	claim := protocol.ExecutionClaim{ActionID: "action-from-engine", AttemptID: "attempt-from-engine", Provider: "codex", RequirementRevision: "revision-from-engine", Candidate: "candidate-from-engine", Task: runtime.TaskKey{Node: "review", Step: "product-review"}}
+	for _, tc := range []struct {
+		f    *Facade
+		want string
+		omit string
+	}{{f, firstText, secondText}, {second, secondText, firstText}} {
+		reopened, err := Open(tc.f.root, tc.f.runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := reopened.Show()
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt, err := reviewPrompt(run, claim)
+		if err != nil || !strings.Contains(prompt, tc.want) || strings.Contains(prompt, tc.omit) {
+			t.Fatalf("bound Markdown not retained: %v\n%s", err, prompt)
+		}
+		start := strings.Index(prompt, "\n\n{\n")
+		if start < 0 {
+			t.Fatal("missing structured input")
+		}
+		var input struct {
+			Binding     protocol.ExecutionClaim      `json:"binding"`
+			Requirement protocol.RequirementDocument `json:"requirement"`
+		}
+		if err := json.Unmarshal([]byte(prompt[start+2:]), &input); err != nil {
+			t.Fatal(err)
+		}
+		if input.Binding != claim || input.Requirement.Text != b1Document {
+			t.Fatal("Markdown assembly changed the dynamic binding or complete requirement")
+		}
+	}
+}
+
+func TestMissingOrEmptyMarkdownDoesNotFallBackToCode(t *testing.T) {
+	pkg := copyPromptPackage(t)
+	path := filepath.Join(pkg, "prompts", "actions", "development-worker.md")
+	for _, data := range [][]byte{[]byte(" \n"), {0xff}} {
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadActionInstructions(pkg); err == nil || !strings.Contains(err.Error(), "development-worker.md") {
+			t.Fatalf("invalid Markdown was accepted: %v", err)
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadActionInstructions(pkg); err == nil || !strings.Contains(err.Error(), "development-worker.md") {
+		t.Fatalf("missing Markdown was accepted: %v", err)
+	}
+	if _, err := reviewPrompt(Run{Regular: &protocol.RegularState{}}, protocol.ExecutionClaim{Task: runtime.TaskKey{Node: "review", Step: "product-review"}}); err == nil || !strings.Contains(err.Error(), "PROMPT_CONFIG_MISSING") {
+		t.Fatalf("unbound prompt silently fell back: %v", err)
+	}
+}
+
+func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
+	f := frozenVerificationFixture(t, false)
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := facadeExecution(t, f, "blackbox-execution").Claim
+	p := run.Regular.Preparation
+	p.QA["whitebox"] = p.QA["blackbox"]
+	p.Resources["whitebox"] = p.Resources["candidate"]
+	repair := protocol.RepairPlan{ID: "repair-fixture", WaveID: run.Regular.Verification.Current}
+	run.Regular.Verification.Repairs = []protocol.RepairPlan{repair}
+	p.Resources[repair.ID] = p.Resources["candidate"]
+	for path := range run.Regular.ActionInstructions {
+		run.Regular.ActionInstructions[path] = "Markdown source: " + path
+	}
+	const common = "# 通用执行约定\nCommon instructions.\n"
+	run.Regular.ActionInstructions["actions/development-worker.md"] = common + "\n# 开发工作者\nDevelopment only.\n\n# 修复工作者\nRepair only.\n\n# 工具说明\nTool only.\n"
+	run.Regular.ActionInstructions["actions/qa-design.md"] = "# QA 设计\nDesign only.\n\n# 白盒覆盖判断\nCoverage only.\n"
+	for _, tc := range []struct{ step, path string }{
+		{"product-review", "actions/product-review.md"}, {"start-readiness", "actions/start-readiness.md"},
+		{"development-worker", "actions/development-worker.md#开发工作者"},
+		{"blackbox-design", "actions/qa-design.md#QA 设计"}, {"whitebox-design", "actions/qa-design.md#QA 设计"},
+		{"blackbox-review", "actions/qa-review.md"}, {"whitebox-review", "actions/qa-review.md"},
+		{"blackbox-execution", "actions/qa-execution.md"}, {"whitebox-execution", "actions/qa-execution.md"},
+		{"repair-worker", "actions/development-worker.md#修复工作者"},
+		{"complexity-gate", ""}, {"implementation-quality-gate", ""},
+	} {
+		t.Run(tc.step, func(t *testing.T) {
+			current := claim
+			current.Task.Step = authoring.StepID(tc.step)
+			var prompt string
+			var err error
+			switch {
+			case preparationAction(tc.step):
+				prompt, _, err = preparationPrompt(run, current)
+			case verificationAction(tc.step):
+				prompt, _, err = verificationPrompt(run, current)
+			default:
+				prompt, err = reviewPrompt(run, current)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := common + "\n\n"
+			if tc.path != "" {
+				role := "Markdown source: " + tc.path
+				switch tc.step {
+				case "development-worker":
+					role = "# 开发工作者\nDevelopment only.\n"
+				case "repair-worker":
+					role = "# 修复工作者\nRepair only.\n"
+				case "blackbox-design", "whitebox-design":
+					role = "# QA 设计\nDesign only.\n"
+				}
+				want += role + "\n\n"
+			}
+			if !strings.HasPrefix(prompt, want) {
+				t.Fatalf("role did not consume its Markdown: %s", prompt)
+			}
+			var input map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(prompt, want)), &input); err != nil {
+				t.Fatal(err)
+			}
+			if _, has := input["sourceResults"]; has != (tc.step == "repair-worker") {
+				t.Fatal("repair evidence crossed an independent input boundary")
+			}
+			if strings.HasSuffix(tc.step, "-gate") {
+				var shared, gate string
+				if err := json.Unmarshal(input["reviewerInstructions"], &shared); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(input["gateInstructions"], &gate); err != nil {
+					t.Fatal(err)
+				}
+				if shared == "" || shared != run.Regular.ReviewerInstructions || gate == "" || gate != run.Regular.CatalogGateInstructions[tc.step] {
+					t.Fatal("gate did not consume its existing base and gate document")
+				}
+				if input["fullImplementationDiff"] == nil || input["reviewerInstructions"] == nil || input["gateInstructions"] == nil || input["design"] != nil || input["frozenQA"] != nil {
+					t.Fatal("gate lost its implementation inputs or received QA material")
+				}
+			}
+		})
+	}
+}
+
+func TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate(t *testing.T) {
+	instructions, err := loadActionInstructions("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{Regular: &protocol.RegularState{ActionInstructions: instructions}}
+	for _, tc := range []struct {
+		selector string
+		want     string
+		omit     []string
+	}{
+		{"actions/development-worker.md#通用执行约定", "当前 action", []string{"完整 Batch", "canonical problems", "Call a bounded operation"}},
+		{"actions/development-worker.md#开发工作者", "完整 Batch", []string{"canonical problems", "Call a bounded operation"}},
+		{"actions/development-worker.md#修复工作者", "canonical problems", []string{"完整 Batch", "Call a bounded operation"}},
+		{"actions/development-worker.md#工具说明", "Call a bounded operation", []string{"完整 Batch", "canonical problems"}},
+		{"actions/qa-design.md#QA 设计", "先独立确定", []string{"Do not request tools"}},
+		{"actions/qa-design.md#白盒覆盖判断", "Do not request tools", []string{"caseDrafts", "冻结命令与模式执行"}},
+	} {
+		t.Run(tc.selector, func(t *testing.T) {
+			got, err := actionInstructions(run, tc.selector)
+			if err != nil || !strings.Contains(got, tc.want) {
+				t.Fatalf("missing selected instruction: %v\n%s", err, got)
+			}
+			for _, omit := range tc.omit {
+				if strings.Contains(got, omit) {
+					t.Fatalf("unselected instructions leaked: %s", omit)
+				}
+			}
+		})
+	}
+	for _, content := range []string{"# 开发工作者\nOnly development.\n", "# 修复工作者\n\n# 工具说明\nTool.\n"} {
+		run.Regular.ActionInstructions["actions/development-worker.md"] = content
+		if _, err := actionInstructions(run, "actions/development-worker.md#修复工作者"); err == nil || !strings.Contains(err.Error(), "PROMPT_CONFIG_MISSING") {
+			t.Fatalf("missing or empty section silently fell back to entire worker document: %v", err)
 		}
 	}
 }

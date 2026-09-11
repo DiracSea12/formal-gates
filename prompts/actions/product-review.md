@@ -1,31 +1,22 @@
 # 产品审
 
-本阶段只审查已确认需求文档，不执行面向实现 diff 的审查步骤。共享契约中的任务完整性、
-项目边界、证据与结果规则仍适用。
+独立阅读输入中的完整需求与方案，只审产品问题、需求合理性、场景、默认值、失败路径、
+范围与验收标准；技术实现细节由技术审负责。本动作不开发、不执行实现 diff 审查。
 
-本动作承接需求细节澄清（Part 1）。从已确认的需求文档出发，从产品/策划视角独立审
-查需求本身是否合理、需求细节是否合理、是否针对真正的用户问题。只评产品与策划层
-面，不评技术实现细节——技术可行性、更简单的既有归属者、开发就绪程度属于 Start
-Readiness（Part 2），不在本动作范围。
+Check every independent mandatory obligation in the complete document, including
+text outside REQ sections. Map each obligation to its owning REQ and a concrete AC
+of that same REQ; generic AC wording or an AC in another REQ does not cover it.
+Report every missing, partial, contradictory or untestable obligation separately
+with its location and actual consequence. A core behavior without an AC is a
+coverage gap; a minor formatting obligation still requires an individually graded
+advisory. Do not infer coverage from headings, counts, a green implementation or an
+empty findings list. Explain the completed obligation-to-AC check in message, and
+mark complete only after checking the entire document.
 
-把需求当成待拍板的产品决策来审：用户问题是否真实且值得解决、需求是否构成一个连贯
-有界可交付的单元、细节与默认值是否合理、范围边界与非目标是否清楚、异常与失败路径
-是否被覆盖、验收标准是否可观察、约束与取舍是否成立。所有相关发现项一并报告。
+只报告有据的范围内问题，不把等价实现偏好、假设性加固或措辞变体变成阻塞。每条 finding
+给出正常使用路径、具体后果、独立 severityRationale 和完整 remedy；条目 FAIL 本身不
+等于 P1。P0 表示需求无法成立、核心验收无可用路径或交付被阻塞；P1 表示核心行为被
+实质违反且无合理规避；P2 是影响有限且有规避的问题；P3 是措辞、格式或纯优化建议。
 
-复审规则（P0/P1/P2/P3 分级、仅含 P2/P3 可 PASS、含 P0/P1 记 FAIL；确认 P0/P1→修订后需重
-审、确认 P2/P3→落实修订但无需重审、驳回→作废；用户逐项处置、主代理无破例权）
-由 CLI 强制、唯一持有在 `references/formal-flow.md`「开发之前」；本提示词不重复其全文。
-结果契约由 CLI 以 [Result contract] 块注入，本提示词不重复其语义。
-
-用户已拍板过的发现项与决定不再重提（已拍板清单由 CLI 注入本动作输入）；例外：需
-求修订（meaning changed）改变了原决定的前提时，可重新提出。
-
-每条 P0/P1 必须独立说明为什么该具体问题达到该等级，并绑定需求、正常产品路径、延期
-影响、可定位证据及逐 finding 的范围/严重度/因果/复现核验；item 的 FAIL 本身不等于
-P1，也不能作为定级理由。
-
-本动作对需求是否构成一个连贯有界可交付的单元（是否值得拆分）的评估，会转入 Part 2
-之后的拆分决定。拆分建议对所有正式 run 必填呈现并留痕，含：拆分理由、如何拆、哪些
-子任务可并行、以及**改拆后果说明**（若改拆，黑盒 QA 设计按新拆分拓扑展开、已覆盖
-用例复用）；仅高置信要拆时需用户确认拆分方案。分片场景下整体级产品审/技术审足够，
-切片继承整体审查结果、不单独重跑。
+只有存在 P0/P1 才返回 FAIL；只有 P2/P3 或无 finding 时返回 PASS，保留全部建议。
+流程推进、用户处置和复审次数由 engine 决定，不在本动作中重新请求授权或安排下一步。

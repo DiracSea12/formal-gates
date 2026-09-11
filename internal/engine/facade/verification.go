@@ -56,7 +56,16 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 		}
 	}
 	payload := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "baseSnapshot": run.Regular.BaseSnapshot, "candidate": claim.Candidate}
-	instructions := "Return direct JSON matching the supplied result schema. Set identity to NATIVE_IDENTITY. Never fabricate checks, delegate, mutate Git history or inspect another worker's evidence."
+	paths := []string{"actions/development-worker.md#通用执行约定"}
+	if claim.Task.Step == "repair-worker" {
+		paths = append(paths, "actions/development-worker.md#修复工作者")
+	} else if strings.HasSuffix(string(claim.Task.Step), "-execution") {
+		paths = append(paths, "actions/qa-execution.md")
+	}
+	instructions, err := actionInstructions(run, paths...)
+	if err != nil {
+		return "", "", err
+	}
 	if claim.Task.Step == "repair-worker" {
 		repair := verificationRepair(run)
 		if repair == nil {
@@ -67,7 +76,6 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 		payload["problems"] = run.Regular.Verification.Problems
 		payload["sourceResults"] = w.Results
 		payload["frozenQA"] = run.Regular.Preparation.QA
-		instructions += " Implement only every canonical problem in the unique repairPlan. Leave frozen case artifacts unchanged; a change of QA acceptance needs explicit QA revision. Return all changed/new/deleted paths in manifest, all resolved problem IDs, actual successful build and full project tests (procedure/observation/result PASS), and independently execute every affected case with its actual output. Finish implementation edits before case execution. For each affected case, use formal_gates_operation in order qa.prepare, qa.target, qa.collect; prepare copies this registered repair workspace including uncommitted edits into an independent self-test copy. Report the collected output and workspace. These self-tests do not replace the new candidate QA wave. A failure is status FAIL and a concrete message, never a partial PASS."
 	} else if strings.HasSuffix(string(claim.Task.Step), "-execution") {
 		mode := strings.TrimSuffix(string(claim.Task.Step), "-execution")
 		payload["design"] = run.Regular.Preparation.QA[mode].Design
@@ -77,7 +85,6 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 			}
 		}
 		payload["checkpoint"] = w.Checkpoints[mode]
-		instructions += " Use formal_gates_operation for each target case in order qa.prepare, qa.target, qa.collect. The bridge executes only its approved command. Use the returned workspace and collected output in case evidence. Execute every supplied target.expected case using this exact candidate. Reuse non-acceptance build/preparation once and identify that reuse in each case; install/native calls that ARE the acceptance target must run for each case. Give independent cases clean directories and continue independent cases after a FAIL; only named dependent cases may be BLOCKED. Preserve complete checkpoint entries byte-for-byte when bindings match, run only remaining cases. If an actual tool/environment change invalidates a completed checkpoint case, first return CHECKPOINT with an invalidated item containing caseId/previousTool/previousEnvironment/tool/environment/reason and move the invalidated cases to remaining. Retain unaffected entries. The accepted checkpoint authorizes one new prepare/target/collect sequence for each changed case on resume; unchanged completed stages cannot run again. Never erase a FAIL without this exact changed-input receipt. Each case includes caseId/status PASS|FAIL|BLOCKED/procedure/output/comparison/environment/tool/workspace/dependencies/reusedPreparation. Each FAIL needs a raw finding with requirement equal to its caseId and concrete remedy. The final cases must cover exactly expected, remaining must be empty. If interrupted, return CHECKPOINT with all completed PASS/FAIL, remaining IDs and the actual interruption reason; no incomplete item is PASS."
 	} else {
 		// Gates see the original baseline-to-candidate implementation diff, excluding
 		// independently owned tests and case artifacts. No QA body/result is handed
@@ -99,7 +106,6 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 		payload["reviewerInstructions"] = run.Regular.ReviewerInstructions
 		payload["gateInstructions"] = run.Regular.CatalogGateInstructions[string(claim.Task.Step)]
 		payload["reviewScope"] = "FULL"
-		instructions += " Independently review the complete original-baseline-to-candidate implementation diff and complete requirement. Every finding needs its own ID, severity rationale, normal-use reproduction, consequence and remedy. P0/P1 makes FAIL; P2 requires repair with PASS; P3 is advisory. Do not read .gates/results or any QA workspace/results. Return empty cases and remaining arrays."
 	}
 	if workspace == "" {
 		return "", "", fmt.Errorf("missing registered verification workspace")
@@ -111,8 +117,8 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 	if head != claim.Candidate {
 		return "", "", fmt.Errorf("EXTERNAL_CHANGED: authorized verification workspace identity differs")
 	}
-	bytes, err := json.MarshalIndent(payload, "", "  ")
-	return instructions + "\n\n" + string(bytes), workspace, err
+	prompt, err := assemblePrompt(instructions, payload)
+	return prompt, workspace, err
 }
 func verificationSchema(claim protocol.ExecutionClaim) map[string]any {
 	str := map[string]any{"type": "string"}

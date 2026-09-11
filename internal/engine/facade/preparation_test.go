@@ -577,8 +577,16 @@ func TestHello(t *testing.T){var out, stderr bytes.Buffer;cmd:=exec.Command("go"
 }
 
 func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
+	instructions, err := loadActionInstructions("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	description, err := actionInstructions(Run{Regular: &protocol.RegularState{ActionInstructions: instructions}}, "actions/development-worker.md#工具说明")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, step := range []string{"product-review", "start-readiness", "development-worker", "blackbox-design", "blackbox-review", "whitebox-design", "whitebox-review", "complexity-gate", "implementation-quality-gate", "blackbox-execution", "whitebox-execution", "repair-worker"} {
-		tool := nativeOperationTool(step)
+		tool := nativeOperationTool(step, description)
 		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		kinds := props["kind"].(map[string]any)["enum"].([]string)
 		qa := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker"

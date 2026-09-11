@@ -18,16 +18,12 @@ import (
 // Advertise only operations this role can actually request. Authoring tests run
 // in the existing writable authoring workspace before any frozen QA wave exists;
 // a design trial must never be presented as formal QA execution.
-func nativeOperationTool(step string) map[string]any {
+func nativeOperationTool(step, description string) map[string]any {
 	kinds := []string{"model.run"}
 	caseID := map[string]any{"type": "string", "enum": []string{""}}
-	description := "Call a bounded operation of this attached workflow task. model.run is a text-only helper with empty caseId and nonempty prompt. It receives only your prompt, without inherited task, requirement or schema; include every required input. Perform your assigned workflow review yourself. The bridge inserts the immutable action binding and enforces admission before calling. Do not use shell for workflow model calls."
 	if step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker" {
 		kinds = append(kinds, "qa.prepare", "qa.target", "qa.collect")
 		delete(caseID, "enum")
-		description += " For each case in this action's approved scope call qa.prepare, qa.target, then qa.collect with its caseId and empty prompt. Do not use shell for these frozen QA targets."
-	} else if step == "whitebox-design" {
-		description += " For whitebox authoring, use the available native shell tool in your assigned authoring workspace to discover, write and trial-run tests. Those preparation observations support reuse records; they are not frozen-case QA results. QA operation kinds are unavailable in this phase."
 	}
 	schema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "caseId", "prompt"}, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": kinds}, "caseId": caseID, "prompt": map[string]any{"type": "string"}}}
 	return map[string]any{"type": "function", "name": "formal_gates_operation", "description": description, "inputSchema": schema}
@@ -38,6 +34,10 @@ func nativeOperationTool(step string) map[string]any {
 // The same client owns fresh and resumed turns; the provider never chooses a
 // workflow step or rewrites the action/attempt/candidate binding.
 func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, coverageOnly bool) (string, error) {
+	toolDescription, err := actionInstructions(run, "actions/development-worker.md#工具说明")
+	if err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	args := []string{"app-server", "--stdio", "--disable", "multi_agent", "--disable", "multi_agent_v2", "--disable", "enable_mcp_apps", "-c", `web_search="disabled"`}
@@ -184,7 +184,7 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 		method = "thread/resume"
 		params["threadId"] = claim.Identity
 	} else {
-		params["dynamicTools"] = []any{nativeOperationTool(string(claim.Task.Step))}
+		params["dynamicTools"] = []any{nativeOperationTool(string(claim.Task.Step), toolDescription)}
 	}
 	raw, err := request(2, method, params)
 	if err != nil {
@@ -334,7 +334,11 @@ func (f *Facade) runNativeBridge(run Run, claim protocol.ExecutionClaim, resume 
 		input, _ := json.Marshal(map[string]any{"requirement": run.Regular.Requirement, "production": production})
 		str := map[string]any{"type": "string"}
 		coverageSchema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"coverageJudgment", "behaviorOracles"}, "properties": map[string]any{"coverageJudgment": str, "behaviorOracles": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"behavior", "oracle"}, "properties": map[string]any{"behavior": str, "oracle": str}}}}}
-		identity, err := f.runNativeBridgeTurn(run, claim, resume, job, job, "Independently enumerate required behavior and exact oracles from the supplied requirement and production source. Existing tests are intentionally unavailable until this judgment is recorded. Do not request tools, inspect test files or bind existing tests. Return the coverage JSON only.\n"+string(input), coverageSchema, true)
+		coverageInstructions, err := actionInstructions(run, "actions/qa-design.md#白盒覆盖判断")
+		if err != nil {
+			return "", err
+		}
+		identity, err := f.runNativeBridgeTurn(run, claim, resume, job, job, coverageInstructions+"\n"+string(input), coverageSchema, true)
 		if err != nil {
 			return identity, err
 		}
