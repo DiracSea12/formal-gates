@@ -76,3 +76,17 @@ For whitebox authoring, use the available native shell tool in your assigned aut
 workspace to discover, write and trial-run tests. Those preparation observations
 support reuse records; they are not frozen-case QA results. QA operation kinds are
 unavailable in this phase.
+
+When advertised, qa.run with empty caseId and prompt consumes this action's
+approved remaining QA operations continuously. It retains individual receipts
+and returns pending judgment/blocked relationships; it never decides semantic
+PASS. Single-case qa.run uses that approved caseId. Resume reconciles existing
+operation IDs without repeating underlying targets. Only submit newly judged
+case rows and the exact remaining set through the existing result contract.
+
+When qa.checkpoint is advertised, use empty caseId and a prompt containing one
+JSON delta object with cases, remaining, message, and optional findings and
+invalidated. It submits that judgment through the existing checkpoint writer
+without ending the native worker. The bridge supplies all action/identity binding.
+Repair workers use it between dependent self-tests, then return the normal final
+RepairResult after all required work and checks pass.

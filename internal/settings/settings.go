@@ -13,6 +13,7 @@ import (
 )
 
 type Values struct {
+	QACapacity      int    `json:"qaCapacity"`
 	TokenCap        *int64 `json:"tokenCap,omitempty"`
 	Capacity        int    `json:"capacity"`
 	CodexExecutable string `json:"codexExecutable"`
@@ -25,6 +26,7 @@ type Effective struct {
 	Files   []string          `json:"files"`
 }
 type input struct {
+	QACapacity      *int    `json:"qaCapacity,omitempty"`
 	TokenCap        *int64  `json:"tokenCap,omitempty"`
 	Capacity        *int    `json:"capacity,omitempty"`
 	CodexExecutable *string `json:"codexExecutable,omitempty"`
@@ -35,8 +37,8 @@ type input struct {
 // Load overlays project values over installation/user values field by field.
 // Unknown fields and null are errors: a typo must never silently remove a cap.
 func Load(root, home string) (Effective, error) {
-	e := Effective{Values: Values{Capacity: 4, CodexExecutable: "codex"}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
-	for _, field := range []string{"tokenCap", "capacity", "codexExecutable", "model", "reasoningEffort"} {
+	e := Effective{Values: Values{QACapacity: 4, Capacity: 4, CodexExecutable: "codex"}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
+	for _, field := range []string{"qaCapacity", "tokenCap", "capacity", "codexExecutable", "model", "reasoningEffort"} {
 		e.Sources[field] = "default"
 	}
 	for _, path := range e.Files {
@@ -74,6 +76,13 @@ func Load(root, home string) (Effective, error) {
 			}
 			e.Values.TokenCap = in.TokenCap
 		}
+		if in.QACapacity != nil {
+			if *in.QACapacity < 1 || *in.QACapacity > 64 {
+				return e, fmt.Errorf("%s: qaCapacity must be 1..64", path)
+			}
+			e.Values.QACapacity = *in.QACapacity
+		}
+
 		if in.Capacity != nil {
 			if *in.Capacity < 1 || *in.Capacity > 64 {
 				return e, fmt.Errorf("%s: capacity: use an integer from 1 to 64", path)

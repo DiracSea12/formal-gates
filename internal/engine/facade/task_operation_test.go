@@ -467,6 +467,10 @@ func TestTaskOperationChangedCheckpointReopensOnlyNamedCase(t *testing.T) {
 	checkpoint.Remaining = []string{"BLACKBOX:C1"}
 	checkpoint.Invalidated = []protocol.CheckpointInvalidation{{CaseID: "BLACKBOX:C1", PreviousTool: "go-old", PreviousEnvironment: "host-A", Tool: "go-new", Environment: "host-A", Reason: "Actual tool version changed between checkpoints"}}
 	preparationSubmit(t, f, protocol.RegularEvent{Operation: "VERIFICATION_RESULT", VerificationResult: &checkpoint})
+	// A later incremental checkpoint does not repeat the invalidation payload.
+	// Its accepted authorization must remain available until preparation uses it.
+	checkpoint.Invalidated = nil
+	preparationSubmit(t, f, protocol.RegularEvent{Operation: "VERIFICATION_RESULT", VerificationResult: &checkpoint})
 	firstWorkspace := collected.Workspace
 	runCase("changed-")
 	if collected.Workspace == firstWorkspace {
@@ -476,7 +480,7 @@ func TestTaskOperationChangedCheckpointReopensOnlyNamedCase(t *testing.T) {
 		t.Fatal("same invalidation authorized a second rerun")
 	}
 	r, _ = f.Show()
-	if len(r.Executions[action].Operations) != 6 || len(verificationWave(r).CheckpointHistory["blackbox"]) != 1 {
+	if len(r.Executions[action].Operations) != 6 || len(verificationWave(r).CheckpointHistory["blackbox"]) != 2 {
 		t.Fatal("checkpoint/raw operation history was not retained")
 	}
 }

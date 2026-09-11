@@ -128,7 +128,21 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 	switch q.Kind {
 	case "qa.prepare":
 		result.Workspace = filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(op.ID, "hact:task:"))
-		if q.Binding.Task.Step == "repair-worker" {
+		if err := f.prepareShared(ctx, run, op, &result); err != nil {
+			return fail(err)
+		}
+
+		if op.WorkspaceMode == "isolated" {
+			if _, err := os.Stat(result.Workspace); err == nil {
+				return fail(fmt.Errorf("UNKNOWN: case workspace already exists"))
+			} else if !os.IsNotExist(err) {
+				return fail(err)
+			}
+			if err := os.MkdirAll(result.Workspace, 0700); err != nil {
+				return fail(err)
+			}
+			result.Output = "Prepared isolated case work for candidate " + q.Binding.Candidate
+		} else if q.Binding.Task.Step == "repair-worker" {
 			source := run.Regular.Preparation.Resources[q.Binding.PrerequisiteDigest]
 			if source == "" {
 				return fail(fmt.Errorf("PREREQUISITE_FAILED: missing registered repair workspace"))
@@ -153,19 +167,25 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 	case "qa.target":
 		if prior := latestTaskOperation(run.Executions[q.Binding.ActionID], "qa.prepare", q.CaseID); prior != nil && prior.Receipt != nil {
 			result.Workspace = prior.Receipt.Workspace
+			result.InputDigest = prior.Receipt.InputDigest
+			result.SharedWorkspace = prior.Receipt.SharedWorkspace
+			result.PreparationReused = prior.Receipt.PreparationReused
 		}
 		if result.Workspace == "" {
 			return fail(fmt.Errorf("PREREQUISITE_FAILED: missing prepared workspace"))
 		}
-		head, err := gitprep.Head(result.Workspace)
-		if err != nil {
-			return fail(err)
-		}
-		if head != q.Binding.Candidate {
-			return fail(fmt.Errorf("EXTERNAL_CHANGED: prepared QA candidate differs"))
+		if op.WorkspaceMode != "isolated" {
+			head, err := gitprep.Head(result.Workspace)
+			if err != nil {
+				return fail(err)
+			}
+			if head != q.Binding.Candidate {
+				return fail(fmt.Errorf("EXTERNAL_CHANGED: prepared QA candidate differs"))
+			}
 		}
 		cmd := exec.CommandContext(ctx, op.Command.Executable, op.Command.Args...)
 		cmd.Dir = result.Workspace
+		cmd.Env = append(os.Environ(), "FORMAL_GATES_QA_SHARED="+result.SharedWorkspace)
 		code, err := runOperationProcess(cmd, job, &result)
 		result.ExitCode = code
 		if err != nil {
@@ -255,12 +275,14 @@ func (f *Facade) observeTaskOperation(op protocol.TaskOperation, job string) (pr
 	}
 	if q.Kind == "qa.prepare" {
 		r.Workspace = filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(op.ID, "hact:task:"))
-		head, err := gitprep.Head(r.Workspace)
-		if err != nil {
-			return unknown(err)
-		}
-		if head != q.Binding.Candidate {
-			return unknown(fmt.Errorf("candidate workspace differs"))
+		if op.WorkspaceMode != "isolated" {
+			head, err := gitprep.Head(r.Workspace)
+			if err != nil {
+				return unknown(err)
+			}
+			if head != q.Binding.Candidate {
+				return unknown(fmt.Errorf("candidate workspace differs"))
+			}
 		}
 		data, err := os.ReadFile(filepath.Join(job, "prepared.json"))
 		if err != nil {

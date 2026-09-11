@@ -590,7 +590,7 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		kinds := props["kind"].(map[string]any)["enum"].([]string)
 		qa := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker"
-		if (!qa && len(kinds) != 1) || (qa && len(kinds) != 4) || kinds[0] != "model.run" {
+		if (!qa && len(kinds) != 1) || (qa && len(kinds) != 6) || kinds[0] != "model.run" {
 			t.Fatalf("%s operation kinds: %v", step, kinds)
 		}
 		if !qa {

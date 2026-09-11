@@ -607,6 +607,9 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if err := f.verifyPreparationReceipt(event); err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
+	if err := f.bindVerificationEvidence(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
 	if err := f.verifyTaskOperationReceipt(event); err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}

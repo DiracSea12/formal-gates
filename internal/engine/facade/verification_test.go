@@ -18,7 +18,7 @@ import (
 func frozenVerificationFixture(t *testing.T, wrong bool) *Facade {
 	return frozenVerificationCommandFixture(t, wrong, nil)
 }
-func frozenVerificationCommandFixture(t *testing.T, wrong bool, command *coverage.Command) *Facade {
+func frozenVerificationCommandFixture(t *testing.T, wrong bool, command *coverage.Command, configure ...func(*coverage.AcceptanceManifest)) *Facade {
 	t.Helper()
 	f := facadePreparation(t, []string{"blackbox"})
 	r, _ := f.Show()
@@ -39,9 +39,19 @@ func frozenVerificationCommandFixture(t *testing.T, wrong bool, command *coverag
 	if command != nil {
 		d.Manifest.Cases[0].Command = command
 	}
+	for _, configureManifest := range configure {
+		configureManifest(&d.Manifest)
+	}
 	facadeResult(t, f, facadeExecution(t, f, "blackbox-design"), protocol.PreparationResult{Design: &d})
 	r, _ = f.Show()
-	facadeResult(t, f, facadeExecution(t, f, "blackbox-review"), protocol.PreparationResult{Review: facadeReview(r, "blackbox")})
+	review := facadeReview(r, "blackbox")
+	for _, c := range d.Manifest.Cases[1:] {
+		review.CaseDecisions = append(review.CaseDecisions, coverage.ReviewDecision{ID: c.CaseID, Status: coverage.StatusPass})
+	}
+	for _, step := range d.Manifest.SharedSteps {
+		review.SharedStepDecisions = append(review.SharedStepDecisions, coverage.ReviewDecision{ID: step.ID, Status: coverage.StatusPass})
+	}
+	facadeResult(t, f, facadeExecution(t, f, "blackbox-review"), protocol.PreparationResult{Review: review})
 	if _, err = f.Drive(); err != nil {
 		t.Fatal(err)
 	}

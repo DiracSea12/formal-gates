@@ -103,3 +103,14 @@ Independently enumerate required behavior and exact oracles from the supplied
 requirement and production source. Existing tests are intentionally unavailable
 until this judgment is recorded. Do not request tools, inspect test files or bind
 existing tests. Return the coverage JSON only.
+
+## 可执行共用准备
+
+sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCode 声明；
+文字 procedure 不自动执行，没有可执行步骤时 command 为 null。artifacts 列出需要复用
+检查的产物相对文件路径。independent 为 true 表示准备本身是独立验收目标，必须实际
+执行；否则相同有效输入共用完成的准备。case.sharedSteps 的引用顺序就是执行顺序。
+普通只使用共用产物的用例选择 workspaceMode=isolated，只分配独立可变目录，
+通过 FORMAL_GATES_QA_SHARED 读取共用源及产物；确实需要独立源码或 Git 工作树的
+构建、安装、返修自测等选择 candidate。工具与依赖缓存沿用运行环境，不复制 HOME。
+本仓库的 build fixture 入口与前提见 scripts/qa-preparation.md；不用旧 workflow prepare。

@@ -13,6 +13,7 @@ regular 在创建 run 时读取 UTF-8 JSON 文件，字段逐项合并：
 | 字段 | 类型与合法值 | 默认 | 含义 |
 | --- | --- | --- | --- |
 | `tokenCap` | 正整数，单位 token | 未配置 | 本 run 的 engine 派发输入加输出 token 达到该值时停止自动调用 |
+| `qaCapacity` | 1–64 整数 | 4 | 同一 run 同时运行的 QA prepare/target/collect 操作上限；超出留在 pending，完成后继续消费 |
 | `capacity` | 1–64 整数 | 4 | 一次决策最多签发的任务数，仍受前置与 guard 限制 |
 | `codexExecutable` | 非空命令名或可执行文件绝对路径 | `codex` | 原生 Codex bridge 可执行文件；选择 regular 时检查可用性 |
 | `model` | 非空模型标识 | Codex 默认 | 传给原生 CLI 的模型选项 |

@@ -26,8 +26,10 @@ type TaskOperationRequest struct {
 }
 
 type TaskOperation struct {
+	WorkspaceMode    string                `json:"workspaceMode,omitempty"`
 	ID               string                `json:"id"`
 	Request          TaskOperationRequest  `json:"request"`
+	Preparation      []coverage.SharedStep `json:"preparation,omitempty"`
 	Command          *coverage.Command     `json:"command,omitempty"`
 	CheckpointDigest string                `json:"checkpointDigest,omitempty"`
 	ClaimedRevision  uint64                `json:"claimedRevision"`
@@ -35,17 +37,21 @@ type TaskOperation struct {
 }
 
 type TaskOperationReceipt struct {
-	ID             string `json:"id"`
-	ActionID       string `json:"actionId"`
-	RequestDigest  string `json:"requestDigest"`
-	Status         string `json:"status"`
-	Workspace      string `json:"workspace,omitempty"`
-	Output         string `json:"output,omitempty"`
-	Stderr         string `json:"stderr,omitempty"`
-	ExitCode       int    `json:"exitCode"`
-	Identity       string `json:"identity,omitempty"`
-	TranscriptPath string `json:"transcriptPath,omitempty"`
-	Message        string `json:"message,omitempty"`
+	Artifacts         map[string]string `json:"artifacts,omitempty"`
+	InputDigest       string            `json:"inputDigest,omitempty"`
+	SharedWorkspace   string            `json:"sharedWorkspace,omitempty"`
+	PreparationReused bool              `json:"preparationReused,omitempty"`
+	ID                string            `json:"id"`
+	ActionID          string            `json:"actionId"`
+	RequestDigest     string            `json:"requestDigest"`
+	Status            string            `json:"status"`
+	Workspace         string            `json:"workspace,omitempty"`
+	Output            string            `json:"output,omitempty"`
+	Stderr            string            `json:"stderr,omitempty"`
+	ExitCode          int               `json:"exitCode"`
+	Identity          string            `json:"identity,omitempty"`
+	TranscriptPath    string            `json:"transcriptPath,omitempty"`
+	Message           string            `json:"message,omitempty"`
 }
 
 func TaskOperationID(q TaskOperationRequest) string {
@@ -159,7 +165,7 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 		return fmt.Errorf("DUPLICATE_ACTION: internal call already claimed")
 	}
 	for _, op := range x.Operations {
-		if op.Receipt == nil {
+		if op.Receipt == nil && (q.CaseID == "" || op.Request.CaseID == "" || q.CaseID == op.Request.CaseID) {
 			return fmt.Errorf("UNKNOWN: reconcile pending internal operation %s before another call", op.ID)
 		}
 	}
@@ -192,11 +198,63 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 		if q.Prompt != "" {
 			return fmt.Errorf("QA operation accepts only its frozen case declaration")
 		}
+
+		active := 0
+		for _, execution := range s.RegularExecutions {
+			for _, pending := range execution.Operations {
+				if pending.Receipt == nil && strings.HasPrefix(pending.Request.Kind, "qa.") {
+					active++
+				}
+			}
+		}
+		if limit := s.Regular.Settings.Values.QACapacity; limit > 0 && active >= limit {
+			return fmt.Errorf("CAPACITY_QUEUED: %d QA operations are running (limit %d)", active, limit)
+		}
 		c, err := taskCase(s, q)
 		if err != nil {
 			return err
 		}
 		op.Command = c.Command
+		op.WorkspaceMode = c.WorkspaceMode
+		for _, qa := range s.Regular.Preparation.QA {
+			ownsCase := false
+			for _, declared := range qa.Design.Manifest.Cases {
+				if declared.CaseID == c.CaseID {
+					ownsCase = true
+				}
+			}
+			if !ownsCase {
+				continue
+			}
+			for _, id := range c.SharedSteps {
+				for _, step := range qa.Design.Manifest.SharedSteps {
+					if step.ID == id {
+						op.Preparation = append(op.Preparation, step)
+					}
+				}
+			}
+		}
+
+		// Independent cases may advance while another target is running.
+		// Explicit shared-step references conservatively serialize their
+		// mutable workspace use; concurrent prepares use the preparation lock.
+		for _, execution := range s.RegularExecutions {
+			for _, pending := range execution.Operations {
+				if pending.Request.Binding.Candidate != q.Binding.Candidate {
+					continue
+				}
+				if pending.Receipt != nil || (q.Kind == "qa.prepare" && pending.Request.Kind == "qa.prepare") {
+					continue
+				}
+				for _, a := range op.Preparation {
+					for _, b := range pending.Preparation {
+						if a.ID == b.ID && !a.Independent && !b.Independent {
+							return fmt.Errorf("RESOURCE_QUEUED: case %s waits for shared step %s held by case %s operation %s", q.CaseID, a.ID, pending.Request.CaseID, pending.ID)
+						}
+					}
+				}
+			}
+		}
 		checkpoint := currentWave(s.Regular).Checkpoints[targetName(q.Binding.Task.Step)]
 		op.CheckpointDigest = checkpoint.Digest
 		for _, completed := range checkpoint.Cases {
@@ -216,11 +274,7 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 						remaining = true
 					}
 				}
-				for _, change := range checkpoint.Invalidated {
-					if change.CaseID == q.CaseID && remaining {
-						allowed = true
-					}
-				}
+				allowed = remaining && qaInvalidatedSince(currentWave(s.Regular), targetName(q.Binding.Task.Step), q.CaseID, prior.CheckpointDigest)
 			} else if q.Kind != "qa.prepare" {
 				prepare := findTaskOperation(x, "qa.prepare", q.CaseID)
 				allowed = prepare != nil && prior.ClaimedRevision < prepare.ClaimedRevision
@@ -244,7 +298,7 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 		}
 		if q.Kind == "qa.prepare" {
 			for _, dep := range c.Dependencies {
-				target := waveTarget(currentWave(s.Regular), targetName(q.Binding.Task.Step))
+				target := qaVerificationTarget(s.Regular, q.Binding)
 				if target != nil && target.Inherited[dep].Status == "PASS" {
 					continue
 				}
@@ -257,10 +311,7 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 				if completed {
 					continue
 				}
-				prior := findTaskOperation(x, "qa.collect", dep)
-				if prior == nil || prior.Receipt == nil || prior.Receipt.Status != "COMPLETED" || prior.Receipt.ExitCode != prior.Command.ExpectedExitCode {
-					return fmt.Errorf("PREREQUISITE_FAILED: dependent case %s has not succeeded", dep)
-				}
+				return fmt.Errorf("PREREQUISITE_FAILED: case %s requires an accepted PASS for dependent case %s; collected exit evidence still needs semantic judgment", q.CaseID, dep)
 			}
 		}
 	default:
@@ -319,6 +370,9 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt) error {
 			s.Regular.Preparation.Resources = map[string]string{}
 		}
 		s.Regular.Preparation.Resources[op.ID] = v.Workspace
+		if v.SharedWorkspace != "" {
+			s.Regular.Preparation.Resources["shared:"+v.InputDigest] = v.SharedWorkspace
+		}
 	}
 	op.Receipt = &v
 	x.Operations[v.ID] = op

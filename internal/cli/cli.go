@@ -481,7 +481,7 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 		if err = json.Unmarshal(data, &q); err != nil {
 			return 1, err
 		}
-		result, err := f.ExecuteTaskOperation(q, *resume)
+		result, err := f.RunTaskOperation(q, *resume)
 		return printValue(streams.Stdout, result, err)
 	}
 	if *actionID != "" {

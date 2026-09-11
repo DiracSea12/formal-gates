@@ -22,7 +22,7 @@ func nativeOperationTool(step, description string) map[string]any {
 	kinds := []string{"model.run"}
 	caseID := map[string]any{"type": "string", "enum": []string{""}}
 	if step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker" {
-		kinds = append(kinds, "qa.prepare", "qa.target", "qa.collect")
+		kinds = append(kinds, "qa.prepare", "qa.target", "qa.collect", "qa.run", "qa.checkpoint")
 		delete(caseID, "enum")
 	}
 	schema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "caseId", "prompt"}, "properties": map[string]any{"kind": map[string]any{"type": "string", "enum": kinds}, "caseId": caseID, "prompt": map[string]any{"type": "string"}}}
@@ -245,7 +245,7 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 			if callErr == nil && (call.Tool != "formal_gates_operation" || call.ThreadID != identity || call.CallID == "") {
 				callErr = fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unbound native tool")
 			}
-			var receipt protocol.TaskOperationReceipt
+			var receipt any
 			if callErr == nil {
 				current, showErr := f.Show()
 				callErr = showErr
@@ -253,7 +253,7 @@ func (f *Facade) runNativeBridgeTurn(run Run, claim protocol.ExecutionClaim, res
 					bound := current.Executions[claim.ActionID].Claim
 					bound.Identity = identity
 					q := protocol.TaskOperationRequest{RunID: run.RunID, ExpectedRevision: current.Revision, Binding: bound, RequestID: call.CallID, Kind: input.Kind, CaseID: input.CaseID, Prompt: input.Prompt}
-					receipt, callErr = f.ExecuteTaskOperation(q, false)
+					receipt, callErr = f.RunTaskOperation(q, false)
 				}
 			}
 			output, _ := json.Marshal(receipt)

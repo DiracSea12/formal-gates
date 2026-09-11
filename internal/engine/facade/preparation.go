@@ -384,6 +384,15 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 		return err
 	}
 	defer unlock()
+
+	isolated := map[string]bool{}
+	for _, execution := range run.Executions {
+		for _, op := range execution.Operations {
+			if op.WorkspaceMode == "isolated" && op.Receipt != nil && op.Receipt.Workspace != "" {
+				isolated[op.Receipt.Workspace] = true
+			}
+		}
+	}
 	all := append([]protocol.Preparation(nil), run.Regular.PreparationHistory...)
 	if run.Regular.Preparation != nil {
 		all = append(all, *run.Regular.Preparation)
@@ -406,6 +415,12 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 			paths[filepath.Join(base, name)] = true
 		}
 		for path := range paths {
+			if isolated[path] {
+				if err = os.RemoveAll(path); err != nil {
+					return err
+				}
+				continue
+			}
 			if err = gitprep.Cleanup(f.root, path); err != nil {
 				return err
 			}
@@ -495,7 +510,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 	sourceBinding := run.Regular.RequiredSources.Binding
 	binding := object(map[string]any{"runId": exact(sourceBinding.RunID), "childId": exact(sourceBinding.ChildID), "requirementRevision": exact(sourceBinding.RequirementRevision), "solutionRevision": exact(sourceBinding.SolutionRevision), "reviewKind": exact(strings.ToUpper(mode)), "routeScope": exact(gitprep.Digest(run.Regular.Route)), "topologyScope": exact(run.Regular.Topology)})
 	if strings.HasSuffix(step, "-design") {
-		caseFields := map[string]any{"command": object(map[string]any{"executable": map[string]any{"type": "string", "description": "One program name or path, without shell quotes or arguments; e.g. go, with test and ./... in args. Never a shell command string such as go test."}, "args": array(str), "expectedExitCode": map[string]any{"type": "integer"}}), "dependencies": array(str), "caseId": str, "mode": exact(strings.ToUpper(mode)), "oracle": str, "sharedSteps": array(str)}
+		caseFields := map[string]any{"workspaceMode": map[string]any{"type": "string", "enum": []string{"candidate", "isolated"}}, "command": object(map[string]any{"executable": map[string]any{"type": "string", "description": "One program name or path, without shell quotes or arguments; e.g. go, with test and ./... in args. Never a shell command string such as go test."}, "args": array(str), "expectedExitCode": map[string]any{"type": "integer"}}), "dependencies": array(str), "caseId": str, "mode": exact(strings.ToUpper(mode)), "oracle": str, "sharedSteps": array(str)}
 		caseFields["dependencies"].(map[string]any)["description"] = "Only case IDs declared earlier in this manifest; use [] for an independent case. Shared-step IDs and environment prerequisites do not belong here."
 		if mode == "blackbox" {
 			caseFields["publicEntry"] = str
@@ -504,7 +519,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 		} else {
 			caseFields["testRef"] = str
 		}
-		manifest := object(map[string]any{"binding": binding, "sources": array(str), "points": array(object(map[string]any{"pointId": str, "observableBehavior": str, "oracle": str})), "cases": array(object(caseFields)), "edges": array(object(map[string]any{"sourceId": str, "pointId": str, "caseId": str})), "sharedSteps": array(object(map[string]any{"id": str, "procedure": str}))})
+		manifest := object(map[string]any{"binding": binding, "sources": array(str), "points": array(object(map[string]any{"pointId": str, "observableBehavior": str, "oracle": str})), "cases": array(object(caseFields)), "edges": array(object(map[string]any{"sourceId": str, "pointId": str, "caseId": str})), "sharedSteps": array(object(map[string]any{"id": str, "procedure": str, "artifacts": array(str), "command": map[string]any{"anyOf": []any{caseFields["command"], map[string]any{"type": "null"}}}, "independent": map[string]any{"type": "boolean"}}))})
 		alternatives := array(object(map[string]any{"sourceId": str, "reason": str, "method": str, "status": exact("PASS"), "evidence": str}))
 		alternatives["description"] = "Only explicit NON_QA sources may have an alternative verification. Never use alternatives to defer or weaken an AC; return an empty array when every source is QA."
 		fields["design"] = object(map[string]any{"coverageJudgment": str, "manifest": manifest, "alternatives": alternatives})

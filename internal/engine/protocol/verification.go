@@ -72,16 +72,21 @@ type VerificationTarget struct {
 	BindingDigest string                   `json:"bindingDigest"`
 }
 type CaseExecution struct {
-	CaseID            string   `json:"caseId"`
-	Status            string   `json:"status"`
-	Procedure         string   `json:"procedure"`
-	Output            string   `json:"output"`
-	Comparison        string   `json:"comparison"`
-	Environment       string   `json:"environment"`
-	Tool              string   `json:"tool"`
-	Workspace         string   `json:"workspace"`
-	Dependencies      []string `json:"dependencies"`
-	ReusedPreparation string   `json:"reusedPreparation,omitempty"`
+	OperationID       string            `json:"operationId,omitempty"`
+	Command           *coverage.Command `json:"command,omitempty"`
+	ExitCode          *int              `json:"exitCode,omitempty"`
+	StdoutPath        string            `json:"stdoutPath,omitempty"`
+	StderrPath        string            `json:"stderrPath,omitempty"`
+	CaseID            string            `json:"caseId"`
+	Status            string            `json:"status"`
+	Procedure         string            `json:"procedure"`
+	Output            string            `json:"output"`
+	Comparison        string            `json:"comparison"`
+	Environment       string            `json:"environment"`
+	Tool              string            `json:"tool"`
+	Workspace         string            `json:"workspace"`
+	Dependencies      []string          `json:"dependencies"`
+	ReusedPreparation string            `json:"reusedPreparation,omitempty"`
 }
 type VerificationResult struct {
 	Invalidated         []CheckpointInvalidation `json:"invalidated,omitempty"`
@@ -567,11 +572,19 @@ func verificationAllowance(s *State, b *guard.Basis) {
 func (e *Engine) acceptVerification(s *State, result VerificationResult, revision uint64) (string, error) {
 	r := s.Regular
 	x, ok := s.RegularExecutions[result.ActionID]
-	if !ok || !x.Claimed || x.Finished || !verificationStep(x.Claim.Task.Step) || x.Claim.Task.Step == "repair-worker" {
+	if !ok || !x.Claimed || x.Finished || !verificationStep(x.Claim.Task.Step) || (x.Claim.Task.Step == "repair-worker" && result.Status != "CHECKPOINT") {
 		return "", fmt.Errorf("UNKNOWN_ACTION: verification requires a live claimed task")
 	}
 	if result.AttemptID != x.Claim.AttemptID || result.Identity != x.Identity {
 		return "", fmt.Errorf("INTENT_MISMATCH: verification native attempt")
+	}
+
+	if w := currentWave(r); w != nil {
+		var err error
+		result, err = mergeVerificationDelta(w.Checkpoints[targetName(x.Claim.Task.Step)], result)
+		if err != nil {
+			return "", err
+		}
 	}
 	var checkpointErr error
 	if result.Status == "CHECKPOINT" && currentVerificationClaim(r, x.Claim) && !r.ChangePending {
@@ -629,7 +642,7 @@ type VerificationError struct {
 
 func validateVerificationResult(r *RegularState, x RegularExecution, result VerificationResult, checkpoint bool) error {
 	w := currentWave(r)
-	t := waveTarget(w, targetName(x.Claim.Task.Step))
+	t := qaVerificationTarget(r, x.Claim)
 	if t == nil || result.Provider != x.Claim.Provider || result.RequirementRevision != x.Claim.RequirementRevision || result.Candidate != x.Claim.Candidate || result.BindingDigest != t.BindingDigest {
 		return fmt.Errorf("verification result binding differs")
 	}
@@ -682,6 +695,10 @@ func validateVerificationResult(r *RegularState, x RegularExecution, result Veri
 			op := findTaskOperation(x, kind, c.CaseID)
 			if op == nil || op.Receipt == nil || op.Receipt.Status != "COMPLETED" || op.Receipt.ExitCode < 0 {
 				return fmt.Errorf("RUNTIME_ERROR: case %s requires completed %s operation", c.CaseID, kind)
+			}
+
+			if kind == "qa.target" && c.Status == "PASS" && op.Command != nil && op.Receipt.ExitCode != op.Command.ExpectedExitCode {
+				return fmt.Errorf("case %s PASS conflicts with frozen expected exit %d (actual %d)", c.CaseID, op.Command.ExpectedExitCode, op.Receipt.ExitCode)
 			}
 			if op.Receipt.Workspace != c.Workspace {
 				return fmt.Errorf("case %s workspace differs from actual operation", c.CaseID)
@@ -912,6 +929,13 @@ func (e *Engine) acceptRepair(s *State, result RepairResult, revision uint64) (s
 	}
 	if result.AttemptID != x.Claim.AttemptID || result.Identity != x.Identity {
 		return "", fmt.Errorf("INTENT_MISMATCH: repair native attempt")
+	}
+	if w := currentWave(r); w != nil {
+		merged, err := mergeVerificationDelta(w.Checkpoints["repair-worker"], VerificationResult{Cases: result.Cases})
+		if err != nil {
+			return "", err
+		}
+		result.Cases = merged.Cases
 	}
 	x.Finished = true
 	x.RepairResult = &result
