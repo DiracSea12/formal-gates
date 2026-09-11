@@ -1,5 +1,14 @@
 # QA 设计
 
+**黑盒设计缺口。** 无法完成设计时可返回 FAIL，并在 `message` 和
+`design.coverageJudgment` 精确描述缺失的公开使用契约或覆盖缺口，保留当前
+`design.manifest.binding` 与已完成的场景。设计者不返回 review 对象；这不是产品执行
+FAIL，部分设计不得冻结。只需公开行为及使用方式，不需内部实现；不能因基线尚无新功能
+而判失败，也不能把自己拟定的测试脚本尚不存在算作产品需求缺失。公开 argv 确实未确定时
+列明对应待补项，不虚构接口。`previousResultRejection` 是本动作的既往拒收信息；其中旧版
+“FAIL needs a complete QA review”是错误分类，应遵循这里的设计缺口合同。
+`previousDesignGap` 是本模式上一轮尚未解决的设计缺口。
+
 从已确认需求出发，为已选 QA 模式设计用例集。两种模式各自可选、均由独立代理执行，
 时序按模式而定：
 

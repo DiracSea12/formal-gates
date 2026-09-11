@@ -341,6 +341,7 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 	if workspace == "" {
 		return "", "", fmt.Errorf("missing authorized workspace")
 	}
+	preparationRetryFeedback(run, claim, payload)
 	prompt, err := assemblePrompt(instructions, payload)
 	return prompt, workspace, err
 }

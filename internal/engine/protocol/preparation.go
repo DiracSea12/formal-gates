@@ -52,6 +52,7 @@ type QAReviewWaiver struct {
 	Revision uint64            `json:"revision"`
 }
 type PreparedQA struct {
+	DesignGap           string          `json:"designGap,omitempty"`
 	ConsecutiveFailures int             `json:"consecutiveFailures"`
 	RecoveryRequired    bool            `json:"recoveryRequired"`
 	ReviewWaiver        *QAReviewWaiver `json:"reviewWaiver,omitempty"`
@@ -557,6 +558,28 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 		s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, Digest: digestOfCanonical(result)}
 		return "ACCEPTED", nil
 	}
+	if result.Status == "FAIL" && step == "blackbox-design" {
+		q := p.QA["blackbox"]
+		if q == nil || result.Design == nil || strings.TrimSpace(result.Design.CoverageJudgment) == "" || strings.TrimSpace(result.Message) == "" {
+			return reject(fmt.Errorf("blackbox-design FAIL requires design.coverageJudgment and message describing the concrete public-contract or coverage gap"))
+		}
+		m := result.Design.Manifest.Binding
+		if m.SourceBinding != r.RequiredSources.Binding || m.ReviewKind != coverage.ReviewKind("BLACKBOX") || m.RouteScope != digestOfCanonical(r.Route) || m.TopologyScope != r.Topology {
+			return reject(fmt.Errorf("blackbox-design FAIL design.manifest.binding differs from inventory/route/topology"))
+		}
+		if len(result.Manifest) != 0 {
+			return reject(fmt.Errorf("blackbox-design FAIL manifest must be empty: this role cannot edit project files"))
+		}
+		// An incomplete design is a semantic design failure, not a malformed
+		// review. Preserve its raw report in the execution without accepting the
+		// partial case set for review, execution, or freezing.
+		q.DesignGap = result.Message + "\n" + result.Design.CoverageJudgment
+		q.ConsecutiveFailures++
+		q.RecoveryRequired = q.ConsecutiveFailures >= 3
+		q.Frozen, q.NeedsRevision = false, true
+		s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, Digest: digestOfCanonical(result)}
+		return "ACCEPTED", nil
+	}
 	if result.Status == "FAIL" && step != "whitebox-design" {
 		if !strings.HasSuffix(step, "-review") || result.Review == nil || result.Message == "" {
 			return reject(fmt.Errorf("FAIL needs a complete QA review and concrete gap"))
@@ -629,6 +652,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 				q.RetainedReview = &retained
 			}
 			q.Design = result.Design
+			q.DesignGap = ""
 			q.Manifest = result.Manifest
 			q.Reuse = result.Reuse
 			if mode == "whitebox" && result.Status == "FAIL" {
@@ -1148,6 +1172,11 @@ func mergeQAReview(review *coverage.ReviewResult, retained coverage.ReviewResult
 func reviseQA(q *PreparedQA) {
 	q.Frozen = false
 	if q.Design == nil && q.Review == nil {
+		if q.NeedsRevision {
+			q.NeedsRevision = false
+			q.ReviewWaiver = nil
+			q.Revision++
+		}
 		return
 	}
 	q.AuthoringBase = q.Snapshot

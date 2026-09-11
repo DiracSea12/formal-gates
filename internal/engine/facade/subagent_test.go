@@ -97,6 +97,21 @@ func TestSubagentPrepareClaimsOnceAndDoesNotSpawn(t *testing.T) {
 	}
 }
 
+func TestSubagentBlackboxPreservesAuthorizedWorkspaceReads(t *testing.T) {
+	f := facadePreparation(t, []string{"blackbox"})
+	x := facadeExecution(t, f, "blackbox-design")
+	r, err := f.PrepareSubagent(x.Claim.ActionID, "fixture-parent", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := r.Subagent.Prompt
+	if strings.Contains(prompt, "Review roles must use only their supplied text") ||
+		!strings.Contains(prompt, "QA access to its isolated workspace") ||
+		!strings.Contains(prompt, "blackbox must not read development code or development evidence") {
+		t.Fatal("native transport changed QA input permissions")
+	}
+}
+
 func TestSubagentContinuationKeepsIdentityAndRejectsOldTurn(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	f := facadePreparation(t, nil)
