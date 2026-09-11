@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"formal-gates/internal/coordination"
@@ -16,14 +17,15 @@ import (
 // It is not a second scheduler. The desktop's native tools own the actual spawn
 // and send_input calls; SOURCE and result admission still belong to the engine.
 type SubagentDispatch struct {
-	ActionID   string `json:"actionId"`
-	Parent     string `json:"parentThreadId"`
-	Identity   string `json:"identity,omitempty"`
-	Operation  string `json:"operation"`
-	Workspace  string `json:"workspace"`
-	Prompt     string `json:"prompt"`
-	SchemaPath string `json:"schemaPath"`
-	Marker     string `json:"marker"`
+	ActionID   string           `json:"actionId"`
+	Parent     string           `json:"parentThreadId"`
+	Identity   string           `json:"identity,omitempty"`
+	Operation  string           `json:"operation"`
+	Workspace  string           `json:"workspace"`
+	Prompt     string           `json:"prompt"`
+	SchemaPath string           `json:"schemaPath"`
+	Marker     string           `json:"marker"`
+	Sources    []SubagentSource `json:"sources,omitempty"`
 }
 
 func (f *Facade) subagentPath(action string) string {
@@ -33,7 +35,10 @@ func (f *Facade) subagentPath(action string) string {
 // PrepareSubagent consumes the ordinary CLAIM before exposing a native dispatch.
 // Reopening a claimed handoff only allows observation: a lost spawn response is
 // not authorization to create another child or replay a turn.
-func (f *Facade) PrepareSubagent(action, parent string, resume bool) (Run, error) {
+func (f *Facade) PrepareSubagent(action, parent string, resume bool, sourceFile ...string) (Run, error) {
+	if len(sourceFile) > 1 {
+		return Run{}, fmt.Errorf("SUBAGENT_SOURCES: expected one source manifest")
+	}
 	if parent == "" {
 		return Run{}, fmt.Errorf("SUBAGENT_PARENT_REQUIRED: use the current native CODEX_THREAD_ID")
 	}
@@ -49,12 +54,22 @@ func (f *Facade) PrepareSubagent(action, parent string, resume bool) (Run, error
 		return Run{}, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: native subagent transport requires Codex")
 	}
 	if x.Claimed {
+		// Sources are fixed by the first claim, just like the native identity.
 		d, err := f.readSubagentDispatch(action)
 		if err != nil {
 			return Run{}, fmt.Errorf("UNKNOWN: claimed action has no subagent handoff; reconcile its original transport: %w", err)
 		}
 		if d.Parent != parent {
 			return Run{}, fmt.Errorf("INTENT_MISMATCH: subagent parent changed")
+		}
+		if len(sourceFile) == 1 && sourceFile[0] != "" {
+			sources, err := readSubagentSources(sourceFile[0], string(x.Claim.Task.Step))
+			if err != nil {
+				return Run{}, err
+			}
+			if !reflect.DeepEqual(sources, d.Sources) {
+				return Run{}, fmt.Errorf("INTENT_MISMATCH: claimed subagent sources are immutable; observe without new sources")
+			}
 		}
 		d.Operation = "observe"
 		d.Identity = x.Identity
@@ -75,13 +90,20 @@ func (f *Facade) PrepareSubagent(action, parent string, resume bool) (Run, error
 	} else if resume {
 		return Run{}, fmt.Errorf("INTENT_MISMATCH: no issued native continuation")
 	}
+	if len(sourceFile) == 1 && sourceFile[0] != "" {
+		f.subagentSources, err = readSubagentSources(sourceFile[0], string(x.Claim.Task.Step))
+		if err != nil {
+			return Run{}, err
+		}
+	}
 	f.subagentParent = parent
-	defer func() { f.subagentParent = "" }()
+	defer func() { f.subagentParent = ""; f.subagentSources = nil }()
 	return f.ExecuteNative(action, resume)
 }
 
 func (f *Facade) prepareSubagentDispatch(run Run, claim protocol.ExecutionClaim, job, workspace, prompt string, schema map[string]any) (Run, error) {
 	d := SubagentDispatch{ActionID: claim.ActionID, Parent: f.subagentParent, Identity: claim.Identity, Operation: claim.Operation, Workspace: workspace, SchemaPath: filepath.Join(job, "result-schema.json")}
+	d.Sources = f.subagentSources
 	d.Marker = "formal-gates native action: " + run.RunID + " / " + claim.ActionID + "\nEND_ACTION_BINDING"
 	contract, err := json.Marshal(schema)
 	if err != nil {
@@ -102,6 +124,23 @@ Schema: %s
 		transport += "Before inspecting ANY existing test, independently read requirements and production source only; submit whitebox.coverage with prompt containing JSON {coverageJudgment,behaviorOracles:[{behavior,oracle}]}. Only after its accepted receipt may you inspect/run tests or author missing coverage.\n"
 	}
 	d.Prompt = transport + prompt
+	if len(d.Sources) != 0 {
+		// Keep the full captured inputs available without repeating long documents
+		// in every native handoff message.
+		var entries []map[string]string
+		for i, source := range d.Sources {
+			path := filepath.Join(job, fmt.Sprintf("subagent-source-%d.txt", i))
+			if err := os.WriteFile(path, []byte(source.Content), 0600); err != nil {
+				return Run{}, err
+			}
+			entries = append(entries, map[string]string{"kind": source.Kind, "path": source.Path, "digest": source.Digest, "fullTextPath": path})
+		}
+		data, err := json.Marshal(entries)
+		if err != nil {
+			return Run{}, err
+		}
+		d.Prompt += "\nSupplementalSources: " + string(data)
+	}
 	if err = writeJSONAtomic(f.subagentPath(claim.ActionID), d); err != nil {
 		return Run{}, err
 	}

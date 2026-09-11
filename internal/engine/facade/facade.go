@@ -156,7 +156,8 @@ type Admission struct {
 }
 
 type Facade struct {
-	subagentParent string
+	subagentParent  string
+	subagentSources []SubagentSource
 	// Private fault seam for process-interruption tests; never exposed by CLI/config.
 	fault      func(persistence.FaultPoint) error
 	root       string

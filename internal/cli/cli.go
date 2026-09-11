@@ -459,6 +459,7 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	actionID := fs.String("action-id", "", "execute this issued Codex action")
 	operationPath := fs.String("operation-request", "", "typed internal task operation request JSON path")
 	subagent := fs.Bool("subagent", false, "prepare a native desktop subagent handoff for this issued action")
+	subagentSources := fs.String("subagent-sources", "", "JSON list of read-only sources to capture before the native action claim")
 	subagentBind := fs.String("subagent-bind", "", "bind the observed native subagent identity")
 	subagentCollect := fs.Bool("subagent-collect", false, "collect the completed result from the bound native transcript")
 	subagentOperation := fs.String("subagent-operation", "", "native subagent task-operation input JSON path")
@@ -467,6 +468,9 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 		return code, err
 	}
 	nativeModes := 0
+	if *subagentSources != "" && !*subagent {
+		return 1, fmt.Errorf("--subagent-sources requires --subagent")
+	}
 	for _, enabled := range []bool{*subagent, *subagentBind != "", *subagentCollect, *subagentOperation != ""} {
 		if enabled {
 			nativeModes++
@@ -486,7 +490,7 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	if *subagent {
-		run, err := f.PrepareSubagent(*actionID, os.Getenv("CODEX_THREAD_ID"), *resume)
+		run, err := f.PrepareSubagent(*actionID, os.Getenv("CODEX_THREAD_ID"), *resume, *subagentSources)
 		return printValue(streams.Stdout, run, err)
 	}
 	if *subagentBind != "" {

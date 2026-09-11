@@ -1,6 +1,6 @@
 # Stage 4a：用户问题与处理记录
 
-更新时间：2026-09-11 16:30（Asia/Shanghai）。
+更新时间：2026-09-11 22:28（Asia/Shanghai）。
 
 这是用户反馈、证据和处理状态的交接记录，不替代活动 run 绑定的唯一正式需求文件。
 后续接手先读本记录，再核对当前 engine 状态；不得把建议、已签发、已启动、已验证混为一谈。
@@ -51,7 +51,7 @@
 - 已实施：黑盒设计缺口作为语义设计 FAIL 接纳；校验当前绑定、覆盖判断和具体说明；部分设计
   不冻结、不当作 PASS；沿用有限语义轮和 QA recovery。旧拒收记录不改写、不事后改成通过。
 - 状态：**代码和兼容安装已完成，定向回归通过；修正 Markdown 指令边界后全套测试、包校验及 44 项 portable 检查通过**。
-  该修复截至本记录未提交，不能沿用原生接入提交号当作其提交证据。
+  修复已提交为 `de2d631`，不能沿用原生接入提交号当作其提交证据。
 
 ### FG-4A-F05：错误必须传回对应执行者
 
@@ -83,23 +83,19 @@
 
 ## 活动执行快照（接手时必须刷新）
 
-- run：`phase-4a-git-regular-001`；工作树：`../formal-gates-stage-4a`；本次核对 revision **63**。
-- B1 已由 engine 接纳并提交：`484d37d6beb71c63df49945b20d1fdca24ecac23`。
-- B2：原生子代理 Einstein，`01a08f7e-d306-7d80-b8a0-ea0cf8df5020`。
-  首轮已采集并接纳为 **CONTINUE**，该轮 SOURCE STOPPED；B2 未完成。
-  后续 `B2-0/attempt-2` 已签发，尚未启动，必须沿用同一身份恢复，不能报告为正在并行运行。
-- 黑盒第三次：原生子代理 Gauss，`01a08f8c-cacb-7293-b587-ea51c9565607`。
-  结果已采集并接纳为**语义设计 FAIL**，该轮 SOURCE STOPPED；非产品执行 FAIL，亦非 PASS。
-  `consecutiveFailures=1`、`recoveryRequired=false`，设计未冻结；原合同拒收问题在这次真实接纳中未再发生。
-  用户额外授权的一次运行尝试已消耗，不能再次拿同一授权增加次数。
-- 新黑盒语义设计轮 `qa-1-0/attempt-1` 已签发，尚未启动；这不是再次获得运行失败重试授权。
-  当前缺口是合法公开使用契约的输入。先核查可提供的公开文档和角色读取权限，避免相同缺口反复耗费模型。
-  原生中转提示是否过度限制 QA 阅读合法公开文档，属于**待核实原因**，不能先写成已证实或已修复。
-- F04/F05：修复已安装并经历上述真实结果采集；完整回归结论与提交号须另核对，不能用一次真实接纳代替全部验证。
-- F01/F02 仍未解决；默认程序自动执行与原生侧栏中转的架构取舍仍待用户决定。
-- 主分支热修复 `d3972ef` 和 `0123113` 后续集成时须保留；当前 4a 基线不自动包含它们。
-- 安装使用适配旧 run 的兼容包，保留全局 admission；不能盲目用新包覆盖，造成旧 run 失去准入。
-- 当前主仓库用户未提交的 `stage-4a-qa-efficiency.md` 修改不能混入本次热修复提交。
+- run：`phase-4a-git-regular-001`；工作树：`../formal-gates-stage-4a`；本次核对 revision **97**。
+- B1 已接纳并提交 `484d37d6beb71c63df49945b20d1fdca24ecac23`。
+- B2 已接纳 PASS 并提交 `b4968d534470340ff57107d4d5897fbcf5106d4a`；Einstein 已关闭。
+- B3 已接纳 PASS 并提交 `1a702e2ca2366d630a8622712c72d62b38bc8eaa`；Schrodinger 已关闭。
+- B4 已接纳 PASS 并提交 `84ac1c9792e4809ccf47cd68053f13cbbc9f3f1c`；Nash 已关闭。
+- B5 两轮均已接纳 CONTINUE；B5-S1 通用协议已完成，B5-S2/S3/S4 未完成。Turing（`01a090f8-3294-7d63-bf6d-061b2a44edcf`）当前已停止，保留身份待续用；B6 尚未启动。
+- 当前引擎 `ASK: RETRY_EXHAUSTED`：两次合法 CONTINUE 已用尽本 TaskKey 的默认 attempt 额度，不是两次运行错误。需要用户精确授权一次 B5 续轮，不能把“推进到 Seal”当成无限次数授权。
+- 黑盒已接纳两次语义设计 FAIL，尚未冻结。第三语义轮 `qa-2-0/attempt-1` 已签发但未启动，等待补齐公开使用契约后合法传入。不能报告黑盒正在并行运行，不能凭相同缺口机械重派。
+- 额外授权的一次运行失败重试已经消耗；语义修订轮不等于重新获得该授权。
+- F04/F05 与原生 QA 读取权限修复已提交 `de2d631`，完成本地验证清单并安装旧 run 兼容包；保留原始拒收记录。
+- F01/F02 仍未解决；默认程序自动执行与原生侧栏中转的架构取舍仍待用户决定。当前“推进到 Seal”不作为对该未决架构方案的额外确认。
+- 后续集成须保留主分支热修复 `d3972ef`、`0123113`、`de2d631`。安装须保留旧 run 的全局 admission；不能盲目用新包替换兼容运行时。
+- 用户在主仓库未提交的 `stage-4a-qa-efficiency.md` 修改不能混入热修复提交。
 
 ## 本次推进到 Seal（2026-09-11）
 
@@ -111,3 +107,33 @@
 
 - 最终验证：权限修正后的全套测试、race 指定包、phase0whitebox、vet、包校验和 44 项 portable 检查均通过。
 - revision 69：Curie 已完成并被采集为第二次语义设计 FAIL，未冻结。它已实际读取基线公开文档，撤回“现有操作/恢复等全部缺失”的判断；剩余是 4a 批次具体使用方式、新宿主使用合同和新增字段取证说明。不给相同输入机械重派下一轮；B2 继续。
+
+- revision 74：B2 attempt-2 已正式接纳 PASS，四子任务完成；engine 提交 `b4968d534470340ff57107d4d5897fbcf5106d4a`。Einstein 已关闭。
+- B3 attempt-1 已签发、派发并绑定 Schrodinger（01a090c5-e629-7ab1-a266-a3daf144486c）；负责资源生命周期。黑盒 qa-2-0/attempt-1 仍未启动，避免用尚不完整的相同公开输入耗尽第三语义轮。
+- B2 已交付公开使用说明 `scripts/qa-preparation.md`，明确 qa.run、qa.checkpoint、qaCapacity 等用法；它不是开发验证 PASS 的替代品，也未擅自写入黑盒的基线隔离区。后续补齐其他公开契约后，须通过合法的输入绑定路径供 QA 读取。
+
+- revision 81：B3 已接纳 PASS 并提交 `1a702e2ca2366d630a8622712c72d62b38bc8eaa`；Schrodinger 已关闭。B4 attempt-1 已派发并绑定 Nash（01a090db-c9b7-7792-ba76-623279e1140c），处理交接、进度、计量与脚本索引。
+
+- revision 88：B4 已接纳并提交 `84ac1c9792e4809ccf47cd68053f13cbbc9f3f1c`。随后 B5 派发并绑定 Turing；不以安装或生命周期观察代替三个宿主的实际支持证据。
+
+## FG-4A-F07：B5 原生入口发现与受控样例前提
+
+- B5 首轮返回 CONTINUE、无文件修改、无自测，不是 FAIL/PASS。它只确认 PATH 未找到 workbuddy/zcode，未断言未安装。
+- 主代理独立核实 `/Applications/WorkBuddy.app` 与 `/Applications/ZCode.app` 均存在。
+- WorkBuddy 自带 `/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy`；真实 `--help` 输出保存在 `/tmp/4a-workbuddy-help.txt`，公布 print、json/stream-json、session-id、resume、ACP 等入口。帮助输出不等于实际模型执行成功。
+- ZCode 自带 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`；真实 `node ... --help` 输出保存在 `/tmp/4a-zcode-help.txt`，版本 0.16.5，公布 app-server、resume、JSON 等入口。
+- DSH 本机版本 0.1.5-rc.1；已安装包的 README.zh.md 明确提供 sdk（JSON-RPC stdio）、sdk-minimal、acp profile。不能仅凭 headless 帮助判定无可恢复接口。
+- 当前受控 model.run 仍绑定 Codex provider；取得其他宿主真实样例的合法路径尚待完成。没有直接通过 shell 启动模型，没有据帮助内容宣称完整支持。
+- B5 attempt-1 已采集；attempt-2 已由 engine 签发，并以同一 Turing 身份恢复和绑定。未替换开发者、未修改其原始结果、未绕过引擎添加任务消息。
+
+- 公开资料已持久保存至 `refactor-plan/evidence/stage-4a-host-discovery/`，包含两份真实 CLI 帮助和 DSH 启动/SDK/ACP 官方随附说明。DSH ACP 文档明确列出 session/list、session/resume、session/close；尚无本轮真实模型执行结论。
+
+## FG-4A-F08：已核实补充材料无法随原生续轮交付
+
+- 当前引擎的原生入口此前只有固定任务 prompt，没有绑定新公开资料的输入入口。主代理不能自由改写派发正文，也不能把开发结果冒充黑盒依据。
+- 已新增 `--subagent-sources`：认领前读取明确的资料清单，校验角色范围，将正文、原路径和 digest 固定到当前 action；消息仅给全文快照入口。已认领动作不能替换输入，相同重放只 observe。
+- environment-observation 仅供开发/修复；public-contract 可供开发/修复和 QA 设计/审查。资料不是指令、授权或正式验证结果。未改变调度默认、既有次数、原生身份或已完成结果。
+- 主源码与旧 run 兼容包的定向验证通过；主源码全套测试、race 指定包、白盒标签、vet、package validate、44 项 portable 检查均通过。兼容包已安装，未修改 AGENTS.md。
+- B5 的资料清单已准备为 `refactor-plan/evidence/stage-4a-host-discovery/b5-sources.json`。尚未消耗新的 B5 续轮；等待引擎规定的单次授权后由 CLI 固定资料并恢复原身份。
+
+- 已生成 B5 单次续轮确认：revision 97，request `request-b5-single-continuation-96`，kind `preparation-retry`，仅当前 B5 TaskKey 一次，confirm/cancel；尚未收到用户决定，不能启动第三次。

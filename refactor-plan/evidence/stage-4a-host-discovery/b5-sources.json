@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "environment-observation",
+    "path": "observations.json"
+  },
+  {
+    "kind": "public-contract",
+    "path": "workbuddy-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "zcode-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-sdk-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-acp-README.zh.md"
+  }
+]

@@ -1,0 +1,29 @@
+{
+  "scope": "Read-only local executable and documentation discovery. No model prompts or sessions were executed. Not a verification PASS.",
+  "workbuddy": {
+    "application": "/Applications/WorkBuddy.app",
+    "executable": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy",
+    "helpArgv": [
+      "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy",
+      "--help"
+    ],
+    "helpExitCode": 0,
+    "version": "2.137.1"
+  },
+  "zcode": {
+    "application": "/Applications/ZCode.app",
+    "executable": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+    "helpArgv": [
+      "node",
+      "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
+      "--help"
+    ],
+    "helpExitCode": 0,
+    "helpReportedVersion": "0.16.5"
+  },
+  "dsh": {
+    "executable": "/Users/suxinyang/.local/bin/dsh",
+    "resolvedExecutable": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/lib/bin.js",
+    "documentation": "Installed README documents sdk and acp stdio profiles; ACP documentation lists session/new, session/resume and session/close."
+  }
+}

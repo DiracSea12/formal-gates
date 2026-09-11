@@ -2,6 +2,15 @@
 
 ## Codex 桌面原生子代理
 
+已签发、尚未认领的动作可在 `--subagent` 时加 `--subagent-sources <sources.json>`。
+文件是 `[{"kind":"public-contract","path":"/absolute/public-usage.md"}]`；相对路径
+以清单文件所在目录解析。CLI 在认领前读取并检查角色范围，将完整正文、路径及 digest
+固定到该 action 的原生交接记录。派发提示只携带该动作固定的 `fullTextPath` 全文入口，
+避免重复塞入长正文。已认领动作不能补换材料；相同材料重放只返回 observe，
+省略此参数时仍读取原快照。补充事实只能随引擎已签发的下一轮加入，不新增任务或授权。
+`public-contract` 只供开发/修复和 QA 设计/审查；`environment-observation` 只供开发/修复。
+不得把开发结论伪装为公开契约传入黑盒；资料不能替代正式结果或改变需求、角色权限。
+
 桌面对话有原生 `spawn_agent` / `send_input` / `wait_agent` 时，新动作使用下列
 transport，使真实子代理关联到当前对话。CLI 仍拥有 CLAIM、SOURCE、操作回执、结果接纳
 和用量；宿主只转交请求及真实身份。无原生工具时保留原 app-server transport。
