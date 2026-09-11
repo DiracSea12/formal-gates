@@ -1,5 +1,11 @@
 # Requirements precedence
 
+Requirement, alignment, and proposal records named below are local historical
+inputs: they are ignored by Git and are not distributed with the package.
+The inventory preserves their historical roles; current public behavior is
+specified by `SKILL.md`, `references/engine-regular.md`, and the shipped prompts.
+
+
 This is the complete stage-0 document inventory. Every listed requirement
 source has one explicit status and priority; there is no catch-all or unnamed
 OpenSpec source. “Priority” is the priority within this implementation scope,

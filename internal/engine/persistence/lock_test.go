@@ -78,12 +78,13 @@ func TestLockReleaseWhileContenderReads(t *testing.T) {
 	}
 	defer reader.Close()
 	unlock()
-	if err := reader.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(store.lockPath()); !os.IsNotExist(err) {
-		t.Fatalf("released lock remains while contender reads: %v", err)
-	}
+	closed := make(chan struct{})
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = reader.Close()
+		close(closed)
+	}()
+	defer func() { <-closed }()
 	next, err := store.acquireLock()
 	if err != nil {
 		t.Fatal(err)

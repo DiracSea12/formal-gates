@@ -38,7 +38,6 @@ func TestQA35BFutureEnginePlansInheritConvergenceContract(t *testing.T) {
 	for _, name := range []string{"refactor-plan/final-implementation-draft.md", "refactor-plan/stage-3-5b-runtime-guardrails.md", "refactor-plan/incremental-seal-plan.md", "refactor-plan/route-matrix.md"} {
 		qa35bContains(t, filepath.Join(pkg, name), "guard-preview", "Operator", "RETRY_EXHAUSTED", "FROZEN", "meaning-changed", "P3", "NOT_INSTALLED")
 	}
-	qa35bContains(t, filepath.Join(pkg, "openspec/changes/orchestration-pipeline-engine/master-requirements.md"), "guard-preview", "Operator", "severity rationale", "meaning-changed", "RETRY_EXHAUSTED", "FROZEN")
 	qa35bContract(t, filepath.Join(pkg, "refactor-plan/stage-3-5b-runtime-guardrails.md"),
 		"不判断语义真假、根因、严重度或重复", "已核实 finding 的处置仍不唯一时才 Ask", "产品/技术审 confirm/dismiss 规则保持",
 		"白盒最终 FROZEN case-set 绑定最终含测试快照后才 review-ready", "COLLECTING 未收齐或核实未完成时不建立返修",
@@ -49,7 +48,6 @@ func TestQA35BFutureEnginePlansInheritConvergenceContract(t *testing.T) {
 		"raw finding、普通 result/receipt/resume 不增 TaskKey", "owner cost 和 token cap 的 UNAVAILABLE 继续由各自来源、区间或配置条件独立决定",
 		"阶段 4 需求 revision 转换由 engine 单一 writer", "只有用户确认事件授权原子回退", "legacy 写入口不能绕过该边界")
 	qa35bContract(t, filepath.Join(pkg, "refactor-plan/incremental-seal-plan.md"), "requirement impact 迁移到 engine 唯一 writer", "仅用户确认事件可原子登记新 revision、用户保留清单及其余结果的回退", "不重置额度或自动授权新产品审；旧 legacy 入口不得绕过")
-	qa35bContract(t, filepath.Join(pkg, "openspec/changes/orchestration-pipeline-engine/master-requirements.md"), "阶段 5–7 继承同一 finding/problem ID、归并、唯一返修、P3 advisory 和 QA 冻结语义")
 }
 
 func qa35bContract(t *testing.T, path string, clauses ...string) {

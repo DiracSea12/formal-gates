@@ -1032,25 +1032,8 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 			t.Fatalf("requirements inventory omits status %s", status)
 		}
 	}
-	for _, path := range []string{
-		"openspec/changes/orchestration-pipeline-engine-phase-0/master-requirements.md",
-		"openspec/changes/orchestration-pipeline-engine/master-requirements.md",
-		"openspec/changes/blackbox-parallel-seal-squash-qa-mode/master-requirements.md",
-		"openspec/changes/deadlock-recovery-and-codex-lifecycle/master-requirements.md",
-		"openspec/changes/fix-existing-defects/master-requirements.md",
-		"openspec/changes/host-rule-management-and-codex-hook/master-requirements.md",
-		"openspec/changes/p1-qa-decouple-and-carries-fix/master-requirements.md",
-		"openspec/changes/qa-execution-rerun-scope/master-requirements.md",
-		"openspec/changes/runtime-review-guards/master-requirements.md",
-		"openspec/changes/sliced-runs-confirmation-and-qa-refactor/master-requirements.md",
-		"openspec/changes/two-phase-pre-development-review/master-requirements.md",
-		"openspec/changes/universal-modification-intake/master-requirements.md",
-		"P2-FIX-REQUIREMENT.md", "QA-INCREMENTAL-ISOLATION-REQUIREMENT.md", "TRIGGER-MODEL-REQUIREMENT.md", "TRIGGER-MODEL-V2-REQUIREMENT.md",
-	} {
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
-			t.Fatalf("inventory path is not present in installed tree: %s: %v", path, err)
-		}
-	}
+	// Requirement records are local-only; validate the shipped contract below.
+
 	stableDocFiles := []string{filepath.Join(root, "SKILL.md"), filepath.Join(root, "README.md"), filepath.Join(root, "README_EN.md")}
 	for _, pattern := range []string{filepath.Join(root, "prompts", "*.md"), filepath.Join(root, "prompts", "actions", "*.md")} {
 		matches, err := filepath.Glob(pattern)

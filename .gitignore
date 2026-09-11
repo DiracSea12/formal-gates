@@ -3,7 +3,8 @@
 contract_review/
 
 # Local gate/review artifacts
-# .gates/results/ is the tracked dogfooding ledger (see README "自狗粮证据")
+# Runtime results are local; existing historical fixtures remain tracked.
+.gates/results/
 .gates/tmp/
 # Per-run isolation worktrees (full repo copies, session-local)
 .gates/qa-isolation/
@@ -29,3 +30,14 @@ bin/
 # Untracked knowledge/backlog files (session-local, not committed)
 P2-BACKLOG.md
 PROMPT-ENGINEERING-KNOWLEDGE.md
+
+# Local requirement, alignment, and proposal records (not package inputs).
+/*-REQUIREMENT*.md
+/*-requirement*.md
+/REQUIREMENT*.md
+/requirement*.md
+/refactor-plan/*requirement*.md
+/openspec/changes/**/*requirement*.md
+/openspec/changes/**/alignment.md
+/openspec/changes/**/proposal.md
+/openspec/changes/**/spec.md

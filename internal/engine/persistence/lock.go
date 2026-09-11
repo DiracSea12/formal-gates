@@ -47,7 +47,7 @@ func (s *Store) acquireLock() (func(), error) {
 		return nil, err
 	}
 	for {
-		file, err := os.OpenFile(s.lockPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		file, err := createLockFile(s.lockPath())
 		if err == nil {
 			owner := fmt.Sprintf("pid=%d token=%d-%d\n", os.Getpid(), time.Now().UnixNano(), lockSequence.Add(1))
 			if _, writeErr := file.WriteString(owner); writeErr != nil {

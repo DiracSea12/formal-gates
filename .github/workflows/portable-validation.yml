@@ -96,6 +96,9 @@ jobs:
         env:
           GOFLAGS: -timeout=20m
         run: go test ./...
+      - name: Repeat Windows concurrent lock regression
+        if: runner.os == 'Windows'
+        run: go test -timeout=5m ./internal/engine/persistence -run '^Test(LockReleaseWhileContenderReads|SaveConcurrentProcessesPreserveEveryCommit)$' -count=10
       - name: Run Go integration tests
         env:
           GOFLAGS: -timeout=20m

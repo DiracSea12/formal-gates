@@ -23,6 +23,19 @@ func openSharedFile(path string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), path), nil
 }
 
+// DeleteFile leaves the name delete-pending until the last shared reader
+// closes. CREATE_NEW reports access denied during that normal release window.
+func createLockFile(path string) (*os.File, error) {
+	deadline := time.Now().Add(time.Second)
+	for {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil || (!errors.Is(err, syscall.ERROR_ACCESS_DENIED) && !errors.Is(err, syscall.Errno(32))) || !time.Now().Before(deadline) {
+			return file, err
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // Windows may temporarily deny replacement while an existing snapshot reader
 // is closing. Retry only those sharing errors, with a fixed deadline.
 func replaceStateFile(source, target string) error {
