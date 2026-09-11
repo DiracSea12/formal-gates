@@ -80,6 +80,7 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
+	reviewDecisions           map[string]protocol.RecordedDecision
 	Regular                   *protocol.RegularState               `json:"regular,omitempty"`
 	Cost                      *cost.RunCost                        `json:"cost,omitempty"`
 	Executions                map[string]protocol.RegularExecution `json:"executions,omitempty"`
@@ -694,6 +695,7 @@ func (f *Facade) project() (Run, error) {
 	run.Regular = snap.State.Regular
 	run.Cost = snap.State.Cost
 	run.Executions = snap.State.RegularExecutions
+	run.reviewDecisions = snap.State.Decisions
 	if run.Regular != nil && run.Regular.Ask != nil {
 		run.Regular.Ask.Token = protocol.RegularFreshness(snap.Revision, run.Regular.Ask.ID)
 	}

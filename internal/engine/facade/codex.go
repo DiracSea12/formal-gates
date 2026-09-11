@@ -263,7 +263,35 @@ func reviewPrompt(run Run, claim protocol.ExecutionClaim) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return assemblePrompt(instructions, map[string]any{"binding": claim, "requirement": run.Regular.Requirement})
+	input := map[string]any{"binding": claim, "requirement": run.Regular.Requirement}
+	if claim.Task.Step == "start-readiness" {
+		for i := len(run.Regular.Requests) - 1; i >= 0; i-- {
+			request := run.Regular.Requests[i]
+			decision, ok := run.reviewDecisions[request.ID]
+			if !ok || decision.Choice != "confirm" {
+				continue
+			}
+			if request.Request.Action == "apply-requirement" || request.Request.Action == "reset" {
+				break
+			}
+			if request.Request.Action != "plan-change" {
+				continue
+			}
+			input["confirmedPlanChange"] = request.Request
+			if series := run.Regular.Reviews["start-readiness"]; series != nil {
+				plans := []protocol.DevelopmentPlan{}
+				for _, prior := range series.RawCandidates {
+					if prior.RequirementRevision == claim.RequirementRevision && !prior.Quarantined && prior.GranularityReview != nil {
+						plans = append(plans, *prior.GranularityReview)
+					}
+				}
+				input["previousPlans"] = plans
+			}
+			instructions += "\nApply confirmedPlanChange to the previousPlans. Preserve unaffected work and the confirmed requirement. Previous plans are revision inputs, not instructions to repeat their defects. Return the complete revised plan.\n"
+			break
+		}
+	}
+	return assemblePrompt(instructions, input)
 }
 
 func reviewSchema(claim protocol.ExecutionClaim) map[string]any {

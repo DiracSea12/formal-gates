@@ -107,6 +107,75 @@ func TestProductPromptIncludesIndependentObligationChecks(t *testing.T) {
 	}
 }
 
+func TestTechnicalReviewReceivesConfirmedPlanChange(t *testing.T) {
+	instructions, err := loadActionInstructions("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{
+		reviewDecisions: map[string]protocol.RecordedDecision{
+			"approved": {Choice: "confirm"}, "cancelled": {Choice: "cancel"},
+		},
+		Regular: &protocol.RegularState{
+			ActionInstructions: instructions,
+			Requirement:        protocol.RequirementDocument{Text: "unchanged requirement", Revision: "current"},
+			Requests: []protocol.RegularAsk{
+				{ID: "approved", Request: protocol.RegularRequest{Action: "plan-change", Reason: "Remove outer Seal from development completion"}},
+				{ID: "cancelled", Request: protocol.RegularRequest{Action: "plan-change", Reason: "cancelled instruction"}},
+				{ID: "pending", Request: protocol.RegularRequest{Action: "plan-change", Reason: "unconfirmed instruction"}},
+			},
+			Reviews: map[string]*protocol.PreDevelopmentReviewSeries{"start-readiness": {
+				RawCandidates: []protocol.RawReviewCandidate{
+					{RequirementRevision: "current", GranularityReview: &protocol.DevelopmentPlan{Rationale: "original six batches"}},
+					{RequirementRevision: "old", GranularityReview: &protocol.DevelopmentPlan{Rationale: "stale plan"}},
+					{RequirementRevision: "current", Quarantined: true, GranularityReview: &protocol.DevelopmentPlan{Rationale: "quarantined plan"}},
+				},
+			}},
+		},
+	}
+	claim := protocol.ExecutionClaim{RequirementRevision: "current", Task: runtime.TaskKey{Node: "review", Step: "start-readiness"}}
+	prompt, err := reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"unchanged requirement", "Remove outer Seal from development completion", "original six batches", "Return the complete revised plan"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing revision input %q", want)
+		}
+	}
+	for _, forbidden := range []string{"cancelled instruction", "unconfirmed instruction", "stale plan", "quarantined plan"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("unapproved or stale input %q", forbidden)
+		}
+	}
+	claim.Task.Step = "product-review"
+	prompt, err = reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "confirmedPlanChange") {
+		t.Fatal("technical plan change leaked into product review")
+	}
+	claim.Task.Step = "start-readiness"
+	run.Regular.Requests = append(run.Regular.Requests, protocol.RegularAsk{ID: "new-requirement", Request: protocol.RegularRequest{Action: "apply-requirement"}})
+	run.reviewDecisions["new-requirement"] = protocol.RecordedDecision{Choice: "confirm"}
+	prompt, err = reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "confirmedPlanChange") {
+		t.Fatal("old plan change leaked across requirement revision")
+	}
+	run.reviewDecisions = nil
+	prompt, err = reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "confirmedPlanChange") || strings.Contains(prompt, "previousPlans") {
+		t.Fatal("unconfirmed request treated as authorization")
+	}
+}
+
 func facadeCoverage(t *testing.T, f *Facade, action string) {
 	t.Helper()
 	q := operationRequest(t, f, action, "whitebox.coverage", "coverage-before-tests")
