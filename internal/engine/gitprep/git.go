@@ -45,9 +45,12 @@ type Receipt struct {
 }
 
 func Git(root string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, stderr.String())
 	}
 	return strings.TrimSpace(string(out)), nil
 }

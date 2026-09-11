@@ -48,6 +48,9 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		t.Setenv("CODEX_HOME", authHome)
 	}
 	binary, _ := installHostCLI(t, lifecycle.ProviderCodex, root)
+	if !native {
+		configureProtocolFixtureRuntime(t, root)
+	}
 	cliGit(t, root, "rm", "whitebox_delivered_test.go")
 	mustWriteCLI(t, filepath.Join(root, ".gitignore"), ".gates/\n.codex/\n.formal-gates-resources/\n")
 	mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("The hello command prints exactly hello followed by a newline. No options or other output are required."))
@@ -324,4 +327,18 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		t.Fatal("owned native resources survived cleanup")
 	}
 	call("show")
+}
+
+// Protocol-only installed tests must not depend on a host Codex installation.
+func configureProtocolFixtureRuntime(t *testing.T, root string) {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]string{"codexExecutable": executable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLI(t, filepath.Join(root, ".gates", "config.json"), string(data))
 }

@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -58,7 +59,7 @@ func (s *Store) acquireLock() (func(), error) {
 				return nil, closeErr
 			}
 			return func() {
-				data, readErr := os.ReadFile(s.lockPath())
+				data, readErr := readLockFile(s.lockPath())
 				if readErr == nil && string(data) == owner {
 					_ = os.Remove(s.lockPath())
 				}
@@ -81,7 +82,7 @@ func (s *Store) acquireLock() (func(), error) {
 // lockIsStale 判定锁是否可抢占：已完整登记的持有进程死亡，或锁已超过
 // lockStaleAge。未完成写入的 owner 行必须等到超时，避免夺走正在创建的锁。
 func lockIsStale(path string) bool {
-	data, err := os.ReadFile(path)
+	data, err := readLockFile(path)
 	if err != nil {
 		return false
 	}
@@ -112,4 +113,13 @@ func lockIsStale(path string) bool {
 		return true
 	}
 	return expired
+}
+
+func readLockFile(path string) ([]byte, error) {
+	file, err := openLockFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }

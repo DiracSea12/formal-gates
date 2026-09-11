@@ -82,7 +82,18 @@ func TestCommitManifestRecoveryAndSquash(t *testing.T) {
 	}
 }
 func TestOwnershipFrameworkInputsAndRenames(t *testing.T) {
+	for _, autocrlf := range []string{"false", "true"} {
+		t.Run("autocrlf="+autocrlf, func(t *testing.T) {
+			testOwnershipFrameworkInputsAndRenames(t, autocrlf)
+		})
+	}
+}
+
+func testOwnershipFrameworkInputsAndRenames(t *testing.T, autocrlf string) {
 	r := repository(t)
+	if _, err := Git(r, "config", "core.autocrlf", autocrlf); err != nil {
+		t.Fatal(err)
+	}
 	write(t, r, "main_test.go", "package main\nimport \"testing\"\nfunc TestAnswer(t *testing.T) {}\n")
 	write(t, r, "testdata/input.txt", "before\n")
 	write(t, r, "latest.go", "package main\nconst latest = 1\n")

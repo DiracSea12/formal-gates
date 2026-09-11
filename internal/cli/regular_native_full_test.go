@@ -307,6 +307,7 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			root, _ := cliWorkflowFixture(t)
 			binary, _ := installHostCLI(t, lifecycle.ProviderCodex, root)
+			configureProtocolFixtureRuntime(t, root)
 			mustWriteCLI(t, filepath.Join(root, "requirements.md"), cliStructuredRequirement("The public command prints hello."))
 			cliGit(t, root, "add", "requirements.md")
 			cliGit(t, root, "commit", "-m", "bounded retry fixture")

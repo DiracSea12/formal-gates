@@ -19,15 +19,20 @@ func TestRuntimeContextKeepsOriginalEnvironmentAndRejectsMissingExecutable(t *te
 	first := t.TempDir()
 	second := t.TempDir()
 	t.Setenv("CODEX_HOME", first)
-	binding, err := captureRuntimeContext("codex", settings.Values{CodexExecutable: "/bin/sh"})
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := captureRuntimeContext("codex", settings.Values{CodexExecutable: executable})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CODEX_HOME", second)
-	cmd := exec.Command("/bin/sh", "-c", "printf '%s' \"$CODEX_HOME\"")
+	cmd := exec.Command(executable, "-test.run=^TestRuntimeContextEnvironmentChild$")
 	if err = runtimeCommandContext(cmd, binding); err != nil {
 		t.Fatal(err)
 	}
+	cmd.Env = append(cmd.Env, "FORMAL_GATES_CONTEXT_CHILD=1")
 	out, err := cmd.Output()
 	if err != nil || string(out) != first {
 		t.Fatalf("context=%q err=%v", out, err)
@@ -44,7 +49,7 @@ func TestRuntimeContextKeepsOriginalEnvironmentAndRejectsMissingExecutable(t *te
 		t.Fatalf("lookup=%s %v", got, err)
 	}
 	binding.Executable = filepath.Join(t.TempDir(), "missing")
-	if err = runtimeCommandContext(exec.Command("/bin/sh"), binding); err == nil {
+	if err = runtimeCommandContext(exec.Command(executable), binding); err == nil {
 		t.Fatal("missing original executable accepted")
 	}
 }
@@ -235,4 +240,12 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntimeContextEnvironmentChild(t *testing.T) {
+	if os.Getenv("FORMAL_GATES_CONTEXT_CHILD") != "1" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(os.Getenv("CODEX_HOME"))
+	os.Exit(0)
 }

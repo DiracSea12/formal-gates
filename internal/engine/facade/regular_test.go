@@ -53,6 +53,23 @@ func newRegularFacadePackage(t *testing.T, document, packagePath string, owner .
 			t.Fatal(err)
 		}
 	}
+	// Protocol fixtures bind an existing executable without invoking a model.
+	if os.Getenv("FORMAL_GATES_REAL_CODEX") != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, ".gates"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(map[string]string{"codexExecutable": executable})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".gates", "config.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	packageRoot, err := filepath.Abs(packagePath)
 	if err != nil {
 		t.Fatal(err)

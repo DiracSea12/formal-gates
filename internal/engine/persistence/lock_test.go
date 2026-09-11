@@ -65,6 +65,32 @@ func TestLockMutualExclusionSameDirectory(t *testing.T) {
 	}
 }
 
+func TestLockReleaseWhileContenderReads(t *testing.T) {
+	store := newTestStore(t)
+	unlock, err := store.acquireLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	reader, err := openLockFile(store.lockPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	unlock()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.lockPath()); !os.IsNotExist(err) {
+		t.Fatalf("released lock remains while contender reads: %v", err)
+	}
+	next, err := store.acquireLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next()
+}
+
 // TestLockStaleByAge：持有进程存活但锁文件超过阈值未刷新，视为失联可
 // 抢占（崩溃后持有者不再刷新的场景由此覆盖）。
 func TestLockStaleByAge(t *testing.T) {
