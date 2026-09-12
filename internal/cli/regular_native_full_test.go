@@ -259,13 +259,13 @@ func TestRegularInstalledFullNativeFailRepairToSeal(t *testing.T) {
 	t.Fatalf("full native canary did not converge: %+v", r.Next)
 }
 
-// The canary grants no extra attempts. Each initial upstream TaskKey has the
-// engine's ordinary two-attempt limit; only already-issued, unclaimed actions
-// may run. A rejected answer is evidence, not a current review candidate.
+// The canary grants no extra attempts and has no independent retry budget.
+// Only engine-issued, unclaimed actions may run; an engine Ask stops consumption.
+// A rejected answer remains evidence, not a current review candidate.
 func nativeCanaryReview(step string, read func() facade.Run, execute func(protocol.RegularExecution)) (protocol.RawReviewCandidate, error) {
 	seen := map[string]bool{}
 	task := ""
-	for calls := 0; calls <= 2; calls++ {
+	for {
 		r := read()
 		if r.Regular.Ask != nil || r.Next.Kind == decision.KindAsk {
 			return protocol.RawReviewCandidate{}, fmt.Errorf("native upstream needs additional user choice: ask=%+v next=%+v", r.Regular.Ask, r.Next)
@@ -278,9 +278,6 @@ func nativeCanaryReview(step string, read func() facade.Run, execute func(protoc
 				}
 				return raw, nil
 			}
-		}
-		if calls == 2 {
-			break
 		}
 		var pending []protocol.RegularExecution
 		for _, x := range r.Executions {
@@ -299,11 +296,10 @@ func nativeCanaryReview(step string, read func() facade.Run, execute func(protoc
 		task = x.Claim.Task.String()
 		execute(x)
 	}
-	return protocol.RawReviewCandidate{}, fmt.Errorf("native upstream finite attempts ended without an accepted candidate: %s", step)
 }
 
 func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
-	for _, scenario := range []string{"invalid-then-valid", "both-invalid", "valid-finding"} {
+	for _, scenario := range []string{"invalid-then-valid", "all-invalid", "valid-finding"} {
 		t.Run(scenario, func(t *testing.T) {
 			root, _ := cliWorkflowFixture(t)
 			binary, _ := installHostCLI(t, lifecycle.ProviderCodex, root)
@@ -353,7 +349,7 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 				src := protocol.ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: "codex", Identity: "fixture-" + x.Claim.ActionID, Status: "RUNNING"}
 				submit(protocol.RegularEvent{Operation: "SOURCE", Source: &src})
 				raw := protocol.RawReviewCandidate{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: src.Identity, Action: "product-review", RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate, Status: "PASS", Complete: true, Message: "Explicit protocol fixture; not a native review"}
-				if scenario == "both-invalid" || (scenario == "invalid-then-valid" && calls == 1) {
+				if scenario == "all-invalid" || (scenario == "invalid-then-valid" && calls == 1) {
 					raw.RequirementRevision = raw.RequirementRevision[:48] + raw.RequirementRevision[49:]
 				}
 				if scenario == "valid-finding" {
@@ -372,8 +368,8 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 				if err != nil || calls != 2 || answer.Status != "PASS" || len(r.Regular.RejectedResults) != 1 {
 					t.Fatalf("retry: calls=%d answer=%+v error=%v", calls, answer, err)
 				}
-			case "both-invalid":
-				if err == nil || calls != 2 || r.Next.Kind != decision.KindAsk {
+			case "all-invalid":
+				if err == nil || calls != 3 || len(r.Regular.RejectedResults) != 3 || r.Next.Kind != decision.KindAsk {
 					t.Fatalf("finite Ask: calls=%d next=%+v error=%v", calls, r.Next, err)
 				}
 			case "valid-finding":

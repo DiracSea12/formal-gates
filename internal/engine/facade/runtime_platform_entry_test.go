@@ -134,8 +134,12 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 	}
 }
 
-func startPlatformFixture(t *testing.T, a *fixtureRuntime) *Facade {
+func startPlatformFixture(t *testing.T, a *fixtureRuntime, installationAlias ...string) *Facade {
 	t.Helper()
+	provider := a.id
+	if len(installationAlias) > 0 {
+		provider = installationAlias[0]
+	}
 	root := regularFixtureRoot(t)
 	writePreparationFile(t, root, "requirements.md", b1Document)
 	writePreparationFile(t, root, ".gitignore", ".gates/\n")
@@ -162,7 +166,7 @@ func startPlatformFixture(t *testing.T, a *fixtureRuntime) *Facade {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, _, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, Request: StartRequest{RunID: "fixture-public", Provider: a.id, RequirementPath: "requirements.md"}, Admission: &Admission{PackageDigest: "sha256:test", InstalledTargetIdentity: "test-target"}})
+	f, _, err := Start(StartOptions{Root: root, PackageRoot: packageRoot, Request: StartRequest{RunID: "fixture-public", Provider: provider, RequirementPath: "requirements.md"}, Admission: &Admission{PackageDigest: "sha256:test", InstalledTargetIdentity: "test-target"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,5 +232,24 @@ func TestNativePlatformAbortRetainsStagedSource(t *testing.T) {
 	usage := run.Cost.Dispatches[x.Claim.ActionID]
 	if usage.Source != cost.SourceTranscript || usage.TotalInputTokens != 11 || usage.OutputTokens != 3 {
 		t.Fatalf("abort source counted twice: %+v", usage)
+	}
+}
+
+func TestNativeIntakeCanonicalizesRegisteredInstallationAlias(t *testing.T) {
+	suffix := strconv.FormatUint(fixtureRegistrationCounter.Add(1), 10)
+	a := &fixtureRuntime{id: "canonical-fixture-" + suffix, executableOption: "aliasExecutable" + suffix, stateOption: "aliasState" + suffix, serverVersion: 1, adapterVersion: 1}
+	alias := "installed-fixture-" + suffix
+	descriptor := a.descriptor()
+	descriptor.Aliases = []string{alias}
+	if err := registerNativePlatform(descriptor, a); err != nil {
+		t.Fatal(err)
+	}
+	f := startPlatformFixture(t, a, alias)
+	x := facadeExecution(t, f, "product-review")
+	if x.Claim.Provider != a.id || x.Claimed {
+		t.Fatalf("intake did not issue the canonical provider before a native call: %+v", x.Claim)
+	}
+	if _, err := runtimeAdapter(alias); err == nil {
+		t.Fatal("installation alias was incorrectly accepted as an issued native identity")
 	}
 }

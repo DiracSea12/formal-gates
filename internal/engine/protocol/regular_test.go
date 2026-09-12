@@ -69,10 +69,28 @@ func submitRegular(t *testing.T, e *Engine, v RegularEvent) Acceptance {
 }
 func regularChoice(t *testing.T, e *Engine, q RegularRequest, choice string) {
 	t.Helper()
+	// Fixture users explicitly delegate their scenario impact classifications.
+	if q.Action == "apply-requirement" {
+		snap, _ := e.Load()
+		if d := snap.State.Regular.RequirementImpact; d != nil {
+			if q.Impact == nil {
+				q.Impact = map[string]string{}
+			}
+			for name, choice := range d.Choices {
+				if choice == "delegate" && q.Impact[name] == "" {
+					q.Impact[name] = "unknown"
+				}
+			}
+		}
+	}
 	submitRegular(t, e, RegularEvent{Operation: "REQUEST", Request: &q})
 	s, _ := e.Load()
 	a := s.State.Regular.Ask
-	submitRegular(t, e, RegularEvent{Operation: "DECIDE", Decision: &RegularDecision{RequestID: a.ID, Token: RegularFreshness(s.Revision, a.ID), Digest: a.Digest, Choice: choice}})
+	dispositions := map[string]string{}
+	for _, item := range a.ImpactItems {
+		dispositions[item.ID] = "delegate"
+	}
+	submitRegular(t, e, RegularEvent{Operation: "DECIDE", Decision: &RegularDecision{RequestID: a.ID, Token: RegularFreshness(s.Revision, a.ID), Digest: a.Digest, Choice: choice, Dispositions: dispositions}})
 }
 func regularStart(t *testing.T, e *Engine) {
 	regularChoice(t, e, RegularRequest{Action: "confirm-requirement"}, "confirm")
@@ -181,7 +199,7 @@ func TestRegularRejectsBeforeClaimAndIndependentRetry(t *testing.T) {
 	if s2.Revision != s.Revision {
 		t.Fatal("rejected claim wrote state")
 	}
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < 3; attempt++ {
 		x = currentExecution(t, e, "product-review")
 		claimAndAttach(t, e, x)
 		v := resultFor(x)
@@ -202,7 +220,7 @@ func TestRegularRejectsBeforeClaimAndIndependentRetry(t *testing.T) {
 	}
 	regularChoice(t, e, RegularRequest{Action: "authorize-retry", ReviewAction: "product-review", Reason: "Retry the corrected result contract once."}, "confirm")
 	x = currentExecution(t, e, "product-review")
-	if x.Number != 3 {
+	if x.Number != 4 {
 		t.Fatalf("extra retry number %d", x.Number)
 	}
 }
@@ -363,7 +381,7 @@ func TestRegularMinorRevisionThenCrossStageInvalidation(t *testing.T) {
 	regularChoice(t, e, RegularRequest{Action: "finding", ReviewAction: "product-review", ResultDigest: digest, FindingID: "P2-1", Reason: "Specify exact output"}, "confirm")
 	regularChoice(t, e, RegularRequest{Action: "requirement-change", Origin: "REVIEW_FINDING", Reason: "Apply confirmed finding"}, "confirm")
 	doc := Document("requirements.md", []byte(strings.Replace(regularDocument, "输出包含结果。", "输出包含结果 hello。", 1)))
-	regularChoice(t, e, RegularRequest{Action: "apply-requirement", Document: &doc, Meaning: "preserved", Origin: "REVIEW_FINDING", Impact: map[string]string{"product-review": "affected", "start-readiness": "affected"}, Reason: "Complete minor remedy", Delta: []ReviewDeltaHunk{{Old: "输出包含结果。", New: "输出包含结果 hello。", Source: "product-review:" + digest + ":P2-1", Reason: "Replaces the one acceptance line"}}}, "confirm")
+	regularChoice(t, e, RegularRequest{Action: "apply-requirement", Document: &doc, Meaning: "preserved", Origin: "REVIEW_FINDING", Impact: map[string]string{"product-review": "unaffected", "start-readiness": "affected"}, Reason: "Complete minor remedy and explicitly retain corrected product evidence", Delta: []ReviewDeltaHunk{{Old: "输出包含结果。", New: "输出包含结果 hello。", Source: "product-review:" + digest + ":P2-1", Reason: "Replaces the one acceptance line"}}}, "confirm")
 	snap, _ = e.Load()
 	series := snap.State.Regular.Reviews["product-review"]
 	if series.Completed != 1 || series.Fresh || effectiveReview(snap.State.Regular, series) != "PASS" {

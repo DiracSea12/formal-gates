@@ -13,7 +13,6 @@ import (
 const (
 	dshPluginEntryID = "formal-gates-dsh"
 	dshPluginFileRel = "plugin/formal-gates.mjs"
-	dshPluginRelName = "../../skills/formal-gates/plugin/formal-gates.mjs"
 	dshPatchFileName = "cordis.patch.yml"
 )
 
@@ -85,7 +84,7 @@ func configureDshHook(target installTarget) error {
 					if wrote {
 						continue
 					}
-					rows = append(rows, newDshPluginEntry())
+					rows = append(rows, newDshPluginEntry(dshPluginPath(target)))
 					wrote = true
 					continue
 				}
@@ -103,14 +102,14 @@ func configureDshHook(target installTarget) error {
 			if wrote {
 				continue
 			}
-			kept = append(kept, newDshInsertPatch())
+			kept = append(kept, newDshInsertPatch(dshPluginPath(target)))
 			wrote = true
 			continue
 		}
 		kept = append(kept, item)
 	}
 	if !wrote {
-		kept = append(kept, newDshInsertPatch())
+		kept = append(kept, newDshInsertPatch(dshPluginPath(target)))
 	}
 	seq.Content = kept
 	return writeDshPatch(target.hookConfig, doc)
@@ -247,7 +246,7 @@ func dshPluginRowIdentity(row *yaml.Node) (id, name string) {
 	return dshMappingValue(row, "id"), dshMappingValue(row, "name")
 }
 
-func newDshPluginEntry() *yaml.Node {
+func newDshPluginEntry(pluginPath string) *yaml.Node {
 	config := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	config.Content = append(config.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skillRoot"},
@@ -261,14 +260,16 @@ func newDshPluginEntry() *yaml.Node {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "timeoutMs"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: "30000"})
 	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	entry.Content = yamlPairs("id", dshPluginEntryID, "name", dshPluginRelName)
+	// DSH layers can have different include bases. The installed target is
+	// already path-bound; its module must not depend on the profile's depth.
+	entry.Content = yamlPairs("id", dshPluginEntryID, "name", filepath.ToSlash(pluginPath))
 	entry.Content = append(entry.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "config"}, config)
 	return entry
 }
 
-func newDshInsertPatch() *yaml.Node {
+func newDshInsertPatch(pluginPath string) *yaml.Node {
 	insert := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	insert.Content = []*yaml.Node{newDshPluginEntry()}
+	insert.Content = []*yaml.Node{newDshPluginEntry(pluginPath)}
 	patch := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	patch.Content = append(patch.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "insert"}, insert)
 	return patch

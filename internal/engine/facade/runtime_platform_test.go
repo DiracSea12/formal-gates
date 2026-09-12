@@ -30,6 +30,7 @@ type fixtureRuntime struct {
 	id, executableOption, stateOption string
 	serverVersion, adapterVersion     int
 	answer                            func(nativeTurn) any
+	beforeCapture                     func()
 }
 
 type fixtureMessage struct {
@@ -209,6 +210,9 @@ func (a *fixtureRuntime) descriptor() *host.Descriptor {
 	}
 }
 func (a *fixtureRuntime) capture(c settings.Values) (*protocol.HostRuntimeContext, error) {
+	if a.beforeCapture != nil {
+		a.beforeCapture()
+	}
 	return captureStreamContext(a.id, c.NativeString(a.executableOption), map[string]string{"FIXTURE_STATE_FILE": c.NativeString(a.stateOption)})
 }
 func (a *fixtureRuntime) validate(c *protocol.HostRuntimeContext) error {
@@ -222,7 +226,7 @@ func (a *fixtureRuntime) invoke(ctx context.Context, c *protocol.HostRuntimeCont
 	}
 	cmd.Env = append(cmd.Env, "FORMAL_GATES_B6_FIXTURE_PROCESS=1")
 	return runNativeStreamProcess(ctx, cmd, job, action, func(in io.Reader, out io.WriteCloser) (nativeProcessResult, error) {
-		if err := json.NewEncoder(out).Encode(fixtureMessage{Version: a.serverVersion, Resume: resume, StateFile: c.Environment["FIXTURE_STATE_FILE"], Answer: answer, Probe: probe, StartID: fixtureSessionID(action)}); err != nil {
+		if err := json.NewEncoder(out).Encode(fixtureMessage{Version: a.serverVersion, Resume: resume, StateFile: fixtureStateFile(c, action, resume), Answer: answer, Probe: probe, StartID: fixtureSessionID(action)}); err != nil {
 			return nativeProcessResult{}, err
 		}
 		var raw json.RawMessage
@@ -233,6 +237,17 @@ func (a *fixtureRuntime) invoke(ctx context.Context, c *protocol.HostRuntimeCont
 		return nativeProcessResult{Identity: r.Identity, Answer: r.Answer}, err
 	})
 }
+
+// Native stores support independent sessions. The local process fixture uses
+// one file per identity so parallel actions cannot overwrite each other's state.
+func fixtureStateFile(c *protocol.HostRuntimeContext, action, resume string) string {
+	identity := resume
+	if identity == "" {
+		identity = fixtureSessionID(action)
+	}
+	return c.Environment["FIXTURE_STATE_FILE"] + "-" + identity
+}
+
 func (a *fixtureRuntime) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
 	answer, _ := json.Marshal(map[string]string{"output": op.Request.Prompt})
 	_, err := a.invoke(ctx, op.Request.Binding.Context, job, op.ID, op.Request.Binding.Identity, answer, false)

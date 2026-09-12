@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"formal-gates/internal/lifecycle"
+	"formal-gates/internal/host"
 	"formal-gates/internal/validate"
 )
 
@@ -82,15 +82,11 @@ func installHostCLI(t *testing.T, provider, project string) (string, string) {
 		t.Fatalf("build installed %s CLI: %v: %s", provider, err, output)
 	}
 	launcher := filepath.Join(os.Getenv("HOME"), ".local", "bin", installTestBinaryName())
-	host := map[string]string{
-		lifecycle.ProviderClaude: "claude",
-		lifecycle.ProviderCursor: "cursor",
-		lifecycle.ProviderCodex:  "codex",
-	}[provider]
-	if host == "" {
-		t.Fatalf("unsupported installed-host fixture provider %q", provider)
+	descriptor, err := host.Lookup(provider)
+	if err != nil {
+		t.Fatal(err)
 	}
-	report, err := validate.Install(validate.InstallOptions{Source: repoRoot, Host: host, Scope: "project", Project: project, BinaryTarget: launcher, Force: true})
+	report, err := validate.Install(validate.InstallOptions{Source: repoRoot, Host: descriptor.InstallName, Scope: "project", Project: project, BinaryTarget: launcher, Force: true})
 	if err != nil {
 		t.Fatalf("install %s CLI: %v", provider, err)
 	}
@@ -99,7 +95,7 @@ func installHostCLI(t *testing.T, provider, project string) (string, string) {
 	}
 	// 文档化首启边界：普通 install 只提交 registry record，第一次 workflow start
 	// 前必须先提交 bootstrap receipt（同一 source/launcher/registry）。
-	if _, err := validate.Install(validate.InstallOptions{Source: repoRoot, Host: host, Scope: "project", Project: project, BinaryTarget: launcher, Bootstrap: true, Force: true}); err != nil {
+	if _, err := validate.Install(validate.InstallOptions{Source: repoRoot, Host: descriptor.InstallName, Scope: "project", Project: project, BinaryTarget: launcher, Bootstrap: true, Force: true}); err != nil {
 		t.Fatalf("bootstrap %s CLI registry: %v", provider, err)
 	}
 	return launcher, report.Targets[0].TargetPath

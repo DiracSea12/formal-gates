@@ -81,6 +81,30 @@ func TestCommitManifestRecoveryAndSquash(t *testing.T) {
 		t.Fatal("squash replay changed identity")
 	}
 }
+
+func TestCommitRecoversPartiallyStagedRename(t *testing.T) {
+	r := repository(t)
+	base, _ := Head(r)
+	if err := os.Rename(filepath.Join(r, "main.go"), filepath.Join(r, "renamed.go")); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash after Git already recognized the delete/add as a rename.
+	if _, err := Git(r, "add", "-A", "--", "main.go", "renamed.go"); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := Commit(r, base, "rename-replay", []string{"main.go", "renamed.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Before != base || receipt.After == base {
+		t.Fatal(receipt)
+	}
+	dirty, err := Changes(r, receipt.After)
+	if err != nil || len(dirty) != 0 {
+		t.Fatalf("post-recovery worktree: %v %v", dirty, err)
+	}
+}
+
 func TestOwnershipFrameworkInputsAndRenames(t *testing.T) {
 	for _, autocrlf := range []string{"false", "true"} {
 		t.Run("autocrlf="+autocrlf, func(t *testing.T) {

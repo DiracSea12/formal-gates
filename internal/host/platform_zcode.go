@@ -21,7 +21,7 @@ var zcodeDescriptor = &Descriptor{
 	Hook:            HookSpec{Response: zcodeHookResponse, Kind: HookZCode, Protocol: ProtocolZCode, GateEvent: "PreToolUse", GateMatcher: ".*", LifecycleMatcher: "Agent|Task"},
 	LifecycleEvents: []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}, LifecycleRequired: true,
 	CostProvider:    ZCode,
-	Configuration:   []ConfigField{StringConfig("zcodeExecutable", "node"), StringConfig("zcodeScript", "")},
+	Configuration:   []ConfigField{StringConfig("zcodeExecutable", "node"), StringConfig("zcodeScript", ""), StringConfig("zcodeHome", "")},
 	ReadUsage:       parseZCodeTranscript,
 	CheckIdentity:   zcodeTranscriptIdentity,
 	ObserveRecovery: zcodeRecoveryOutcome,

@@ -68,15 +68,16 @@ type DevelopmentPlan struct {
 	ConfirmedRevision   string             `json:"confirmedRevision,omitempty"`
 }
 type RegularAsk struct {
-	QA       *QARecoveryBinding `json:"qa,omitempty"`
-	Preview  *RegularPreview    `json:"preview,omitempty"`
-	ID       string             `json:"id"`
-	Kind     string             `json:"kind"`
-	Token    string             `json:"token"`
-	Revision uint64             `json:"revision"`
-	Digest   string             `json:"digest"`
-	Options  []string           `json:"options"`
-	Request  RegularRequest     `json:"request"`
+	ImpactItems []ImpactItem       `json:"impactItems,omitempty"`
+	QA          *QARecoveryBinding `json:"qa,omitempty"`
+	Preview     *RegularPreview    `json:"preview,omitempty"`
+	ID          string             `json:"id"`
+	Kind        string             `json:"kind"`
+	Token       string             `json:"token"`
+	Revision    uint64             `json:"revision"`
+	Digest      string             `json:"digest"`
+	Options     []string           `json:"options"`
+	Request     RegularRequest     `json:"request"`
 }
 
 // RegularPreview is displayed inside the Ask and participates in its digest.
@@ -99,8 +100,10 @@ type ExternalObservation struct {
 	DiffDigest string `json:"diffDigest"`
 }
 type RegularRequest struct {
-	External *ExternalObservation `json:"external,omitempty"`
-	Target   string               `json:"target,omitempty"`
+	Increment *DevelopmentIncrement `json:"increment,omitempty"`
+	Handoff   *ExecutorHandoff      `json:"handoff,omitempty"`
+	External  *ExternalObservation  `json:"external,omitempty"`
+	Target    string                `json:"target,omitempty"`
 
 	RequiredSources []coverage.RequiredSource `json:"requiredSources,omitempty"`
 	Action          string                    `json:"action"`
@@ -125,23 +128,26 @@ type ReviewDeltaHunk struct {
 	Reason string `json:"reason"`
 }
 type RegularDecision struct {
-	RequestID string `json:"requestId"`
-	Token     string `json:"token"`
-	Digest    string `json:"digest"`
-	Choice    string `json:"choice"`
-	Reason    string `json:"reason,omitempty"`
+	Impact       map[string]string `json:"impact,omitempty"`
+	Dispositions map[string]string `json:"dispositions,omitempty"`
+	RequestID    string            `json:"requestId"`
+	Token        string            `json:"token"`
+	Digest       string            `json:"digest"`
+	Choice       string            `json:"choice"`
+	Reason       string            `json:"reason,omitempty"`
 }
 type RequirementChangeReceipt struct {
-	FromRevision  string            `json:"fromRevision"`
-	ToRevision    string            `json:"toRevision"`
-	Candidate     string            `json:"candidate"`
-	StateRevision uint64            `json:"stateRevision"`
-	Meaning       string            `json:"meaning"`
-	Origin        string            `json:"origin"`
-	Keep          []KeptReview      `json:"keep"`
-	Impact        map[string]string `json:"impact"`
-	Reason        string            `json:"reason"`
-	DeltaDigest   string            `json:"deltaDigest"`
+	UserDisposition *RequirementImpactDecision `json:"userDisposition,omitempty"`
+	FromRevision    string                     `json:"fromRevision"`
+	ToRevision      string                     `json:"toRevision"`
+	Candidate       string                     `json:"candidate"`
+	StateRevision   uint64                     `json:"stateRevision"`
+	Meaning         string                     `json:"meaning"`
+	Origin          string                     `json:"origin"`
+	Keep            []KeptReview               `json:"keep"`
+	Impact          map[string]string          `json:"impact"`
+	Reason          string                     `json:"reason"`
+	DeltaDigest     string                     `json:"deltaDigest"`
 }
 type KeptReview struct {
 	Action          string `json:"action"`
@@ -160,6 +166,9 @@ type GuardProjection struct {
 	ContinueTasks  []runtime.TaskKey `json:"continueTasks,omitempty"`
 }
 type RegularState struct {
+	DevelopmentIncrements   []DevelopmentIncrementReceipt          `json:"developmentIncrements,omitempty"`
+	RequirementImpact       *RequirementImpactDecision             `json:"requirementImpact,omitempty"`
+	ExecutorHandoffs        []ExecutorHandoffReceipt               `json:"executorHandoffs,omitempty"`
 	StartedAt               time.Time                              `json:"startedAt,omitempty"`
 	OwnerStartedAt          time.Time                              `json:"ownerStartedAt,omitempty"`
 	OwnerTranscript         string                                 `json:"ownerTranscript,omitempty"`
@@ -399,6 +408,21 @@ func (e *Engine) refreshRegular(s *State) {
 	if r == nil {
 		return
 	}
+	// Recompute the scheduling projection from immutable execution history so
+	// resumed runs apply the current failure allowance without resetting history.
+	for key, at := range s.Attempts {
+		last := 0
+		for _, x := range s.RegularExecutions {
+			if x.Claim.Task == key && x.Number > last {
+				last = x.Number
+			}
+		}
+		if last > 0 {
+			at.MaxAttempts = preparationMax(s, key)
+			at.RetryExhausted = s.Tasks[key] == runtime.TaskTerminal && last >= at.MaxAttempts
+			s.Attempts[key] = at
+		}
+	}
 	v := &decision.RegularView{Prechecked: r.Requirement.Projection != nil, Confirmed: r.Requirement.Confirmed, Mode: r.Mode, TopologyConfirmed: r.Topology == "no-split", RouteConfirmed: r.Route != nil, Terminal: r.Terminal != "" && r.Terminal != "ABORTING"}
 	if r.Ask != nil {
 		v.Control = r.Ask.Kind
@@ -524,7 +548,7 @@ func (e *Engine) regularBasis(s *State) (guard.Result, error) {
 		for seq := 1; seq <= series.Limit; seq++ {
 			key := step
 			key.Scope = "review-" + strconv.Itoa(seq)
-			max := 2 + series.ExtraAttempts[key.String()]
+			max := 3 + series.ExtraAttempts[key.String()]
 			b.ExternalTasks = append(b.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.DefinitionSource, Identity: b.Definition.Identity}, MaxAttempts: &max})
 		}
 	}
@@ -537,6 +561,9 @@ func (e *Engine) regularBasis(s *State) (guard.Result, error) {
 // Scheduling and retry authority remain TaskKey/Attempt/PendingActions; ended
 // actions leave PendingActions while this immutable history survives task reuse.
 type RegularExecution struct {
+	Executor           *ExecutorTarget          `json:"executor,omitempty"`
+	ExecutorHandoffID  string                   `json:"executorHandoffId,omitempty"`
+	SupersededBy       string                   `json:"supersededBy,omitempty"`
 	Operations         map[string]TaskOperation `json:"operations,omitempty"`
 	ResumeCount        int                      `json:"resumeCount"`
 	VerificationResult *VerificationResult      `json:"verificationResult,omitempty"`
@@ -587,7 +614,7 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 				number++
 			}
 		}
-		max := preparationMax(r, a.Task)
+		max := preparationMax(s, a.Task)
 		if number > max {
 			return nil, fmt.Errorf("RETRY_EXHAUSTED: %s", a.Task.String())
 		}
@@ -613,7 +640,7 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 		}
 		candidate, prerequisite := preparationClaim(r, a.Task)
 		at.Bindings.Snapshot = candidate
-		at.MaxAttempts = preparationMax(r, a.Task)
+		at.MaxAttempts = preparationMax(s, a.Task)
 		s.Attempts[a.Task] = at
 		c := ExecutionClaim{PrerequisiteDigest: prerequisite, ActionID: a.ActionID, AttemptID: at.ID, Task: a.Task, Provider: s.RunProvider, RequirementRevision: r.Requirement.Revision, Candidate: candidate, Operation: "spawn"}
 		if c.Task.Step == "start-readiness" {
@@ -650,15 +677,7 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 		}
 		if c.Task.Step == "development-worker" {
 			r.Preparation.DevelopmentTask = &c.Task
-			if previous, ok := latestDeveloper(s, c.Task); ok {
-				x.PreviousAction = previous.Claim.ActionID
-				x.Claim.Context = previous.Claim.Context
-				if previous.Identity != "" {
-					x.Claim.Operation = "resume"
-					x.Claim.Identity = previous.Identity
-					x.Identity = previous.Identity
-				}
-			}
+			bindDeveloperExecutor(s, &x)
 			x.Claim.PayloadDigest = digestOfCanonical(struct {
 				Claim          ExecutionClaim
 				PreviousAction string
@@ -741,7 +760,7 @@ func (e *Engine) admitRegularEvent(ev Event, s *State, revision uint64) (Accepta
 			s.RegularExecutions[id] = x
 			s.Tasks[x.Claim.Task] = runtime.TaskTerminal
 			at := s.Attempts[x.Claim.Task]
-			at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+			at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 			s.Attempts[x.Claim.Task] = at
 		}
 	}
@@ -835,7 +854,14 @@ func (e *Engine) claimRegular(s *State, c ExecutionClaim) error {
 			return fmt.Errorf("TOKEN_CAP: continue authorization is bound to another TaskKey")
 		}
 	}
-	if c.Operation == "spawn" {
+	if isExternalExecution(x) && c.Operation != "external" {
+		return fmt.Errorf("EXECUTOR_HANDOFF: user-assigned external work cannot be launched as a native process")
+	}
+	if c.Operation == "external" {
+		if err := claimExternalExecutor(s, &x, c); err != nil {
+			return err
+		}
+	} else if c.Operation == "spawn" {
 		if c.Task.Step == "development-worker" && x.Claim.Identity != "" {
 			return fmt.Errorf("DEVELOPMENT_CONTINUITY: unfinished batch must resume its bound native identity")
 		}
@@ -870,7 +896,7 @@ func (e *Engine) claimRegular(s *State, c ExecutionClaim) error {
 	}
 	x.Claim.Context = c.Context
 	s.RegularExecutions[c.ActionID] = x
-	if c.Operation == "spawn" || c.Operation == "resume" || c.Operation == "replace" {
+	if c.Operation == "spawn" || c.Operation == "resume" || c.Operation == "replace" || c.Operation == "external" {
 		kept := r.Guard.ContinueTasks[:0]
 		for _, key := range r.Guard.ContinueTasks {
 			if key != c.Task {
@@ -885,6 +911,12 @@ func (e *Engine) sourceRegular(s *State, src ExecutionSource) error {
 	x, ok := s.RegularExecutions[src.ActionID]
 	if !ok || !x.Claimed {
 		return fmt.Errorf("UNKNOWN_ACTION: source requires a claimed execution")
+	}
+	if x.SupersededBy != "" {
+		return fmt.Errorf("EVENT_NOT_CURRENT: source belongs to a handed-off execution")
+	}
+	if isExternalExecution(x) {
+		return fmt.Errorf("EXECUTOR_HANDOFF: external executor cannot publish native lifecycle or usage")
 	}
 	if src.AttemptID != x.Claim.AttemptID || src.Provider != x.Claim.Provider || (src.Identity == "" && src.Status != "UNAVAILABLE") {
 		return fmt.Errorf("INTENT_MISMATCH: source binding mismatch")
@@ -903,7 +935,7 @@ func (e *Engine) sourceRegular(s *State, src ExecutionSource) error {
 			return fmt.Errorf("DEVELOPMENT_CONTINUITY: result source is not the bound developer")
 		}
 		for id, prior := range s.RegularExecutions {
-			if id != src.ActionID && prior.Claim.Task.Step == "development-worker" && prior.Claim.Task != x.Claim.Task && prior.Identity == src.Identity {
+			if id != src.ActionID && prior.Claim.Task.Step == "development-worker" && prior.Claim.Task != x.Claim.Task && prior.Claim.Provider == src.Provider && prior.Identity == src.Identity {
 				return fmt.Errorf("INTENT_MISMATCH: development batches require fresh independent native sessions")
 			}
 		}
@@ -1121,7 +1153,7 @@ func RegularAvailableActions(s *State) []string {
 		actions = append(actions, "submit:WAVE_ADJUDICATE", "submit:REQUEST:verification-retry", "submit:REQUEST:authorize-wave")
 	}
 	if r.Preparation != nil {
-		actions = append(actions, "submit:REQUEST:plan-change", "submit:REQUEST:qa-suggestion", "submit:REQUEST:qa-revise", "submit:REQUEST:development-rework", "submit:REQUEST:preparation-retry")
+		actions = append(actions, "submit:REQUEST:development-increment", "submit:REQUEST:plan-change", "submit:REQUEST:qa-suggestion", "submit:REQUEST:qa-revise", "submit:REQUEST:development-rework", "submit:REQUEST:preparation-retry")
 	}
 	finished := true
 	for _, x := range s.RegularExecutions {

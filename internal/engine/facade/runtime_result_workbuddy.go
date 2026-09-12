@@ -17,7 +17,7 @@ type workBuddyResult struct {
 
 // observeWorkBuddyResult is shared by live collection and interrupted-process
 // recovery. A resume must supply the previously bound native session identity.
-// SDK task notifications and assistant text are never terminal result evidence.
+// SDK task notifications and assistant text are never successful result evidence.
 func observeWorkBuddyResult(stream io.Reader, expectedIdentity string) (workBuddyResult, error) {
 	return observeWorkBuddyStream(stream, expectedIdentity, nil)
 }
@@ -41,6 +41,7 @@ func observeWorkBuddyStream(stream io.Reader, expectedIdentity string, attached 
 			IsError    *bool           `json:"is_error"`
 			Result     string          `json:"result"`
 			Structured json.RawMessage `json:"structured_output"`
+			Message    json.RawMessage `json:"message"`
 		}
 		if err := json.Unmarshal(line, &msg); err != nil {
 			return observed, fmt.Errorf("WORKBUDDY_STREAM: %w", err)
@@ -58,6 +59,9 @@ func observeWorkBuddyStream(stream io.Reader, expectedIdentity string, attached 
 				}
 			}
 			attachedIdentity = true
+		}
+		if msg.Type == "assistant" && attachedIdentity && workBuddyAuthenticationRequired(msg.Message) {
+			return observed, fmt.Errorf("WORKBUDDY_AUTH: native WorkBuddy authentication is unavailable; sign in through its original native configuration")
 		}
 		if msg.Type != "result" {
 			continue
@@ -90,4 +94,28 @@ func observeWorkBuddyStream(stream io.Reader, expectedIdentity string, attached 
 		return observed, fmt.Errorf("WORKBUDDY_RESULT: terminal result not observed; do not repeat the native call")
 	}
 	return observed, nil
+}
+
+// The native CLI can emit an authentication rejection with absent/zero usage and no
+// terminal result or closing stdout. Treat its exact protocol message as a
+// failed invocation rather than waiting forever or interpreting it as PASS.
+func workBuddyAuthenticationRequired(raw json.RawMessage) bool {
+	var message struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Usage *struct {
+			Input  *int64 `json:"input_tokens"`
+			Output *int64 `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &message) != nil || len(message.Content) != 1 || message.Content[0].Type != "text" {
+		return false
+	}
+	if usage := message.Usage; usage != nil && ((usage.Input != nil && *usage.Input != 0) || (usage.Output != nil && *usage.Output != 0)) {
+		return false
+	}
+	text := message.Content[0].Text
+	return text == "Authentication required. Please use /login command to sign in to your account" || text == "Authentication failed. Please use /login command to sign in to your account"
 }

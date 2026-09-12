@@ -24,8 +24,11 @@ func workBuddyCommand(executable, workspace, model, effort, resumeIdentity strin
 	if err := json.Unmarshal(schema, &object); err != nil || object == nil {
 		return nil, fmt.Errorf("WORKBUDDY_CONFIG: result schema must be a JSON object")
 	}
+	// WorkBuddy implements --json-schema through its StructuredOutput tool.
+	// Declare the result-only protocol explicitly even when a role has no
+	// workspace or engine-operation tools; do not rely on implicit injection.
 	args := []string{"--print", "--verbose", "--output-format", "stream-json", "--input-format", "text",
-		"--json-schema", string(schema), "--tools", "",
+		"--json-schema", string(schema), "--tools", "StructuredOutput",
 		"--strict-mcp-config", "--mcp-config", mcpConfigPath,
 		"--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", "bypassPermissions"}
 	if model != "" {
@@ -65,12 +68,12 @@ func workBuddySessionCommand(executable, workspace, model, effort, identity stri
 // workBuddyRoleTools applies the same authoring versus frozen execution boundary
 // as the existing native adapter. The allow list never exposes native delegation.
 func workBuddyRoleTools(cmd *exec.Cmd, step string) {
-	tools := ""
+	tools := "StructuredOutput"
 	switch nativeRoleAccess(step) {
 	case nativeWorkspaceWrite:
-		tools = "Bash,Edit,Read"
+		tools += ",Bash,Edit,Read"
 	case nativeReadOnly:
-		tools = "Read"
+		tools += ",Read"
 	}
 	for i := 1; i+1 < len(cmd.Args); i++ {
 		if cmd.Args[i] == "--tools" {

@@ -15,6 +15,9 @@ func TestDSHNativeOperationProfile(t *testing.T) {
 	if !reflect.DeepEqual(acp["inject"], []string{"acpAppStartup", "formalGatesNativeReady"}) || acp["config"] != nil {
 		t.Fatal("profile replaced native model configuration or lost startup ordering")
 	}
+	if !reflect.DeepEqual(patch[3], map[string]any{"id": "formal-gates-dsh", "disabled": true}) {
+		t.Fatal("native child must disable only the owner's duplicate lifecycle hook")
+	}
 	plugin := patch[0].(map[string]any)["insert"].([]any)[0].(map[string]any)
 	config := plugin["config"].(map[string]any)
 	schema := config["tool"].(map[string]any)["inputSchema"].(map[string]any)

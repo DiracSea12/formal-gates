@@ -16,6 +16,7 @@ import (
 // Preparation is the current plan's projection, not another task lifecycle.
 // Attempts and native sessions continue to live in the existing protocol maps.
 type Preparation struct {
+	BatchTasks          map[string]runtime.TaskKey   `json:"batchTasks,omitempty"`
 	DevelopmentTask     *runtime.TaskKey             `json:"developmentTask,omitempty"`
 	ReworkReason        string                       `json:"reworkReason,omitempty"`
 	PlanDigest          string                       `json:"planDigest"`
@@ -52,6 +53,9 @@ type QAReviewWaiver struct {
 	Revision uint64            `json:"revision"`
 }
 type PreparedQA struct {
+	TestArtifactsFrom   string          `json:"testArtifactsFrom,omitempty"`
+	TestArtifactsBase   string          `json:"testArtifactsBase,omitempty"`
+	DesignGap           string          `json:"designGap,omitempty"`
 	ConsecutiveFailures int             `json:"consecutiveFailures"`
 	RecoveryRequired    bool            `json:"recoveryRequired"`
 	ReviewWaiver        *QAReviewWaiver `json:"reviewWaiver,omitempty"`
@@ -182,6 +186,12 @@ func prepareProjection(r *RegularState) {
 		r.PreparationHistory = append(r.PreparationHistory, *r.Preparation)
 	}
 	p := &Preparation{PlanDigest: r.Plan.Digest, BindingDigest: binding, Resources: map[string]string{}, Batches: map[string]PreparationResult{}, Commits: map[string]gitprep.Receipt{}, QA: map[string]*PreparedQA{}, DevelopmentSnapshot: r.Candidate}
+	if old := r.Preparation; old != nil {
+		p.BatchTasks = map[string]runtime.TaskKey{}
+		for id, key := range old.BatchTasks {
+			p.BatchTasks[id] = key
+		}
+	}
 	if old := r.Preparation; old != nil && old.DevelopmentTask != nil {
 		// A revised plan may rename its first unfinished batch. The open work still
 		// owns the same TaskKey, native session, attempt budget and working files.
@@ -195,7 +205,21 @@ func prepareProjection(r *RegularState) {
 	}
 	if old := r.Preparation; old != nil && len(r.Changes) > 0 && r.Changes[len(r.Changes)-1].ToRevision == r.Requirement.Revision {
 		change := r.Changes[len(r.Changes)-1]
-		if change.Impact["development"] == "unaffected" {
+		if change.UserDisposition != nil {
+			p.DevelopmentSnapshot = old.DevelopmentSnapshot
+			p.Resources["development"] = old.Resources["development"]
+			p.ExtraAttempts = old.ExtraAttempts
+			for id, result := range old.Batches {
+				impact := change.Impact["batch:"+id]
+				if impact == "" {
+					impact = change.Impact["development"]
+				}
+				if impact == "unaffected" {
+					p.Batches[id] = result
+					p.Commits[id] = old.Commits[id]
+				}
+			}
+		} else if change.Impact["development"] == "unaffected" {
 			p.Batches = old.Batches
 			p.Commits = old.Commits
 			p.DevelopmentSnapshot = old.DevelopmentSnapshot
@@ -245,6 +269,9 @@ func preparationTask(p *Preparation, step, scope string) runtime.TaskKey {
 	return runtime.TaskKey{Node: "entry", Step: authoring.StepID(step), Scope: strings.TrimPrefix(p.BindingDigest, "sha256:") + ":" + scope}
 }
 func batchTask(p *Preparation, id string) runtime.TaskKey {
+	if key, ok := p.BatchTasks[id]; ok {
+		return key
+	}
 	if p.DevelopmentTask != nil {
 		return *p.DevelopmentTask
 	}
@@ -473,7 +500,9 @@ func preparationAllowance(s *State, b *guard.Basis) {
 		current := nextBatch(r)
 		for _, batch := range r.Plan.Batches {
 			key := preparationTask(p, "development-worker", fmt.Sprintf("%s-%d", batch.ID, p.Rework))
-			if current != nil && batch.ID == current.ID {
+			if bound, ok := p.BatchTasks[batch.ID]; ok {
+				key = bound
+			} else if current != nil && batch.ID == current.ID {
 				key = batchTask(p, batch.ID)
 			}
 			keys[key] = true
@@ -484,34 +513,52 @@ func preparationAllowance(s *State, b *guard.Basis) {
 		}
 	}
 	for key := range keys {
-		max := 2
+		max := 3
 		for _, old := range r.PreparationHistory {
-			if n := 2 + old.ExtraAttempts[key.String()]; n > max {
+			if n := 3 + old.ExtraAttempts[key.String()]; n > max {
 				max = n
 			}
 		}
 		if p != nil {
-			if n := 2 + p.ExtraAttempts[key.String()]; n > max {
+			if n := 3 + p.ExtraAttempts[key.String()]; n > max {
 				max = n
 			}
 		}
+		max += continuationCredit(s, key)
 		b.ExternalTasks = append(b.ExternalTasks, guard.ExternalTask{TaskKey: key, Provenance: guard.Provenance{Kind: guard.DefinitionSource, Identity: b.Definition.Identity}, MaxAttempts: &max})
 	}
 }
-func preparationMax(r *RegularState, key runtime.TaskKey) int {
+
+// continuationCredit excludes only accepted normal development returns from the
+// failure allowance. Dispatch identities, source evidence and cost remain intact.
+func continuationCredit(s *State, key runtime.TaskKey) int {
+	if key.Step != "development-worker" {
+		return 0
+	}
+	n := 0
+	for id, x := range s.RegularExecutions {
+		if x.Claim.Task == key && x.Finished && s.Results[id].Outcome == "CONTINUE" {
+			n++
+		}
+	}
+	return n
+}
+
+func preparationMax(s *State, key runtime.TaskKey) int {
+	r := s.Regular
 	if verificationStep(key.Step) {
 		if r.Verification == nil {
-			return 2
+			return 3
 		}
-		return 2 + r.Verification.ExtraAttempts[key.String()]
+		return 3 + r.Verification.ExtraAttempts[key.String()]
 	}
 	if preparationStep(key.Step) {
 		if r.Preparation == nil {
-			return 2
+			return 3
 		}
-		return 2 + r.Preparation.ExtraAttempts[key.String()]
+		return 3 + r.Preparation.ExtraAttempts[key.String()] + continuationCredit(s, key)
 	}
-	return 2 + r.Reviews[string(key.Step)].ExtraAttempts[key.String()]
+	return 3 + r.Reviews[string(key.Step)].ExtraAttempts[key.String()]
 }
 
 func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision uint64) (string, error) {
@@ -531,7 +578,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 	reject := func(err error) (string, error) {
 		at := s.Attempts[x.Claim.Task]
 		at.Attempts = x.Number
-		at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+		at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 		s.Attempts[x.Claim.Task] = at
 		r.PreparationErrors = append(r.PreparationErrors, PreparationError{Result: result, Reason: err.Error(), Revision: revision + 1})
 		return "REJECTED_RESULT", nil
@@ -552,7 +599,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			return reject(fmt.Errorf("unfinished development requires its actual continuation or failure reason"))
 		}
 		at := s.Attempts[x.Claim.Task]
-		at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+		at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 		s.Attempts[x.Claim.Task] = at
 		s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, Digest: digestOfCanonical(result)}
 		return "ACCEPTED", nil
@@ -594,6 +641,10 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			}
 		}
 		p.Batches[b.ID] = result
+		if p.BatchTasks == nil {
+			p.BatchTasks = map[string]runtime.TaskKey{}
+		}
+		p.BatchTasks[b.ID] = x.Claim.Task
 	} else {
 		mode := strings.Split(step, "-")[0]
 		q := p.QA[mode]

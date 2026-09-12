@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -376,6 +377,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	// Facade intake normalizes the installed host once before issuing identities.
 	request := facade.StartRequest{Provider: admission.Host, RunID: *runID, RequirementPath: *req, BaseSnapshot: *base, Route: *route}
 	if *intake != "" {
 		if *req != "" || (*route != "" && *route != "lightweight") {
@@ -466,6 +468,8 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
 	actionID := fs.String("action-id", "", "execute this issued native action")
+	external := fs.Bool("external-executor", false, "claim an explicitly user-assigned external developer action")
+	continuous := fs.Bool("continuous", false, "consume engine-issued actions until a user, operator, external executor or blocked boundary")
 	operationPath := fs.String("operation-request", "", "typed internal task operation request JSON path")
 	nativeOperationPath := fs.String("operation-native", "", "bound native tool request JSON path")
 	mcp := fs.Bool("operation-mcp", false, "serve bound task operations over MCP stdio")
@@ -473,6 +477,9 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	resume := fs.Bool("resume", false, "resume this action through the bound native session")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
+	}
+	if *continuous && (*actionID != "" || *external || *resume || *operationPath != "" || *nativeOperationPath != "" || *mcp || *nativeIdentity != "") {
+		return 1, fmt.Errorf("--continuous cannot combine with a single action or task operation")
 	}
 	if *mcp && (*actionID == "" || *nativeIdentity == "" || *operationPath != "" || *nativeOperationPath != "" || *resume) {
 		return 1, fmt.Errorf("--operation-mcp requires --action-id and --native-identity; cannot combine with --operation-request or --resume")
@@ -482,6 +489,9 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	}
 	if *nativeOperationPath != "" && (*mcp || *actionID == "" || *nativeIdentity == "" || *operationPath != "" || *resume) {
 		return 1, fmt.Errorf("--operation-native requires --action-id and --native-identity; cannot combine with --operation-mcp, --operation-request or --resume")
+	}
+	if *external && (*actionID == "" || *resume || *operationPath != "" || *mcp || *nativeOperationPath != "" || *nativeIdentity != "") {
+		return 1, fmt.Errorf("--external-executor requires only --action-id and cannot combine with native operations")
 	}
 	f, ok, err := openEngineIfPresent(*root, *runID)
 	if !ok {
@@ -517,6 +527,14 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 			return 1, err
 		}
 		result, err := f.RunTaskOperation(q, *resume)
+		return printValue(streams.Stdout, result, err)
+	}
+	if *external {
+		input, err := f.PrepareExternalDeveloper(*actionID)
+		return printValue(streams.Stdout, input, err)
+	}
+	if *continuous {
+		result, err := f.DriveContinuous(context.Background())
 		return printValue(streams.Stdout, result, err)
 	}
 	if *actionID != "" {

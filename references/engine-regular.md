@@ -54,6 +54,13 @@ whitebox 和该 run `catalogGates`；custom 至少选择一个 QA 或普通门�
 需求保证；没有 QA 时保持 INACTIVE。技术审的每个 Batch 必须有 ordered subtasks、依赖、
 接口、状态边界、风险、DoD、验证、恢复、交接和上下文成本。
 
+
+宿主由已注册安装目标选择，而不是 workflow start 的任意 provider 参数。Codex、
+WorkBuddy、ZCode 和 DSH 的 regular 执行共用 `workflow drive --continuous`；规范
+provider ID 分别为 codex、workbuddy、zcode、deepseek-harness，安装别名 dsh 不作为
+可改写的 action 身份。安装能力不等于原生完整执行能力；缺少所需能力时启动前拒绝。
+其他已安装但没有完整 runtime adapter 的宿主不能作为 native executor 被静默接受。
+
 ## 原生审查与结果
 
 ```sh
@@ -66,8 +73,9 @@ formal-gates workflow drive --root <project> --run-id <id> --action-id <issued-a
 State/CAS 认领 action、TaskKey、Attempt、provider、需求 revision、candidate、payload
 和前置审查 digest。未知、重复、过期、取消、不匹配及 guard 阻塞均在进程创建前拒绝。
 开发前审查读取完整文档并禁用 shell、MCP、web 和子代理。开发和白盒设计只在登记的
-隔离 workspace 编辑文件；QA Review 只读。所有任务禁用子代理、MCP 与 web，Git
-写入由 adapter 执行。原生 thread.started 绑定身份，进程和输出回执用于中断对账。
+隔离 workspace 编辑文件；QA Review 只读。角色工具权限由公共合同约束，禁用任意
+子代理、外部 MCP 与 web；仅开放当前动作绑定的 engine 工具，Git 写入由 adapter
+执行。各宿主的原生启动观察绑定身份，进程和输出回执用于中断对账。
 
 resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答案直接结算，没有身份/进程
 回执时显示 UNKNOWN。明确已停止且有身份时最多认领一次同 thread 的原生 resume，
@@ -76,8 +84,9 @@ resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答�
 未完成 Batch 的正常返回使用 `CONTINUE`，自测失败使用 `FAIL`，并保留实际剩余项、
 验证与 manifest。后续 attempt 的 `claim.operation` 为 `resume`，必须使用上述
 `--resume` 入口；正常返回、RUNTIME_ERROR、授权增加 attempt 或重新确认改编号的计划
-均不解除原生身份，也不重置已用额度。只有 Batch DoD、验证和交接全部完成并提交后，
-下一 Batch 才获得新会话。
+均不自行解除原生身份，也不重置已用额度。显式 executor-handoff 是另一项用户控制：
+它保留同一未完成 TaskKey 的历史并授权新的 executor/provider/identity。完成 Batch 后的
+增量优化则签发新的 TaskKey；两者都不能用旧会话身份冒充新执行者。
 
 开发恢复先核对旧进程已停止及开发工作区 HEAD/工作视图，再实际执行 Codex
 `thread/resume` 查询；查询只加载指定身份，不启动新任务。查询成功时继续原会话。
@@ -91,7 +100,8 @@ Raw candidate 保留原文与 digest。REVIEW_RESULT 不替代 Operator：ADJUDI
 CORRECT 绑定当前 result digest、finding ID、旧/新 decision、旧/新 severity、revision
 和 reason；冲突拒绝，历史保留，新增有效阻塞使依赖失效。
 
-产品/技术 series 各自默认最多三次有效语义审查，每个 TaskKey 默认两次原生 attempt。
+产品/技术 series 各自默认最多三次有效语义审查，当前失败额度为每个 TaskKey 三次。
+开发正常 CONTINUE 保留已用 attempt 但不消耗失败额度；额外授权按该次 typed Ask 计算。
 不完整、无效或 RUNTIME_ERROR 不增加语义次数。OPEN 重用当前任务，明确 review-again
 才请求新审查；达到上限后 authorize-round 只加指定 action 一轮，authorize-retry 只加
 当前 exhausted TaskKey 一次。改变需求、保留 PASS 或 adopt 不重置计数。
@@ -143,6 +153,45 @@ B2 通过此 State/Event/TaskKey/Attempt/CAS 和原生认领边界接入准备�
 原生进程的停止检查。
 
 
+## 用户指定的执行者交接
+
+未完成的开发 Batch 可以通过 `REQUEST executor-handoff` → typed Ask → `DECIDE confirm/cancel`
+明确交给另一执行者。`target` 必须是 show 中当前未完成的 development-worker actionId；
+`handoff.to` 为 `{kind, provider, label}`。`kind=native` 选择实际具备原生运行能力的宿主，
+目标的配置和环境由其 adapter 捕获并校验；能力不足在写入 Ask 前拒绝，确认交接前再次
+校验，拒绝时不签发目标执行动作。`kind=external` 仅表示
+用户明确指定外部开发者（例如由当前对话直接编辑），不是完整自动平台支持，不能用于
+独立产品审、技术审、黑盒/白盒或门审，也不会自动替代不可用的原生平台。
+
+```json
+{"operation":"REQUEST","expectedRevision":0,"request":{"action":"executor-handoff","target":"<当前开发 actionId>","reason":"<用户的明确交接决定>","handoff":{"to":{"kind":"external","provider":"chatgpt","label":"当前对话通过远程工具直接开发"}}}}
+```
+
+示例中的 revision/actionId 必须从本次 show 取得；这只是 REGULAR 事件的正文，仍使用
+原信封提交，不自行编造 TaskKey 或 identity。程序在 Ask 中绑定当前 workspace view、
+旧动作与来源、目标能力和影响；确认前不得领取新执行者，确认时工作区或目标环境漂移则
+拒绝。先停止并结算旧执行者的实际调用及在途操作；交接不伪造失败，不重写旧结果或成本，
+不使产品/技术审、早先 Batch 或独立 QA 默认失效。用户确认只授权这个目标的一次新执行，
+不清零重试历史。旧动作的迟到结果不能覆盖新动作。
+
+原生目标取得新的 provider/session，之后的正常续用仍保持这个新的身份；不要求另一个
+平台复用旧平台的不可移植 session。外部开发目标通过：
+
+```sh
+formal-gates workflow drive --root <root> --run-id <run> --action-id <新签发的 action> --external-executor
+```
+
+领取并获得精确 binding、workspace、完整结构化任务 input 和结果 schema。结构化任务与
+原生模型 prompt 使用同一个材料组装入口，包含当前 Batch、有序子任务和完整已确认需求。
+`previousDevelopmentResult` 提供原动作链上最近的真实开发结果（没有则为空）；交接中被
+替代但未执行的动作不会遮住已有 CONTINUE/FAIL 与交接事项。该历史结果仍保留旧 provider、
+identity 和绑定，新执行者只使用当前 `binding` 提交自己的结果，不复制旧身份冒充续用。
+外部开发者不要求宿主原生模型提示词配置，也不补造旧 run 不存在的提示词绑定。重复读取已领取输入不
+新建动作；Ask、需求暂停或终态期间不继续。外部 identity 由 engine 生成，明确不是已观察
+的原生会话，不提供虚构的 native spawn、transcript 或 token；计量标为 unavailable。
+开发者按正常 PREPARATION_RESULT 返回实际 manifest、逐子任务验证和交接，CLI 校验工作区
+全部变动，再由既有 Git intent/commit/snapshot 推进。开发结果不能替代独立 QA 或 Seal。
+
 ## 开发与 QA 准备（B2）
 
 路线确认后调用 drive 登记并创建 detached Git 工作区。开发从当前精确候选开始，黑盒
@@ -192,7 +241,7 @@ VCS 内 artifacts、VCS 外审批/建议/复用证据的 externalArtifacts diges
 
 黑盒有效审查 FAIL 不等待开发完成：前两次连续 FAIL 自动把完整原设计与逐项审查缺口
 交回同模式设计，再派发 fresh 审查；开发中的原会话继续运行。第三次连续 FAIL 或同一
-QA TaskKey 两次运行错误/无效结果后，立即返回 `qa-recovery` typed Ask，包含
+QA TaskKey 默认三次运行错误/无效结果额度耗尽后，立即返回 `qa-recovery` typed Ask，包含
 `qa.mode/task/requirementRevision/candidate/caseSetDigest/resultDigest/consecutiveFailures/retryExhausted`。
 黑盒与白盒连续 FAIL 计数独立；PASS 清除此模式连续失败数，运行错误不算语义失败。
 
@@ -423,8 +472,9 @@ authorize-wave 的 choice 恰为 additional-wave/retry-qa/waiver/change-requirem
 claim 的完整字段为 `actionId/attemptId/task/provider/requirementRevision/candidate/
 payloadDigest/operation`，可含 `prerequisiteDigest/identity/context`。`context` 由宿主 adapter
 在首次认领时捕获，调用者不能另选或替换。后续从 executions 复制整个
-对象，provider 当前为 codex，operation 由签发结果给出（start/resume；原生不可恢复时
-的 replacement 由 adapter 控制）。调用者不编造 TaskKey、payloadDigest 或新身份。
+对象，provider 是已签发的宿主规范 ID，operation 由签发结果给出（spawn/resume；
+原生不可恢复时的 replace 由 adapter 控制，显式外部开发为 external）。调用者不编造
+TaskKey、payloadDigest 或新身份。
 
 source 为 `{actionId,attemptId,provider,identity,status,transcriptPath?,reason?}`。
 status 为 RUNNING/STOPPED/UNAVAILABLE。RUNNING 绑定实际会话身份；STOPPED 提供完整
@@ -957,3 +1007,81 @@ receipt 前”开关，也不保证轮询必然命中。只观察到认领、att
 已落盘而 observed.json 尚无时，内部 model/目标操作的 resume 会依据原 process 完成
 记录、原生日志和输出文件恢复；证据不足维持 UNKNOWN。Git 恢复依据已存在的原生 commit
 trailer、父关系、manifest 与快照，不重复 commit。
+
+### 持续消费公开入口
+
+`formal-gates workflow drive --root <project> --run-id <run> --continuous`
+消费该 run 已签发的动作，不接受调用方自造 TaskKey、重试次数或执行顺序。原来的
+单动作 `--action-id` 入口保持可用；两种入口不能混用。持续入口复用原生执行器、
+任务操作、Git adapter、结果 writer 和 cost writer，不创建第二套调度或账本。
+独立的已签发动作可并行；下一批次、返修及次数授权仍由 engine 决定。
+
+返回对象包含 `run`、`boundary`，以及存在时的 `blocked`（actionId 到真实原因）和
+`external`（外部执行者动作 ID）。`ASK` 需要完成当前 typed Ask；`OPERATOR` 需要
+原流程的语义裁决，程序不代作审查结论；`EXTERNAL_EXECUTOR` 表示明确授权给外部
+执行者的工作尚未提交。能力缺失或无法确认原生副作用时返回 `BLOCKED`，不降级为
+主代理逐项转交。终态返回 `COMPLETE`。
+
+重启时运行同一条命令。程序复用 run 级互斥及每个 action 的原生进程记录，先观察
+已经发生的调用并采集结果/来源，再执行 engine 允许的原身份续用。已经完成且来源
+已结算的动作不再次启动。中断消费不表示调用未发生，也不授权创建替代会话。
+未能确定调用是否发生的 `UNKNOWN` 保留为明确阻塞，不能猜成一次新的调用。
+
+### 需求变更的用户逐项处置
+
+`requirement-change` 的 Ask 包含 engine 生成的 `impactItems`。每项有 `id`、
+`canKeep` 和已有证据说明。`DECIDE.decision.dispositions` 必须对所有列出的 ID
+逐项填写 `keep`、`rerun` 或 `delegate`；遗漏任何项不能继续。`keep` 要求已有可保留
+证据；`development` 的保留只表示保留未完成工作和工作区，不是开发 PASS。
+已完成批次使用 `batch:<Batch ID>` 单独列出，不能用笼统判断抹掉某批次的用户选择。
+
+例如 decision 中的 `dispositions` 可含 `"batch:B1":"keep"`、
+`"blackbox-review":"delegate"`。这些只是字段示例，实际完整 ID 集合以该次 Ask
+为准，不得据示例省略其他项。用户决定和原 request、decision event、需求、candidate
+及 revision 一起持久化。
+
+随后 `apply-requirement` 只允许主代理为明确 `delegate` 的项提交影响分类。
+用户固定 `keep`/`rerun` 的项可以省略，engine 会填入已确认选择；提交相反的
+`impact` 或 `keep` 会被拒绝。不能在 apply 的 DECIDE 中替换前次逐项决定。
+新需求正文还须通过原有精确文件 revision、影响预览及 typed Ask 确认。
+`meaning=preserved` 不能覆盖用户明确要求的重跑。
+
+保留的已完成 Batch 继续引用原 PASS、commit 和 TaskKey；旧原生 identity、调用、
+attempt 与来源历史不变。重跑是在原工作区上重新完成和验证，不是删除工作区、
+改写旧 PASS 或清零次数。未回答 Ask 时没有自动默认选择。
+
+
+### 已完成批次的增量优化与追加批次
+
+在同一个仍活动的 Git/no-split regular run 内使用 `REQUEST development-increment`
+→ typed Ask → `DECIDE`。这是当前已确认需求内的增量实现；需求含义改变仍先走
+requirement-change/apply-requirement。不能用该入口修改正式需求或已 Seal 的历史。
+
+`request` 的必需字段为 `action`、`target`、`meaning:"preserved"`、`reason` 和
+`increment:{kind,batch}`。`batch` 是完整 DevelopmentBatch，包含 id、task、subtasks、
+dependencies、interfaces、stateBoundary、risks、definitionOfDone、validation、recovery、
+handoff、contextCost；字段含义与技术计划中的 Batch 相同。workspaceView 由 facade
+根据当前真实工作区填入并绑定 Ask，调用者不填历史路径、摘要或 TaskKey。
+
+- `kind:"optimize"`：target 为已完成 Batch ID；batch.id 保持该 ID，dependencies
+  保持原依赖。先完成当前在途任务、Git 收尾并结算 source，工作区不得有未提交的其他批次工作。
+- `kind:"append"`：target 为现有计划的末尾 Batch ID；batch 使用新 ID，并明确依赖
+  target。原有未完成批次仍按原依赖继续，新增批次排在它们之后。
+
+Ask 的 `impactItems` 枚举其他已完成批次、已有 QA 设计/审查及验证证据。DECIDE 的
+`dispositions` 对每项明确 keep/rerun/delegate；不得遗漏，也没有“默认重做前置审查”。
+用户固定的 keep/rerun 优先，冲突请求被拒绝；只有 delegate 项可在 Ask 后通过
+`decision.impact` 明确填写 affected/unaffected/unknown，也可沿用 request.impact 中
+已展示的分类。decision.impact 不得修改用户固定的 keep/rerun 或增加未列出的项。
+不能保留的条目有 canKeep=false 和具体原因，
+包括尚不存在的 PASS、绑定旧执行候选而不能用于新实现的验证。需要修改预览或决定时，
+取消原 Ask 后重新 REQUEST，不用旧 token 覆盖决定。
+
+确认后，优化及显式重跑的已完成批次得到新的 TaskKey/action/attempt；追加批次获得自己的
+新 TaskKey。`regular.developmentIncrements` 保存原计划、前后 TaskKey 对应、用户决定、
+workspace view、需求 revision 和影响范围。旧 PASS、commit、attempt、cost 和 source
+原样保留在历史；开发从已有 development snapshot 继续，不把优化伪造为原批次 FAIL。
+未受影响的产品审、技术审和批次不重新执行；QA 的设计保留不等于新候选已执行 PASS。
+保留白盒测试时仅携带测试工件，不能把旧生产代码覆盖到新 development snapshot。
+新增或优化 Batch 的结果仍按正常 PREPARATION_RESULT 提交，由 engine 执行 commit/snapshot，
+然后继续原 QA、验证 wave、修复及 promotion/Seal。

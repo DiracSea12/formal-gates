@@ -91,6 +91,9 @@ func (f *Facade) ExecuteNative(actionID string, resume bool) (Run, error) {
 	if !ok {
 		return Run{}, fmt.Errorf("UNKNOWN_ACTION: %s", actionID)
 	}
+	if x.Executor != nil && x.Executor.Kind == "external" {
+		return Run{}, fmt.Errorf("EXECUTOR_HANDOFF: use the explicitly assigned external developer entry; no native fallback")
+	}
 	adapter, err := runtimeAdapter(x.Claim.Provider)
 	if err != nil {
 		return Run{}, err
@@ -147,6 +150,20 @@ func runtimeCommandContext(cmd *exec.Cmd, binding *protocol.HostRuntimeContext) 
 	}
 
 	return nil
+}
+
+// engineToolEnvironment preserves the installation/admission environment of
+// engine-owned child tools when a native host needs a different HOME/profile.
+// Values are captured at invocation time; no machine-specific path is part of
+// the product contract or persisted as a default.
+func engineToolEnvironment() map[string]string {
+	environment := map[string]string{}
+	for _, key := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME"} {
+		if value := os.Getenv(key); value != "" {
+			environment[key] = value
+		}
+	}
+	return environment
 }
 
 func findBoundTranscript(identity string, binding *protocol.HostRuntimeContext) (string, error) {

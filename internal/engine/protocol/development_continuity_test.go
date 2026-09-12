@@ -66,9 +66,23 @@ func TestDeveloperContinuationCannotResetByStatusOrRetry(t *testing.T) {
 			src.Status = "UNAVAILABLE"
 			src.Reason = "fixture source"
 			submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &src})
-			regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "authorized same developer continuation"}, "confirm")
+			// A normal CONTINUE is an observed attempt, not a failed attempt.
+			failures := 2
+			if status == "CONTINUE" {
+				failures = 1
+			}
+			lastNumber := next.Number
+			for ; failures < 3; failures++ {
+				remaining := currentExecution(t, e, "development-worker")
+				if remaining.Identity != next.Identity || remaining.Claim.Task != first.Claim.Task {
+					t.Fatal("remaining failure allowance reset identity")
+				}
+				failBoundDeveloperContinuation(t, e, remaining)
+				lastNumber = remaining.Number
+			}
+			regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "authorized same developer continuation after the three real failures"}, "confirm")
 			third := currentExecution(t, e, "development-worker")
-			if third.Identity != next.Identity || third.Number != 3 || third.Claim.Task != first.Claim.Task {
+			if third.Identity != next.Identity || third.Number != lastNumber+1 || third.Claim.Task != first.Claim.Task {
 				t.Fatal("retry reset", third)
 			}
 			s, _ := e.Load()
@@ -199,15 +213,20 @@ func TestDeveloperRenumberedPlanNeedsExistingQuotaAndIdentity(t *testing.T) {
 	s, _ := e.Load()
 	regularChoice(t, e, RegularRequest{Action: "topology", PlanDigest: s.State.Regular.Plan.Digest, Reason: "same repository"}, "confirm")
 	s, _ = e.Load()
-	if !s.State.Attempts[next.Claim.Task].RetryExhausted || *s.State.Regular.Preparation.DevelopmentTask != next.Claim.Task {
-		t.Fatal("plan reset consumed quota")
+	if s.State.Attempts[next.Claim.Task].RetryExhausted || *s.State.Regular.Preparation.DevelopmentTask != next.Claim.Task || s.State.Regular.Preparation.ExtraAttempts[next.Claim.Task.String()] != 0 {
+		t.Fatal("plan reset the task or granted extra quota")
 	}
-	regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "continue within existing identity"}, "confirm")
 	third := currentExecution(t, e, "development-worker")
 	if third.Number != 3 || third.Identity != next.Identity || third.PreviousAction != first.Claim.ActionID {
 		t.Fatalf("renumbered plan lost native history: %+v", third)
 	}
-	spawn := third.Claim
+	failBoundDeveloperContinuation(t, e, third)
+	regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "one explicit attempt after the existing allowance, on the original identity"}, "confirm")
+	fourth := currentExecution(t, e, "development-worker")
+	if fourth.Number != 4 || fourth.Identity != third.Identity || fourth.Claim.Task != first.Claim.Task {
+		t.Fatal("explicit retry reset original lineage")
+	}
+	spawn := fourth.Claim
 	spawn.Operation = "spawn"
 	spawn.Identity = ""
 	rejectContinuity(t, e, RegularEvent{Operation: "CLAIM", Claim: &spawn})
@@ -242,4 +261,19 @@ func TestDeveloperReplacementRetainsConsumedTokenContinue(t *testing.T) {
 	if err := e.claimRegular(s, replacement); err == nil {
 		t.Fatal("replacement authorization replayed")
 	}
+}
+
+func failBoundDeveloperContinuation(t *testing.T, e *Engine, x RegularExecution) {
+	t.Helper()
+	submitRegular(t, e, RegularEvent{Operation: "CLAIM", Claim: &x.Claim})
+	source := ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: x.Identity, Status: "RUNNING"}
+	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &source})
+	result := preparationResult(x)
+	result.Identity = x.Identity
+	result.Status = "RUNTIME_ERROR"
+	result.Message = "deterministic fixture native failure; no billable model"
+	submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &result})
+	source.Status = "UNAVAILABLE"
+	source.Reason = "deterministic fixture has no native transcript"
+	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &source})
 }

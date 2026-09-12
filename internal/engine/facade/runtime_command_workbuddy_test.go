@@ -19,7 +19,7 @@ func TestWorkBuddyCommandContract(t *testing.T) {
 	if fresh.Dir != "/work" || fresh.Path != "/bin/workbuddy" {
 		t.Fatalf("wrong invocation: %+v", fresh)
 	}
-	want := []string{"/bin/workbuddy", "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--json-schema", string(schema), "--tools", "", "--strict-mcp-config", "--mcp-config", "/work/mcp.json", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", "bypassPermissions", "--model", "chosen-model", "--effort", "high"}
+	want := []string{"/bin/workbuddy", "--print", "--verbose", "--output-format", "stream-json", "--input-format", "text", "--json-schema", string(schema), "--tools", "StructuredOutput", "--strict-mcp-config", "--mcp-config", "/work/mcp.json", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", "bypassPermissions", "--model", "chosen-model", "--effort", "high"}
 	if !reflect.DeepEqual(fresh.Args, want) {
 		t.Fatalf("args=%q", fresh.Args)
 	}
@@ -60,10 +60,10 @@ func TestWorkBuddyFreshIdentityIsNotResume(t *testing.T) {
 
 func TestWorkBuddyRoleTools(t *testing.T) {
 	for _, tc := range []struct{ step, want string }{
-		{"development-worker", "Bash,Edit,Read"}, {"repair-worker", "Bash,Edit,Read"},
-		{"whitebox-design", "Bash,Edit,Read"}, {"product-review", ""},
-		{"start-readiness", ""}, {"blackbox-execution", ""},
-		{"whitebox-execution", ""}, {"blackbox-design", "Read"},
+		{"development-worker", "StructuredOutput,Bash,Edit,Read"}, {"repair-worker", "StructuredOutput,Bash,Edit,Read"},
+		{"whitebox-design", "StructuredOutput,Bash,Edit,Read"}, {"product-review", "StructuredOutput"},
+		{"start-readiness", "StructuredOutput"}, {"blackbox-execution", "StructuredOutput"},
+		{"whitebox-execution", "StructuredOutput"}, {"blackbox-design", "StructuredOutput,Read"},
 	} {
 		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "m", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
 		if err != nil {

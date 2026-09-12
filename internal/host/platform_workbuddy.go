@@ -12,7 +12,7 @@ var workbuddyDescriptor = &Descriptor{
 	// Native engine actions carry their tool and lifecycle boundary directly.
 	// Installation supplies the native skill entry; it adds no global hook.
 	CostProvider:    WorkBuddy,
-	Configuration:   []ConfigField{StringConfig("workbuddyExecutable", "codebuddy")},
+	Configuration:   []ConfigField{StringConfig("workbuddyExecutable", "codebuddy"), StringConfig("workbuddyProductConfig", ""), StringConfig("workbuddyHome", "")},
 	ReadUsage:       parseWorkBuddyTranscript,
 	CheckIdentity:   workBuddyTranscriptIdentity,
 	ObserveRecovery: workBuddyRecoveryOutcome,
@@ -92,8 +92,15 @@ func workBuddyTranscriptIdentity(path, identity string) error {
 }
 
 func workBuddyRecoveryOutcome(r RecoveryObservation) string {
-	if r.NativeMethod != "session/load" {
+	if r.NativeMethod != "session/store" {
 		return "UNKNOWN"
 	}
-	return acpRecoveryOutcome(r.NativeResponse)
+	var response struct {
+		SessionID string `json:"sessionId"`
+		Present   bool   `json:"present"`
+	}
+	if json.Unmarshal(r.NativeResponse, &response) != nil || !response.Present || response.SessionID != r.Identity {
+		return "UNKNOWN"
+	}
+	return "RESUMABLE"
 }

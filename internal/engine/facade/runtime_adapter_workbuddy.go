@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/settings"
@@ -25,29 +26,133 @@ func (workBuddyRuntimeAdapter) capture(config settings.Values) (*protocol.HostRu
 			}
 		}
 	}
-	return captureStreamContext("workbuddy", executable, nil)
+	home := config.NativeString("workbuddyHome")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	home, err := filepath.Abs(home)
+	if err != nil {
+		return nil, err
+	}
+	if err := workBuddyHomeAvailable(home); err != nil {
+		return nil, err
+	}
+	nativeHome := os.Getenv("WORKBUDDY_CONFIG_DIR")
+	if nativeHome == "" {
+		nativeHome = filepath.Join(home, ".workbuddy")
+	}
+	nativeHome, err = filepath.Abs(nativeHome)
+	if err != nil {
+		return nil, err
+	}
+	product := config.NativeString("workbuddyProductConfig")
+	if product == "" {
+		product = os.Getenv("ACC_PRODUCT_CONFIG_PATH")
+	}
+	if product == "" {
+		product = filepath.Join(nativeHome, "cache", "acc-product-config-v3.json")
+	}
+	product, err = filepath.Abs(product)
+	if err != nil {
+		return nil, err
+	}
+	if err := workBuddyProductConfigAvailable(product); err != nil {
+		return nil, err
+	}
+	// Native desktop authentication is rooted in os.homedir(), independently of
+	// CODEBUDDY_CONFIG_DIR. An isolated engine installation must bind the existing
+	// native home rather than copy authentication files into its own HOME.
+	environment := map[string]string{
+		"HOME":                 home,
+		"CODEBUDDY_CONFIG_DIR": nativeHome, "WORKBUDDY_CONFIG_DIR": nativeHome,
+		"ACC_PRODUCT_CONFIG_PATH": product,
+	}
+	if runtime.GOOS == "windows" {
+		environment["USERPROFILE"] = home
+	}
+	return captureStreamContext("workbuddy", executable, environment)
 }
 func (workBuddyRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
-	return validateStreamContext(binding, "workbuddy")
+	if err := validateStreamContext(binding, "workbuddy"); err != nil {
+		return err
+	}
+	if home := binding.Environment["HOME"]; home != "" {
+		if err := workBuddyHomeAvailable(home); err != nil {
+			return err
+		}
+	}
+	if path := binding.Environment["ACC_PRODUCT_CONFIG_PATH"]; path != "" {
+		return workBuddyProductConfigAvailable(path)
+	}
+	return nil
+}
+
+func workBuddyHomeAvailable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("WORKBUDDY_CONFIG: native home directory unavailable at %s; select the existing WorkBuddy user's home with workbuddyHome", path)
+	}
+	return nil
+}
+
+func workBuddyProductConfigAvailable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return fmt.Errorf("WORKBUDDY_CONFIG: native desktop product configuration unavailable at %s; start/sign in to WorkBuddy or set workbuddyProductConfig to its native file", path)
+	}
+	return nil
 }
 
 func (workBuddyRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error) {
-	identity, binding, workspace, job := q.Identity, q.Context, q.Workspace, q.Job
+	present, err := workBuddySessionRecordAvailable(q.Context, q.Identity)
+	raw, _ := json.Marshal(map[string]any{"sessionId": q.Identity, "present": present})
+	if err != nil {
+		return "session/store", raw, err
+	}
+	if !present {
+		return "session/store", raw, fmt.Errorf("WORKBUDDY_RECOVERY: native session record is unavailable")
+	}
+	return "session/store", raw, nil
+}
 
-	if err := os.MkdirAll(job, 0700); err != nil {
-		return "session/load", nil, err
+// WorkBuddy's print-mode sessions and ACP sessions use different control
+// surfaces. Recovery therefore checks the native print-session store and lets
+// the subsequent --resume invocation prove actual resumability. The adapter
+// never reads or copies transcript contents during this capability check.
+func workBuddySessionRecordAvailable(binding *protocol.HostRuntimeContext, identity string) (bool, error) {
+	if binding == nil || identity == "" || filepath.Base(identity) != identity {
+		return false, fmt.Errorf("WORKBUDDY_RECOVERY: exact native identity is required")
 	}
-	configPath := filepath.Join(job, "mcp.json")
-	if err := writeJSONAtomic(configPath, map[string]any{"mcpServers": map[string]any{}}); err != nil {
-		return "session/load", nil, err
+	configRoot := binding.Environment["CODEBUDDY_CONFIG_DIR"]
+	if !filepath.IsAbs(configRoot) {
+		return false, fmt.Errorf("WORKBUDDY_RECOVERY: native config root is unavailable")
 	}
-	cmd := exec.Command(binding.Executable, "--acp", "--tools", "", "--strict-mcp-config", "--mcp-config", configPath, "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--permission-mode", "bypassPermissions")
-	cmd.Dir = workspace
-	if err := runtimeCommandContext(cmd, binding); err != nil {
-		return "session/load", nil, err
+	projects := filepath.Join(configRoot, "projects")
+	entries, err := os.ReadDir(projects)
+	if os.IsNotExist(err) {
+		return false, nil
 	}
-	raw, err := probeACPRecovery(cmd, job, q.ActionID, workspace, identity, "session/load")
-	return "session/load", raw, err
+	if err != nil {
+		return false, err
+	}
+	matches := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, statErr := os.Stat(filepath.Join(projects, entry.Name(), identity+".jsonl"))
+		if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			matches++
+		}
+	}
+	if matches > 1 {
+		return false, fmt.Errorf("WORKBUDDY_RECOVERY: native identity is ambiguous across project stores")
+	}
+	return matches == 1, nil
 }
 func requestedNativeID() (string, error) {
 	var value [16]byte

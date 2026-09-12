@@ -12,8 +12,12 @@ func workBuddyMCPConfig(engineExecutable, root, runID, actionID, identity string
 	if !filepath.IsAbs(engineExecutable) || !filepath.IsAbs(root) || runID == "" || actionID == "" || identity == "" {
 		return nil, fmt.Errorf("WORKBUDDY_CONFIG: MCP needs absolute engine/root paths and a bound run/action/identity")
 	}
+	// The native process can use the desktop's HOME for authentication, but its
+	// engine tool must still find the caller's admitted installation and registry.
+	environment := engineToolEnvironment()
 	return map[string]any{"mcpServers": map[string]any{"formal-gates": map[string]any{
 		"command": engineExecutable,
 		"args":    []string{"workflow", "drive", "--root", root, "--run-id", runID, "--action-id", actionID, "--operation-mcp", "--native-identity", identity},
+		"env":     environment,
 	}}}, nil
 }

@@ -28,6 +28,11 @@ func TestWorkBuddyProcessChild(t *testing.T) {
 		}
 	}
 	fmt.Fprintln(os.Stderr, "fixture diagnostic")
+	if mode == "auth" {
+		fmt.Println(`{"type":"assistant","session_id":"native-session","message":{"content":[{"type":"text","text":"Authentication required. Please use /login command to sign in to your account"}],"usage":{"input_tokens":0,"output_tokens":0}}}`)
+		time.Sleep(time.Hour) // Native authentication rejection may leave stdout open.
+		os.Exit(8)
+	}
 	if mode == "broken" {
 		fmt.Print("{")
 		os.Exit(0)
@@ -40,7 +45,7 @@ func TestWorkBuddyProcessChild(t *testing.T) {
 }
 
 func TestWorkBuddyProcessRecordsAndAttaches(t *testing.T) {
-	for _, mode := range []string{"attach", "broken", "exit-error"} {
+	for _, mode := range []string{"attach", "broken", "exit-error", "auth"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			job := filepath.Join(dir, "job")
@@ -63,6 +68,9 @@ func TestWorkBuddyProcessRecordsAndAttaches(t *testing.T) {
 			})
 			if (err == nil) != (mode == "attach") {
 				t.Fatalf("mode=%s observed=%+v err=%v", mode, observed, err)
+			}
+			if mode == "auth" && (ctx.Err() != nil || !strings.Contains(err.Error(), "WORKBUDDY_AUTH:")) {
+				t.Fatalf("authentication failure waited for cancellation instead of native rejection: %v", err)
 			}
 			if attached != 1 {
 				t.Fatalf("attach count=%d", attached)

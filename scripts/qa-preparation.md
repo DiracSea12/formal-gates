@@ -140,3 +140,34 @@ inspection. A real end-to-end target still executes through qa.target after
 approval; syntax PASS is never target or oracle PASS.
 
 `observedNativeCalls` counts only retained process observations; `nativeCallSourcesUnavailable` lists claimed task journals that cannot establish a call count. Repeated-operation entries bind previous/current operation IDs and report candidate/input/checkpoint changes; when no explicit reason is recorded they say unavailable. These do not authorize another execution.
+
+
+## Continuous execution and change controls (Stage 4a)
+
+`workflow drive --continuous` consumes only this run's engine-issued actions.
+Do not supply action IDs one by one to simulate continuous execution. Restart
+uses the same run, persisted operations, native identities and observations;
+completed side effects and retained PASS are not repeated. `ASK`, `OPERATOR`,
+`EXTERNAL_EXECUTOR` and `BLOCKED` name distinct boundaries, not successful tests.
+Use `workflow show --summary` for progress and follow the returned evidence paths.
+
+Select the native host through the registered installation before starting a
+scenario. Installed command availability, native session success, deterministic
+fixtures and a complete real regular scenario are separate evidence claims.
+An unavailable native capability must produce a concrete pre-launch refusal,
+not a switch to another provider or a manual owner dispatch loop. Do not change
+the requested model or repeat successful model samples for statistics.
+
+The exact public event contracts for requirement-change dispositions,
+development-increment (optimize/append), and executor-handoff are in
+`references/engine-regular.md`. Take binding values from the current Ask/action,
+not historical examples. A handoff retains unfinished Batch/TaskKey lineage but
+changes the executor's legal provider/action/attempt/identity. Optimizing a
+completed Batch creates new authorized work and preserves its previous PASS.
+
+Blackbox design uses the confirmed requirement and approved public documentation
+only. It must not read development source, whitebox material, development test
+results or implementation handoff notes. Public contracts must be available
+before spending a design attempt; once available, design can run alongside the
+remaining development work. A fixture/scenario Seal belongs only to that
+scenario and never proves the enclosing product-development run is sealed.

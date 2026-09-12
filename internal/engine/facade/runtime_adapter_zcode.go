@@ -7,13 +7,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/settings"
 )
 
-const zcodeScriptBinding = "FORMAL_GATES_ZCODE_SCRIPT"
+const (
+	zcodeScriptBinding = "FORMAL_GATES_ZCODE_SCRIPT"
+)
 
 type zcodeRuntimeAdapter struct{ streamRuntimeAdapter }
 
@@ -31,7 +34,28 @@ func (zcodeRuntimeAdapter) capture(config settings.Values) (*protocol.HostRuntim
 	} else if info.IsDir() {
 		return nil, fmt.Errorf("ZCODE_CONFIG: CLI script is a directory")
 	}
-	return captureStreamContext("zcode", config.NativeString("zcodeExecutable"), map[string]string{zcodeScriptBinding: script, "ZCODE_HOME": os.Getenv("ZCODE_HOME")})
+	home := config.NativeString("zcodeHome")
+	if home == "" {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		return nil, err
+	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("ZCODE_CONFIG: native home directory unavailable at %s", home)
+	}
+	environment := map[string]string{zcodeScriptBinding: script, "HOME": home}
+	if runtime.GOOS == "windows" {
+		environment["USERPROFILE"] = home
+	}
+	if value := os.Getenv("ZCODE_HOME"); value != "" {
+		environment["ZCODE_HOME"] = value
+	}
+	return captureStreamContext("zcode", config.NativeString("zcodeExecutable"), environment)
 }
 func (zcodeRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
 	if err := validateStreamContext(binding, "zcode"); err != nil {
@@ -40,8 +64,15 @@ func (zcodeRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error 
 	if !filepath.IsAbs(binding.Environment[zcodeScriptBinding]) {
 		return fmt.Errorf("ZCODE_CONFIG: original script binding missing")
 	}
-	_, err := os.Stat(binding.Environment[zcodeScriptBinding])
-	return err
+	if _, err := os.Stat(binding.Environment[zcodeScriptBinding]); err != nil {
+		return err
+	}
+	if home := binding.Environment["HOME"]; home == "" || !filepath.IsAbs(home) {
+		return fmt.Errorf("ZCODE_CONFIG: original native home binding missing")
+	} else if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		return fmt.Errorf("ZCODE_CONFIG: original native home unavailable at %s", home)
+	}
+	return nil
 }
 func zcodeRoleTools(step string, coverage bool) []string {
 	if coverage || nativeTextOnlyRole(step) {
@@ -87,7 +118,11 @@ func (zcodeRuntimeAdapter) turn(q nativeTurn) (string, error) {
 			if err != nil {
 				return nil, err
 			}
-			return []any{map[string]any{"name": "formal-gates", "command": executable, "args": []string{"workflow", "drive", "--root", q.Root, "--run-id", q.RunID, "--action-id", claim.ActionID, "--operation-mcp", "--native-identity", identity}, "env": []any{}}}, nil
+			env := []any{}
+			for name, value := range engineToolEnvironment() {
+				env = append(env, map[string]any{"name": name, "value": value})
+			}
+			return []any{map[string]any{"name": "formal-gates", "command": executable, "args": []string{"workflow", "drive", "--root", q.Root, "--run-id", q.RunID, "--action-id", claim.ActionID, "--operation-mcp", "--native-identity", identity}, "env": env}}, nil
 		}
 	}
 	encoded, _ := json.Marshal(schema)

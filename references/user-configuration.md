@@ -89,8 +89,11 @@ ZCode 使用累计 inputTokens/outputTokens/cacheReadTokens，并要求 modelReq
 | 字段 | 默认值 | 单位与范围 | 错误与使用说明 |
 |---|---|---|---|
 | `workbuddyExecutable` | `codebuddy` | 命令名或可执行文件路径字符串 | 默认命令不在 PATH 时检查 `/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy` |
+| `workbuddyProductConfig` | WorkBuddy 原生产品配置文件 | 非空文件路径字符串；未配置时沿 `ACC_PRODUCT_CONFIG_PATH`，否则用 WorkBuddy 配置目录的 `cache/acc-product-config-v3.json` | 文件由 WorkBuddy 桌面登录/启动维护；不存在则在原生调用前拒绝，不能切换到独立 CodeBuddy 账号或复制 token |
+| `workbuddyHome` | 当前进程的用户主目录 | 已存在的目录路径字符串 | 原生桌面认证按用户主目录读取，并非只按 `WORKBUDDY_CONFIG_DIR`。隔离安装可显式选择原生用户主目录；只绑定路径，不复制 HOME 或认证文件。缺失/非目录在启动前拒绝，恢复沿原绑定 |
 | `zcodeExecutable` | `node` | Node 命令名或可执行文件路径字符串 | 找不到命令或不可执行时报告配置错误 |
 | `zcodeScript` | 未配置 | CLI 脚本路径字符串 | 未配置时检查 `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`；其他安装位置显式填写；缺失或目录报错 |
+| `zcodeHome` | 当前进程的用户主目录 | 已存在的目录路径字符串 | ZCode 原生 CLI 从该用户主目录读取自己的 `.zcode/cli/config.json` 与认证状态；隔离安装可显式选择原生用户主目录。只绑定目录，不复制配置/凭据；缺失或非目录在启动前拒绝，恢复沿原绑定 |
 | `dshExecutable` | `dsh` | 命令名或可执行文件路径字符串 | 默认命令不在 PATH 时检查 `~/.local/bin/dsh`；DSH_HOME 沿宿主环境，未设时 `~/.dsh` |
 
 这些字符串无数值单位；显式空值、空白、null、非字符串拒绝。可执行路径不经 shell
@@ -105,7 +108,9 @@ ZCode/DSH 显式模型选择沿原生当前 provider；无法观察 provider 时
 冻结 QA 不开放本地作者工具。QA 与嵌套模型继续走引擎授权任务操作。白盒覆盖判断先执行
 无工具回合，结果提交成功后才开放作者工具；中断时复用保存的覆盖结果。
 WorkBuddy 使用进程级 bypassPermissions、明确角色工具列表、严格单个 MCP 配置并禁用
-继承设置/hooks。ZCode 使用原生 yolo 模式与角色工具 allowlist；DSH 使用原生 agent 作用域
+继承设置/hooks。其原生 JSON-schema 输出依赖 `StructuredOutput`；各角色保留这个只返回
+结构化结果的协议工具，不因此获得文件、命令、模型或委派能力。原生 success 若只返回
+普通工具调用文本而没有合法 JSON，仍不接纳为角色结果。ZCode 使用原生 yolo 模式与角色工具 allowlist；DSH 使用原生 agent 作用域
 工具限制及现有权限服务。没有另建权限框架。
 
 内部入口 `workflow drive --operation-mcp --action-id <id> --native-identity <id>`
@@ -208,3 +213,38 @@ go test ./internal/host ./internal/settings ./internal/cost ./internal/lifecycle
 平台协议变化只补跑其受影响测试；公共合同变化才扩大回归。不为新增平台复制整套大型
 验收，不为字段更新重跑未受影响的真实模型调用。安装/完整 regular 的支持声明仍须依据
 相应实际验证，缺失能力不能用通用 fallback 或主代理手工转交代替。
+
+持续执行使用 `workflow drive --continuous`，并沿用本 run 创建时冻结的配置；
+不需要另一份 executor 配置。`capacity` 仍是 engine 的签发容量，不是主代理可在
+消费过程中擅自提高的并发/次数预算。WorkBuddy、ZCode、DSH 与 Codex 通过同一
+已注册平台合同进入该入口。缺少原生能力或原绑定不可恢复时，返回明确错误，
+不会改选另一宿主。外部 ChatGPT executor 必须通过正式交接获得独立的绑定，
+不能冒充某个原生平台，也不会被持续入口自动领取或启动。
+
+
+### 选择宿主和变更执行者
+
+初始宿主来自当前项目适用的 registry 安装记录，workflow start 不接受自行指定的
+provider。使用已有 install 的 host/scope/project 选择宿主，先检查其原生可执行路径及
+配置；同一个 run 继续使用已冻结设置。不能编辑 state/request/registry 来换宿主。
+
+活动开发批次需要跨平台时，使用 engine-regular 的 executor-handoff 用户确认入口，
+指定目标规范 provider 和实际 executor label。目标必须通过统一能力合同；仅安装了
+Claude Code 等宿主的技能，不表示它已经具备 regular 原生运行适配。能力不够就拒绝目标，
+不会改用 Codex 或 ChatGPT。external ChatGPT 是显式授权的外部开发模式，不是原生支持。
+
+已完成批次的优化和追加使用 development-increment，而不是修改 capacity、清零计数或
+伪造开发失败。这些控制无新的配置文件或隐藏执行预算；保留/重跑范围以该次用户 typed Ask
+决定为准。持续消费停止不代表取消原生任务，恢复仍先对账；取消走原有 abort 及清理。
+
+
+WorkBuddy 原生配置目录沿应用的 `WORKBUDDY_CONFIG_DIR`，未设时为 `~/.workbuddy`；
+适配器将原生 `CODEBUDDY_CONFIG_DIR` 绑定到同一目录，避免误用独立 CodeBuddy 的登录。
+首次捕获的原生产品文件路径随 action 固定，恢复重新检查其可用性，不读取另一账号或
+把凭证写进 state。原生登录失败返回 `WORKBUDDY_AUTH`，不是持续等待或语义 PASS。
+
+`workbuddyHome` 只选择 WorkBuddy 原生子进程的用户主目录；其 MCP 引擎工具保留启动方的
+安装 HOME、USERPROFILE 和 XDG_CONFIG_HOME，不能因此改用另一份 registry 或 run。
+未设置该字段时沿当前用户主目录；设置后仍由 WorkBuddy 读取和验证自己的登录，不保证
+文件存在就等于认证有效。已领取动作使用其原 context，不能通过后来编辑配置来替换原生
+身份或认证目录；修正配置按正常新授权和恢复合同处理，不手改已有 run 的 settings/context。

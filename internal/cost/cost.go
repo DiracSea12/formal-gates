@@ -35,6 +35,9 @@ type RunCost struct {
 // DispatchCost is the exact metered token usage of one dispatched gate or
 // action, backfilled from its host transcript when available.
 type DispatchCost struct {
+	// Retain the recorded number/null distinction when an existing observation
+	// is read and written. New unavailable observations still serialize as null.
+	numericTokenFields   *[4]bool
 	Target               string `json:"target"`
 	Kind                 string `json:"kind"` // "gate" | "action"
 	InputCacheHitTokens  int64  `json:"inputCacheHitTokens"`

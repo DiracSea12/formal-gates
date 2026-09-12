@@ -1,5 +1,45 @@
 # 阶段 4a：QA 执行提效与多宿主引擎支持
 
+## 当前执行安排：用户批准最小交接核心先行
+
+原 Codex 核验尝试已因 usageLimitExceeded 结束，失败和来源仍保留。用户随后明确批准
+在 B6 接纳前先实现 B7-S6 的最小交接核心，将当前未完成开发动作通过 engine 的
+REQUEST/DECIDE 转交给当前 ChatGPT 直接开发者；不再依赖旧 Codex 额度，不冒充旧会话。
+B6 已有交付和有效证据保留；新增交接核心及状态保留修正使用独立的定向验证，记录在
+原 run 的 `b7-handoff/`。临时维护适配器只调用正式 facade/event writer，真实二进制摘要
+单独记录，不伪装成原已安装版本；全局安装保持不变。这是用户批准的本次自举例外。
+B7 完成前必须删除全部临时程序、旁路入口和残留引用，必要能力归入唯一正式实现；
+清理清单及完成约束见 §7.2，不把自举完成或开发自测当成 B7/独立 QA/Seal 的 PASS。
+
+## 历史：B6 Codex 核验过桥方案（已因额度限制终止）
+
+以下为前一次方案记录，已被上面的用户授权取代，不再作为当前执行指令。
+
+当前 B6 的代码与开发自测由当前 ChatGPT 对话通过 AgentDock 直接完成，原 Codex
+开发会话曾按用户要求停止。用户现明确批准恢复原 B6 Codex 会话，仅独立核验现有工作树、
+manifest 与已有验证证据并交付；不是授权重做 B6、重跑有效测试、改写代码或启动 B7。
+请先读取本文件末尾的 B6 交付节及以下只读开发交接证据，然后核对实际文件和原始日志。
+
+开发证据目录：原正式 run 的 `manual-takeover/b6-finish/`。
+入口为 `README.md`、`completion.json`、`b6-final-manifest.json`、`b5-diff-audit.json`、
+`delivery-checks.json`、`platform-proof/result.json`；每项结论对应的原始日志按索引读取，
+它们是开发证据，不是你的结论，也不是独立 QA/正式 Seal。基线为
+`455efd4c9d2c035cf93c20cd7d8f744ce3a65993`，代码仍在本 action 分配的开发工作树。
+
+注意：原 B6 manifest 形成后，用户补充了 B7-S6 的执行者交接及跨平台交接，随后新增本节。
+因此本计划文件与旧交付摘要不同是明确的后续文档变更；其余实际代码与原 84 路径 manifest
+应一致。核验时解释这个差异，不悄悄更新旧证据，也不要将 B7 文档需求算成 B6 未实现。
+原正式需求 revision 保持 `bb8f4b529e61cfd93bdbbe2f9bfd82d2a1d41c6c75ed8cba241d4cff3c1fa43b`。
+
+核验与本 Batch 的 B6-S1 至 S4 对应。只在发现具体证据缺口或代码不一致时补必要检查；
+无新增修改且有效检查已具备时复用原始证据，不发动另一轮全仓测试。原超时、中止、
+失败与跳过如实保留，不将其改成 PASS。存在真实未解决缺口就报告具体事实，不能为了
+过桥强行 PASS；不要自行返修或扩展架构。若核验满足 DoD，返回原 engine schema 的
+PREPARATION_RESULT，包括完整实际路径 manifest、四个有序 subtask 的核验记录，message
+明确“实现作者为外部当前 ChatGPT 对话；本 Codex 会话核验并交付”，不冒充实现作者。
+不要执行 Git 写命令或触碰 state；Git 收尾、正式接纳、B7 签发由 engine 完成。
+
+
 > 当前修订（2026-09-12）：唯一正式需求为 `stage-4a-requirement.md`；本文件是计划与历史证据来源。
 > 当前续推顺序及 B6/B7 完成条件见 §7：保留原 B1–B5，由新 B6 收尾 B5 遗留问题，原 B6 功能顺延到 B7。
 > 本次仅更新文档和待确认需求；engine 技术计划须经正式审查与确认后生效，不由本文直接替换。
@@ -429,13 +469,29 @@ B7；不能并行启动 B7 来掩盖新 B6 未完成。此依赖和两批完成�
 | B7 S3：最小真实开发自测 | 用小型确定性场景验证自动消费、并行、恢复和无重复副作用；三个新增宿主各用最小必要真实 regular 场景验证原生执行/续用、身份、结果、返修或恢复与清理。CLI 缺失须区分 MCP 和实际应用能力，不用无限尝试代替能力结论。 |
 | B7 S4：比较与交接 | 沿 B1 固定口径复用合格历史证据，确需新对照先各跑一次；记录全部实际失败、中断和限制，仅补缺口。交付 manifest/handoff 与后续正式验证入口，不把场景 Seal 冒充本 run Seal。 |
 | B7 S5：需求变更影响处置权 | 在 engine 的 requirement-change/apply-requirement 状态机加入强制用户影响处置 Ask。Ask 枚举可保留/需重跑的既有阶段和证据并允许用户逐项决定，或明确将某些未决项委托主代理；没有用户响应时保持暂停。engine 持久化决定并在 apply-requirement 前校验 impact/keep，拒绝主代理改判、扩大失效或绕过咨询。用户重新决定时必须使用新的绑定 Ask，旧 token/决定不可静默改写。 |
-| B7 S6：增量开发控制入口 | 在 engine 提供正常的“继续优化已完成批次 / 新增增量批次”控制入口。用户可指定已有 Batch 继续优化，或在其后新增一个增量 Batch；engine 必须保留既有提交、PASS、成本、attempt 和已结算身份，不伪造失败、不重写历史，并只失效用户明确选择或实际依赖受影响的后续工作。该入口生成新的合法 TaskKey/action/attempt 与明确依赖，不能要求先制造白盒 production failure，也不能默认触发产品审、完整技术审或重跑 B1–B5；是否需要前置审查仍遵守用户影响处置 Ask 的决定。 |
+| B7 S6：增量开发与跨平台执行者交接控制入口 | 在 engine 提供正常的“继续优化已完成批次 / 新增增量批次 / 显式转交未完成批次”控制入口。用户可指定已有 Batch 继续优化、在其后新增增量 Batch，或把仍未完成的 Batch 从当前 executor/platform 明确交给新的 executor/platform；交接不局限于同一 Codex 内换会话，应支持 Codex、Claude Code、ZCode、WorkBuddy、DSH 等已注册宿主之间切换。继续优化或新增批次生成新的合法 TaskKey/action/attempt 与明确依赖；执行者交接保留原 Batch/TaskKey lineage、workspace/checkpoint、提交、PASS、成本、attempt、source、旧 provider 及旧原生 identity 历史，并记录绑定用户决定、state revision、from/to provider、from/to executor 与 reason 的 handoff receipt。engine 在新宿主签发前必须经统一 platform capability contract 校验该 Batch 所需能力；满足时签发绑定新 provider/executor 的新 action/attempt，不满足则在启动前明确拒绝该目标宿主而不是回退到旧宿主或主代理手工代跑。旧 session identity 只约束旧 provider 上对应原生调用的恢复，不再永久占有整个 Batch；跨平台后不要求复用不可移植的原生 session，新 executor 的最终结果必须绑定自己的合法 provider/identity，不能冒充旧平台或旧会话。三种入口均不得伪造失败、重写历史或默认扩大失效范围，不能要求先制造白盒 production failure，也不能默认触发产品审、完整技术审或重跑 B1–B5；是否需要前置审查仍遵守用户影响处置 Ask 的决定。 |
 
-完成条件：REQ-003 的强制消费、三宿主接入、需求变更影响处置权及增量开发控制入口满足已确认合同，开发自测与合法剩余项有
+完成条件：REQ-003 的强制消费、三宿主接入、需求变更影响处置权及增量开发/执行者交接控制入口满足已确认合同，开发自测与合法剩余项有
 精确证据绑定；需求变更时先由 engine 强制咨询用户，用户决定优先且不可被主代理覆盖，只有明确委托项才由主代理判断；无用户响应不继续。只有用户确认、无法自动恢复的明确阻塞或终态交回主代理。不新增总预算、
 不更换指定模型、不借 continue 增加 attempt，不为了计量重跑有效 PASS。
 最终正式 QA、门审、必要返修、Seal、集成与安装在全部开发批接纳后沿原流程完成，
 不是 B7 交付的循环前置；各时点按实际回执报告。
+
+
+#### B7-S6 自举与最终清理约束（用户 2026-09-12 决定）
+
+为解除旧引擎与已耗尽额度的 Codex 会话绑定，在 B6 正式接纳之前允许先实现 B7-S6 的
+最小执行者交接核心；这是本次用户明确批准的依赖调整，不代表 B7 全部完成或正式 QA PASS。
+交接仍走带精确绑定的 engine REQUEST/DECIDE 和原持久化 writer，不手工改 state、不伪造
+旧会话结果、不清除历史 attempt、成本或失败。当前对话的直接开发须标明实际执行者及
+无法取得的原生用量，不能冒称完整自动宿主或独立 QA。
+
+最小核心优先直接实现正式、可复用的 executor handoff，不新增带本 run/Batch/会话特判的
+应急入口。B7 交付前必须将必要能力并入唯一正式实现，删除或替换所有临时控制分支、
+bootstrap 专用代码、重复适配、绕过开关、临时配置和一次性迁移脚本；安装运行时及公开
+文档不得继续依赖临时程序。永久回归须通过正式入口覆盖同平台和跨平台交接、原结果/
+成本保留及旧会话迟到结果不得覆盖新执行者。只保留必要的历史授权、迁移回执和验证证据，
+不把运行日志的留存误当作产品临时代码。临时实现及其引用未清理完，B7 不得声明完成。
 
 ### 7.3 审查、黑盒输入与证据保留
 
@@ -1058,3 +1114,54 @@ manifest 集中保留在原 run 的 `manual-takeover/b6-finish/`。新增假平�
 这不代表独立正式 Batch PASS 或真实平台模型验收，代码不冒充原 Codex 会话成果。
 正式 run revision 164 未改，B1–B5 证据保留，B7 未启动；B7 仍负责原定持续执行器、真实
 闭环以及用户强制咨询/影响处置和受支持的增量批次入口，不承接本批已确认的遗留问题。
+
+
+## B7 已验证的交接与原生配置修正（2026-09-12）
+
+以下是原 B7 external/chatgpt action 内的开发事实，不替代独立 QA、B7 接纳或外层 Seal。
+共享输入组装现沿同一 TaskKey 的 PreviousAction 链取得最近真实开发结果，避免交接一个
+尚未领取的续行动作时丢失已有 CONTINUE/checkpoint；原结果的 provider、identity 和来源
+保持不变。原生交接目标在 REQUEST 和 DECIDE 前均通过其原 adapter 能力校验，拒绝时
+不产生目标动作或回退。原 run `b7-handoff/validation/` 的 `b7-handoff-checkpoint-red-26`
+保留真实修复前失败；`b7-handoff-core-green-28` 两项公共 Facade 回归通过且源码摘要不变。
+中间 `green-27` 因并行 ZCode 测试调用尚未同步而编译失败，原日志保留，未记作测试 PASS。
+
+场景调用脚本已按公开 preDevelopmentReviewSeries/developmentPlan 字段读取；真实 FAIL
+或未处理 OPERATOR 明确交回，不再空转。`b7-smoke-plan-24` 的七项本地回归通过；
+`b7-smoke-actual-boundary-25` 在同一 DSH 场景复验，只读观察后状态摘要及三条执行记录
+未变，预期报告待裁决。它不是 DSH 完整流程通过，也不覆盖脚本后续的其他改动。
+
+WorkBuddy 原生认证另按用户 HOME 定位；仅绑定产品文件与配置目录不足以使隔离安装
+读取原有桌面登录。原生源码与文件元数据依据见 `b7-workbuddy-native-home-observation-31`，
+没有读取或复制认证文件内容。平台配置新增 workbuddyHome，原生子进程沿该路径，而
+MCP 引擎工具仍沿原安装 HOME/USERPROFILE/XDG_CONFIG_HOME；已有 context 不重写。
+`b7-workbuddy-home-31` 的三项配置/恢复/隔离回归、受影响 vet 和 diff 检查通过，源码摘要
+不变；其中 settings 包没有匹配测试，不冒称额外执行。目录存在仍不证明真实认证有效。
+
+`b7-core-static-30` 记录上述 HOME 增量之前的全仓编译、vet 及 diff 检查全部 exit 0，
+不能覆盖后来改动，也不把历史整仓测试超时改写为通过。WorkBuddy 旧隔离场景 002 已通过
+其自己的正式 REQUEST/DECIDE/drive 到达 ABORTED/COMPLETE，原三次认证失败保留，
+外层状态未变；只为已定位的配置缺口补必要纠正场景。三宿主实际完整流程、bootstrap 清理、
+最终 manifest/逐子任务验证及外层正式流程仍按真实后续回执完成，未测或受阻项不标 PASS。
+
+
+## B7 当前开发结果回交与收尾（2026-09-12 夜间）
+
+本次用户要求执行收尾与B7正式交付。当前开发结果按真实自测状态回交 FAIL，不是 B7 PASS：
+S1、S4、S5、S6 有有效本地验证；S2 的平台合同/配置回归通过但完整原生能力未验证；
+S3 三宿主真实完整 regular 与同身份恢复仍未通过，不能降为模拟或生命周期通过。
+
+当前源码全仓编译（不执行全套测试）、settings 全包测试、vet、构建、package validate
+及两项 diff 检查全部退出 0，检查期间源码摘要不变；原全仓测试失败/超时记录仍保留。
+本轮新增检查、按原正式入口进行的失败场景收尾、原始失败证据、精确交付清单与事件
+统一保存在原 run 的 `b7-handoff/final-closeout/`。正式接纳状态以其中 engine 回执为准。
+
+WorkBuddy004在产品审PASS后技术审三次未观察最终结果；DSH002技术审三次未交回合法JSON。
+两者已通过正式 abort 分别到 revision22/54、ABORTED/COMPLETE，原调用/来源未删改。
+ZCode002仍缺完整成功证据，本次原入口报 UNREGISTERED_INSTALL，未手改registry/state清除。
+原主run的新构建永久CLI同样未通过原安装身份准入；临时finalizer及源文本保留用于
+本次已授权的原Facade/event writer回交，永久入口接管和bootstrap清理尚未完成，不冒称已删。
+
+B1–B6不重做，主run黑盒不启动；没有手工Git提交，也不授权新增模型样本或清零重试。
+后续仍须解决原生闭环与旧run永久入口接管，完成所有DoD后才能提交B7 PASS；
+本次FAILED开发回交不能替代后续独立QA、门、Seal、集成或安装。

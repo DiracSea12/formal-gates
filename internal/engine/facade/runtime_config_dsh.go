@@ -31,5 +31,8 @@ func dshOperationPatch(pluginPath, executable, root, runID, actionID, requestDir
 		}}},
 		map[string]any{"id": "agent-loop", "config": map[string]any{"agents": []any{}}},
 		map[string]any{"id": "acp", "inject": []string{"acpAppStartup", "formalGatesNativeReady"}},
+		// This child already uses the bound engine operation plugin. Do not load
+		// the owner's installed lifecycle hook again or inherit its launcher.
+		map[string]any{"id": "formal-gates-dsh", "disabled": true},
 	}, nil
 }

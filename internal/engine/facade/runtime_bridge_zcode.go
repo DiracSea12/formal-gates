@@ -38,6 +38,26 @@ func runZCodeSession(reader io.Reader, writer io.Writer, session zcodeRequest, i
 			}
 			if msg.Method != "" {
 				if msg.ID != "" {
+					if msg.Method == "session/requestRuntimePreferences" {
+						var preferences struct {
+							SessionID string `json:"sessionId"`
+							Scope     string `json:"scope"`
+						}
+						if json.Unmarshal(msg.Params, &preferences) != nil || preferences.SessionID == "" || (preferences.Scope != "runtime-materialization" && preferences.Scope != "user-execution") || (identity != "" && preferences.SessionID != identity) || (session.Method == "session/resume" && preferences.SessionID != session.Params["sessionId"]) {
+							return nil, fmt.Errorf("ZCODE_BINDING: runtime preferences do not match the native session")
+						}
+						// This native setup request is not a tool grant or a user decision.
+						// Keep independent roles free of ambient memory, implicit search
+						// and automatic answers to questions owned by the engine/user.
+						response := map[string]any{"id": msg.ID, "result": map[string]any{
+							"nativeSearchEnhancementsEnabled": false, "memoryEnabled": false,
+							"askUserQuestionAutoResolutionEnabled": false, "modelContextBudgetStrategy": "preflight-v1",
+						}}
+						if err := encoder.Encode(response); err != nil {
+							return nil, err
+						}
+						continue
+					}
 					// A host interaction request is not an engine grant. Fail instead of
 					// silently approving a tool or asking a second model to decide.
 					return nil, fmt.Errorf("ZCODE_INTERACTION: unhandled native request %s", msg.Method)

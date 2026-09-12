@@ -25,6 +25,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/host"
 )
 
 const (
@@ -210,6 +211,15 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	var regularInitial *protocol.RegularState
 	if req.RequirementPath != "" {
+		// Installation names may be aliases. Normalize once at intake; issued
+		// claims and native identities remain bound to the canonical provider.
+		if req.Provider != "" {
+			platform, lookupErr := host.Lookup(req.Provider)
+			if lookupErr != nil {
+				return nil, Run{}, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: %w", lookupErr)
+			}
+			req.Provider = platform.ID
+		}
 		initial, err := prepareRegular(root, req)
 		if err != nil {
 			return nil, Run{}, err
@@ -580,6 +590,15 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
+	if err := f.verifyDevelopmentIncrement(&event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyExecutorHandoff(&event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyExternalDevelopmentResult(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
 	if event.Regular != nil && event.Regular.Claim != nil {
 		c := event.Regular.Claim
 		run, err := f.Show()
@@ -593,7 +612,7 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		if c.Context == nil {
 			c.Context = x.Claim.Context
 		}
-		if x.Claim.Context == nil && !x.Claimed && x.Identity == "" {
+		if x.Claim.Context == nil && !x.Claimed && x.Identity == "" && (x.Executor == nil || x.Executor.Kind != "external") {
 			captured, err := captureRuntimeContext(c.Provider, run.Regular.Settings.Values, f.stateDir, f.root)
 			if err != nil {
 				return protocol.Acceptance{}, Run{}, err

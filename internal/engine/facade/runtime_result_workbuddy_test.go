@@ -1,8 +1,10 @@
 package facade
 
 import (
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These SDK-schema fixtures do not execute WorkBuddy or establish native support.
@@ -36,5 +38,50 @@ func TestWorkBuddyResultObservation(t *testing.T) {
 				t.Fatalf("result=%+v", got)
 			}
 		})
+	}
+}
+
+func TestWorkBuddyAuthenticationFailureDoesNotWaitForTerminalResult(t *testing.T) {
+	const init = `{"type":"system","subtype":"init","session_id":"s1"}`
+	const rejection = `{"type":"assistant","session_id":"s1","message":{"content":[{"type":"text","text":"Authentication required. Please use /login command to sign in to your account"}],"usage":{"input_tokens":0,"output_tokens":0}}}`
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	finished := make(chan error, 1)
+	go func() {
+		got, err := observeWorkBuddyResult(reader, "s1")
+		if got.Identity != "s1" || len(got.Answer) != 0 {
+			t.Errorf("authentication rejection changed identity or produced an answer: %+v", got)
+		}
+		finished <- err
+	}()
+	if _, err := io.WriteString(writer, init+"\n"+rejection+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-finished:
+		if err == nil || !strings.Contains(err.Error(), "WORKBUDDY_AUTH:") {
+			t.Fatalf("authentication rejection=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("native authentication rejection waited for a result or EOF")
+	}
+	// Ordinary assistant text is still not terminal evidence, and discussing an
+	// authentication error during real model work does not cancel the invocation.
+	result := `{"type":"result","subtype":"success","session_id":"s1","uuid":"r1","is_error":false,"result":"{\"status\":\"PASS\"}"}`
+	for _, text := range []string{strings.Replace(rejection, `"input_tokens":0`, `"input_tokens":1`, 1), strings.Replace(rejection, "Authentication required.", "Observed: Authentication required.", 1)} {
+		if _, err := observeWorkBuddyResult(strings.NewReader(init+"\n"+text+"\n"+result), "s1"); err != nil {
+			t.Fatal("ordinary assistant output was treated as a native authentication failure", err)
+		}
+	}
+}
+
+func TestWorkBuddyNativeAuthenticationFailureIsNotAnIndefiniteWait(t *testing.T) {
+	stream := `{"type":"system","subtype":"init","session_id":"native"}
+{"type":"assistant","session_id":"native","message":{"content":[{"type":"text","text":"Authentication required. Please use /login command to sign in to your account"}]}}
+`
+	result, err := observeWorkBuddyResult(strings.NewReader(stream), "native")
+	if err == nil || !strings.Contains(err.Error(), "WORKBUDDY_AUTH") || result.Identity != "native" || result.Answer != nil {
+		t.Fatalf("authentication treated as a verdict or missing terminal wait: %+v %v", result, err)
 	}
 }

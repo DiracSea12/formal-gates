@@ -107,6 +107,30 @@ func TestProductPromptIncludesIndependentObligationChecks(t *testing.T) {
 	}
 }
 
+func TestTextReviewPromptDescribesActualToolBoundary(t *testing.T) {
+	instructions, err := loadActionInstructions("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{Regular: &protocol.RegularState{ActionInstructions: instructions,
+		Requirement: protocol.RequirementDocument{Text: "complete mandatory input"}}}
+	for _, task := range []runtime.TaskKey{{Node: "entry", Step: "product-review"}, {Node: "entry", Step: "start-readiness"}} {
+		step := string(task.Step)
+		if nativeRoleAccess(step) != nativeTextOnly {
+			t.Fatal("fixture must correspond to a text-only native role", step)
+		}
+		prompt, err := reviewPrompt(run, protocol.ExecutionClaim{Task: task})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, text := range []string{"没有工作区或流程工具权限", "不要用普通文本模拟工具调用", "原生结构化", "complete mandatory input"} {
+			if !strings.Contains(prompt, text) {
+				t.Fatalf("%s did not receive its bound text-only instructions: %s", step, text)
+			}
+		}
+	}
+}
+
 func facadeCoverage(t *testing.T, f *Facade, action string) {
 	t.Helper()
 	q := operationRequest(t, f, action, "whitebox.coverage", "coverage-before-tests")

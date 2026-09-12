@@ -128,6 +128,11 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 		if err := gitprep.Workspace(f.root, path, op.Before); err != nil {
 			return receipt, err
 		}
+		if q := p.QA["whitebox"]; q != nil && q.TestArtifactsFrom != "" {
+			if err := gitprep.RestoreTestArtifacts(path, q.TestArtifactsBase, q.TestArtifactsFrom, q.Manifest); err != nil {
+				return receipt, err
+			}
+		}
 		receipt.Resources["whitebox"] = path
 	case "whitebox-commit":
 		wb := p.Resources["whitebox"]
@@ -285,14 +290,11 @@ func preparationAction(step string) bool {
 // one complete Batch with ordered Subtasks, never another batch's live session.
 // Blackbox receives only confirmed inputs and the baseline authoring resource.
 func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
-	p := run.Regular.Preparation
-	if p == nil {
-		return "", "", fmt.Errorf("no preparation binding")
+	payload, workspace, err := preparationInput(run, claim)
+	if err != nil {
+		return "", "", err
 	}
 	step := string(claim.Task.Step)
-	mode := strings.Split(step, "-")[0]
-	workspace := p.Resources[mode]
-	payload := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
 	action := step
 	if strings.HasSuffix(step, "-design") {
 		action = "qa-design"
@@ -309,10 +311,40 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 	if err != nil {
 		return "", "", err
 	}
+	prompt, err := assemblePrompt(instructions, payload)
+	return prompt, workspace, err
+}
+
+// The structured task is shared by native model prompts and explicitly assigned
+// external developers. Native prompt configuration is not an external capability.
+func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, string, error) {
+	p := run.Regular.Preparation
+	if p == nil {
+		return nil, "", fmt.Errorf("no preparation binding")
+	}
+	step := string(claim.Task.Step)
+	mode := strings.Split(step, "-")[0]
+	workspace := p.Resources[mode]
+	document := run.Regular.Requirement
+	payload := map[string]any{"binding": claim, "requirement": map[string]any{"path": document.Path, "revision": document.Revision, "text": document.Text, "confirmed": document.Confirmed}, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
 	if step == "development-worker" {
 		workspace = p.Resources["development"]
 		if previous := run.Executions[claim.ActionID].PreviousAction; previous != "" {
-			payload["previousDevelopmentResult"] = run.Executions[previous].PreparationResult
+			payload["previousDevelopmentResult"] = (*protocol.PreparationResult)(nil)
+			// Handoff can retire an unclaimed continuation without a result of its
+			// own. Follow its existing lineage to the last actual checkpoint; keep
+			// that result's original provider/identity rather than rebinding it.
+			for previous != "" {
+				prior, ok := run.Executions[previous]
+				if !ok || prior.Claim.Task != claim.Task {
+					break
+				}
+				if prior.PreparationResult != nil {
+					payload["previousDevelopmentResult"] = prior.PreparationResult
+					break
+				}
+				previous = prior.PreviousAction
+			}
 		}
 		for _, b := range run.Regular.Plan.Batches {
 			if _, done := p.Commits[b.ID]; !done {
@@ -330,6 +362,9 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 		}
 	} else if strings.HasSuffix(step, "-design") {
 		payload["reviewKind"] = strings.ToUpper(mode)
+		if p.QA[mode].DesignGap != "" {
+			payload["designGap"] = p.QA[mode].DesignGap
+		}
 		payload["previousDesign"] = p.QA[mode].PreviousDesign
 		payload["reviewGaps"] = p.QA[mode].RetainedReview
 	} else {
@@ -339,10 +374,9 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 		payload["existingTestEvidence"] = p.QA[mode].Reuse
 	}
 	if workspace == "" {
-		return "", "", fmt.Errorf("missing authorized workspace")
+		return nil, "", fmt.Errorf("missing authorized workspace")
 	}
-	prompt, err := assemblePrompt(instructions, payload)
-	return prompt, workspace, err
+	return payload, workspace, nil
 }
 
 // Adapter facts may race with another authorized task's result. Only CAS/lock

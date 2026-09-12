@@ -301,9 +301,27 @@ func Commit(root, base, id string, paths []string) (Receipt, error) {
 			// Only the exact manifest already checked above is staged. Frozen QA
 			// artifacts are delivery paths even when their .gates parent is
 			// ignored; Git requires -f again when restaging such tracked paths.
-			args := append([]string{"add", "-f", "--"}, paths...)
-			if _, err = Git(root, args...); err != nil {
-				return Receipt{}, err
+			// A crash may leave a deletion/rename already staged, in which case
+			// the old path no longer exists in either the worktree or index. Do
+			// not turn that valid partial side effect into an unrecoverable
+			// pathspec error on replay.
+			stage := make([]string, 0, len(paths))
+			for _, path := range paths {
+				if _, statErr := os.Lstat(filepath.Join(root, path)); statErr == nil {
+					stage = append(stage, path)
+					continue
+				} else if !os.IsNotExist(statErr) {
+					return Receipt{}, statErr
+				}
+				if _, trackedErr := Git(root, "ls-files", "--error-unmatch", "--", path); trackedErr == nil {
+					stage = append(stage, path)
+				}
+			}
+			if len(stage) > 0 {
+				args := append([]string{"add", "-f", "--"}, stage...)
+				if _, err = Git(root, args...); err != nil {
+					return Receipt{}, err
+				}
 			}
 			if _, err = Git(root, "diff", "--cached", "--check"); err != nil {
 				return Receipt{}, err

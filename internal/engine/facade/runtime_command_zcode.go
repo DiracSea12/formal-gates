@@ -12,7 +12,11 @@ func zcodeCommand(executable, script, workspace string) (*exec.Cmd, error) {
 	if !filepath.IsAbs(executable) || !filepath.IsAbs(script) || !filepath.IsAbs(workspace) {
 		return nil, fmt.Errorf("ZCODE_CONFIG: executable, script and workspace must be absolute paths")
 	}
-	cmd := exec.Command(executable, script, "app-server", "--cwd", workspace)
+	// Current ZCode parses --cwd as a global option and app-server as the
+	// positional command. Native user configuration is discovered from HOME;
+	// do not pass help-only/unsupported settings flags.
+	args := []string{script, "--cwd", workspace, "app-server"}
+	cmd := exec.Command(executable, args...)
 	cmd.Dir = workspace
 	return cmd, nil
 }

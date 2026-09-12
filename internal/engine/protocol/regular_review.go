@@ -397,6 +397,14 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		return fmt.Errorf("request %s requires a reason", q.Action)
 	}
 	switch q.Action {
+	case "development-increment":
+		if err := validateDevelopmentIncrement(s, q); err != nil {
+			return err
+		}
+	case "executor-handoff":
+		if err := validateExecutorHandoff(s, q); err != nil {
+			return err
+		}
 	case "verification-retry", "authorize-wave":
 		if err := verificationRequest(s, q); err != nil {
 			return err
@@ -478,6 +486,9 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		if !r.ChangePending {
 			return fmt.Errorf("request requirement-change before applying its candidate")
 		}
+		if err := resolveRequirementImpact(r, &q); err != nil {
+			return err
+		}
 		if err := validateRequirementChange(r, q); err != nil {
 			return err
 		}
@@ -534,8 +545,19 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		options = []string{"confirm", "dismiss", "clarify"}
 	}
 	ask := &RegularAsk{ID: id, Kind: q.Action, Revision: revision + 1, Request: q, Options: options}
+	if q.Action == "requirement-change" {
+		ask.ImpactItems = requirementImpactItems(r)
+	}
+	if q.Action == "development-increment" {
+		ask.ImpactItems = incrementalImpactItems(r, q)
+	}
 	if q.Action == "authorize-wave" || q.Action == "apply-requirement" || q.Action == "adopt-external" || q.Action == "reset" {
 		ask.Preview = &RegularPreview{StateRevision: revision + 1, RequirementRevision: r.Requirement.Revision, BaseSnapshot: r.BaseSnapshot, Candidate: r.Candidate, Reviews: r.Reviews, Verification: r.Verification, Guard: r.Guard, Cost: s.Cost, Consequences: "Preserve original evidence, cost, attempts, base and review counts. Apply only explicit keep/unaffected classifications; invalidate other dependent results and reconcile side effects. Reset additionally clears current plan, topology, route and guarantee. An additional-wave decision adds exactly one semantic wave to the current exhausted series."}
+	}
+	if q.Action == "executor-handoff" {
+		ask.Preview = &RegularPreview{StateRevision: revision + 1, RequirementRevision: r.Requirement.Revision,
+			BaseSnapshot: r.BaseSnapshot, Candidate: r.Candidate, Reviews: r.Reviews, Verification: r.Verification,
+			Guard: r.Guard, Cost: s.Cost, Consequences: "Transfer only the named unfinished developer action. Preserve the Batch, workspace, checkpoints, prior results, costs and attempts. Authorize one new execution for the selected provider/executor; do not rerun reviews or earlier batches. External execution is user-assigned development, not native or independent QA evidence."}
 	}
 	if ask.Preview != nil {
 		data, err := json.Marshal(ask.Preview)
@@ -549,14 +571,15 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		ask.Preview = &frozen
 	}
 	ask.Digest = digestOfCanonical(struct {
-		Run       string
-		Req       string
-		Base      string
-		Candidate string
-		Revision  uint64
-		Request   RegularRequest
-		Preview   *RegularPreview
-	}{s.RunID, r.Requirement.Revision, r.BaseSnapshot, r.Candidate, revision + 1, q, ask.Preview})
+		Run         string
+		Req         string
+		Base        string
+		Candidate   string
+		Revision    uint64
+		Request     RegularRequest
+		Preview     *RegularPreview
+		ImpactItems []ImpactItem
+	}{s.RunID, r.Requirement.Revision, r.BaseSnapshot, r.Candidate, revision + 1, q, ask.Preview, ask.ImpactItems})
 	ask.Token = freshnessToken(revision+1, RequestID(id))
 	r.Ask = ask
 	return nil
@@ -605,6 +628,9 @@ func (e *Engine) regularDecision(s *State, d RegularDecision, revision uint64, e
 		return fmt.Errorf("INVALID_CHOICE")
 	}
 	q := a.Request
+	if len(d.Impact) > 0 && q.Action != "development-increment" {
+		return fmt.Errorf("USER_IMPACT_REQUIRED: decision impact is only for delegated development-increment items; requirement changes use apply-requirement")
+	}
 	if q.Action == "qa-recovery" {
 		if d.Choice == "abort" {
 			if strings.TrimSpace(d.Reason) == "" {
@@ -635,6 +661,14 @@ func (e *Engine) regularDecision(s *State, d RegularDecision, revision uint64, e
 		q = RegularRequest{Action: "abort", Reason: d.Reason}
 	}
 	switch q.Action {
+	case "development-increment":
+		if err := decideDevelopmentIncrement(s, a, d, eventID, revision+1); err != nil {
+			return err
+		}
+	case "executor-handoff":
+		if err := decideExecutorHandoff(s, q, a.ID, eventID, revision+1); err != nil {
+			return err
+		}
 	case "authorize-wave":
 		if err := decideWaveRecovery(s, a, d, revision+1); err != nil {
 			return err
@@ -732,8 +766,16 @@ func (e *Engine) regularDecision(s *State, d RegularDecision, revision uint64, e
 			}
 		}
 	case "requirement-change":
+		if err := recordRequirementImpact(r, a, d, eventID, revision+1); err != nil {
+			return err
+		}
 		r.ChangePending = true
 	case "apply-requirement":
+		if len(d.Dispositions) > 0 {
+			return fmt.Errorf("USER_IMPACT_CONFLICT: apply cannot replace the already-confirmed dispositions")
+		}
+		bindRequirementBatchLineage(s, q)
+		retireUnclaimedOnChange(s, a.ID)
 		classifyVerificationChange(r, q, revision+1)
 		applyRequirementChange(r, q, revision+1, s.RunID)
 	case "jump":
@@ -785,8 +827,11 @@ func (e *Engine) regularDecision(s *State, d RegularDecision, revision uint64, e
 		invalidateVerification(s, q.Action)
 		r.Guard.ContinueTasks = nil
 		for id, x := range s.RegularExecutions {
-			if !x.Claimed {
+			if !x.Claimed || isExternalExecution(x) {
 				x.Finished = true
+				if isExternalExecution(x) {
+					x.SupersededBy = "abort:" + eventID
+				}
 				delete(s.PendingActions, id)
 				s.RegularExecutions[id] = x
 				continue
@@ -907,7 +952,7 @@ func applyRequirementChange(r *RegularState, q RegularRequest, revision uint64, 
 	p, _ := requirements.ParseRequirementProjection(doc.Path, []byte(doc.Text))
 	doc.Projection = &p
 	doc.Confirmed = true
-	receipt := RequirementChangeReceipt{FromRevision: old.Revision, ToRevision: doc.Revision, Candidate: r.Candidate, StateRevision: revision, Meaning: q.Meaning, Origin: q.Origin, Impact: q.Impact, Reason: q.Reason, DeltaDigest: digestOfCanonical(q.Delta)}
+	receipt := RequirementChangeReceipt{UserDisposition: r.RequirementImpact, FromRevision: old.Revision, ToRevision: doc.Revision, Candidate: r.Candidate, StateRevision: revision, Meaning: q.Meaning, Origin: q.Origin, Impact: q.Impact, Reason: q.Reason, DeltaDigest: digestOfCanonical(q.Delta)}
 	for _, action := range reviewActions {
 		series := r.Reviews[action]
 		keep := false
@@ -939,8 +984,9 @@ func applyRequirementChange(r *RegularState, q RegularRequest, revision uint64, 
 			}
 		}
 		implicit := q.Impact[action] == "unaffected" && q.Origin == "USER_INITIATED_CHANGE"
-		if action == "product-review" && q.Meaning == "preserved" {
-			implicit = true
+		if q.Impact[action] != "unaffected" && !keep {
+			implicit = false
+			settledMinor = false
 		}
 		if (keep || implicit || settledMinor) && effectiveReview(r, series) == "PASS" {
 			receipt.Keep = append(receipt.Keep, KeptReview{Action: action, ResultDigest: series.CurrentDigest, FromRequirement: series.CurrentRequirement, FromCandidate: r.Candidate, ToRequirement: doc.Revision, ToCandidate: r.Candidate})
@@ -965,6 +1011,7 @@ func applyRequirementChange(r *RegularState, q RegularRequest, revision uint64, 
 	r.RequiredSources.Binding.SolutionRevision = doc.Revision
 	r.Changes = append(r.Changes, receipt)
 	r.ChangePending = false
+	r.RequirementImpact = nil
 	r.Topology = ""
 	if r.Plan != nil {
 		r.Plan.ConfirmedRevision = ""

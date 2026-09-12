@@ -375,7 +375,7 @@ func TestBlackboxRuntimeExhaustionIsAskAndBounded(t *testing.T) {
 	dev := currentExecution(t, e, "development-worker")
 	claimAndAttach(t, e, dev)
 	first := currentExecution(t, e, "blackbox-design")
-	for n := 1; n <= 2; n++ {
+	for n := 1; n <= 3; n++ {
 		x := currentExecution(t, e, "blackbox-design")
 		if x.Claim.Task != first.Claim.Task {
 			t.Fatal("runtime retry changed TaskKey")
@@ -396,7 +396,7 @@ func TestBlackboxRuntimeExhaustionIsAskAndBounded(t *testing.T) {
 	}
 	chooseQARecovery(t, e, "retry")
 	x := currentExecution(t, e, "blackbox-design")
-	if x.Number != 3 || x.Claim.Task != first.Claim.Task {
+	if x.Number != 4 || x.Claim.Task != first.Claim.Task {
 		t.Fatal("additional attempt not bound to same task")
 	}
 	claimAndAttach(t, e, x)

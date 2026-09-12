@@ -561,7 +561,7 @@ func verificationAllowance(s *State, b *guard.Basis) {
 		}
 	}
 	for key := range keys {
-		max := 2
+		max := 3
 		if v != nil {
 			max += v.ExtraAttempts[key.String()]
 		}
@@ -611,7 +611,7 @@ func (e *Engine) acceptVerification(s *State, result VerificationResult, revisio
 	s.RegularExecutions[result.ActionID] = x
 	reject := func(reason string) (string, error) {
 		at := s.Attempts[x.Claim.Task]
-		at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+		at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 		s.Attempts[x.Claim.Task] = at
 		r.VerificationErrors = append(r.VerificationErrors, VerificationError{Result: result, Reason: reason, Revision: revision + 1})
 		return "REJECTED_RESULT", nil
@@ -944,7 +944,7 @@ func (e *Engine) acceptRepair(s *State, result RepairResult, revision uint64) (s
 	s.Tasks[x.Claim.Task] = runtime.TaskTerminal
 	reject := func(reason string) (string, error) {
 		at := s.Attempts[x.Claim.Task]
-		at.RetryExhausted = x.Number >= preparationMax(r, x.Claim.Task)
+		at.RetryExhausted = x.Number >= preparationMax(s, x.Claim.Task)
 		s.Attempts[x.Claim.Task] = at
 		r.RepairErrors = append(r.RepairErrors, RepairError{Result: result, Reason: reason, Revision: revision + 1})
 		return "REJECTED_RESULT", nil
@@ -1393,7 +1393,7 @@ func reconcileDismissedQA(s *State, a WaveAdjudication) {
 	w.Complete = false
 	x := s.RegularExecutions[result.ActionID]
 	at := s.Attempts[t.Task]
-	at.RetryExhausted = x.Number >= preparationMax(r, t.Task)
+	at.RetryExhausted = x.Number >= preparationMax(s, t.Task)
 	s.Attempts[t.Task] = at
 }
 

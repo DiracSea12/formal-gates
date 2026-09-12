@@ -96,13 +96,28 @@ func facadeChoice(t *testing.T, f *Facade, q protocol.RegularRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Fixture users explicitly delegate; missing production input remains blocked.
+	if q.Action == "apply-requirement" && r.Regular.RequirementImpact != nil {
+		if q.Impact == nil {
+			q.Impact = map[string]string{}
+		}
+		for name, choice := range r.Regular.RequirementImpact.Choices {
+			if choice == "delegate" && q.Impact[name] == "" {
+				q.Impact[name] = "unknown"
+			}
+		}
+	}
 	ev, _ := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("request-%d", r.Revision)), protocol.RegularEvent{Operation: "REQUEST", ExpectedRevision: r.Revision, Request: &q})
 	_, r, err = f.Submit(ev)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := r.Regular.Ask
-	ev, _ = protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("decision-%d", r.Revision)), protocol.RegularEvent{Operation: "DECIDE", ExpectedRevision: r.Revision, Decision: &protocol.RegularDecision{RequestID: a.ID, Token: a.Token, Digest: a.Digest, Choice: "confirm"}})
+	dispositions := map[string]string{}
+	for _, item := range a.ImpactItems {
+		dispositions[item.ID] = "delegate"
+	}
+	ev, _ = protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("decision-%d", r.Revision)), protocol.RegularEvent{Operation: "DECIDE", ExpectedRevision: r.Revision, Decision: &protocol.RegularDecision{RequestID: a.ID, Token: a.Token, Digest: a.Digest, Choice: "confirm", Dispositions: dispositions}})
 	if _, _, err = f.Submit(ev); err != nil {
 		t.Fatal(err)
 	}
