@@ -1,9 +1,25 @@
-package cost
+package host
 
 import (
 	"encoding/json"
 	"io"
 )
+
+var claudeDescriptor = &Descriptor{
+	Lifecycle:    claudeAdapter(),
+	ID:           Claude,
+	InstallName:  "claude",
+	ManifestName: "Claude Code",
+	Aliases:      []string{"claude", "claude-code", "claude code"},
+	Installable:  true,
+	Paths: PathLayout{
+		GlobalBase: ".claude/skills", GlobalHookConfig: ".claude/settings.json", GlobalManaged: ".claude/CLAUDE.md",
+		ProjectBase: ".claude/skills", ProjectHookConfig: ".claude/settings.json", ProjectManaged: "CLAUDE.md",
+	},
+	Hook:            HookSpec{Kind: HookNested, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
+	LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true, CostProvider: Claude,
+	ReadUsage: parseClaudeTranscript,
+}
 
 // parseClaudeTranscript sums per-message usage over the assistant lines of a
 // Claude Code subagent transcript (agent-<id>.jsonl). Transcript entries can
@@ -49,14 +65,4 @@ func parseClaudeTranscript(reader io.Reader) (Usage, error) {
 		return Usage{}, err
 	}
 	return total, nil
-}
-
-// nonNegative returns the pointer value, or zero for a missing or negative
-// field. A corrupted negative count is treated as absent rather than
-// subtracted.
-func nonNegative(value *int64) int64 {
-	if value == nil || *value < 0 {
-		return 0
-	}
-	return *value
 }

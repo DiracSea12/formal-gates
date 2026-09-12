@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/host"
 	"formal-gates/internal/settings"
 	"os"
 	"os/exec"
@@ -15,29 +16,68 @@ import (
 // supplies native configuration, process transport and transcript observation;
 // it cannot allocate attempts, change authorization, or grant descendants tools.
 // Installation support alone does not imply a regular execution transport.
+// nativeTurn is a single native invocation, not a workflow or an executor.
+// The driver supplies immutable inputs and two bounded callbacks. Adapters never
+// decide the next task, write a verdict, or connect the whitebox preflight.
+type nativeTurn struct {
+	Claim                                                protocol.ExecutionClaim
+	Settings                                             settings.Values
+	Root, RunID, Job, Workspace, Prompt, ToolDescription string
+	Schema                                               map[string]any
+	Resume, NoTools                                      bool
+	Attached                                             func(string) error
+	Operation                                            func(string, string, json.RawMessage) (any, error)
+}
+
+type nativeProbe struct {
+	Context                                               *protocol.HostRuntimeContext
+	Root, RunID, Job, Workspace, ActionID, Step, Identity string
+}
+
 type nativeRuntimeAdapter interface {
+	nativeExecutionTransport
 	capture(settings.Values) (*protocol.HostRuntimeContext, error)
 	validate(*protocol.HostRuntimeContext) error
 	transcript(string, *protocol.HostRuntimeContext) (string, error)
 	toolConfig(json.RawMessage) (map[string]any, error)
-	execute(*Facade, string, bool) (Run, error)
-	runModel(context.Context, Run, protocol.TaskOperation, string, protocol.TaskOperationReceipt) protocol.TaskOperationReceipt
+	runModel(context.Context, settings.Values, protocol.TaskOperation, string, protocol.TaskOperationReceipt) protocol.TaskOperationReceipt
 	observeModel(protocol.TaskOperation, string, protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error)
 }
 
-func runtimeAdapter(provider string) (nativeRuntimeAdapter, error) {
-	switch provider {
-	case "codex":
-		return codexRuntimeAdapter{}, nil
-	case "workbuddy":
-		return workBuddyRuntimeAdapter{}, nil
-	case "zcode":
-		return zcodeRuntimeAdapter{}, nil
-	case "deepseek-harness":
-		return dshRuntimeAdapter{}, nil
-	default:
-		return nil, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: no regular runtime adapter for %s", provider)
+type nativePlatform struct {
+	*host.Descriptor
+	nativeRuntimeAdapter
+}
+
+func registerNativePlatform(descriptor *host.Descriptor, adapter nativeRuntimeAdapter) error {
+	if descriptor == nil || adapter == nil || descriptor.CheckIdentity == nil || descriptor.ReadUsage == nil || descriptor.ObserveRecovery == nil {
+		return fmt.Errorf("native platform requires runtime, identity, recovery and usage capabilities")
 	}
+	return host.Register(&nativePlatform{descriptor, adapter})
+}
+
+func registerBuiltinRuntime(provider string, adapter nativeRuntimeAdapter) {
+	base, err := host.LookupAdapter(provider)
+	if err == nil {
+		err = registerNativePlatform(base.HostDescriptor(), adapter)
+	}
+	if err != nil {
+		panic(err)
+	}
+}
+
+// Execution claims use canonical provider IDs. Do not admit an installation alias
+// that would later disagree with the platform's persisted native identity binding.
+func runtimeAdapter(provider string) (nativeRuntimeAdapter, error) {
+	entry, err := host.LookupAdapter(provider)
+	if err == nil {
+		if platform, ok := entry.(*nativePlatform); ok && platform.ID == provider {
+			// Preserve optional capabilities on the concrete adapter (for example
+			// managed resource binding), not just the mandatory interface methods.
+			return platform.nativeRuntimeAdapter, nil
+		}
+	}
+	return nil, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: no regular runtime adapter for %s", provider)
 }
 
 // ExecuteNative dispatches creation and recovery through the same platform
@@ -55,7 +95,7 @@ func (f *Facade) ExecuteNative(actionID string, resume bool) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	return adapter.execute(f, actionID, resume)
+	return f.executeNativeTransport(actionID, resume, adapter)
 }
 
 func captureRuntimeContext(provider string, config settings.Values, stateDirectory ...string) (*protocol.HostRuntimeContext, error) {

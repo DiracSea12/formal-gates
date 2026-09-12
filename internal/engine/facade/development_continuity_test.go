@@ -122,7 +122,7 @@ func TestDeveloperNativeContinuation(t *testing.T) {
 			if mode == "replacement" {
 				// This identity was created by this test invocation. Deleting only that
 				// disposable test thread supplies a real, reproducible irrecoverable case.
-				raw, e := codexThreadRequest(first.Regular.Settings.Values.CodexExecutable, "thread/delete", original.Identity, original.Claim.Context, first.Regular.Preparation.Resources["development"])
+				raw, e := codexThreadRequest(first.Regular.Settings.Values.NativeString("codexExecutable"), "thread/delete", original.Identity, original.Claim.Context, first.Regular.Preparation.Resources["development"])
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -186,7 +186,7 @@ done
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := captureRuntimeContext("codex", settings.Values{CodexExecutable: executable})
+	binding, err := captureRuntimeContext("codex", settings.Values{Native: map[string]string{"codexExecutable": executable}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ done
 		t.Fatal(err)
 	}
 	run, _ := f.Show()
-	recovery, err := f.observeDeveloperRecovery(run, next, false)
+	recovery, err := f.observeNativeDeveloperRecovery(run, next, false, codexRuntimeAdapter{})
 	if err != nil || recovery.Outcome() != "UNRECOVERABLE" {
 		t.Fatalf("%+v %v", recovery, err)
 	}

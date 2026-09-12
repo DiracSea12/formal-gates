@@ -3,13 +3,12 @@ package facade
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
-
-	"formal-gates/internal/engine/protocol"
 )
 
-func (f *Facade) reconcileStreamNative(actionID string, x protocol.RegularExecution, observeIdentity func(string) (string, error), finish func(string, string, error) (Run, error)) (Run, bool, error) {
+func (f *Facade) reconcileNative(actionID string, x protocol.RegularExecution, adapter nativeExecutionTransport) (Run, bool, error) {
 	if !x.Claimed {
 		return Run{}, false, fmt.Errorf("INTENT_MISMATCH: unclaimed action cannot be resumed")
 	}
@@ -19,6 +18,11 @@ func (f *Facade) reconcileStreamNative(actionID string, x protocol.RegularExecut
 	job := f.codexJob(actionID)
 	if x.ResumeClaimed || x.ResumeCount > 0 {
 		job = codexResumeJob(job, x.ResumeCount)
+	}
+	invocationRoot := job
+	job, err := nativeProcessDirectory(job, string(x.Claim.Task.Step))
+	if err != nil {
+		return Run{}, false, fmt.Errorf("UNKNOWN: original native process evidence unavailable: %w", err)
 	}
 	data, err := os.ReadFile(filepath.Join(job, "process.json"))
 	if err != nil {
@@ -37,54 +41,66 @@ func (f *Facade) reconcileStreamNative(actionID string, x protocol.RegularExecut
 	if !process.Stopped && codexProcessAlive(process.PID) {
 		return Run{}, false, fmt.Errorf("HOST_ACTION_RUNNING: original native process is still running")
 	}
+	if run, err := f.Show(); err == nil && process.Stopped && checkpointCanResume(run, x) {
+		return run, false, nil
+	}
 	identity := x.Identity
 	if identity == "" {
 		identity = process.Identity
 	}
-	if identity == "" && observeIdentity != nil {
-		identity, err = observeIdentity(job)
+	if identity == "" {
+		identity, err = adapter.readIdentity(job, actionID)
 		if err != nil {
 			return Run{}, false, err
 		}
 	}
 	if identity == "" {
-		return Run{}, false, fmt.Errorf("UNKNOWN: native session identity not observed; no new session created")
+		return Run{}, false, fmt.Errorf("UNKNOWN: native identity not observed; no new session created")
 	}
 	if x.Identity == "" {
 		if err := f.attachStreamIdentity(x.Claim, identity); err != nil {
 			return Run{}, false, err
 		}
 	}
-	if process.Stopped && process.ExitCode != nil {
-		var executionErr error
-		if *process.ExitCode != 0 {
-			executionErr = fmt.Errorf("native process exited %d", *process.ExitCode)
+	// Directory identity distinguishes the no-tools preflight from authoring,
+	// even if interruption occurred before the coverage operation was accepted.
+	if job == filepath.Join(invocationRoot, "coverage") && process.Stopped && (process.ExitCode == nil || *process.ExitCode == 0) {
+		if err := f.recordNativeCoverage(x.Claim, identity, job, adapter); err != nil {
+			return Run{}, false, err
 		}
-		if _, err := os.Stat(filepath.Join(job, "answer.json")); err != nil && executionErr == nil {
-			if _, coverageErr := os.Stat(filepath.Join(job, "coverage-answer.json")); coverageErr == nil && x.Claim.Task.Step == "whitebox-design" {
-				current, readErr := f.Show()
-				if readErr != nil {
-					return Run{}, false, readErr
-				}
-				if !protocol.WhiteboxCoverageReady(current.Executions[actionID]) {
-					answer, readErr := os.ReadFile(filepath.Join(job, "coverage-answer.json"))
-					if readErr != nil {
-						return Run{}, false, readErr
-					}
-					bound := current.Executions[actionID].Claim
-					bound.Identity = identity
-					if readErr = f.commitNativeCoverage(current, bound, answer); readErr != nil {
-						return Run{}, false, readErr
-					}
-				}
-				run, showErr := f.Show()
-				return run, false, showErr
-			}
-			return Run{}, false, fmt.Errorf("UNKNOWN: native answer unavailable after exit: %w", err)
+		run, err := f.Show()
+		return run, false, err
+	}
+	var executionErr error
+	if process.Stopped && process.ExitCode != nil && *process.ExitCode != 0 {
+		executionErr = fmt.Errorf("native process exited %d", *process.ExitCode)
+	}
+	_, answerErr := os.Stat(filepath.Join(job, "answer.json"))
+	if answerErr == nil || executionErr != nil || x.ResumeClaimed {
+		if answerErr != nil && executionErr == nil {
+			executionErr = fmt.Errorf("interrupted native resume has no result")
 		}
-		run, err := finish(identity, job, executionErr)
+		run, err := f.collectNativeResult(actionID, x.Claim, identity, job, executionErr, adapter)
 		return run, true, err
+	}
+	if process.Stopped && process.ExitCode != nil {
+		return Run{}, false, fmt.Errorf("UNKNOWN: native answer unavailable after exit: %w", answerErr)
 	}
 	run, err := f.Show()
 	return run, false, err
+}
+
+// Main and preflight have separate directories. Only the common process receipt
+// is observed here; all other invocation files are opaque platform-owned data.
+func nativeProcessDirectory(job, step string) (string, error) {
+	if _, err := os.Stat(filepath.Join(job, "process.json")); err == nil {
+		return job, nil
+	} else if !os.IsNotExist(err) || step != "whitebox-design" {
+		return "", err
+	}
+	coverage := filepath.Join(job, "coverage")
+	if _, err := os.Stat(filepath.Join(coverage, "process.json")); err != nil {
+		return "", err
+	}
+	return coverage, nil
 }

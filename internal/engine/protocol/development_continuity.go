@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/host"
 	"reflect"
 
 	"formal-gates/internal/engine/authoring"
@@ -28,11 +29,11 @@ func (r DeveloperRecovery) Outcome() string {
 	if r.Identity == "" || r.TransportError != "" {
 		return "UNKNOWN"
 	}
-	observe := recoveryObservers[r.Claim.Provider]
-	if observe == nil {
+	descriptor, err := host.Lookup(r.Claim.Provider)
+	if err != nil || descriptor.ObserveRecovery == nil {
 		return "UNKNOWN"
 	}
-	return observe(r)
+	return descriptor.ObserveRecovery(host.RecoveryObservation{Identity: r.Identity, NativeMethod: r.NativeMethod, NativeResponse: r.NativeResponse, TransportError: r.TransportError})
 }
 
 func latestDeveloper(s *State, task runtime.TaskKey) (RegularExecution, bool) {

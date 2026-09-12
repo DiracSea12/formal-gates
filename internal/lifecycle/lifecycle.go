@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/host"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,7 +151,7 @@ func captureRoots(root string, adapter providerAdapter, payload any) ([]string, 
 			return nil, err
 		}
 		if found {
-			activeRoots = appendUniqueStrings(activeRoots, activeRoot)
+			activeRoots = host.AppendUniqueStrings(activeRoots, activeRoot)
 		}
 	}
 	if len(activeRoots) > 0 {
@@ -258,7 +259,7 @@ func ResolveClaimIdentityWithProvider(root, runID, preferred, provider string) (
 	starts := []string{}
 	for _, record := range records {
 		if record.Event == eventStart && record.Identity != "" {
-			starts = appendUniqueStrings(starts, record.Identity)
+			starts = host.AppendUniqueStrings(starts, record.Identity)
 		}
 	}
 	for _, identity := range starts {

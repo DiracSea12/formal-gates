@@ -9,11 +9,24 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
 )
 
 const nativeSourceRoot = "FORMAL_GATES_NATIVE_SOURCES"
+
+// streamRuntimeAdapter supplies the identical transport support shared by stream
+// hosts. Native protocol, configuration and result semantics stay with the host.
+type streamRuntimeAdapter struct{}
+
+func (streamRuntimeAdapter) bindResources(binding *protocol.HostRuntimeContext, root string) {
+	bindStreamResources(binding, root)
+}
+func (streamRuntimeAdapter) transcript(identity string, binding *protocol.HostRuntimeContext) (string, error) {
+	return streamTranscript(identity, binding)
+}
+func (streamRuntimeAdapter) toolConfig(json.RawMessage) (map[string]any, error) {
+	return map[string]any{}, nil
+}
 
 func captureStreamContext(provider, executable string, extra map[string]string) (*protocol.HostRuntimeContext, error) {
 	resolved, err := exec.LookPath(executable)
@@ -97,40 +110,11 @@ func appendStreamTranscript(job, identity, stream string, binding *protocol.Host
 	process["transcriptPath"] = path
 	return path, writeJSONAtomic(filepath.Join(job, "process.json"), process)
 }
-func (f *Facade) finishStreamNative(actionID string, claim protocol.ExecutionClaim, identity, job, stream string, waitErr error) (Run, error) {
-	path, err := appendStreamTranscript(job, identity, stream, claim.Context)
-	source := protocol.ExecutionSource{ActionID: actionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: identity, Status: "STOPPED", TranscriptPath: path}
-	if err == nil {
-		_, err = cost.ParseTranscript(claim.Provider, path)
-	}
-	if err != nil {
-		source.Status = "UNAVAILABLE"
-		source.Reason = err.Error()
-	}
-	return f.finishNativeResult(actionID, claim, identity, filepath.Join(job, "answer.json"), waitErr, source)
-}
+
 func (f *Facade) attachStreamIdentity(claim protocol.ExecutionClaim, identity string) error {
 	return f.submitSource(protocol.ExecutionSource{ActionID: claim.ActionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: identity, Status: "RUNNING"})
 }
 
-func finishStreamCoverage(job, identity string, binding *protocol.HostRuntimeContext, stream string) error {
-	if _, err := appendStreamTranscript(job, identity, stream, binding); err != nil {
-		return err
-	}
-	if err := os.Rename(filepath.Join(job, "answer.json"), filepath.Join(job, "coverage-answer.json")); err != nil {
-		return err
-	}
-	process, err := os.ReadFile(filepath.Join(job, "process.json"))
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(job, "coverage-process.json"), process, 0600); err != nil {
-		return err
-	}
-	for _, name := range []string{"stderr.log", "session-request.json", "native-source.json", "native-events.jsonl"} {
-		if err := os.Rename(filepath.Join(job, name), filepath.Join(job, "coverage-"+name)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	return nil
+func (streamRuntimeAdapter) source(identity, job string, binding *protocol.HostRuntimeContext) (string, error) {
+	return appendStreamTranscript(job, identity, "stdout.jsonl", binding)
 }

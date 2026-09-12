@@ -122,10 +122,89 @@ kind/caseId/prompt。引擎检查原记录、观察结果和进程，不用新 I
 ### 验证状态与维护入口
 
 平台命令构造、原生协议、身份/结果拒绝、用量解析、安装和公共契约使用本地 fixture 验证。
-已确认 CLI 可执行不等于真实会话或完整 regular 验收通过。困难/耗时的平台真实集成实跑
-按用户决定延期，**未验证，不记 PASS，也不作为本轮 Seal 阻塞**；正式验收变更由主代理
-记录，本说明不改正式需求或替引擎作 Seal 决定。延期仅限实跑，不免除三宿主接入实现。
+CLI 可执行或本地 fixture 通过不等于真实会话或完整 regular 验收通过。未实测必须保持
+未验证，不能记 PASS。某次 run 的真实集成实跑确需延期时，由用户决定并沿 engine
+已有的精确 waiver/deferred/skip 合同记录；是否阻塞该 run 的 Seal 由实际处置决定，
+不是本产品默认豁免。延期不免除三宿主接入实现，也不能由主代理口头记录代替引擎接纳。
 
-维护入口是 `internal/engine/facade/runtime_context.go` 的 nativeRuntimeAdapter，
-平台方法、配置、原生结果与生命周期观察在 runtime_adapter/bridge/result_<host> 文件。
-新增宿主复用既有 host 安装登记、任务操作及 cost parser，公共流程不增加平台特判。
+### 维护者：新增和更新平台适配
+
+平台接入以 `internal/host/host.go` 的 `Descriptor` 为唯一能力描述。公共 runtime、
+settings、source/recovery、cost、lifecycle 和 hook 响应均从这一描述取能力，不分别维护
+平台名单。`host` 只描述平台并解释原生数据，不依赖 engine、settings 或 cost 账本。
+
+描述中填写 ID/别名、安装路径、可编辑配置及默认值/校验、`ReadUsage`、`CheckIdentity`、
+`ObserveRecovery`，有真实来源时再提供 `ReadTiming`。需要原生 hook 时提供 `Lifecycle`
+以及 `Hook.Response`/`Hook.ExitCode`；没有 hook 的平台不伪造生命周期能力。原生事件名、
+载荷字段、身份探测信号和项目级 hook 限制属于平台描述，不进入公共检测流程。
+
+#### 新平台的最少操作
+
+在平台自己的适配文件中构造描述并实现 `nativeRuntimeAdapter`，在同一文件的 `init`
+中调用一次 `registerNativePlatform(descriptor, adapter)` 并检查错误。新增平台不需要
+修改公共 runtime/source/recovery/cost/settings/lifecycle 的名单或分支。已有安装描述
+通过对应平台的 `registerBuiltinRuntime` 接上运行时，不复制描述。平台允许有多个专属
+文件；无需为了文件数合并不同协议，也不引入动态插件、热加载或第二套调度。
+
+命令/路径配置使用 `host.StringConfig`，由 `Values.NativeString` 读取。默认值、字段名
+和校验仅由平台提供，公共配置仍保留现有扁平 JSON 格式和创建 run 时的有效值快照。
+随适配补充该平台的协议样本、测试与使用说明；若发布新的安装目标，还需在 manifest
+声明该目标及真实验证状态。这是平台支持声明，不是另一套运行时注册。
+
+传输合同位于 `internal/engine/facade/runtime_context.go` 与 `runtime_execute.go`：
+
+| 平台提供 | 仅负责的内容 |
+|---|---|
+| `capture` / `validate` | 捕获并校验原生可执行文件、环境与平台配置；恢复仍使用原绑定 |
+| `turn(nativeTurn)` | 执行一个原生回合，处理本平台启动/续用/等待及原生结果；不判断下一阶段 |
+| `source` / `transcript` / `readIdentity` | 返回真实计量来源或解释已落盘身份，不接纳工作流结果 |
+| `probe(nativeProbe)` | 原生恢复查询的方法名、原始响应或真实错误；不自行批准替换或重试 |
+| `runModel` / `observeModel` / `toolConfig` | 本平台的无工具模型调用、已完成调用观察及原生工具配置映射 |
+
+流式平台可嵌入 `streamRuntimeAdapter`，复用资源绑定、来源定位、默认来源采集和空工具
+配置；用 `runNativeStreamProcess` 保存进程与原始输出，以 `completeStreamModel`/
+`observeStreamModel` 处理已有模型回执。不复制这些公共实现，也不自建结果/成本 writer。
+
+`nativeTurn` 只携带本次调用输入，不提供 `Facade`、`Run` 或可写工作流对象。宿主确认
+原生身份后调用 `Attached`，随后才提交模型输入；需要引擎任务工具时经 `Operation`
+或已绑定的 CLI 工具入口转交。角色允许读写什么由公共 `nativeRoleAccess` 决定，平台
+只翻译成自己的工具名、配置和原生权限。`NoTools` 回合不开放原生工作区工具。
+公共执行器统一完成 CLAIM、白盒前置、结果接纳、恢复衔接和取消；平台不实现
+`execute`、`finish`、`reconcile`，也不逐个连接这些工作流步骤。
+
+#### 调用产物与恢复
+
+`nativeTurn.Job` 是公共执行器分配的本次原生调用目录。公共合同只约定实际输入
+`prompt.txt`/`result-schema.json`、进程回执 `process.json` 和成功原生答案 `answer.json`。
+平台的请求、配置、日志和其他私有产物均放在这个目录内，具体文件名和子目录由平台决定。
+进程与来源 helper 负责保存可恢复证据；平台不改 run state，不把请求身份当成已观察身份。
+
+白盒无工具覆盖回合使用独立 `coverage/` 调用目录，正式编写使用另一调用目录，并续用
+同一个原生身份。公共恢复根据目录和既有 coverage 操作回执识别前置/正式答案，不搬运
+平台文件、不维护私有文件清单，也不因平台增加文件而修改公共收尾。中断后先观察原进程
+与原答案；已有有效 coverage 不再次执行，也不能作为正式设计结果接纳。取消定位实际
+在途调用，终态仍按原资源归属统一清理，正式来源与结果沿原合同保留。
+
+#### 已有平台更新与验证
+
+在既定能力合同内，协议字段、配置、结果格式、用量格式或私有产物布局变化，只修改
+该平台的适配、测试和说明，不同步修改其他平台或公共流程。解析器保留仍有效的旧来源
+读取能力，例如升级后同一会话的旧计量前缀。真正新增公共能力时才说明合同变化，不能
+把扩充公共核心当作每次接入或平台升级的惯常步骤。
+
+最小接入范例是 `runtime_platform_test.go`：一次注册覆盖配置、生命周期、身份、恢复和
+计量；模拟协议及私有产物布局升级，未适配版本必须失败，更新平台解释器后保留同身份
+续用和旧来源。`runtime_platform_entry_test.go` 通过公开 Start/ExecuteNative/Open
+验证进程、身份、结果、计量和中断后采集；`runtime_platform_cycle_test.go` 验证开发
+CONTINUE/续用、公共白盒前置与编写自动衔接，私有文件隔离且不覆盖。
+`runtime_boundary_test.go` 防止适配器重新依赖工作流所有者或公共代码恢复平台名单。
+这些都是本地假平台测试，不是真实宿主支持或独立审查的证明。
+
+```sh
+go test ./internal/engine/facade -run '^TestNativePlatform|^TestNativeRoleAccess|^TestStreamCoverageRecovery' -count=1
+go test ./internal/host ./internal/settings ./internal/cost ./internal/lifecycle
+```
+
+平台协议变化只补跑其受影响测试；公共合同变化才扩大回归。不为新增平台复制整套大型
+验收，不为字段更新重跑未受影响的真实模型调用。安装/完整 regular 的支持声明仍须依据
+相应实际验证，缺失能力不能用通用 fallback 或主代理手工转交代替。

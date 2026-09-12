@@ -1,4 +1,4 @@
-package lifecycle
+package host
 
 import (
 	"os"
@@ -39,9 +39,6 @@ func deepseekGlobalInstallPrefix() string {
 
 // isProjectDshInstall reports whether path is a project-local DSH skill binary
 // rather than a global DSH-home install.
-func isProjectDshInstall(path string) bool {
-	return isNormalizedProjectDshInstall(normalizeProviderExecutablePath(path))
-}
 
 func isNormalizedProjectDshInstall(normalized string) bool {
 	if !strings.Contains(normalized, "/.dsh/skills/formal-gates/bin/") {
@@ -51,30 +48,31 @@ func isNormalizedProjectDshInstall(normalized string) bool {
 	return prefix == "" || !strings.HasPrefix(normalized, prefix)
 }
 
-func deepseekAdapter() providerAdapter {
-	return providerAdapter{
-		name: ProviderDeepSeek,
-		executableMatches: func(normalized string) bool {
+func deepseekAdapter() *Lifecycle {
+	return &Lifecycle{
+		ProjectWithoutHooks: isNormalizedProjectDshInstall,
+
+		ExecutableMatches: func(normalized string) bool {
 			prefix := deepseekGlobalInstallPrefix()
 			return prefix != "" && strings.HasPrefix(normalized, prefix)
 		},
-		agentPrefixes:   []string{"deepseek", "dsh"},
-		environmentKeys: []string{"DSH_HOME", "DSH_PROJECT_DIR"},
-		normalizeEvent: func(eventName string) (string, error) {
-			return normalizeNamedEvent(ProviderDeepSeek, eventName, "SubagentStart", "SubagentStop")
+		AgentPrefixes:   []string{"deepseek", "dsh"},
+		EnvironmentKeys: []string{"DSH_HOME", "DSH_PROJECT_DIR"},
+		NormalizeEvent: func(eventName string) (string, error) {
+			return normalizeNamedEvent(DeepSeek, eventName, "SubagentStart", "SubagentStop")
 		},
-		identity: func(_ string, payload any) string {
+		Identity: func(_ string, payload any) string {
 			return payloadIdentity(payload, []string{"agent_id", "agentId", "subagent_id", "subagentId"})
 		},
-		correlation: func(_ string, _ any) string { return "" },
-		projectRoots: func(payload any) []string {
-			roots := appendUniqueStrings(nil, os.Getenv("DSH_PROJECT_DIR"))
-			roots = appendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
-			return appendUniqueStrings(roots, payloadProjectRoots(payload)...)
+		Correlation: func(_ string, _ any) string { return "" },
+		ProjectRoots: func(payload any) []string {
+			roots := AppendUniqueStrings(nil, os.Getenv("DSH_PROJECT_DIR"))
+			roots = AppendUniqueStrings(roots, payloadWorkingDirectories(payload)...)
+			return AppendUniqueStrings(roots, payloadProjectRoots(payload)...)
 		},
-		transcriptPath: func(payload any) string {
+		TranscriptPath: func(payload any) string {
 			return payloadScalar(payload, []string{"transcript_path", "transcriptPath"}, 0)
 		},
-		reason: payloadReason,
+		Reason: payloadReason,
 	}
 }

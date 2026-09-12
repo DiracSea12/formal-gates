@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/gitprep"
 	"formal-gates/internal/engine/protocol"
 	"os"
+	"path/filepath"
 )
 
 // finishNativeResult admits a transport's final answer through the existing
@@ -67,4 +69,17 @@ func (f *Facade) finishNativeResult(actionID string, claim protocol.ExecutionCla
 		return Run{}, err
 	}
 	return f.Show()
+}
+
+func (f *Facade) collectNativeResult(actionID string, claim protocol.ExecutionClaim, identity, job string, waitErr error, adapter nativeExecutionTransport) (Run, error) {
+	path, err := adapter.source(identity, job, claim.Context)
+	source := protocol.ExecutionSource{ActionID: actionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: identity, Status: "STOPPED", TranscriptPath: path}
+	if err == nil {
+		_, err = cost.ParseTranscript(claim.Provider, path)
+	}
+	if err != nil {
+		source.Status = "UNAVAILABLE"
+		source.Reason = err.Error()
+	}
+	return f.finishNativeResult(actionID, claim, identity, filepath.Join(job, "answer.json"), waitErr, source)
 }

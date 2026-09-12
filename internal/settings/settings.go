@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/host"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,16 +14,13 @@ import (
 )
 
 type Values struct {
-	QACapacity          int    `json:"qaCapacity"`
-	TokenCap            *int64 `json:"tokenCap,omitempty"`
-	Capacity            int    `json:"capacity"`
-	CodexExecutable     string `json:"codexExecutable"`
-	Model               string `json:"model,omitempty"`
-	ReasoningEffort     string `json:"reasoningEffort,omitempty"`
-	WorkBuddyExecutable string `json:"workbuddyExecutable"`
-	ZCodeExecutable     string `json:"zcodeExecutable"`
-	ZCodeScript         string `json:"zcodeScript"`
-	DSHExecutable       string `json:"dshExecutable"`
+	Native     map[string]string `json:"-"`
+	QACapacity int               `json:"qaCapacity"`
+	TokenCap   *int64            `json:"tokenCap,omitempty"`
+	Capacity   int               `json:"capacity"`
+
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 type Effective struct {
 	Values  Values            `json:"values"`
@@ -30,24 +28,28 @@ type Effective struct {
 	Files   []string          `json:"files"`
 }
 type input struct {
-	QACapacity          *int    `json:"qaCapacity,omitempty"`
-	TokenCap            *int64  `json:"tokenCap,omitempty"`
-	Capacity            *int    `json:"capacity,omitempty"`
-	CodexExecutable     *string `json:"codexExecutable,omitempty"`
-	Model               *string `json:"model,omitempty"`
-	ReasoningEffort     *string `json:"reasoningEffort,omitempty"`
-	WorkBuddyExecutable *string `json:"workbuddyExecutable,omitempty"`
-	ZCodeExecutable     *string `json:"zcodeExecutable,omitempty"`
-	ZCodeScript         *string `json:"zcodeScript,omitempty"`
-	DSHExecutable       *string `json:"dshExecutable,omitempty"`
+	QACapacity *int   `json:"qaCapacity,omitempty"`
+	TokenCap   *int64 `json:"tokenCap,omitempty"`
+	Capacity   *int   `json:"capacity,omitempty"`
+
+	Model           *string `json:"model,omitempty"`
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }
 
 // Load overlays project values over installation/user values field by field.
 // Unknown fields and null are errors: a typo must never silently remove a cap.
 func Load(root, home string) (Effective, error) {
-	e := Effective{Values: Values{QACapacity: 4, Capacity: 4, CodexExecutable: "codex", WorkBuddyExecutable: "codebuddy", ZCodeExecutable: "node", DSHExecutable: "dsh"}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
-	for _, field := range []string{"qaCapacity", "tokenCap", "capacity", "codexExecutable", "model", "reasoningEffort", "workbuddyExecutable", "zcodeExecutable", "zcodeScript", "dshExecutable"} {
-		e.Sources[field] = "default"
+	nativeFields := host.Configuration()
+	e := Effective{Values: Values{QACapacity: 4, Capacity: 4, Native: map[string]string{}}, Sources: map[string]string{}, Files: []string{filepath.Join(home, ".config", "formal-gates", "config.json"), filepath.Join(root, ".gates", "config.json")}}
+	for _, name := range []string{"qaCapacity", "tokenCap", "capacity", "model", "reasoningEffort"} {
+		e.Sources[name] = "default"
+	}
+	for name, field := range nativeFields {
+		if _, exists := e.Sources[name]; exists {
+			return e, fmt.Errorf("platform configuration shadows common field %q", name)
+		}
+		e.Values.Native[name] = field.Default
+		e.Sources[name] = "default"
 	}
 	for _, path := range e.Files {
 		data, err := os.ReadFile(path)
@@ -71,7 +73,7 @@ func Load(root, home string) (Effective, error) {
 		}
 		var in input
 		dec := json.NewDecoder(bytes.NewReader(data))
-		dec.DisallowUnknownFields()
+		// Exact names (including platform fields) were checked against the one registry above.
 		if err = dec.Decode(&in); err != nil {
 			return e, fmt.Errorf("%s: %w; see references/user-configuration.md for supported fields", path, err)
 		}
@@ -97,30 +99,21 @@ func Load(root, home string) (Effective, error) {
 			}
 			e.Values.Capacity = *in.Capacity
 		}
-		if in.CodexExecutable != nil {
-			if strings.TrimSpace(*in.CodexExecutable) == "" {
-				return e, fmt.Errorf("%s: codexExecutable: use a command name or executable path", path)
-			}
-			e.Values.CodexExecutable = *in.CodexExecutable
-		}
-
-		for _, field := range []struct {
-			name   string
-			input  *string
-			target *string
-		}{
-			{"workbuddyExecutable", in.WorkBuddyExecutable, &e.Values.WorkBuddyExecutable},
-			{"zcodeExecutable", in.ZCodeExecutable, &e.Values.ZCodeExecutable},
-			{"zcodeScript", in.ZCodeScript, &e.Values.ZCodeScript},
-			{"dshExecutable", in.DSHExecutable, &e.Values.DSHExecutable},
-		} {
-			if field.input == nil {
+		for name, field := range nativeFields {
+			value, present := raw[name]
+			if !present {
 				continue
 			}
-			if strings.TrimSpace(*field.input) == "" {
-				return e, fmt.Errorf("%s: %s: use a nonempty command/path or remove the field", path, field.name)
+			var decoded string
+			if err := json.Unmarshal(value, &decoded); err != nil {
+				return e, fmt.Errorf("%s: %s: %w", path, name, err)
 			}
-			*field.target = *field.input
+			if field.Validate != nil {
+				if err := field.Validate(decoded); err != nil {
+					return e, fmt.Errorf("%s: %w", path, err)
+				}
+			}
+			e.Values.Native[name] = decoded
 		}
 		if in.Model != nil {
 			if strings.TrimSpace(*in.Model) == "" {
@@ -141,4 +134,64 @@ func Load(root, home string) (Effective, error) {
 		}
 	}
 	return e, nil
+}
+
+// NativeString reads an adapter-owned option. Load freezes all configured defaults
+// into Native; the descriptor default also supports existing zero-value callers.
+func (v Values) NativeString(name string) string {
+	if value, ok := v.Native[name]; ok {
+		return value
+	}
+	return host.Configuration()[name].Default
+}
+
+// Preserve the existing flat JSON wire format. Adding a native option changes
+// only its descriptor, never this struct, encoder, decoder or overlay loop.
+func (v Values) MarshalJSON() ([]byte, error) {
+	type common Values
+	data, err := json.Marshal(common(v))
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	for name, value := range v.Native {
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("native option shadows common field %q", name)
+		}
+		fields[name], err = json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(fields)
+}
+
+func (v *Values) UnmarshalJSON(data []byte) error {
+	type common Values
+	var base common
+	if err := json.Unmarshal(data, &base); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	native := map[string]string{}
+	for name := range host.Configuration() {
+		raw, ok := fields[name]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		native[name] = value
+	}
+	*v = Values(base)
+	v.Native = native
+	return nil
 }

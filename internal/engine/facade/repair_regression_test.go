@@ -23,7 +23,7 @@ func TestRuntimeContextKeepsOriginalEnvironmentAndRejectsMissingExecutable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := captureRuntimeContext("codex", settings.Values{CodexExecutable: executable})
+	binding, err := captureRuntimeContext("codex", settings.Values{Native: map[string]string{"codexExecutable": executable}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 				if err := os.WriteFile(script, []byte("// capture only; never executed"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				binding, err := captureRuntimeContext(provider, settings.Values{WorkBuddyExecutable: executable, ZCodeExecutable: executable, ZCodeScript: script, DSHExecutable: executable}, filepath.Join(root, ".gates", "engine", "run"), root)
+				binding, err := captureRuntimeContext(provider, settings.Values{Native: map[string]string{"workbuddyExecutable": executable, "zcodeExecutable": executable, "zcodeScript": script, "dshExecutable": executable}}, filepath.Join(root, ".gates", "engine", "run"), root)
 				if err != nil || binding.Provider != provider || binding.Executable != executable || binding.Environment[nativeSourceRoot] == "" || binding.Environment["FORMAL_GATES_ENGINE_ROOT"] != root {
 					t.Fatalf("binding=%+v err=%v", binding, err)
 				}
@@ -245,7 +245,7 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 			if _, err = prepareRegular(root, StartRequest{Provider: provider}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
 				t.Fatal("unsupported native intake accepted", err)
 			}
-			if _, err = captureRuntimeContext(provider, settings.Values{CodexExecutable: "must-not-execute"}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
+			if _, err = captureRuntimeContext(provider, settings.Values{Native: map[string]string{"codexExecutable": "must-not-execute"}}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
 				t.Fatal("unsupported creation captured Codex environment", err)
 			}
 			if _, err = runtimeToolConfig(provider, json.RawMessage(`{"config":{}}`)); err == nil {

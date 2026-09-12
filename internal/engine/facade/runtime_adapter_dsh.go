@@ -13,10 +13,10 @@ import (
 	"formal-gates/internal/settings"
 )
 
-type dshRuntimeAdapter struct{}
+type dshRuntimeAdapter struct{ streamRuntimeAdapter }
 
 func (dshRuntimeAdapter) capture(config settings.Values) (*protocol.HostRuntimeContext, error) {
-	executable := config.DSHExecutable
+	executable := config.NativeString("dshExecutable")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -39,9 +39,6 @@ func (dshRuntimeAdapter) capture(config settings.Values) (*protocol.HostRuntimeC
 	}
 	return captureStreamContext("deepseek-harness", executable, map[string]string{"DSH_HOME": dshHome})
 }
-func (dshRuntimeAdapter) bindResources(binding *protocol.HostRuntimeContext, root string) {
-	bindStreamResources(binding, root)
-}
 func (dshRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
 	if err := validateStreamContext(binding, "deepseek-harness"); err != nil {
 		return err
@@ -51,27 +48,18 @@ func (dshRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
 	}
 	return nil
 }
-func (dshRuntimeAdapter) transcript(identity string, binding *protocol.HostRuntimeContext) (string, error) {
-	return streamTranscript(identity, binding)
-}
-func (dshRuntimeAdapter) toolConfig(json.RawMessage) (map[string]any, error) {
-	return map[string]any{}, nil
-}
-func (a dshRuntimeAdapter) execute(f *Facade, action string, resume bool) (Run, error) {
-	return f.executeNativeTransport(action, resume, a)
-}
 func dshRoleTools(step string, noTools bool) []string {
 	if noTools {
 		return []string{}
 	}
 	read := []string{"Read", "read", "read_file", "Glob", "glob", "Grep", "grep", "list_directory"}
-	switch step {
-	case "development-worker", "repair-worker", "whitebox-design":
+	switch nativeRoleAccess(step) {
+	case nativeWorkspaceWrite:
 		return append(read, "Bash", "bash", "shell", "Write", "write", "write_file", "Edit", "edit", "edit_file", "apply_patch")
-	case "product-review", "start-readiness", "blackbox-execution", "whitebox-execution":
-		return []string{}
-	default:
+	case nativeReadOnly:
 		return read
+	default:
+		return []string{}
 	}
 }
 func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, root, runID, actionID, step string, noTools bool) (*exec.Cmd, error) {
@@ -93,7 +81,7 @@ func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, roo
 	plugin := patch[0].(map[string]any)["insert"].([]any)[0].(map[string]any)
 	plugin["config"].(map[string]any)["exposeOperation"] = !noTools
 	mode := "read-only"
-	if !noTools && (step == "development-worker" || step == "repair-worker" || step == "whitebox-design") {
+	if !noTools && nativeRoleAccess(step) == nativeWorkspaceWrite {
 		mode = "workspace-write"
 	}
 	patch = append(patch,
@@ -117,77 +105,46 @@ func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, roo
 	}
 	return cmd, nil
 }
-func (dshRuntimeAdapter) bridge(f *Facade, run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any) (string, error) {
-	return f.runNativeBridgeTurns(run, claim, resume, job, workspace, prompt, schema, func(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, coverage bool) (string, error) {
-		identity := ""
-		if resume {
-			identity = claim.Identity
-			if identity == "" {
-				return "", fmt.Errorf("DSH_BINDING: original native session required")
-			}
+func (dshRuntimeAdapter) turn(q nativeTurn) (string, error) {
+	claim, resume, job, workspace, prompt, schema, coverage := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema, q.NoTools
+
+	identity := ""
+	if resume {
+		identity = claim.Identity
+		if identity == "" {
+			return "", fmt.Errorf("DSH_BINDING: original native session required")
 		}
-		cmd, err := prepareDSHProcess(claim.Context, job, workspace, f.root, run.RunID, claim.ActionID, string(claim.Task.Step), coverage || nativeTextOnlyRole(string(claim.Task.Step)))
-		if err != nil {
-			return "", err
-		}
-		encoded, _ := json.Marshal(schema)
-		result, err := runNativeStreamProcess(context.Background(), cmd, job, claim.ActionID, func(in io.Reader, out io.WriteCloser) (nativeProcessResult, error) {
-			return runDSHSession(in, out, job, workspace, identity, prompt+"\nReturn one JSON object matching this schema:\n"+string(encoded), func(identity string) error { return f.attachStreamIdentity(claim, identity) }, dshSessionOptions{Model: run.Regular.Settings.Values.Model, Effort: run.Regular.Settings.Values.ReasoningEffort})
-		})
-		if err == nil && coverage {
-			err = finishStreamCoverage(job, result.Identity, claim.Context, "native-events.jsonl")
-		}
-		return result.Identity, err
+	}
+	cmd, err := prepareDSHProcess(claim.Context, job, workspace, q.Root, q.RunID, claim.ActionID, string(claim.Task.Step), coverage || nativeTextOnlyRole(string(claim.Task.Step)))
+	if err != nil {
+		return "", err
+	}
+	encoded, _ := json.Marshal(schema)
+	result, err := runNativeStreamProcess(context.Background(), cmd, job, claim.ActionID, func(in io.Reader, out io.WriteCloser) (nativeProcessResult, error) {
+		return runDSHSession(in, out, job, workspace, identity, prompt+"\nReturn one JSON object matching this schema:\n"+string(encoded), q.Attached, dshSessionOptions{Model: q.Settings.Model, Effort: q.Settings.ReasoningEffort})
 	})
+	return result.Identity, err
 }
-func (dshRuntimeAdapter) finish(f *Facade, action string, claim protocol.ExecutionClaim, identity, job string, waitErr error) (Run, error) {
-	return f.finishStreamNative(action, claim, identity, job, "native-events.jsonl", waitErr)
+
+func (dshRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error) {
+	identity, binding, workspace, job := q.Identity, q.Context, q.Workspace, q.Job
+
+	cmd, err := prepareDSHProcess(binding, job, workspace, q.Root, q.RunID, q.ActionID, q.Step, true)
+	if err != nil {
+		return "session/resume", nil, err
+	}
+	raw, err := probeACPRecovery(cmd, job, q.ActionID, workspace, identity, "session/resume")
+	return "session/resume", raw, err
 }
-func (a dshRuntimeAdapter) reconcile(f *Facade, action string, x protocol.RegularExecution) (Run, bool, error) {
-	return f.reconcileStreamNative(action, x, func(job string) (string, error) {
-		file, err := os.Open(filepath.Join(job, "stdout.jsonl"))
-		if err != nil {
-			return "", err
-		}
-		defer file.Close()
-		decoder := json.NewDecoder(file)
-		for {
-			var raw struct {
-				ID     *int `json:"id"`
-				Result struct {
-					ID string `json:"sessionId"`
-				} `json:"result"`
-			}
-			if err := decoder.Decode(&raw); err != nil {
-				return "", err
-			}
-			if raw.ID != nil && *raw.ID == 3 && raw.Result.ID != "" {
-				return raw.Result.ID, nil
-			}
-		}
-	}, func(identity, job string, err error) (Run, error) {
-		return a.finish(f, action, x.Claim, identity, job, err)
-	})
-}
-func (dshRuntimeAdapter) observeRecovery(f *Facade, run Run, x protocol.RegularExecution, interrupted bool) (protocol.DeveloperRecovery, error) {
-	return f.observeNativeDeveloperRecovery(run, x, interrupted, "session/resume", func(identity string, binding *protocol.HostRuntimeContext, workspace string) (json.RawMessage, error) {
-		job := filepath.Join(filepath.Dir(f.developerRecoveryPath(x.Claim.ActionID, interrupted)), "native-probe")
-		cmd, err := prepareDSHProcess(binding, job, workspace, f.root, run.RunID, x.Claim.ActionID, string(x.Claim.Task.Step), true)
-		if err != nil {
-			return nil, err
-		}
-		return probeACPRecovery(cmd, job, x.Claim.ActionID, workspace, identity, "session/resume")
-	})
-}
-func (dshRuntimeAdapter) runModel(ctx context.Context, run Run, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
+func (dshRuntimeAdapter) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
 	invoke := func() error {
 		binding := op.Request.Binding.Context
-		cmd, err := prepareDSHProcess(binding, job, job, binding.Environment["FORMAL_GATES_ENGINE_ROOT"], run.RunID, op.Request.Binding.ActionID, "model-run", true)
+		cmd, err := prepareDSHProcess(binding, job, job, binding.Environment["FORMAL_GATES_ENGINE_ROOT"], op.Request.RunID, op.Request.Binding.ActionID, "model-run", true)
 		if err != nil {
 			return err
 		}
 		_, err = runNativeStreamProcess(ctx, cmd, job, op.ID, func(in io.Reader, out io.WriteCloser) (nativeProcessResult, error) {
-			return runDSHSession(in, out, job, job, "", nativeModelPrompt(op.Request.Prompt), func(string) error { return nil }, dshSessionOptions{Model: run.Regular.Settings.Values.Model, Effort: run.Regular.Settings.Values.ReasoningEffort})
+			return runDSHSession(in, out, job, job, "", nativeModelPrompt(op.Request.Prompt), func(string) error { return nil }, dshSessionOptions{Model: config.Model, Effort: config.ReasoningEffort})
 		})
 		return err
 	}
@@ -195,4 +152,33 @@ func (dshRuntimeAdapter) runModel(ctx context.Context, run Run, op protocol.Task
 }
 func (dshRuntimeAdapter) observeModel(op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error) {
 	return observeStreamModel(op, job, "native-events.jsonl", result)
+}
+
+func init() { registerBuiltinRuntime("deepseek-harness", dshRuntimeAdapter{}) }
+
+func (dshRuntimeAdapter) readIdentity(job, action string) (string, error) {
+	file, err := os.Open(filepath.Join(job, "stdout.jsonl"))
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	for {
+		var raw struct {
+			ID     *int `json:"id"`
+			Result struct {
+				ID string `json:"sessionId"`
+			} `json:"result"`
+		}
+		if err := decoder.Decode(&raw); err != nil {
+			return "", err
+		}
+		if raw.ID != nil && *raw.ID == 3 && raw.Result.ID != "" {
+			return raw.Result.ID, nil
+		}
+	}
+}
+
+func (dshRuntimeAdapter) source(identity, job string, binding *protocol.HostRuntimeContext) (string, error) {
+	return appendStreamTranscript(job, identity, "native-events.jsonl", binding)
 }

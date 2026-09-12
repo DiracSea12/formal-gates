@@ -24,14 +24,14 @@ func TestQA35BOwnerIntervalExcludesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if baseline.Usage != (Usage{40, 60, 20}) || baseline.Size != int64(len(first)) || baseline.Digest == "" {
+	if baseline.Usage != (Usage{InputCacheHitTokens: 40, InputCacheMissTokens: 60, OutputTokens: 20}) || baseline.Size != int64(len(first)) || baseline.Digest == "" {
 		t.Fatalf("baseline %+v", baseline)
 	}
 	if err := os.WriteFile(path, []byte(first+qa35bUsageEvent("two", 35, 15, 8)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := MeasureOwner("codex", path, baseline)
-	if err != nil || got != (Usage{15, 20, 8}) {
+	if err != nil || got != (Usage{InputCacheHitTokens: 15, InputCacheMissTokens: 20, OutputTokens: 8}) {
 		t.Fatalf("got %+v err %v", got, err)
 	}
 	got2, err := MeasureOwner("codex", path, baseline)
@@ -111,11 +111,11 @@ func TestQA35BCostLegacyAndChildMerge(t *testing.T) {
 
 func TestQA35BDispatchParserStillDeduplicates(t *testing.T) {
 	line := qa35bUsageEvent("one", 100, 40, 20)
-	got, err := parseCodexTranscript(strings.NewReader("{}\n" + line + line))
-	if err != nil || got != (Usage{40, 60, 20}) {
+	got, err := parseTranscript("codex", strings.NewReader("{}\n"+line+line))
+	if err != nil || got != (Usage{InputCacheHitTokens: 40, InputCacheMissTokens: 60, OutputTokens: 20}) {
 		t.Fatalf("got %+v %v", got, err)
 	}
-	if _, err = parseCodexTranscript(strings.NewReader("{}\n")); err == nil || !strings.Contains(err.Error(), "no parseable token usage") {
+	if _, err = parseTranscript("codex", strings.NewReader("{}\n")); err == nil || !strings.Contains(err.Error(), "no parseable token usage") {
 		t.Fatalf("missing usage: %v", err)
 	}
 }

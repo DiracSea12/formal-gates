@@ -8,30 +8,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
-
-	"formal-gates/internal/engine/protocol"
 )
 
 // runCodexBridge hosts Codex's typed dynamic tool. QA execution workers have no shell
 // tool: their only target operation is the frozen argv consumed by the adapter.
 // The same client owns fresh and resumed turns; the provider never chooses a
 // workflow step or rewrites the action/attempt/candidate binding.
-func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, coverageOnly bool) (string, error) {
-	toolDescription, err := actionInstructions(run, "actions/development-worker.md#工具说明")
-	if err != nil {
-		return "", err
-	}
+func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
+	claim, resume, job, workspace, prompt, schema, coverageOnly := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema, q.NoTools
+	toolDescription := q.ToolDescription
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	args := []string{"app-server", "--stdio", "--disable", "multi_agent", "--disable", "multi_agent_v2", "--disable", "enable_mcp_apps", "-c", `web_search="disabled"`}
-	qa := strings.HasSuffix(string(claim.Task.Step), "-execution")
-	if coverageOnly || qa || claim.Task.Step == "product-review" || claim.Task.Step == "start-readiness" {
+	access := nativeRoleAccess(string(claim.Task.Step))
+	if coverageOnly || access == nativeTextOnly || access == nativeOperationOnly {
 		args = append(args, "--disable", "shell_tool")
 	}
 
-	cmd := exec.CommandContext(ctx, run.Regular.Settings.Values.CodexExecutable, args...)
+	cmd := exec.CommandContext(ctx, claim.Context.Executable, args...)
 	if err := runtimeCommandContext(cmd, claim.Context); err != nil {
 		return "", err
 	}
@@ -118,8 +113,8 @@ func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resu
 	// The host setting's empty model means Codex's advertised default, just as
 	// exec --ignore-user-config did. Do not import a personal app model selection
 	// into this isolated workflow or silently replace an explicit model.
-	model := run.Regular.Settings.Values.Model
-	effort := run.Regular.Settings.Values.ReasoningEffort
+	model := q.Settings.Model
+	effort := q.Settings.ReasoningEffort
 	if model == "" {
 		raw, err := request(4, "model/list", map[string]any{})
 		if err != nil {
@@ -159,7 +154,7 @@ func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resu
 		return "", err
 	}
 	params := map[string]any{"cwd": workspace, "approvalPolicy": "never", "sandbox": "read-only", "config": toolConfig}
-	if !coverageOnly && (claim.Task.Step == "development-worker" || claim.Task.Step == "whitebox-design" || claim.Task.Step == "repair-worker") {
+	if !coverageOnly && nativeRoleAccess(string(claim.Task.Step)) == nativeWorkspaceWrite {
 		params["sandbox"] = "workspace-write"
 	}
 	if model != "" {
@@ -188,7 +183,7 @@ func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resu
 	if resume && identity != claim.Identity {
 		return identity, fmt.Errorf("INTENT_MISMATCH: native resumed identity differs")
 	}
-	if err = f.submitSource(protocol.ExecutionSource{ActionID: claim.ActionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: identity, Status: "RUNNING"}); err != nil {
+	if err = q.Attached(identity); err != nil {
 		return identity, err
 	}
 	turn := map[string]any{"threadId": identity, "input": []any{map[string]any{"type": "text", "text": prompt, "text_elements": []any{}}}, "outputSchema": schema}
@@ -225,7 +220,7 @@ func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resu
 			}
 			var receipt any
 			if callErr == nil {
-				receipt, callErr = f.dispatchNativeOperation(claim.ActionID, identity, call.CallID, call.Arguments)
+				receipt, callErr = q.Operation(identity, call.CallID, call.Arguments)
 			}
 			output, _ := json.Marshal(receipt)
 			if callErr != nil {
@@ -259,9 +254,6 @@ func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resu
 				return identity, fmt.Errorf("native turn completed without a final answer")
 			}
 			answerName := "answer.json"
-			if coverageOnly {
-				answerName = "coverage-answer.json"
-			}
 			if err = os.WriteFile(filepath.Join(job, answerName), []byte(answer), 0600); err != nil {
 				return identity, err
 			}
@@ -282,6 +274,3 @@ func (f *Facade) runCodexBridgeTurn(run Run, claim protocol.ExecutionClaim, resu
 // The first whitebox turn receives only requirements and production source, with
 // native shell disabled. A durable operation receipt precedes the same identity's
 // test-authoring turn, so existing tests cannot influence the coverage judgment.
-func (f *Facade) runCodexBridge(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any) (string, error) {
-	return f.runNativeBridgeTurns(run, claim, resume, job, workspace, prompt, schema, f.runCodexBridgeTurn)
-}

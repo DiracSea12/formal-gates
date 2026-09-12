@@ -1,21 +1,21 @@
 package facade
 
 import (
+	"encoding/json"
 	"fmt"
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"os"
 	"os/exec"
-	"path/filepath"
 )
 
 // Transport owns native state; the existing engine still owns claims and results.
 type nativeExecutionTransport interface {
-	bridge(*Facade, Run, protocol.ExecutionClaim, bool, string, string, string, map[string]any) (string, error)
-	finish(*Facade, string, protocol.ExecutionClaim, string, string, error) (Run, error)
-	reconcile(*Facade, string, protocol.RegularExecution) (Run, bool, error)
-	observeRecovery(*Facade, Run, protocol.RegularExecution, bool) (protocol.DeveloperRecovery, error)
+	turn(nativeTurn) (string, error)
+	source(string, string, *protocol.HostRuntimeContext) (string, error)
+	readIdentity(string, string) (string, error)
+	probe(nativeProbe) (string, json.RawMessage, error)
 }
 
 func (f *Facade) executeNativeTransport(actionID string, resume bool, adapter nativeExecutionTransport) (Run, error) {
@@ -59,7 +59,7 @@ func (f *Facade) executeNativeTransport(actionID string, resume bool, adapter na
 	replacementRecovery := resume && execution.Recovery != nil && execution.Recovery.Outcome() == "UNRECOVERABLE" && !execution.ReplacementClaimed
 	interrupted := resume && !continuation && !replacementRecovery
 	if interrupted {
-		recovered, complete, recoveryErr := adapter.reconcile(f, actionID, execution)
+		recovered, complete, recoveryErr := f.reconcileNative(actionID, execution, adapter)
 		if recoveryErr != nil {
 			return Run{}, recoveryErr
 		}
@@ -97,7 +97,7 @@ func (f *Facade) executeNativeTransport(actionID string, resume bool, adapter na
 		if replacementRecovery {
 			recovery = *execution.Recovery
 		} else {
-			recovery, recoveryErr = adapter.observeRecovery(f, run, execution, interrupted)
+			recovery, recoveryErr = f.observeNativeDeveloperRecovery(run, execution, interrupted, adapter)
 		}
 		if recoveryErr != nil {
 			return Run{}, recoveryErr
@@ -124,16 +124,12 @@ func (f *Facade) executeNativeTransport(actionID string, resume bool, adapter na
 	if err = os.MkdirAll(job, 0700); err != nil {
 		return Run{}, err
 	}
-	schemaPath := filepath.Join(job, "result-schema.json")
 	schema := reviewSchema(claim)
 	if preparationAction(string(claim.Task.Step)) {
 		schema = preparationSchema(string(claim.Task.Step), run, claim)
 	}
 	if verificationAction(string(claim.Task.Step)) {
 		schema = verificationSchema(claim)
-	}
-	if err = writeJSONAtomic(schemaPath, schema); err != nil {
-		return Run{}, err
 	}
 	var prompt string
 	workspace := job
@@ -155,10 +151,7 @@ func (f *Facade) executeNativeTransport(actionID string, resume bool, adapter na
 			return Run{}, err
 		}
 	}
-	if err = os.WriteFile(filepath.Join(job, "prompt.txt"), []byte(prompt), 0600); err != nil {
-		return Run{}, err
-	}
-	identity, nativeErr := adapter.bridge(f, run, claim, resume, job, workspace, prompt, schema)
+	identity, nativeErr := f.runNativeBridgeTurns(run, claim, resume, job, workspace, prompt, schema, adapter)
 	if identity == "" {
 		return f.failedNativeStart(actionID, claim, nativeErr)
 	}
@@ -167,5 +160,12 @@ func (f *Facade) executeNativeTransport(actionID string, resume bool, adapter na
 			return Run{}, err
 		}
 	}
-	return adapter.finish(f, actionID, claim, identity, job, nativeErr)
+	if nativeErr != nil {
+		// A preflight failure belongs to that invocation, not to a main turn
+		// that has never been started. Preserve its actual source and error.
+		if observed, err := nativeProcessDirectory(job, string(claim.Task.Step)); err == nil {
+			job = observed
+		}
+	}
+	return f.collectNativeResult(actionID, claim, identity, job, nativeErr, adapter)
 }

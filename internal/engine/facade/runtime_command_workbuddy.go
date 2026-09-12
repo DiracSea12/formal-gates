@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // workBuddyCommand builds the platform invocation from adapter-owned inputs.
@@ -67,14 +66,11 @@ func workBuddySessionCommand(executable, workspace, model, effort, identity stri
 // as the existing native adapter. The allow list never exposes native delegation.
 func workBuddyRoleTools(cmd *exec.Cmd, step string) {
 	tools := ""
-	switch step {
-	case "development-worker", "repair-worker", "whitebox-design":
+	switch nativeRoleAccess(step) {
+	case nativeWorkspaceWrite:
 		tools = "Bash,Edit,Read"
-	case "product-review", "start-readiness":
-	default:
-		if !strings.HasSuffix(step, "-execution") {
-			tools = "Read"
-		}
+	case nativeReadOnly:
+		tools = "Read"
 	}
 	for i := 1; i+1 < len(cmd.Args); i++ {
 		if cmd.Args[i] == "--tools" {

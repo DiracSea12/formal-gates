@@ -16,12 +16,8 @@ import (
 // All callers use the same binding and tool boundary for fresh or resumed work.
 type codexRuntimeAdapter struct{}
 
-func (codexRuntimeAdapter) execute(f *Facade, actionID string, resume bool) (Run, error) {
-	return f.executeCodex(actionID, resume)
-}
-
 func (codexRuntimeAdapter) capture(config settings.Values) (*protocol.HostRuntimeContext, error) {
-	executable := config.CodexExecutable
+	executable := config.NativeString("codexExecutable")
 	resolved, err := exec.LookPath(executable)
 	if err != nil {
 		return nil, err
@@ -110,14 +106,13 @@ func (codexRuntimeAdapter) toolConfig(raw json.RawMessage) (map[string]any, erro
 	return config, nil
 }
 
-func (codexRuntimeAdapter) runModel(ctx context.Context, run Run, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
+func (codexRuntimeAdapter) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
 	q := op.Request
 	fail := func(err error) protocol.TaskOperationReceipt {
 		result.Status = "FAILED"
 		result.Message = err.Error()
 		return result
 	}
-	config := run.Regular.Settings.Values
 	answer := filepath.Join(job, "answer.txt")
 	args := []string{"exec", "--ignore-user-config", "-c", "agents.max_depth=0", "--disable", "shell_tool", "--disable", "multi_agent", "--disable", "multi_agent_v2", "--disable", "enable_mcp_apps", "-c", `web_search="disabled"`, "--skip-git-repo-check", "--json", "--color", "never", "-s", "read-only", "-C", job, "-o", answer}
 	if config.Model != "" {
@@ -127,7 +122,7 @@ func (codexRuntimeAdapter) runModel(ctx context.Context, run Run, op protocol.Ta
 		raw, _ := json.Marshal(config.ReasoningEffort)
 		args = append(args, "-c", "model_reasoning_effort="+string(raw))
 	}
-	cmd := exec.CommandContext(ctx, config.CodexExecutable, append(args, "-")...)
+	cmd := exec.CommandContext(ctx, config.NativeString("codexExecutable"), append(args, "-")...)
 	if err := runtimeCommandContext(cmd, q.Binding.Context); err != nil {
 		return fail(err)
 	}
@@ -207,15 +202,53 @@ func (codexRuntimeAdapter) observeModel(op protocol.TaskOperation, job string, r
 	return r, nil
 }
 
-func (codexRuntimeAdapter) bridge(f *Facade, run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any) (string, error) {
-	return f.runCodexBridge(run, claim, resume, job, workspace, prompt, schema)
+func init() { registerBuiltinRuntime("codex", codexRuntimeAdapter{}) }
+
+func (a codexRuntimeAdapter) source(identity, job string, binding *protocol.HostRuntimeContext) (string, error) {
+	return a.transcript(identity, binding)
 }
-func (codexRuntimeAdapter) finish(f *Facade, actionID string, claim protocol.ExecutionClaim, identity, job string, waitErr error) (Run, error) {
-	return f.finishCodex(actionID, claim, identity, job, waitErr)
+func (codexRuntimeAdapter) readIdentity(job, actionID string) (string, error) {
+	identity := ""
+	data, err := os.ReadFile(filepath.Join(job, "stdout.jsonl"))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		var event struct {
+			Type     string `json:"type"`
+			ThreadID string `json:"thread_id"`
+		}
+		if json.Unmarshal([]byte(line), &event) == nil && event.Type == "thread.started" {
+			identity = event.ThreadID
+		}
+		var native struct {
+			Method string `json:"method"`
+			Params struct {
+				Thread struct {
+					ID string `json:"id"`
+				} `json:"thread"`
+			} `json:"params"`
+			Result struct {
+				Thread struct {
+					ID string `json:"id"`
+				} `json:"thread"`
+			} `json:"result"`
+		}
+		if json.Unmarshal([]byte(line), &native) == nil {
+			if native.Method == "thread/started" && native.Params.Thread.ID != "" {
+				identity = native.Params.Thread.ID
+			}
+			if native.Result.Thread.ID != "" {
+				identity = native.Result.Thread.ID
+			}
+		}
+	}
+	if identity == "" {
+		return "", fmt.Errorf("UNKNOWN: native thread identity unavailable")
+	}
+	return identity, nil
 }
-func (codexRuntimeAdapter) reconcile(f *Facade, actionID string, x protocol.RegularExecution) (Run, bool, error) {
-	return f.reconcileCodex(actionID, x)
-}
-func (codexRuntimeAdapter) observeRecovery(f *Facade, run Run, x protocol.RegularExecution, interrupted bool) (protocol.DeveloperRecovery, error) {
-	return f.observeDeveloperRecovery(run, x, interrupted)
+func (codexRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error) {
+	raw, err := codexThreadRequest(q.Context.Executable, "thread/resume", q.Identity, q.Context, q.Workspace)
+	return "thread/resume", raw, err
 }

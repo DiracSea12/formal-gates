@@ -14,6 +14,30 @@ func nativeOperationTool(step, description string) map[string]any {
 	return map[string]any{"type": "function", "name": "formal_gates_operation", "description": description, "inputSchema": schema}
 }
 
+// Native file/command grants are workflow policy, not a platform decision.
+// Adapters only translate this access into their own tool names and options.
+type nativeAccess uint8
+
+const (
+	nativeTextOnly nativeAccess = iota
+	nativeOperationOnly
+	nativeReadOnly
+	nativeWorkspaceWrite
+)
+
+func nativeRoleAccess(step string) nativeAccess {
+	switch step {
+	case "product-review", "start-readiness":
+		return nativeTextOnly
+	case "blackbox-execution", "whitebox-execution":
+		return nativeOperationOnly
+	case "development-worker", "repair-worker", "whitebox-design":
+		return nativeWorkspaceWrite
+	default:
+		return nativeReadOnly
+	}
+}
+
 func nativeTextOnlyRole(step string) bool {
-	return step == "product-review" || step == "start-readiness"
+	return nativeRoleAccess(step) == nativeTextOnly
 }

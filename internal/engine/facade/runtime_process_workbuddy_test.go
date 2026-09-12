@@ -64,16 +64,6 @@ func TestWorkBuddyProcessRecordsAndAttaches(t *testing.T) {
 			if (err == nil) != (mode == "attach") {
 				t.Fatalf("mode=%s observed=%+v err=%v", mode, observed, err)
 			}
-			recovered, recoveryErr := recoverWorkBuddyProcess(job, "action", "native-session")
-			if (recoveryErr == nil) != (mode == "attach") {
-				t.Fatalf("recovery=%+v err=%v", recovered, recoveryErr)
-			}
-			if mode == "attach" && string(recovered.Answer) != string(observed.Answer) {
-				t.Fatal("recovery changed result")
-			}
-			if _, err := recoverWorkBuddyProcess(job, "other-action", "native-session"); err == nil {
-				t.Fatal("accepted another action's log")
-			}
 			if attached != 1 {
 				t.Fatalf("attach count=%d", attached)
 			}
@@ -100,17 +90,5 @@ func TestWorkBuddyProcessRecordsAndAttaches(t *testing.T) {
 				t.Fatal("repeated invocation overwrote existing journal")
 			}
 		})
-	}
-}
-
-func TestWorkBuddyRecoveryNeedsExitEvidence(t *testing.T) {
-	job := t.TempDir()
-	for _, raw := range []string{`{"actionId":"a","stopped":true}`, `{"actionId":"a","stopped":false,"exitCode":0}`} {
-		if err := os.WriteFile(filepath.Join(job, "process.json"), []byte(raw), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := recoverWorkBuddyProcess(job, "a", "s"); err == nil || !strings.Contains(err.Error(), "UNKNOWN") {
-			t.Fatalf("missing completion evidence accepted: %v", err)
-		}
 	}
 }

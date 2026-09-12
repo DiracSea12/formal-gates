@@ -1,10 +1,27 @@
-package cost
+package host
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
 )
+
+var dshDescriptor = &Descriptor{
+	Lifecycle:       deepseekAdapter(),
+	ID:              DeepSeek,
+	InstallName:     "dsh",
+	ManifestName:    "DeepSeek Harness",
+	Aliases:         []string{"dsh", "deepseek", "deepseek-harness", "deepseek harness"},
+	Installable:     true,
+	Paths:           PathLayout{ProjectManaged: "AGENTS.md"},
+	Hook:            HookSpec{Kind: HookDSH, Protocol: ProtocolGeneric, GateEvent: "PreToolUse", GateMatcher: "*"},
+	LifecycleEvents: []string{"SubagentStart", "SubagentStop"}, LifecycleRequired: true,
+	CostProvider:    DeepSeek,
+	Configuration:   []ConfigField{StringConfig("dshExecutable", "dsh")},
+	ReadUsage:       parseDSHTranscript,
+	CheckIdentity:   dshTranscriptIdentity,
+	ObserveRecovery: dshRecoveryOutcome,
+}
 
 // DSH emits TokenUsage on committed assistant messages and LLM compactions.
 // Input is the reported total prompt count; cache reads are its cached subset.
@@ -73,4 +90,23 @@ func parseDSHTranscript(reader io.Reader) (Usage, error) {
 		return Usage{}, fmt.Errorf("DSH committed model usage unavailable")
 	}
 	return total, nil
+}
+
+func dshTranscriptIdentity(path, identity string) error {
+	return checkStreamTranscriptIdentity(path, identity, func(raw json.RawMessage) string {
+		var row struct {
+			Session string `json:"sessionId"`
+		}
+		if json.Unmarshal(raw, &row) != nil {
+			return ""
+		}
+		return row.Session
+	})
+}
+
+func dshRecoveryOutcome(r RecoveryObservation) string {
+	if r.NativeMethod != "session/resume" {
+		return "UNKNOWN"
+	}
+	return acpRecoveryOutcome(r.NativeResponse)
 }

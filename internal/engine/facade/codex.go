@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/coordination"
-	"formal-gates/internal/cost"
 	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
@@ -14,31 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 )
-
-// executeCodex is the Codex adapter's native model transport. It consumes an
-// issued action before starting a process. The command is constructed here, not
-// provided by a request or a model. B1 reviews need no tools: disabling shell,
-// nested agents, MCP user configuration and web search leaves only the document
-// and the result contract available to this independent, fresh session.
-func (f *Facade) executeCodex(actionID string, resume bool) (Run, error) {
-	return f.executeNativeTransport(actionID, resume, codexRuntimeAdapter{})
-}
-
-func (f *Facade) finishCodex(actionID string, claim protocol.ExecutionClaim, identity, job string, waitErr error) (Run, error) {
-	answer := filepath.Join(job, "answer.json")
-	transcript, sourceErr := findBoundTranscript(identity, claim.Context)
-	source := protocol.ExecutionSource{ActionID: actionID, AttemptID: claim.AttemptID, Provider: "codex", Identity: identity, Status: "STOPPED", TranscriptPath: transcript}
-	if sourceErr == nil && waitErr != nil {
-		if _, parseErr := cost.ParseTranscript("codex", transcript); parseErr != nil {
-			sourceErr = fmt.Errorf("native process failed (%v) and transcript usage is unavailable: %w", waitErr, parseErr)
-		}
-	}
-	if sourceErr != nil {
-		source.Status = "UNAVAILABLE"
-		source.Reason = sourceErr.Error()
-	}
-	return f.finishNativeResult(actionID, claim, identity, answer, waitErr, source)
-}
 
 func (f *Facade) submitSource(source protocol.ExecutionSource) error {
 	run, err := f.Show()
@@ -101,86 +75,6 @@ func (f *Facade) codexJob(actionID string) string {
 	}
 	return filepath.Join(f.stateDir, "executions", name)
 }
-func (f *Facade) reconcileCodex(actionID string, x protocol.RegularExecution) (Run, bool, error) {
-	if !x.Claimed {
-		return Run{}, false, fmt.Errorf("INTENT_MISMATCH: unclaimed action cannot be resumed")
-	}
-	if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
-		return Run{}, false, fmt.Errorf("DUPLICATE_ACTION: completed execution cannot be resumed")
-	}
-	job := f.codexJob(actionID)
-	if x.ResumeClaimed || x.ResumeCount > 0 {
-		job = codexResumeJob(job, x.ResumeCount)
-	}
-	data, err := os.ReadFile(filepath.Join(job, "process.json"))
-	if err != nil {
-		return Run{}, false, fmt.Errorf("UNKNOWN: no native process receipt for the claim; reconcile before retry: %w", err)
-	}
-	var process codexProcess
-	if err = json.Unmarshal(data, &process); err != nil || process.ActionID != actionID {
-		return Run{}, false, fmt.Errorf("INTENT_MISMATCH: native process receipt is invalid")
-	}
-	if !process.Stopped && codexProcessAlive(process.PID) {
-		return Run{}, false, fmt.Errorf("HOST_ACTION_RUNNING: bound native process %d is still running", process.PID)
-	}
-	if run, err := f.Show(); err == nil && process.Stopped && checkpointCanResume(run, x) {
-		return run, false, nil
-	}
-	identity := x.Identity
-	if identity == "" {
-		data, err = os.ReadFile(filepath.Join(job, "stdout.jsonl"))
-		if err != nil {
-			return Run{}, false, err
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			var event struct {
-				Type     string `json:"type"`
-				ThreadID string `json:"thread_id"`
-			}
-			if json.Unmarshal([]byte(line), &event) == nil && event.Type == "thread.started" {
-				identity = event.ThreadID
-			}
-			var native struct {
-				Method string `json:"method"`
-				Params struct {
-					Thread struct {
-						ID string `json:"id"`
-					} `json:"thread"`
-				} `json:"params"`
-				Result struct {
-					Thread struct {
-						ID string `json:"id"`
-					} `json:"thread"`
-				} `json:"result"`
-			}
-			if json.Unmarshal([]byte(line), &native) == nil {
-				if native.Method == "thread/started" && native.Params.Thread.ID != "" {
-					identity = native.Params.Thread.ID
-				}
-				if native.Result.Thread.ID != "" {
-					identity = native.Result.Thread.ID
-				}
-			}
-		}
-	}
-	if identity == "" {
-		return Run{}, false, fmt.Errorf("UNKNOWN: native process has no observed thread identity; no automatic retry")
-	}
-	if x.Identity == "" {
-		if err = f.submitSource(protocol.ExecutionSource{ActionID: actionID, AttemptID: x.Claim.AttemptID, Provider: "codex", Identity: identity, Status: "RUNNING"}); err != nil {
-			return Run{}, false, err
-		}
-	}
-	if _, err = os.Stat(filepath.Join(job, "answer.json")); err == nil {
-		r, err := f.finishCodex(actionID, x.Claim, identity, job, nil)
-		return r, true, err
-	}
-	if x.ResumeClaimed {
-		r, err := f.finishCodex(actionID, x.Claim, identity, job, fmt.Errorf("interrupted native resume has no result"))
-		return r, true, err
-	}
-	return Run{}, false, nil
-}
 
 func (f *Facade) failedNativeStart(actionID string, claim protocol.ExecutionClaim, cause error) (Run, error) {
 	src := protocol.ExecutionSource{ActionID: actionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: claim.Identity, Status: "UNAVAILABLE", Reason: "Native execution ended without an observed thread; source unavailable: " + cause.Error()}
@@ -228,6 +122,10 @@ func (f *Facade) finishRegularAbort() (Run, error) {
 		if x.ResumeClaimed || x.ResumeCount > 0 {
 			job = codexResumeJob(job, x.ResumeCount)
 		}
+		job, err = nativeProcessDirectory(job, string(x.Claim.Task.Step))
+		if err != nil {
+			return Run{}, fmt.Errorf("UNKNOWN: abort needs the native process receipt for %s: %w", id, err)
+		}
 		data, err := os.ReadFile(filepath.Join(job, "process.json"))
 		if err != nil {
 			return Run{}, fmt.Errorf("UNKNOWN: abort needs the native process receipt for %s: %w", id, err)
@@ -272,8 +170,12 @@ func (f *Facade) finishRegularAbort() (Run, error) {
 			if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
 				return nil
 			}
-			receipt.Stopped = true
-			if err = writeJSONAtomic(filepath.Join(job, "process.json"), receipt); err != nil {
+			var preserved map[string]json.RawMessage
+			if err = json.Unmarshal(data, &preserved); err != nil {
+				return err
+			}
+			preserved["stopped"] = json.RawMessage("true")
+			if err = writeJSONAtomic(filepath.Join(job, "process.json"), preserved); err != nil {
 				return err
 			}
 			if x.Identity == "" {
@@ -283,11 +185,7 @@ func (f *Facade) finishRegularAbort() (Run, error) {
 				if lookupErr != nil {
 					return lookupErr
 				}
-				transport, ok := adapter.(nativeExecutionTransport)
-				if !ok {
-					return fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: native result collector missing")
-				}
-				_, err = transport.finish(f, id, x.Claim, x.Identity, job, fmt.Errorf("user authorized abort"))
+				_, err = f.collectNativeResult(id, x.Claim, x.Identity, job, fmt.Errorf("user authorized abort"), adapter)
 			}
 			return err
 		}()

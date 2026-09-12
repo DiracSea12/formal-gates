@@ -232,7 +232,7 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 		if err != nil {
 			return fail(err)
 		}
-		return adapter.runModel(ctx, run, op, job, result)
+		return adapter.runModel(ctx, run.Regular.Settings.Values, op, job, result)
 	default:
 		return fail(fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unknown task operation"))
 	}

@@ -326,5 +326,5 @@ marketplace 或 `npx` 分发路径。
 
 ZCode 与 DSH 继续复用原来的安装位置、宿主配置与生命周期能力；本阶段只增加 regular
 驱动和 action 内工具配置，不替换用户模型/认证设置。可执行入口与模型选项见
-[user-configuration.md](user-configuration.md)。困难平台实跑按用户决定延期，明确未验证；
-公共与协议组件验证继续执行，延期不免除实现，也不作为本轮 Seal 阻塞。
+[user-configuration.md](user-configuration.md)。未完成的真实平台验证须如实标明；具体 run
+的延期或豁免由 engine 按用户决定记录，不在安装文档中预先承诺 Seal 处置。

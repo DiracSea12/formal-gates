@@ -1,10 +1,22 @@
-package cost
+package host
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
 )
+
+var workbuddyDescriptor = &Descriptor{
+	ID: WorkBuddy, InstallName: "workbuddy", ManifestName: "WorkBuddy", Aliases: []string{"workbuddy", "codebuddy", "cbc"}, Installable: true,
+	Paths: PathLayout{GlobalBase: ".codebuddy/skills", GlobalManaged: ".codebuddy/CODEBUDDY.md", ProjectBase: ".codebuddy/skills", ProjectManaged: "CODEBUDDY.md"},
+	// Native engine actions carry their tool and lifecycle boundary directly.
+	// Installation supplies the native skill entry; it adds no global hook.
+	CostProvider:    WorkBuddy,
+	Configuration:   []ConfigField{StringConfig("workbuddyExecutable", "codebuddy")},
+	ReadUsage:       parseWorkBuddyTranscript,
+	CheckIdentity:   workBuddyTranscriptIdentity,
+	ObserveRecovery: workBuddyRecoveryOutcome,
+}
 
 // parseWorkBuddyTranscript consumes SDK AssistantMessage records. ResultMessage
 // usage is a summary, and TaskUsage cannot supply the required token categories.
@@ -65,4 +77,23 @@ func parseWorkBuddyTranscript(reader io.Reader) (Usage, error) {
 		return Usage{}, err
 	}
 	return total, nil
+}
+
+func workBuddyTranscriptIdentity(path, identity string) error {
+	return checkStreamTranscriptIdentity(path, identity, func(raw json.RawMessage) string {
+		var row struct {
+			Session string `json:"session_id"`
+		}
+		if json.Unmarshal(raw, &row) != nil {
+			return ""
+		}
+		return row.Session
+	})
+}
+
+func workBuddyRecoveryOutcome(r RecoveryObservation) string {
+	if r.NativeMethod != "session/load" {
+		return "UNKNOWN"
+	}
+	return acpRecoveryOutcome(r.NativeResponse)
 }

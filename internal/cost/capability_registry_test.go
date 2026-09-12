@@ -11,7 +11,7 @@ func TestTranscriptParserRegistryMatchesDeclaredCostProviders(t *testing.T) {
 		if !descriptor.Installable || descriptor.CostProvider == "" {
 			continue
 		}
-		if _, ok := transcriptParsers[descriptor.CostProvider]; !ok {
+		if descriptor.ReadUsage == nil {
 			t.Fatalf("installable host %q declares unsupported cost provider %q", descriptor.ID, descriptor.CostProvider)
 		}
 	}

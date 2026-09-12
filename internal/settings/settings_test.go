@@ -33,7 +33,7 @@ func TestNativeExecutableSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Values.WorkBuddyExecutable != "codebuddy" || e.Values.ZCodeExecutable != "node" || e.Values.ZCodeScript != "" || e.Values.DSHExecutable != "dsh" {
+	if e.Values.NativeString("workbuddyExecutable") != "codebuddy" || e.Values.NativeString("zcodeExecutable") != "node" || e.Values.NativeString("zcodeScript") != "" || e.Values.NativeString("dshExecutable") != "dsh" {
 		t.Fatalf("defaults=%+v", e.Values)
 	}
 	user := filepath.Join(home, ".config", "formal-gates")
@@ -56,7 +56,7 @@ func TestNativeExecutableSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Values.DSHExecutable != "/project/dsh" || e.Sources["dshExecutable"] != projectFile || e.Sources["zcodeScript"] != userFile {
+	if e.Values.NativeString("dshExecutable") != "/project/dsh" || e.Sources["dshExecutable"] != projectFile || e.Sources["zcodeScript"] != userFile {
 		t.Fatalf("overlay=%+v", e)
 	}
 	for _, field := range []string{"workbuddyExecutable", "zcodeExecutable", "zcodeScript", "dshExecutable"} {

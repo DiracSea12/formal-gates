@@ -2,47 +2,35 @@ package facade
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
-
-	"formal-gates/internal/engine/protocol"
 )
 
 // runWorkBuddyBridge composes the platform command, MCP config, process journal
 // and observed identity callback. The public driver must claim first; this
 // transport neither schedules nor registers the resulting action verdict.
-func (f *Facade) runWorkBuddyBridge(ctx context.Context, run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, coverageOnly ...bool) (string, error) {
+func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
+	ctx := context.Background()
+	claim, resume, job, workspace, prompt, schema := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema
+	var err error
 	if claim.Provider != "workbuddy" || claim.Context == nil || claim.Context.Provider != "workbuddy" {
 		return "", fmt.Errorf("INTENT_MISMATCH: WorkBuddy transport requires its bound runtime")
 	}
-	current, err := f.Show()
-	if err != nil {
-		return "", err
-	}
-	execution, ok := current.Executions[claim.ActionID]
-	if !ok || !execution.Claimed || execution.Finished || execution.Claim.AttemptID != claim.AttemptID || execution.Claim.Provider != claim.Provider || !reflect.DeepEqual(execution.Claim.Context, claim.Context) || current.RunID != run.RunID || run.Regular == nil {
-		return "", fmt.Errorf("INTENT_MISMATCH: WorkBuddy transport requires a claimed live attempt")
-	}
 	identity := claim.Identity
 	if resume {
-		if identity == "" || execution.Identity != identity {
+		if identity == "" {
 			return "", fmt.Errorf("DEVELOPMENT_CONTINUITY: WorkBuddy resume requires observed identity")
 		}
 	} else {
-		if identity != "" || execution.Identity != "" {
+		if identity != "" {
 			return "", fmt.Errorf("DEVELOPMENT_CONTINUITY: attached WorkBuddy action cannot start a new session")
 		}
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
+		identity, err = requestedNativeID()
+		if err != nil {
 			return "", err
 		}
-		random[6] = (random[6] & 0x0f) | 0x40
-		random[8] = (random[8] & 0x3f) | 0x80
-		identity = fmt.Sprintf("%x-%x-%x-%x-%x", random[:4], random[4:6], random[6:8], random[8:10], random[10:])
 	}
 	if err := os.MkdirAll(job, 0700); err != nil {
 		return "", err
@@ -68,11 +56,11 @@ func (f *Facade) runWorkBuddyBridge(ctx context.Context, run Run, claim protocol
 	if err != nil {
 		return "", err
 	}
-	config, err := workBuddyMCPConfig(engineExecutable, f.root, run.RunID, claim.ActionID, identity)
+	config, err := workBuddyMCPConfig(engineExecutable, q.Root, q.RunID, claim.ActionID, identity)
 	if err != nil {
 		return "", err
 	}
-	if (len(coverageOnly) > 0 && coverageOnly[0]) || nativeTextOnlyRole(string(claim.Task.Step)) {
+	if q.NoTools || nativeTextOnlyRole(string(claim.Task.Step)) {
 		config = map[string]any{"mcpServers": map[string]any{}}
 	}
 	configPath := filepath.Join(job, "mcp.json")
@@ -83,11 +71,11 @@ func (f *Facade) runWorkBuddyBridge(ctx context.Context, run Run, claim protocol
 	if err != nil {
 		return "", err
 	}
-	cmd, err := workBuddySessionCommand(claim.Context.Executable, workspace, run.Regular.Settings.Values.Model, run.Regular.Settings.Values.ReasoningEffort, identity, resume, encodedSchema, configPath)
+	cmd, err := workBuddySessionCommand(claim.Context.Executable, workspace, q.Settings.Model, q.Settings.ReasoningEffort, identity, resume, encodedSchema, configPath)
 	if err != nil {
 		return "", err
 	}
-	if len(coverageOnly) == 0 || !coverageOnly[0] {
+	if !q.NoTools {
 		workBuddyRoleTools(cmd, string(claim.Task.Step))
 	}
 	// Restore the captured native environment.
@@ -97,7 +85,7 @@ func (f *Facade) runWorkBuddyBridge(ctx context.Context, run Run, claim protocol
 	}
 	attachedIdentity := ""
 	_, err = runWorkBuddyProcess(ctx, cmd, job, claim.ActionID, identity, prompt, func(observed string) error {
-		if err := f.submitSource(protocol.ExecutionSource{ActionID: claim.ActionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: observed, Status: "RUNNING"}); err != nil {
+		if err := q.Attached(observed); err != nil {
 			return err
 		}
 		attachedIdentity = observed

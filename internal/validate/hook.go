@@ -8,86 +8,24 @@ import (
 	"formal-gates/internal/host"
 )
 
-type HookDecision struct {
-	Decision                 string `json:"decision"`
-	Reason                   string `json:"reason"`
-	Permission               string `json:"permission"`
-	PermissionDecision       string `json:"permissionDecision"`
-	PermissionDecisionReason string `json:"permissionDecisionReason"`
-}
-
-type CodexHookDecision struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason,omitempty"`
-}
-
-type ZCodeHookDecision struct {
-	HookSpecificOutput ZCodeHookSpecificOutput `json:"hookSpecificOutput"`
-}
-
-type ZCodeHookSpecificOutput struct {
-	HookEventName            string `json:"hookEventName"`
-	PermissionDecision       string `json:"permissionDecision"`
-	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
-}
-
-type hookProtocolAdapter struct {
-	response func(HookDecision) any
-	exitCode func(HookDecision) int
-}
-
-var hookProtocolAdapters = map[host.HookProtocol]hookProtocolAdapter{
-	host.ProtocolGeneric: {
-		response: func(decision HookDecision) any { return decision },
-		exitCode: genericHookExitCode,
-	},
-	host.ProtocolCodex: {
-		response: codexHookResponse,
-		exitCode: func(HookDecision) int { return 0 },
-	},
-	host.ProtocolZCode: {
-		response: zcodeHookResponse,
-		exitCode: genericHookExitCode,
-	},
-}
+// Preserve existing caller types while the platform owns its wire response.
+type HookDecision = host.HookDecision
+type CodexHookDecision = host.CodexHookDecision
+type ZCodeHookDecision = host.ZCodeHookDecision
+type ZCodeHookSpecificOutput = host.ZCodeHookSpecificOutput
 
 func HookResponse(provider string, decision HookDecision) any {
-	return hookProtocolFor(provider).response(decision)
+	if d, err := host.Lookup(provider); err == nil && d.Hook.Response != nil {
+		return d.Hook.Response(decision)
+	}
+	return decision
 }
 
-// HookExitCode returns the process status expected by the selected host. Codex
-// consumes its JSON block decision only when the hook process itself succeeds;
-// ZCode also accepts the documented exit-2 blocking shortcut for denied calls.
 func HookExitCode(provider string, decision HookDecision) int {
-	return hookProtocolFor(provider).exitCode(decision)
-}
-
-func hookProtocolFor(provider string) hookProtocolAdapter {
-	descriptor, err := host.Lookup(provider)
-	if err == nil {
-		if adapter, ok := hookProtocolAdapters[descriptor.Hook.Protocol]; ok {
-			return adapter
-		}
+	if d, err := host.Lookup(provider); err == nil && d.Hook.ExitCode != nil {
+		return d.Hook.ExitCode(decision)
 	}
-	return hookProtocolAdapters[host.ProtocolGeneric]
-}
-
-func codexHookResponse(decision HookDecision) any {
-	if decision.PermissionDecision != "deny" {
-		return nil
-	}
-	return CodexHookDecision{Decision: "block", Reason: decision.Reason}
-}
-
-func zcodeHookResponse(decision HookDecision) any {
-	if decision.PermissionDecision != "deny" {
-		return nil
-	}
-	return ZCodeHookDecision{HookSpecificOutput: ZCodeHookSpecificOutput{
-		HookEventName:            "PreToolUse",
-		PermissionDecision:       "deny",
-		PermissionDecisionReason: decision.Reason,
-	}}
+	return genericHookExitCode(decision)
 }
 
 func genericHookExitCode(decision HookDecision) int {

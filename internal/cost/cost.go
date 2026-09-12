@@ -6,6 +6,8 @@
 // marked unavailable and never receives a fabricated value.
 package cost
 
+import "formal-gates/internal/host"
+
 // Source markers for a dispatch cost entry.
 const (
 	// SourceTranscript marks an entry backfilled from a parsed transcript.
@@ -48,20 +50,11 @@ type DispatchCost struct {
 
 // TaskTiming is the active model-task wall time, including tool waits. Start
 // and completion identify the outer boundaries; separate-turn idle is excluded.
-type TaskTiming struct {
-	IncompleteTurns int    `json:"incompleteTurns,omitempty"`
-	StartedAt       string `json:"startedAt"`
-	CompletedAt     string `json:"completedAt"`
-	WallTimeMillis  int64  `json:"wallTimeMillis"`
-}
+type TaskTiming = host.TaskTiming
 
 // Usage is the exact metered token usage parsed from one host transcript,
 // normalized to the pricing categories shared by both hosts.
-type Usage struct {
-	InputCacheHitTokens  int64
-	InputCacheMissTokens int64
-	OutputTokens         int64
-}
+type Usage = host.Usage
 
 // Record adds the dispatch entry to the run ledger and accumulates the run
 // totals. A dispatch is recorded at most once: recording the same dispatch

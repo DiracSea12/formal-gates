@@ -1,4 +1,4 @@
-package cost
+package host
 
 import (
 	"bufio"
@@ -32,4 +32,14 @@ func scanTranscriptLines(reader io.Reader, fn func(line []byte) bool) error {
 		return fmt.Errorf("transcript contains no parseable token usage")
 	}
 	return nil
+}
+
+// nonNegative returns the pointer value, or zero for a missing or negative
+// field. A corrupted negative count is treated as absent rather than
+// subtracted.
+func nonNegative(value *int64) int64 {
+	if value == nil || *value < 0 {
+		return 0
+	}
+	return *value
 }
