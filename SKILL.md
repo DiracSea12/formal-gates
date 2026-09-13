@@ -61,7 +61,7 @@ regular 路线 full/custom 在技术审和 no-split 计划确认后选择，不�
    全部 Batch 与黑盒屏障完成后接入独立白盒覆盖/测试；只有测试变动推进快照。全部
    FROZEN case-set 装配到 review-ready 候选，在最后必需验证之前压缩 Git 多提交范围。
 7. **完整验证 wave。** 冻结唯一 expected-set，按容量并行推进 QA execution 与各门。
-   QA 消费冻结 command 的准备→目标→采集操作；门只读基线至最终候选完整实现 diff。
+   QA 按批准步骤消费准备→目标→采集操作；门只读基线至最终候选完整实现 diff。
    一个 FAIL/运行错误不停止独立兄弟任务。每项 source 结算、usage、guard 后自动补位。
 8. **统一修复。** 全部目标终结、错误处置和 finding 裁决完成后，NEW/SAME_AS/DISMISSED
    归并 canonical problems，只建一个 repair。普通修复固定 AFFECTED；本轮必需 QA 与门全部有效 PASS（含合法继承）即可 Seal，不因保证激活追加最终 FULL。
@@ -84,8 +84,8 @@ lightweight 是正式流程内的路线（非受理阶段选项）。用户明�
 执行程序拥有的机械动作和实际宿主调用。重复结果重放不重复副作用，UNKNOWN 先对账。
 
 任务内 model.run 与声明 QA 操作也经过相同 CAS、intent、guard 和原动作绑定。不得绕过
-formal_gates_operation 使用自由 shell 创建模型或调用 QA 目标。QA command 在设计时冻结，
-执行时不能另选 argv。共同步骤、依赖和 checkpoint 按公开合同使用；实际工具/环境变化先
+formal_gates_operation 使用自由 shell 创建模型或调用 QA 目标。设计冻结用例步骤与判据；未声明 command 时由执行者经 qa.target 提交实际命令，
+已声明的 command 不得替换。共同步骤、依赖和 checkpoint 按公开合同使用；实际工具/环境变化先
 提交精确 invalidated checkpoint，再继续原动作的未完成部分。
 
 独立派发按宿主容量并行，仅从已授权 Ready 集合取任务。同功能在途规则保持；依赖等待

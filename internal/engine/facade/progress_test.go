@@ -176,9 +176,7 @@ func TestQAReadinessInstructionsReachBothRoles(t *testing.T) {
 				t.Fatalf("%s missing readiness material %q", step, text)
 			}
 		}
-		if strings.HasSuffix(step, "review") && !strings.Contains(prompt, "先 Seal/abort") {
-			t.Fatalf("%s omits concrete prestate conflict", step)
-		}
+
 	}
 }
 

@@ -144,7 +144,7 @@ const (
 
 // AcceptanceCase is a case in a manifest.  Black-box and merge cases use the
 // public-entry fields; white-box cases use the unique test reference.
-// Command is a frozen argv declaration. There is no shell interpolation and the
+// Command is an argv declaration recorded in a design or execution intent. The
 // adapter selects the candidate workspace, environment and output locations.
 type Command struct {
 	Executable       string   `json:"executable"`

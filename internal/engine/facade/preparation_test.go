@@ -34,7 +34,7 @@ func TestBothQADesignContractsExplainCaseDependencies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, expected := range []string{"dependencies contains only case IDs from the retained complete set or earlier in this increment", "[] when there are none", "never put shared-step IDs or environment prerequisites in dependencies"} {
+		for _, expected := range []string{"dependencies 只引用此前已有或本增量中更早的 case ID", "独立用例为 []", "环境可用性写入前置，不作 case 依赖"} {
 			if !strings.Contains(prompt, expected) {
 				t.Fatalf("%s authoring contract omits %q", mode, expected)
 			}

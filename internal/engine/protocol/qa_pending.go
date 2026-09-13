@@ -10,6 +10,7 @@ import (
 type QAPending struct {
 	Ready    []TaskOperationRequest `json:"ready"`
 	Running  []TaskOperationRequest `json:"running"`
+	Input    []string               `json:"input"`
 	Judgment []string               `json:"judgment"`
 	Blocked  map[string]string      `json:"blocked"`
 }
@@ -101,6 +102,10 @@ func PendingQA(s *State, binding ExecutionClaim, caseID string) (QAPending, erro
 				op = nil
 			}
 			if op == nil {
+				if kind == "qa.target" && c.Command == nil {
+					p.Input = append(p.Input, id)
+					break
+				}
 				q.Kind = kind
 				q.RequestID = "qa:" + id + ":" + kind + ":" + checkpoint.Digest
 				p.Ready = append(p.Ready, q)

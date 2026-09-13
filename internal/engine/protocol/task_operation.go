@@ -13,16 +13,17 @@ import (
 )
 
 // TaskOperationRequest is an internal call of an already attached worker. It
-// never creates a task or an attempt. The operation names and QA command come
-// from the workflow contract; callers cannot supply an executable at call time.
+// never creates a task or an attempt. QA executors implement approved procedures
+// through this boundary; the engine owns binding, admission and evidence.
 type TaskOperationRequest struct {
-	RunID            string         `json:"runId"`
-	ExpectedRevision uint64         `json:"expectedRevision"`
-	Binding          ExecutionClaim `json:"binding"`
-	RequestID        string         `json:"requestId"`
-	Kind             string         `json:"kind"`
-	CaseID           string         `json:"caseId,omitempty"`
-	Prompt           string         `json:"prompt,omitempty"`
+	RunID            string            `json:"runId"`
+	ExpectedRevision uint64            `json:"expectedRevision"`
+	Binding          ExecutionClaim    `json:"binding"`
+	RequestID        string            `json:"requestId"`
+	Kind             string            `json:"kind"`
+	CaseID           string            `json:"caseId,omitempty"`
+	Command          *coverage.Command `json:"command,omitempty"`
+	Prompt           string            `json:"prompt,omitempty"`
 }
 
 // TaskResources is bound by the prepare intent before any filesystem work.
@@ -145,9 +146,6 @@ func taskCase(s *State, q TaskOperationRequest) (*coverage.AcceptanceCase, error
 	qa := s.Regular.Preparation.QA[mode]
 	for _, c := range qa.Design.Manifest.Cases {
 		if c.CaseID == q.CaseID {
-			if c.Command == nil {
-				return nil, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: case has no frozen executable declaration")
-			}
 			return &c, nil
 		}
 	}
@@ -188,6 +186,9 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 		if op.Receipt == nil && (q.CaseID == "" || op.Request.CaseID == "" || q.CaseID == op.Request.CaseID) {
 			return fmt.Errorf("UNKNOWN: reconcile pending internal operation %s before another call", op.ID)
 		}
+	}
+	if q.Command != nil && q.Kind != "qa.target" {
+		return fmt.Errorf("SCOPE_MISMATCH: command belongs only to qa.target")
 	}
 	op := TaskOperation{ID: id, Request: q, ClaimedRevision: revision + 1}
 	switch q.Kind {
@@ -235,6 +236,20 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 			return err
 		}
 		op.Command = c.Command
+		if q.Kind == "qa.target" {
+			if q.Command != nil {
+				if c.Command != nil && !reflect.DeepEqual(c.Command, q.Command) {
+					return fmt.Errorf("SCOPE_MISMATCH: execution command differs from approved command")
+				}
+				op.Command = q.Command
+			}
+			if op.Command == nil || strings.TrimSpace(op.Command.Executable) == "" {
+				return fmt.Errorf("EXECUTION_INPUT_REQUIRED: implement the approved case procedure with command executable and args")
+			}
+			if !strings.ContainsAny(op.Command.Executable, "/\\") && strings.ContainsAny(op.Command.Executable, " \t\r\n") {
+				return fmt.Errorf("command executable must be one program name or path; put arguments in args")
+			}
+		}
 		op.WorkspaceMode = c.WorkspaceMode
 		for _, qa := range s.Regular.Preparation.QA {
 			ownsCase := false

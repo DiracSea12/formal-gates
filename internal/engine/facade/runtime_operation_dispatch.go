@@ -3,6 +3,7 @@ package facade
 import (
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/engine/coverage"
 	"formal-gates/internal/engine/protocol"
 )
 
@@ -14,10 +15,11 @@ func (f *Facade) dispatchNativeOperation(actionID, identity, requestID string, a
 		return nil, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unbound native tool")
 	}
 	var input struct {
-		Resume bool   `json:"resume"`
-		Kind   string `json:"kind"`
-		CaseID string `json:"caseId"`
-		Prompt string `json:"prompt"`
+		Command *coverage.Command `json:"command"`
+		Resume  bool              `json:"resume"`
+		Kind    string            `json:"kind"`
+		CaseID  string            `json:"caseId"`
+		Prompt  string            `json:"prompt"`
 	}
 	if err := json.Unmarshal(arguments, &input); err != nil {
 		return nil, err
@@ -35,7 +37,7 @@ func (f *Facade) dispatchNativeOperation(actionID, identity, requestID string, a
 	}
 	bound := execution.Claim
 	bound.Identity = identity
-	q := protocol.TaskOperationRequest{RunID: current.RunID, ExpectedRevision: current.Revision, Binding: bound, RequestID: requestID, Kind: input.Kind, CaseID: input.CaseID, Prompt: input.Prompt}
+	q := protocol.TaskOperationRequest{RunID: current.RunID, ExpectedRevision: current.Revision, Binding: bound, RequestID: requestID, Kind: input.Kind, CaseID: input.CaseID, Prompt: input.Prompt, Command: input.Command}
 	if input.Resume {
 		if original, ok := execution.Operations[protocol.TaskOperationID(q)]; ok {
 			// The operation digest includes its admission revision. Recovery

@@ -1,6 +1,9 @@
 # QA 设计
 
+写清前态与后态、步骤顺序和取证入口。静态检查只解析，不导入或 source 会启动任务的脚本。
+
 交付可执行用例和共享准备的草稿增量，status 为 DRAFT；DRAFT 只表示登记设计，不是覆盖 PASS。
+增量仅定义与已有设计的合并方式，不缩小当前 action 的工作范围。首次设计面向完整已确认需求；返修须处理全部未解决审查意见和覆盖缺口。
 用例充分性、需求/AC 映射与全套覆盖由独立 QA 审查判断，不由设计者自行返回覆盖 PASS/FAIL。
 读取 previousDesign 中的当前完整用例集、reviewGaps、designGap 及 existingTestEvidence，
 只提交必要增删改；未提到的用例、共享步骤和有效证据由引擎保留。
@@ -10,7 +13,6 @@
 返修必须修改实际用例或准备内容；只列缺失 AC、改说明或重交相同材料不算修复。
 真实读取/执行障碍走原有运行时错误路径，并保留已完成工作；不能因为基线没有新功能就判设计失败。
 previousResultRejection 是当前动作的拒收原因，按原因修正提交。
-为冻结前可达性检查写清每步所需前态、产生后态及取证入口，区分被验收目标与可简化前置。公共操作按当前任务已绑定的材料核对依赖、参数和适用版本；候选与身份来自当前绑定。静态检查只解析，不导入或 source 会启动任务的脚本。状态前置冲突、必要精确接口或取证缺口沿现有增量修订解决，执行者不得自行改判据。
 
 从已确认需求出发，为已选 QA 模式设计用例集。两种模式各自可选、均由独立代理执行，
 时序按模式而定：
@@ -58,7 +60,7 @@ fixture、输入、已有前置状态，以及模拟审查结果、授权、生�
 已有测试的输入、真实断言与覆盖对应。有效测试显式绑定并独立运行；仅缺口或错误才新增、
 修正。普通逻辑优先单测，跨模块用集成测试，公开路径由黑盒承担；交叉验证须有不同验证
 目标。不能仅凭测试名、覆盖率或开发者声明放行。没有测试变动时不增加文件或推进快照；
-有变动则由 adapter 提交并纳入最终含测试快照。
+有变动则提交并纳入最终含测试快照。
 
 黑盒仍必须通过文档化产品入口实际使用产物，不能以既有测试套件为主体或主要证据；
 独立的短驱动脚本可调用公共入口、采集真实输出并断言。
@@ -113,24 +115,15 @@ QA Review 可选建议由 engine 按 suggestion ID 接受用户处置，不在�
 稳定可执行性变化经编排层合法 THAW 后，才设计受影响用例；普通代码返修和一次性环境不可用
 都不属于 THAW 理由。
 
-## 冻结命令与模式执行
+## 设计与执行分工
 
-Each case must declare command {executable,args,expectedExitCode} as exact argv for the public target or test. executable is only a program name or file path, without shell quoting or arguments: use executable "go" and args ["test","./..."], never executable "go test". dependencies contains only case IDs from the retained complete set or earlier in this increment, or [] when there are none; never put shared-step IDs or environment prerequisites in dependencies. Use sharedSteps for shared-step IDs; environment availability is not a case dependency. The runtime prepares the candidate copy and captures output; no shell interpolation occurs.
-
-**blackbox-design：** Do not inspect any development workspace, implementation changes, whitebox work, or developer explanations. This workspace is the original baseline. Return the manifest in JSON without editing project files.
+设计交付完整可照做的步骤、前置构造方法、取证方式和判据，不要求在设计阶段编写驱动脚本。
+case.command 可以为 null；已有适用的可执行命令可直接声明 executable、args、expectedExitCode。
+执行者按批准步骤在 qa.target 提交实际命令，仍经同一引擎绑定、执行和留证，不得改变用例或 oracle。
+若设计已声明 command，执行者不得替换它。dependencies 只引用此前已有或本增量中更早的 case ID，
+独立用例为 []；共用准备引用 sharedSteps，环境可用性写入前置，不作 case 依赖。
 
 **whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test content or test-only fixtures. Tests may live inside production files: preserve all production behavior and shared inputs, list the mixed file in the change manifest, and never list it in design.testFiles. Return only actual changed file paths in the top-level manifest; declare all test-only file paths separately in design.testFiles, including unchanged reused developer tests. Return reuse records for each added or changed case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production fixes return to development. The isolated intermediate commit is for independent review, not approval to promote; the reviewer checks all declared testFiles and the complete whitebox diff before final candidate creation.
-
-# 白盒覆盖判断
-
-Independently enumerate required behavior and exact oracles from the bound requirement,
-public contracts and candidate implementation. The engine provides the bound ordinary
-candidate workspace for normal reading and searching; source bodies are not inlined or
-copied into a filtered projection. Locate relevant implementation as needed without
-assuming any language or directory layout. Before recording this independent judgment,
-do not inspect existing tests, modify files, run tests or bind existing tests. This is
-role sequencing, not a per-file read whitelist. Return the coverage JSON only. The engine
-records it before the subsequent test inspection and gap-filling invocation.
 
 ## 可执行共用准备
 
@@ -142,3 +135,15 @@ sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCod
 通过 FORMAL_GATES_QA_SHARED 读取共用源及产物；确实需要独立源码或 Git 工作树的
 构建、安装、返修自测等选择 candidate。工具与依赖缓存沿用运行环境，不复制 HOME。
 构建入口与前提以当前任务已绑定的材料为准。
+
+
+# 白盒覆盖判断
+
+Independently enumerate required behavior and exact oracles from the bound requirement,
+public contracts and candidate implementation. The engine provides the bound ordinary
+candidate workspace for normal reading and searching; source bodies are not inlined or
+copied into a filtered projection. Locate relevant implementation as needed without
+assuming any language or directory layout. Before recording this independent judgment,
+do not inspect existing tests, modify files, run tests or bind existing tests. This is
+role sequencing, not a per-file read whitelist. Return the coverage JSON only. The engine
+records it before the subsequent test inspection and gap-filling invocation.

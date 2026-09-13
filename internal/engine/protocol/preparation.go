@@ -837,12 +837,12 @@ func validateQADesignCoverage(r *RegularState, mode string, d QADesign, complete
 	m := d.Manifest
 	seen := map[string]bool{}
 	for _, c := range m.Cases {
-		if c.Command == nil || strings.TrimSpace(c.Command.Executable) == "" {
-			return fmt.Errorf("QA case %s requires a frozen command argv declaration", c.CaseID)
+		if c.Command != nil && strings.TrimSpace(c.Command.Executable) == "" {
+			return fmt.Errorf("QA case %s command executable cannot be empty", c.CaseID)
 		}
 		// A bare executable is one program name. Paths may contain spaces; arguments
 		// are separate array entries and are never inferred from a command string.
-		if !strings.ContainsAny(c.Command.Executable, "/\\") && strings.ContainsAny(c.Command.Executable, " \t\r\n") {
+		if c.Command != nil && !strings.ContainsAny(c.Command.Executable, "/\\") && strings.ContainsAny(c.Command.Executable, " \t\r\n") {
 			return fmt.Errorf("QA case %s executable must be one program name or path; put arguments in args", c.CaseID)
 		}
 		for _, dep := range c.Dependencies {

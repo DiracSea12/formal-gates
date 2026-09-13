@@ -16,6 +16,9 @@ type QABatchReceipt struct {
 // convenience: every side effect still has its original individual claim and
 // receipt. It never writes a PASS or creates another worker.
 func (f *Facade) RunTaskOperation(q protocol.TaskOperationRequest, resume bool) (any, error) {
+	if q.Command != nil && q.Kind != "qa.target" {
+		return nil, fmt.Errorf("SCOPE_MISMATCH: command belongs only to qa.target")
+	}
 	if q.Kind == "qa.checkpoint" {
 		return f.checkpointQA(q)
 	}

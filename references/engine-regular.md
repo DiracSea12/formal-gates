@@ -32,7 +32,7 @@ transport，使真实子代理关联到当前对话。CLI 仍拥有 CLAIM、SOUR
 任务内需要 `formal_gates_operation` 时，使用同一 CLI 的
 `--action-id <issued> --subagent-operation <request.json>`。请求只含 `requestId`、
 `kind`、`caseId`、`prompt`；绑定由 CLI 从当前状态填入。中断对账以同一请求加 `--resume`，
-不得更换 requestId 重跑目标。角色允许范围、冻结 argv、checkpoint 和 CAS 沿用既有入口。
+不得更换 requestId 重跑目标。角色允许范围、批准用例、checkpoint 和 CAS 沿用既有入口。
 
 原生工具继承父对话权限，接口没有单独的工作目录或动态工具注册参数；工作者需显式使用
 派发的 workspace，并遵守原角色输入限制。这不等同于 app-server 的每角色工具裁剪。
@@ -606,7 +606,7 @@ review.setStatus 表示集合覆盖结论；集合缺口可为 FAIL，同时保�
 | binding | `{runId,childId,requirementRevision,solutionRevision,reviewKind,routeScope,topologyScope}`；childId 无切片为 `""`，前四项复制 requiredSources.binding；reviewKind=BLACKBOX/WHITEBOX，topologyScope=当前 topology |
 | sources | sourceId 字符串数组 |
 | points | `[{pointId,observableBehavior,oracle}]`；每个正式 AC 使用 `<MODE>:AC-001` 形式 |
-| cases | `[{caseId,mode,oracle,command,dependencies?,sharedSteps,publicEntry?,preconditions?,steps?,testRef?}]`；mode=BLACKBOX/WHITEBOX，与审查种类相同；黑盒提供公开入口/前态/步骤，白盒提供唯一 testRef，新增 caseId 是局部标签；修改使用引擎返回的正式 ID |
+| cases | `[{caseId,mode,oracle,command?,dependencies?,sharedSteps,publicEntry?,preconditions?,steps?,testRef?}]`；mode=BLACKBOX/WHITEBOX，与审查种类相同；黑盒提供公开入口/前态/步骤，白盒提供唯一 testRef，新增 caseId 是局部标签；修改使用引擎返回的正式 ID |
 | edges | `[{sourceId,pointId,caseId,reviewKind?}]`；明确来源→验收点→用例关系，reviewKind 省略时取 binding |
 | sharedSteps | `[{id,procedure,command?,independent?,artifacts?}]`，case.sharedSteps 引用这些 ID；不用则 [] |
 | alternatives | `[{sourceId,reason,method,status,evidence}]`，仅明确 NON_QA 来源，status=PASS 且有实际非 QA 验证；普通 AC 不可转入此数组 |
@@ -946,7 +946,7 @@ model.run 只接收调用者给出的文本，不隐式继承外层任务、需�
 在 prompt 内提供问题所需的全部正文；缺少正文时返回缺项说明，不通过文件查找补齐。
 该文本辅助调用不代替外层已签发审查，也不自行登记正式结果。
 bridge 将原生 callId 用作 requestId，复制当前 action 的完整绑定，并走下面同一个 API。
-QA execution 线程不提供 shell 工具；目标调用只能消费冻结声明中的 argv。
+QA execution 线程通过引擎操作执行命令；未声明 command 的批准用例由执行者在 qa.target 提供 command，不能改动步骤或判据。
 白盒设计先在禁用 shell 的同一原生身份中，仅根据完整需求和生产源码形成行为/oracle 判断。
 adapter 通过 `whitebox.coverage` 内部操作持久化判断回执，之后才续跑原身份并开放已有
 可写 authoring 副本和原生 shell 工具发现、编写、实际试跑测试，
@@ -998,28 +998,27 @@ provider/payload/候选不符、超出该动作精确 case set、旧 revision、
 新任务或自动增加额度。model 的原生 transcript 写入同一 cost 投影，kind=task-operation，
 以内部操作 ID 区分来源；不会变成新的派发 attempt。
 
-QA 设计时，每条 regular case 还必须提供：
+QA 设计冻结完整步骤、前置和 oracle，不要求提前编写驱动脚本。case.command 可省略或为 null；
+原生设计 schema 用 null 表示由执行者实现批准步骤。已有适用命令可声明并随 case-set 冻结。
+执行者对没有 command 的用例经现有 qa.target 提交实际命令，例如：
 
 ```json
-{"command":{"executable":"go","args":["run","."],"expectedExitCode":0},"dependencies":[]}
+{"kind":"qa.target","caseId":"BLACKBOX:C1","prompt":"","command":{"executable":"go","args":["run","."],"expectedExitCode":0}}
 ```
 
-command 随 case-set 冻结；执行请求中没有 command/argv/env/cwd 字段。executable 按宿主
-正常可执行路径解析，args 每项作为独立参数，不作 shell 字符串拼接或插值。裸程序名
-不能混入空白分隔的参数，例如 `go test` 须由设计者声明为 executable=`go`、args=`["test"]`；
-程序不自动拆写。显式路径可含空格（例如 `./my tool`），冻结前不因当前工具未安装而拒绝
-声明；运行环境缺工具仍按运行期失败处理。工作目录由 adapter 选定为该候选的独立 Git
-副本。dependencies 可省略或为空；非空时只引用同 manifest
-中先前声明的 case ID，引用的 case 必须采集完成且退出码符合其 expectedExitCode。
-共享步骤 ID 只放在 sharedSteps，环境可用性写入用例前置说明；两者均不是 dependencies。
-原生设计任务的 typed schema 要求该数组字段，独立用例返回 `[]`。
+command 随该次操作 intent 保存并用于恢复，不另建任务或执行路线。不能替换设计已批准的 command。
+executable 是程序名或路径，args 逐参数传递，不自动拆分 shell 字符串；必要前置和短脚本由执行者
+按批准 procedure 实现。工作目录、候选、环境和输出位置仍由引擎分配，调用者不能另选 cwd/env。
+qa.run 自动推进可运行步骤；pending.input 列出已准备且需要执行者提交 qa.target command 的用例，
+不是运行失败。pending.judgment 仍须独立判据比较和 checkpoint，退出零不等于 PASS。
+dependencies 只引用此前声明的 case ID，须有被接纳的 PASS；共享步骤引用 sharedSteps。
 
 顺序与输出如下：
 
 | kind | 前置 | 实际操作 | 后续 |
 | --- | --- | --- | --- |
 | qa.prepare | 当前 action/case binding，声明依赖已成功；QA execution 只接受其 expected 集，repair 只接受绑定 plan 的 affectedCases | QA execution 创建精确 candidate 的干净 Git 副本；repair 从已注册修复工作区复制实际修改／新增／删除到独立副本 | 完整副本的观察持久化且 COMPLETED 才可 target |
-| qa.target | 本 case prepare 已完成 | 在该副本执行一次冻结 argv，保存 stdout/stderr 与实际 exit code | 进程创建/准备失败则 FAILED；已观察到的正常退出可 collect，非零退出保留为验收数据 |
+| qa.target | 本 case prepare 已完成 | 在该副本执行一次已绑定 argv，保存 stdout/stderr 与实际 exit code | 进程创建/准备失败则 FAILED；已观察到的正常退出可 collect，非零退出保留为验收数据 |
 | qa.collect | 本 case target 已完成 | 读取该次实际 stdout 和单独的 stderr，返回原 exit code 和 workspace | 已完成 stage 不可用新 requestId 重做 |
 | model.run | 原动作有效，source/guard 允许，无未对账内部调用 | 调用原动作运行上下文绑定的 Codex exec，禁用 shell/多代理/MCP apps/web，返回文本和原生 identity/transcript | 结果与成本归入原动作；不自行产生正式审查结果 |
 
@@ -1038,7 +1037,7 @@ HEAD 仍绑定 repairPlan.candidate，不表示未经提交的修改已成为新
 返回 TaskOperationReceipt：
 `{id,actionId,requestDigest,status,workspace?,output?,exitCode,identity?,transcriptPath?,message?}`。
 status=COMPLETED/FAILED；失败必须有 message，model 成功包含原生 identity/transcriptPath。
-回执保留在 `executions[actionId].operations[id]`，该条目还包含原 request、冻结 command、
+回执保留在 `executions[actionId].operations[id]`，该条目还包含原 request、实际 command、
 claimedRevision 和当时的 checkpointDigest；实际请求先持久化到既有 pending HostAction，再执行。
 
 在 submit 的 REGULAR union 中，`TASK_OPERATION_CLAIM` 对应唯一载荷 `taskOperation`，

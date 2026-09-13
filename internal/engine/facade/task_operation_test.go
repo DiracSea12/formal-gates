@@ -639,3 +639,55 @@ func TestRepairTaskOperationUsesWorkingEditsAndRecovery(t *testing.T) {
 	raw, _ := json.Marshal(window)
 	t.Logf("actual repair edits copied; stdout=%q; target recovery=%s; original candidate=%s", result.Output, raw, x.Claim.Candidate)
 }
+
+func TestProcedureExecutionUsesEngineAdmissionAndRealEvidence(t *testing.T) {
+	f := frozenVerificationCommandFixture(t, false, nil, func(m *coverage.AcceptanceManifest) {
+		m.Cases[0].Command = nil
+	})
+	x := facadeExecution(t, f, "blackbox-execution")
+	nativeFixtureClaim(t, f, x)
+	action := x.Claim.ActionID
+	pending := runBatch(t, f, action)
+	if len(pending.Pending.Input) != 1 || pending.Pending.Input[0] != "BLACKBOX:C1" || len(pending.Pending.Blocked) != 0 {
+		t.Fatalf("approved procedure should await executor input after automatic prepare: %+v", pending)
+	}
+	command := &coverage.Command{Executable: "sh", Args: []string{"-c", "go run .; printf observed-stderr >&2; exit 7"}, ExpectedExitCode: 7}
+	q := operationRequest(t, f, action, "qa.target", "outside")
+	q.CaseID = "BLACKBOX:OUTSIDE"
+	q.Command = command
+	if _, err := f.ExecuteTaskOperation(q, false); err == nil || !strings.Contains(err.Error(), "SCOPE_MISMATCH") {
+		t.Fatalf("out-of-scope procedure admitted: %v", err)
+	}
+	run, _ := f.Show()
+	input, _ := json.Marshal(map[string]any{"kind": "qa.target", "caseId": "BLACKBOX:C1", "prompt": "", "command": command})
+	if _, err := f.dispatchNativeOperation(action, run.Executions[action].Identity, "procedure", input); err != nil {
+		t.Fatal(err)
+	}
+	pending = runBatch(t, f, action)
+	if len(pending.Pending.Judgment) != 1 || len(pending.Pending.Input) != 0 {
+		t.Fatalf("missing semantic judgment: %+v", pending)
+	}
+	run, _ = f.Show()
+	collected := latestTaskOperation(run.Executions[action], "qa.collect", "BLACKBOX:C1")
+	if collected == nil || collected.Receipt.Output != "hello" || collected.Receipt.Stderr != "observed-stderr" || collected.Receipt.ExitCode != 7 {
+		t.Fatalf("actual streams and exit not preserved: %+v", collected)
+	}
+	target := latestTaskOperation(run.Executions[action], "qa.target", "BLACKBOX:C1")
+	if target.Command == nil || target.Request.Command == nil || target.Command.Executable != "sh" {
+		t.Fatal("execution command not persisted in original intent")
+	}
+	q = operationRequest(t, f, action, "qa.target", "repeat")
+	q.Command = command
+	if _, err := f.ExecuteTaskOperation(q, false); err == nil {
+		t.Fatal("procedure repeated after collection")
+	}
+}
+
+func TestApprovedCommandCannotBeReplacedByExecution(t *testing.T) {
+	f, action := operationFixture(t)
+	q := operationRequest(t, f, action, "qa.target", "replace")
+	q.Command = &coverage.Command{Executable: "sh", Args: []string{"-c", "echo replacement"}}
+	if _, err := f.ExecuteTaskOperation(q, false); err == nil || !strings.Contains(err.Error(), "differs from approved command") {
+		t.Fatalf("approved command replacement: %v", err)
+	}
+}

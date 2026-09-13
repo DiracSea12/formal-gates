@@ -11,6 +11,11 @@ func nativeOperationTool(step, description string) map[string]any {
 		delete(caseID, "enum")
 	}
 	schema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind", "caseId", "prompt"}, "properties": map[string]any{"resume": map[string]any{"type": "boolean", "description": "Default false. Set true only to reconcile an interrupted operation with its original requestId and unchanged kind, caseId and prompt; never rerun under a new ID."}, "kind": map[string]any{"type": "string", "enum": kinds}, "caseId": caseID, "prompt": map[string]any{"type": "string"}}}
+	if step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker" {
+		schema["properties"].(map[string]any)["command"] = map[string]any{"type": "object", "additionalProperties": false, "required": []string{"executable", "args", "expectedExitCode"}, "properties": map[string]any{
+			"executable": map[string]any{"type": "string"}, "args": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "expectedExitCode": map[string]any{"type": "integer"},
+		}, "description": "qa.target only: execute the approved procedure in the engine prepared workspace when the case has no command. Cannot replace an approved command or change its oracle."}
+	}
 	return map[string]any{"type": "function", "name": "formal_gates_operation", "description": description, "inputSchema": schema}
 }
 

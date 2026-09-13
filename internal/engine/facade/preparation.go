@@ -591,6 +591,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 			fields["status"] = map[string]any{"type": "string", "enum": []string{"DRAFT", "FAIL"}}
 		}
 		caseFields := map[string]any{"workspaceMode": map[string]any{"type": "string", "enum": []string{"candidate", "isolated"}}, "command": object(map[string]any{"executable": map[string]any{"type": "string", "description": "One program name or path, without shell quotes or arguments; e.g. go, with test and ./... in args. Never a shell command string such as go test."}, "args": array(str), "expectedExitCode": map[string]any{"type": "integer"}}), "dependencies": array(str), "caseId": str, "mode": exact(strings.ToUpper(mode)), "oracle": str, "sharedSteps": array(str)}
+		caseFields["command"] = map[string]any{"anyOf": []any{caseFields["command"], map[string]any{"type": "null"}}, "description": "Optional existing executable procedure. Use null when the executor will implement the approved steps; do not write a driver script during design."}
 		caseFields["dependencies"].(map[string]any)["description"] = "Only case IDs from the retained complete set or earlier in this increment; use [] for an independent case. Shared-step IDs and environment prerequisites do not belong here."
 		if mode == "blackbox" {
 			caseFields["publicEntry"] = str
@@ -599,7 +600,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 		} else {
 			caseFields["testRef"] = str
 		}
-		manifest := object(map[string]any{"binding": binding, "sources": array(str), "points": array(object(map[string]any{"pointId": str, "observableBehavior": str, "oracle": str})), "cases": array(object(caseFields)), "edges": array(object(map[string]any{"sourceId": str, "pointId": str, "caseId": str})), "sharedSteps": array(object(map[string]any{"id": str, "procedure": str, "artifacts": array(str), "command": map[string]any{"anyOf": []any{caseFields["command"], map[string]any{"type": "null"}}}, "independent": map[string]any{"type": "boolean"}}))})
+		manifest := object(map[string]any{"binding": binding, "sources": array(str), "points": array(object(map[string]any{"pointId": str, "observableBehavior": str, "oracle": str})), "cases": array(object(caseFields)), "edges": array(object(map[string]any{"sourceId": str, "pointId": str, "caseId": str})), "sharedSteps": array(object(map[string]any{"id": str, "procedure": str, "artifacts": array(str), "command": caseFields["command"], "independent": map[string]any{"type": "boolean"}}))})
 		alternatives := array(object(map[string]any{"sourceId": str, "reason": str, "method": str, "status": exact("PASS"), "evidence": str}))
 		alternatives["description"] = "Only explicit NON_QA sources may have an alternative verification. Never use alternatives to defer or weaken an AC; return an empty array when every source is QA."
 		designFields := map[string]any{"replace": map[string]any{"type": "boolean"}, "removeCases": array(str), "removeSharedSteps": array(str), "manifest": manifest, "alternatives": alternatives}
