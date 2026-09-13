@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"formal-gates/internal/engine/coverage"
@@ -77,7 +78,11 @@ func gitReceipt(t *testing.T, e *Engine, after string, ownership ...string) {
 	submitRegular(t, e, RegularEvent{Operation: "GIT_RECEIPT", GitReceipt: &receipt})
 }
 func preparationResult(x RegularExecution) PreparationResult {
-	return PreparationResult{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: "native-" + x.Claim.ActionID, RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate, Status: "PASS"}
+	status := "PASS"
+	if strings.HasSuffix(string(x.Claim.Task.Step), "-design") {
+		status = "DRAFT"
+	}
+	return PreparationResult{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: "native-" + x.Claim.ActionID, RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate, Status: status}
 }
 func completeBatch(t *testing.T, e *Engine, id string) {
 	x := currentExecution(t, e, "development-worker")
@@ -115,10 +120,17 @@ func completeQA(t *testing.T, e *Engine, mode, kind string) {
 			d = testDesign(s.State.Regular, string(coverage.ReviewWhitebox))
 			v.Reuse = []TestReuse{{CaseID: "WHITEBOX:C1", TestRef: "main_test.go::TestHello", CoverageJudgment: "asserts exact output", Procedure: "go test -run TestHello", Observation: "PASS", Comparison: "hello equals hello", Result: "EXECUTED_PASS"}}
 		}
+		if previous := s.State.Regular.Preparation.QA[mode].PreviousDesign; previous != nil {
+			if mode == "blackbox" {
+				d.Manifest.Cases[0].Steps += fmt.Sprintf("; capture required evidence, revision %d", s.State.Regular.Preparation.QA[mode].Revision)
+			} else {
+				d.Manifest.Cases[0].Oracle += fmt.Sprintf("; assert evidence for revision %d", s.State.Regular.Preparation.QA[mode].Revision)
+			}
+		}
 		v.Design = &d
 	} else {
 		q := s.State.Regular.Preparation.QA[mode]
-		v.Review = &coverage.ReviewResult{Binding: q.Design.Manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: s.State.Regular.Requirement.Path, Status: coverage.StatusPass}}, PointDecisions: []coverage.ReviewDecision{{ID: string(q.Design.Manifest.Binding.ReviewKind) + ":AC-001", Status: coverage.StatusPass}}, CaseDecisions: []coverage.ReviewDecision{{ID: string(q.Design.Manifest.Binding.ReviewKind) + ":C1", Status: coverage.StatusPass}}}
+		v.Review = &coverage.ReviewResult{Binding: q.Design.Manifest.Binding, Scope: q.ReviewScope, SourceDecisions: []coverage.ReviewDecision{{ID: s.State.Regular.Requirement.Path, Status: coverage.StatusPass}}, PointDecisions: []coverage.ReviewDecision{{ID: string(q.Design.Manifest.Binding.ReviewKind) + ":AC-001", Status: coverage.StatusPass}}, CaseDecisions: []coverage.ReviewDecision{{ID: string(q.Design.Manifest.Binding.ReviewKind) + ":C1", Status: coverage.StatusPass}}}
 	}
 	a := submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &v})
 	if a.Status != "ACCEPTED" {
@@ -218,7 +230,7 @@ func TestPreparationCoverageAndSuggestionBarriers(t *testing.T) {
 	s, _ := e.Load()
 	q := s.State.Regular.Preparation.QA["blackbox"]
 	v := preparationResult(x)
-	v.Review = &coverage.ReviewResult{Binding: q.Design.Manifest.Binding, Scope: coverage.ScopeFull, SourceDecisions: []coverage.ReviewDecision{{ID: "requirements.md", Status: coverage.StatusPass}}, PointDecisions: []coverage.ReviewDecision{{ID: "BLACKBOX:AC-001", Status: coverage.StatusPass}}, CaseDecisions: []coverage.ReviewDecision{{ID: "BLACKBOX:C1", Status: coverage.StatusPass}}}
+	v.Review = &coverage.ReviewResult{Binding: q.Design.Manifest.Binding, Scope: q.ReviewScope, SourceDecisions: []coverage.ReviewDecision{{ID: "requirements.md", Status: coverage.StatusPass}}, PointDecisions: []coverage.ReviewDecision{{ID: "BLACKBOX:AC-001", Status: coverage.StatusPass}}, CaseDecisions: []coverage.ReviewDecision{{ID: "BLACKBOX:C1", Status: coverage.StatusPass}}}
 	v.Suggestions = []QASuggestion{{ID: "SG-1", Severity: "P3", Problem: "Improve a case explanation", Cases: []string{"BLACKBOX:C1"}}}
 	submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &v})
 	sourceUnavailable(t, e, x)

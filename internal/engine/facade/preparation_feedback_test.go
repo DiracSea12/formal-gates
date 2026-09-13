@@ -25,7 +25,7 @@ func TestPreparationRetryFeedbackIsBoundAndRoleSpecific(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{"previousResultRejection", "FAIL needs a complete QA review", "public interface missing", "设计者不返回 review 对象"} {
+	for _, s := range []string{"previousResultRejection", "FAIL needs a complete QA review", "public interface missing", "用例充分性、需求/AC 映射与全套覆盖由独立 QA 审查判断"} {
 		if !strings.Contains(prompt, s) {
 			t.Fatalf("missing feedback %q", s)
 		}

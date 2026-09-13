@@ -78,10 +78,13 @@ type PreparedQA struct {
 	Reuse          []TestReuse                 `json:"reuse"`
 }
 type QADesign struct {
-	Manifest         coverage.AcceptanceManifest        `json:"manifest"`
-	TestFiles        []string                           `json:"testFiles"`
-	Alternatives     []coverage.AlternativeVerification `json:"alternatives,omitempty"`
-	CoverageJudgment string                             `json:"coverageJudgment"`
+	Replace           bool                               `json:"replace,omitempty"`
+	RemoveCases       []string                           `json:"removeCases,omitempty"`
+	RemoveSharedSteps []string                           `json:"removeSharedSteps,omitempty"`
+	Manifest          coverage.AcceptanceManifest        `json:"manifest"`
+	TestFiles         []string                           `json:"testFiles"`
+	Alternatives      []coverage.AlternativeVerification `json:"alternatives,omitempty"`
+	CoverageJudgment  string                             `json:"coverageJudgment,omitempty"`
 }
 type QASuggestion struct {
 	ID                string   `json:"id"`
@@ -614,7 +617,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 		r.PreparationErrors = append(r.PreparationErrors, PreparationError{Result: result, Reason: err.Error(), Revision: revision + 1})
 		return "REJECTED_RESULT", nil
 	}
-	if (result.Status != "PASS" && result.Status != "FAIL" && result.Status != "CONTINUE") || (result.Status == "CONTINUE" && x.Claim.Task.Step != "development-worker") || result.Provider != x.Claim.Provider || result.RequirementRevision != x.Claim.RequirementRevision || result.Candidate != x.Claim.Candidate {
+	if (result.Status != "PASS" && result.Status != "FAIL" && result.Status != "CONTINUE" && result.Status != "DRAFT") || (result.Status == "CONTINUE" && x.Claim.Task.Step != "development-worker") || result.Provider != x.Claim.Provider || result.RequirementRevision != x.Claim.RequirementRevision || result.Candidate != x.Claim.Candidate {
 		return reject(fmt.Errorf("invalid preparation result binding/status: %s %s", result.Status, result.Message))
 	}
 	if !currentPreparationClaim(r, x.Claim) || r.ChangePending {
@@ -625,6 +628,9 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 	}
 	p := r.Preparation
 	step := string(x.Claim.Task.Step)
+	if result.Status == "DRAFT" && !strings.HasSuffix(step, "-design") {
+		return reject(fmt.Errorf("DRAFT is only a QA design delivery status"))
+	}
 	if step == "development-worker" && result.Status != "PASS" {
 		if strings.TrimSpace(result.Message) == "" {
 			return reject(fmt.Errorf("unfinished development requires its actual continuation or failure reason"))
@@ -636,26 +642,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 		return "ACCEPTED", nil
 	}
 	if result.Status == "FAIL" && step == "blackbox-design" {
-		q := p.QA["blackbox"]
-		if q == nil || result.Design == nil || strings.TrimSpace(result.Design.CoverageJudgment) == "" || strings.TrimSpace(result.Message) == "" {
-			return reject(fmt.Errorf("blackbox-design FAIL requires design.coverageJudgment and message describing the concrete public-contract or coverage gap"))
-		}
-		m := result.Design.Manifest.Binding
-		if m.SourceBinding != r.RequiredSources.Binding || m.ReviewKind != coverage.ReviewKind("BLACKBOX") || m.RouteScope != digestOfCanonical(r.Route) || m.TopologyScope != r.Topology {
-			return reject(fmt.Errorf("blackbox-design FAIL design.manifest.binding differs from inventory/route/topology"))
-		}
-		if len(result.Manifest) != 0 {
-			return reject(fmt.Errorf("blackbox-design FAIL manifest must be empty: this role cannot edit project files"))
-		}
-		// An incomplete design is a semantic design failure, not a malformed
-		// review. Preserve its raw report in the execution without accepting the
-		// partial case set for review, execution, or freezing.
-		q.DesignGap = result.Message + "\n" + result.Design.CoverageJudgment
-		q.ConsecutiveFailures++
-		q.RecoveryRequired = q.ConsecutiveFailures >= 3
-		q.Frozen, q.NeedsRevision = false, true
-		s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, Digest: digestOfCanonical(result)}
-		return "ACCEPTED", nil
+		return reject(fmt.Errorf("blackbox design delivers a draft increment, not a coverage FAIL; coverage belongs to independent review"))
 	}
 	if result.Status == "FAIL" && step != "whitebox-design" {
 		if !strings.HasSuffix(step, "-review") || result.Review == nil || result.Message == "" {
@@ -673,6 +660,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			mergeQAReview(result.Review, *q.RetainedReview)
 		}
 		q.Review = result.Review
+		q.DesignGap = result.Message
 		q.ConsecutiveFailures++
 		q.RecoveryRequired = q.ConsecutiveFailures >= 3
 		q.Frozen = false
@@ -705,10 +693,28 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			return reject(fmt.Errorf("QA mode is not selected"))
 		}
 		if strings.HasSuffix(step, "-design") {
-			if result.Design == nil || strings.TrimSpace(result.Design.CoverageJudgment) == "" {
-				return reject(fmt.Errorf("independent coverage judgment and manifest required"))
+			if result.Design == nil || (result.Status != "DRAFT" && !(mode == "whitebox" && result.Status == "FAIL")) {
+				return reject(fmt.Errorf("QA design requires a DRAFT increment; only an executed whitebox production failure returns FAIL"))
 			}
-			if err := validateQADesign(r, mode, *result.Design); err != nil {
+			if mode == "whitebox" {
+				if result.Design.TestFiles == nil {
+					return reject(fmt.Errorf("whitebox increment requires explicit testFiles"))
+				}
+				if _, err := gitprep.Paths(result.Design.TestFiles); err != nil {
+					return reject(err)
+				}
+			}
+			merged, ids, err := mergeQADesign(q.PreviousDesign, *result.Design, mode, s)
+			if err != nil {
+				return reject(err)
+			}
+			result.Design = &merged
+			for i := range result.Reuse {
+				if id, ok := ids[result.Reuse[i].CaseID]; ok {
+					result.Reuse[i].CaseID = id
+				}
+			}
+			if err := validateQADraft(r, mode, merged); err != nil {
 				return reject(err)
 			}
 			if mode == "blackbox" && len(result.Manifest) > 0 {
@@ -724,7 +730,10 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 				if !allDevelopment(r) {
 					return reject(fmt.Errorf("development must complete before whitebox"))
 				}
-				if err := validateReuse(result.Design.Manifest, result.Reuse, result.Status == "FAIL"); err != nil {
+				if err := validateQAReuseIncrement(q.PreviousDesign, merged, result.Reuse, result.Manifest); err != nil {
+					return reject(err)
+				}
+				if err := validateReuse(result.Design.Manifest, mergeQAReuse(q.Reuse, result.Reuse, merged.Manifest), result.Status == "FAIL"); err != nil {
 					return reject(err)
 				}
 			}
@@ -736,7 +745,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			q.DesignGap = ""
 			q.DesignActionID = result.ActionID
 			q.Manifest = result.Manifest
-			q.Reuse = result.Reuse
+			q.Reuse = mergeQAReuse(q.Reuse, result.Reuse, merged.Manifest)
 			if mode == "whitebox" && result.Status == "FAIL" {
 				// A valid test can reveal a production defect during authoring.
 				// Keep that evidence and use the existing explicit rework decision;
@@ -753,6 +762,9 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			}
 			if q.RetainedReview != nil {
 				mergeQAReview(result.Review, *q.RetainedReview)
+			}
+			if err := validateQADesign(r, mode, *q.Design); err != nil {
+				return reject(err)
 			}
 			c := qaContract(r, mode, *q.Design)
 			w, err := c.ValidateReviews([]coverage.ReviewResult{*result.Review})
@@ -803,7 +815,15 @@ func qaContract(r *RegularState, mode string, d QADesign) coverage.CoverageContr
 	}
 	return coverage.CoverageContract{RequiredSources: required, SelectedKinds: []coverage.ReviewKind{coverage.ReviewKind(strings.ToUpper(mode))}, Manifests: []coverage.AcceptanceManifest{d.Manifest}, AlternativeVerifications: d.Alternatives}
 }
+func validateQADraft(r *RegularState, mode string, d QADesign) error {
+	return validateQADesignCoverage(r, mode, d, false)
+}
+
 func validateQADesign(r *RegularState, mode string, d QADesign) error {
+	return validateQADesignCoverage(r, mode, d, true)
+}
+
+func validateQADesignCoverage(r *RegularState, mode string, d QADesign, complete bool) error {
 	if mode == "whitebox" {
 		if d.TestFiles == nil {
 			return fmt.Errorf("whitebox design requires explicit testFiles, separate from the change manifest")
@@ -836,6 +856,9 @@ func validateQADesign(r *RegularState, mode string, d QADesign) error {
 		return fmt.Errorf("QA manifest binding differs from inventory/route/topology")
 	}
 	c := qaContract(r, mode, d)
+	if !complete {
+		return c.ValidateDraft()
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -1081,10 +1104,10 @@ func ChangedQA(old, new coverage.AcceptanceManifest, review coverage.ReviewResul
 	changedShared := map[string]bool{}
 	oldShared := map[string]string{}
 	for _, s := range old.SharedSteps {
-		oldShared[s.ID] = s.Procedure
+		oldShared[s.ID] = digestOfCanonical(s)
 	}
 	for _, s := range new.SharedSteps {
-		if oldShared[s.ID] != s.Procedure {
+		if oldShared[s.ID] != digestOfCanonical(s) {
 			changedShared[s.ID] = true
 		}
 		delete(oldShared, s.ID)
@@ -1122,10 +1145,41 @@ func ChangedQA(old, new coverage.AcceptanceManifest, review coverage.ReviewResul
 		}
 	}
 	review.SharedStepDecisions = shared
-	if digestOfCanonical(old.Edges) != digestOfCanonical(new.Edges) || digestOfCanonical(old.Points) != digestOfCanonical(new.Points) || digestOfCanonical(old.Sources) != digestOfCanonical(new.Sources) {
-		review.PointDecisions = nil
-		review.SourceDecisions = nil
+	edgeKey := func(m coverage.AcceptanceManifest, id string, point bool) string {
+		edges := []string{}
+		for _, e := range m.Edges {
+			if (!point && e.SourceID == id) || (point && e.PointID == id) {
+				edges = append(edges, digestOfCanonical(e))
+			}
+		}
+		sort.Strings(edges)
+		if point {
+			for _, p := range m.Points {
+				if p.PointID == id {
+					return digestOfCanonical(p) + digestOfCanonical(edges)
+				}
+			}
+		} else {
+			for _, source := range m.Sources {
+				if source == id {
+					return digestOfCanonical(edges)
+				}
+			}
+		}
+		return ""
 	}
+	retain := func(in []coverage.ReviewDecision, point bool) []coverage.ReviewDecision {
+		out := []coverage.ReviewDecision{}
+		for _, d := range in {
+			before, after := edgeKey(old, d.ID, point), edgeKey(new, d.ID, point)
+			if before != "" && before == after {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	review.SourceDecisions = retain(review.SourceDecisions, false)
+	review.PointDecisions = retain(review.PointDecisions, true)
 	review.SetStatus = coverage.StatusPending
 	return review
 }
@@ -1416,7 +1470,7 @@ func decideQARecovery(s *State, a *RegularAsk, d RegularDecision, revision uint6
 // FAIL decisions normalized solely for structural validation avoids counting an
 // incomplete native response as a semantic review. The raw FAIL is never edited.
 func validateFailedQAReview(r *RegularState, mode string, design QADesign, review coverage.ReviewResult) error {
-	failed := false
+	failed := review.SetStatus == coverage.StatusFail
 	normalize := func(in []coverage.ReviewDecision) ([]coverage.ReviewDecision, error) {
 		out := append([]coverage.ReviewDecision{}, in...)
 		for i := range out {
@@ -1449,8 +1503,7 @@ func validateFailedQAReview(r *RegularState, mode string, design QADesign, revie
 	if q := r.Preparation.QA[mode]; q.RetainedReview != nil {
 		mergeQAReview(&review, *q.RetainedReview)
 	}
-	_, err = qaContract(r, mode, design).ValidateReviews([]coverage.ReviewResult{review})
-	return err
+	return qaContract(r, mode, design).ValidateDraftReview([]coverage.ReviewResult{review})
 }
 
 // A current explicit keep decision also applies when confirming an unchanged

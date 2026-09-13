@@ -1,8 +1,6 @@
 package facade
 
 import (
-	"strings"
-
 	"formal-gates/internal/engine/protocol"
 )
 
@@ -17,12 +15,5 @@ func preparationRetryFeedback(run Run, claim protocol.ExecutionClaim, payload ma
 		}
 		payload["previousResultRejection"] = map[string]string{"actionId": e.Result.ActionID, "reason": e.Reason, "status": e.Result.Status, "message": e.Result.Message}
 		break
-	}
-	step := string(claim.Task.Step)
-	if strings.HasSuffix(step, "-design") {
-		mode := strings.TrimSuffix(step, "-design")
-		if q := run.Regular.Preparation.QA[mode]; q != nil && q.DesignGap != "" {
-			payload["previousDesignGap"] = q.DesignGap
-		}
 	}
 }

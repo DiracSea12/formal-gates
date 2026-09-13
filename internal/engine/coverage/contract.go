@@ -535,7 +535,12 @@ func ValidateRequiredSources(required RequiredSources) error {
 
 // Validate validates every source, selected manifest, edge, and alternative
 // verification in deterministic layer order.
-func (c CoverageContract) Validate() error {
+func (c CoverageContract) Validate() error { return c.validate(true) }
+
+// ValidateDraft checks declarations and references without claiming coverage.
+func (c CoverageContract) ValidateDraft() error { return c.validate(false) }
+
+func (c CoverageContract) validate(complete bool) error {
 	if err := ValidateRequiredSources(c.RequiredSources); err != nil {
 		return err
 	}
@@ -559,11 +564,15 @@ func (c CoverageContract) Validate() error {
 	if len(c.Manifests) == 0 {
 		for _, source := range c.RequiredSources.Sources {
 			if source.Applicability == QAApplicability {
-				return invalid(CodeMissingCoverage, "manifests", "QA source is absent from every selected manifest: "+source.SourceID)
+				if complete {
+					return invalid(CodeMissingCoverage, "manifests", "QA source is absent from every selected manifest: "+source.SourceID)
+				}
 			}
 		}
 		if len(selectedSet) != 0 {
-			return invalid(CodeMissingCoverage, "manifests", "selected kind has no manifest")
+			if complete {
+				return invalid(CodeMissingCoverage, "manifests", "selected kind has no manifest")
+			}
 		}
 	}
 
@@ -597,7 +606,9 @@ func (c CoverageContract) Validate() error {
 			return invalid(CodeDuplicateID, path+".sources", "duplicate or empty manifest source ID")
 		}
 		if len(sources) == 0 {
-			return invalid(CodeMissingCoverage, path+".sources", "manifest must record at least one source")
+			if complete {
+				return invalid(CodeMissingCoverage, path+".sources", "manifest must record at least one source")
+			}
 		}
 		for _, sourceID := range sortedKeys(sources) {
 			source, exists := sourceByID[sourceID]
@@ -711,17 +722,23 @@ func (c CoverageContract) Validate() error {
 		}
 		for _, sourceID := range sortedKeys(sources) {
 			if _, ok := hasSource[sourceID]; !ok {
-				return invalid(CodeMissingCoverage, path+".sources", "manifest source has no point/case edge: "+sourceID)
+				if complete {
+					return invalid(CodeMissingCoverage, path+".sources", "manifest source has no point/case edge: "+sourceID)
+				}
 			}
 		}
 		for _, pointID := range sortedPointIDs(pointByID) {
 			if _, ok := hasPoint[pointID]; !ok {
-				return invalid(CodeMissingCoverage, path+".points", "point has no source/case edge: "+pointID)
+				if complete {
+					return invalid(CodeMissingCoverage, path+".points", "point has no source/case edge: "+pointID)
+				}
 			}
 		}
 		for _, caseID := range sortedCaseIDs(caseByID) {
 			if _, ok := hasCase[caseID]; !ok {
-				return invalid(CodeMissingCoverage, path+".cases", "case has no source/point edge: "+caseID)
+				if complete {
+					return invalid(CodeMissingCoverage, path+".cases", "case has no source/point edge: "+caseID)
+				}
 			}
 		}
 	}
@@ -733,13 +750,17 @@ func (c CoverageContract) Validate() error {
 	for _, kindID := range selectedKinds {
 		kind := ReviewKind(kindID)
 		if _, ok := seenKinds[kind]; !ok {
-			return invalid(CodeMissingCoverage, "manifests", "selected kind has no manifest")
+			if complete {
+				return invalid(CodeMissingCoverage, "manifests", "selected kind has no manifest")
+			}
 		}
 	}
 	for _, source := range c.RequiredSources.Sources {
 		if source.Applicability == QAApplicability {
 			if _, ok := coveredQA[source.SourceID]; !ok {
-				return invalid(CodeMissingCoverage, "manifests", "QA source is absent from every selected manifest: "+source.SourceID)
+				if complete {
+					return invalid(CodeMissingCoverage, "manifests", "QA source is absent from every selected manifest: "+source.SourceID)
+				}
 			}
 		}
 	}
@@ -893,7 +914,17 @@ func CanonicalDigest(value any) (string, error) { return canonicalDigest(value) 
 // the approved whitelist.  Reviews must contain exactly one result for every
 // manifest in the contract.
 func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhitelist, error) {
-	if err := c.Validate(); err != nil {
+	return c.validateReviews(reviews, true)
+}
+
+// ValidateDraftReview checks review structure only; it never grants execution approval.
+func (c CoverageContract) ValidateDraftReview(reviews []ReviewResult) error {
+	_, err := c.validateReviews(reviews, false)
+	return err
+}
+
+func (c CoverageContract) validateReviews(reviews []ReviewResult, complete bool) (ApprovedWhitelist, error) {
+	if err := c.validate(complete); err != nil {
 		return ApprovedWhitelist{}, err
 	}
 	if len(reviews) != len(c.Manifests) {
@@ -954,6 +985,9 @@ func (c CoverageContract) ValidateReviews(reviews []ReviewResult) (ApprovedWhite
 	}
 	if len(seenKinds) != len(manifestByKind) {
 		return ApprovedWhitelist{}, invalid(CodeIncompleteReview, "reviews", "a manifest review is missing")
+	}
+	if !complete {
+		return ApprovedWhitelist{}, nil
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]

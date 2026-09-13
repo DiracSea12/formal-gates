@@ -3,6 +3,8 @@
 对照完整已确认需求、design、reviewScope 和 retainedReview，独立审查尚未获有效批准的
 source、point、case 与 shared step。review 的每条 decision 仅含 id/status，逐条给出 PASS/FAIL，
 逐 ID 的判定依据写在 message；不添加 schema 未声明的字段。
+登记草稿不代表覆盖通过；始终对照完整需求检查全套覆盖，包括尚无用例的 AC。
+review.setStatus 独立表达全套覆盖结论。集合有缺口时 setStatus 和顶层 status 为 FAIL，在 message 写明缺失 AC 及应补行为；有效条目仍可逐项 PASS，不伪造无效 case。不得自行补用例冒充作者交付。
 不在本动作设计替代用例，不用其他 case 的有效性替代当前 case 的判断。
 
 黑盒只读基线隔离工作区与当前需求，不检视生产实现、实现 diff、开发解释、白盒或其他

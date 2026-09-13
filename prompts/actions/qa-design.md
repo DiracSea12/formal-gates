@@ -1,13 +1,15 @@
 # QA 设计
 
-**黑盒设计缺口。** 无法完成设计时可返回 FAIL，并在 `message` 和
-`design.coverageJudgment` 精确描述缺失的公开使用契约或覆盖缺口，保留当前
-`design.manifest.binding` 与已完成的场景。设计者不返回 review 对象；这不是产品执行
-FAIL，部分设计不得冻结。只需公开行为及使用方式，不需内部实现；不能因基线尚无新功能
-而判失败，也不能把自己拟定的测试脚本尚不存在算作产品需求缺失。公开 argv 确实未确定时
-列明对应待补项，不虚构接口。`previousResultRejection` 是本动作的既往拒收信息；其中旧版
-“FAIL needs a complete QA review”是错误分类，应遵循这里的设计缺口合同。
-`previousDesignGap` 是本模式上一轮尚未解决的设计缺口。
+交付可执行用例和共享准备的草稿增量，status 为 DRAFT；DRAFT 只表示登记设计，不是覆盖 PASS。
+用例充分性、需求/AC 映射与全套覆盖由独立 QA 审查判断，不由设计者自行返回覆盖 PASS/FAIL。
+读取 previousDesign 中的当前完整用例集、reviewGaps、designGap 及 existingTestEvidence，
+只提交必要增删改；未提到的用例、共享步骤和有效证据由引擎保留。
+新增 caseId 使用本次唯一的局部标签，引用该标签填写 edges、dependencies 和 reuse；引擎分配正式 ID。
+修改已有用例必须引用 previousDesign 的正式 ID；removeCases 和 removeSharedSteps 列明要删除的正式 ID。
+默认 replace=false；仅需明确整体替换时设为 true，并交付新的完整集合，不能靠遗漏条目隐式删除。
+返修必须修改实际用例或准备内容；只列缺失 AC、改说明或重交相同材料不算修复。
+真实读取/执行障碍走原有运行时错误路径，并保留已完成工作；不能因为基线没有新功能就判设计失败。
+previousResultRejection 是当前动作的拒收原因，按原因修正提交。
 为冻结前可达性检查写清每步所需前态、产生后态及取证入口，区分被验收目标与可简化前置。公共操作按当前任务已绑定的材料核对依赖、参数和适用版本；候选与身份来自当前绑定。静态检查只解析，不导入或 source 会启动任务的脚本。状态前置冲突、必要精确接口或取证缺口沿现有增量修订解决，执行者不得自行改判据。
 
 从已确认需求出发，为已选 QA 模式设计用例集。两种模式各自可选、均由独立代理执行，
@@ -70,7 +72,7 @@ fixture、输入、已有前置状态，以及模拟审查结果、授权、生�
 顶层 manifest 只列实际新增、修改、删除的路径；零改动复用时 manifest 为 []，testFiles
 仍列出复用的测试文件。两者不得混用，不为标记测试归属修改已有文件。
 
-设计结果使用当前 schema 的 design（coverageJudgment、manifest、alternatives，白盒另含 testFiles）；manifest 中
+设计结果使用当前 schema 的 design（replace、removeCases、removeSharedSteps、manifest、alternatives，白盒另含 testFiles）；manifest 中
 包含 binding、sources、points、cases、edges、sharedSteps。所选模式合起来须覆盖全部 AC，
 每个已覆盖 AC 的 pointId 为 REVIEWKIND:AC-ID，例如 BLACKBOX:AC-001；case ID 同样带
 REVIEWKIND 前缀，并以 edge 连接需求来源和验收点。每个 case 有独立 oracle。
@@ -113,11 +115,11 @@ QA Review 可选建议由 engine 按 suggestion ID 接受用户处置，不在�
 
 ## 冻结命令与模式执行
 
-Each case must declare command {executable,args,expectedExitCode} as exact argv for the public target or test. executable is only a program name or file path, without shell quoting or arguments: use executable "go" and args ["test","./..."], never executable "go test". dependencies contains only case IDs declared earlier in this manifest, or [] when there are none; never put shared-step IDs or environment prerequisites in dependencies. Use sharedSteps for shared-step IDs; environment availability is not a case dependency. The runtime prepares the candidate copy and captures output; no shell interpolation occurs.
+Each case must declare command {executable,args,expectedExitCode} as exact argv for the public target or test. executable is only a program name or file path, without shell quoting or arguments: use executable "go" and args ["test","./..."], never executable "go test". dependencies contains only case IDs from the retained complete set or earlier in this increment, or [] when there are none; never put shared-step IDs or environment prerequisites in dependencies. Use sharedSteps for shared-step IDs; environment availability is not a case dependency. The runtime prepares the candidate copy and captures output; no shell interpolation occurs.
 
 **blackbox-design：** Do not inspect any development workspace, implementation changes, whitebox work, or developer explanations. This workspace is the original baseline. Return the manifest in JSON without editing project files.
 
-**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test content or test-only fixtures. Tests may live inside production files: preserve all production behavior and shared inputs, list the mixed file in the change manifest, and never list it in design.testFiles. Return only actual changed file paths in the top-level manifest; declare all test-only file paths separately in design.testFiles, including unchanged reused developer tests. Return reuse records for every case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production fixes return to development. The isolated intermediate commit is for independent review, not approval to promote; the reviewer checks all declared testFiles and the complete whitebox diff before final candidate creation.
+**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test content or test-only fixtures. Tests may live inside production files: preserve all production behavior and shared inputs, list the mixed file in the change manifest, and never list it in design.testFiles. Return only actual changed file paths in the top-level manifest; declare all test-only file paths separately in design.testFiles, including unchanged reused developer tests. Return reuse records for each added or changed case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production fixes return to development. The isolated intermediate commit is for independent review, not approval to promote; the reviewer checks all declared testFiles and the complete whitebox diff before final candidate creation.
 
 # 白盒覆盖判断
 

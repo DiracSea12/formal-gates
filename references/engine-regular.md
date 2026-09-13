@@ -572,14 +572,27 @@ manifest 是实际增加/修改/删除的项目相对路径数组，不是 QA co
 | 执行 | 结果字段与要求 |
 | --- | --- |
 | development-worker | status=PASS/FAIL/CONTINUE；validation 为逐 Subtask 检查数组，handoff 为不可从提交恢复的剩余事项，没有则明确写无；PASS 必须完整覆盖 Batch |
-| blackbox-design | status=PASS/FAIL；design 为覆盖设计 |
-| whitebox-design | status=PASS/FAIL；design、reuse；manifest 仅测试所有权修改，生产变化/UNKNOWN 进入返工处置 |
+| blackbox-design | status=DRAFT；design 为可执行用例和共享准备的草稿增量，独立 review 判断覆盖 |
+| whitebox-design | status=DRAFT；实际试跑发现生产缺陷时才返回 FAIL；design、reuse；manifest 仅测试所有权修改，生产变化/UNKNOWN 进入返工处置 |
 | blackbox-review / whitebox-review | status=PASS/FAIL；review 为逐项审查，suggestions 为 P2/P3 可选建议数组 |
 
 validation 每项 `{subtaskId,procedure,observation,result}`，result=PASS/FAIL；procedure
 为实际命令/操作，observation 为实际输出或观察，不能只填写预计会通过。
 
-design 为 `{coverageJudgment,manifest,alternatives}`。coverageJudgment 说明独立覆盖判断。
+design 为 `{replace,removeCases,removeSharedSteps,manifest,alternatives}`。
+设计返回 DRAFT，不代表覆盖 PASS。`design.manifest` 携带本次新增或修改的声明；
+`replace:false` 时引擎合并并保留未提及的用例、共享准备、映射及有效证据。
+新 caseId 是本次局部引用标签，引擎分配正式 ID，并同步 edges、dependencies 与 reuse；
+修改使用当前完整设计中的正式 ID。`removeCases`、`removeSharedSteps` 显式删除条目，
+`replace:true` 明确整体替换；不能以遗漏条目隐式删除。白盒仍显式声明 testFiles，
+未改用例可保留已有试跑证据，新增或修改用例必须实际试跑。
+
+首次草稿及返修均进入独立 review；覆盖缺口由 review 返回 FAIL，草稿本身不冻结。
+返修收到当前完整设计、审查问题和已接纳证据，只补必要增量；没有实质增删改的重复提交被拒收。
+review.setStatus 表示集合覆盖结论；集合缺口可为 FAIL，同时保留有效条目的逐项 PASS。
+完整覆盖和必需审查均通过后才能冻结。原始事件/输出保留，接纳结果保存程序合并后的完整投影；
+恢复与重放沿已有事件和身份，不重新执行已完成项。
+
 白盒 design 另有必填 `testFiles: string[]`：全部测试专用文件及 fixture 的精确项目相对
 路径，包括未改动的已有测试和删除的测试路径；无项目内测试专用文件时显式返回 []。
 缺失该字段的旧结果不接纳。路径不重复、不含目录或 glob；生产或生产共用文件不能列入，
@@ -593,7 +606,7 @@ design 为 `{coverageJudgment,manifest,alternatives}`。coverageJudgment 说明�
 | binding | `{runId,childId,requirementRevision,solutionRevision,reviewKind,routeScope,topologyScope}`；childId 无切片为 `""`，前四项复制 requiredSources.binding；reviewKind=BLACKBOX/WHITEBOX，topologyScope=当前 topology |
 | sources | sourceId 字符串数组 |
 | points | `[{pointId,observableBehavior,oracle}]`；每个正式 AC 使用 `<MODE>:AC-001` 形式 |
-| cases | `[{caseId,mode,oracle,command,dependencies?,sharedSteps,publicEntry?,preconditions?,steps?,testRef?}]`；mode=BLACKBOX/WHITEBOX，与审查种类相同；黑盒提供公开入口/前态/步骤，白盒提供唯一 testRef，caseId 以 mode 加冒号开头 |
+| cases | `[{caseId,mode,oracle,command,dependencies?,sharedSteps,publicEntry?,preconditions?,steps?,testRef?}]`；mode=BLACKBOX/WHITEBOX，与审查种类相同；黑盒提供公开入口/前态/步骤，白盒提供唯一 testRef，新增 caseId 是局部标签；修改使用引擎返回的正式 ID |
 | edges | `[{sourceId,pointId,caseId,reviewKind?}]`；明确来源→验收点→用例关系，reviewKind 省略时取 binding |
 | sharedSteps | `[{id,procedure,command?,independent?,artifacts?}]`，case.sharedSteps 引用这些 ID；不用则 [] |
 | alternatives | `[{sourceId,reason,method,status,evidence}]`，仅明确 NON_QA 来源，status=PASS 且有实际非 QA 验证；普通 AC 不可转入此数组 |
@@ -632,6 +645,11 @@ design 为 `{coverageJudgment,manifest,alternatives}`。coverageJudgment 说明�
 包内辅助脚本按正常安装包位置定位，仅在当前任务适用时使用；不要求外部项目复制这些
 脚本或具有相同目录结构。当前项目的准备与构建仍由已批准命令决定。
 
+下表描述本版本运行包的辅助入口。`<package-root>` 取实际安装回执中的 `targetPath`，
+不指外部项目根目录，也不要求外部项目自带这些脚本。独立黑盒基线可能仍是旧版，
+其中同名脚本的子命令及文件清单不代表本次目标版本；设计按确认需求和本版公开契约，
+执行时使用对应候选的安装包。仅为核对入口，不向黑盒工作区复制本次开发实现。
+
 | 辅助入口 | 依赖、参数与适用边界 |
 | --- | --- |
 | `<package-root>/scripts/phase3-qa-fixture.sh build` | POSIX sh、Go；`--source <engine-prepared-source> --output <binary>`。仅构建 formal-gates 的 Go 夹具，消费引擎已准备的源码及返修输入，不作为任意外部项目的通用构建命令；历史 `prepare` 不代替当前 `qa.prepare`。 |
@@ -649,7 +667,7 @@ result=EXECUTED_PASS/EXECUTED_FAIL；表示白盒独立判断并实际运行测�
 至少一条已声明用例须有 EXECUTED_FAIL 及实际 procedure/observation/comparison。引擎接纳
 失败证据并停在 PRODUCTION_FAILURE，不冻结候选；经既有 development-rework 请求和确认
 回到开发。status=PASS 仍要求全部 EXECUTED_PASS，不得修改有效断言强行通过。
-review 为 `{binding,scope,sourceDecisions,pointDecisions,caseDecisions,sharedStepDecisions}`；
+review 为 `{binding,scope,setStatus,sourceDecisions,pointDecisions,caseDecisions,sharedStepDecisions}`；
 binding 复制对应 design.manifest.binding，scope 复制公开 reviewScope。每个 decisions
 数组为 `[{id,status}]`，status=PASS/FAIL，逐项覆盖当前需要审查的 ID，共享步骤只审一次。
 首次 FULL 覆盖全部；AFFECTED 可复用未变化的已批准项。可选诊断字段
@@ -828,7 +846,7 @@ route_bytes = (json.dumps(route, ensure_ascii=False, indent=2) + '\n').encode()
 binding = dict(r['requiredSources']['binding'], childId='', reviewKind='BLACKBOX',
     routeScope='sha256:' + hashlib.sha256(route_bytes).hexdigest(),
     topologyScope=r['topology'])
-design = {'coverageJudgment': 'AC-001 covers the exact public output', 'alternatives': [],
+design = {'replace': False, 'removeCases': [], 'removeSharedSteps': [], 'alternatives': [],
     'manifest': {'binding': binding, 'sources': [r['requirement']['path']],
       'points': [{'pointId': 'BLACKBOX:AC-001', 'observableBehavior': 'Command stdout',
                   'oracle': 'hello plus newline'}],
@@ -840,13 +858,13 @@ design = {'coverageJudgment': 'AC-001 covers the exact public output', 'alternat
       'edges': [{'sourceId': r['requirement']['path'], 'pointId': 'BLACKBOX:AC-001',
                  'caseId': 'BLACKBOX:C1'}], 'sharedSteps': []}}
 c, src, b = attach_fixture('blackbox-design')
-send('PREPARATION_RESULT', 'preparationResult', dict(b, status='PASS',
+send('PREPARATION_RESULT', 'preparationResult', dict(b, status='DRAFT',
      message='Declared isolated design precondition', manifest=[], design=design))
 settle_fixture(src)
 ```
 
 对应 review 复制 design.manifest.binding、公开 reviewScope，sourceDecisions 给需求文件
-PASS，pointDecisions 给 BLACKBOX:AC-001 PASS，caseDecisions 给 BLACKBOX:C1 PASS，
+PASS，pointDecisions 给 BLACKBOX:AC-001 PASS，caseDecisions 使用登记后 design 中的正式 caseId 给 PASS，
 sharedStepDecisions=[]、suggestions=[]，由 PREPARATION_RESULT 提交并结算 SOURCE。
 FAIL 前态只把实际需要表达的逐项 status 改为 FAIL，同时整体 status=FAIL；不漏填其他
 独立项。完成开发与 QA 两侧屏障后 drive 冻结候选并签发 wave。

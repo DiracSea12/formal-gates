@@ -64,6 +64,7 @@ func TestNativePlatformDevelopmentResumeAndWhiteboxPreflight(t *testing.T) {
 			r.Manifest = []string{"go.mod", "main.go"}
 			r.Validation = []protocol.BatchValidation{{SubtaskID: "S1", Procedure: "go run .", Observation: "exit zero and stdout exactly hello", Result: "PASS"}}
 		case "whitebox-design":
+			r.Status = "DRAFT"
 			current, err := f.Show()
 			if err != nil {
 				t.Fatal(err)

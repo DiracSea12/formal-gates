@@ -83,7 +83,7 @@ func validateAcceptedDesignAction(run Run, mode string, design *protocol.QADesig
 		}
 	}
 	result := x.PreparationResult
-	if action == "" || !ok || !x.Finished || rejected || string(x.Claim.Task.Step) != mode+"-design" || result == nil || (result.Status != "PASS" && result.Status != "FAIL") || !acceptedDesignProjectionMatches(run, result.Design, design) {
+	if action == "" || !ok || !x.Finished || rejected || string(x.Claim.Task.Step) != mode+"-design" || result == nil || (result.Status != "DRAFT" && result.Status != "PASS" && result.Status != "FAIL") || !acceptedDesignProjectionMatches(run, result.Design, design) {
 		return fmt.Errorf("ACTION_SOURCE_BINDING: accepted %s design requires its exact bound completed action", mode)
 	}
 	return nil

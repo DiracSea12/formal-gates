@@ -85,7 +85,7 @@ func mixedWhiteboxDiff(t *testing.T, productionEdit bool) {
 	result := protocol.PreparationResult{
 		ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider,
 		Identity: src.Identity, RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate,
-		Status: "PASS", Manifest: []string{"entry"}, Design: &design,
+		Status: "DRAFT", Manifest: []string{"entry"}, Design: &design,
 		Reuse: []protocol.TestReuse{{CaseID: "WHITEBOX:C1", TestRef: design.Manifest.Cases[0].TestRef,
 			CoverageJudgment: "probe asserts entry stdout hello, empty stderr and exit 0",
 			Procedure:        "python3 entry --test", Observation: "stdout empty; stderr empty; exit 0",

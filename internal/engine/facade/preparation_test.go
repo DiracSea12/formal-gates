@@ -34,13 +34,13 @@ func TestBothQADesignContractsExplainCaseDependencies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, expected := range []string{"dependencies contains only case IDs declared earlier", "[] when there are none", "never put shared-step IDs or environment prerequisites in dependencies"} {
+		for _, expected := range []string{"dependencies contains only case IDs from the retained complete set or earlier in this increment", "[] when there are none", "never put shared-step IDs or environment prerequisites in dependencies"} {
 			if !strings.Contains(prompt, expected) {
 				t.Fatalf("%s authoring contract omits %q", mode, expected)
 			}
 		}
 		schema, err := json.Marshal(preparationSchema(mode+"-design", r, claim))
-		if err != nil || !bytes.Contains(schema, []byte("Only case IDs declared earlier in this manifest")) {
+		if err != nil || !bytes.Contains(schema, []byte("Only case IDs from the retained complete set or earlier in this increment")) {
 			t.Fatalf("%s typed schema omits dependency meaning: %s, %v", mode, schema, err)
 		}
 		if mode == "whitebox" {
@@ -149,6 +149,9 @@ func facadeResult(t *testing.T, f *Facade, x protocol.RegularExecution, result p
 	result.RequirementRevision = x.Claim.RequirementRevision
 	result.Candidate = x.Claim.Candidate
 	result.Status = "PASS"
+	if strings.HasSuffix(string(x.Claim.Task.Step), "-design") {
+		result.Status = "DRAFT"
+	}
 	preparationSubmit(t, f, protocol.RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &result})
 	src.Status = "UNAVAILABLE"
 	src.Reason = "fixture source is unavailable"
@@ -552,7 +555,7 @@ func TestHello(t *testing.T){var out, stderr bytes.Buffer;cmd:=exec.Command("go"
 				t.Fatal("authoring lost its coverage-before-tests prerequisite")
 			}
 			design = facadeDesign(r, "whitebox")
-			v := protocol.PreparationResult{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: src.Identity, RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate, Status: "PASS", Manifest: []string{"main_test.go"}, Design: &design, Reuse: []protocol.TestReuse{{CaseID: "WHITEBOX:C1", TestRef: "main_test.go::TestHello", CoverageJudgment: "asserts exit and both exact output streams", Procedure: "go test ./... -count=1 in authoring workspace", Observation: string(out), Comparison: "subprocess exit 0, stdout hello, empty stderr", Result: "EXECUTED_PASS"}}}
+			v := protocol.PreparationResult{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: src.Identity, RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate, Status: "DRAFT", Manifest: []string{"main_test.go"}, Design: &design, Reuse: []protocol.TestReuse{{CaseID: "WHITEBOX:C1", TestRef: "main_test.go::TestHello", CoverageJudgment: "asserts exit and both exact output streams", Procedure: "go test ./... -count=1 in authoring workspace", Observation: string(out), Comparison: "subprocess exit 0, stdout hello, empty stderr", Result: "EXECUTED_PASS"}}}
 			if failed {
 				v.Status = "FAIL"
 				v.Message = "Production stdout is BAD; the valid independent test requires hello."

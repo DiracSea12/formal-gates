@@ -24,6 +24,8 @@ func (m *nativePromptMaterial) bindFiles(job string, requirement protocol.Requir
 		"previousDevelopmentResult": "previous-development.json",
 		"committedHandoffs":         "dependency-handoffs.json",
 		"existingTestEvidence":      "existing-test-evidence.json",
+		"reviewGaps":                "qa-review.json",
+		"retainedReview":            "qa-review.json",
 	} {
 		if _, already := m.files[name]; already {
 			continue

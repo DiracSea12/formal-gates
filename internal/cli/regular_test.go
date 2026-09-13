@@ -215,6 +215,9 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		result.RequirementRevision = x.Claim.RequirementRevision
 		result.Candidate = x.Claim.Candidate
 		result.Status = "PASS"
+		if strings.HasSuffix(step, "-design") {
+			result.Status = "DRAFT"
+		}
 		submit(protocol.RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &result})
 		stop(source)
 	}
@@ -307,6 +310,8 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		prep(mode+"-review", protocol.PreparationResult{Review: &v})
 	}
 	black := design("blackbox")
+	black.Manifest.Cases[0].CaseID = "local-output"
+	black.Manifest.Edges[0].CaseID = "local-output"
 	prep("blackbox-design", protocol.PreparationResult{Design: &black})
 	review("blackbox")
 	r = call("drive")
