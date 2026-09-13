@@ -324,6 +324,12 @@ func assemblePrompt(instructions string, input any) (string, error) {
 		for key, value := range payload {
 			copy[key] = value
 		}
+		if binding, ok := copy["binding"].(protocol.ExecutionClaim); ok {
+			// The adapter needs the captured environment to launch/resume;
+			// the worker only needs the action and result binding.
+			binding.Context = nil
+			copy["binding"] = binding
+		}
 		if requirement, ok := copy["requirement"].(protocol.RequirementDocument); ok {
 			copy["requirement"] = map[string]any{"path": requirement.Path, "revision": requirement.Revision, "text": requirement.Text, "confirmed": requirement.Confirmed}
 		}

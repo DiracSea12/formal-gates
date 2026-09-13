@@ -63,7 +63,9 @@ func (a *checkpointMaterialTransport) turn(q nativeTurn) (string, error) {
 	if err := json.Unmarshal([]byte(q.Prompt[start+2:]), &input); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(input.Binding, q.Claim) {
+	wantBinding := q.Claim
+	wantBinding.Context = nil
+	if !reflect.DeepEqual(input.Binding, wantBinding) {
 		t.Fatal("message binding differs from dispatched claim")
 	}
 	read := func(path string) []byte {

@@ -213,7 +213,7 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 				}
 				duration, source = intervalDuration(process.CompletedAt, now.Format(time.RFC3339Nano), filepath.Join(job, "process.json")+" native completion to result handling observation")
 			}
-			p.Current = append(p.Current, OperationProgress{ActionID: id, Stage: stage, Status: "RUNNING", DurationMillis: duration, TimeSource: source, Evidence: job})
+			p.Current = append(p.Current, OperationProgress{Candidate: x.Claim.Candidate, ActionID: id, Stage: stage, Status: "RUNNING", DurationMillis: duration, TimeSource: source, Evidence: job})
 		}
 	}
 	// Derive dependency and resource reasons through the existing pending view.

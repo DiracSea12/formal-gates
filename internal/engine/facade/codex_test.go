@@ -414,7 +414,9 @@ func TestMarkdownInstructionsAreBoundAtStartAndRetainedOnReopen(t *testing.T) {
 		if err := json.Unmarshal([]byte(prompt[start+2:]), &input); err != nil {
 			t.Fatal(err)
 		}
-		if input.Binding != claim || input.Requirement.Text != b1Document {
+		wantBinding := claim
+		wantBinding.Context = nil
+		if input.Binding != wantBinding || input.Requirement.Text != b1Document {
 			t.Fatal("Markdown assembly changed the dynamic binding or complete requirement")
 		}
 	}

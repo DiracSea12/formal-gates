@@ -99,13 +99,20 @@ func TestOperationDurationIncludesWaitAndMissingIsUnavailable(t *testing.T) {
 func TestPromptKeepsCompleteTextAndCurrentBindingWithoutDerivedDuplication(t *testing.T) {
 	for _, candidate := range []string{"candidate-a", "candidate-b"} {
 		requirement := protocol.RequirementDocument{Path: "requirement.md", Revision: "revision", Text: "Full REQ and AC text", Confirmed: true, Projection: &requirements.FrozenRequirementProjection{}}
-		input := map[string]any{"requirement": requirement, "binding": protocol.ExecutionClaim{Candidate: candidate, Identity: "same-native"}}
+		claim := protocol.ExecutionClaim{Candidate: candidate, Identity: "same-native", Context: &protocol.HostRuntimeContext{Environment: map[string]string{"PATH": "runtime-only-path"}}}
+		input := map[string]any{"requirement": requirement, "binding": claim}
 		prompt, err := assemblePrompt("instructions", input)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(prompt, requirement.Text) || !strings.Contains(prompt, candidate) || !strings.Contains(prompt, "same-native") {
 			t.Fatalf("context lost: %s", prompt)
+		}
+		if strings.Contains(prompt, "runtime-only-path") || strings.Contains(prompt, `"context"`) {
+			t.Fatalf("runtime environment entered role input: %s", prompt)
+		}
+		if input["binding"] != claim || claim.Context.Environment["PATH"] != "runtime-only-path" {
+			t.Fatal("runtime authority binding mutated")
 		}
 		var parsed map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(prompt, "instructions\n\n")), &parsed); err != nil {
@@ -247,6 +254,11 @@ func TestProgressCoverageLifecycle(t *testing.T) {
 		}
 		if p.Revision != run.Revision || p.NativeCalls != calls || len(p.Messages) != len(operations) {
 			t.Fatalf("unexpected progress: %+v", p)
+		}
+		for _, current := range p.Current {
+			if current.ActionID == action && current.Candidate != run.Executions[action].Claim.Candidate {
+				t.Fatalf("current stage lost execution candidate: %+v", current)
+			}
 		}
 		for i, operation := range operations {
 			m := p.Messages[i]
