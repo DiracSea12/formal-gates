@@ -4,8 +4,7 @@
 
 本回合保留授权材料的普通读取、搜索能力，禁止写入；通过程序提供的路径读取完整材料，
 不探索无关目录或请求辅助模型。材料缺失通过既有程序输入入口处理，并在结构化结果
-中报告具体缺项。不要用普通文本模拟工具调用；按当前 schema 通过原生结构化输出
-通道交回完整 JSON。
+中报告具体缺项。不要用普通文本模拟工具调用。
 
 本动作承接技术方案选择与对齐（Part 2）。从已确认需求和所提方案出发，独立评估该方
 案是否合理、这项工作是否已准备好进入开发。方案层面的判据是：是否有更简单的既有归
@@ -44,10 +43,9 @@ Batch 作为 Subtask。编号、commit 数、文件/行数、阶段/层/角色/�
 借此新增需求。开发快照完成后，应以该边界对照实际 diff；发现越界时按需求、方案或批次
 契约变化处置，不得静默吸收进当前 Batch。
 
-每条 finding 给出正常路径、具体后果、独立 severityRationale 和完整 remedy。
-category 中只有 requirement-conflict、responsibility-dependency、acceptance-entry 可定为
-技术 P0/P1；implementation-detail 最高 P2。存在 P0/P1 才返回 FAIL；只有 P2/P3 或无
-finding 时返回 PASS 并保留建议。措辞润色、假设性加固或等价设计偏好不阻塞。
+每条 finding 另给出完整 remedy。category 对应 requirement-conflict、responsibility-dependency、
+acceptance-entry 或 implementation-detail。存在 P0/P1 才返回 FAIL；只有 P2/P3 或无 finding
+时返回 PASS 并保留建议。措辞润色、假设性加固或等价设计偏好不阻塞。
 
 Batch.dependencies contains only other Batch IDs declared in this plan; use [] when there are no cross-batch dependencies.
 Express the order of Subtasks within a Batch through the ordered subtasks array, not dependencies.

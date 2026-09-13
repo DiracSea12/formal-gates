@@ -51,7 +51,7 @@ func mixedWhiteboxDiff(t *testing.T, productionEdit bool) {
 	}
 	x := facadeExecution(t, f, "whitebox-design")
 	authorPrompt, _, err := preparationPrompt(run, x.Claim)
-	if err != nil || !strings.Contains(authorPrompt, "Tests may live inside production files") {
+	if err != nil || !strings.Contains(authorPrompt, "允许在混合文件内新增、修正测试内容") {
 		t.Fatalf("actual authoring contract still forbids mixed-file tests: %v", err)
 	}
 	// Persist independent coverage before executing the existing test.

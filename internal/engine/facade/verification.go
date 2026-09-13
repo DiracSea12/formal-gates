@@ -71,7 +71,17 @@ func prepareVerificationPrompt(run Run, claim protocol.ExecutionClaim) (nativePr
 	if claim.Task.Step == "repair-worker" {
 		paths = append(paths, "actions/development-worker.md#修复工作者")
 	} else if strings.HasSuffix(string(claim.Task.Step), "-execution") {
-		paths = append(paths, "actions/qa-execution.md")
+		path := "actions/qa-execution.md"
+		if strings.Contains(run.Regular.ActionInstructions[path], "\n# 黑盒执行\n") {
+			section := "黑盒执行"
+			if claim.Task.Step == "whitebox-execution" {
+				section = "白盒执行"
+			}
+			paths = append(paths, path+"#QA 执行", path+"#"+section)
+		} else {
+			// Resume retains the rules captured by the run that issued the action.
+			paths = append(paths, path)
+		}
 	}
 	instructions, err := actionInstructions(run, paths...)
 	if err != nil {

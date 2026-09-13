@@ -352,6 +352,9 @@ func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePro
 	if step == "whitebox-review" && strings.Contains(path, "#") {
 		paths = append(paths, "actions/qa-review.md#白盒改动与最终候选")
 	}
+	if step == "blackbox-review" && strings.Contains(run.Regular.ActionInstructions["actions/qa-review.md"], "\n# 黑盒审查\n") {
+		paths = append(paths, "actions/qa-review.md#黑盒审查")
+	}
 	instructions, err := actionInstructions(run, paths...)
 	if err != nil {
 		return nativePromptMaterial{}, err

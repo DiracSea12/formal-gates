@@ -25,9 +25,8 @@ func TestQA35BHumanWorkflowContractOwners(t *testing.T) {
 	qa35bContains(t, filepath.Join(pkg, "prompts/actions/start-readiness.md"), "实现偏好最高为 P2", "category")
 	qa35bContains(t, filepath.Join(pkg, "prompts/actions/qa-design.md"), "先独立确定应验证的行为、分支和 oracle", "复用真正有效的覆盖")
 	qa35bContains(t, filepath.Join(pkg, "prompts/actions/qa-execution.md"), "AFFECTED", "FULL", "RUNTIME_ERROR")
-	for _, name := range []string{"complexity-gate.md", "implementation-quality-gate.md"} {
-		qa35bContains(t, filepath.Join(pkg, "gates", name), "acceptance-surface")
-	}
+	// Gate assembly supplies this shared contract; do not require duplicated
+	// clauses in each gate-specific document.
 	qa35bContains(t, filepath.Join(pkg, "README.md"), "guard-preview", "冻结", "固定只跑受影响", "P2", "P3", "review-delta")
 	qa35bContains(t, filepath.Join(pkg, "README_EN.md"), "guard-preview", "frozen", "fixed affected QA subset", "P2", "P3", "meaning-changing")
 	qa35bContains(t, filepath.Join(pkg, "AGENTS.md"), "项目代理规则", "prompts/reviewer-base.md", "SKILL.md", "references/formal-flow.md")
@@ -70,8 +69,9 @@ func TestQA35BInitialAndDeltaConfirmationHaveSeparateContracts(t *testing.T) {
 
 func TestQA35BAcceptanceSurfaceHasLocalResponsibilityAndGateRule(t *testing.T) {
 	pkg := qa35bPackage(t)
-	qa35bContract(t, filepath.Join(pkg, "gates/complexity-gate.md"), "建议删除或形成 finding 前先核对附近的 `acceptance-surface` REQ/AC 引用", "不自动证明接口必要，也不要求普通内部接口增加模板注释")
-	qa35bContract(t, filepath.Join(pkg, "gates/implementation-quality-gate.md"), "建议删除或据此形成 finding 前先核对附近的 `acceptance-surface` REQ/AC 引用", "不替代需求、实现或测试，也不要求普通接口批量添加")
+	qa35bContract(t, filepath.Join(pkg, "prompts/reviewer-base.md"),
+		"`acceptance-surface` 需求/AC 引用", "核对已确认需求中的对外验收职责",
+		"不能替代需求、实现或测试", "不得据此要求普通内部接口批量增加模板注释")
 }
 
 func TestQA35BCheckpointDoesNotImplementStage4OrRewriteHistory(t *testing.T) {

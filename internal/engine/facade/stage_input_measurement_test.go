@@ -6,6 +6,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -51,7 +52,7 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 				input.material, err = preparePreparationPrompt(run, current)
 				input.schema = preparationSchema(step, run, current)
 				if err == nil {
-					input.toolDescription, err = actionInstructions(run, "actions/development-worker.md#工具说明")
+					input.toolDescription, err = nativeOperationInstructions(run, step)
 				}
 				if err == nil {
 					err = input.material.bindFiles(job, run.Regular.Requirement)
@@ -68,6 +69,23 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 			if err = input.material.writeFiles(job); err != nil {
 				t.Fatal(err)
 			}
+			for _, marker := range []string{"# 黑盒审查", "# 白盒改动与最终候选", "# 黑盒执行", "# 白盒执行"} {
+				owner := map[string]string{"# 黑盒审查": "blackbox-review", "# 白盒改动与最终候选": "whitebox-review", "# 黑盒执行": "blackbox-execution", "# 白盒执行": "whitebox-execution"}[marker]
+				if strings.Contains(input.prompt, marker) != (step == owner) {
+					t.Fatalf("%s has incorrect role section %s", step, marker)
+				}
+			}
+			qaTools := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker"
+			if strings.Contains(input.toolDescription, "# QA 操作说明") != qaTools {
+				t.Fatalf("%s has unrelated or missing QA tool instructions", step)
+			}
+			if step == "complexity-gate" || step == "implementation-quality-gate" {
+				for _, clause := range []string{"acceptance-surface", "核对已确认需求中的对外验收职责", "不能替代需求、实现或测试"} {
+					if strings.Count(input.prompt, clause) != 1 {
+						t.Fatalf("%s must receive the shared obligation exactly once: %s", step, clause)
+					}
+				}
+			}
 			for name, want := range input.material.files {
 				got, err := os.ReadFile(filepath.Join(job, name))
 				if err != nil || string(got) != string(want) {
@@ -77,6 +95,9 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 			schema, err := json.Marshal(input.schema)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if strings.Contains(string(schema), "uniqueItems") {
+				t.Fatalf("%s schema uses unsupported uniqueItems", step)
 			}
 			tool, err := json.Marshal(nativeOperationTool(step, input.toolDescription))
 			if err != nil {
