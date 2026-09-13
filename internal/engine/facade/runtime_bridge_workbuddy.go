@@ -104,7 +104,7 @@ func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if q.NoTools {
+	if !q.allowsOperation() {
 		config = map[string]any{"mcpServers": map[string]any{}}
 	}
 	configPath := filepath.Join(job, "mcp.json")

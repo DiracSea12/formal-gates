@@ -1,14 +1,17 @@
 package facade
 
-import "strings"
+// Product and technical reviews are independent and prohibit helper calls.
+func nativeAllowsOperation(step string) bool {
+	return step != "product-review" && step != "start-readiness"
+}
 
-// Use the same bound Markdown sections for direct native tools and MCP.
+// All roles use sections from the run-bound Markdown.
 func nativeOperationInstructions(run Run, step string) (string, error) {
+	if !nativeAllowsOperation(step) {
+		return "", nil
+	}
 	paths := []string{"actions/development-worker.md#工具说明"}
-	// Older runs retain their captured tool text; do not require a section that
-	// did not exist when they started or replace it with current package rules.
-	if (step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker") &&
-		strings.Contains(run.Regular.ActionInstructions["actions/development-worker.md"], "\n# QA 操作说明\n") {
+	if step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker" {
 		paths = append(paths, "actions/development-worker.md#QA 操作说明")
 	}
 	return actionInstructions(run, paths...)

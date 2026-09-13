@@ -336,12 +336,11 @@ func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePro
 		path += "#开发工作者"
 	} else if action == "qa-design" {
 		path += "#QA 设计"
-	} else if action == "qa-review" && strings.Contains(run.Regular.ActionInstructions[path], "\n# 白盒改动与最终候选\n") {
+	} else if action == "qa-review" {
 		path += "#QA 审查"
 	}
 	paths := []string{"actions/development-worker.md#通用执行约定", path}
-	// Bound documents from earlier runs keep their original unsplit role text.
-	if action == "qa-design" && strings.Contains(run.Regular.ActionInstructions["actions/qa-design.md"], "\n# 黑盒设计\n") {
+	if action == "qa-design" {
 		section := "黑盒设计"
 		if step == "whitebox-design" {
 			section = "白盒设计"
@@ -349,10 +348,10 @@ func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePro
 		paths = append(paths, "actions/qa-design.md#"+section)
 	}
 
-	if step == "whitebox-review" && strings.Contains(path, "#") {
+	if step == "whitebox-review" {
 		paths = append(paths, "actions/qa-review.md#白盒改动与最终候选")
 	}
-	if step == "blackbox-review" && strings.Contains(run.Regular.ActionInstructions["actions/qa-review.md"], "\n# 黑盒审查\n") {
+	if step == "blackbox-review" {
 		paths = append(paths, "actions/qa-review.md#黑盒审查")
 	}
 	instructions, err := actionInstructions(run, paths...)

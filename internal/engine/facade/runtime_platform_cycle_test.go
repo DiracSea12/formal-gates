@@ -26,15 +26,15 @@ func TestNativePlatformDevelopmentResumeAndWhiteboxPreflight(t *testing.T) {
 	var coverageDirectory, authorDirectory string
 	a.answer = func(q nativeTurn) any {
 		c := q.Claim
-		if q.NoTools {
-			if c.Task.Step != "whitebox-design" {
-				t.Fatal("unexpected preflight")
-			}
+		if q.NoTools && c.Task.Step == "whitebox-design" {
 			coverageTurns++
 			coverageDirectory = q.Job
 			return map[string]any{"coverageJudgment": "local fixture checks exact hello output", "behaviorOracles": []map[string]string{{"behavior": "hello command", "oracle": "exit zero and stdout exactly hello"}}}
 		}
 		if c.Task.Step == "product-review" || c.Task.Step == "start-readiness" {
+			if q.NoTools || q.allowsOperation() || q.ToolDescription != "" {
+				t.Fatal("independent review advertises helper operations")
+			}
 			result := protocol.RawReviewCandidate{ActionID: c.ActionID, AttemptID: c.AttemptID, Provider: c.Provider, RequirementRevision: c.RequirementRevision, Candidate: c.Candidate, Action: string(c.Task.Step), Status: "PASS", Complete: true, Message: "Explicit local protocol fixture, not a semantic review", Findings: []protocol.ReviewFinding{}}
 			if c.Task.Step == "start-readiness" {
 				result.GranularityReview = &protocol.DevelopmentPlan{RequirementRevision: c.RequirementRevision, Rationale: "one local command fixture", Batches: []protocol.DevelopmentBatch{{ID: "B1", Task: "Create hello command", Subtasks: []protocol.DevelopmentSubtask{{ID: "S1", Task: "Create and execute command"}}, Dependencies: []string{}, Interfaces: "stdout", StateBoundary: "local files only", Risks: "wrong output", DefinitionOfDone: "hello command exits successfully", Validation: "go run .", Recovery: "reuse original identity", Handoff: "whitebox after code", ContextCost: "one tiny module"}}}
@@ -45,6 +45,24 @@ func TestNativePlatformDevelopmentResumeAndWhiteboxPreflight(t *testing.T) {
 		switch c.Task.Step {
 		case "development-worker":
 			developmentTurns++
+			if q.Resume {
+				current, err := f.Show()
+				if err != nil {
+					t.Fatal(err)
+				}
+				previous := current.Executions[c.ActionID].PreviousAction
+				original := filepath.Join(f.codexJob(previous), "prompt.txt")
+				if previous == "" || !strings.Contains(q.Prompt, original) {
+					t.Fatal("continuation does not reference preceding actual message")
+				}
+				if _, err := os.ReadFile(original); err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(q.Prompt, "# 开发工作者") {
+					t.Fatal("continuation repeats role instructions")
+				}
+			}
+
 			if developmentTurns == 1 {
 				r.Status = "CONTINUE"
 				r.Message = "Explicit local fixture continuation; S1 remains"

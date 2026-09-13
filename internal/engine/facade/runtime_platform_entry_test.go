@@ -127,6 +127,15 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 					t.Fatalf("reader privilege differs: %s", list)
 				}
 			}
+			if strings.Contains(strings.Join(zcodeRoleTools(tc.step, false), ","), "formal_gates_operation") != nativeAllowsOperation(tc.step) {
+				t.Fatal("workflow tool declaration differs from role policy")
+			}
+			if !nativeAllowsOperation(tc.step) {
+				run := Run{Regular: &protocol.RegularState{ActionInstructions: map[string]string{}}}
+				if description, err := nativeOperationInstructions(run, tc.step); err != nil || description != "" {
+					t.Fatalf("independent review requires unavailable helper instructions: %q %v", description, err)
+				}
+			}
 			if !strings.Contains(strings.Join(zcodeRoleTools(tc.step, true), ","), "Read") || strings.Contains(strings.Join(zcodeRoleTools(tc.step, true), ","), "Write") || !strings.Contains(strings.Join(dshRoleTools(tc.step, true), ","), "Read") {
 				t.Fatal("coverage must retain ordinary read tools without write tools")
 			}

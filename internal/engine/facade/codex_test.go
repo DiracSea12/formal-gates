@@ -474,8 +474,9 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 	}
 	const common = "# 通用执行约定\nCommon instructions.\n"
 	run.Regular.ActionInstructions["actions/development-worker.md"] = common + "\n# 开发工作者\nDevelopment only.\n\n# 修复工作者\nRepair only.\n\n# 工具说明\nTool only.\n"
-	run.Regular.ActionInstructions["actions/qa-design.md"] = "# QA 设计\nDesign only.\n\n# 白盒覆盖判断\nCoverage only.\n"
-	run.Regular.ActionInstructions["actions/qa-review.md"] = "# QA 审查\nReview only.\n\n# 白盒改动与最终候选\nWhitebox only.\n"
+	run.Regular.ActionInstructions["actions/qa-design.md"] = "# QA 设计\nDesign only.\n\n# 黑盒设计\nBlackbox design.\n\n# 白盒设计\nWhitebox design.\n\n# 白盒覆盖判断\nCoverage only.\n"
+	run.Regular.ActionInstructions["actions/qa-review.md"] = "# QA 审查\nReview only.\n\n# 黑盒审查\nBlackbox review.\n\n# 白盒改动与最终候选\nWhitebox only.\n"
+	run.Regular.ActionInstructions["actions/qa-execution.md"] = "# QA 执行\nExecute only.\n\n# 黑盒执行\nBlackbox execution.\n\n# 白盒执行\nWhitebox execution.\n"
 	for _, tc := range []struct{ step, path string }{
 		{"product-review", "actions/product-review.md"}, {"start-readiness", "actions/start-readiness.md"},
 		{"development-worker", "actions/development-worker.md#开发工作者"},
@@ -509,10 +510,16 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 					role = "# 开发工作者\nDevelopment only.\n"
 				case "repair-worker":
 					role = "# 修复工作者\nRepair only.\n"
-				case "blackbox-design", "whitebox-design":
-					role = "# QA 设计\nDesign only.\n"
+				case "blackbox-design":
+					role = "# QA 设计\nDesign only.\n\n\n# 黑盒设计\nBlackbox design.\n"
+				case "whitebox-design":
+					role = "# QA 设计\nDesign only.\n\n\n# 白盒设计\nWhitebox design.\n"
 				case "blackbox-review":
-					role = "# QA 审查\nReview only.\n"
+					role = "# QA 审查\nReview only.\n\n\n# 黑盒审查\nBlackbox review.\n"
+				case "blackbox-execution":
+					role = "# QA 执行\nExecute only.\n\n\n# 黑盒执行\nBlackbox execution.\n"
+				case "whitebox-execution":
+					role = "# QA 执行\nExecute only.\n\n\n# 白盒执行\nWhitebox execution.\n"
 				case "whitebox-review":
 					role = "# QA 审查\nReview only.\n\n\n# 白盒改动与最终候选\nWhitebox only.\n"
 				}

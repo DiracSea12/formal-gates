@@ -88,7 +88,17 @@ func TestZCodeBoundToolsConfigurationAndUsage(t *testing.T) {
 					t.Fatalf("mode = %s, want %s", mode, wantMode)
 				}
 				tools := zcodeRoleTools(step, false)
-				for _, required := range []string{"Read", "Glob", "Grep", "Bash", "formal_gates_operation", "mcp__formal-gates__formal_gates_operation"} {
+				requiredTools := []string{"Read", "Glob", "Grep", "Bash"}
+				if nativeAllowsOperation(step) {
+					requiredTools = append(requiredTools, "formal_gates_operation", "mcp__formal-gates__formal_gates_operation")
+				} else {
+					for _, forbidden := range []string{"formal_gates_operation", "mcp__formal-gates__formal_gates_operation"} {
+						if slices.Contains(tools, forbidden) {
+							t.Fatalf("independent review received tool %s", forbidden)
+						}
+					}
+				}
+				for _, required := range requiredTools {
 					if !slices.Contains(tools, required) {
 						t.Fatalf("missing tool %s: %v", required, tools)
 					}
