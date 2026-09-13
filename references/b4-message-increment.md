@@ -363,3 +363,17 @@ canary 的实际结果保留。全量复验及该测试的 race 复验结果由�
 未变更包复用有效 Go 测试缓存。失败用例的 race `-count=5` 通过（14.473s），构建、
 `go vet ./...`、package validate 及差异检查通过。结合上轮仍有效的其余必要检查，
 B4 本地开发验证完成；本节不声明独立 QA、Seal 或安装接纳完成。
+
+### B5 工具策略的跨平台接纳前核实
+
+在 B5 当前增量运行期间核实，以下两项尚不能认定满足保留正常角色能力、按禁止操作限制的既有要求：
+
+- `runtime_adapter_dsh.go` 的 `dshRoleTools` 仍枚举可用工具，`runtime_config_dsh.go` 与
+  `runtime_tools_dsh.mjs` 继续传递和消费 `allowedTools`。DSH 原生只读 sandbox 已配置，
+  但它不能证明额外的工具白名单已移除；仅修改 WorkBuddy/ZCode 不覆盖这一实现。
+- Codex 的白盒覆盖判断使用只读 sandbox 并保留 shell；WorkBuddy/ZCode 的当前增量仍在
+  coverage 分支禁止整个 Bash，DSH 的 coverage 分支也仅保留枚举读取工具。只读覆盖判断
+  不等于冻结用例执行，不能将后者禁止自由执行测试目标的限制直接扩大到前者。
+
+这是一份主代理源码核实记录，不是独立门审 PASS 或新增产品能力。后续处理仍引用原 B5
+及 REQ-011，保留已有效完成的开发与验证，平台困难实跑按本 run 既有处置延期。
