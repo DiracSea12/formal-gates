@@ -109,7 +109,6 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 			t.Logf("assembled step=%s message=%d schema=%d tool=%d files=%d", step, utf8.RuneCountInString(input.prompt), utf8.RuneCount(schema), utf8.RuneCount(tool), len(input.material.files))
 			if step == "development-worker" {
 				current.Operation, current.Identity = "resume", "same-native-identity"
-				input.material.initialMessage = filepath.Join(job, "prompt.txt")
 				input.material.resumeInstructions, err = actionInstructions(run, "actions/development-worker.md#续做约定")
 				if err != nil {
 					t.Fatal(err)
@@ -118,7 +117,7 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(resumed) >= len(input.prompt) || !strings.Contains(resumed, input.material.initialMessage) || !strings.Contains(resumed, "same-native-identity") {
+				if len(resumed) >= len(input.prompt) || strings.Contains(resumed, "prompt.txt") || !strings.Contains(resumed, "same-native-identity") {
 					t.Fatal("resume lacks compact traceable identity binding")
 				}
 				t.Logf("assembled step=development-resume message=%d schema=%d tool=%d", utf8.RuneCountInString(resumed), utf8.RuneCount(schema), utf8.RuneCount(tool))

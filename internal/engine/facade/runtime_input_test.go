@@ -14,6 +14,32 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
+func TestNativeResumeUsesCurrentMaterialsWithoutMessageIndirection(t *testing.T) {
+	m := nativePromptMaterial{
+		instructions:       "complete role rules",
+		resumeInstructions: "continue the native session",
+		input:              map[string]any{"requirement": map[string]string{"path": "/bound/requirement.md"}},
+	}
+	for _, operation := range []string{"resume", "replace", "spawn"} {
+		claim := protocol.ExecutionClaim{Operation: operation, Identity: "native-session", Candidate: "current-candidate"}
+		prompt, err := m.render(claim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(prompt, "previousMessage") || strings.Contains(prompt, "prompt.txt") || !strings.Contains(prompt, "/bound/requirement.md") || !strings.Contains(prompt, "current-candidate") {
+			t.Fatalf("%s lost direct current material binding: %s", operation, prompt)
+		}
+		if strings.Contains(prompt, "complete role rules") != (operation != "resume") {
+			t.Fatalf("%s selected wrong role rules: %s", operation, prompt)
+		}
+	}
+	// An unbound identity must never inherit rules from a previous native session.
+	prompt, err := m.render(protocol.ExecutionClaim{Operation: "resume"})
+	if err != nil || !strings.Contains(prompt, "complete role rules") {
+		t.Fatalf("unbound resume omitted rules: %s, %v", prompt, err)
+	}
+}
+
 // Build an isolated historical-state fixture through the normal envelope
 // writer. This never edits a real run or backfills its missing instructions.
 func removeFixtureInstructions(t *testing.T, f *Facade, change func(*protocol.RegularState)) {

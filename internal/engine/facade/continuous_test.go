@@ -114,16 +114,31 @@ func TestContinuousUserAskInterruptsTransientWait(t *testing.T) {
 		turns.Add(1)
 		return nil
 	}
-	a.beforeCapture = func() {
+	retryStopped := make(chan struct{})
+	a.beforeCapture = func() error {
 		// Two captures precede the first per-action lock refusal. The next
 		// capture is a retry of that waiter, so the Ask arrives after waiting
 		// is established, without sleep-based ordering or a native model call.
-		if captures.Add(1) == 3 {
+		switch captures.Add(1) {
+		case 3:
 			preparationSubmit(t, f, protocol.RegularEvent{Operation: "REQUEST", Request: &protocol.RegularRequest{Action: "requirement-change", Origin: "USER_INITIATED_CHANGE", Reason: "fixture user requests a change while another native owner holds the action"}})
+		case 4:
+			// Ask can return while this retry is still active. Stop the fixture
+			// before its lock/filesystem work so TempDir cleanup cannot race it.
+			close(retryStopped)
+			return errors.New("fixture retry stopped after user Ask")
 		}
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	defer func() {
+		select {
+		case <-retryStopped:
+		case <-ctx.Done():
+			t.Error("fixture retry did not stop before cleanup")
+		}
+	}()
 	result, err := f.DriveContinuous(ctx)
 	if err != nil || result.Boundary != "ASK" || result.Run.Regular.Ask == nil || result.Run.Executions[x.Claim.ActionID].Claimed || turns.Load() != 0 {
 		t.Fatalf("unanswered Ask did not stop the waiter: boundary=%s captures=%d turns=%d blocked=%v error=%v", result.Boundary, captures.Load(), turns.Load(), result.Blocked, err)

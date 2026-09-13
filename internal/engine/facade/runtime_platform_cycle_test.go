@@ -52,8 +52,8 @@ func TestNativePlatformDevelopmentResumeAndWhiteboxPreflight(t *testing.T) {
 				}
 				previous := current.Executions[c.ActionID].PreviousAction
 				original := filepath.Join(f.codexJob(previous), "prompt.txt")
-				if previous == "" || !strings.Contains(q.Prompt, original) {
-					t.Fatal("continuation does not reference preceding actual message")
+				if previous == "" || strings.Contains(q.Prompt, "prompt.txt") {
+					t.Fatal("continuation must use current materials, not a preceding message as material")
 				}
 				if _, err := os.ReadFile(original); err != nil {
 					t.Fatal(err)

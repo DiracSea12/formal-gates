@@ -30,7 +30,7 @@ type fixtureRuntime struct {
 	id, executableOption, stateOption string
 	serverVersion, adapterVersion     int
 	answer                            func(nativeTurn) any
-	beforeCapture                     func()
+	beforeCapture                     func() error
 }
 
 type fixtureMessage struct {
@@ -211,7 +211,9 @@ func (a *fixtureRuntime) descriptor() *host.Descriptor {
 }
 func (a *fixtureRuntime) capture(c settings.Values) (*protocol.HostRuntimeContext, error) {
 	if a.beforeCapture != nil {
-		a.beforeCapture()
+		if err := a.beforeCapture(); err != nil {
+			return nil, err
+		}
 	}
 	return captureStreamContext(a.id, c.NativeString(a.executableOption), map[string]string{"FIXTURE_STATE_FILE": c.NativeString(a.stateOption)})
 }

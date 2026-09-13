@@ -97,6 +97,6 @@ RepairResult after all required work and checks pass.
 # 续做约定
 
 继续当前 action，沿用本身份已收到的职责、验收边界和结果契约。读取本次绑定材料及续做
-信息，只完成剩余工作，不重复已有效完成项。previousMessage 指向前次实际消息，可按需
-读取完整规则。当前 binding 与材料是本轮输入，不沿用旧消息中的候选或执行范围。
+信息，只完成剩余工作，不重复已有效完成项。当前 binding 与材料是本轮输入，不沿用
+原生会话历史中的候选或执行范围。
 按当前 schema 返回真实增量结果；identity 使用 NATIVE_IDENTITY。

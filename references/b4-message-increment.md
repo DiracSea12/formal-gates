@@ -285,3 +285,81 @@ DECIDE 的原措辞。其余首轮或最终检查结果照实记录，不以首�
 本轮第一次 portable canary 的 Codex bootstrap identity 失败也保留在
 `/tmp/b4-canary-657.json`；固定文件并重建后的 `/tmp/b4-canary-final-657.json` 退出 0，
 未将失败原因推定为已证实的产品问题。
+
+
+### B4 当前增量（绑定基线 c3526fa，attempt 683）
+
+移除续做输入的 `previousMessage`/`prompt.txt` 材料间接引用。原身份续做依赖其原生会话
+已收到的规则，继续携带当前 binding、任务和直接材料路径；新建或替换身份仍收到完整规则。
+固定续做文字仍由已有 development-worker.md 的“续做约定”持有。实际 prompt.txt
+继续作为用户可见的发送记录保留，不作为模型的材料入口。本节取代上文对该引用的保留说明。
+
+生产装配使用相同 TestStageInputAssemblyMeasurement 小型夹具；修改前来自绑定 HEAD 的
+只读 git archive 临时副本，修改后来自本工作区。下表为 Unicode 字符数，不是实际 token、
+费用或真实宿主延迟；随机临时目录导致少量字符浮动。没有为计量启动真实模型任务。
+
+| 阶段 | 消息 前→后 | schema 前→后 | 工具 前→后 |
+| --- | ---: | ---: | ---: |
+| product-review | 3150 → 3150 | 1476 → 1476 | 0 → 0 |
+| start-readiness | 4330 → 4330 | 2852 → 2852 | 0 → 0 |
+| development-worker | 3494 → 3494 | 1536 → 1536 | 983 → 983 |
+| development-resume | 2228 → 2046 | 1536 → 1536 | 983 → 983 |
+| blackbox-design | 6791 → 6791 | 5548 → 5548 | 983 → 983 |
+| whitebox-design | 7846 → 7846 | 6375 → 6375 | 983 → 983 |
+| whitebox-coverage | 1676 → 1676 | 355 → 355 | 0 → 0 |
+| blackbox-review | 6423 → 6423 | 3281 → 3281 | 983 → 983 |
+| whitebox-review | 7767 → 7767 | 3281 → 3281 | 983 → 983 |
+| blackbox-execution | 5826 → 5829 | 2568 → 2568 | 2554 → 2554 |
+| whitebox-execution | 5810 → 5804 | 2568 → 2568 | 2554 → 2554 |
+| complexity-gate | 8367 → 8367 | 2568 → 2568 | 983 → 983 |
+| implementation-quality-gate | 8176 → 8176 | 2568 → 2568 | 983 → 983 |
+| repair-worker | 3836 → 3836 | 2263 → 2263 | 2554 → 2554 |
+
+定向装配、缺失材料 preflight、同身份 transport 续做和替换身份规则选择检查已通过
+（31.804s）。新增回归覆盖 resume 后 render replace/spawn，以及缺失原生身份时保留完整规则；
+transport 夹具验证前次实际消息仍存在，但本次输入不将其作为材料入口。
+
+B4-S2/S3 保留既有进度与 internal/cost 实现；此次未改调度、计量或第二套记录。
+B4-S4 的公共操作索引仍由 references/engine-regular.md 持有，已有可达性审查和安全静态
+检查入口保持不变。全量、race、tagged、vet、构建、package validate、portable canary 与
+安装后无上下文材料检查的最终结果由本 action 的结构化 validation 如实交回。
+临时输出位于 /tmp/b4-*-683.log；这不是正式 QA、真实宿主验收或 Seal 证据。
+
+#### attempt 683 自测交回：FAIL
+
+稳定源码的全量 `go test ./... -timeout 30m` 退出 1，facade 用时 618.919s，唯一失败为
+`TestContinuousUserAskInterruptsTransientWait` 的 TempDir RemoveAll 清理错误：
+`directory not empty`。其他包全部通过，包括 CLI 的安装后无上下文材料消费夹具。
+随后单独 `go test ./internal/engine/facade -run '^TestContinuousUserAskInterruptsTransientWait$'
+-count=5 -v` 五次中四次通过，一次重现同一清理错误，整体退出 1（3.345s）。
+该测试涉及 Ask 立即交回及后台执行；本次没有改其测试或执行生命周期，也没有认定根因。
+尚须解决这一全量验证阻塞并取得完整通过结果，不能以定向通过或重试中的四次通过抵消。
+
+实际通过的检查：构建、package validate、portable canary（52 项全部 PASS）、go vet、
+phase0whitebox validate（84.985s）、race validate（42.374s）和 CLI（183.582s）。
+进度、等待、可达性、静态检查、材料及计量定向检查通过（facade 24.315s，cost 0.669s）。
+Go 检查统一使用 `env -u CODEX_HOME -u CODEX_CLI_PATH GOCACHE=/tmp/formal-gates-b4-cache`。
+日志分别为 `/tmp/b4-all-683.log`、`/tmp/b4-wait-recheck-683.log` 及上述同前缀日志；
+临时日志不保证跨工作区保留，因此本节保存错误、命令、次数和最终状态。
+本 Batch 尚未完成；进度和计量实现保留，不因该清理错误扩展本次产品修改。
+
+#### attempt 687：清理夹具的必要配套修正
+
+沿同一开发身份续做。上轮失败测试在第三次 capture 中提交 Ask；消费器仍可发起下一次
+重试，而 Ask 会立即交回。原夹具释放 action lock 并清理 TempDir 时，这个重试可能仍在
+读取状态或尝试锁路径。此次只修改两个测试文件：已有 beforeCapture 钩子允许返回错误；
+第四次 capture 到达后，夹具发出信号并返回本地错误，从该位置起不再触及文件系统。
+测试在清理前等待该信号，保留首次真实锁拒绝、等待后的 Ask、零原生 turn 和未擅自回答
+用户决定的断言。没有修改生产消费器或改变其及时交回语义。该配套用于解除 B4 必需全量
+验证的可重复清理阻塞，不增加产品功能。
+
+修正后该测试 `-count=20` 通过（13.107s）。新增检查只针对这项并发夹具修正；上轮
+B4-S1/S2/S3、CLI 安装后交接、成本、tagged、race validate/CLI、构建、vet 和 portable
+canary 的实际结果保留。全量复验及该测试的 race 复验结果由当前 action 结构化 validation
+交回。临时日志为 `/tmp/b4-wait-687.log`、`/tmp/b4-wait-race-687.log` 和
+`/tmp/b4-all-687.log`。上轮失败记录保留，不把重试前的全量结果改写为通过。
+
+本次最终结果：`go test ./... -timeout 30m` 退出 0，facade 513.280s、CLI 84.823s；
+未变更包复用有效 Go 测试缓存。失败用例的 race `-count=5` 通过（14.473s），构建、
+`go vet ./...`、package validate 及差异检查通过。结合上轮仍有效的其余必要检查，
+B4 本地开发验证完成；本节不声明独立 QA、Seal 或安装接纳完成。
