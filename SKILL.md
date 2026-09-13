@@ -5,8 +5,8 @@ description: 用户明确要求走正式流程时才进入完整受理流程；�
 
 # Formal Gates
 
-本版本以 engine 的已签发动作、typed Ask 和单一状态为流程权威。首个完整 regular
-支持 Codex、Git、no-split；安装维护仍支持已公布宿主。完整字段和可编码示例唯一持有在
+本版本以 engine 的已签发动作、typed Ask 和单一状态为流程权威。当前 Git、no-split regular
+支持 Codex、WorkBuddy、ZCode 和 DeepSeek Harness，启动前检查所需原生能力；安装维护仍支持已公布宿主。完整字段和可编码示例唯一持有在
 [regular 公开使用合同](references/engine-regular.md)，步骤说明见
 [正式流程](references/formal-flow.md)。旧 workflow 命令、别名、writer 和状态迁移已删除；
 旧 run 只用原始 diagnose，不由本版本续写。历史记录与 Seal 不改写。

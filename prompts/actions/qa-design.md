@@ -8,16 +8,19 @@ FAIL，部分设计不得冻结。只需公开行为及使用方式，不需内�
 列明对应待补项，不虚构接口。`previousResultRejection` 是本动作的既往拒收信息；其中旧版
 “FAIL needs a complete QA review”是错误分类，应遵循这里的设计缺口合同。
 `previousDesignGap` 是本模式上一轮尚未解决的设计缺口。
+为冻结前可达性检查写清每步所需前态、产生后态及取证入口，区分被验收目标与可简化前置。公共操作按当前任务已绑定的材料核对依赖、参数和适用版本；候选与身份来自当前绑定。静态检查只解析，不导入或 source 会启动任务的脚本。状态前置冲突、必要精确接口或取证缺口沿现有增量修订解决，执行者不得自行改判据。
 
 从已确认需求出发，为已选 QA 模式设计用例集。两种模式各自可选、均由独立代理执行，
 时序按模式而定：
 
 - **黑盒**：真实 QA。不关心代码是什么；只从「产品是什么、怎么用、需求是什么」出发，
   通过实际使用产品（文档化的正常使用方式操作产品、覆盖常见操作失误）验证需求是否完成
-  并通过。黑盒设计在 QA 隔离工作区中进行：工作区从基线快照创建、恒等于基线、始终不含
-  本次开发代码，设计阶段无可运行产品可"实际使用产品"——用例以注入到隔离工作区的**当前
-  需求文档**为准（不要以基线产品文档为准，后者仍含旧时序与旧表述）；"实际使用产品"是
-  执行阶段的描述：快照后对主工作区已构建产品执行。
+  并通过。黑盒设计在独立的基线工作区中进行，不包含本次开发变更；基线是否已有可运行
+  产品及公开文档，应按项目实际情况核对。当前确认需求决定本次新增或变更的行为；未变
+  接口沿用已有公开文档。公开文档与当前确认需求冲突时，按当前确认契约判断，并指出
+  具体冲突，不能无条件认定基线文档过时。声称接口或公开说明缺失前，先用正常读取和
+  搜索工具核对当前可读的公开文档；只读取需求或列出文件不能证明文档缺失。设计不读取
+  本次开发实现或白盒材料；正式执行时使用引擎绑定的候选产品，保留实际运行证据。
 - **白盒**：开发后由独立代理读实现设计面向实现结构的测试（单元、系统、集成等职责式定
   义，不限定具体类型），在指定的白盒隔离工作区进行。结构测试充分性依赖实现，白盒设计阶段读
   取实现；开发前无实现可读，白盒设计只在开发后进行。
@@ -26,8 +29,9 @@ FAIL，部分设计不得冻结。只需公开行为及使用方式，不需内�
 该入口；测试准备可构造的边界见下文，被测功能与执行证据仍须在快照后真实运行取得。
 
 白盒用例先独立确定应验证的行为、分支和 oracle，再检查已有测试，复用真正有效的覆盖。
-每条白盒用例以 `<文件路径>::<函数名>` 绑定实际测试（可定位到独立子测试）；CLI 校验引用
-非空且唯一，QA Review 检查输入、断言和对应性，QA Execution 独立运行并保留输出。
+每条白盒用例用 testRef 定位实际测试（可引用独立子测试）；引用可用项目适用的测试标识，
+例如 `<文件路径>::<函数名>`，不规定语言或解析格式。CLI 校验引用非空且唯一，QA Review
+检查输入、断言和对应性，QA Execution 独立运行并保留输出。引擎不从 testRef 推断文件路径。
 **用例集是否充分由 QA 审查（review）判断，不设机械化质量下限**——被选中模式零用例是
 覆盖缺失，由 review 的 set-level 覆盖判定承担。
 
@@ -57,7 +61,16 @@ fixture、输入、已有前置状态，以及模拟审查结果、授权、生�
 黑盒仍必须通过文档化产品入口实际使用产物，不能以既有测试套件为主体或主要证据；
 独立的短驱动脚本可调用公共入口、采集真实输出并断言。
 
-设计结果使用当前 schema 的 design（coverageJudgment、manifest、alternatives）；manifest 中
+白盒 design.testFiles 必须明确列出全部测试专用文件及测试专用 fixture 的项目相对路径，
+包括开发者编写、直接复用而没有改动的测试，以及本轮新增、修改、删除的测试文件。
+只列精确文件路径，不列目录或 glob；生产文件、生产配置及生产共用输入即使被测试引用，
+也不能列入。允许在混合文件内新增、修正测试内容，但不得修改生产行为、生产配置或共用输入；
+混合文件列入实际变更 manifest，不列入 testFiles，仍保留在实现门 diff 中。没有项目内测试专用文件时
+显式返回 []。这是待独立白盒 review 核对的声明，不能单凭作者声明排除文件。
+顶层 manifest 只列实际新增、修改、删除的路径；零改动复用时 manifest 为 []，testFiles
+仍列出复用的测试文件。两者不得混用，不为标记测试归属修改已有文件。
+
+设计结果使用当前 schema 的 design（coverageJudgment、manifest、alternatives，白盒另含 testFiles）；manifest 中
 包含 binding、sources、points、cases、edges、sharedSteps。所选模式合起来须覆盖全部 AC，
 每个已覆盖 AC 的 pointId 为 REVIEWKIND:AC-ID，例如 BLACKBOX:AC-001；case ID 同样带
 REVIEWKIND 前缀，并以 edge 连接需求来源和验收点。每个 case 有独立 oracle。
@@ -104,11 +117,26 @@ Each case must declare command {executable,args,expectedExitCode} as exact argv 
 
 **blackbox-design：** Do not inspect any development workspace, implementation changes, whitebox work, or developer explanations. This workspace is the original baseline. Return the manifest in JSON without editing project files.
 
-**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test-owned test/fixture files. Return all file paths in manifest, and reuse records for every case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production changes and unknown ownership return to development.
+**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test content or test-only fixtures. Tests may live inside production files: preserve all production behavior and shared inputs, list the mixed file in the change manifest, and never list it in design.testFiles. Return only actual changed file paths in the top-level manifest; declare all test-only file paths separately in design.testFiles, including unchanged reused developer tests. Return reuse records for every case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production fixes return to development. The isolated intermediate commit is for independent review, not approval to promote; the reviewer checks all declared testFiles and the complete whitebox diff before final candidate creation.
 
 # 白盒覆盖判断
 
-Independently enumerate required behavior and exact oracles from the supplied
-requirement and production source. Existing tests are intentionally unavailable
-until this judgment is recorded. Do not request tools, inspect test files or bind
-existing tests. Return the coverage JSON only.
+Independently enumerate required behavior and exact oracles from the bound requirement,
+public contracts and candidate implementation. The engine provides the bound ordinary
+candidate workspace for normal reading and searching; source bodies are not inlined or
+copied into a filtered projection. Locate relevant implementation as needed without
+assuming any language or directory layout. Before recording this independent judgment,
+do not inspect existing tests, modify files, run tests or bind existing tests. This is
+role sequencing, not a per-file read whitelist. Return the coverage JSON only. The engine
+records it before the subsequent test inspection and gap-filling invocation.
+
+## 可执行共用准备
+
+sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCode 声明；
+文字 procedure 不自动执行，没有可执行步骤时 command 为 null。artifacts 列出需要复用
+检查的产物相对文件路径。independent 为 true 表示准备本身是独立验收目标，必须实际
+执行；否则相同有效输入共用完成的准备。case.sharedSteps 的引用顺序就是执行顺序。
+普通只使用共用产物的用例选择 workspaceMode=isolated，只分配独立可变目录，
+通过 FORMAL_GATES_QA_SHARED 读取共用源及产物；确实需要独立源码或 Git 工作树的
+构建、安装、返修自测等选择 candidate。工具与依赖缓存沿用运行环境，不复制 HOME。
+构建入口与前提以当前任务已绑定的材料为准。

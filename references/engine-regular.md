@@ -92,6 +92,13 @@ whitebox 和该 run `catalogGates`；custom 至少选择一个 QA 或普通门�
 需求保证；没有 QA 时保持 INACTIVE。技术审的每个 Batch 必须有 ordered subtasks、依赖、
 接口、状态边界、风险、DoD、验证、恢复、交接和上下文成本。
 
+
+宿主由已注册安装目标选择，而不是 workflow start 的任意 provider 参数。Codex、
+WorkBuddy、ZCode 和 DSH 的 regular 执行共用 `workflow drive --continuous`；规范
+provider ID 分别为 codex、workbuddy、zcode、deepseek-harness，安装别名 dsh 不作为
+可改写的 action 身份。安装能力不等于原生完整执行能力；缺少所需能力时启动前拒绝。
+其他已安装但没有完整 runtime adapter 的宿主不能作为 native executor 被静默接受。
+
 ## 原生审查与结果
 
 ```sh
@@ -104,8 +111,9 @@ formal-gates workflow drive --root <project> --run-id <id> --action-id <issued-a
 State/CAS 认领 action、TaskKey、Attempt、provider、需求 revision、candidate、payload
 和前置审查 digest。未知、重复、过期、取消、不匹配及 guard 阻塞均在进程创建前拒绝。
 开发前审查读取完整文档并禁用 shell、MCP、web 和子代理。开发和白盒设计只在登记的
-隔离 workspace 编辑文件；QA Review 只读。所有任务禁用子代理、MCP 与 web，Git
-写入由 adapter 执行。原生 thread.started 绑定身份，进程和输出回执用于中断对账。
+隔离 workspace 编辑文件；QA Review 只读。角色工具权限由公共合同约束，禁用任意
+子代理、外部 MCP 与 web；仅开放当前动作绑定的 engine 工具，Git 写入由 adapter
+执行。各宿主的原生启动观察绑定身份，进程和输出回执用于中断对账。
 
 resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答案直接结算，没有身份/进程
 回执时显示 UNKNOWN。明确已停止且有身份时最多认领一次同 thread 的原生 resume，
@@ -114,8 +122,9 @@ resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答�
 未完成 Batch 的正常返回使用 `CONTINUE`，自测失败使用 `FAIL`，并保留实际剩余项、
 验证与 manifest。后续 attempt 的 `claim.operation` 为 `resume`，必须使用上述
 `--resume` 入口；正常返回、RUNTIME_ERROR、授权增加 attempt 或重新确认改编号的计划
-均不解除原生身份，也不重置已用失败额度。已接纳的 `CONTINUE` 不消耗失败额度；真实派发次数、token 和成本仍完整计入记录。只有 Batch DoD、验证和交接全部完成并提交后，
-下一 Batch 才获得新会话。
+均不自行解除原生身份，也不重置已用额度。显式 executor-handoff 是另一项用户控制：
+它保留同一未完成 TaskKey 的历史并授权新的 executor/provider/identity。完成 Batch 后的
+增量优化则签发新的 TaskKey；两者都不能用旧会话身份冒充新执行者。
 
 开发恢复先核对旧进程已停止及开发工作区 HEAD/工作视图，再实际执行 Codex
 `thread/resume` 查询；查询只加载指定身份，不启动新任务。查询成功时继续原会话。
@@ -129,7 +138,8 @@ Raw candidate 保留原文与 digest。REVIEW_RESULT 不替代 Operator：ADJUDI
 CORRECT 绑定当前 result digest、finding ID、旧/新 decision、旧/新 severity、revision
 和 reason；冲突拒绝，历史保留，新增有效阻塞使依赖失效。
 
-产品/技术 series 各自默认最多三次有效语义审查，每个 TaskKey 默认三次失败 attempt。
+产品/技术 series 各自默认最多三次有效语义审查，当前失败额度为每个 TaskKey 三次。
+开发正常 CONTINUE 保留已用 attempt 但不消耗失败额度；额外授权按该次 typed Ask 计算。
 不完整、无效或 RUNTIME_ERROR 不增加语义次数。OPEN 重用当前任务，明确 review-again
 才请求新审查；达到上限后 authorize-round 只加指定 action 一轮，authorize-retry 只加
 当前 exhausted TaskKey 一次。改变需求、保留 PASS 或 adopt 不重置计数。
@@ -181,6 +191,45 @@ B2 通过此 State/Event/TaskKey/Attempt/CAS 和原生认领边界接入准备�
 原生进程的停止检查。
 
 
+## 用户指定的执行者交接
+
+未完成的开发 Batch 可以通过 `REQUEST executor-handoff` → typed Ask → `DECIDE confirm/cancel`
+明确交给另一执行者。`target` 必须是 show 中当前未完成的 development-worker actionId；
+`handoff.to` 为 `{kind, provider, label}`。`kind=native` 选择实际具备原生运行能力的宿主，
+目标的配置和环境由其 adapter 捕获并校验；能力不足在写入 Ask 前拒绝，确认交接前再次
+校验，拒绝时不签发目标执行动作。`kind=external` 仅表示
+用户明确指定外部开发者（例如由当前对话直接编辑），不是完整自动平台支持，不能用于
+独立产品审、技术审、黑盒/白盒或门审，也不会自动替代不可用的原生平台。
+
+```json
+{"operation":"REQUEST","expectedRevision":0,"request":{"action":"executor-handoff","target":"<当前开发 actionId>","reason":"<用户的明确交接决定>","handoff":{"to":{"kind":"external","provider":"chatgpt","label":"当前对话通过远程工具直接开发"}}}}
+```
+
+示例中的 revision/actionId 必须从本次 show 取得；这只是 REGULAR 事件的正文，仍使用
+原信封提交，不自行编造 TaskKey 或 identity。程序在 Ask 中绑定当前 workspace view、
+旧动作与来源、目标能力和影响；确认前不得领取新执行者，确认时工作区或目标环境漂移则
+拒绝。先停止并结算旧执行者的实际调用及在途操作；交接不伪造失败，不重写旧结果或成本，
+不使产品/技术审、早先 Batch 或独立 QA 默认失效。用户确认只授权这个目标的一次新执行，
+不清零重试历史。旧动作的迟到结果不能覆盖新动作。
+
+原生目标取得新的 provider/session，之后的正常续用仍保持这个新的身份；不要求另一个
+平台复用旧平台的不可移植 session。外部开发目标通过：
+
+```sh
+formal-gates workflow drive --root <root> --run-id <run> --action-id <新签发的 action> --external-executor
+```
+
+领取并获得精确 binding、workspace、完整结构化任务 input 和结果 schema。结构化任务与
+原生模型 prompt 使用同一个材料组装入口，包含当前 Batch、有序子任务和完整已确认需求。
+`previousDevelopmentResult` 提供原动作链上最近的真实开发结果（没有则为空）；交接中被
+替代但未执行的动作不会遮住已有 CONTINUE/FAIL 与交接事项。该历史结果仍保留旧 provider、
+identity 和绑定，新执行者只使用当前 `binding` 提交自己的结果，不复制旧身份冒充续用。
+外部开发者不要求宿主原生模型提示词配置，也不补造旧 run 不存在的提示词绑定。重复读取已领取输入不
+新建动作；Ask、需求暂停或终态期间不继续。外部 identity 由 engine 生成，明确不是已观察
+的原生会话，不提供虚构的 native spawn、transcript 或 token；计量标为 unavailable。
+开发者按正常 PREPARATION_RESULT 返回实际 manifest、逐子任务验证和交接，CLI 校验工作区
+全部变动，再由既有 Git intent/commit/snapshot 推进。开发结果不能替代独立 QA 或 Seal。
+
 ## 开发与 QA 准备（B2）
 
 路线确认后调用 drive 登记并创建 detached Git 工作区。开发从当前精确候选开始，黑盒
@@ -213,12 +262,17 @@ FROZEN；采纳须落实修改并重审。需要修改时 REQUEST `qa-revise` + 
 确认只增加一次 attempt；token-cap continue 沿用同一容量和次数限制。
 
 全部开发完成且黑盒批准后，drive 从精确 DevelopmentSnapshot 创建白盒工作区。
-白盒先判断覆盖、检查并独立运行已有有效测试，再补缺口。当前 Go resolver 复用
-`go list` 的测试发现、测试 embed 与 testdata、生产编译/嵌入输入；unsupported 项目
-返回 UNKNOWN。文件名包含 test 不足以归属；被生产 embed 的 fixture 也不属测试。
-全部增删改及 mode/blob 参与完整 view 比较。仅 TEST_ONLY 才 track/commit，生产变化或
-UNKNOWN 停在 PRODUCTION_CHANGED；`development-rework` 确认后回开发形成新 Dn。
-白盒 Review 读取完整测试候选，统一审查开发者和 QA 测试质量。
+白盒先在绑定的普通候选工作区独立判断覆盖，再检查并独立运行已有有效测试，仅补缺口。
+不要求外部项目具有 Go 模块，也不按语言、文件名筛选或复制生产源码。
+白盒的 manifest 精确核对实际文件改动；中间 commit 仅固定隔离工作区的待审快照，
+有改动时记录 REVIEW_PENDING，不等于最终候选或测试归属 PASS。
+白盒 design.testFiles 单独声明精确测试专用文件路径，包括零改动复用的开发者测试，
+不从自由 testRef 推断路径。白盒 Review 逐项核对声明文件，并读取开发快照到当前白盒
+快照的完整 diff（包括历次修订），按内容与用途确认仅涉及测试或测试专用 fixture，
+未误列或误改生产实现、配置或共用输入，并统一审查测试质量。沿用现有 review 的
+PASS/FAIL 和 message；发现生产文件或归属不明返回 FAIL，修正声明或撤销误改，必要
+生产修复交回开发。声明文件和白盒改动均只在当前快照获得有效独立 review 后用于实现门
+排除，skip/waiver 不能代替该批准。无文件改动的测试复用不推进白盒快照。
 
 所有选定 QA FROZEN 后，drive 把批准设计物化为
 `.gates/results/<run-id>.<mode>-cases.json` 并提交，创建最终候选并在必需验证前 squash。
@@ -230,7 +284,7 @@ VCS 内 artifacts、VCS 外审批/建议/复用证据的 externalArtifacts diges
 
 黑盒有效审查 FAIL 不等待开发完成：前两次连续 FAIL 自动把完整原设计与逐项审查缺口
 交回同模式设计，再派发 fresh 审查；开发中的原会话继续运行。第三次连续 FAIL 或同一
-QA TaskKey 三次运行错误/无效结果后，立即返回 `qa-recovery` typed Ask，包含
+QA TaskKey 默认三次运行错误/无效结果额度耗尽后，立即返回 `qa-recovery` typed Ask，包含
 `qa.mode/task/requirementRevision/candidate/caseSetDigest/resultDigest/consecutiveFailures/retryExhausted`。
 黑盒与白盒连续 FAIL 计数独立；PASS 清除此模式连续失败数，运行错误不算语义失败。
 
@@ -461,8 +515,9 @@ authorize-wave 的 choice 恰为 additional-wave/retry-qa/waiver/change-requirem
 claim 的完整字段为 `actionId/attemptId/task/provider/requirementRevision/candidate/
 payloadDigest/operation`，可含 `prerequisiteDigest/identity/context`。`context` 由宿主 adapter
 在首次认领时捕获，调用者不能另选或替换。后续从 executions 复制整个
-对象，provider 当前为 codex，operation 由签发结果给出（start/resume；原生不可恢复时
-的 replacement 由 adapter 控制）。调用者不编造 TaskKey、payloadDigest 或新身份。
+对象，provider 是已签发的宿主规范 ID，operation 由签发结果给出（spawn/resume；
+原生不可恢复时的 replace 由 adapter 控制，显式外部开发为 external）。调用者不编造
+TaskKey、payloadDigest 或新身份。
 
 source 为 `{actionId,attemptId,provider,identity,status,transcriptPath?,reason?}`。
 status 为 RUNNING/STOPPED/UNAVAILABLE。RUNNING 绑定实际会话身份；STOPPED 提供完整
@@ -525,6 +580,12 @@ validation 每项 `{subtaskId,procedure,observation,result}`，result=PASS/FAIL�
 为实际命令/操作，observation 为实际输出或观察，不能只填写预计会通过。
 
 design 为 `{coverageJudgment,manifest,alternatives}`。coverageJudgment 说明独立覆盖判断。
+白盒 design 另有必填 `testFiles: string[]`：全部测试专用文件及 fixture 的精确项目相对
+路径，包括未改动的已有测试和删除的测试路径；无项目内测试专用文件时显式返回 []。
+缺失该字段的旧结果不接纳。路径不重复、不含目录或 glob；生产或生产共用文件不能列入，
+混合生产与测试的文件保留在实现门 diff。顶层改动 manifest 仍只报告实际文件改动。
+该声明交给现有独立白盒 review 核对，通过后仅将声明的纯测试文件绑定到候选 TestOwned；
+实现门只收到绑定的精确路径排除参数，不接收用例正文或复用执行证据。
 其 manifest 为 `{binding,sources,points,cases,edges,sharedSteps}`：
 
 | 字段 | 完整嵌套结构 |
@@ -534,8 +595,48 @@ design 为 `{coverageJudgment,manifest,alternatives}`。coverageJudgment 说明�
 | points | `[{pointId,observableBehavior,oracle}]`；每个正式 AC 使用 `<MODE>:AC-001` 形式 |
 | cases | `[{caseId,mode,oracle,command,dependencies?,sharedSteps,publicEntry?,preconditions?,steps?,testRef?}]`；mode=BLACKBOX/WHITEBOX，与审查种类相同；黑盒提供公开入口/前态/步骤，白盒提供唯一 testRef，caseId 以 mode 加冒号开头 |
 | edges | `[{sourceId,pointId,caseId,reviewKind?}]`；明确来源→验收点→用例关系，reviewKind 省略时取 binding |
-| sharedSteps | `[{id,procedure}]`，case.sharedSteps 引用这些 ID；不用则 [] |
+| sharedSteps | `[{id,procedure,command?,independent?,artifacts?}]`，case.sharedSteps 引用这些 ID；不用则 [] |
 | alternatives | `[{sourceId,reason,method,status,evidence}]`，仅明确 NON_QA 来源，status=PASS 且有实际非 QA 验证；普通 AC 不可转入此数组 |
+
+共享准备与资源使用：
+
+共享准备绑定声明工具、继承环境、命令和源码输入，不自动探测未声明的 Go 环境。
+声明工具缺失、命令退出码不符或产物缺失仍会失败。Git 准备校验交付清单和索引冲突，
+不把空白格式检查作为通用提交前置；项目需要的格式检查由项目声明。
+
+- `sharedSteps[].command` 使用 `{executable,args,expectedExitCode}`；按用例的
+  `sharedSteps` 引用顺序执行。`procedure` 仅为说明，不作为 shell 命令执行。
+  相同有效输入、命令和工具环境复用完成的准备；准备本身需要独立验收时设置
+  `independent: true`。`artifacts` 声明可复用产物，缺失或变化时不能沿用旧结果。
+- 普通用例使用 `workspaceMode: "isolated"` 分配独立可变目录，经
+  `FORMAL_GATES_QA_SHARED` 读取共享准备产物；需要自己的源码或 Git 操作时使用
+  `candidate`。实际构建命令由当前项目的已批准 manifest 给出，不要求外部项目
+  具有本仓库的脚本、目录或工具链。
+- `qa.run` 使用当前动作绑定、稳定 `requestId` 和空 `prompt`；空 `caseId` 选择
+  已批准的剩余集合，指定 `caseId` 则只运行该用例。并行度由现有 `qaCapacity`
+  配置控制，见 `references/user-configuration.md`。命令完成不代表语义 PASS；
+  依赖用例须等前置用例已接纳的 PASS。
+- `qa.checkpoint` 在同一原生身份内提交增量判断：空 `caseId`，`prompt` 为包含
+  `cases`、精确 `remaining`、`message` 的 JSON，可带 `findings`、`invalidated`。
+  引擎绑定当前动作并原样合并有效旧记录；返修自测的 checkpoint 不替代正式 QA。
+- 命令使用 `FORMAL_GATES_QA_WORK`、`FORMAL_GATES_QA_TMP`、
+  `FORMAL_GATES_QA_OUTPUT` 和 `FORMAL_GATES_QA_CACHE` 访问分配的工作、临时、
+  交付和缓存目录；`TMPDIR`、`TMP`、`TEMP` 指向该临时目录。
+  `FORMAL_GATES_QA_RESOURCE_ROOT`、`FORMAL_GATES_QA_RUN`、
+  `FORMAL_GATES_QA_CANDIDATE`、`FORMAL_GATES_QA_TASK` 提供资源绑定信息。
+  普通准备复用工具缓存，不复制 HOME；独立准备保留其实际缓存隔离语义。
+- 交付文件保存在 `artifacts/qa-output/` 下，操作及标准流证据保存在
+  `artifacts/task-operations/` 下。消费者完成且无待处理操作后释放用例工作目录；
+  终态清理共享资源，保留正式证据和交付。清理重试不重新执行 QA 命令。
+
+包内辅助脚本按正常安装包位置定位，仅在当前任务适用时使用；不要求外部项目复制这些
+脚本或具有相同目录结构。当前项目的准备与构建仍由已批准命令决定。
+
+| 辅助入口 | 依赖、参数与适用边界 |
+| --- | --- |
+| `<package-root>/scripts/phase3-qa-fixture.sh build` | POSIX sh、Go；`--source <engine-prepared-source> --output <binary>`。仅构建 formal-gates 的 Go 夹具，消费引擎已准备的源码及返修输入，不作为任意外部项目的通用构建命令；历史 `prepare` 不代替当前 `qa.prepare`。 |
+| `python3 <package-root>/scripts/qa-static-check.py <paths...>` | Python 3；`.py` 用 AST 解析，`.sh` 用 POSIX `sh -n`。不 import/source 被检查文件；其他语言需使用项目适用的静态检查。语法通过不代表目标执行或 oracle 通过。 |
+| `<package-root>/scripts/phase3-qa-codex-run.py` | 历史 3.5c 固定比较脚本，依赖 Python 3、已安装 Codex，含固定 run/case 与模块级执行；保留作历史证据线索，不作当前通用入口。需执行时先按当前任务操作契约适配，不通过 import 或执行来发现接口。 |
 
 首次 design.binding.routeScope 是当前 route 的规范摘要：按 `kind,qa,gates` 顺序序列化
 对象，UTF-8、两个空格缩进、末尾换行、不把 `<>&` 转义，SHA-256 加 `sha256:` 前缀。
@@ -605,7 +706,7 @@ operation ID、before、bindingDigest、目标及路径必须精确匹配当时�
 - view：`{providerMetadata,identity,tree,entries,digest}`；providerMetadata 是字符串映射，
   entries 为 `[{path,mode,type,object}]`，分别是 Git 路径、模式、对象类型、对象 ID。
 - ownership：`{status,paths,productionDigest,reason?}`；status 按实际归属为
-  TEST_ONLY/PRODUCTION_CHANGED/UNKNOWN，不由文件名猜测。
+  TEST_ONLY/REVIEW_PENDING/PRODUCTION_CHANGED/UNKNOWN，不由文件名猜测。
 - promotion：`{operationId,expectedTargetBase,source,target,ref,status,conflictFree}`；source/
   target 为完整 view，ref 是真实目标 ref，status=COMPLETE 且 conflictFree=true 才可接受，
   路径、blob、mode、metadata、digest 都必须等价。
@@ -995,3 +1096,118 @@ receipt 前”开关，也不保证轮询必然命中。只观察到认领、att
 已落盘而 observed.json 尚无时，内部 model/目标操作的 resume 会依据原 process 完成
 记录、原生日志和输出文件恢复；证据不足维持 UNKNOWN。Git 恢复依据已存在的原生 commit
 trailer、父关系、manifest 与快照，不重复 commit。
+
+### 普通推进入口 `formal-gates workflow drive --root <project> --run-id <run>` 默认持续
+消费该 run 已签发的动作，直到真实 ASK、OPERATOR、终态、明确的外部执行者或阻塞边界。
+不接受调用方自造 TaskKey、重试次数或执行顺序。显式 `--continuous` 保持可用；
+单动作 `--action-id` / `--resume` 是诊断入口，不能与 `--continuous` 混用。
+持续入口复用原生执行器、任务操作、Git adapter、结果 writer 和 cost writer，
+不创建第二套调度或账本。
+独立的已签发动作可并行；下一批次、返修及次数授权仍由 engine 决定。
+
+普通 `drive` 和显式 `--continuous` 返回同一份 JSON：`progress` 复用
+`ProgressSince`，以本次调用开始推进前的 revision 为 `afterRevision`，只在
+`newResults` 中返回本次新接纳的任务操作结果，并报告当前计数、运行项、异常和证据路径；
+`next` 与可选的 `ask` 保留当前精确协议值（包括 Ask 的 ID、token、digest 和预览），
+不输出完整 Regular、Executions、提示词正文或历史 PASS。
+`boundary` 表示执行边界，可选的 `blocked` 给出本次消费阻塞原因，`external`
+列出外部执行者动作 ID。`ASK` 需要完成当前 typed Ask；`OPERATOR` 需要原流程的语义裁决，
+程序不代作审查结论；`EXTERNAL_EXECUTOR` 表示明确授权给外部执行者的工作尚未提交。
+能力缺失或无法确认原生副作用时返回 `BLOCKED`；终态返回 `COMPLETE`。
+完整历史状态通过显式 `workflow show` 或诊断入口读取。
+
+普通 `submit` 接纳 REQUEST、DECIDE、ADJUDICATE、WAVE_ADJUDICATE、CORRECT 或
+DEVELOPER_RECOVERY 控制输入后，自动进入同一消费器，不需主代理另发 drive。
+其单份 JSON 使用同一输出结构，并保留本次精确 `acceptance`；增量游标在接纳事件前取得，
+包含本次接纳及续推期间的新结果。`ask`、`next` 为续推后的当前值。
+worker 的结果、来源和任务操作回执仍只接纳事件，避免在持有消费锁的执行期间递归启动消费者。
+
+协议测试或排障可显式使用 `drive --single-step`（只推进一次）或
+`submit --single-step`（只接纳输入）；正常路线不使用该选项。
+`drive --single-step` 不能与 continuous、单动作或任务操作选项混用。
+
+Ctrl-C / SIGTERM 中断前台消费，输出一份带 `INTERRUPTED`、本次增量和当前控制信息的
+JSON，退出码 130；执行错误同样只输出一份 JSON，错误说明写 stderr，退出码 1。
+已接纳的控制输入仍保留 acceptance。中断不撤销已经授权启动的原生工作。
+
+重启时运行同一条命令。程序复用 run 级互斥及每个 action 的原生进程记录，先观察
+已经发生的调用并采集结果/来源，再执行 engine 允许的原身份续用。已经完成且来源
+已结算的动作不再次启动。中断消费不表示调用未发生，也不授权创建替代会话。
+未能确定调用是否发生的 `UNKNOWN` 保留为明确阻塞，不能猜成一次新的调用。
+
+### 需求变更的用户逐项处置
+
+`requirement-change` 的 Ask 包含 engine 生成的 `impactItems`。每项有 `id`、
+`canKeep` 和已有证据说明。`DECIDE.decision.dispositions` 必须对所有列出的 ID
+逐项填写 `keep`、`rerun` 或 `delegate`；遗漏任何项不能继续。`keep` 要求已有可保留
+证据；`development` 的保留只表示保留未完成工作和工作区，不是开发 PASS。
+已完成批次使用 `batch:<Batch ID>` 单独列出，不能用笼统判断抹掉某批次的用户选择。
+
+例如 decision 中的 `dispositions` 可含 `"batch:B1":"keep"`、
+`"blackbox-review":"delegate"`。这些只是字段示例，实际完整 ID 集合以该次 Ask
+为准，不得据示例省略其他项。用户决定和原 request、decision event、需求、candidate
+及 revision 一起持久化。
+
+随后 `apply-requirement` 只允许主代理为明确 `delegate` 的项提交影响分类。
+用户固定 `keep`/`rerun` 的项可以省略，engine 会填入已确认选择；提交相反的
+`impact` 或 `keep` 会被拒绝。不能在 apply 的 DECIDE 中替换前次逐项决定。
+新需求正文还须通过原有精确文件 revision、影响预览及 typed Ask 确认。
+`meaning=preserved` 不能覆盖用户明确要求的重跑。
+
+保留的已完成 Batch 继续引用原 PASS、commit 和 TaskKey；旧原生 identity、调用、
+attempt 与来源历史不变。重跑是在原工作区上重新完成和验证，不是删除工作区、
+改写旧 PASS 或清零次数。未回答 Ask 时没有自动默认选择。
+
+
+### 已完成批次的增量优化与追加批次
+
+在同一个仍活动的 Git/no-split regular run 内使用 `REQUEST development-increment`
+→ typed Ask → `DECIDE`。这是当前已确认需求内的增量实现；需求含义改变仍先走
+requirement-change/apply-requirement。不能用该入口修改正式需求或已 Seal 的历史。
+
+`request` 的必需字段为 `action`、`target`、`meaning:"preserved"`、`reason` 和
+`increment:{kind,batchId}`。`batchId` 只引用当前已确认 DevelopmentPlan 中的批次；
+任务、子任务、依赖、DoD、验证及交接内容由引擎从该计划读取，不接收调用方的替代正文。
+旧 `batch` 或额外任务字段拒收。已保存的历史请求保留原始证据，不再作为当前输入执行。
+workspaceView 由 facade
+根据当前真实工作区填入并绑定 Ask，调用者不填历史路径、摘要或 TaskKey。
+
+- `kind:"optimize"`：target 与 batchId 为同一个已完成 Batch ID，复用已确认任务定义。
+  先完成当前在途任务、Git 收尾并结算 source，工作区不得有未提交的其他批次工作。
+- `kind:"append"`：batchId 引用已确认计划末尾尚未完成的批次，target 为其前一批次，
+  计划中该批次须已明确依赖 target。原有未完成批次仍按原依赖继续。
+
+新增或修改任务定义先走现有 plan-change 或 requirement-change，返回方案编写、审查与
+确认阶段。不能通过开发增量创建临时 Batch，也不机械复制旧 Batch 冒充新任务。
+内部 DevelopmentPlan 仍保存完整批次定义；开发代理收到引擎展开的当前批次内容及材料路径，
+不是只收到 batchId。返修继续使用已裁决问题和引擎绑定的修复计划，不由主代理重写问题摘要。
+
+Ask 的 `impactItems` 枚举其他已完成批次、已有 QA 设计/审查及验证证据。DECIDE 的
+`dispositions` 对每项明确 keep/rerun/delegate；不得遗漏，也没有“默认重做前置审查”。
+用户固定的 keep/rerun 优先，冲突请求被拒绝；只有 delegate 项可在 Ask 后通过
+`decision.impact` 明确填写 affected/unaffected/unknown，也可沿用 request.impact 中
+已展示的分类。decision.impact 不得修改用户固定的 keep/rerun 或增加未列出的项。
+不能保留的条目有 canKeep=false 和具体原因，
+包括尚不存在的 PASS、绑定旧执行候选而不能用于新实现的验证。需要修改预览或决定时，
+取消原 Ask 后重新 REQUEST，不用旧 token 覆盖决定。
+
+确认后，优化及显式重跑的已完成批次得到新的 TaskKey/action/attempt；追加批次获得自己的
+新 TaskKey。`regular.developmentIncrements` 保存原计划、前后 TaskKey 对应、用户决定、
+workspace view、需求 revision 和影响范围。旧 PASS、commit、attempt、cost 和 source
+原样保留在历史；开发从已有 development snapshot 继续，不把优化伪造为原批次 FAIL。
+未受影响的产品审、技术审和批次不重新执行；QA 的设计保留不等于新候选已执行 PASS。
+保留白盒测试时仅携带测试工件，不能把旧生产代码覆盖到新 development snapshot。
+新增或优化 Batch 的结果仍按正常 PREPARATION_RESULT 提交，由 engine 执行 commit/snapshot，
+然后继续原 QA、验证 wave、修复及 promotion/Seal。
+
+### 用户跳过已有开发 run 的入口复审
+
+已有开发计划和准备工作区的 regular run，可通过 `REQUEST` 的 `action:"skip-review"`、
+`reviewAction:"product-review"` 或 `"start-readiness"` 和明确 reason 请求跳过对应入口复审。
+引擎生成当前需求绑定的 Ask；用户明确要求跳过后才提交对应 `DECIDE confirm`。
+尚在执行或未结算来源的该项审查必须先结束并结算。跳过只取消该项尚未领取的动作，
+不停止独立开发或 QA；原始结果、次数、成本和开发计划保留。
+
+状态显示为 `SKIPPED`，不产生审查 PASS，也不能把跳过当作可继承的 PASS 证据。
+需求发生变化或该项显式重新审查后，旧跳过不继续生效。该入口不跳过 QA、门审，
+也不替代首次建立开发计划；最终报告须如实列出用户跳过的入口审查。

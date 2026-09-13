@@ -8,86 +8,24 @@ import (
 	"formal-gates/internal/host"
 )
 
-type HookDecision struct {
-	Decision                 string `json:"decision"`
-	Reason                   string `json:"reason"`
-	Permission               string `json:"permission"`
-	PermissionDecision       string `json:"permissionDecision"`
-	PermissionDecisionReason string `json:"permissionDecisionReason"`
-}
-
-type CodexHookDecision struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason,omitempty"`
-}
-
-type ZCodeHookDecision struct {
-	HookSpecificOutput ZCodeHookSpecificOutput `json:"hookSpecificOutput"`
-}
-
-type ZCodeHookSpecificOutput struct {
-	HookEventName            string `json:"hookEventName"`
-	PermissionDecision       string `json:"permissionDecision"`
-	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
-}
-
-type hookProtocolAdapter struct {
-	response func(HookDecision) any
-	exitCode func(HookDecision) int
-}
-
-var hookProtocolAdapters = map[host.HookProtocol]hookProtocolAdapter{
-	host.ProtocolGeneric: {
-		response: func(decision HookDecision) any { return decision },
-		exitCode: genericHookExitCode,
-	},
-	host.ProtocolCodex: {
-		response: codexHookResponse,
-		exitCode: func(HookDecision) int { return 0 },
-	},
-	host.ProtocolZCode: {
-		response: zcodeHookResponse,
-		exitCode: genericHookExitCode,
-	},
-}
+// Preserve existing caller types while the platform owns its wire response.
+type HookDecision = host.HookDecision
+type CodexHookDecision = host.CodexHookDecision
+type ZCodeHookDecision = host.ZCodeHookDecision
+type ZCodeHookSpecificOutput = host.ZCodeHookSpecificOutput
 
 func HookResponse(provider string, decision HookDecision) any {
-	return hookProtocolFor(provider).response(decision)
+	if d, err := host.Lookup(provider); err == nil && d.Hook.Response != nil {
+		return d.Hook.Response(decision)
+	}
+	return decision
 }
 
-// HookExitCode returns the process status expected by the selected host. Codex
-// consumes its JSON block decision only when the hook process itself succeeds;
-// ZCode also accepts the documented exit-2 blocking shortcut for denied calls.
 func HookExitCode(provider string, decision HookDecision) int {
-	return hookProtocolFor(provider).exitCode(decision)
-}
-
-func hookProtocolFor(provider string) hookProtocolAdapter {
-	descriptor, err := host.Lookup(provider)
-	if err == nil {
-		if adapter, ok := hookProtocolAdapters[descriptor.Hook.Protocol]; ok {
-			return adapter
-		}
+	if d, err := host.Lookup(provider); err == nil && d.Hook.ExitCode != nil {
+		return d.Hook.ExitCode(decision)
 	}
-	return hookProtocolAdapters[host.ProtocolGeneric]
-}
-
-func codexHookResponse(decision HookDecision) any {
-	if decision.PermissionDecision != "deny" {
-		return nil
-	}
-	return CodexHookDecision{Decision: "block", Reason: decision.Reason}
-}
-
-func zcodeHookResponse(decision HookDecision) any {
-	if decision.PermissionDecision != "deny" {
-		return nil
-	}
-	return ZCodeHookDecision{HookSpecificOutput: ZCodeHookSpecificOutput{
-		HookEventName:            "PreToolUse",
-		PermissionDecision:       "deny",
-		PermissionDecisionReason: decision.Reason,
-	}}
+	return genericHookExitCode(decision)
 }
 
 func genericHookExitCode(decision HookDecision) int {
@@ -116,15 +54,6 @@ func Hook(payload []byte, providers ...string) (HookDecision, error) {
 	command := hookCommand(decoded)
 	if strings.TrimSpace(command) == "" {
 		return allowHook("no command-like field found"), nil
-	}
-	if mentionsLegacyFormalGatesCommand(command) {
-		return HookDecision{
-			Decision:                 "block",
-			Reason:                   "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
-			Permission:               "deny",
-			PermissionDecision:       "deny",
-			PermissionDecisionReason: "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
-		}, nil
 	}
 	if deniesFormalGatePassWithoutBinding(command) {
 		return HookDecision{
@@ -166,18 +95,6 @@ func deniesFormalGatePassWithoutBinding(command string) bool {
 		}
 	}
 	return false
-}
-
-func mentionsLegacyFormalGatesCommand(command string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(command, "\\", "/"))
-	return strings.Contains(normalized, "gate-workflow.ps1") ||
-		strings.Contains(normalized, "gate-state.ps1") ||
-		strings.Contains(normalized, "gate-artifact-validation.ps1") ||
-		strings.Contains(normalized, "gate-proof-receipt.ps1") ||
-		strings.Contains(normalized, "install-formal-gates.ps1") ||
-		strings.Contains(normalized, "run-complexity-gate.ps1") ||
-		strings.Contains(normalized, "capture-subagent-receipt.ps1") ||
-		strings.Contains(normalized, "enforce-gate-sequence.ps1")
 }
 
 func mentionsNativeRecord(tokens []string) bool {
@@ -299,34 +216,73 @@ func hookCommand(value any) string {
 }
 
 func splitCommand(command string) []string {
+	return splitCommandParts(command, false)[0]
+}
+
+// splitCommandParts reuses the hook tokenizer, optionally ending a command at
+// unquoted shell separators. Quoted/escaped separators remain argument data.
+func splitCommandParts(command string, segmented bool) [][]string {
+	var parts [][]string
 	var tokens []string
 	var current strings.Builder
 	var quote rune
-
-	for _, ch := range command {
+	started := false
+	flush := func() {
+		if started {
+			tokens = append(tokens, current.String())
+			current.Reset()
+			started = false
+		}
+	}
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+		if ch == '\\' && quote != '\'' && i+1 < len(runes) {
+			next := runes[i+1]
+			escapable := strings.ContainsRune("\\\"$`\n", next)
+			if quote == 0 {
+				escapable = escapable || strings.ContainsRune("' ;|&()\t", next)
+			}
+			if escapable {
+				i++
+				if next != '\n' {
+					current.WriteRune(next)
+					started = true
+				}
+				continue
+			}
+		}
 		if quote != 0 {
 			if ch == quote {
 				quote = 0
-				continue
+			} else {
+				current.WriteRune(ch)
 			}
-			current.WriteRune(ch)
 			continue
 		}
 		if ch == '\'' || ch == '"' {
 			quote = ch
+			started = true
 			continue
 		}
-		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
-			if current.Len() > 0 {
-				tokens = append(tokens, current.String())
-				current.Reset()
+		// Descriptor merges (& in 2>&1) and redirect operators (&>, >|)
+		// belong to the current command rather than starting another segment.
+		redirectPart := ch == '&' && ((i > 0 && (runes[i-1] == '>' || runes[i-1] == '<')) || (i+1 < len(runes) && runes[i+1] == '>')) || ch == '|' && i > 0 && runes[i-1] == '>'
+		if segmented && !redirectPart && strings.ContainsRune(";|&()\n", ch) {
+			flush()
+			if len(tokens) > 0 {
+				parts = append(parts, tokens)
+				tokens = nil
 			}
 			continue
 		}
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+			flush()
+			continue
+		}
 		current.WriteRune(ch)
+		started = true
 	}
-	if current.Len() > 0 {
-		tokens = append(tokens, current.String())
-	}
-	return tokens
+	flush()
+	return append(parts, tokens)
 }

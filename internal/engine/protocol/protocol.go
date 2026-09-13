@@ -185,8 +185,10 @@ type RecordedDecision struct {
 // EventRecord 是事件台账的单条记录：accepted 事件的 payload digest 与
 // acceptance 快照。幂等重放按 eventID 命中后原样返回 acceptance。
 type EventRecord struct {
-	Digest     string     `json:"digest"`
-	Acceptance Acceptance `json:"acceptance"`
+	// Receipt preserves source evidence as opaque JSON; reading a run does not dispatch historical events.
+	Receipt    json.RawMessage `json:"receipt,omitempty"`
+	Digest     string          `json:"digest"`
+	Acceptance Acceptance      `json:"acceptance"`
 }
 
 // SpawnReceipt 是落账的 SpawnReceipt（draft §9.1 公共字段）。Digest 是

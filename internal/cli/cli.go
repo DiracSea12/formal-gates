@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,6 +20,10 @@ import (
 )
 
 type IO struct {
+	// Context cancels the foreground consumer, not authorized native work.
+	Context context.Context
+	// Tests substitute admission only; execution still uses the real facade.
+	workflowOpen   func(string, string) (*facade.Facade, bool, error)
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 }
@@ -376,6 +381,7 @@ func runWorkflowStart(args []string, streams IO) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	// Facade intake normalizes the installed host once before issuing identities.
 	request := facade.StartRequest{Provider: admission.Host, RunID: *runID, RequirementPath: *req, BaseSnapshot: *base, Route: *route}
 	if *intake != "" {
 		if *req != "" || (*route != "" && *route != "lightweight") {
@@ -397,6 +403,8 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow show", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "run id")
+	summary := fs.Bool("summary", false, "show incremental progress and evidence/message paths")
+	after := fs.Uint64("after-revision", 0, "return operation results accepted after this revision (with --summary)")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
@@ -406,6 +414,13 @@ func runWorkflowShow(args []string, streams IO) (int, error) {
 	if facadeRun, ok, err := openEngineIfPresent(*root, *runID); ok {
 		if err != nil {
 			return 1, err
+		}
+		if *summary {
+			progress, err := facadeRun.ProgressSince(*after)
+			return printValue(streams.Stdout, progress, err)
+		}
+		if *after != 0 {
+			return 1, fmt.Errorf("--after-revision requires --summary")
 		}
 		run, err := facadeRun.Show()
 		return printValue(streams.Stdout, run, err)
@@ -456,66 +471,55 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow drive", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
-	actionID := fs.String("action-id", "", "execute this issued Codex action")
+	actionID := fs.String("action-id", "", "execute this issued native action")
+	external := fs.Bool("external-executor", false, "claim an explicitly user-assigned external developer action")
+	singleStep := fs.Bool("single-step", false, "diagnostic: advance once without consuming native work")
+	continuous := fs.Bool("continuous", false, "consume engine-issued actions until a user, operator, external executor or blocked boundary")
 	operationPath := fs.String("operation-request", "", "typed internal task operation request JSON path")
-	subagent := fs.Bool("subagent", false, "prepare a native desktop subagent handoff for this issued action")
-	subagentSources := fs.String("subagent-sources", "", "JSON list of read-only sources to capture before the native action claim")
-	subagentBind := fs.String("subagent-bind", "", "bind the observed native subagent identity")
-	subagentCollect := fs.Bool("subagent-collect", false, "collect the completed result from the bound native transcript")
-	subagentOperation := fs.String("subagent-operation", "", "native subagent task-operation input JSON path")
+	nativeOperationPath := fs.String("operation-native", "", "bound native tool request JSON path")
+	mcp := fs.Bool("operation-mcp", false, "serve bound task operations over MCP stdio")
+	nativeIdentity := fs.String("native-identity", "", "native session identity, verified before task operation execution")
 	resume := fs.Bool("resume", false, "resume this action through the bound native session")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	nativeModes := 0
-	if *subagentSources != "" && !*subagent {
-		return 1, fmt.Errorf("--subagent-sources requires --subagent")
+	if *singleStep && (*continuous || *actionID != "" || *external || *resume || *operationPath != "" || *nativeOperationPath != "" || *mcp || *nativeIdentity != "") {
+		return 1, fmt.Errorf("--single-step cannot combine with continuous, single action or task operation")
 	}
-	for _, enabled := range []bool{*subagent, *subagentBind != "", *subagentCollect, *subagentOperation != ""} {
-		if enabled {
-			nativeModes++
-		}
+	if *continuous && (*actionID != "" || *external || *resume || *operationPath != "" || *nativeOperationPath != "" || *mcp || *nativeIdentity != "") {
+		return 1, fmt.Errorf("--continuous cannot combine with a single action or task operation")
 	}
-	if nativeModes > 1 || (nativeModes > 0 && (*actionID == "" || *operationPath != "")) {
-		return 1, fmt.Errorf("one subagent operation requires --action-id and cannot combine with --operation-request")
+	if *mcp && (*actionID == "" || *nativeIdentity == "" || *operationPath != "" || *nativeOperationPath != "" || *resume) {
+		return 1, fmt.Errorf("--operation-mcp requires --action-id and --native-identity; cannot combine with --operation-request or --resume")
 	}
-	if *resume && (*subagentBind != "" || *subagentCollect) {
-		return 1, fmt.Errorf("--resume is only for dispatch continuation or task-operation reconciliation")
+	if !*mcp && *nativeOperationPath == "" && *nativeIdentity != "" {
+		return 1, fmt.Errorf("--native-identity requires --operation-mcp or --operation-native")
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	if *nativeOperationPath != "" && (*mcp || *actionID == "" || *nativeIdentity == "" || *operationPath != "" || *resume) {
+		return 1, fmt.Errorf("--operation-native requires --action-id and --native-identity; cannot combine with --operation-mcp, --operation-request or --resume")
+	}
+	if *external && (*actionID == "" || *resume || *operationPath != "" || *mcp || *nativeOperationPath != "" || *nativeIdentity != "") {
+		return 1, fmt.Errorf("--external-executor requires only --action-id and cannot combine with native operations")
+	}
+	f, ok, err := streams.openWorkflow(*root, *runID)
 	if !ok {
 		return 1, fmt.Errorf("workflow drive is supported for candidate engine runs only")
 	}
 	if err != nil {
 		return 1, err
 	}
-	if *subagent {
-		run, err := f.PrepareSubagent(*actionID, os.Getenv("CODEX_THREAD_ID"), *resume, *subagentSources)
-		return printValue(streams.Stdout, run, err)
-	}
-	if *subagentBind != "" {
-		run, err := f.BindSubagent(*actionID, *subagentBind)
-		return printValue(streams.Stdout, run, err)
-	}
-	if *subagentCollect {
-		run, err := f.CollectSubagent(*actionID)
-		return printValue(streams.Stdout, run, err)
-	}
-	if *subagentOperation != "" {
-		var q struct {
-			RequestID string `json:"requestId"`
-			Kind      string `json:"kind"`
-			CaseID    string `json:"caseId"`
-			Prompt    string `json:"prompt"`
+	if *mcp {
+		if err := f.ServeNativeOperationMCP(*actionID, *nativeIdentity, streams.Stdin, streams.Stdout); err != nil {
+			return 1, err
 		}
-		data, err := os.ReadFile(*subagentOperation)
+		return 0, nil
+	}
+	if *nativeOperationPath != "" {
+		data, err := os.ReadFile(*nativeOperationPath)
 		if err != nil {
 			return 1, err
 		}
-		if err = json.Unmarshal(data, &q); err != nil {
-			return 1, err
-		}
-		result, err := f.ExecuteSubagentOperation(*actionID, os.Getenv("CODEX_THREAD_ID"), q.RequestID, q.Kind, q.CaseID, q.Prompt, *resume)
+		result, err := f.RunNativeOperation(*actionID, *nativeIdentity, data)
 		return printValue(streams.Stdout, result, err)
 	}
 	if *operationPath != "" {
@@ -530,25 +534,41 @@ func runWorkflowDrive(args []string, streams IO) (int, error) {
 		if err = json.Unmarshal(data, &q); err != nil {
 			return 1, err
 		}
-		result, err := f.ExecuteTaskOperation(q, *resume)
+		result, err := f.RunTaskOperation(q, *resume)
 		return printValue(streams.Stdout, result, err)
+	}
+	if *external {
+		input, err := f.PrepareExternalDeveloper(*actionID)
+		return printValue(streams.Stdout, input, err)
 	}
 	if *actionID != "" {
 		run, err := f.ExecuteNative(*actionID, *resume)
 		return printValue(streams.Stdout, run, err)
 	}
-	run, err := f.Drive()
-	return printValue(streams.Stdout, run, err)
+	if *resume {
+		return 1, fmt.Errorf("--resume requires --action-id or --operation-request")
+	}
+	if *singleStep {
+		run, err := f.Drive()
+		return printValue(streams.Stdout, run, err)
+	}
+	before, err := f.Show()
+	if err != nil {
+		return 1, err
+	}
+	result, err := consumeWorkflow(streams, f, before.Revision)
+	return printWorkflowConsumption(streams, result, err)
 }
 
 func runWorkflowSubmit(args []string, streams IO) (int, error) {
 	fs := newFlagSet("workflow submit", streams)
 	root := fs.String("root", ".", "repository root")
 	runID := fs.String("run-id", "", "engine run id")
+	singleStep := fs.Bool("single-step", false, "diagnostic: accept the event without consuming subsequent work")
 	if code, err, done := parseFlagSet(fs, args, streams.Stdout); done {
 		return code, err
 	}
-	f, ok, err := openEngineIfPresent(*root, *runID)
+	f, ok, err := streams.openWorkflow(*root, *runID)
 	if !ok {
 		return 1, fmt.Errorf("workflow submit is supported for candidate engine runs only")
 	}
@@ -556,12 +576,28 @@ func runWorkflowSubmit(args []string, streams IO) (int, error) {
 		return 1, err
 	}
 	var event protocol.Event
-	if err := json.NewDecoder(streams.Stdin).Decode(&event); err != nil {
+	decoder := json.NewDecoder(streams.Stdin)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&event); err != nil {
 		return 1, fmt.Errorf("workflow submit requires a typed event JSON object on stdin: %w", err)
+	}
+	var afterRevision uint64
+	control := !*singleStep && workflowControlEvent(event)
+	if control {
+		before, err := f.Show()
+		if err != nil {
+			return 1, err
+		}
+		afterRevision = before.Revision
 	}
 	acceptance, run, err := f.Submit(event)
 	if err != nil {
 		return 1, err
+	}
+	if control {
+		result, driveErr := consumeWorkflow(streams, f, afterRevision)
+		result.Acceptance = &acceptance
+		return printWorkflowConsumption(streams, result, driveErr)
 	}
 	return printJSON(streams.Stdout, map[string]any{"acceptance": acceptance, "next": run.Next, "run": run})
 }

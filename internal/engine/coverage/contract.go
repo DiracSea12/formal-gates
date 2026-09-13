@@ -153,6 +153,7 @@ type Command struct {
 }
 
 type AcceptanceCase struct {
+	WorkspaceMode string   `json:"workspaceMode,omitempty"`
 	Command       *Command `json:"command,omitempty"`
 	Dependencies  []string `json:"dependencies,omitempty"`
 	SharedSteps   []string `json:"sharedSteps,omitempty"`
@@ -185,8 +186,11 @@ func executionEdgeKey(kind ReviewKind, sourceID, pointID, caseID string) string 
 // independently reviewed and executed.
 // SharedStep holds reusable preparation/operations; cases still own their oracle.
 type SharedStep struct {
-	ID        string `json:"id"`
-	Procedure string `json:"procedure"`
+	Artifacts   []string `json:"artifacts,omitempty"`
+	Command     *Command `json:"command,omitempty"`
+	Independent bool     `json:"independent,omitempty"`
+	ID          string   `json:"id"`
+	Procedure   string   `json:"procedure"`
 }
 
 type AcceptanceManifest struct {
@@ -629,11 +633,17 @@ func (c CoverageContract) Validate() error {
 			if sharedIDs[step.ID] {
 				return invalid(CodeDuplicateID, path+".sharedSteps", "duplicate shared step")
 			}
+			if step.Command != nil && strings.TrimSpace(step.Command.Executable) == "" {
+				return invalid(CodeInvalidCaseBinding, path+".sharedSteps", "executable preparation requires a program")
+			}
 			sharedIDs[step.ID] = true
 		}
 		caseByID := make(map[string]AcceptanceCase, len(manifest.Cases))
 		for ci, qaCase := range manifest.Cases {
 			cpath := fmt.Sprintf("%s.cases[%d]", path, ci)
+			if qaCase.WorkspaceMode != "" && qaCase.WorkspaceMode != "candidate" && qaCase.WorkspaceMode != "isolated" {
+				return invalid(CodeInvalidCaseBinding, cpath, "workspaceMode must be candidate or isolated")
+			}
 			for _, id := range qaCase.SharedSteps {
 				if !sharedIDs[id] {
 					return invalid(CodeUnknownID, cpath+".sharedSteps", "unknown shared step")

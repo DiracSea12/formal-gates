@@ -53,6 +53,9 @@ func TestRegularInstalledFullNativeFailRepairToSeal(t *testing.T) {
 		}
 	}()
 	invoke := func(sub string, tail ...string) facade.Run {
+		if sub == "drive" && len(tail) == 0 {
+			tail = append(tail, "--single-step")
+		}
 		args := append([]string{"workflow", sub, "--root", root, "--run-id", id}, tail...)
 		out := runInstalledCLI(t, binary, root, nativeEnv, "", args...)
 		var v facade.Run
@@ -70,7 +73,7 @@ func TestRegularInstalledFullNativeFailRepairToSeal(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := json.Marshal(e)
-		out := runInstalledCLI(t, binary, root, nativeEnv, string(b), "workflow", "submit", "--root", root, "--run-id", id)
+		out := runInstalledCLI(t, binary, root, nativeEnv, string(b), "workflow", "submit", "--single-step", "--root", root, "--run-id", id)
 		var response struct {
 			Run facade.Run `json:"run"`
 		}
@@ -259,13 +262,13 @@ func TestRegularInstalledFullNativeFailRepairToSeal(t *testing.T) {
 	t.Fatalf("full native canary did not converge: %+v", r.Next)
 }
 
-// The canary grants no extra attempts. Each initial upstream TaskKey has the
-// engine's ordinary three-attempt limit; only already-issued, unclaimed actions
-// may run. A rejected answer is evidence, not a current review candidate.
+// The canary grants no extra attempts and has no independent retry budget.
+// Only engine-issued, unclaimed actions may run; an engine Ask stops consumption.
+// A rejected answer remains evidence, not a current review candidate.
 func nativeCanaryReview(step string, read func() facade.Run, execute func(protocol.RegularExecution)) (protocol.RawReviewCandidate, error) {
 	seen := map[string]bool{}
 	task := ""
-	for calls := 0; calls <= 3; calls++ {
+	for {
 		r := read()
 		if r.Regular.Ask != nil || r.Next.Kind == decision.KindAsk {
 			return protocol.RawReviewCandidate{}, fmt.Errorf("native upstream needs additional user choice: ask=%+v next=%+v", r.Regular.Ask, r.Next)
@@ -278,9 +281,6 @@ func nativeCanaryReview(step string, read func() facade.Run, execute func(protoc
 				}
 				return raw, nil
 			}
-		}
-		if calls == 3 {
-			break
 		}
 		var pending []protocol.RegularExecution
 		for _, x := range r.Executions {
@@ -299,7 +299,6 @@ func nativeCanaryReview(step string, read func() facade.Run, execute func(protoc
 		task = x.Claim.Task.String()
 		execute(x)
 	}
-	return protocol.RawReviewCandidate{}, fmt.Errorf("native upstream finite attempts ended without an accepted candidate: %s", step)
 }
 
 func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
@@ -312,6 +311,9 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 			cliGit(t, root, "add", "requirements.md")
 			cliGit(t, root, "commit", "-m", "bounded retry fixture")
 			call := func(sub string, extra ...string) facade.Run {
+				if sub == "drive" && len(extra) == 0 {
+					extra = append(extra, "--single-step")
+				}
 				out := runInstalledCLI(t, binary, root, nil, "", append([]string{"workflow", sub, "--root", root, "--run-id", "retry-fixture"}, extra...)...)
 				var r facade.Run
 				if err := json.Unmarshal([]byte(out), &r); err != nil {
@@ -325,7 +327,7 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 				v.ExpectedRevision = r.Revision
 				e, _ := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("retry-fixture-%d", r.Revision)), v)
 				data, _ := json.Marshal(e)
-				out := runInstalledCLI(t, binary, root, nil, string(data), "workflow", "submit", "--root", root, "--run-id", "retry-fixture")
+				out := runInstalledCLI(t, binary, root, nil, string(data), "workflow", "submit", "--single-step", "--root", root, "--run-id", "retry-fixture")
 				var reply struct {
 					Run facade.Run `json:"run"`
 				}
@@ -373,7 +375,7 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 					t.Fatalf("retry: calls=%d answer=%+v error=%v", calls, answer, err)
 				}
 			case "all-invalid":
-				if err == nil || calls != 3 || r.Next.Kind != decision.KindAsk {
+				if err == nil || calls != 3 || len(r.Regular.RejectedResults) != 3 || r.Next.Kind != decision.KindAsk {
 					t.Fatalf("finite Ask: calls=%d next=%+v error=%v", calls, r.Next, err)
 				}
 			case "valid-finding":

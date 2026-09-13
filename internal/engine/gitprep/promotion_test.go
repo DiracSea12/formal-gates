@@ -8,12 +8,23 @@ import (
 )
 
 func TestPromotionPreservesConfirmedDocumentBytesAcrossCheckoutFilters(t *testing.T) {
+	for _, name := range []string{"requirements.md", "需求 说明.md"} {
+		t.Run(name, func(t *testing.T) {
+			promotionPreservesConfirmedDocument(t, name)
+		})
+	}
+}
+
+func promotionPreservesConfirmedDocument(t *testing.T, name string) {
 	root := repository(t)
+	if _, err := Git(root, "config", "core.quotepath", "true"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Git(root, "config", "core.autocrlf", "true"); err != nil {
 		t.Fatal(err)
 	}
-	write(t, root, "requirements.md", "original requirement\n")
-	if _, err := Git(root, "add", "requirements.md"); err != nil {
+	write(t, root, name, "original requirement\n")
+	if _, err := Git(root, "add", name); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Git(root, "commit", "-qm", "requirement baseline"); err != nil {
@@ -25,17 +36,17 @@ func TestPromotionPreservesConfirmedDocumentBytesAcrossCheckoutFilters(t *testin
 		t.Fatal(err)
 	}
 	want := []byte("confirmed requirement\nwith another line\n")
-	write(t, workspace, "requirements.md", string(want))
-	commit, err := Commit(workspace, base, "confirmed requirement", []string{"requirements.md"})
+	write(t, workspace, name, string(want))
+	commit, err := Commit(workspace, base, "confirmed requirement", []string{name})
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(t, root, "requirements.md", string(want))
+	write(t, root, name, string(want))
 	for _, operation := range []string{"promote", "replay"} {
 		if _, err := Promote(root, commit.After, base, operation); err != nil {
 			t.Fatal(err)
 		}
-		got, err := os.ReadFile(filepath.Join(root, "requirements.md"))
+		got, err := os.ReadFile(filepath.Join(root, name))
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("confirmed bytes changed after %s: %q %v", operation, got, err)
 		}

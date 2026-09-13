@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	"formal-gates/internal/host"
@@ -51,33 +50,16 @@ type HookDefinition struct {
 	Timeout bool
 }
 
-// adapterFactories is the lifecycle capability registry. Keeping factories
-// here (rather than switching on provider IDs in the call path) means a new
-// host only registers its payload adapter once; event names and requiredness
-// still come from internal/host's descriptor registry.
-var adapterFactories = map[string]func() providerAdapter{
-	ProviderClaude:   claudeAdapter,
-	ProviderCodex:    codexAdapter,
-	ProviderCursor:   cursorAdapter,
-	ProviderDeepSeek: deepseekAdapter,
-	ProviderZCode:    zcodeAdapter,
-	ProviderDefault:  defaultAdapter,
-}
-
 type registeredAdapter struct {
 	descriptor host.Descriptor
 	adapter    providerAdapter
 }
 
 func installedAdapters() []registeredAdapter {
-	result := make([]registeredAdapter, 0, len(adapterFactories))
+	result := []registeredAdapter{}
 	for _, descriptor := range host.All() {
-		if !descriptor.Installable {
-			continue
-		}
-		factory, ok := adapterFactories[descriptor.ID]
-		if ok {
-			result = append(result, registeredAdapter{descriptor: descriptor, adapter: factory()})
+		if descriptor.Installable && descriptor.Lifecycle != nil {
+			result = append(result, registeredAdapter{descriptor, descriptorAdapter(descriptor)})
 		}
 	}
 	return result
@@ -102,21 +84,19 @@ func ProviderEnvironmentKeys() []string {
 
 func adapterFor(provider string) (providerAdapter, error) {
 	descriptor, err := host.Lookup(provider)
-	if err != nil {
+	if err != nil || descriptor.Lifecycle == nil {
 		return providerAdapter{}, fmt.Errorf("unsupported lifecycle provider %q", provider)
 	}
-	factory, ok := adapterFactories[descriptor.ID]
-	if !ok {
-		return providerAdapter{}, fmt.Errorf("unsupported lifecycle provider %q", provider)
-	}
-	adapter := factory()
-	// The finite registry owns event names and required/lenient semantics. The
-	// adapter constructors only own payload-specific normalization and identity.
-	adapter.required = descriptor.LifecycleRequired
-	if len(descriptor.LifecycleEvents) > 0 {
-		adapter.hookEvents = append([]string(nil), descriptor.LifecycleEvents...)
-	}
-	return adapter, nil
+	return descriptorAdapter(descriptor), nil
+}
+
+func descriptorAdapter(d host.Descriptor) providerAdapter {
+	a := d.Lifecycle
+	return providerAdapter{name: d.ID, required: d.LifecycleRequired,
+		hookEvents: d.LifecycleEvents, executableMatches: a.ExecutableMatches,
+		agentPrefixes: a.AgentPrefixes, environmentKeys: a.EnvironmentKeys,
+		normalizeEvent: a.NormalizeEvent, identity: a.Identity, correlation: a.Correlation,
+		projectRoots: a.ProjectRoots, transcriptPath: a.TranscriptPath, reason: a.Reason}
 }
 
 func HookDefinitions(provider string) ([]HookDefinition, error) {
@@ -148,20 +128,15 @@ func currentProvider() (string, error) {
 		return "", err
 	}
 	normalized := normalizeProviderExecutablePath(path)
-	// ZCode currently ignores project-level hook configuration. A project-local
-	// skill therefore has no active lifecycle bridge and remains lenient, just
-	// like the existing project-local DSH install.
-	if isNormalizedProjectZCodeInstall(normalized) {
-		return ProviderDefault, nil
+	// A project install without native hooks stays lenient. Each platform
+	// declares its path shape; detection never adds a platform-specific branch.
+	for _, d := range host.All() {
+		if a := d.Lifecycle; a != nil && a.ProjectWithoutHooks != nil && a.ProjectWithoutHooks(normalized) {
+			return ProviderDefault, nil
+		}
 	}
 	if provider := providerFromNormalizedExecutable(normalized); provider != ProviderDefault {
 		return provider, nil
-	}
-	// A project-local DSH skill has no active lifecycle bridge (DSH auto-loads
-	// no project-level cordis.patch.yml), so it stays on the lenient default
-	// provider even when the driving DSH process exports DSH_HOME.
-	if isNormalizedProjectDshInstall(normalized) {
-		return ProviderDefault, nil
 	}
 	// The stage-0 launcher is deliberately one fixed user-level path for every
 	// host.  Host-specific directory names are therefore no longer available as
@@ -389,225 +364,6 @@ func normalizeProviderExecutablePath(path string) string {
 	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 }
 
-func normalizeNamedEvent(provider, eventName, startName, stopName string) (string, error) {
-	switch strings.TrimSpace(eventName) {
-	case startName:
-		return eventStart, nil
-	case stopName:
-		return eventStop, nil
-	default:
-		return "", fmt.Errorf("unsupported %s lifecycle event %q", provider, eventName)
-	}
-}
-
-func payloadIdentity(value any, names []string) string {
-	return payloadScalar(value, names, 0)
-}
-
-// payloadReason extracts an interruption reason from a host stop/error event
-// payload. It reads the reason-shaped fields first (stop_reason,
-// reason, error, message, status), then falls back to any embedded HTTP error
-// code (429/502/503/504/402/529 etc.) found in the payload text. Empty when the
-// payload carries no discernible reason; Capture then records "未知".
-func payloadReason(value any) string {
-	for _, name := range []string{"stop_reason", "stopReason", "reason", "error", "error_message", "errorMessage", "message", "status", "result"} {
-		if reason := payloadScalar(value, []string{name}, 0); reason != "" {
-			return reason
-		}
-	}
-	if code := payloadHTTPErrorCode(value); code != "" {
-		return code
-	}
-	return ""
-}
-
-// payloadHTTPErrorCode scans every scalar string in the payload for a common
-// transient HTTP error code and returns the first match as "HTTP <code>". To
-// avoid misclassifying non-HTTP text, a code only matches
-// as a standalone numeric token — a whole number bounded by non-digit characters
-// or the string edge — or when it appears in a dedicated error-code field name.
-// The scan is bounded by the same depth limit as payloadScalar so a large payload
-// does not walk unbounded.
-func payloadHTTPErrorCode(value any) string {
-	codes := []string{"429", "402", "500", "502", "503", "504", "529"}
-	var walk func(any, int, string) string
-	walk = func(v any, depth int, field string) string {
-		if v == nil || depth > 3 {
-			return ""
-		}
-		if s, ok := v.(string); ok {
-			if isErrorCodeField(field) {
-				for _, code := range codes {
-					if strings.Contains(s, code) {
-						return "HTTP " + code
-					}
-				}
-				return ""
-			}
-			for _, code := range codes {
-				if containsStandaloneNumber(s, code) {
-					return "HTTP " + code
-				}
-			}
-			return ""
-		}
-		switch typed := v.(type) {
-		case map[string]any:
-			for name, raw := range typed {
-				if found := walk(raw, depth+1, name); found != "" {
-					return found
-				}
-			}
-		case []any:
-			for _, raw := range typed {
-				if found := walk(raw, depth+1, ""); found != "" {
-					return found
-				}
-			}
-		}
-		return ""
-	}
-	return walk(value, 0, "")
-}
-
-// isErrorCodeField reports whether a payload field name looks like a dedicated
-// error-code carrier (status, code, error, message and their compound forms).
-func isErrorCodeField(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "status", "status_code", "statuscode", "code", "error_code", "errorcode", "error", "message":
-		return true
-	}
-	return false
-}
-
-// containsStandaloneNumber reports whether s contains the numeric token as a
-// whole number token: the token is preceded and followed by whitespace or the
-// string edge, so substrings inside longer numbers, words, or decimals ("3.429")
-// do not match.
-func containsStandaloneNumber(s, token string) bool {
-	for i := 0; i+len(token) <= len(s); i++ {
-		if s[i:i+len(token)] != token {
-			continue
-		}
-		beforeOK := i == 0 || isSpaceByte(s[i-1])
-		afterOK := i+len(token) == len(s) || isSpaceByte(s[i+len(token)])
-		if beforeOK && afterOK {
-			return true
-		}
-	}
-	return false
-}
-
-func isSpaceByte(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
-}
-
-func payloadProjectRoots(value any) []string {
-	return appendUniqueStrings(
-		payloadStrings(value, []string{"projectDir", "project_dir"}, 0),
-		payloadWorkspaceRoots(value)...,
-	)
-}
-
-func payloadWorkingDirectories(value any) []string {
-	return payloadStrings(value, []string{"cwd"}, 0)
-}
-
-func payloadWorkspaceRoots(value any) []string {
-	return payloadStrings(value, []string{"workspaceRoots", "workspace_roots"}, 0)
-}
-
-func payloadStrings(value any, names []string, depth int) []string {
-	if value == nil || depth > 3 {
-		return nil
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil
-	}
-	var results []string
-	for _, name := range names {
-		for key, raw := range object {
-			if !strings.EqualFold(key, name) {
-				continue
-			}
-			if values, ok := raw.([]any); ok {
-				for _, value := range values {
-					results = appendUniqueStrings(results, ScalarString(value))
-				}
-			} else {
-				results = appendUniqueStrings(results, ScalarString(raw))
-			}
-		}
-	}
-	for _, container := range []string{"payload", "event", "data", "hook", "tool_input", "toolInput", "input"} {
-		for key, raw := range object {
-			if strings.EqualFold(key, container) {
-				results = appendUniqueStrings(results, payloadStrings(raw, names, depth+1)...)
-			}
-		}
-	}
-	return results
-}
-
-func payloadScalar(value any, names []string, depth int) string {
-	if value == nil || depth > 3 {
-		return ""
-	}
-	if object, ok := value.(map[string]any); ok {
-		for _, name := range names {
-			for key, raw := range object {
-				if strings.EqualFold(key, name) {
-					if scalar := ScalarString(raw); scalar != "" {
-						return scalar
-					}
-				}
-			}
-		}
-		for _, container := range []string{"payload", "event", "data", "hook", "tool_input", "toolInput", "input"} {
-			for key, raw := range object {
-				if strings.EqualFold(key, container) {
-					if scalar := payloadScalar(raw, names, depth+1); scalar != "" {
-						return scalar
-					}
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func ScalarString(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	case float64, bool:
-		return strings.TrimSpace(fmt.Sprint(typed))
-	default:
-		reflected := reflect.ValueOf(value)
-		if reflected.IsValid() && reflected.Kind() >= reflect.Int && reflected.Kind() <= reflect.Uint64 {
-			return strings.TrimSpace(fmt.Sprint(value))
-		}
-	}
-	return ""
-}
-
-func appendUniqueStrings(values []string, additions ...string) []string {
-	for _, addition := range additions {
-		addition = strings.TrimSpace(addition)
-		if addition == "" {
-			continue
-		}
-		found := false
-		for _, value := range values {
-			if value == addition {
-				found = true
-				break
-			}
-		}
-		if !found {
-			values = append(values, addition)
-		}
-	}
-	return values
-}
+// ScalarString retains the public lifecycle helper; native payload decoding
+// is owned by the host package and is not reimplemented here.
+func ScalarString(value any) string { return host.ScalarString(value) }

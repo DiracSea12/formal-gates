@@ -438,6 +438,7 @@ func TestRouteMatrixWorkflowFace(t *testing.T) {
 			}
 			isUnsupported = false
 		}
+
 		if isUnsupported && actual[entry] {
 			t.Fatalf("workflow row %q is bound unsupported but the subcommand is actually registered in workflowSubcommands", entry)
 		}

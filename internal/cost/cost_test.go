@@ -214,7 +214,7 @@ func TestParseCodexCurrentRequestsAndMirrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := ParseTranscript("codex", writeFixture(t, content))
-			if err != nil || got != (Usage{50, 75, 27}) {
+			if err != nil || got != (Usage{InputCacheHitTokens: 50, InputCacheMissTokens: 75, OutputTokens: 27}) {
 				t.Fatalf("usage=%+v err=%v", got, err)
 			}
 		})
@@ -248,7 +248,7 @@ func TestCodexResumeDoesNotMixThreadAndProcessCounters(t *testing.T) {
 {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":55,"cached_input_tokens":30,"output_tokens":15}}}}
 `
 	got, err := ParseTranscript("codex", writeFixture(t, transcript))
-	if err != nil || got != (Usage{70, 85, 35}) {
+	if err != nil || got != (Usage{InputCacheHitTokens: 70, InputCacheMissTokens: 85, OutputTokens: 35}) {
 		t.Fatalf("resume usage=%+v err=%v", got, err)
 	}
 }

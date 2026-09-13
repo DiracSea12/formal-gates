@@ -267,7 +267,8 @@ func runInstalledCurrentIntake(t *testing.T, candidate, home, source string) {
 		return r
 	}
 	call("start", "--requirement", "requirements.md", "--vcs", "git")
-	r := read(call("drive"))
+	call("drive")
+	r := read(call("show"))
 	submit := func(v protocol.RegularEvent) {
 		v.ExpectedRevision = r.Revision
 		ev, err := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("installed-%d", r.Revision)), v)
@@ -275,20 +276,16 @@ func runInstalledCurrentIntake(t *testing.T, candidate, home, source string) {
 			t.Fatal(err)
 		}
 		data, _ := json.Marshal(ev)
-		var out struct {
-			Run facade.Run `json:"run"`
-		}
-		if err := json.Unmarshal(runCandidateInput(t, candidate, home, project, string(data), "workflow", "submit", "--root", project, "--run-id", "installed-current"), &out); err != nil {
-			t.Fatal(err)
-		}
-		r = out.Run
+		runCandidateInput(t, candidate, home, project, string(data), "workflow", "submit", "--root", project, "--run-id", "installed-current")
+		r = read(call("show"))
 	}
 	for _, q := range []protocol.RegularRequest{{Action: "confirm-requirement"}, {Action: "mode", Mode: "lightweight"}} {
 		submit(protocol.RegularEvent{Operation: "REQUEST", Request: &q})
 		a := r.Regular.Ask
 		submit(protocol.RegularEvent{Operation: "DECIDE", Decision: &protocol.RegularDecision{RequestID: a.ID, Token: a.Token, Digest: a.Digest, Choice: "confirm"}})
 	}
-	r = read(call("drive"))
+	call("drive")
+	r = read(call("show"))
 	if r.Status != "COMPLETE" || !r.Unverified {
 		t.Fatalf("installed terminal: %+v", r)
 	}

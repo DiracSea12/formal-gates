@@ -1,6 +1,6 @@
 {
   "name": "formal-gates",
-  "description": "Agent Skill compatible formal workflow package with a default one-time reminder, an on-request formal flow, and a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer and hook targets are Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
+  "description": "Agent Skill compatible formal workflow package with a default one-time reminder, an on-request formal flow, and a record-only lightweight route. Core skill documents are runtime-neutral; bundled installer targets are WorkBuddy, Claude Code, Codex, Cursor, DeepSeek Harness, and ZCode. WorkBuddy uses the native engine action transport without a global hook. Go package validation is cross-platform. Hook enforcement must be verified per host with a live canary.",
   "hosts": [
     {
       "name": "Claude Code",
@@ -89,6 +89,17 @@
         "hook_blocking_live_canary": "not-claimed"
       },
       "caveat": "Windsurf may use the readable workflow guidance if its environment supports equivalent instruction loading; this package ships no Windsurf installer or hook target."
+    },
+    {
+      "name": "WorkBuddy",
+      "support": "host-target",
+      "capabilities": {
+        "readable_skill_support": "supported",
+        "install_guidance": "bundled-installer",
+        "hook_configuration": "not-bundled-native-engine-tool-boundary",
+        "hook_blocking_live_canary": "not-claimed"
+      },
+      "caveat": "Installs the native skill and CODEBUDDY.md entry. Engine-issued native actions enforce their role tool boundary through the runtime adapter; no global hook is installed. Real platform integration has not been verified."
     }
   ],
   "package_parts": [

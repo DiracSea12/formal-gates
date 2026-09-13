@@ -177,11 +177,11 @@ func PortableCanary(options PortableCanaryOptions) (PortableCanaryReport, Result
 	}
 	_, err := LoadPromptCatalog(root)
 	add("prompt-catalog", err)
-	decision, err := Hook([]byte(`{"command":"pwsh -File ./scripts/gate-workflow.ps1"}`))
-	if err == nil && decision.PermissionDecision != "deny" {
-		err = fmt.Errorf("legacy command was allowed")
+	decision, err := Hook([]byte(`{"command":"git diff --name-only"}`))
+	if err == nil && decision.PermissionDecision == "deny" {
+		err = fmt.Errorf("read-only command denied")
 	}
-	add("hook-blocks-legacy-command", err)
+	add("hook-allows-read-only-command", err)
 	// An installed candidate invokes this command with a private marker.  It
 	// must exercise the same regression path without recursively starting a
 	// second install-canary from inside itself.

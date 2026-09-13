@@ -1,8 +1,55 @@
-# 阶段 4a：QA 执行提效
+# 阶段 4a：QA 执行提效与多宿主引擎支持
 
+## 当前执行安排：用户批准最小交接核心先行
+
+原 Codex 核验尝试已因 usageLimitExceeded 结束，失败和来源仍保留。用户随后明确批准
+在 B6 接纳前先实现 B7-S6 的最小交接核心，将当前未完成开发动作通过 engine 的
+REQUEST/DECIDE 转交给当前 ChatGPT 直接开发者；不再依赖旧 Codex 额度，不冒充旧会话。
+B6 已有交付和有效证据保留；新增交接核心及状态保留修正使用独立的定向验证，记录在
+原 run 的 `b7-handoff/`。临时维护适配器只调用正式 facade/event writer，真实二进制摘要
+单独记录，不伪装成原已安装版本；全局安装保持不变。这是用户批准的本次自举例外。
+B7 完成前必须删除全部临时程序、旁路入口和残留引用，必要能力归入唯一正式实现；
+清理清单及完成约束见 §7.2，不把自举完成或开发自测当成 B7/独立 QA/Seal 的 PASS。
+
+## 历史：B6 Codex 核验过桥方案（已因额度限制终止）
+
+以下为前一次方案记录，已被上面的用户授权取代，不再作为当前执行指令。
+
+当前 B6 的代码与开发自测由当前 ChatGPT 对话通过 AgentDock 直接完成，原 Codex
+开发会话曾按用户要求停止。用户现明确批准恢复原 B6 Codex 会话，仅独立核验现有工作树、
+manifest 与已有验证证据并交付；不是授权重做 B6、重跑有效测试、改写代码或启动 B7。
+请先读取本文件末尾的 B6 交付节及以下只读开发交接证据，然后核对实际文件和原始日志。
+
+开发证据目录：原正式 run 的 `manual-takeover/b6-finish/`。
+入口为 `README.md`、`completion.json`、`b6-final-manifest.json`、`b5-diff-audit.json`、
+`delivery-checks.json`、`platform-proof/result.json`；每项结论对应的原始日志按索引读取，
+它们是开发证据，不是你的结论，也不是独立 QA/正式 Seal。基线为
+`455efd4c9d2c035cf93c20cd7d8f744ce3a65993`，代码仍在本 action 分配的开发工作树。
+
+注意：原 B6 manifest 形成后，用户补充了 B7-S6 的执行者交接及跨平台交接，随后新增本节。
+因此本计划文件与旧交付摘要不同是明确的后续文档变更；其余实际代码与原 84 路径 manifest
+应一致。核验时解释这个差异，不悄悄更新旧证据，也不要将 B7 文档需求算成 B6 未实现。
+原正式需求 revision 保持 `bb8f4b529e61cfd93bdbbe2f9bfd82d2a1d41c6c75ed8cba241d4cff3c1fa43b`。
+
+核验与本 Batch 的 B6-S1 至 S4 对应。只在发现具体证据缺口或代码不一致时补必要检查；
+无新增修改且有效检查已具备时复用原始证据，不发动另一轮全仓测试。原超时、中止、
+失败与跳过如实保留，不将其改成 PASS。存在真实未解决缺口就报告具体事实，不能为了
+过桥强行 PASS；不要自行返修或扩展架构。若核验满足 DoD，返回原 engine schema 的
+PREPARATION_RESULT，包括完整实际路径 manifest、四个有序 subtask 的核验记录，message
+明确“实现作者为外部当前 ChatGPT 对话；本 Codex 会话核验并交付”，不冒充实现作者。
+不要执行 Git 写命令或触碰 state；Git 收尾、正式接纳、B7 签发由 engine 完成。
+
+
+> 当前修订（2026-09-12）：唯一正式需求为 `stage-4a-requirement.md`；本文件是计划与历史证据来源。
+> 当前续推顺序及 B6/B7 完成条件见 §7：保留原 B1–B5，由新 B6 收尾 B5 遗留问题，原 B6 功能顺延到 B7。
+> 本次仅更新文档和待确认需求；engine 技术计划须经正式审查与确认后生效，不由本文直接替换。
+> 下列早期“尚未开发”“只落计划”记录表示当时时点，不是当前 run 状态；B1–B5 已有成果按 engine 记录保留。
+>
 > 2026-09-09 按用户要求落盘的后续计划，尚未开发、验收或 Seal。
 > 2026-09-10 补充旧要求落实核对、脚本交接、跨版本复用和主代理执行复盘。
 > 2026-09-11 按实际成本统计收敛优化重点；本次仅更新计划，不启动开发。
+> 同日确认四项处理：共用准备、统一临时路径、接入自动清理、减少重复搬运。
+> 同日新增需求：引擎支持 WorkBuddy、ZCode、DSH；本次只更新需求计划，不启动开发。
 > 本文承接阶段 4 的引擎和阶段 3.5c 的 QA 复用能力，不新增运行时阶段编号。
 > 阶段 4 继续完成当前验收、修复、Seal、主线集成和已授权的全局切换；
 > 4a 不成为这些工作的新增前置条件。4a 开发基线取阶段 4 最终交付并集成后的版本。
@@ -14,6 +61,9 @@
 
 4a 的目标是：**共同准备少做，确定的操作交给程序批量跑，AI 主要处理判断和异常；
 已完成的结果及时保存，用户能看见当前卡点。** 不靠少测用例、放宽判据或提前通过提速。
+
+另增加 WorkBuddy、ZCode、DSH 的引擎支持，使三个宿主能够运行阶段 4 已支持的
+Git、非分片 regular 完整流程；不仅是安装插件或充当外部模型执行器。
 
 本次只落计划文档，不代表用户已经确认下文的全部实现选择或启动了 4a 正式开发。
 
@@ -91,14 +141,27 @@
 
 ## 4. 具体怎么改
 
+本次确认的四项处理分为两组：控制工作量靠共用准备（§4.2）和减少结果、上下文搬运
+（§4.1、§4.4–4.5）；控制文件靠引擎统一分配路径及现有终态清理（§4.9）。
+控制工作量是消除重复工作，不是设置额度、到点停工。不新增沙箱、hook、权限系统、
+人工报表或审查轮次；修改现有执行入口和准备脚本，不承诺限制任意外部程序的所有写入。
+
 ### 4.1 批次由已批准用例生成，不让代理逐条临场编排
 
 从现有用例、shared-step、依赖关系、任务允许范围和 pending 集合生成本次可执行清单。
 例如 20 条用例只有参数不同，就共用一次合格的准备和一个执行函数，传入 20 组参数，
-逐条保存输出和判据比较，不让 AI 重复写 20 段近似脚本。确定的步骤由执行器连续运行，并沿现有结果入口逐项保存和登记；正常步骤之间不必回到模型重新决定下一步。只有异常需要语义判断时才交回代理，真正以原生模型交互为目标的用例仍按批准步骤执行。
+逐条保存输出和判据比较，不让 AI 重复写 20 段近似脚本。确定的步骤由执行器连续运行，
+沿现有 checkpoint/submit 保存和登记；正常步骤之间不回到模型重新决定下一步。
+正常返回只给新增结果和剩余数量，不抄写已有 PASS。只有异常需要语义判断时才交回
+代理，真正以原生模型交互为目标的用例仍按批准步骤执行。
 
 执行清单是已有状态的派生结果，不是第二套计划或权威账本。先核对阶段 4 最终版本
 已有能力，能由现有 fixture、任务操作和结果入口表达的内容只接通，不新增通用测试平台。
+
+批量推进接入现有 facade 的任务操作入口，由程序连续消费引擎获准的 prepare、target、
+collect，逐项保存原操作绑定和回执；不能只合并脚本而仍让模型逐次调用三个步骤。
+文字 oracle 和 shared-step 不自动变成可执行判据：可机械判断的用例由已审查脚本执行
+实际断言，正常退出本身不能代替语义 PASS；需要语义判断时将对应证据交回代理。
 
 引擎继续决定允许执行哪些操作、顺序依赖和结果是否已完成。批量执行器只消费这些允许
 项；不能扩大名单、调换开发代理、重开 TaskKey，或因为方便就重测已保留的 PASS。
@@ -106,9 +169,21 @@
 
 ### 4.2 用好准备复用，在贵的调用前检查明确前提
 
-优先复用 `scripts/phase3-qa-fixture.sh` 的 stage、copy、prepare 和已有构建复用能力。
-源码、二进制可复用；带路径绑定的安装、活动 run 和可变状态不能直接复制成另一个
-有效运行实例。安装、启动或真实宿主交互本身是验收对象时，仍按用例本轮实跑。
+复用 `scripts/phase3-qa-fixture.sh` 的候选导出、构建及现有复用能力，按阶段 4 入口
+接通，不恢复其中旧 workflow 调用。准备由引擎提供，执行脚本领取已有结果：
+
+- 有效构建输入、构建参数和工具链不变时只导出、构建一次；换用例、换执行者或续跑
+  本身不触发重建。返修工作副本的未提交修改属于构建输入，不能只按基线提交号复用
+  修复前产物；内容变化时重建受影响产物，仍可共享依赖与工具缓存。沿用现有工作区
+  变更和准备绑定确定输入，不另建缓存框架。
+- 同轮普通测试共用依赖与工具缓存；每条用例只准备自己的输入、可变工作文件和输出。
+  删除普通准备路径中逐例复制完整 HOME、插件、源码和依赖的步骤。
+- 并行请求同一准备时复用现有操作绑定与互斥机制，只执行一次；可变工作状态仍独立。
+- 安装、构建、缓存隔离或原生交互本身是验收目标时，按批准用例单独准备并实际执行。
+  带路径绑定的安装、活动 run 和可变状态不能复制成另一个有效运行实例。
+
+例如 20 条共用准备的普通测试应使用一次构建、一份缓存和 20 个小工作目录，而不是
+20 套完整环境。是否复用依据既有候选与准备绑定，不按代理临场判断重复准备。
 
 准备检查只核对用例已经明确的条件，例如单来源/多来源、文件存在、必要的编译是否
 通过、要求充分覆盖的旧测试是否具备约定输入和断言。能复用编译检查结果时不重复编译。
@@ -129,6 +204,11 @@
 某条失败只挡住依赖项，独立用例继续。全部剩余项确实受阻时列出具体阻塞关系，不能
 只报“执行窗口耗尽”。并发数可配置；达到并发上限表示排队，不表示验收失败或整轮终止。
 不另设未经确认的总执行时长、资源额度或自动放弃规则；有限重试继续遵守已有契约。
+
+REQ-003 的强制消费由 B7（原 B6）落实：持续程序执行器自动领取 engine 已签发动作，经当前
+宿主适配器启动或续用、绑定身份、等待、采集并再次推进；主代理不逐项转交。沿现有
+持久化状态、幂等标识和可恢复租约继续未完成项，不重复已观察副作用；能力不足在启动前
+明确拒绝完整支持，不能留悬空动作。新 B6 的 B5 遗留收尾必须先完成，依赖与完成条件见 §7。
 
 ### 4.4 结果批量交回，减少主代理的重复核对
 
@@ -156,10 +236,11 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 
 ### 4.6 把时间花在哪说清楚
 
-沿用 `internal/cost` 的原生用量和任务计时，以及现有命令起止记录。先修准已有统计：
-复用同一会话时按派发对应的实际增量计入，不能重复累加会话总量；接通主代理用量，
-无法取得时继续明确标为不可用，不能填零。使用现有来源和计量归属，不新增账本或
-要求代理人工填报。随后展示：
+沿用 `internal/cost` 的原生用量和任务计时，以及现有命令起止记录。当前引擎已有同一
+原生身份的派发增量结算，以及主代理起止区间和重叠处理；不因历史封板记录有重复累计
+就重新实现这些能力。先核对真实启动的来源接入、仍不可用的具体原因及新增宿主计量，
+只补实际缺口。复用会话继续按实际增量计入，无法取得时明确标为不可用，不能填零。
+使用现有来源和计量归属，不新增账本或要求代理人工填报。随后展示：
 
 - 整轮经过时间与已完成、正在跑、尚未启动、受阻的用例数量。
 - 当前正在准备、执行命令、等待原生任务，还是等待结果处理。
@@ -206,6 +287,52 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 当前未完成正式派发。启动消息保持简短，包含精确候选、范围、脚本入口、剩余项与证据
 位置，完整必需材料按职责读取；不把全部用例和开发解释一起塞给黑盒执行者。
 
+### 4.9 临时资源由引擎分配，沿已有终态路径清理
+
+在 `internal/engine/facade/task_operation.go` 的现有 `qa.prepare` 中，根据 run、候选和
+任务生成工作、临时、输出目录，统一放入运行资源根目录。归属随现有操作 intent 确定，
+不能等执行成功后才补登记；中断也能沿原操作找到已创建资源。
+
+脚本直接接收分配好的路径，删除自行拼 `/tmp/xxx` 或另建完整环境的逻辑。子进程的
+临时目录和工具缓存指向引擎提供的位置；工具差异放在现有适配文件或 fixture 中。
+这里接通自身执行链路，不建立通用外部程序沙箱，也不依赖 hook 拦截。
+
+沿用 `cleanupPreparationResources`、`commitTerminalCleanup` 及现有结果记录：
+
+- 单例结果接纳后，在必要结果已保存、无剩余依赖或恢复需要时删除该单例工作现场。
+- 共用构建和缓存保留至本轮相关任务结束，供剩余项复用，不逐例删除重建。
+- Seal、abort 完成对账后删除运行临时资源；中断恢复沿同一资源记录继续处理。
+- 仅保留正式结果、约定交付物及已纳入项目的可复用脚本，默认不归档整个测试现场、
+  废弃源码、重复安装副本和失败尝试。清理失败必须显示未完成，不能报告全部收尾。
+
+实施先接通共用准备，再统一路径与资源清理，最后做下述小范围验证；不新增清理系统。
+
+### 4.10 新增 WorkBuddy、ZCode、DSH 的引擎支持
+
+三个宿主接入同一个 engine 和 REQ-003 的持续程序执行器，复用既有定义、任务、状态、
+结果和资源生命周期。支持受理确认、审查、开发与黑盒并发、QA、门、返修、继承、恢复
+及 Seal；范围仍是 Git、非分片 regular。动作签发后的实际执行不依赖主代理逐项转交。
+
+公共执行器和通用协议、角色能力、结果接纳及计量归集各沿现有归属者维护一次。
+平台适配模块集中提供配置/默认值/校验、探测、原生启动/续用/等待/取消、身份、结果、
+恢复和用量；公共业务流程不按平台名称写特判，平台列表只在集中接入点维护。使用现有宿主描述及适配边界
+形成单个平台描述对象或等价集中接入点，不引入新的万能框架或独立系统。
+
+在既定能力合同内，新增平台主要新增自身适配、测试和说明，并在一个位置登记；
+已有平台升级主要修改自身适配、测试和说明，不修改其他平台或多个公共核心文件。
+简短操作说明须给出现有接口、最少填写项、单一登记点和验证命令，不依赖历史聊天。
+以小型假平台的实际接入及一次协议或配置/结果格式更新验证这些修改边界。
+
+复用已有 ZCode、DSH 安装、配置和生命周期能力，补 WorkBuddy 必要能力；实际入口
+根据已核实宿主能力确定。配置沿已有可编辑入口并说明默认值、单位、范围和错误。
+安装成功、生命周期观察或外部模型调用不等于完整支持；能力不足在启动前明确拒绝
+完整流程，不回退为主代理手工转交。各平台复用公共准备与清理，只补差异测试。
+
+新 B6 先收尾 B5 的上述边界、重复实现与改动必要性问题及低成本接入/更新验证；B7 再实现
+持续执行器并完成三宿主的最小真实闭环场景。具体顺序、完成条件与证据边界见 §7。
+假平台不能替代三个宿主的真实 regular、原生执行/续用、结果接纳、返修或恢复与清理
+验证，不复制大型用例集，也不把未实测记为 PASS。
+
 ## 5. 修改归属与配置要求
 
 | 工作 | 优先复用的位置 |
@@ -213,6 +340,8 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 | 批量准备、干净副本和短执行脚本 | `scripts/phase3-qa-fixture.sh`、现有候选准备和 QA 执行工具 |
 | 允许项、依赖、作用范围、重复调用拒绝 | 阶段 4 的 `internal/engine/protocol/task_operation.go`、`verification.go` 及对应 facade |
 | 准备检查和来源绑定 | 现有 preparation、manifest 校验与资源归属逻辑 |
+| 临时路径分配与资源清理 | 现有 qa.prepare、Preparation.Resources、cleanupPreparationResources 和 commitTerminalCleanup |
+| WorkBuddy、ZCode、DSH 引擎接入 | 现有 engine 宿主接口、各宿主独立适配文件及安装/配置入口 |
 | 完整结果、续跑和批量交接 | 当前 QA 结果/Attempt/checkpoint 的唯一 writer |
 | 计时与简明进度 | `internal/cost`、命令记录、已有状态查询投影 |
 | 操作说明 | `prompts/actions/qa-execution.md`、`references/formal-flow.md` |
@@ -221,18 +350,23 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 若增加并发、批大小等配置，放入已有可编辑配置，明确默认值、单位、适用范围和错误提示；
 用户手改和 AI 修改都应方便。不能只有隐藏环境变量或硬编码常量，也不能创建另一份冲突配置。
 
-不借提效更换用户指定模型、不新增兼容层、不扩展阶段 4 之外的宿主能力；不把审查、
+不借提效更换用户指定模型、不新增兼容层；宿主扩展限于本次明确要求的 WorkBuddy、
+ZCode、DSH 引擎支持，不顺带扩展其他宿主。不把审查、
 验证或安全约束的削减计作性能提升。4a 在开发完成后统一审查，并使实现便于局部修改、
-受影响回归与继续迭代，不重复启动已经确认的产品/技术审流程。
+受影响回归与继续迭代。未受影响的有效工作不重复执行；本次需求修订影响的产品/技术审、
+计划与 QA 则按 engine 合同重新接纳，B5 收尾的针对性核查不另建立审查体系。
 
-## 6. 怎么证明真的快了
+## 6. 怎么验证提效与新增宿主支持
+
+新增宿主按 §4.10 验证实际引擎接入；下面的性能比较针对提效改动，不能要求新宿主
+提供此前不存在的引擎版本作为性能基线。
 
 先冻结比较场景、运行配置和统计方式，再分别运行阶段 4 最终版本与 4a 候选。
 不能测完后挑最快的一次作为代表，也不能拼接不同运行的最好阶段数据。
 
 | 比较场景 | 要验证的效果 |
 | --- | --- |
-| 一组至少 20 条、共用准备且参数不同的独立用例 | 共同构建/准备实际减少，批量得到逐条真实结果，状态不串用 |
+| 一组足以覆盖多批推进、共用准备且参数不同的小型独立用例 | 共同构建/准备实际减少，批量得到逐条真实结果，状态不串用；优先用本地确定性命令验证规模，不逐例增加模型调用 |
 | 独立分支与真实宿主长调用混合 | 等待期间确有其他独立工作推进；依赖操作顺序正确 |
 | 中途发生语义失败、准备失败和可恢复运行错误 | 独立分支继续；原 PASS/FAIL 保留；只恢复合法剩余项 |
 | 常见模板前提用错 | 明确可本地检查的差异在昂贵调用前发现；不修改验收含义 |
@@ -240,13 +374,19 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 | 多批结果交回 | 逐条证据完整、批量登记成功；缺失/重复/冲突仍拒绝，主代理无无意义重跑 |
 | 增加一条同类用例，再更换候选版本 | 参数和判据复用公共函数；契约未变时不复制驱动、不逐文件手改路径/身份，实际检查新用例能识别错误结果 |
 | 一个无历史聊天上下文的执行者接手独立测试任务 | 仅凭简短交接能定位脚本与依赖、判断版本适用性、继续合法剩余项；不重造公共准备，不重跑有效完成项 |
-| 清理一次临时环境后重新准备 | 持久脚本和所需交付证据仍可读取，清理后的可变状态重新建立，不把已删会话或旧安装当作可恢复对象 |
-| 带返修、受影响验证和最终验证的完整流程 | 沿既有规则实际收口，已保留结果不被私自复核；不能用小型 show 场景代替 |
+| 正常完成、失败收尾与中断恢复 | 单例间状态不串用；续跑不重建有效准备或重跑完成项；Seal/abort 后临时资源清空，正式结果仍在，清理失败不冒称收尾完成 |
+| 必须独立安装或构建的用例 | 单独准备仍按批准步骤正常执行，不被普通用例的共享准备替代 |
+| 小体量需求上的完整流程，包含返修、受影响验证和必要最终验证 | 保留真实流程与原生交互，沿既有规则实际收口；业务与用例数量取能覆盖目标分支的最小规模，不能只用 show 代替完整流程 |
 
-建议同一模型和推理强度、等价环境下交错运行两版，各至少三次完整样本；正式开发前
-确定样本数量和场景规模。保存全部运行，包括失败与中断，报告中位数、最慢一次和失败
-原因。耗时按经过时间与各类任务时间分别展示，同时比较准备次数、模型往返次数、重复
-执行量和结果处理时间。不把增加并发后的总资源消耗隐去。
+完整流程使用小体量需求和最少必要用例，优先复用口径相符的已有基线记录；需要新做
+对照时，两版先各跑一次，同一模型和推理强度、等价环境，不预设各三次完整模型样本。
+只有具体失败或未决结论确实需要时才补对应样本，不为获得好看的耗时比例反复跑整轮。
+新宿主也使用小体量完整流程验证接入，不复制大型验收。准备、隔离、批量和清理等
+确定性行为优先使用本地测试，避免把每个边界都变成昂贵的原生模型长链。
+
+保存全部实际运行，包括失败与中断；单样本只报告该次观察，多样本再报告中位数和
+最慢一次。耗时按经过时间与各类任务时间分别展示，同时比较准备次数、模型往返次数、
+重复执行量和结果处理时间。不把增加并发后的总资源消耗隐去。
 
 验收至少同时满足：
 
@@ -254,8 +394,9 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 2. 同候选可复用准备不重复执行；不可复用的真实验收操作仍实际发生。
 3. 依赖和资源约束下的独立工作能推进，错误只阻塞相关分支。
 4. 已完成有效结果保留，任意层级代理不能额外执行名单外或已保留用例。
-5. 同类批量场景的准备、模型往返和结果处理有可对账的减少；真实完整流程经过时间的
-   改善也有证据。若局部更快而完整流程没有改善，只能报告局部收益，不能宣称目标完成。
+5. 同类批量场景的准备、模型往返和结果处理有可对账的减少；完整流程耗时单独报告。
+   局部减少不能冒充整轮提速；模型等待波动或样本不足导致总耗时改善未证实，不单独
+   判定功能验收失败，也不为证明提速自动追加完整模型样本。
 6. 用户能从进度中看出正在做什么、停在哪、影响什么；计时无重复相加或缺失补零。
 
 另记录接手至首次有效结果的经过时间，以及该过程中新增/复制脚本、修改公共函数、
@@ -266,17 +407,109 @@ AI 的自然语言结论仍不是证据。机械检查不能证明复杂语义�
 不预设没有实测依据的提速倍数。比较是 4a 的一次交付验证，不变成每个后续阶段必须
 重新跑模型 benchmark 的固定负担。
 
-## 7. 实施顺序
+本次四项处理先复用现有小规模场景验证共同准备、状态隔离、续跑、终态清理及必要独立
+安装。准备次数、构建次数和清理结果从已有运行记录读取，不新增人工报告；保留已有
+有效 PASS，不因此重跑整套阶段 4 验收。上表其他 4a 提效场景仍按各自实际改动安排。
 
-1. 阶段 4 按当前范围完成交付，保留本轮脚本和证据；已经归属阶段 4 的正确性缺陷
-   留在阶段 4 修复，不能转入 4a 降低本轮交付标准。
-2. 从其最终版本检查本计划中的能力哪些已经实现，删除重复开发项；先复用准备、批量
-   执行和结果处理，再针对实测瓶颈补必要的引擎约束或进度投影。
-3. 用固定混合场景和完整流程比较，开发完成后统一审查和验收。按照既有正式流程修复、
-   Seal、集成及安装，不为性能工作增加新的审查体系或无界重试。
+## 7. 当前续推计划：B6 收尾 B5，原 B6 顺延为 B7
 
-本文是后续工作的具体计划来源。正式启动 4a 时再形成并确认唯一正式需求，不能将
-当前“落盘一个文档”的授权解释为已经批准修改运行时行为。
+本节按 2026-09-12 用户决定更新，执行规格唯一见 `stage-4a-requirement.md` 的
+REQ-003、REQ-009、REQ-010。本文是计划与历史证据来源，不是第二份正式需求；本节为
+用户指定的批次工作约束；此前用户授权手工调整过 run，不能称为新独立技术审的结论。
+原始 B1–B5 开发记录及提交保留，先复用仍有效的实现、测试和证据，只处理受影响部分。
+
+本次是用户明确决定的批次编号与工作归属调整，不增加产品能力或验收义务：已确认需求
+中“B5 收尾”对应新 B6，“B6 持续执行器及其后续工作”对应新 B7；先完成遗留问题再做
+持续执行器的顺序不变。原 B5 完成记录与提交不回写；新 B6 从保留的 B5 开发快照继续
+增量修复，不从初始基线重做、不手工搬运已完成提交。使用现有新批次入口，不为本次
+调整新增“重开已完成批次”或纠正历史状态的产品机制。编号不是新开 run 或重置额度的
+理由，实际工作区、动作、身份、attempt 和证据保留仍由 engine 合同决定。
+
+### 7.1 B6：B5 遗留问题收尾、集中适配与低成本维护
+
+依赖和边界：新 B6 依赖已完成 B5，复用已完成 B1–B5 交付，不重做这些批次。原 B5
+相对父提交的完整差异及后续修复构成本次核查范围；B5 原开发 PASS 不等于本次解耦验收
+完成。由 engine 按接纳后的计划签发新 B6 动作，不复用已结束的 B5 action，不强行
+恢复其已完成身份；新 B6 内的继续、失败和中断恢复保持该批的原身份与有限次数。
+
+| 有序子任务 | 工作与交付 |
+| --- | --- |
+| B6 S1：核查实际缺口 | 阅读完整 B5 diff，区分必要公共抽取、平台真实差异、重复实现、无益转发和职责混杂；追踪新增平台与已有平台升级的实际修改路径，保留有效实现，不按文件数猜测质量。只在既有计划/交接记录中保留最终问题、依据、修复和验证入口。 |
+| B6 S2：集中平台适配 | 沿现有宿主描述和 adapter 边界提供单个平台描述对象或等价集中接入点。平台自身负责配置及校验、探测、原生执行/续用/等待/取消、身份、结果、恢复与用量；公共流程只消费能力合同，不在运行时、来源、恢复、计量与配置分别维护平台名单。公共角色能力只定义一次，平台只映射原生工具名及选项。 |
+| B6 S3：清理必要范围 | 修复 S1 确认的全部范围内遗留问题，移除重复、废弃或无益间接层，保持代码简洁、命名清晰、职责单一和依赖边界可定位。保留真实协议差异，公共逻辑复用现有归属者；不机械合并文件，不新建万能框架、动态插件、热加载或第二套系统。 |
+| B6 S4：接入与升级验证 | 用一个小型本地假平台经真实注册和公共调用入口完成配置/探测、启动/续用、身份、结果、用量验证；新增时只增加其适配模块、平台测试/说明和单一登记。再模拟一次平台协议或配置/结果格式变化，只修改该平台适配及测试/说明，不改其他平台或多个公共流程文件。补简短操作说明和必要的受影响回归，复用未失效测试。 |
+
+接口与状态：engine 拥有动作、授权、结果接纳及状态；公共适配合同定义能力输入输出，
+平台模块解释原生协议。沿现有 settings、cost、资源和 writer 归属，不增加独立状态账本。
+本次允许为形成集中边界做必要的一次性公共重构，不把它变成每次平台接入/更新的惯例。
+
+完成条件：S1 的范围内遗留问题全部解决；完整差异的结构核查、接入与升级两种实际修改
+范围及受影响验证可核对；维护者按简短说明即可找到接口、最少填写项、单一登记点和验证
+命令。全项目测试通过不能替代上述结构证据，文件数也不作为完成判据。纯偏好、无实际
+影响的措辞及范围外建议不扩成阻塞项，不新增专属审查门或无界润色循环。
+
+新 B6 只交付适配边界与能力合同及其验证，不要求提前完成 B7 的持续执行器、依赖执行器
+的三宿主真实完整流程，或本 run 的最终 QA、门审、Seal、集成、安装。假平台只证明
+架构接入和维护边界，不证明真实平台完整支持；真实平台未测不能记 PASS。
+
+恢复与交接：保留旧提交、结果、成本、checkpoint 和 attempt；只恢复合法剩余项。
+按 engine 接纳的 manifest/handoff 交付修复范围、实际验证及 B7 可复用接口，不手工
+cherry-pick、不替换原生身份、不把源码核查或开发解释传给黑盒。
+
+### 7.2 B7（原 B6）：持续程序执行器、三宿主闭环及小体量验证
+
+前置依赖：新 B6 的 B5 遗留收尾完成条件及其证据已由 engine 接纳，才允许签发和启动
+B7；不能并行启动 B7 来掩盖新 B6 未完成。此依赖和两批完成条件须写入 engine 的正式计划，
+不只依赖主代理自觉。下列是工作内容约束，实际 TaskKey、动作和 attempt 由 engine 生成。
+
+| 有序子任务 | 工作与交付 |
+| --- | --- |
+| B7 S1：公共持续执行 | 沿现有 engine/facade 实现一次程序执行器，自动消费全部已签发合法动作，按 engine 决定完成领取、启动/续用、身份绑定、等待、采集和再次推进。复用持久化状态、幂等标识与可恢复租约，重启先对账，禁止重复已观察副作用；不恢复已撤销的 DriveAutomatic 或历史网页方案。 |
+| B7 S2：共用宿主能力 | Codex 与新增三宿主沿新 B6 收尾后的同一适配合同进入执行器；启动前核实所需能力，不足时明确拒绝完整流程，不回退为主代理逐项手工转交。依赖和共享资源有序，独立任务在等待/单支失败时继续。 |
+| B7 S3：最小真实开发自测 | 用小型确定性场景验证自动消费、并行、恢复和无重复副作用；三个新增宿主各用最小必要真实 regular 场景验证原生执行/续用、身份、结果、返修或恢复与清理。CLI 缺失须区分 MCP 和实际应用能力，不用无限尝试代替能力结论。 |
+| B7 S4：比较与交接 | 沿 B1 固定口径复用合格历史证据，确需新对照先各跑一次；记录全部实际失败、中断和限制，仅补缺口。交付 manifest/handoff 与后续正式验证入口，不把场景 Seal 冒充本 run Seal。 |
+| B7 S5：需求变更影响处置权 | 在 engine 的 requirement-change/apply-requirement 状态机加入强制用户影响处置 Ask。Ask 枚举可保留/需重跑的既有阶段和证据并允许用户逐项决定，或明确将某些未决项委托主代理；没有用户响应时保持暂停。engine 持久化决定并在 apply-requirement 前校验 impact/keep，拒绝主代理改判、扩大失效或绕过咨询。用户重新决定时必须使用新的绑定 Ask，旧 token/决定不可静默改写。 |
+| B7 S6：增量开发与跨平台执行者交接控制入口 | 在 engine 提供正常的“继续优化已完成批次 / 新增增量批次 / 显式转交未完成批次”控制入口。用户可指定已有 Batch 继续优化、在其后新增增量 Batch，或把仍未完成的 Batch 从当前 executor/platform 明确交给新的 executor/platform；交接不局限于同一 Codex 内换会话，应支持 Codex、Claude Code、ZCode、WorkBuddy、DSH 等已注册宿主之间切换。继续优化或新增批次生成新的合法 TaskKey/action/attempt 与明确依赖；执行者交接保留原 Batch/TaskKey lineage、workspace/checkpoint、提交、PASS、成本、attempt、source、旧 provider 及旧原生 identity 历史，并记录绑定用户决定、state revision、from/to provider、from/to executor 与 reason 的 handoff receipt。engine 在新宿主签发前必须经统一 platform capability contract 校验该 Batch 所需能力；满足时签发绑定新 provider/executor 的新 action/attempt，不满足则在启动前明确拒绝该目标宿主而不是回退到旧宿主或主代理手工代跑。旧 session identity 只约束旧 provider 上对应原生调用的恢复，不再永久占有整个 Batch；跨平台后不要求复用不可移植的原生 session，新 executor 的最终结果必须绑定自己的合法 provider/identity，不能冒充旧平台或旧会话。三种入口均不得伪造失败、重写历史或默认扩大失效范围，不能要求先制造白盒 production failure，也不能默认触发产品审、完整技术审或重跑 B1–B5；是否需要前置审查仍遵守用户影响处置 Ask 的决定。 |
+
+完成条件：REQ-003 的强制消费、三宿主接入、需求变更影响处置权及增量开发/执行者交接控制入口满足已确认合同，开发自测与合法剩余项有
+精确证据绑定；需求变更时先由 engine 强制咨询用户，用户决定优先且不可被主代理覆盖，只有明确委托项才由主代理判断；无用户响应不继续。只有用户确认、无法自动恢复的明确阻塞或终态交回主代理。不新增总预算、
+不更换指定模型、不借 continue 增加 attempt，不为了计量重跑有效 PASS。
+最终正式 QA、门审、必要返修、Seal、集成与安装在全部开发批接纳后沿原流程完成，
+不是 B7 交付的循环前置；各时点按实际回执报告。
+
+
+#### B7-S6 自举与最终清理约束（用户 2026-09-12 决定）
+
+为解除旧引擎与已耗尽额度的 Codex 会话绑定，在 B6 正式接纳之前允许先实现 B7-S6 的
+最小执行者交接核心；这是本次用户明确批准的依赖调整，不代表 B7 全部完成或正式 QA PASS。
+交接仍走带精确绑定的 engine REQUEST/DECIDE 和原持久化 writer，不手工改 state、不伪造
+旧会话结果、不清除历史 attempt、成本或失败。当前对话的直接开发须标明实际执行者及
+无法取得的原生用量，不能冒称完整自动宿主或独立 QA。
+
+最小核心优先直接实现正式、可复用的 executor handoff，不新增带本 run/Batch/会话特判的
+应急入口。B7 交付前必须将必要能力并入唯一正式实现，删除或替换所有临时控制分支、
+bootstrap 专用代码、重复适配、绕过开关、临时配置和一次性迁移脚本；安装运行时及公开
+文档不得继续依赖临时程序。永久回归须通过正式入口覆盖同平台和跨平台交接、原结果/
+成本保留及旧会话迟到结果不得覆盖新执行者。只保留必要的历史授权、迁移回执和验证证据，
+不把运行日志的留存误当作产品临时代码。临时实现及其引用未清理完，B7 不得声明完成。
+
+### 7.3 审查、黑盒输入与证据保留
+
+本次用户决定仅调整批次归属，不因编号变化重跑产品审或其他已完成流程，也不把技术审
+重跑视为默示授权。新的技术计划须将 B6 收尾和 B7 后续工作的顺序落入依赖、DoD、
+验证、恢复与交接；已有效的 B1–B5 成果不重新立项。若当前 engine 接纳计划的入口仍
+要求旧前置收尾或额外审查，应明确该限制及实际所需决定，不以本计划或主代理判断
+自动增加审查轮次。旧结果是否可继承由 engine 支持的合同处理，不手工标 PASS 或清历史。
+
+黑盒按 engine 新签发动作，以最终正式需求和公开文档重新设计；公开合同来源限于
+`scripts/qa-preparation.md`、`references/engine-regular.md`、`references/user-configuration.md`，
+不读取开发源码、白盒或本节的实现核查结果。来源 manifest 按既有正式入口绑定，不把
+旧动作的结果提交到新动作。依赖允许时黑盒设计与开发并行，不等全部开发结束才补设计。
+
+真实平台样本的延期只能作为本 run 的精确验证处置，由 engine 支持的 waiver/deferred/skip
+合同处理；不是产品需求，不写入 AC-009/AC-010 的通过条件，也不把未测变成 PASS。
+不新增子代理历史网页，不恢复 dispatch_history、--history-output、automatic-dispatch-fix
+或 dispatch-history.html；Codex 可见性只使用正式支持的原生派发及客户端原生列表。
 
 ## 8. 本轮继续执行时定位的等待点
 
@@ -341,3 +574,857 @@ checkpoint 保留校验拒收。这里的拦截是实际生效的；漏做步骤
 
 上述本机材料是复盘证据入口，不成为用户安装插件后的运行依赖。4a 最终应交付通用的
 复用和交接能力，不能写死本项目的 CASE 编号、绝对路径或某个宿主环境。
+
+## 10. B1 开发依据核查（2026-09-11）
+
+本节是已确认正式需求的开发依据，不新增规格或验收结果。唯一需求仍为
+`refactor-plan/stage-4a-requirement.md`，SHA-256 为
+`b793aad2f15c3679b85afb8cab7394e737fba315e40c097e6996983d80d79259`。
+本次只改本计划；没有启动宿主、修改活动 run、冻结用例、既有结果或执行 Git 写命令。
+
+### 10.1 候选、证据等级与十项映射（B1-S1）
+
+只读核查：工作区初始 `git status --short` 为空；`git rev-parse HEAD` 为
+`630c6e7baebbc9c268cdeebcf8a13c9e55e7474f`，与开发 action 候选一致。
+`git merge-base --is-ancestor 7239018374654c85e3c4c917458a05b58a479ab4 HEAD`
+确认指定阶段 4 基线为祖先。需求文件摘要与 action 绑定一致。本节源码结论仅适用于
+该候选；后续修改应按受影响入口复核，不把历史设计当成当前行为。
+
+下面的测试名称是可复用的验证入口，本批没有执行这些 Go 测试，不能读作本次 PASS。
+源码存在、历史记录及当前候选实测三者分开；历史 PASS 原样保留，但不能换绑为本阶段 PASS。
+
+| 要求 | 当前入口、已核实能力与可复用验证入口 | 必要缺口及归属 |
+| --- | --- | --- |
+| REQ-001 | `internal/engine/protocol/task_operation.go` 的 `claimTaskOperation` 检查绑定、用例与依赖；`internal/engine/facade/task_operation.go` 的 `ExecuteTaskOperation` 逐操作 claim/receipt、锁及恢复；`task_operation_test.go::TestTaskOperationQASequenceAdmissionAndReplay` | 现有单操作入口不等于自动消费批次。沿 facade 派生批准清单并连续消费；保留逐条准入与语义交回。属旧批量要求接入缺口，不重建调度。 |
+| REQ-002 | 同一操作有路径锁和回执；`qa.prepare` 支持候选工作区及 repair 工作修改复制；`task_operation_test.go::TestRepairTaskOperationUsesWorkingEditsAndRecovery`；fixture `stage` 支持快照导出和一次 build | 目前 workspace 按 operation ID 分配，不是内容/参数/工具链共用构建。需接通共用准备、未提交内容失效、独立可变状态与前提检查；fixture `prepare` 的旧 workflow 链必须替换，不能原样调用。 |
+| REQ-003 | `internal/engine/runtime/batch.go`、`task.go` 与 protocol preparation/task-operation 的依赖、领取、pending；`protocol/preparation_test.go::TestPreparationConcurrentBatchesNoIntermediateGates`、`facade/task_operation_test.go::TestTaskOperationConcurrentClaimAndUnknown` | 批次并发机制保留；需在连续操作层证明原生等待/单支失败时独立项推进、共享资源串行和容量排队，不能从已有批次测试外推。 |
+| REQ-004 | `internal/engine/protocol/verification.go`、`internal/engine/facade/verification.go` 的 checkpoint/resume；`protocol/repair_regression_test.go::TestRepairCheckpointBlocksCompletedSideEffectsAndAllowsInheritedDependency`；`facade/repair_regression_test.go::TestCollectRetainsSeparateStderr` | 沿 writer 合并增量，不重抄旧结果；接通批量 collect、完整性/文件证据与语义判断。既有恢复/保留规则是应复用能力。 |
+| REQ-005 | `preparationPrompt`、`verificationPrompt` 及 `prompts/actions/development-worker.md`、`qa-execution.md` 是实际派发入口；`facade/codex_test.go::TestMarkdownInstructionsAreBoundAtStartAndRetainedOnReopen`；`development_continuity.go` 保留开发身份 | 需要对实际启动/追加消息、增量投影及全文入口作小批观察，避免继续搬整份状态；不能仅修改未加载的提示文件。 |
+| REQ-006 | `internal/cost/owner.go`、`cost.go` 与 `facade/regular.go::settleOwnerReport` 沿原记录计量；`internal/cost/parse.go` 只注册 Claude/Codex parser；`internal/cost/owner_test.go` | 三宿主用量源缺失；需沿现有 cost 补来源或 unavailable 原因，并补准备/等待/处理阶段与计数投影；不另建账本，不将 task 时间相加当经过时间。 |
+| REQ-007 | `prompts/actions/qa-design.md` 已规定目标/前置、共同步骤、冻结修订与真实身份；`scripts/phase3-qa-fixture.sh` 与 `phase3-qa-codex-run.py` 是复用候选；`protocol/verification_test.go::TestVerificationRejectsIncompleteCheckpointAndRawObligations` | 需要按本次回执参数化、检查前态冲突与可达取证；fixture 的 stage/copy 与旧 prepare 分开适配。历史脚本不是现成已批准的本阶段脚本。 |
+| REQ-008 | `internal/engine/protocol/preparation.go` 的资源记录；`facade/preparation.go::cleanupPreparationResources` 遍历现行/历史 preparation 资源和回执；`facade/facade_test.go::TestDriveRecoversTerminalCleanupIntentBeforePublishingSummary` | `qa.prepare` 写入 resources/qa-operations，现有 preparation 清理枚举不能证明覆盖此根；需把 intent、工作/临时/输出、依赖保留和单例/终态清理接通，验证失败不误报完成。 |
+| REQ-009 | `facade/runtime_context.go` 已有 `nativeRuntimeAdapter` 边界，但仅注册 codex；`facade/repair_regression_test.go::TestNativeRuntimeBoundaryForEveryInstalledHost` 是边界入口；安装与生命周期见 §10.2 | 三宿主真实驱动是新增能力；通用入口解除 Codex 限制、宿主文件实现原生接口，不能把安装/生命周期支持改称完整支持。 |
+| REQ-010 | 本计划历史 §2、§3、§8、§9 与 `refactor-plan/stage-3-5c-validation.md`；仓库 `references/phase4-*-native-*.json` 保存部分开发验证记录 | 按 §10.3 固定最小场景与口径；本批仅核查和制定执行依据，真实验收、计时、Seal、集成安装由后续已签发 action 完成。 |
+
+旧要求归属：3.5c REQ-002 对应本轮 001/002/003，REQ-003 对应 002/007，
+REQ-004 对应 004/005/006，REQ-008 对应所有相关阶段 4 接入；不再立同义能力。
+
+证据索引与可保留范围：
+
+- `references/phase4-b1-native-evidence.json` 明示 developer validation，包含 Codex claim、身份、停止及 cost；其中原生 claim 候选为 `24a0029ca9df0db65db45b2fb53389a283893c80`，并非本次候选。
+- `references/phase4-b2-native-evidence.json`、`phase4-b2-continuity-native-evidence.json` 可定位原生并行准备与同开发身份 CONTINUE/PASS 历史记录；后者入口为 `TestDeveloperNativeContinuation`。保留原绑定，不能据此宣称三宿主通过。
+- `references/phase4-b3-native-evidence.json`、`phase4-b3-native-continuation.json` 保存原生流程、返修和恢复线索；continuation 明确保留原始 `FAIL_TIMEOUT`（1800.548 秒），续跑候选 `1d46b65457338337112caacaa82fdc8a0086df52`。续跑完成不抹除原失败，也不把该区间称为本轮耗时。
+- `references/phase4-release-regression.json` 为历史回归索引。上述 JSON 中外部 transcript、临时日志及 §9 的工作区外 handoff 路径本批未读取；只有仓库记录得到核查，外部原始流与绑定完整性待有权限的后续 action 验证，不搬运或制造替代证据。
+- 可复用函数/脚本入口：fixture `stage --source --snapshot --output` 需要 Git/Go/tar、不可存在的输出目录，绑定提交快照并构建；不包含未提交 overlay。`prepare --project-root --home --source --candidate --receipt [--reuse-build]` 会复制源码、安装并执行旧 workflow，不可作为阶段 4 准备路径直接使用。静态查看内容即可，不 source/import；其 Git 写操作也不属于本批。新版本须消费实际 candidate/identity/resource 回执。
+
+### 10.2 三宿主能力证据与适配路线（B1-S2）
+
+核查范围限本工作区源码和已保存记录；未探测工作区外安装、配置或私有会话，未调用外部模型。
+“待核实”指原生能力证据不足，不是认定宿主没有该能力；它是后续接入必须解决的明确缺口。
+
+| 能力 | WorkBuddy | ZCode | DSH |
+| --- | --- | --- | --- |
+| 安装/配置 | `internal/host/host.go` 无 descriptor；需新增必要安装配置 | `internal/validate/zcode_hooks.go`、README：全局 `.zcode/cli/config.json`，项目只装 skill/AGENTS | `internal/validate/dsh_hooks.go`、README：全局 `$DSH_HOME/cordis.patch.yml` 和 Cordis 插件，项目只装 skill/AGENTS |
+| 原生启动 | 无 runtime driver/本地原生记录，待核实 | `provider_zcode.go` 观察 Agent/Task 的 PreToolUse，不能主动启动；启动 API/CLI 待核实 | `dsh_plugin.mjs` 观察 subagent/start，不能主动启动；启动 API/CLI 待核实 |
+| 身份 | 原生稳定任务身份待核实 | 当前 lifecycle 使用 tool call ID（`zcodeCallID`）；源码明确仅是相关键，不能冒作可恢复 child identity | `provider_deepseek.go` 读取 agent_id/agentId/subagent_id；插件保留 start child 至 end；能否以此续用同 session 待核实 |
+| 续用 | 原生 resume 与同身份回执待核实 | 未实现 runtime resume，稳定 session 映射待核实 | 未实现 runtime resume，agent ID/session/run ID 对应及持久性待核实 |
+| 结束 | 结束/中断与退出状态待核实 | PostToolUse/PostToolUseFailure 是工具回执关闭，不能证明 worker 可控终止 | subagent/end 可观察，插件卸载会 drain hooks；不能证明 engine 能停止整个原生任务 |
+| 结果/受控工具 | 原生结果格式、工具注册与受控桥待核实 | payload 可读 transcript_path；无 runtime result reader/工具配置适配，待核实 | payload 可读 transcript_path；无 runtime result reader/工具配置适配，待核实 |
+| 用量 | host/parser 均未注册 | `internal/cost/parse.go` 未注册，当前不可宣称可计量 | 同左；生命周期 transcript 路径不等于已支持用量格式 |
+
+接入路线固定为现有 `nativeRuntimeAdapter`：各宿主独立文件实现 `capture`、`validate`、
+`transcript`、`toolConfig`、`execute`、`runModel`、`observeModel`，由 registry 选取；
+engine 继续拥有 claim、attempt、准入、恢复、结果接纳与终态。复用现有 native bridge，
+不能另建宿主调度、hook 权限系统或借其他宿主/外部模型代跑。
+
+具体原生命令尚无本工作区证据，不在此虚构 CLI flags：接入 action 必须先取得版本、
+原生启动结果、同身份续用、退出/中断及原始结果样例，再将它们映射到上述接口。
+ZCode 尤须证明 call ID 与持久任务身份的区别；DSH 须证明 session/agent 映射及可控结束；
+WorkBuddy 须先核实可用原生传输和安装路径。若能力不足，按原契约报告缺口，不以 shell
+包装其他模型宣称该宿主支持。三者目前完整 regular 支持均未验证。
+
+配置沿 `internal/settings/settings.go` 的用户 `.config/formal-gates/config.json` 和项目
+`.gates/config.json`（项目逐字段覆盖用户）。当前默认 capacity=4、codexExecutable=codex，
+已有 model/reasoningEffort；未知字段和 null 拒绝。新增 executable/宿主选项仅在实际接口
+确定后接入同配置并在 `references/user-configuration.md` 写明默认值、单位、范围和错误。
+本批不填写假配置、不改变用户模型、不新增预算。用量可用则在 `internal/cost` 加实际格式
+parser 并测试增量；不可用保留 unavailable 及原因。
+
+### 10.3 固定小场景、覆盖分配与比较口径（B1-S3）
+
+比较业务固定为小 Go CLI `greet`：无参数精确 stdout `Hello, world!\n`、stderr 空、exit 0；
+一个姓名参数 `Alice` 输出 `Hello, Alice!\n`、stderr 空、exit 0；两个参数 stdout 空、
+stderr `usage: greet [name]\n`、exit 2。只用标准库、一个可执行入口，无网络和依赖安装。
+这是后续小样本 fixture 的规格，不是本项目新增产品或冻结 QA case。本批不创建它。
+
+确定性本地覆盖使用这个业务及小型操作集合：默认/姓名共用准备，错误参数用独立可变目录；
+安排两批，首批留证后中断，第二批只补剩余。另一独立分支在等待及一支失败时继续，
+同一共享可变资源的两项串行。对姓名分支引入未提交修改再修复，断言输入摘要变化、
+受影响构建刷新，未变准备复用。预期错误输出不能被 exit 0 掩盖。另用本地边界测试覆盖
+名单外、倒序、重复、缺失/冲突结果、前态矛盾、容量排队、清理失败及恢复；不增加原生模型样本。
+
+| 验收入口分配 | 必须取得的证据 | 不可替代边界 |
+| --- | --- | --- |
+| 本地 facade/protocol/fixture 测试（REQ-001～008、010） | 实际 prepare/target/collect 的回执、分流输出和 exit；批次精确集合、资源目录、构建次数/摘要、旧条目字节保留、合法 remaining | 不用 helper 返回 true 或 show 代替操作；共享准备不抹去状态隔离 |
+| Codex 小体量真实 regular 主样本（REQ-001～010 的通用链路） | 受理确认、审查、开发与黑盒并行、QA、门、实际失败返修、受影响验证、必要最终验证、Seal 及清理的同 run 记录 | 复用 installed harness 的入口/取证方法，不能把旧 show 场景称为完整业务流程；故障仅在隔离 fixture 中产生，不改活动状态或伪造门结论 |
+| WorkBuddy、ZCode、DSH 各一次同业务 regular（REQ-009、010） | 每宿主原生版本、身份、启动、续用、结果接纳、QA/门到 Seal；各自在首条合法 checkpoint 后中断并恢复同身份；每轮核对资源清理 | 至少一条主样本真实覆盖返修；三宿主各自覆盖中断恢复，不复制大型验收，不要求不存在的旧宿主引擎基线 |
+| 失败收尾/abort 与清理恢复（REQ-008） | 本地隔离测试逐例/共享资源依赖、终态清单、正式结果保留；原生各样本核对 Seal 后资源状态 | 清理失败必须保持未完成，不能只检查终态文字；无必要不为 abort 再开完整模型流程 |
+
+执行配置在比较开始前固定：Git、no-split、regular，capacity=2；QA 操作按两批分组，
+不声称当前已存在 batch-size 配置。相同 Go/OS/架构、模型与推理强度、宿主版本、
+源快照、构建参数和缓存初态通过现有配置投影与命令回执保留。模型/推理强度沿该执行
+已确认的用户配置，前后完全相同；当前输入没有提供比较模型具体值，因此在有效配置
+被捕获前不得开始性能比较，也不得擅自选择或更换模型。新宿主间不作同模型性能排名。
+
+来源只用既有 event、operation receipt、原生 transcript 和 cost/show 投影：
+
+- 整轮经过时间取同 run 开始至终态清理完成（含等待/恢复间隔）；另列暂停区间，不能悄悄扣除。
+- 准备/构建按实际命令开始结束区间与内容/参数/工具链键统计创建、复用、失效原因。
+- 模型往返按实际 spawn/resume 次数，逻辑 TaskKey 和模型请求数另列；同身份累计用量只结算新增量，按来源 ID 去重。
+- 结果处理按 collect 到合法 checkpoint/submit 的区间、次数与新增条目数；失败/重复拒收仍保留，不能只挑成功快路径。
+- 并行时间取区间并集或单独报告各任务时间，不能直接求和当 wall time；资源消耗取实际可得峰值并发/目录占用等观察，无来源则 unavailable，不填零。
+- 交接到首次有效结果取本次追加/派发至首个被接纳新增结果；候选变化列出保留、适配、重建及重跑原因，不能将旧结果当新增产出。
+
+历史可比性结论：`stage-3-5c-validation.md` 的样本为两条旧 `workflow show`，
+Codex 0.153.4、gpt-6-astra/xhigh、Go 1.26.4、macOS 15.7.9 arm64；统计仅 QA 三阶段，
+排除安装/构建/受理，优化后从四次取最快一组。它可复用指标解释，不能作为以上业务
+完整流程的数值对照。§3 阶段 4 token 比例也只是历史工作量观察，未提供同场景分段基线。
+仓库原生 canary 记录用于历史功能线索，候选/范围/模型与本场景不同，不可直接拼表。
+
+因此目前没有已核实的可比旧整轮样本。若后续仍需量化新旧差异，仅对同配置 Codex
+小场景前后各一次；确定性部分优先在指定阶段 4 基线与后续候选各测一次。新宿主各一次
+功能样本足够，不补旧引擎基线。全部失败/中断保留；单样本只称本次观察，多样本才报
+中位数和最慢值。局部机械工作减少不外推整轮提速，未证实总耗时改善不单独判功能失败，
+不为计量重跑阶段 4 全套或有效 PASS。
+
+### 10.4 本批实际自检
+
+B1-S1：只读 Git 候选/祖先检查、需求 SHA-256 检查通过；Python 静态校验十项映射、
+所列项目路径存在及 Test 符号存在通过。B1-S2：逐项读取 host registry、runtime adapter、
+lifecycle、安装插件与 cost parser，确认上表已实现/待核实边界；三宿主八类能力均有记录。
+B1-S3：人工对照历史比较的范围、候选、配置与选样方法，核对小场景的真实流程、返修、
+三宿主恢复及清理覆盖入口；静态检查相关条目存在通过。`git diff --check` 通过，唯一修改
+为本计划。首轮路径校验把 `internal/cost` 目录误当文件而失败，改为允许目录索引后通过；
+同时修正 owner 入口名称为源码实际的 `settleOwnerReport`。这些是文档检查，不是 Go
+测试或原生宿主验收；本批未运行构建、fixture、模型调用或完整流程，未产生新的功能 PASS。
+
+### B4：材料、进度、计量与公共操作的落实核对
+
+| 需求 | 保留的既有入口/证据 | 本批补齐 |
+| --- | --- | --- |
+| REQ-005 | `assemblePrompt`、每次原生启动/续用的 `prompt.txt`、当前候选及身份绑定 | 完整冻结需求文本只带一次，不重复派生 projection；`workflow show --summary` 提供实际消息文件入口。文本限定角色仍收到完整正文。 |
+| REQ-005/006 | task-operation request/process/observed、现有 `PendingQA` 与 checkpoint | 回执接纳 revision 用于只取新增操作；查询无写入，同一快照结合当前原生身份投影剩余/受阻关系。记录 run 起点、准备/收集与命令起止，显示具体 argv、退出码、准备复用与重复操作的实际绑定差异。 |
+| REQ-006 | `internal/cost` 同身份扣除、owner 基线与重叠判定、原生 transcript | 缺失来源保留原因；缺失测量序列化 null，真实测得的零仍是零。摘要仅取既有账本的 measured 小计与缺失来源，不另结算；单项经过时间含等待，不累加重叠时间。 |
+| REQ-007 | 现有 QA design/review 的实际加载入口和增量修订路径 | 增加逐步前态/后态、可达性及退出/输出/语义取证核对，给出 Seal/abort 后继续同 run 的冲突例；公共操作、参数、依赖及版本限制集中在 `scripts/qa-preparation.md`。静态检查 AST / `sh -n` 不启动被检查脚本。 |
+
+开发验证入口：`internal/engine/facade/progress_test.go`（增量游标、当前身份
+pending、候选变化、实际消息路径、等待时间、缺失时间、两种 QA 角色的实际提示词入口、
+终态前置不可达、静态检查副作用与错误脚本）；`internal/cost/json_test.go`（缺失 null
+与真实零的区分及 JSON 恢复）。既有 owner 区间/重叠、续用计量与候选准备变更测试继续
+使用，未重建或重跑历史正式 PASS。
+
+开发自测曾暴露两处已修复的问题：接纳 revision 应由事件边界传入，不能从 State
+读取不存在的字段；新增提示词测试需先给两个角色分配工作区。其失败与后续验证输出
+保留在本 action 的原生记录中。新增 pending 检查还验证了查询必须使用当前原生身份，
+而不是初始 claim 中尚未绑定的 identity。
+
+计量限制：旧记录缺少的时间、调用观察或重复理由明确 unavailable；摘要的 issued-action
+数量不估计未来动态派发任务，操作 COMPLETED 不代表语义 PASS。旧
+`phase3-qa-codex-run.py` 是固定 3.5c 比较脚本，不能导入来发现接口，也不能作为当前
+stage-4 操作直接执行。本批未运行新宿主模型样本，不据局部摘要或静态测试宣称整轮提速。
+
+本批最终验证：`go build ./...`、`go test ./...` 均实际退出 0；最后的进度显示字段
+补充后，`go test ./internal/engine/facade -run 'TestProgress|TestOperationDuration|TestPromptKeeps|TestStaticChecker|TestQAReadiness'`
+退出 0，最终构建再次退出 0。`python3 scripts/qa-static-check.py scripts/qa-static-check.py scripts/phase3-qa-fixture.sh scripts/phase3-qa-codex-run.py`
+对三个文件均报告 syntax-only PASS；`git diff --check` 通过。上述是开发自测，不替代
+后续引擎签发的独立 QA，也不声称新增宿主或完整模型流程已验证。
+
+### B5：通用协议入口与尚缺的原生证据
+
+本批尚未完成。通用协议的 `InitRegular` 与 regular 模式确认不再另设 Codex
+名单；公开受理和执行仍由 `nativeRuntimeAdapter` registry 拒绝没有驱动的宿主。
+`regular_provider_test.go` 共用现有协议 fixture，覆盖 Codex、WorkBuddy、ZCode、
+DeepSeek Harness 的 provider 绑定、受理确认、领取、原生身份绑定、磁盘恢复后的
+结果接纳和 COST_PENDING。它是确定性协议测试，不是宿主原生执行证据，也不覆盖
+尚未实现的宿主传输、工具约束和资源消费。
+
+本 native action 的入口检查：PATH 未找到 `workbuddy`、`zcode`，未据此推断
+其他安装位置不存在；`dsh --version` 返回 `0.1.5-rc.1`，
+`dsh --profile headless --help` 仅公布单任务文本输入、最终消息输出和帮助选项。
+未执行模型任务；这些帮助输出不能证明稳定任务身份、同身份续用或结构化结果来源。
+当前受控 `model.run` 按 action 的 provider 绑定选择 adapter，不能用本 Codex
+绑定获取其他宿主的原生任务样例。
+
+B5-S2/S3 仍缺 §10.2 要求的合法原生入口、启动/续用/结束/结果样例和 WorkBuddy
+安装路径证据；不能据此虚构三个驱动。B5-S4 的宿主配置与平台差异验证也未完成。
+原生样例取得后继续本批，完整 regular 验收仍归 B6；保留本批开发者身份。
+
+本次实际自检通过：`go test ./internal/engine/protocol -run
+TestRegularProviderBindingAcrossRecovery -count=1`、`go test
+./internal/engine/protocol`、`go test ./internal/engine/facade -run
+TestNativeRuntimeBoundaryForEveryInstalledHost -count=1`、`go build ./...`、
+`go test ./...` 和 `git diff --check`。未执行三个宿主的原生流程，也未将这些
+本地检查计作 B5-S2/S3/S4 或 B6 的 PASS。
+
+
+#### B5 第三次续用：补充材料核对（2026-09-12）
+
+已读取本 action 固定的六份 SupplementalSources 全文。它们是公开接口或本机发现
+记录，不是新的执行授权，也没有模型任务或真实流程通过证据。前述 PATH 观察保留为
+首次检查事实；新增事实如下：
+
+- WorkBuddy 2.137.1 的随包入口为 `/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy`。
+  帮助公布 `--session-id`、`--resume`、`--output-format stream-json`、`--json-schema`、
+  `--tools`、`--strict-mcp-config`、`--mcp-config` 和模型/推理强度参数。
+  尚缺结果帧及用量字段样例、MCP 操作桥实证，以及正式安装配置文件位置。
+- ZCode 0.16.5 的随包入口为 `node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`。
+  帮助公布 `app-server`、`--resume sess_...`、`--cwd`、`--settings` 和工具名单参数。
+  尚缺 ZCode Protocol 的方法与参数正文、原生结果/身份/用量样例；不能因命令也叫
+  app-server 就套用 Codex 协议。
+- DSH 文档明确 `dsh --profile sdk` 和 `dsh --profile acp` 为受支持的 stdio 入口。
+  ACP 文档列出 session/new、session/list、session/resume、session/close，支持绝对 cwd、
+  MCP 声明及公开 model/reasoning_effort；profile 文档没有包含其链接所指的完整
+  ACP 方法矩阵、MCP 信任模型、更新映射和停止原因正文。未将 headless 帮助的限制
+  推广为整个 DSH 的能力限制。尚需这些协议细节以及受控真实调用样例。
+
+代码核对发现 `native_bridge.go` 实际只由 Codex driver 调用，并使用 Codex 的
+thread/start、thread/resume、动态工具及 app-server 参数。本次移至
+`runtime_bridge_codex.go`，入口名明确为 runCodexBridge；不改变执行行为，不把该
+传输当作新增宿主的共用协议。原生接口缺口缩小但未消失，B5-S2/S3/S4 仍未完成。
+
+本次增量验证通过：`go test ./internal/engine/facade -run
+'Test(TaskOperationNativeBridgeQA|NativeOperationToolMatchesRoleAdmission|RegularCodexNative|DeveloperNativeContinuation|WhiteboxAuthoringTrialsBeforeFrozenQA)'
+-count=1`（退出 0），并完成 `go build ./...` 与 `git diff --check`。
+这些测试仍使用现有本地验证设施，不是 WorkBuddy、ZCode 或 DSH 的原生验证。
+前次全项目测试通过记录保留，本次没有为文件归属和名称调整重跑整套测试。
+
+#### B5 第五次续用：WorkBuddy 配置与用量合同
+
+新增固定材料已补齐 WorkBuddy 配置位置：用户 `~/.codebuddy/settings.json`，项目
+`.codebuddy/settings.json`，项目本地 `.codebuddy/settings.local.json`；启动指令文件
+为 CODEBUDDY.md。SDK 文档给出 AssistantMessage 的 uuid、session_id 和
+message.usage，以及 ResultMessage 和 Usage 类型。这些是公开合同，尚无真实调用样例。
+
+沿 internal/cost 增加 WorkBuddy SDK JSONL assistant 用量解析，并注册 cost-only
+宿主描述；安装和 regular 入口仍未开放。按消息 UUID 去重，仅累计 assistant 的
+input_tokens、output_tokens、cache_read_input_tokens；不再叠加 result 汇总或后台
+TaskUsage.total_tokens，不把缺失必需用量补零。缺失必需身份/用量、负值、重复消息
+用量冲突和混合会话返回 unavailable；可选 cache_read_input_tokens 未给出时为 0。
+保留现有计量口径，cache_creation_input_tokens 不进入已定价类别。
+
+新增 SDK schema fixture 测试覆盖上述边界，并通过现有 CaptureBaseline/MeasureOwner
+验证追加消息只结算新增量。这不是原生观测，不代表宿主成本来源已实机验证。
+
+新增索引给出 ZCode/DSH 安装包实现的定位和短片段，但未包含完整请求/响应 schema；
+索引本身声明片段不是完整合同。后续仍需按本 action 合法输入提供完整协议材料，
+以及允许三宿主真实启动/续用/结束与受控工具调用的执行途径。WorkBuddy 安装配置
+位置与 SDK 用量字段不再列作缺失；三个驱动、安装接线及 B5-S4 仍未完成。
+
+本次实际验证：`go build ./...` 与 `go test ./...` 均退出 0，成本、宿主登记、
+CLI、生命周期及全部现有引擎测试通过；`git diff --check` 通过。用量来源测试的
+数据明确标注为 SDK schema fixture；未执行三宿主原生模型调用，B5 不作整体 PASS。
+
+#### B5 第六次续用：DSH ACP 完整实现核对
+
+本 action 新增 DSH ACP 0.1.5-rc.1 的固定实现和类型材料，已按会话、MCP、
+模型控制、更新及关闭路径核对。三平台本机已安装的说明作为环境事实；不再以缺少
+独立 CLI 或 DSH 会话方法正文作为阻塞原因。未执行原生模型调用。
+
+可据源码确定的适配约束：
+
+- `session/new` 接收绝对 cwd 和 mcpServers，创建并刷新持久会话后返回 sessionId、
+  configOptions。`session/resume` 使用请求中的 sessionId，拒绝活动会话、子代理会话
+  和 cwd 不匹配，成功返回 configOptions；不能要求它再次返回 sessionId。
+- `session/prompt` 的 prompt 为内容块数组；文本输出来自 session/update 的
+  agent_message_chunk，含 messageId。需按会话和请求关联增量消息，并依 engine
+  结果 schema 校验正文。stopReason=end_turn 不是成功 oracle：转换函数也将
+  aborted、blocked 映射为 end_turn；错误分支在实际结算时可返回 JSON-RPC error。
+- `session/cancel` 是通知；`session/close` 是请求，等待活动、输出、可续用后代、
+  持久化刷新及 agent disposal。关闭错误不能当作资源清理成功。恢复会重新建立
+  请求声明的 MCP 连接，不复制另一会话的活动状态。
+- MCP stdio command 必须为绝对路径，环境使用 name/value 数组；HTTP 支持，
+  其他 transport 拒绝。此能力可用于接现有任务操作桥，但仍需实现桥与绑定校验。
+- 模型选项 id 为 model，其 value 为公开 configOptions 给出的 provider/model
+  JSON 数组字符串；reasoning_effort 同样从公开选项选择。不得将任意模型字符串
+  当成可用选项或静默改用其他模型。
+- usage_update 的 used/size 是上下文占用和窗口容量，不能接入计费 token 累加。
+  未取得持久计量事件字段与来源绑定前，DSH 成本继续 unavailable。
+
+尚未解决的接入前提更具体地收敛为：DSH 原生 profile 如何按角色限制内置工具、
+嵌套代理和私人配置，以及所有需要控制的调用实际经过何种入口。ACP 实现只显示
+approval/request 事件转发；不能由此推出所有工具都经过该事件。需要相应现有
+配置合同/实现材料，不能以新 hook 或权限系统补洞。ZCode 完整方法和事件 schema
+仍未提供。当前 action 也仍没有可执行三宿主真实模型探测的受控操作；不得自由
+shell 调用或改写已冻结 QA。故本次仅更新已核实路线，不注册未完成的 DSH driver。
+
+本次无代码修改、无自测失败；只做文档差异检查。attempt-5 的构建与全项目测试
+通过记录保留，未因读取补充材料重跑。
+
+
+#### B5 第七次续用：ZCode 正文核对与接入边界
+
+本次读取动作固定的 ZCode schema、会话处理正文及资料索引，未执行该包或模型。
+据实际 schema/处理调用（不依赖索引中的压缩符号名称）确认：
+
+- 传输封套为 `{id,method,params}` / `{id,result}` / `{id,error}`，通知为
+  `{method,params}`，不是 ACP JSON-RPC 2.0；平台不能共用 Codex/DSH 封套。
+- `session/create` schema 虽含可选 sessionId，实际 `Dn(lCt,...)` 处理明确拒绝
+  未带 importedHistory 的指定 ID。普通启动必须取得宿主返回身份，恢复使用
+  `session/resume`，不能通过指定旧 ID 创建替代会话。
+- create/resume 接受 toolAllowlist/toolDenylist；构建运行配置时分别映射到
+  toolAllowlist/toolDisallowlist。字段存在不等于全部内建工具、子代理、私人配置
+  已受约束，仍需核实实际执行边界。
+- `session/send` 返回 accepted 和 revision，只证明接收；完成事件的 resultType
+  区分 success、cancelled 和各错误终态。适配应按 sessionId、inputId 和事件序号
+  关联恢复观察，不能以 accepted 或事件名 turn.completed 单独判成功。
+- `session/usage` 处理在 sessionStore.queryTaskUsage 不存在时返回全零。
+  因而计量接入必须先证明真实来源存在；仅拿到零响应不能将 unavailable 改为零。
+  有效来源返回 input/output/reasoning/cache 等累计字段，其类别包含关系尚需核实。
+
+用户重申的平台解耦约束沿现有接口执行；集中步骤见
+`references/user-configuration.md` 的 Runtime adapter 接入与平台更新。
+平台协议、配置、身份、结果和用量留在各平台适配文件，公共逻辑复用，不另造框架。
+
+ZCode 方法/schema 正文不再作为笼统缺口。仍未完成的是三个真实驱动、安装接线、
+工具边界核实、用量来源接线及原生验证。当前开发动作的 model.run 沿绑定的 Codex
+provider，未提供切换到三宿主的受控调用能力；本次未自行启动其他模型或调度动作。
+本次仅补充文档，不重跑未修改代码的自测；保留此前测试记录，Batch 继续未完成。
+
+#### B5 第八次续用：适配组件代码与 DSH setup 合同
+
+本次开始补驱动组件：公共任务操作工具定义从 Codex bridge 移到
+`runtime_operation_tool.go`，原有调用继续复用。新增 WorkBuddy 平台文件：
+`runtime_command_workbuddy.go` 按已提供 CLI 合同构造 print/stream-json 命令、
+显式模型与可选 effort、原身份 resume、空内建工具列表、严格 MCP 文件和独立设置来源；
+不设自动模型回退或新增时间/token 预算。`runtime_result_workbuddy.go` 提取原生结果，
+验证会话身份、明确成功终态和 JSON 对象，拒绝混合会话、错误/重复终态、缺失终态及
+截断流。结构化结果优先，保留现有 engine writer 的最终接纳权。
+
+以上是尚未注册的驱动组件，未接通进程执行、MCP 服务端、安装或结果 writer，
+不能视为完整 WorkBuddy 支持。fixture 不启动模型；命令参数检查也不证明宿主实际
+限制生效。定向测试覆盖命令构造、14 个结果场景及既有按角色工具广告契约，退出 0。
+
+按需核对新增 DSH `dsh-tools` 类型正文和 `dsh-agent` setup 类型：
+`restrict` 对全局工具施加相交限制，scoped 注册仍可见；`guard` 可在 agent.ctx
+作用域单调拒绝。create/resume 都有发布前 setup/commit 接口。已有这些能力，
+角色策略装配属于 DSH adapter 待实现工作，不再作为外部合同缺口。
+
+真实跨宿主调用的具体当前边界：`protocol.CurrentTaskOperationBinding` 对完整
+claim 做 DeepEqual，改 provider 会返回 INTENT_MISMATCH；
+`facade/task_operation.go` 的 model.run 按 q.Binding.Provider 选择 adapter，
+`runtime_context.go` 目前只注册 Codex。故不能篡改本 action 的 provider 试跑。
+最小处理是在驱动完成后由有权签发动作的 engine 路径提供该宿主的合法绑定与
+对应验证动作；本开发者继续先做代码与本地 fixture，不自行发起调度。
+
+剩余：完成三个驱动的执行/恢复/工具桥与安装配置接线，消费现有资源、用量与结果
+入口，补共享验证并经合法宿主绑定完成真实入口核验。B5 未完成。
+
+#### B5 第九次续用：公共操作分发与 MCP 传输组件
+
+新增 `runtime_operation_dispatch.go`，Codex 原生工具调用已接入此公共分发函数：
+按当前 engine 记录取 claim/revision，校验原生身份，使用宿主提供的稳定 requestId
+进入既有 RunTaskOperation；不允许传输自行指定 provider、候选或批准范围。
+新增 `runtime_mcp.go` 的 stdio tools 传输组件，复用公共工具 schema，显式携带
+稳定 requestId，保留引擎错误，不将 JSON-RPC 连接内请求编号当成恢复身份。
+本地 fixture 覆盖工具列表、参数传递、相同 ID 重送、引擎拒绝、缺失 ID、错误工具、
+通知不执行操作及损坏流；组件尚未接入可执行 MCP 服务入口或 WorkBuddy 进程。
+
+本次定向测试中的 TestTaskOperationNativeBridgeQA 是 opt-in 测试，本次跳过，
+不是原生 PASS。实际执行通过的定向项是 MCP、公共工具定义和 WorkBuddy fixture。
+主代理补充 CLI 实测：WorkBuddy 2.137.1、ZCode 0.16.5、DSH 0.1.5-rc.1，
+三个 --version 均 exit 0；这是提供的入口证据，本开发动作未重跑或据此宣称会话通过。
+无需因未在 PATH 另装 CLI，安装入口不是当前代码工作的阻塞。
+
+本次最终检查：`go test ./internal/engine/facade -count=1` 退出 0（222.491s）；
+另外新增的 `TestNativeOperationDispatchUsesEngineBinding` 单独实际执行通过（5.801s），
+覆盖错误身份、缺失 ID、损坏参数与 QA 前置拒绝，确认拒绝后未新增 operation。
+`git diff --check` 通过。未开启 opt-in 原生模型测试。
+
+#### B5 第十次续用：MCP 服务入口接线
+
+已将 stdio MCP 组件接入 facade.ServeNativeOperationMCP 和现有 CLI drive 的
+`--operation-mcp` 分支；要求已领取、未完成动作和已观察的原生身份，不创建动作，
+每次工具调用仍经过公共 dispatch 和 RunTaskOperation。冲突参数在打开 run 前拒绝。
+WorkBuddy 平台配置函数生成该 CLI 的单个 stdio MCP server 配置，参数按数组传递，
+不使用 shell 拼接或合并私人 MCP 配置。文档记录默认值与错误。
+
+本地定向 fixture 验证 CLI 参数拒绝、facade 身份检查、合法绑定转交引擎前置拒绝、
+MCP 协议组件和 WorkBuddy 配置数组，均通过；未开启真实模型测试。
+完整三宿主驱动、首次原生启动与身份观察的接线、作者工具配置、安装与计量/资源/
+结果处理及平台原生验收仍待实现，B5 不作 PASS。
+
+#### B5 第十一次续用：WorkBuddy 进程观察、恢复与入口配置
+
+新增 WorkBuddy 进程执行组件：消费已构造命令、显式 workspace/job/action，先将原生
+stdout 持久化再在 system/init 时回传观察身份；记录 stderr、PID、动作、参数、开始/
+结束时间及退出码。解析或附着失败停止本次进程组，不创建替代会话；日志使用独占创建，
+禁止同一 job 被重跑覆盖。仅在成功终态、零退出、日志/结束记录保存成功后写 answer.json。
+新增恢复读取只查既有 process.json 与 stdout.jsonl，缺失退出证据或未停止返回 UNKNOWN，
+非零退出、动作不符、身份冲突不接纳；不启动进程。
+
+本地假进程测试验证：子进程等待身份回调后才输出终态，回调可读到已落盘身份；
+截断输出、原生成功 JSON 后退出 7 均保留失败；重跑相同 job 被拒绝；恢复得到相同答案，
+缺失/未完成退出记录被拒绝。测试子进程是 Go 测试程序，不是宿主或模型。
+
+三个宿主的可执行入口选项已加入 internal/settings 的既有 JSON 合并、来源记录和
+设置快照：workbuddyExecutable、zcodeExecutable、zcodeScript、dshExecutable。
+测试默认值、项目覆盖、来源及错误值；文档注明单位、范围和默认值。
+这些配置与进程组件仍待完整 adapter 消费，未注册新宿主，B5 仍未完成。
+
+随后接通 `runWorkBuddyBridge`：检查当前已领取的宿主、attempt 与运行环境绑定；
+新建时保存请求 session ID，续用只接受已观察身份；生成 MCP 配置后调用进程组件，
+system/init 的实际身份通过原 SOURCE 入口附着。MCP 可在该身份尚未附着时完成初始化
+和工具列表交换，但操作仍因身份未被观察而拒绝，不会将请求 ID 注册为 SOURCE。
+这个启动顺序避免要求 MCP 初始化之前就已有原生 init 事件；没有弱化工具执行绑定。
+桥仍未注册到公共 runtime adapter，也未完成作者工具与累计 transcript/完整生命周期。
+
+本次 `go test ./...` 退出 0（facade 259.894s）；它覆盖进程/恢复及设置改动。
+其后启动顺序与桥接改动另跑 WorkBuddy、MCP、运行环境定向测试及宿主绑定拒绝测试，
+均退出 0。未运行 opt-in 宿主模型测试，不将这些 fixture 视作原生验收。
+
+
+B5 attempt-11 续行：将原 finishCodex 的结果接纳提取到 finishNativeResult，继续使用
+原 preparation/review/verification 与 source writer，传输负责来源证据；构建通过。
+WorkBuddy 命令补角色工具列表及宿主默认模型行为，首次请求身份改用 UUID 格式。
+WorkBuddy 定向组件测试通过（5.103s；默认模型/角色参数相关增量测试 0.526s）。
+ZCode 已增加 app-server 参数、create/resume 请求构造和 turn 结果观察；定向测试通过
+（退出 0）。原生 send accepted 不作为完成，非 success 终态不提供结果。
+这些实现尚未注册为完整 runtime adapter，安装、执行/恢复/资源/计量完整接线仍待完成。
+本 worker 没有启动真实平台模型测试。按用户最新决定，困难平台实跑延期、未验证不记
+PASS；不自行调整正式需求或 Seal 条件，相关变更由主代理处理。MCP 不作为统一产品目标。
+
+本次进一步接线：ZCode 原生请求交换已连通 create/resume、订阅、输入与 close，实际
+输入发送前先执行身份附着回调；fixture 覆盖拒绝附着及 accepted 后 EOF 不得成功。
+WorkBuddy 与 ZCode 共用 runNativeStreamProcess 保存原始输出、stderr、process.json、
+退出码与结果文件。WorkBuddy 回归退出 0；该测试使用自身测试程序，不启动宿主模型。
+DSH 增加原生工具插件与 ACP profile overlay：沿原 ctx.tools.register/restrict/guard，
+通过新 CLI --operation-native 请求路径复用 dispatchNativeOperation 的引擎绑定检查。
+ACP 依赖 formalGatesNativeReady，以保留配置先于原生启动的顺序；不覆盖已有模型配置。
+Node 原生工具注册 fixture 通过（1 test，0 skipped），CLI/配置定向测试通过。
+仍未完成公开 runtime 注册、三宿主完整执行/恢复、累计计量和资源接线、WorkBuddy安装；
+DSH ACP 会话传输尚待实现。现有 DeveloperRecovery.Outcome 仍限定 thread/resume，
+必须在接入公共开发续用前消除该 Codex 假设。未把组件、安装或未执行实跑等同完整支持。
+
+最后一组低成本定向测试（WorkBuddy、ZCode、DSH、NativeMCP、NativeOperationDispatch）
+退出 0，facade 20.082s；go build ./... 与 git diff --check 均退出 0。WorkBuddy 使用
+进程级 bypassPermissions 配合显式工具与严格 MCP 配置，不靠未配置的交互授权才能调用
+已授予操作。真实平台验证仍未执行，完整接入未完成。
+
+### B5 当前实现汇总（attempt-11；覆盖上文各轮组件未接线状态）
+
+本节描述本次实现状态；上文逐轮记录保留为历史，不能把当时未注册的状态当成当前结论。
+
+- B5-S1：通用 runtime adapter 已登记 Codex、WorkBuddy、ZCode、DSH；公共执行、结果 writer、
+  中断观察、白盒覆盖先行及成本结算复用原 engine 契约。宿主原生协议与恢复判断在适配文件。
+  成本入口已消除固定 Codex parser/session_meta 限制；同身份续用保留既有增量结算。
+- B5-S2：WorkBuddy 通过应用自带 CodeBuddy print/stream-json 启动与 resume；只有原生 init
+  确认身份后才 SOURCE，成功结构化 result 与真实进程退出均需满足。角色工具与 MCP 绑定
+  由适配器生成；覆盖回合/纯文本角色不开放工具。恢复使用 ACP session/load 控制查询。
+  安装登记已补技能与 CODEBUDDY.md；不配置未经确认的全局 hook。
+- B5-S3：ZCode 使用现有 app-server；宿主分配身份，工具配置沿相同 session 重载，accepted
+  不作为完成；DSH 使用现有 ACP profile 与原生注册工具，agent 作用域限制按实际 API 配置。
+  两者接通启动、续用、结束、原生结果、模型选项、来源计量、公共资源与中断观察。
+  DSH 原生 completed turn/end 必须存在，单独 ACP end_turn 不足以证明成功。
+- B5-S4：新增入口选项在既有 settings 合并与 run 快照内；默认路径探测不把 PATH 缺失当
+  未安装。文档列出默认值、单位/范围、原生配置错误、安装和来源。不新增独立账本或调度。
+  MCP 仅 WorkBuddy/ZCode 的工具实现手段；DSH 沿直接 CLI，不追求形式统一。
+
+本次修复的实际验证失败：第一次全包 Go 回归 facade 281.294s 后失败，包含旧宿主名单断言、
+缺 provider 的旧恢复 fixture、将安装能力等同全局 hook 的生命周期断言，以及短命进程先关闭
+stdin 导致身份未观察。前三处按实际契约修正测试；后者修正进程适配器，即使写入失败也观察
+并保留已输出身份，最终错误仍保留。随后四项定向回归通过。一次中间编译因将 Provider
+误写为恢复结构顶层字段失败，已改用 Claim.Provider；来源适配提取后的无用 import 也已移除。
+这些失败不删除或改写成 PASS。
+
+新增确定性测试覆盖 ZCode 工具绑定后同身份重载/模型配置/usage 查询、DSH ACP 新建与续用及
+身份附着失败拒绝、三宿主计量来源/增量结算、覆盖结果中断后原样提交且不重跑、模型用量
+缺失不丢弃已完成答案、失败模型保留可得用量及稳定 requestId 显式恢复。
+Node 原生工具 fixture 验证 DSH 使用 agent.ctx.tools.restrict（不是不支持的全局调用）以及
+guard/启动依赖和缺失身份拒绝。测试不调用真实宿主模型。
+
+困难/耗时的平台真实集成实跑按用户明确决定延期：未验证，不记 PASS，不作为本轮 Seal
+阻塞；延期不免除接入实现。正式需求验收变更由主代理记录，本 worker 不改需求文件、不做
+Seal 决策。没有新装 CLI、委派模型、执行 Git 写命令或自行派发工作流。
+
+验证收尾：关闭原生 opt-in 的 `go test ./...` 全部通过（facade 279.772s、protocol
+95.314s、CLI 93.810s、validate 37.564s；这是包耗时，不相加作为整轮耗时）。随后新增加的
+显式恢复测试发现 TaskOperationDigest 包含原接纳 revision，公共桥用当前 revision 会
+导致同请求恢复被拒绝。已修正为恢复时保留原 revision、其余绑定/参数仍由原 digest 校验；
+白盒覆盖结果恢复同样处理。这个新增测试的首次失败也保留为真实发现。
+
+最终受影响定向回归通过：NativeOperation（原回执恢复、重复/改参拒绝）、StreamCoverage、
+NativeMCP/MCP/WorkBuddyMCP，facade 22.958s；此前三平台与 StreamModelSource/覆盖中断
+定向组通过，facade 23.831s。DSH Node 插件测试 1 项通过、无跳过。最终构建和 diff 空白检查
+通过。B5 三宿主接入实现及必要本地验证已完成；真实平台集成仍为上述明确延期的未验证项，
+没有将 CLI 版本、组件 fixture 或安装结果写成真实会话/完整 regular PASS。
+
+## B6：直接接手后的适配边界收尾（2026-09-12）
+
+本节是 B6 最新交接，旧 B5 逐轮文字仅为历史，不能覆盖当前需求或构成真实平台的自动豁免。
+需求正文同步用户已确认的 `bb8f4b529e61cfd93bdbbe2f9bfd82d2a1d41c6c75ed8cba241d4cff3c1fa43b`，
+未重新修改需求语义。按用户决定由当前对话直接开发；原 Codex 已停止，既有 B1–B5 的提交、
+结果、checkpoint、cost 和 attempt 未改写，本次代码不得冒充原 Codex 的正式交付。
+
+| 原 B5 完整差异核查结论 | 本次处理及对应边界 |
+| --- | --- |
+| runtime/source/recovery/cost/settings 多处维护平台名单；配置公共结构逐平台加字段 | 同一个 `host.Descriptor` 提供配置、身份、用量和恢复解释；配置保持既有 JSON 形态，仅从平台描述读字段。 |
+| 生命周期、hook 返回格式另有平台分发表，接入者要跨模块同步 | 生命周期原生解释与 hook response/exit code 归同一描述；现有生命周期日志/配对、安装事务和 hook 判定仍留原归属者。 |
+| 平台接收完整 Facade/Run，自行接白盒前置、提交结果、连接恢复 | 公共驱动唯一拥有认领、白盒前置、身份/结果接纳和恢复编排；平台只实现窄 `nativeTurn/nativeProbe`、来源和身份观察，不接收完整工作流对象。 |
+| 三平台重复角色分类、共用流式方法及无实际调用的恢复包装 | 公共角色能力只定义一次；流式支持复用；删除逐平台 execute/finish/reconcile 包装及无生产调用的 WorkBuddy 恢复路径。 |
+| 不能按文件数判断原 91 文件 / +5091 -402 全部必要或全部多余 | 保留有真实差异的 CLI/ACP/NDJSON、字段/事件解释和原生工具映射；公共操作/MCP、进程证据、writer、增量计量是必要抽取，不机械合并平台协议。 |
+| 覆盖答案刚保存但未归档的恢复窗口、abort 改写进程记录丢失来源标记 | 按现有覆盖 operation 区分前置与最终答案；中止仅更新原进程记录的 stopped 字段，保留其他原生元数据，避免重跑/重复归集。 |
+
+接入入口与最少方法、单点登记、平台升级和验证命令集中在 `references/user-configuration.md`。
+`runtime_boundary_test.go` 约束平台不得重新依赖完整工作流对象；永久本地测试覆盖设置、能力
+缺失拒绝、身份、结果、用量、公开入口恢复、开发 CONTINUE/同身份续用、引擎白盒覆盖前置。
+
+文件级接入实验使用仅含源码的隔离副本，不复制活动 run。加入一个假平台及公开入口测试后
+v1 通过；未适配 v2 正确失败；只改该平台的一个文件后 v2 通过，512 个基线文件摘要不变。
+该实验通过真实注册及公共 Start/ExecuteNative 入口；全部为本地假进程，没有模型调用，
+不是三个真实宿主或独立审查的 PASS。原始日志、平台升级 diff 及文件集合见本 run 的
+`manual-takeover/b6-extension-proof/`。
+
+验证收尾仍以实际日志为准，最终汇总在本节更新，不逐条记过程流水。三宿主真实完整流程、
+持续自动执行器、强制咨询用户及用户优先影响处置、正常增量批次控制都属于既定 B7，未启动。
+正式 B6 接纳、最终 QA/门、Seal、集成和安装不得由本节代替；未实跑不标 PASS。
+
+
+## B6 最终架构收尾与开发交付（2026-09-12）
+
+B6 的范围内架构问题已经解决：所有平台能力集中到同一描述；平台只处理原生操作与证据，
+不接收完整 Facade/Run；认领、覆盖前置、恢复、结果接纳和取消由公共引擎统一执行。
+覆盖与编写使用不同调用目录，公共流程不枚举、改名或清理平台私有文件。架构回归只检查
+引擎类型依赖，不因原生 SDK 的普通 Run 方法同名而提高接入成本。
+
+原 B5 的 91 文件完整差异核查、平台新增/更新的实际文件差异、原始测试日志及最终补丁和
+manifest 集中保留在原 run 的 `manual-takeover/b6-finish/`。新增假平台进入公共入口；
+未适配的新协议正确失败，仅改该平台一个文件后通过，512 个既有文件摘要未变。当前六项
+架构/开发续用/白盒前置/私有产物隔离/恢复/取消/升级定向测试通过，平台边界基础包及受
+影响 CLI 的竞态检查通过；受影响运行时分组 29 项通过、3 项真实模型 opt-in 跳过，未计 PASS。
+
+固定源码的 52 项 portable 安装、回归、故障恢复和卸载检查通过。旧全仓超时/中止、源输入
+变化时的 bootstrap 失败及准备缺 bin 的失败保留，不合并宣称整条全仓测试命令退出 0。
+本地安装后的完整流程在测试父进程超时前已完成目标，沿同一隔离测试 run 只补 qa.collect、
+接纳及终态收尾后到达 SEALED/COMPLETE，实际 HEAD、hello 输出与资源清理均核对通过；
+原准备/目标 receipt 未改、未重复执行。共享准备取消场景按原判据复验通过，未改产品行为。
+
+被验证生产源码快照 SHA-256：c02617c24d8e11ec6ba75fe4b88bce1b6ce8f4eb03e6adefac1363be6cff5882。
+生产实现和公开维护合同与该快照一致；其后仅修正架构检查测试的同名方法误报并更新本交接，
+对应增量验证及文件摘要见 completion.json。最终开发完成状态以该记录及实际日志为准。
+这不代表独立正式 Batch PASS 或真实平台模型验收，代码不冒充原 Codex 会话成果。
+正式 run revision 164 未改，B1–B5 证据保留，B7 未启动；B7 仍负责原定持续执行器、真实
+闭环以及用户强制咨询/影响处置和受支持的增量批次入口，不承接本批已确认的遗留问题。
+
+
+## B7 已验证的交接与原生配置修正（2026-09-12）
+
+以下是原 B7 external/chatgpt action 内的开发事实，不替代独立 QA、B7 接纳或外层 Seal。
+共享输入组装现沿同一 TaskKey 的 PreviousAction 链取得最近真实开发结果，避免交接一个
+尚未领取的续行动作时丢失已有 CONTINUE/checkpoint；原结果的 provider、identity 和来源
+保持不变。原生交接目标在 REQUEST 和 DECIDE 前均通过其原 adapter 能力校验，拒绝时
+不产生目标动作或回退。原 run `b7-handoff/validation/` 的 `b7-handoff-checkpoint-red-26`
+保留真实修复前失败；`b7-handoff-core-green-28` 两项公共 Facade 回归通过且源码摘要不变。
+中间 `green-27` 因并行 ZCode 测试调用尚未同步而编译失败，原日志保留，未记作测试 PASS。
+
+场景调用脚本已按公开 preDevelopmentReviewSeries/developmentPlan 字段读取；真实 FAIL
+或未处理 OPERATOR 明确交回，不再空转。`b7-smoke-plan-24` 的七项本地回归通过；
+`b7-smoke-actual-boundary-25` 在同一 DSH 场景复验，只读观察后状态摘要及三条执行记录
+未变，预期报告待裁决。它不是 DSH 完整流程通过，也不覆盖脚本后续的其他改动。
+
+WorkBuddy 原生认证另按用户 HOME 定位；仅绑定产品文件与配置目录不足以使隔离安装
+读取原有桌面登录。原生源码与文件元数据依据见 `b7-workbuddy-native-home-observation-31`，
+没有读取或复制认证文件内容。平台配置新增 workbuddyHome，原生子进程沿该路径，而
+MCP 引擎工具仍沿原安装 HOME/USERPROFILE/XDG_CONFIG_HOME；已有 context 不重写。
+`b7-workbuddy-home-31` 的三项配置/恢复/隔离回归、受影响 vet 和 diff 检查通过，源码摘要
+不变；其中 settings 包没有匹配测试，不冒称额外执行。目录存在仍不证明真实认证有效。
+
+`b7-core-static-30` 记录上述 HOME 增量之前的全仓编译、vet 及 diff 检查全部 exit 0，
+不能覆盖后来改动，也不把历史整仓测试超时改写为通过。WorkBuddy 旧隔离场景 002 已通过
+其自己的正式 REQUEST/DECIDE/drive 到达 ABORTED/COMPLETE，原三次认证失败保留，
+外层状态未变；只为已定位的配置缺口补必要纠正场景。三宿主实际完整流程、bootstrap 清理、
+最终 manifest/逐子任务验证及外层正式流程仍按真实后续回执完成，未测或受阻项不标 PASS。
+
+
+## B7 当前开发结果回交与收尾（2026-09-12 夜间）
+
+本次用户要求执行收尾与B7正式交付。当前开发结果按真实自测状态回交 FAIL，不是 B7 PASS：
+S1、S4、S5、S6 有有效本地验证；S2 的平台合同/配置回归通过但完整原生能力未验证；
+S3 三宿主真实完整 regular 与同身份恢复仍未通过，不能降为模拟或生命周期通过。
+
+当前源码全仓编译（不执行全套测试）、settings 全包测试、vet、构建、package validate
+及两项 diff 检查全部退出 0，检查期间源码摘要不变；原全仓测试失败/超时记录仍保留。
+本轮新增检查、按原正式入口进行的失败场景收尾、原始失败证据、精确交付清单与事件
+统一保存在原 run 的 `b7-handoff/final-closeout/`。正式接纳状态以其中 engine 回执为准。
+
+WorkBuddy004在产品审PASS后技术审三次未观察最终结果；DSH002技术审三次未交回合法JSON。
+两者已通过正式 abort 分别到 revision22/54、ABORTED/COMPLETE，原调用/来源未删改。
+ZCode002仍缺完整成功证据，本次原入口报 UNREGISTERED_INSTALL，未手改registry/state清除。
+原主run的新构建永久CLI同样未通过原安装身份准入；临时finalizer及源文本保留用于
+本次已授权的原Facade/event writer回交，永久入口接管和bootstrap清理尚未完成，不冒称已删。
+
+B1–B6不重做，主run黑盒不启动；没有手工Git提交，也不授权新增模型样本或清零重试。
+后续仍须解决原生闭环与旧run永久入口接管，完成所有DoD后才能提交B7 PASS；
+本次FAILED开发回交不能替代后续独立QA、门、Seal、集成或安装。
+
+
+## 2026-09-13 隔离 staging 完整差异处置（直接修复例外）
+
+本节是隔离源码的处置记录，不是正式 run 接纳、candidate 晋升或 Seal 回执。
+仅本节所在 staging 可写；没有修改真实 run、全局/项目安装或正式 development 工作区，没有在这些源码工作区作 Git 提交。
+
+### 本次有效范围与依据
+
+- staging：`/private/var/folders/d_/drx086s144qb8g4b0yzfy9cm0000gn/T/formal-gates-orchestration-fix-9_11e65l/source`。
+- B8 交付：`/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4a/.gates/engine/phase-4a-git-regular-001/resources/b20f330b482c2748982e891298bfd0f30314c317d8883532c38594820c65dc16/development`。共同 Git 基线 `d2b9d1a9971aa093226733d086834397c90eb5f0`；比较包括未跟踪源码与删除项，不只比较已提交树。
+- 唯一正式需求路径为 `/Users/suxinyang/Documents/Codex/2026-06-28/nin/work/formal-gates-stage-4a/refactor-plan/stage-4a-requirement.md`。本次采用任务开始时已读取的 REQ-001–011 及用户本轮明确要求。中断期间该文件新增的开发期编写/Batch/DoD 入口强制限制尚待确认，用户明确不实施；本次不据当前文件最新字节把它当成已确认要求，也不复制覆盖 staging 中的历史需求副本。
+- staging 中原需求副本与正式文件的 REQ-005/011 不同，历史计划也含后续 B7 交付记录。它们不取代外部唯一正式需求；不通过盲目文件同步删除历史证据。执行输入由 `run.Regular.Requirement` 绑定，非从此历史副本选取。
+- 原对账为 `/tmp/formal-gates-dispatch-reconciliation.md` 的 S01–S47、C01–C32 共 79 条；旧核实报告 `/tmp/formal-gates-reconciliation-current-report.md` 是当时状态，不当作当前安装/run 事实。
+- 第四次黑盒“读需求 37 次、列文件 1 次、未读已有文档”为本轮用户明确给定事实。本轮未重放该会话。该 FAIL 不足以证明产品缺公开文档；未改写或撤销正式 FAIL。
+
+### 实际修改与现有修复保留
+
+本轮内容修改只有三个现有 Markdown 文件：`prompts/actions/qa-design.md`、`references/engine-regular.md` 和本记录。没有新增提示词文件、文件白名单、供料系统、任务定义 API、规划器、兼容层或生产代码。
+
+QA 设计不再断言基线产品不存在或其文档必定过时：当前确认需求决定变更行为，未变接口沿已有公开文档，冲突按当前确认契约逐项判断；声称缺接口/说明前先读取、搜索可读公开文档。正式执行使用引擎绑定候选，不假定主工作区已构建产品。
+
+公开说明纠正一处实际矛盾：白盒完整 diff 用于独立审查，不能全部合并成 TestOwned；只有批准的纯测试文件用于整文件排除。混合生产/测试文件保留生产审查。删除旧 QA 索引后仍有效的包内 build、静态检查和历史 Codex 夹具适用边界补回现有 `engine-regular.md`；不要求外部项目拥有本仓库目录。
+
+保留此前 staging 已有的 AGENTS 三条规则、只读 canary、完整包版本校验与测试、正常安装/恢复说明。安装修复解决版本合同的二次校验边界；其夹具通过不证明当前包曾安装失败，也不等于本次真实安装验证。
+
+### 差异族的具体依据与处置
+
+| 代号 | 最新有效义务、实现证据与结论 |
+| --- | --- |
+| P | REQ-005：`runtime_input.go` 统一准备所有角色输入；`action_material_files.go` 仅固定当前需求/设计/依赖；`runtime_execute.go` 在 CLAIM 前预检。`action_material_files_test.go`、`runtime_input_test.go` 覆盖正文不内联、无关材料排除和缺材料不耗 attempt。采用现有实现；强制 prompt/index、专用分段协议舍弃。 |
+| S | REQ-004/005：`task_sources.go`、PreparedQA.DesignActionID 与 PreviousDesignActionID 只认显式已接纳设计及 canonical sources；Open 后可读取，缺捕获与空登记不同。sources/retention 测试覆盖恢复和禁止 legacy 回退；`unstarted_claim.go` 保留实际已执行历史。采用。 |
+| V | REQ-005：`verification_materials.go` 选当前 remaining、必要传递依赖/shared steps 与当前 repairPlan 来源；`verification.go` 用绑定 base/candidate/workspace/diffArgs 查看差异；resume 文件保留原切片。对应材料、依赖、恢复测试已在交付中。采用。 |
+| I | 原已确认程序组装与污染拒收义务：`reviewer-base.md` 明确原样交接、合法用户决定先由引擎接纳、污染位置/原因与 RUNTIME_ERROR；对应加载与材料测试。采用规则和加载证据；不把模型必定服从或待确认的 Batch/DoD 机器拒收宣称已实现。 |
+| C | REQ-001/003：CLI 默认 drive 及控制事件后共用 DriveContinuous；worker 回执不递归消费。独立分支等待、终止结算、重启身份、acceptance、单份 JSON、终态锁由既有 engine/facade 持有。CLI/parallel/cancellation/store 测试及已有取消 red/green 证据。取消未批准 30 分钟任务预算符合 REQ-003/010，不新增调度器。采用。 |
+| Q | REQ-009/011：黑盒基线 worktree 与开发分开；白盒在绑定普通工作区先独立判断，再检查测试；删除 Go resolver、未声明 Go 环境探测、逐文件读取筛选。平台只翻译原生读写能力：Codex read-only，WorkBuddy dontAsk 且 Bash 不预先放行，ZCode plan 并在恢复重设，DSH 原生读写模式。共同输入逻辑不复制到平台；代码与 fake transport 检查采用，三宿主真实模型读/写演示仍缺。 |
+| W | REQ-007/011 及混合文件修复事实：design.testFiles 独立于变更 manifest；review 核对全部声明与完整白盒 diff，当前快照有效审查后才晋升；waiver 不批准文件排除，mixed file 不整文件排除，只保留已审产物。mixed/reused/test_files/promotion 测试及原 mixed-whitebox 证据。采用，不能以文件命名或 Go 发现替代内容判断。 |
+| G | REQ-006：ProgressSince 从实际 coverage/main/resume prompt/process 观察调用、消息与耗时；空目录不计调用，不给未开始主 turn 虚填调用；缺来源仍 unavailable。progress 测试。采用；不把字符数变化当整轮 token 或时间收益。 |
+| K | REQ-004/010 的合法保留：显式 keep 与候选/需求/plan 绑定，不重做有效批次。B8 已有 `skip-review` 仅通过现有 REQUEST/DECIDE 对已有准备 run 记录显式用户例外，显示 SKIPPED，不制造 PASS、不跳 QA/门；本轮不新增该 API，也未实际调用它。requirement_retention、review_skip 测试。保留 B8 交付及其公开边界，不据本次直接修复授权操作正式流程。 |
+| N | 用户明确三条规则、REQ-011 和 S27：完整包由自身 validator 校验其版本词汇，runtime-only 仍用当前安装器词汇；所选宿主注册检查和事务保留。canary 不再要求已移除的旧脚本黑名单，而验证正常只读命令放行；配套 Hook/write-block 仍验真写。install_version_contract 测试含自校验失败、未注册宿主及 runtime-only 反例。保留；不扩大成安装故障事实。 |
+| L | S35/S39、REQ-005/011 替代旧维护、临时升级、专用 reader/过滤快照路线；源码已无这些运行分支。`EventRecord.Receipt` 只保留不透明历史证据，`install --bootstrap` 是现有正常安装身份入口，不等于本次临时 run 迁移入口，不能按名字一概删。旧 patch/index 删除保留，实际切换与真实历史绑定仍需后续正式动作。 |
+| R | S11–13 的完成/续用/中断义务由当前 `runtime_reconcile_stream.go` 的进程/identity/answer/source 绑定及各平台适配承担；`TestStreamCoverageRecoveryRetainsOriginalAnswer` 和已有 recovery 日志证明有限恢复场景。旧 task_complete/activeInput 解析补丁不移植。已有等效实现，未据此声称当前正式 run 全程验收通过。 |
+| T/O | 验证失败、接收消息、分工和暂止都是证据/过程记录，不能互相替代。已有效测试保留；旧全仓 FAIL、未测或中断不改写 PASS，不建立额外全套重跑门。 |
+
+### 原 79 条记录逐条处置
+
+下表的原记录链接可继续定位原始会话接收行；差异族证据见上表。混合要求逐条区分保留义务与被替代实现。
+
+| 记录 | 处置及依据 |
+| --- | --- |
+| [S01](/tmp/formal-gates-dispatch-reconciliation.md:23) | 采用 P：短消息与当前动作材料；不再展开源码正文。 |
+| [S02](/tmp/formal-gates-dispatch-reconciliation.md:24) | 部分采用 P；单一强制 prompt 文件层被 S07 和 REQ-005 替代。 |
+| [S03](/tmp/formal-gates-dispatch-reconciliation.md:25) | 过期舍弃强制任务文件跳转；依据 S07、REQ-005。 |
+| [S04](/tmp/formal-gates-dispatch-reconciliation.md:26) | 过程记录 O；停止扩范围约束保留，调研通知不算功能。 |
+| [S05](/tmp/formal-gates-dispatch-reconciliation.md:27) | 采用依赖及问题证据筛选 P/V；强制任务文件层按 S07 舍弃。 |
+| [S06](/tmp/formal-gates-dispatch-reconciliation.md:28) | 采用普通文件读取能力 Q；专用 bridge reader 实现路线按 C26、REQ-011 舍弃。 |
+| [S07](/tmp/formal-gates-dispatch-reconciliation.md:29) | 采用 P：直接消息指向现有职责和必要材料，不新增 prompt/index 层。 |
+| [S08](/tmp/formal-gates-dispatch-reconciliation.md:30) | 已有等效实现 P：消息直接交接；prompt.txt 仅既有实际消息回执。 |
+| [S09](/tmp/formal-gates-dispatch-reconciliation.md:31) | 已有等效实现 P/V：不要求聚合 evidence 全文，当前修复范围选材。 |
+| [S10](/tmp/formal-gates-dispatch-reconciliation.md:32) | 采用 T：保留已跑验证；旧全套失败不改写，新包不无故全重跑。 |
+| [S11](/tmp/formal-gates-dispatch-reconciliation.md:33) | 已有等效实现 R：新版原生进程、身份、结果与来源收集；不移植旧解析器。 |
+| [S12](/tmp/formal-gates-dispatch-reconciliation.md:34) | 已有等效实现 R：按 action/attempt/candidate 和调用证据接纳，不能因历史相同输入误用旧结果。 |
+| [S13](/tmp/formal-gates-dispatch-reconciliation.md:35) | 已有等效实现 R：原生终止/恢复沿进程回执；旧 activeInput 补丁不适用当前传输。 |
+| [S14](/tmp/formal-gates-dispatch-reconciliation.md:36) | 旧维护兼容按 S35 舍弃；P 的 CLAIM 前完整材料检查仍采用。 |
+| [S15](/tmp/formal-gates-dispatch-reconciliation.md:37) | 采用 S：共享 canonical sources；旧维护源同步按 S35 舍弃。 |
+| [S16](/tmp/formal-gates-dispatch-reconciliation.md:38) | 采用 S：Open 后从固定 sources 恢复；不依赖主代理内存，旧执行兼容舍弃。 |
+| [S17](/tmp/formal-gates-dispatch-reconciliation.md:39) | 采用 C/S：CLI 默认持续与决定后续推，材料共用；通知不增新功能。 |
+| [S18](/tmp/formal-gates-dispatch-reconciliation.md:40) | 过程记录 O；现有 staging 交付完整保留，范围按当前授权。 |
+| [S19](/tmp/formal-gates-dispatch-reconciliation.md:41) | 采用 S/Q：公共材料与生命周期集中，原生差异归平台适配器。 |
+| [S20](/tmp/formal-gates-dispatch-reconciliation.md:42) | 采用 S：空登记区别于缺捕获，已完成来源不重采；旧 subagent 兼容按 S39 舍弃。 |
+| [S21](/tmp/formal-gates-dispatch-reconciliation.md:43) | 采用显式 DesignActionID 绑定 S；旧记录扫描推断仅历史升级用途，正常路径舍弃。 |
+| [S22](/tmp/formal-gates-dispatch-reconciliation.md:44) | 过程记录 O：状态/预计时间不构成新增验收。 |
+| [S23](/tmp/formal-gates-dispatch-reconciliation.md:45) | 采用 T：整合失败保持原证据，只保留必要修复及对应后续检查。 |
+| [S24](/tmp/formal-gates-dispatch-reconciliation.md:46) | 采用 T：其余包失败按实际根因处置；不重复无关全套。 |
+| [S25](/tmp/formal-gates-dispatch-reconciliation.md:47) | 已有等效验证条件 T：staging 已有独立 Git 基线；不把缺 .git 的归档当产品缺陷。 |
+| [S26](/tmp/formal-gates-dispatch-reconciliation.md:48) | 过程记录 O：路径更正和分工，不新增产品职责。 |
+| [S27](/tmp/formal-gates-dispatch-reconciliation.md:49) | 采用 N：完整包使用自身版本校验；不据此声称当前包正常安装已失败。 |
+| [S28](/tmp/formal-gates-dispatch-reconciliation.md:50) | 过程记录 O：仅状态交付，不能据消息推定完成。 |
+| [S29](/tmp/formal-gates-dispatch-reconciliation.md:51) | 旧维护适配路线按 S35 舍弃；缺绑定须启动前拒绝的 P 契约保留。 |
+| [S30](/tmp/formal-gates-dispatch-reconciliation.md:52) | 旧版本函数签名参考过期；采用现有共享 native adapter，不添兼容层。 |
+| [S31](/tmp/formal-gates-dispatch-reconciliation.md:53) | 采用 P：prompt/schema/tools/sources 在 CLAIM 前预检；不回补旧维护版本。 |
+| [S32](/tmp/formal-gates-dispatch-reconciliation.md:54) | 采用 P/Q：去除整仓内联；旧维护移植按 S35 舍弃。 |
+| [S33](/tmp/formal-gates-dispatch-reconciliation.md:55) | 采用 Q/T：实际发送入口及真实材料只读检查证据保留；旧过滤生产快照路线由 REQ-011 替代。 |
+| [S34](/tmp/formal-gates-dispatch-reconciliation.md:56) | 采用共享选材边界 Q；专用读取协议按 C26、REQ-011 舍弃。 |
+| [S35](/tmp/formal-gates-dispatch-reconciliation.md:57) | 采用 L：使用新版并清理旧维护路径，不增旧版 fallback。 |
+| [S36](/tmp/formal-gates-dispatch-reconciliation.md:58) | 一次性升级是历史动作 L；正常源码不恢复入口；清理时点以 REQ-005 接入验证后立即清理为准。 |
+| [S37](/tmp/formal-gates-dispatch-reconciliation.md:59) | 采用 L：接入验证后清临时入口；本轮不执行真实 run 升级、安装或清理。 |
+| [S38](/tmp/formal-gates-dispatch-reconciliation.md:60) | 已有等效实现 L/S：不透明历史 Receipt 可读取；正常执行不派发已退役升级事件。 |
+| [S39](/tmp/formal-gates-dispatch-reconciliation.md:61) | 采用 S/L：只读显式设计 action 与 canonical 捕获；正常路径不扫 legacy；真实历史迁移不在本次写入范围。 |
+| [S40](/tmp/formal-gates-dispatch-reconciliation.md:62) | 采用 V：门审按基线/候选 diffArgs，执行/返修只交当前范围。 |
+| [S41](/tmp/formal-gates-dispatch-reconciliation.md:63) | 已有等效实现 P/V：必要结构化文件绑定，不建强制索引或总材料副本。 |
+| [S42](/tmp/formal-gates-dispatch-reconciliation.md:64) | 已有等效实现 P/V：bindFiles 解析当前文件引用，恢复切片独立固定。 |
+| [S43](/tmp/formal-gates-dispatch-reconciliation.md:65) | 采用 Q/V：普通读取/搜索/diff，不依赖 input.read/file.read。 |
+| [S44](/tmp/formal-gates-dispatch-reconciliation.md:66) | 过程记录 O：不安装、不改 run、不启动正式 QA；保留已做实现。 |
+| [S45](/tmp/formal-gates-dispatch-reconciliation.md:67) | 采用 V：原已确认 REQ-005/011 的范围选择；本次未确认新增限制不纳入。 |
+| [S46](/tmp/formal-gates-dispatch-reconciliation.md:68) | 采用 I：规则按路径输入契约加载，合法材料与污染区分。 |
+| [S47](/tmp/formal-gates-dispatch-reconciliation.md:69) | 采用 I：共享 reviewer-base 拒绝人工污染并报具体位置、RUNTIME_ERROR；不新建字段规划 API。 |
+| [C01](/tmp/formal-gates-dispatch-reconciliation.md:70) | 诊断已由 C 实现承接；不把只读诊断本身算开发 PASS。 |
+| [C02](/tmp/formal-gates-dispatch-reconciliation.md:71) | 采用 C：drive 默认消费、控制输入接纳后自动消费。 |
+| [C03](/tmp/formal-gates-dispatch-reconciliation.md:72) | 采用 C/T：保留实际实现和检查证据，不据交付消息冒称接纳。 |
+| [C04](/tmp/formal-gates-dispatch-reconciliation.md:73) | 已有等效实现 C：统一入口/单份 JSON/错误与中断合同。 |
+| [C05](/tmp/formal-gates-dispatch-reconciliation.md:74) | 采用 C：续推错误仍保留原控制输入 acceptance。 |
+| [C06](/tmp/formal-gates-dispatch-reconciliation.md:75) | 过程记录 O：联合验证通知，测试本身按 T 的原日志。 |
+| [C07](/tmp/formal-gates-dispatch-reconciliation.md:76) | 过程记录 O：交付/停编通知，不增加功能要求。 |
+| [C08](/tmp/formal-gates-dispatch-reconciliation.md:77) | 过程记录 O：报告去向，原交付证据保留。 |
+| [C09](/tmp/formal-gates-dispatch-reconciliation.md:78) | 采用 T：需求 keep 晋升新文档的定向修复，未扩成全部开发重做。 |
+| [C10](/tmp/formal-gates-dispatch-reconciliation.md:79) | 采用 C/T：installed harness 适配默认消费与当前输出；执行租约终态清理不误删。 |
+| [C11](/tmp/formal-gates-dispatch-reconciliation.md:80) | 采用 P/L：缺 ActionInstructions 启动前拒绝；旧 run 绑定动作留后续正式接入，不加 fallback。 |
+| [C12](/tmp/formal-gates-dispatch-reconciliation.md:81) | 采用 P/Q：覆盖正文改路径，保留独立先判断再看测试的角色时序。 |
+| [C13](/tmp/formal-gates-dispatch-reconciliation.md:82) | 采用 Q/T：发送前输入长度检查与真实绑定材料测量；不以 helper PASS 冒充实机。 |
+| [C14](/tmp/formal-gates-dispatch-reconciliation.md:83) | 专用跨平台读取工具方案过期；已有普通工具共享组装 Q 替代。 |
+| [C15](/tmp/formal-gates-dispatch-reconciliation.md:84) | 采用 Q：读取路径必须可用；不以全面禁工具作为完成态。 |
+| [C16](/tmp/formal-gates-dispatch-reconciliation.md:85) | 采用 Q：普通读工具；不重建跨平台 reader 或文件审批系统。 |
+| [C17](/tmp/formal-gates-dispatch-reconciliation.md:86) | 采用 S/L：canonical sources 与精确 action；临时升级入口不恢复。 |
+| [C18](/tmp/formal-gates-dispatch-reconciliation.md:87) | 已有等效实现 Q：整工作区正常按需发现必要依赖，不强制递归复制或按文件数截断。 |
+| [C19](/tmp/formal-gates-dispatch-reconciliation.md:88) | 专用 input.read 协议过期；按 C26、REQ-011 舍弃，普通读取保留。 |
+| [C20](/tmp/formal-gates-dispatch-reconciliation.md:89) | 采用 Q：工作区绑定与必要材料；不恢复语言特定依赖投影。 |
+| [C21](/tmp/formal-gates-dispatch-reconciliation.md:90) | 采用 P/Q/V：各动作统一路径材料，职责仍由现有入口持有。 |
+| [C22](/tmp/formal-gates-dispatch-reconciliation.md:91) | 采用 Q：去掉无条件拒绝；独立判断通过角色时序，不构造去测试源码副本。 |
+| [C23](/tmp/formal-gates-dispatch-reconciliation.md:92) | 已有等效实现 P：只保存当前动作必要结构化材料，不新增总索引。 |
+| [C24](/tmp/formal-gates-dispatch-reconciliation.md:93) | 已有等效实现 P：bindFiles 处理当前需求、设计及必要历史材料。 |
+| [C25](/tmp/formal-gates-dispatch-reconciliation.md:94) | 过程记录 O：进度/接口通知，不代表平台真实通过。 |
+| [C26](/tmp/formal-gates-dispatch-reconciliation.md:95) | 采用 Q：review 保留普通读取、搜索、diff；写能力交宿主原生控制。 |
+| [C27](/tmp/formal-gates-dispatch-reconciliation.md:96) | 删除完整 approved-scope 属有效要求；生产快照及 Go 闭包路线由 REQ-011 普通绑定工作区替代。 |
+| [C28](/tmp/formal-gates-dispatch-reconciliation.md:97) | 过程记录 O：停止扩范围，等待确认；本轮仅恢复原任务。 |
+| [C29](/tmp/formal-gates-dispatch-reconciliation.md:98) | 采用 Q/T：原确认范围下的接线与小样本检查；三宿主实机读写仍未证明。 |
+| [C30](/tmp/formal-gates-dispatch-reconciliation.md:99) | 采用 I：程序原样生成与交接，材料缺项走既有入口。 |
+| [C31](/tmp/formal-gates-dispatch-reconciliation.md:100) | 采用 I：污染须拒收，不仅提醒；不新增系统。 |
+| [C32](/tmp/formal-gates-dispatch-reconciliation.md:101) | 已有等效实现 I：拒收规则集中在 reviewer-base。 |
+
+### 全部源码差异文件处置
+
+本表是 staging 与 B8 相对共同基线的完整路径并集，包含修改、新文件、双方已删除的文件以及 B8 独有交付摘要。按内容核对；措辞/空行不强行同步。每行对应上表差异族的具体需求、实现或测试依据。检查产物在 `.gates/reconciliation-checks/`，不混入产品源码差集。
+
+最终源码路径全集为 644 项：630 个文件与 B8 内容相同，12 项内容不同或仅一侧存在，2 项双方均已删除。相对共同 Git 基线的全部改动路径并集为下表 105 项；B8 独有交付摘要也有单独处置，没有把示例文件作为范围上限。精确差集见 `.gates/reconciliation-checks/inventory.txt`。
+
+| 文件 | 处置 | 依据与必要性 |
+| --- | --- | --- |
+| `AGENTS.md` | 采用／保留 staging 必要补项 | N：三条项目规则；正常安装形态、最小必要实现、不新增提示词文件。 |
+| `gates/implementation-quality-gate.md` | 采用／保留（与 B8 同内容） | W：纯测试文件由独立 review 判断；不依赖 Go resolver。 |
+| `internal/cli/cli.go` | 采用／保留（与 B8 同内容） | C：默认 drive 及控制事件自动消费；诊断 single-step。 |
+| `internal/cli/hook_read_test.go` | 采用／保留（与 B8 同内容） | Q：TestRunHookAllowsLegacyNameReading；TestRunHookWriteCommandSemantics |
+| `internal/cli/regular_native_full_test.go` | 采用／保留（与 B8 同内容） | C：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/cli/regular_test.go` | 采用／保留（与 B8 同内容） | C：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/cli/workflow_consumption.go` | 采用／保留（与 B8 同内容） | C：共用消费器、增量输出、单份 JSON、acceptance 与中断退出码。 |
+| `internal/cli/workflow_consumption_test.go` | 采用／保留（与 B8 同内容） | C：TestCLIConsumerFakeServer；TestCLIConsumerDecisionAndAdjudicationAdvance；TestCLIConsumerDefaultDriveAndResumeIdentity；TestCLIConsumerIndependentTurnsOverlap；TestCLIConsumerDriverProcess；TestCLIConsumerProcessRestartUsesOriginalIdentity；TestCLIConsumerSingleJSONOnErrorsAndCanceledControl；TestCLIConsumerDiagnosticFlags；TestCLIConsumerLightweightDecisionCleansUpWithLease；TestCLIConsumerRepeatedAskCanDecideFromOutput |
+| `internal/engine/acceptance/installed_harness_test.go` | 采用／保留（与 B8 同内容） | C：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/decision/regular.go` | 采用／保留（与 B8 同内容） | K：区分显式用户 SKIPPED 与 PASS 的前置条件。 |
+| `internal/engine/facade/action_material_files.go` | 采用／保留（与 B8 同内容） | P：当前动作文件与公开 sources 绑定；没有 prompt/index 必经层。 |
+| `internal/engine/facade/action_material_files_test.go` | 采用／保留（与 B8 同内容） | P：TestActionMaterialPathsExcludeBodiesAndUnrelatedFields；TestNativeReviewInputUsesCapturedContractPaths；TestActualStagePromptPathsReadOnly |
+| `internal/engine/facade/codex.go` | 采用／保留（与 B8 同内容） | P/C：共享输入组装；取消沿同一进程回执、锁及来源结算。 |
+| `internal/engine/facade/codex_test.go` | 采用／保留（与 B8 同内容） | P：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/continuous.go` | 采用／保留（与 B8 同内容） | C：分支 QA recovery 不中断仍在执行的独立开发。 |
+| `internal/engine/facade/continuous_cancellation_test.go` | 采用／保留（与 B8 同内容） | C：TestCancelledNativeProcess；TestCancelledNativeOwner；TestContinuousCancelledDeveloperSettlesBeforeCurrentWork |
+| `internal/engine/facade/continuous_parallel_test.go` | 采用／保留（与 B8 同内容） | C：TestContinuousQARecoveryDoesNotInterruptActiveDeveloper |
+| `internal/engine/facade/coverage_paths.go` | 采用／保留（与 B8 同内容） | Q：普通候选工作区绑定与覆盖先行，不猜语言和测试路径。 |
+| `internal/engine/facade/coverage_paths_test.go` | 采用／保留（与 B8 同内容） | Q：TestCoveragePathsScopeAndBinding；TestCoverageInputSizeBeforeClaimAndSend |
+| `internal/engine/facade/development_continuity_test.go` | 采用／保留（与 B8 同内容） | P：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/development_handoff.go` | 采用／保留（与 B8 同内容） | P：既有显式外部开发交接同样使用必要文件路径。 |
+| `internal/engine/facade/development_handoff_checkpoint_test.go` | 采用／保留（与 B8 同内容） | P：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/facade.go` | 采用／保留（与 B8 同内容） | C：消费 engine terminate intent，按 action/attempt/identity 结算后推进。 |
+| `internal/engine/facade/mixed_whitebox_test.go` | 采用／保留（与 B8 同内容） | W：TestMixedWhiteboxFileRemainsInImplementationDiff；TestMixedWhiteboxProductionEditRequiresRevision；TestMixedWhiteboxRetentionPreservesNewProduction |
+| `internal/engine/facade/preparation.go` | 采用／保留（与 B8 同内容） | P/W：仅当前依赖交接；独立 review 审白盒完整 diff，最终只排除纯测试文件。 |
+| `internal/engine/facade/preparation_nongo_test.go` | 采用／保留（与 B8 同内容） | Q/W：TestNonGoPreparationReuseAndUnclassifiedChanges；TestNonGoNativeCoveragePrecedesTestInspection |
+| `internal/engine/facade/preparation_test.go` | 采用／保留（与 B8 同内容） | W：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/progress.go` | 采用／保留（与 B8 同内容） | G：覆盖与主调用按真实 prompt/process 记录计量与显示，目录不计调用。 |
+| `internal/engine/facade/progress_test.go` | 采用／保留（与 B8 同内容） | G：TestProgressCoverageLifecycle；TestNativeProgressCoverageOnContinuation |
+| `internal/engine/facade/qa_preparation.go` | 采用／保留（与 B8 同内容） | Q：去掉未声明的 Go 环境探测；保留声明工具/环境/命令缓存键。 |
+| `internal/engine/facade/qa_preparation_external_test.go` | 采用／保留（与 B8 同内容） | Q：TestExternalShellQAPreparationIgnoresUnrelatedGo |
+| `internal/engine/facade/repair_regression_test.go` | 采用／保留（与 B8 同内容） | P/Q：TestReadOnlyReviewPromptDescribesActualToolBoundary |
+| `internal/engine/facade/reused_developer_test_diff_test.go` | 采用／保留（与 B8 同内容） | W：TestReusedDeveloperTestExcludedFromImplementationDiff；TestDeclaredProductionFileNeedsIndependentWhiteboxReview |
+| `internal/engine/facade/runtime_adapter_dsh.go` | 采用／保留（与 B8 同内容） | Q：DSH 原生角色读工具和读写模式，复用公共材料。 |
+| `internal/engine/facade/runtime_adapter_zcode.go` | 采用／保留（与 B8 同内容） | Q：ZCode review plan、覆盖读工具，恢复重设原生模式。 |
+| `internal/engine/facade/runtime_bridge.go` | 采用／保留（与 B8 同内容） | P/Q：覆盖与主 turn 共用预检材料；删除整仓 Go 正文组装。 |
+| `internal/engine/facade/runtime_bridge_codex.go` | 采用／保留（与 B8 同内容） | Q/C：保留原生 read-only shell、发送长度边界；移除未批准 30 分钟任务取消。 |
+| `internal/engine/facade/runtime_bridge_workbuddy.go` | 采用／保留（与 B8 同内容） | Q：WorkBuddy 覆盖回合普通读工具；不依赖 text-only 禁读。 |
+| `internal/engine/facade/runtime_bridge_workbuddy_test.go` | 采用／保留（与 B8 同内容） | Q：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/runtime_bridge_zcode.go` | 采用／保留（与 B8 同内容） | Q：按适配器选择模式设置会话，失败不发送输入。 |
+| `internal/engine/facade/runtime_bridge_zcode_test.go` | 采用／保留（与 B8 同内容） | Q：TestZCodeReviewModeFailureStopsInput |
+| `internal/engine/facade/runtime_command_workbuddy.go` | 采用／保留（与 B8 同内容） | Q：review 使用 dontAsk，Bash 不进入绕过权限检查的 allowedTools。 |
+| `internal/engine/facade/runtime_command_workbuddy_test.go` | 采用／保留（与 B8 同内容） | Q：TestWorkBuddyReviewNativePermissionsFreshAndResume；TestWorkBuddyNonReviewPermissionsUnchanged |
+| `internal/engine/facade/runtime_command_zcode.go` | 采用／保留（与 B8 同内容） | Q：模式作为平台会话参数，不改公共调度。 |
+| `internal/engine/facade/runtime_command_zcode_test.go` | 采用／保留（与 B8 同内容） | Q：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/runtime_execute.go` | 采用／保留（与 B8 同内容） | P/S：材料/schema/tool/source 在 CLAIM 前检查；空启动残留识别及恢复固定输入。 |
+| `internal/engine/facade/runtime_input.go` | 采用／保留（与 B8 同内容） | P：所有角色共用当前输入准备和两次发送边界检查。 |
+| `internal/engine/facade/runtime_input_test.go` | 采用／保留（与 B8 同内容） | P：TestNativeMandatoryInputsBeforeClaim；TestContinuousHistoricalMissingInstructionsBlocksWithoutAttempts |
+| `internal/engine/facade/runtime_operation_dispatch.go` | 采用／保留（与 B8 同内容） | Q：白盒独立覆盖阶段不执行后续任务操作。 |
+| `internal/engine/facade/runtime_operation_tool.go` | 采用／保留（与 B8 同内容） | Q：统一公共角色能力，产品/技术审保留只读能力。 |
+| `internal/engine/facade/runtime_platform_entry_test.go` | 采用／保留（与 B8 同内容） | Q：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/runtime_preferences_zcode_test.go` | 采用／保留（与 B8 同内容） | Q：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/runtime_workspace_workbuddy_test.go` | 采用／保留（与 B8 同内容） | Q：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/facade/task_operation.go` | 采用／保留（与 B8 同内容） | C：移除无用户授权的 30 分钟统一任务预算，取消仍沿现有生命周期。 |
+| `internal/engine/facade/task_sources.go` | 采用／保留（与 B8 同内容） | S：只消费 canonical 捕获及已接纳设计 action，不读 legacy/live provenance。 |
+| `internal/engine/facade/task_sources_retention_test.go` | 采用／保留（与 B8 同内容） | S：TestRetainedDesignSourcesNormalRevisionDispatch |
+| `internal/engine/facade/task_sources_test.go` | 采用／保留（与 B8 同内容） | S：TestCandidateSourcesDispatchAfterReopen；TestCandidateSourcesMissingBeforeClaim；TestCandidateUnstartedClaimRecovery；TestActionSourcesExactDesignAndRole；TestActionSourcesEmptyRegistrationDiffersFromMissingCapture；TestCandidateContinuousSkipsCompletedDesktopSource；TestCandidateUnstartedClaimRejectsExecutorHistory；TestCanonicalSourcesNeverReadsLegacyDispatch |
+| `internal/engine/facade/unstarted_claim.go` | 采用／保留（与 B8 同内容） | S：仅无身份、来源、恢复和操作且空 job 的初次 claim 判未启动。 |
+| `internal/engine/facade/verification.go` | 采用／保留（与 B8 同内容） | V/W：门审绑定完整 diffArgs；执行/返修筛范围；纯测试精确 literal 排除。 |
+| `internal/engine/facade/verification_materials.go` | 采用／保留（与 B8 同内容） | V：当前剩余用例、传递依赖、共享步骤和修复来源；续跑切片不覆写原材料。 |
+| `internal/engine/facade/verification_materials_test.go` | 采用／保留（与 B8 同内容） | V/I：TestVerificationMaterialActualDispatch；TestVerificationRepairSelectsOnlyPlanSources；TestVerificationExecutionDisclosesOnlyRemainingCases；TestVerificationReviewerContractProgramOwned；TestVerificationCaseScopeTransitiveDependencies |
+| `internal/engine/facade/verification_resume_materials_test.go` | 采用／保留（与 B8 同内容） | V：TestVerificationCheckpointResumeMaterialBinding |
+| `internal/engine/facade/verification_test.go` | 采用／保留（与 B8 同内容） | V/W：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/gitprep/git.go` | 采用／保留（与 B8 同内容） | Q/W：移除 Go 测试所有权猜测和通用空白否决；保留清单/索引/完整变更核对。 |
+| `internal/engine/gitprep/git_test.go` | 采用／保留（与 B8 同内容） | Q/W：TestOwnershipDeclaredInputsAndRenames |
+| `internal/engine/gitprep/markdown_test.go` | 采用／保留（与 B8 同内容） | Q：TestMarkdownHardBreakChangesAndCommit；TestChangesStillRejectsUnresolvedIndex |
+| `internal/engine/gitprep/promotion.go` | 采用／保留（与 B8 同内容） | Q：Git 路径以 NUL 分隔，带换行等普通路径不按文本行误拆。 |
+| `internal/engine/gitprep/promotion_test.go` | 采用／保留（与 B8 同内容） | Q：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/persistence/store.go` | 采用／保留（与 B8 同内容） | C：终态清理保留消费器持有的 executor.lock，由原 token owner 释放。 |
+| `internal/engine/persistence/store_test.go` | 采用／保留（与 B8 同内容） | C：TestCleanupTerminalPreservesConsumerLease |
+| `internal/engine/protocol/development_increment.go` | 采用／保留（与 B8 同内容） | W/K：只继承已有效 review 的测试产物，不提升待审生产树。 |
+| `internal/engine/protocol/engine.go` | 无行为差异，不作采纳项 | O：仅空行，不作为有效实现采纳项；不为对齐改动。 |
+| `internal/engine/protocol/preparation.go` | 采用／保留（与 B8 同内容） | S/W/K：显式设计 action、纯测试声明与独立 review 晋升、合法开发 keep。 |
+| `internal/engine/protocol/preparation_test.go` | 采用／保留（与 B8 同内容） | W：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/protocol/protocol.go` | 采用／保留（与 B8 同内容） | L：历史收据保留为 opaque JSON；不恢复旧事件执行逻辑。 |
+| `internal/engine/protocol/recovery_adapters_test.go` | 采用／保留（与 B8 同内容） | T：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/engine/protocol/regular.go` | 采用／保留（与 B8 同内容） | K：已存在 skip-review 的显式决策与前置条件保持一致，不伪造 PASS。 |
+| `internal/engine/protocol/regular_review.go` | 采用／保留（与 B8 同内容） | K：已有准备 run 的显式用户入口复审例外；不跳 QA/门，不代替首次计划。 |
+| `internal/engine/protocol/requirement_impact.go` | 采用／保留（与 B8 同内容） | K：仅取消对应未领取动作，保留独立分支及历史证据。 |
+| `internal/engine/protocol/requirement_retention_test.go` | 采用／保留（与 B8 同内容） | K：TestExplicitDevelopmentKeepSurvivesTopologyRebinding；TestExplicitDevelopmentRetentionDoesNotOverrideChangedInput |
+| `internal/engine/protocol/review_skip_test.go` | 采用／保留（与 B8 同内容） | K：TestEntryReviewSkipPreservesResultsAndDoesNotInventPASS；TestEntryReviewSkipRejectsOtherStagesAndCancelLeavesResults；TestEntryReviewSkipStillIssuesGitPreparation |
+| `internal/engine/protocol/test_files_test.go` | 采用／保留（与 B8 同内容） | W：TestWhiteboxTestFilesResultContract；TestUnchangedDeclaredTestsCannotWaiveIndependentReview |
+| `internal/engine/protocol/whitebox_promotion_test.go` | 采用／保留（与 B8 同内容） | W：TestWhiteboxPendingSnapshotNeedsCurrentIndependentReview；TestWhiteboxIncrementRetainsOnlyReviewedArtifacts |
+| `internal/validate/canary.go` | 采用／保留 staging 必要补项 | N：旧脚本黑名单已删；canary 改验只读 Git 命令正常放行。 |
+| `internal/validate/distribution_repair_test.go` | 采用／保留 staging 必要补项 | N：既有测试的输入/字段/单步调用按对应现行合同调整，保留原断言职责。 |
+| `internal/validate/hook.go` | 采用／保留（与 B8 同内容） | Q：去旧名称黑名单；按真正执行命令解析，不把搜索参数当写操作。 |
+| `internal/validate/hook_test.go` | 采用／保留（与 B8 同内容） | Q：TestHookDoesNotReserveRetiredScriptNames |
+| `internal/validate/install.go` | 采用／保留 staging 必要补项 | N：完整包先执行自身 validator，仅 runtime-only 保留当前安装器词汇检查。 |
+| `internal/validate/install_version_contract_test.go` | 采用／保留 staging 必要补项 | N：TestInstallSourceVersionOwnsManifestVocabulary |
+| `internal/validate/route_matrix_test.go` | 无行为差异，不作采纳项 | O：仅新增空行；无行为或断言变化，不作为有效采纳项。 |
+| `internal/validate/write_block.go` | 采用／保留（与 B8 同内容） | Q：按命令位置、选项、引号和重定向判断普通写操作；不是新增权限系统。 |
+| `internal/validate/write_block_test.go` | 采用／保留（与 B8 同内容） | Q：TestWriteBlockVCSCommandsVersusSearchArguments |
+| `prompts/actions/product-review.md` | 采用／保留（与 B8 同内容） | P/Q：通过路径读取必需材料，保留普通只读工具。 |
+| `prompts/actions/qa-design.md` | 采用 B8 必要项，并作本轮修正 | Q/W：本轮纠正基线产品/公开文档无条件断言；保留独立覆盖与混合文件合同。 |
+| `prompts/actions/qa-review.md` | 采用／保留（与 B8 同内容） | W/Q：独立审查完整纯测试声明和累积白盒 diff；不凭文件名或作者判断。 |
+| `prompts/actions/start-readiness.md` | 采用／保留（与 B8 同内容） | P/Q：技术审按绑定路径读取，不把禁写扩成禁读。 |
+| `prompts/reviewer-base.md` | 采用／保留（与 B8 同内容） | I/W：程序材料完整性和污染拒收；混合文件保留生产审查。 |
+| `refactor-plan/stage-4a-qa-efficiency.md` | 本轮补齐处置记录 | T：本轮完整差异处置记录；不替代唯一正式需求，不删除历史事实。 |
+| `references/b8-runtime-increment.md` | 已有等效记录，不另复制 | T：不新增/照搬此交付摘要；其有效实现、验证及三宿主实机未测边界归入本记录。 |
+| `references/engine-regular.md` | 采用 B8 必要项，并作本轮修正 | C/Q/W：统一公开合同；本轮修正 TestOwned 说明并补回仍适用的包内脚本索引。 |
+| `references/formal-flow.md` | 采用／保留（与 B8 同内容） | C/W：默认持续消费和独立白盒 review 晋升合同。 |
+| `references/install-and-hooks.md` | 采用／保留 staging 必要补项 | N/L：保留正常安装版本边界、隔离安装/恢复说明，删除旧维护补丁路线。 |
+| `references/phase4-installer-maintenance.patch` | 过期舍弃（双方已删除） | L：双方均已删除旧版本维护补丁；历史发布收据保留，不恢复兼容路径。 |
+| `references/user-configuration.md` | 等效措辞，保留原状 | C：默认持续执行说明；显式 continuous 的措辞不同无行为差异，不同步。 |
+| `scripts/qa-preparation.md` | 过期舍弃（双方已删除） | L/Q：双方均删除；现行操作/资源说明由 engine-regular 持有，仍有效脚本说明本轮补齐；旧时序舍弃。 |
+
+### 验证与仍未完成事项
+
+本轮只做受影响的必要检查，精确命令、stdout、stderr、exit 保存于本 staging 的 `.gates/reconciliation-checks/`：
+
+- 三项既有提示词测试：`TestMarkdownInstructionsAreBoundAtStartAndRetainedOnReopen`、`TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate`、`TestQAReadinessInstructionsReachBothRoles`，exit 0，facade 2.450s。证明绑定/恢复和章节加载，不能证明某次模型实际阅读过文档。
+- 从 staging 源码构建：exit 0；当前包 `package validate --root <staging>`：exit 0。不执行 install，不启动正式 QA 或原生模型。
+- `git diff --check`：exit 0。79 条原记录逐项覆盖、全部不同路径均有处置的完整性检查通过；这只是范围核对，不作为语义或正式 QA PASS。临时构建可执行文件已删除，保留命令和检查日志。
+- 已有 `/tmp/b8-adopted-tests.log`：facade 544.209s、protocol 118.546s、gitprep 28.503s、cli 105.788s 均 `ok`；本轮只读复核，没有重跑，也不扩大为全仓 PASS。`/tmp/b8-packages.log` 的 cli/persistence 与 `/tmp/installer-compat-staging.log` 的 validate 2.650s 保留为此前检查。
+- 取消修复 red/green 证据仍在 staging 同级 `cancellation-fix-evidence/`；混合白盒证据仍在 `mixed-whitebox-evidence.md`。未改这些文件或此前 PASS/FAIL。
+
+仍需后续正式动作或尚未证实：
+
+1. 本 staging 改动由正式开发动作接纳/整合为候选；新 run 从当前包加载提示词，已绑定的旧 run 不会因编辑 Markdown 自动更新。真实 run 的指令/来源绑定、准入及切换需要现有正式入口，本次不改。
+2. WorkBuddy、ZCode、DSH 的原生读/搜索/diff 可用且写入确被拒绝的实机证据，以及小体量真实完整 regular、恢复与终态清理。B8 自测明确未启用真实模型；当前不能用 fake transport 或本次包校验填这些 PASS。未另行重启耗时模型样本。
+3. 当前正式 QA（包括黑盒既有 FAIL）、门审、必要返修、Seal、集成和安装。本次没有改变其状态；未再核验真实 run 的最新 revision，不引用旧报告的 revision 239 为当前事实。
+4. 原对账中的“新版接入并验证可继续后立即清除真实临时升级入口/安装绑定”的现场义务：staging 已清相关源码不等于现场已完成。本次授权禁止改安装和真实 run，故不执行，不恢复已退役兼容路径。
+5. 当前待确认修订新增的开发期编写与任务定义字段强制限制不属于本次实现。未新增相应 API、规划器或聊天拦截；已有 reviewer-base 污染拒收规则继续保留，不能称为这些新限制已落实。
+
+结论：本次原任务的源码差异处置与提示词修正已交付，采用、等效、过期和纯格式项已逐项列明。源码层面的交付不代表上述正式动作或未实测验收已经完成。

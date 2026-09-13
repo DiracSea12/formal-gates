@@ -81,15 +81,39 @@ func TestCommitManifestRecoveryAndSquash(t *testing.T) {
 		t.Fatal("squash replay changed identity")
 	}
 }
-func TestOwnershipFrameworkInputsAndRenames(t *testing.T) {
+
+func TestCommitRecoversPartiallyStagedRename(t *testing.T) {
+	r := repository(t)
+	base, _ := Head(r)
+	if err := os.Rename(filepath.Join(r, "main.go"), filepath.Join(r, "renamed.go")); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash after Git already recognized the delete/add as a rename.
+	if _, err := Git(r, "add", "-A", "--", "main.go", "renamed.go"); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := Commit(r, base, "rename-replay", []string{"main.go", "renamed.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Before != base || receipt.After == base {
+		t.Fatal(receipt)
+	}
+	dirty, err := Changes(r, receipt.After)
+	if err != nil || len(dirty) != 0 {
+		t.Fatalf("post-recovery worktree: %v %v", dirty, err)
+	}
+}
+
+func TestOwnershipDeclaredInputsAndRenames(t *testing.T) {
 	for _, autocrlf := range []string{"false", "true"} {
 		t.Run("autocrlf="+autocrlf, func(t *testing.T) {
-			testOwnershipFrameworkInputsAndRenames(t, autocrlf)
+			testOwnershipDeclaredInputsAndRenames(t, autocrlf)
 		})
 	}
 }
 
-func testOwnershipFrameworkInputsAndRenames(t *testing.T, autocrlf string) {
+func testOwnershipDeclaredInputsAndRenames(t *testing.T, autocrlf string) {
 	r := repository(t)
 	if _, err := Git(r, "config", "core.autocrlf", autocrlf); err != nil {
 		t.Fatal(err)
@@ -107,21 +131,12 @@ func testOwnershipFrameworkInputsAndRenames(t *testing.T, autocrlf string) {
 	}
 	base, _ := Head(r)
 	before, _ := Snapshot(r, base)
-	old, err := TestOwnershipResolver(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if old["latest.go"] || !old["testdata/input.txt"] || !old["main_test.go"] {
-		t.Fatal(old)
-	}
+	old := map[string]bool{"main_test.go": true, "testdata/input.txt": true}
 	if err = os.Rename(filepath.Join(r, "testdata/input.txt"), filepath.Join(r, "testdata/renamed.txt")); err != nil {
 		t.Fatal(err)
 	}
 	write(t, r, "main_test.go", "package main\nimport \"testing\"\nfunc TestAnswer(t *testing.T) { t.Log(42) }\n")
-	now, err := TestOwnershipResolver(r)
-	if err != nil {
-		t.Fatal(err)
-	}
+	now := map[string]bool{"main_test.go": true, "testdata/renamed.txt": true}
 	after, err := WorkingView(r, base)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +184,5 @@ func TestWorkspaceBaselineAndUnknown(t *testing.T) {
 	if err = Cleanup(r, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = TestOwnershipResolver(t.TempDir()); err == nil {
-		t.Fatal("unsupported project ownership guessed")
-	}
+
 }

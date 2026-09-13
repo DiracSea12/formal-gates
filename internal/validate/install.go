@@ -253,11 +253,15 @@ func Install(options InstallOptions) (InstallReport, error) {
 	if manifestShape.Name != "formal-gates" {
 		return InstallReport{}, fmt.Errorf("formal-gates manifest name must be formal-gates")
 	}
-	if unknown := unknownManifestHosts(manifestShape.Hosts); len(unknown) > 0 {
-		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported host target %q", unknown[0])
-	}
-	if unknown := unknownManifestParts(manifestShape.Parts); len(unknown) > 0 {
-		return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported package target %q", unknown[0])
+	// A complete package has already validated its own versioned manifest.
+	// Only runtime-only fixtures need this installer's local vocabulary.
+	if !completePackage {
+		if unknown := unknownManifestHosts(manifestShape.Hosts); len(unknown) > 0 {
+			return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported host target %q", unknown[0])
+		}
+		if unknown := unknownManifestParts(manifestShape.Parts); len(unknown) > 0 {
+			return InstallReport{}, fmt.Errorf("formal-gates manifest lists unsupported package target %q", unknown[0])
+		}
 	}
 	// An install target is only valid when this payload's manifest registers
 	// the requested host as an installable host target. A manifest that omits

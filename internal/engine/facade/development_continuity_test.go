@@ -122,7 +122,7 @@ func TestDeveloperNativeContinuation(t *testing.T) {
 			if mode == "replacement" {
 				// This identity was created by this test invocation. Deleting only that
 				// disposable test thread supplies a real, reproducible irrecoverable case.
-				raw, e := codexThreadRequest(first.Regular.Settings.Values.CodexExecutable, "thread/delete", original.Identity, original.Claim.Context, first.Regular.Preparation.Resources["development"])
+				raw, e := codexThreadRequest(first.Regular.Settings.Values.NativeString("codexExecutable"), "thread/delete", original.Identity, original.Claim.Context, first.Regular.Preparation.Resources["development"])
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -186,7 +186,7 @@ done
 	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := captureRuntimeContext("codex", settings.Values{CodexExecutable: executable})
+	binding, err := captureRuntimeContext("codex", settings.Values{Native: map[string]string{"codexExecutable": executable}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ done
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt := protocol.DeveloperRecovery{Identity: "fixture-native", NativeMethod: "thread/resume", NativeResponse: raw}
+	receipt := protocol.DeveloperRecovery{Claim: protocol.ExecutionClaim{Provider: "codex"}, Identity: "fixture-native", NativeMethod: "thread/resume", NativeResponse: raw}
 	if receipt.Outcome() != "RESUMABLE" {
 		t.Fatalf("successful native resume classified %s: %s", receipt.Outcome(), raw)
 	}
@@ -242,8 +242,16 @@ done
 	if err := writeJSONAtomic(filepath.Join(f.codexJob(first.Claim.ActionID), "process.json"), codexProcess{ActionID: first.Claim.ActionID, PID: os.Getpid(), Stopped: true}); err != nil {
 		t.Fatal(err)
 	}
+	// The current action has captured its inputs before native process startup.
+	if err := os.MkdirAll(f.codexJob(next.Claim.ActionID), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(f.codexJob(next.Claim.ActionID), "sources.json"), []SubagentSource{}); err != nil {
+		t.Fatal(err)
+	}
+
 	run, _ := f.Show()
-	recovery, err := f.observeDeveloperRecovery(run, next, false)
+	recovery, err := f.observeNativeDeveloperRecovery(run, next, false, codexRuntimeAdapter{})
 	if err != nil || recovery.Outcome() != "UNRECOVERABLE" {
 		t.Fatalf("%+v %v", recovery, err)
 	}

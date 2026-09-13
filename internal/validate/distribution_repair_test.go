@@ -130,6 +130,11 @@ func TestManifestRejectsUnknownPackageTargetBeforeInstall(t *testing.T) {
 	if result := Package(source); result.OK() || !resultHasPath(result, "formal-gates.manifest.json") {
 		t.Fatalf("unknown manifest target was accepted by package validation: %#v", result.Failures)
 	}
+	// Exercise the local runtime-only vocabulary check. Complete packages use
+	// their own validator, tested separately at the real Install boundary.
+	if err := os.Remove(filepath.Join(source, "internal", "validate", "runner.go")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	project := t.TempDir()
 	registry := filepath.Join(t.TempDir(), "registry.json")
 	launcher := filepath.Join(t.TempDir(), "bin", nativeBinaryName())

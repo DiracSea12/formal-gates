@@ -1,0 +1,42 @@
+[
+  {
+    "kind": "environment-observation",
+    "path": "observations.json"
+  },
+  {
+    "kind": "public-contract",
+    "path": "workbuddy-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "zcode-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-sdk-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-acp-README.zh.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "b5-native-reference-index.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/acp.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/sdk-typescript.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/settings.md"
+  }
+]

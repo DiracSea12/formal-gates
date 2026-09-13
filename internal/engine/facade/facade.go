@@ -25,6 +25,7 @@ import (
 	"formal-gates/internal/engine/persistence"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
+	"formal-gates/internal/host"
 )
 
 const (
@@ -80,7 +81,6 @@ type Envelope = persistence.Envelope
 
 // Run is the read-only façade projection returned by show/status/next.
 type Run struct {
-	Subagent                  *SubagentDispatch `json:"subagent,omitempty"`
 	reviewDecisions           map[string]protocol.RecordedDecision
 	Regular                   *protocol.RegularState               `json:"regular,omitempty"`
 	Cost                      *cost.RunCost                        `json:"cost,omitempty"`
@@ -156,8 +156,6 @@ type Admission struct {
 }
 
 type Facade struct {
-	subagentParent  string
-	subagentSources []SubagentSource
 	// Private fault seam for process-interruption tests; never exposed by CLI/config.
 	fault      func(persistence.FaultPoint) error
 	root       string
@@ -214,6 +212,15 @@ func Start(options StartOptions) (*Facade, Run, error) {
 	}
 	var regularInitial *protocol.RegularState
 	if req.RequirementPath != "" {
+		// Installation names may be aliases. Normalize once at intake; issued
+		// claims and native identities remain bound to the canonical provider.
+		if req.Provider != "" {
+			platform, lookupErr := host.Lookup(req.Provider)
+			if lookupErr != nil {
+				return nil, Run{}, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: %w", lookupErr)
+			}
+			req.Provider = platform.ID
+		}
 		initial, err := prepareRegular(root, req)
 		if err != nil {
 			return nil, Run{}, err
@@ -514,6 +521,30 @@ func (f *Facade) Drive() (Run, error) {
 		if err := f.verifyRegularDocument(nil); err != nil {
 			return Run{}, err
 		}
+		// A cancelled claimed execution still owns its slot and cost until its
+		// native source is settled. Consume the engine's terminate intent before
+		// deciding or resuming work under the current requirement binding.
+		var cancellations []string
+		for id, intent := range snap.State.PendingHostActions {
+			if intent.Operation == protocol.HostActionTerminateAgent {
+				cancellations = append(cancellations, id)
+			}
+		}
+		sort.Strings(cancellations)
+		for _, id := range cancellations {
+			intent := snap.State.PendingHostActions[id]
+			if intent.Operation != protocol.HostActionTerminateAgent || intent.Terminate == nil {
+				continue
+			}
+			target := intent.Terminate
+			x, ok := snap.State.RegularExecutions[target.WorkerActionID]
+			if !ok || x.Claim.AttemptID != target.AttemptID || (target.Identity != "" && x.Identity != target.Identity) {
+				return Run{}, fmt.Errorf("INTENT_MISMATCH: terminate execution binding")
+			}
+			if err := f.finishNativeCancellation(target.WorkerActionID, target.Reason); err != nil {
+				return Run{}, err
+			}
+		}
 		if _, _, err := f.engine.Drive(emptyFingerprint()); err != nil {
 			return Run{}, err
 		}
@@ -584,6 +615,15 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 	if f == nil || f.engine == nil {
 		return protocol.Acceptance{}, Run{}, fmt.Errorf("engine submit: nil façade")
 	}
+	if err := f.verifyDevelopmentIncrement(&event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyExecutorHandoff(&event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.verifyExternalDevelopmentResult(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
 	if event.Regular != nil && event.Regular.Claim != nil {
 		c := event.Regular.Claim
 		run, err := f.Show()
@@ -597,8 +637,8 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		if c.Context == nil {
 			c.Context = x.Claim.Context
 		}
-		if x.Claim.Context == nil && !x.Claimed && x.Identity == "" {
-			captured, err := captureRuntimeContext(c.Provider, run.Regular.Settings.Values)
+		if x.Claim.Context == nil && !x.Claimed && x.Identity == "" && (x.Executor == nil || x.Executor.Kind != "external") {
+			captured, err := captureRuntimeContext(c.Provider, run.Regular.Settings.Values, f.stateDir, f.root)
 			if err != nil {
 				return protocol.Acceptance{}, Run{}, err
 			}
@@ -609,6 +649,9 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		}
 	}
 	if err := f.verifyPreparationReceipt(event); err != nil {
+		return protocol.Acceptance{}, Run{}, err
+	}
+	if err := f.bindVerificationEvidence(event); err != nil {
 		return protocol.Acceptance{}, Run{}, err
 	}
 	if err := f.verifyTaskOperationReceipt(event); err != nil {
@@ -625,6 +668,9 @@ func (f *Facade) Submit(event protocol.Event) (protocol.Acceptance, Run, error) 
 		return protocol.Acceptance{}, Run{}, err
 	}
 	run, err := f.project()
+	if err == nil {
+		err = f.releaseCollectedResources(run)
+	}
 	return acceptance, run, err
 }
 
@@ -794,6 +840,9 @@ func (f *Facade) commitTerminalCleanup(summary TerminalSummary) error {
 		if err := os.RemoveAll(filepath.Join(f.stateDir, "executions")); err != nil {
 			return err
 		}
+	}
+	if err := f.cleanupTaskOperationFiles(); err != nil {
+		return fmt.Errorf("FINALIZING_CLEANUP: %w", err)
 	}
 	if err := f.store.CleanupTerminal(); err != nil {
 		return err

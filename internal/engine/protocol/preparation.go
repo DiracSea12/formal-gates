@@ -16,6 +16,7 @@ import (
 // Preparation is the current plan's projection, not another task lifecycle.
 // Attempts and native sessions continue to live in the existing protocol maps.
 type Preparation struct {
+	BatchTasks          map[string]runtime.TaskKey   `json:"batchTasks,omitempty"`
 	DevelopmentTask     *runtime.TaskKey             `json:"developmentTask,omitempty"`
 	ReworkReason        string                       `json:"reworkReason,omitempty"`
 	PlanDigest          string                       `json:"planDigest"`
@@ -52,10 +53,14 @@ type QAReviewWaiver struct {
 	Revision uint64            `json:"revision"`
 }
 type PreparedQA struct {
-	DesignGap           string          `json:"designGap,omitempty"`
-	ConsecutiveFailures int             `json:"consecutiveFailures"`
-	RecoveryRequired    bool            `json:"recoveryRequired"`
-	ReviewWaiver        *QAReviewWaiver `json:"reviewWaiver,omitempty"`
+	DesignActionID         string          `json:"designActionId,omitempty"`
+	PreviousDesignActionID string          `json:"previousDesignActionId,omitempty"`
+	TestArtifactsFrom      string          `json:"testArtifactsFrom,omitempty"`
+	TestArtifactsBase      string          `json:"testArtifactsBase,omitempty"`
+	DesignGap              string          `json:"designGap,omitempty"`
+	ConsecutiveFailures    int             `json:"consecutiveFailures"`
+	RecoveryRequired       bool            `json:"recoveryRequired"`
+	ReviewWaiver           *QAReviewWaiver `json:"reviewWaiver,omitempty"`
 
 	ReviewScope    coverage.ScopeMode          `json:"reviewScope"`
 	AuthoringBase  string                      `json:"authoringBase,omitempty"`
@@ -74,6 +79,7 @@ type PreparedQA struct {
 }
 type QADesign struct {
 	Manifest         coverage.AcceptanceManifest        `json:"manifest"`
+	TestFiles        []string                           `json:"testFiles"`
 	Alternatives     []coverage.AlternativeVerification `json:"alternatives,omitempty"`
 	CoverageJudgment string                             `json:"coverageJudgment"`
 }
@@ -177,12 +183,21 @@ func prepareProjection(r *RegularState) {
 	}
 	binding := preparationBinding(r)
 	if r.Preparation != nil && r.Preparation.BindingDigest == binding {
+		if r.Preparation.Resources["development"] == "" {
+			retainExplicitDevelopment(r, r.Preparation)
+		}
 		return
 	}
 	if r.Preparation != nil {
 		r.PreparationHistory = append(r.PreparationHistory, *r.Preparation)
 	}
 	p := &Preparation{PlanDigest: r.Plan.Digest, BindingDigest: binding, Resources: map[string]string{}, Batches: map[string]PreparationResult{}, Commits: map[string]gitprep.Receipt{}, QA: map[string]*PreparedQA{}, DevelopmentSnapshot: r.Candidate}
+	if old := r.Preparation; old != nil {
+		p.BatchTasks = map[string]runtime.TaskKey{}
+		for id, key := range old.BatchTasks {
+			p.BatchTasks[id] = key
+		}
+	}
 	if old := r.Preparation; old != nil && old.DevelopmentTask != nil {
 		// A revised plan may rename its first unfinished batch. The open work still
 		// owns the same TaskKey, native session, attempt budget and working files.
@@ -196,7 +211,26 @@ func prepareProjection(r *RegularState) {
 	}
 	if old := r.Preparation; old != nil && len(r.Changes) > 0 && r.Changes[len(r.Changes)-1].ToRevision == r.Requirement.Revision {
 		change := r.Changes[len(r.Changes)-1]
-		if change.Impact["development"] == "unaffected" {
+		if change.UserDisposition != nil {
+			p.DevelopmentSnapshot = old.DevelopmentSnapshot
+			p.Resources["development"] = old.Resources["development"]
+			p.ExtraAttempts = old.ExtraAttempts
+			for id, result := range old.Batches {
+				impact := change.Impact["batch:"+id]
+				if impact == "unaffected" {
+					p.Batches[id] = result
+					if receipt, ok := old.Commits[id]; ok && receipt.After != "" {
+						p.Commits[id] = receipt
+					}
+				} else {
+					key := batchTask(old, id)
+					delete(p.BatchTasks, id)
+					if p.DevelopmentTask != nil && *p.DevelopmentTask == key {
+						p.DevelopmentTask = nil
+					}
+				}
+			}
+		} else if change.Impact["development"] == "unaffected" {
 			p.Batches = old.Batches
 			p.Commits = old.Commits
 			p.DevelopmentSnapshot = old.DevelopmentSnapshot
@@ -240,12 +274,16 @@ func prepareProjection(r *RegularState) {
 			p.Resources[mode] = old.Resources[mode]
 		}
 	}
+	retainExplicitDevelopment(r, p)
 	r.Preparation = p
 }
 func preparationTask(p *Preparation, step, scope string) runtime.TaskKey {
 	return runtime.TaskKey{Node: "entry", Step: authoring.StepID(step), Scope: strings.TrimPrefix(p.BindingDigest, "sha256:") + ":" + scope}
 }
 func batchTask(p *Preparation, id string) runtime.TaskKey {
+	if key, ok := p.BatchTasks[id]; ok {
+		return key
+	}
 	if p.DevelopmentTask != nil {
 		return *p.DevelopmentTask
 	}
@@ -285,6 +323,22 @@ func nextBatch(r *RegularState) *DevelopmentBatch {
 	}
 	return nil
 }
+
+// WhiteboxPromotionReady separates an isolated review snapshot from the final
+// candidate. A review is accepted only against the current snapshot; revisions
+// clear it. A case-set waiver approves neither test-file declarations nor edits.
+func WhiteboxPromotionReady(p *Preparation) bool {
+	q := p.QA["whitebox"]
+	if q == nil {
+		return true
+	}
+	if q.Design == nil || q.Design.TestFiles == nil {
+		return false
+	}
+	return (q.Snapshot == p.DevelopmentSnapshot && len(q.Design.TestFiles) == 0) ||
+		(q.Frozen && q.Review != nil && q.Whitelist != nil && q.ReviewWaiver == nil && !q.NeedsRevision)
+}
+
 func desiredGit(r *RegularState) *GitPreparation {
 	p := r.Preparation
 	if p != nil && p.Candidate != nil {
@@ -320,6 +374,9 @@ func desiredGit(r *RegularState) *GitPreparation {
 			}
 		}
 		if op.Kind == "" {
+			if !WhiteboxPromotionReady(p) {
+				return nil
+			}
 			op.Kind = "finalize"
 			if q := p.QA["whitebox"]; q != nil {
 				op.Before = q.Snapshot
@@ -474,7 +531,9 @@ func preparationAllowance(s *State, b *guard.Basis) {
 		current := nextBatch(r)
 		for _, batch := range r.Plan.Batches {
 			key := preparationTask(p, "development-worker", fmt.Sprintf("%s-%d", batch.ID, p.Rework))
-			if current != nil && batch.ID == current.ID {
+			if bound, ok := p.BatchTasks[batch.ID]; ok {
+				key = bound
+			} else if current != nil && batch.ID == current.ID {
 				key = batchTask(p, batch.ID)
 			}
 			keys[key] = true
@@ -635,6 +694,10 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			}
 		}
 		p.Batches[b.ID] = result
+		if p.BatchTasks == nil {
+			p.BatchTasks = map[string]runtime.TaskKey{}
+		}
+		p.BatchTasks[b.ID] = x.Claim.Task
 	} else {
 		mode := strings.Split(step, "-")[0]
 		q := p.QA[mode]
@@ -671,6 +734,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			}
 			q.Design = result.Design
 			q.DesignGap = ""
+			q.DesignActionID = result.ActionID
 			q.Manifest = result.Manifest
 			q.Reuse = result.Reuse
 			if mode == "whitebox" && result.Status == "FAIL" {
@@ -740,6 +804,16 @@ func qaContract(r *RegularState, mode string, d QADesign) coverage.CoverageContr
 	return coverage.CoverageContract{RequiredSources: required, SelectedKinds: []coverage.ReviewKind{coverage.ReviewKind(strings.ToUpper(mode))}, Manifests: []coverage.AcceptanceManifest{d.Manifest}, AlternativeVerifications: d.Alternatives}
 }
 func validateQADesign(r *RegularState, mode string, d QADesign) error {
+	if mode == "whitebox" {
+		if d.TestFiles == nil {
+			return fmt.Errorf("whitebox design requires explicit testFiles, separate from the change manifest")
+		}
+		if _, err := gitprep.Paths(d.TestFiles); err != nil {
+			return fmt.Errorf("whitebox testFiles: %w", err)
+		}
+	} else if len(d.TestFiles) != 0 {
+		return fmt.Errorf("only whitebox design declares testFiles")
+	}
 	m := d.Manifest
 	seen := map[string]bool{}
 	for _, c := range m.Cases {
@@ -863,12 +937,20 @@ func (e *Engine) acceptGit(s *State, receipt GitPreparationReceipt) error {
 			return fmt.Errorf("missing whitebox workspace")
 		}
 	case "whitebox-commit":
-		if receipt.Ownership == nil || receipt.Ownership.Status != "TEST_ONLY" {
+		if receipt.Ownership == nil || (receipt.Ownership.Status != "TEST_ONLY" && receipt.Ownership.Status != "REVIEW_PENDING") {
 			p.Blocked = "PRODUCTION_CHANGED"
 		} else {
 			p.QA["whitebox"].Snapshot = receipt.Git.After
+			// The reviewed scope is cumulative across whitebox revisions. Keep
+			// that exact delta for later test-artifact retention.
+			if receipt.Ownership.Paths != nil {
+				p.QA["whitebox"].Manifest = receipt.Ownership.Paths
+			}
 		}
 	case "finalize":
+		if !WhiteboxPromotionReady(p) {
+			return fmt.Errorf("whitebox testFiles and changes require independent test-only review")
+		}
 		if !allDevelopment(r) {
 			return fmt.Errorf("candidate requires all development batches")
 		}
@@ -969,7 +1051,7 @@ func PreparationArtifact(run, mode string) string {
 func issuePreparationGit(s *State, revision uint64) bool {
 	r := s.Regular
 	p := r.Preparation
-	if p == nil || p.Operation != nil || r.Guard.Status == "COST_PENDING" || r.ChangePending || r.Ask != nil || r.Terminal != "" || r.Topology != "no-split" || effectiveReview(r, r.Reviews["start-readiness"]) != "PASS" {
+	if p == nil || p.Operation != nil || r.Guard.Status == "COST_PENDING" || r.ChangePending || r.Ask != nil || r.Terminal != "" || r.Topology != "no-split" || !reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) {
 		return false
 	}
 	op := desiredGit(r)
@@ -1199,6 +1281,7 @@ func reviseQA(q *PreparedQA) {
 	}
 	q.AuthoringBase = q.Snapshot
 	q.PreviousDesign = q.Design
+	q.PreviousDesignActionID = q.DesignActionID
 	q.RetainedReview = q.Review
 	if q.RetainedReview != nil {
 		q.ReviewScope = coverage.ScopeAffected
@@ -1206,6 +1289,7 @@ func reviseQA(q *PreparedQA) {
 	q.NeedsRevision = false
 	q.ReviewWaiver = nil
 	q.Design = nil
+	q.DesignActionID = ""
 	q.Review = nil
 	q.Whitelist = nil
 	q.Revision++
@@ -1245,7 +1329,7 @@ func refreshPreparationRecovery(s *State, revision uint64) bool {
 		}
 		reason := "Three consecutive pre-wave review FAIL results require a bounded disposition."
 		if at.RetryExhausted {
-			reason = "The current QA TaskKey exhausted its finite runtime attempts; no additional attempt is authorized."
+			reason = "The current QA TaskKey exhausted its configured runtime attempt budget; another attempt requires a recovery decision."
 		}
 		ask := &RegularAsk{ID: fmt.Sprintf("qa-recovery:%s:%d", mode, revision), Kind: "qa-recovery", Revision: revision, Request: RegularRequest{Action: "qa-recovery", Target: mode, Reason: reason}, Options: []string{"redesign", "fresh-review", "change-requirement", "waiver", "skip", "abort"}, QA: binding}
 		if at.RetryExhausted {
@@ -1303,6 +1387,9 @@ func decideQARecovery(s *State, a *RegularAsk, d RegularDecision, revision uint6
 			q.ReviewScope = coverage.ScopeFull
 		}
 	case "waiver", "skip":
+		if b.Mode == "whitebox" && (q.Snapshot != r.Preparation.DevelopmentSnapshot || (q.Design != nil && len(q.Design.TestFiles) != 0)) {
+			return fmt.Errorf("whitebox testFiles and project changes require independent test-only review; case-set waiver cannot authorize promotion")
+		}
 		if q.Design == nil {
 			return fmt.Errorf("review waiver/skip requires an exact authored case-set; redesign first")
 		}
@@ -1364,4 +1451,35 @@ func validateFailedQAReview(r *RegularState, mode string, design QADesign, revie
 	}
 	_, err = qaContract(r, mode, design).ValidateReviews([]coverage.ReviewResult{review})
 	return err
+}
+
+// A current explicit keep decision also applies when confirming an unchanged
+// requirement after a recording pause. That path has no new apply-requirement
+// receipt, so the older change classification cannot override the user's choice.
+func retainExplicitDevelopment(r *RegularState, p *Preparation) {
+	d := r.RequirementImpact
+	if d == nil || d.RequirementRevision != r.Requirement.Revision || d.Candidate != r.Candidate || d.Choices["development"] != "keep" {
+		return
+	}
+	for i := len(r.PreparationHistory) - 1; i >= 0; i-- {
+		old := &r.PreparationHistory[i]
+		if old.PlanDigest != p.PlanDigest || old.Resources["development"] == "" {
+			continue
+		}
+		p.Resources["development"] = old.Resources["development"]
+		p.DevelopmentSnapshot = old.DevelopmentSnapshot
+		p.ExtraAttempts = old.ExtraAttempts
+		for id, result := range old.Batches {
+			if d.Choices["batch:"+id] != "keep" {
+				continue
+			}
+			if _, exists := p.Batches[id]; !exists {
+				p.Batches[id] = result
+				if receipt, ok := old.Commits[id]; ok {
+					p.Commits[id] = receipt
+				}
+			}
+		}
+		return
+	}
 }

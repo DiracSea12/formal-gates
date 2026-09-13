@@ -70,14 +70,21 @@ func submitChoiceWhilePIDAlive(t *testing.T, f *Facade, pid int, q protocol.Regu
 		t.Fatalf("%s: PID %d was not alive before DECIDE", label, pid)
 	}
 	a := pending.Regular.Ask
+	// This fixture's synthetic user explicitly invalidates every old item.
+	// Exercise the actual typed disposition contract while the QA PID is live.
+	dispositions := map[string]string{}
+	for _, item := range a.ImpactItems {
+		dispositions[item.ID] = "rerun"
+	}
 	decision, err := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("%s-decide-%d", label, pending.Revision)), protocol.RegularEvent{
 		Operation:        "DECIDE",
 		ExpectedRevision: pending.Revision,
 		Decision: &protocol.RegularDecision{
-			RequestID: a.ID,
-			Token:     a.Token,
-			Digest:    a.Digest,
-			Choice:    "confirm",
+			Dispositions: dispositions,
+			RequestID:    a.ID,
+			Token:        a.Token,
+			Digest:       a.Digest,
+			Choice:       "confirm",
 		},
 	})
 	if err != nil {
@@ -139,7 +146,7 @@ func finishRunningQATarget(t *testing.T, f *Facade, pid int, done <-chan running
 
 func taskOperationDirectoryCount(t *testing.T, f *Facade) int {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(f.stateDir, "task-operations"))
+	entries, err := os.ReadDir(filepath.Join(f.stateDir, "artifacts", "task-operations"))
 	if os.IsNotExist(err) {
 		return 0
 	}

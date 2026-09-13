@@ -40,7 +40,7 @@ $HOME/.local/bin/formal-gates uninstall \
 ```
 
 安装器复制一份运行时包，包含 `SKILL.md`、CLI、`prompts/`、`gates/` 和所维护的参
-考文档。它默认配置所选 host 的 formal-gates 命令和子代理生命周期 hook。既有的无
+考文档。它默认配置所选 host 的 formal-gates 命令，并为支持 hook 的 host 配置子代理生命周期 hook。既有的无
 关 hook 条目会被保留，并在适用的 host 指导文件中维护最新的受理规则。只有当 host 的 hook 配置和受理规则都必须逐字节保持不变时，才使用
 `--skip-hooks`。
 
@@ -114,6 +114,9 @@ $HOME/.local/bin/formal-gates uninstall --host zcode --scope project --project <
 执行，不接受旧 `--source` 旁路。
 
 ## Hook 边界
+
+hook 不保留已退役脚本名的命令字符串黑名单，正常搜索、阅读和历史查询可以引用这些名称。
+活动 run 的写入权限和原生门审 PASS 的绑定校验仍然生效。
 
 原生 hook 入口是：
 
@@ -219,34 +222,17 @@ installed: <test-project>/<host-path>/formal-gates
 不执行安装。复制、installed-path smoke、runtime/pointer/registry 提交和失败恢复仍全部
 由当前 stable owner 的既有事务持有。这样新版恢复旧包时不会要求旧包包含新版源码文件。
 
-`97eef33d866301a2985f510dd486a21196eea3f9` 的旧安装器仍用自身文件清单校验其他版本，
-不能直接安装删除了旧 workflow 文件的阶段 4 包。先从精确旧源码构建维护版本，应用
-[通用安装器补丁](phase4-installer-maintenance.patch)，再由原 stable launcher 安装维护包：
+安装及恢复验证使用当前稳定入口，在独立的 project、release root 和 registry 中执行。
+每一步保留精确源码、package/installed identity、registry generation 和
+`<registry>.install.json`，下一步不覆盖上一步的留存证据。
 
 ```bash
-git -C <old-source-copy> checkout --detach 97eef33d866301a2985f510dd486a21196eea3f9
-git -C <old-source-copy> apply --unidiff-zero <stage4-source>/references/phase4-installer-maintenance.patch
-git -C <old-source-copy> add internal/validate/install.go
-git -C <old-source-copy> commit -m "Validate install sources with their own package contract"
-cd <old-source-copy>
-go build -o bin/formal-gates ./cmd/formal-gates
-bin/formal-gates package validate --root .
+<stable-launcher> install --source <candidate-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
+<stable-launcher> install --source <previous-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
 ```
 
-在独立 HOME、project、release root 中按下列顺序演练；`<stable-launcher>` 必须是该隔离
-目标已安装的固定入口。每一步保留精确源码、package/installed identity、registry generation
-和 `<registry>.install.json`，下一步不得覆盖上一步的留存副本。
-
-```bash
-<stable-launcher> install --source <old-source-copy> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
-<stable-launcher> install --source <committed-stage4-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
-<stable-launcher> install --source <original-stable-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
-```
-
-最后一步是提交后恢复原稳定包，仍是一笔新安装事务，generation 不倒退；失败提交则
-按下述原 journal 自动恢复。维护补丁与阶段 4 的 `internal/validate/install.go` 修改相同，
-不增加命令或 workflow 兼容路径。真实全局的维护升级只能在本阶段固定 driver 完成 Seal、
-主线集成及必要重验后执行；Seal 前保持该 driver 及运行绑定不变。
+恢复已保存的稳定包仍是一笔新安装事务，generation 不倒退；失败提交按下述原 journal
+自动恢复。候选包使用自身的校验合同，不提供旧 workflow 或旧安装器的兼容补丁。
 
 首次使用固定 stable driver 时，先从冻结的已安装 artifact 调用受支持的
 `install --bootstrap` 维护入口。bootstrap 只登记 target、host、project/state/resource
@@ -313,3 +299,18 @@ CI 流程构建 Windows、macOS 和 Linux 二进制、portable-canary 输出和 
 checksum 文件，并可以把它们附加到 GitHub Release。checksum 说明下载到的字节与已
 发布的 CI 产物一致。它们不提供签名、attestation、provenance、registry、
 marketplace 或 `npx` 分发路径。
+
+
+## WorkBuddy 原生入口（阶段 4a）
+
+已有 WorkBuddy 应用包 CLI 可直接使用，不必因为 codebuddy 不在 PATH 再装一份。
+使用已有安装事务：`./install.command --host workbuddy --scope project --project <project> --force`
+或 `--scope global`。项目/全局技能目录为 `.codebuddy/skills/formal-gates`；指导文件分别为
+项目 `CODEBUDDY.md` 与 `~/.codebuddy/CODEBUDDY.md`。安装器不为 WorkBuddy 写全局 hook；
+引擎动作的启动、结束、身份、结果与工具边界由原生 runtime adapter 记录。安装成功
+不代表已经实测平台完整 regular 流程，也不承诺原生流程以外的全局 hook 拦截。
+
+ZCode 与 DSH 继续复用原来的安装位置、宿主配置与生命周期能力；本阶段只增加 regular
+驱动和 action 内工具配置，不替换用户模型/认证设置。可执行入口与模型选项见
+[user-configuration.md](user-configuration.md)。未完成的真实平台验证须如实标明；具体 run
+的延期或豁免由 engine 按用户决定记录，不在安装文档中预先承诺 Seal 处置。

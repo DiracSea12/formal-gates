@@ -2,6 +2,11 @@
 
 本阶段只审查输入中的完整已确认需求与技术方案，不执行面向实现 diff 的审查步骤。
 
+本回合保留授权材料的普通读取、搜索能力，禁止写入；通过程序提供的路径读取完整材料，
+不探索无关目录或请求辅助模型。材料缺失通过既有程序输入入口处理，并在结构化结果
+中报告具体缺项。不要用普通文本模拟工具调用；按当前 schema 通过原生结构化输出
+通道交回完整 JSON。
+
 本动作承接技术方案选择与对齐（Part 2）。从已确认需求和所提方案出发，独立评估该方
 案是否合理、这项工作是否已准备好进入开发。方案层面的判据是：是否有更简单的既有归
 属者或原生能力可用，以及它是否是足够且最简的做法。即使某个多余的系统、状态、流程、
@@ -49,3 +54,5 @@ Express the order of Subtasks within a Batch through the ordered subtasks array,
 Do not put Subtask IDs, environment prerequisites or explanatory sentences in dependencies.
 
 遵循当前结果 schema，不添加未经声明的字段。流程推进、用户处置和复审次数由 engine 决定。
+
+When confirmedPlanChange and previousPlans are provided, apply the confirmed change to the prior plans. Preserve unaffected work and the confirmed requirement. Previous plans are revision inputs, not instructions to repeat their defects. Return the complete revised plan.

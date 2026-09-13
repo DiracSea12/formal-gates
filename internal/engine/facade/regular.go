@@ -53,7 +53,7 @@ func prepareRegular(root string, req StartRequest) (protocol.RegularState, error
 		return protocol.RegularState{}, fmt.Errorf("B1 intake base-snapshot must match the current immutable Git HEAD")
 	}
 	gates := []string{"complexity-gate", "implementation-quality-gate"}
-	initial := protocol.RegularState{CatalogGates: gates, Requirement: protocol.Document(filepath.ToSlash(p), data), Settings: config, BaseSnapshot: head, Candidate: head}
+	initial := protocol.RegularState{StartedAt: time.Now().UTC(), CatalogGates: gates, Requirement: protocol.Document(filepath.ToSlash(p), data), Settings: config, BaseSnapshot: head, Candidate: head}
 	ownerPath := filepath.Join(root, ".gates", "start-owner.json")
 	if data, err := os.ReadFile(ownerPath); err == nil {
 		var owner struct {
@@ -214,7 +214,7 @@ func (f *Facade) settleOwnerReport(run Run) error {
 		return nil
 	}
 	r := run.Regular
-	entry := cost.OwnerCost{Source: cost.SourceUnavailable}
+	entry := cost.OwnerCost{Source: cost.SourceUnavailable, TranscriptPath: r.OwnerTranscript, SourceReason: "owner source unavailable"}
 	overlapped := false
 	if r.OwnerTranscript != "" && !r.OwnerStartedAt.IsZero() {
 		peers, err := os.ReadDir(filepath.Join(f.root, ".gates", "engine"))
@@ -254,8 +254,12 @@ func (f *Facade) settleOwnerReport(run Run) error {
 	}
 	if !overlapped {
 		if usage, err := cost.MeasureOwner(r.OwnerProvider, r.OwnerTranscript, r.OwnerCostBaseline); err == nil {
-			entry = cost.OwnerCost{Source: cost.SourceTranscript, InputCacheHitTokens: usage.InputCacheHitTokens, InputCacheMissTokens: usage.InputCacheMissTokens, TotalInputTokens: usage.InputCacheHitTokens + usage.InputCacheMissTokens, OutputTokens: usage.OutputTokens}
+			entry = cost.OwnerCost{Source: cost.SourceTranscript, TranscriptPath: r.OwnerTranscript, InputCacheHitTokens: usage.InputCacheHitTokens, InputCacheMissTokens: usage.InputCacheMissTokens, TotalInputTokens: usage.InputCacheHitTokens + usage.InputCacheMissTokens, OutputTokens: usage.OutputTokens}
+		} else {
+			entry.SourceReason = err.Error()
 		}
+	} else {
+		entry.SourceReason = "owner interval overlaps another run or peer interval could not be established"
 	}
 	cost.RecordOwner(run.Cost, entry)
 	return nil

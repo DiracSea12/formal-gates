@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,9 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 	}
 	call := func(sub string, tail ...string) facade.Run {
 		args := []string{"workflow", sub, "--root", root, "--run-id", runID}
+		if sub == "drive" && len(tail) == 0 {
+			args = append(args, "--single-step")
+		}
 		args = append(args, tail...)
 		out := runInstalledCLI(t, binary, root, nativeEnv, "", args...)
 		var r facade.Run
@@ -77,7 +81,7 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		v.ExpectedRevision = r.Revision
 		ev, _ := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("public-%d", r.Revision)), v)
 		data, _ := json.Marshal(ev)
-		out := runInstalledCLI(t, binary, root, nativeEnv, string(data), "workflow", "submit", "--root", root, "--run-id", runID)
+		out := runInstalledCLI(t, binary, root, nativeEnv, string(data), "workflow", "submit", "--single-step", "--root", root, "--run-id", runID)
 		var response struct {
 			Run facade.Run `json:"run"`
 		}
@@ -223,22 +227,78 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		}
 		return string(out)
 	}
-	development := r.Regular.Preparation.Resources["development"]
+	// Use the installed external-author entry in this existing complete fixture.
+	// This is a real CLI/Git lifecycle, not native-model or independent QA evidence.
+	previous := currentExecution("development-worker")
+	choose(protocol.RegularRequest{Action: "executor-handoff", Target: previous.Claim.ActionID, Reason: "Fixture user explicitly assigns this unfinished batch to the local external author", Handoff: &protocol.ExecutorHandoff{To: protocol.ExecutorTarget{Kind: "external", Provider: "chatgpt", Label: "installed CLI fixture author"}}})
+	assigned := currentExecution("development-worker")
+	externalInput := func() facade.ExternalDevelopment {
+		output := runInstalledCLI(t, binary, root, nativeEnv, "", "workflow", "drive", "--root", root, "--run-id", runID, "--action-id", assigned.Claim.ActionID, "--external-executor")
+		var input facade.ExternalDevelopment
+		if err := json.Unmarshal([]byte(output), &input); err != nil {
+			t.Fatal(err)
+		}
+		return input
+	}
+	input := externalInput()
+	r = call("show")
+	claimedRevision := r.Revision
+	if input.Binding.Provider != "chatgpt" || input.Binding.Identity == "" || input.Binding.Task != previous.Claim.Task || input.Binding.ActionID == previous.Claim.ActionID || input.Workspace != r.Regular.Preparation.Resources["development"] || len(input.Input) == 0 || len(input.Schema) == 0 {
+		t.Fatalf("installed external input lost its issued binding/materials: %+v", input.Binding)
+	}
+	if again := externalInput(); !reflect.DeepEqual(again.Binding, input.Binding) {
+		t.Fatal("reading an already claimed external input changed identity")
+	}
+	r = call("show")
+	if r.Revision != claimedRevision {
+		t.Fatal("reading external input consumed another attempt")
+	}
+	development := input.Workspace
 	mustWriteCLI(t, filepath.Join(development, "go.mod"), "module example.invalid/installed\n\ngo 1.22\n")
 	mustWriteCLI(t, filepath.Join(development, "main.go"), "package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"hello\")}\n")
 	runGo(development, "build", "-o", filepath.Join(t.TempDir(), "hello"), ".")
 	if runGo(development, "run", ".") != "hello\n" {
 		t.Fatal("actual installed fixture output wrong")
 	}
-	prep("development-worker", protocol.PreparationResult{Manifest: []string{"go.mod", "main.go"}, Validation: []protocol.BatchValidation{{SubtaskID: "S1", Procedure: "go build ./...; go run .", Observation: "build succeeded; stdout hello newline", Result: "PASS"}}, Handoff: "No unresolved decisions"})
+	c := input.Binding
+	result := protocol.PreparationResult{ActionID: c.ActionID, AttemptID: c.AttemptID, Provider: c.Provider, Identity: c.Identity, RequirementRevision: c.RequirementRevision, Candidate: c.Candidate, Status: "PASS", Message: "Explicit external fixture author; no native or independent QA claim", Manifest: []string{"go.mod", "main.go"}, Validation: []protocol.BatchValidation{{SubtaskID: "S1", Procedure: "go build ./...; go run .", Observation: "build succeeded; stdout hello newline", Result: "PASS"}}, Handoff: "No unresolved decisions"}
+	delivery, err := protocol.NewRegularEvent("installed-external-delivery", protocol.RegularEvent{Operation: "PREPARATION_RESULT", ExpectedRevision: r.Revision, PreparationResult: &result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryBytes, err := json.Marshal(delivery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted struct {
+		Acceptance protocol.Acceptance `json:"acceptance"`
+		Run        facade.Run          `json:"run"`
+	}
+	output := runInstalledCLI(t, binary, root, nativeEnv, string(deliveryBytes), "workflow", "submit", "--single-step", "--root", root, "--run-id", runID)
+	if err := json.Unmarshal([]byte(output), &accepted); err != nil || accepted.Run.Regular == nil || accepted.Run.Regular.Preparation.Batches["B1"].Identity != c.Identity {
+		t.Fatal("installed external result was not accepted", err)
+	}
 	r = call("drive")
+	var replayed struct {
+		Acceptance protocol.Acceptance `json:"acceptance"`
+		Run        facade.Run          `json:"run"`
+	}
+	output = runInstalledCLI(t, binary, root, nativeEnv, string(deliveryBytes), "workflow", "submit", "--single-step", "--root", root, "--run-id", runID)
+	if err := json.Unmarshal([]byte(output), &replayed); err != nil || !reflect.DeepEqual(replayed.Acceptance, accepted.Acceptance) || replayed.Run.Revision != r.Revision || !reflect.DeepEqual(replayed.Run.Regular.Preparation.Commits, r.Regular.Preparation.Commits) {
+		t.Fatal("installed delivery replay changed its receipt, commit or revision", err)
+	}
+	t.Logf("installed external action=%s identity=%s commit=%s; exact delivery replay preserved revision %d", c.ActionID, c.Identity, r.Regular.Preparation.Commits["B1"].After, r.Revision)
 	design := func(mode string) protocol.QADesign {
 		prefix := strings.ToUpper(mode)
 		m := coverage.AcceptanceManifest{Binding: coverage.ManifestBinding{SourceBinding: r.Regular.RequiredSources.Binding, ReviewKind: coverage.ReviewKind(prefix), RouteScope: gitprep.Digest(r.Regular.Route), TopologyScope: r.Regular.Topology}, Sources: []string{r.Regular.Requirement.Path}, Points: []coverage.AcceptancePoint{{PointID: prefix + ":AC-001", ObservableBehavior: "documented hello command", Oracle: "hello newline"}}, Cases: []coverage.AcceptanceCase{{CaseID: prefix + ":C1", Command: &coverage.Command{Executable: "go", Args: []string{"run", "."}}, Mode: coverage.CaseMode(prefix), PublicEntry: "go run .", Preconditions: "Go installed", Steps: "execute command and compare stdout", Oracle: "hello newline"}}, Edges: []coverage.CoverageEdge{{SourceID: r.Regular.Requirement.Path, PointID: prefix + ":AC-001", CaseID: prefix + ":C1"}}}
 		if mode == "whitebox" {
 			m.Cases[0] = coverage.AcceptanceCase{CaseID: prefix + ":C1", Command: &coverage.Command{Executable: "go", Args: []string{"test", "./..."}}, Mode: coverage.CaseWhitebox, TestRef: "main_test.go::TestHello", Oracle: "hello newline"}
 		}
-		return protocol.QADesign{Manifest: m, CoverageJudgment: "This fixture independently maps the sole public output AC"}
+		d := protocol.QADesign{Manifest: m, CoverageJudgment: "This fixture independently maps the sole public output AC"}
+		if mode == "whitebox" {
+			d.TestFiles = []string{"main_test.go"}
+		}
+		return d
 	}
 	review := func(mode string) {
 		q := r.Regular.Preparation.QA[mode]

@@ -41,9 +41,18 @@ func verificationRepair(run Run) *protocol.RepairPlan {
 	return nil
 }
 func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
+	material, err := prepareVerificationPrompt(run, claim)
+	if err != nil {
+		return "", "", err
+	}
+	prompt, err := material.render(claim)
+	return prompt, material.workspace, err
+}
+
+func prepareVerificationPrompt(run Run, claim protocol.ExecutionClaim) (nativePromptMaterial, error) {
 	w := verificationWave(run)
 	if w == nil {
-		return "", "", fmt.Errorf("no bound review wave")
+		return nativePromptMaterial{}, fmt.Errorf("no bound review wave")
 	}
 	workspace := run.Regular.Preparation.Resources["candidate"]
 	for _, receipt := range run.Regular.Preparation.Receipts {
@@ -55,7 +64,9 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 			}
 		}
 	}
+	files := map[string][]byte{}
 	payload := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "baseSnapshot": run.Regular.BaseSnapshot, "candidate": claim.Candidate}
+
 	paths := []string{"actions/development-worker.md#通用执行约定"}
 	if claim.Task.Step == "repair-worker" {
 		paths = append(paths, "actions/development-worker.md#修复工作者")
@@ -64,61 +75,64 @@ func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string,
 	}
 	instructions, err := actionInstructions(run, paths...)
 	if err != nil {
-		return "", "", err
+		return nativePromptMaterial{}, err
 	}
 	if claim.Task.Step == "repair-worker" {
 		repair := verificationRepair(run)
 		if repair == nil {
-			return "", "", fmt.Errorf("no repair plan")
+			return nativePromptMaterial{}, fmt.Errorf("no repair plan")
 		}
 		workspace = run.Regular.Preparation.Resources[repair.ID]
 		payload["repairPlan"] = repair
-		payload["problems"] = run.Regular.Verification.Problems
-		payload["sourceResults"] = w.Results
-		payload["frozenQA"] = run.Regular.Preparation.QA
+		if err = verificationRepairInputs(run, repair, payload, files); err != nil {
+			return nativePromptMaterial{}, err
+		}
+
 	} else if strings.HasSuffix(string(claim.Task.Step), "-execution") {
 		mode := strings.TrimSuffix(string(claim.Task.Step), "-execution")
-		payload["design"] = run.Regular.Preparation.QA[mode].Design
-		for _, t := range w.Targets {
-			if t.Target == mode {
-				payload["target"] = t
-			}
+		if err = verificationExecutionInputs(run, w, mode, payload, files); err != nil {
+			return nativePromptMaterial{}, err
 		}
-		payload["checkpoint"] = w.Checkpoints[mode]
+
 	} else {
 		// Gates see the original baseline-to-candidate implementation diff, excluding
 		// independently owned tests and case artifacts. No QA body/result is handed
 		// to the gate, even though all evidence belongs to the same immutable wave.
 		args := []string{"diff", "--binary", run.Regular.BaseSnapshot, claim.Candidate, "--", "."}
 		for _, path := range w.Candidate.TestOwned {
-			args = append(args, ":(exclude)"+path)
+			args = append(args, ":(top,literal,exclude)"+path)
 		}
 		for path := range w.Candidate.Artifacts {
 			if path != run.Regular.Requirement.Path {
 				args = append(args, ":(exclude)"+path)
 			}
 		}
-		diff, err := exec.Command("git", append([]string{"-C", workspace}, args...)...).Output()
-		if err != nil {
-			return "", "", err
+		sort.Strings(args[6:])
+		payload["implementation"] = map[string]any{"workspace": workspace, "base": run.Regular.BaseSnapshot, "candidate": claim.Candidate, "diffArgs": args, "read": "Use native read-only Git/file tools in this bound workspace. Inspect the full base-to-candidate implementation diff on demand with diffArgs, preserving all exclusions; do not inspect independently owned tests or QA artifacts."}
+
+		if strings.TrimSpace(run.Regular.ReviewerInstructions) == "" || strings.TrimSpace(run.Regular.CatalogGateInstructions[string(claim.Task.Step)]) == "" {
+			return nativePromptMaterial{}, fmt.Errorf("PROMPT_CONFIG_MISSING: run has no bound reviewer or %s gate instructions", claim.Task.Step)
 		}
-		payload["fullImplementationDiff"] = string(diff)
 		payload["reviewerInstructions"] = run.Regular.ReviewerInstructions
 		payload["gateInstructions"] = run.Regular.CatalogGateInstructions[string(claim.Task.Step)]
 		payload["reviewScope"] = "FULL"
 	}
 	if workspace == "" {
-		return "", "", fmt.Errorf("missing registered verification workspace")
+		return nativePromptMaterial{}, fmt.Errorf("missing registered verification workspace")
 	}
 	head, err := gitprep.Head(workspace)
 	if err != nil {
-		return "", "", err
+		return nativePromptMaterial{}, err
+	}
+	if claim.Task.Step == "complexity-gate" || claim.Task.Step == "implementation-quality-gate" {
+		if err := exec.Command("git", "-C", workspace, "cat-file", "-e", run.Regular.BaseSnapshot+"^{commit}").Run(); err != nil {
+			return nativePromptMaterial{}, fmt.Errorf("verification baseline unavailable: %w", err)
+		}
 	}
 	if head != claim.Candidate {
-		return "", "", fmt.Errorf("EXTERNAL_CHANGED: authorized verification workspace identity differs")
+		return nativePromptMaterial{}, fmt.Errorf("EXTERNAL_CHANGED: authorized verification workspace identity differs")
 	}
-	prompt, err := assemblePrompt(instructions, payload)
-	return prompt, workspace, err
+	return nativePromptMaterial{instructions: instructions, input: payload, workspace: workspace, files: files}, nil
 }
 func verificationSchema(claim protocol.ExecutionClaim) map[string]any {
 	str := map[string]any{"type": "string"}

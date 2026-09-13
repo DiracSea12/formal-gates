@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"formal-gates/internal/cost"
-	"formal-gates/internal/engine/guard"
 	"formal-gates/internal/engine/runtime"
 )
 
@@ -67,23 +66,23 @@ func TestDeveloperContinuationCannotResetByStatusOrRetry(t *testing.T) {
 			src.Status = "UNAVAILABLE"
 			src.Reason = "fixture source"
 			submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &src})
-			// Normal continuation does not consume the failure allowance.
-			extraFailures := 1
+			// A normal CONTINUE is an observed attempt, not a failed attempt.
+			failures := 2
 			if status == "CONTINUE" {
-				extraFailures = 2
+				failures = 1
 			}
-			for i := 0; i < extraFailures; i++ {
-				x := currentExecution(t, e, "development-worker")
-				claimContinuingDeveloper(t, e, x)
-				raw := preparationResult(x)
-				raw.Identity = continuityIdentity(x)
-				raw.Status, raw.Message = "FAIL", "self-test still fails"
-				submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &raw})
-				settleContinuingDeveloper(t, e, x)
+			lastNumber := next.Number
+			for ; failures < 3; failures++ {
+				remaining := currentExecution(t, e, "development-worker")
+				if remaining.Identity != next.Identity || remaining.Claim.Task != first.Claim.Task {
+					t.Fatal("remaining failure allowance reset identity")
+				}
+				failBoundDeveloperContinuation(t, e, remaining)
+				lastNumber = remaining.Number
 			}
-			regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "authorized same developer continuation"}, "confirm")
+			regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "authorized same developer continuation after the three real failures"}, "confirm")
 			third := currentExecution(t, e, "development-worker")
-			if third.Identity != next.Identity || third.Number != 3+extraFailures || third.Claim.Task != first.Claim.Task {
+			if third.Identity != next.Identity || third.Number != lastNumber+1 || third.Claim.Task != first.Claim.Task {
 				t.Fatal("retry reset", third)
 			}
 			s, _ := e.Load()
@@ -171,8 +170,8 @@ func TestDeveloperContinuationChargesOnlyNewNativeTurns(t *testing.T) {
 	if err := os.WriteFile(path, []byte(first), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := &State{Cost: &cost.RunCost{}, RegularExecutions: map[string]RegularExecution{"one": {Identity: "same-session"}, "two": {Identity: "same-session"}}}
-	src := ExecutionSource{ActionID: "one", Identity: "same-session", Status: "STOPPED", TranscriptPath: path}
+	s := &State{Cost: &cost.RunCost{}, RegularExecutions: map[string]RegularExecution{"one": {Identity: "same-session", Claim: ExecutionClaim{Provider: "codex"}}, "two": {Identity: "same-session", Claim: ExecutionClaim{Provider: "codex"}}}}
+	src := ExecutionSource{ActionID: "one", Provider: "codex", Identity: "same-session", Status: "STOPPED", TranscriptPath: path}
 	if err := settleRegularSource(s, src, s.RegularExecutions["one"]); err != nil {
 		t.Fatal(err)
 	}
@@ -214,14 +213,20 @@ func TestDeveloperRenumberedPlanNeedsExistingQuotaAndIdentity(t *testing.T) {
 	s, _ := e.Load()
 	regularChoice(t, e, RegularRequest{Action: "topology", PlanDigest: s.State.Regular.Plan.Digest, Reason: "same repository"}, "confirm")
 	s, _ = e.Load()
-	if s.State.Attempts[next.Claim.Task].RetryExhausted || *s.State.Regular.Preparation.DevelopmentTask != next.Claim.Task {
-		t.Fatal("plan reset consumed quota")
+	if s.State.Attempts[next.Claim.Task].RetryExhausted || *s.State.Regular.Preparation.DevelopmentTask != next.Claim.Task || s.State.Regular.Preparation.ExtraAttempts[next.Claim.Task.String()] != 0 {
+		t.Fatal("plan reset the task or granted extra quota")
 	}
 	third := currentExecution(t, e, "development-worker")
 	if third.Number != 3 || third.Identity != next.Identity || third.PreviousAction != first.Claim.ActionID {
 		t.Fatalf("renumbered plan lost native history: %+v", third)
 	}
-	spawn := third.Claim
+	failBoundDeveloperContinuation(t, e, third)
+	regularChoice(t, e, RegularRequest{Action: "preparation-retry", Target: next.Claim.Task.String(), Reason: "one explicit attempt after the existing allowance, on the original identity"}, "confirm")
+	fourth := currentExecution(t, e, "development-worker")
+	if fourth.Number != 4 || fourth.Identity != third.Identity || fourth.Claim.Task != first.Claim.Task {
+		t.Fatal("explicit retry reset original lineage")
+	}
+	spawn := fourth.Claim
 	spawn.Operation = "spawn"
 	spawn.Identity = ""
 	rejectContinuity(t, e, RegularEvent{Operation: "CLAIM", Claim: &spawn})
@@ -258,103 +263,17 @@ func TestDeveloperReplacementRetainsConsumedTokenContinue(t *testing.T) {
 	}
 }
 
-func TestAcceptedContinuationsPreserveFailureBudgetAndLedger(t *testing.T) {
-	e := preparationEngine(t)
-	gitReceipt(t, e, "git-base")
-	var task runtime.TaskKey
-	for n := 1; n <= 5; n++ {
-		x := currentExecution(t, e, "development-worker")
-		task = x.Claim.Task
-		if x.Number != n {
-			t.Fatalf("dispatch number = %d, want %d", x.Number, n)
-		}
-		claimContinuingDeveloper(t, e, x)
-		raw := preparationResult(x)
-		raw.Identity = continuityIdentity(x)
-		raw.Status, raw.Message = "CONTINUE", "next subtask remains"
-		submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &raw})
-		settleContinuingDeveloper(t, e, x)
-	}
-	snap, _ := e.Load()
-	s := snap.State
-	if continuationCredit(s, task) != 5 || preparationMax(s, task) != 8 {
-		t.Fatal("continuations consumed failure allowance")
-	}
-	if s.Regular.Guard.UsedAttempts < 5 || len(s.Cost.Dispatches) < 5 {
-		t.Fatal("continuation dispatch costs disappeared")
-	}
-	// A persisted exhaustion projection from the old policy must not block resume.
-	at := s.Attempts[task]
-	at.RetryExhausted = true
-	s.Attempts[task] = at
-	e.refreshRegular(s)
-	if s.Attempts[task].RetryExhausted {
-		t.Fatal("old exhaustion projection survived recomputation")
-	}
-	for n := 6; n <= 8; n++ {
-		x := currentExecution(t, e, "development-worker")
-		claimContinuingDeveloper(t, e, x)
-		raw := preparationResult(x)
-		raw.Identity = continuityIdentity(x)
-		raw.Status, raw.Message = "FAIL", "actual self-test failure"
-		if n == 6 {
-			raw.Status, raw.Candidate = "CONTINUE", "invalid-candidate"
-		}
-		if n == 8 {
-			raw.Status = "RUNTIME_ERROR"
-		}
-
-		submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &raw})
-		settleContinuingDeveloper(t, e, x)
-	}
-	snap, _ = e.Load()
-	if !snap.State.Attempts[task].RetryExhausted || continuationCredit(snap.State, task) != 5 {
-		t.Fatal("three failures did not exhaust allowance")
-	}
-}
-
-func continuityIdentity(x RegularExecution) string {
-	if x.Identity != "" {
-		return x.Identity
-	}
-	return "native-" + x.Claim.ActionID
-}
-func claimContinuingDeveloper(t *testing.T, e *Engine, x RegularExecution) {
+func failBoundDeveloperContinuation(t *testing.T, e *Engine, x RegularExecution) {
+	t.Helper()
 	submitRegular(t, e, RegularEvent{Operation: "CLAIM", Claim: &x.Claim})
-	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: "codex", Identity: continuityIdentity(x), Status: "RUNNING"}})
-}
-func settleContinuingDeveloper(t *testing.T, e *Engine, x RegularExecution) {
-	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: "codex", Identity: continuityIdentity(x), Status: "UNAVAILABLE", Reason: "fixture source"}})
-}
-
-func TestLoadPreviousRetryPolicyRecomputesProjection(t *testing.T) {
-	e := preparationEngine(t)
-	gitReceipt(t, e, "git-base")
-	x, _ := unfinishedDeveloper(t, e, "CONTINUE")
-	snap, _ := e.Load()
-	s := snap.State
-	b, err := e.regularBasis(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := b.Basis
-	for i := range legacy.ExternalTasks {
-		task := &legacy.ExternalTasks[i]
-		n := *task.MaxAttempts - 1 - continuationCredit(s, task.TaskKey)
-		task.MaxAttempts = &n
-	}
-	s.Regular.Guard.Basis, err = guard.Calculate(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = e.commit(s, snap.Revision, fingerprintOf(t, e)); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := e.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restored.State.Regular.Guard.Basis.TotalAllowance != b.TotalAllowance || continuationCredit(restored.State, x.Claim.Task) != 1 {
-		t.Fatal("old policy failed to resume with intact history")
-	}
+	source := ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: x.Identity, Status: "RUNNING"}
+	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &source})
+	result := preparationResult(x)
+	result.Identity = x.Identity
+	result.Status = "RUNTIME_ERROR"
+	result.Message = "deterministic fixture native failure; no billable model"
+	submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &result})
+	source.Status = "UNAVAILABLE"
+	source.Reason = "deterministic fixture has no native transcript"
+	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &source})
 }

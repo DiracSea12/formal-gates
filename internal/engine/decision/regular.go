@@ -75,9 +75,9 @@ func decideRegular(s *State, obs Observation, cd *compiler.CompiledDefinition) (
 		wait("COST_PENDING")
 	case v.GuardReason != "":
 		ask(v.GuardReason)
-	case v.ProductStatus != "PASS":
+	case v.ProductStatus != "PASS" && v.ProductStatus != "SKIPPED":
 		review("product-review", v.ProductStatus, v.ProductTask)
-	case v.TechnicalStatus != "PASS":
+	case v.TechnicalStatus != "PASS" && v.TechnicalStatus != "SKIPPED":
 		review("start-readiness", v.TechnicalStatus, v.TechnicalTask)
 	case !v.TopologyConfirmed:
 		ask("topology.confirm")

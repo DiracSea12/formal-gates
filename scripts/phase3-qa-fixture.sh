@@ -9,6 +9,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: phase3-qa-fixture.sh prepare --project-root DIR --home DIR --source DIR --candidate BIN --receipt PATH [--old-confirmed-at] [--reuse-build]
        phase3-qa-fixture.sh stage --source DIR --snapshot COMMIT --output DIR
+       phase3-qa-fixture.sh build --source DIR --output BIN
        phase3-qa-fixture.sh copy --source DIR --output DIR
        phase3-qa-fixture.sh mutate --input PATH --output PATH --field FIELD
        phase3-qa-fixture.sh mutate-envelope --input-project DIR --output-project DIR --run-id ID --field FIELD
@@ -122,6 +123,27 @@ print(json.dumps({'projectRoot': project, 'packageRoot': str(pathlib.Path(projec
 PY
 }
 
+# qa.prepare already exports the candidate and overlays registered repair input.
+# This entry consumes that source directly; the engine owns reuse and binding.
+# Omit shared reuse (independent shared-step) when building is the actual target.
+build_candidate() {
+  source= output=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --source) source=$2; shift 2 ;;
+      --output) output=$2; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [ -n "$source" ] && [ -n "$output" ] || usage
+  [ -f "$source/go.mod" ] && [ -d "$source/cmd/formal-gates" ] || {
+    echo 'fixture: source must contain go.mod and cmd/formal-gates' >&2; exit 1;
+  }
+  # Go's dependency and tool caches remain inherited; only the output belongs
+  # to this preparation. No HOME, installation or active run is copied.
+  (cd "$source" && go build -o "$output" ./cmd/formal-gates)
+}
+
 mutate() {
   input= output= field=
   while [ "$#" -gt 0 ]; do
@@ -233,6 +255,7 @@ copy_fixture() {
 command=$1
 shift
 case "$command" in
+  build) build_candidate "$@" ;;
   stage) stage "$@" ;;
   copy) copy_fixture "$@" ;;
   prepare) prepare "$@" ;;

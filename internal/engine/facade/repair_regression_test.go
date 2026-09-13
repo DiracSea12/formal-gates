@@ -23,7 +23,7 @@ func TestRuntimeContextKeepsOriginalEnvironmentAndRejectsMissingExecutable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := captureRuntimeContext("codex", settings.Values{CodexExecutable: executable})
+	binding, err := captureRuntimeContext("codex", settings.Values{Native: map[string]string{"codexExecutable": executable}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,72 +107,27 @@ func TestProductPromptIncludesIndependentObligationChecks(t *testing.T) {
 	}
 }
 
-func TestTechnicalReviewReceivesConfirmedPlanChange(t *testing.T) {
+func TestReadOnlyReviewPromptDescribesActualToolBoundary(t *testing.T) {
 	instructions, err := loadActionInstructions("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := Run{
-		reviewDecisions: map[string]protocol.RecordedDecision{
-			"approved": {Choice: "confirm"}, "cancelled": {Choice: "cancel"},
-		},
-		Regular: &protocol.RegularState{
-			ActionInstructions: instructions,
-			Requirement:        protocol.RequirementDocument{Text: "unchanged requirement", Revision: "current"},
-			Requests: []protocol.RegularAsk{
-				{ID: "approved", Request: protocol.RegularRequest{Action: "plan-change", Reason: "Remove outer Seal from development completion"}},
-				{ID: "cancelled", Request: protocol.RegularRequest{Action: "plan-change", Reason: "cancelled instruction"}},
-				{ID: "pending", Request: protocol.RegularRequest{Action: "plan-change", Reason: "unconfirmed instruction"}},
-			},
-			Reviews: map[string]*protocol.PreDevelopmentReviewSeries{"start-readiness": {
-				RawCandidates: []protocol.RawReviewCandidate{
-					{RequirementRevision: "current", GranularityReview: &protocol.DevelopmentPlan{Rationale: "original six batches"}},
-					{RequirementRevision: "old", GranularityReview: &protocol.DevelopmentPlan{Rationale: "stale plan"}},
-					{RequirementRevision: "current", Quarantined: true, GranularityReview: &protocol.DevelopmentPlan{Rationale: "quarantined plan"}},
-				},
-			}},
-		},
-	}
-	claim := protocol.ExecutionClaim{RequirementRevision: "current", Task: runtime.TaskKey{Node: "review", Step: "start-readiness"}}
-	prompt, err := reviewPrompt(run, claim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"unchanged requirement", "Remove outer Seal from development completion", "original six batches", "Return the complete revised plan"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("missing revision input %q", want)
+	run := Run{Regular: &protocol.RegularState{ActionInstructions: instructions,
+		Requirement: protocol.RequirementDocument{Text: "complete mandatory input"}}}
+	for _, task := range []runtime.TaskKey{{Node: "entry", Step: "product-review"}, {Node: "entry", Step: "start-readiness"}} {
+		step := string(task.Step)
+		if nativeRoleAccess(step) != nativeReadOnly {
+			t.Fatal("fixture must correspond to a text-only native role", step)
 		}
-	}
-	for _, forbidden := range []string{"cancelled instruction", "unconfirmed instruction", "stale plan", "quarantined plan"} {
-		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("unapproved or stale input %q", forbidden)
+		prompt, err := reviewPrompt(run, protocol.ExecutionClaim{Task: task})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	claim.Task.Step = "product-review"
-	prompt, err = reviewPrompt(run, claim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(prompt, "confirmedPlanChange") {
-		t.Fatal("technical plan change leaked into product review")
-	}
-	claim.Task.Step = "start-readiness"
-	run.Regular.Requests = append(run.Regular.Requests, protocol.RegularAsk{ID: "new-requirement", Request: protocol.RegularRequest{Action: "apply-requirement"}})
-	run.reviewDecisions["new-requirement"] = protocol.RecordedDecision{Choice: "confirm"}
-	prompt, err = reviewPrompt(run, claim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(prompt, "confirmedPlanChange") {
-		t.Fatal("old plan change leaked across requirement revision")
-	}
-	run.reviewDecisions = nil
-	prompt, err = reviewPrompt(run, claim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(prompt, "confirmedPlanChange") || strings.Contains(prompt, "previousPlans") {
-		t.Fatal("unconfirmed request treated as authorization")
+		for _, text := range []string{"普通读取、搜索能力，禁止写入", "不要用普通文本模拟工具调用", "原生结构化", "complete mandatory input"} {
+			if !strings.Contains(prompt, text) {
+				t.Fatalf("%s did not receive its bound text-only instructions: %s", step, text)
+			}
+		}
 	}
 }
 
@@ -277,6 +232,27 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			root := t.TempDir()
 			adapter, err := runtimeAdapter(provider)
+			if provider == host.WorkBuddy || provider == host.ZCode || provider == host.DeepSeek {
+				if err != nil || adapter == nil {
+					t.Fatal("native runtime missing", err)
+				}
+				executable, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				script := filepath.Join(root, "zcode.cjs")
+				if err := os.WriteFile(script, []byte("// capture only; never executed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				binding, err := captureRuntimeContext(provider, settings.Values{Native: map[string]string{"workbuddyExecutable": executable, "zcodeExecutable": executable, "zcodeScript": script, "dshExecutable": executable}}, filepath.Join(root, ".gates", "engine", "run"), root)
+				if err != nil || binding.Provider != provider || binding.Executable != executable || binding.Environment[nativeSourceRoot] == "" || binding.Environment["FORMAL_GATES_ENGINE_ROOT"] != root {
+					t.Fatalf("binding=%+v err=%v", binding, err)
+				}
+				if _, ok := binding.Environment["CODEX_HOME"]; ok {
+					t.Fatal("native host inherited Codex context")
+				}
+				return
+			}
 			if provider == host.Codex {
 				if err != nil || adapter == nil {
 					t.Fatal("supported native runtime missing", err)
@@ -293,7 +269,7 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 			if _, err = prepareRegular(root, StartRequest{Provider: provider}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
 				t.Fatal("unsupported native intake accepted", err)
 			}
-			if _, err = captureRuntimeContext(provider, settings.Values{CodexExecutable: "must-not-execute"}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
+			if _, err = captureRuntimeContext(provider, settings.Values{Native: map[string]string{"codexExecutable": "must-not-execute"}}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
 				t.Fatal("unsupported creation captured Codex environment", err)
 			}
 			if _, err = runtimeToolConfig(provider, json.RawMessage(`{"config":{}}`)); err == nil {
@@ -317,4 +293,86 @@ func TestRuntimeContextEnvironmentChild(t *testing.T) {
 	}
 	_, _ = os.Stdout.WriteString(os.Getenv("CODEX_HOME"))
 	os.Exit(0)
+}
+
+func TestTechnicalReviewReceivesConfirmedPlanChange(t *testing.T) {
+	instructions, err := loadActionInstructions("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{
+		reviewDecisions: map[string]protocol.RecordedDecision{
+			"approved": {Choice: "confirm"}, "cancelled": {Choice: "cancel"},
+		},
+		Regular: &protocol.RegularState{
+			ActionInstructions: instructions,
+			Requirement:        protocol.RequirementDocument{Text: "unchanged requirement", Revision: "current"},
+			Requests: []protocol.RegularAsk{
+				{ID: "approved", Request: protocol.RegularRequest{Action: "plan-change", Reason: "Remove outer Seal from development completion"}},
+				{ID: "cancelled", Request: protocol.RegularRequest{Action: "plan-change", Reason: "cancelled instruction"}},
+				{ID: "pending", Request: protocol.RegularRequest{Action: "plan-change", Reason: "unconfirmed instruction"}},
+			},
+			Reviews: map[string]*protocol.PreDevelopmentReviewSeries{"start-readiness": {
+				RawCandidates: []protocol.RawReviewCandidate{
+					{RequirementRevision: "current", GranularityReview: &protocol.DevelopmentPlan{Rationale: "original six batches"}},
+					{RequirementRevision: "old", GranularityReview: &protocol.DevelopmentPlan{Rationale: "stale plan"}},
+					{RequirementRevision: "current", Quarantined: true, GranularityReview: &protocol.DevelopmentPlan{Rationale: "quarantined plan"}},
+				},
+			}},
+		},
+	}
+	hasInput := func(prompt, key string) bool {
+		t.Helper()
+		start := strings.LastIndex(prompt, "\n\n{")
+		if start < 0 {
+			t.Fatal("missing structured review input")
+		}
+		var input map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(prompt[start+2:]), &input); err != nil {
+			t.Fatal(err)
+		}
+		_, ok := input[key]
+		return ok
+	}
+	claim := protocol.ExecutionClaim{RequirementRevision: "current", Task: runtime.TaskKey{Node: "review", Step: "start-readiness"}}
+	prompt, err := reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"unchanged requirement", "Remove outer Seal from development completion", "original six batches", "Return the complete revised plan"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing revision input %q", want)
+		}
+	}
+	for _, forbidden := range []string{"cancelled instruction", "unconfirmed instruction", "stale plan", "quarantined plan"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("unapproved or stale input %q", forbidden)
+		}
+	}
+	claim.Task.Step = "product-review"
+	prompt, err = reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInput(prompt, "confirmedPlanChange") {
+		t.Fatal("technical plan change leaked into product review")
+	}
+	claim.Task.Step = "start-readiness"
+	run.Regular.Requests = append(run.Regular.Requests, protocol.RegularAsk{ID: "new-requirement", Request: protocol.RegularRequest{Action: "apply-requirement"}})
+	run.reviewDecisions["new-requirement"] = protocol.RecordedDecision{Choice: "confirm"}
+	prompt, err = reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInput(prompt, "confirmedPlanChange") {
+		t.Fatal("old plan change leaked across requirement revision")
+	}
+	run.reviewDecisions = nil
+	prompt, err = reviewPrompt(run, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasInput(prompt, "confirmedPlanChange") || hasInput(prompt, "previousPlans") {
+		t.Fatal("unconfirmed request treated as authorization")
+	}
 }

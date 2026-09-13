@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ import (
 func frozenVerificationFixture(t *testing.T, wrong bool) *Facade {
 	return frozenVerificationCommandFixture(t, wrong, nil)
 }
-func frozenVerificationCommandFixture(t *testing.T, wrong bool, command *coverage.Command) *Facade {
+func frozenVerificationCommandFixture(t *testing.T, wrong bool, command *coverage.Command, configure ...func(*coverage.AcceptanceManifest)) *Facade {
 	t.Helper()
 	f := facadePreparation(t, []string{"blackbox"})
 	r, _ := f.Show()
@@ -39,9 +40,19 @@ func frozenVerificationCommandFixture(t *testing.T, wrong bool, command *coverag
 	if command != nil {
 		d.Manifest.Cases[0].Command = command
 	}
+	for _, configureManifest := range configure {
+		configureManifest(&d.Manifest)
+	}
 	facadeResult(t, f, facadeExecution(t, f, "blackbox-design"), protocol.PreparationResult{Design: &d})
 	r, _ = f.Show()
-	facadeResult(t, f, facadeExecution(t, f, "blackbox-review"), protocol.PreparationResult{Review: facadeReview(r, "blackbox")})
+	review := facadeReview(r, "blackbox")
+	for _, c := range d.Manifest.Cases[1:] {
+		review.CaseDecisions = append(review.CaseDecisions, coverage.ReviewDecision{ID: c.CaseID, Status: coverage.StatusPass})
+	}
+	for _, step := range d.Manifest.SharedSteps {
+		review.SharedStepDecisions = append(review.SharedStepDecisions, coverage.ReviewDecision{ID: step.ID, Status: coverage.StatusPass})
+	}
+	facadeResult(t, f, facadeExecution(t, f, "blackbox-review"), protocol.PreparationResult{Review: review})
 	if _, err = f.Drive(); err != nil {
 		t.Fatal(err)
 	}
@@ -195,10 +206,19 @@ func TestVerificationRequirementKeepPromotesNewDocument(t *testing.T) {
 	executeVerificationFixture(t, f, "implementation-quality-gate")
 	r, _ := f.Show()
 	old := r.Regular.Preparation.Candidate.Candidate.Identity
+	originalBatches := r.Regular.Preparation.Batches
+	originalCommits := r.Regular.Preparation.Commits
+	impact := map[string]string{"product-review": "affected", "start-readiness": "unknown", "development": "unaffected", "blackbox-review": "affected", "blackbox": "affected", "implementation-quality-gate": "unknown"}
+	// facadeChoice explicitly delegates every impact item. Completed batches
+	// are separate scopes; classify each one instead of leaving it unknown.
+	for id := range originalCommits {
+		impact["batch:"+id] = "unaffected"
+	}
+
 	facadeChoice(t, f, protocol.RegularRequest{Action: "requirement-change", Origin: "USER_INITIATED_CHANGE", Reason: "user adds a clarification and retains existing passes"})
 	doc := protocol.Document(r.Regular.Requirement.Path, []byte(r.Regular.Requirement.Text+"\n用户说明：现有 hello 行为保持。\n"))
 	writePreparationFile(t, f.root, r.Regular.Requirement.Path, doc.Text)
-	facadeChoice(t, f, protocol.RegularRequest{Action: "apply-requirement", Origin: "USER_INITIATED_CHANGE", Meaning: "changed", Document: &doc, Keep: []string{"product-review", "start-readiness", "blackbox-review", "blackbox", "implementation-quality-gate"}, Impact: map[string]string{"product-review": "affected", "start-readiness": "unknown", "development": "unaffected", "blackbox-review": "affected", "blackbox": "affected", "implementation-quality-gate": "unknown"}, Reason: "explicitly retain all existing PASS for this clarification"})
+	facadeChoice(t, f, protocol.RegularRequest{Action: "apply-requirement", Origin: "USER_INITIATED_CHANGE", Meaning: "changed", Document: &doc, Keep: []string{"product-review", "start-readiness", "blackbox-review", "blackbox", "implementation-quality-gate"}, Impact: impact, Reason: "explicitly retain all existing PASS for this clarification"})
 	r, _ = f.Show()
 	for _, target := range []string{"blackbox", "implementation-quality-gate"} {
 		ev, ok := r.Regular.Verification.Effective[target]
@@ -207,6 +227,17 @@ func TestVerificationRequirementKeepPromotesNewDocument(t *testing.T) {
 		}
 	}
 	facadeChoice(t, f, protocol.RegularRequest{Action: "topology", PlanDigest: r.Regular.Plan.Digest, Reason: "same confirmed batches and no split"})
+	r, _ = f.Show()
+	if !reflect.DeepEqual(r.Regular.Preparation.Batches, originalBatches) ||
+		!reflect.DeepEqual(r.Regular.Preparation.Commits, originalCommits) {
+		t.Fatal("explicitly retained completed batches or commit receipts changed")
+	}
+	for _, x := range r.Executions {
+		if x.Claim.Task.Step == "development-worker" && !x.Finished && x.SupersededBy == "" {
+			t.Fatalf("retained development was reissued: %s", x.Claim.ActionID)
+		}
+	}
+
 	var err error
 	for i := 0; i < 5; i++ {
 		r, err = f.Drive()

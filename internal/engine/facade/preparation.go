@@ -128,6 +128,11 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 		if err := gitprep.Workspace(f.root, path, op.Before); err != nil {
 			return receipt, err
 		}
+		if q := p.QA["whitebox"]; q != nil && q.TestArtifactsFrom != "" {
+			if err := gitprep.RestoreTestArtifacts(path, q.TestArtifactsBase, q.TestArtifactsFrom, q.Manifest); err != nil {
+				return receipt, err
+			}
+		}
 		receipt.Resources["whitebox"] = path
 	case "whitebox-commit":
 		wb := p.Resources["whitebox"]
@@ -140,44 +145,68 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 		if err != nil {
 			return receipt, err
 		}
-		oldOwners, oldErr := gitprep.TestOwnershipResolver(p.Resources["development"])
-		newOwners, newErr := gitprep.TestOwnershipResolver(wb)
-		ownership := gitprep.Ownership{Status: "UNKNOWN"}
 		head, err := gitprep.Head(wb)
 		if err != nil {
 			return receipt, err
 		}
-		if oldErr == nil && newErr == nil {
-			var after gitprep.View
-			if head == op.Before {
-				if err = gitprep.CheckManifest(wb, op.Before, op.Paths); err != nil {
-					return receipt, err
-				}
-				after, err = gitprep.WorkingView(wb, op.Before)
-			} else {
-				after, err = gitprep.Snapshot(wb, head)
-			}
-			if err != nil {
+		var after gitprep.View
+		if head == op.Before {
+			if err = gitprep.CheckManifest(wb, op.Before, op.Paths); err != nil {
 				return receipt, err
 			}
-			ownership, err = gitprep.TestOnly(before, after, oldOwners, newOwners)
-			if err != nil {
-				return receipt, err
-			}
+			after, err = gitprep.WorkingView(wb, op.Before)
 		} else {
-			ownership.Reason = fmt.Sprintf("old discovery=%v; new discovery=%v", oldErr, newErr)
+			after, err = gitprep.Snapshot(wb, head)
+		}
+		if err != nil {
+			return receipt, err
+		}
+		// This is a review snapshot in the isolated whitebox workspace, not
+		// promotion. Only the independent review can classify nonempty changes.
+		if q := p.QA["whitebox"]; q != nil && q.Design != nil {
+			// Resolve exact files from the existing Git views, including deleted
+			// tests. Directories cannot exclude a whole production subtree.
+			files := map[string]bool{}
+			for _, view := range []gitprep.View{before, after} {
+				for _, entry := range view.Entries {
+					if entry.Type == "blob" {
+						files[entry.Path] = true
+					}
+				}
+			}
+			for _, name := range q.Design.TestFiles {
+				if !files[name] {
+					return receipt, fmt.Errorf("whitebox testFiles path is not a project file: %s", name)
+				}
+			}
+		}
+		ownership, err := gitprep.TestOnly(before, after, nil, nil)
+		if err != nil {
+			return receipt, err
+		}
+		if ownership.Status != "TEST_ONLY" {
+			ownership = gitprep.Ownership{Status: "REVIEW_PENDING", Reason: "independent whitebox review must inspect the complete development-to-whitebox diff"}
 		}
 		receipt.Ownership = &ownership
-		if ownership.Status != "TEST_ONLY" {
-			receipt.Git = gitprep.Receipt{OperationID: op.ID, Before: op.Before, After: op.Before, View: before}
-			return receipt, nil
-		}
 		commit, err := gitprep.Commit(wb, op.Before, op.ID, op.Paths)
 		if err != nil {
 			return receipt, err
 		}
+		diff, err := gitprep.Git(wb, "diff", "--name-only", "--no-renames", "-z", p.DevelopmentSnapshot, commit.After, "--")
+		if err != nil {
+			return receipt, err
+		}
+		receipt.Ownership.Paths = []string{}
+		for _, name := range strings.Split(diff, "\x00") {
+			if name != "" {
+				receipt.Ownership.Paths = append(receipt.Ownership.Paths, name)
+			}
+		}
 		receipt.Git = commit
 	case "finalize":
+		if !protocol.WhiteboxPromotionReady(p) {
+			return receipt, fmt.Errorf("WHITEBOX_REVIEW_REQUIRED: whitebox testFiles and changes need independent test-only review before candidate promotion")
+		}
 		// Each finalize operation owns its workspace, so a QA revision cannot
 		// reuse the previous candidate squashed against the run baseline.
 		path := filepath.Join(resourceRoot, "candidate-"+strings.TrimPrefix(op.ID, "git:sha256:"))
@@ -255,16 +284,13 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 		}
 		commit.Before = op.Before
 		receipt.Git = commit
-		// Test ownership is a gate scope, independent of who authored those files.
-		if owners, err := gitprep.TestOwnershipResolver(path); err == nil {
-			for _, entry := range commit.View.Entries {
-				if owners[entry.Path] {
-					receipt.TestOwned = append(receipt.TestOwned, entry.Path)
-				}
-			}
+		// Independent review approves test-only edits separately from whole-file
+		// ownership. A mixed production/test file may have valid whitebox edits
+		// but must remain in the implementation diff. Only declared, reviewed
+		// pure test files (including reused developer tests) can be excluded.
+		if q := p.QA["whitebox"]; q != nil {
+			receipt.TestOwned = append([]string{}, q.Design.TestFiles...)
 			sort.Strings(receipt.TestOwned)
-		} else if p.QA["whitebox"] != nil {
-			return receipt, err
 		}
 		for _, artifact := range paths {
 			if _, err = gitprep.Git(path, "cat-file", "-e", commit.After+":"+artifact); err != nil {
@@ -285,14 +311,20 @@ func preparationAction(step string) bool {
 // one complete Batch with ordered Subtasks, never another batch's live session.
 // Blackbox receives only confirmed inputs and the baseline authoring resource.
 func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
-	p := run.Regular.Preparation
-	if p == nil {
-		return "", "", fmt.Errorf("no preparation binding")
+	material, err := preparePreparationPrompt(run, claim)
+	if err != nil {
+		return "", "", err
+	}
+	prompt, err := material.render(claim)
+	return prompt, material.workspace, err
+}
+
+func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePromptMaterial, error) {
+	payload, workspace, err := preparationInput(run, claim)
+	if err != nil {
+		return nativePromptMaterial{}, err
 	}
 	step := string(claim.Task.Step)
-	mode := strings.Split(step, "-")[0]
-	workspace := p.Resources[mode]
-	payload := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
 	action := step
 	if strings.HasSuffix(step, "-design") {
 		action = "qa-design"
@@ -307,12 +339,41 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 	}
 	instructions, err := actionInstructions(run, "actions/development-worker.md#通用执行约定", path)
 	if err != nil {
-		return "", "", err
+		return nativePromptMaterial{}, err
 	}
+	return nativePromptMaterial{instructions: instructions, input: payload, workspace: workspace}, nil
+}
+
+// The structured task is shared by native model prompts and explicitly assigned
+// external developers. Native prompt configuration is not an external capability.
+func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, string, error) {
+	p := run.Regular.Preparation
+	if p == nil {
+		return nil, "", fmt.Errorf("no preparation binding")
+	}
+	step := string(claim.Task.Step)
+	mode := strings.Split(step, "-")[0]
+	workspace := p.Resources[mode]
+	document := run.Regular.Requirement
+	payload := map[string]any{"binding": claim, "requirement": map[string]any{"path": document.Path, "revision": document.Revision, "text": document.Text, "confirmed": document.Confirmed}, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
 	if step == "development-worker" {
 		workspace = p.Resources["development"]
 		if previous := run.Executions[claim.ActionID].PreviousAction; previous != "" {
-			payload["previousDevelopmentResult"] = run.Executions[previous].PreparationResult
+			payload["previousDevelopmentResult"] = (*protocol.PreparationResult)(nil)
+			// Handoff can retire an unclaimed continuation without a result of its
+			// own. Follow its existing lineage to the last actual checkpoint; keep
+			// that result's original provider/identity rather than rebinding it.
+			for previous != "" {
+				prior, ok := run.Executions[previous]
+				if !ok || prior.Claim.Task != claim.Task {
+					break
+				}
+				if prior.PreparationResult != nil {
+					payload["previousDevelopmentResult"] = prior.PreparationResult
+					break
+				}
+				previous = prior.PreviousAction
+			}
 		}
 		for _, b := range run.Regular.Plan.Batches {
 			if _, done := p.Commits[b.ID]; !done {
@@ -323,13 +384,18 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 		}
 		payload["committedHandoffs"] = map[string]string{}
 		handoffs := payload["committedHandoffs"].(map[string]string)
-		for id, result := range p.Batches {
-			if _, done := p.Commits[id]; done {
-				handoffs[id] = result.Handoff
+		if batch, ok := payload["batch"].(protocol.DevelopmentBatch); ok {
+			for _, id := range batch.Dependencies {
+				if _, done := p.Commits[id]; done {
+					handoffs[id] = p.Batches[id].Handoff
+				}
 			}
 		}
 	} else if strings.HasSuffix(step, "-design") {
 		payload["reviewKind"] = strings.ToUpper(mode)
+		if p.QA[mode].DesignGap != "" {
+			payload["designGap"] = p.QA[mode].DesignGap
+		}
 		payload["previousDesign"] = p.QA[mode].PreviousDesign
 		payload["reviewGaps"] = p.QA[mode].RetainedReview
 	} else {
@@ -337,13 +403,18 @@ func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, 
 		payload["design"] = p.QA[mode].Design
 		payload["retainedReview"] = p.QA[mode].RetainedReview
 		payload["existingTestEvidence"] = p.QA[mode].Reuse
+		if mode == "whitebox" {
+			payload["testChanges"] = map[string]any{
+				"base": p.DevelopmentSnapshot, "candidate": claim.Candidate,
+				"diffArgs": []string{"diff", "--binary", "--no-renames", p.DevelopmentSnapshot, claim.Candidate, "--"},
+			}
+		}
 	}
 	if workspace == "" {
-		return "", "", fmt.Errorf("missing authorized workspace")
+		return nil, "", fmt.Errorf("missing authorized workspace")
 	}
 	preparationRetryFeedback(run, claim, payload)
-	prompt, err := assemblePrompt(instructions, payload)
-	return prompt, workspace, err
+	return payload, workspace, nil
 }
 
 // Adapter facts may race with another authorized task's result. Only CAS/lock
@@ -385,6 +456,18 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 		return err
 	}
 	defer unlock()
+
+	if err := f.cleanupQAResources(run); err != nil {
+		return err
+	}
+	isolated := map[string]bool{}
+	for _, execution := range run.Executions {
+		for _, op := range execution.Operations {
+			if op.WorkspaceMode == "isolated" && op.Receipt != nil && op.Receipt.Workspace != "" {
+				isolated[op.Receipt.Workspace] = true
+			}
+		}
+	}
 	all := append([]protocol.Preparation(nil), run.Regular.PreparationHistory...)
 	if run.Regular.Preparation != nil {
 		all = append(all, *run.Regular.Preparation)
@@ -407,6 +490,12 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 			paths[filepath.Join(base, name)] = true
 		}
 		for path := range paths {
+			if isolated[path] {
+				if err = os.RemoveAll(path); err != nil {
+					return err
+				}
+				continue
+			}
 			if err = gitprep.Cleanup(f.root, path); err != nil {
 				return err
 			}
@@ -496,7 +585,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 	sourceBinding := run.Regular.RequiredSources.Binding
 	binding := object(map[string]any{"runId": exact(sourceBinding.RunID), "childId": exact(sourceBinding.ChildID), "requirementRevision": exact(sourceBinding.RequirementRevision), "solutionRevision": exact(sourceBinding.SolutionRevision), "reviewKind": exact(strings.ToUpper(mode)), "routeScope": exact(gitprep.Digest(run.Regular.Route)), "topologyScope": exact(run.Regular.Topology)})
 	if strings.HasSuffix(step, "-design") {
-		caseFields := map[string]any{"command": object(map[string]any{"executable": map[string]any{"type": "string", "description": "One program name or path, without shell quotes or arguments; e.g. go, with test and ./... in args. Never a shell command string such as go test."}, "args": array(str), "expectedExitCode": map[string]any{"type": "integer"}}), "dependencies": array(str), "caseId": str, "mode": exact(strings.ToUpper(mode)), "oracle": str, "sharedSteps": array(str)}
+		caseFields := map[string]any{"workspaceMode": map[string]any{"type": "string", "enum": []string{"candidate", "isolated"}}, "command": object(map[string]any{"executable": map[string]any{"type": "string", "description": "One program name or path, without shell quotes or arguments; e.g. go, with test and ./... in args. Never a shell command string such as go test."}, "args": array(str), "expectedExitCode": map[string]any{"type": "integer"}}), "dependencies": array(str), "caseId": str, "mode": exact(strings.ToUpper(mode)), "oracle": str, "sharedSteps": array(str)}
 		caseFields["dependencies"].(map[string]any)["description"] = "Only case IDs declared earlier in this manifest; use [] for an independent case. Shared-step IDs and environment prerequisites do not belong here."
 		if mode == "blackbox" {
 			caseFields["publicEntry"] = str
@@ -505,10 +594,14 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 		} else {
 			caseFields["testRef"] = str
 		}
-		manifest := object(map[string]any{"binding": binding, "sources": array(str), "points": array(object(map[string]any{"pointId": str, "observableBehavior": str, "oracle": str})), "cases": array(object(caseFields)), "edges": array(object(map[string]any{"sourceId": str, "pointId": str, "caseId": str})), "sharedSteps": array(object(map[string]any{"id": str, "procedure": str}))})
+		manifest := object(map[string]any{"binding": binding, "sources": array(str), "points": array(object(map[string]any{"pointId": str, "observableBehavior": str, "oracle": str})), "cases": array(object(caseFields)), "edges": array(object(map[string]any{"sourceId": str, "pointId": str, "caseId": str})), "sharedSteps": array(object(map[string]any{"id": str, "procedure": str, "artifacts": array(str), "command": map[string]any{"anyOf": []any{caseFields["command"], map[string]any{"type": "null"}}}, "independent": map[string]any{"type": "boolean"}}))})
 		alternatives := array(object(map[string]any{"sourceId": str, "reason": str, "method": str, "status": exact("PASS"), "evidence": str}))
 		alternatives["description"] = "Only explicit NON_QA sources may have an alternative verification. Never use alternatives to defer or weaken an AC; return an empty array when every source is QA."
-		fields["design"] = object(map[string]any{"coverageJudgment": str, "manifest": manifest, "alternatives": alternatives})
+		designFields := map[string]any{"coverageJudgment": str, "manifest": manifest, "alternatives": alternatives}
+		if mode == "whitebox" {
+			designFields["testFiles"] = map[string]any{"type": "array", "items": str, "uniqueItems": true, "description": "Exact project-relative test-only file paths, including unchanged reused developer tests and test-only fixtures. Never directories, globs, production/shared files or paths inferred from testRef. Include deleted test paths; return [] explicitly if no project files are test-only. Independent whitebox review must approve these files before gate exclusion. The top-level manifest lists only actual file changes."}
+		}
+		fields["design"] = object(designFields)
 		if mode == "whitebox" {
 			fields["reuse"] = array(object(map[string]any{"caseId": str, "testRef": str, "coverageJudgment": str, "procedure": str, "observation": str, "comparison": str, "result": map[string]any{"type": "string", "enum": []string{"EXECUTED_PASS", "EXECUTED_FAIL"}}}))
 		}

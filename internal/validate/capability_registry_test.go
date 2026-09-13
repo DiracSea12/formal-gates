@@ -8,7 +8,7 @@ import (
 
 func TestHookCapabilityRegistryCoversEveryInstallableHost(t *testing.T) {
 	for _, descriptor := range host.All() {
-		if !descriptor.Installable {
+		if !descriptor.Installable || (descriptor.Hook.Kind == "" && descriptor.Paths.GlobalHookConfig == "" && descriptor.Paths.ProjectHookConfig == "") {
 			continue
 		}
 		capability, ok := hookCapabilities[descriptor.Hook.Kind]

@@ -1,0 +1,830 @@
+[
+  {
+    "kind": "environment-observation",
+    "path": "observations.json"
+  },
+  {
+    "kind": "public-contract",
+    "path": "workbuddy-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "zcode-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-sdk-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-acp-README.zh.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "b5-native-reference-index.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/acp.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/sdk-typescript.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/settings.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/content.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/session.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/codec.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/updates.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/model-control.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/mcp.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "b5-local-platform-facts.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/01-shared-types.source.txt"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/02-protocol-schemas.source.txt"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/03-session-handlers.source.txt"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/04-server-and-ndjson.source.txt"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/05-bootstrap.source.txt"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/06-cli.source.txt"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/zcode/sources.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/lib/plugin-Ddi42qoW.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/lib/bin.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/lib/profile-boot-BP_C0vpU.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/lib/profile-boot-Dk-7KqJc.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh@0.1.5-rc.1_97390cce590b3577ee2956c129bb85c6/node_modules/@deepseek-ai/dsh/lib/dump-config-lFgMwK8i.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.5-rc.1_@deepseek-ai+cordis-plugin-group@1.0.2_@deepseek-a_b294d18114c8a65a3132635cfc2c85c0/node_modules/@deepseek-ai/dsh-app-boot/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.5-rc.1_@deepseek-ai+cordis-plugin-group@1.0.2_@deepseek-a_b294d18114c8a65a3132635cfc2c85c0/node_modules/@deepseek-ai/dsh-app-boot/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.5-rc.1_@deepseek-ai+cordis-plugin-group@1.0.2_@deepseek-a_b294d18114c8a65a3132635cfc2c85c0/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.5-rc.1_@deepseek-ai+cordis-plugin-group@1.0.2_@deepseek-a_b294d18114c8a65a3132635cfc2c85c0/node_modules/@deepseek-ai/dsh-app-boot/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-app-boot@0.1.5-rc.1_@deepseek-ai+cordis-plugin-group@1.0.2_@deepseek-a_b294d18114c8a65a3132635cfc2c85c0/node_modules/@deepseek-ai/dsh-app-boot/lib/types/profile.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-base@0.1.5-rc.1_8129a6b1fc62be8a434a7c1f2783c36d/node_modules/@deepseek-ai/dsh-base/cordis.patch.yml"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-base@0.1.5-rc.1_8129a6b1fc62be8a434a7c1f2783c36d/node_modules/@deepseek-ai/dsh-base/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-base@0.1.5-rc.1_8129a6b1fc62be8a434a7c1f2783c36d/node_modules/@deepseek-ai/dsh-base/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-base@0.1.5-rc.1_8129a6b1fc62be8a434a7c1f2783c36d/node_modules/@deepseek-ai/dsh-base/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-base@0.1.5-rc.1_8129a6b1fc62be8a434a7c1f2783c36d/node_modules/@deepseek-ai/dsh-base/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/cordis.patch.yml"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/testing.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/ptc.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/py-types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/py-types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/json-schema.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/testing.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/presentation.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/invariant.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/schema.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/ts-types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/ptc.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/schema.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/presentation.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/ts-types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1_42bef068bdb77cea11b81bec106cd1d1/node_modules/@deepseek-ai/dsh-tools/lib/types/json-schema.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/consumed-work.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/dispatch.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/projection.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/dispatch.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/projection.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/invariant.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/model-selection.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/model-selection.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.5-rc.1_011efc65c149ca53f6af28580be53483/node_modules/@deepseek-ai/dsh-agent/lib/types/consumed-work.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/tool-calls.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/constants.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/inbox.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/agent.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/runtime-context.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/invariant.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/assistant-stream.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-agent-loop@0.1.5-rc.1_18dbf52164179c4e7ef8ea2299bce86a/node_modules/@deepseek-ai/dsh-agent-loop/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/model-selection-settings.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/types/model-selection-state.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/types/list-models.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/types/invariant.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/types/model-selection.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/types/model-selection-settings.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent@0.1.5-rc.1_174ae6ddb543e4770922bc2eef40ba2a/node_modules/@deepseek-ai/dsh-tool-subagent/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/typert.remote-client.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/typert.host.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/typert.remote-client.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/typert.host.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/client.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/control.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/error.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation-messages.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/control-types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/list-children.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/run-settlement.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/internal.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/lifecycle.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/inbox.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/catalog.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/projection.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/descriptor.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation-messages.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/run-settlement.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/out-of-process.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/error.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/control-types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/out-of-process.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/assistant-output.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/projection.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/assistant-output.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/projection-types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/invariant.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/depth.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/child-agent.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/child-agent.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/internal.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/catalog.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/descriptor.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation-activation.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/projection-types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/control.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/list-children.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/client.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/inbox.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/continuation-activation.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/depth.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent@0.1.5-rc.1_47dcfb5e79994ed8e3e500870b7ad9c4/node_modules/@deepseek-ai/dsh-subagent/lib/types/lifecycle.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-spawn-in-process@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepse_0e3e82cc8ff750d86cec589c080f8744/node_modules/@deepseek-ai/dsh-subagent-spawn-in-process/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-spawn-in-process@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepse_0e3e82cc8ff750d86cec589c080f8744/node_modules/@deepseek-ai/dsh-subagent-spawn-in-process/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-spawn-in-process@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepse_0e3e82cc8ff750d86cec589c080f8744/node_modules/@deepseek-ai/dsh-subagent-spawn-in-process/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-spawn-in-process@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepse_0e3e82cc8ff750d86cec589c080f8744/node_modules/@deepseek-ai/dsh-subagent-spawn-in-process/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-fork-in-process@0.1.5-rc.1_28438f418420a6db057f6a2b642b7c26/node_modules/@deepseek-ai/dsh-subagent-fork-in-process/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-fork-in-process@0.1.5-rc.1_28438f418420a6db057f6a2b642b7c26/node_modules/@deepseek-ai/dsh-subagent-fork-in-process/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-fork-in-process@0.1.5-rc.1_28438f418420a6db057f6a2b642b7c26/node_modules/@deepseek-ai/dsh-subagent-fork-in-process/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-subagent-fork-in-process@0.1.5-rc.1_28438f418420a6db057f6a2b642b7c26/node_modules/@deepseek-ai/dsh-subagent-fork-in-process/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/lib/types/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/lib/types/list-agents.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/lib/types/list-agents.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-tool-subagent-control@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-a_e9dccd1e8d5df5ea73c0eec51b30eedf/node_modules/@deepseek-ai/dsh-tool-subagent-control/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/client.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/types.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/types.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/invariant.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/invariant.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-permission-presets@0.1.5-rc.1_8564a373e9ae380d9cc6f50a0620053e/node_modules/@deepseek-ai/dsh-permission-presets/lib/types/client.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/README.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/connection.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/tools.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/transport.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-mcp-client@0.1.5-rc.1_@deepseek-ai+cordis@4.0.2_@deepseek-ai+dsh-attac_913b756a4197e5196d61541f0eac8ac9/node_modules/@deepseek-ai/dsh-mcp-client/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/tmp/b5-host-contracts/dsh-profile/README.md"
+  }
+]

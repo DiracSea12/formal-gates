@@ -60,11 +60,11 @@ func Promote(root, source, expectedBase, operation string) (receipt PromotionRec
 		}
 		var matching []string
 		if status != "" {
-			changed, err := Git(root, "diff", "--name-only", "HEAD", "--")
+			changed, err := Git(root, "diff", "--name-only", "-z", "HEAD", "--")
 			if err != nil {
 				return receipt, err
 			}
-			for _, path := range strings.Split(changed, "\n") {
+			for _, path := range strings.Split(changed, "\x00") {
 				if path == "" {
 					continue
 				}

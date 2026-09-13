@@ -17,7 +17,7 @@ import (
 )
 
 func (f *Facade) taskOperationDir(id string) string {
-	return filepath.Join(f.stateDir, "task-operations", strings.TrimPrefix(id, "hact:task:"))
+	return filepath.Join(f.stateDir, "artifacts", "task-operations", strings.TrimPrefix(id, "hact:task:"))
 }
 
 // ExecuteTaskOperation serves the CLI and native dynamic tool using one path.
@@ -53,6 +53,9 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 			return protocol.TaskOperationReceipt{}, fmt.Errorf("INTENT_MISMATCH: recovery requires the original request")
 		}
 		if op.Receipt != nil {
+			if err := f.releaseCollectedResources(run); err != nil {
+				return *op.Receipt, err
+			}
 			return *op.Receipt, nil
 		}
 	} else {
@@ -95,6 +98,7 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 		// Persist the call boundary before invoking. If the driver dies between this
 		// marker and native attach, absence of a result is UNKNOWN, not permission to
 		// execute again. This is the same intent discipline as outer dispatch.
+		op.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err = writeJSONAtomic(filepath.Join(job, "request.json"), op); err != nil {
 			return receipt, err
 		}
@@ -111,24 +115,44 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 	if receipt.ID != id || receipt.RequestDigest != protocol.TaskOperationDigest(q) {
 		return receipt, fmt.Errorf("INTENT_MISMATCH: observed result differs")
 	}
-	_, _, err = f.submitAdapterRegular("task-receipt:"+id, protocol.RegularEvent{Operation: "TASK_OPERATION_RECEIPT", TaskOperationReceipt: &receipt})
+	_, run, err = f.submitAdapterRegular("task-receipt:"+id, protocol.RegularEvent{Operation: "TASK_OPERATION_RECEIPT", TaskOperationReceipt: &receipt})
+	if err == nil {
+		err = f.releaseCollectedResources(run)
+	}
 	return receipt, err
 }
 
-func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job string) protocol.TaskOperationReceipt {
+func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job string) (result protocol.TaskOperationReceipt) {
 	q := op.Request
-	result := protocol.TaskOperationReceipt{ID: op.ID, ActionID: q.Binding.ActionID, RequestDigest: protocol.TaskOperationDigest(q), Status: "FAILED"}
+	result = protocol.TaskOperationReceipt{ID: op.ID, ActionID: q.Binding.ActionID, RequestDigest: protocol.TaskOperationDigest(q), Status: "FAILED", StartedAt: op.StartedAt}
+	defer func() { result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano) }()
 	fail := func(err error) protocol.TaskOperationReceipt {
 		result.Status = "FAILED"
 		result.Message = err.Error()
 		return result
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 	switch q.Kind {
 	case "qa.prepare":
-		result.Workspace = filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(op.ID, "hact:task:"))
-		if q.Binding.Task.Step == "repair-worker" {
+		result.Workspace = f.operationResources(op).Work
+		if err := f.createOperationResources(op); err != nil {
+			return fail(err)
+		}
+		if err := f.prepareShared(ctx, run, op, &result); err != nil {
+			return fail(err)
+		}
+
+		if op.WorkspaceMode == "isolated" {
+			if _, err := os.Stat(result.Workspace); err == nil {
+				return fail(fmt.Errorf("UNKNOWN: case workspace already exists"))
+			} else if !os.IsNotExist(err) {
+				return fail(err)
+			}
+			if err := os.MkdirAll(result.Workspace, 0700); err != nil {
+				return fail(err)
+			}
+			result.Output = "Prepared isolated case work for candidate " + q.Binding.Candidate
+		} else if q.Binding.Task.Step == "repair-worker" {
 			source := run.Regular.Preparation.Resources[q.Binding.PrerequisiteDigest]
 			if source == "" {
 				return fail(fmt.Errorf("PREREQUISITE_FAILED: missing registered repair workspace"))
@@ -153,19 +177,26 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 	case "qa.target":
 		if prior := latestTaskOperation(run.Executions[q.Binding.ActionID], "qa.prepare", q.CaseID); prior != nil && prior.Receipt != nil {
 			result.Workspace = prior.Receipt.Workspace
+			result.InputDigest = prior.Receipt.InputDigest
+			result.SharedWorkspace = prior.Receipt.SharedWorkspace
+			result.PreparationReused = prior.Receipt.PreparationReused
 		}
 		if result.Workspace == "" {
 			return fail(fmt.Errorf("PREREQUISITE_FAILED: missing prepared workspace"))
 		}
-		head, err := gitprep.Head(result.Workspace)
-		if err != nil {
-			return fail(err)
-		}
-		if head != q.Binding.Candidate {
-			return fail(fmt.Errorf("EXTERNAL_CHANGED: prepared QA candidate differs"))
+		if op.WorkspaceMode != "isolated" {
+			head, err := gitprep.Head(result.Workspace)
+			if err != nil {
+				return fail(err)
+			}
+			if head != q.Binding.Candidate {
+				return fail(fmt.Errorf("EXTERNAL_CHANGED: prepared QA candidate differs"))
+			}
 		}
 		cmd := exec.CommandContext(ctx, op.Command.Executable, op.Command.Args...)
 		cmd.Dir = result.Workspace
+		prepare := latestTaskOperation(run.Executions[q.Binding.ActionID], "qa.prepare", q.CaseID)
+		cmd.Env = f.operationEnvironment(*prepare, result.SharedWorkspace)
 		code, err := runOperationProcess(cmd, job, &result)
 		result.ExitCode = code
 		if err != nil {
@@ -200,7 +231,7 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 		if err != nil {
 			return fail(err)
 		}
-		return adapter.runModel(ctx, run, op, job, result)
+		return adapter.runModel(ctx, run.Regular.Settings.Values, op, job, result)
 	default:
 		return fail(fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unknown task operation"))
 	}
@@ -224,7 +255,8 @@ func runOperationProcess(cmd *exec.Cmd, job string, result *protocol.TaskOperati
 	if err = cmd.Start(); err != nil {
 		return -1, err
 	}
-	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": false}); err != nil {
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": false, "startedAt": startedAt}); err != nil {
 		_ = stopCodexProcess(cmd.Process.Pid)
 		_ = cmd.Wait()
 		return -1, err
@@ -233,7 +265,7 @@ func runOperationProcess(cmd *exec.Cmd, job string, result *protocol.TaskOperati
 	_ = out.Sync()
 	_ = stderr.Sync()
 	code := cmd.ProcessState.ExitCode()
-	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": true, "exitCode": code}); err != nil {
+	if err = writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"pid": cmd.Process.Pid, "argv": cmd.Args, "cwd": cmd.Dir, "stopped": true, "exitCode": code, "startedAt": startedAt, "completedAt": time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 		return code, err
 	}
 	if waitErr != nil {
@@ -254,13 +286,15 @@ func (f *Facade) observeTaskOperation(op protocol.TaskOperation, job string) (pr
 		return r, fmt.Errorf("UNKNOWN: %s; no underlying call repeated: %w", op.ID, err)
 	}
 	if q.Kind == "qa.prepare" {
-		r.Workspace = filepath.Join(f.stateDir, "resources", "qa-operations", strings.TrimPrefix(op.ID, "hact:task:"))
-		head, err := gitprep.Head(r.Workspace)
-		if err != nil {
-			return unknown(err)
-		}
-		if head != q.Binding.Candidate {
-			return unknown(fmt.Errorf("candidate workspace differs"))
+		r.Workspace = f.operationResources(op).Work
+		if op.WorkspaceMode != "isolated" {
+			head, err := gitprep.Head(r.Workspace)
+			if err != nil {
+				return unknown(err)
+			}
+			if head != q.Binding.Candidate {
+				return unknown(fmt.Errorf("candidate workspace differs"))
+			}
 		}
 		data, err := os.ReadFile(filepath.Join(job, "prepared.json"))
 		if err != nil {
@@ -344,6 +378,11 @@ func (f *Facade) abortTaskOperations(run Run) error {
 				continue
 			}
 			job := f.taskOperationDir(op.ID)
+			if op.Request.Kind == "qa.prepare" {
+				if err := f.stopPreparationProcesses(job); err != nil {
+					return err
+				}
+			}
 			if op.Request.Kind == "qa.target" || op.Request.Kind == "model.run" {
 				data, err := os.ReadFile(filepath.Join(job, "process.json"))
 				if err != nil {
@@ -387,7 +426,7 @@ func (f *Facade) abortTaskOperations(run Run) error {
 			current, err := f.Show()
 			if err == nil && current.Executions[x.Claim.ActionID].Operations[op.ID].Receipt == nil {
 				receipt, observeErr := f.observeTaskOperation(op, job)
-				if observeErr != nil && (op.Request.Kind == "qa.prepare" || op.Request.Kind == "qa.collect") {
+				if observeErr != nil && op.Request.Kind == "qa.collect" {
 					unlock()
 					return observeErr
 				}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/coordination"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -573,5 +574,45 @@ func TestCleanupTerminalRefusesUnknownResidue(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "cleanup.receipt.json"))
 	if err != nil || !strings.Contains(string(data), `"residue":true`) {
 		t.Fatalf("cleanup residue receipt = %s err=%v", data, err)
+	}
+}
+
+// Cleanup cannot release the consumer lease: another consumer must remain
+// excluded until the owner has finished publishing its terminal result.
+func TestCleanupTerminalPreservesConsumerLease(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, Config{PackageDigest: testPackageDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "executor.lock")
+	unlock, err := coordination.AcquirePath(path, "fixture consumer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupTerminal(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("consumer lease changed: %v", err)
+	}
+	if other, err := coordination.AcquirePath(path, "competing consumer"); err == nil {
+		other()
+		t.Fatal("cleanup released the live consumer lease")
+	}
+	unlock()
+	unlock = nil
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("owner release: %v", err)
 	}
 }

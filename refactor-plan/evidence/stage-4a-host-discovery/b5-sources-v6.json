@@ -1,0 +1,94 @@
+[
+  {
+    "kind": "environment-observation",
+    "path": "observations.json"
+  },
+  {
+    "kind": "public-contract",
+    "path": "workbuddy-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "zcode-help.txt"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-sdk-README.zh.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "dsh-acp-README.zh.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "b5-native-reference-index.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/acp.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/sdk-typescript.md"
+  },
+  {
+    "kind": "public-contract",
+    "path": "/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/dist/web-ui/docs/cn/cli/settings.md"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/content.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/session.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/codec.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/updates.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/model-control.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp@0.1.5-rc.1_c8d942ef55fce9edae43460782a3f5c2/node_modules/@deepseek-ai/dsh-acp/lib/types/mcp.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/package.json"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/lib/index.js"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "/Users/suxinyang/.local/share/deepseek-harness/node_modules/.pnpm/@deepseek-ai+dsh-acp-app@0.1.5-rc.1_3468612934b6ac61e3c621a49758512e/node_modules/@deepseek-ai/dsh-acp-app/lib/types/index.d.ts"
+  },
+  {
+    "kind": "environment-observation",
+    "path": "b5-local-platform-facts.md"
+  }
+]

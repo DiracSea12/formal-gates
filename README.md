@@ -1,8 +1,8 @@
 # formal-gates
 
 formal-gates 在用户明确要求时，把需求确认、独立开发和审查、QA、返修与 Seal 按固定
-流程推进。当前完整 regular 支持 **Codex、Git、no-split**；五宿主安装维护能力保留。
-split、其他 VCS 和其他宿主 regular 留待后续阶段。旧 workflow 命令、别名和 writer 已删除，
+流程推进。当前 Git、no-split regular 支持 **Codex、WorkBuddy、ZCode、DeepSeek Harness**；
+各入口在启动前检查所需原生能力。split、其他 VCS 和其他宿主 regular 留待后续阶段。旧 workflow 命令、别名和 writer 已删除，
 历史需求、原始结果与 Seal 保留原身份，旧 run 只提供原始只读 diagnose。
 
 完整命令、typed 事件字段、动态绑定、任务内 model/QA 操作及恢复取证唯一见
@@ -62,6 +62,7 @@ macOS/Linux 上不要试图运行它（会报 `exec format error`），请使用
 | Cursor | `~/.cursor/formal-gates` | 所选项目下的对应目录 |
 | DeepSeek Harness | `~/.dsh/skills/formal-gates`（`$DSH_HOME` 下） | 所选项目 `.dsh/skills/formal-gates` |
 | ZCode | `~/.zcode/skills/formal-gates` | 所选项目 `.zcode/skills/formal-gates` |
+| WorkBuddy | `~/.codebuddy/skills/formal-gates` | 所选项目 `.codebuddy/skills/formal-gates` |
 
 安装会把本包自带的宿主 hook 合并进对应配置：Claude Code 写 `~/.claude/settings.json`，Codex 写 `~/.codex/hooks.json`，Cursor 写 `~/.cursor/hooks.json`（项目级安装写所选项目下的对应文件）；DeepSeek Harness 全局安装写 `$DSH_HOME/cordis.patch.yml` 并挂载包内最小 Cordis 插件，项目级安装只装 skill 与 `AGENTS.md` 指令（DSH 只自动加载 home 级补丁）；ZCode 全局安装写 `~/.zcode/cli/config.json`，项目级安装只装 skill 与 `AGENTS.md` 指令（当前 ZCode 忽略项目级 hook 配置）。已有的非 formal-gates hook/插件行不会被覆盖；多个宿主共享项目 `AGENTS.md` 时，只有最后一个仍在使用该文件的宿主卸载才会清理 managed marker。
 

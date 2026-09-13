@@ -44,10 +44,10 @@ func TestZCodeDescriptorCapturesGlobalOnlyHookAndToolLifecycle(t *testing.T) {
 }
 
 func TestInstallableListsComeFromRegistry(t *testing.T) {
-	if got, want := InstallableNames(), []string{"claude", "codex", "cursor", "dsh", "zcode"}; !equalStrings(got, want) {
+	if got, want := InstallableNames(), []string{"workbuddy", "claude", "codex", "cursor", "dsh", "zcode"}; !equalStrings(got, want) {
 		t.Fatalf("InstallableNames()=%v, want %v", got, want)
 	}
-	if got, want := InstallableIDs(), []string{Claude, Codex, Cursor, DeepSeek, ZCode}; !equalStrings(got, want) {
+	if got, want := InstallableIDs(), []string{WorkBuddy, Claude, Codex, Cursor, DeepSeek, ZCode}; !equalStrings(got, want) {
 		t.Fatalf("InstallableIDs()=%v, want %v", got, want)
 	}
 }
