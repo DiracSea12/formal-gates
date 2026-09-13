@@ -1,7 +1,12 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"formal-gates/internal/engine/coverage"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +103,66 @@ func TestExplicitDevelopmentRetentionDoesNotOverrideChangedInput(t *testing.T) {
 	retainExplicitDevelopment(r, p)
 	if len(p.Resources) != 0 {
 		t.Fatal("rerun decision reused workspace")
+	}
+}
+
+func TestUnaffectedAdoptionPreservesUnfrozenQADesignAndApprovals(t *testing.T) {
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		for _, revising := range []bool{false, true} {
+			for _, impact := range []string{"unaffected", "affected"} {
+				t.Run(fmt.Sprintf("%s/revising=%t/%s", mode, revising, impact), func(t *testing.T) {
+					e := preparationEngine(t, mode)
+					gitReceipt(t, e, "base")
+					loaded, err := e.Load()
+					if err != nil {
+						t.Fatal(err)
+					}
+					r := loaded.State.Regular
+					old := r.Preparation
+					design := testDesign(r, strings.ToUpper(mode))
+					review := coverage.ReviewResult{Binding: design.Manifest.Binding, Scope: coverage.ScopeAffected, CaseDecisions: []coverage.ReviewDecision{{ID: design.Manifest.Cases[0].CaseID, Status: coverage.StatusPass}}}
+					q := &PreparedQA{Design: &design, RetainedReview: &review, ReviewScope: coverage.ScopeAffected, Revision: 2, ConsecutiveFailures: 1, DesignGap: "Remaining specific issue", Snapshot: "base"}
+					if revising {
+						q.PreviousDesign = q.Design
+						q.Design = nil
+						q.NeedsRevision = true
+					}
+					old.QA[mode] = q
+					before, _ := json.Marshal(q)
+					old.Resources[mode] = "/registered/qa-workspace"
+					r.Candidate = "adopted"
+					r.Changes = append(r.Changes, RequirementChangeReceipt{FromRevision: r.Requirement.Revision, ToRevision: r.Requirement.Revision, Origin: "EXTERNAL_ADOPTION", Impact: map[string]string{"development": "unaffected", mode + "-review": impact}})
+					prepareProjection(r)
+					retained := r.Preparation.QA[mode]
+					if impact == "affected" {
+						if retained.Design != nil || retained.PreviousDesign != nil || retained.RetainedReview != nil {
+							t.Fatal("affected QA was inherited")
+						}
+					} else {
+						if mode == "whitebox" {
+							if retained.Snapshot != "adopted" || r.Preparation.Resources[mode] != "" {
+								t.Fatal("whitebox retained old implementation workspace")
+							}
+							retained.Snapshot = q.Snapshot // Compare all remaining evidence without changing history.
+						}
+						after, _ := json.Marshal(retained)
+						if !bytes.Equal(before, after) {
+							t.Fatalf("unaffected partial QA changed: before %s after %s", before, after)
+						}
+						if mode == "blackbox" && r.Preparation.Resources[mode] != old.Resources[mode] {
+							t.Fatal("registered QA workspace lost")
+						}
+						retained.RetainedReview.CaseDecisions[0].Status = coverage.StatusFail
+						if q.RetainedReview.CaseDecisions[0].Status != coverage.StatusPass {
+							t.Fatal("new review mutated historical approval")
+						}
+					}
+					history, _ := json.Marshal(r.PreparationHistory[len(r.PreparationHistory)-1].QA[mode])
+					if !bytes.Equal(before, history) {
+						t.Fatal("original QA history changed")
+					}
+				})
+			}
+		}
 	}
 }

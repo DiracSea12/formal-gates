@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -250,7 +251,54 @@ func prepareProjection(r *RegularState) {
 					keep = true
 				}
 			}
-			if p.QA[mode] == nil || !keep || !q.Frozen || q.Design == nil || q.Review == nil || q.ReviewWaiver != nil {
+			if p.QA[mode] == nil || !keep || q.ReviewWaiver != nil {
+				continue
+			}
+			if !q.Frozen && (q.Design != nil || q.PreviousDesign != nil) {
+				// An explicit unaffected classification also preserves unfinished
+				// design and its per-item approvals. Keep history independent.
+				data, err := json.Marshal(q)
+				if err != nil {
+					continue
+				}
+				var retained PreparedQA
+				if err := json.Unmarshal(data, &retained); err != nil {
+					continue
+				}
+				valid := true
+				for _, design := range []*QADesign{retained.Design, retained.PreviousDesign} {
+					if design == nil {
+						continue
+					}
+					design.Manifest.Binding.SourceBinding = r.RequiredSources.Binding
+					design.Manifest.Binding.RouteScope = digestOfCanonical(r.Route)
+					design.Manifest.Binding.TopologyScope = r.Topology
+					if validateQADraft(r, mode, *design) != nil {
+						valid = false
+						break
+					}
+				}
+				if !valid {
+					continue
+				}
+				for _, review := range []*coverage.ReviewResult{retained.Review, retained.RetainedReview} {
+					if review == nil {
+						continue
+					}
+					review.Binding.SourceBinding = r.RequiredSources.Binding
+					review.Binding.RouteScope = digestOfCanonical(r.Route)
+					review.Binding.TopologyScope = r.Topology
+				}
+				p.QA[mode] = &retained
+				if change.Origin == "EXTERNAL_ADOPTION" && mode == "whitebox" && retained.Snapshot != p.DevelopmentSnapshot {
+					// Author against the adopted candidate, never the old source tree.
+					retained.Snapshot = p.DevelopmentSnapshot
+				} else {
+					p.Resources[mode] = old.Resources[mode]
+				}
+				continue
+			}
+			if !q.Frozen || q.Design == nil || q.Review == nil {
 				continue
 			}
 			copy := *q
