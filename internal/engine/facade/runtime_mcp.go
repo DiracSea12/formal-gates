@@ -107,7 +107,7 @@ func (f *Facade) ServeNativeOperationMCP(actionID, identity string, in io.Reader
 	if !ok || !execution.Claimed || execution.Finished || identity == "" || (execution.Identity != "" && execution.Identity != identity) {
 		return fmt.Errorf("INTENT_MISMATCH: MCP requires a claimed live action and a matching native identity")
 	}
-	description, err := actionInstructions(run, "actions/development-worker.md#工具说明")
+	description, err := nativeOperationInstructions(run, string(execution.Claim.Task.Step))
 	if err != nil {
 		return err
 	}

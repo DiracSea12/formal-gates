@@ -60,7 +60,7 @@ func (f *Facade) prepareNativeActionInput(run Run, claim protocol.ExecutionClaim
 	if err != nil {
 		return p, err
 	}
-	p.toolDescription, err = actionInstructions(run, "actions/development-worker.md#工具说明")
+	p.toolDescription, err = nativeOperationInstructions(run, string(claim.Task.Step))
 	if err != nil {
 		return p, err
 	}

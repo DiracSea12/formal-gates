@@ -44,6 +44,9 @@ func TestBothQADesignContractsExplainCaseDependencies(t *testing.T) {
 			t.Fatalf("%s typed schema omits dependency meaning: %s, %v", mode, schema, err)
 		}
 		if mode == "whitebox" {
+			if bytes.Contains(schema, []byte("uniqueItems")) {
+				t.Fatal("native result schema contains unsupported uniqueItems")
+			}
 			design := preparationSchema(mode+"-design", r, claim)["properties"].(map[string]any)["design"].(map[string]any)
 			if !strings.Contains(strings.Join(design["required"].([]string), ","), "testFiles") || !bytes.Contains(schema, []byte("unchanged reused developer tests")) {
 				t.Fatal("actual whitebox result schema does not require explicit testFiles")
@@ -600,11 +603,11 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	description, err := actionInstructions(Run{Regular: &protocol.RegularState{ActionInstructions: instructions}}, "actions/development-worker.md#工具说明")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, step := range []string{"product-review", "start-readiness", "development-worker", "blackbox-design", "blackbox-review", "whitebox-design", "whitebox-review", "complexity-gate", "implementation-quality-gate", "blackbox-execution", "whitebox-execution", "repair-worker"} {
+		description, err := nativeOperationInstructions(Run{Regular: &protocol.RegularState{ActionInstructions: instructions}}, step)
+		if err != nil {
+			t.Fatal(err)
+		}
 		tool := nativeOperationTool(step, description)
 		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		kinds := props["kind"].(map[string]any)["enum"].([]string)
@@ -618,8 +621,11 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 				t.Fatalf("%s model-only caseId: %v", step, cases)
 			}
 		}
-		if step == "whitebox-design" && (!strings.Contains(tool["description"].(string), "native shell tool") || strings.Contains(tool["description"].(string), "Do not use shell for these frozen QA targets")) {
-			t.Fatal("authoring tool contradicts trial contract")
+		if strings.Contains(description, "qa.prepare") != qa || strings.Contains(description, "qa.checkpoint") != qa {
+			t.Fatalf("%s received instructions for unavailable operations: %s", step, description)
+		}
+		if strings.Contains(description, "whitebox authoring") {
+			t.Fatal("tool repeats role-specific authoring instructions")
 		}
 	}
 }

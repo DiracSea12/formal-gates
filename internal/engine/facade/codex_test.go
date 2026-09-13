@@ -475,6 +475,7 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 	const common = "# 通用执行约定\nCommon instructions.\n"
 	run.Regular.ActionInstructions["actions/development-worker.md"] = common + "\n# 开发工作者\nDevelopment only.\n\n# 修复工作者\nRepair only.\n\n# 工具说明\nTool only.\n"
 	run.Regular.ActionInstructions["actions/qa-design.md"] = "# QA 设计\nDesign only.\n\n# 白盒覆盖判断\nCoverage only.\n"
+	run.Regular.ActionInstructions["actions/qa-review.md"] = "# QA 审查\nReview only.\n\n# 白盒改动与最终候选\nWhitebox only.\n"
 	for _, tc := range []struct{ step, path string }{
 		{"product-review", "actions/product-review.md"}, {"start-readiness", "actions/start-readiness.md"},
 		{"development-worker", "actions/development-worker.md#开发工作者"},
@@ -510,6 +511,10 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 					role = "# 修复工作者\nRepair only.\n"
 				case "blackbox-design", "whitebox-design":
 					role = "# QA 设计\nDesign only.\n"
+				case "blackbox-review":
+					role = "# QA 审查\nReview only.\n"
+				case "whitebox-review":
+					role = "# QA 审查\nReview only.\n\n\n# 白盒改动与最终候选\nWhitebox only.\n"
 				}
 				want += role + "\n\n"
 			}
@@ -557,8 +562,12 @@ func TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate(t *testing.T) {
 		{"actions/development-worker.md#开发工作者", "完整 Batch", []string{"canonical problems", "Call a bounded operation"}},
 		{"actions/development-worker.md#修复工作者", "canonical problems", []string{"完整 Batch", "Call a bounded operation"}},
 		{"actions/development-worker.md#工具说明", "Call a bounded operation", []string{"完整 Batch", "canonical problems"}},
-		{"actions/qa-design.md#QA 设计", "先独立确定", []string{"Do not request tools"}},
+		{"actions/qa-design.md#QA 设计", "草稿增量", []string{"design.testFiles 必须", "whitebox-design："}},
+		{"actions/qa-design.md#黑盒设计", "文档化产品入口", []string{"design.testFiles", "whitebox-design："}},
+		{"actions/qa-design.md#白盒设计", "先独立确定", []string{"每一条黑盒用例"}},
 		{"actions/qa-design.md#白盒覆盖判断", "candidate workspace", []string{"caseDrafts", "冻结命令与模式执行"}},
+		{"actions/qa-review.md#QA 审查", "每条用例固定核验五项", []string{"逐项读取 design.testFiles", "必须执行 testChanges.diffArgs"}},
+		{"actions/qa-review.md#白盒改动与最终候选", "必须执行 testChanges.diffArgs", []string{"每条用例固定核验五项"}},
 	} {
 		t.Run(tc.selector, func(t *testing.T) {
 			got, err := actionInstructions(run, tc.selector)

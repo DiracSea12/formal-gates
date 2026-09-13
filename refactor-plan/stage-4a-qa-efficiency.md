@@ -712,10 +712,10 @@ B1-S3：人工对照历史比较的范围、候选、配置与选样方法，核
 
 | 需求 | 保留的既有入口/证据 | 本批补齐 |
 | --- | --- | --- |
-| REQ-005 | `assemblePrompt`、每次原生启动/续用的 `prompt.txt`、当前候选及身份绑定 | 完整冻结需求文本只带一次，不重复派生 projection；`workflow show --summary` 提供实际消息文件入口。文本限定角色仍收到完整正文。 |
+| REQ-005 | `assemblePrompt`、每次原生启动/续用的 `prompt.txt`、当前候选及身份绑定 | 完整需求与当前职责材料按绑定路径交接，不重复派生 projection；`workflow show --summary` 提供实际消息文件入口。 |
 | REQ-005/006 | task-operation request/process/observed、现有 `PendingQA` 与 checkpoint | 回执接纳 revision 用于只取新增操作；查询无写入，同一快照结合当前原生身份投影剩余/受阻关系。记录 run 起点、准备/收集与命令起止，显示具体 argv、退出码、准备复用与重复操作的实际绑定差异。 |
 | REQ-006 | `internal/cost` 同身份扣除、owner 基线与重叠判定、原生 transcript | 缺失来源保留原因；缺失测量序列化 null，真实测得的零仍是零。摘要仅取既有账本的 measured 小计与缺失来源，不另结算；单项经过时间含等待，不累加重叠时间。 |
-| REQ-007 | 现有 QA design/review 的实际加载入口和增量修订路径 | 增加逐步前态/后态、可达性及退出/输出/语义取证核对，给出 Seal/abort 后继续同 run 的冲突例；公共操作、参数、依赖及版本限制集中在 `scripts/qa-preparation.md`。静态检查 AST / `sh -n` 不启动被检查脚本。 |
+| REQ-007 | 现有 QA design/review 的实际加载入口和增量修订路径 | 增加逐步前态/后态、可达性及退出/输出/语义取证核对，给出 Seal/abort 后继续同 run 的冲突例；公共操作、参数、依赖及版本限制集中在 `references/engine-regular.md` 的脚本表。静态检查 AST / `sh -n` 不启动被检查脚本。 |
 
 开发验证入口：`internal/engine/facade/progress_test.go`（增量游标、当前身份
 pending、候选变化、实际消息路径、等待时间、缺失时间、两种 QA 角色的实际提示词入口、
@@ -733,11 +733,98 @@ pending、候选变化、实际消息路径、等待时间、缺失时间、两�
 `phase3-qa-codex-run.py` 是固定 3.5c 比较脚本，不能导入来发现接口，也不能作为当前
 stage-4 操作直接执行。本批未运行新宿主模型样本，不据局部摘要或静态测试宣称整轮提速。
 
-本批最终验证：`go build ./...`、`go test ./...` 均实际退出 0；最后的进度显示字段
+本批既有实现验证（本轮修订前）：`go build ./...`、`go test ./...` 均实际退出 0；最后的进度显示字段
 补充后，`go test ./internal/engine/facade -run 'TestProgress|TestOperationDuration|TestPromptKeeps|TestStaticChecker|TestQAReadiness'`
 退出 0，最终构建再次退出 0。`python3 scripts/qa-static-check.py scripts/qa-static-check.py scripts/phase3-qa-fixture.sh scripts/phase3-qa-codex-run.py`
 对三个文件均报告 syntax-only PASS；`git diff --check` 通过。上述是开发自测，不替代
 后续引擎签发的独立 QA，也不声称新增宿主或完整模型流程已验证。
+
+### B4 当前修订：按角色装配与本地计量
+
+本次保留进度、成本、材料路径及事件归属。白盒 testFiles schema 移除宿主不支持的
+uniqueItems；重复路径仍由协议结果接纳校验。新 run 的 QA 设计分别选择通用和当前模式
+章节；QA 审查仅白盒收到测试文件归属与完整测试 diff 规则。QA 操作说明仅交给执行和
+修复角色，原生工具与 MCP 使用同一装配入口。旧 run 使用其捕获的未分段规则，不能因
+新章节缺失而拒绝恢复，也不从新安装包回填规则；这是已绑定文本的读取，不恢复旧驱动。
+
+已检查产品审、技术审、开发、QA 设计/审查、覆盖前置、执行、门审与返修的装配调用、
+结果 schema 和工具定义。产品审的完整 obligation/AC 核对、技术审粒度与分类、覆盖前置
+的先独立判断、门审的完整实现范围均保留。开发删去重复 Git 归属说明，执行删去重复
+checkpoint 参数和旧 fixture 参数提示。需求澄清由主代理的受理/确认入口承担；
+loadActionInstructions 不加载它，不存在可计为原生 worker 发送的 schema/工具定义。
+它的全文、revision 与明确确认要求保留，不伪造该阶段的模型发送数。
+
+计量命令：`go test ./internal/engine/facade -run '^TestStageInputAssemblyMeasurement$' -count=1 -v`。
+修改前为 `6ee0543c0b5bc5dca2595e2a42f7cfab36ccca64` 的只读 Git archive 导出，
+只复制同一测量测试；修改后为本批工作树。最终修正口径的两边各运行一次，无模型调用。此前夹具及计量修正样本不合并统计。夹具共用一个
+冻结小场景，执行真实装配和材料写入/读取；QA 审查使用共用 preparation 装配函数，
+不为计量伪造另一位设计者的来源记录。下表为实际 UTF-8 解码字符数，schema/tool 使用
+实际 JSON 序列化；工具列包含说明和操作输入 schema。临时绝对路径长度随测试变化，
+个位数差异不能解释为规则增减；数据不是 token 统计、宿主接收回执或正式 QA。
+
+| 阶段 | 消息 前→后 | 结果 schema 前→后 | 工具定义 前→后 |
+| --- | --- | --- | --- |
+| product-review | 3206 → 3206 | 1476 → 1476 | 2401 → 983 |
+| start-readiness | 4433 → 4433 | 2852 → 2852 | 2401 → 983 |
+| development-worker | 3651 → 3602 | 1536 → 1536 | 2401 → 983 |
+| blackbox-design | 9215 → 6863 | 5548 → 5548 | 2401 → 983 |
+| whitebox-design | 9281 → 8691 | 6394 → 6375 | 2401 → 983 |
+| whitebox-coverage | 1676 → 1676 | 355 → 355 | 2401 → 0 |
+| blackbox-review | 8241 → 7047 | 3281 → 3281 | 2401 → 983 |
+| whitebox-review | 8637 → 8638 | 3281 → 3281 | 2401 → 983 |
+| blackbox-execution | 6193 → 5996 | 2568 → 2568 | 2878 → 2554 |
+| whitebox-execution | 6193 → 5996 | 2568 → 2568 | 2878 → 2554 |
+| complexity-gate | 8538 → 8538 | 2568 → 2568 | 2401 → 983 |
+| implementation-quality-gate | 8416 → 8416 | 2568 → 2568 | 2401 → 983 |
+| repair-worker | 3859 → 3856 | 2263 → 2263 | 2878 → 2554 |
+
+Codex 的动态工具由 thread/start 固定，thread/resume/turn/start 不支持重新声明。
+覆盖前置现按 NoTools 不声明工作流工具；后续白盒编写沿原 thread 使用原生读取、写入及
+shell 试跑，不依赖可选 model.run 辅助。旧 thread 若仍保留原工具声明，覆盖前置也不会
+执行其操作请求。其他角色的工具声明不变，没有增加接口或更换白盒身份。
+本表是共用装配定义的字符数，不是所有宿主逐 turn 发送总量；经覆盖前置创建的 Codex
+thread 在编写阶段也没有工作流工具，不能把白盒两行定义相加当作重复发送或 token 计量。
+缺失用量来源仍由 cost 标记 unavailable。
+
+静态核对本机 `codex app-server generate-json-schema --experimental --out <temporary-directory>`
+确认上述字段边界，未调用模型。`TestCodexCoverageThenAuthoringKeepsIdentityWithoutWorkflowTools`
+通过实际 Codex 适配器与本地协议端点记录请求：一次 thread/start（params 493 字符）、
+一次 thread/resume（536 字符），两次 turn/start（2160、15444 字符）；启动与恢复都不
+发送动态工具，覆盖 read-only，编写 workspace-write，附着身份保持一致。端点实际读取
+behavior.txt，编写 probe.sh 并执行 `sh probe.sh`，退出 0、stdout 为 `checked\n`；检查
+实际发送的 schema 不含 uniqueItems。数字受临时路径影响，不报 token 或整轮耗时收益。
+这验证传输配置及本地 I/O，不冒称模型语义判断或真实 Codex 沙箱执行。首次新夹具因漏配
+原生 CODEX_HOME 绑定未启动，补齐隔离目录后通过；没有修改产品上下文校验。
+
+初次夹具失败原因：将主代理需求澄清误列为原生动作，以及合成 QA
+审查缺少独立设计来源。调整夹具职责边界后两次计量均通过，不将失败样本算作成功发送。
+首次 go test 因默认 Go cache 无权限未能启动，后续使用 `/tmp/formal-gates-b4-go-cache`。
+
+本次增补 `TestInstalledConsumerReadsBoundMaterialWithoutContext`：正常安装包提供绑定
+说明，本地原生协议接收端仅根据收到的 requirement.path 读取正文，检查 binding 不含
+内部 context，再交回结果；public consumer 接纳该结果。连同现有 CLI consumer
+启动、恢复、身份续用及重复派发检查一起通过。该端点是假协议端点，不是模型语义
+审查或真实宿主全流程证据。`TestCapturedUnsplitInstructionsRemainReadable` 验证捕获的
+旧说明仍可读取；初次夹具漏配白盒工作区，补齐后复测通过。所有公共脚本 syntax-only
+检查和 `go build ./...` 通过，未通过 import/source 启动脚本。公共入口、参数、依赖及
+历史脚本版本限制继续由 `references/engine-regular.md` 的既有脚本表提供。
+
+首次全量 `go test ./...` 失败：facade 的旧文本测试夹具缺白盒工作区（已修正并单测
+通过）；lifecycle 的 ZCode 环境识别测试继承本机 CODEX_HOME/CODEX_CLI_PATH，优先
+识别为 Codex；validate 的安装身份测试需要本地 bin 产物。未修改这两个产品模块：先
+`go build -o bin/formal-gates ./cmd/formal-gates`，再在测试子进程通过
+`env -u CODEX_HOME -u CODEX_CLI_PATH GOCACHE=/tmp/formal-gates-b4-go-cache go test ./...`
+复测。bin 是现有忽略目录中的构建产物，不作为本批源文件交付。
+
+上述环境与夹具修正后的全量 `go test ./...` 退出 0，lifecycle、validate 和 facade
+均通过；最终计量夹具修正后在前后源树分别运行也退出 0。`git diff --check` 通过。
+该全量结果早于覆盖前置工具修正。修正后的全量验证日志为
+`/tmp/b4-complete-full.log`，退出 1：仅
+`TestContinuousUserAskInterruptsTransientWait` 的 TempDir 清理报告 directory not empty，
+功能断言及其他测试通过。未据此改动调度或生命周期代码；同一源码单独重跑该测试
+通过（`/tmp/b4-cleanup-recheck.log`，退出 0）。同一源码完整套件重跑通过
+（`/tmp/b4-complete-retry.log`，退出 0）；未重现清理错误。此次结果覆盖最终
+Codex 工具修正，构建、定向验证与公共脚本静态检查结果见上文。
 
 ### B5：通用协议入口与尚缺的原生证据
 

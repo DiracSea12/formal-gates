@@ -40,8 +40,7 @@ the transport fills the observed native identity. 绑定值来自当前输入，
 注释解释原因、约束和不明显的行为，不逐行复述代码；行为改变时更新对应说明，
 不要保留过时解释再堆叠补丁注释。
 
-只在指定工作区修改交付文件。全部 Git 跟踪、提交和快照由 adapter 执行；不要自行执行
-Git 写命令或触碰无关文件。返回 manifest 中全部新增、修改和删除路径，每个有序 subtask
+只在指定工作区修改交付文件。返回 manifest 中全部新增、修改和删除路径，每个有序 subtask
 各一条 validation（subtaskId/procedure/observation/result），handoff 只记录无法从已提交
 文件直接得知的决定或遗留事项。
 
@@ -78,15 +77,11 @@ inherited task, requirement or schema; include every required input. Perform you
 assigned workflow review yourself. The bridge inserts the immutable action binding
 and enforces admission before calling. Do not use shell for workflow model calls.
 
-Only kinds advertised in inputSchema are available. When qa.prepare, qa.target and
-qa.collect are available, call them in that order for each case in this action's
-approved scope, with its caseId and empty prompt. Do not use shell for frozen QA targets.
+Only kinds advertised in inputSchema are available.
 
-For whitebox authoring, use the available native shell tool in your assigned authoring
-workspace to discover, write and trial-run tests. Those preparation observations
-support reuse records; they are not frozen-case QA results. QA operation kinds are
-unavailable in this phase.
-
+# QA 操作说明
+Call qa.prepare, qa.target and qa.collect in order for each approved case, with
+its caseId and empty prompt. Do not use shell for frozen QA targets.
 When advertised, qa.run with empty caseId and prompt consumes this action's
 approved remaining QA operations continuously. It retains individual receipts
 and returns pending judgment/blocked relationships; it never decides semantic

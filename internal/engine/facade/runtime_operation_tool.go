@@ -1,5 +1,19 @@
 package facade
 
+import "strings"
+
+// Use the same bound Markdown sections for direct native tools and MCP.
+func nativeOperationInstructions(run Run, step string) (string, error) {
+	paths := []string{"actions/development-worker.md#工具说明"}
+	// Older runs retain their captured tool text; do not require a section that
+	// did not exist when they started or replace it with current package rules.
+	if (step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker") &&
+		strings.Contains(run.Regular.ActionInstructions["actions/development-worker.md"], "\n# QA 操作说明\n") {
+		paths = append(paths, "actions/development-worker.md#QA 操作说明")
+	}
+	return actionInstructions(run, paths...)
+}
+
 // Advertise only operations this role can actually request. Authoring tests run
 // in the existing writable authoring workspace before any frozen QA wave exists;
 // a design trial must never be presented as formal QA execution.

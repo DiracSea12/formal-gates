@@ -21,17 +21,16 @@
 一类跳过、授权或模板文案冒充逐用例证据；用户授权可以改变流程是否继续，不能把未执行
 用例改写为执行 PASS。未执行、setup 失败、入口不存在或所需真实宿主能力缺失时，完整已完成行照实保存 PASS/FAIL，
 未完成行保持未完成；记录中断原因与未完成集合，整体维持 PENDING/RUNTIME_ERROR，不能 PASS。
-通过 formal_gates_operation 的 qa.checkpoint 保存新增完整结果：caseId 为空，prompt 为
-包含 cases、remaining、message 及可选 findings、invalidated 的 JSON。该操作不结束当前 worker。
-中断时按当前 schema 返回 CHECKPOINT 和真实原因；续跑只补 remaining，既有有效结果由引擎保留。
-工具或环境变化先在 invalidated 逐项给出 caseId、previousTool、previousEnvironment、tool、environment、reason。
-最终按当前结果 schema 交回剩余完整行；引擎合并有效进度并核对完整 expected-set。授权跳过不是 PASS。
+通过 qa.checkpoint 保存新增完整结果，参数见当前工具说明；该操作不结束 worker。
+中断返回 CHECKPOINT 和真实原因，只续跑 remaining。工具或环境变化先在 invalidated
+逐项给出 caseId、previousTool、previousEnvironment、tool、environment、reason。
+引擎合并有效进度并核对完整 expected-set；授权跳过不是 PASS。
 
 同一不可变候选构建一次，复用不属于验收目标的共同准备；独立用例从干净副本开始。
 有序场景显式声明依赖且共享同一副本；一条失败仅停止依赖操作，其余独立用例继续。
 逐条保存真实命令、输出与断言结果。构建、安装、启动、真实宿主派发本身是验收目标时
 必须在本轮真实执行，不能以复用准备替代。批量只在本次 QA 派发内部组织，不新增逐例
-代理、TaskKey 或额度。可用既有 fixture 的 stage/copy/prepare --reuse-build 减少准备。
+代理、TaskKey 或额度。
 
 不要声称程序能判断自然语言 Operator 是否撒谎。以故意伪造 Operator 核验或证据作为被测场景属于项目
 边界外的对抗性输入；遇到这类批准错误应如实报告用例准入问题或运行错误，不为它构造

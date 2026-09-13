@@ -316,9 +316,8 @@ func actionInstructions(run Run, paths ...string) (string, error) {
 }
 
 func assemblePrompt(instructions string, input any) (string, error) {
-	// The source document is authoritative; its derived projection repeats the
-	// same requirements and acceptance text. Keep the complete document in the
-	// actual message, including for roles that cannot read files.
+	// Production callers bind document paths before rendering. Keep direct
+	// assembly useful for input validation without duplicating derived projections.
 	if payload, ok := input.(map[string]any); ok {
 		copy := make(map[string]any, len(payload))
 		for key, value := range payload {

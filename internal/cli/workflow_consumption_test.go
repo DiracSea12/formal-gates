@@ -19,6 +19,7 @@ import (
 
 	"formal-gates/internal/engine/facade"
 	"formal-gates/internal/engine/protocol"
+	"formal-gates/internal/lifecycle"
 )
 
 // This helper is the fake transport endpoint behind the production Codex
@@ -63,6 +64,34 @@ func TestCLIConsumerFakeServer(t *testing.T) {
 			}
 			reply(map[string]any{"thread": map[string]any{"id": identity}})
 		case "turn/start":
+			// Read only the received path, with no fixture history supplied to the
+			// endpoint. This checks installed handoff access, not model semantics.
+			var received []struct{ Text string }
+			_ = json.Unmarshal(q.Params["input"], &received)
+			if len(received) == 0 {
+				os.Exit(12)
+			}
+			pos := strings.LastIndex(received[0].Text, "\n{")
+			if pos < 0 {
+				os.Exit(12)
+			}
+			var payload struct {
+				Requirement     struct{ Path string }
+				RequirementPath string
+				Binding         map[string]json.RawMessage
+			}
+			if json.Unmarshal([]byte(received[0].Text[pos+1:]), &payload) != nil {
+				os.Exit(12)
+			}
+			path := payload.Requirement.Path
+			if path == "" {
+				path = payload.RequirementPath
+			}
+			body, err := os.ReadFile(path)
+			if err != nil || len(body) == 0 || payload.Binding["context"] != nil {
+				os.Exit(12)
+			}
+
 			var schema struct {
 				Properties map[string]struct{ Enum []string }
 			}
@@ -137,7 +166,7 @@ type consumerFixture struct {
 	f          *facade.Facade
 }
 
-func newConsumerFixture(t *testing.T) *consumerFixture {
+func newConsumerFixture(t *testing.T, installed ...bool) *consumerFixture {
 	t.Helper()
 	root, _ := cliWorkflowFixture(t)
 	home := t.TempDir()
@@ -159,6 +188,9 @@ func newConsumerFixture(t *testing.T) *consumerFixture {
 	pkg, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(installed) > 0 && installed[0] {
+		_, pkg = installHostCLI(t, lifecycle.ProviderCodex, root)
 	}
 	f, _, err := facade.Start(facade.StartOptions{Root: root, PackageRoot: pkg, Request: facade.StartRequest{RunID: "cli-consumer", Provider: "codex", RequirementPath: "requirements.md"}, Admission: &facade.Admission{PackageDigest: "sha256:fixture", InstalledTargetIdentity: "fixture"}})
 	if err != nil {
@@ -787,5 +819,15 @@ func TestCLIConsumerRepeatedAskCanDecideFromOutput(t *testing.T) {
 	}
 	if !c.decodeConsumer(t, out).Regular.Requirement.Confirmed {
 		t.Fatal("decision not persisted")
+	}
+}
+
+func TestInstalledConsumerReadsBoundMaterialWithoutContext(t *testing.T) {
+	c := newConsumerFixture(t, true)
+	c.call(t, "drive")
+	c.choose(t, protocol.RegularRequest{Action: "confirm-requirement"})
+	r := c.choose(t, protocol.RegularRequest{Action: "mode", Mode: "regular"})
+	if len(c.turns(t)) != 1 || r.Regular.Reviews["product-review"].Completed != 1 {
+		t.Fatal("installed handoff was not read and its bound result accepted")
 	}
 }

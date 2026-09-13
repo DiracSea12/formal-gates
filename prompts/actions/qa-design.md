@@ -14,28 +14,11 @@
 真实读取/执行障碍走原有运行时错误路径，并保留已完成工作；不能因为基线没有新功能就判设计失败。
 previousResultRejection 是当前动作的拒收原因，按原因修正提交。
 
-从已确认需求出发，为已选 QA 模式设计用例集。两种模式各自可选、均由独立代理执行，
-时序按模式而定：
-
-- **黑盒**：真实 QA。不关心代码是什么；只从「产品是什么、怎么用、需求是什么」出发，
-  通过实际使用产品（文档化的正常使用方式操作产品、覆盖常见操作失误）验证需求是否完成
-  并通过。黑盒设计在独立的基线工作区中进行，不包含本次开发变更；基线是否已有可运行
-  产品及公开文档，应按项目实际情况核对。当前确认需求决定本次新增或变更的行为；未变
-  接口沿用已有公开文档。公开文档与当前确认需求冲突时，按当前确认契约判断，并指出
-  具体冲突，不能无条件认定基线文档过时。声称接口或公开说明缺失前，先用正常读取和
-  搜索工具核对当前可读的公开文档；只读取需求或列出文件不能证明文档缺失。设计不读取
-  本次开发实现或白盒材料；正式执行时使用引擎绑定的候选产品，保留实际运行证据。
-- **白盒**：开发后由独立代理读实现设计面向实现结构的测试（单元、系统、集成等职责式定
-  义，不限定具体类型），在指定的白盒隔离工作区进行。结构测试充分性依赖实现，白盒设计阶段读
-  取实现；开发前无实现可读，白盒设计只在开发后进行。
+从已确认需求出发，为当前 action 指定的 QA 模式设计用例集。
 
 本次新增或修改的产品入口在开发前按已确认接口契约设计步骤，不要求基线帮助已包含
 该入口；测试准备可构造的边界见下文，被测功能与执行证据仍须在快照后真实运行取得。
 
-白盒用例先独立确定应验证的行为、分支和 oracle，再检查已有测试，复用真正有效的覆盖。
-每条白盒用例用 testRef 定位实际测试（可引用独立子测试）；引用可用项目适用的测试标识，
-例如 `<文件路径>::<函数名>`，不规定语言或解析格式。CLI 校验引用非空且唯一，QA Review
-检查输入、断言和对应性，QA Execution 独立运行并保留输出。引擎不从 testRef 推断文件路径。
 **用例集是否充分由 QA 审查（review）判断，不设机械化质量下限**——被选中模式零用例是
 覆盖缺失，由 review 的 set-level 覆盖判定承担。
 
@@ -56,24 +39,6 @@ fixture、输入、已有前置状态，以及模拟审查结果、授权、生�
 - 构造仅用于隔离测试环境，不得篡改当前项目的正式 run，或将模拟材料冒充正式审查、授权
   或正式 PASS。测试材料与实际运行所得证据须明确区分。
 
-**白盒先独立判断覆盖，再复用已有测试。** 先列出应验证的行为、关键分支和 oracle，再读取
-已有测试的输入、真实断言与覆盖对应。有效测试显式绑定并独立运行；仅缺口或错误才新增、
-修正。普通逻辑优先单测，跨模块用集成测试，公开路径由黑盒承担；交叉验证须有不同验证
-目标。不能仅凭测试名、覆盖率或开发者声明放行。没有测试变动时不增加文件或推进快照；
-有变动则提交并纳入最终含测试快照。
-
-黑盒仍必须通过文档化产品入口实际使用产物，不能以既有测试套件为主体或主要证据；
-独立的短驱动脚本可调用公共入口、采集真实输出并断言。
-
-白盒 design.testFiles 必须明确列出全部测试专用文件及测试专用 fixture 的项目相对路径，
-包括开发者编写、直接复用而没有改动的测试，以及本轮新增、修改、删除的测试文件。
-只列精确文件路径，不列目录或 glob；生产文件、生产配置及生产共用输入即使被测试引用，
-也不能列入。允许在混合文件内新增、修正测试内容，但不得修改生产行为、生产配置或共用输入；
-混合文件列入实际变更 manifest，不列入 testFiles，仍保留在实现门 diff 中。没有项目内测试专用文件时
-显式返回 []。这是待独立白盒 review 核对的声明，不能单凭作者声明排除文件。
-顶层 manifest 只列实际新增、修改、删除的路径；零改动复用时 manifest 为 []，testFiles
-仍列出复用的测试文件。两者不得混用，不为标记测试归属修改已有文件。
-
 设计结果使用当前 schema 的 design（replace、removeCases、removeSharedSteps、manifest、alternatives，白盒另含 testFiles）；manifest 中
 包含 binding、sources、points、cases、edges、sharedSteps。所选模式合起来须覆盖全部 AC，
 每个已覆盖 AC 的 pointId 为 REVIEWKIND:AC-ID，例如 BLACKBOX:AC-001；case ID 同样带
@@ -82,11 +47,6 @@ REVIEWKIND 前缀，并以 edge 连接需求来源和验收点。每个 case 有
 把行为主张写进描述；把文档化的入口、必要的前置条件、用户操作和需要留存的证据写进
 步骤；把可观察的预期结果和失败信号写进预期判据。代码检视、模拟输出或开发者自测主
 张都不能替代黑盒的实际使用执行。共同准备和操作在 manifest.sharedSteps 保存一份，case.sharedSteps 按 ID 引用；逐例保留特殊前提、操作差异、证据与 oracle。
-
-**每一条黑盒用例都必须写出真实、完整、可照做的执行步骤。** 步骤必须给出实际使用
-的公开入口、命令或调用、必要参数和输入、环境与 fixture 前置、操作顺序，以及需要留
-存的输出或产物；不能只写场景名称、检查项、类别名或“执行相应测试”。设计阶段不能
-运行产品，不等于可以省略执行细节；这些步骤必须能在快照后的真实产品上直接照做。
 
 覆盖文档化的正常使用和常见操作失误，并逐验收点设计：正向生效、失败路径或不得
 误报、边界/中间态、以及本次改动可能破坏的既有文档化正常使用行为的回归面——凡对应
@@ -123,8 +83,6 @@ case.command 可以为 null；已有适用的可执行命令可直接声明 exec
 若设计已声明 command，执行者不得替换它。dependencies 只引用此前已有或本增量中更早的 case ID，
 独立用例为 []；共用准备引用 sharedSteps，环境可用性写入前置，不作 case 依赖。
 
-**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test content or test-only fixtures. Tests may live inside production files: preserve all production behavior and shared inputs, list the mixed file in the change manifest, and never list it in design.testFiles. Return only actual changed file paths in the top-level manifest; declare all test-only file paths separately in design.testFiles, including unchanged reused developer tests. Return reuse records for each added or changed case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production fixes return to development. The isolated intermediate commit is for independent review, not approval to promote; the reviewer checks all declared testFiles and the complete whitebox diff before final candidate creation.
-
 ## 可执行共用准备
 
 sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCode 声明；
@@ -136,6 +94,53 @@ sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCod
 构建、安装、返修自测等选择 candidate。工具与依赖缓存沿用运行环境，不复制 HOME。
 构建入口与前提以当前任务已绑定的材料为准。
 
+
+# 黑盒设计
+
+- **黑盒**：真实 QA。不关心代码是什么；只从「产品是什么、怎么用、需求是什么」出发，
+  通过实际使用产品（文档化的正常使用方式操作产品、覆盖常见操作失误）验证需求是否完成
+  并通过。黑盒设计在独立的基线工作区中进行，不包含本次开发变更；基线是否已有可运行
+  产品及公开文档，应按项目实际情况核对。当前确认需求决定本次新增或变更的行为；未变
+  接口沿用已有公开文档。公开文档与当前确认需求冲突时，按当前确认契约判断，并指出
+  具体冲突，不能无条件认定基线文档过时。声称接口或公开说明缺失前，先用正常读取和
+  搜索工具核对当前可读的公开文档；只读取需求或列出文件不能证明文档缺失。设计不读取
+  本次开发实现或白盒材料；正式执行时使用引擎绑定的候选产品，保留实际运行证据。
+
+黑盒仍必须通过文档化产品入口实际使用产物，不能以既有测试套件为主体或主要证据；
+独立的短驱动脚本可调用公共入口、采集真实输出并断言。
+
+**每一条黑盒用例都必须写出真实、完整、可照做的执行步骤。** 步骤必须给出实际使用
+的公开入口、命令或调用、必要参数和输入、环境与 fixture 前置、操作顺序，以及需要留
+存的输出或产物；不能只写场景名称、检查项、类别名或“执行相应测试”。设计阶段不能
+运行产品，不等于可以省略执行细节；这些步骤必须能在快照后的真实产品上直接照做。
+
+# 白盒设计
+
+- **白盒**：开发后由独立代理读实现设计面向实现结构的测试（单元、系统、集成等职责式定
+  义，不限定具体类型），在指定的白盒隔离工作区进行。结构测试充分性依赖实现，白盒设计阶段读
+  取实现；开发前无实现可读，白盒设计只在开发后进行。
+
+白盒用例先独立确定应验证的行为、分支和 oracle，再检查已有测试，复用真正有效的覆盖。
+每条白盒用例用 testRef 定位实际测试（可引用独立子测试）；引用可用项目适用的测试标识，
+例如 `<文件路径>::<函数名>`，不规定语言或解析格式。CLI 校验引用非空且唯一，QA Review
+检查输入、断言和对应性，QA Execution 独立运行并保留输出。引擎不从 testRef 推断文件路径。
+
+**白盒先独立判断覆盖，再复用已有测试。** 先列出应验证的行为、关键分支和 oracle，再读取
+已有测试的输入、真实断言与覆盖对应。有效测试显式绑定并独立运行；仅缺口或错误才新增、
+修正。普通逻辑优先单测，跨模块用集成测试，公开路径由黑盒承担；交叉验证须有不同验证
+目标。不能仅凭测试名、覆盖率或开发者声明放行。没有测试变动时不增加文件或推进快照；
+有变动则提交并纳入最终含测试快照。
+
+白盒 design.testFiles 必须明确列出全部测试专用文件及测试专用 fixture 的项目相对路径，
+包括开发者编写、直接复用而没有改动的测试，以及本轮新增、修改、删除的测试文件。
+只列精确文件路径，不列目录或 glob；生产文件、生产配置及生产共用输入即使被测试引用，
+也不能列入。允许在混合文件内新增、修正测试内容，但不得修改生产行为、生产配置或共用输入；
+混合文件列入实际变更 manifest，不列入 testFiles，仍保留在实现门 diff 中。没有项目内测试专用文件时
+显式返回 []。这是待独立白盒 review 核对的声明，不能单凭作者声明排除文件。
+顶层 manifest 只列实际新增、修改、删除的路径；零改动复用时 manifest 为 []，testFiles
+仍列出复用的测试文件。两者不得混用，不为标记测试归属修改已有文件。
+
+**whitebox-design：** Inspect and independently run existing tests before adding only missing coverage. Use the available native shell tool in this assigned whitebox authoring workspace for test discovery and trial execution, including running newly written tests before reporting reuse. The qa.prepare/qa.target/qa.collect operations are for later frozen-case execution or repair and are unavailable during authoring. These trial results are preparation evidence, not formal QA results. Edit only test content or test-only fixtures. Tests may live inside production files: preserve all production behavior and shared inputs, list the mixed file in the change manifest, and never list it in design.testFiles. Return only actual changed file paths in the top-level manifest; declare all test-only file paths separately in design.testFiles, including unchanged reused developer tests. Return reuse records for each added or changed case with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return status FAIL with the actual failure evidence and a concrete message; do not change the test to force a pass. Production fixes return to development. The isolated intermediate commit is for independent review, not approval to promote; the reviewer checks all declared testFiles and the complete whitebox diff before final candidate creation.
 
 # 白盒覆盖判断
 

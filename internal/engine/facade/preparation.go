@@ -336,8 +336,23 @@ func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePro
 		path += "#开发工作者"
 	} else if action == "qa-design" {
 		path += "#QA 设计"
+	} else if action == "qa-review" && strings.Contains(run.Regular.ActionInstructions[path], "\n# 白盒改动与最终候选\n") {
+		path += "#QA 审查"
 	}
-	instructions, err := actionInstructions(run, "actions/development-worker.md#通用执行约定", path)
+	paths := []string{"actions/development-worker.md#通用执行约定", path}
+	// Bound documents from earlier runs keep their original unsplit role text.
+	if action == "qa-design" && strings.Contains(run.Regular.ActionInstructions["actions/qa-design.md"], "\n# 黑盒设计\n") {
+		section := "黑盒设计"
+		if step == "whitebox-design" {
+			section = "白盒设计"
+		}
+		paths = append(paths, "actions/qa-design.md#"+section)
+	}
+
+	if step == "whitebox-review" && strings.Contains(path, "#") {
+		paths = append(paths, "actions/qa-review.md#白盒改动与最终候选")
+	}
+	instructions, err := actionInstructions(run, paths...)
 	if err != nil {
 		return nativePromptMaterial{}, err
 	}
@@ -605,7 +620,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 		alternatives["description"] = "Only explicit NON_QA sources may have an alternative verification. Never use alternatives to defer or weaken an AC; return an empty array when every source is QA."
 		designFields := map[string]any{"replace": map[string]any{"type": "boolean"}, "removeCases": array(str), "removeSharedSteps": array(str), "manifest": manifest, "alternatives": alternatives}
 		if mode == "whitebox" {
-			designFields["testFiles"] = map[string]any{"type": "array", "items": str, "uniqueItems": true, "description": "Exact project-relative test-only file paths, including unchanged reused developer tests and test-only fixtures. Never directories, globs, production/shared files or paths inferred from testRef. Include deleted test paths; return [] explicitly if no project files are test-only. Independent whitebox review must approve these files before gate exclusion. The top-level manifest lists only actual file changes."}
+			designFields["testFiles"] = map[string]any{"type": "array", "items": str, "description": "Exact project-relative test-only file paths, including unchanged reused developer tests and test-only fixtures. Never directories, globs, production/shared files or paths inferred from testRef. Include deleted test paths; return [] explicitly if no project files are test-only. Independent whitebox review must approve these files before gate exclusion. The top-level manifest lists only actual file changes."}
 		}
 		fields["design"] = object(designFields)
 		if mode == "whitebox" {
