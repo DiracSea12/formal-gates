@@ -157,4 +157,11 @@ not claim they occurred. No unresolved implementation decisions remain.
 | 需求澄清等包内指南 | `requirements-clarification.md` 重复全文/revision/确认步骤，并保留 RQ-011 登记集说明；未创建原生 worker 不等于该指南已完成内容优化。 | 全阶段核对尚未体现该指南的处置。 |
 | 续做输入 | 同身份 B4 恢复曾再次发送 6,569 字完整角色消息；现有阶段计量主要覆盖首次装配。 | 仍需区分必要的恢复约束、可按需读取的内容及重复材料，不能把首次派发计量当作续做验证。 |
 
+### 当前 B4 增量的接纳前复核
+
+以下为原生开发身份 `01a09c9a-a4c4-7c03-8c4b-edd5aa74deb3` 在途改动的复核事实，尚非其最终交付结论：
+
+- `runtime_input.go` 的续做消息将 `initialMessage` 指向 `prompt.txt`，重新把实际消息记录作为材料披露入口，不符合已确认的取消 prompt 中间层要求。已 claimed 的正常恢复指向当前 job 的同名文件，而 `runtime_bridge.go` 在发送前写入该文件；因此此路径会用续做消息覆盖所引用的原始消息，链接指向自身。历史实际消息记录与对模型提供的正式材料入口应区分，不能以另一份提示词副本替代直接材料来源。
+- 同一改动在 `nativePromptMaterial.render` 内硬编码整段固定续做指令；项目规则要求固定内部指令由已有 Markdown 持有，代码只选取并组装动态材料。这一职责约束不能因缩短消息而丢失。
+
 复核原始记录：`/private/tmp/stage4a-reference-bind-ss_0ezih/evidence/all-prompts-source-audit.json`。上述判断不改变既有开发、QA 原结果或费用记录。
