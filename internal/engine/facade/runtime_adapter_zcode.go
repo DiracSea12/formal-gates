@@ -78,7 +78,10 @@ func zcodeRoleTools(step string, coverage bool) []string {
 	if coverage {
 		return []string{"Read", "Glob", "Grep"}
 	}
-	tools := []string{"formal_gates_operation", "mcp__formal-gates__formal_gates_operation"}
+	tools := []string{}
+	if nativeAllowsOperation(step) {
+		tools = append(tools, "formal_gates_operation", "mcp__formal-gates__formal_gates_operation")
+	}
 	switch nativeRoleAccess(step) {
 	case nativeWorkspaceWrite:
 		tools = append(tools, "Bash", "Read", "Write", "Edit", "Glob", "Grep")
@@ -124,7 +127,7 @@ func (zcodeRuntimeAdapter) turn(q nativeTurn) (string, error) {
 		return "", err
 	}
 	options := zcodeSessionOptions{Mode: mode, CaptureUsage: true, Model: q.Settings.Model, Effort: q.Settings.ReasoningEffort}
-	if !coverage {
+	if q.allowsOperation() {
 		options.PrepareTools = func(identity string) ([]any, error) {
 			executable, err := os.Executable()
 			if err != nil {

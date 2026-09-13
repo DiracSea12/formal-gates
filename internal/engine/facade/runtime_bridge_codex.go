@@ -173,7 +173,7 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if resume {
 		method = "thread/resume"
 		params["threadId"] = claim.Identity
-	} else if !q.NoTools {
+	} else if q.allowsOperation() {
 		// Dynamic tools are fixed at thread creation. Coverage starts without
 		// workflow operations; subsequent whitebox authoring uses native file
 		// and shell tools on that same thread, without the optional helper.
@@ -234,10 +234,10 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 				callErr = fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unbound native tool")
 			}
 			var receipt any
-			if callErr == nil && q.NoTools {
+			if callErr == nil && !q.allowsOperation() {
 				// A resumed historical thread may still advertise its original
-				// tool declaration. The current coverage role cannot execute it.
-				callErr = fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: workflow operations unavailable during coverage judgment")
+				// tool declaration. The current role must still permit execution.
+				callErr = fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: workflow operations unavailable for this role")
 			}
 			if callErr == nil {
 				receipt, callErr = q.Operation(identity, call.CallID, call.Arguments)

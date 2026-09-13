@@ -81,7 +81,7 @@ func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, roo
 		return nil, err
 	}
 	plugin := patch[0].(map[string]any)["insert"].([]any)[0].(map[string]any)
-	plugin["config"].(map[string]any)["exposeOperation"] = !noTools
+	plugin["config"].(map[string]any)["exposeOperation"] = !noTools && nativeAllowsOperation(step)
 	mode := "read-only"
 	if !noTools && nativeRoleAccess(step) == nativeWorkspaceWrite {
 		mode = "workspace-write"

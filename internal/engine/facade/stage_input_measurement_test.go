@@ -99,11 +99,30 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 			if strings.Contains(string(schema), "uniqueItems") {
 				t.Fatalf("%s schema uses unsupported uniqueItems", step)
 			}
-			tool, err := json.Marshal(nativeOperationTool(step, input.toolDescription))
-			if err != nil {
-				t.Fatal(err)
+			var tool []byte
+			if nativeAllowsOperation(step) {
+				tool, err = json.Marshal(nativeOperationTool(step, input.toolDescription))
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			t.Logf("assembled step=%s message=%d schema=%d tool=%d files=%d", step, utf8.RuneCountInString(input.prompt), utf8.RuneCount(schema), utf8.RuneCount(tool), len(input.material.files))
+			if step == "development-worker" {
+				current.Operation, current.Identity = "resume", "same-native-identity"
+				input.material.initialMessage = filepath.Join(job, "prompt.txt")
+				input.material.resumeInstructions, err = actionInstructions(run, "actions/development-worker.md#续做约定")
+				if err != nil {
+					t.Fatal(err)
+				}
+				resumed, err := input.material.render(current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(resumed) >= len(input.prompt) || !strings.Contains(resumed, input.material.initialMessage) || !strings.Contains(resumed, "same-native-identity") {
+					t.Fatal("resume lacks compact traceable identity binding")
+				}
+				t.Logf("assembled step=development-resume message=%d schema=%d tool=%d", utf8.RuneCountInString(resumed), utf8.RuneCount(schema), utf8.RuneCount(tool))
+			}
 			if input.coverage != nil {
 				schema, err := json.Marshal(input.coverage.schema)
 				if err != nil {
@@ -117,32 +136,20 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 	}
 }
 
-func TestCapturedUnsplitInstructionsRemainReadable(t *testing.T) {
+func TestUnsplitInstructionsDoNotFallback(t *testing.T) {
 	f := facadePreparation(t, []string{"blackbox", "whitebox"})
 	run, err := f.Show()
 	if err != nil {
 		t.Fatal(err)
 	}
 	claim := facadeExecution(t, f, "blackbox-design").Claim
-	run.Regular.Preparation.Resources["whitebox"] = t.TempDir()
-	const oldTool = "# 工具说明\nCaptured model and QA operations.\n"
-	const oldReview = "# QA 审查\nCaptured review.\n\n## 白盒改动与最终候选\nCaptured test ownership.\n"
-	run.Regular.ActionInstructions["actions/development-worker.md"] = "# 通用执行约定\nCaptured common.\n\n" + oldTool
-	run.Regular.ActionInstructions["actions/qa-review.md"] = oldReview
-	for _, step := range []string{"blackbox-review", "whitebox-review"} {
-		claim.Task.Step = authoring.StepID(step)
-		material, err := preparePreparationPrompt(run, claim)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if material.instructions != "# 通用执行约定\nCaptured common.\n\n\n"+oldReview {
-			t.Fatalf("captured instructions changed: %s", material.instructions)
-		}
+	run.Regular.ActionInstructions["actions/qa-review.md"] = "# QA 审查\nReview.\n\n## 白盒改动与最终候选\nOld section.\n"
+	claim.Task.Step = "blackbox-review"
+	if _, err := preparePreparationPrompt(run, claim); err == nil {
+		t.Fatal("missing role section accepted")
 	}
-	for _, step := range []string{"development-worker", "blackbox-execution", "repair-worker"} {
-		got, err := nativeOperationInstructions(run, step)
-		if err != nil || got != oldTool {
-			t.Fatalf("captured tool instructions changed: %q %v", got, err)
-		}
+	run.Regular.ActionInstructions["actions/development-worker.md"] = "# 工具说明\nModel and QA.\n"
+	if _, err := nativeOperationInstructions(run, "blackbox-execution"); err == nil {
+		t.Fatal("missing QA tool section accepted")
 	}
 }

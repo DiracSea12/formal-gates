@@ -29,6 +29,11 @@ type nativeTurn struct {
 	Operation                                            func(string, string, json.RawMessage) (any, error)
 }
 
+// Workflow helpers are independent of native read/search/diff capabilities.
+func (q nativeTurn) allowsOperation() bool {
+	return !q.NoTools && nativeAllowsOperation(string(q.Claim.Task.Step))
+}
+
 type nativeProbe struct {
 	Context                                               *protocol.HostRuntimeContext
 	Root, RunID, Job, Workspace, ActionID, Step, Identity string

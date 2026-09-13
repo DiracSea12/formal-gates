@@ -112,7 +112,11 @@ func TestWorkBuddyReviewNativePermissionsFreshAndResume(t *testing.T) {
 			if flags["--tools"] != "StructuredOutput,Bash,Read,Glob,Grep" {
 				t.Fatalf("%s: unexpected workspace tools: %q", step, cmd.Args)
 			}
-			if flags["--allowedTools"] != "StructuredOutput,Read,Glob,Grep,mcp__formal-gates__formal_gates_operation" {
+			allowed := "StructuredOutput,Read,Glob,Grep"
+			if nativeAllowsOperation(step) {
+				allowed += ",mcp__formal-gates__formal_gates_operation"
+			}
+			if flags["--allowedTools"] != allowed {
 				t.Fatalf("%s: Bash must use native command checks; reads and result delivery must remain allowed: %q", step, cmd.Args)
 			}
 			if flags["--strict-mcp-config"] != "--mcp-config" || flags["--setting-sources"] != "" {

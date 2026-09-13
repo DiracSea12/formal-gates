@@ -83,7 +83,11 @@ func workBuddyRoleTools(cmd *exec.Cmd, step string) {
 				break
 			}
 		}
-		cmd.Args = append(cmd.Args, "--allowedTools", "StructuredOutput,Read,Glob,Grep,mcp__formal-gates__formal_gates_operation")
+		allowed := "StructuredOutput,Read,Glob,Grep"
+		if nativeAllowsOperation(step) {
+			allowed += ",mcp__formal-gates__formal_gates_operation"
+		}
+		cmd.Args = append(cmd.Args, "--allowedTools", allowed)
 	case nativeOperationOnly:
 		tools += ",Read,Glob,Grep"
 	}

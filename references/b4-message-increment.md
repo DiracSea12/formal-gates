@@ -158,3 +158,121 @@ not claim they occurred. No unresolved implementation decisions remain.
 | 续做输入 | 同身份 B4 恢复曾再次发送 6,569 字完整角色消息；现有阶段计量主要覆盖首次装配。 | 仍需区分必要的恢复约束、可按需读取的内容及重复材料，不能把首次派发计量当作续做验证。 |
 
 复核原始记录：`/private/tmp/stage4a-reference-bind-ss_0ezih/evidence/all-prompts-source-audit.json`。上述判断不改变既有开发、QA 原结果或费用记录。
+
+
+### B4 本次增量（绑定基线 5ecf7b5）
+
+上表保留为修改前复核记录。本次移除基于旧标题的章节回退；缺失必需章节明确报错，
+不混装当前包规则。QA 审查、执行及 carry 的规则已直接表达，不再引用外部项目中不存在的
+包内相对文件。需求澄清指南合并重复确认步骤，移除过时 RQ-011 登记集说明，保留正式
+全文、revision、预检和用户确认约束。未新增提示词文件。
+
+产品审和技术审不提供 workflow 工具，工具说明为空；原生读取、搜索与只读 shell/diff
+能力保留，不能借用白盒前置覆盖的 NoTools 模式限制这些能力。操作桥也拒绝这两种角色的请求。其余角色工具范围保持不变。
+同身份恢复及跨 action 续做使用现有 development-worker.md 的“续做约定”，携带当前
+绑定、完整当前任务与材料路径，并引用前次实际消息；新身份/替换仍收完整规则。
+前次消息只用于规则追溯，当前候选与执行范围以本轮输入为准。没有新增材料索引或账本。
+
+#### 同一小型夹具的实际装配计量
+
+修改前在 `git archive 5ecf7b5` 的临时副本运行生产装配，修改后在本工作区运行；
+均使用 TestStageInputAssemblyMeasurement。基线只在测试中增加一次 resume renderer 调用，
+没有修改基线生产实现。单位为 Unicode 字符，schema/tool 为序列化 JSON；工具为空计 0。
+随机临时目录长度会带来少数字符抖动。它不是 tokenizer 计量、真实模型调用或宿主效果证据。
+
+| 阶段 | 消息 前→后 | schema 前→后 | 工具 前→后 |
+| --- | ---: | ---: | ---: |
+| product-review | 3150 → 3148 | 1476 → 1476 | 983 → 0 |
+| start-readiness | 4332 → 4332 | 2852 → 2852 | 983 → 0 |
+| development-worker | 3494 → 3494 | 1536 → 1536 | 983 → 983 |
+| development-resume | 3535 → 2228 | 1536 → 1536 | 983 → 983 |
+| blackbox-design | 6791 → 6792 | 5548 → 5548 | 983 → 983 |
+| whitebox-design | 7846 → 7846 | 6375 → 6375 | 983 → 983 |
+| whitebox-coverage | 1676 → 1676 | 355 → 355 | 0 → 0 |
+| blackbox-review | 6467 → 6423 | 3281 → 3281 | 983 → 983 |
+| whitebox-review | 7809 → 7767 | 3281 → 3281 | 983 → 983 |
+| blackbox-execution | 5900 → 5829 | 2568 → 2568 | 2554 → 2554 |
+| whitebox-execution | 5878 → 5807 | 2568 → 2568 | 2554 → 2554 |
+| complexity-gate | 8367 → 8367 | 2568 → 2568 | 983 → 983 |
+| implementation-quality-gate | 8176 → 8175 | 2568 → 2568 | 983 → 983 |
+| repair-worker | 3836 → 3836 | 2263 → 2263 | 2554 → 2554 |
+
+`requirements-clarification.md` 包内指南正文：1624 → 1246 字符；没有独立原生 worker，故不虚构 schema 或工具计量。
+
+`carry.md` 包内指南正文：753 → 725 字符；没有独立原生 worker，故不虚构 schema 或工具计量。
+
+白盒前置覆盖、两类设计/复审、执行、开发、返修和两类门均经过实际装配；仍检查
+schema 无 uniqueItems、无无关角色段落、绑定材料可读。首次装配未受影响的阶段保持原义。
+跨 action 的真实本地 transport 夹具验证 CONTINUE 后沿原身份续做，前次 prompt.txt
+实际存在且可读，续做消息不重复开发角色段落，结果可接纳；夹具结果不代表独立审查 PASS。
+
+#### 本地验证与边界
+
+本次验证日志位于 `/tmp/b4-*-653.log`，属于临时原始输出。最终检查状态在本节更新。
+进度、等待时长、候选变化、静态检查、计量归属和 unavailable 沿既有实现，未增加新机制。
+公共操作、脚本参数、安装根目录与版本索引仍位于 references/engine-regular.md。
+正式审查、独立 QA、真实宿主完成情况和 Seal 由后续 engine action 认定。
+
+首轮文档契约检查指出精简指南缺少两处规定措辞；已恢复预检后 REQUEST 与确认前禁止
+DECIDE 的原措辞。其余首轮或最终检查结果照实记录，不以首次装配测量代替续做验证。
+
+第二轮修正同步更新了旧章节装配夹具，并保留“等待用户明确确认”的规定措辞。
+`go test -tags phase0whitebox ./internal/validate -timeout 5m` 通过；
+定向 `TestMarkdownRoleAssemblyKeepsInputBoundaries|TestProgress|TestOperationDuration|TestStaticChecker|TestQAReadiness|TestNativeProgress|TestNativePlatformDevelopmentResumeAndWhiteboxPreflight`
+通过（35.447s）。`go test -race ./internal/cli` 所在首轮组合检查中的 CLI 包通过（199.042s）；
+修正文档后单独 `go test -race ./internal/validate` 通过（38.481s）。
+最终构建、`go vet ./...`、package validate、portable canary 均退出 0。
+以上 Go 检查使用 `env -u CODEX_HOME -u CODEX_CLI_PATH GOCACHE=/tmp/formal-gates-b4-cache`。
+
+首轮全量 facade 达到五分钟超时，栈停在
+`TestExternalShellQAPreparationIgnoresUnrelatedGo/declared-command-fails` 的子进程等待；
+该测试会设置无效 GOTOOLCHAIN 并调用 go env。原因尚未证实，不将其报告为产品缺陷。
+最终全量另以 `GOPROXY=off GOSUMDB=off` 禁止下载来源核验；没有修改该用例或被测逻辑。
+
+#### 本次交回：FAIL，Batch 尚未完成
+
+两轮配套自测修正后，全量检查仍未全部通过，本轮停止继续修复并交回 engine：
+
+- 当前源码重现 `TestNativeMandatoryInputsBeforeClaim/tools-only` 失败：夹具以 product-review
+  删除工具说明后仍期待 preflight 报错；产品审已不声明该工具，因此返回 nil。
+  尚须将必需工具说明检查放到实际需要该工具的角色，并核验产品/技术审没有工具说明也可派发。
+- 较早十分钟全量检查的 facade 超时发生在
+  `TestRepairTaskOperationUsesWorkingEditsAndRecovery`（当时该测试运行 13s），不是持续停在
+  五分钟那次的同一个用例；不足以断定下载导致超时。
+- 该次 validate 的 `TestResolveEngineAdmissionChoosesProjectBinding` 报
+  `UNREGISTERED_INSTALL: registered target digest is stale`；尚须在稳定交付文件和有效安装目标
+  绑定下完成全量验证，不能用单项 canary 成功抵消该失败。
+- 本轮已启动的最终源码全量输出保留在 `/tmp/b4-all-stable-653.log`（20m 上限）与
+  `/tmp/b4-offline-final-653.log`（10m，上述离线环境）。交回时尚未收齐，不能认定 PASS。
+
+上述未完成项属于当前 B4；无新增范围、公开 API 或架构决定。后续继续沿 engine 派发的
+原开发身份处理，不能把本文早先历史轮次的“开发检查完成”当成本次增量完成。
+
+
+### B4 原身份续跑（attempt-2）
+
+上轮两项全量输出已收齐：20m 上限检查的 facade 实际运行 685.711s，仅
+`TestNativeMandatoryInputsBeforeClaim/tools-only` 失败，其余包（含 validate）均通过。
+10m 离线检查发生总时限超时，另有 `TestContinuousUserAskInterruptsTransientWait`
+临时目录清理的 directory not empty；这不证明离线与下载是前次超时的原因。
+
+本轮把缺失工具说明的 preflight 夹具改为实际需要该工具的 development-worker；
+产品审、技术审无工具说明可装配的检查纳入共用角色测试。同时纠正上轮 NoTools 使用：
+只取消 workflow 辅助工具，保留各宿主现有只读读取、搜索和 Git diff 能力。
+共用 nativeTurn 判定承载工具许可；Codex、WorkBuddy、ZCode、DSH 只在各自原生声明
+位置消费该判定/角色政策，不增加新能力或放开写入。对应配套测试分别检查读取/shell
+仍存在、辅助工具不声明以及前置覆盖仍不提供 workflow 工具。
+
+剩余验证使用稳定源码、单次全量及既有安装检查，不并发启动多个全量副本，也不在
+检查过程中修改包内交付文件。最终观察通过本 action 的结构化 validation 交回；
+不为写验证结论而在包摘要检查期间再次改动文件。
+
+
+本轮第一组稳定源码全量已返回：facade 运行 523.543s，仅
+`TestZCodeBoundToolsConfigurationAndUsage` 的 product-review/start-readiness 初始与续用四个
+子项因仍要求已取消的辅助工具而失败；其余包与测试通过，安装 digest 错误未再出现。
+本轮第二次配套修正将该断言改为保留 Read/Glob/Grep/Bash，明确禁止两个 workflow 工具名称。
+生产实现未因此改变；该测试修正及最终验证结果由当前 action 的 validation 记录。
+本轮第一次 portable canary 的 Codex bootstrap identity 失败也保留在
+`/tmp/b4-canary-657.json`；固定文件并重建后的 `/tmp/b4-canary-final-657.json` 退出 0，
+未将失败原因推定为已证实的产品问题。

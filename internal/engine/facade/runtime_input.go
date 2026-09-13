@@ -2,21 +2,29 @@ package facade
 
 import (
 	"formal-gates/internal/engine/protocol"
+	"path/filepath"
 	"reflect"
 )
 
 type nativePromptMaterial struct {
-	instructions string
-	input        map[string]any
-	workspace    string
-	files        map[string][]byte
+	initialMessage     string
+	resumeInstructions string
+	instructions       string
+	input              map[string]any
+	workspace          string
+	files              map[string][]byte
 }
 
 // The role payload and mandatory instructions are prepared once, before CLAIM.
 // Bind the final operation after native recovery (which can authorize replace).
 func (m nativePromptMaterial) render(claim protocol.ExecutionClaim) (string, error) {
 	m.input["binding"] = claim
-	return assemblePrompt(m.instructions, m.input)
+	instructions := m.instructions
+	if claim.Operation == "resume" && claim.Identity != "" && m.initialMessage != "" {
+		instructions = m.resumeInstructions
+		m.input["previousMessage"] = m.initialMessage
+	}
+	return assemblePrompt(instructions, m.input)
 }
 
 type nativeActionInput struct {
@@ -75,6 +83,18 @@ func (f *Facade) prepareNativeActionInput(run Run, claim protocol.ExecutionClaim
 		return p, err
 	}
 	p.material.bindPublicSources(job, p.sources)
+	if execution.Claimed {
+		p.material.initialMessage = filepath.Join(job, "prompt.txt")
+	} else if execution.PreviousAction != "" {
+		p.material.initialMessage = filepath.Join(f.codexJob(execution.PreviousAction), "prompt.txt")
+	}
+
+	if p.material.initialMessage != "" {
+		p.material.resumeInstructions, err = actionInstructions(run, "actions/development-worker.md#续做约定")
+		if err != nil {
+			return p, err
+		}
+	}
 
 	return p, nil
 }
