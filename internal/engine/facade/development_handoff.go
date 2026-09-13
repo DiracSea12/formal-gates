@@ -2,6 +2,7 @@ package facade
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 
 	"formal-gates/internal/engine/gitprep"
@@ -117,6 +118,18 @@ func (f *Facade) PrepareExternalDeveloper(actionID string) (ExternalDevelopment,
 	if err != nil {
 		return ExternalDevelopment{}, err
 	}
+	material := nativePromptMaterial{input: payload, workspace: workspace}
+	job := f.codexJob(actionID)
+	if err = material.bindFiles(job, run.Regular.Requirement); err != nil {
+		return ExternalDevelopment{}, err
+	}
+	if err = os.MkdirAll(job, 0700); err != nil {
+		return ExternalDevelopment{}, err
+	}
+	if err = material.writeFiles(job); err != nil {
+		return ExternalDevelopment{}, err
+	}
+	payload = material.input
 	schema := preparationSchema("development-worker", run, claim)
 	properties := schema["properties"].(map[string]any)
 	properties["identity"] = map[string]any{"type": "string", "enum": []string{x.Identity}}

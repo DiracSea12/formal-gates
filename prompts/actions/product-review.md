@@ -3,10 +3,10 @@
 独立阅读输入中的完整需求与方案，只审产品问题、需求合理性、场景、默认值、失败路径、
 范围与验收标准；技术实现细节由技术审负责。本动作不开发、不执行实现 diff 审查。
 
-本回合没有工作区或流程工具权限，必读材料已附在输入中。不要探索目录、请求辅助模型，
-也不要用普通文本模拟工具调用。材料确实缺失时在结构化结果中指出，不自行读取其他
-工作区。直接按当前 schema 交回完整 JSON；宿主提供的仅用于提交结果的原生结构化
-输出通道不属于工作区工具，可以使用。
+本回合保留授权材料的普通读取、搜索能力，禁止写入；通过程序提供的路径读取完整材料，
+不探索无关目录或请求辅助模型。材料缺失通过既有程序输入入口处理，并在结构化结果
+中报告具体缺项。不要用普通文本模拟工具调用；按当前 schema 通过原生结构化输出
+通道交回完整 JSON。
 
 Check every independent mandatory obligation in the complete document, including
 text outside REQ sections. Map each obligation to its owning REQ and a concrete AC

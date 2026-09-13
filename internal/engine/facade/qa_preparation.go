@@ -91,17 +91,6 @@ func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOpe
 		sum := sha256.Sum256(data)
 		tools[program] = hex.EncodeToString(sum[:])
 	}
-	// Go may select a toolchain using go.mod or GOENV. Capture its effective
-	// configuration for the existing Go fixture, including cache/compiler flags.
-	if path, err := exec.LookPath("go"); err == nil {
-		cmd := exec.CommandContext(ctx, path, "env", "-json", "GOOS", "GOARCH", "GOVERSION", "GOTOOLCHAIN", "GOROOT", "GOFLAGS", "CGO_ENABLED", "CC", "CXX", "CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS", "GOAMD64", "GOARM", "GOEXPERIMENT", "GOWORK", "GOMOD", "GOPROXY", "GOSUMDB")
-		cmd.Dir = source
-		data, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("PREREQUISITE_FAILED: Go preparation environment: %w", err)
-		}
-		tools["go.environment"] = string(data)
-	}
 	keyInput := struct {
 		View        string
 		Steps       any

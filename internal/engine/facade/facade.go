@@ -520,6 +520,30 @@ func (f *Facade) Drive() (Run, error) {
 		if err := f.verifyRegularDocument(nil); err != nil {
 			return Run{}, err
 		}
+		// A cancelled claimed execution still owns its slot and cost until its
+		// native source is settled. Consume the engine's terminate intent before
+		// deciding or resuming work under the current requirement binding.
+		var cancellations []string
+		for id, intent := range snap.State.PendingHostActions {
+			if intent.Operation == protocol.HostActionTerminateAgent {
+				cancellations = append(cancellations, id)
+			}
+		}
+		sort.Strings(cancellations)
+		for _, id := range cancellations {
+			intent := snap.State.PendingHostActions[id]
+			if intent.Operation != protocol.HostActionTerminateAgent || intent.Terminate == nil {
+				continue
+			}
+			target := intent.Terminate
+			x, ok := snap.State.RegularExecutions[target.WorkerActionID]
+			if !ok || x.Claim.AttemptID != target.AttemptID || (target.Identity != "" && x.Identity != target.Identity) {
+				return Run{}, fmt.Errorf("INTENT_MISMATCH: terminate execution binding")
+			}
+			if err := f.finishNativeCancellation(target.WorkerActionID, target.Reason); err != nil {
+				return Run{}, err
+			}
+		}
 		if _, _, err := f.engine.Drive(emptyFingerprint()); err != nil {
 			return Run{}, err
 		}

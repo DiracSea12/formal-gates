@@ -239,15 +239,19 @@ func decideDevelopmentIncrement(s *State, a *RegularAsk, d RegularDecision, even
 	}
 	for mode, qa := range next.QA {
 		previousSnapshot := qa.Snapshot
+		previousReviewed := qa.Frozen && qa.Review != nil && qa.Whitelist != nil && qa.ReviewWaiver == nil && !qa.NeedsRevision
 		if q.Impact[mode+"-review"] != "unaffected" {
 			reviseQA(qa)
 		}
 		if mode == "whitebox" {
 			// Carry only the test-only artifact manifest into a workspace based on the
 			// new development snapshot. Never reuse the old production tree as Q.
-			if previousSnapshot != "" {
+			if previousSnapshot != "" && previousReviewed {
 				qa.TestArtifactsFrom = previousSnapshot
 				qa.TestArtifactsBase = old.DevelopmentSnapshot
+			} else {
+				qa.TestArtifactsFrom = ""
+				qa.TestArtifactsBase = ""
 			}
 			qa.AuthoringBase = ""
 			qa.Snapshot = ""

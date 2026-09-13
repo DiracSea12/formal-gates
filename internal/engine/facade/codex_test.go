@@ -451,6 +451,18 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 	claim := facadeExecution(t, f, "blackbox-execution").Claim
 	p := run.Regular.Preparation
 	p.QA["whitebox"] = p.QA["blackbox"]
+	for i := range run.Regular.Verification.Waves {
+		wave := &run.Regular.Verification.Waves[i]
+		if wave.ID == run.Regular.Verification.Current {
+			for _, target := range wave.Targets {
+				if target.Target == "blackbox" {
+					target.Target = "whitebox"
+					wave.Targets = append(wave.Targets, target)
+					break
+				}
+			}
+		}
+	}
 	p.Resources["whitebox"] = p.Resources["candidate"]
 	repair := protocol.RepairPlan{ID: "repair-fixture", WaveID: run.Regular.Verification.Current}
 	run.Regular.Verification.Repairs = []protocol.RepairPlan{repair}
@@ -506,7 +518,7 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 			if err := json.Unmarshal([]byte(strings.TrimPrefix(prompt, want)), &input); err != nil {
 				t.Fatal(err)
 			}
-			if _, has := input["sourceResults"]; has != (tc.step == "repair-worker") {
+			if _, has := input["sourceResults"]; has {
 				t.Fatal("repair evidence crossed an independent input boundary")
 			}
 			if strings.HasSuffix(tc.step, "-gate") {
@@ -520,7 +532,7 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 				if shared == "" || shared != run.Regular.ReviewerInstructions || gate == "" || gate != run.Regular.CatalogGateInstructions[tc.step] {
 					t.Fatal("gate did not consume its existing base and gate document")
 				}
-				if input["fullImplementationDiff"] == nil || input["reviewerInstructions"] == nil || input["gateInstructions"] == nil || input["design"] != nil || input["frozenQA"] != nil {
+				if input["implementation"] == nil || input["fullImplementationDiff"] != nil || input["reviewerInstructions"] == nil || input["gateInstructions"] == nil || input["design"] != nil || input["frozenQA"] != nil {
 					t.Fatal("gate lost its implementation inputs or received QA material")
 				}
 			}
@@ -544,7 +556,7 @@ func TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate(t *testing.T) {
 		{"actions/development-worker.md#修复工作者", "canonical problems", []string{"完整 Batch", "Call a bounded operation"}},
 		{"actions/development-worker.md#工具说明", "Call a bounded operation", []string{"完整 Batch", "canonical problems"}},
 		{"actions/qa-design.md#QA 设计", "先独立确定", []string{"Do not request tools"}},
-		{"actions/qa-design.md#白盒覆盖判断", "Do not request tools", []string{"caseDrafts", "冻结命令与模式执行"}},
+		{"actions/qa-design.md#白盒覆盖判断", "candidate workspace", []string{"caseDrafts", "冻结命令与模式执行"}},
 	} {
 		t.Run(tc.selector, func(t *testing.T) {
 			got, err := actionInstructions(run, tc.selector)

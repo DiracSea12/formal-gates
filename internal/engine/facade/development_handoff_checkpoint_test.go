@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -48,9 +49,20 @@ func TestExternalHandoffPreservesLastDevelopmentCheckpoint(t *testing.T) {
 	if second.Binding.Task != c.Task || second.Binding.Provider == c.Provider || second.Binding.Identity == c.Identity || second.Workspace != first.Workspace {
 		t.Fatal("handoff changed workspace/TaskKey or reused the old executor's identity")
 	}
-	previous, ok := second.Input["previousDevelopmentResult"].(*protocol.PreparationResult)
-	if !ok || previous == nil || !reflect.DeepEqual(*previous, checkpoint) {
-		t.Fatalf("handoff lost the last actual development checkpoint behind an unclaimed action: %#v", second.Input["previousDevelopmentResult"])
+	reference, ok := second.Input["previousDevelopmentResult"].(map[string]string)
+	if !ok {
+		t.Fatalf("handoff must reference the last checkpoint: %#v", second.Input["previousDevelopmentResult"])
+	}
+	captured, err := os.ReadFile(reference["path"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous protocol.PreparationResult
+	if err := json.Unmarshal(captured, &previous); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(previous, checkpoint) {
+		t.Fatal("handoff changed the last actual development checkpoint")
 	}
 	after, err := f.Show()
 	if err != nil {
@@ -68,8 +80,12 @@ func TestExternalHandoffPreservesLastDevelopmentCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayed, err := reopened.PrepareExternalDeveloper(second.Binding.ActionID)
-	if err != nil || !reflect.DeepEqual(replayed.Input["previousDevelopmentResult"], previous) {
+	if err != nil || !reflect.DeepEqual(replayed.Input["previousDevelopmentResult"], reference) {
 		t.Fatal("restart did not recover the same previous checkpoint", err)
+	}
+	replayedData, err := os.ReadFile(reference["path"])
+	if err != nil || string(replayedData) != string(captured) {
+		t.Fatal("restart changed captured checkpoint bytes", err)
 	}
 	t.Log("public external CONTINUE -> unclaimed continuation -> cross-executor handoff preserves original checkpoint, TaskKey, workspace, result and source; no native model calls")
 }

@@ -73,7 +73,19 @@ func workBuddyRoleTools(cmd *exec.Cmd, step string) {
 	case nativeWorkspaceWrite:
 		tools += ",Bash,Edit,Read"
 	case nativeReadOnly:
-		tools += ",Read"
+		tools += ",Bash,Read,Glob,Grep"
+		// WorkBuddy's native dontAsk policy runs built-in safe commands (including
+		// git diff) and denies actions requiring approval. Never grant Bash through
+		// allowedTools: that would bypass its command-level permission checks.
+		for i := 1; i+1 < len(cmd.Args); i++ {
+			if cmd.Args[i] == "--permission-mode" {
+				cmd.Args[i+1] = "dontAsk"
+				break
+			}
+		}
+		cmd.Args = append(cmd.Args, "--allowedTools", "StructuredOutput,Read,Glob,Grep,mcp__formal-gates__formal_gates_operation")
+	case nativeOperationOnly:
+		tools += ",Read,Glob,Grep"
 	}
 	for i := 1; i+1 < len(cmd.Args); i++ {
 		if cmd.Args[i] == "--tools" {

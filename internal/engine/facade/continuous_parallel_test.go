@@ -11,7 +11,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
-func TestContinuousIndependentActionsRunTogether(t *testing.T) {
+func continuousPreparationFixture(t *testing.T) (*Facade, *fixtureRuntime) {
 	f, a := continuousFixture(t)
 	a.answer = func(q nativeTurn) any {
 		c := q.Claim
@@ -46,6 +46,11 @@ func TestContinuousIndependentActionsRunTogether(t *testing.T) {
 			t.Logf("issued %s claimed=%v guard=%s next=%s", x.Claim.Task.Step, x.Claimed, run.Regular.Guard.Status, run.Next.Kind)
 		}
 	}
+	return f, a
+}
+
+func TestContinuousIndependentActionsRunTogether(t *testing.T) {
+	f, a := continuousPreparationFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	started := make(chan string, 2)
@@ -85,8 +90,75 @@ func TestContinuousIndependentActionsRunTogether(t *testing.T) {
 	}
 	close(release)
 	result := <-finished
-	err = <-failure
+	err := <-failure
 	if err != nil || !seen["development-worker"] || !seen["blackbox-design"] || turns.Load() != 2 || len(result.Blocked) != 2 {
 		t.Fatalf("seen=%v turns=%d blocked=%v err=%v", seen, turns.Load(), result.Blocked, err)
+	}
+}
+
+func TestContinuousQARecoveryDoesNotInterruptActiveDeveloper(t *testing.T) {
+	f, a := continuousPreparationFixture(t)
+	developerEntered, release := make(chan struct{}), make(chan struct{})
+	var blackboxTurns atomic.Int32
+	a.answer = func(q nativeTurn) any {
+		if q.Claim.Task.Step == "development-worker" {
+			close(developerEntered)
+			<-release
+		} else {
+			blackboxTurns.Add(1)
+		}
+		c := q.Claim
+		return protocol.PreparationResult{ActionID: c.ActionID, AttemptID: c.AttemptID, Provider: c.Provider, RequirementRevision: c.RequirementRevision, Candidate: c.Candidate, Status: "RUNTIME_ERROR", Message: "deterministic fixture runtime failure"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	type outcome struct {
+		result ContinuousResult
+		err    error
+	}
+	returned := make(chan outcome, 1)
+	go func() { r, err := f.DriveContinuous(ctx); returned <- outcome{r, err} }()
+	select {
+	case <-developerEntered:
+	case <-ctx.Done():
+		close(release)
+		t.Fatal("developer not started")
+	}
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case got := <-returned:
+			t.Fatalf("consumer exited with independent developer active: %s %v", got.result.Boundary, got.err)
+		case <-deadline.C:
+			t.Fatal("QA recovery did not become visible")
+		case <-time.After(50 * time.Millisecond):
+			r, err := f.Show()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Next.Kind == "ASK" && (r.Regular.Ask == nil || r.Regular.Ask.Kind == "qa-recovery") {
+				if blackboxTurns.Load() == 0 {
+					t.Fatal("no blackbox turn executed")
+				}
+				close(release)
+				select {
+				case got := <-returned:
+					if got.err != nil {
+						t.Fatal(got.err)
+					}
+				case <-ctx.Done():
+					t.Fatal("consumer did not settle after developer released")
+				}
+				return
+			}
+		}
 	}
 }

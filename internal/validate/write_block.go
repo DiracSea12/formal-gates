@@ -167,44 +167,133 @@ var vcsWriteMarkers = []string{
 	"p4 reconcile",
 }
 
-// isVCSWriteCommand reports whether a command carries a VCS state-write marker
-// (git / svn / p4 的提交类或变更工作区状态的命令)。
-func isVCSWriteCommand(command string) bool {
-	lower := strings.ToLower(command)
+// executedCommands selects command positions, never searching ordinary arguments
+// for executable names. Shell -c operands are executable text, so segment those
+// with the same tokenizer; other quoted arguments stay data.
+func executedCommands(command string) [][]string {
+	var commands [][]string
+	for _, tokens := range splitCommandParts(command, true) {
+		for len(tokens) > 0 {
+			name := strings.ToLower(filepath.Base(tokens[0]))
+			if strings.Contains(tokens[0], "=") && !strings.HasPrefix(tokens[0], "-") {
+				tokens = tokens[1:]
+				continue
+			}
+			switch name {
+			case "sudo", "env", "command":
+				// command -v/-V describes a command rather than executing it.
+				if name == "command" && len(tokens) > 1 && (tokens[1] == "-v" || tokens[1] == "-V") {
+					break
+				}
+				tokens = tokens[1:]
+				for len(tokens) > 0 && strings.HasPrefix(tokens[0], "-") {
+					option := tokens[0]
+					tokens = tokens[1:]
+					if (name == "sudo" && (option == "-u" || option == "-g")) || (name == "env" && option == "-u") {
+						if len(tokens) > 0 {
+							tokens = tokens[1:]
+						}
+					}
+					if option == "--" {
+						break
+					}
+				}
+				continue
+			case "sh", "bash", "zsh", "dash", "ksh":
+				for i := 1; i < len(tokens) && strings.HasPrefix(tokens[i], "-"); i++ {
+					if !strings.HasPrefix(tokens[i], "--") && strings.Contains(tokens[i][1:], "c") && i+1 < len(tokens) {
+						commands = append(commands, executedCommands(tokens[i+1])...)
+						break
+					}
+				}
+			}
+			commands = append(commands, tokens)
+			break
+		}
+	}
+	return commands
+}
+
+// vcsCommandWrites matches the executable, subcommand and any required option
+// tokens. Global options precede the subcommand; arguments after it are data.
+func vcsCommandWrites(tokens []string) bool {
+	name := strings.ToLower(filepath.Base(tokens[0]))
+	if name != "git" && name != "svn" && name != "p4" {
+		return false
+	}
+	args := tokens[1:]
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		option := args[0]
+		args = args[1:]
+		takesValue := false
+		switch name {
+		case "git":
+			takesValue = option == "-C" || option == "-c" || option == "--git-dir" || option == "--work-tree" || option == "--namespace"
+		case "svn":
+			takesValue = option == "--username" || option == "--password" || option == "--config-dir" || option == "--config-option"
+		case "p4":
+			takesValue = option == "-c" || option == "-d" || option == "-H" || option == "-p" || option == "-u" || option == "-P" || option == "-C" || option == "-Q"
+		}
+		if takesValue && len(args) > 0 {
+			args = args[1:]
+		}
+		if option == "--" {
+			break
+		}
+	}
 	for _, marker := range vcsWriteMarkers {
-		if strings.Contains(lower, marker) {
+		pattern := strings.Fields(marker)
+		if name != pattern[0] || len(args) < len(pattern)-1 {
+			continue
+		}
+		match := true
+		for i, want := range pattern[1:] {
+			if !strings.EqualFold(args[i], want) {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}
 	return false
 }
 
-// commandWritesFiles reports whether a Bash/shell command writes to the VCS or to
-// files (git commit 与写文件 Bash），从而纳入阻断判定。只读命令不命中：输出
-// 重定向到 /dev/null（丢弃输出）与 2>&1（stderr 合并）等只读惯用法不视为写文件，由
-// redirectWriteTargets 正确解析重定向目标、不靠朴素子串匹配（"2>&1 命中 2>"、
-// "> /dev/null 命中 > " 的误判在此被修正）。
-func commandWritesFiles(command string) bool {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return false
-	}
-	lower := strings.ToLower(command)
-	// VCS 状态写入（git / svn / p4）：提交 / 推送 / 合并 / 重置 / 丢弃 / 暂存等。
-	if isVCSWriteCommand(command) {
-		return true
-	}
-	// 按真实写目标判定（改动 3）：不再以命令文本是否含 .gates 子串判写入——只读命令
-	// （grep/ls/cat/find/python3 读、只读 git 查询等）即使提到 .gates 也放行；真写 .gates
-	// 由下面的文件变更工具与输出重定向按目标路径判定命中。
-	// 文件写入工具与文件系统变更命令（非重定向的写文件写法）。
-	for _, marker := range []string{"tee ", "sed -i", "install ", "touch ", "mkdir ", "rm ", "mv ", "cp "} {
-		if strings.Contains(lower, marker) {
+func isVCSWriteCommand(command string) bool {
+	for _, tokens := range executedCommands(command) {
+		if vcsCommandWrites(tokens) {
 			return true
 		}
 	}
-	// 输出重定向到真实文件（写文件）：> file、>> file、2> file、&> file 等。只读惯用法
-	// （> /dev/null、2>&1 等）由 redirectWriteTargets 排除、不命中。
+	return false
+}
+
+func fileCommandWrites(tokens []string) bool {
+	switch strings.ToLower(filepath.Base(tokens[0])) {
+	case "tee", "install", "touch", "mkdir", "rm", "mv", "cp":
+		return true
+	case "sed":
+		for _, arg := range tokens[1:] {
+			if arg == "--" || !strings.HasPrefix(arg, "-") {
+				break
+			}
+			if strings.HasPrefix(arg, "-i") || arg == "--in-place" || strings.HasPrefix(arg, "--in-place=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// commandWritesFiles checks executed commands and keeps the existing redirect
+// target protection. Output discarded or merged between descriptors is read-only.
+func commandWritesFiles(command string) bool {
+	for _, tokens := range executedCommands(command) {
+		if vcsCommandWrites(tokens) || fileCommandWrites(tokens) {
+			return true
+		}
+	}
 	return len(redirectWriteTargets(command)) != 0
 }
 
@@ -602,24 +691,21 @@ func redirectOperatorStart(token string) int {
 // pipelines/conditionals and other compound forms return complete=false and keep
 // the existing conservative block behavior.
 func explicitBashWriteTargets(command string) ([]string, bool) {
-	lower := strings.ToLower(command)
-	// VCS 状态写入（git / svn / p4）与 sed -i 目标无法可靠解析，保留保守行为。
-	if isVCSWriteCommand(command) || strings.Contains(lower, "sed -i") {
+	commands := executedCommands(command)
+	// Keep compound or opaque writes in the role decision path.
+	if len(commands) != 1 {
 		return nil, false
 	}
-	if strings.Contains(command, "&&") || strings.Contains(command, "||") || strings.ContainsAny(command, ";|") {
+	tokens := commands[0]
+	name := strings.ToLower(filepath.Base(tokens[0]))
+	if vcsCommandWrites(tokens) || name == "sed" {
 		return nil, false
 	}
 	targets := redirectWriteTargets(command)
-	tokens := splitCommand(command)
-	for index, token := range tokens {
-		name := strings.ToLower(filepath.Base(token))
-		if name != "tee" && name != "touch" && name != "mkdir" && name != "rm" && name != "mv" && name != "cp" && name != "install" {
-			continue
-		}
+	if fileCommandWrites(tokens) {
 		var args []string
 		skipNextTarget := false
-		for _, candidate := range tokens[index+1:] {
+		for _, candidate := range tokens[1:] {
 			candidate = strings.TrimSpace(candidate)
 			if skipNextTarget {
 				skipNextTarget = false
@@ -786,16 +872,11 @@ func bashWriteTargetsCodeOrState(command string) bool {
 // --x），按 isCodeOrRunStatePath 判定；命令首 token 不是这些工具时返回 false——npm /
 // pip / go install 等首 token 是包管理器，不是文件变更工具，直接放行。
 func fileChangeTargetsCodeOrRunState(command string) bool {
-	tokens := splitCommand(command)
-	for index, token := range tokens {
-		// 用 filepath.Base 归一，兼容全路径（/usr/bin/cp）与带前缀（sudo/env/command cp）
-		// 的写法，避免只认裸首 token 而漏拦。
-		switch strings.ToLower(filepath.Base(token)) {
-		case "tee", "touch", "mkdir", "rm", "mv", "cp", "install", "sed":
-		default:
+	for _, tokens := range executedCommands(command) {
+		if !fileCommandWrites(tokens) {
 			continue
 		}
-		for _, arg := range tokens[index+1:] {
+		for _, arg := range tokens[1:] {
 			if strings.HasPrefix(arg, "-") {
 				continue
 			}
@@ -803,7 +884,6 @@ func fileChangeTargetsCodeOrRunState(command string) bool {
 				return true
 			}
 		}
-		return false
 	}
 	return false
 }

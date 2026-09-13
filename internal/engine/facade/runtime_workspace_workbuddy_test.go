@@ -61,8 +61,8 @@ func TestWorkBuddyAuthorizedWorkspaceUsesAddDirWithoutChangingTextOnlyRoles(t *t
 	}{
 		{step: "development-worker", wantAddDir: true},
 		{step: "blackbox-design", wantAddDir: true},
-		{step: "product-review", wantAddDir: false},
-		{step: "start-readiness", wantAddDir: false},
+		{step: "product-review", wantAddDir: true},
+		{step: "start-readiness", wantAddDir: true},
 	} {
 		t.Run(tc.step, func(t *testing.T) {
 			cmd, err := workBuddyCommand("/bin/workbuddy", t.TempDir(), "", "", "", schema, filepath.Join(t.TempDir(), "mcp.json"))

@@ -167,6 +167,12 @@ func (s *Store) CleanupTerminal() error {
 		if name == "artifacts" && entry.IsDir() {
 			continue
 		}
+		// The foreground consumer retains its lease through terminal cleanup.
+		// Its token-owning defer removes it after publishing the result; cleanup
+		// must neither reject nor unlink that live coordination lock.
+		if name == "executor.lock" {
+			continue
+		}
 		if name == "request.json" || name == "terminal-summary.json" || name == "terminal-summary.intent.json" || name == filepath.Base(s.cleanupIntentPath()) || name == filepath.Base(s.cleanupReceiptPath()) || name == lockFileName {
 			continue
 		}

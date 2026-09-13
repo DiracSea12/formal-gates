@@ -242,6 +242,14 @@ done
 	if err := writeJSONAtomic(filepath.Join(f.codexJob(first.Claim.ActionID), "process.json"), codexProcess{ActionID: first.Claim.ActionID, PID: os.Getpid(), Stopped: true}); err != nil {
 		t.Fatal(err)
 	}
+	// The current action has captured its inputs before native process startup.
+	if err := os.MkdirAll(f.codexJob(next.Claim.ActionID), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(f.codexJob(next.Claim.ActionID), "sources.json"), []SubagentSource{}); err != nil {
+		t.Fatal(err)
+	}
+
 	run, _ := f.Show()
 	recovery, err := f.observeNativeDeveloperRecovery(run, next, false, codexRuntimeAdapter{})
 	if err != nil || recovery.Outcome() != "UNRECOVERABLE" {

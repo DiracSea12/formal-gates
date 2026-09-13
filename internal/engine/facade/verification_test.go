@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -205,10 +206,19 @@ func TestVerificationRequirementKeepPromotesNewDocument(t *testing.T) {
 	executeVerificationFixture(t, f, "implementation-quality-gate")
 	r, _ := f.Show()
 	old := r.Regular.Preparation.Candidate.Candidate.Identity
+	originalBatches := r.Regular.Preparation.Batches
+	originalCommits := r.Regular.Preparation.Commits
+	impact := map[string]string{"product-review": "affected", "start-readiness": "unknown", "development": "unaffected", "blackbox-review": "affected", "blackbox": "affected", "implementation-quality-gate": "unknown"}
+	// facadeChoice explicitly delegates every impact item. Completed batches
+	// are separate scopes; classify each one instead of leaving it unknown.
+	for id := range originalCommits {
+		impact["batch:"+id] = "unaffected"
+	}
+
 	facadeChoice(t, f, protocol.RegularRequest{Action: "requirement-change", Origin: "USER_INITIATED_CHANGE", Reason: "user adds a clarification and retains existing passes"})
 	doc := protocol.Document(r.Regular.Requirement.Path, []byte(r.Regular.Requirement.Text+"\n用户说明：现有 hello 行为保持。\n"))
 	writePreparationFile(t, f.root, r.Regular.Requirement.Path, doc.Text)
-	facadeChoice(t, f, protocol.RegularRequest{Action: "apply-requirement", Origin: "USER_INITIATED_CHANGE", Meaning: "changed", Document: &doc, Keep: []string{"product-review", "start-readiness", "blackbox-review", "blackbox", "implementation-quality-gate"}, Impact: map[string]string{"product-review": "affected", "start-readiness": "unknown", "development": "unaffected", "blackbox-review": "affected", "blackbox": "affected", "implementation-quality-gate": "unknown"}, Reason: "explicitly retain all existing PASS for this clarification"})
+	facadeChoice(t, f, protocol.RegularRequest{Action: "apply-requirement", Origin: "USER_INITIATED_CHANGE", Meaning: "changed", Document: &doc, Keep: []string{"product-review", "start-readiness", "blackbox-review", "blackbox", "implementation-quality-gate"}, Impact: impact, Reason: "explicitly retain all existing PASS for this clarification"})
 	r, _ = f.Show()
 	for _, target := range []string{"blackbox", "implementation-quality-gate"} {
 		ev, ok := r.Regular.Verification.Effective[target]
@@ -217,6 +227,17 @@ func TestVerificationRequirementKeepPromotesNewDocument(t *testing.T) {
 		}
 	}
 	facadeChoice(t, f, protocol.RegularRequest{Action: "topology", PlanDigest: r.Regular.Plan.Digest, Reason: "same confirmed batches and no split"})
+	r, _ = f.Show()
+	if !reflect.DeepEqual(r.Regular.Preparation.Batches, originalBatches) ||
+		!reflect.DeepEqual(r.Regular.Preparation.Commits, originalCommits) {
+		t.Fatal("explicitly retained completed batches or commit receipts changed")
+	}
+	for _, x := range r.Executions {
+		if x.Claim.Task.Step == "development-worker" && !x.Finished && x.SupersededBy == "" {
+			t.Fatalf("retained development was reissued: %s", x.Claim.ActionID)
+		}
+	}
+
 	var err error
 	for i := 0; i < 5; i++ {
 		r, err = f.Drive()

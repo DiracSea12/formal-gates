@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,9 +124,6 @@ func Paths(paths []string) ([]string, error) {
 // are deliberately represented as delete/add so neither can escape the manifest.
 func Changes(root, base string) ([]string, error) {
 	if _, err := Git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all"); err != nil {
-		return nil, err
-	}
-	if _, err := Git(root, "diff", "--check"); err != nil {
 		return nil, err
 	}
 	unmerged, err := Git(root, "ls-files", "-u")
@@ -323,9 +319,6 @@ func Commit(root, base, id string, paths []string) (Receipt, error) {
 					return Receipt{}, err
 				}
 			}
-			if _, err = Git(root, "diff", "--cached", "--check"); err != nil {
-				return Receipt{}, err
-			}
 			if _, err = Git(root, "commit", "-m", "Prepare regular candidate\n\nFormal-Gates-Operation: "+id); err != nil {
 				return Receipt{}, err
 			}
@@ -380,71 +373,6 @@ func Squash(root, base, id string) (Receipt, error) {
 	}
 	v, err := Snapshot(root, head)
 	return Receipt{OperationID: id, Before: base, After: head, View: v}, err
-}
-
-// TestOwnershipResolver uses Go's test discovery plus its production embed and
-// input lists. Unsupported projects return UNKNOWN. Names containing 'test' alone
-// never establish ownership; fixture ownership follows a discovered test package.
-func TestOwnershipResolver(root string) (map[string]bool, error) {
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		return nil, fmt.Errorf("UNKNOWN: no supported Go project configuration")
-	}
-	cmd := exec.Command("go", "list", "-e", "-json", "./...")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("UNKNOWN: test discovery: %w", err)
-	}
-	type pkg struct {
-		Dir, ImportPath, Name                                                                                                                                           string
-		GoFiles, CgoFiles, CFiles, CXXFiles, HFiles, SFiles, EmbedFiles, TestGoFiles, XTestGoFiles, TestEmbedFiles, XTestEmbedFiles, Imports, TestImports, XTestImports []string
-		Error                                                                                                                                                           *struct{ Err string }
-	}
-	packages := []pkg{}
-	dec := json.NewDecoder(bytes.NewReader(out))
-	for {
-		var p pkg
-		err := dec.Decode(&p)
-		if err == io.EOF {
-			break
-		}
-		if err != nil || p.Error != nil {
-			return nil, fmt.Errorf("UNKNOWN: incomplete Go discovery")
-		}
-		packages = append(packages, p)
-	}
-	owners := map[string]bool{}
-	prod := map[string]bool{}
-	for _, p := range packages {
-		rel, err := filepath.Rel(root, p.Dir)
-		if err != nil {
-			return nil, err
-		}
-		join := func(f string) string { return filepath.ToSlash(filepath.Join(rel, f)) }
-		for _, list := range [][]string{p.GoFiles, p.CgoFiles, p.CFiles, p.CXXFiles, p.HFiles, p.SFiles, p.EmbedFiles} {
-			for _, f := range list {
-				prod[join(f)] = true
-			}
-		}
-		for _, list := range [][]string{p.TestGoFiles, p.XTestGoFiles, p.TestEmbedFiles, p.XTestEmbedFiles} {
-			for _, f := range list {
-				owners[join(f)] = true
-			}
-		}
-		if len(p.TestGoFiles)+len(p.XTestGoFiles) > 0 {
-			_ = filepath.WalkDir(filepath.Join(p.Dir, "testdata"), func(path string, d os.DirEntry, e error) error {
-				if e == nil && !d.IsDir() {
-					r, _ := filepath.Rel(root, path)
-					owners[filepath.ToSlash(r)] = true
-				}
-				return nil
-			})
-		}
-	}
-	for p := range prod {
-		delete(owners, p)
-	}
-	return owners, nil
 }
 
 // TestOnly compares every path/mode/blob in the two canonical trees and retains

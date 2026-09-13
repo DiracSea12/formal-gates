@@ -20,7 +20,7 @@ func TestZCodeRuntimePreferencesPreserveBoundNativeExchange(t *testing.T) {
 {"method":"session/event","params":{"sessionId":"native","seq":2,"turnId":"turn","type":"turn.completed","payload":{"inputId":"input","resultType":"success","response":"{\"status\":\"CONTINUE\"}"}}}
 {"id":"request:close","result":{}}
 `
-			request, err := zcodeSessionRequest("request", "/work", resume, []string{})
+			request, err := zcodeSessionRequest("request", "/work", resume, "yolo", []string{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +64,7 @@ func TestZCodeRuntimePreferencesPreserveBoundNativeExchange(t *testing.T) {
 }
 
 func TestZCodeUnknownInteractionStillRefusesBeforeModelInput(t *testing.T) {
-	request, _ := zcodeSessionRequest("request", "/work", "", []string{})
+	request, _ := zcodeSessionRequest("request", "/work", "", "yolo", []string{})
 	var out bytes.Buffer
 	_, answer, err := runZCodeSession(strings.NewReader(`{"id":"permission","method":"session/requestPermission","params":{}}`), &out, request, "input", "prompt", func(string) error { t.Fatal("unexpected attachment"); return nil })
 	if err == nil || !strings.Contains(err.Error(), "ZCODE_INTERACTION") || answer != nil || strings.Contains(out.String(), "session/send") || strings.Contains(out.String(), `"result"`) {

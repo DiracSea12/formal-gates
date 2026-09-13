@@ -64,13 +64,15 @@ func (f *Facade) DriveContinuous(ctx context.Context) (ContinuousResult, error) 
 		}
 		result.Run = run
 		result.External = nil
-		// A user decision must be visible while a native invocation is waiting,
-		// not only after it finishes. Leaving this consumer does not cancel that
-		// invocation: its action lock and process journal remain authoritative.
-		if run.Next.Kind == decision.KindAsk || (run.Regular != nil && run.Regular.Ask != nil) {
+		// Surface an explicit user request immediately. A branch-local recovery
+		// boundary must not exit the CLI while an independent native invocation
+		// is still owned by this process; closing its pipes interrupts that turn.
+		userAsk := run.Regular != nil && run.Regular.Ask != nil && run.Regular.Ask.Kind != "qa-recovery"
+		if userAsk || (run.Next.Kind == decision.KindAsk && len(active) == 0) {
 			result.Boundary = "ASK"
 			return result, nil
 		}
+
 		paused := run.Status == "COMPLETE" || run.Regular == nil || run.Regular.Ask != nil || run.Regular.ChangePending || run.Next.Kind == decision.KindOperator || run.Next.Kind == decision.KindAsk
 		ids := make([]string, 0, len(run.Executions))
 		for id, x := range run.Executions {

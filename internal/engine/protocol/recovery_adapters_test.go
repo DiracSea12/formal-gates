@@ -7,7 +7,7 @@ import (
 
 func TestNativeRecoveryEvidenceByProvider(t *testing.T) {
 	for _, tc := range []struct{ provider, method, raw string }{
-		{"workbuddy", "session/load", `{"jsonrpc":"2.0","id":3,"result":{}}`},
+		{"workbuddy", "session/store", `{"sessionId":"native","present":true}`},
 		{"deepseek-harness", "session/resume", `{"jsonrpc":"2.0","id":3,"result":{"configOptions":[]}}`},
 		{"zcode", "session/resume", `{"id":"recovery","result":{"session":{"sessionId":"native"}}}`},
 	} {

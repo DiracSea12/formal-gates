@@ -53,6 +53,9 @@ func TestRegularInstalledFullNativeFailRepairToSeal(t *testing.T) {
 		}
 	}()
 	invoke := func(sub string, tail ...string) facade.Run {
+		if sub == "drive" && len(tail) == 0 {
+			tail = append(tail, "--single-step")
+		}
 		args := append([]string{"workflow", sub, "--root", root, "--run-id", id}, tail...)
 		out := runInstalledCLI(t, binary, root, nativeEnv, "", args...)
 		var v facade.Run
@@ -70,7 +73,7 @@ func TestRegularInstalledFullNativeFailRepairToSeal(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := json.Marshal(e)
-		out := runInstalledCLI(t, binary, root, nativeEnv, string(b), "workflow", "submit", "--root", root, "--run-id", id)
+		out := runInstalledCLI(t, binary, root, nativeEnv, string(b), "workflow", "submit", "--single-step", "--root", root, "--run-id", id)
 		var response struct {
 			Run facade.Run `json:"run"`
 		}
@@ -308,6 +311,9 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 			cliGit(t, root, "add", "requirements.md")
 			cliGit(t, root, "commit", "-m", "bounded retry fixture")
 			call := func(sub string, extra ...string) facade.Run {
+				if sub == "drive" && len(extra) == 0 {
+					extra = append(extra, "--single-step")
+				}
 				out := runInstalledCLI(t, binary, root, nil, "", append([]string{"workflow", sub, "--root", root, "--run-id", "retry-fixture"}, extra...)...)
 				var r facade.Run
 				if err := json.Unmarshal([]byte(out), &r); err != nil {
@@ -321,7 +327,7 @@ func TestNativeCanaryReviewConsumesOnlyIssuedFiniteRetry(t *testing.T) {
 				v.ExpectedRevision = r.Revision
 				e, _ := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("retry-fixture-%d", r.Revision)), v)
 				data, _ := json.Marshal(e)
-				out := runInstalledCLI(t, binary, root, nil, string(data), "workflow", "submit", "--root", root, "--run-id", "retry-fixture")
+				out := runInstalledCLI(t, binary, root, nil, string(data), "workflow", "submit", "--single-step", "--root", root, "--run-id", "retry-fixture")
 				var reply struct {
 					Run facade.Run `json:"run"`
 				}

@@ -176,8 +176,20 @@ func bindRequirementBatchLineage(s *State, q RegularRequest) {
 // explicit change retires its obsolete binding without inventing a FAIL. The
 // original task and attempt remain in history; the decision grants replacement
 // capacity instead of resetting an attempt counter.
-func retireUnclaimedOnChange(s *State, decisionID string) {
+func retireUnclaimedOnChange(s *State, decisionID string, steps ...string) {
 	for id, x := range s.RegularExecutions {
+		if len(steps) > 0 {
+			selected := false
+			for _, step := range steps {
+				if string(x.Claim.Task.Step) == step {
+					selected = true
+					break
+				}
+			}
+			if !selected {
+				continue
+			}
+		}
 		if x.Claimed || x.Finished {
 			continue
 		}

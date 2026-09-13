@@ -29,7 +29,7 @@ type zcodeRequest struct {
 
 // Native creation owns the session ID. Supplying sessionId for ordinary create
 // is rejected by ZCode, even though its common schema marks that field optional.
-func zcodeSessionRequest(requestID, workspace, identity string, tools []string) (zcodeRequest, error) {
+func zcodeSessionRequest(requestID, workspace, identity, mode string, tools []string) (zcodeRequest, error) {
 	if requestID == "" || !filepath.IsAbs(workspace) || tools == nil {
 		return zcodeRequest{}, fmt.Errorf("ZCODE_BINDING: request identity, absolute workspace and explicit tool policy required")
 	}
@@ -43,7 +43,7 @@ func zcodeSessionRequest(requestID, workspace, identity string, tools []string) 
 		params["sessionId"] = identity
 	} else {
 		params["persistence"] = "immediate"
-		params["mode"] = "yolo"
+		params["mode"] = mode
 		params["titleGenerationEnabled"] = false
 	}
 	return zcodeRequest{ID: requestID, Method: method, Params: params}, nil

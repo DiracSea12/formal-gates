@@ -609,6 +609,7 @@ func (e *Engine) Submit(ev Event, expectedFingerprint string) (Acceptance, error
 		}
 		return record.Acceptance, nil
 	}
+
 	if state.Regular != nil {
 		// Observe native sources before the pure admission/usage/guard/refill work.
 		// Save re-reads these finite files under the existing transaction lock.

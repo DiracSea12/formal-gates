@@ -833,7 +833,7 @@ func (e *Engine) claimRegular(s *State, c ExecutionClaim) error {
 	if r.ChangePending || r.Ask != nil || r.Terminal != "" || c.RequirementRevision != r.Requirement.Revision || !currentPreparationClaim(r, c) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: execution binding is cancelled or stale")
 	}
-	if c.Task.Step == "start-readiness" && (effectiveReview(r, r.Reviews["product-review"]) != "PASS" || c.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest) {
+	if c.Task.Step == "start-readiness" && (!reviewPrerequisiteSatisfied(r, r.Reviews["product-review"]) || c.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: prerequisite product review changed")
 	}
 	e.refreshRegular(s)
@@ -1133,6 +1133,9 @@ func RegularAvailableActions(s *State) []string {
 		return []string{"submit:DECIDE", "submit:REQUEST:requirement-change", "submit:REQUEST:abort"}
 	}
 	actions := []string{"submit:REQUEST:abort", "submit:REQUEST:requirement-change"}
+	if r.Mode == "regular" && r.Requirement.Confirmed && !r.ChangePending && r.Plan != nil && r.Preparation != nil {
+		actions = append(actions, "submit:REQUEST:skip-review")
+	}
 	if r.ChangePending {
 		return append(actions, "submit:REQUEST:apply-requirement")
 	}
@@ -1193,7 +1196,7 @@ func RegularAvailableActions(s *State) []string {
 			actions = uniqueAppend(actions, "submit:REQUEST:authorize-retry")
 		}
 	}
-	if effectiveReview(r, r.Reviews["product-review"]) == "PASS" && effectiveReview(r, r.Reviews["start-readiness"]) == "PASS" && r.Plan != nil {
+	if reviewPrerequisiteSatisfied(r, r.Reviews["product-review"]) && reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) && r.Plan != nil {
 		actions = append(actions, "submit:REQUEST:topology")
 		if r.Topology == "no-split" {
 			if r.Route == nil {

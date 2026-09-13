@@ -43,6 +43,15 @@ func TestBothQADesignContractsExplainCaseDependencies(t *testing.T) {
 		if err != nil || !bytes.Contains(schema, []byte("Only case IDs declared earlier in this manifest")) {
 			t.Fatalf("%s typed schema omits dependency meaning: %s, %v", mode, schema, err)
 		}
+		if mode == "whitebox" {
+			design := preparationSchema(mode+"-design", r, claim)["properties"].(map[string]any)["design"].(map[string]any)
+			if !strings.Contains(strings.Join(design["required"].([]string), ","), "testFiles") || !bytes.Contains(schema, []byte("unchanged reused developer tests")) {
+				t.Fatal("actual whitebox result schema does not require explicit testFiles")
+			}
+			if !strings.Contains(prompt, "design.testFiles") || !strings.Contains(prompt, "顶层 manifest 只列实际") {
+				t.Fatal("bound whitebox authoring instructions conflate test files and changes")
+			}
+		}
 	}
 }
 
@@ -65,10 +74,13 @@ func facadePreparation(t *testing.T, modes []string) *Facade {
 func facadePreparationBatches(t *testing.T, modes []string, batches int) *Facade {
 	return facadePreparationTask(t, modes, batches, "")
 }
-func facadePreparationTask(t *testing.T, modes []string, batches int, task string) *Facade {
+func facadePreparationTask(t *testing.T, modes []string, batches int, task string, documents ...string) *Facade {
 	t.Helper()
 	document := strings.ReplaceAll(b1Document, "命令输出字符串 hello。", "在 Go module 根目录执行公开命令 go run .，退出码为 0，stdout 恰好为五个 UTF-8 字节 hello，无换行，stderr 为空。")
 	document = strings.ReplaceAll(document, "运行后输出恰好是 hello。", "执行 go run . 后退出码为 0，stdout 恰好为 hello（无换行），stderr 为空。")
+	if len(documents) > 0 {
+		document = documents[0]
+	}
 	f := newRegularFacadeDocument(t, document)
 	facadeChoice(t, f, protocol.RegularRequest{Action: "confirm-requirement"})
 	facadeChoice(t, f, protocol.RegularRequest{Action: "mode", Mode: "regular"})
@@ -148,7 +160,11 @@ func facadeDesign(r Run, mode string) protocol.QADesign {
 	if mode == "whitebox" {
 		m.Cases[0] = coverage.AcceptanceCase{CaseID: prefix + ":C1", Command: &coverage.Command{Executable: "go", Args: []string{"test", "./..."}}, Mode: coverage.CaseWhitebox, TestRef: "main_test.go::TestHello", Oracle: "hello"}
 	}
-	return protocol.QADesign{Manifest: m, CoverageJudgment: "Independently compared the exact hello requirement to the case oracle"}
+	d := protocol.QADesign{Manifest: m, CoverageJudgment: "Independently compared the exact hello requirement to the case oracle"}
+	if mode == "whitebox" {
+		d.TestFiles = []string{"main_test.go"}
+	}
+	return d
 }
 func facadeReview(r Run, mode string) *coverage.ReviewResult {
 	m := r.Regular.Preparation.QA[mode].Design.Manifest

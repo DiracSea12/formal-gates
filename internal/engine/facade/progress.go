@@ -118,23 +118,19 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 		default:
 			p.NotStarted++
 		}
-		jobs := []string{f.codexJob(id)}
-		for n := 1; n <= x.ResumeCount; n++ {
-			jobs = append(jobs, codexResumeJob(f.codexJob(id), n))
-		}
-		for i, job := range jobs {
-			path := filepath.Join(job, "prompt.txt")
-			if _, err := os.Stat(path); err == nil {
-				operation := "spawn"
-				if i > 0 {
-					operation = "resume"
-				}
-				p.Messages = append(p.Messages, TaskMessage{id, x.Identity, x.Claim.Candidate, operation, path})
+		jobs := nativeProgressJobs(f.codexJob(id), x.ResumeCount)
+		currentJob := jobs[0]
+		for _, call := range jobs {
+			if call.prompt {
+				p.Messages = append(p.Messages, TaskMessage{id, x.Identity, x.Claim.Candidate, call.operation, filepath.Join(call.job, "prompt.txt")})
 			}
-			if _, err := os.Stat(filepath.Join(job, "process.json")); err == nil {
+			if call.process {
 				p.NativeCalls++
-			} else if x.Claimed {
-				p.NativeCallSourcesUnavailable = append(p.NativeCallSourcesUnavailable, filepath.Join(job, "process.json"))
+			} else if x.Claimed && call.expected {
+				p.NativeCallSourcesUnavailable = append(p.NativeCallSourcesUnavailable, filepath.Join(call.job, "process.json"))
+			}
+			if call.expected {
+				currentJob = call
 			}
 		}
 		if x.ResumeCount > 0 {
@@ -203,12 +199,18 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 			}
 		}
 		if x.Claimed && !x.Finished && !active {
-			job := jobs[len(jobs)-1]
+			job := currentJob.job
 			duration, source := operationDuration(job, now)
 			stage := "native wait"
+			if currentJob.coverage {
+				stage = "whitebox.coverage"
+			}
 			var process codexProcess
 			if data, err := os.ReadFile(filepath.Join(job, "process.json")); err == nil && json.Unmarshal(data, &process) == nil && process.Stopped {
 				stage = "result handling"
+				if currentJob.coverage {
+					stage = "whitebox.coverage result handling"
+				}
 				duration, source = intervalDuration(process.CompletedAt, now.Format(time.RFC3339Nano), filepath.Join(job, "process.json")+" native completion to result handling observation")
 			}
 			p.Current = append(p.Current, OperationProgress{ActionID: id, Stage: stage, Status: "RUNNING", DurationMillis: duration, TimeSource: source, Evidence: job})
@@ -236,6 +238,41 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 	p.BlockedCount = len(p.Blocked)
 	p.RepeatedExecutions = repeatedOperations(run)
 	return p, nil
+}
+
+// Coverage runs before the main turn in each initial/resume job. Project only
+// existing invocation files for coverage; creating a directory is not a call.
+type nativeProgressJob struct {
+	job, operation                      string
+	coverage, prompt, process, expected bool
+}
+
+func nativeProgressJobs(base string, resumes int) []nativeProgressJob {
+	fileExists := func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && !info.IsDir()
+	}
+	var jobs []nativeProgressJob
+	for n := 0; n <= resumes; n++ {
+		job, operation := base, "spawn"
+		if n > 0 {
+			job, operation = codexResumeJob(base, n), "resume"
+		}
+		coverage := filepath.Join(job, "coverage")
+		coveragePrompt := fileExists(filepath.Join(coverage, "prompt.txt"))
+		coverageProcess := fileExists(filepath.Join(coverage, "process.json"))
+		hasCoverage := coveragePrompt || coverageProcess
+		if hasCoverage {
+			jobs = append(jobs, nativeProgressJob{coverage, "coverage." + operation, true, coveragePrompt, coverageProcess, true})
+			// The bridge continues the identity returned by coverage.
+			operation = "resume"
+		}
+		prompt := fileExists(filepath.Join(job, "prompt.txt"))
+		process := fileExists(filepath.Join(job, "process.json"))
+		// While coverage runs, the main turn has not been invoked yet.
+		jobs = append(jobs, nativeProgressJob{job, operation, false, prompt, process, !hasCoverage || prompt || process})
+	}
+	return jobs
 }
 
 func operationDuration(job string, now time.Time) (*int64, string) {

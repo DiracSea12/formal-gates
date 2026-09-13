@@ -9,22 +9,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 )
 
 // runCodexBridge hosts Codex's typed dynamic tool. QA execution workers have no shell
 // tool: their only target operation is the frozen argv consumed by the adapter.
 // The same client owns fresh and resumed turns; the provider never chooses a
 // workflow step or rewrites the action/attempt/candidate binding.
-func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
-	claim, resume, job, workspace, prompt, schema, coverageOnly := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema, q.NoTools
-	toolDescription := q.ToolDescription
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	args := []string{"app-server", "--stdio", "--disable", "multi_agent", "--disable", "multi_agent_v2", "--disable", "enable_mcp_apps", "-c", `web_search="disabled"`}
-	access := nativeRoleAccess(string(claim.Task.Step))
-	if coverageOnly || access == nativeTextOnly || access == nativeOperationOnly {
-		args = append(args, "--disable", "shell_tool")
+const codexInputCharacters = 1_048_576
+
+func (codexRuntimeAdapter) validatePrompt(prompt string) error {
+	if n := utf8.RuneCountInString(prompt); n > codexInputCharacters {
+		return fmt.Errorf("INPUT_TOO_LARGE: Codex text input has %d characters; limit is %d", n, codexInputCharacters)
 	}
+	return nil
+}
+
+func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
+	if err := (codexRuntimeAdapter{}).validatePrompt(q.Prompt); err != nil {
+		return "", err
+	}
+	claim, resume, job, workspace, prompt, schema := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema
+	toolDescription := q.ToolDescription
+	ctx := context.Background()
+	args := []string{"app-server", "--stdio", "--disable", "multi_agent", "--disable", "multi_agent_v2", "--disable", "enable_mcp_apps", "-c", `web_search="disabled"`}
 
 	cmd := exec.CommandContext(ctx, claim.Context.Executable, args...)
 	if err := runtimeCommandContext(cmd, claim.Context); err != nil {
@@ -154,9 +162,10 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 		return "", err
 	}
 	params := map[string]any{"cwd": workspace, "approvalPolicy": "never", "sandbox": "read-only", "config": toolConfig}
-	if !coverageOnly && nativeRoleAccess(string(claim.Task.Step)) == nativeWorkspaceWrite {
+	if !q.NoTools && nativeRoleAccess(string(claim.Task.Step)) == nativeWorkspaceWrite {
 		params["sandbox"] = "workspace-write"
 	}
+
 	if model != "" {
 		params["model"] = model
 	}
@@ -189,6 +198,9 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	turn := map[string]any{"threadId": identity, "input": []any{map[string]any{"type": "text", "text": prompt, "text_elements": []any{}}}, "outputSchema": schema}
 	if effort != "" {
 		turn["effort"] = effort
+	}
+	if err := (codexRuntimeAdapter{}).validatePrompt(prompt); err != nil {
+		return identity, err
 	}
 	if _, err = request(3, "turn/start", turn); err != nil {
 		return identity, err

@@ -8,7 +8,7 @@ import (
 
 type zcodeSessionOptions struct {
 	CaptureUsage bool
-	EnforceMode  bool
+	Mode         string
 	Model        string
 	Effort       string
 	PrepareTools func(string) ([]any, error)
@@ -135,8 +135,8 @@ func runZCodeSession(reader io.Reader, writer io.Writer, session zcodeRequest, i
 			return identity, nil, fmt.Errorf("ZCODE_BINDING: tool configuration resumed another session")
 		}
 	}
-	if option.EnforceMode {
-		if _, err := request(session.ID+":mode", "session/setMode", map[string]any{"sessionId": identity, "mode": "yolo"}); err != nil {
+	if option.Mode != "" {
+		if _, err := request(session.ID+":mode", "session/setMode", map[string]any{"sessionId": identity, "mode": option.Mode}); err != nil {
 			return identity, nil, err
 		}
 	}

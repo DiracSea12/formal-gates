@@ -64,6 +64,9 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 	}
 	call := func(sub string, tail ...string) facade.Run {
 		args := []string{"workflow", sub, "--root", root, "--run-id", runID}
+		if sub == "drive" && len(tail) == 0 {
+			args = append(args, "--single-step")
+		}
 		args = append(args, tail...)
 		out := runInstalledCLI(t, binary, root, nativeEnv, "", args...)
 		var r facade.Run
@@ -78,7 +81,7 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		v.ExpectedRevision = r.Revision
 		ev, _ := protocol.NewRegularEvent(protocol.EventID(fmt.Sprintf("public-%d", r.Revision)), v)
 		data, _ := json.Marshal(ev)
-		out := runInstalledCLI(t, binary, root, nativeEnv, string(data), "workflow", "submit", "--root", root, "--run-id", runID)
+		out := runInstalledCLI(t, binary, root, nativeEnv, string(data), "workflow", "submit", "--single-step", "--root", root, "--run-id", runID)
 		var response struct {
 			Run facade.Run `json:"run"`
 		}
@@ -271,7 +274,7 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		Acceptance protocol.Acceptance `json:"acceptance"`
 		Run        facade.Run          `json:"run"`
 	}
-	output := runInstalledCLI(t, binary, root, nativeEnv, string(deliveryBytes), "workflow", "submit", "--root", root, "--run-id", runID)
+	output := runInstalledCLI(t, binary, root, nativeEnv, string(deliveryBytes), "workflow", "submit", "--single-step", "--root", root, "--run-id", runID)
 	if err := json.Unmarshal([]byte(output), &accepted); err != nil || accepted.Run.Regular == nil || accepted.Run.Regular.Preparation.Batches["B1"].Identity != c.Identity {
 		t.Fatal("installed external result was not accepted", err)
 	}
@@ -280,7 +283,7 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		Acceptance protocol.Acceptance `json:"acceptance"`
 		Run        facade.Run          `json:"run"`
 	}
-	output = runInstalledCLI(t, binary, root, nativeEnv, string(deliveryBytes), "workflow", "submit", "--root", root, "--run-id", runID)
+	output = runInstalledCLI(t, binary, root, nativeEnv, string(deliveryBytes), "workflow", "submit", "--single-step", "--root", root, "--run-id", runID)
 	if err := json.Unmarshal([]byte(output), &replayed); err != nil || !reflect.DeepEqual(replayed.Acceptance, accepted.Acceptance) || replayed.Run.Revision != r.Revision || !reflect.DeepEqual(replayed.Run.Regular.Preparation.Commits, r.Regular.Preparation.Commits) {
 		t.Fatal("installed delivery replay changed its receipt, commit or revision", err)
 	}
@@ -291,7 +294,11 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 		if mode == "whitebox" {
 			m.Cases[0] = coverage.AcceptanceCase{CaseID: prefix + ":C1", Command: &coverage.Command{Executable: "go", Args: []string{"test", "./..."}}, Mode: coverage.CaseWhitebox, TestRef: "main_test.go::TestHello", Oracle: "hello newline"}
 		}
-		return protocol.QADesign{Manifest: m, CoverageJudgment: "This fixture independently maps the sole public output AC"}
+		d := protocol.QADesign{Manifest: m, CoverageJudgment: "This fixture independently maps the sole public output AC"}
+		if mode == "whitebox" {
+			d.TestFiles = []string{"main_test.go"}
+		}
+		return d
 	}
 	review := func(mode string) {
 		q := r.Regular.Preparation.QA[mode]

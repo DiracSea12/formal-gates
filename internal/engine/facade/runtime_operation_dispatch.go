@@ -30,6 +30,9 @@ func (f *Facade) dispatchNativeOperation(actionID, identity, requestID string, a
 	if !ok || execution.Identity != identity {
 		return nil, fmt.Errorf("INTENT_MISMATCH: native tool identity differs from execution")
 	}
+	if execution.Claim.Task.Step == "whitebox-design" && !protocol.WhiteboxCoverageReady(execution) {
+		return nil, fmt.Errorf("ACTION_INPUT_SCOPE: coverage cannot execute task operations")
+	}
 	bound := execution.Claim
 	bound.Identity = identity
 	q := protocol.TaskOperationRequest{RunID: current.RunID, ExpectedRevision: current.Revision, Binding: bound, RequestID: requestID, Kind: input.Kind, CaseID: input.CaseID, Prompt: input.Prompt}

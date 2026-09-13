@@ -55,15 +55,6 @@ func Hook(payload []byte, providers ...string) (HookDecision, error) {
 	if strings.TrimSpace(command) == "" {
 		return allowHook("no command-like field found"), nil
 	}
-	if mentionsLegacyFormalGatesCommand(command) {
-		return HookDecision{
-			Decision:                 "block",
-			Reason:                   "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
-			Permission:               "deny",
-			PermissionDecision:       "deny",
-			PermissionDecisionReason: "legacy PowerShell formal-gates commands are not supported; use native formal-gates commands",
-		}, nil
-	}
 	if deniesFormalGatePassWithoutBinding(command) {
 		return HookDecision{
 			Decision:                 "block",
@@ -104,18 +95,6 @@ func deniesFormalGatePassWithoutBinding(command string) bool {
 		}
 	}
 	return false
-}
-
-func mentionsLegacyFormalGatesCommand(command string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(command, "\\", "/"))
-	return strings.Contains(normalized, "gate-workflow.ps1") ||
-		strings.Contains(normalized, "gate-state.ps1") ||
-		strings.Contains(normalized, "gate-artifact-validation.ps1") ||
-		strings.Contains(normalized, "gate-proof-receipt.ps1") ||
-		strings.Contains(normalized, "install-formal-gates.ps1") ||
-		strings.Contains(normalized, "run-complexity-gate.ps1") ||
-		strings.Contains(normalized, "capture-subagent-receipt.ps1") ||
-		strings.Contains(normalized, "enforce-gate-sequence.ps1")
 }
 
 func mentionsNativeRecord(tokens []string) bool {
@@ -237,34 +216,73 @@ func hookCommand(value any) string {
 }
 
 func splitCommand(command string) []string {
+	return splitCommandParts(command, false)[0]
+}
+
+// splitCommandParts reuses the hook tokenizer, optionally ending a command at
+// unquoted shell separators. Quoted/escaped separators remain argument data.
+func splitCommandParts(command string, segmented bool) [][]string {
+	var parts [][]string
 	var tokens []string
 	var current strings.Builder
 	var quote rune
-
-	for _, ch := range command {
+	started := false
+	flush := func() {
+		if started {
+			tokens = append(tokens, current.String())
+			current.Reset()
+			started = false
+		}
+	}
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		ch := runes[i]
+		if ch == '\\' && quote != '\'' && i+1 < len(runes) {
+			next := runes[i+1]
+			escapable := strings.ContainsRune("\\\"$`\n", next)
+			if quote == 0 {
+				escapable = escapable || strings.ContainsRune("' ;|&()\t", next)
+			}
+			if escapable {
+				i++
+				if next != '\n' {
+					current.WriteRune(next)
+					started = true
+				}
+				continue
+			}
+		}
 		if quote != 0 {
 			if ch == quote {
 				quote = 0
-				continue
+			} else {
+				current.WriteRune(ch)
 			}
-			current.WriteRune(ch)
 			continue
 		}
 		if ch == '\'' || ch == '"' {
 			quote = ch
+			started = true
 			continue
 		}
-		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
-			if current.Len() > 0 {
-				tokens = append(tokens, current.String())
-				current.Reset()
+		// Descriptor merges (& in 2>&1) and redirect operators (&>, >|)
+		// belong to the current command rather than starting another segment.
+		redirectPart := ch == '&' && ((i > 0 && (runes[i-1] == '>' || runes[i-1] == '<')) || (i+1 < len(runes) && runes[i+1] == '>')) || ch == '|' && i > 0 && runes[i-1] == '>'
+		if segmented && !redirectPart && strings.ContainsRune(";|&()\n", ch) {
+			flush()
+			if len(tokens) > 0 {
+				parts = append(parts, tokens)
+				tokens = nil
 			}
 			continue
 		}
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+			flush()
+			continue
+		}
 		current.WriteRune(ch)
+		started = true
 	}
-	if current.Len() > 0 {
-		tokens = append(tokens, current.String())
-	}
-	return tokens
+	flush()
+	return append(parts, tokens)
 }

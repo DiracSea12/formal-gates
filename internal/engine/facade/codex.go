@@ -27,11 +27,19 @@ func (f *Facade) submitSource(source protocol.ExecutionSource) error {
 	return err
 }
 func reviewPrompt(run Run, claim protocol.ExecutionClaim) (string, error) {
-	instructions, err := actionInstructions(run, "actions/development-worker.md#通用执行约定", "actions/"+string(claim.Task.Step)+".md")
+	material, err := prepareReviewPrompt(run, claim)
 	if err != nil {
 		return "", err
 	}
-	return assemblePrompt(instructions, map[string]any{"binding": claim, "requirement": run.Regular.Requirement})
+	return material.render(claim)
+}
+
+func prepareReviewPrompt(run Run, claim protocol.ExecutionClaim) (nativePromptMaterial, error) {
+	instructions, err := actionInstructions(run, "actions/development-worker.md#通用执行约定", "actions/"+string(claim.Task.Step)+".md")
+	if err != nil {
+		return nativePromptMaterial{}, err
+	}
+	return nativePromptMaterial{instructions: instructions, input: map[string]any{"binding": claim, "requirement": run.Regular.Requirement}}, nil
 }
 
 func reviewSchema(claim protocol.ExecutionClaim) map[string]any {
@@ -118,79 +126,8 @@ func (f *Facade) finishRegularAbort() (Run, error) {
 		if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
 			continue
 		}
-		job := f.codexJob(id)
-		if x.ResumeClaimed || x.ResumeCount > 0 {
-			job = codexResumeJob(job, x.ResumeCount)
-		}
-		job, err = nativeProcessDirectory(job, string(x.Claim.Task.Step))
-		if err != nil {
-			return Run{}, fmt.Errorf("UNKNOWN: abort needs the native process receipt for %s: %w", id, err)
-		}
-		data, err := os.ReadFile(filepath.Join(job, "process.json"))
-		if err != nil {
-			return Run{}, fmt.Errorf("UNKNOWN: abort needs the native process receipt for %s: %w", id, err)
-		}
-		var receipt codexProcess
-		if err = json.Unmarshal(data, &receipt); err != nil || receipt.ActionID != id {
-			return Run{}, fmt.Errorf("INTENT_MISMATCH: abort process receipt")
-		}
-		if !receipt.Stopped && codexProcessAlive(receipt.PID) {
-			if err = stopCodexProcess(receipt.PID); err != nil {
-				return Run{}, err
-			}
-			deadline := time.Now().Add(3 * time.Second)
-			for codexProcessAlive(receipt.PID) && time.Now().Before(deadline) {
-				time.Sleep(20 * time.Millisecond)
-			}
-			if codexProcessAlive(receipt.PID) {
-				return Run{}, fmt.Errorf("HOST_ACTION_RUNNING: native process group %d is still stopping", receipt.PID)
-			}
-		}
-		// A still-running original driver owns result collection. Killing its
-		// native process does not make it safe to submit a competing result.
-		var release func()
-		deadline := time.Now().Add(3 * time.Second)
-		for {
-			release, err = coordination.AcquirePath(f.codexJob(id)+".lock", "native abort collection")
-			if err == nil || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		if err != nil {
+		if err := f.finishNativeCancellation(id, "user authorized abort"); err != nil {
 			return Run{}, err
-		}
-		collectErr := func() error {
-			defer release()
-			current, err := f.Show()
-			if err != nil {
-				return err
-			}
-			x = current.Executions[id]
-			if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
-				return nil
-			}
-			var preserved map[string]json.RawMessage
-			if err = json.Unmarshal(data, &preserved); err != nil {
-				return err
-			}
-			preserved["stopped"] = json.RawMessage("true")
-			if err = writeJSONAtomic(filepath.Join(job, "process.json"), preserved); err != nil {
-				return err
-			}
-			if x.Identity == "" {
-				_, err = f.failedNativeStart(id, x.Claim, fmt.Errorf("user authorized abort; owned native process group stopped before any thread identity was observed"))
-			} else {
-				adapter, lookupErr := runtimeAdapter(x.Claim.Provider)
-				if lookupErr != nil {
-					return lookupErr
-				}
-				_, err = f.collectNativeResult(id, x.Claim, x.Identity, job, fmt.Errorf("user authorized abort"), adapter)
-			}
-			return err
-		}()
-		if collectErr != nil {
-			return Run{}, collectErr
 		}
 	}
 	run, err = f.Show()
@@ -203,6 +140,102 @@ func (f *Facade) finishRegularAbort() (Run, error) {
 		}
 	}
 	return run, nil
+}
+
+// finishNativeCancellation settles an already authorized cancellation. It never
+// claims, resumes or replaces a native task; abort and ordinary terminate intents
+// share the same process evidence, action lock and result/source collection.
+func (f *Facade) finishNativeCancellation(id, reason string) error {
+	run, err := f.Show()
+	if err != nil {
+		return err
+	}
+	x, ok := run.Executions[id]
+	if !ok || !x.Claimed {
+		return fmt.Errorf("INTENT_MISMATCH: cancellation requires a claimed execution")
+	}
+	if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
+		return nil
+	}
+	job := f.codexJob(id)
+	if x.ResumeClaimed || x.ResumeCount > 0 {
+		job = codexResumeJob(job, x.ResumeCount)
+	}
+	job, err = nativeProcessDirectory(job, string(x.Claim.Task.Step))
+	if err != nil {
+		return fmt.Errorf("UNKNOWN: cancellation needs the native process receipt for %s: %w", id, err)
+	}
+	data, err := os.ReadFile(filepath.Join(job, "process.json"))
+	if err != nil {
+		return fmt.Errorf("UNKNOWN: cancellation needs the native process receipt for %s: %w", id, err)
+	}
+	var receipt codexProcess
+	if err = json.Unmarshal(data, &receipt); err != nil || receipt.ActionID != id {
+		return fmt.Errorf("INTENT_MISMATCH: cancellation process receipt")
+	}
+	if !receipt.Stopped && codexProcessAlive(receipt.PID) {
+		if err = stopCodexProcess(receipt.PID); err != nil {
+			return err
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for codexProcessAlive(receipt.PID) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if codexProcessAlive(receipt.PID) {
+			return fmt.Errorf("HOST_ACTION_RUNNING: native process group %d is still stopping", receipt.PID)
+		}
+	}
+	// A still-running original driver owns result collection. Killing its
+	// native process does not make it safe to submit a competing result.
+	var release func()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		release, err = coordination.AcquirePath(f.codexJob(id)+".lock", "native cancellation collection")
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		return err
+	}
+	collectErr := func() error {
+		defer release()
+		current, err := f.Show()
+		if err != nil {
+			return err
+		}
+		x = current.Executions[id]
+		if x.Finished && x.Source != nil && x.Source.Status != "RUNNING" {
+			return nil
+		}
+		data, err := os.ReadFile(filepath.Join(job, "process.json"))
+		if err != nil {
+			return err
+		}
+		var preserved map[string]json.RawMessage
+		if err = json.Unmarshal(data, &preserved); err != nil {
+			return err
+		}
+		preserved["stopped"] = json.RawMessage("true")
+		if err = writeJSONAtomic(filepath.Join(job, "process.json"), preserved); err != nil {
+			return err
+		}
+		if x.Identity == "" {
+			_, err = f.failedNativeStart(id, x.Claim, fmt.Errorf("%s; owned native process group stopped before any thread identity was observed", reason))
+		} else {
+			adapter, lookupErr := runtimeAdapter(x.Claim.Provider)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			_, err = f.collectNativeResult(id, x.Claim, x.Identity, job, fmt.Errorf("%s", reason), adapter)
+		}
+		return err
+	}()
+	if collectErr != nil {
+		return collectErr
+	}
+	return nil
 }
 
 func codexResumeJob(job string, count int) string {

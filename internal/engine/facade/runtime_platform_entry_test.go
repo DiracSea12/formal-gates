@@ -106,7 +106,7 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 		step   string
 		access nativeAccess
 	}{
-		{"product-review", nativeTextOnly}, {"start-readiness", nativeTextOnly},
+		{"product-review", nativeReadOnly}, {"start-readiness", nativeReadOnly},
 		{"blackbox-execution", nativeOperationOnly}, {"whitebox-execution", nativeOperationOnly},
 		{"development-worker", nativeWorkspaceWrite}, {"repair-worker", nativeWorkspaceWrite}, {"whitebox-design", nativeWorkspaceWrite},
 		{"blackbox-design", nativeReadOnly}, {"blackbox-review", nativeReadOnly}, {"whitebox-review", nativeReadOnly},
@@ -120,15 +120,15 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 			workBuddyRoleTools(command, tc.step)
 			tools := []string{command.Args[2], strings.Join(zcodeRoleTools(tc.step, false), ","), strings.Join(dshRoleTools(tc.step, false), ",")}
 			for _, list := range tools {
-				if strings.Contains(list, "Bash") != (tc.access == nativeWorkspaceWrite) {
+				if strings.Contains(list, "Bash") != (tc.access == nativeWorkspaceWrite || tc.access == nativeReadOnly) {
 					t.Fatalf("authoring privilege differs: %s", list)
 				}
-				if strings.Contains(list, "Read") != (tc.access == nativeWorkspaceWrite || tc.access == nativeReadOnly) {
+				if strings.Contains(list, "Read") != (tc.access == nativeWorkspaceWrite || tc.access == nativeReadOnly || tc.access == nativeOperationOnly) {
 					t.Fatalf("reader privilege differs: %s", list)
 				}
 			}
-			if len(zcodeRoleTools(tc.step, true)) != 0 || len(dshRoleTools(tc.step, true)) != 0 {
-				t.Fatal("coverage-only pass leaked tools")
+			if !strings.Contains(strings.Join(zcodeRoleTools(tc.step, true), ","), "Read") || strings.Contains(strings.Join(zcodeRoleTools(tc.step, true), ","), "Write") || !strings.Contains(strings.Join(dshRoleTools(tc.step, true), ","), "Read") {
+				t.Fatal("coverage must retain ordinary read tools without write tools")
 			}
 		})
 	}

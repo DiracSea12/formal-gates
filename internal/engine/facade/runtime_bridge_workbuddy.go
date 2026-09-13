@@ -104,7 +104,7 @@ func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if q.NoTools || nativeTextOnlyRole(string(claim.Task.Step)) {
+	if q.NoTools {
 		config = map[string]any{"mcpServers": map[string]any{}}
 	}
 	configPath := filepath.Join(job, "mcp.json")
@@ -126,6 +126,12 @@ func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	}
 	if !q.NoTools {
 		workBuddyRoleTools(cmd, string(claim.Task.Step))
+	} else {
+		for i := 1; i+1 < len(cmd.Args); i++ {
+			if cmd.Args[i] == "--tools" {
+				cmd.Args[i+1] = "Read,Glob,Grep,StructuredOutput"
+			}
+		}
 	}
 	prompt, err = workBuddyAuthorizeWorkspace(cmd, string(claim.Task.Step), workspace, prompt)
 	if err != nil {

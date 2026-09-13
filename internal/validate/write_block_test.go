@@ -410,3 +410,28 @@ func writeRunStateForWriteBlock(t *testing.T, root, runStatus, developmentStatus
 		t.Fatal(err)
 	}
 }
+
+// Every existing VCS write form must still be blocked when executed, and must
+// remain ordinary data when a reviewer searches for it.
+func TestWriteBlockVCSCommandsVersusSearchArguments(t *testing.T) {
+	root := t.TempDir()
+	writeActiveRunState(t, root)
+	for _, marker := range vcsWriteMarkers {
+		for _, tc := range []struct{ command, want string }{
+			{marker + " main.go", "deny"},
+			{"rg -n '" + marker + "' README.md", "allow"},
+			{"git log --grep='" + marker + "'", "allow"},
+		} {
+			t.Run(tc.command, func(t *testing.T) {
+				payload, err := json.Marshal(map[string]any{"cwd": root, "tool_name": "Bash", "agent_type": "qa-review", "tool_input": map[string]string{"command": tc.command}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				decision, err := Hook(payload)
+				if err != nil || decision.PermissionDecision != tc.want {
+					t.Fatalf("want %s; decision=%#v err=%v", tc.want, decision, err)
+				}
+			})
+		}
+	}
+}

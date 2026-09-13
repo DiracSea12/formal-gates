@@ -11,7 +11,18 @@ import (
 
 var reviewActions = []string{"product-review", "start-readiness"}
 
+// ReviewSkip records a user-directed exception for a repeated entry review.
+// It is neither an accepted reviewer result nor a PASS.
+type ReviewSkip struct {
+	RequirementRevision string `json:"requirementRevision"`
+	Sequence            int    `json:"sequence"`
+	EventID             string `json:"eventId"`
+	Revision            uint64 `json:"revision"`
+	Reason              string `json:"reason"`
+}
+
 type PreDevelopmentReviewSeries struct {
+	Skip               *ReviewSkip               `json:"skip,omitempty"`
 	Action             string                    `json:"action"`
 	Completed          int                       `json:"completed"`
 	Sequence           int                       `json:"sequence"`
@@ -114,6 +125,9 @@ func findingDecision(series *PreDevelopmentReviewSeries, digest, id string) (str
 	return d, sev
 }
 func effectiveReview(r *RegularState, series *PreDevelopmentReviewSeries) string {
+	if series.Skip != nil && !series.Fresh && series.Skip.RequirementRevision == r.Requirement.Revision && series.Skip.Sequence == series.Sequence {
+		return "SKIPPED"
+	}
 	if series.Fresh || series.CurrentDigest == "" || series.CurrentRequirement != r.Requirement.Revision {
 		return "OPEN"
 	}
@@ -142,6 +156,11 @@ func effectiveReview(r *RegularState, series *PreDevelopmentReviewSeries) string
 	return "PASS"
 }
 func validSeverity(s string) bool { return s == "P0" || s == "P1" || s == "P2" || s == "P3" }
+func reviewPrerequisiteSatisfied(r *RegularState, series *PreDevelopmentReviewSeries) bool {
+	status := effectiveReview(r, series)
+	return status == "PASS" || status == "SKIPPED"
+}
+
 func validateReview(r *RegularState, v RawReviewCandidate) error {
 	if v.Status != "PASS" && v.Status != "FAIL" {
 		return fmt.Errorf("review status must be PASS or FAIL")
@@ -279,7 +298,7 @@ func (e *Engine) acceptRegularReview(s *State, v RawReviewCandidate, revision ui
 	}
 	s.Results[v.ActionID] = WorkerResult{ActionID: v.ActionID, Provider: v.Provider, Outcome: v.Status, PayloadDigest: v.Digest, Digest: v.Digest}
 	series := r.Reviews[v.Action]
-	if r.ChangePending || v.RequirementRevision != r.Requirement.Revision || v.Candidate != r.Candidate || (v.Action == "start-readiness" && (effectiveReview(r, r.Reviews["product-review"]) != "PASS" || x.Claim.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest)) {
+	if r.ChangePending || v.RequirementRevision != r.Requirement.Revision || v.Candidate != r.Candidate || (v.Action == "start-readiness" && (!reviewPrerequisiteSatisfied(r, r.Reviews["product-review"]) || x.Claim.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest)) {
 		v.Quarantined = true
 		series.RawCandidates = append(series.RawCandidates, v)
 		return "QUARANTINED", nil
@@ -397,6 +416,19 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		return fmt.Errorf("request %s requires a reason", q.Action)
 	}
 	switch q.Action {
+	case "skip-review":
+		if r.Mode != "regular" || !r.Requirement.Confirmed || r.ChangePending || r.Plan == nil || r.Preparation == nil {
+			return fmt.Errorf("skip-review requires an existing prepared regular run and confirmed requirement")
+		}
+		if q.ReviewAction != "product-review" && q.ReviewAction != "start-readiness" {
+			return fmt.Errorf("skip-review is limited to product-review and start-readiness")
+		}
+		for _, x := range s.RegularExecutions {
+			if string(x.Claim.Task.Step) == q.ReviewAction && x.Claimed && (!x.Finished || x.Source == nil || x.Source.Status == "RUNNING") {
+				return fmt.Errorf("skip-review requires the current review execution and source to be settled")
+			}
+		}
+
 	case "development-increment":
 		if err := validateDevelopmentIncrement(s, q); err != nil {
 			return err
@@ -429,14 +461,14 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 			return fmt.Errorf("mode requires confirmed intake and an initial regular/lightweight choice")
 		}
 	case "topology":
-		if effectiveReview(r, r.Reviews["product-review"]) != "PASS" || effectiveReview(r, r.Reviews["start-readiness"]) != "PASS" || r.Plan == nil || r.Plan.Digest != q.PlanDigest || q.Reason == "" {
+		if !reviewPrerequisiteSatisfied(r, r.Reviews["product-review"]) || !reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) || r.Plan == nil || r.Plan.Digest != q.PlanDigest || q.Reason == "" {
 			return fmt.Errorf("topology requires both reviews PASS, current plan digest and no-split reason")
 		}
 	case "route", "route-add", "route-reselect":
 		if err := validateRouteChangeAfterDevelopment(s, q); err != nil {
 			return err
 		}
-		if r.Mode != "regular" || r.Topology != "no-split" || r.Plan == nil || r.Plan.ConfirmedRevision != r.Requirement.Revision || effectiveReview(r, r.Reviews["start-readiness"]) != "PASS" {
+		if r.Mode != "regular" || r.Topology != "no-split" || r.Plan == nil || r.Plan.ConfirmedRevision != r.Requirement.Revision || !reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) {
 			return fmt.Errorf("route requires regular, technical PASS and confirmed no-split plan")
 		}
 		if err := validateRegularRoute(q.Route, r.CatalogGates); err != nil {
@@ -496,7 +528,7 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		if q.Target != "product-review" && q.Target != "start-readiness" {
 			return fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: B1 jump target must be a pre-development review")
 		}
-		if r.Mode != "regular" || (q.Target == "start-readiness" && effectiveReview(r, r.Reviews["product-review"]) != "PASS") {
+		if r.Mode != "regular" || (q.Target == "start-readiness" && !reviewPrerequisiteSatisfied(r, r.Reviews["product-review"])) {
 			return fmt.Errorf("jump cannot skip an unmet prerequisite")
 		}
 		for _, x := range s.RegularExecutions {
@@ -661,6 +693,12 @@ func (e *Engine) regularDecision(s *State, d RegularDecision, revision uint64, e
 		q = RegularRequest{Action: "abort", Reason: d.Reason}
 	}
 	switch q.Action {
+	case "skip-review":
+		series := r.Reviews[q.ReviewAction]
+		series.Skip = &ReviewSkip{RequirementRevision: r.Requirement.Revision, Sequence: series.Sequence, EventID: eventID, Revision: revision + 1, Reason: q.Reason}
+		series.Fresh = false
+		retireUnclaimedOnChange(s, a.ID, q.ReviewAction)
+
 	case "development-increment":
 		if err := decideDevelopmentIncrement(s, a, d, eventID, revision+1); err != nil {
 			return err
@@ -750,11 +788,11 @@ func (e *Engine) regularDecision(s *State, d RegularDecision, revision uint64, e
 		s.Attempts[key] = at
 	case "continue":
 		key := reviewTask(r, "product-review")
-		if effectiveReview(r, r.Reviews["product-review"]) == "PASS" {
+		if reviewPrerequisiteSatisfied(r, r.Reviews["product-review"]) {
 			key = reviewTask(r, "start-readiness")
 		}
 		r.Guard.ContinueTasks = []runtime.TaskKey{key}
-		if effectiveReview(r, r.Reviews["start-readiness"]) == "PASS" && r.Preparation != nil {
+		if reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) && r.Preparation != nil {
 			r.Guard.ContinueTasks = sortedPreparationTasks(s)
 			for _, x := range s.RegularExecutions {
 				if !x.Finished {
@@ -1016,7 +1054,7 @@ func applyRequirementChange(r *RegularState, q RegularRequest, revision uint64, 
 	if r.Plan != nil {
 		r.Plan.ConfirmedRevision = ""
 	}
-	if r.Plan != nil && effectiveReview(r, r.Reviews["start-readiness"]) == "PASS" {
+	if r.Plan != nil && reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) {
 		r.Plan.RequirementRevision = doc.Revision
 		r.Plan.Digest = ""
 		r.Plan.Digest = digestOfCanonical(*r.Plan)

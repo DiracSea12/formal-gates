@@ -75,17 +75,28 @@ func (zcodeRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error 
 	return nil
 }
 func zcodeRoleTools(step string, coverage bool) []string {
-	if coverage || nativeTextOnlyRole(step) {
-		return []string{}
+	if coverage {
+		return []string{"Read", "Glob", "Grep"}
 	}
 	tools := []string{"formal_gates_operation", "mcp__formal-gates__formal_gates_operation"}
 	switch nativeRoleAccess(step) {
 	case nativeWorkspaceWrite:
 		tools = append(tools, "Bash", "Read", "Write", "Edit", "Glob", "Grep")
 	case nativeReadOnly:
+		tools = append(tools, "Bash", "Read", "Glob", "Grep")
+	case nativeOperationOnly:
 		tools = append(tools, "Read", "Glob", "Grep")
 	}
 	return tools
+}
+
+// Plan mode applies ZCode's native per-command read-only checks to Bash.
+// The allowlist excludes file writers and tools that can leave plan mode.
+func zcodeRoleMode(step string, coverage bool) string {
+	if !coverage && nativeRoleAccess(step) == nativeReadOnly {
+		return "plan"
+	}
+	return "yolo"
 }
 func (zcodeRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	claim, resume, job, workspace, prompt, schema, coverage := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema, q.NoTools
@@ -97,7 +108,8 @@ func (zcodeRuntimeAdapter) turn(q nativeTurn) (string, error) {
 			return "", fmt.Errorf("ZCODE_BINDING: resume identity missing")
 		}
 	}
-	session, err := zcodeSessionRequest(claim.ActionID, workspace, identity, zcodeRoleTools(string(claim.Task.Step), coverage))
+	mode := zcodeRoleMode(string(claim.Task.Step), coverage)
+	session, err := zcodeSessionRequest(claim.ActionID, workspace, identity, mode, zcodeRoleTools(string(claim.Task.Step), coverage))
 	if err != nil {
 		return "", err
 	}
@@ -111,8 +123,8 @@ func (zcodeRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err := runtimeCommandContext(cmd, claim.Context); err != nil {
 		return "", err
 	}
-	options := zcodeSessionOptions{EnforceMode: true, CaptureUsage: true, Model: q.Settings.Model, Effort: q.Settings.ReasoningEffort}
-	if !coverage && !nativeTextOnlyRole(string(claim.Task.Step)) {
+	options := zcodeSessionOptions{Mode: mode, CaptureUsage: true, Model: q.Settings.Model, Effort: q.Settings.ReasoningEffort}
+	if !coverage {
 		options.PrepareTools = func(identity string) ([]any, error) {
 			executable, err := os.Executable()
 			if err != nil {
@@ -140,7 +152,7 @@ func (zcodeRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error)
 	if err := runtimeCommandContext(cmd, binding); err != nil {
 		return "session/resume", nil, err
 	}
-	session, err := zcodeSessionRequest("recovery", workspace, identity, []string{})
+	session, err := zcodeSessionRequest("recovery", workspace, identity, "yolo", []string{})
 	if err != nil {
 		return "session/resume", nil, err
 	}
@@ -178,7 +190,7 @@ func (zcodeRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error)
 }
 func (zcodeRuntimeAdapter) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
 	invoke := func() error {
-		session, err := zcodeSessionRequest(op.ID, job, "", []string{})
+		session, err := zcodeSessionRequest(op.ID, job, "", "yolo", []string{})
 		if err != nil {
 			return err
 		}

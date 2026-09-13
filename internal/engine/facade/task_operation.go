@@ -131,8 +131,7 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 		result.Message = err.Error()
 		return result
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 	switch q.Kind {
 	case "qa.prepare":
 		result.Workspace = f.operationResources(op).Work

@@ -171,7 +171,7 @@ func TestQAReadinessInstructionsReachBothRoles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, text := range []string{"前态", "取证", "scripts/qa-preparation.md", "静态检查"} {
+		for _, text := range []string{"前态", "取证", "静态检查"} {
 			if !strings.Contains(prompt, text) {
 				t.Fatalf("%s missing readiness material %q", step, text)
 			}
@@ -221,5 +221,113 @@ func TestQAReadinessTerminalPrestateCannotReachTarget(t *testing.T) {
 	}
 	if after.Revision != run.Revision || len(after.Executions[action].Operations) != len(run.Executions[action].Operations) {
 		t.Fatal("readiness probe executed a target")
+	}
+}
+
+func TestProgressCoverageLifecycle(t *testing.T) {
+	f, action := operationFixture(t)
+	job := f.codexJob(action)
+	coverage := filepath.Join(job, "coverage")
+	if err := os.MkdirAll(coverage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(calls int, operations []string, missing, evidence, stage string) {
+		t.Helper()
+		p, err := f.ProgressSince(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Revision != run.Revision || p.NativeCalls != calls || len(p.Messages) != len(operations) {
+			t.Fatalf("unexpected progress: %+v", p)
+		}
+		for i, operation := range operations {
+			m := p.Messages[i]
+			if m.Operation != operation || m.ActionID != action || m.Identity != run.Executions[action].Identity || m.Candidate != run.Executions[action].Claim.Candidate {
+				t.Fatalf("message binding/type lost: %+v", m)
+			}
+			if data, err := os.ReadFile(m.Path); err != nil || len(data) == 0 {
+				t.Fatalf("actual prompt inaccessible: %+v, %v", m, err)
+			}
+		}
+		var missingSources []string
+		for _, path := range p.NativeCallSourcesUnavailable {
+			if strings.HasPrefix(path, job+string(filepath.Separator)) {
+				missingSources = append(missingSources, path)
+			}
+		}
+		if missing == "" {
+			if len(missingSources) != 0 {
+				t.Fatalf("false missing source: %v", missingSources)
+			}
+		} else if len(missingSources) != 1 || missingSources[0] != missing {
+			t.Fatalf("missing source mismatch: %v", missingSources)
+		}
+		if len(p.Current) != 1 || p.Current[0].Evidence != evidence || p.Current[0].Stage != stage {
+			t.Fatalf("current invocation mismatch: %+v", p.Current)
+		}
+		if calls > 0 && p.Current[0].DurationMillis == nil {
+			t.Fatalf("invocation timing unavailable: %+v", p.Current)
+		}
+	}
+	check(0, nil, filepath.Join(job, "process.json"), job, "native wait")
+	write(coverage, "prompt.txt", "independent whitebox coverage input")
+	check(0, []string{"coverage.spawn"}, filepath.Join(coverage, "process.json"), coverage, "whitebox.coverage")
+	process := codexProcess{ActionID: action, StartedAt: time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)}
+	if err := writeJSONAtomic(filepath.Join(coverage, "process.json"), process); err != nil {
+		t.Fatal(err)
+	}
+	check(1, []string{"coverage.spawn"}, "", coverage, "whitebox.coverage")
+	process.Stopped = true
+	process.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := writeJSONAtomic(filepath.Join(coverage, "process.json"), process); err != nil {
+		t.Fatal(err)
+	}
+	check(1, []string{"coverage.spawn"}, "", coverage, "whitebox.coverage result handling")
+	write(job, "prompt.txt", "main whitebox design input")
+	process.Stopped = false
+	process.CompletedAt = ""
+	if err := writeJSONAtomic(filepath.Join(job, "process.json"), process); err != nil {
+		t.Fatal(err)
+	}
+	check(2, []string{"coverage.spawn", "resume"}, "", job, "native wait")
+}
+
+func TestNativeProgressCoverageOnContinuation(t *testing.T) {
+	base := t.TempDir()
+	resume := codexResumeJob(base, 1)
+	coverage := filepath.Join(resume, "coverage")
+	if err := os.MkdirAll(coverage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(base, "process.json"), filepath.Join(coverage, "prompt.txt"), filepath.Join(coverage, "process.json")} {
+		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs := nativeProgressJobs(base, 1)
+	if len(jobs) != 3 || jobs[0].operation != "spawn" || jobs[1].operation != "coverage.resume" || jobs[1].job != coverage || !jobs[1].process || jobs[2].expected {
+		t.Fatalf("coverage continuation omitted or unstarted main expected: %+v", jobs)
+	}
+	if err := os.WriteFile(filepath.Join(resume, "process.json"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	jobs = nativeProgressJobs(base, 1)
+	if !jobs[2].process || !jobs[2].expected || jobs[2].operation != "resume" {
+		t.Fatalf("main continuation not projected: %+v", jobs)
+	}
+	// A later ordinary continuation must not inherit the earlier coverage call.
+	jobs = nativeProgressJobs(base, 2)
+	if len(jobs) != 4 || jobs[3].coverage || jobs[3].operation != "resume" {
+		t.Fatalf("coverage leaked into subsequent continuation: %+v", jobs)
 	}
 }

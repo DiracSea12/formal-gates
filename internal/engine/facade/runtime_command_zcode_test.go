@@ -20,7 +20,7 @@ func TestZCodeNativeCommandAndRequests(t *testing.T) {
 		t.Fatalf("%+v", cmd)
 	}
 	for _, identity := range []string{"", "native-session"} {
-		r, err := zcodeSessionRequest("stable-request", "/work", identity, []string{})
+		r, err := zcodeSessionRequest("stable-request", "/work", identity, "yolo", []string{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -40,7 +40,7 @@ func TestZCodeNativeCommandAndRequests(t *testing.T) {
 			t.Fatal("resume lost identity")
 		}
 	}
-	if _, err := zcodeSessionRequest("r", "/work", "", nil); err == nil {
+	if _, err := zcodeSessionRequest("r", "/work", "", "yolo", nil); err == nil {
 		t.Fatal("implicit tool grant accepted")
 	}
 	if _, err := zcodeCommand("node", "/script", "/work"); err == nil {

@@ -34,7 +34,7 @@ func preparationEngine(t *testing.T, modes ...string) *Engine {
 	regularChoice(t, e, RegularRequest{Action: "route", Route: &RegularRoute{Kind: "custom", QA: modes, Gates: []string{"implementation-quality-gate"}}}, "confirm")
 	return e
 }
-func gitReceipt(t *testing.T, e *Engine, after string) {
+func gitReceipt(t *testing.T, e *Engine, after string, ownership ...string) {
 	t.Helper()
 	if _, _, err := e.Drive(fingerprintOf(t, e)); err != nil {
 		t.Fatal(err)
@@ -58,6 +58,9 @@ func gitReceipt(t *testing.T, e *Engine, after string) {
 		receipt.Resources["whitebox"] = "/isolated/whitebox"
 	case "whitebox-commit":
 		receipt.Ownership = &gitprep.Ownership{Status: "TEST_ONLY"}
+		if len(ownership) > 0 {
+			receipt.Ownership.Status = ownership[0]
+		}
 	case "finalize":
 		receipt.Artifacts = map[string]string{}
 		for mode, q := range s.State.Regular.Preparation.QA {
@@ -87,7 +90,11 @@ func testDesign(r *RegularState, mode string) QADesign {
 	if mode == "WHITEBOX" {
 		m.Cases[0] = coverage.AcceptanceCase{CaseID: mode + ":C1", Command: &coverage.Command{Executable: "go", Args: []string{"test", "./..."}}, Mode: coverage.CaseWhitebox, TestRef: "main_test.go::TestHello", Oracle: "hello"}
 	}
-	return QADesign{Manifest: m, CoverageJudgment: "Independently mapped the output requirement and exact oracle"}
+	d := QADesign{Manifest: m, CoverageJudgment: "Independently mapped the output requirement and exact oracle"}
+	if mode == "WHITEBOX" {
+		d.TestFiles = []string{"main_test.go"}
+	}
+	return d
 }
 func completeQA(t *testing.T, e *Engine, mode, kind string) {
 	x := currentExecution(t, e, mode+"-"+kind)

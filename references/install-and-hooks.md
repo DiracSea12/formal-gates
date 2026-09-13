@@ -219,35 +219,6 @@ installed: <test-project>/<host-path>/formal-gates
 不执行安装。复制、installed-path smoke、runtime/pointer/registry 提交和失败恢复仍全部
 由当前 stable owner 的既有事务持有。这样新版恢复旧包时不会要求旧包包含新版源码文件。
 
-`97eef33d866301a2985f510dd486a21196eea3f9` 的旧安装器仍用自身文件清单校验其他版本，
-不能直接安装删除了旧 workflow 文件的阶段 4 包。先从精确旧源码构建维护版本，应用
-[通用安装器补丁](phase4-installer-maintenance.patch)，再由原 stable launcher 安装维护包：
-
-```bash
-git -C <old-source-copy> checkout --detach 97eef33d866301a2985f510dd486a21196eea3f9
-git -C <old-source-copy> apply --unidiff-zero <stage4-source>/references/phase4-installer-maintenance.patch
-git -C <old-source-copy> add internal/validate/install.go
-git -C <old-source-copy> commit -m "Validate install sources with their own package contract"
-cd <old-source-copy>
-go build -o bin/formal-gates ./cmd/formal-gates
-bin/formal-gates package validate --root .
-```
-
-在独立 HOME、project、release root 中按下列顺序演练；`<stable-launcher>` 必须是该隔离
-目标已安装的固定入口。每一步保留精确源码、package/installed identity、registry generation
-和 `<registry>.install.json`，下一步不得覆盖上一步的留存副本。
-
-```bash
-<stable-launcher> install --source <old-source-copy> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
-<stable-launcher> install --source <committed-stage4-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
-<stable-launcher> install --source <original-stable-package> --host codex --scope project --project <project> --binary-target <stable-launcher> --release-root <release-root> --force
-```
-
-最后一步是提交后恢复原稳定包，仍是一笔新安装事务，generation 不倒退；失败提交则
-按下述原 journal 自动恢复。维护补丁与阶段 4 的 `internal/validate/install.go` 修改相同，
-不增加命令或 workflow 兼容路径。真实全局的维护升级只能在本阶段固定 driver 完成 Seal、
-主线集成及必要重验后执行；Seal 前保持该 driver 及运行绑定不变。
-
 首次使用固定 stable driver 时，先从冻结的已安装 artifact 调用受支持的
 `install --bootstrap` 维护入口。bootstrap 只登记 target、host、project/state/resource
 root、runtime sibling、epoch/generation 和 lease/token，并写 bootstrap receipt；它不创建

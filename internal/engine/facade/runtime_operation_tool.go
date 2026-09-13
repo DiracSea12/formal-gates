@@ -19,8 +19,7 @@ func nativeOperationTool(step, description string) map[string]any {
 type nativeAccess uint8
 
 const (
-	nativeTextOnly nativeAccess = iota
-	nativeOperationOnly
+	nativeOperationOnly nativeAccess = iota
 	nativeReadOnly
 	nativeWorkspaceWrite
 )
@@ -28,7 +27,7 @@ const (
 func nativeRoleAccess(step string) nativeAccess {
 	switch step {
 	case "product-review", "start-readiness":
-		return nativeTextOnly
+		return nativeReadOnly
 	case "blackbox-execution", "whitebox-execution":
 		return nativeOperationOnly
 	case "development-worker", "repair-worker", "whitebox-design":
@@ -36,8 +35,4 @@ func nativeRoleAccess(step string) nativeAccess {
 	default:
 		return nativeReadOnly
 	}
-}
-
-func nativeTextOnlyRole(step string) bool {
-	return nativeRoleAccess(step) == nativeTextOnly
 }

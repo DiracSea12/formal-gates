@@ -22,6 +22,10 @@ revision。确认前不派发。REQUEST(confirm-requirement) → Ask → DECIDE(
 REQUEST(mode) 选择 regular/lightweight。lightweight 终态 unverified，drive 自动固化清理。
 控制 abort、reset、jump、adopt-external 都通过 REQUEST/DECIDE；不能用旧同名命令。
 
+普通 drive 默认持续消费到用户决定、语义裁决或终态等真实边界；submit 接纳控制
+决定后自动续推，不需主代理另发 drive。单步排障使用明确的 --single-step，
+完整输出及中断合同见 [regular 公开使用合同](engine-regular.md)。
+
 ## 需求、计划与路线
 
 技术审给 granularity_review，产品审有效通过后才进入技术审。确认 topology 携带实际
@@ -54,7 +58,7 @@ Ask 推进，不以开发尚未结束为等待理由。QA Review 逐点、逐来
 开发返回 PREPARATION_RESULT，给 manifest、每个 subtask 实际验证、handoff 和完整
 状态。adapter 校验范围并跟踪/提交/取快照；缺前置的底层步骤不执行。未完成 Batch 的
 CONTINUE、FAIL、RUNTIME_ERROR 都保留原生身份，同批续跑用 drive --action-id --resume。
-全部 Batch 与黑盒冻结后，白盒独立判断覆盖再复用有效测试；只接受 test-owned 修改。
+全部 Batch 与黑盒冻结后，白盒独立判断覆盖再复用有效测试。中间 commit 只固定隔离待审快照；独立白盒 review 检查开发至当前白盒的完整 diff、确认仅测试改动后，才允许最终候选推进。有改动时 skip/waiver 不替代这一证明。
 全部 FROZEN case-set 与最终测试快照形成 review-ready，drive 冻结唯一 review-wave。
 
 ## 开发后审查

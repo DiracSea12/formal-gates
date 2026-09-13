@@ -3,44 +3,19 @@ package facade
 import (
 	"encoding/json"
 	"fmt"
-	"formal-gates/internal/engine/gitprep"
 	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 )
 
-func (f *Facade) runNativeBridgeTurns(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, adapter nativeExecutionTransport) (string, error) {
-	if claim.Task.Step == "whitebox-design" && !protocol.WhiteboxCoverageReady(run.Executions[claim.ActionID]) {
-		owners, err := gitprep.TestOwnershipResolver(workspace)
-		if err != nil {
-			return "", err
-		}
-		view, err := gitprep.Snapshot(workspace, claim.Candidate)
-		if err != nil {
-			return "", err
-		}
-		production := map[string]string{}
-		for _, entry := range view.Entries {
-			if !owners[entry.Path] && strings.HasSuffix(entry.Path, ".go") {
-				content, err := os.ReadFile(filepath.Join(workspace, entry.Path))
-				if err != nil {
-					return "", err
-				}
-				production[entry.Path] = string(content)
-			}
-		}
-		input, _ := json.Marshal(map[string]any{"requirement": run.Regular.Requirement, "production": production})
-		str := map[string]any{"type": "string"}
-		coverageSchema := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"coverageJudgment", "behaviorOracles"}, "properties": map[string]any{"coverageJudgment": str, "behaviorOracles": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"behavior", "oracle"}, "properties": map[string]any{"behavior": str, "oracle": str}}}}}
-		coverageInstructions, err := actionInstructions(run, "actions/qa-design.md#白盒覆盖判断")
-		if err != nil {
-			return "", err
-		}
+func (f *Facade) runNativeBridgeTurns(run Run, claim protocol.ExecutionClaim, resume bool, job, prompt string, plan nativeActionInput, adapter nativeExecutionTransport) (string, error) {
+	if plan.coverage != nil {
 		coverageJob := filepath.Join(job, "coverage")
-		identity := run.Executions[claim.ActionID].Identity
-		identity, err = f.callNativeTurn(run, claim, resume, coverageJob, coverageJob, coverageInstructions+"\n"+string(input), coverageSchema, true, adapter)
+		if err := plan.coverage.writeFiles(coverageJob, claim); err != nil {
+			return "", err
+		}
+		identity, err := f.callNativeTurn(run, claim, resume, coverageJob, plan.coverage.workspace, plan.coverage.prompt, plan.coverage.schema, plan.toolDescription, true, adapter)
 		if err != nil {
 			return identity, err
 		}
@@ -54,7 +29,7 @@ func (f *Facade) runNativeBridgeTurns(run Run, claim protocol.ExecutionClaim, re
 		claim.Identity = identity
 		resume = true
 	}
-	return f.callNativeTurn(run, claim, resume, job, workspace, prompt, schema, false, adapter)
+	return f.callNativeTurn(run, claim, resume, job, plan.material.workspace, prompt, plan.schema, plan.toolDescription, false, adapter)
 }
 
 // Coverage is a separate invocation directory. Platform-private files never
@@ -90,7 +65,7 @@ func (f *Facade) commitNativeCoverage(current Run, bound protocol.ExecutionClaim
 }
 
 // Every platform enters through the same live-claim check and bounded callbacks.
-func (f *Facade) callNativeTurn(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, noTools bool, adapter nativeExecutionTransport) (string, error) {
+func (f *Facade) callNativeTurn(run Run, claim protocol.ExecutionClaim, resume bool, job, workspace, prompt string, schema map[string]any, description string, noTools bool, adapter nativeExecutionTransport) (string, error) {
 	current, err := f.Show()
 	if err != nil {
 		return "", err
@@ -102,8 +77,7 @@ func (f *Facade) callNativeTurn(run Run, claim protocol.ExecutionClaim, resume b
 	if resume && (claim.Identity == "" || x.Identity != claim.Identity) || !resume && x.Identity != "" {
 		return "", fmt.Errorf("DEVELOPMENT_CONTINUITY: native turn must preserve the observed identity")
 	}
-	description, err := actionInstructions(run, "actions/development-worker.md#工具说明")
-	if err != nil {
+	if err := validateNativeInput(adapter, prompt); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(job, 0700); err != nil {

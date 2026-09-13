@@ -50,13 +50,15 @@ func (dshRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
 }
 func dshRoleTools(step string, noTools bool) []string {
 	if noTools {
-		return []string{}
+		return []string{"Read", "read", "read_file", "Glob", "glob", "Grep", "grep", "list_directory"}
 	}
 	read := []string{"Read", "read", "read_file", "Glob", "glob", "Grep", "grep", "list_directory"}
 	switch nativeRoleAccess(step) {
 	case nativeWorkspaceWrite:
 		return append(read, "Bash", "bash", "shell", "Write", "write", "write_file", "Edit", "edit", "edit_file", "apply_patch")
 	case nativeReadOnly:
+		return append(read, "Bash", "bash", "shell")
+	case nativeOperationOnly:
 		return read
 	default:
 		return []string{}
@@ -115,7 +117,7 @@ func (dshRuntimeAdapter) turn(q nativeTurn) (string, error) {
 			return "", fmt.Errorf("DSH_BINDING: original native session required")
 		}
 	}
-	cmd, err := prepareDSHProcess(claim.Context, job, workspace, q.Root, q.RunID, claim.ActionID, string(claim.Task.Step), coverage || nativeTextOnlyRole(string(claim.Task.Step)))
+	cmd, err := prepareDSHProcess(claim.Context, job, workspace, q.Root, q.RunID, claim.ActionID, string(claim.Task.Step), coverage)
 	if err != nil {
 		return "", err
 	}

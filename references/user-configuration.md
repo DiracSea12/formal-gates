@@ -214,7 +214,7 @@ go test ./internal/host ./internal/settings ./internal/cost ./internal/lifecycle
 验收，不为字段更新重跑未受影响的真实模型调用。安装/完整 regular 的支持声明仍须依据
 相应实际验证，缺失能力不能用通用 fallback 或主代理手工转交代替。
 
-持续执行使用 `workflow drive --continuous`，并沿用本 run 创建时冻结的配置；
+普通 `workflow drive` 默认持续执行，`--continuous` 显式选择相同行为，并沿用本 run 创建时冻结的配置；
 不需要另一份 executor 配置。`capacity` 仍是 engine 的签发容量，不是主代理可在
 消费过程中擅自提高的并发/次数预算。WorkBuddy、ZCode、DSH 与 Codex 通过同一
 已注册平台合同进入该入口。缺少原生能力或原绑定不可恢复时，返回明确错误，

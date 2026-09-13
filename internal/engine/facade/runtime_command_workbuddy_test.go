@@ -61,9 +61,9 @@ func TestWorkBuddyFreshIdentityIsNotResume(t *testing.T) {
 func TestWorkBuddyRoleTools(t *testing.T) {
 	for _, tc := range []struct{ step, want string }{
 		{"development-worker", "StructuredOutput,Bash,Edit,Read"}, {"repair-worker", "StructuredOutput,Bash,Edit,Read"},
-		{"whitebox-design", "StructuredOutput,Bash,Edit,Read"}, {"product-review", "StructuredOutput"},
-		{"start-readiness", "StructuredOutput"}, {"blackbox-execution", "StructuredOutput"},
-		{"whitebox-execution", "StructuredOutput"}, {"blackbox-design", "StructuredOutput,Read"},
+		{"whitebox-design", "StructuredOutput,Bash,Edit,Read"}, {"product-review", "StructuredOutput,Bash,Read,Glob,Grep"},
+		{"start-readiness", "StructuredOutput,Bash,Read,Glob,Grep"}, {"blackbox-execution", "StructuredOutput,Read,Glob,Grep"},
+		{"whitebox-execution", "StructuredOutput,Read,Glob,Grep"}, {"blackbox-design", "StructuredOutput,Bash,Read,Glob,Grep"},
 	} {
 		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "m", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
 		if err != nil {
@@ -90,6 +90,52 @@ func TestWorkBuddyDefaultModel(t *testing.T) {
 	for _, arg := range cmd.Args {
 		if arg == "--model" || arg == "--fallback-model" {
 			t.Fatalf("host default replaced: %q", cmd.Args)
+		}
+	}
+}
+
+func TestWorkBuddyReviewNativePermissionsFreshAndResume(t *testing.T) {
+	for _, step := range []string{"product-review", "start-readiness", "blackbox-design", "blackbox-review", "whitebox-review", "complexity-gate", "implementation-quality-gate"} {
+		for _, resume := range []bool{false, true} {
+			cmd, err := workBuddySessionCommand("/bin/workbuddy", "/work", "", "", "session", resume, json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			workBuddyRoleTools(cmd, step)
+			flags := map[string]string{}
+			for i := 1; i+1 < len(cmd.Args); i++ {
+				flags[cmd.Args[i]] = cmd.Args[i+1]
+			}
+			if flags["--permission-mode"] != "dontAsk" {
+				t.Fatalf("%s resume=%v: permission bypass: %q", step, resume, cmd.Args)
+			}
+			if flags["--tools"] != "StructuredOutput,Bash,Read,Glob,Grep" {
+				t.Fatalf("%s: unexpected workspace tools: %q", step, cmd.Args)
+			}
+			if flags["--allowedTools"] != "StructuredOutput,Read,Glob,Grep,mcp__formal-gates__formal_gates_operation" {
+				t.Fatalf("%s: Bash must use native command checks; reads and result delivery must remain allowed: %q", step, cmd.Args)
+			}
+			if flags["--strict-mcp-config"] != "--mcp-config" || flags["--setting-sources"] != "" {
+				t.Fatalf("%s: ambient configuration enabled: %q", step, cmd.Args)
+			}
+		}
+	}
+}
+
+func TestWorkBuddyNonReviewPermissionsUnchanged(t *testing.T) {
+	for _, step := range []string{"development-worker", "repair-worker", "whitebox-design", "blackbox-execution", "whitebox-execution"} {
+		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		workBuddyRoleTools(cmd, step)
+		for i, arg := range cmd.Args {
+			if arg == "--permission-mode" && cmd.Args[i+1] != "bypassPermissions" {
+				t.Fatalf("%s: non-review permission changed", step)
+			}
+			if arg == "--allowedTools" {
+				t.Fatalf("%s: review permission rules leaked", step)
+			}
 		}
 	}
 }
