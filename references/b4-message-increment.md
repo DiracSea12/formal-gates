@@ -143,3 +143,18 @@ failure is retained and its root cause is not asserted.
 The B4 development checks are complete. Formal review, independent QA, Seal and
 release/install adoption remain engine-owned later actions; this document does
 not claim they occurred. No unresolved implementation decisions remain.
+
+
+### B4 全阶段提示词复核：尚未落实的事实
+
+以下是对实际源码和派发输入的复核记录，范围仍为已确认 REQ-005。
+
+| 项目 | 当前证据 | 状态 |
+| --- | --- | --- |
+| 旧章节兼容 | `preparation.go`、`verification.go`、`runtime_operation_tool.go` 仍根据旧正文是否存在某个标题选择回退路径。 | 新版接入后的清理尚未完成。 |
+| 安装后的规则引用 | QA 审查和执行正文仍引用项目相对路径 `prompts/actions/qa-design.md`、`prompts/reviewer-base.md`，实际材料发布入口没有为外部项目提供这些绑定文件。 | 引用尚未解决；正文已含相应摘要的引用也仍保留。 |
+| 不适用工具 | 产品审和技术审正文禁止请求辅助模型，装配却仍声明 `model.run` 及其工具说明。 | 规则与工具声明不一致。 |
+| 需求澄清等包内指南 | `requirements-clarification.md` 重复全文/revision/确认步骤，并保留 RQ-011 登记集说明；未创建原生 worker 不等于该指南已完成内容优化。 | 全阶段核对尚未体现该指南的处置。 |
+| 续做输入 | 同身份 B4 恢复曾再次发送 6,569 字完整角色消息；现有阶段计量主要覆盖首次装配。 | 仍需区分必要的恢复约束、可按需读取的内容及重复材料，不能把首次派发计量当作续做验证。 |
+
+复核原始记录：`/private/tmp/stage4a-reference-bind-ss_0ezih/evidence/all-prompts-source-audit.json`。上述判断不改变既有开发、QA 原结果或费用记录。
