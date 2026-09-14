@@ -290,9 +290,8 @@ func prepareProjection(r *RegularState) {
 					review.Binding.TopologyScope = r.Topology
 				}
 				p.QA[mode] = &retained
-				if change.Origin == "EXTERNAL_ADOPTION" && mode == "whitebox" && retained.Snapshot != p.DevelopmentSnapshot {
-					// Author against the adopted candidate, never the old source tree.
-					retained.Snapshot = p.DevelopmentSnapshot
+				if mode == "whitebox" && old.DevelopmentSnapshot != p.DevelopmentSnapshot {
+					projectWhiteboxArtifacts(&retained, old.DevelopmentSnapshot)
 				} else {
 					p.Resources[mode] = old.Resources[mode]
 				}
@@ -315,19 +314,37 @@ func prepareProjection(r *RegularState) {
 			if err != nil {
 				continue
 			}
-			if change.Origin == "EXTERNAL_ADOPTION" && mode == "whitebox" {
-				copy.Snapshot = p.DevelopmentSnapshot
-			}
 			copy.Design = &design
 			copy.Review = &review
 			copy.Whitelist = &whitelist
 			p.QA[mode] = &copy
-			p.Resources[mode] = old.Resources[mode]
+			if mode == "whitebox" && old.DevelopmentSnapshot != p.DevelopmentSnapshot {
+				projectWhiteboxArtifacts(&copy, old.DevelopmentSnapshot)
+			} else {
+				p.Resources[mode] = old.Resources[mode]
+			}
 		}
 	}
 	retainExplicitDevelopment(r, p)
 	r.Preparation = p
 }
+
+// Retain the recorded QA delta while rebasing its workspace on new development.
+// A revision's committed tests live in AuthoringBase until the next design is
+// committed. Repeated candidate changes before that commit keep the same source.
+func projectWhiteboxArtifacts(q *PreparedQA, developmentBase string) {
+	source := q.Snapshot
+	if source == "" {
+		source = q.AuthoringBase
+	}
+	if source != "" {
+		q.TestArtifactsFrom = source
+		q.TestArtifactsBase = developmentBase
+	}
+	q.AuthoringBase = ""
+	q.Snapshot = ""
+}
+
 func preparationTask(p *Preparation, step, scope string) runtime.TaskKey {
 	return runtime.TaskKey{Node: "entry", Step: authoring.StepID(step), Scope: strings.TrimPrefix(p.BindingDigest, "sha256:") + ":" + scope}
 }

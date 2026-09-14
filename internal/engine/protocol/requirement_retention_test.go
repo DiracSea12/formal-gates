@@ -140,10 +140,12 @@ func TestUnaffectedAdoptionPreservesUnfrozenQADesignAndApprovals(t *testing.T) {
 						}
 					} else {
 						if mode == "whitebox" {
-							if retained.Snapshot != "adopted" || r.Preparation.Resources[mode] != "" {
+							if retained.Snapshot != "" || retained.AuthoringBase != "" || retained.TestArtifactsFrom != q.Snapshot || retained.TestArtifactsBase != old.DevelopmentSnapshot || r.Preparation.Resources[mode] != "" {
 								t.Fatal("whitebox retained old implementation workspace")
 							}
 							retained.Snapshot = q.Snapshot // Compare all remaining evidence without changing history.
+							retained.TestArtifactsFrom = q.TestArtifactsFrom
+							retained.TestArtifactsBase = q.TestArtifactsBase
 						}
 						after, _ := json.Marshal(retained)
 						if !bytes.Equal(before, after) {

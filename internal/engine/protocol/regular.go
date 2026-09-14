@@ -754,19 +754,19 @@ func (e *Engine) admitRegularEvent(ev Event, s *State, revision uint64) (Accepta
 	if err != nil {
 		return Acceptance{}, err
 	}
-	// Stale unclaimed work can retire immediately. A claimed developer first
+	// Stale unclaimed work can retire immediately. A claimed preparation task first
 	// stops through the existing host action and source settlement; only then
 	// release its scheduling slot, retaining its identity and spent attempts.
 	for id, x := range s.RegularExecutions {
 		stale := x.Claim.RequirementRevision != r.Requirement.Revision || !currentPreparationClaim(r, x.Claim) || (x.Claim.Task.Step == "start-readiness" && x.Claim.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest)
-		if stale && x.Claim.Task.Step == "development-worker" && x.Claimed && !x.Finished && (x.Source == nil || x.Source.Status == "RUNNING") {
+		if stale && preparationStep(x.Claim.Task.Step) && x.Claimed && !x.Finished && (x.Source == nil || x.Source.Status == "RUNNING") {
 			target := &AgentHostAction{WorkerActionID: id, AttemptID: x.Claim.AttemptID, Identity: x.Identity, Reason: "execution binding superseded"}
 			intentID := "hact:" + id + ":terminate"
 			if _, exists := s.PendingHostActions[intentID]; !exists {
 				s.PendingHostActions[intentID] = HostActionIntent{ActionID: intentID, Operation: HostActionTerminateAgent, Step: x.Claim.Task.Step, Terminate: target, PayloadDigest: digestOfCanonical(target), Correlation: x.Identity, Revision: revision + 1}
 			}
 		}
-		if stale && !x.Finished && (!x.Claimed || (x.Claim.Task.Step == "development-worker" && x.Source != nil && x.Source.Status != "RUNNING")) {
+		if stale && !x.Finished && (!x.Claimed || (preparationStep(x.Claim.Task.Step) && x.Source != nil && x.Source.Status != "RUNNING")) {
 			x.Finished = true
 			delete(s.PendingActions, id)
 			s.RegularExecutions[id] = x
