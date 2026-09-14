@@ -2,6 +2,7 @@ package facade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/decision"
+	"formal-gates/internal/engine/persistence"
 )
 
 // ContinuousResult is a projection of one consumption call, not another task
@@ -173,6 +175,10 @@ func (f *Facade) DriveContinuous(ctx context.Context) (ContinuousResult, error) 
 }
 
 func transientExecutorWait(err error) bool {
+	var held *persistence.LockHeldError
+	if errors.As(err, &held) {
+		return true
+	}
 	message := err.Error()
 	return strings.Contains(message, "HOST_ACTION_RUNNING") || strings.Contains(message, "COST_PENDING") || strings.Contains(message, "lock held") || strings.Contains(message, "STALE_FRESHNESS")
 }

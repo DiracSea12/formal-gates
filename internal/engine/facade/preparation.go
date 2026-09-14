@@ -612,7 +612,7 @@ func preparationSchema(step string, run Run, claim protocol.ExecutionClaim) map[
 		fields["manifest"] = map[string]any{"type": "array", "items": str, "description": "Only actual changed, new or deleted project-relative file path strings; never coverage source/point/case IDs."}
 	}
 	if step == "development-worker" {
-		fields["status"] = map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "CONTINUE"}}
+		fields["status"] = map[string]any{"type": "string", "enum": []string{"PASS", "CONTINUE"}}
 		fields["handoff"] = map[string]any{"type": "string", "minLength": 1, "description": "Only unresolved decisions/debt unavailable from committed files. If none, write No unresolved decisions."}
 		fields["validation"] = array(object(map[string]any{"subtaskId": str, "procedure": str, "observation": str, "result": map[string]any{"type": "string", "enum": []string{"PASS", "FAIL"}}}))
 		return object(fields)

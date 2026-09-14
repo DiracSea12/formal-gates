@@ -7,7 +7,7 @@ import (
 )
 
 func TestDeveloperValidationContinuationUsesStatusAndPreservesChecks(t *testing.T) {
-	for _, status := range []string{"CONTINUE", "FAIL"} {
+	for _, status := range []string{"PASS", "FAIL"} {
 		t.Run(status, func(t *testing.T) {
 			e := preparationEngine(t)
 			gitReceipt(t, e, "base")
@@ -15,12 +15,12 @@ func TestDeveloperValidationContinuationUsesStatusAndPreservesChecks(t *testing.
 			claimContinuingDeveloper(t, e, x)
 			raw := preparationResult(x)
 			raw.Identity = continuityIdentity(x)
-			raw.Status = status
+			raw.Status = "CONTINUE"
 			// Neither the word FAIL nor PASS decides completion or retry credit.
 			// Only the typed result does; partial successful checks remain useful
 			// evidence even when the remaining check has not completed or failed.
 			raw.Message = "PASS and FAIL are fixture text; consult the typed status"
-			raw.Validation = []BatchValidation{{SubtaskID: "S1", Procedure: "completed bounded check", Observation: "check passed; remaining validation is separate", Result: "PASS"}}
+			raw.Validation = []BatchValidation{{SubtaskID: "S1", Procedure: "completed bounded check", Observation: "fixture check result: " + status, Result: status}}
 			submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &raw})
 			settleContinuingDeveloper(t, e, x)
 			snap, err := e.Load()
@@ -38,10 +38,7 @@ func TestDeveloperValidationContinuationUsesStatusAndPreservesChecks(t *testing.
 			if next.PreviousAction != x.Claim.ActionID || next.Claim.Task != x.Claim.Task || next.Identity != raw.Identity || next.Claim.Operation != "resume" {
 				t.Fatal("validation continuation lost its original work/session")
 			}
-			credit := 0
-			if status == "CONTINUE" {
-				credit = 1
-			}
+			credit := 1
 			if continuationCredit(snap.State, x.Claim.Task) != credit {
 				t.Fatal("message text overrode typed failure/continuation")
 			}
@@ -116,4 +113,22 @@ func claimContinuingDeveloper(t *testing.T, e *Engine, x RegularExecution) {
 }
 func settleContinuingDeveloper(t *testing.T, e *Engine, x RegularExecution) {
 	submitRegular(t, e, RegularEvent{Operation: "SOURCE", Source: &ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: "codex", Identity: continuityIdentity(x), Status: "UNAVAILABLE", Reason: "fixture source"}})
+}
+
+func TestDevelopmentFailIsRejectedAsTaskResult(t *testing.T) {
+	e := preparationEngine(t)
+	gitReceipt(t, e, "base")
+	x := currentExecution(t, e, "development-worker")
+	claimContinuingDeveloper(t, e, x)
+	raw := preparationResult(x)
+	raw.Identity = continuityIdentity(x)
+	raw.Status, raw.Message = "FAIL", "self-test failed"
+	got := submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &raw})
+	if got.Status != "REJECTED_RESULT" {
+		t.Fatalf("development FAIL admitted: %s", got.Status)
+	}
+	snap, _ := e.Load()
+	if snap.State.Results[x.Claim.ActionID].Outcome == "FAIL" || len(snap.State.Regular.Preparation.Batches) != 0 {
+		t.Fatal("invalid task result became development failure or completed batch")
+	}
 }

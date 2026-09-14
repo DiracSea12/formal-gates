@@ -34,7 +34,7 @@ func (f *Facade) finishNativeResult(actionID string, claim protocol.ExecutionCla
 		if claim.Task.Step == "development-worker" && result.Status == "PASS" {
 			p := current.Regular.Preparation
 			if err := gitprep.CheckManifest(p.Resources["development"], p.DevelopmentSnapshot, result.Manifest); err != nil {
-				result.Status = "FAIL"
+				result.Status = "CONTINUE"
 				result.Message = "Development delivery validation failed; correct the manifest in this same batch identity: " + err.Error()
 			}
 		}

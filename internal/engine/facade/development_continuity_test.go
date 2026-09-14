@@ -33,7 +33,7 @@ func TestDeveloperNativeContinuation(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			task := "Implement the hello Go command. This is a deliberately two-turn preparation exercise. If go.mod does not exist, create only go.mod with module example.invalid/hello and go 1.23, then return CONTINUE immediately with manifest [go.mod] and concrete remaining work. Do not create main.go on that first turn. If go.mod already exists, implement main.go printing exactly hello with no newline, run go run . and go test ./..., and return PASS with the complete manifest including go.mod and main.go and S1 validation."
 			if mode == "self-test" {
-				task = "Implement the hello Go command in two turns. If go.mod does not exist, create only go.mod (module example.invalid/hello; go 1.23), actually execute go test ./... which will fail because no Go package exists yet, then return FAIL immediately with manifest [go.mod], the exact observed validation failure and remaining main.go work. Do not fix it during that first turn. If go.mod already exists, finish main.go printing exactly hello with no newline, run go run . and go test ./..., and return PASS with manifest go.mod and main.go and S1 validation."
+				task = "Implement the hello Go command in two turns. If go.mod does not exist, create only go.mod (module example.invalid/hello; go 1.23), actually execute go test ./... which will fail because no Go package exists yet, then return CONTINUE immediately with manifest [go.mod], validation result FAIL, the exact observed validation failure and remaining main.go work. Do not fix it during that first turn. If go.mod already exists, finish main.go printing exactly hello with no newline, run go run . and go test ./..., and return PASS with manifest go.mod and main.go and S1 validation."
 			}
 			if mode == "interrupted" {
 				task = "Implement main.go and go.mod for the exact hello command. On binding.operation spawn, first execute sleep 20 before doing any work. On binding.operation resume proceed immediately to implement and validate go run . and go test ./..., then return PASS with manifest go.mod and main.go and S1 validation."
@@ -100,9 +100,6 @@ func TestDeveloperNativeContinuation(t *testing.T) {
 			}
 			original := first.Executions[x.Claim.ActionID]
 			expected := "CONTINUE"
-			if mode == "self-test" {
-				expected = "FAIL"
-			}
 			if mode == "interrupted" {
 				expected = "RUNTIME_ERROR"
 			}

@@ -676,12 +676,15 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 	}
 	p := r.Preparation
 	step := string(x.Claim.Task.Step)
+	if step == "development-worker" && result.Status != "PASS" && result.Status != "CONTINUE" {
+		return reject(fmt.Errorf("development result requires PASS or CONTINUE"))
+	}
 	if result.Status == "DRAFT" && !strings.HasSuffix(step, "-design") {
 		return reject(fmt.Errorf("DRAFT is only a QA design delivery status"))
 	}
 	if step == "development-worker" && result.Status != "PASS" {
 		if strings.TrimSpace(result.Message) == "" {
-			return reject(fmt.Errorf("unfinished development requires its actual continuation or failure reason"))
+			return reject(fmt.Errorf("unfinished development requires its actual continuation reason"))
 		}
 		s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, Digest: digestOfCanonical(result)}
 		at := s.Attempts[x.Claim.Task]

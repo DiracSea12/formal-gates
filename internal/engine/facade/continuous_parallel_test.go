@@ -3,6 +3,7 @@ package facade
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -160,5 +161,61 @@ func TestContinuousQARecoveryDoesNotInterruptActiveDeveloper(t *testing.T) {
 				return
 			}
 		}
+	}
+}
+
+func TestContinuousLockHeldDoesNotInterruptIndependentActions(t *testing.T) {
+	f, a := continuousPreparationFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var turns atomic.Int32
+	a.answer = func(q nativeTurn) any {
+		turns.Add(1)
+		started <- string(q.Claim.Task.Step)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return map[string]string{"message": "fixture interrupted before result admission"}
+	}
+	var completions atomic.Int32
+	f.fault = func(p persistence.FaultPoint) error {
+		if p == persistence.FaultExecuteAfter {
+			if completions.Add(1) == 1 {
+				return fmt.Errorf("source submission: %w", &persistence.LockHeldError{Path: "fixture-state.lock"})
+			}
+			return fmt.Errorf("fixture interruption preserves completed native journal")
+		}
+		return nil
+	}
+	finished := make(chan ContinuousResult, 1)
+	failure := make(chan error, 1)
+	go func() { r, e := f.DriveContinuous(ctx); finished <- r; failure <- e }()
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case step := <-started:
+			seen[step] = true
+			t.Logf("native turn entered: %s", step)
+		case result := <-finished:
+			close(release)
+			t.Fatalf("consumer returned before independent turns: seen=%v boundary=%s blocked=%v error=%v", seen, result.Boundary, result.Blocked, <-failure)
+		case <-ctx.Done():
+			close(release)
+			t.Fatalf("independent issued actions did not overlap: seen=%v", seen)
+		}
+	}
+	close(release)
+	result := <-finished
+	err := <-failure
+	for _, reason := range result.Blocked {
+		if strings.Contains(reason, "LOCK_HELD") {
+			t.Fatalf("transient source lock became terminal: %s", reason)
+		}
+	}
+	if err != nil || len(seen) != 2 || turns.Load() != 2 || len(result.Blocked) != 2 {
+		t.Fatalf("seen=%v turns=%d blocked=%v err=%v", seen, turns.Load(), result.Blocked, err)
 	}
 }

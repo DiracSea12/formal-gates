@@ -119,7 +119,8 @@ resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答�
 回执时显示 UNKNOWN。明确已停止且有身份时最多认领一次同 thread 的原生 resume，
 再次中断由已有结果或 RUNTIME_ERROR 结算，不无限恢复。
 
-未完成 Batch 的正常返回使用 `CONTINUE`，自测失败使用 `FAIL`，并保留实际剩余项、
+开发任务结果只允许 `PASS` / `CONTINUE`；自测失败继续修复并验证，不设固定修测轮数。
+未完成返回 `CONTINUE`，单次验证仍可记 `FAIL`，并保留实际剩余项、
 验证与 manifest。后续 attempt 的 `claim.operation` 为 `resume`，必须使用上述
 `--resume` 入口；正常返回、RUNTIME_ERROR、授权增加 attempt 或重新确认改编号的计划
 均不自行解除原生身份，也不重置已用额度。显式 executor-handoff 是另一项用户控制：
