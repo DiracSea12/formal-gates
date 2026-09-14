@@ -560,6 +560,15 @@ func TestProcedureExecutionUsesEngineAdmissionAndRealEvidence(t *testing.T) {
 	if len(pending.Pending.Input) != 1 || pending.Pending.Input[0] != "BLACKBOX:C1" || len(pending.Pending.Blocked) != 0 {
 		t.Fatalf("approved procedure should await executor input after automatic prepare: %+v", pending)
 	}
+	// A procedure awaiting its execution command is still unfinished work.
+	// The progress view must count it even though no target can start yet.
+	progress, err := f.ProgressSince(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := progress.PendingCases[action].Remaining; got != 1 {
+		t.Fatalf("awaiting command omitted from remaining count: %d", got)
+	}
 	command := &coverage.Command{Executable: "sh", Args: []string{"-c", "go run .; printf observed-stderr >&2; exit 7"}, ExpectedExitCode: 7}
 	q := operationRequest(t, f, action, "qa.target", "outside")
 	q.CaseID = "BLACKBOX:OUTSIDE"
