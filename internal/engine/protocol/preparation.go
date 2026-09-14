@@ -711,7 +711,9 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			mergeQAReview(result.Review, *q.RetainedReview)
 		}
 		q.Review = result.Review
-		q.DesignGap = result.Message
+		if !q.NeedsRevision {
+			q.DesignGap = result.Message
+		}
 		q.ConsecutiveFailures++
 		q.RecoveryRequired = q.ConsecutiveFailures >= 3
 		q.Frozen = false
@@ -803,7 +805,9 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			}
 			syncQAReviewScope(q)
 			q.Design = result.Design
-			q.DesignGap = ""
+			if !q.NeedsRevision {
+				q.DesignGap = ""
+			}
 			q.DesignActionID = result.ActionID
 			q.Manifest = result.Manifest
 			q.Reuse = mergeQAReuse(q.Reuse, result.Reuse, merged.Manifest)
@@ -845,7 +849,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			q.ReviewWaiver = nil
 			q.Whitelist = &w
 			q.Suggestions = result.Suggestions
-			q.Frozen = len(q.Suggestions) == 0
+			q.Frozen = len(q.Suggestions) == 0 && !q.NeedsRevision
 		}
 	}
 	s.Results[result.ActionID] = WorkerResult{ActionID: result.ActionID, Provider: result.Provider, Outcome: result.Status, PayloadDigest: digestOfCanonical(result), Digest: digestOfCanonical(result)}
@@ -1352,7 +1356,14 @@ func preparationDecision(s *State, q RegularRequest) {
 	case "qa-revise":
 		invalidateVerification(s, "QA artifact revision")
 		p.Candidate = nil
-		reviseQA(p.QA[q.Target])
+		// Keep the current binding until running work returns. Its real draft,
+		// review and test artifacts must become the revision's retained inputs.
+		if qaPreparationInFlight(s, q.Target) {
+			p.QA[q.Target].NeedsRevision = true
+			p.QA[q.Target].Frozen = false
+		} else {
+			reviseQA(p.QA[q.Target])
+		}
 		p.QA[q.Target].DesignGap = q.Reason
 	case "development-rework":
 		batch, _ := developmentReworkBatch(r, q.Target) // validated by preparationRequest
@@ -1439,6 +1450,19 @@ func reviseQA(q *PreparedQA) {
 	q.Revision++
 	q.Snapshot = ""
 }
+
+// Unclaimed actions have no worker result to retain and can be superseded by
+// the existing revision binding. Claimed actions must finish under their binding.
+func qaPreparationInFlight(s *State, mode string) bool {
+	p := s.Regular.Preparation
+	for _, x := range s.RegularExecutions {
+		if x.Claimed && !x.Finished && (x.Claim.Task == qaTask(p, mode, "design") || x.Claim.Task == qaTask(p, mode, "review")) {
+			return true
+		}
+	}
+	return false
+}
+
 func refreshPreparationRecovery(s *State, revision uint64) bool {
 	r := s.Regular
 	p := r.Preparation
@@ -1457,6 +1481,11 @@ func refreshPreparationRecovery(s *State, revision uint64) bool {
 		key := qaTask(p, mode, kind)
 		at := s.Attempts[key]
 		if q.NeedsRevision && !q.RecoveryRequired {
+			// Whitebox files need their existing commit receipt before we clear
+			// the design; the next authoring action then uses that exact snapshot.
+			if qaPreparationInFlight(s, mode) || (mode == "whitebox" && q.Design != nil && q.Snapshot == "") {
+				continue
+			}
 			reviseQA(q)
 			return true
 		}
