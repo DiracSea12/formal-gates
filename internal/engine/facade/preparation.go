@@ -375,6 +375,13 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 	payload := map[string]any{"binding": claim, "requirement": map[string]any{"path": document.Path, "revision": document.Revision, "text": document.Text, "confirmed": document.Confirmed}, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
 	if step == "development-worker" {
 		workspace = p.Resources["development"]
+		increment, incrementBatch, err := developmentIncrementInput(run, claim)
+		if err != nil {
+			return nil, "", err
+		}
+		if increment != nil {
+			payload["developmentIncrement"] = increment
+		}
 		if previous := run.Executions[claim.ActionID].PreviousAction; previous != "" {
 			payload["previousDevelopmentResult"] = (*protocol.PreparationResult)(nil)
 			// Handoff can retire an unclaimed continuation without a result of its
@@ -393,7 +400,10 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 			}
 		}
 		for _, b := range run.Regular.Plan.Batches {
-			if _, done := p.Commits[b.ID]; !done {
+			if incrementBatch != "" && b.ID != incrementBatch {
+				continue
+			}
+			if _, done := p.Commits[b.ID]; !done || incrementBatch != "" {
 				payload["batch"] = b
 				payload["reworkReason"] = p.ReworkReason
 				break

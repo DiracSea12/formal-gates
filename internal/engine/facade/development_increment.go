@@ -1,11 +1,41 @@
 package facade
 
 import (
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"formal-gates/internal/engine/gitprep"
 	"formal-gates/internal/engine/protocol"
 )
+
+// Select by the issued task, not the latest receipt: older tasks can still be
+// resumed after another increment has been confirmed. Do not copy the previous
+// plan or other batches' task/disposition maps into this role's material.
+func developmentIncrementInput(run Run, claim protocol.ExecutionClaim) (map[string]any, string, error) {
+	for _, receipt := range run.Regular.DevelopmentIncrements {
+		for batch, task := range receipt.Tasks {
+			if task != claim.Task {
+				continue
+			}
+			return map[string]any{
+				"id": receipt.ID, "decisionEvent": receipt.DecisionEvent,
+				"revision": receipt.Revision, "requirementRevision": receipt.RequirementRevision,
+				"kind": receipt.Kind, "batchId": batch, "task": task,
+				"reason": receipt.Reason,
+			}, batch, nil
+		}
+	}
+	// The protocol appends a SHA-256 decision digest to increment task scopes.
+	// Ordinary Batch names may themselves contain the word "increment".
+	if i := strings.LastIndex(claim.Task.Scope, "-increment-"); i >= 0 {
+		digest := claim.Task.Scope[i+len("-increment-"):]
+		if _, err := hex.DecodeString(digest); err == nil && len(digest) == 64 {
+			return nil, "", fmt.Errorf("DEVELOPMENT_INCREMENT: confirmed receipt missing for task %s", claim.Task)
+		}
+	}
+	return nil, "", nil
+}
 
 // The ordinary Facade boundary freezes the actual workspace in the Ask. The
 // engine remains the only writer of plan, lineage and incremental authorization.
