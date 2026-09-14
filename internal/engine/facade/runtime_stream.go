@@ -27,9 +27,6 @@ func (streamRuntimeAdapter) bindResources(binding *protocol.HostRuntimeContext, 
 func (streamRuntimeAdapter) transcript(identity string, binding *protocol.HostRuntimeContext) (string, error) {
 	return streamTranscript(identity, binding)
 }
-func (streamRuntimeAdapter) toolConfig(json.RawMessage) (map[string]any, error) {
-	return map[string]any{}, nil
-}
 
 func captureStreamContext(provider, executable string, extra map[string]string) (*protocol.HostRuntimeContext, error) {
 	resolved, err := exec.LookPath(executable)

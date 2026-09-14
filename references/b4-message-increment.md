@@ -460,3 +460,75 @@ reason 引用对应已核实问题；workspaceView 由 facade 取得。随后使
 最终保留全量运行中其余包的有效结果，并使用最终针对性测试、CLI race 和失败用例的
 普通复验覆盖受影响部分，没有重复启动完整测试集。这里的 PASS 仅为开发本地验证；
 没有实机平台测试、原生平台入口探测、独立正式 QA、Seal 或发布接纳声明。
+
+### R5 清理增量：已验证修改与剩余核查（候选 096ddbec）
+
+本节记录 development-increment `r5-complete-diff-915` 的开发自测与未完成项，
+不代表 R5 完成、正式门审或 QA 通过。原 B5 比较范围是 `455efd4^..455efd4`
+（91 个文件）；累计范围是 `7239018374654c85e3c4c917458a05b58a479ab4..096ddbec`
+（340 个路径）。路径枚举不等于完整正文核查，原有 B5/B6 PASS 不替代后续差异检查。
+
+已确认并实施的清理：
+
+- `runtimeToolConfig` 的两个生产调用均在 Codex 启动/恢复模块。改为直接消费
+  Codex 适配方法，删除公共 runtime 合同的 `toolConfig` 义务、公共转发和 stream
+  空实现。其他平台不再为 Codex 配置协议实现空方法；解析和错误处理仍由 Codex 持有。
+- `reviewPrompt`、`preparationPrompt`、`verificationPrompt` 只被测试调用。
+  将原样包装移入各自既有测试文件；生产仍由 `prepareNativeActionInput` 装配材料，
+  未删除测试断言，也未新增提示词文件或装配层。
+- 删除 common continuity 中错位的 Codex 恢复注释，在实际归属处说明恢复约束。
+  公开说明同步修正只读角色的正常工具能力及平台合同，不增加工具白名单或新配置。
+
+已经检查的平台、来源、恢复、用量与角色能力边界表明：公共流程继续消费 host descriptor
+和 runtime adapter；DSH ACP、ZCode 事件流及 WorkBuddy print 协议具有不同身份、完成与
+恢复语义，保留对应薄适配。WorkBuddy 的 `--allowedTools` 预批准与 `--tools default`
+工具集不是同一职责，不作重复代码删除。QA 增量合并、临时资源保留、持续消费租约、
+动作材料绑定和历史结果读取分别有已确认需求依据，不因新增文件数多而删除。
+包内 `phase3-qa-fixture.sh build` 明确构建 formal-gates 自身；不能将该专用测试夹具的
+Go 结构前提误判为普通外部项目的生产入口前提。
+
+有效验证使用 `GOCACHE=/tmp/formal-gates-b4-cache`，Go 命令清除 `CODEX_HOME`、
+`CODEX_CLI_PATH`：
+
+- `go test ./... -timeout 30m` 完整日志 `/tmp/b6-r5-full-resume.log` 全部包通过，
+  facade 503.731s。更早中断的运行没有最终结果，不计为通过。
+- `go test -race ./internal/validate ./internal/cli -timeout 15m` 最终日志
+  `/tmp/b6-r5-race-final.log` 两包通过。此前 `/tmp/b6-r5-race.log` 中
+  `TestCLIConsumerIndependentTurnsOverlap` 报 `fake owners did not settle`；
+  单例复跑通过，最终完整 race 通过。保留原失败，不无据断言其根因。
+- `go test -tags=phase0whitebox ./internal/validate` 通过（48.430s）；最终源码
+  `go vet ./...`、构建、package validate、portable canary 及两种 diff 检查通过。
+- 最终受影响平台测试集通过（11.926s），包括 `TestNativePlatform` 系列、
+  `TestClosedToolConfig`、`TestNativeRoleAccess`、`TestStreamCoverageRecovery`。
+  现有假平台注册/协议升级测试及公共入口回归均保留；本次没有重复真实昂贵平台流程，
+  本地夹具结果不构成真实平台完整支持的验收证明。维护合同见 `user-configuration.md`。
+
+剩余工作：完整累计差异仍未逐项收尾。已读范围覆盖最新 `cf8764e..096ddbec` 的生产 Go
+差异、平台主要实现及上述公共模块，并继续检查了脚本、清单、角色规则、材料绑定、
+开发续用、并发取消、平台结果、混合白盒和状态契约的相关测试差异；其余累计测试、
+说明及历史变更的必要性仍须完成对照，不能把这些已检查组扩大成完整核查结论。
+本次续查另外读取了原 B5 的 WorkBuddy 配置、命令、进程恢复与 MCP 边界测试，
+以及累计 README、SKILL、正式流程、安装说明和需求优先级说明差异。旧平台参数断言
+须结合其后角色能力升级看待，不能把历史严格工具集当成当前必需兼容合同。
+
+进度疑点已在正常用例路径复现，未修改生产进度代码：复用
+`frozenVerificationCommandFixture`，将批准 case 的 Command 设为 nil，经
+`nativeFixtureClaim` 和 `runBatch` 自动完成 prepare，再调用 `ProgressSince(0)`。
+`pending.input=[BLACKBOX:C1]`，但 `PendingCases[action].Remaining=0`，预期为 1。
+原因是 `progress.go` 的 Remaining 汇总遗漏 `PendingQA.Input`；待执行输入已经由现有
+QA pending 合同正确提供，不需要新增调度或平台能力。
+
+临时探针 `TestR5ProgressAwaitingCommandProbe` 使用上述已有夹具并断言 Remaining=1，
+通过 `go test ./internal/engine/facade -run '^TestR5ProgressAwaitingCommandProbe$' -count=1 -timeout 3m`
+实际失败（4.706s），原始日志 `/tmp/b6-r5-progress-probe.log`。探针随后移除，未纳入交付。
+此前全量/race通过记录仍是其实际运行结果，不能以这些结果否定该新复现；累计结构核查
+仍未结束。
+
+本次继续核查了 protocol 的 preparation/verification 累计改动、安装版本合同及目录
+发现测试、cost 的 number/null 往返与生命周期/恢复测试。草稿与独立审查分离、白盒
+测试所有权批准和 CONTINUE 额度保留都有既有需求归属；number/null 处理用来保留
+已记录的计量存在性，不另造账本。未据此删除必要公共逻辑。
+
+发现并清除 `formal-flow.md` 的过时开发 FAIL 返回说明：开发者只返回 PASS/CONTINUE，
+真实运行错误仍由既有机制记录为 RUNTIME_ERROR。此项只同步已实现的结果合同，
+没有更改运行时状态或历史结果。完整累计结构核查与进度问题处置仍未完成。

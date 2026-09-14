@@ -44,7 +44,6 @@ type nativeRuntimeAdapter interface {
 	capture(settings.Values) (*protocol.HostRuntimeContext, error)
 	validate(*protocol.HostRuntimeContext) error
 	transcript(string, *protocol.HostRuntimeContext) (string, error)
-	toolConfig(json.RawMessage) (map[string]any, error)
 	runModel(context.Context, settings.Values, protocol.TaskOperation, string, protocol.TaskOperationReceipt) protocol.TaskOperationReceipt
 	observeModel(protocol.TaskOperation, string, protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error)
 }
@@ -126,14 +125,6 @@ func captureRuntimeContext(provider string, config settings.Values, stateDirecto
 		}
 	}
 	return binding, nil
-}
-
-func runtimeToolConfig(provider string, raw json.RawMessage) (map[string]any, error) {
-	adapter, err := runtimeAdapter(provider)
-	if err != nil {
-		return nil, err
-	}
-	return adapter.toolConfig(raw)
 }
 
 func runtimeCommandContext(cmd *exec.Cmd, binding *protocol.HostRuntimeContext) error {

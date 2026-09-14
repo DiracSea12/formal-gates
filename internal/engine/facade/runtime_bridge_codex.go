@@ -157,7 +157,7 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	toolConfig, err := runtimeToolConfig(claim.Provider, rawConfig)
+	toolConfig, err := (codexRuntimeAdapter{}).toolConfig(rawConfig)
 	if err != nil {
 		return "", err
 	}

@@ -624,3 +624,13 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 		}
 	}
 }
+
+// preparationPrompt renders the production material for prompt assertions in this package.
+func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
+	material, err := preparePreparationPrompt(run, claim)
+	if err != nil {
+		return "", "", err
+	}
+	prompt, err := material.render(claim)
+	return prompt, material.workspace, err
+}

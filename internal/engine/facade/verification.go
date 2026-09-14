@@ -40,14 +40,6 @@ func verificationRepair(run Run) *protocol.RepairPlan {
 	}
 	return nil
 }
-func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
-	material, err := prepareVerificationPrompt(run, claim)
-	if err != nil {
-		return "", "", err
-	}
-	prompt, err := material.render(claim)
-	return prompt, material.workspace, err
-}
 
 func prepareVerificationPrompt(run Run, claim protocol.ExecutionClaim) (nativePromptMaterial, error) {
 	w := verificationWave(run)

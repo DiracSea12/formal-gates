@@ -10,10 +10,6 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
-// codexThreadRequest invokes Codex's native local protocol without a turn/start
-// or fresh thread request. A resume probe loads only the specified thread; its
-// native missing-rollout error is different from a timeout or transport failure.
-
 func (f *Facade) developerRecoveryPath(action string, interrupted bool) string {
 	job := f.codexJob(action)
 	if interrupted {

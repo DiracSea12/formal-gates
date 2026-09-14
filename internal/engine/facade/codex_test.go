@@ -650,3 +650,12 @@ func TestCodexJobDirectoryForIssuedBatchAction(t *testing.T) {
 		}
 	}
 }
+
+// reviewPrompt renders the production material for prompt assertions in this package.
+func reviewPrompt(run Run, claim protocol.ExecutionClaim) (string, error) {
+	material, err := prepareReviewPrompt(run, claim)
+	if err != nil {
+		return "", err
+	}
+	return material.render(claim)
+}

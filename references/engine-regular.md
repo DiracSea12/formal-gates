@@ -110,10 +110,11 @@ formal-gates workflow drive --root <project> --run-id <id> --action-id <issued-a
 的 design/review。adapter 在创建原生进程前通过同一
 State/CAS 认领 action、TaskKey、Attempt、provider、需求 revision、candidate、payload
 和前置审查 digest。未知、重复、过期、取消、不匹配及 guard 阻塞均在进程创建前拒绝。
-开发前审查读取完整文档并禁用 shell、MCP、web 和子代理。开发和白盒设计只在登记的
-隔离 workspace 编辑文件；QA Review 只读。角色工具权限由公共合同约束，禁用任意
-子代理、外部 MCP 与 web；仅开放当前动作绑定的 engine 工具，Git 写入由 adapter
-执行。各宿主的原生启动观察绑定身份，进程和输出回执用于中断对账。
+开发前审查读取完整文档，保留读取、搜索和只读 shell/diff，不开放引擎任务操作。
+开发和白盒设计只在登记的隔离 workspace 编辑文件；QA Review 只读。角色能力由
+公共合同定义，平台映射原生工具及权限，具体映射见 `user-configuration.md` 的
+“原生角色工具限制”。Git 写入由 adapter 执行。各宿主的原生启动观察绑定身份，
+进程和输出回执用于中断对账。
 
 resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答案直接结算，没有身份/进程
 回执时显示 UNKNOWN。明确已停止且有身份时最多认领一次同 thread 的原生 resume，

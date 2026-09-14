@@ -389,3 +389,13 @@ func TestVerificationNativeFailRepairToSeal(t *testing.T) {
 	r, _ := f.Show()
 	t.Fatalf("native path did not converge: %+v errors=%+v repairs=%+v", r.Next, r.Regular.VerificationErrors, r.Regular.RepairErrors)
 }
+
+// verificationPrompt renders the production material for prompt assertions in this package.
+func verificationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
+	material, err := prepareVerificationPrompt(run, claim)
+	if err != nil {
+		return "", "", err
+	}
+	prompt, err := material.render(claim)
+	return prompt, material.workspace, err
+}

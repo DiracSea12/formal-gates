@@ -57,7 +57,8 @@ Ask 推进，不以开发尚未结束为等待理由。QA Review 逐点、逐来
 
 开发返回 PREPARATION_RESULT，给 manifest、每个 subtask 实际验证、handoff 和完整
 状态。adapter 校验范围并跟踪/提交/取快照；缺前置的底层步骤不执行。未完成 Batch 的
-CONTINUE、FAIL、RUNTIME_ERROR 都保留原生身份，同批续跑用 drive --action-id --resume。
+开发者返回 CONTINUE；真实运行错误由既有机制记录为 RUNTIME_ERROR。两者保留原生身份，
+同批续跑用 drive --action-id --resume。
 全部 Batch 与黑盒冻结后，白盒独立判断覆盖再复用有效测试。中间 commit 只固定隔离待审快照；独立白盒 review 检查开发至当前白盒的完整 diff、确认仅测试改动后，才允许最终候选推进。有改动时 skip/waiver 不替代这一证明。
 全部 FROZEN case-set 与最终测试快照形成 review-ready，drive 冻结唯一 review-wave。
 

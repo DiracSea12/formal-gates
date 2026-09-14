@@ -71,7 +71,7 @@ func TestRecoveryJSONRoundTripPreservesNativeDigest(t *testing.T) {
 }
 
 func TestClosedToolConfigDisablesEveryResolvedServerAndPlugin(t *testing.T) {
-	config, err := runtimeToolConfig("codex", json.RawMessage(`{"config":{"features":{"multi_agent":true,"multi_agent_v2":true,"enable_mcp_apps":true},"mcp_servers":{"ordinary":{"command":"x"},"name.with.dots":{"url":"x"}},"plugins":{"plugin@market":{"enabled":true}}}}`))
+	config, err := (codexRuntimeAdapter{}).toolConfig(json.RawMessage(`{"config":{"features":{"multi_agent":true,"multi_agent_v2":true,"enable_mcp_apps":true},"mcp_servers":{"ordinary":{"command":"x"},"name.with.dots":{"url":"x"}},"plugins":{"plugin@market":{"enabled":true}}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestClosedToolConfigDisablesEveryResolvedServerAndPlugin(t *testing.T) {
 			}
 		}
 	}
-	if _, err = runtimeToolConfig("codex", json.RawMessage(`{}`)); err == nil {
+	if _, err = (codexRuntimeAdapter{}).toolConfig(json.RawMessage(`{}`)); err == nil {
 		t.Fatal("missing effective configuration accepted")
 	}
 }
@@ -257,7 +257,7 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 				if err != nil || adapter == nil {
 					t.Fatal("supported native runtime missing", err)
 				}
-				cfg, err := runtimeToolConfig(provider, json.RawMessage(`{"config":{}}`))
+				cfg, err := (codexRuntimeAdapter{}).toolConfig(json.RawMessage(`{"config":{}}`))
 				if err != nil || cfg["agents"].(map[string]any)["max_depth"] != 0 {
 					t.Fatal("native descendant boundary differs", cfg, err)
 				}
@@ -271,9 +271,6 @@ func TestNativeRuntimeBoundaryForEveryInstalledHost(t *testing.T) {
 			}
 			if _, err = captureRuntimeContext(provider, settings.Values{Native: map[string]string{"codexExecutable": "must-not-execute"}}); err == nil || !strings.Contains(err.Error(), "UNSUPPORTED_ENGINE_ENTRY") {
 				t.Fatal("unsupported creation captured Codex environment", err)
-			}
-			if _, err = runtimeToolConfig(provider, json.RawMessage(`{"config":{}}`)); err == nil {
-				t.Fatal("unsupported recovery received Codex tool configuration")
 			}
 			cmd := &exec.Cmd{Path: "untouched", Args: []string{"untouched"}}
 			if err = runtimeCommandContext(cmd, &protocol.HostRuntimeContext{Provider: provider}); err == nil || cmd.Path != "untouched" || cmd.Args[0] != "untouched" {

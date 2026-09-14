@@ -26,13 +26,6 @@ func (f *Facade) submitSource(source protocol.ExecutionSource) error {
 	_, _, err = f.submitAdapterRegular(string(ev.ID), *ev.Regular)
 	return err
 }
-func reviewPrompt(run Run, claim protocol.ExecutionClaim) (string, error) {
-	material, err := prepareReviewPrompt(run, claim)
-	if err != nil {
-		return "", err
-	}
-	return material.render(claim)
-}
 
 func prepareReviewPrompt(run Run, claim protocol.ExecutionClaim) (nativePromptMaterial, error) {
 	instructions, err := actionInstructions(run, "actions/development-worker.md#通用执行约定", "actions/"+string(claim.Task.Step)+".md")
