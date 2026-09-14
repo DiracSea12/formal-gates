@@ -64,7 +64,7 @@ MCP 仅是工具传输手段：WorkBuddy/ZCode 使用绑定的 stdio 工具服�
 
 | 宿主 | 原生启动、续用与结束 | 结果与计量来源 |
 |---|---|---|
-| WorkBuddy | CodeBuddy print/stream-json；请求 session UUID 后等待原生 init 确认；续用同一 session；进程退出留证；恢复观察使用 ACP session/load | 同 session 的成功 result 和结构化输出；SDK assistant 消息 usage，按 uuid 去重 |
+| WorkBuddy | CodeBuddy print/stream-json；请求 session UUID 后等待原生 init 确认；续用同一 session；进程退出留证；恢复观察检查原生 print 会话存储（session/store），实际续用由后续 --resume 确认 | 同 session 的成功 result 和结构化输出；SDK assistant 消息 usage，按 uuid 去重 |
 | ZCode | 自带 app-server NDJSON；宿主分配 sessionId；session/resume 保留身份，完成后 session/close；首次取得身份后重载同会话绑定工具，再发送输入 | 只接受匹配 session/input/turn 的成功 turn.completed，accepted 不是完成；session/usage 累计快照，不重复相加 |
 | DSH | 已有 ACP profile 加本次 action 工具配置；session/new 或 session/resume，完成后 session/close | 原生 session/event 的 assistant/message 和 completed turn/end；仅 ACP end_turn 不算成功；assistant 及真实 LLM compaction usage 按 seq 去重 |
 
@@ -248,3 +248,15 @@ WorkBuddy 原生配置目录沿应用的 `WORKBUDDY_CONFIG_DIR`，未设时为 `
 未设置该字段时沿当前用户主目录；设置后仍由 WorkBuddy 读取和验证自己的登录，不保证
 文件存在就等于认证有效。已领取动作使用其原 context，不能通过后来编辑配置来替换原生
 身份或认证目录；修正配置按正常新授权和恢复合同处理，不手改已有 run 的 settings/context。
+
+### 原生角色工具限制
+
+WorkBuddy 角色回合使用 `--tools default`，以 `--disallowedTools` 禁止原生委派、
+改变引擎工作区及非写入角色的编辑/写入和退出只读模式操作。审查角色仍使用 `dontAsk`，
+Bash 不预先授权，由宿主逐命令判断；读取、搜索及其他未禁止的默认工具保留。
+ZCode 角色创建、同身份恢复及绑定工具后的恢复均传 `toolDenylist`，不发送角色工具白名单；
+审查与覆盖判断使用原生 `plan`。DSH 通过现有工具插件传 `deniedTools`，
+使用 SDK 的 scoped `restrict({deny: ...})` 和 guard，保留其默认工具及原生 sandbox。
+三个宿主的覆盖判断均保留只读 shell；只有冻结 QA 执行禁止直接 Bash，沿已有操作边界执行。
+文本辅助模型没有角色工作区职责，仍使用显式空工具集；它不是角色默认工具策略。
+这些是内部角色映射，不新增用户配置或权限系统。真实模型宿主验收的延期状态不因此改变。

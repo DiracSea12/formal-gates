@@ -118,16 +118,19 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 			}
 			command := exec.Command("unused", "--tools", "")
 			workBuddyRoleTools(command, tc.step)
-			tools := []string{command.Args[2], strings.Join(zcodeRoleTools(tc.step, false), ","), strings.Join(dshRoleTools(tc.step, false), ",")}
+			tools := []string{strings.Join(dshRoleDeniedTools(tc.step, false), ",")}
+			if command.Args[2] != "default" {
+				t.Fatal("WorkBuddy native defaults lost")
+			}
 			for _, list := range tools {
-				if strings.Contains(list, "Bash") != (tc.access == nativeWorkspaceWrite || tc.access == nativeReadOnly) {
+				if strings.Contains(list, "Bash") != (tc.access == nativeOperationOnly) {
 					t.Fatalf("authoring privilege differs: %s", list)
 				}
-				if strings.Contains(list, "Read") != (tc.access == nativeWorkspaceWrite || tc.access == nativeReadOnly || tc.access == nativeOperationOnly) {
+				if strings.Contains(list, "Read") {
 					t.Fatalf("reader privilege differs: %s", list)
 				}
 			}
-			if strings.Contains(strings.Join(zcodeRoleTools(tc.step, false), ","), "formal_gates_operation") != nativeAllowsOperation(tc.step) {
+			if strings.Contains(strings.Join(zcodeRoleDeniedTools(tc.step, false), ","), "formal_gates_operation") == nativeAllowsOperation(tc.step) {
 				t.Fatal("workflow tool declaration differs from role policy")
 			}
 			if !nativeAllowsOperation(tc.step) {
@@ -136,7 +139,7 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 					t.Fatalf("independent review requires unavailable helper instructions: %q %v", description, err)
 				}
 			}
-			if !strings.Contains(strings.Join(zcodeRoleTools(tc.step, true), ","), "Read") || strings.Contains(strings.Join(zcodeRoleTools(tc.step, true), ","), "Write") || !strings.Contains(strings.Join(dshRoleTools(tc.step, true), ","), "Read") {
+			if strings.Contains(strings.Join(zcodeRoleDeniedTools(tc.step, true), ","), "Read") || !strings.Contains(strings.Join(zcodeRoleDeniedTools(tc.step, true), ","), "Write") || strings.Contains(strings.Join(dshRoleDeniedTools(tc.step, true), ","), "Read") {
 				t.Fatal("coverage must retain ordinary read tools without write tools")
 			}
 		})
@@ -260,5 +263,26 @@ func TestNativeIntakeCanonicalizesRegisteredInstallationAlias(t *testing.T) {
 	}
 	if _, err := runtimeAdapter(alias); err == nil {
 		t.Fatal("installation alias was incorrectly accepted as an issued native identity")
+	}
+}
+
+func TestNativeCoverageKeepsDefaultReadCapabilities(t *testing.T) {
+	for provider, denied := range map[string][]string{
+		"zcode": zcodeRoleDeniedTools("whitebox-design", true),
+		"dsh":   dshRoleDeniedTools("whitebox-design", true),
+	} {
+		for _, tool := range []string{"Read", "Glob", "Grep", "Bash", "shell", "WebSearch"} {
+			for _, name := range denied {
+				if name == tool {
+					t.Fatalf("%s coverage denies %s", provider, tool)
+				}
+			}
+		}
+		if !strings.Contains(strings.Join(denied, ","), "Write") {
+			t.Fatal(provider, "coverage exposes writes")
+		}
+	}
+	if zcodeRoleMode("whitebox-design", true) != "plan" {
+		t.Fatal("coverage must use native read-only mode")
 	}
 }

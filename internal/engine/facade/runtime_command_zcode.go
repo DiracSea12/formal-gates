@@ -29,13 +29,13 @@ type zcodeRequest struct {
 
 // Native creation owns the session ID. Supplying sessionId for ordinary create
 // is rejected by ZCode, even though its common schema marks that field optional.
-func zcodeSessionRequest(requestID, workspace, identity, mode string, tools []string) (zcodeRequest, error) {
-	if requestID == "" || !filepath.IsAbs(workspace) || tools == nil {
+func zcodeSessionRequest(requestID, workspace, identity, mode string, deniedTools []string) (zcodeRequest, error) {
+	if requestID == "" || !filepath.IsAbs(workspace) || deniedTools == nil {
 		return zcodeRequest{}, fmt.Errorf("ZCODE_BINDING: request identity, absolute workspace and explicit tool policy required")
 	}
 	params := map[string]any{
-		"workspace":     map[string]any{"workspacePath": workspace, "workspaceKey": workspace},
-		"toolAllowlist": append([]string{}, tools...),
+		"workspace":    map[string]any{"workspacePath": workspace, "workspaceKey": workspace},
+		"toolDenylist": append([]string{}, deniedTools...),
 	}
 	method := "session/create"
 	if identity != "" {

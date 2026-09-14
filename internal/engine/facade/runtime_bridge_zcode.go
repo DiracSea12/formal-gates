@@ -121,7 +121,7 @@ func runZCodeSession(reader io.Reader, writer io.Writer, session zcodeRequest, i
 		if _, err := request(session.ID+":configure-close", "session/close", map[string]any{"sessionId": identity}); err != nil {
 			return identity, nil, err
 		}
-		params := map[string]any{"sessionId": identity, "workspace": session.Params["workspace"], "mcpServers": servers, "toolAllowlist": session.Params["toolAllowlist"]}
+		params := map[string]any{"sessionId": identity, "workspace": session.Params["workspace"], "mcpServers": servers, "toolDenylist": session.Params["toolDenylist"]}
 		raw, err = request(session.ID+":configure-resume", "session/resume", params)
 		if err != nil {
 			return identity, nil, err

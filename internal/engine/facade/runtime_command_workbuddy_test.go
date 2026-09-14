@@ -3,6 +3,7 @@ package facade
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -59,29 +60,33 @@ func TestWorkBuddyFreshIdentityIsNotResume(t *testing.T) {
 }
 
 func TestWorkBuddyRoleTools(t *testing.T) {
-	for _, tc := range []struct{ step, want string }{
-		{"development-worker", "StructuredOutput,Bash,Edit,Read"}, {"repair-worker", "StructuredOutput,Bash,Edit,Read"},
-		{"whitebox-design", "StructuredOutput,Bash,Edit,Read"}, {"product-review", "StructuredOutput,Bash,Read,Glob,Grep"},
-		{"start-readiness", "StructuredOutput,Bash,Read,Glob,Grep"}, {"blackbox-execution", "StructuredOutput,Read,Glob,Grep"},
-		{"whitebox-execution", "StructuredOutput,Read,Glob,Grep"}, {"blackbox-design", "StructuredOutput,Bash,Read,Glob,Grep"},
-	} {
-		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "m", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
+	for _, step := range []string{"development-worker", "repair-worker", "whitebox-design", "product-review", "start-readiness", "blackbox-execution", "whitebox-execution", "blackbox-design"} {
+		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
 		if err != nil {
 			t.Fatal(err)
 		}
-		workBuddyRoleTools(cmd, tc.step)
-		got := "missing"
+		workBuddyRoleTools(cmd, step)
+		flags := map[string]string{}
 		for i := 1; i+1 < len(cmd.Args); i++ {
-			if cmd.Args[i] == "--tools" {
-				got = cmd.Args[i+1]
+			flags[cmd.Args[i]] = cmd.Args[i+1]
+		}
+		if flags["--tools"] != "default" {
+			t.Fatal("native defaults replaced", cmd.Args)
+		}
+		denied := "," + flags["--disallowedTools"] + ","
+		for _, tool := range []string{"Read", "Glob", "Grep", "WebFetch", "WebSearch", "StructuredOutput"} {
+			if strings.Contains(denied, ","+tool+",") {
+				t.Fatal("ordinary native capability denied", tool)
 			}
 		}
-		if got != tc.want {
-			t.Fatalf("%s: tools=%q want=%q", tc.step, got, tc.want)
+		if strings.Contains(denied, ",Bash,") != (nativeRoleAccess(step) == nativeOperationOnly) || strings.Contains(denied, ",Edit,") != (nativeRoleAccess(step) != nativeWorkspaceWrite) {
+			t.Fatal("role boundary", step, denied)
+		}
+		if !strings.Contains(denied, ",Task,") {
+			t.Fatal("native delegation exposed")
 		}
 	}
 }
-
 func TestWorkBuddyDefaultModel(t *testing.T) {
 	cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
 	if err != nil {
@@ -109,7 +114,7 @@ func TestWorkBuddyReviewNativePermissionsFreshAndResume(t *testing.T) {
 			if flags["--permission-mode"] != "dontAsk" {
 				t.Fatalf("%s resume=%v: permission bypass: %q", step, resume, cmd.Args)
 			}
-			if flags["--tools"] != "StructuredOutput,Bash,Read,Glob,Grep" {
+			if flags["--tools"] != "default" {
 				t.Fatalf("%s: unexpected workspace tools: %q", step, cmd.Args)
 			}
 			allowed := "StructuredOutput,Read,Glob,Grep"
@@ -139,6 +144,28 @@ func TestWorkBuddyNonReviewPermissionsUnchanged(t *testing.T) {
 			}
 			if arg == "--allowedTools" {
 				t.Fatalf("%s: review permission rules leaked", step)
+			}
+		}
+	}
+}
+
+func TestWorkBuddyCoverageKeepsReadOnlyShell(t *testing.T) {
+	for _, identity := range []string{"", "native-session"} {
+		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "", "", identity, json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		workBuddyRoleTools(cmd, "whitebox-design", true)
+		flags := map[string]string{}
+		for i := 1; i+1 < len(cmd.Args); i++ {
+			flags[cmd.Args[i]] = cmd.Args[i+1]
+		}
+		if flags["--tools"] != "default" || flags["--permission-mode"] != "dontAsk" || strings.Contains(flags["--disallowedTools"], "Bash") || strings.Contains(flags["--allowedTools"], "Bash") {
+			t.Fatalf("coverage lost native read-only shell policy: %v", cmd.Args)
+		}
+		for _, forbidden := range []string{"Write", "Edit", "mcp__formal-gates__formal_gates_operation"} {
+			if !strings.Contains(flags["--disallowedTools"], forbidden) {
+				t.Fatal("coverage exposes", forbidden)
 			}
 		}
 	}
