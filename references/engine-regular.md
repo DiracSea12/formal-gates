@@ -162,7 +162,10 @@ CORRECT 绑定当前 result digest、finding ID、旧/新 decision、旧/新 sev
   当前计划/拓扑/路线/保证并重开审查，运行中执行先对账。
 - adopt-external 绑定当前 Git HEAD `identity`、原始 base `lineage`，以及
   `git diff --binary <old-candidate> <new-head> --` 字节的 `sha256:` digest；要求 original
-  base 是新 HEAD 祖先，显式影响分类后使受影响结果失效。原 base 不变。需求正文变化
+  base 是新 HEAD 祖先。impact 必须显式填写 product-review、start-readiness，以及当前适用的
+  development、各 QA 模式的 `<mode>-review` 和已有验证结果目标；值仅为
+  affected/unaffected/unknown。缺项在改变状态前拒绝，不能用 keep 代替 impact；development
+  按整体开发成果分类，无需逐个填写 batch ID。显式分类后使受影响结果失效。原 base 不变。需求正文变化
   必须走需求流程，不能借 adopt 绕过确认。
 - abort 登记 TERMINATE_AGENT intent，drive 终止本 run 创建的进程，结算 source/cost，
   写 terminal summary/receipt 后清理运行资源。UNKNOWN 不猜测成功；公开 cleanup 不删除

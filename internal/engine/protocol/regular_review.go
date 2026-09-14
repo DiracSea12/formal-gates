@@ -543,9 +543,16 @@ func (e *Engine) regularRequest(s *State, id string, q RegularRequest, revision 
 		if q.External == nil || q.External.Identity == "" || q.External.Identity == r.Candidate || q.External.Lineage != r.BaseSnapshot || q.External.DiffDigest == "" {
 			return fmt.Errorf("adopt-external requires exact identity, original lineage and diff")
 		}
-		for _, action := range reviewActions {
-			if q.Impact[action] != "affected" && q.Impact[action] != "unaffected" && q.Impact[action] != "unknown" {
-				return fmt.Errorf("adopt-external requires explicit impact for %s", action)
+		// Adoption carries development as a whole; its preparation and QA
+		// evidence must not disappear merely because an impact was omitted.
+		// Reuse the current impact inventory, but leave individual Batch choices
+		// to requirement changes (adoption uses the aggregate development key).
+		for _, item := range requirementImpactItems(r) {
+			if strings.HasPrefix(item.ID, "batch:") {
+				continue
+			}
+			if q.Impact[item.ID] != "affected" && q.Impact[item.ID] != "unaffected" && q.Impact[item.ID] != "unknown" {
+				return fmt.Errorf("adopt-external requires explicit impact for %s", item.ID)
 			}
 		}
 		for _, action := range q.Keep {

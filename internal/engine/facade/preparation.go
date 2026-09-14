@@ -124,7 +124,11 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 		}
 		receipt.Git = commit
 	case "whitebox-workspace":
-		path := filepath.Join(resourceRoot, fmt.Sprintf("whitebox-%d", p.Rework))
+		// A new development snapshot can require a new whitebox workspace
+		// without changing the plan binding or rework count. The operation ID
+		// already binds that input and QA revision; replay reuses its workspace,
+		// while a later operation cannot collide with committed test artifacts.
+		path := filepath.Join(resourceRoot, "whitebox-"+strings.TrimPrefix(op.ID, "git:sha256:"))
 		if err := gitprep.Workspace(f.root, path, op.Before); err != nil {
 			return receipt, err
 		}
@@ -514,7 +518,11 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 		if p.Operation != nil && p.Operation.Kind == "finalize" {
 			paths[filepath.Join(base, "candidate-"+strings.TrimPrefix(p.Operation.ID, "git:sha256:"))] = true
 		}
-		for _, name := range []string{"development", "blackbox", "candidate", fmt.Sprintf("whitebox-%d", p.Rework)} {
+		if p.Operation != nil && p.Operation.Kind == "whitebox-workspace" {
+			// The worktree may exist before its resource receipt is persisted.
+			paths[filepath.Join(base, "whitebox-"+strings.TrimPrefix(p.Operation.ID, "git:sha256:"))] = true
+		}
+		for _, name := range []string{"development", "blackbox", "candidate"} {
 			paths[filepath.Join(base, name)] = true
 		}
 		for path := range paths {

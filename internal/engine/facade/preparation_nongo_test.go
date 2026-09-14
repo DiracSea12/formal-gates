@@ -13,6 +13,68 @@ import (
 	"strings"
 )
 
+func TestWhiteboxWorkspaceReplaysOnlyItsBoundOperation(t *testing.T) {
+	f := facadePreparation(t, nil)
+	run, err := f.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := run.Regular.Preparation
+	p.QA["whitebox"] = &protocol.PreparedQA{}
+	first := protocol.GitPreparation{Kind: "whitebox-workspace", Before: p.DevelopmentSnapshot, ID: "git:sha256:first"}
+	a, err := f.performPreparationGit(run, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := a.Resources["whitebox"]
+	writePreparationFile(t, workspace, "probe", "retained test work")
+	replayed, err := f.performPreparationGit(run, first)
+	if err != nil || replayed.Resources["whitebox"] != workspace {
+		t.Fatalf("same operation did not reuse workspace: %+v %v", replayed, err)
+	}
+	// The previous whitebox author committed its tests. A later preparation
+	// still has the same plan/rework number but targets new development input.
+	old, err := gitprep.Commit(workspace, first.Before, "test-artifacts", []string{"probe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := p.Resources["development"]
+	writePreparationFile(t, dev, "implementation", "new development input")
+	updated, err := gitprep.Commit(dev, first.Before, "updated-development", []string{"implementation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := protocol.GitPreparation{Kind: "whitebox-workspace", Before: updated.After, ID: "git:sha256:second"}
+	b, err := f.performPreparationGit(run, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Resources["whitebox"] == workspace {
+		t.Fatal("new operation reused committed old whitebox workspace")
+	}
+	if head, err := gitprep.Head(workspace); err != nil || head != old.After {
+		t.Fatal("old whitebox evidence changed", err)
+	}
+	if head, err := gitprep.Head(b.Resources["whitebox"]); err != nil || head != updated.After {
+		t.Fatal("new whitebox does not match development", err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Resources["whitebox"], "probe")); !os.IsNotExist(err) {
+		t.Fatal("new workspace inherited unapproved old test state", err)
+	}
+	// Model interruption after creation but before receipt persistence. Normal
+	// terminal cleanup must also find this operation-owned workspace.
+	p.Resources["whitebox"] = workspace
+	p.Operation = &next
+	if err := f.cleanupPreparationResources(run); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{workspace, b.Resources["whitebox"]} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("terminal cleanup left a whitebox workspace", path, err)
+		}
+	}
+}
+
 // Exercise the shared Git preparation entry used by Drive, in a real external
 // repository. Role results are fixtures; the shell command and Git work are real.
 func TestNonGoPreparationReuseAndUnclassifiedChanges(t *testing.T) {

@@ -118,6 +118,29 @@ func TestContinuousCancelledDeveloperSettlesBeforeCurrentWork(t *testing.T) {
 	if process.Stopped || !codexProcessAlive(process.PID) || !x.Claimed || x.Finished {
 		t.Fatal("fixture was not claimed and actually running")
 	}
+	// A fresh consumer must observe the existing owner, not turn an unfinished
+	// validation into a failed result or start the development task again.
+	reopened, err := Open(f.root, f.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := reopened.ExecuteNative(x.Claim.ActionID, true)
+	if err == nil {
+		t.Fatal("second consumer entered a live owned native action", observed)
+	}
+	stillRunning, err := reopened.Show()
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := stillRunning.Executions[x.Claim.ActionID]
+	if retained.Finished || retained.PreparationResult != nil || retained.Source == nil || retained.Source.Status != "RUNNING" || !codexProcessAlive(process.PID) {
+		t.Fatal("reopening completed, failed or stopped running validation")
+	}
+	var retainedProcess codexProcess
+	retainedData, err := os.ReadFile(filepath.Join(f.codexJob(x.Claim.ActionID), "process.json"))
+	if err != nil || json.Unmarshal(retainedData, &retainedProcess) != nil || retainedProcess.PID != process.PID || retainedProcess.Stopped {
+		t.Fatal("reopening replaced the running process receipt", err)
+	}
 	before, _ := f.Show()
 	facadeChoice(t, f, protocol.RegularRequest{Action: "requirement-change", Origin: "USER_INITIATED_CHANGE", Reason: "fixture clarification retains work and requires current independent QA"})
 	doc := protocol.Document(before.Regular.Requirement.Path, []byte(before.Regular.Requirement.Text+"\nClarification: preserve the documented hello behavior.\n"))

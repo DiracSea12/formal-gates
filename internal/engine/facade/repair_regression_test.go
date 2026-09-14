@@ -123,7 +123,7 @@ func TestReadOnlyReviewPromptDescribesActualToolBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, text := range []string{"普通读取、搜索能力，禁止写入", "不要用普通文本模拟工具调用", "原生结构化", "complete mandatory input"} {
+		for _, text := range []string{"普通读取、搜索能力，禁止写入", "不要用普通文本模拟工具调用", "按当前 schema 返回直接 JSON，不加围栏", "complete mandatory input"} {
 			if !strings.Contains(prompt, text) {
 				t.Fatalf("%s did not receive its bound text-only instructions: %s", step, text)
 			}

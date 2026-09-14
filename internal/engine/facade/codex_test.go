@@ -313,7 +313,7 @@ func TestNativeReviewContractUsesClaimAndBatchIDs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, binding := range []string{`"task": "` + claim.Task.String() + `"`, `"requirementRevision": "` + claim.RequirementRevision + `"`, "Set identity to NATIVE_IDENTITY"} {
+		for _, binding := range []string{`"task": "` + claim.Task.String() + `"`, `"requirementRevision": "` + claim.RequirementRevision + `"`, "identity 填 NATIVE_IDENTITY", "由传输层绑定真实身份"} {
 			if !strings.Contains(prompt, binding) {
 				t.Fatalf("prompt omits binding %q", binding)
 			}

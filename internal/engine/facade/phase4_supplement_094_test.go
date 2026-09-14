@@ -338,7 +338,7 @@ func TestTaskOperationRunningTargetInvalidationBarriers(t *testing.T) {
 			t.Fatal(err)
 		}
 		sum := sha256.Sum256(diff)
-		impact := map[string]string{"product-review": "affected", "start-readiness": "affected"}
+		impact := map[string]string{"product-review": "affected", "start-readiness": "affected", "development": "affected", "blackbox-review": "affected", "blackbox": "affected"}
 		submitChoiceWhilePIDAlive(t, f, pid, protocol.RegularRequest{
 			Action:   "adopt-external",
 			External: &protocol.ExternalObservation{Identity: newHead, Lineage: before.Regular.BaseSnapshot, DiffDigest: "sha256:" + hex.EncodeToString(sum[:])},

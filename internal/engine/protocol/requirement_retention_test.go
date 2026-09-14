@@ -166,3 +166,55 @@ func TestUnaffectedAdoptionPreservesUnfrozenQADesignAndApprovals(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalAdoptionRequiresApplicableImpactsBeforeMutation(t *testing.T) {
+	e := preparationEngine(t, "blackbox", "whitebox")
+	gitReceipt(t, e, "base")
+	completeBatch(t, e, "B1")
+	gitReceipt(t, e, "D1")
+	loaded, err := e.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	impacts := map[string]string{"product-review": "unaffected", "start-readiness": "unaffected", "development": "unaffected", "blackbox-review": "unaffected", "whitebox-review": "unaffected"}
+	for missing := range impacts {
+		for _, value := range []string{"", "keep"} {
+			t.Run(missing+"/"+value, func(t *testing.T) {
+				// Check the request itself, before an event transaction could hide
+				// accidental mutation by discarding its rejected state copy.
+				s, err := e.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, _ := json.Marshal(s.State)
+				impact := map[string]string{}
+				for key, v := range impacts {
+					if key != missing {
+						impact[key] = v
+					}
+				}
+				if value != "" {
+					impact[missing] = value
+				}
+				request := RegularRequest{Action: "adopt-external", Reason: "fixture external delivery", External: &ExternalObservation{Identity: "external", Lineage: s.State.Regular.BaseSnapshot, DiffDigest: "sha256:diff"}, Impact: impact}
+				err = e.regularRequest(s.State, "adopt", request, s.Revision)
+				if err == nil || !strings.Contains(err.Error(), "explicit impact for "+missing) {
+					t.Fatalf("missing/invalid impact accepted: %v", err)
+				}
+				after, _ := json.Marshal(s.State)
+				if !bytes.Equal(before, after) {
+					t.Fatal("rejected adoption mutated state")
+				}
+			})
+		}
+	}
+	old := loaded.State.Regular.Preparation.Batches["B1"]
+	regularChoice(t, e, RegularRequest{Action: "adopt-external", Reason: "explicitly preserve delivery", External: &ExternalObservation{Identity: "external", Lineage: loaded.State.Regular.BaseSnapshot, DiffDigest: "sha256:diff"}, Impact: impacts}, "confirm")
+	after, err := e.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(old, after.State.Regular.Preparation.Batches["B1"]) {
+		t.Fatal("explicit unaffected adoption lost accepted Batch")
+	}
+}
