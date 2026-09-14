@@ -288,6 +288,9 @@ func TestPreparationIncrementalReviewRetainsUnchangedApprovals(t *testing.T) {
 	x := currentExecution(t, e, "blackbox-design")
 	claimAndAttach(t, e, x)
 	s, _ := e.Load()
+	if got := s.State.Regular.Preparation.QA["blackbox"].DesignGap; got != "Clarify raw output comparison" {
+		t.Fatalf("revision reason lost: %q", got)
+	}
 	design := testDesign(s.State.Regular, "BLACKBOX")
 	design.Manifest.Cases[0].Steps = "invoke and preserve raw output without normalization"
 	result := preparationResult(x)
@@ -298,6 +301,9 @@ func TestPreparationIncrementalReviewRetainsUnchangedApprovals(t *testing.T) {
 	sourceUnavailable(t, e, x)
 	s, _ = e.Load()
 	qa := s.State.Regular.Preparation.QA["blackbox"]
+	if qa.DesignGap != "" {
+		t.Fatalf("accepted design retained completed revision reason: %q", qa.DesignGap)
+	}
 	if qa.ReviewScope != coverage.ScopeAffected || qa.RetainedReview == nil || len(qa.RetainedReview.SourceDecisions) != 1 || len(qa.RetainedReview.PointDecisions) != 1 || len(qa.RetainedReview.CaseDecisions) != 0 {
 		t.Fatalf("incremental input lost its exact review scope/approvals: %+v", qa)
 	}

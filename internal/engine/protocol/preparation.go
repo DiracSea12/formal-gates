@@ -1313,6 +1313,7 @@ func preparationDecision(s *State, q RegularRequest) {
 		invalidateVerification(s, "QA artifact revision")
 		p.Candidate = nil
 		reviseQA(p.QA[q.Target])
+		p.QA[q.Target].DesignGap = q.Reason
 	case "development-rework":
 		p.Rework++
 		if p.Blocked != "PRODUCTION_FAILURE" {
