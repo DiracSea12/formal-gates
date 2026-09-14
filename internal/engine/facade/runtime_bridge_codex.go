@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,7 +26,7 @@ func (codexRuntimeAdapter) validatePrompt(prompt string) error {
 	return nil
 }
 
-func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
+func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr error) {
 	if err := (codexRuntimeAdapter{}).validatePrompt(q.Prompt); err != nil {
 		return "", err
 	}
@@ -62,14 +63,30 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err = cmd.Start(); err != nil {
 		return "", err
 	}
-	defer func() { _ = in.Close(); _ = stopCodexProcess(cmd.Process.Pid); _ = cmd.Wait() }()
 	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	scan := bufio.NewScanner(out)
+	scan.Buffer(make([]byte, 65536), 32*1024*1024)
+	defer func() {
+		shutdownErr := finishCodexProcess(cmd, in, func() error {
+			for scan.Scan() {
+				if _, err := journal.Write(append(scan.Bytes(), '\n')); err != nil {
+					return err
+				}
+			}
+			return scan.Err()
+		})
+		receipt := codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID, Stopped: true, StartedAt: startedAt, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		if cmd.ProcessState != nil {
+			exitCode := cmd.ProcessState.ExitCode()
+			receipt.ExitCode = &exitCode
+		}
+		persistErr := writeJSONAtomic(filepath.Join(job, "process.json"), receipt)
+		resultErr = errors.Join(resultErr, shutdownErr, journal.Sync(), stderr.Sync(), persistErr)
+	}()
 	if err = writeJSONAtomic(filepath.Join(job, "process.json"), codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID, StartedAt: startedAt}); err != nil {
 		return "", err
 	}
 	enc := json.NewEncoder(in)
-	scan := bufio.NewScanner(out)
-	scan.Buffer(make([]byte, 65536), 32*1024*1024)
 	type message struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -275,9 +292,6 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (string, error) {
 			}
 			answerName := "answer.json"
 			if err = os.WriteFile(filepath.Join(job, answerName), []byte(answer), 0600); err != nil {
-				return identity, err
-			}
-			if err = writeJSONAtomic(filepath.Join(job, "process.json"), codexProcess{PID: cmd.Process.Pid, ActionID: claim.ActionID, Stopped: true, StartedAt: startedAt, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 				return identity, err
 			}
 			return identity, nil

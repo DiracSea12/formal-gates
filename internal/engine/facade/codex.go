@@ -93,6 +93,7 @@ type codexProcess struct {
 	PID         int    `json:"pid"`
 	ActionID    string `json:"actionId"`
 	Stopped     bool   `json:"stopped"`
+	ExitCode    *int   `json:"exitCode,omitempty"`
 }
 
 func (f *Facade) codexJob(actionID string) string {
@@ -105,7 +106,18 @@ func (f *Facade) codexJob(actionID string) string {
 }
 
 func (f *Facade) failedNativeStart(actionID string, claim protocol.ExecutionClaim, cause error) (Run, error) {
-	src := protocol.ExecutionSource{ActionID: actionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: claim.Identity, Status: "UNAVAILABLE", Reason: "Native execution ended without an observed thread; source unavailable: " + cause.Error()}
+	current, err := f.Show()
+	if err != nil {
+		return Run{}, err
+	}
+	x, ok := current.Executions[actionID]
+	if !ok || !x.Claimed || claim.ActionID != actionID || claim.AttemptID != x.Claim.AttemptID || claim.Provider != x.Claim.Provider || claim.Task != x.Claim.Task || claim.RequirementRevision != x.Claim.RequirementRevision || claim.Candidate != x.Claim.Candidate || (claim.Identity != "" && claim.Identity != x.Claim.Identity && claim.Identity != x.Identity) {
+		return Run{}, fmt.Errorf("INTENT_MISMATCH: native startup failure requires the bound execution")
+	}
+	// A later invocation can fail before reporting a thread, even though an
+	// earlier turn already attached it. Use only that accepted observation.
+	claim.Identity = x.Identity
+	src := protocol.ExecutionSource{ActionID: actionID, AttemptID: claim.AttemptID, Provider: claim.Provider, Identity: claim.Identity, Status: "UNAVAILABLE", Reason: "Native invocation failed; source unavailable: " + cause.Error()}
 	if err := f.submitSource(src); err != nil {
 		return Run{}, err
 	}
