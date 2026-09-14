@@ -314,11 +314,6 @@ func TestLifecycleStopCaptureStoresInterruptionReason(t *testing.T) {
 	}
 }
 
-// TestPayloadHTTPErrorCodeStandaloneToken covers payloadHTTPErrorCode
-// only classifies a code when it appears as a standalone numeric token or in a
-// dedicated error-code field — a substring inside a longer number or word must
-// not be misclassified as an objective API interruption reason.
-
 // TestLifecycleInterruptedDispatchVerification covers a dispatch with a
 // start event and a recorded interruption reason but no paired stop is accepted
 // as an interruption credential (Interrupted), not REJECTED.

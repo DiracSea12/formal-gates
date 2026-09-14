@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// codexThreadRequest loads only the specified native thread, without starting a
+// model turn. The native missing-rollout response is distinct from a timeout or
+// transport error; the engine decides whether that evidence permits replacement.
 func codexThreadRequest(executable, method, identity string, binding *protocol.HostRuntimeContext, workspace string) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -68,7 +71,7 @@ func codexThreadRequest(executable, method, identity string, binding *protocol.H
 	if json.Unmarshal(configResponse, &envelope) != nil {
 		return nil, fmt.Errorf("native configuration response invalid")
 	}
-	config, err := runtimeToolConfig(binding.Provider, envelope.Result)
+	config, err := (codexRuntimeAdapter{}).toolConfig(envelope.Result)
 	if err != nil {
 		return nil, err
 	}

@@ -311,18 +311,6 @@ func preparationAction(step string) bool {
 	return step == "development-worker" || step == "blackbox-design" || step == "blackbox-review" || step == "whitebox-design" || step == "whitebox-review"
 }
 
-// preparationPrompt is the engine-generated thin handoff. Development receives
-// one complete Batch with ordered Subtasks, never another batch's live session.
-// Blackbox receives only confirmed inputs and the baseline authoring resource.
-func preparationPrompt(run Run, claim protocol.ExecutionClaim) (string, string, error) {
-	material, err := preparePreparationPrompt(run, claim)
-	if err != nil {
-		return "", "", err
-	}
-	prompt, err := material.render(claim)
-	return prompt, material.workspace, err
-}
-
 func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePromptMaterial, error) {
 	payload, workspace, err := preparationInput(run, claim)
 	if err != nil {

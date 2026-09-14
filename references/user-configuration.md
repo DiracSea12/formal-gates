@@ -164,16 +164,17 @@ settings、source/recovery、cost、lifecycle 和 hook 响应均从这一描述�
 | `turn(nativeTurn)` | 执行一个原生回合，处理本平台启动/续用/等待及原生结果；不判断下一阶段 |
 | `source` / `transcript` / `readIdentity` | 返回真实计量来源或解释已落盘身份，不接纳工作流结果 |
 | `probe(nativeProbe)` | 原生恢复查询的方法名、原始响应或真实错误；不自行批准替换或重试 |
-| `runModel` / `observeModel` / `toolConfig` | 本平台的无工具模型调用、已完成调用观察及原生工具配置映射 |
+| `runModel` / `observeModel` | 本平台的无工具模型调用与已完成调用观察 |
 
-流式平台可嵌入 `streamRuntimeAdapter`，复用资源绑定、来源定位、默认来源采集和空工具
-配置；用 `runNativeStreamProcess` 保存进程与原始输出，以 `completeStreamModel`/
+流式平台可嵌入 `streamRuntimeAdapter`，复用资源绑定、来源定位和默认来源采集；用 `runNativeStreamProcess` 保存进程与原始输出，以 `completeStreamModel`/
 `observeStreamModel` 处理已有模型回执。不复制这些公共实现，也不自建结果/成本 writer。
 
 `nativeTurn` 只携带本次调用输入，不提供 `Facade`、`Run` 或可写工作流对象。宿主确认
 原生身份后调用 `Attached`，随后才提交模型输入；需要引擎任务工具时经 `Operation`
 或已绑定的 CLI 工具入口转交。角色允许读写什么由公共 `nativeRoleAccess` 决定，平台
-只翻译成自己的工具名、配置和原生权限。`NoTools` 回合不开放原生工作区工具。
+只翻译成自己的工具名、配置和原生权限。`NoTools` 表示白盒覆盖判断：
+保留只读工作区工具与 shell，不开放写入或引擎任务操作。Codex 的 `config/read`
+解释由其适配层内部处理，其他平台无需实现空的 `toolConfig` 方法。
 公共执行器统一完成 CLAIM、白盒前置、结果接纳、恢复衔接和取消；平台不实现
 `execute`、`finish`、`reconcile`，也不逐个连接这些工作流步骤。
 
@@ -184,7 +185,7 @@ settings、source/recovery、cost、lifecycle 和 hook 响应均从这一描述�
 平台的请求、配置、日志和其他私有产物均放在这个目录内，具体文件名和子目录由平台决定。
 进程与来源 helper 负责保存可恢复证据；平台不改 run state，不把请求身份当成已观察身份。
 
-白盒无工具覆盖回合使用独立 `coverage/` 调用目录，正式编写使用另一调用目录，并续用
+白盒只读覆盖回合使用独立 `coverage/` 调用目录，正式编写使用另一调用目录，并续用
 同一个原生身份。公共恢复根据目录和既有 coverage 操作回执识别前置/正式答案，不搬运
 平台文件、不维护私有文件清单，也不因平台增加文件而修改公共收尾。中断后先观察原进程
 与原答案；已有有效 coverage 不再次执行，也不能作为正式设计结果接纳。取消定位实际

@@ -228,7 +228,7 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 			binding.Identity = x.Identity
 			pending, err := protocol.PendingQA(snapshot, binding, "")
 			if err == nil {
-				p.PendingCases[id] = QACaseProgress{Remaining: len(pending.Ready) + len(pending.Running) + len(pending.Judgment) + len(pending.Blocked), Ready: len(pending.Ready), Running: len(pending.Running), AwaitingJudgment: len(pending.Judgment), Blocked: len(pending.Blocked)}
+				p.PendingCases[id] = QACaseProgress{Remaining: len(pending.Ready) + len(pending.Running) + len(pending.Input) + len(pending.Judgment) + len(pending.Blocked), Ready: len(pending.Ready), Running: len(pending.Running), AwaitingJudgment: len(pending.Judgment), Blocked: len(pending.Blocked)}
 				for key, reason := range pending.Blocked {
 					p.Blocked[key] = reason
 				}
