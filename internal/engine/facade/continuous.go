@@ -65,6 +65,7 @@ func (f *Facade) DriveContinuous(ctx context.Context) (ContinuousResult, error) 
 			}
 			return result, err
 		}
+		advanced := run.Revision != result.Run.Revision
 		result.Run = run
 		result.External = nil
 		// Run-wide stops surface immediately. Branch decisions remain visible while
@@ -145,6 +146,10 @@ func (f *Facade) DriveContinuous(ctx context.Context) (ContinuousResult, error) 
 			case len(result.Blocked) > 0:
 				result.Boundary = "BLOCKED"
 			case run.Regular.Preparation != nil && run.Regular.Preparation.Operation != nil:
+				continue
+			case advanced && run.Next.Kind == decision.KindWait && run.Next.Wait != nil && run.Next.Wait.Reason == "GIT_PREPARATION":
+				// Receipt acceptance clears Operation before the next Git intent is
+				// issued. Let the engine issue it; an unchanged WAIT still returns.
 				continue
 			case len(result.External) > 0:
 				result.Boundary = "EXTERNAL_EXECUTOR"

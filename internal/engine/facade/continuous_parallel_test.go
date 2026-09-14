@@ -15,6 +15,11 @@ import (
 )
 
 func continuousPreparationFixture(t *testing.T, extraBatches ...protocol.DevelopmentBatch) (*Facade, *fixtureRuntime) {
+	return continuousPreparationFixtureQA(t, []string{"blackbox"}, extraBatches...)
+}
+
+func continuousPreparationFixtureQA(t *testing.T, modes []string, extraBatches ...protocol.DevelopmentBatch) (*Facade, *fixtureRuntime) {
+	t.Helper()
 	f, a := continuousFixture(t)
 	a.answer = func(q nativeTurn) any {
 		c := q.Claim
@@ -34,7 +39,7 @@ func continuousPreparationFixture(t *testing.T, extraBatches ...protocol.Develop
 	}
 	run, _ := f.Show()
 	facadeChoice(t, f, protocol.RegularRequest{Action: "topology", PlanDigest: run.Regular.Plan.Digest, Reason: "single fixture batch"})
-	facadeChoice(t, f, protocol.RegularRequest{Action: "route", Route: &protocol.RegularRoute{Kind: "custom", QA: []string{"blackbox"}}})
+	facadeChoice(t, f, protocol.RegularRequest{Action: "route", Route: &protocol.RegularRoute{Kind: "custom", QA: modes}})
 	// Set up the real Git workspaces before installing a native-completion
 	// fault. The shared fault point also covers Git; interrupting that earlier
 	// operation would test preparation recovery, not independent native turns.

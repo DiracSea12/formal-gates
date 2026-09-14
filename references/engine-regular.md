@@ -462,7 +462,7 @@ planDigest/document/meaning/origin/impact/keep/delta/requiredSources/target/exte
 | plan-change | 当前有计划且 Git operation 已对账；reason；使计划/拓扑确认失效 |
 | qa-suggestion | target=`blackbox`/`whitebox`，findingId=未处置建议 ID，meaning=`adopted`/`deferred`/`not-adopted`，reason |
 | qa-revise | target=QA mode，reason；候选已形成时 meaning 只能是 acceptance/public-behavior/stable-execution |
-| development-rework | 当前 preparation.blocked=PRODUCTION_CHANGED 或 PRODUCTION_FAILURE；reason |
+| development-rework | 当前 preparation.blocked=PRODUCTION_CHANGED 或 PRODUCTION_FAILURE；reason；可用 target 引用已确认 Batch；已有待修 Batch 时必须沿用它，否则默认最后一批 |
 | preparation-retry | target=耗尽的准备 TaskKey 字符串，reason；仅加一次 |
 | verification-retry | target=耗尽的验证/修复 TaskKey 字符串，reason；仅加一次 |
 | authorize-wave | 当前完整 wave 已收齐、source 已结算、逐项裁决完成、已用完语义额度且仍有义务；reason。可带 target=current wave.id、keep=精确问题 ID 数组；省略时程序填入当前精确集合 |
@@ -1197,6 +1197,13 @@ workspace view、需求 revision 和影响范围。旧 PASS、commit、attempt�
 增量记录。实际发送消息仍由既有 show 证据入口查看。
 未受影响的产品审、技术审和批次不重新执行；QA 的设计保留不等于新候选已执行 PASS。
 保留白盒测试时仅携带测试工件，不能把旧生产代码覆盖到新 development snapshot。
+若确认增量前已存在 PRODUCTION_FAILURE/PRODUCTION_CHANGED，增量确认不会将失败变为
+PASS，也不会自动解除返修确认边界。继续提交 `REQUEST development-rework`，以 `target`
+引用已选待修 Batch，再按该 Ask 的当前 token/digest 提交 `DECIDE confirm`。返修沿用增量
+已绑定的 TaskKey 和 receipt，不重开其他已保留批次；原生产失败原因及已接纳结果仍保留。
+这也适用于增量已经确认、成果已移出但仍被 blocked 拦住的在途状态，无须重新 optimize。
+若当前另有仅用于暂停的 requirement-change Ask，且需求不变，先按该 Ask 的当前绑定
+提交 `DECIDE cancel` 结束暂停，再提交上述返修请求；不确认或应用不存在的需求变更。
 新增或优化 Batch 的结果仍按正常 PREPARATION_RESULT 提交，由 engine 执行 commit/snapshot，
 然后继续原 QA、验证 wave、修复及 promotion/Seal。
 

@@ -1272,6 +1272,9 @@ func preparationRequest(s *State, q RegularRequest) error {
 		if p == nil || (p.Blocked != "PRODUCTION_CHANGED" && p.Blocked != "PRODUCTION_FAILURE") {
 			return fmt.Errorf("development rework requires whitebox production failure, production change or UNKNOWN")
 		}
+		if _, err := developmentReworkBatch(r, q.Target); err != nil {
+			return err
+		}
 	case "preparation-retry":
 		if p == nil {
 			return fmt.Errorf("no preparation attempt")
@@ -1287,6 +1290,30 @@ func preparationRequest(s *State, q RegularRequest) error {
 	}
 	return nil
 }
+
+// Rework consumes the plan's already pending work, including a confirmed
+// development increment. It must not reopen an unrelated completed Batch.
+func developmentReworkBatch(r *RegularState, target string) (*DevelopmentBatch, error) {
+	if r.Plan == nil || len(r.Plan.Batches) == 0 {
+		return nil, fmt.Errorf("development rework requires a development plan")
+	}
+	if pending := nextBatch(r); pending != nil {
+		if target != "" && target != pending.ID {
+			return nil, fmt.Errorf("development rework must use pending Batch %s", pending.ID)
+		}
+		return pending, nil
+	}
+	if target == "" {
+		return &r.Plan.Batches[len(r.Plan.Batches)-1], nil
+	}
+	for i := range r.Plan.Batches {
+		if r.Plan.Batches[i].ID == target {
+			return &r.Plan.Batches[i], nil
+		}
+	}
+	return nil, fmt.Errorf("development rework target must reference the confirmed plan")
+}
+
 func preparationDecision(s *State, q RegularRequest) {
 	r := s.Regular
 	p := r.Preparation
@@ -1319,6 +1346,7 @@ func preparationDecision(s *State, q RegularRequest) {
 		reviseQA(p.QA[q.Target])
 		p.QA[q.Target].DesignGap = q.Reason
 	case "development-rework":
+		batch, _ := developmentReworkBatch(r, q.Target) // validated by preparationRequest
 		p.Rework++
 		if p.Blocked != "PRODUCTION_FAILURE" {
 			p.ReworkReason = "Whitebox could not prove a test-only candidate. Recheck the required behavior and production inputs."
@@ -1330,13 +1358,12 @@ func preparationDecision(s *State, q RegularRequest) {
 			}
 		}
 		p.Blocked = ""
-		last := r.Plan.Batches[len(r.Plan.Batches)-1].ID
-		if result, ok := p.Batches[last]; ok {
+		if result, ok := p.Batches[batch.ID]; ok {
 			key := s.RegularExecutions[result.ActionID].Claim.Task
 			p.DevelopmentTask = &key
 		}
-		delete(p.Batches, last)
-		delete(p.Commits, last)
+		delete(p.Batches, batch.ID)
+		delete(p.Commits, batch.ID)
 		delete(p.Resources, "whitebox")
 		p.QA["whitebox"] = &PreparedQA{ReviewScope: coverage.ScopeFull}
 		p.Candidate = nil
