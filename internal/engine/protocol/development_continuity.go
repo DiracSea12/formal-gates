@@ -52,7 +52,7 @@ func acceptDeveloperRecovery(s *State, receipt DeveloperRecovery) error {
 	if !ok || x.Claim.Task.Step != "development-worker" || !x.Claimed || x.Finished || x.Recovery != nil || !reflect.DeepEqual(receipt.Claim, x.Claim) || receipt.Identity != x.Identity {
 		return fmt.Errorf("DEVELOPMENT_CONTINUITY: recovery needs the exact live claimed developer")
 	}
-	if !currentPreparationClaim(s.Regular, x.Claim) || s.Regular.ChangePending || s.Regular.Ask != nil || s.Regular.Terminal != "" {
+	if !currentPreparationClaim(s.Regular, x.Claim) || ControlBlocksTask(s.Regular, x.Claim.Task) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: developer recovery binding expired")
 	}
 	previous := x.Claim.ActionID

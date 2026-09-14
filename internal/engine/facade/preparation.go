@@ -41,7 +41,7 @@ func (f *Facade) drivePreparation(run Run) (Run, error) {
 	run = current
 	p = run.Regular.Preparation
 	op = *p.Operation
-	if run.Regular.Terminal != "" || run.Regular.ChangePending || run.Regular.Ask != nil {
+	if protocol.ControlBlocksGit(run.Regular, op) {
 		return Run{}, fmt.Errorf("EVENT_NOT_CURRENT: Git preparation paused by control")
 	}
 	if !op.Claimed {

@@ -461,6 +461,18 @@ func (e *Engine) refreshRegular(s *State) {
 	sort.Slice(v.HostSteps, func(i, j int) bool { return v.HostSteps[i] < v.HostSteps[j] })
 	preparationView(s, v)
 	verificationView(s, v)
+	tasks := v.PreparationTasks[:0]
+	for _, task := range v.PreparationTasks {
+		if !ControlBlocksTask(r, task.Task) {
+			tasks = append(tasks, task)
+		}
+	}
+	v.PreparationTasks = tasks
+	// Keep the pending decision when idle, but dispatch independent ready work.
+	if r.Ask != nil && !ControlPausesRun(r) && len(tasks) > 0 {
+		v.Control = ""
+		v.PreparationAsk = ""
+	}
 	s.State.Regular = v
 	if r.Mode == "regular" && r.Requirement.Confirmed {
 		result, err := e.regularBasis(s)
@@ -585,7 +597,7 @@ type RegularExecution struct {
 func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string) (decision.IssuedSet, error) {
 	r := s.Regular
 	e.refreshRegular(s)
-	if r.ChangePending || r.Ask != nil || r.Guard.Status != "READY" {
+	if ControlPausesRun(r) || r.Guard.Status != "READY" {
 		return nil, nil
 	}
 	capacity := r.Settings.Values.Capacity
@@ -830,7 +842,7 @@ func (e *Engine) claimRegular(s *State, c ExecutionClaim) error {
 	if !reflect.DeepEqual(c, want) {
 		return fmt.Errorf("INTENT_MISMATCH: claim must match action, TaskKey, Attempt, provider, requirement, candidate and payload")
 	}
-	if r.ChangePending || r.Ask != nil || r.Terminal != "" || c.RequirementRevision != r.Requirement.Revision || !currentPreparationClaim(r, c) {
+	if ControlBlocksTask(r, c.Task) || c.RequirementRevision != r.Requirement.Revision || !currentPreparationClaim(r, c) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: execution binding is cancelled or stale")
 	}
 	if c.Task.Step == "start-readiness" && (!reviewPrerequisiteSatisfied(r, r.Reviews["product-review"]) || c.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest) {

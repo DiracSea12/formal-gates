@@ -12,6 +12,7 @@ import (
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/decision"
 	"formal-gates/internal/engine/persistence"
+	"formal-gates/internal/engine/protocol"
 )
 
 // ContinuousResult is a projection of one consumption call, not another task
@@ -66,16 +67,14 @@ func (f *Facade) DriveContinuous(ctx context.Context) (ContinuousResult, error) 
 		}
 		result.Run = run
 		result.External = nil
-		// Surface an explicit user request immediately. A branch-local recovery
-		// boundary must not exit the CLI while an independent native invocation
-		// is still owned by this process; closing its pipes interrupts that turn.
-		userAsk := run.Regular != nil && run.Regular.Ask != nil && run.Regular.Ask.Kind != "qa-recovery"
-		if userAsk || (run.Next.Kind == decision.KindAsk && len(active) == 0) {
+		// Run-wide stops surface immediately. Branch decisions remain visible while
+		// independent issued actions, continuations and source collection advance.
+		if run.Regular != nil && run.Regular.Ask != nil && protocol.ControlPausesRun(run.Regular) {
 			result.Boundary = "ASK"
 			return result, nil
 		}
+		paused := run.Status == "COMPLETE" || protocol.ControlPausesRun(run.Regular) || run.Next.Kind == decision.KindOperator
 
-		paused := run.Status == "COMPLETE" || run.Regular == nil || run.Regular.Ask != nil || run.Regular.ChangePending || run.Next.Kind == decision.KindOperator || run.Next.Kind == decision.KindAsk
 		ids := make([]string, 0, len(run.Executions))
 		for id, x := range run.Executions {
 			if x.SupersededBy != "" {
@@ -97,7 +96,7 @@ func (f *Facade) DriveContinuous(ctx context.Context) (ContinuousResult, error) 
 				}
 				continue
 			}
-			if paused && !unsettled {
+			if (paused || protocol.ControlBlocksTask(run.Regular, x.Claim.Task)) && !unsettled {
 				delete(waiting, id)
 				continue
 			}

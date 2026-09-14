@@ -94,7 +94,7 @@ func CurrentTaskOperationBinding(s *State, q TaskOperationRequest) error {
 		return fmt.Errorf("INTENT_MISMATCH: operation binding differs from issued action")
 	}
 	r := s.Regular
-	if r.Terminal != "" || r.ChangePending || r.Ask != nil || q.Binding.RequirementRevision != r.Requirement.Revision || !currentPreparationClaim(r, q.Binding) {
+	if ControlBlocksTask(r, q.Binding.Task) || q.Binding.RequirementRevision != r.Requirement.Revision || !currentPreparationClaim(r, q.Binding) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: task operation is stale or paused")
 	}
 	if q.Binding.Task.Step == "start-readiness" && q.Binding.PrerequisiteDigest != r.Reviews["product-review"].CurrentDigest {

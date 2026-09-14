@@ -965,7 +965,7 @@ func (e *Engine) claimGit(s *State, op GitPreparation) error {
 	}
 	want := *p.Operation
 	want.Claimed = op.Claimed
-	if digestOfCanonical(want) != digestOfCanonical(op) || op.Claimed || p.Operation.Claimed || r.ChangePending || r.Ask != nil || r.Terminal != "" || op.BindingDigest != preparationBinding(r) {
+	if digestOfCanonical(want) != digestOfCanonical(op) || op.Claimed || p.Operation.Claimed || ControlBlocksGit(r, op) || op.BindingDigest != preparationBinding(r) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: stale, duplicate or cancelled Git operation")
 	}
 	p.Operation.Claimed = true
@@ -1125,11 +1125,11 @@ func PreparationArtifact(run, mode string) string {
 func issuePreparationGit(s *State, revision uint64) bool {
 	r := s.Regular
 	p := r.Preparation
-	if p == nil || p.Operation != nil || r.Guard.Status == "COST_PENDING" || r.ChangePending || r.Ask != nil || r.Terminal != "" || r.Topology != "no-split" || !reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) {
+	if p == nil || p.Operation != nil || r.Guard.Status == "COST_PENDING" || ControlPausesRun(r) || r.Topology != "no-split" || !reviewPrerequisiteSatisfied(r, r.Reviews["start-readiness"]) {
 		return false
 	}
 	op := desiredGit(r)
-	if op == nil {
+	if op == nil || ControlBlocksGit(r, *op) {
 		return false
 	}
 	op.Revision = revision + 1
