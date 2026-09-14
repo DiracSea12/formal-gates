@@ -64,12 +64,29 @@ func TestCodexLifecycleEndpoint(t *testing.T) {
 			owned = true
 			reply(map[string]any{"thread": map[string]string{"id": "fixture-thread"}})
 		case "turn/start":
-			reply(map[string]any{})
+			reply(map[string]any{"turn": map[string]string{"id": "fixture-turn"}})
+			if _, err := os.Stat(filepath.Join(root, "steer")); err == nil {
+				continue
+			}
 			answer := `{"fixture":true}`
 			if data, err := os.ReadFile(filepath.Join(root, "answer.json")); err == nil {
 				answer = string(data)
 			}
 			_ = enc.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]string{"type": "agentMessage", "text": answer}}})
+			_ = enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]string{"status": "completed"}}})
+		case "turn/steer":
+			if string(q.Params["threadId"]) != `"fixture-thread"` || string(q.Params["expectedTurnId"]) != `"fixture-turn"` {
+				fail(fmt.Errorf("wrong steer binding"))
+			}
+			if err := os.WriteFile(filepath.Join(root, "steered.json"), scan.Bytes(), 0600); err != nil {
+				fail(err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "steer-fail")); err == nil {
+				_ = enc.Encode(map[string]any{"id": q.ID, "error": map[string]string{"message": "fixture delivery rejected"}})
+			} else {
+				reply(map[string]string{"turnId": "fixture-turn"})
+			}
+			_ = enc.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]string{"type": "agentMessage", "text": `{"fixture":true}`}}})
 			_ = enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]string{"status": "completed"}}})
 		}
 	}
@@ -297,6 +314,49 @@ func TestFailedNativeStartUsesAcceptedIdentity(t *testing.T) {
 			}
 			if status != "RUNTIME_ERROR" || resultIdentity != identity || !strings.Contains(message, "fixture startup rejected") {
 				t.Fatalf("original failure lost: %s %s %s", status, resultIdentity, message)
+			}
+		})
+	}
+}
+
+func TestCodexActiveMessageUsesOwningConnection(t *testing.T) {
+	for _, failDelivery := range []bool{false, true} {
+		t.Run(fmt.Sprint(failDelivery), func(t *testing.T) {
+			binding, root := codexLifecycleContext(t)
+			if err := os.WriteFile(filepath.Join(root, "steer"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if failDelivery {
+				if err := os.WriteFile(filepath.Join(root, "steer-fail"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pending := true
+			var receipts []protocol.TaskMessage
+			q := nativeTurn{Claim: protocol.ExecutionClaim{ActionID: "fixture-action", Context: binding}, Settings: settings.Values{Model: "fixture"}, Workspace: root, Job: t.TempDir(), Prompt: "initial text", Schema: map[string]any{"type": "object"}, Attached: func(string) error { return nil }, PendingMessage: func(identity string) (*protocol.TaskMessage, error) {
+				if !pending {
+					return nil, nil
+				}
+				pending = false
+				return &protocol.TaskMessage{ID: "note", Text: "Observe the amber output.", Identity: identity, Status: "SENDING"}, nil
+			}, MessageReceipt: func(m protocol.TaskMessage) error { receipts = append(receipts, m); return nil }}
+			id, err := (codexRuntimeAdapter{}).turn(q)
+			if err != nil || id != "fixture-thread" {
+				t.Fatalf("%s %v", id, err)
+			}
+			want := "ACCEPTED"
+			if failDelivery {
+				want = "FAILED"
+			}
+			if len(receipts) != 1 || receipts[0].Status != want {
+				t.Fatalf("receipts: %+v", receipts)
+			}
+			raw, err := os.ReadFile(filepath.Join(root, "steered.json"))
+			if err != nil || !strings.Contains(string(raw), "Observe the amber output.") {
+				t.Fatalf("actual steer: %s %v", raw, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "writer")); !os.IsNotExist(err) {
+				t.Fatal("writer not released")
 			}
 		})
 	}

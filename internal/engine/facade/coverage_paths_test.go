@@ -39,6 +39,7 @@ func TestCoveragePathsScopeAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	run.Regular.ActionInstructions = instructions
+	run.Regular.Preparation = &protocol.Preparation{QA: map[string]*protocol.PreparedQA{"whitebox": {DesignGap: "Use the amber fixture; keep its original output."}}}
 	claim := protocol.ExecutionClaim{Candidate: candidate}
 	claim.Task.Step = "whitebox-design"
 	job := t.TempDir()
@@ -51,10 +52,14 @@ func TestCoveragePathsScopeAndBinding(t *testing.T) {
 	}
 	var input struct {
 		SourcePaths []coverageSourcePath `json:"sourcePaths"`
+		DesignGap   string               `json:"designGap"`
 	}
 	start := strings.LastIndex(plan.prompt, "\n")
 	if err := json.Unmarshal([]byte(plan.prompt[start+1:]), &input); err != nil {
 		t.Fatal(err)
+	}
+	if input.DesignGap != run.Regular.Preparation.QA["whitebox"].DesignGap {
+		t.Fatal("current instructions missing from coverage")
 	}
 	if len(input.SourcePaths) != 1 || input.SourcePaths[0].Path != root {
 		t.Fatalf("not ordinary workspace: %+v", input)

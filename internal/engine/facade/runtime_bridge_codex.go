@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"formal-gates/internal/engine/protocol"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,8 @@ func (codexRuntimeAdapter) validatePrompt(prompt string) error {
 	}
 	return nil
 }
+
+func (codexRuntimeAdapter) liveMessages() {}
 
 func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr error) {
 	if err := (codexRuntimeAdapter{}).validatePrompt(q.Prompt); err != nil {
@@ -66,10 +69,17 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr 
 	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	scan := bufio.NewScanner(out)
 	scan.Buffer(make([]byte, 65536), 32*1024*1024)
+	incoming := make(chan []byte)
+	go func() {
+		defer close(incoming)
+		for scan.Scan() {
+			incoming <- append([]byte(nil), scan.Bytes()...)
+		}
+	}()
 	defer func() {
 		shutdownErr := finishCodexProcess(cmd, in, func() error {
-			for scan.Scan() {
-				if _, err := journal.Write(append(scan.Bytes(), '\n')); err != nil {
+			for raw := range incoming {
+				if _, err := journal.Write(append(raw, '\n')); err != nil {
 					return err
 				}
 			}
@@ -94,20 +104,81 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr 
 		Result json.RawMessage `json:"result"`
 		Error  json.RawMessage `json:"error"`
 	}
+	turnID, threadID := "", ""
+	inflight := map[string]protocol.TaskMessage{}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	defer func() {
+		for _, m := range inflight {
+			m.Status, m.Reason = "FAILED", "native connection ended before delivery acknowledgment; not automatically resent"
+			resultErr = errors.Join(resultErr, q.MessageReceipt(m))
+		}
+	}()
 	read := func() (message, error) {
-		if !scan.Scan() {
-			return message{}, fmt.Errorf("BRIDGE_UNAVAILABLE: native response unavailable: scan=%v context=%v", scan.Err(), ctx.Err())
+		for {
+			var raw []byte
+			select {
+			case data, ok := <-incoming:
+				if !ok {
+					return message{}, fmt.Errorf("BRIDGE_UNAVAILABLE: native response unavailable: scan=%v", scan.Err())
+				}
+				raw = data
+			case <-ticker.C:
+				if turnID == "" || q.PendingMessage == nil {
+					continue
+				}
+				m, err := q.PendingMessage(threadID)
+				if err != nil {
+					return message{}, err
+				}
+				if m == nil {
+					continue
+				}
+				if err := (codexRuntimeAdapter{}).validatePrompt(m.Text); err != nil {
+					m.Status, m.Reason = "FAILED", err.Error()
+					if err := q.MessageReceipt(*m); err != nil {
+						return message{}, err
+					}
+					continue
+				}
+				id := "message:" + m.ActionID + ":" + m.ID
+				inflight[id] = *m
+				if err = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "method": "turn/steer", "params": map[string]any{"threadId": threadID, "expectedTurnId": turnID, "input": []any{map[string]any{"type": "text", "text": m.Text, "text_elements": []any{}}}}}); err != nil {
+					return message{}, err
+				}
+				continue
+			}
+			if _, err := journal.Write(append(raw, '\n')); err != nil {
+				return message{}, err
+			}
+			if err := journal.Sync(); err != nil {
+				return message{}, err
+			}
+			var m message
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return message{}, err
+			}
+			var id string
+			if json.Unmarshal(m.ID, &id) == nil {
+				if sent, ok := inflight[id]; ok {
+					sent.Status = "ACCEPTED"
+					var ack struct {
+						TurnID string `json:"turnId"`
+					}
+					if len(m.Error) > 0 && string(m.Error) != "null" {
+						sent.Status, sent.Reason = "FAILED", string(m.Error)
+					} else if json.Unmarshal(m.Result, &ack) != nil || ack.TurnID != turnID {
+						sent.Status, sent.Reason = "FAILED", "native delivery acknowledgment has no matching turn ID"
+					}
+					if err := q.MessageReceipt(sent); err != nil {
+						return message{}, err
+					}
+					delete(inflight, id)
+					continue
+				}
+			}
+			return m, nil
 		}
-		raw := append([]byte(nil), scan.Bytes()...)
-		if _, err := journal.Write(append(raw, '\n')); err != nil {
-			return message{}, err
-		}
-		if err := journal.Sync(); err != nil {
-			return message{}, err
-		}
-		var m message
-		err := json.Unmarshal(raw, &m)
-		return m, err
 	}
 	var queued []message
 	request := func(id int, method string, params any) (json.RawMessage, error) {
@@ -222,9 +293,18 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr 
 	if err := (codexRuntimeAdapter{}).validatePrompt(prompt); err != nil {
 		return identity, err
 	}
-	if _, err = request(3, "turn/start", turn); err != nil {
+	if raw, err = request(3, "turn/start", turn); err != nil {
 		return identity, err
 	}
+	var active struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(raw, &active) == nil {
+		turnID = active.Turn.ID
+	}
+	threadID = identity
 	answer := ""
 	for {
 		var m message

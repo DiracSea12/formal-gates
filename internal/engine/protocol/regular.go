@@ -209,6 +209,7 @@ type RegularState struct {
 // RegularEvent extends the existing event union with typed business facts. The
 // operation is closed; arbitrary names never become handlers or model commands.
 type RegularEvent struct {
+	Message              *TaskMessage             `json:"message,omitempty"`
 	TaskOperation        *TaskOperationRequest    `json:"taskOperation,omitempty"`
 	TaskOperationReceipt *TaskOperationReceipt    `json:"taskOperationReceipt,omitempty"`
 	VerificationResult   *VerificationResult      `json:"verificationResult,omitempty"`
@@ -262,13 +263,15 @@ type ExecutionSource struct {
 
 func (v RegularEvent) validate() error {
 	n := 0
-	for _, set := range []bool{v.TaskOperation != nil, v.TaskOperationReceipt != nil, v.Request != nil, v.Decision != nil, v.Review != nil, v.Adjudication != nil, v.Correction != nil, v.Claim != nil, v.Source != nil, v.PreparationResult != nil, v.GitClaim != nil, v.GitReceipt != nil, v.DeveloperRecovery != nil, v.VerificationResult != nil, v.WaveAdjudication != nil, v.RepairResult != nil} {
+	for _, set := range []bool{v.Message != nil, v.TaskOperation != nil, v.TaskOperationReceipt != nil, v.Request != nil, v.Decision != nil, v.Review != nil, v.Adjudication != nil, v.Correction != nil, v.Claim != nil, v.Source != nil, v.PreparationResult != nil, v.GitClaim != nil, v.GitReceipt != nil, v.DeveloperRecovery != nil, v.VerificationResult != nil, v.WaveAdjudication != nil, v.RepairResult != nil} {
 		if set {
 			n++
 		}
 	}
 	ok := false
 	switch v.Operation {
+	case "MESSAGE", "MESSAGE_RECEIPT":
+		ok = v.Message != nil
 	case "TASK_OPERATION_CLAIM":
 		ok = v.TaskOperation != nil
 	case "TASK_OPERATION_RECEIPT":
@@ -573,6 +576,7 @@ func (e *Engine) regularBasis(s *State) (guard.Result, error) {
 // Scheduling and retry authority remain TaskKey/Attempt/PendingActions; ended
 // actions leave PendingActions while this immutable history survives task reuse.
 type RegularExecution struct {
+	Messages           map[string]TaskMessage   `json:"messages,omitempty"`
 	Executor           *ExecutorTarget          `json:"executor,omitempty"`
 	ExecutorHandoffID  string                   `json:"executorHandoffId,omitempty"`
 	SupersededBy       string                   `json:"supersededBy,omitempty"`
@@ -678,6 +682,24 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 			}{c, currentWave(r), currentRepair(r)})
 		}
 		x := RegularExecution{Claim: c, Number: number}
+		if c.Task.Step == "whitebox-design" {
+			// A malformed final result retries authoring, not an already completed
+			// independent coverage judgment. Task revision and candidate bind its
+			// effective inputs. Preserve the original receipt and identity verbatim.
+			for _, prior := range s.RegularExecutions {
+				if prior.Claim.Task != c.Task || prior.Claim.Candidate != c.Candidate || prior.Claim.RequirementRevision != c.RequirementRevision || prior.Claim.PrerequisiteDigest != c.PrerequisiteDigest {
+					continue
+				}
+				for id, op := range prior.Operations {
+					if op.Request.Kind == "whitebox.coverage" && op.Receipt != nil && op.Receipt.Status == "COMPLETED" {
+						if x.Operations == nil {
+							x.Operations = map[string]TaskOperation{}
+						}
+						x.Operations[id] = op
+					}
+				}
+			}
+		}
 		for _, prior := range s.RegularExecutions {
 			if prior.Claim.Task == c.Task && prior.Claim.Context != nil {
 				x.Claim.Context = prior.Claim.Context
@@ -709,12 +731,14 @@ func (e *Engine) admitRegularEvent(ev Event, s *State, revision uint64) (Accepta
 		return Acceptance{}, &RejectedError{Code: CodeStaleFreshness, Detail: "regular expectedRevision is not current"}
 	}
 	r := s.Regular
-	if r.Terminal != "" && (r.Terminal != "ABORTING" || (v.Operation != "SOURCE" && v.Operation != "REVIEW_RESULT" && v.Operation != "PREPARATION_RESULT" && v.Operation != "VERIFICATION_RESULT" && v.Operation != "REPAIR_RESULT" && v.Operation != "TASK_OPERATION_RECEIPT")) {
+	if r.Terminal != "" && (r.Terminal != "ABORTING" || (v.Operation != "SOURCE" && v.Operation != "MESSAGE_RECEIPT" && v.Operation != "REVIEW_RESULT" && v.Operation != "PREPARATION_RESULT" && v.Operation != "VERIFICATION_RESULT" && v.Operation != "REPAIR_RESULT" && v.Operation != "TASK_OPERATION_RECEIPT")) {
 		return Acceptance{}, fmt.Errorf("regular run is terminal")
 	}
 	var err error
 	status := "ACCEPTED"
 	switch v.Operation {
+	case "MESSAGE", "MESSAGE_RECEIPT":
+		err = acceptTaskMessage(s, *v.Message, v.Operation == "MESSAGE_RECEIPT")
 	case "TASK_OPERATION_CLAIM":
 		err = e.claimTaskOperation(s, *v.TaskOperation, revision)
 	case "TASK_OPERATION_RECEIPT":

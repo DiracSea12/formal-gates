@@ -19,6 +19,8 @@ import (
 // The driver supplies immutable inputs and two bounded callbacks. Adapters never
 // decide the next task, write a verdict, or connect the whitebox preflight.
 type nativeTurn struct {
+	PendingMessage                                       func(string) (*protocol.TaskMessage, error)
+	MessageReceipt                                       func(protocol.TaskMessage) error
 	Claim                                                protocol.ExecutionClaim
 	Settings                                             settings.Values
 	Root, RunID, Job, Workspace, Prompt, ToolDescription string

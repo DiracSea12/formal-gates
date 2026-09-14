@@ -1379,7 +1379,13 @@ func preparationDecision(s *State, q RegularRequest) {
 			p.QA[q.Target].NeedsRevision = true
 			p.QA[q.Target].Frozen = false
 		} else {
+			previous := p.QA[q.Target].Revision
 			reviseQA(p.QA[q.Target])
+			if p.QA[q.Target].Revision == previous {
+				// Explicitly changed instructions invalidate even an unfinished
+				// draft's prior coverage input, before any design has been accepted.
+				p.QA[q.Target].Revision++
+			}
 		}
 		p.QA[q.Target].DesignGap = q.Reason
 	case "development-rework":

@@ -41,6 +41,10 @@ type Progress struct {
 	EvidenceRoot                 string                    `json:"evidenceRoot"`
 }
 type TaskMessage struct {
+	ID        string `json:"id,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	ActionID  string `json:"actionId"`
 	Identity  string `json:"identity"`
 	Candidate string `json:"candidate"`
@@ -110,11 +114,20 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		x := run.Executions[id]
+		messageIDs := []string{}
+		for id := range x.Messages {
+			messageIDs = append(messageIDs, id)
+		}
+		sort.Strings(messageIDs)
+		for _, messageID := range messageIDs {
+			m := x.Messages[messageID]
+			p.Messages = append(p.Messages, TaskMessage{ID: m.ID, ActionID: id, Identity: m.Identity, Candidate: x.Claim.Candidate, Operation: "message", Text: m.Text, Status: m.Status, Reason: m.Reason})
+		}
 		jobs := nativeProgressJobs(f.codexJob(id), x.ResumeCount)
 		currentJob := jobs[0]
 		for _, call := range jobs {
 			if call.prompt {
-				p.Messages = append(p.Messages, TaskMessage{id, x.Identity, x.Claim.Candidate, call.operation, filepath.Join(call.job, "prompt.txt")})
+				p.Messages = append(p.Messages, TaskMessage{ActionID: id, Identity: x.Identity, Candidate: x.Claim.Candidate, Operation: call.operation, Path: filepath.Join(call.job, "prompt.txt")})
 			}
 			if call.process {
 				p.NativeCalls++

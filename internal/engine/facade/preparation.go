@@ -417,6 +417,24 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 		payload["reviewKind"] = strings.ToUpper(mode)
 		payload["previousDesign"] = p.QA[mode].PreviousDesign
 		payload["reviewGaps"] = p.QA[mode].RetainedReview
+		// The review projection contains statuses only. Keep the reviewer's
+		// original explanation alongside it, even after a scope decision changes
+		// DesignGap. Select the exact retained binding, not the latest run result.
+		if retained := p.QA[mode].RetainedReview; retained != nil {
+			messages := map[string]string{}
+			previous, bound := run.Executions[p.QA[mode].PreviousDesignActionID]
+			rejected := map[string]bool{}
+			for _, failure := range run.Regular.PreparationErrors {
+				rejected[failure.Result.ActionID] = true
+			}
+			for id, execution := range run.Executions {
+				result := execution.PreparationResult
+				if bound && !rejected[id] && execution.Claim.Task.Scope == previous.Claim.Task.Scope && result != nil && string(execution.Claim.Task.Step) == mode+"-review" && result.Status == "FAIL" && result.Review != nil {
+					messages[id] = result.Message
+				}
+			}
+			payload["reviewGaps"] = map[string]any{"review": retained, "messages": messages}
+		}
 		payload["existingTestEvidence"] = p.QA[mode].Reuse
 	} else {
 		payload["reviewScope"] = p.QA[mode].ReviewScope

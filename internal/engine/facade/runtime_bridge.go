@@ -77,6 +77,14 @@ func (f *Facade) callNativeTurn(run Run, claim protocol.ExecutionClaim, resume b
 	if resume && (claim.Identity == "" || x.Identity != claim.Identity) || !resume && x.Identity != "" {
 		return "", fmt.Errorf("DEVELOPMENT_CONTINUITY: native turn must preserve the observed identity")
 	}
+	for _, m := range x.Messages {
+		if m.Status == "SENDING" {
+			m.Status, m.Reason = "FAILED", "previous delivery has no acknowledgment; not automatically resent"
+			if err := f.recordTaskMessage(m); err != nil {
+				return "", err
+			}
+		}
+	}
 	if err := validateNativeInput(adapter, prompt); err != nil {
 		return "", err
 	}
@@ -86,14 +94,55 @@ func (f *Facade) callNativeTurn(run Run, claim protocol.ExecutionClaim, resume b
 	if err := writeJSONAtomic(filepath.Join(job, "result-schema.json"), schema); err != nil {
 		return "", err
 	}
+	// Hosts without in-turn delivery consume queued text at their next legal
+	// invocation. They never attach a second writer to an active session.
+	var queued []protocol.TaskMessage
+	if _, live := adapter.(interface{ liveMessages() }); !live {
+		for {
+			if claim.Identity == "" {
+				break
+			}
+			m, err := f.pendingTaskMessage(claim.ActionID, claim.Identity)
+			if err != nil {
+				return "", err
+			}
+			if m == nil {
+				break
+			}
+			nextPrompt := prompt + "\n\n" + m.Text
+			if err := validateNativeInput(adapter, nextPrompt); err != nil {
+				m.Status, m.Reason = "FAILED", err.Error()
+				if err := f.recordTaskMessage(*m); err != nil {
+					return "", err
+				}
+				continue
+			}
+			queued = append(queued, *m)
+			prompt = nextPrompt
+		}
+	}
 	if err := os.WriteFile(filepath.Join(job, "prompt.txt"), []byte(prompt), 0600); err != nil {
 		return "", err
 	}
-	return adapter.turn(nativeTurn{Claim: claim, Settings: run.Regular.Settings.Values,
-		Root: f.root, RunID: run.RunID, Job: job, Workspace: workspace, Prompt: prompt,
+	identity, turnErr := adapter.turn(nativeTurn{Claim: claim, Settings: run.Regular.Settings.Values,
+		PendingMessage: func(identity string) (*protocol.TaskMessage, error) {
+			return f.pendingTaskMessage(claim.ActionID, identity)
+		},
+		MessageReceipt: f.recordTaskMessage,
+		Root:           f.root, RunID: run.RunID, Job: job, Workspace: workspace, Prompt: prompt,
 		ToolDescription: description, Schema: schema, Resume: resume, NoTools: noTools,
 		Attached: func(id string) error { return f.attachStreamIdentity(claim, id) },
 		Operation: func(identity, request string, args json.RawMessage) (any, error) {
 			return f.dispatchNativeOperation(claim.ActionID, identity, request, args)
 		}})
+	for _, m := range queued {
+		m.Status = "ACCEPTED"
+		if turnErr != nil {
+			m.Status, m.Reason = "FAILED", turnErr.Error()
+		}
+		if err := f.recordTaskMessage(m); err != nil {
+			return identity, err
+		}
+	}
+	return identity, turnErr
 }

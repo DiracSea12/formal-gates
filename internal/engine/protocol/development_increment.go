@@ -118,11 +118,11 @@ func incrementalPlan(r *RegularState, q RegularRequest) (*DevelopmentPlan, error
 	}
 	plan.RequirementRevision = r.Requirement.Revision
 	plan.ConfirmedRevision = r.Requirement.Revision
-	plan.Digest = ""
 	if err := validateDevelopmentPlan(plan, r.Requirement.Revision); err != nil {
 		return nil, err
 	}
-	plan.Digest = digestOfCanonical(plan)
+	// Selecting an already confirmed Batch does not change the plan bytes or
+	// invalidate independent baseline tasks bound to that plan.
 	return &plan, nil
 }
 
@@ -130,13 +130,20 @@ func validateDevelopmentIncrement(s *State, q RegularRequest) error {
 	if _, err := incrementalPlan(s.Regular, q); err != nil {
 		return err
 	}
-	for _, x := range s.RegularExecutions {
+	for id, x := range s.RegularExecutions {
+		// Baseline QA owns a separate workspace and does not depend on the
+		// implementation candidate. Preserve its live claim when its contract
+		// is retained; all candidate-dependent work still conflicts.
+		independent := (x.Claim.Task.Step == "blackbox-design" || x.Claim.Task.Step == "blackbox-review") && (q.Impact["blackbox-review"] == "" || q.Impact["blackbox-review"] == "unaffected")
+		if independent {
+			continue
+		}
 		if x.Claimed && (!x.Finished || x.Source == nil || x.Source.Status == "RUNNING") {
-			return fmt.Errorf("DEVELOPMENT_INCREMENT: settle/checkpoint active executions before changing the plan")
+			return fmt.Errorf("DEVELOPMENT_INCREMENT: %s depends on changed inputs or shares the development workspace; settle/checkpoint it first", id)
 		}
 		for _, op := range x.Operations {
 			if op.Receipt == nil {
-				return fmt.Errorf("DEVELOPMENT_INCREMENT: reconcile pending task operations first")
+				return fmt.Errorf("DEVELOPMENT_INCREMENT: reconcile pending operation for conflicting action %s first", id)
 			}
 		}
 	}
@@ -159,6 +166,10 @@ func incrementalImpactItems(r *RegularState, q RegularRequest) []ImpactItem {
 				item.CanKeep = false
 				item.Evidence += "; execution is bound to the previous candidate"
 			}
+		}
+		if item.ID == "blackbox-review" && !r.Preparation.QA["blackbox"].Frozen && r.Preparation.QA["blackbox"].ReviewWaiver == nil {
+			item.CanKeep = true
+			item.Evidence += "; baseline QA contract and unfinished work may be retained; no execution PASS is inferred"
 		}
 		result = append(result, item)
 	}
@@ -204,6 +215,9 @@ func decideDevelopmentIncrement(s *State, a *RegularAsk, d RegularDecision, even
 		if !item.CanKeep && q.Impact[item.ID] == "unaffected" {
 			return fmt.Errorf("DEVELOPMENT_INCREMENT: %s has no applicable PASS to carry", item.ID)
 		}
+	}
+	if err := validateDevelopmentIncrement(s, q); err != nil {
+		return err
 	}
 	plan, err := incrementalPlan(r, q)
 	if err != nil {
