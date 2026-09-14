@@ -415,9 +415,6 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 		}
 	} else if strings.HasSuffix(step, "-design") {
 		payload["reviewKind"] = strings.ToUpper(mode)
-		if p.QA[mode].DesignGap != "" {
-			payload["designGap"] = p.QA[mode].DesignGap
-		}
 		payload["previousDesign"] = p.QA[mode].PreviousDesign
 		payload["reviewGaps"] = p.QA[mode].RetainedReview
 		payload["existingTestEvidence"] = p.QA[mode].Reuse
@@ -432,6 +429,9 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 				"diffArgs": []string{"diff", "--binary", "--no-renames", p.DevelopmentSnapshot, claim.Candidate, "--"},
 			}
 		}
+	}
+	if qa := p.QA[mode]; qa != nil && qa.DesignGap != "" {
+		payload["designGap"] = qa.DesignGap
 	}
 	if workspace == "" {
 		return nil, "", fmt.Errorf("missing authorized workspace")

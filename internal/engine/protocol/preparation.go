@@ -1516,6 +1516,10 @@ func decideQARecovery(s *State, a *RegularAsk, d RegularDecision, revision uint6
 	default:
 		return fmt.Errorf("INVALID_CHOICE")
 	}
+	switch d.Choice {
+	case "retry", "redesign", "fresh-review":
+		q.DesignGap = d.Reason
+	}
 	q.RecoveryRequired = false
 	return nil
 }
