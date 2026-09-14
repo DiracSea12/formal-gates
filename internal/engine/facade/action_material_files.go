@@ -11,13 +11,13 @@ import (
 
 // Only material selected for the current action is published. File references
 // are handed directly to the worker; there is no extra prompt or index document.
-func (m *nativePromptMaterial) bindFiles(job string, requirement protocol.RequirementDocument) error {
+func (m *nativePromptMaterial) bindFiles(job string, requirement protocol.RequirementDocument, root string) error {
 	if m.files == nil {
 		m.files = map[string][]byte{}
 	}
 	if _, ok := m.input["requirement"]; ok {
 		m.files["requirement.md"] = []byte(requirement.Text)
-		m.input["requirement"] = map[string]any{"path": filepath.Join(job, "requirement.md"), "revision": requirement.Revision, "confirmed": requirement.Confirmed}
+		m.input["requirement"] = map[string]any{"path": filepath.Join(job, "requirement.md"), "revision": requirement.Revision, "confirmed": requirement.Confirmed, "referenceBase": filepath.Dir(filepath.Join(root, requirement.Path))}
 	}
 	for key, name := range map[string]string{
 		"developmentIncrement": "development-increment.json",

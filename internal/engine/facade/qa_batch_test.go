@@ -282,7 +282,7 @@ func TestRepairCheckpointKeepsAttachedWorker(t *testing.T) {
 	}
 	plan := verificationRepair(run)
 	source := run.Regular.Preparation.Resources[plan.ID]
-	x := facadeExecution(t, f, "repair-worker")
+	x := facadeExecution(t, f, "repair")
 	nativeFixtureClaim(t, f, x)
 	writePreparationFile(t, source, "main.go", "package main\nimport \"fmt\"\nfunc main(){fmt.Print(\"hello\")}\n")
 	result := runBatch(t, f, x.Claim.ActionID)
@@ -303,7 +303,7 @@ func TestRepairCheckpointKeepsAttachedWorker(t *testing.T) {
 	if attached.Finished || attached.Identity != q.Binding.Identity || len(attached.Operations) != 3 {
 		t.Fatal("checkpoint changed worker or replayed targets")
 	}
-	checkpoint := verificationWave(run).Checkpoints["repair-worker"]
+	checkpoint := verificationWave(run).Checkpoints["repair"]
 	if len(checkpoint.Cases) != 1 || checkpoint.BindingDigest != plan.ID || checkpoint.Cases[0].OperationID != collect.ID {
 		t.Fatal("repair checkpoint lacks exact source binding", checkpoint)
 	}

@@ -35,7 +35,7 @@ func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOpe
 		return err
 	}
 	source := f.root
-	repair := op.Request.Binding.Task.Step == "repair-worker"
+	repair := op.Request.Binding.Task.Step == "repair"
 	if repair {
 		source = run.Regular.Preparation.Resources[op.Request.Binding.PrerequisiteDigest]
 	}

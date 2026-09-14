@@ -13,7 +13,7 @@ import (
 )
 
 func verificationAction(step string) bool {
-	return step == "blackbox-execution" || step == "whitebox-execution" || step == "complexity-gate" || step == "implementation-quality-gate" || step == "repair-worker"
+	return step == "blackbox-execution" || step == "whitebox-execution" || step == "complexity-gate" || step == "implementation-quality-gate" || step == "repair"
 }
 func verificationWave(run Run) *protocol.VerificationWave {
 	if run.Regular.Verification == nil {
@@ -60,8 +60,8 @@ func prepareVerificationPrompt(run Run, claim protocol.ExecutionClaim) (nativePr
 	payload := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "baseSnapshot": run.Regular.BaseSnapshot, "candidate": claim.Candidate}
 
 	paths := []string{"actions/development-worker.md#通用执行约定"}
-	if claim.Task.Step == "repair-worker" {
-		paths = append(paths, "actions/development-worker.md#修复工作者")
+	if claim.Task.Step == "repair" {
+		paths = append(paths, "actions/development-worker.md#开发工作者", "actions/development-worker.md#返修交付")
 	} else if strings.HasSuffix(string(claim.Task.Step), "-execution") {
 		path := "actions/qa-execution.md"
 		section := "黑盒执行"
@@ -74,13 +74,16 @@ func prepareVerificationPrompt(run Run, claim protocol.ExecutionClaim) (nativePr
 	if err != nil {
 		return nativePromptMaterial{}, err
 	}
-	if claim.Task.Step == "repair-worker" {
+	if claim.Task.Step == "repair" {
 		repair := verificationRepair(run)
 		if repair == nil {
 			return nativePromptMaterial{}, fmt.Errorf("no repair plan")
 		}
 		workspace = run.Regular.Preparation.Resources[repair.ID]
 		payload["repairPlan"] = repair
+		if previous := run.Executions[claim.ActionID].RepairResult; previous != nil && previous.Status == "CONTINUE" {
+			payload["continuation"] = map[string]any{"message": previous.Message, "manifest": previous.Manifest, "resolved": previous.Resolved}
+		}
 		if err = verificationRepairInputs(run, repair, payload, files); err != nil {
 			return nativePromptMaterial{}, err
 		}
@@ -146,8 +149,8 @@ func verificationSchema(claim protocol.ExecutionClaim) map[string]any {
 	fields := map[string]any{"actionId": exact(claim.ActionID), "attemptId": exact(claim.AttemptID), "provider": exact(claim.Provider), "identity": exact("NATIVE_IDENTITY"), "requirementRevision": exact(claim.RequirementRevision), "candidate": exact(claim.Candidate), "status": map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "CHECKPOINT"}}, "message": str}
 	oneCase := obj(map[string]any{"caseId": str, "status": map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "BLOCKED"}}, "procedure": str, "output": str, "comparison": str, "environment": str, "tool": str, "workspace": str, "dependencies": arr(str), "reusedPreparation": str})
 	fields["cases"] = arr(oneCase)
-	if claim.Task.Step == "repair-worker" {
-		fields["status"] = map[string]any{"type": "string", "enum": []string{"PASS", "FAIL"}}
+	if claim.Task.Step == "repair" {
+		fields["status"] = map[string]any{"type": "string", "enum": []string{"PASS", "CONTINUE"}}
 		fields["planId"] = exact(claim.PrerequisiteDigest)
 		fields["manifest"] = arr(str)
 		fields["resolved"] = arr(str)
@@ -164,7 +167,7 @@ func verificationSchema(claim protocol.ExecutionClaim) map[string]any {
 }
 func (f *Facade) finishVerification(claim protocol.ExecutionClaim, identity string, data []byte, readErr, waitErr error, source protocol.ExecutionSource) (Run, error) {
 	v := protocol.RegularEvent{}
-	if claim.Task.Step == "repair-worker" {
+	if claim.Task.Step == "repair" {
 		var result protocol.RepairResult
 		err := json.Unmarshal(data, &result)
 		if readErr != nil || waitErr != nil || err != nil {
@@ -229,7 +232,7 @@ func (f *Facade) performVerificationGit(run Run, op protocol.GitPreparation) (pr
 	return receipt, nil
 }
 func checkpointCanResume(run Run, x protocol.RegularExecution) bool {
-	if !strings.HasSuffix(string(x.Claim.Task.Step), "-execution") {
+	if x.Claim.Task.Step != "repair" && !strings.HasSuffix(string(x.Claim.Task.Step), "-execution") {
 		return false
 	}
 	w := verificationWave(run)

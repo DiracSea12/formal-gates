@@ -14,7 +14,7 @@ func TestActionMaterialPathsExcludeBodiesAndUnrelatedFields(t *testing.T) {
 	body := strings.Repeat("required-contract-text ", 100000)
 	req := protocol.RequirementDocument{Text: body, Revision: "bound-revision"}
 	m := nativePromptMaterial{instructions: "Read the specified files for this action.", input: map[string]any{"requirement": req, "design": map[string]any{"manifest": body}}}
-	if err := m.bindFiles(job, req); err != nil {
+	if err := m.bindFiles(job, req, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	prompt, err := m.render(protocol.ExecutionClaim{})
@@ -81,8 +81,8 @@ func TestNativeReviewInputUsesCapturedContractPaths(t *testing.T) {
 // shared assembly with current instructions, without claiming or changing it.
 func TestActualStagePromptPathsReadOnly(t *testing.T) {
 	state := os.Getenv("FORMAL_GATES_PROMPT_READONLY_STATE")
-	if state == "" {
-		t.Skip("explicit read-only state required")
+	if state == "" || os.Getenv("FORMAL_GATES_PROMPT_READONLY_ROOT") == "" {
+		t.Skip("explicit read-only state and original project root required")
 	}
 	data, err := os.ReadFile(state)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestActualStagePromptPathsReadOnly(t *testing.T) {
 			t.Fatal(step, err)
 		}
 		job := filepath.Join(t.TempDir(), step)
-		if err = m.bindFiles(job, run.Regular.Requirement); err != nil {
+		if err = m.bindFiles(job, run.Regular.Requirement, os.Getenv("FORMAL_GATES_PROMPT_READONLY_ROOT")); err != nil {
 			t.Fatal(err)
 		}
 		if step == "blackbox-review" {
@@ -153,5 +153,44 @@ func TestActualStagePromptPathsReadOnly(t *testing.T) {
 			}
 		}
 		t.Logf("%s initial_chars=%d material_files=%d", step, len([]rune(prompt)), len(m.files))
+	}
+}
+
+func TestRequirementReferencesRemainReadableOutsideActionJob(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "spec", "request.md")
+	reference := filepath.Join(root, "samples", "before.txt")
+	for _, path := range []string{original, reference} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text := "Read [the recorded sample](../samples/before.txt).\n"
+	if err := os.WriteFile(original, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reference, []byte("self-owned recorded input\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	requirement := protocol.Document("spec/request.md", []byte(text))
+	m := nativePromptMaterial{input: map[string]any{"requirement": requirement}, workspace: root}
+	job := t.TempDir()
+	if err := m.bindFiles(job, requirement, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.writeFiles(job); err != nil {
+		t.Fatal(err)
+	}
+	binding := m.input["requirement"].(map[string]any)
+	data, err := os.ReadFile(binding["path"].(string))
+	if err != nil || string(data) != text {
+		t.Fatal("fixed requirement unavailable", err)
+	}
+	data, err = os.ReadFile(filepath.Join(binding["referenceBase"].(string), "../samples/before.txt"))
+	if err != nil || string(data) != "self-owned recorded input\n" {
+		t.Fatal("relative source unavailable", err)
+	}
+	if len(m.files) != 1 {
+		t.Fatal("reference created an unnecessary material copy")
 	}
 }

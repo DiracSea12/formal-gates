@@ -332,6 +332,9 @@ func preparePreparationPrompt(run Run, claim protocol.ExecutionClaim) (nativePro
 		path += "#QA 审查"
 	}
 	paths := []string{"actions/development-worker.md#通用执行约定", path}
+	if action == "development-worker" {
+		paths = append(paths, "actions/development-worker.md#Batch 交付")
+	}
 	if action == "qa-design" {
 		section := "黑盒设计"
 		if step == "whitebox-design" {

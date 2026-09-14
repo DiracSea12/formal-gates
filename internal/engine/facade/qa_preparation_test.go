@@ -116,7 +116,7 @@ func TestSharedPreparationConcurrentReuseAndWorkingChanges(t *testing.T) {
 	if err := gitprep.Workspace(f.root, source, q.Binding.Candidate); err != nil {
 		t.Fatal(err)
 	}
-	op.Request.Binding.Task.Step = "repair-worker"
+	op.Request.Binding.Task.Step = "repair"
 	op.Request.Binding.PrerequisiteDigest = "shared-repair-test"
 	run.Regular.Preparation.Resources["shared-repair-test"] = source
 	op.Preparation[0].Independent = false

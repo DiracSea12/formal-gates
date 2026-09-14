@@ -601,7 +601,7 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, step := range []string{"product-review", "start-readiness", "development-worker", "blackbox-design", "blackbox-review", "whitebox-design", "whitebox-review", "complexity-gate", "implementation-quality-gate", "blackbox-execution", "whitebox-execution", "repair-worker"} {
+	for _, step := range []string{"product-review", "start-readiness", "development-worker", "blackbox-design", "blackbox-review", "whitebox-design", "whitebox-review", "complexity-gate", "implementation-quality-gate", "blackbox-execution", "whitebox-execution", "repair"} {
 		description, err := nativeOperationInstructions(Run{Regular: &protocol.RegularState{ActionInstructions: instructions}}, step)
 		if err != nil {
 			t.Fatal(err)
@@ -609,14 +609,14 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 		tool := nativeOperationTool(step, description)
 		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
 		kinds := props["kind"].(map[string]any)["enum"].([]string)
-		qa := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker"
-		if (!qa && len(kinds) != 1) || (qa && len(kinds) != 6) || kinds[0] != "model.run" {
+		qa := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair"
+		if (!qa && len(kinds) != 0) || (qa && len(kinds) != 5) {
 			t.Fatalf("%s operation kinds: %v", step, kinds)
 		}
 		if !qa {
 			cases := props["caseId"].(map[string]any)["enum"].([]string)
 			if len(cases) != 1 || cases[0] != "" {
-				t.Fatalf("%s model-only caseId: %v", step, cases)
+				t.Fatalf("%s unavailable operation caseId: %v", step, cases)
 			}
 		}
 		if strings.Contains(description, "fixture development-worker section 5") != qa {

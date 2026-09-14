@@ -79,7 +79,6 @@ func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, roo
 	}
 	plugin := patch[0].(map[string]any)["insert"].([]any)[0].(map[string]any)
 	plugin["config"].(map[string]any)["exposeOperation"] = !noTools && nativeAllowsOperation(step)
-	plugin["config"].(map[string]any)["disableTools"] = step == "model-run"
 	mode := "read-only"
 	if !noTools && nativeRoleAccess(step) == nativeWorkspaceWrite {
 		mode = "workspace-write"
@@ -135,23 +134,6 @@ func (dshRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error) {
 	}
 	raw, err := probeACPRecovery(cmd, job, q.ActionID, workspace, identity, "session/resume")
 	return "session/resume", raw, err
-}
-func (dshRuntimeAdapter) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
-	invoke := func() error {
-		binding := op.Request.Binding.Context
-		cmd, err := prepareDSHProcess(binding, job, job, binding.Environment["FORMAL_GATES_ENGINE_ROOT"], op.Request.RunID, op.Request.Binding.ActionID, "model-run", true)
-		if err != nil {
-			return err
-		}
-		_, err = runNativeStreamProcess(ctx, cmd, job, op.ID, func(in io.Reader, out io.WriteCloser) (nativeProcessResult, error) {
-			return runDSHSession(in, out, job, job, "", nativeModelPrompt(op.Request.Prompt), func(string) error { return nil }, dshSessionOptions{Model: config.Model, Effort: config.ReasoningEffort})
-		})
-		return err
-	}
-	return completeStreamModel(op, job, "native-events.jsonl", result, invoke())
-}
-func (dshRuntimeAdapter) observeModel(op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error) {
-	return observeStreamModel(op, job, "native-events.jsonl", result)
 }
 
 func init() { registerBuiltinRuntime("deepseek-harness", dshRuntimeAdapter{}) }

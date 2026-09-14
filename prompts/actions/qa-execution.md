@@ -18,7 +18,7 @@
 用例改写为执行 PASS。未执行、setup 失败、入口不存在或所需真实宿主能力缺失时，完整已完成行照实保存 PASS/FAIL，
 未完成行保持未完成；记录中断原因与未完成集合，整体维持 PENDING/RUNTIME_ERROR，不能 PASS。
 通过 qa.checkpoint 保存新增完整结果，参数见当前工具说明；该操作不结束 worker。
-中断返回 CHECKPOINT 和真实原因，只续跑 remaining。工具或环境变化先在 invalidated
+可继续执行时持续完成，等待自己启动的操作或普通未完成不作为交回理由。真实外部中断返回 CHECKPOINT 和原因，只续跑 remaining。工具或环境变化先在 invalidated
 逐项给出 caseId、previousTool、previousEnvironment、tool、environment、reason。
 引擎合并有效进度并核对完整 expected-set；授权跳过不是 PASS。
 
@@ -48,9 +48,7 @@
 
 ## 当前引擎操作与结果
 
-读取 requirement.path、caseFile.path；只执行 remaining 中的批准用例。通过
-formal_gates_operation 按 qa.prepare → qa.target → qa.collect 执行；引擎选择工作目录，
-绑定候选和用例，记录实际 stdout、stderr、退出码。prepare/target/collect 的 prompt 为空，checkpoint 的判断 JSON 按工具说明填写。
+读取 requirement.path、caseFile.path；只执行 remaining 中的批准用例。操作参数按当前工具说明；使用引擎返回的工作目录和实际 stdout、stderr、退出码取证。
 case.command 为 null 时，由执行者按批准步骤在 qa.target 的 command 提供
 {executable,args,expectedExitCode}，包含必要前置准备和实际目标调用；简单操作直接调用，
 仅重复或多步取证需要短脚本，不改变已批准步骤或判据。executable 是程序名或路径，参数逐项放 args。
@@ -60,8 +58,7 @@ qa.run 可以自动消费已有命令和准备/采集操作。返回 pending.inp
 方式提交 qa.target；pending.judgment 需要逐例比较 oracle 并 checkpoint。输入待补或等待不等于 FAIL。
 引擎仍拥有动作派发、依赖、剩余集合、并发、恢复和结果接纳；执行者只完成当前已批准用例。
 
-每条结果按 schema 返回 caseId、status PASS/FAIL/BLOCKED、procedure、output、comparison、
-environment、tool、workspace、dependencies、reusedPreparation。逐条记录真实命令、实际观察与判据比较。
+按当前 schema 逐条记录真实命令、观察、判据比较及环境。
 FAIL 附 raw finding，requirement 使用对应 caseId 并给出 remedy。最终 remaining 为空；
 无法执行的用例保持未完成并说明真实阻塞，不以空结果或模板文案冒充 PASS。
 

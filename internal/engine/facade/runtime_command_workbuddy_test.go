@@ -60,7 +60,7 @@ func TestWorkBuddyFreshIdentityIsNotResume(t *testing.T) {
 }
 
 func TestWorkBuddyRoleTools(t *testing.T) {
-	for _, step := range []string{"development-worker", "repair-worker", "whitebox-design", "product-review", "start-readiness", "blackbox-execution", "whitebox-execution", "blackbox-design"} {
+	for _, step := range []string{"development-worker", "repair", "whitebox-design", "product-review", "start-readiness", "blackbox-execution", "whitebox-execution", "blackbox-design"} {
 		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
 		if err != nil {
 			t.Fatal(err)
@@ -132,7 +132,7 @@ func TestWorkBuddyReviewNativePermissionsFreshAndResume(t *testing.T) {
 }
 
 func TestWorkBuddyNonReviewPermissionsUnchanged(t *testing.T) {
-	for _, step := range []string{"development-worker", "repair-worker", "whitebox-design", "blackbox-execution", "whitebox-execution"} {
+	for _, step := range []string{"development-worker", "repair", "whitebox-design", "blackbox-execution", "whitebox-execution"} {
 		cmd, err := workBuddyCommand("/bin/workbuddy", "/work", "", "", "", json.RawMessage(`{"type":"object"}`), "/work/mcp.json")
 		if err != nil {
 			t.Fatal(err)

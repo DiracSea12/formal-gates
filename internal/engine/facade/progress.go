@@ -184,11 +184,6 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 					view.PreparationReason = "executed preparation; input binding and commands in receipt/request evidence"
 				}
 			}
-			if op.Request.Kind == "model.run" {
-				if _, err := os.Stat(filepath.Join(job, "process.json")); err == nil {
-					p.NativeCalls++
-				}
-			}
 			if op.CompletedRevision > after || (after == 0 && op.CompletedRevision == 0) {
 				p.NewResults = append(p.NewResults, view)
 			}

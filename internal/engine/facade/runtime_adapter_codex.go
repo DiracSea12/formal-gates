@@ -1,7 +1,6 @@
 package facade
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/protocol"
@@ -76,7 +75,7 @@ func (codexRuntimeAdapter) toolConfig(raw json.RawMessage) (map[string]any, erro
 	}
 	// Some native models still register v1 delegation with both multi-agent
 	// feature flags off. Zero native depth removes that route from the actual
-	// tool registry; descendants must use the engine's bounded model.run tool.
+	// tool registry; workflow roles may not delegate additional model calls.
 	config := map[string]any{"web_search": "disabled", "features.enable_mcp_apps": false, "features.multi_agent": false, "features.multi_agent_v2": false, "agents": map[string]any{"max_depth": 0}}
 	for _, category := range []string{"mcp_servers", "plugins"} {
 		entries := map[string]json.RawMessage{}
@@ -104,102 +103,6 @@ func (codexRuntimeAdapter) toolConfig(raw json.RawMessage) (map[string]any, erro
 		config[category] = disabled
 	}
 	return config, nil
-}
-
-func (codexRuntimeAdapter) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
-	q := op.Request
-	fail := func(err error) protocol.TaskOperationReceipt {
-		result.Status = "FAILED"
-		result.Message = err.Error()
-		return result
-	}
-	answer := filepath.Join(job, "answer.txt")
-	args := []string{"exec", "--ignore-user-config", "-c", "agents.max_depth=0", "--disable", "shell_tool", "--disable", "multi_agent", "--disable", "multi_agent_v2", "--disable", "enable_mcp_apps", "-c", `web_search="disabled"`, "--skip-git-repo-check", "--json", "--color", "never", "-s", "read-only", "-C", job, "-o", answer}
-	if config.Model != "" {
-		args = append(args, "-m", config.Model)
-	}
-	if config.ReasoningEffort != "" {
-		raw, _ := json.Marshal(config.ReasoningEffort)
-		args = append(args, "-c", "model_reasoning_effort="+string(raw))
-	}
-	cmd := exec.CommandContext(ctx, config.NativeString("codexExecutable"), append(args, "-")...)
-	if err := runtimeCommandContext(cmd, q.Binding.Context); err != nil {
-		return fail(err)
-	}
-	cmd.Stdin = strings.NewReader("Answer only from the supplied prompt text. Do not search for files, tools, or external context. If necessary input is absent, state what is missing; do not invent workflow results.\n\n" + q.Prompt)
-	code, err := runOperationProcess(cmd, job, &result)
-	result.ExitCode = code
-	if err != nil {
-		return fail(err)
-	}
-	if code != 0 {
-		return fail(fmt.Errorf("native model exited %d", code))
-	}
-	data, err := os.ReadFile(answer)
-	if err != nil {
-		return fail(err)
-	}
-	result.Output = string(data)
-	journal, err := os.ReadFile(filepath.Join(job, "stdout.log"))
-	if err != nil {
-		return fail(err)
-	}
-	for _, line := range strings.Split(string(journal), "\n") {
-		var v struct {
-			Type     string `json:"type"`
-			ThreadID string `json:"thread_id"`
-		}
-		if json.Unmarshal([]byte(line), &v) == nil && v.Type == "thread.started" {
-			result.Identity = v.ThreadID
-		}
-	}
-	if result.Identity == "" {
-		return fail(fmt.Errorf("UNKNOWN: model completed without observed native identity"))
-	}
-	result.TranscriptPath, err = findBoundTranscript(result.Identity, q.Binding.Context)
-	if err != nil {
-		return fail(err)
-	}
-	result.Status = "COMPLETED"
-	return result
-}
-
-func (codexRuntimeAdapter) observeModel(op protocol.TaskOperation, job string, r protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error) {
-	unknown := func(err error) (protocol.TaskOperationReceipt, error) {
-		return r, fmt.Errorf("UNKNOWN: %s; no underlying call repeated: %w", op.ID, err)
-	}
-	journal, err := os.ReadFile(filepath.Join(job, "stdout.log"))
-	if err != nil {
-		return unknown(err)
-	}
-	complete := false
-	for _, line := range strings.Split(string(journal), "\n") {
-		var v struct {
-			Type     string `json:"type"`
-			ThreadID string `json:"thread_id"`
-		}
-		if json.Unmarshal([]byte(line), &v) == nil {
-			if v.Type == "thread.started" {
-				r.Identity = v.ThreadID
-			}
-			if v.Type == "turn.completed" {
-				complete = true
-			}
-		}
-	}
-	if !complete || r.Identity == "" || r.ExitCode != 0 {
-		return unknown(fmt.Errorf("native model success is not observed"))
-	}
-	r.TranscriptPath, err = findBoundTranscript(r.Identity, op.Request.Binding.Context)
-	if err != nil {
-		return unknown(err)
-	}
-	answer, err := os.ReadFile(filepath.Join(job, "answer.txt"))
-	if err != nil {
-		return unknown(err)
-	}
-	r.Output = string(answer)
-	return r, nil
 }
 
 func init() { registerBuiltinRuntime("codex", codexRuntimeAdapter{}) }

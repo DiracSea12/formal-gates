@@ -38,7 +38,7 @@ func TestDevelopmentIncrementMaterialFollowsIssuedTask(t *testing.T) {
 			}
 			job := t.TempDir()
 			material := nativePromptMaterial{instructions: "Read the bound material.", resumeInstructions: "Continue with current material.", input: payload, workspace: workspace}
-			if err := material.bindFiles(job, run.Regular.Requirement); err != nil {
+			if err := material.bindFiles(job, run.Regular.Requirement, f.root); err != nil {
 				t.Fatal(err)
 			}
 			if err := material.writeFiles(job); err != nil {

@@ -345,7 +345,7 @@ func copyPromptPackage(t *testing.T) string {
 		}
 	}
 	sections := map[string][]string{
-		"development-worker": {"通用执行约定", "开发工作者", "续做约定", "修复工作者", "工具说明", "QA 操作说明"},
+		"development-worker": {"通用执行约定", "开发工作者", "续做约定", "返修交付", "Batch 交付", "QA 操作说明"},
 		"qa-design":          {"QA 设计", "黑盒设计", "白盒设计", "白盒覆盖判断"},
 		"qa-review":          {"QA 审查", "黑盒审查", "白盒改动与最终候选"},
 		"qa-execution":       {"QA 执行", "黑盒执行", "白盒执行"},
@@ -520,7 +520,7 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 		run.Regular.ActionInstructions[path] = "Markdown source: " + path
 	}
 	const common = "# 通用执行约定\nCommon instructions.\n"
-	run.Regular.ActionInstructions["actions/development-worker.md"] = common + "\n# 开发工作者\nDevelopment only.\n\n# 修复工作者\nRepair only.\n\n# 工具说明\nTool only.\n"
+	run.Regular.ActionInstructions["actions/development-worker.md"] = common + "\n# 开发工作者\nDevelopment only.\n\n# 返修交付\nRepair only.\n\n# Batch 交付\nBatch only.\n"
 	run.Regular.ActionInstructions["actions/qa-design.md"] = "# QA 设计\nDesign only.\n\n# 黑盒设计\nBlackbox design.\n\n# 白盒设计\nWhitebox design.\n\n# 白盒覆盖判断\nCoverage only.\n"
 	run.Regular.ActionInstructions["actions/qa-review.md"] = "# QA 审查\nReview only.\n\n# 黑盒审查\nBlackbox review.\n\n# 白盒改动与最终候选\nWhitebox only.\n"
 	run.Regular.ActionInstructions["actions/qa-execution.md"] = "# QA 执行\nExecute only.\n\n# 黑盒执行\nBlackbox execution.\n\n# 白盒执行\nWhitebox execution.\n"
@@ -530,7 +530,7 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 		{"blackbox-design", "actions/qa-design.md#QA 设计"}, {"whitebox-design", "actions/qa-design.md#QA 设计"},
 		{"blackbox-review", "actions/qa-review.md"}, {"whitebox-review", "actions/qa-review.md"},
 		{"blackbox-execution", "actions/qa-execution.md"}, {"whitebox-execution", "actions/qa-execution.md"},
-		{"repair-worker", "actions/development-worker.md#修复工作者"},
+		{"repair", "actions/development-worker.md#返修交付"},
 		{"complexity-gate", ""}, {"implementation-quality-gate", ""},
 	} {
 		t.Run(tc.step, func(t *testing.T) {
@@ -554,9 +554,9 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 				role := "Markdown source: " + tc.path
 				switch tc.step {
 				case "development-worker":
-					role = "# 开发工作者\nDevelopment only.\n"
-				case "repair-worker":
-					role = "# 修复工作者\nRepair only.\n"
+					role = "# 开发工作者\nDevelopment only.\n\n\n# Batch 交付\nBatch only.\n"
+				case "repair":
+					role = "# 开发工作者\nDevelopment only.\n\n\n# 返修交付\nRepair only.\n"
 				case "blackbox-design":
 					role = "# QA 设计\nDesign only.\n\n\n# 黑盒设计\nBlackbox design.\n"
 				case "whitebox-design":
@@ -626,9 +626,9 @@ func TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate(t *testing.T) {
 			}
 		}
 	}
-	for _, content := range []string{"# 开发工作者\nOnly development.\n", "# 修复工作者\n\n# 工具说明\nTool.\n"} {
+	for _, content := range []string{"# 开发工作者\nOnly development.\n", "# 返修交付\n\n# 工具说明\nTool.\n"} {
 		run.Regular.ActionInstructions["actions/development-worker.md"] = content
-		if _, err := actionInstructions(run, "actions/development-worker.md#修复工作者"); err == nil || !strings.Contains(err.Error(), "PROMPT_CONFIG_MISSING") {
+		if _, err := actionInstructions(run, "actions/development-worker.md#返修交付"); err == nil || !strings.Contains(err.Error(), "PROMPT_CONFIG_MISSING") {
 			t.Fatalf("missing or empty section accepted: %v", err)
 		}
 	}

@@ -278,7 +278,7 @@ func TestNonGoNativeCoveragePrecedesTestInspection(t *testing.T) {
 	claim.Identity = "native-non-go"
 	job := t.TempDir()
 	workspace := run.Regular.Preparation.Resources["whitebox"]
-	coverage, err := prepareNativeCoverage(run, claim, workspace, nil, job)
+	coverage, err := prepareNativeCoverage(run, claim, workspace, nil, job, f.root)
 	if err != nil {
 		t.Fatal(err)
 	}

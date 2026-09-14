@@ -187,30 +187,6 @@ func (zcodeRuntimeAdapter) probe(q nativeProbe) (string, json.RawMessage, error)
 	})
 	return "session/resume", response, err
 }
-func (zcodeRuntimeAdapter) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
-	invoke := func() error {
-		session, err := zcodeSessionRequest(op.ID, job, "", "yolo", []string{})
-		if err != nil {
-			return err
-		}
-		// A text-only model helper has no role tools or workspace operations.
-		session.Params["toolAllowlist"] = []string{}
-		binding := op.Request.Binding.Context
-		cmd, err := zcodeCommand(binding.Executable, binding.Environment[zcodeScriptBinding], job)
-		if err != nil {
-			return err
-		}
-		if err := runtimeCommandContext(cmd, binding); err != nil {
-			return err
-		}
-		_, err = runZCodeProcess(ctx, cmd, job, op.ID, session, op.ID+":input", nativeModelPrompt(op.Request.Prompt), func(string) error { return nil }, zcodeSessionOptions{CaptureUsage: true, Model: config.Model, Effort: config.ReasoningEffort})
-		return err
-	}
-	return completeStreamModel(op, job, "stdout.jsonl", result, invoke())
-}
-func (zcodeRuntimeAdapter) observeModel(op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error) {
-	return observeStreamModel(op, job, "stdout.jsonl", result)
-}
 
 func init() { registerBuiltinRuntime("zcode", zcodeRuntimeAdapter{}) }
 

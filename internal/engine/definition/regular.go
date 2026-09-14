@@ -21,7 +21,7 @@ func RegularWorkflow() *compiler.Definition {
 		{"product-review", "agent"}, {"product.adjudicate", "ask"},
 		{"start-readiness", "agent"}, {"technical.adjudicate", "ask"},
 		{"topology.confirm", "ask"}, {"route.confirm", "ask"}, {"development.ready", "ask"},
-		{"development-worker", "agent"}, {"blackbox-design", "agent"}, {"blackbox-review", "agent"}, {"whitebox-design", "agent"}, {"whitebox-review", "agent"}, {"git.prepare", "host"}, {"review.ready", "ask"}, {"blackbox-execution", "agent"}, {"whitebox-execution", "agent"}, {"complexity-gate", "agent"}, {"implementation-quality-gate", "agent"}, {"repair-worker", "agent"},
+		{"development-worker", "agent"}, {"blackbox-design", "agent"}, {"blackbox-review", "agent"}, {"whitebox-design", "agent"}, {"whitebox-review", "agent"}, {"git.prepare", "host"}, {"review.ready", "ask"}, {"blackbox-execution", "agent"}, {"whitebox-execution", "agent"}, {"complexity-gate", "agent"}, {"implementation-quality-gate", "agent"}, {"repair", "agent"},
 	} {
 		deps := []string{}
 		if previous != "" {
@@ -37,7 +37,7 @@ func RegularWorkflow() *compiler.Definition {
 		case "agent":
 			reviewIO := ioWith(deps...)
 			reviewIO.Postconditions = []authoring.PredicateRef{{ID: "pred.review.post"}}
-			step, err = authoring.NewAgentStep(h, reviewIO, authoring.AgentSpec{Handler: authoring.HandlerID("engine." + item.id), Reason: authoring.ReasonIndependentReview, Timeout: 30 * time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}})
+			step, err = authoring.NewAgentStep(h, reviewIO, authoring.AgentSpec{Handler: regularAgentHandler(item.id), Reason: authoring.ReasonIndependentReview, Timeout: 30 * time.Minute, Retry: &authoring.RetryPolicy{MaxAttempts: 2}})
 		case "host":
 			step, err = authoring.NewHostActionStep(h, ioWith(deps...), authoring.HostActionSpec{Handler: "engine.git.prepare", Boundary: authoring.BoundaryAgentDispatchAPI, Operation: "git.prepare", Schema: "schema.git.prepare", Timeout: 30 * time.Minute})
 		case "ask":
@@ -51,7 +51,7 @@ func RegularWorkflow() *compiler.Definition {
 }
 
 func registerRegular(reg *compiler.Registry) {
-	for _, op := range []authoring.OperationID{"model.run", "qa.prepare", "qa.target", "qa.collect"} {
+	for _, op := range []authoring.OperationID{"qa.prepare", "qa.target", "qa.collect"} {
 		must(op, reg.RegisterOperation(op))
 	}
 	must("schema.task.operation", reg.RegisterSchema("schema.task.operation"))
@@ -64,7 +64,14 @@ func registerRegular(reg *compiler.Registry) {
 	must("schema.regular.request", reg.RegisterSchema("schema.regular.request"))
 	must("schema.regular.response", reg.RegisterSchema("schema.regular.response"))
 	must("engine.intake.precheck", reg.RegisterHandler("engine.intake.precheck", authoring.RunnerEngineLocal))
-	for _, id := range []authoring.HandlerID{"engine.product-review", "engine.start-readiness", "engine.development-worker", "engine.blackbox-design", "engine.blackbox-review", "engine.whitebox-design", "engine.whitebox-review", "engine.blackbox-execution", "engine.whitebox-execution", "engine.complexity-gate", "engine.implementation-quality-gate", "engine.repair-worker"} {
+	for _, id := range []authoring.HandlerID{"engine.product-review", "engine.start-readiness", "engine.development-worker", "engine.blackbox-design", "engine.blackbox-review", "engine.whitebox-design", "engine.whitebox-review", "engine.blackbox-execution", "engine.whitebox-execution", "engine.complexity-gate", "engine.implementation-quality-gate"} {
 		must(id, reg.RegisterHandler(id, authoring.RunnerAgentWorker))
 	}
+}
+
+func regularAgentHandler(step string) authoring.HandlerID {
+	if step == "repair" {
+		return "engine.development-worker"
+	}
+	return authoring.HandlerID("engine." + step)
 }

@@ -17,7 +17,7 @@ type nativeCoverageInput struct {
 	workspace string
 }
 
-func prepareNativeCoverage(run Run, claim protocol.ExecutionClaim, workspace string, sources []SubagentSource, job string) (*nativeCoverageInput, error) {
+func prepareNativeCoverage(run Run, claim protocol.ExecutionClaim, workspace string, sources []SubagentSource, job, root string) (*nativeCoverageInput, error) {
 	if claim.Task.Step != "whitebox-design" || protocol.WhiteboxCoverageReady(run.Executions[claim.ActionID]) {
 		return nil, nil
 	}
@@ -32,7 +32,7 @@ func prepareNativeCoverage(run Run, claim protocol.ExecutionClaim, workspace str
 		result.files[p] = []byte(source.Content)
 		contracts = append(contracts, map[string]string{"kind": source.Kind, "path": p})
 	}
-	input := map[string]any{"binding": map[string]string{"actionId": claim.ActionID, "attemptId": claim.AttemptID, "candidate": claim.Candidate, "requirementRevision": claim.RequirementRevision}, "sourcePaths": paths, "requirementPath": filepath.Join(job, "requirement.md"), "publicContracts": contracts}
+	input := map[string]any{"binding": map[string]string{"actionId": claim.ActionID, "attemptId": claim.AttemptID, "candidate": claim.Candidate, "requirementRevision": claim.RequirementRevision}, "sourcePaths": paths, "requirementPath": filepath.Join(job, "requirement.md"), "publicContracts": contracts, "referenceBase": filepath.Dir(filepath.Join(root, run.Regular.Requirement.Path))}
 	instructions, err := actionInstructions(run, "actions/qa-design.md#白盒覆盖判断")
 	if err != nil {
 		return nil, err

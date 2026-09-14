@@ -4,14 +4,14 @@ package protocol
 // plan. They never populate a formal QA wave result or inherit an affected case.
 func qaVerificationTarget(r *RegularState, claim ExecutionClaim) *VerificationTarget {
 	w := currentWave(r)
-	if claim.Task.Step != "repair-worker" {
+	if claim.Task.Step != "repair" {
 		return waveTarget(w, targetName(claim.Task.Step))
 	}
 	repair := currentRepair(r)
 	if repair == nil || repair.ID != claim.PrerequisiteDigest {
 		return nil
 	}
-	target := &VerificationTarget{Target: "repair-worker", Task: claim.Task, Expected: repair.AffectedCases, BindingDigest: repair.ID, Inherited: map[string]CaseExecution{}}
+	target := &VerificationTarget{Target: "repair", Task: claim.Task, Expected: repair.AffectedCases, BindingDigest: repair.ID, Inherited: map[string]CaseExecution{}}
 	affected := map[string]bool{}
 	for _, id := range repair.AffectedCases {
 		affected[id] = true

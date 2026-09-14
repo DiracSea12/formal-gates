@@ -37,6 +37,21 @@ func operationFixture(t *testing.T) (*Facade, string) {
 }
 func TestTaskOperationQASequenceAdmissionAndReplay(t *testing.T) {
 	f, action := operationFixture(t)
+	removed := operationRequest(t, f, action, "model.run", "removed-helper")
+	removed.CaseID = ""
+	removed.Prompt = "self-owned input"
+	before, _ := f.Show()
+	if _, err := f.ExecuteTaskOperation(removed, false); err == nil {
+		t.Fatal("removed helper accepted")
+	}
+	after, _ := f.Show()
+	if after.Revision != before.Revision {
+		t.Fatal("removed operation mutated run")
+	}
+	if _, err := os.Stat(f.taskOperationDir(protocol.TaskOperationID(removed))); !os.IsNotExist(err) {
+		t.Fatal("removed operation invoked a process", err)
+	}
+
 	// The frozen target is the actual Go application. Refused requests cannot
 	// create its process journal; successful execution produces the real stdout.
 	for _, kind := range []string{"qa.target", "qa.collect"} {
@@ -310,112 +325,6 @@ func TestTaskOperationGitCommitSuccessBeforeReceipt(t *testing.T) {
 	writeOperationEvidence(t, "git", evidence)
 	t.Logf("actual Git commit %s, independent rev-list count=1 before/after recovery and rejected replays", after)
 }
-func modelTranscriptMatches(t *testing.T, marker string) []string {
-	t.Helper()
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		root, err := os.UserHomeDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		home = filepath.Join(root, ".codex")
-	}
-	var matches []string
-	err := filepath.WalkDir(filepath.Join(home, "sessions"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if strings.Contains(string(data), marker) {
-			matches = append(matches, path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return matches
-}
-func TestTaskOperationModelNativeSuccessBeforeReceipt(t *testing.T) {
-	if os.Getenv("FORMAL_GATES_REAL_CODEX") != "1" {
-		t.Skip("opt-in native model call")
-	}
-	f := readyRegularFacade(t)
-	r, _ := f.Show()
-	var x protocol.RegularExecution
-	for _, v := range r.Executions {
-		x = v
-	}
-	nativeFixtureClaim(t, f, x)
-	marker := fmt.Sprintf("formal-gates-inner-model-%d", time.Now().UnixNano())
-	q := operationRequest(t, f, x.Claim.ActionID, "model.run", marker)
-	q.CaseID = ""
-	q.Prompt = "Reply with exactly " + marker + ". Do not call tools."
-	for _, name := range []string{"unsigned", "provider", "stale", "candidate", "payload", "scope"} {
-		bad := q
-		bad.RequestID = name
-		switch name {
-		case "unsigned":
-			bad.Binding.ActionID = "unissued"
-		case "provider":
-			bad.Binding.Provider = "other"
-		case "stale":
-			bad.ExpectedRevision--
-		case "candidate":
-			bad.Binding.Candidate = "old"
-		case "payload":
-			bad.Binding.PayloadDigest = "wrong"
-		case "scope":
-			bad.Binding.Task.Scope = "outside"
-		}
-		if _, err := f.ExecuteTaskOperation(bad, false); err == nil {
-			t.Fatalf("%s model call admitted", name)
-		}
-	}
-	if got := modelTranscriptMatches(t, marker); len(got) != 0 {
-		t.Fatalf("refused calls reached native provider: %v", got)
-	}
-	evidence := interruptTaskOperationAfterSuccess(t, f, q)
-	matches := modelTranscriptMatches(t, marker)
-	if len(matches) != 1 {
-		t.Fatalf("actual native transcript count before resume: %v", matches)
-	}
-	receipt, err := f.ExecuteTaskOperation(q, true)
-	if err != nil || receipt.Status != "COMPLETED" || !strings.Contains(receipt.Output, marker) {
-		t.Fatal(receipt, err)
-	}
-	if matches[0] != receipt.TranscriptPath {
-		t.Fatal("receipt not bound to the independent native transcript")
-	}
-	if _, err = f.ExecuteTaskOperation(q, false); err == nil {
-		t.Fatal("native model replay admitted")
-	}
-	if got := modelTranscriptMatches(t, marker); len(got) != 1 {
-		t.Fatalf("recovery/refusal created another native call: %v", got)
-	}
-	r, _ = f.Show()
-	if len(r.Executions) != 1 || len(r.Executions[x.Claim.ActionID].Operations) != 1 {
-		t.Fatal("internal model allocated another outer task")
-	}
-	entry := r.Cost.Dispatches[receipt.ID]
-	if entry.TotalInputTokens <= 0 {
-		t.Fatal("native usage not settled in existing cost ledger")
-	}
-	evidence["nativeTranscripts"] = matches
-	evidence["refusedNativeCallCount"] = 0
-	evidence["nativeCallCountBeforeRecovery"] = 1
-	evidence["nativeCallCountAfterRecoveryAndReplay"] = 1
-	evidence["receiptAfterRecovery"] = receipt
-	evidence["cost"] = entry
-	writeOperationEvidence(t, "model", evidence)
-	t.Logf("actual model identity=%s transcript=%s; independent native count=1; input=%d output=%d", receipt.Identity, receipt.TranscriptPath, entry.TotalInputTokens, entry.OutputTokens)
-}
 func TestTaskOperationNativeBridgeQA(t *testing.T) {
 	if os.Getenv("FORMAL_GATES_REAL_CODEX") != "1" {
 		t.Skip("opt-in native dynamic tool")
@@ -519,7 +428,7 @@ func TestTaskOperationAbortStopsOwnedTarget(t *testing.T) {
 	if codexProcessAlive(process.PID) {
 		t.Fatal("abort left owned target alive")
 	}
-	if _, err := f.ExecuteTaskOperation(operationRequest(t, f, x.Claim.ActionID, "model.run", "cancelled"), false); err == nil {
+	if _, err := f.ExecuteTaskOperation(operationRequest(t, f, x.Claim.ActionID, "qa.prepare", "cancelled"), false); err == nil {
 		t.Fatal("cancelled action invoked model")
 	}
 }
@@ -537,7 +446,7 @@ func TestRepairTaskOperationUsesWorkingEditsAndRecovery(t *testing.T) {
 	}
 	plan := verificationRepair(r)
 	source := r.Regular.Preparation.Resources[plan.ID]
-	x := facadeExecution(t, f, "repair-worker")
+	x := facadeExecution(t, f, "repair")
 	nativeFixtureClaim(t, f, x)
 	// Exercise a tracked modification, deletion and untracked addition. A clean
 	// old candidate would still print wrong, so it cannot pass this oracle.

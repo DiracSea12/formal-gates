@@ -1059,7 +1059,7 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 		}
 	}
 	currentContract := string(round12ReadFile(t, filepath.Join(root, "references", "engine-regular.md")))
-	for _, token := range []string{"workflow drive", "workflow submit", "model.run", "qa.prepare", "qa.target", "qa.collect", "UNSUPPORTED_RUN_VERSION"} {
+	for _, token := range []string{"workflow drive", "workflow submit", "qa.prepare", "qa.target", "qa.collect", "UNSUPPORTED_RUN_VERSION"} {
 		if !strings.Contains(currentContract, token) {
 			t.Fatalf("current installed contract omits %s", token)
 		}

@@ -42,9 +42,9 @@ export function apply(ctx, config) {
   })
   ctx.on('agent/created', ({ agent }) => {
     const names = new Set(ctx.tools.schemas(agent).map(tool => tool.name))
-    agent.ctx.tools.restrict(config.disableTools ? { allow: [] } : { deny: [...denied].filter(name => names.has(name)) })
+    agent.ctx.tools.restrict({ deny: [...denied].filter(name => names.has(name)) })
   })
-  const unguard = ctx.tools.guard(execution => config.disableTools || denied.has(execution.name) ? 'Engine action does not grant this native tool' : undefined)
+  const unguard = ctx.tools.guard(execution => denied.has(execution.name) ? 'Engine action does not grant this native tool' : undefined)
   ctx.effect(() => () => { unguard(); unregister() })
   let activeSession, activeTurn
   ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {

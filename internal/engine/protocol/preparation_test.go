@@ -532,3 +532,72 @@ func TestWhiteboxReuseFailureMustMatchActualCaseEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestQAReviewSurvivesSuccessiveDraftsAndDevelopmentIncrement(t *testing.T) {
+	for _, mode := range []string{"blackbox", "whitebox"} {
+		t.Run(mode, func(t *testing.T) {
+			e := preparationEngine(t, mode)
+			gitReceipt(t, e, "base")
+			completeBatch(t, e, "B1")
+			gitReceipt(t, e, "D1")
+			completeBatch(t, e, "B2")
+			gitReceipt(t, e, "D2")
+			if mode == "whitebox" {
+				gitReceipt(t, e, "D2")
+			}
+			completeQA(t, e, mode, "design")
+			if mode == "whitebox" {
+				gitReceipt(t, e, "Q0")
+			}
+			completeQA(t, e, mode, "review")
+			for i := 0; i < 3; i++ {
+				if i == 2 {
+					regularChoice(t, e, RegularRequest{Action: "development-increment", Target: "B1", Meaning: "preserved", Reason: "fixture implementation optimization", Impact: map[string]string{"batch:B2": "unaffected", mode + "-review": "affected"}, Increment: &DevelopmentIncrement{Kind: "optimize", BatchID: "B1", WorkspaceView: "fixture-view"}}, "confirm")
+					completeBatch(t, e, "B1")
+					gitReceipt(t, e, "D3")
+					if mode == "whitebox" {
+						gitReceipt(t, e, "D3")
+					}
+				} else {
+					regularChoice(t, e, RegularRequest{Action: "qa-revise", Target: mode, Reason: fmt.Sprintf("fixture draft revision %d", i)}, "confirm")
+				}
+				completeQA(t, e, mode, "design")
+				snap, _ := e.Load()
+				q := snap.State.Regular.Preparation.QA[mode]
+				if q.ReviewScope != coverage.ScopeAffected || q.RetainedReview == nil || len(q.RetainedReview.SourceDecisions) != 1 || len(q.RetainedReview.PointDecisions) != 1 || len(q.RetainedReview.CaseDecisions) != 0 {
+					t.Fatalf("revision %d lost valid approval or retained modified case: %+v", i, q)
+				}
+			}
+			if mode == "whitebox" {
+				gitReceipt(t, e, "Q3")
+			}
+			x := currentExecution(t, e, mode+"-review")
+			claimAndAttach(t, e, x)
+			snap, _ := e.Load()
+			q := snap.State.Regular.Preparation.QA[mode]
+			result := preparationResult(x)
+			result.Review = &coverage.ReviewResult{Binding: q.Design.Manifest.Binding, Scope: coverage.ScopeAffected, CaseDecisions: []coverage.ReviewDecision{{ID: strings.ToUpper(mode) + ":C1", Status: coverage.StatusPass}}}
+			if got := submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &result}); got.Status != "ACCEPTED" {
+				t.Fatal(got)
+			}
+			snap, _ = e.Load()
+			q = snap.State.Regular.Preparation.QA[mode]
+			if !q.Frozen || len(q.Review.SourceDecisions) != 1 || len(q.Review.CaseDecisions) != 1 {
+				t.Fatal("incomplete merged approval", q)
+			}
+		})
+	}
+}
+
+func TestQARevisionWithoutReviewReturnsFullScope(t *testing.T) {
+	q := &PreparedQA{Design: &QADesign{}, ReviewScope: coverage.ScopeAffected}
+	reviseQA(q)
+	if q.ReviewScope != coverage.ScopeFull || q.RetainedReview != nil {
+		t.Fatalf("unfounded AFFECTED: %+v", q)
+	}
+	q.Design = &QADesign{}
+	reviseQA(q)
+	if q.ReviewScope != coverage.ScopeFull || q.RetainedReview != nil {
+		t.Fatal("draft invented approval")
+	}
+}

@@ -3,10 +3,8 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"formal-gates/internal/cost"
 	"reflect"
 	"strings"
-	"time"
 
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/coverage"
@@ -110,7 +108,7 @@ func taskCase(s *State, q TaskOperationRequest) (*coverage.AcceptanceCase, error
 	}
 	mode := strings.TrimSuffix(string(q.Binding.Task.Step), "-execution")
 	allowed := false
-	if q.Binding.Task.Step == "repair-worker" {
+	if q.Binding.Task.Step == "repair" {
 		plan := currentRepair(s.Regular)
 		if plan == nil || plan.ID != q.Binding.PrerequisiteDigest || plan.Candidate != q.Binding.Candidate {
 			return nil, fmt.Errorf("EVENT_NOT_CURRENT: repair plan differs")
@@ -210,10 +208,6 @@ func (e *Engine) claimTaskOperation(s *State, q TaskOperationRequest, revision u
 			if strings.TrimSpace(row.Behavior) == "" || strings.TrimSpace(row.Oracle) == "" {
 				return fmt.Errorf("coverage behavior/oracle cannot be empty")
 			}
-		}
-	case "model.run":
-		if strings.TrimSpace(q.Prompt) == "" || q.CaseID != "" {
-			return fmt.Errorf("model.run requires prompt and no caseId")
 		}
 	case "qa.prepare", "qa.target", "qa.collect":
 		if q.Prompt != "" {
@@ -382,28 +376,6 @@ func (e *Engine) acceptTaskOperation(s *State, v TaskOperationReceipt, revision 
 	}
 	if v.Status == "FAILED" && strings.TrimSpace(v.Message) == "" {
 		return fmt.Errorf("failed task operation needs diagnostic message")
-	}
-	if op.Request.Kind == "model.run" {
-		entry := cost.DispatchCost{Target: string(x.Claim.Task.Step), Kind: "task-operation", Source: cost.SourceUnavailable, TranscriptPath: v.TranscriptPath, SourceReason: "native model transcript unavailable: " + v.Message}
-		if v.TranscriptPath != "" {
-			if err := checkNativeTranscriptIdentity(x.Claim.Provider, v.TranscriptPath, v.Identity); err != nil {
-				return err
-			}
-			usage, err := cost.ParseTranscript(x.Claim.Provider, v.TranscriptPath)
-			if err != nil {
-				return fmt.Errorf("COST_PENDING: task model source: %w", err)
-			}
-			entry.Source = cost.SourceTranscript
-			entry.SourceReason = ""
-			entry.InputCacheHitTokens = usage.InputCacheHitTokens
-			entry.InputCacheMissTokens = usage.InputCacheMissTokens
-			entry.TotalInputTokens = usage.InputCacheHitTokens + usage.InputCacheMissTokens
-			entry.OutputTokens = usage.OutputTokens
-			if timing, err := nativeTranscriptTiming(x.Claim.Provider, v.TranscriptPath, time.Time{}); err == nil {
-				entry.Timing = &timing
-			}
-		}
-		cost.Record(s.Cost, v.ID, entry)
 	}
 	if op.Request.Kind == "qa.prepare" && v.Workspace != "" && s.Regular.Preparation != nil {
 		if s.Regular.Preparation.Resources == nil {

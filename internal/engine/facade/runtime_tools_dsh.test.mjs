@@ -60,7 +60,7 @@ test('DSH installed SDK applies role restrictions before prompt assembly', {
     const bridge = ctx.plugin(nativePlugin, {
       executable: '/engine', root: directory, requestDirectory: directory,
       sourceInfoPath: join(directory, 'native-source.json'), runId: 'sdk-fixture', actionId: 'sdk-fixture',
-      exposeOperation: false, deniedTools: [], disableTools: true,
+      exposeOperation: false, deniedTools: [],
       tool: { name: 'formal_gates_operation', description: 'SDK fixture only', inputSchema: { type: 'object' } },
     })
     await bridge.inertia

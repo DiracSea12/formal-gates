@@ -39,7 +39,7 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 	run.Regular.Verification.Repairs = []protocol.RepairPlan{repair}
 	p.Resources[repair.ID] = p.Resources["candidate"]
 
-	for _, step := range []string{"product-review", "start-readiness", "development-worker", "blackbox-design", "whitebox-design", "blackbox-review", "whitebox-review", "blackbox-execution", "whitebox-execution", "complexity-gate", "implementation-quality-gate", "repair-worker"} {
+	for _, step := range []string{"product-review", "start-readiness", "development-worker", "blackbox-design", "whitebox-design", "blackbox-review", "whitebox-review", "blackbox-execution", "whitebox-execution", "complexity-gate", "implementation-quality-gate", "repair"} {
 		t.Run(step, func(t *testing.T) {
 			current := claim
 			current.Task.Step = authoring.StepID(step)
@@ -55,7 +55,7 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 					input.toolDescription, err = nativeOperationInstructions(run, step)
 				}
 				if err == nil {
-					err = input.material.bindFiles(job, run.Regular.Requirement)
+					err = input.material.bindFiles(job, run.Regular.Requirement, f.root)
 				}
 			} else {
 				input, err = f.prepareNativeActionInput(run, current, protocol.RegularExecution{}, job)
@@ -75,7 +75,7 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 					t.Fatalf("%s has incorrect role section %s", step, marker)
 				}
 			}
-			qaTools := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair-worker"
+			qaTools := step == "blackbox-execution" || step == "whitebox-execution" || step == "repair"
 			if strings.Contains(input.toolDescription, "# QA 操作说明") != qaTools {
 				t.Fatalf("%s has unrelated or missing QA tool instructions", step)
 			}

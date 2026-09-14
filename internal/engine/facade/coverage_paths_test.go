@@ -42,7 +42,7 @@ func TestCoveragePathsScopeAndBinding(t *testing.T) {
 	claim := protocol.ExecutionClaim{Candidate: candidate}
 	claim.Task.Step = "whitebox-design"
 	job := t.TempDir()
-	plan, err := prepareNativeCoverage(run, claim, root, nil, job)
+	plan, err := prepareNativeCoverage(run, claim, root, nil, job, root)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,6 @@
 package facade
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"formal-gates/internal/engine/protocol"
@@ -44,8 +43,6 @@ type nativeRuntimeAdapter interface {
 	capture(settings.Values) (*protocol.HostRuntimeContext, error)
 	validate(*protocol.HostRuntimeContext) error
 	transcript(string, *protocol.HostRuntimeContext) (string, error)
-	runModel(context.Context, settings.Values, protocol.TaskOperation, string, protocol.TaskOperationReceipt) protocol.TaskOperationReceipt
-	observeModel(protocol.TaskOperation, string, protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error)
 }
 
 type nativePlatform struct {

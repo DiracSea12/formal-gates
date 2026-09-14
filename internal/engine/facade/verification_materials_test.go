@@ -56,7 +56,7 @@ func priorVerificationMessage(t *testing.T, run Run, claim protocol.ExecutionCla
 	w := verificationWave(run)
 	p := map[string]any{"binding": claim, "requirement": run.Regular.Requirement, "baseSnapshot": run.Regular.BaseSnapshot, "candidate": claim.Candidate}
 	step := string(claim.Task.Step)
-	if step == "repair-worker" {
+	if step == "repair" {
 		p["repairPlan"] = verificationRepair(run)
 		p["problems"] = run.Regular.Verification.Problems
 		p["sourceResults"] = w.Results
@@ -121,7 +121,7 @@ func (a *verificationMaterialTransport) turn(q nativeTurn) (string, error) {
 	if err != nil {
 		a.t.Fatal(err)
 	}
-	if err = material.bindFiles(q.Job, run.Regular.Requirement); err != nil {
+	if err = material.bindFiles(q.Job, run.Regular.Requirement, a.f.root); err != nil {
 		a.t.Fatal(err)
 	}
 	for name, want := range material.files {
@@ -176,7 +176,7 @@ func TestVerificationRepairSelectsOnlyPlanSources(t *testing.T) {
 	if _, err := f.Drive(); err != nil {
 		t.Fatal(err)
 	}
-	x := facadeExecution(t, f, "repair-worker")
+	x := facadeExecution(t, f, "repair")
 	run, _ = f.Show()
 	// Unrelated data must never enter either prompt or selected action files.
 	run.Regular.Verification.Problems["unrelated"] = protocol.CanonicalProblem{ID: "unrelated", Evidence: strings.Repeat("UNRELATED-PROBLEM", 8192)}
@@ -199,7 +199,7 @@ func TestVerificationRepairSelectsOnlyPlanSources(t *testing.T) {
 	if len(m.input["resultFiles"].([]any)) != 1 {
 		t.Fatal("repair lost related result source")
 	}
-	spy := &verificationMaterialTransport{t: t, f: f, step: "repair-worker"}
+	spy := &verificationMaterialTransport{t: t, f: f, step: "repair"}
 	_, _ = f.executeNativeTransport(x.Claim.ActionID, false, spy)
 	if !spy.seen {
 		t.Fatal("repair actual dispatch not reached")

@@ -28,8 +28,8 @@ func (f *Facade) bindVerificationEvidence(event protocol.Event) error {
 	var old []protocol.CaseExecution
 	if run.Regular != nil && run.Regular.Verification != nil {
 		for _, w := range run.Regular.Verification.Waves {
-			if x.Claim.Task.Step == "repair-worker" {
-				checkpoint := w.Checkpoints["repair-worker"]
+			if x.Claim.Task.Step == "repair" {
+				checkpoint := w.Checkpoints["repair"]
 				if checkpoint.BindingDigest == x.Claim.PrerequisiteDigest {
 					old = checkpoint.Cases
 				}

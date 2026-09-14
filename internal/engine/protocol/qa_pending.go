@@ -26,7 +26,7 @@ func PendingQA(s *State, binding ExecutionClaim, caseID string) (QAPending, erro
 		return p, fmt.Errorf("EVENT_NOT_CURRENT: no current QA wave")
 	}
 	var ids []string
-	if binding.Task.Step == "repair-worker" {
+	if binding.Task.Step == "repair" {
 		repair := currentRepair(s.Regular)
 		if repair == nil {
 			return p, fmt.Errorf("EVENT_NOT_CURRENT: no repair plan")

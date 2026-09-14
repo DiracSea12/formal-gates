@@ -186,7 +186,7 @@ type SealBinding struct {
 	Advisory            []CanonicalProblem            `json:"advisory"`
 }
 
-var verificationSteps = []string{"blackbox-execution", "whitebox-execution", "complexity-gate", "implementation-quality-gate", "repair-worker"}
+var verificationSteps = []string{"blackbox-execution", "whitebox-execution", "complexity-gate", "implementation-quality-gate", "repair"}
 
 func verificationStep(step authoring.StepID) bool {
 	for _, id := range verificationSteps {
@@ -390,7 +390,7 @@ func refreshVerification(s *State) {
 		}
 		plan := RepairPlan{WaveID: w.ID, Candidate: w.Candidate.Candidate.Identity, Problems: problems, AffectedCases: sortedStrings(affected), PureP2: pure}
 		plan.ID = "repair:" + digestOfCanonical(plan)
-		plan.Task = runtime.TaskKey{Node: "entry", Step: "repair-worker", Scope: plan.ID}
+		plan.Task = runtime.TaskKey{Node: "entry", Step: "repair", Scope: plan.ID}
 		r.Verification.Repairs = append(r.Verification.Repairs, plan)
 		return
 	}
@@ -519,7 +519,7 @@ func verificationClaim(r *RegularState, key runtime.TaskKey) (string, string) {
 	if w == nil {
 		return "", ""
 	}
-	if key.Step == "repair-worker" {
+	if key.Step == "repair" {
 		if p := currentRepair(r); p != nil && p.Task == key {
 			return p.Candidate, p.ID
 		}
@@ -572,7 +572,7 @@ func verificationAllowance(s *State, b *guard.Basis) {
 func (e *Engine) acceptVerification(s *State, result VerificationResult, revision uint64) (string, error) {
 	r := s.Regular
 	x, ok := s.RegularExecutions[result.ActionID]
-	if !ok || !x.Claimed || x.Finished || !verificationStep(x.Claim.Task.Step) || (x.Claim.Task.Step == "repair-worker" && result.Status != "CHECKPOINT") {
+	if !ok || !x.Claimed || x.Finished || !verificationStep(x.Claim.Task.Step) || (x.Claim.Task.Step == "repair" && result.Status != "CHECKPOINT") {
 		return "", fmt.Errorf("UNKNOWN_ACTION: verification requires a live claimed task")
 	}
 	if result.AttemptID != x.Claim.AttemptID || result.Identity != x.Identity {
@@ -924,18 +924,48 @@ func adjudicateWave(r *RegularState, a WaveAdjudication, revision uint64) error 
 func (e *Engine) acceptRepair(s *State, result RepairResult, revision uint64) (string, error) {
 	r := s.Regular
 	x, ok := s.RegularExecutions[result.ActionID]
-	if !ok || !x.Claimed || x.Finished || x.Claim.Task.Step != "repair-worker" {
+	if !ok || !x.Claimed || x.Finished || x.Claim.Task.Step != "repair" {
 		return "", fmt.Errorf("UNKNOWN_ACTION: repair needs a live claimed attempt")
 	}
 	if result.AttemptID != x.Claim.AttemptID || result.Identity != x.Identity {
 		return "", fmt.Errorf("INTENT_MISMATCH: repair native attempt")
 	}
 	if w := currentWave(r); w != nil {
-		merged, err := mergeVerificationDelta(w.Checkpoints["repair-worker"], VerificationResult{Cases: result.Cases})
+		merged, err := mergeVerificationDelta(w.Checkpoints["repair"], VerificationResult{Cases: result.Cases})
 		if err != nil {
 			return "", err
 		}
 		result.Cases = merged.Cases
+	}
+	// A host-limited developer handoff uses the existing checkpoint/resume
+	// lifecycle. It neither completes the repair nor consumes a failed attempt.
+	if result.Status == "CONTINUE" && currentVerificationClaim(r, x.Claim) && !r.ChangePending {
+		p := currentRepair(r)
+		if p == nil || result.PlanID != p.ID {
+			return "", fmt.Errorf("repair continuation plan differs")
+		}
+		completed := map[string]bool{}
+		for _, c := range result.Cases {
+			completed[c.CaseID] = true
+		}
+		remaining := []string{}
+		for _, id := range p.AffectedCases {
+			if !completed[id] {
+				remaining = append(remaining, id)
+			}
+		}
+		checkpoint := VerificationResult{ActionID: result.ActionID, AttemptID: result.AttemptID, Provider: result.Provider, Identity: result.Identity, RequirementRevision: result.RequirementRevision, Candidate: result.Candidate, BindingDigest: result.PlanID, Status: "CHECKPOINT", Message: result.Message, Cases: result.Cases, Remaining: remaining}
+		if err := ValidateQACheckpoint(s, checkpoint); err != nil {
+			return "", err
+		}
+		status, err := e.acceptVerification(s, checkpoint, revision)
+		if err != nil {
+			return status, err
+		}
+		x = s.RegularExecutions[result.ActionID]
+		x.RepairResult = &result
+		s.RegularExecutions[result.ActionID] = x
+		return "CONTINUE", nil
 	}
 	x.Finished = true
 	x.RepairResult = &result

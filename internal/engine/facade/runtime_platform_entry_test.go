@@ -108,7 +108,7 @@ func TestNativeRoleAccessSharedPolicy(t *testing.T) {
 	}{
 		{"product-review", nativeReadOnly}, {"start-readiness", nativeReadOnly},
 		{"blackbox-execution", nativeOperationOnly}, {"whitebox-execution", nativeOperationOnly},
-		{"development-worker", nativeWorkspaceWrite}, {"repair-worker", nativeWorkspaceWrite}, {"whitebox-design", nativeWorkspaceWrite},
+		{"development-worker", nativeWorkspaceWrite}, {"repair", nativeWorkspaceWrite}, {"whitebox-design", nativeWorkspaceWrite},
 		{"blackbox-design", nativeReadOnly}, {"blackbox-review", nativeReadOnly}, {"whitebox-review", nativeReadOnly},
 		{"complexity-gate", nativeReadOnly}, {"implementation-quality-gate", nativeReadOnly},
 	} {

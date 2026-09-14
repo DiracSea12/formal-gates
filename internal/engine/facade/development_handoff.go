@@ -120,7 +120,7 @@ func (f *Facade) PrepareExternalDeveloper(actionID string) (ExternalDevelopment,
 	}
 	material := nativePromptMaterial{input: payload, workspace: workspace}
 	job := f.codexJob(actionID)
-	if err = material.bindFiles(job, run.Regular.Requirement); err != nil {
+	if err = material.bindFiles(job, run.Regular.Requirement, f.root); err != nil {
 		return ExternalDevelopment{}, err
 	}
 	if err = os.MkdirAll(job, 0700); err != nil {

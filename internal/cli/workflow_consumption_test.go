@@ -429,28 +429,6 @@ func TestCLIConsumerDefaultDriveAndResumeIdentity(t *testing.T) {
 		}
 	}
 	original := c.turns(t)
-	// A worker receipt arrives during this drive through the actual submit
-	// entry. The local fixture reports a failure without invoking a model.
-	active, err := c.f.Show()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var binding protocol.ExecutionClaim
-	for _, x := range active.Executions {
-		if x.Claimed && !x.Finished {
-			binding = x.Claim
-			binding.Identity = x.Identity
-		}
-	}
-	q := protocol.TaskOperationRequest{RunID: active.RunID, ExpectedRevision: active.Revision,
-		Binding: binding, RequestID: "cli-increment-fixture", Kind: "model.run", Prompt: "fixture-only-prompt-must-not-be-echoed"}
-	c.submit(t, protocol.RegularEvent{Operation: "TASK_OPERATION_CLAIM", TaskOperation: &q})
-	receipt := protocol.TaskOperationReceipt{ID: protocol.TaskOperationID(q), ActionID: binding.ActionID,
-		RequestDigest: protocol.TaskOperationDigest(q), Status: "FAILED", Message: "local fixture operation failure"}
-	observed, _ := json.Marshal(receipt)
-	mustWriteCLI(t, filepath.Join(c.root, facade.EngineNamespace, "cli-consumer", "artifacts", "task-operations",
-		strings.TrimPrefix(receipt.ID, "hact:task:"), "observed.json"), string(observed))
-	c.submit(t, protocol.RegularEvent{Operation: "TASK_OPERATION_RECEIPT", TaskOperationReceipt: &receipt})
 	cancel()
 	r := <-done
 	if r.code != 130 || !bytes.Contains(r.out, []byte(`"boundary": "INTERRUPTED"`)) {
@@ -460,10 +438,8 @@ func TestCLIConsumerDefaultDriveAndResumeIdentity(t *testing.T) {
 	if err := json.Unmarshal(r.out, &incremental); err != nil {
 		t.Fatal(err)
 	}
-	if incremental.Progress.AfterRevision != start.Revision || len(incremental.Progress.NewResults) != 1 || incremental.Progress.NewResults[0].OperationID != receipt.ID ||
-		incremental.Progress.NewResults[0].Error != receipt.Message || incremental.Progress.Blocked[receipt.ID] != receipt.Message ||
-		bytes.Contains(r.out, []byte(q.Prompt)) {
-		t.Fatalf("lost current receipt/exception or leaked prompt: %s", r.out)
+	if incremental.Progress.AfterRevision != start.Revision || len(incremental.Progress.NewResults) != 0 || len(incremental.Progress.Messages) == 0 {
+		t.Fatalf("lost cursor/message or invented result during native wait: %s", r.out)
 	}
 	interrupted := c.decodeConsumer(t, r.out)
 	identity := ""

@@ -14,7 +14,7 @@ import (
 func (f *Facade) checkpointQA(q protocol.TaskOperationRequest) (QABatchReceipt, error) {
 	empty := QABatchReceipt{}
 	switch q.Binding.Task.Step {
-	case "blackbox-execution", "whitebox-execution", "repair-worker":
+	case "blackbox-execution", "whitebox-execution", "repair":
 	default:
 		return empty, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: checkpoint requires QA or repair")
 	}

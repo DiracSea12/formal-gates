@@ -132,8 +132,30 @@ func TestVerificationActualFailRepairAffectedPromotionSeal(t *testing.T) {
 	}
 	repair := verificationRepair(r)
 	root := r.Regular.Preparation.Resources[repair.ID]
-	x := facadeExecution(t, f, "repair-worker")
+	x := facadeExecution(t, f, "repair")
 	src := nativeFixtureClaim(t, f, x)
+	// Host-limited developer continuations reuse the repair action and identity.
+	for i := 0; i < 4; i++ {
+		pending := protocol.RepairResult{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: src.Identity, RequirementRevision: x.Claim.RequirementRevision, Candidate: x.Claim.Candidate, PlanID: repair.ID, Status: "CONTINUE", Message: fmt.Sprintf("fixture host turn boundary %d", i)}
+		accepted, current, err := f.submitAdapterRegular(fmt.Sprintf("repair-continue-%d", i), protocol.RegularEvent{Operation: "REPAIR_RESULT", RepairResult: &pending})
+		if err != nil || accepted.Status != "CONTINUE" {
+			t.Fatal(accepted, err)
+		}
+		live := current.Executions[x.Claim.ActionID]
+		if live.Finished || live.Number != x.Number || !checkpointCanResume(current, live) || verificationRepair(current).Result != nil || len(current.Regular.RepairErrors) != 0 {
+			t.Fatal("continuation spent an attempt or completed repair")
+		}
+		material, err := prepareVerificationPrompt(current, live.Claim)
+		if err != nil || material.input["continuation"] == nil {
+			t.Fatal("repair handoff missing", err)
+		}
+		nativeFixtureStop(t, f, src)
+		claim := live.Claim
+		claim.Operation = "resume"
+		claim.Identity = src.Identity
+		preparationSubmit(t, f, protocol.RegularEvent{Operation: "CLAIM", Claim: &claim})
+		preparationSubmit(t, f, protocol.RegularEvent{Operation: "SOURCE", Source: &src})
+	}
 	writePreparationFile(t, root, "main.go", "package main\nimport \"fmt\"\nfunc main(){fmt.Print(\"hello\")}\n")
 	check := func(args ...string) protocol.BatchValidation {
 		cmd := exec.Command("go", args...)

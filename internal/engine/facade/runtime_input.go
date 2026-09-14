@@ -69,14 +69,14 @@ func (f *Facade) prepareNativeActionInput(run Run, claim protocol.ExecutionClaim
 	if err != nil {
 		return p, err
 	}
-	p.coverage, err = prepareNativeCoverage(run, claim, p.material.workspace, p.sources, job)
+	p.coverage, err = prepareNativeCoverage(run, claim, p.material.workspace, p.sources, job, f.root)
 	if err != nil {
 		return p, err
 	}
 	if claim.Operation == "resume" && checkpointCanResume(run, execution) {
 		p.material.bindVerificationResumeFiles(execution.ResumeCount + 1)
 	}
-	if err = p.material.bindFiles(job, run.Regular.Requirement); err != nil {
+	if err = p.material.bindFiles(job, run.Regular.Requirement, f.root); err != nil {
 		return p, err
 	}
 	p.material.bindPublicSources(job, p.sources)

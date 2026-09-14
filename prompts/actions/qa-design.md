@@ -44,8 +44,7 @@ fixture、输入、已有前置状态，以及模拟审查结果、授权、生�
 REVIEWKIND 前缀，并以 edge 连接需求来源和验收点。每个 case 有独立 oracle。
 
 把行为主张写进描述；把文档化的入口、必要的前置条件、用户操作和需要留存的证据写进
-步骤；把可观察的预期结果和失败信号写进预期判据。代码检视、模拟输出或开发者自测主
-张都不能替代黑盒的实际使用执行。共同准备和操作在 manifest.sharedSteps 保存一份，case.sharedSteps 按 ID 引用；逐例保留特殊前提、操作差异、证据与 oracle。
+步骤；把可观察的预期结果和失败信号写进预期判据。共同准备和操作在 manifest.sharedSteps 保存一份，case.sharedSteps 按 ID 引用；逐例保留特殊前提、操作差异、证据与 oracle。
 
 覆盖文档化的正常使用和常见操作失误，并逐验收点设计：正向生效、失败路径或不得
 误报、边界/中间态、以及本次改动可能破坏的既有文档化正常使用行为的回归面——凡对应
@@ -108,11 +107,6 @@ sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCod
 黑盒仍必须通过文档化产品入口实际使用产物，不能以既有测试套件为主体或主要证据；
 独立的短驱动脚本可调用公共入口、采集真实输出并断言。
 
-**每一条黑盒用例都必须写出真实、完整、可照做的执行步骤。** 步骤必须给出实际使用
-的公开入口、命令或调用、必要参数和输入、环境与 fixture 前置、操作顺序，以及需要留
-存的输出或产物；不能只写场景名称、检查项、类别名或“执行相应测试”。设计阶段不能
-运行产品，不等于可以省略执行细节；这些步骤必须能在快照后的真实产品上直接照做。
-
 # 白盒设计
 
 - **白盒**：开发后由独立代理读实现设计面向实现结构的测试（单元、系统、集成等职责式定
@@ -123,10 +117,9 @@ sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCod
 例如 `<文件路径>::<函数名>`，不规定语言或解析格式。CLI 校验引用非空且唯一，QA Review
 检查输入、断言和对应性，QA Execution 独立运行并保留输出。引擎不从 testRef 推断文件路径。
 
-**白盒先独立判断覆盖，再复用已有测试。** 先独立确定应验证的行为、分支和 oracle，再读取
-已有测试的输入、真实断言与覆盖对应，复用真正有效的覆盖；仅缺口或错误才新增、修正。普通逻辑优先单测，跨模块用集成测试，公开路径由黑盒承担；交叉验证须有不同验证
-目标。不能仅凭测试名、覆盖率或开发者声明放行。没有测试变动时不增加文件或推进快照；
-有变动则提交并纳入最终含测试快照。
+沿用本身份前置阶段已独立确定的行为、分支与 oracle，再检查既有测试的输入与真实断言，
+只补缺口或修正错误，不凭测试名、覆盖率或开发者声明认定覆盖。普通逻辑在直接归属层
+测试，跨模块用集成测试；交叉验证须有不同目标。零测试变动不增加文件或推进快照。
 
 白盒 design.testFiles 必须明确列出全部测试专用文件及测试专用 fixture 的项目相对路径，
 包括开发者编写、直接复用而没有改动的测试，以及本轮新增、修改、删除的测试文件。
@@ -141,11 +134,6 @@ sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCod
 
 # 白盒覆盖判断
 
-Independently enumerate required behavior and exact oracles from the bound requirement,
-public contracts and candidate implementation. The engine provides the bound ordinary
-candidate workspace for normal reading and searching; source bodies are not inlined or
-copied into a filtered projection. Locate relevant implementation as needed without
-assuming any language or directory layout. Before recording this independent judgment,
-do not inspect existing tests, modify files, run tests or bind existing tests. This is
-role sequencing, not a per-file read whitelist. Return the coverage JSON only. The engine
-records it before the subsequent test inspection and gap-filling invocation.
+依据已确认需求、公开材料和候选实现，独立列出应验证的行为、分支与精确 oracle。
+在绑定工作区正常读取、搜索，不假定项目语言或目录结构；此阶段不查看、绑定或运行
+既有测试，不修改文件。只返回当前覆盖判断 JSON；引擎登记后才沿本身份进入测试检查与补缺口。

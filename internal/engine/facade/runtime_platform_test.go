@@ -250,14 +250,6 @@ func fixtureStateFile(c *protocol.HostRuntimeContext, action, resume string) str
 	return c.Environment["FIXTURE_STATE_FILE"] + "-" + identity
 }
 
-func (a *fixtureRuntime) runModel(ctx context.Context, config settings.Values, op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) protocol.TaskOperationReceipt {
-	answer, _ := json.Marshal(map[string]string{"output": op.Request.Prompt})
-	_, err := a.invoke(ctx, op.Request.Binding.Context, job, op.ID, op.Request.Binding.Identity, answer, false)
-	return completeStreamModel(op, job, "stdout.jsonl", result, err)
-}
-func (a *fixtureRuntime) observeModel(op protocol.TaskOperation, job string, result protocol.TaskOperationReceipt) (protocol.TaskOperationReceipt, error) {
-	return observeStreamModel(op, job, "stdout.jsonl", result)
-}
 func (a *fixtureRuntime) turn(q nativeTurn) (string, error) {
 	c, resume, job := q.Claim, q.Resume, q.Job
 	// A deterministic review response is an explicit fixture, never an actual review.
@@ -339,22 +331,37 @@ func TestNativePlatformSingleRegistrationAndProtocolUpgrade(t *testing.T) {
 	if err := runtime.validate(binding); err != nil {
 		t.Fatal(err)
 	}
-	run := Run{Regular: &protocol.RegularState{Settings: effective}}
-	f := &Facade{}
+	a.answer = func(nativeTurn) any { return map[string]string{"output": "small local fixture"} }
 	invoke := func(label, identity string) protocol.TaskOperationReceipt {
-		op := protocol.TaskOperation{ID: label, Request: protocol.TaskOperationRequest{Kind: "model.run", Prompt: "small local fixture", Binding: protocol.ExecutionClaim{Provider: a.id, Identity: identity, Context: binding}}}
-		result := f.performTaskOperation(run, op, filepath.Join(root, label))
-		if result.Status == "COMPLETED" {
-			before, err := os.ReadFile(result.TranscriptPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			replay, err := runtime.observeModel(op, filepath.Join(root, label), protocol.TaskOperationReceipt{})
-			after, _ := os.ReadFile(result.TranscriptPath)
-			if err != nil || replay.Output != result.Output || string(before) != string(after) {
-				t.Fatal("observation repeated native effect", err)
-			}
+		job := filepath.Join(root, label)
+		id, err := runtime.turn(nativeTurn{Claim: protocol.ExecutionClaim{ActionID: label, Provider: a.id, Identity: identity, Context: binding}, Settings: effective.Values, Job: job, Workspace: root, Resume: identity != "", Attached: func(string) error { return nil }})
+		result := protocol.TaskOperationReceipt{Status: "FAILED", Identity: id}
+		if err != nil {
+			result.Message = err.Error()
+			return result
 		}
+		data, err := os.ReadFile(filepath.Join(job, "answer.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var answer struct {
+			Output string `json:"output"`
+		}
+		if err = json.Unmarshal(data, &answer); err != nil {
+			t.Fatal(err)
+		}
+		result.Output = answer.Output
+		result.TranscriptPath, err = runtime.source(id, job, binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, _ := os.ReadFile(result.TranscriptPath)
+		replay, err := runtime.source(id, job, binding)
+		after, _ := os.ReadFile(replay)
+		if err != nil || string(before) != string(after) {
+			t.Fatal("observation repeated native effect", err)
+		}
+		result.Status = "COMPLETED"
 		return result
 	}
 	first := invoke("first", "")

@@ -1,42 +1,22 @@
 # regular 受理、开发、验证与 Seal
 
-## Codex 桌面原生子代理
+## 原生运行时派发
 
-已签发、尚未认领的动作可在 `--subagent` 时加 `--subagent-sources <sources.json>`。
-文件是 `[{"kind":"public-contract","path":"/absolute/public-usage.md"}]`；相对路径
-以清单文件所在目录解析。CLI 在认领前读取并检查角色范围，将完整正文、路径及 digest
-固定到该 action 的原生交接记录。派发提示只携带该动作固定的 `fullTextPath` 全文入口，
-避免重复塞入长正文。已认领动作不能补换材料；相同材料重放只返回 observe，
-省略此参数时仍读取原快照。补充事实只能随引擎已签发的下一轮加入，不新增任务或授权。
-`public-contract` 只供开发/修复和 QA 设计/审查；`environment-observation` 只供开发/修复。
-不得把开发结论伪装为公开契约传入黑盒；资料不能替代正式结果或改变需求、角色权限。
+`workflow drive --root <project> --run-id <run>` 由引擎选择已签发动作，执行原生派发、
+身份绑定、等待、采集及恢复；主代理不手工调用 spawn/send/bind/collect，也不自行拼装提示词。
+已绑定身份按原宿主协议恢复，实际请求、响应与结果保留在该动作记录中。
 
-桌面对话有原生 `spawn_agent` / `send_input` / `wait_agent` 时，新动作使用下列
-transport，使真实子代理关联到当前对话。CLI 仍拥有 CLAIM、SOURCE、操作回执、结果接纳
-和用量；宿主只转交请求及真实身份。无原生工具时保留原 app-server transport。
+动作输入提供已确认需求的固定副本与 referenceBase（原始需求文件目录）。需求中的普通
+相对文件引用按此基址读取；绝对路径直接读取。项目公开文档可在绑定工作区正常搜索、读取，
+无需逐文件供料。历史样本按已确认需求及其引用材料定位，核对真实可读文件与样本边界；链接不证明
+样本已经完整或与当前动作等价。缺少前态材料时报告缺口，不构造测量结果。
+已有动作捕获的公开材料随设计及审查继承，内容保持原 action 的绑定；不手改 sources.json。
+补充事实不改变需求、角色权限或验收；修改已确认范围仍走既有需求变更入口。
 
-1. 从 engine 读取已签发动作，以当前 `CODEX_THREAD_ID` 为父身份调用
-   `workflow drive --root <root> --run-id <run> --action-id <issued> --subagent`。
-   只读取响应的 `subagent`，不搬运完整 run。`operation=spawn` 才调用原生
-   `spawn_agent(message=subagent.prompt, fork_context=false)`；不要另加主对话历史。
-2. `operation=resume` 只向返回的 `identity` 使用 `send_input` 转交同一 prompt；
-   已签发开发续轮还需 CLI `--resume`。不得替换身份。原 app-server 身份继续用原入口。
-3. 原生工具返回身份后调用同一 root/run/action 的 `--subagent-bind <identity>`。
-   CLI 验证原生记录里的父子关系及本动作实际输入，然后登记 SOURCE。工作者使用任务操作前
-   也可用自身 `CODEX_THREAD_ID` 绑定；重复绑定不重复派发。
-4. 等原生子代理完成后调用 `--subagent-collect`。CLI 直接从该身份的原生 `task_complete`
-   读取最终 JSON，通过原有结果校验和用量入口接纳；父代理不得代写、改写或补造结果。
-5. 重复准备返回 `operation=observe`，只能查询/等待原身份并采集。派发返回丢失而身份未知时
-   先对账原生工具记录，不重新 spawn。未观察到本轮完成返回 WAIT，不沿用上一轮结果。
-
-任务内需要 `formal_gates_operation` 时，使用同一 CLI 的
-`--action-id <issued> --subagent-operation <request.json>`。请求只含 `requestId`、
-`kind`、`caseId`、`prompt`；绑定由 CLI 从当前状态填入。中断对账以同一请求加 `--resume`，
-不得更换 requestId 重跑目标。角色允许范围、批准用例、checkpoint 和 CAS 沿用既有入口。
-
-原生工具继承父对话权限，接口没有单独的工作目录或动态工具注册参数；工作者需显式使用
-派发的 workspace，并遵守原角色输入限制。这不等同于 app-server 的每角色工具裁剪。
-该入口不把独立旧任务补挂成子代理，也不把尚未验证的 UI 渲染宣称为验收完成。
+工作者只调用该动作实际提供的 `formal_gates_operation`。批准 QA 通过
+qa.prepare → qa.target → qa.collect 执行，或使用工具提供的 qa.run、qa.checkpoint；
+桥接绑定当前 action 和 requestId。恢复沿用原 requestId，不重复执行目标。
+白盒覆盖判断由既有前置调用完成，不作为可选模型辅助暴露给工作者。
 
 公开入口从单文件受理推进到已确认需求、Batch 计划、no-split 拓扑与 full/custom 路线，
 随后完成开发、Git、QA、唯一验证 wave、统一返修和候选 promotion/Seal。
@@ -121,7 +101,7 @@ resume 先检查登记 PID 和输出；仍运行则拒绝再调用，已有答�
 再次中断由已有结果或 RUNTIME_ERROR 结算，不无限恢复。
 
 开发任务结果只允许 `PASS` / `CONTINUE`；自测失败继续修复并验证，不设固定修测轮数。
-未完成返回 `CONTINUE`，单次验证仍可记 `FAIL`，并保留实际剩余项、
+普通未完成、等待自己的测试或自测失败时继续工作；只有外部/宿主限制确需交接才返回 `CONTINUE`，单次验证仍可记 `FAIL`，并保留实际剩余项、
 验证与 manifest。后续 attempt 的 `claim.operation` 为 `resume`，必须使用上述
 `--resume` 入口；正常返回、RUNTIME_ERROR、授权增加 attempt 或重新确认改编号的计划
 均不自行解除原生身份，也不重置已用额度。显式 executor-handoff 是另一项用户控制：
@@ -337,10 +317,10 @@ TaskKey 的有限错误重试。source 到达后，按既有结果→source→co
 只接受 NEW、SAME_AS、DISMISSED。SAME_AS 引用已存在的稳定 problem ID。纠正提供
 `replacesRevision`，历史裁决和原始结果保留。范围外项只能是 P3。
 
-确认后的 QA FAIL、P0/P1 和门审 P2 自动汇成唯一 repair。`repair-worker` 在登记的
+确认后的 QA FAIL、P0/P1 和门审 P2 自动汇成唯一 repair。开发者执行 `repair` 动作 在登记的
 隔离 worktree 执行；REPAIR_RESULT 绑定 `planId`，报告全部路径 manifest、resolved
 problem ID、真实 build/projectTests，以及固定 affectedCases 的逐项实跑输出。
-结果与 source 均结算后由 adapter 提交新候选。普通修复保持 QA FROZEN，采用 AFFECTED；
+只有全部修复、自测完成才返回 PASS；仍可推进时持续修测，外部/宿主限制需交接时返回 CONTINUE，由既有 checkpoint 沿原身份恢复，不消耗失败额度。PASS 与 source 均结算后由 adapter 提交新候选。普通修复保持 QA FROZEN，采用 AFFECTED；
 本轮必需 QA 与门全部有效 PASS（含合法继承）后即可封板，不因保证路线额外补 FULL。纯门审 P2 使用结构化 P2_CARRY 继承原 gate PASS，不新增 wave。
 
 默认最多三次完成且裁决结束的普通验证 wave。额外 wave 使用 REQUEST `authorize-wave`，
@@ -576,7 +556,7 @@ manifest 是实际增加/修改/删除的项目相对路径数组，不是 QA co
 
 | 执行 | 结果字段与要求 |
 | --- | --- |
-| development-worker | status=PASS/FAIL/CONTINUE；validation 为逐 Subtask 检查数组，handoff 为不可从提交恢复的剩余事项，没有则明确写无；PASS 必须完整覆盖 Batch |
+| development-worker | status=PASS/CONTINUE；validation 为逐 Subtask 检查数组，handoff 为不可从提交恢复的剩余事项，没有则明确写无；PASS 必须完整覆盖 Batch |
 | blackbox-design | status=DRAFT；design 为可执行用例和共享准备的草稿增量，独立 review 判断覆盖 |
 | whitebox-design | status=DRAFT；实际试跑发现生产缺陷时才返回 FAIL；design、reuse；manifest 仅测试所有权修改，生产变化/UNKNOWN 进入返工处置 |
 | blackbox-review / whitebox-review | status=PASS/FAIL；review 为逐项审查，suggestions 为 P2/P3 可选建议数组 |
@@ -885,7 +865,7 @@ comparison/environment/tool/workspace 必须换成待测操作的实跑观察。
 
 要报告同一例的失败，改 overall/case.status 为 FAIL 并附完整 finding，requirement 为
 BLACKBOX:C1；独立目标继续运行。完整 wave 后按上述 WAVE_ADJUDICATE 对该 finding
-给 NEW、稳定 problemId 和 affectedCases，再通过真正 repair-worker 或明确的隔离 worker
+给 NEW、稳定 problemId 和 affectedCases，再通过实际开发者返修动作 或明确的隔离 worker
 执行实际修复/构建/受影响测试，提交 REPAIR_RESULT 并由 drive 创建新候选及所需重验。
 任何 fixture 的身份与原因都保留在结果/source 中；它只用于省去非待测前态成本。
 
@@ -932,7 +912,7 @@ formal-gates workflow diagnose --root /absolute/project --path /absolute/old-sta
 只接受当前 engine 信封。旧运行时模式、authority handoff、旧状态 decoder/writer 和
 旧 cleanup 均不在安装包中。
 
-## 任务内部 model 与声明 QA 操作
+## 任务内声明 QA 操作
 
 外层 `drive --action-id` 使用 Codex app-server 的原生 JSON-RPC 桥接。真实调用顺序是
 `initialize` → `model/list`（仅未显式设置模型时）→ `thread/start` 或 `thread/resume`
@@ -945,15 +925,13 @@ formal-gates workflow diagnose --root /absolute/project --path /absolute/old-sta
 {"kind":"qa.prepare","caseId":"BLACKBOX:C1","prompt":""}
 ```
 
-三个字段均须给出。QA execution 与 repair 的 kind 接受 `model.run`、`qa.prepare`、
-`qa.target`、`qa.collect`；其他角色的动态 schema 仅公开 `model.run`，caseId 只能为空。
-model.run 使用非空 prompt 和空 caseId；QA 三种操作使用 caseId 和空 prompt。
-model.run 只接收调用者给出的文本，不隐式继承外层任务、需求文件或结果 schema。调用者须
-在 prompt 内提供问题所需的全部正文；缺少正文时返回缺项说明，不通过文件查找补齐。
-该文本辅助调用不代替外层已签发审查，也不自行登记正式结果。
+三个字段均须给出。仅 QA execution 与开发者返修动作提供此工具，支持 qa.prepare、
+qa.target、qa.collect、qa.run 和 qa.checkpoint。前三种操作使用 caseId 和空 prompt；
+qa.run 可指定 caseId 或以空值执行剩余集合，qa.checkpoint 的 prompt 是判断增量 JSON。
+其他角色不提供该工具，也不允许自行调用辅助模型。
 bridge 将原生 callId 用作 requestId，复制当前 action 的完整绑定，并走下面同一个 API。
 QA execution 线程通过引擎操作执行命令；未声明 command 的批准用例由执行者在 qa.target 提供 command，不能改动步骤或判据。
-白盒设计先在禁用 shell 的同一原生身份中，仅根据完整需求和生产源码形成行为/oracle 判断。
+白盒设计先在同一原生身份的只读前置动作中，根据需求、公开材料及候选实现独立形成行为/oracle 判断；此时不查看或运行既有测试。
 adapter 通过 `whitebox.coverage` 内部操作持久化判断回执，之后才续跑原身份并开放已有
 可写 authoring 副本和原生 shell 工具发现、编写、实际试跑测试，
 将观察记入 reuse；此时尚未冻结用例，不调用 QA 三步，也不产生正式 QA 执行结果。
@@ -1026,7 +1004,6 @@ dependencies 只引用此前声明的 case ID，须有被接纳的 PASS；共享
 | qa.prepare | 当前 action/case binding，声明依赖已成功；QA execution 只接受其 expected 集，repair 只接受绑定 plan 的 affectedCases | QA execution 创建精确 candidate 的干净 Git 副本；repair 从已注册修复工作区复制实际修改／新增／删除到独立副本 | 完整副本的观察持久化且 COMPLETED 才可 target |
 | qa.target | 本 case prepare 已完成 | 在该副本执行一次已绑定 argv，保存 stdout/stderr 与实际 exit code | 进程创建/准备失败则 FAILED；已观察到的正常退出可 collect，非零退出保留为验收数据 |
 | qa.collect | 本 case target 已完成 | 读取该次实际 stdout 和单独的 stderr，返回原 exit code 和 workspace | 已完成 stage 不可用新 requestId 重做 |
-| model.run | 原动作有效，source/guard 允许，无未对账内部调用 | 调用原动作运行上下文绑定的 Codex exec，禁用 shell/多代理/MCP apps/web，返回文本和原生 identity/transcript | 结果与成本归入原动作；不自行产生正式审查结果 |
 
 repair 同样使用上述三个 kind、原 action/Attempt 和动态绑定，不创建额外任务。修复者先完成
 实现修改，再逐 case 准备、执行和采集；返回的 workspace 是含实际修复内容的副本，其
@@ -1034,15 +1011,9 @@ HEAD 仍绑定 repairPlan.candidate，不表示未经提交的修改已成为新
 原修复工作区及复制路径；缺少完整复制观察的恢复为 UNKNOWN，不重新复制或执行目标。
 自测通过后仍须按原流程提交新候选及重验，不能替代正式 QA 结果。
 
-内部 model 的 argv 由 bridge 构造：`codex exec --ignore-user-config --disable shell_tool
---disable multi_agent --disable multi_agent_v2 --disable enable_mcp_apps -c web_search="disabled"
---skip-git-repo-check --json --color never -s read-only -C <operation-dir> -o <answer.txt>`，
-如有显式 model/effort 则追加 `-m <model>`/`-c model_reasoning_effort=<quoted value>`，
-最后 `-` 从 stdin 接收“仅据所给正文回答、缺输入则说明”的固定边界说明与 prompt。不存在任意命令执行 API。
-
 返回 TaskOperationReceipt：
 `{id,actionId,requestDigest,status,workspace?,output?,exitCode,identity?,transcriptPath?,message?}`。
-status=COMPLETED/FAILED；失败必须有 message，model 成功包含原生 identity/transcriptPath。
+status=COMPLETED/FAILED；失败必须有 message。
 回执保留在 `executions[actionId].operations[id]`，该条目还包含原 request、实际 command、
 claimedRevision 和当时的 checkpointDigest；实际请求先持久化到既有 pending HostAction，再执行。
 

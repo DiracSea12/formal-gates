@@ -792,6 +792,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 				retained := ChangedQA(q.PreviousDesign.Manifest, result.Design.Manifest, *q.RetainedReview)
 				q.RetainedReview = &retained
 			}
+			syncQAReviewScope(q)
 			q.Design = result.Design
 			q.DesignGap = ""
 			q.DesignActionID = result.ActionID
@@ -1378,6 +1379,7 @@ func mergeQAReview(review *coverage.ReviewResult, retained coverage.ReviewResult
 func reviseQA(q *PreparedQA) {
 	q.Frozen = false
 	if q.Design == nil && q.Review == nil {
+		syncQAReviewScope(q)
 		if q.NeedsRevision {
 			q.NeedsRevision = false
 			q.ReviewWaiver = nil
@@ -1388,10 +1390,10 @@ func reviseQA(q *PreparedQA) {
 	q.AuthoringBase = q.Snapshot
 	q.PreviousDesign = q.Design
 	q.PreviousDesignActionID = q.DesignActionID
-	q.RetainedReview = q.Review
-	if q.RetainedReview != nil {
-		q.ReviewScope = coverage.ScopeAffected
+	if q.Review != nil {
+		q.RetainedReview = q.Review
 	}
+	syncQAReviewScope(q)
 	q.NeedsRevision = false
 	q.ReviewWaiver = nil
 	q.Design = nil
@@ -1586,5 +1588,21 @@ func retainExplicitDevelopment(r *RegularState, p *Preparation) {
 			}
 		}
 		return
+	}
+}
+
+// An affected review needs an actual retained approval, not merely an old scope.
+func syncQAReviewScope(q *PreparedQA) {
+	q.ReviewScope = coverage.ScopeFull
+	if q.RetainedReview == nil {
+		return
+	}
+	for _, rows := range [][]coverage.ReviewDecision{q.RetainedReview.SourceDecisions, q.RetainedReview.PointDecisions, q.RetainedReview.CaseDecisions, q.RetainedReview.SharedStepDecisions} {
+		for _, row := range rows {
+			if row.Status == coverage.StatusPass {
+				q.ReviewScope = coverage.ScopeAffected
+				return
+			}
+		}
 	}
 }

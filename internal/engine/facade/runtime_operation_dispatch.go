@@ -33,10 +33,7 @@ func (f *Facade) dispatchNativeOperation(actionID, identity, requestID string, a
 		return nil, fmt.Errorf("INTENT_MISMATCH: native tool identity differs from execution")
 	}
 	if !nativeAllowsOperation(string(execution.Claim.Task.Step)) {
-		return nil, fmt.Errorf("ACTION_INPUT_SCOPE: independent review cannot execute task operations")
-	}
-	if execution.Claim.Task.Step == "whitebox-design" && !protocol.WhiteboxCoverageReady(execution) {
-		return nil, fmt.Errorf("ACTION_INPUT_SCOPE: coverage cannot execute task operations")
+		return nil, fmt.Errorf("ACTION_INPUT_SCOPE: this role cannot execute task operations")
 	}
 	bound := execution.Claim
 	bound.Identity = identity

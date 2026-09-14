@@ -13,6 +13,8 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
+// This selects captured supplements only; ordinary reading of requirement
+// references and the bound workspace does not require a capture.
 // planActionSources selects only captured inputs of the accepted design, never
 // live provenance paths or another role's workspace. Both native transports call
 // this before claiming a new action; issued actions keep their fixed inputs.
@@ -60,7 +62,7 @@ func (f *Facade) planActionSources(run Run, claim protocol.ExecutionClaim, suppl
 }
 
 func validateCapturedSources(sources []SubagentSource, step string) error {
-	development := step == "development-worker" || step == "repair-worker"
+	development := step == "development-worker" || step == "repair"
 	qa := step == "blackbox-design" || step == "blackbox-review" || step == "whitebox-design" || step == "whitebox-review"
 	for _, source := range sources {
 		if !(source.Kind == "public-contract" && (development || qa) || source.Kind == "environment-observation" && development) {

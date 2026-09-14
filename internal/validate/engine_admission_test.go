@@ -12,14 +12,7 @@ func TestResolveEngineAdmissionChoosesProjectBinding(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	workingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := filepath.Abs(filepath.Join(workingDir, "..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
+	target := installerVersionFixture(t)
 	installed, err := PackageReceipt(target)
 	if err != nil {
 		t.Fatal(err)

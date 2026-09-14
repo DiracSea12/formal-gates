@@ -684,7 +684,7 @@ func (e *Engine) issueRegular(s *State, p *decision.Plan, next uint64, fp string
 				break
 			}
 		}
-		if a.Step == "repair-worker" {
+		if a.Step == "repair" {
 			currentRepair(r).Issued = true
 		}
 		if c.Task.Step == "development-worker" {

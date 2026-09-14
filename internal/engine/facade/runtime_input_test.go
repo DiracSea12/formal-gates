@@ -130,12 +130,12 @@ func TestNativeMandatoryInputsBeforeClaim(t *testing.T) {
 		removeFixtureInstructions(t, f, func(r *protocol.RegularState) { delete(r.ActionInstructions, "actions/qa-review.md") })
 		assertInputFailureBeforeClaim(t, f, x)
 	})
-	t.Run("tools-only", func(t *testing.T) {
+	t.Run("batch-instructions", func(t *testing.T) {
 		f := facadePreparation(t, []string{"blackbox"})
 		x := facadeExecution(t, f, "development-worker")
 		removeFixtureInstructions(t, f, func(r *protocol.RegularState) {
 			text := r.ActionInstructions["actions/development-worker.md"]
-			text = strings.Replace(text, "# 工具说明\n", "# Removed tool section\n", 1)
+			text = strings.Replace(text, "# Batch 交付\n", "# Removed tool section\n", 1)
 			r.ActionInstructions["actions/development-worker.md"] = text
 		})
 		assertInputFailureBeforeClaim(t, f, x)

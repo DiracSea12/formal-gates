@@ -39,12 +39,6 @@ func (f *Facade) ExecuteTaskOperation(q protocol.TaskOperationRequest, resume bo
 		return protocol.TaskOperationReceipt{}, fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: task operations require regular")
 	}
 	x := run.Executions[q.Binding.ActionID]
-	if q.Kind == "model.run" {
-		probe := &exec.Cmd{Args: []string{"native-model"}}
-		if err := runtimeCommandContext(probe, q.Binding.Context); err != nil {
-			return protocol.TaskOperationReceipt{}, err
-		}
-	}
 	var op protocol.TaskOperation
 	if resume {
 		var ok bool
@@ -152,7 +146,7 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 				return fail(err)
 			}
 			result.Output = "Prepared isolated case work for candidate " + q.Binding.Candidate
-		} else if q.Binding.Task.Step == "repair-worker" {
+		} else if q.Binding.Task.Step == "repair" {
 			source := run.Regular.Preparation.Resources[q.Binding.PrerequisiteDigest]
 			if source == "" {
 				return fail(fmt.Errorf("PREREQUISITE_FAILED: missing registered repair workspace"))
@@ -226,12 +220,6 @@ func (f *Facade) performTaskOperation(run Run, op protocol.TaskOperation, job st
 	case "whitebox.coverage":
 		result.Output = q.Prompt
 		result.Status = "COMPLETED"
-	case "model.run":
-		adapter, err := runtimeAdapter(q.Binding.Provider)
-		if err != nil {
-			return fail(err)
-		}
-		return adapter.runModel(ctx, run.Regular.Settings.Values, op, job, result)
 	default:
 		return fail(fmt.Errorf("UNSUPPORTED_ENGINE_ENTRY: unknown task operation"))
 	}
@@ -332,14 +320,7 @@ func (f *Facade) observeTaskOperation(op protocol.TaskOperation, job string) (pr
 	if q.Kind == "qa.target" {
 		return r, nil
 	}
-	if q.Kind != "model.run" {
-		return unknown(fmt.Errorf("unsupported operation"))
-	}
-	adapter, err := runtimeAdapter(q.Binding.Provider)
-	if err != nil {
-		return unknown(err)
-	}
-	return adapter.observeModel(op, job, r)
+	return unknown(fmt.Errorf("unsupported operation"))
 }
 
 func (f *Facade) verifyTaskOperationReceipt(event protocol.Event) error {
@@ -383,7 +364,7 @@ func (f *Facade) abortTaskOperations(run Run) error {
 					return err
 				}
 			}
-			if op.Request.Kind == "qa.target" || op.Request.Kind == "model.run" {
+			if op.Request.Kind == "qa.target" {
 				data, err := os.ReadFile(filepath.Join(job, "process.json"))
 				if err != nil {
 					return fmt.Errorf("UNKNOWN: abort needs task process observation: %w", err)

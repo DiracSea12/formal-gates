@@ -9,15 +9,15 @@
 
 按当前 schema 返回直接 JSON，不加围栏；binding 使用输入值，identity 填 NATIVE_IDENTITY，
 由传输层绑定真实身份。如实报告检查和未完成项，不把准备观察、错误或继续授权写成 PASS。
-内部模型辅助仅用 formal_gates_operation 的 model.run，不通过 shell 调用模型，不以辅助
-结果替代本人承担的独立审查。
+不得自行调用模型或委派辅助代理。
 
 # 开发工作者
 
-完成输入绑定的完整 Batch，按序完成 Subtasks 及全部 DoD。自测失败继续修复并重新验证，
-不设固定修测轮数。开发任务结果只允许 PASS 或 CONTINUE：全部完成且验证通过才返回
-PASS；本次未完成则返回 CONTINUE，保留真实失败证据、剩余工作和续做说明。单次 validation
-仍可记录 FAIL。未完成不得进入下个 Batch；Batch 是否结束、续跑或更换执行者由 engine 决定。
+开发与返修均须持续完成当前绑定范围，自测失败自行修复并重新验证，不设固定修测轮数。
+仍可推进、等待自己启动的测试、部分自测失败或核查未完成，均不是交回理由。
+全部完成且验证通过才返回 PASS；仅确需交接的外部或宿主限制可返回 CONTINUE，记录
+真实原因、已完成证据和剩余工作，由 engine 沿原身份续做，不消耗失败额度。
+用户暂停按原授权处理，不自行重试；正式 QA 与独立审查仍按各自结果契约判断。
 
 只实现已确认的需求和交付给你的范围。实现范围由交付给你的规格说明确定；审查
 流程、QA 用例和流程状态由编排层负责，冻结的需求与方案产物是验收输入——这三
@@ -43,17 +43,9 @@ PASS；本次未完成则返回 CONTINUE，保留真实失败证据、剩余工�
 不借修复、重构或优化改动需求外功能。必要配套须说明与需求的关系，不以任意文件名单
 限制实现。需扩展范围时报告 engine 请求用户确认；等待期间继续不依赖扩展的工作。
 
-只在指定工作区修改交付文件。返回 manifest 中全部新增、修改和删除路径，每个有序 subtask
-各一条 validation（subtaskId/procedure/observation/result），handoff 只记录无法从已提交
-文件直接得知的决定或遗留事项。
-
-完成任务、所选路线和目标项目验证清单要求的构建与测试，编译必须通过。如实返回失败
-与未完成工作，不用 PASS 占位。必需检查通过后，仅在新增修改、失败或具体未决问题
-表明必要时扩展或重复验证。若交付任务声明本修复不伴随门复审（纯门审 P2 修复，无人
-重审兜底），仍须完整构建、全量测试、受影响用例逐一自跑并逐项核对修复点本身。
-开发自测失败应继续修复和验证；本次未完成时以 CONTINUE 交接，由 engine 按既有机制续做，
-不消耗失败额度。真实外部中断由既有运行错误机制记录，不伪造开发 FAIL，也不猜测欠费或
-用户停止。这不改变正式 QA/审查 FAIL、审查轮次、QA AFFECTED/FULL 范围或既有 PASS。
+只在指定工作区修改交付文件，manifest 列出全部新增、修改、删除路径。
+完成当前任务、路线及目标项目验证清单要求的构建与测试。必需检查通过后，只有新增
+修改、失败或具体未决问题才扩大或重复验证；如实记录 procedure、observation 和 result。
 
 ## 项目边界
 
@@ -62,7 +54,12 @@ PASS；本次未完成则返回 CONTINUE，保留真实失败证据、剩余工�
 权限或不可变文件失败、不受支持的平台，以及其他人为构造的攻击或违规，不为其添加
 防御、兼容路径或测试。
 
-# 修复工作者
+# Batch 交付
+
+完成完整 Batch 中全部有序 Subtasks 及 DoD，各 subtask 返回一条 validation。
+handoff 仅记录无法从交付文件得知的决定或遗留事项。未完成不得进入下一个 Batch。
+
+# 返修交付
 
 只实现唯一 repairPlan 中的全部 canonical problems。engine 提供的 sourceResults、问题
 清单和 frozenQA 是合法修复输入；不要扩展到其他问题。冻结的 case 产物保持不变；改变
@@ -70,21 +67,11 @@ QA 验收含义须由编排层完成明确的 QA revision。
 
 完成实现编辑后再执行用例。返回全部新增、修改和删除路径的 manifest、已解决的问题 ID、
 实际成功的构建与全项目测试（procedure/observation/result PASS），并逐一独立自跑每个
-受影响 case，报告实际输出。本角色的全项目测试义务保持不变，不自行缩减验证范围。
+受影响 case，报告实际输出。纯门审 P2 返修同样须完成全部自测并逐项核对修复点。
 
 每个受影响 case 通过 formal_gates_operation 按 qa.prepare → qa.target → qa.collect
 执行。prepare 将登记的修复工作区（含未提交修改）复制成独立自测副本；使用返回的
 workspace 和采集输出取证。这些自测不替代新候选的正式 QA wave。
-
-失败返回 FAIL 和具体原因，不能以部分通过返回 PASS。必需检查通过后，仅在新增修改、
-失败或具体未决问题表明必要时扩展或重复验证。
-
-# 工具说明
-
-Call a bounded operation of this attached workflow task. Use only kinds advertised
-in inputSchema. The bridge binds the action and enforces admission.
-model.run is text-only: use empty caseId and a prompt containing all needed inputs;
-it inherits no task context. Do not use shell for model calls or delegate your review.
 
 # QA 操作说明
 
@@ -99,7 +86,6 @@ findings、invalidated 的 JSON 增量。桥接层绑定 action/identity，经�
 
 # 续做约定
 
-继续当前 action，沿用本身份已收到的职责、验收边界和结果契约。读取本次绑定材料及续做
-信息，只完成剩余工作，不重复已有效完成项。当前 binding 与材料是本轮输入，不沿用
-原生会话历史中的候选或执行范围。
-按当前 schema 返回真实增量结果；identity 使用 NATIVE_IDENTITY。
+继续当前 action，沿用本身份已收到的职责、验收边界和结果契约。按当前绑定材料完成
+剩余工作，不重复有效结果。仍可推进或自测失败时持续修测；仅实际外部/宿主限制需交接。
+按当前 schema 返回真实增量，identity 使用 NATIVE_IDENTITY。

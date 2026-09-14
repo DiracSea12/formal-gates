@@ -15,7 +15,7 @@ func TestNativeMCPTaskBoundary(t *testing.T) {
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"formal_gates_operation","arguments":{"requestId":"stable-1","kind":"qa.target","caseId":"CASE-1","prompt":""}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"formal_gates_operation","arguments":{"requestId":"stable-1","kind":"qa.target","caseId":"CASE-1","prompt":""}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"formal_gates_operation","arguments":{"kind":"model.run"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"formal_gates_operation","arguments":{"kind":"qa.prepare"}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"shell","arguments":{"requestId":"bad"}}}
 {"jsonrpc":"2.0","method":"tools/call","params":{"name":"formal_gates_operation","arguments":{"requestId":"notification"}}}
 `
