@@ -40,7 +40,7 @@ func TestRetainedTestArtifactsFollowNewDevelopmentSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	for replay := 0; replay < 2; replay++ {
-		if err := RestoreTestArtifacts(target, base.After, tests.After, manifest); err != nil {
+		if err := RestoreArtifacts(target, base.After, tests.After, manifest); err != nil {
 			t.Fatalf("replay %d: %v", replay, err)
 		}
 		got, err := os.ReadFile(filepath.Join(target, "main.go"))
@@ -61,7 +61,7 @@ func TestRetainedTestArtifactsFollowNewDevelopmentSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RestoreTestArtifacts(target, base.After, tests.After, manifest); err == nil || !strings.Contains(err.Error(), "TEST_ARTIFACT_CONFLICT") {
+	if err := RestoreArtifacts(target, base.After, tests.After, manifest); err == nil || !strings.Contains(err.Error(), "ARTIFACT_CONFLICT") {
 		t.Fatalf("divergent test edits were not reported: %v", err)
 	}
 	after, err := WorkingView(target, increment.After)

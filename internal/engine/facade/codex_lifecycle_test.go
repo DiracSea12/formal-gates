@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/settings"
@@ -65,6 +66,14 @@ func TestCodexLifecycleEndpoint(t *testing.T) {
 			reply(map[string]any{"thread": map[string]string{"id": "fixture-thread"}})
 		case "turn/start":
 			reply(map[string]any{"turn": map[string]string{"id": "fixture-turn"}})
+			if _, err := os.Stat(filepath.Join(root, "slow-poll")); err == nil {
+				for {
+					if _, err := os.Stat(filepath.Join(root, "poll-started")); err == nil {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
 			if _, err := os.Stat(filepath.Join(root, "steer")); err == nil {
 				continue
 			}
@@ -359,5 +368,79 @@ func TestCodexActiveMessageUsesOwningConnection(t *testing.T) {
 				t.Fatal("writer not released")
 			}
 		})
+	}
+}
+
+func TestCodexSlowMessageLookupDoesNotBlockNativeEvents(t *testing.T) {
+	testCodexSlowMessageState(t, false)
+}
+
+func TestCodexSlowMessageReceiptDoesNotBlockNativeEvents(t *testing.T) {
+	testCodexSlowMessageState(t, true)
+}
+
+func testCodexSlowMessageState(t *testing.T, receipt bool) {
+	binding, root := codexLifecycleContext(t)
+	marker := "slow-poll"
+	if receipt {
+		marker = "steer"
+	}
+	if err := os.WriteFile(filepath.Join(root, marker), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	job := t.TempDir()
+	release := make(chan struct{})
+	started := make(chan struct{})
+	finished := make(chan error, 1)
+	q := nativeTurn{Claim: protocol.ExecutionClaim{ActionID: "slow-message", Context: binding}, Settings: settings.Values{Model: "fixture"}, Workspace: root, Job: job, Prompt: "fixture", Schema: map[string]any{"type": "object"}, Attached: func(string) error { return nil }, PendingMessage: func(string) (*protocol.TaskMessage, error) {
+		if receipt {
+			return &protocol.TaskMessage{ID: "slow-receipt", Text: "fixture note", Status: "SENDING"}, nil
+		}
+		if err := os.WriteFile(filepath.Join(root, "poll-started"), nil, 0600); err != nil {
+			return nil, err
+		}
+		close(started)
+		<-release
+		return nil, nil
+	}}
+	if receipt {
+		q.MessageReceipt = func(m protocol.TaskMessage) error {
+			close(started)
+			<-release
+			if m.Status != "ACCEPTED" {
+				return fmt.Errorf("receipt status %s", m.Status)
+			}
+			return nil
+		}
+	}
+	go func() { _, err := (codexRuntimeAdapter{}).turn(q); finished <- err }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("message lookup did not start")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	observed := false
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(filepath.Join(job, "stdout.jsonl"))
+		if strings.Contains(string(data), "turn/completed") {
+			observed = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-finished:
+		close(release)
+		t.Fatal("turn returned before its message state was settled")
+	default:
+	}
+	close(release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if !observed {
+		t.Fatal("slow message lookup held native events outside the journal")
 	}
 }

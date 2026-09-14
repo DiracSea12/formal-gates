@@ -63,7 +63,7 @@ func ControlBlocksGit(r *RegularState, op GitPreparation) bool {
 	// Workspaces and batch commits consume the plan and development result;
 	// candidate construction/promotion also consumes QA approval.
 	switch op.Kind {
-	case "workspaces", "batch-commit":
+	case "workspaces", "development-workspace", "batch-commit":
 		return ControlBlocksTask(r, batchTask(r.Preparation, op.Target))
 	case "whitebox-workspace", "whitebox-commit":
 		return ControlBlocksTask(r, qaTask(r.Preparation, "whitebox", "design"))

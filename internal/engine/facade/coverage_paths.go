@@ -33,8 +33,8 @@ func prepareNativeCoverage(run Run, claim protocol.ExecutionClaim, workspace str
 		contracts = append(contracts, map[string]string{"kind": source.Kind, "path": p})
 	}
 	input := map[string]any{"binding": map[string]string{"actionId": claim.ActionID, "attemptId": claim.AttemptID, "candidate": claim.Candidate, "requirementRevision": claim.RequirementRevision}, "sourcePaths": paths, "requirementPath": filepath.Join(job, "requirement.md"), "publicContracts": contracts, "referenceBase": filepath.Dir(filepath.Join(root, run.Regular.Requirement.Path))}
-	if p := run.Regular.Preparation; p != nil && p.QA["whitebox"] != nil && p.QA["whitebox"].DesignGap != "" {
-		input["designGap"] = p.QA["whitebox"].DesignGap
+	if p := run.Regular.Preparation; p != nil && p.QA["whitebox"] != nil && p.QA["whitebox"].UserInstructions != "" {
+		input["userInstructions"] = p.QA["whitebox"].UserInstructions
 	}
 	instructions, err := actionInstructions(run, "actions/qa-design.md#白盒覆盖判断")
 	if err != nil {

@@ -73,12 +73,25 @@ func (f *Facade) verifyDevelopmentIncrement(event *protocol.Event) error {
 	if head != p.DevelopmentSnapshot {
 		return fmt.Errorf("DEVELOPMENT_INCREMENT: reconcile the development snapshot first")
 	}
-	if q.Increment.Kind == "optimize" {
+	concurrent := false
+	for _, x := range run.Executions {
+		if x.Claim.Task.Step == "development-worker" && x.Claimed && !x.Finished {
+			concurrent = true
+		}
+	}
+	if q.Increment.Kind == "optimize" && !concurrent {
 		if err := gitprep.CheckManifest(workspace, head, nil); err != nil {
 			return fmt.Errorf("DEVELOPMENT_INCREMENT: finish the current Batch before reopening another; uncommitted work is preserved: %w", err)
 		}
 	}
-	view, err := gitprep.WorkingView(workspace, head)
+	var view gitprep.View
+	if concurrent {
+		// The new worker starts from committed inputs in its own worktree.
+		// Another authorized worker may keep editing its existing files.
+		view, err = gitprep.Snapshot(workspace, head)
+	} else {
+		view, err = gitprep.WorkingView(workspace, head)
+	}
 	if err != nil {
 		return err
 	}

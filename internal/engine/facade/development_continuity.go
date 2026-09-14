@@ -53,11 +53,11 @@ func (f *Facade) observeNativeDeveloperRecovery(run Run, x protocol.RegularExecu
 	if p.Operation != nil {
 		return protocol.DeveloperRecovery{}, fmt.Errorf("UNKNOWN: Git side effects require reconciliation")
 	}
-	head, err := gitprep.Head(p.Resources["development"])
-	if err != nil || head != p.DevelopmentSnapshot {
+	head, err := gitprep.Head(protocol.DevelopmentWorkspace(p, x.Claim.Task))
+	if err != nil || head != x.Claim.Candidate {
 		return protocol.DeveloperRecovery{}, fmt.Errorf("UNKNOWN: development workspace HEAD differs: %v", err)
 	}
-	view, err := gitprep.WorkingView(p.Resources["development"], head)
+	view, err := gitprep.WorkingView(protocol.DevelopmentWorkspace(p, x.Claim.Task), head)
 	if err != nil {
 		return protocol.DeveloperRecovery{}, err
 	}
@@ -74,7 +74,7 @@ func (f *Facade) observeNativeDeveloperRecovery(run Run, x protocol.RegularExecu
 	receipt.NativeMethod, receipt.NativeResponse, err = adapter.probe(nativeProbe{
 		Context: x.Claim.Context, Root: f.root, RunID: run.RunID,
 		Job:       filepath.Join(filepath.Dir(f.developerRecoveryPath(x.Claim.ActionID, interrupted)), "native-probe"),
-		Workspace: p.Resources["development"], ActionID: x.Claim.ActionID,
+		Workspace: protocol.DevelopmentWorkspace(p, x.Claim.Task), ActionID: x.Claim.ActionID,
 		Step: string(x.Claim.Task.Step), Identity: receipt.Identity})
 	if err != nil {
 		receipt.TransportError = err.Error()

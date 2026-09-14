@@ -54,14 +54,17 @@ type QAReviewWaiver struct {
 	Revision uint64            `json:"revision"`
 }
 type PreparedQA struct {
-	DesignActionID         string          `json:"designActionId,omitempty"`
-	PreviousDesignActionID string          `json:"previousDesignActionId,omitempty"`
-	TestArtifactsFrom      string          `json:"testArtifactsFrom,omitempty"`
-	TestArtifactsBase      string          `json:"testArtifactsBase,omitempty"`
-	DesignGap              string          `json:"designGap,omitempty"`
-	ConsecutiveFailures    int             `json:"consecutiveFailures"`
-	RecoveryRequired       bool            `json:"recoveryRequired"`
-	ReviewWaiver           *QAReviewWaiver `json:"reviewWaiver,omitempty"`
+	DesignActionID         string `json:"designActionId,omitempty"`
+	PreviousDesignActionID string `json:"previousDesignActionId,omitempty"`
+	TestArtifactsFrom      string `json:"testArtifactsFrom,omitempty"`
+	TestArtifactsBase      string `json:"testArtifactsBase,omitempty"`
+	// UserInstructions holds only explicit QA revision/recovery decisions. Review
+	// feedback stays in DesignGap and must not enter independent coverage input.
+	UserInstructions    string          `json:"userInstructions,omitempty"`
+	DesignGap           string          `json:"designGap,omitempty"`
+	ConsecutiveFailures int             `json:"consecutiveFailures"`
+	RecoveryRequired    bool            `json:"recoveryRequired"`
+	ReviewWaiver        *QAReviewWaiver `json:"reviewWaiver,omitempty"`
 
 	ReviewScope    coverage.ScopeMode          `json:"reviewScope"`
 	AuthoringBase  string                      `json:"authoringBase,omitempty"`
@@ -418,11 +421,20 @@ func desiredGit(r *RegularState) *GitPreparation {
 	op := GitPreparation{BindingDigest: p.BindingDigest, Before: p.DevelopmentSnapshot}
 	if p.Resources["development"] == "" || (p.QA["blackbox"] != nil && p.Resources["blackbox"] == "") {
 		op.Kind = "workspaces"
-	} else if b := nextBatch(r); b != nil {
-		if result, ok := p.Batches[b.ID]; ok {
-			op.Kind = "batch-commit"
-			op.Target = b.ID
-			op.Paths = result.Manifest
+	} else if batches := developmentBatches(r); len(batches) > 0 {
+		for _, b := range batches {
+			if DevelopmentWorkspace(p, batchTask(p, b.ID)) == "" {
+				op.Kind, op.Target = "development-workspace", b.ID
+				break
+			}
+		}
+		if op.Kind == "" {
+			for _, b := range batches {
+				if result, ok := p.Batches[b.ID]; ok && developmentJoinReady(r, b.ID) {
+					op.Kind, op.Target, op.Paths = "batch-commit", b.ID, result.Manifest
+					break
+				}
+			}
 		}
 	} else if allDevelopment(r) {
 		if q := p.QA["blackbox"]; q != nil && !q.Frozen {
@@ -455,6 +467,9 @@ func desiredGit(r *RegularState) *GitPreparation {
 		return nil
 	}
 	scope := fmt.Sprint(p.Rework)
+	if op.Kind == "development-workspace" || op.Kind == "batch-commit" {
+		scope += batchTask(p, op.Target).String()
+	}
 	for _, mode := range []string{"blackbox", "whitebox"} {
 		if q := p.QA[mode]; q != nil {
 			scope += fmt.Sprintf(":%s:%d", mode, q.Revision)
@@ -510,8 +525,8 @@ func preparationView(s *State, v *decision.RegularView) {
 	if p.Resources["development"] == "" {
 		return
 	}
-	if b := nextBatch(r); b != nil {
-		if _, ok := p.Batches[b.ID]; !ok {
+	for _, b := range developmentBatches(r) {
+		if _, ok := p.Batches[b.ID]; !ok && DevelopmentWorkspace(p, batchTask(p, b.ID)) != "" {
 			add(batchTask(p, b.ID))
 		}
 	}
@@ -550,6 +565,9 @@ func preparationClaim(r *RegularState, key runtime.TaskKey) (string, string) {
 		return r.Candidate, ""
 	}
 	candidate := p.DevelopmentSnapshot
+	if key.Step == "development-worker" {
+		candidate = DevelopmentBase(r, key)
+	}
 	if strings.HasPrefix(string(key.Step), "blackbox") {
 		candidate = r.BaseSnapshot
 	} else if key.Step == "whitebox-design" && p.QA["whitebox"].AuthoringBase != "" {
@@ -572,7 +590,7 @@ func currentPreparationClaim(r *RegularState, c ExecutionClaim) bool {
 	}
 	candidate, _ := preparationClaim(r, c.Task)
 	if c.Task.Step == "development-worker" {
-		b := nextBatch(r)
+		b := DevelopmentBatchForTask(r, c.Task)
 		return b != nil && c.Task == batchTask(p, b.ID) && c.Candidate == candidate
 	}
 	parts := strings.Split(string(c.Task.Step), "-")
@@ -728,9 +746,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			mergeQAReview(result.Review, *q.RetainedReview)
 		}
 		q.Review = result.Review
-		if !q.NeedsRevision {
-			q.DesignGap = result.Message
-		}
+		q.DesignGap = result.Message
 		q.ConsecutiveFailures++
 		q.RecoveryRequired = q.ConsecutiveFailures >= 3
 		q.Frozen = false
@@ -739,7 +755,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 		return "ACCEPTED", nil
 	}
 	if step == "development-worker" {
-		b := nextBatch(r)
+		b := DevelopmentBatchForTask(r, x.Claim.Task)
 		if b == nil || batchTask(p, b.ID) != x.Claim.Task {
 			return reject(fmt.Errorf("development batch is not current"))
 		}
@@ -824,6 +840,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 			q.Design = result.Design
 			if !q.NeedsRevision {
 				q.DesignGap = ""
+				q.UserInstructions = ""
 			}
 			q.DesignActionID = result.ActionID
 			q.Manifest = result.Manifest
@@ -1015,7 +1032,7 @@ func (e *Engine) acceptGit(s *State, receipt GitPreparationReceipt) error {
 	if r.ChangePending || op.BindingDigest != preparationBinding(r) {
 		return fmt.Errorf("EVENT_NOT_CURRENT: reconcile cancelled Git resource before advancing")
 	}
-	if op.Kind != "workspaces" && op.Kind != "whitebox-workspace" && op.Kind != "repair-workspace" && (receipt.Git.OperationID != op.ID || receipt.Git.Before != op.Before || receipt.Git.After == "" || receipt.Git.View.Identity != receipt.Git.After || receipt.Git.View.Digest == "") {
+	if op.Kind != "workspaces" && op.Kind != "development-workspace" && op.Kind != "whitebox-workspace" && op.Kind != "repair-workspace" && (receipt.Git.OperationID != op.ID || receipt.Git.Before != op.Before || receipt.Git.After == "" || receipt.Git.View.Identity != receipt.Git.After || receipt.Git.View.Digest == "") {
 		return fmt.Errorf("incomplete Git snapshot receipt")
 	}
 	for k, v := range receipt.Resources {
@@ -1033,7 +1050,12 @@ func (e *Engine) acceptGit(s *State, receipt GitPreparationReceipt) error {
 		if p.Resources["development"] == "" || (p.QA["blackbox"] != nil && p.Resources["blackbox"] == "") {
 			return fmt.Errorf("missing isolated workspaces")
 		}
+	case "development-workspace":
+		if p.Resources[DevelopmentResource(batchTask(p, op.Target))] == "" {
+			return fmt.Errorf("missing independent development workspace")
+		}
 	case "batch-commit":
+		delete(p.Resources, DevelopmentResource(batchTask(p, op.Target)))
 		p.Commits[op.Target] = receipt.Git
 		p.DevelopmentSnapshot = receipt.Git.After
 		p.DevelopmentTask = nil
@@ -1387,7 +1409,7 @@ func preparationDecision(s *State, q RegularRequest) {
 				p.QA[q.Target].Revision++
 			}
 		}
-		p.QA[q.Target].DesignGap = q.Reason
+		p.QA[q.Target].UserInstructions = q.Reason
 	case "development-rework":
 		batch, _ := developmentReworkBatch(r, q.Target) // validated by preparationRequest
 		p.Rework++
@@ -1606,7 +1628,7 @@ func decideQARecovery(s *State, a *RegularAsk, d RegularDecision, revision uint6
 	}
 	switch d.Choice {
 	case "retry", "redesign", "fresh-review":
-		q.DesignGap = d.Reason
+		q.UserInstructions = d.Reason
 	}
 	q.RecoveryRequired = false
 	return nil

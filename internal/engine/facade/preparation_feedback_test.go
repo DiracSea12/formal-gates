@@ -22,7 +22,7 @@ func TestQARevisionReasonReachesCurrentDesignAndResume(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := before.Regular.Preparation.QA[mode].DesignGap; got != oldReason {
+			if got := before.Regular.Preparation.QA[mode].UserInstructions; got != oldReason {
 				t.Fatalf("first revision reason lost: %q", got)
 			}
 			facadeChoice(t, f, protocol.RegularRequest{Action: "qa-revise", Target: mode, Meaning: "stable-execution", Reason: reason})

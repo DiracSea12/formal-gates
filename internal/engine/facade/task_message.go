@@ -8,11 +8,12 @@ import (
 // The action owner claims delivery before invoking the host. An interrupted
 // SENDING message is never silently sent again: the host may have received it.
 func (f *Facade) pendingTaskMessage(action, identity string) (*protocol.TaskMessage, error) {
-	run, err := f.Show()
+	snapshot, err := f.engine.Load()
 	if err != nil {
 		return nil, err
 	}
-	x := run.Executions[action]
+	executions := snapshot.State.RegularExecutions
+	x := executions[action]
 	for {
 		ids := []string{}
 		for id, m := range x.Messages {
@@ -32,7 +33,7 @@ func (f *Facade) pendingTaskMessage(action, identity string) (*protocol.TaskMess
 		// CONTINUE reuses the native identity through the existing task lineage.
 		// Consume the original record in place, so a successor never copies a
 		// stale PENDING entry or loses the original action/attempt provenance.
-		previous, ok := run.Executions[x.PreviousAction]
+		previous, ok := executions[x.PreviousAction]
 		if !ok || previous.Claim.Task != x.Claim.Task || previous.Identity != identity {
 			return nil, nil
 		}

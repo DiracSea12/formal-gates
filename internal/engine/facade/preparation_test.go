@@ -78,6 +78,10 @@ func facadePreparationBatches(t *testing.T, modes []string, batches int) *Facade
 	return facadePreparationTask(t, modes, batches, "")
 }
 func facadePreparationTask(t *testing.T, modes []string, batches int, task string, documents ...string) *Facade {
+	return facadePreparationPlan(t, modes, batches, task, nil, documents...)
+}
+
+func facadePreparationPlan(t *testing.T, modes []string, batches int, task string, edit func(*protocol.DevelopmentPlan), documents ...string) *Facade {
 	t.Helper()
 	document := strings.ReplaceAll(b1Document, "命令输出字符串 hello。", "在 Go module 根目录执行公开命令 go run .，退出码为 0，stdout 恰好为五个 UTF-8 字节 hello，无换行，stderr 为空。")
 	document = strings.ReplaceAll(document, "运行后输出恰好是 hello。", "执行 go run . 后退出码为 0，stdout 恰好为 hello（无换行），stderr 为空。")
@@ -103,6 +107,9 @@ func facadePreparationTask(t *testing.T, modes []string, batches int, task strin
 			raw.GranularityReview = &protocol.DevelopmentPlan{RequirementRevision: x.Claim.RequirementRevision, Rationale: "one output capability", Batches: []protocol.DevelopmentBatch{{ID: "B1", Task: "Implement a Go hello command", Subtasks: []protocol.DevelopmentSubtask{{ID: "S1", Task: "Create go.mod and main.go printing exactly hello; validate by running the Go command"}}, Interfaces: "stdout hello", StateBoundary: "command output", Risks: "wrong output", DefinitionOfDone: "go run . prints hello", Validation: "go run . and go test ./...", Recovery: "revert batch commit", Handoff: "only unresolved decisions", ContextCost: "single executable"}}}
 			if batches == 2 {
 				raw.GranularityReview.Batches = append(raw.GranularityReview.Batches, protocol.DevelopmentBatch{ID: "B2", Task: "Add a regression test for the committed hello command", Subtasks: []protocol.DevelopmentSubtask{{ID: "S2", Task: "Add main_test.go with a subprocess test of go run . asserting exit 0, stdout exactly hello with no newline, and empty stderr. Run go test ./...."}}, Dependencies: []string{"B1"}, Interfaces: "committed command from B1", StateBoundary: "test only", Risks: "assertion may omit stream or newline", DefinitionOfDone: "subprocess regression passes", Validation: "go test ./...", Recovery: "revert the test commit", Handoff: "only unresolved decisions", ContextCost: "independently rerunnable regression"})
+			}
+			if edit != nil {
+				edit(raw.GranularityReview)
 			}
 			if task != "" {
 				raw.GranularityReview.Batches[0].Task = task

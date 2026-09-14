@@ -253,7 +253,7 @@ func TestMixedWhiteboxRetentionPreservesNewProduction(t *testing.T) {
 				receipt, err := f.performPreparationGit(run, op)
 				workspace := filepath.Join(f.stateDir, "resources", p.BindingDigest, "whitebox-restore")
 				if changedMixed {
-					if err == nil || !strings.Contains(err.Error(), "TEST_ARTIFACT_CONFLICT") {
+					if err == nil || !strings.Contains(err.Error(), "ARTIFACT_CONFLICT") {
 						t.Fatalf("new production not protected: %v", err)
 					}
 				} else {

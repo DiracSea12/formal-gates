@@ -117,8 +117,29 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 			}
 			receipt.Resources[mode] = path
 		}
+	case "development-workspace":
+		key := p.BatchTasks[op.Target]
+		path := filepath.Join(resourceRoot, "development-"+strings.TrimPrefix(op.ID, "git:sha256:"))
+		if err := gitprep.Workspace(f.root, path, op.Before); err != nil {
+			return receipt, err
+		}
+		receipt.Resources[protocol.DevelopmentResource(key)] = path
 	case "batch-commit":
-		commit, err := gitprep.Commit(p.Resources["development"], op.Before, op.ID, op.Paths)
+		paths := op.Paths
+		if source := protocol.DevelopmentWorkspace(p, p.BatchTasks[op.Target]); source != p.Resources["development"] {
+			committed, err := gitprep.Commit(source, protocol.DevelopmentBase(r, p.BatchTasks[op.Target]), op.ID+":source", op.Paths)
+			if err != nil {
+				return receipt, err
+			}
+			if err := gitprep.RestoreArtifacts(p.Resources["development"], protocol.DevelopmentBase(r, p.BatchTasks[op.Target]), committed.After, op.Paths); err != nil {
+				return receipt, err
+			}
+			paths, err = gitprep.Changes(p.Resources["development"], op.Before)
+			if err != nil {
+				return receipt, err
+			}
+		}
+		commit, err := gitprep.Commit(p.Resources["development"], op.Before, op.ID, paths)
 		if err != nil {
 			return receipt, err
 		}
@@ -133,7 +154,7 @@ func (f *Facade) performPreparationGit(run Run, op protocol.GitPreparation) (pro
 			return receipt, err
 		}
 		if q := p.QA["whitebox"]; q != nil && q.TestArtifactsFrom != "" {
-			if err := gitprep.RestoreTestArtifacts(path, q.TestArtifactsBase, q.TestArtifactsFrom, q.Manifest); err != nil {
+			if err := gitprep.RestoreArtifacts(path, q.TestArtifactsBase, q.TestArtifactsFrom, q.Manifest); err != nil {
 				return receipt, err
 			}
 		}
@@ -369,7 +390,7 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 	document := run.Regular.Requirement
 	payload := map[string]any{"binding": claim, "requirement": map[string]any{"path": document.Path, "revision": document.Revision, "text": document.Text, "confirmed": document.Confirmed}, "requiredSources": run.Regular.RequiredSources, "routeScope": gitprep.Digest(run.Regular.Route), "topologyScope": run.Regular.Topology}
 	if step == "development-worker" {
-		workspace = p.Resources["development"]
+		workspace = protocol.DevelopmentWorkspace(p, claim.Task)
 		increment, incrementBatch, err := developmentIncrementInput(run, claim)
 		if err != nil {
 			return nil, "", err
@@ -395,6 +416,10 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 			}
 		}
 		for _, b := range run.Regular.Plan.Batches {
+			bound := protocol.DevelopmentBatchForTask(run.Regular, claim.Task)
+			if incrementBatch == "" && bound != nil && bound.ID != b.ID {
+				continue
+			}
 			if incrementBatch != "" && b.ID != incrementBatch {
 				continue
 			}
@@ -418,8 +443,8 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 		payload["previousDesign"] = p.QA[mode].PreviousDesign
 		payload["reviewGaps"] = p.QA[mode].RetainedReview
 		// The review projection contains statuses only. Keep the reviewer's
-		// original explanation alongside it, even after a scope decision changes
-		// DesignGap. Select the exact retained binding, not the latest run result.
+		// original explanation alongside the separate user instructions. Select
+		// the retained design round, not historical results sharing a review binding.
 		if retained := p.QA[mode].RetainedReview; retained != nil {
 			messages := map[string]string{}
 			previous, bound := run.Executions[p.QA[mode].PreviousDesignActionID]
@@ -447,6 +472,9 @@ func preparationInput(run Run, claim protocol.ExecutionClaim) (map[string]any, s
 				"diffArgs": []string{"diff", "--binary", "--no-renames", p.DevelopmentSnapshot, claim.Candidate, "--"},
 			}
 		}
+	}
+	if qa := p.QA[mode]; qa != nil && qa.UserInstructions != "" {
+		payload["userInstructions"] = qa.UserInstructions
 	}
 	if qa := p.QA[mode]; qa != nil && qa.DesignGap != "" {
 		payload["designGap"] = qa.DesignGap
@@ -540,6 +568,9 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 		if p.Operation != nil && p.Operation.Kind == "finalize" {
 			paths[filepath.Join(base, "candidate-"+strings.TrimPrefix(p.Operation.ID, "git:sha256:"))] = true
 		}
+		if p.Operation != nil && p.Operation.Kind == "development-workspace" {
+			paths[filepath.Join(base, "development-"+strings.TrimPrefix(p.Operation.ID, "git:sha256:"))] = true
+		}
 		if p.Operation != nil && p.Operation.Kind == "whitebox-workspace" {
 			// The worktree may exist before its resource receipt is persisted.
 			paths[filepath.Join(base, "whitebox-"+strings.TrimPrefix(p.Operation.ID, "git:sha256:"))] = true
@@ -548,6 +579,9 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 			paths[filepath.Join(base, name)] = true
 		}
 		for path := range paths {
+			if path == "" {
+				continue
+			}
 			if isolated[path] {
 				if err = os.RemoveAll(path); err != nil {
 					return err
@@ -572,7 +606,7 @@ func (f *Facade) verifyPreparationReceipt(event protocol.Event) error {
 		x := run.Executions[result.ActionID]
 		if x.Claim.Task.Step == "development-worker" && result.Status == "PASS" && !x.Finished {
 			p := run.Regular.Preparation
-			if err := gitprep.CheckManifest(p.Resources["development"], p.DevelopmentSnapshot, result.Manifest); err != nil {
+			if err := gitprep.CheckManifest(protocol.DevelopmentWorkspace(p, x.Claim.Task), x.Claim.Candidate, result.Manifest); err != nil {
 				return err
 			}
 		}

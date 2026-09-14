@@ -5,10 +5,10 @@ import (
 	"os/exec"
 )
 
-// RestoreTestArtifacts carries a previously classified test-only manifest, not
-// its production tree, into the new developer snapshot. Divergent edits require
-// a real QA revision rather than silently overwriting newer developer work.
-func RestoreTestArtifacts(root, base, source string, manifest []string) error {
+// RestoreArtifacts applies a bound manifest to the current candidate. Validate
+// every path before writing: divergent edits in a shared file must be resolved
+// explicitly, never silently overwrite another worker's accepted changes.
+func RestoreArtifacts(root, base, source string, manifest []string) error {
 	paths, err := Paths(manifest)
 	if err != nil {
 		return err
@@ -40,7 +40,7 @@ func RestoreTestArtifacts(root, base, source string, manifest []string) error {
 	selected := []string{}
 	for _, path := range paths {
 		if now[path] != old[path] && now[path] != want[path] {
-			return fmt.Errorf("TEST_ARTIFACT_CONFLICT: %s changed in development; revise QA against the new file", path)
+			return fmt.Errorf("ARTIFACT_CONFLICT: %s changed in the target; reconcile the overlapping changes", path)
 		}
 		_, present := want[path]
 		tracked := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", path).Run() == nil
@@ -54,7 +54,7 @@ func RestoreTestArtifacts(root, base, source string, manifest []string) error {
 	}
 	args := append([]string{"-C", root, "restore", "--source=" + source, "--staged", "--worktree", "--"}, selected...)
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("restore retained test artifacts: %w: %s", err, out)
+		return fmt.Errorf("restore bound artifacts: %w: %s", err, out)
 	}
 	return nil
 }

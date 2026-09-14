@@ -20,7 +20,7 @@ func TestQARevisionCarriesOriginalReviewExplanation(t *testing.T) {
 	qa := run.Regular.Preparation.QA["blackbox"]
 	qa.PreviousDesignActionID = claim.ActionID
 	qa.RetainedReview = &coverage.ReviewResult{SetStatus: coverage.StatusFail}
-	qa.DesignGap = "Use the revised fixture boundary."
+	qa.UserInstructions = "Use the revised fixture boundary."
 	review := previous
 	review.Claim.Task.Step = "blackbox-review"
 	review.PreparationResult = &protocol.PreparationResult{Status: "FAIL", Message: "The amber branch lacks an observable output oracle.", Review: qa.RetainedReview}
@@ -29,6 +29,13 @@ func TestQARevisionCarriesOriginalReviewExplanation(t *testing.T) {
 	unrelated.Claim.Task.Scope = "another-round"
 	unrelated.PreparationResult = &protocol.PreparationResult{Status: "FAIL", Message: "unrelated obsolete gap", Review: qa.RetainedReview}
 	run.Executions["unrelated"] = unrelated
+	// Matching review bindings alone do not make an old round current. Even
+	// a rejected result from this scope must not become repair instructions.
+	rejected := review
+	rejected.PreparationResult = &protocol.PreparationResult{ActionID: "rejected", Status: "FAIL", Message: "rejected obsolete gap", Review: qa.RetainedReview}
+	run.Executions["rejected"] = rejected
+	run.Regular.PreparationErrors = append(run.Regular.PreparationErrors, protocol.PreparationError{Result: *rejected.PreparationResult, Reason: "invalid result"})
+
 	payload, workspace, err := preparationInput(run, claim)
 	if err != nil {
 		t.Fatal(err)
@@ -42,10 +49,10 @@ func TestQARevisionCarriesOriginalReviewExplanation(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(m.files["qa-review.json"])
-	if !strings.Contains(raw, review.PreparationResult.Message) || strings.Contains(raw, "unrelated obsolete gap") {
+	if !strings.Contains(raw, review.PreparationResult.Message) || strings.Contains(raw, "unrelated obsolete gap") || strings.Contains(raw, "rejected obsolete gap") {
 		t.Fatalf("review explanation: %s", raw)
 	}
-	if payload["designGap"] != qa.DesignGap {
+	if payload["userInstructions"] != qa.UserInstructions {
 		t.Fatal("scope instruction overwritten")
 	}
 }

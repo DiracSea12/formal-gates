@@ -62,7 +62,7 @@ func TestQARevisionWaitsForIssuedResults(t *testing.T) {
 				}
 				waiting, _ := e.Load()
 				q := waiting.State.Regular.Preparation.QA[mode]
-				if !q.NeedsRevision || q.Revision != initialRevision || q.DesignGap != reason {
+				if !q.NeedsRevision || q.Revision != initialRevision || q.UserInstructions != reason {
 					t.Fatalf("issued binding or revision lost before result: %+v", q)
 				}
 				if a := submitRegular(t, e, RegularEvent{Operation: "PREPARATION_RESULT", PreparationResult: &result}); a.Status != "ACCEPTED" {
@@ -75,7 +75,7 @@ func TestQARevisionWaitsForIssuedResults(t *testing.T) {
 				next := currentExecution(t, e, mode+"-design")
 				after, _ := e.Load()
 				q = after.State.Regular.Preparation.QA[mode]
-				if q.Revision != initialRevision+1 || q.NeedsRevision || q.Frozen || q.Design != nil || q.PreviousDesign == nil || q.DesignGap != reason || next.Claim.Task == x.Claim.Task {
+				if q.Revision != initialRevision+1 || q.NeedsRevision || q.Frozen || q.Design != nil || q.PreviousDesign == nil || q.UserInstructions != reason || next.Claim.Task == x.Claim.Task {
 					t.Fatalf("confirmed revision did not continue: %+v", q)
 				}
 				expected := result
@@ -90,6 +90,9 @@ func TestQARevisionWaitsForIssuedResults(t *testing.T) {
 				if !old.Finished || digestOfCanonical(old.PreparationResult) != digestOfCanonical(expected) || old.Identity != result.Identity || after.State.Results[x.Claim.ActionID].Outcome != result.Status {
 					t.Fatal("late result or native source binding lost")
 				}
+				if kind == "review-fail" && q.DesignGap != result.Message {
+					t.Fatal("current review feedback lost beside user instructions")
+				}
 				if step == "review" && !reflect.DeepEqual(q.RetainedReview, result.Review) {
 					t.Fatal("review evidence lost")
 				}
@@ -103,7 +106,7 @@ func TestQARevisionWaitsForIssuedResults(t *testing.T) {
 				completeQA(t, e, mode, "design")
 				settled, _ := e.Load()
 				q = settled.State.Regular.Preparation.QA[mode]
-				if q.DesignGap != "" || q.Revision != initialRevision+1 {
+				if q.UserInstructions != "" || q.Revision != initialRevision+1 {
 					t.Fatal("revision repeated or reason not consumed")
 				}
 			})

@@ -15,8 +15,12 @@ func preparationEngine(t *testing.T, modes ...string) *Engine {
 }
 
 func preparationEngineWithPlan(t *testing.T, edit func(*DevelopmentPlan), modes ...string) *Engine {
+	return preparationEnginePlanCapacity(t, edit, 4, modes...)
+}
+
+func preparationEnginePlanCapacity(t *testing.T, edit func(*DevelopmentPlan), capacity int, modes ...string) *Engine {
 	t.Helper()
-	e := regularEngine(t, nil)
+	e := regularEngineForProvider(t, nil, t.TempDir(), "codex", capacity)
 	regularStart(t, e)
 	for _, step := range reviewActions {
 		x := currentExecution(t, e, step)
@@ -62,6 +66,8 @@ func gitReceipt(t *testing.T, e *Engine, after string, ownership ...string) {
 	switch op.Kind {
 	case "workspaces":
 		receipt.Resources = map[string]string{"development": "/isolated/dev", "blackbox": "/isolated/baseline"}
+	case "development-workspace":
+		receipt.Resources[DevelopmentResource(s.State.Regular.Preparation.BatchTasks[op.Target])] = "/isolated/" + op.Target
 	case "whitebox-workspace":
 		receipt.Resources["whitebox"] = "/isolated/whitebox"
 	case "whitebox-commit":
@@ -288,7 +294,7 @@ func TestPreparationIncrementalReviewRetainsUnchangedApprovals(t *testing.T) {
 	x := currentExecution(t, e, "blackbox-design")
 	claimAndAttach(t, e, x)
 	s, _ := e.Load()
-	if got := s.State.Regular.Preparation.QA["blackbox"].DesignGap; got != "Clarify raw output comparison" {
+	if got := s.State.Regular.Preparation.QA["blackbox"].UserInstructions; got != "Clarify raw output comparison" {
 		t.Fatalf("revision reason lost: %q", got)
 	}
 	design := testDesign(s.State.Regular, "BLACKBOX")
@@ -301,8 +307,8 @@ func TestPreparationIncrementalReviewRetainsUnchangedApprovals(t *testing.T) {
 	sourceUnavailable(t, e, x)
 	s, _ = e.Load()
 	qa := s.State.Regular.Preparation.QA["blackbox"]
-	if qa.DesignGap != "" {
-		t.Fatalf("accepted design retained completed revision reason: %q", qa.DesignGap)
+	if qa.UserInstructions != "" {
+		t.Fatalf("accepted design retained completed revision reason: %q", qa.UserInstructions)
 	}
 	if qa.ReviewScope != coverage.ScopeAffected || qa.RetainedReview == nil || len(qa.RetainedReview.SourceDecisions) != 1 || len(qa.RetainedReview.PointDecisions) != 1 || len(qa.RetainedReview.CaseDecisions) != 0 {
 		t.Fatalf("incremental input lost its exact review scope/approvals: %+v", qa)

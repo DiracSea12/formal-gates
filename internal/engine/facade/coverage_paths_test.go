@@ -39,7 +39,7 @@ func TestCoveragePathsScopeAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	run.Regular.ActionInstructions = instructions
-	run.Regular.Preparation = &protocol.Preparation{QA: map[string]*protocol.PreparedQA{"whitebox": {DesignGap: "Use the amber fixture; keep its original output."}}}
+	run.Regular.Preparation = &protocol.Preparation{QA: map[string]*protocol.PreparedQA{"whitebox": {DesignGap: "Reviewer conclusion must stay out.", UserInstructions: "Use the amber fixture; keep its original output."}}}
 	claim := protocol.ExecutionClaim{Candidate: candidate}
 	claim.Task.Step = "whitebox-design"
 	job := t.TempDir()
@@ -51,15 +51,18 @@ func TestCoveragePathsScopeAndBinding(t *testing.T) {
 		t.Fatal("candidate workspace lost")
 	}
 	var input struct {
-		SourcePaths []coverageSourcePath `json:"sourcePaths"`
-		DesignGap   string               `json:"designGap"`
+		SourcePaths      []coverageSourcePath `json:"sourcePaths"`
+		UserInstructions string               `json:"userInstructions"`
 	}
 	start := strings.LastIndex(plan.prompt, "\n")
 	if err := json.Unmarshal([]byte(plan.prompt[start+1:]), &input); err != nil {
 		t.Fatal(err)
 	}
-	if input.DesignGap != run.Regular.Preparation.QA["whitebox"].DesignGap {
+	if input.UserInstructions != run.Regular.Preparation.QA["whitebox"].UserInstructions {
 		t.Fatal("current instructions missing from coverage")
+	}
+	if strings.Contains(plan.prompt, "Reviewer conclusion") || strings.Contains(plan.prompt, `"designGap"`) {
+		t.Fatal("review feedback entered independent coverage")
 	}
 	if len(input.SourcePaths) != 1 || input.SourcePaths[0].Path != root {
 		t.Fatalf("not ordinary workspace: %+v", input)

@@ -106,8 +106,34 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr 
 	}
 	turnID, threadID := "", ""
 	inflight := map[string]protocol.TaskMessage{}
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	// A run load can wait on durable state and must never hold up the native
+	// event reader (including the acknowledgment for a message already sent).
+	// Keep exactly one lookup outstanding and settle its claimed message on exit.
+	type messagePoll struct {
+		value *protocol.TaskMessage
+		err   error
+	}
+	var polling chan messagePoll
+	var settling chan error
+	defer func() {
+		if settling != nil {
+			resultErr = errors.Join(resultErr, <-settling)
+		}
+	}()
+	defer func() {
+		if polling != nil {
+			polled := <-polling
+			resultErr = errors.Join(resultErr, polled.err)
+			if polled.value != nil {
+				m := *polled.value
+				m.Status, m.Reason = "FAILED", "turn ended before message delivery; not automatically resent"
+				resultErr = errors.Join(resultErr, q.MessageReceipt(m))
+			}
+		}
+	}()
+
 	defer func() {
 		for _, m := range inflight {
 			m.Status, m.Reason = "FAILED", "native connection ended before delivery acknowledgment; not automatically resent"
@@ -124,10 +150,23 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr 
 				}
 				raw = data
 			case <-ticker.C:
-				if turnID == "" || q.PendingMessage == nil {
-					continue
+				if turnID != "" && q.PendingMessage != nil && polling == nil && settling == nil && len(inflight) == 0 {
+					polling = make(chan messagePoll, 1)
+					go func(done chan<- messagePoll, identity string) {
+						m, err := q.PendingMessage(identity)
+						done <- messagePoll{m, err}
+					}(polling, threadID)
 				}
-				m, err := q.PendingMessage(threadID)
+				continue
+			case err := <-settling:
+				settling = nil
+				if err != nil {
+					return message{}, err
+				}
+				continue
+			case polled := <-polling:
+				polling = nil
+				m, err := polled.value, polled.err
 				if err != nil {
 					return message{}, err
 				}
@@ -170,9 +209,11 @@ func (codexRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr 
 					} else if json.Unmarshal(m.Result, &ack) != nil || ack.TurnID != turnID {
 						sent.Status, sent.Reason = "FAILED", "native delivery acknowledgment has no matching turn ID"
 					}
-					if err := q.MessageReceipt(sent); err != nil {
-						return message{}, err
-					}
+					// Persist the host acknowledgment without stopping journal/event
+					// collection behind the run writer. Turn completion still waits
+					// for this receipt; receiving an ack alone is not settlement.
+					settling = make(chan error, 1)
+					go func(done chan<- error, receipt protocol.TaskMessage) { done <- q.MessageReceipt(receipt) }(settling, sent)
 					delete(inflight, id)
 					continue
 				}

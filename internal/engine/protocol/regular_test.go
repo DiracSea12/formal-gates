@@ -27,8 +27,12 @@ func regularEngineAt(t *testing.T, cap *int64, dir string) *Engine {
 	t.Helper()
 	return regularEngineForProvider(t, cap, dir, "codex")
 }
-func regularEngineForProvider(t *testing.T, cap *int64, dir, provider string) *Engine {
+func regularEngineForProvider(t *testing.T, cap *int64, dir, provider string, capacities ...int) *Engine {
 	t.Helper()
+	capacity := 4
+	if len(capacities) > 0 {
+		capacity = capacities[0]
+	}
 	store, err := persistence.NewStore(dir, persistence.Config{PackageDigest: "sha256:b1"})
 	if err != nil {
 		t.Fatal(err)
@@ -37,12 +41,12 @@ func regularEngineForProvider(t *testing.T, cap *int64, dir, provider string) *E
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(store, Config{Definition: cd, Registry: definition.Registry(), Capacity: 4}, nil)
+	e, err := New(store, Config{Definition: cd, Registry: definition.Registry(), Capacity: capacity}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	view, _ := decision.NewState(cd.Version, runtime.PhaseIntakeRegistered)
-	if err = e.InitRegular(view, provider, fingerprintOf(t, e), "b1", RegularState{Requirement: Document("requirements.md", []byte(regularDocument)), BaseSnapshot: "git-base", Candidate: "git-base", Settings: settings.Effective{Values: settings.Values{Capacity: 4, TokenCap: cap}}}); err != nil {
+	if err = e.InitRegular(view, provider, fingerprintOf(t, e), "b1", RegularState{Requirement: Document("requirements.md", []byte(regularDocument)), BaseSnapshot: "git-base", Candidate: "git-base", Settings: settings.Effective{Values: settings.Values{Capacity: capacity, TokenCap: cap}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = e.Drive(fingerprintOf(t, e)); err != nil {

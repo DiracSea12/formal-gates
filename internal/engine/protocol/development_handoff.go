@@ -101,7 +101,7 @@ func decideExecutorHandoff(s *State, q RegularRequest, id, eventID string, revis
 		from = &ExecutorTarget{Kind: "native", Provider: x.Claim.Provider, Label: x.Claim.Provider, Context: x.Claim.Context}
 	}
 	receipt := ExecutorHandoffReceipt{
-		ID: id, Task: x.Claim.Task, BatchID: nextBatch(r).ID,
+		ID: id, Task: x.Claim.Task, BatchID: DevelopmentBatchForTask(r, x.Claim.Task).ID,
 		FromAction: q.Target, FromProvider: x.Claim.Provider, FromExecutor: from, FromIdentity: x.Identity,
 		To: q.Handoff.To, WorkspaceView: q.Handoff.WorkspaceView,
 		RequirementRevision: r.Requirement.Revision, Candidate: x.Claim.Candidate,

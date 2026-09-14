@@ -44,14 +44,14 @@ func (f *Facade) verifyExecutorHandoff(event *protocol.Event) error {
 		return fmt.Errorf("EXECUTOR_HANDOFF: unknown or completed developer action")
 	}
 	p := run.Regular.Preparation
-	head, err := gitprep.Head(p.Resources["development"])
+	head, err := gitprep.Head(protocol.DevelopmentWorkspace(p, x.Claim.Task))
 	if err != nil {
 		return err
 	}
-	if head != p.DevelopmentSnapshot {
+	if head != x.Claim.Candidate {
 		return fmt.Errorf("EXECUTOR_HANDOFF: reconcile development HEAD first")
 	}
-	view, err := gitprep.WorkingView(p.Resources["development"], head)
+	view, err := gitprep.WorkingView(protocol.DevelopmentWorkspace(p, x.Claim.Task), head)
 	if err != nil {
 		return err
 	}
@@ -162,5 +162,5 @@ func (f *Facade) verifyExternalDevelopmentResult(event protocol.Event) error {
 		return nil
 	}
 	p := run.Regular.Preparation
-	return gitprep.CheckManifest(p.Resources["development"], p.DevelopmentSnapshot, result.Manifest)
+	return gitprep.CheckManifest(protocol.DevelopmentWorkspace(p, x.Claim.Task), x.Claim.Candidate, result.Manifest)
 }

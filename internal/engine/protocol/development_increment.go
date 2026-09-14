@@ -133,11 +133,27 @@ func validateDevelopmentIncrement(s *State, q RegularRequest) error {
 	for id, x := range s.RegularExecutions {
 		// Baseline QA owns a separate workspace and does not depend on the
 		// implementation candidate. Preserve its live claim when its contract
-		// is retained; all candidate-dependent work still conflicts.
+		// is retained. Independent developer batches receive isolated workspaces;
+		// other candidate-dependent work still conflicts.
 		independent := (x.Claim.Task.Step == "blackbox-design" || x.Claim.Task.Step == "blackbox-review") && (q.Impact["blackbox-review"] == "" || q.Impact["blackbox-review"] == "unaffected")
 		if independent {
 			continue
 		}
+		if x.Claim.Task.Step == "development-worker" && x.Claimed && (!x.Finished || x.Source == nil || x.Source.Status == "RUNNING") {
+			b := DevelopmentBatchForTask(s.Regular, x.Claim.Task)
+			if b != nil {
+				conflict := batchDependsOn(s.Regular.Plan, b.ID, q.Increment.BatchID) || batchDependsOn(s.Regular.Plan, q.Increment.BatchID, b.ID)
+				for id := range s.Regular.Preparation.Commits {
+					if q.Impact["batch:"+id] == "affected" && batchDependsOn(s.Regular.Plan, b.ID, id) {
+						conflict = true
+					}
+				}
+				if !conflict {
+					continue
+				}
+			}
+		}
+
 		if x.Claimed && (!x.Finished || x.Source == nil || x.Source.Status == "RUNNING") {
 			return fmt.Errorf("DEVELOPMENT_INCREMENT: %s depends on changed inputs or shares the development workspace; settle/checkpoint it first", id)
 		}
@@ -224,6 +240,14 @@ func decideDevelopmentIncrement(s *State, a *RegularAsk, d RegularDecision, even
 		return err
 	}
 	old := r.Preparation
+	active := map[string]RegularExecution{}
+	for _, x := range s.RegularExecutions {
+		if x.Claim.Task.Step == "development-worker" && x.Claimed && (!x.Finished || x.Source == nil || x.Source.Status == "RUNNING") {
+			if b := DevelopmentBatchForTask(r, x.Claim.Task); b != nil {
+				active[b.ID] = x
+			}
+		}
+	}
 	encoded, err := json.Marshal(old)
 	if err != nil {
 		return err
@@ -288,6 +312,29 @@ func decideDevelopmentIncrement(s *State, a *RegularAsk, d RegularDecision, even
 			reopen(id)
 		}
 	}
+	if len(active) > 0 {
+		for id, x := range active {
+			next.BatchTasks[id] = x.Claim.Task
+			next.Resources[DevelopmentResource(x.Claim.Task)] = DevelopmentWorkspace(old, x.Claim.Task)
+		}
+		for id, key := range tasks {
+			ready := true
+			for _, batch := range r.Plan.Batches {
+				if batch.ID == id {
+					for _, dep := range batch.Dependencies {
+						if _, done := next.Commits[dep]; !done {
+							ready = false
+						}
+					}
+				}
+			}
+			if !ready {
+				continue
+			}
+			// An empty path is a pending resource intent, never the common workspace.
+			next.Resources[DevelopmentResource(key)] = ""
+		}
+	}
 	for mode, qa := range next.QA {
 		previousSnapshot := qa.Snapshot
 		previousReviewed := qa.Frozen && qa.Review != nil && qa.Whitelist != nil && qa.ReviewWaiver == nil && !qa.NeedsRevision
@@ -313,4 +360,87 @@ func decideDevelopmentIncrement(s *State, a *RegularAsk, d RegularDecision, even
 	classifyVerificationChange(r, q, revision)
 	r.DevelopmentIncrements = append(r.DevelopmentIncrements, DevelopmentIncrementReceipt{ID: a.ID, DecisionEvent: eventID, Revision: revision, RequirementRevision: r.Requirement.Revision, Kind: q.Increment.Kind, Target: q.Target, PreviousPlan: previousPlan, PlanDigest: plan.Digest, WorkspaceView: q.Increment.WorkspaceView, PreviousTasks: previousTasks, Tasks: tasks, UserDisposition: authority.RequirementImpact, Impact: q.Impact, Reason: q.Reason})
 	return nil
+}
+
+// These are bindings within the existing preparation/Batch lifecycle, not a
+// second scheduler. Only confirmed independent increments enter this set.
+func developmentBatches(r *RegularState) []*DevelopmentBatch {
+	var batches []*DevelopmentBatch
+	for i := range r.Plan.Batches {
+		b := &r.Plan.Batches[i]
+		if _, done := r.Preparation.Commits[b.ID]; done {
+			continue
+		}
+		if _, bound := r.Preparation.Resources[DevelopmentResource(batchTask(r.Preparation, b.ID))]; bound {
+			batches = append(batches, b)
+		}
+	}
+	if len(batches) == 0 {
+		if b := nextBatch(r); b != nil {
+			batches = append(batches, b)
+		}
+	}
+	return batches
+}
+
+// Workspace creation already records the exact base and task-owned resource.
+// Reuse that receipt when another independent result advances the common HEAD.
+func DevelopmentBase(r *RegularState, key runtime.TaskKey) string {
+	p := r.Preparation
+	resource := DevelopmentResource(key)
+	if _, bound := p.Resources[resource]; bound {
+		for i := len(p.Receipts) - 1; i >= 0; i-- {
+			receipt := p.Receipts[i]
+			if receipt.Operation.Kind == "development-workspace" && receipt.Resources[resource] != "" && receipt.Resources[resource] == p.Resources[resource] {
+				return receipt.Operation.Before
+			}
+		}
+	}
+	return p.DevelopmentSnapshot
+}
+
+func DevelopmentBatchForTask(r *RegularState, key runtime.TaskKey) *DevelopmentBatch {
+	for _, b := range developmentBatches(r) {
+		if batchTask(r.Preparation, b.ID) == key {
+			return b
+		}
+	}
+	return nil
+}
+
+func DevelopmentResource(key runtime.TaskKey) string { return "development:" + key.String() }
+
+func DevelopmentWorkspace(p *Preparation, key runtime.TaskKey) string {
+	if path, ok := p.Resources[DevelopmentResource(key)]; ok {
+		return path
+	}
+	return p.Resources["development"]
+}
+
+// Integration uses the common development worktree. Its current writer must
+// finish first; isolated workers and their accepted results need not stop.
+func developmentJoinReady(r *RegularState, batch string) bool {
+	p := r.Preparation
+	for _, other := range developmentBatches(r) {
+		if other.ID != batch && DevelopmentWorkspace(p, batchTask(p, other.ID)) == p.Resources["development"] {
+			return false
+		}
+	}
+	return true
+}
+
+func batchDependsOn(plan *DevelopmentPlan, from, target string) bool {
+	if from == target {
+		return true
+	}
+	for _, b := range plan.Batches {
+		if b.ID == from {
+			for _, dep := range b.Dependencies {
+				if batchDependsOn(plan, dep, target) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
