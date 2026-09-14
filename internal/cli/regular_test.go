@@ -339,8 +339,8 @@ func TestRegularInstalledPublicIntakeToSeal(t *testing.T) {
 			wave = &r.Regular.Verification.Waves[i]
 		}
 	}
-	if wave == nil || len(wave.Targets) != 4 {
-		t.Fatal("full installed route did not freeze two QA and two gates")
+	if wave == nil || len(wave.Targets) != len(r.Regular.Route.QA)+len(r.Regular.Route.Gates) {
+		t.Fatal("full installed route did not freeze the selected QA and discovered gates")
 	}
 	targetSteps := []string{}
 	for _, target := range wave.Targets {

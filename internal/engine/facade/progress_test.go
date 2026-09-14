@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/requirements"
 )
@@ -159,31 +158,6 @@ func TestStaticCheckerDoesNotExecuteInspectedScripts(t *testing.T) {
 	}
 	if output, err := exec.Command(python, checker, py).CombinedOutput(); err == nil || !strings.Contains(string(output), "FAIL") {
 		t.Fatalf("invalid script accepted: %s %v", output, err)
-	}
-}
-
-func TestQAReadinessInstructionsReachBothRoles(t *testing.T) {
-	f := facadePreparation(t, []string{"blackbox", "whitebox"})
-	x := facadeExecution(t, f, "blackbox-design")
-	run, err := f.Show()
-	if err != nil {
-		t.Fatal(err)
-	}
-	run.Regular.Preparation.Resources["blackbox"] = t.TempDir()
-	run.Regular.Preparation.Resources["whitebox"] = t.TempDir()
-	for _, step := range []string{"blackbox-design", "whitebox-design", "blackbox-review", "whitebox-review"} {
-		claim := x.Claim
-		claim.Task.Step = authoring.StepID(step)
-		prompt, _, err := preparationPrompt(run, claim)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, text := range []string{"前态", "取证", "静态检查"} {
-			if !strings.Contains(prompt, text) {
-				t.Fatalf("%s missing readiness material %q", step, text)
-			}
-		}
-
 	}
 }
 

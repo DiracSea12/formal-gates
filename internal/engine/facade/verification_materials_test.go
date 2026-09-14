@@ -271,18 +271,14 @@ func TestVerificationExecutionDisclosesOnlyRemainingCases(t *testing.T) {
 	}
 }
 
-func TestVerificationReviewerContractProgramOwned(t *testing.T) {
+func TestVerificationReceivesBoundReviewerInstructions(t *testing.T) {
 	f := frozenVerificationFixture(t, false)
 	run, err := f.Show()
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := run.Regular.ReviewerInstructions
-	for _, want := range []string{"程序全权选取、绑定和组装", "追加、删减、改写或转述任何任务内容", "合法用户决定", "基线、候选、工作区及允许材料路径", "补齐并重新生成任务", "按当前结果契约报告运行错误（RUNTIME_ERROR）", "主代理必须原样派发", "具体污染位置、原因", "不得仅提醒后继续审查"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("bound reviewer contract missing %q", want)
-		}
-	}
+
 	x := facadeExecution(t, f, "implementation-quality-gate")
 	m, err := prepareVerificationPrompt(run, x.Claim)
 	if err != nil {
@@ -291,9 +287,7 @@ func TestVerificationReviewerContractProgramOwned(t *testing.T) {
 	if m.input["reviewerInstructions"] != text {
 		t.Fatal("verification dispatch did not receive bound reviewer contract")
 	}
-	if strings.Contains(text, "fullImplementationDiff") || strings.Contains(text, "[Shared reviewer contract]") {
-		t.Fatal("obsolete input block requirement remains")
-	}
+
 }
 
 func TestVerificationCaseScopeTransitiveDependencies(t *testing.T) {

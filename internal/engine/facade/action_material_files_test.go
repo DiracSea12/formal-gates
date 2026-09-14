@@ -92,7 +92,7 @@ func TestActualStagePromptPathsReadOnly(t *testing.T) {
 	if err = json.Unmarshal(data, &run); err != nil {
 		t.Fatal(err)
 	}
-	run.Regular.ActionInstructions, err = loadActionInstructions("../../..")
+	run.Regular.ActionInstructions, err = loadActionInstructions(copyPromptPackage(t))
 	if err != nil {
 		t.Fatal(err)
 	}

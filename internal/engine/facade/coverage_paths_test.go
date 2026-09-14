@@ -34,7 +34,7 @@ func TestCoveragePathsScopeAndBinding(t *testing.T) {
 	git("commit", "-qm", "candidate")
 	candidate := git("rev-parse", "HEAD")
 	run := Run{Regular: &protocol.RegularState{BaseSnapshot: base}}
-	instructions, err := loadActionInstructions("../../..")
+	instructions, err := loadActionInstructions(copyPromptPackage(t))
 	if err != nil {
 		t.Fatal(err)
 	}

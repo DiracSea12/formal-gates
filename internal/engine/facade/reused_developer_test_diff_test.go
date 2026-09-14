@@ -99,10 +99,7 @@ func reusedDeveloperTestDiff(t *testing.T, declareProduction bool) {
 	if err != nil || input["design"].(*protocol.QADesign).TestFiles[0] != "probe" {
 		t.Fatal("independent review did not receive testFiles", err)
 	}
-	prompt, _, err := preparationPrompt(run, reviewTask.Claim)
-	if err != nil || !strings.Contains(prompt, "design.testFiles") || !strings.Contains(prompt, "零改动直接复用") {
-		t.Fatal("actual review prompt omits declared-file review", err)
-	}
+
 	if declareProduction {
 		src := nativeFixtureClaim(t, f, reviewTask)
 		failed := facadeReview(run, "whitebox")

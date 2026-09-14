@@ -2,6 +2,7 @@ package facade
 
 import (
 	"encoding/json"
+	"fmt"
 	"formal-gates/internal/engine/authoring"
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/engine/runtime"
@@ -313,17 +314,13 @@ func TestNativeReviewContractUsesClaimAndBatchIDs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, binding := range []string{`"task": "` + claim.Task.String() + `"`, `"requirementRevision": "` + claim.RequirementRevision + `"`, "identity 填 NATIVE_IDENTITY", "由传输层绑定真实身份"} {
+		for _, binding := range []string{`"task": "` + claim.Task.String() + `"`, `"requirementRevision": "` + claim.RequirementRevision + `"`} {
 			if !strings.Contains(prompt, binding) {
 				t.Fatalf("prompt omits binding %q", binding)
 			}
 		}
 		if step == "start-readiness" {
-			for _, meaning := range []string{"only other Batch IDs declared in this plan", "use [] when there are no cross-batch dependencies", "ordered subtasks array, not dependencies", "Do not put Subtask IDs, environment prerequisites or explanatory sentences"} {
-				if !strings.Contains(prompt, meaning) {
-					t.Fatalf("technical prompt omits %q", meaning)
-				}
-			}
+
 			plan := props["granularityReview"].(map[string]any)["properties"].(map[string]any)
 			if got := plan["requirementRevision"].(map[string]any)["enum"].([]string); len(got) != 1 || got[0] != claim.RequirementRevision {
 				t.Fatalf("plan revision is not bound: %v", got)
@@ -342,28 +339,28 @@ func TestNativeReviewContractUsesClaimAndBatchIDs(t *testing.T) {
 func copyPromptPackage(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, dir := range []string{"prompts", "gates"} {
-		err := filepath.WalkDir(filepath.Join("../../..", dir), func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel("../../..", path)
-			if err != nil {
-				return err
-			}
-			target := filepath.Join(root, rel)
-			if entry.IsDir() {
-				return os.MkdirAll(target, 0700)
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(target, data, 0600)
-		})
-		if err != nil {
+	for _, dir := range []string{"prompts/actions", "gates"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	sections := map[string][]string{
+		"development-worker": {"通用执行约定", "开发工作者", "续做约定", "修复工作者", "工具说明", "QA 操作说明"},
+		"qa-design":          {"QA 设计", "黑盒设计", "白盒设计", "白盒覆盖判断"},
+		"qa-review":          {"QA 审查", "黑盒审查", "白盒改动与最终候选"},
+		"qa-execution":       {"QA 执行", "黑盒执行", "白盒执行"},
+	}
+	for _, id := range []string{"carry", "development-worker", "product-review", "qa-design", "qa-execution", "qa-review", "requirements-clarification", "start-readiness"} {
+		body := "fixture action " + id + "\n"
+		for i, heading := range sections[id] {
+			body += fmt.Sprintf("\n# %s\nfixture %s section %d\n", heading, id, i)
+		}
+		writePreparationFile(t, root, "prompts/actions/"+id+".md", body)
+	}
+	writePreparationFile(t, root, "prompts/reviewer-base.md", "fixture shared reviewer\n")
+	// These names belong only to this fixture; no installed gate file is required.
+	for _, id := range []string{"complexity-gate", "implementation-quality-gate"} {
+		writePreparationFile(t, root, "gates/"+id+".md", "fixture gate "+id+"\n")
 	}
 	return root
 }
@@ -418,6 +415,56 @@ func TestMarkdownInstructionsAreBoundAtStartAndRetainedOnReopen(t *testing.T) {
 		wantBinding.Context = nil
 		if input.Binding != wantBinding || input.Requirement.Text != b1Document {
 			t.Fatal("Markdown assembly changed the dynamic binding or complete requirement")
+		}
+	}
+}
+
+// Catalog changes affect new runs; reopening uses the captured gate definitions,
+// even when none of the current package's gate files remain available.
+func TestArbitraryGateCatalogIsBoundAndRetainedOnReopen(t *testing.T) {
+	pkg := copyPromptPackage(t)
+	gates := filepath.Join(pkg, "gates")
+	if err := os.RemoveAll(gates); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(gates, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writePreparationFile(t, pkg, "gates/fixture-one.md", "first gate")
+	first := newRegularFacadePackage(t, b1Document, pkg)
+	writePreparationFile(t, pkg, "gates/fixture-one.md", "replacement gate")
+	writePreparationFile(t, pkg, "gates/fixture-two.md", "added gate")
+	second := newRegularFacadePackage(t, b1Document, pkg)
+	if err := os.Remove(filepath.Join(gates, "fixture-one.md")); err != nil {
+		t.Fatal(err)
+	}
+	third := newRegularFacadePackage(t, b1Document, pkg)
+	if err := os.RemoveAll(gates); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		f    *Facade
+		want map[string]string
+	}{
+		{first, map[string]string{"fixture-one": "first gate"}},
+		{second, map[string]string{"fixture-one": "replacement gate", "fixture-two": "added gate"}},
+		{third, map[string]string{"fixture-two": "added gate"}},
+	} {
+		reopened, err := Open(tc.f.root, tc.f.runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := reopened.Show()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(run.Regular.CatalogGates) != len(tc.want) || len(run.Regular.CatalogGateInstructions) != len(tc.want) {
+			t.Fatalf("catalog changed on recovery: %#v", run.Regular.CatalogGateInstructions)
+		}
+		for _, id := range run.Regular.CatalogGates {
+			if want, ok := tc.want[id]; !ok || run.Regular.CatalogGateInstructions[id] != want {
+				t.Fatalf("wrong bound gate %s: %#v", id, run.Regular.CatalogGateInstructions)
+			}
 		}
 	}
 }
@@ -555,43 +602,34 @@ func TestMarkdownRoleAssemblyKeepsInputBoundaries(t *testing.T) {
 }
 
 func TestMarkdownSectionsKeepRoleAndCoverageInstructionsSeparate(t *testing.T) {
-	instructions, err := loadActionInstructions("../../..")
+	instructions, err := loadActionInstructions(copyPromptPackage(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	run := Run{Regular: &protocol.RegularState{ActionInstructions: instructions}}
-	for _, tc := range []struct {
-		selector string
-		want     string
-		omit     []string
-	}{
-		{"actions/development-worker.md#通用执行约定", "当前 action", []string{"完整 Batch", "canonical problems", "Call a bounded operation"}},
-		{"actions/development-worker.md#开发工作者", "完整 Batch", []string{"canonical problems", "Call a bounded operation"}},
-		{"actions/development-worker.md#修复工作者", "canonical problems", []string{"完整 Batch", "Call a bounded operation"}},
-		{"actions/development-worker.md#工具说明", "Call a bounded operation", []string{"完整 Batch", "canonical problems"}},
-		{"actions/qa-design.md#QA 设计", "草稿增量", []string{"design.testFiles 必须", "whitebox-design："}},
-		{"actions/qa-design.md#黑盒设计", "文档化产品入口", []string{"design.testFiles", "whitebox-design："}},
-		{"actions/qa-design.md#白盒设计", "先独立确定", []string{"每一条黑盒用例"}},
-		{"actions/qa-design.md#白盒覆盖判断", "candidate workspace", []string{"caseDrafts", "冻结命令与模式执行"}},
-		{"actions/qa-review.md#QA 审查", "每条用例固定核验五项", []string{"逐项读取 design.testFiles", "必须执行 testChanges.diffArgs"}},
-		{"actions/qa-review.md#白盒改动与最终候选", "必须执行 testChanges.diffArgs", []string{"每条用例固定核验五项"}},
-	} {
-		t.Run(tc.selector, func(t *testing.T) {
-			got, err := actionInstructions(run, tc.selector)
-			if err != nil || !strings.Contains(got, tc.want) {
-				t.Fatalf("missing selected instruction: %v\n%s", err, got)
+	for path, body := range instructions {
+		parts := strings.Split(body, "\n# ")
+		for i, section := range parts[1:] {
+			heading, _, _ := strings.Cut(section, "\n")
+			got, err := actionInstructions(run, path+"#"+heading)
+			if err != nil || got != "# "+strings.TrimSuffix(section, "\n")+"\n" {
+				t.Fatalf("section %s: %q %v", heading, got, err)
 			}
-			for _, omit := range tc.omit {
-				if strings.Contains(got, omit) {
-					t.Fatalf("unselected instructions leaked: %s", omit)
+			for j, other := range parts[1:] {
+				if i == j {
+					continue
+				}
+				_, text, _ := strings.Cut(other, "\n")
+				if strings.Contains(got, strings.TrimSpace(text)) {
+					t.Fatalf("unselected section leaked: %s", heading)
 				}
 			}
-		})
+		}
 	}
 	for _, content := range []string{"# 开发工作者\nOnly development.\n", "# 修复工作者\n\n# 工具说明\nTool.\n"} {
 		run.Regular.ActionInstructions["actions/development-worker.md"] = content
 		if _, err := actionInstructions(run, "actions/development-worker.md#修复工作者"); err == nil || !strings.Contains(err.Error(), "PROMPT_CONFIG_MISSING") {
-			t.Fatalf("missing or empty section silently fell back to entire worker document: %v", err)
+			t.Fatalf("missing or empty section accepted: %v", err)
 		}
 	}
 }

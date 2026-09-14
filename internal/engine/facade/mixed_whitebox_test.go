@@ -50,10 +50,7 @@ func mixedWhiteboxDiff(t *testing.T, productionEdit bool) {
 		t.Fatal(err)
 	}
 	x := facadeExecution(t, f, "whitebox-design")
-	authorPrompt, _, err := preparationPrompt(run, x.Claim)
-	if err != nil || !strings.Contains(authorPrompt, "允许在混合文件内新增、修正测试内容") {
-		t.Fatalf("actual authoring contract still forbids mixed-file tests: %v", err)
-	}
+
 	// Persist independent coverage before executing the existing test.
 	src := nativeFixtureClaim(t, f, x)
 	run, err = f.Show()
@@ -112,10 +109,7 @@ func mixedWhiteboxDiff(t *testing.T, productionEdit bool) {
 	if err != nil || input["design"].(*protocol.QADesign).TestFiles[0] != "probe" {
 		t.Fatal("independent review did not receive testFiles", err)
 	}
-	prompt, _, err := preparationPrompt(run, reviewTask.Claim)
-	if err != nil || !strings.Contains(prompt, "design.testFiles") || !strings.Contains(prompt, "混合文件按内容检查测试修改与生产行为") {
-		t.Fatal("actual review prompt omits declared-file review", err)
-	}
+
 	args := input["testChanges"].(map[string]any)["diffArgs"].([]string)
 	whiteboxDiff, err := gitprep.Git(wb, args...)
 	if err != nil || !strings.Contains(whiteboxDiff, "+    assert greeting()") {

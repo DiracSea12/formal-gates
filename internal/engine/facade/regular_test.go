@@ -22,7 +22,7 @@ func newRegularFacade(t *testing.T) *Facade {
 
 func newRegularFacadeDocument(t *testing.T, document string, owner ...string) *Facade {
 	t.Helper()
-	return newRegularFacadePackage(t, document, "../../..", owner...)
+	return newRegularFacadePackage(t, document, copyPromptPackage(t), owner...)
 }
 
 func newRegularFacadePackage(t *testing.T, document, packagePath string, owner ...string) *Facade {

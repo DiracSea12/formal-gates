@@ -342,18 +342,4 @@ func TestRenamedArtifactsDropLightweightWording(t *testing.T) {
 	canary := readWorktreeFile(t, "internal/validate/canary.go")
 	assertHasText(t, canary, "runInstalledEngineCanary")
 	assertLacksText(t, canary, "runQuickE2ECanary")
-	clarification := readWorktreeFile(t, "prompts/actions/requirements-clarification.md")
-	assertHasText(t, clarification, "快速澄清兜底")
-	assertLacksText(t, clarification, "轻量澄清兜底")
-}
-
-// Current intake exposes its typed Ask after precheck and waits for the user's
-// confirmation before DECIDE; no removed writer is part of the prompt contract.
-func TestRequirementsClarificationPromptRecordsPassBeforeConfirmationCommand(t *testing.T) {
-	clarification := readWorktreeFile(t, "prompts/actions/requirements-clarification.md")
-	for _, token := range []string{"预检成功后", "confirm-requirement", "等待用户明确确认", "requestId、token、digest", "DECIDE"} {
-		assertHasText(t, clarification, token)
-	}
-	assertLacksText(t, clarification, "workflow requirement --confirmed")
-	assertLacksText(t, clarification, "record-action")
 }

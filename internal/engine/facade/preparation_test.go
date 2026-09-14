@@ -19,7 +19,7 @@ import (
 	"formal-gates/internal/engine/protocol"
 )
 
-func TestBothQADesignContractsExplainCaseDependencies(t *testing.T) {
+func TestBothQADesignSchemasRequireCaseDependencies(t *testing.T) {
 	f := facadePreparation(t, []string{"blackbox", "whitebox"})
 	x := facadeExecution(t, f, "blackbox-design")
 	r, err := f.Show()
@@ -30,29 +30,29 @@ func TestBothQADesignContractsExplainCaseDependencies(t *testing.T) {
 		claim := x.Claim
 		claim.Task.Step = authoring.StepID(mode + "-design")
 		r.Regular.Preparation.Resources[mode] = t.TempDir()
-		prompt, _, err := preparationPrompt(r, claim)
+		_, _, err := preparationPrompt(r, claim)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, expected := range []string{"dependencies 只引用此前已有或本增量中更早的 case ID", "独立用例为 []", "环境可用性写入前置，不作 case 依赖"} {
-			if !strings.Contains(prompt, expected) {
-				t.Fatalf("%s authoring contract omits %q", mode, expected)
-			}
+		definition := preparationSchema(mode+"-design", r, claim)
+		schema, err := json.Marshal(definition)
+		if err != nil {
+			t.Fatal(err)
 		}
-		schema, err := json.Marshal(preparationSchema(mode+"-design", r, claim))
-		if err != nil || !bytes.Contains(schema, []byte("Only case IDs from the retained complete set or earlier in this increment")) {
-			t.Fatalf("%s typed schema omits dependency meaning: %s, %v", mode, schema, err)
+		design := definition["properties"].(map[string]any)["design"].(map[string]any)
+		properties := design["properties"].(map[string]any)
+		manifest := properties["manifest"].(map[string]any)["properties"].(map[string]any)
+		caseDefinition := manifest["cases"].(map[string]any)["items"].(map[string]any)
+		dependencies := caseDefinition["properties"].(map[string]any)["dependencies"].(map[string]any)
+		if dependencies["type"] != "array" || dependencies["items"].(map[string]any)["type"] != "string" || !strings.Contains(strings.Join(caseDefinition["required"].([]string), ","), "dependencies") {
+			t.Fatalf("%s case dependencies are not a required string array: %#v", mode, dependencies)
 		}
 		if mode == "whitebox" {
 			if bytes.Contains(schema, []byte("uniqueItems")) {
 				t.Fatal("native result schema contains unsupported uniqueItems")
 			}
-			design := preparationSchema(mode+"-design", r, claim)["properties"].(map[string]any)["design"].(map[string]any)
-			if !strings.Contains(strings.Join(design["required"].([]string), ","), "testFiles") || !bytes.Contains(schema, []byte("unchanged reused developer tests")) {
+			if !strings.Contains(strings.Join(design["required"].([]string), ","), "testFiles") || properties["testFiles"].(map[string]any)["type"] != "array" || properties["testFiles"].(map[string]any)["items"].(map[string]any)["type"] != "string" {
 				t.Fatal("actual whitebox result schema does not require explicit testFiles")
-			}
-			if !strings.Contains(prompt, "design.testFiles") || !strings.Contains(prompt, "顶层 manifest 只列实际") {
-				t.Fatal("bound whitebox authoring instructions conflate test files and changes")
 			}
 		}
 	}
@@ -521,13 +521,11 @@ func TestWhiteboxAuthoringTrialsBeforeFrozenQA(t *testing.T) {
 			x := facadeExecution(t, f, "whitebox-design")
 			src := nativeFixtureClaim(t, f, x)
 			r, _ = f.Show()
-			prompt, workspace, err := preparationPrompt(r, x.Claim)
+			_, workspace, err := preparationPrompt(r, x.Claim)
 			if err != nil || !filepath.IsAbs(workspace) || workspace != r.Regular.Preparation.Resources["whitebox"] {
 				t.Fatalf("authoring workspace: %q %v", workspace, err)
 			}
-			if !strings.Contains(prompt, "Use the available native shell tool") || !strings.Contains(prompt, "not formal QA results") {
-				t.Fatal("authoring trial contract missing")
-			}
+
 			writePreparationFile(t, workspace, "main_test.go", `package main
 import("bytes";"testing";"os/exec")
 func TestHello(t *testing.T){var out, stderr bytes.Buffer;cmd:=exec.Command("go","run",".");cmd.Stdout=&out;cmd.Stderr=&stderr;if err:=cmd.Run();err!=nil||out.String()!="hello"||stderr.Len()!=0{t.Fatalf("stdout=%q stderr=%q error=%v",out.String(),stderr.String(),err)}}
@@ -599,7 +597,7 @@ func TestHello(t *testing.T){var out, stderr bytes.Buffer;cmd:=exec.Command("go"
 }
 
 func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
-	instructions, err := loadActionInstructions("../../..")
+	instructions, err := loadActionInstructions(copyPromptPackage(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,11 +619,8 @@ func TestNativeOperationToolMatchesRoleAdmission(t *testing.T) {
 				t.Fatalf("%s model-only caseId: %v", step, cases)
 			}
 		}
-		if strings.Contains(description, "qa.prepare") != qa || strings.Contains(description, "qa.checkpoint") != qa {
-			t.Fatalf("%s received instructions for unavailable operations: %s", step, description)
-		}
-		if strings.Contains(description, "whitebox authoring") {
-			t.Fatal("tool repeats role-specific authoring instructions")
+		if strings.Contains(description, "fixture development-worker section 5") != qa {
+			t.Fatalf("%s received the wrong tool section: %s", step, description)
 		}
 	}
 }

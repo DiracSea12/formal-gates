@@ -1021,9 +1021,19 @@ func TestWhiteboxPhase0Round12InstalledInventoryAndStableHelpStayWithinStageZero
 	for _, entry := range receipt.Entries {
 		entrySet[entry.Path] = true
 	}
-	for _, required := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "definitions/workflow.json", "references/requirements-precedence.md", "prompts/actions/qa-design.md", "gates/implementation-quality-gate.md", "internal/engine/facade/facade.go"} {
+	for _, required := range []string{"SKILL.md", "README.md", "README_EN.md", "formal-gates.manifest.json", "definitions/workflow.json", "references/requirements-precedence.md", "prompts/actions/qa-design.md", "internal/engine/facade/facade.go"} {
 		if !entrySet[required] {
 			t.Fatalf("installed package inventory omits %s", required)
+		}
+	}
+	// Inventory follows the discovered catalog, including added or replaced gates.
+	catalog, err := LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gate := range catalog.Gates {
+		if !entrySet["gates/"+gate.ID+".md"] {
+			t.Fatalf("inventory omits discovered gate %s", gate.ID)
 		}
 	}
 	inventory := string(round12ReadFile(t, filepath.Join(root, "references", "requirements-precedence.md")))

@@ -174,7 +174,7 @@ func startPlatformFixture(t *testing.T, a *fixtureRuntime, installationAlias ...
 		t.Fatal(err)
 	}
 	writePreparationFile(t, root, ".gates/config.json", string(config))
-	packageRoot, err := filepath.Abs("../../..")
+	packageRoot, err := filepath.Abs(copyPromptPackage(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,6 +35,18 @@ func TestGateDiscoveryIsLexicalAndFileDriven(t *testing.T) {
 	if got, want := removed.GateIDs(), []string{"middle", "z-last"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("removed gate order=%v", got)
 	}
+	// Replacement changes the next catalog without rewriting an already loaded one.
+	writeTestFile(t, filepath.Join(root, "gates", "middle.md"), "replacement body without any prescribed wording\n")
+	replaced, err := LoadPromptCatalog(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := removed.Gate("middle")
+	after, _ := replaced.Gate("middle")
+	if before.Content != "middle checks" || after.Content != "replacement body without any prescribed wording" {
+		t.Fatalf("replacement lost catalog snapshot: %#v %#v", before, after)
+	}
+
 }
 
 func TestPackageRouteCandidatesUsePromptCatalog(t *testing.T) {

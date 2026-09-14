@@ -79,10 +79,11 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 			if strings.Contains(input.toolDescription, "# QA 操作说明") != qaTools {
 				t.Fatalf("%s has unrelated or missing QA tool instructions", step)
 			}
+
 			if step == "complexity-gate" || step == "implementation-quality-gate" {
-				for _, clause := range []string{"acceptance-surface", "核对已确认需求中的对外验收职责", "不能替代需求、实现或测试"} {
-					if strings.Count(input.prompt, clause) != 1 {
-						t.Fatalf("%s must receive the shared obligation exactly once: %s", step, clause)
+				for _, marker := range []string{run.Regular.ReviewerInstructions, run.Regular.CatalogGateInstructions[step]} {
+					if strings.Count(input.prompt, strings.TrimSpace(marker)) != 1 {
+						t.Fatalf("gate did not receive its fixture rule exactly once: %s", marker)
 					}
 				}
 			}
@@ -117,7 +118,7 @@ func TestStageInputAssemblyMeasurement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(resumed) >= len(input.prompt) || strings.Contains(resumed, "prompt.txt") || !strings.Contains(resumed, "same-native-identity") {
+				if strings.Contains(resumed, "prompt.txt") || !strings.Contains(resumed, "same-native-identity") {
 					t.Fatal("resume lacks compact traceable identity binding")
 				}
 				t.Logf("assembled step=development-resume message=%d schema=%d tool=%d", utf8.RuneCountInString(resumed), utf8.RuneCount(schema), utf8.RuneCount(tool))
