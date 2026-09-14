@@ -20,7 +20,8 @@ func (m *nativePromptMaterial) bindFiles(job string, requirement protocol.Requir
 		m.input["requirement"] = map[string]any{"path": filepath.Join(job, "requirement.md"), "revision": requirement.Revision, "confirmed": requirement.Confirmed}
 	}
 	for key, name := range map[string]string{
-		"design": "design.json", "previousDesign": "previous-design.json",
+		"developmentIncrement": "development-increment.json",
+		"design":               "design.json", "previousDesign": "previous-design.json",
 		"previousDevelopmentResult": "previous-development.json",
 		"committedHandoffs":         "dependency-handoffs.json",
 		"existingTestEvidence":      "existing-test-evidence.json",

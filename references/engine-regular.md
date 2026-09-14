@@ -1213,6 +1213,12 @@ Ask 的 `impactItems` 枚举其他已完成批次、已有 QA 设计/审查及�
 新 TaskKey。`regular.developmentIncrements` 保存原计划、前后 TaskKey 对应、用户决定、
 workspace view、需求 revision 和影响范围。旧 PASS、commit、attempt、cost 和 source
 原样保留在历史；开发从已有 development snapshot 继续，不把优化伪造为原批次 FAIL。
+开发首次派发、同身份续做及合法替换均按当前 TaskKey 选择这份确认记录，将当前批次的
+增量类型、原始 reason、确认事件及 revision 固定到动作的 `development-increment.json`，
+输入中的 `developmentIncrement.path` 直接指向该文件。已记录在 reason 中的依据、材料
+引用及本次执行约束原样传递，不从临时聊天推断，也不复制其他增量、原计划或其他批次
+的处置清单。增量 TaskKey 缺少对应确认记录时，原生启动前报错；普通首次批次不要求
+增量记录。实际发送消息仍由既有 show 证据入口查看。
 未受影响的产品审、技术审和批次不重新执行；QA 的设计保留不等于新候选已执行 PASS。
 保留白盒测试时仅携带测试工件，不能把旧生产代码覆盖到新 development snapshot。
 新增或优化 Batch 的结果仍按正常 PREPARATION_RESULT 提交，由 engine 执行 commit/snapshot，

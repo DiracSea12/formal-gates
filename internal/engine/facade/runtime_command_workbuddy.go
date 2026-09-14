@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // workBuddyCommand builds the platform invocation from adapter-owned inputs.
@@ -66,17 +67,22 @@ func workBuddySessionCommand(executable, workspace, model, effort, identity stri
 }
 
 // workBuddyRoleTools applies the same authoring versus frozen execution boundary
-// as the existing native adapter. The allow list never exposes native delegation.
-func workBuddyRoleTools(cmd *exec.Cmd, step string) {
-	tools := "StructuredOutput"
-	switch nativeRoleAccess(step) {
-	case nativeWorkspaceWrite:
-		tools += ",Bash,Edit,Read"
-	case nativeReadOnly:
-		tools += ",Bash,Read,Glob,Grep"
-		// WorkBuddy's native dontAsk policy runs built-in safe commands (including
-		// git diff) and denies actions requiring approval. Never grant Bash through
-		// allowedTools: that would bypass its command-level permission checks.
+// as the existing native adapter. Preserve default tools and deny role-prohibited
+// operations; native permission checks still govern shell commands.
+func workBuddyRoleTools(cmd *exec.Cmd, step string, coverage ...bool) {
+	readOnlyCoverage := len(coverage) > 0 && coverage[0]
+	denied := []string{"Task", "Agent", "Workflow", "EnterWorktree"}
+	if readOnlyCoverage || nativeRoleAccess(step) != nativeWorkspaceWrite {
+		denied = append(denied, "Write", "Edit", "NotebookEdit", "EnterPlanMode", "ExitPlanMode")
+	}
+	if !readOnlyCoverage && nativeRoleAccess(step) == nativeOperationOnly {
+		denied = append(denied, "Bash")
+	}
+	if readOnlyCoverage || !nativeAllowsOperation(step) {
+		denied = append(denied, "mcp__formal-gates__formal_gates_operation")
+	}
+	if readOnlyCoverage || nativeRoleAccess(step) == nativeReadOnly {
+		// Do not pre-approve Bash: dontAsk must check each command natively.
 		for i := 1; i+1 < len(cmd.Args); i++ {
 			if cmd.Args[i] == "--permission-mode" {
 				cmd.Args[i+1] = "dontAsk"
@@ -84,16 +90,15 @@ func workBuddyRoleTools(cmd *exec.Cmd, step string) {
 			}
 		}
 		allowed := "StructuredOutput,Read,Glob,Grep"
-		if nativeAllowsOperation(step) {
+		if !readOnlyCoverage && nativeAllowsOperation(step) {
 			allowed += ",mcp__formal-gates__formal_gates_operation"
 		}
 		cmd.Args = append(cmd.Args, "--allowedTools", allowed)
-	case nativeOperationOnly:
-		tools += ",Read,Glob,Grep"
 	}
+	cmd.Args = append(cmd.Args, "--disallowedTools", strings.Join(denied, ","))
 	for i := 1; i+1 < len(cmd.Args); i++ {
 		if cmd.Args[i] == "--tools" {
-			cmd.Args[i+1] = tools
+			cmd.Args[i+1] = "default"
 			break
 		}
 	}

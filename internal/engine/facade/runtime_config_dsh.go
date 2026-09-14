@@ -11,13 +11,13 @@ var dshNativeOperationPlugin []byte
 
 // dshOperationPatch composes with the installed ACP profile. It uses DSH's own
 // tools registry and monotonic guard; no independent permission system is added.
-func dshOperationPatch(pluginPath, executable, root, runID, actionID, requestDirectory, step, description string, allowedTools []string) ([]any, error) {
+func dshOperationPatch(pluginPath, executable, root, runID, actionID, requestDirectory, step, description string, deniedTools []string) ([]any, error) {
 	for _, path := range []string{pluginPath, executable, root, requestDirectory} {
 		if !filepath.IsAbs(path) {
 			return nil, fmt.Errorf("DSH_CONFIG: native operation paths must be absolute")
 		}
 	}
-	if runID == "" || actionID == "" || allowedTools == nil {
+	if runID == "" || actionID == "" || deniedTools == nil {
 		return nil, fmt.Errorf("DSH_CONFIG: run, action and explicit native tool policy required")
 	}
 	tool := nativeOperationTool(step, description)
@@ -27,7 +27,7 @@ func dshOperationPatch(pluginPath, executable, root, runID, actionID, requestDir
 	return []any{
 		map[string]any{"insert": []any{map[string]any{
 			"id": "formal-gates-native-operation", "name": pluginPath,
-			"config": map[string]any{"executable": executable, "root": root, "runId": runID, "actionId": actionID, "requestDirectory": requestDirectory, "sourceInfoPath": filepath.Join(filepath.Dir(requestDirectory), "native-source.json"), "tool": tool, "allowedTools": append([]string{}, allowedTools...)},
+			"config": map[string]any{"executable": executable, "root": root, "runId": runID, "actionId": actionID, "requestDirectory": requestDirectory, "sourceInfoPath": filepath.Join(filepath.Dir(requestDirectory), "native-source.json"), "tool": tool, "deniedTools": append([]string{}, deniedTools...)},
 		}}},
 		map[string]any{"id": "agent-loop", "config": map[string]any{"agents": []any{}}},
 		map[string]any{"id": "acp", "inject": []string{"acpAppStartup", "formalGatesNativeReady"}},

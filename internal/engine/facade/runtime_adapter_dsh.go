@@ -48,21 +48,18 @@ func (dshRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
 	}
 	return nil
 }
-func dshRoleTools(step string, noTools bool) []string {
-	if noTools {
-		return []string{"Read", "read", "read_file", "Glob", "glob", "Grep", "grep", "list_directory"}
+
+// Native sandbox policy governs shell writes; only prohibited capabilities are
+// removed from the host's default tool set.
+func dshRoleDeniedTools(step string, coverage bool) []string {
+	denied := []string{"Task", "Agent", "subagent", "agent", "spawn_agent", "EnterWorktree"}
+	if coverage || nativeRoleAccess(step) != nativeWorkspaceWrite {
+		denied = append(denied, "Write", "write", "write_file", "Edit", "edit", "edit_file", "apply_patch")
 	}
-	read := []string{"Read", "read", "read_file", "Glob", "glob", "Grep", "grep", "list_directory"}
-	switch nativeRoleAccess(step) {
-	case nativeWorkspaceWrite:
-		return append(read, "Bash", "bash", "shell", "Write", "write", "write_file", "Edit", "edit", "edit_file", "apply_patch")
-	case nativeReadOnly:
-		return append(read, "Bash", "bash", "shell")
-	case nativeOperationOnly:
-		return read
-	default:
-		return []string{}
+	if !coverage && nativeRoleAccess(step) == nativeOperationOnly {
+		denied = append(denied, "Bash", "bash", "shell")
 	}
+	return denied
 }
 func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, root, runID, actionID, step string, noTools bool) (*exec.Cmd, error) {
 	if err := os.MkdirAll(filepath.Join(job, "native-requests"), 0700); err != nil {
@@ -76,12 +73,13 @@ func prepareDSHProcess(binding *protocol.HostRuntimeContext, job, workspace, roo
 	if err != nil {
 		return nil, err
 	}
-	patch, err := dshOperationPatch(pluginPath, executable, root, runID, actionID, filepath.Join(job, "native-requests"), step, "Use only the engine-issued operation boundary. Preserve each requestId across recovery.", dshRoleTools(step, noTools))
+	patch, err := dshOperationPatch(pluginPath, executable, root, runID, actionID, filepath.Join(job, "native-requests"), step, "Use only the engine-issued operation boundary. Preserve each requestId across recovery.", dshRoleDeniedTools(step, noTools))
 	if err != nil {
 		return nil, err
 	}
 	plugin := patch[0].(map[string]any)["insert"].([]any)[0].(map[string]any)
 	plugin["config"].(map[string]any)["exposeOperation"] = !noTools && nativeAllowsOperation(step)
+	plugin["config"].(map[string]any)["disableTools"] = step == "model-run"
 	mode := "read-only"
 	if !noTools && nativeRoleAccess(step) == nativeWorkspaceWrite {
 		mode = "workspace-write"

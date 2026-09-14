@@ -24,10 +24,11 @@ test('DSH native tool binds the role before ACP readiness', async () => {
     provide(name, value) { assert.equal(name, 'formalGatesNativeReady'); assert.equal(value, true); calls.push('ready') },
   }
   apply(ctx, { executable: '/engine', root: '/work', requestDirectory: '/requests', sourceInfoPath: '/native-source.json', runId: 'run', actionId: 'action',
-    allowedTools: ['Read'], tool: { name: 'formal_gates_operation', description: 'Bound operation', inputSchema: { type: 'object' } } })
+    deniedTools: ['Bash', 'subagent'], tool: { name: 'formal_gates_operation', description: 'Bound operation', inputSchema: { type: 'object' } } })
   assert.deepEqual(calls, ['register', 'guard', 'ready'])
   listeners.get('agent/created')({agent: {ctx: {tools: {restrict(value) { filter = value }}}}})
-  assert.deepEqual(filter.allow, ['formal_gates_operation', 'Read'])
+  assert.deepEqual(filter, { deny: ['Bash'] })
+  assert.equal(guard({name: 'WebSearch'}), undefined)
   assert.equal(guard({name: 'Read'}), undefined)
   assert.equal(guard({name: 'formal_gates_operation'}), undefined)
   assert.equal(typeof guard({name: 'subagent'}), 'string')
@@ -59,7 +60,7 @@ test('DSH installed SDK applies role restrictions before prompt assembly', {
     const bridge = ctx.plugin(nativePlugin, {
       executable: '/engine', root: directory, requestDirectory: directory,
       sourceInfoPath: join(directory, 'native-source.json'), runId: 'sdk-fixture', actionId: 'sdk-fixture',
-      exposeOperation: false, allowedTools: [],
+      exposeOperation: false, deniedTools: [], disableTools: true,
       tool: { name: 'formal_gates_operation', description: 'SDK fixture only', inputSchema: { type: 'object' } },
     })
     await bridge.inertia

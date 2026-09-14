@@ -124,15 +124,8 @@ func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !q.NoTools {
-		workBuddyRoleTools(cmd, string(claim.Task.Step))
-	} else {
-		for i := 1; i+1 < len(cmd.Args); i++ {
-			if cmd.Args[i] == "--tools" {
-				cmd.Args[i+1] = "Read,Glob,Grep,StructuredOutput"
-			}
-		}
-	}
+	workBuddyRoleTools(cmd, string(claim.Task.Step), q.NoTools)
+
 	prompt, err = workBuddyAuthorizeWorkspace(cmd, string(claim.Task.Step), workspace, prompt)
 	if err != nil {
 		return "", err

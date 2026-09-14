@@ -74,29 +74,25 @@ func (zcodeRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error 
 	}
 	return nil
 }
-func zcodeRoleTools(step string, coverage bool) []string {
-	if coverage {
-		return []string{"Read", "Glob", "Grep"}
+
+// zcodeRoleDeniedTools preserves the native default tool set. The host's plan
+// mode remains responsible for command-level read-only checks.
+func zcodeRoleDeniedTools(step string, coverage bool) []string {
+	denied := []string{"Agent", "Task", "Workflow", "ScheduleWakeup", "EnterWorktree", "ExitWorktree"}
+	if coverage || nativeRoleAccess(step) != nativeWorkspaceWrite {
+		denied = append(denied, "Write", "Edit", "NotebookEdit", "EnterPlanMode", "ExitPlanMode")
 	}
-	tools := []string{}
-	if nativeAllowsOperation(step) {
-		tools = append(tools, "formal_gates_operation", "mcp__formal-gates__formal_gates_operation")
+	if !coverage && nativeRoleAccess(step) == nativeOperationOnly {
+		denied = append(denied, "Bash")
 	}
-	switch nativeRoleAccess(step) {
-	case nativeWorkspaceWrite:
-		tools = append(tools, "Bash", "Read", "Write", "Edit", "Glob", "Grep")
-	case nativeReadOnly:
-		tools = append(tools, "Bash", "Read", "Glob", "Grep")
-	case nativeOperationOnly:
-		tools = append(tools, "Read", "Glob", "Grep")
+	if coverage || !nativeAllowsOperation(step) {
+		denied = append(denied, "formal_gates_operation", "mcp__formal-gates__formal_gates_operation")
 	}
-	return tools
+	return denied
 }
 
-// Plan mode applies ZCode's native per-command read-only checks to Bash.
-// The allowlist excludes file writers and tools that can leave plan mode.
 func zcodeRoleMode(step string, coverage bool) string {
-	if !coverage && nativeRoleAccess(step) == nativeReadOnly {
+	if coverage || nativeRoleAccess(step) == nativeReadOnly {
 		return "plan"
 	}
 	return "yolo"
@@ -112,7 +108,7 @@ func (zcodeRuntimeAdapter) turn(q nativeTurn) (string, error) {
 		}
 	}
 	mode := zcodeRoleMode(string(claim.Task.Step), coverage)
-	session, err := zcodeSessionRequest(claim.ActionID, workspace, identity, mode, zcodeRoleTools(string(claim.Task.Step), coverage))
+	session, err := zcodeSessionRequest(claim.ActionID, workspace, identity, mode, zcodeRoleDeniedTools(string(claim.Task.Step), coverage))
 	if err != nil {
 		return "", err
 	}
@@ -197,6 +193,8 @@ func (zcodeRuntimeAdapter) runModel(ctx context.Context, config settings.Values,
 		if err != nil {
 			return err
 		}
+		// A text-only model helper has no role tools or workspace operations.
+		session.Params["toolAllowlist"] = []string{}
 		binding := op.Request.Binding.Context
 		cmd, err := zcodeCommand(binding.Executable, binding.Environment[zcodeScriptBinding], job)
 		if err != nil {

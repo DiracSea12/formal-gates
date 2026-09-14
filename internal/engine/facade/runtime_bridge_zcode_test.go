@@ -87,25 +87,25 @@ func TestZCodeBoundToolsConfigurationAndUsage(t *testing.T) {
 				if mode != wantMode {
 					t.Fatalf("mode = %s, want %s", mode, wantMode)
 				}
-				tools := zcodeRoleTools(step, false)
+				tools := zcodeRoleDeniedTools(step, false)
 				requiredTools := []string{"Read", "Glob", "Grep", "Bash"}
 				if nativeAllowsOperation(step) {
 					requiredTools = append(requiredTools, "formal_gates_operation", "mcp__formal-gates__formal_gates_operation")
 				} else {
 					for _, forbidden := range []string{"formal_gates_operation", "mcp__formal-gates__formal_gates_operation"} {
-						if slices.Contains(tools, forbidden) {
+						if !slices.Contains(tools, forbidden) {
 							t.Fatalf("independent review received tool %s", forbidden)
 						}
 					}
 				}
 				for _, required := range requiredTools {
-					if !slices.Contains(tools, required) {
-						t.Fatalf("missing tool %s: %v", required, tools)
+					if slices.Contains(tools, required) {
+						t.Fatalf("required native default denied %s: %v", required, tools)
 					}
 				}
 				if wantMode == "plan" {
-					for _, forbidden := range []string{"Write", "Edit", "ApplyPatch", "EnterPlanMode", "ExitPlanMode"} {
-						if slices.Contains(tools, forbidden) {
+					for _, forbidden := range []string{"Write", "Edit", "EnterPlanMode", "ExitPlanMode"} {
+						if !slices.Contains(tools, forbidden) {
 							t.Fatalf("review exposes %s", forbidden)
 						}
 					}
@@ -172,7 +172,7 @@ func TestZCodeBoundToolsConfigurationAndUsage(t *testing.T) {
 					}
 					if method == "session/create" || method == "session/resume" {
 						want, _ := json.Marshal(tools)
-						got, _ := json.Marshal(r.Params["toolAllowlist"])
+						got, _ := json.Marshal(r.Params["toolDenylist"])
 						if !bytes.Equal(got, want) {
 							t.Fatalf("tools lost on %s: %s", r.ID, got)
 						}
@@ -193,7 +193,7 @@ func TestZCodeBoundToolsConfigurationAndUsage(t *testing.T) {
 func TestZCodeReviewModeFailureStopsInput(t *testing.T) {
 	for _, resume := range []string{"", "native"} {
 		t.Run(resume, func(t *testing.T) {
-			request, err := zcodeSessionRequest("request", "/work", resume, "plan", zcodeRoleTools("product-review", false))
+			request, err := zcodeSessionRequest("request", "/work", resume, "plan", zcodeRoleDeniedTools("product-review", false))
 			if err != nil {
 				t.Fatal(err)
 			}

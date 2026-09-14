@@ -12,10 +12,10 @@ export function apply(ctx, config) {
   for (const field of ['executable', 'root', 'requestDirectory', 'sourceInfoPath']) {
     if (!isAbsolute(config?.[field] ?? '')) throw new Error(`DSH_CONFIG: ${field} must be absolute`)
   }
-  if (!config.runId || !config.actionId || !config.tool || config.tool.name !== 'formal_gates_operation' || !Array.isArray(config.allowedTools)) {
+  if (!config.runId || !config.actionId || !config.tool || config.tool.name !== 'formal_gates_operation' || !Array.isArray(config.deniedTools)) {
     throw new Error('DSH_CONFIG: complete action and native tool configuration required')
   }
-  const allowed = new Set([...(config.exposeOperation === false ? [] : ['formal_gates_operation']), ...config.allowedTools])
+  const denied = new Set([...(config.exposeOperation === false ? ['formal_gates_operation'] : []), ...config.deniedTools])
   const unregister = ctx.tools.register({
     name: config.tool.name,
     description: config.tool.description,
@@ -42,9 +42,9 @@ export function apply(ctx, config) {
   })
   ctx.on('agent/created', ({ agent }) => {
     const names = new Set(ctx.tools.schemas(agent).map(tool => tool.name))
-    agent.ctx.tools.restrict({ allow: [...allowed].filter(name => names.has(name)) })
+    agent.ctx.tools.restrict(config.disableTools ? { allow: [] } : { deny: [...denied].filter(name => names.has(name)) })
   })
-  const unguard = ctx.tools.guard(execution => allowed.has(execution.name) ? undefined : 'Engine action does not grant this native tool')
+  const unguard = ctx.tools.guard(execution => config.disableTools || denied.has(execution.name) ? 'Engine action does not grant this native tool' : undefined)
   ctx.effect(() => () => { unguard(); unregister() })
   let activeSession, activeTurn
   ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {

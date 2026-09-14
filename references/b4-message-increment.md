@@ -422,3 +422,41 @@ reason 引用对应已核实问题；workspaceView 由 facade 取得。随后使
  development-increment 确认。后续继续 R4，开发全部完成后才开展 R5 独立调查。
 本轮最新用户决定是：Codex 可以实测，其他平台禁止实机测试及原生入口探测。
 这仅是本次执行约束，不修改产品能力或正式需求；此前“实测延期”表述以此决定为准。
+
+### B4 当前增量材料修复（基线 5acd3444）
+
+本次修复公共开发输入遗漏确认增量依据的问题。`preparationInput` 按当前 TaskKey
+查找已有 `DevelopmentIncrementReceipt.Tasks`，选择对应 Batch，将原始 reason、
+增量类型、确认事件和需求 revision 交给已有材料发布入口。首次派发、同身份续做和
+合法身份替换都使用这一路径。动作输入直接引用 `development-increment.json`，不把
+历史 prompt 当作材料，不复制原计划、其他增量或其他批次的处置映射。
+
+确认 reason 中已有的材料引用及执行约束随记录原样传递；不从聊天生成新的执行政策。
+缺少对应记录的增量在原生启动前拒收且不创建 job。普通批次不要求增量记录，名称中
+含有 `increment` 也不会因此误判。公开使用说明更新在现有 `engine-regular.md`。
+本次未修改进度、成本账本、QA 冻结规则或静态检查器；保留其既有实现和验证。
+
+新回归测试覆盖两个历史增量、其他未完成 Batch、首次/续做/替换、直接读取绑定文件、
+后续决定不改写已绑定文件、普通批次及缺记录的公共原生预检拒收。针对性检查通过：
+`TestDevelopmentIncrementMaterialFollowsIssuedTask`，以及 progress、等待计时、候选
+变化理由、前态可达性和安全静态检查的现有测试（facade 24.380s）。最终源码构建通过。
+这些是本地夹具验证，不是实机平台或独立正式 QA 的通过证据。
+
+完整检查使用 `GOCACHE=/tmp/formal-gates-b4-cache`，测试清除 `CODEX_HOME` 和
+`CODEX_CLI_PATH`；日志在 `/tmp/b4-current-*.log`。全量测试启动后补充的普通 Batch
+命名识别修正及对应测试已由上述最终针对性检查覆盖，最终二进制也已重新构建。
+完整检查已退出，实际结果如下：
+
+- `go test ./... -timeout 30m` 退出 1：CLI 的
+  `TestInstalledConsumerReadsBoundMaterialWithoutContext` 在安装 bootstrap 阶段报
+  `UNREGISTERED_INSTALL`，registry identity 不一致。其他包通过，包括 facade
+  590.624s、cost 1.217s。保留这次失败，不将整条命令改写为 PASS。
+- `go test -race ./internal/validate ./internal/cli` 退出 0（30.923s、133.543s），
+  包含该安装夹具。所有其他检查退出后，以 `-count=1` 单独复跑上述 CLI 用例也通过
+  （3.407s）。复验期间未修改文件；未修改安装代码，也不对首次失败根因作断言。
+- `go test -tags=phase0whitebox ./internal/validate` 通过（45.622s）；`go vet ./...`、
+  最终构建、package validate、portable canary、工作区及 cached diff 检查均通过。
+
+最终保留全量运行中其余包的有效结果，并使用最终针对性测试、CLI race 和失败用例的
+普通复验覆盖受影响部分，没有重复启动完整测试集。这里的 PASS 仅为开发本地验证；
+没有实机平台测试、原生平台入口探测、独立正式 QA、Seal 或发布接纳声明。

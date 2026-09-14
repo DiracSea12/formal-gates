@@ -1515,3 +1515,42 @@ QA 设计不再断言基线产品不存在或其文档必定过时：当前确�
 5. 当前待确认修订新增的开发期编写与任务定义字段强制限制不属于本次实现。未新增相应 API、规划器或聊天拦截；已有 reviewer-base 污染拒收规则继续保留，不能称为这些新限制已落实。
 
 结论：本次原任务的源码差异处置与提示词修正已交付，采用、等效、过期和纯格式项已逐项列明。源码层面的交付不代表上述正式动作或未实测验收已经完成。
+
+
+### B5 工具策略增量收尾（attempt-8，2026-09-14）
+
+本次绑定候选 `7c7dd5e9226af520ffc78b714b93b1708661db1f`，需求 revision
+`14bccf5f1ac00fd612385207078a03cb7133a9788360303da15cdf03320b59fe`。
+依据本次续做输入，仅完成 B5 剩余工具策略修正，保留前次 WorkBuddy/ZCode 修改。
+
+- WorkBuddy 保留 `--tools default`，通过 `--disallowedTools` 限制角色操作；
+  `--allowedTools` 仅作原生预批准，不是工具集合白名单。审查和覆盖判断均为 `dontAsk`，
+  不预批准 Bash，由原生权限规则判断只读命令。
+- ZCode 角色会话的创建、同身份恢复及工具绑定重载均使用 `toolDenylist`；
+  覆盖判断与审查使用 `plan`，保留 Bash。文本辅助使用空工具集。
+- DSH 将适配参数、既有插件和对应测试一起从 `allowedTools` 改为 `deniedTools`；
+  使用 SDK 已有 scoped `restrict({deny: ...})` 和 monotonic guard。覆盖判断沿既有
+  read-only sandbox 保留 shell，冻结 QA 执行仍禁止自由 shell。文本辅助的空工具集
+  单独保留，避免改为默认工具后让文本辅助获得工作区操作。
+- 默认工具限制、宿主权限模式和辅助模型边界属于平台适配；未新增配置、调度、权限系统、
+  安装路线或材料筛选逻辑。共享测试只验证共同角色合同，平台差异仍在适配文件内。
+  DSH 配置与插件必须同步，否则生成的配置无法满足插件启动校验。
+
+本地验证：受影响 Go 契约测试
+`go test ./internal/engine/facade -run 'Test(WorkBuddy|ZCode|DSH|NativeRoleAccessSharedPolicy|NativeCoverageKeepsDefaultReadCapabilities|NativePlatform)' -timeout 5m`
+通过（16.338s）；包含原生协议夹具的身份、续用、结果、计量、恢复及平台注册公共入口检查。
+Go 命令使用 `env -u CODEX_HOME -u CODEX_CLI_PATH GOCACHE=/tmp/formal-gates-b5-cache`。
+`env -u FORMAL_GATES_DSH_SDK_PACKAGE node --test internal/engine/facade/runtime_tools_dsh.test.mjs`
+通过 1 项，安装 SDK 项跳过 1 项。`go build -o bin/formal-gates ./cmd/formal-gates`、
+`go vet ./...` 和 `bin/formal-gates package validate --root .` 均退出 0。
+日志为 `/tmp/b5-attempt8-{targeted,vet,package,canary}.log`。
+此前有效全量、race、tagged 和 vet 记录保留在 `/tmp/b5-deny-{all,race,tagged,vet}.log`；
+本次只读复核其通过记录，没有把历史检查冒称为当前源码重跑。
+
+本 run 的最新执行约束禁止 WorkBuddy、ZCode、DSH 实机测试及原生入口探测；本轮没有
+启动这些入口，也未运行安装 SDK 测试。只读核对已安装 DSH SDK 的 restrict 实现确认
+支持 deny 参数，不是原生执行证据。三个宿主实机验收仍为延期、未验证，不能由协议
+夹具替代；该处置是本 run 约束，不是产品需求。后续批次、正式 QA 和接纳由 engine 决定。
+
+本轮 `bin/formal-gates canary portable --root . --format json`、`git diff --check`
+及 `git diff --cached --check` 均退出 0。portable canary 不代表三个宿主实机通过。
