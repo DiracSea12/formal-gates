@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"formal-gates/internal/engine/protocol"
@@ -87,5 +88,27 @@ func TestNativeSourceDistinctIdenticalTurnsRemainDistinct(t *testing.T) {
 	got, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(got, bytes.Repeat(content, 2)) {
 		t.Fatal("different native invocations were deduplicated by content instead of their journals", err)
+	}
+}
+
+func nativeCLIHelpFixture(t *testing.T, help string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell native CLI fixture")
+	}
+	path := filepath.Join(t.TempDir(), "native-help")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+help+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestNativeCLICapabilityProbeRejectsMissingRequiredOption(t *testing.T) {
+	binding := &protocol.HostRuntimeContext{Provider: "fixture", Executable: nativeCLIHelpFixture(t, "--resume"), Environment: map[string]string{}}
+	if err := probeNativeCLI(binding, []string{"--help"}, []string{"--resume"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := probeNativeCLI(binding, []string{"--help"}, []string{"--json-schema"}); err == nil {
+		t.Fatal("missing structured result capability accepted")
 	}
 }

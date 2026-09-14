@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +15,7 @@ import (
 // and observed identity callback. The public driver must claim first; this
 // transport neither schedules nor registers the resulting action verdict.
 
-func workBuddyCarrierWorkspace(identity, workspace string) (string, func(), error) {
+func workBuddyCarrierWorkspace(identity, workspace string, jobs ...string) (string, func(), error) {
 	if identity == "" || !filepath.IsAbs(workspace) {
 		return "", nil, fmt.Errorf("WORKBUDDY_CONFIG: bound identity and absolute workspace are required for native cwd")
 	}
@@ -27,6 +28,23 @@ func workBuddyCarrierWorkspace(identity, workspace string) (string, func(), erro
 	}
 	sum := sha256.Sum256([]byte(identity))
 	carrier := filepath.Join(base, fmt.Sprintf("%x", sum[:8]))
+	// Persist ownership in the existing invocation request before allocation, so
+	// cancellation and terminal cleanup can recover even if this turn crashes.
+	if len(jobs) > 0 {
+		path := filepath.Join(jobs[0], "session-request.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", nil, err
+		}
+		var request map[string]any
+		if err := json.Unmarshal(data, &request); err != nil {
+			return "", nil, err
+		}
+		request["resources"] = []string{carrier}
+		if err := writeJSONAtomic(path, request); err != nil {
+			return "", nil, err
+		}
+	}
 	// The action lock prevents two native owners for one identity. Recreate the
 	// deterministic carrier so a crashed prior turn cannot leak local files into
 	// the resumed turn while WorkBuddy still finds its session by the same short cwd.
@@ -55,7 +73,7 @@ func workBuddyAuthorizeWorkspace(cmd *exec.Cmd, step, workspace, prompt string) 
 	return fmt.Sprintf("Formal-Gates authorized workspace: %s\nThe native process cwd is only a short transport directory used to keep WorkBuddy session storage within filesystem limits. Use the authorized workspace above for every file or shell operation; do not create product files in the transport directory.\n\n%s", workspace, prompt), nil
 }
 
-func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
+func (workBuddyRuntimeAdapter) turn(q nativeTurn) (resultIdentity string, resultErr error) {
 	ctx := context.Background()
 	claim, resume, job, workspace, prompt, schema := q.Claim, q.Resume, q.Job, q.Workspace, q.Prompt, q.Schema
 	var err error
@@ -115,11 +133,11 @@ func (workBuddyRuntimeAdapter) turn(q nativeTurn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	carrier, cleanupCarrier, err := workBuddyCarrierWorkspace(identity, workspace)
+	carrier, _, err := workBuddyCarrierWorkspace(identity, workspace, job)
 	if err != nil {
 		return "", err
 	}
-	defer cleanupCarrier()
+	defer func() { resultErr = errors.Join(resultErr, cleanupNativeInvocationResources(job)) }()
 	cmd, err := workBuddySessionCommand(claim.Context.Executable, carrier, q.Settings.Model, q.Settings.ReasoningEffort, identity, resume, encodedSchema, configPath)
 	if err != nil {
 		return "", err

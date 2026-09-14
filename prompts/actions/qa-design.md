@@ -132,6 +132,9 @@ sharedSteps 的 command 使用与目标相同的 executable/args/expectedExitCod
 顶层 manifest 只列实际新增、修改、删除的路径；零改动复用时 manifest 为 []，testFiles
 仍列出复用的测试文件。两者不得混用，不为标记测试归属修改已有文件。
 
+文件改动影响的已有 case 也须列入本次 design.manifest.cases，即使定义未变，并提交新 reuse；
+未受影响的 case 省略，保留原证据。独立审查核对文件 diff 与该影响声明，不从自由 testRef 猜文件归属。
+
 **whitebox-design：** Use the available native shell tool in this assigned authoring workspace for discovery and trial execution, including newly written tests. Frozen QA operations are unavailable during authoring; trial results are preparation evidence, not formal QA results. For each added or changed case return reuse with caseId/testRef/coverageJudgment/procedure/observation/comparison/result EXECUTED_PASS or EXECUTED_FAIL. If a valid test reveals a production failure, return FAIL with actual evidence and a concrete message; do not weaken the test. Production fixes return to development. The intermediate commit awaits independent review of all testFiles and the complete whitebox diff before promotion.
 
 # 白盒覆盖判断

@@ -755,9 +755,18 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 					return reject(err)
 				}
 			}
+			editedCases := []string{}
+			for _, c := range result.Design.Manifest.Cases {
+				editedCases = append(editedCases, c.CaseID)
+			}
 			merged, ids, err := mergeQADesign(q.PreviousDesign, *result.Design, mode, s)
 			if err != nil {
 				return reject(err)
+			}
+			for i, id := range editedCases {
+				if bound, ok := ids[id]; ok {
+					editedCases[i] = bound
+				}
 			}
 			result.Design = &merged
 			for i := range result.Reuse {
@@ -781,7 +790,7 @@ func (e *Engine) acceptPreparation(s *State, result PreparationResult, revision 
 				if !allDevelopment(r) {
 					return reject(fmt.Errorf("development must complete before whitebox"))
 				}
-				if err := validateQAReuseIncrement(q.PreviousDesign, merged, result.Reuse, result.Manifest); err != nil {
+				if err := validateQAReuseIncrement(q.PreviousDesign, merged, result.Reuse, result.Manifest, editedCases...); err != nil {
 					return reject(err)
 				}
 				if err := validateReuse(result.Design.Manifest, mergeQAReuse(q.Reuse, result.Reuse, merged.Manifest), result.Status == "FAIL"); err != nil {

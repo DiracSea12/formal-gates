@@ -79,3 +79,38 @@ func testSavedCoverageRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestInterruptedDeveloperCollectsSourceBeforeResumeClaim(t *testing.T) {
+	f := facadePreparation(t, nil)
+	x := facadeExecution(t, f, "development-worker")
+	preparationSubmit(t, f, protocol.RegularEvent{Operation: "CLAIM", Claim: &x.Claim})
+	preparationSubmit(t, f, protocol.RegularEvent{Operation: "SOURCE", Source: &protocol.ExecutionSource{ActionID: x.Claim.ActionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: "native", Status: "RUNNING"}})
+	job := f.codexJob(x.Claim.ActionID)
+	if err := os.MkdirAll(job, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(filepath.Join(job, "process.json"), map[string]any{"actionId": x.Claim.ActionID, "identity": "native", "pid": os.Getpid(), "stopped": true}); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := f.Show()
+	x = run.Executions[x.Claim.ActionID]
+	if _, _, err := f.reconcileNative(x.Claim.ActionID, x, savedCoverageTransport{}); err == nil {
+		t.Fatal("missing old source accepted")
+	}
+	run, _ = f.Show()
+	if run.Executions[x.Claim.ActionID].ResumeCount != 0 {
+		t.Fatal("source error consumed resume claim")
+	}
+	// A source adapter can materialize this from the original native stream.
+	if err := os.WriteFile(filepath.Join(job, "stdout.jsonl"), []byte(`{"type":"session_meta","payload":{"id":"native"}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run, complete, err := f.reconcileNative(x.Claim.ActionID, x, savedCoverageTransport{})
+	if err != nil || complete {
+		t.Fatal("stopped invocation not ready for recovery", err)
+	}
+	current := run.Executions[x.Claim.ActionID]
+	if current.Source == nil || current.Source.Status != "STOPPED" || current.ResumeCount != 0 {
+		t.Fatal("source not settled before claim", current)
+	}
+}

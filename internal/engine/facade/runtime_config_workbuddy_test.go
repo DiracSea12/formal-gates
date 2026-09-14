@@ -59,10 +59,7 @@ func TestWorkBuddyCaptureBindsNativeProductFileWithoutCredentials(t *testing.T) 
 	if err := os.WriteFile(path, []byte(`{"authentication":{"type":"custom-token","attributes":{"token":"`+secret+`"}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	executable := nativeCLIHelpFixture(t, "--resume --json-schema stream-json --disallowedTools --permission-mode dontAsk plan --mcp-config")
 	adapter := workBuddyRuntimeAdapter{}
 	binding, err := adapter.capture(settings.Values{Native: map[string]string{"workbuddyExecutable": executable}})
 	if err != nil {

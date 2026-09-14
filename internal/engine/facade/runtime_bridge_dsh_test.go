@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"formal-gates/internal/engine/protocol"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,6 +81,23 @@ func TestDSHSessionLifecycleAndConfiguration(t *testing.T) {
 					t.Fatal("effort changed")
 				}
 			}
+		}
+	}
+}
+
+func TestDSHCapabilityProbeRequiresResumeAndCloseWithoutPrompt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell ACP fixture")
+	}
+	for _, capabilities := range []string{`{"resume":{},"close":{}}`, `{"close":{}}`} {
+		executable := filepath.Join(t.TempDir(), "dsh-probe")
+		script := "#!/bin/sh\nread request\n" + `case "$request" in *initialize*) ;; *) exit 9;; esac` + "\nprintf '%s\\n' '" + `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"sessionCapabilities":` + capabilities + "}}}'\n"
+		if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		err := probeDSHCapabilities(&protocol.HostRuntimeContext{Executable: executable})
+		if (err == nil) != (capabilities == `{"resume":{},"close":{}}`) {
+			t.Fatalf("capabilities %s: %v", capabilities, err)
 		}
 	}
 }

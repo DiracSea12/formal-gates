@@ -72,7 +72,7 @@ func (zcodeRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error 
 	} else if info, err := os.Stat(home); err != nil || !info.IsDir() {
 		return fmt.Errorf("ZCODE_CONFIG: original native home unavailable at %s", home)
 	}
-	return nil
+	return probeNativeCLI(binding, []string{binding.Environment[zcodeScriptBinding], "--help"}, []string{"app-server", "--resume", "--disallowedTools", "--mode", "plan"})
 }
 
 // zcodeRoleDeniedTools preserves the native default tool set. The host's plan

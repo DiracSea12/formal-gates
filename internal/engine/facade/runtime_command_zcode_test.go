@@ -50,10 +50,7 @@ func TestZCodeNativeCommandAndRequests(t *testing.T) {
 
 func TestZCodeNativeHomeBinding(t *testing.T) {
 	root, nativeHome := t.TempDir(), t.TempDir()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	executable := nativeCLIHelpFixture(t, "app-server --resume --disallowedTools --mode plan")
 	script := filepath.Join(root, "zcode.cjs")
 	path := filepath.Join(nativeHome, ".zcode", "cli", "config.json")
 	native := []byte(`{"opaqueNativeValue":"not-an-engine-field"}`)

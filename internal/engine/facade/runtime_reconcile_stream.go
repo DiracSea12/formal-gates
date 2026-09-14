@@ -86,6 +86,18 @@ func (f *Facade) reconcileNative(actionID string, x protocol.RegularExecution, a
 	if process.Stopped && process.ExitCode != nil {
 		return Run{}, false, fmt.Errorf("UNKNOWN: native answer unavailable after exit: %w", answerErr)
 	}
+	// Reconcile the stopped invocation before granting a resume claim. Stream
+	// hosts materialize their transcript through source; merely looking up its
+	// future path would lose this call and consume an unusable resume claim.
+	if x.Claim.Task.Step == "development-worker" {
+		path, err := adapter.source(identity, job, x.Claim.Context)
+		if err != nil {
+			return Run{}, false, err
+		}
+		if err := f.submitSource(protocol.ExecutionSource{ActionID: actionID, AttemptID: x.Claim.AttemptID, Provider: x.Claim.Provider, Identity: identity, TranscriptPath: path, Status: "STOPPED"}); err != nil {
+			return Run{}, false, err
+		}
+	}
 	run, err := f.Show()
 	return run, false, err
 }

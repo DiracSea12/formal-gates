@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -211,13 +210,7 @@ func mergeQAReuse(old, added []TestReuse, manifest coverage.AcceptanceManifest) 
 }
 
 // A retained trial is reusable only while its tested inputs remain unchanged.
-func validateQAReuseIncrement(previous *QADesign, merged QADesign, supplied []TestReuse, changedFiles []string) error {
-	old := map[string]coverage.AcceptanceCase{}
-	if previous != nil {
-		for _, c := range previous.Manifest.Cases {
-			old[c.CaseID] = c
-		}
-	}
+func validateQAReuseIncrement(previous *QADesign, merged QADesign, supplied []TestReuse, changedFiles []string, editedCases ...string) error {
 	records := map[string]bool{}
 	for _, r := range supplied {
 		if records[r.CaseID] {
@@ -225,10 +218,28 @@ func validateQAReuseIncrement(previous *QADesign, merged QADesign, supplied []Te
 		}
 		records[r.CaseID] = true
 	}
-	sharedChanged := previous == nil || digestOfCanonical(previous.Manifest.SharedSteps) != digestOfCanonical(merged.Manifest.SharedSteps)
+	// Reuse the same case/shared-step dependency comparison as review retention.
+	// File ownership is explicitly reviewed; testRef is free text, not a path
+	// grammar. With file edits, the submitted case increment declares their
+	// affected cases; omitted cases retain their prior evidence.
+	unchanged := map[string]bool{}
+	if previous != nil {
+		review := coverage.ReviewResult{}
+		for _, c := range previous.Manifest.Cases {
+			review.CaseDecisions = append(review.CaseDecisions, coverage.ReviewDecision{ID: c.CaseID})
+		}
+		for _, d := range ChangedQA(previous.Manifest, merged.Manifest, review).CaseDecisions {
+			unchanged[d.ID] = true
+		}
+	}
+	fileAffected := map[string]bool{}
+	if len(changedFiles) > 0 {
+		for _, id := range editedCases {
+			fileAffected[id] = true
+		}
+	}
 	for _, c := range merged.Manifest.Cases {
-		prior, exists := old[c.CaseID]
-		changed := !exists || !reflect.DeepEqual(prior, c) || len(changedFiles) > 0 || (sharedChanged && len(c.SharedSteps) > 0)
+		changed := !unchanged[c.CaseID] || fileAffected[c.CaseID]
 		if changed && !records[c.CaseID] {
 			return fmt.Errorf("changed whitebox case %s requires fresh actual test evidence", c.CaseID)
 		}

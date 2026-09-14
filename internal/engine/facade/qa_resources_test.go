@@ -14,7 +14,7 @@ import (
 )
 
 func TestQAResourcesIntentReleaseAndTerminalEvidence(t *testing.T) {
-	f := frozenVerificationCommandFixture(t, false, &coverage.Command{Executable: "sh", Args: []string{"-c", `test -d "$FORMAL_GATES_QA_WORK" && test "$TMPDIR" = "$FORMAL_GATES_QA_TMP" && test -d "$GOCACHE" && test -d "$GOMODCACHE" || exit 99
+	f := frozenVerificationCommandFixture(t, false, &coverage.Command{Executable: "sh", Args: []string{"-c", `test -d "$FORMAL_GATES_QA_WORK" && test "$TMPDIR" = "$FORMAL_GATES_QA_TMP" && test -d "$FORMAL_GATES_QA_CACHE" || exit 99
 printf delivered > "$FORMAL_GATES_QA_OUTPUT/result.txt"
 printf actual; printf failure >&2; exit 7`}})
 	x := facadeExecution(t, f, "blackbox-execution")
@@ -216,5 +216,26 @@ func TestQAResourcesAbortStopsInterruptedSharedPreparation(t *testing.T) {
 	}
 	if _, err := os.ReadFile(path); err != nil {
 		t.Fatal("failed preparation evidence lost", err)
+	}
+}
+
+func TestQAResourcesInheritToolCaches(t *testing.T) {
+	t.Setenv("GOCACHE", "/project/existing/build-cache")
+	t.Setenv("GOMODCACHE", "/project/existing/module-cache")
+	f := &Facade{stateDir: t.TempDir()}
+	for _, independent := range []bool{false, true} {
+		op := protocol.TaskOperation{ID: "cache-test", Preparation: []coverage.SharedStep{{Independent: independent}}}
+		env := strings.Join(f.operationEnvironment(op, ""), "\n")
+		for _, entry := range []string{"GOCACHE=/project/existing/build-cache", "GOMODCACHE=/project/existing/module-cache"} {
+			if !strings.Contains(env, entry+"\n") && !strings.HasSuffix(env, entry) {
+				t.Fatalf("tool cache overwritten: %s", entry)
+			}
+		}
+		if err := f.createOperationResources(op); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(f.operationResources(op).Cache, "go-build")); !os.IsNotExist(err) {
+			t.Fatal("generic resources created a language cache", err)
+		}
 	}
 }

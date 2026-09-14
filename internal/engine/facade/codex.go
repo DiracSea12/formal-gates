@@ -219,6 +219,10 @@ func (f *Facade) finishNativeCancellation(id, reason string) error {
 	if err != nil {
 		return err
 	}
+	if err := cleanupNativeInvocationResources(job); err != nil {
+		release()
+		return err
+	}
 	collectErr := func() error {
 		defer release()
 		current, err := f.Show()

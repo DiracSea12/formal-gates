@@ -20,10 +20,7 @@ func TestWorkBuddyNativeHomeDoesNotMoveEngineInstallation(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(engineHome, "config"))
 	t.Setenv("WORKBUDDY_CONFIG_DIR", "")
 	t.Setenv("ACC_PRODUCT_CONFIG_PATH", "")
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	executable := nativeCLIHelpFixture(t, "--resume --json-schema stream-json --disallowedTools --permission-mode dontAsk plan --mcp-config")
 	product := filepath.Join(nativeHome, ".workbuddy", "cache", "acc-product-config-v3.json")
 	for _, path := range []string{filepath.Dir(product), filepath.Join(project, ".gates")} {
 		if err := os.MkdirAll(path, 0700); err != nil {

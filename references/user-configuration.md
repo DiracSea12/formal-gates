@@ -105,13 +105,10 @@ ZCode/DSH 显式模型选择沿原生当前 provider；无法观察 provider 时
 ### 工具边界与恢复
 
 开发/返修/白盒设计按角色获得本地作者工具；读者只获得读工具；产品审查、启动就绪及
-冻结 QA 不开放本地作者工具。QA 与嵌套模型继续走引擎授权任务操作。白盒覆盖判断先执行
-无工具回合，结果提交成功后才开放作者工具；中断时复用保存的覆盖结果。
-WorkBuddy 使用进程级 bypassPermissions、明确角色工具列表、严格单个 MCP 配置并禁用
-继承设置/hooks。其原生 JSON-schema 输出依赖 `StructuredOutput`；各角色保留这个只返回
-结构化结果的协议工具，不因此获得文件、命令、模型或委派能力。原生 success 若只返回
-普通工具调用文本而没有合法 JSON，仍不接纳为角色结果。ZCode 使用原生 yolo 模式与角色工具 allowlist；DSH 使用原生 agent 作用域
-工具限制及现有权限服务。没有另建权限框架。
+冻结 QA 不开放本地作者工具。白盒覆盖判断保留原生只读工作区工具与 shell，
+不开放写入或引擎任务操作；中断时复用保存的覆盖结果。WorkBuddy 的结构化输出
+依赖 `StructuredOutput`；它只返回结果，不授予文件或委派能力。工具映射和权限
+模式遵循下方唯一的平台能力合同。
 
 内部入口 `workflow drive --operation-mcp --action-id <id> --native-identity <id>`
 提供 stdio 工具服务；或 `--operation-native <request.json>` 处理单次直接工具请求。
@@ -160,14 +157,12 @@ settings、source/recovery、cost、lifecycle 和 hook 响应均从这一描述�
 
 | 平台提供 | 仅负责的内容 |
 |---|---|
-| `capture` / `validate` | 捕获并校验原生可执行文件、环境与平台配置；恢复仍使用原绑定 |
+| `capture` / `validate` | 捕获并校验原生可执行文件、环境与平台配置，执行无模型 CLI 能力检查；恢复仍使用原绑定 |
 | `turn(nativeTurn)` | 执行一个原生回合，处理本平台启动/续用/等待及原生结果；不判断下一阶段 |
 | `source` / `transcript` / `readIdentity` | 返回真实计量来源或解释已落盘身份，不接纳工作流结果 |
 | `probe(nativeProbe)` | 原生恢复查询的方法名、原始响应或真实错误；不自行批准替换或重试 |
-| `runModel` / `observeModel` | 本平台的无工具模型调用与已完成调用观察 |
 
-流式平台可嵌入 `streamRuntimeAdapter`，复用资源绑定、来源定位和默认来源采集；用 `runNativeStreamProcess` 保存进程与原始输出，以 `completeStreamModel`/
-`observeStreamModel` 处理已有模型回执。不复制这些公共实现，也不自建结果/成本 writer。
+流式平台可嵌入 `streamRuntimeAdapter`，复用资源绑定、来源定位和默认来源采集；用 `runNativeStreamProcess` 保存进程与原始输出，通过既有结果采集入口处理调用回执。不复制这些公共实现，也不自建结果/成本 writer。
 
 `nativeTurn` 只携带本次调用输入，不提供 `Facade`、`Run` 或可写工作流对象。宿主确认
 原生身份后调用 `Attached`，随后才提交模型输入；需要引擎任务工具时经 `Operation`

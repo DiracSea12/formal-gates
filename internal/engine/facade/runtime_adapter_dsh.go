@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"formal-gates/internal/engine/protocol"
 	"formal-gates/internal/settings"
@@ -46,7 +47,10 @@ func (dshRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) error {
 	if !filepath.IsAbs(binding.Environment["DSH_HOME"]) {
 		return fmt.Errorf("DSH_CONFIG: original DSH_HOME missing")
 	}
-	return nil
+	if err := probeNativeCLI(binding, []string{"--help"}, []string{"--profile", "--patch"}); err != nil {
+		return err
+	}
+	return probeDSHCapabilities(binding)
 }
 
 // Native sandbox policy governs shell writes; only prohibited capabilities are
@@ -163,4 +167,44 @@ func (dshRuntimeAdapter) readIdentity(job, action string) (string, error) {
 
 func (dshRuntimeAdapter) source(identity, job string, binding *protocol.HostRuntimeContext) (string, error) {
 	return appendStreamTranscript(job, identity, "native-events.jsonl", binding)
+}
+
+// ACP initialize advertises recovery and close without creating a session or
+// sending session/prompt. This catches a missing/changed native ACP profile
+// before an engine action is consumed.
+func probeDSHCapabilities(binding *protocol.HostRuntimeContext) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binding.Executable, "--profile", "acp")
+	isolateCodexProcess(cmd)
+	cmd.Env = os.Environ()
+	for name, value := range binding.Environment {
+		cmd.Env = replaceEnvironment(cmd.Env, name, value)
+	}
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	defer func() { _ = in.Close(); cancel(); _ = cmd.Wait() }()
+	_, raw, err := newACPClient(out, in).request(1, "initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}})
+	if err != nil {
+		return fmt.Errorf("DSH_CAPABILITY: initialize: %w", err)
+	}
+	var response struct {
+		Version      int `json:"protocolVersion"`
+		Capabilities struct {
+			Sessions map[string]json.RawMessage `json:"sessionCapabilities"`
+		} `json:"agentCapabilities"`
+	}
+	if json.Unmarshal(raw, &response) != nil || response.Version != 1 || response.Capabilities.Sessions["resume"] == nil || response.Capabilities.Sessions["close"] == nil {
+		return fmt.Errorf("DSH_CAPABILITY: ACP v1 session resume/close required")
+	}
+	return nil
 }

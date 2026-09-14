@@ -403,7 +403,7 @@ QA、门、repair、来源结算、Git 和最终命令。该记录证明实际 F
 | GIT_CLAIM | gitClaim | Git adapter 认领当前已签发副作用 |
 | GIT_RECEIPT | gitReceipt | Git adapter 实跑后的回执 |
 | DEVELOPER_RECOVERY | developerRecovery | adapter 对已停止开发会话的原生恢复观察 |
-| TASK_OPERATION_CLAIM | taskOperation | 原动作内部 model/声明 QA 操作准入 |
+| TASK_OPERATION_CLAIM | taskOperation | 原动作内部声明 QA 操作准入 |
 | TASK_OPERATION_RECEIPT | taskOperationReceipt | adapter 实际内部操作的观察回执 |
 
 正常原生执行使用 `workflow drive --action-id <id>`；续跑按原 claim 的 operation 使用
@@ -979,8 +979,7 @@ runId 和 expectedRevision 复制本次 show；binding 复制 `executions[action
 必须是已认领、已 attach、尚未结束且当前候选/需求/QA wave 仍有效的原动作。未签发、
 provider/payload/候选不符、超出该动作精确 case set、旧 revision、暂停/取消、重复认领及
 已完成步骤均在底层调用之前拒绝。每条内部请求沿用原 TaskKey、Attempt 和 guard；不创建
-新任务或自动增加额度。model 的原生 transcript 写入同一 cost 投影，kind=task-operation，
-以内部操作 ID 区分来源；不会变成新的派发 attempt。
+新任务或自动增加额度。
 
 QA 设计冻结完整步骤、前置和 oracle，不要求提前编写驱动脚本。case.command 可省略或为 null；
 原生设计 schema 用 null 表示由执行者实现批准步骤。已有适用命令可声明并随 case-set 冻结。
@@ -1066,9 +1065,9 @@ print(receipt['output'], receipt['exitCode'], receipt['workspace'])
   有 request.json、process.json、stdout.log、stderr.log，以及成功观察后的 observed.json。
 - Git 操作 ID/claim 在 `regular.preparation.operation`；完成观察保存在
   `.gates/engine/<run>/git-operations/<id 去掉 git:sha256:>.json`。
-- Codex 原生 transcript 路径由 SOURCE 或内部 model 回执返回。使用其 session_meta.id、
+- Codex 原生 transcript 路径由 SOURCE返回。使用其 session_meta.id、
   thread/turn ID 和 task_complete 计数；重复镜像按原生 ID 去重。记录调用前后的原生来源
-  集合，并使用独特的测试 prompt 标记关联本次 model 请求。仅统计本次已隔离输入。
+  集合，并使用独特的测试 prompt 标记关联本次原生请求。仅统计本次已隔离输入。
 
 目标程序的独立计数由其原生副作用确认。例如，对“在隔离仓库创建一个空 commit”的
 已声明 QA 目标，可冻结 `git -c core.hooksPath=/dev/null commit --allow-empty -m <独特标记>`。
@@ -1087,7 +1086,7 @@ receipt 的该内部 operation；以及终止 driver 的 PID/时间和上述原�
 可以用操作系统的进程/文件事件观察与终止能力捕获这个窗口；本版本没有公开的“停在
 receipt 前”开关，也不保证轮询必然命中。只观察到认领、attach、运行中或已有完整 receipt
 都不构成命中；未采到上述同时成立的原始证据就记录未命中，不推断成功。原生成功日志
-已落盘而 observed.json 尚无时，内部 model/目标操作的 resume 会依据原 process 完成
+已落盘而 observed.json 尚无时，目标操作的 resume 会依据原 process 完成
 记录、原生日志和输出文件恢复；证据不足维持 UNKNOWN。Git 恢复依据已存在的原生 commit
 trailer、父关系、manifest 与快照，不重复 commit。
 
@@ -1218,3 +1217,8 @@ PASS，也不会自动解除返修确认边界。继续提交 `REQUEST developme
 状态显示为 `SKIPPED`，不产生审查 PASS，也不能把跳过当作可继承的 PASS 证据。
 需求发生变化或该项显式重新审查后，旧跳过不继续生效。该入口不跳过 QA、门审，
 也不替代首次建立开发计划；最终报告须如实列出用户跳过的入口审查。
+
+白盒文件增量须在 `design.manifest.cases` 中列出实际受该文件修改影响的 case，
+即使其定义未变，并为它们提交新的 reuse。省略的 case 及未变化共享步骤的使用者
+保留原证据；独立白盒审查仍核对真实文件 diff 与该影响声明。testRef 是自由引用，
+引擎不从它推断语言或文件归属。

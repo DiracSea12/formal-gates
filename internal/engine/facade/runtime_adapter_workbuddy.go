@@ -85,9 +85,11 @@ func (workBuddyRuntimeAdapter) validate(binding *protocol.HostRuntimeContext) er
 		}
 	}
 	if path := binding.Environment["ACC_PRODUCT_CONFIG_PATH"]; path != "" {
-		return workBuddyProductConfigAvailable(path)
+		if err := workBuddyProductConfigAvailable(path); err != nil {
+			return err
+		}
 	}
-	return nil
+	return probeNativeCLI(binding, []string{"--help"}, []string{"--resume", "--json-schema", "stream-json", "--disallowedTools", "--permission-mode", "dontAsk", "plan", "--mcp-config"})
 }
 
 func workBuddyHomeAvailable(path string) error {

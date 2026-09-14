@@ -2,6 +2,7 @@ package facade
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"formal-gates/internal/coordination"
 	"formal-gates/internal/engine/protocol"
@@ -172,4 +175,29 @@ func (f *Facade) attachStreamIdentity(claim protocol.ExecutionClaim, identity st
 
 func (streamRuntimeAdapter) source(identity, job string, binding *protocol.HostRuntimeContext) (string, error) {
 	return appendStreamTranscript(job, identity, "stdout.jsonl", binding)
+}
+
+// Probe the native CLI without supplying a prompt or opening a model turn.
+// Platforms supply their own required advertised options; the common transport
+// only bounds the process and restores the captured environment.
+func probeNativeCLI(binding *protocol.HostRuntimeContext, args []string, required []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binding.Executable, args...)
+	isolateCodexProcess(cmd)
+	cmd.WaitDelay = time.Second
+	cmd.Env = os.Environ()
+	for name, value := range binding.Environment {
+		cmd.Env = replaceEnvironment(cmd.Env, name, value)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("NATIVE_CAPABILITY: %s CLI probe failed: %w", binding.Provider, err)
+	}
+	for _, capability := range required {
+		if !strings.Contains(string(output), capability) {
+			return fmt.Errorf("NATIVE_CAPABILITY: %s CLI does not advertise required %s", binding.Provider, capability)
+		}
+	}
+	return nil
 }

@@ -110,14 +110,6 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		x := run.Executions[id]
-		switch {
-		case x.Finished:
-			p.Completed++
-		case x.Claimed:
-			p.Running++
-		default:
-			p.NotStarted++
-		}
 		jobs := nativeProgressJobs(f.codexJob(id), x.ResumeCount)
 		currentJob := jobs[0]
 		for _, call := range jobs {
@@ -132,6 +124,20 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 			if call.expected {
 				currentJob = call
 			}
+		}
+		var nativeProcess codexProcess
+		data, processErr := os.ReadFile(filepath.Join(currentJob.job, "process.json"))
+		observed := processErr == nil && json.Unmarshal(data, &nativeProcess) == nil && nativeProcess.PID > 0
+		running := observed && !nativeProcess.Stopped && codexProcessAlive(nativeProcess.PID)
+		switch {
+		case x.Finished:
+			p.Completed++
+		case running:
+			p.Running++
+		case !observed && x.Identity == "" && x.Source == nil:
+			p.NotStarted++
+		default:
+			p.Blocked[id] = "native invocation stopped or unavailable; reconciliation pending"
 		}
 		if x.ResumeCount > 0 {
 			reason := "same-identity continuation; detailed reason unavailable"
@@ -196,19 +202,24 @@ func (f *Facade) ProgressSince(after uint64) (Progress, error) {
 		if x.Claimed && !x.Finished && !active {
 			job := currentJob.job
 			duration, source := operationDuration(job, now)
-			stage := "native wait"
-			if currentJob.coverage {
+			stage, status := "not started", "NOT_STARTED"
+			if running {
+				stage, status = "native wait", "RUNNING"
+			} else if observed || x.Identity != "" || x.Source != nil {
+				stage, status = "reconciliation pending", "BLOCKED"
+			}
+			if currentJob.coverage && running {
 				stage = "whitebox.coverage"
 			}
 			var process codexProcess
 			if data, err := os.ReadFile(filepath.Join(job, "process.json")); err == nil && json.Unmarshal(data, &process) == nil && process.Stopped {
-				stage = "result handling"
+				stage, status = "result handling", "PENDING"
 				if currentJob.coverage {
 					stage = "whitebox.coverage result handling"
 				}
 				duration, source = intervalDuration(process.CompletedAt, now.Format(time.RFC3339Nano), filepath.Join(job, "process.json")+" native completion to result handling observation")
 			}
-			p.Current = append(p.Current, OperationProgress{Candidate: x.Claim.Candidate, ActionID: id, Stage: stage, Status: "RUNNING", DurationMillis: duration, TimeSource: source, Evidence: job})
+			p.Current = append(p.Current, OperationProgress{Candidate: x.Claim.Candidate, ActionID: id, Stage: stage, Status: status, DurationMillis: duration, TimeSource: source, Evidence: job})
 		}
 	}
 	// Derive dependency and resource reasons through the existing pending view.

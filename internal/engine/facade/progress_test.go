@@ -1,6 +1,7 @@
 package facade
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -263,10 +264,16 @@ func TestProgressCoverageLifecycle(t *testing.T) {
 			t.Fatalf("invocation timing unavailable: %+v", p.Current)
 		}
 	}
-	check(0, nil, filepath.Join(job, "process.json"), job, "native wait")
+	check(0, nil, filepath.Join(job, "process.json"), job, "reconciliation pending")
 	write(coverage, "prompt.txt", "independent whitebox coverage input")
-	check(0, []string{"coverage.spawn"}, filepath.Join(coverage, "process.json"), coverage, "whitebox.coverage")
-	process := codexProcess{ActionID: action, StartedAt: time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)}
+	check(0, []string{"coverage.spawn"}, filepath.Join(coverage, "process.json"), coverage, "reconciliation pending")
+	processCommand := exec.CommandContext(context.Background(), "sleep", "30")
+	isolateCodexProcess(processCommand)
+	if err := processCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stopCodexProcess(processCommand.Process.Pid); _ = processCommand.Wait() })
+	process := codexProcess{PID: processCommand.Process.Pid, ActionID: action, StartedAt: time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)}
 	if err := writeJSONAtomic(filepath.Join(coverage, "process.json"), process); err != nil {
 		t.Fatal(err)
 	}

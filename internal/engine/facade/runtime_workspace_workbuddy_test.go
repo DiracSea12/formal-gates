@@ -94,3 +94,24 @@ func TestWorkBuddyAuthorizedWorkspaceUsesAddDirWithoutChangingTextOnlyRoles(t *t
 		})
 	}
 }
+
+func TestWorkBuddyCarrierRecordedBeforeAllocationAndRecovered(t *testing.T) {
+	job, workspace := t.TempDir(), t.TempDir()
+	if err := writeJSONAtomic(filepath.Join(job, "session-request.json"), map[string]any{"identity": "owned-carrier"}); err != nil {
+		t.Fatal(err)
+	}
+	carrier, _, err := workBuddyCarrierWorkspace("owned-carrier", workspace, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate loss of the turn's defer: the collector only has the request.
+	if err := cleanupNativeInvocationResources(job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(carrier); !os.IsNotExist(err) {
+		t.Fatal("interrupted carrier leaked", err)
+	}
+	if err := cleanupNativeInvocationResources(job); err != nil {
+		t.Fatal("cleanup is not replayable", err)
+	}
+}

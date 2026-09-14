@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -22,6 +24,15 @@ import (
 // Shared preparation is an observation of qa.prepare, not another task or
 // result ledger. Text-only steps are handed back for interpretation.
 func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOperation, result *protocol.TaskOperationReceipt) error {
+	// Text-only instructions do not change executable preparation inputs.
+	steps := op.Preparation[:0:0]
+	for _, step := range op.Preparation {
+		if step.Command != nil {
+			step.Procedure = ""
+			steps = append(steps, step)
+		}
+	}
+	op.Preparation = steps
 	var executable bool
 	independent := false
 	for _, step := range op.Preparation {
@@ -101,6 +112,16 @@ func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOpe
 	if independent {
 		keyInput.Independent = op.ID
 	}
+	// Each completed prefix is an existing shared preparation receipt. Later
+	// private or independent steps branch from it instead of rebuilding it.
+	var prefix protocol.TaskOperationReceipt
+	if len(op.Preparation) > 1 {
+		prior := op
+		prior.Preparation = op.Preparation[:len(op.Preparation)-1]
+		if err := f.prepareShared(ctx, run, prior, &prefix); err != nil {
+			return err
+		}
+	}
 	result.InputDigest = gitprep.Digest(keyInput)
 	result.SharedWorkspace = filepath.Join(f.stateDir, "resources", "qa-shared", strings.TrimPrefix(result.InputDigest, "sha256:"))
 	// Register the owned path before work begins. Recovery can reconcile the
@@ -163,7 +184,15 @@ func (f *Facade) prepareShared(ctx context.Context, run Run, op protocol.TaskOpe
 			return fmt.Errorf("EXTERNAL_CHANGED: repair inputs changed during shared preparation: %v", err)
 		}
 	}
+	if prefix.SharedWorkspace != "" {
+		if err := copyPreparationPrefix(prefix.SharedWorkspace, result.SharedWorkspace); err != nil {
+			return err
+		}
+	}
 	for i, step := range op.Preparation {
+		if prefix.SharedWorkspace != "" && i < len(op.Preparation)-1 {
+			continue
+		}
 		if step.Command == nil {
 			continue
 		}
@@ -207,4 +236,69 @@ func sharedArtifacts(root string, op protocol.TaskOperation) (map[string]string,
 		}
 	}
 	return result, nil
+}
+
+// Keep the new worktree's Git binding and copy the actual prepared tree,
+// including ignored build products. Declared artifacts alone need not include
+// intermediate files consumed by the next preparation step.
+func copyPreparationPrefix(source, target string) error {
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".git" {
+			if err := os.RemoveAll(filepath.Join(target, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if rel == ".git" || rel == ".qa-prepared.json" {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		destination := filepath.Join(target, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(destination, info.Mode().Perm())
+		}
+		if err := os.RemoveAll(destination); err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, destination)
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(out, in)
+		closeErr := out.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	})
 }

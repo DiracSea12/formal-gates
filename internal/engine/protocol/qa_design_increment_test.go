@@ -199,3 +199,13 @@ func TestQAIncrementAddsPrerequisiteWithoutReplacingOldCases(t *testing.T) {
 		t.Fatal("increment lost stable identity or prerequisite order")
 	}
 }
+
+func TestWhiteboxFileIncrementRetainsOmittedCaseEvidence(t *testing.T) {
+	prior := QADesign{Manifest: coverage.AcceptanceManifest{Cases: []coverage.AcceptanceCase{{CaseID: "a", TestRef: "arbitrary runner A"}, {CaseID: "b", TestRef: "arbitrary runner B"}}}}
+	if err := validateQAReuseIncrement(&prior, prior, nil, []string{"tests/a.py"}, "a"); err == nil {
+		t.Fatal("file-only edit retained affected evidence")
+	}
+	if err := validateQAReuseIncrement(&prior, prior, []TestReuse{{CaseID: "a"}}, []string{"tests/a.py"}, "a"); err != nil {
+		t.Fatal("unrelated case forced to rerun", err)
+	}
+}

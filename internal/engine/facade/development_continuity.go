@@ -25,10 +25,11 @@ func (f *Facade) observeNativeDeveloperRecovery(run Run, x protocol.RegularExecu
 	}
 	var data []byte
 	var err error
+	var job string
 	for {
-		job := f.codexJob(old.Claim.ActionID)
+		job = f.codexJob(old.Claim.ActionID)
 		if old.ResumeClaimed {
-			job = filepath.Join(job, "resume")
+			job = codexResumeJob(job, old.ResumeCount)
 		}
 		data, err = os.ReadFile(filepath.Join(job, "process.json"))
 		// An unavailable probe creates no model process. The next authorized
@@ -61,7 +62,7 @@ func (f *Facade) observeNativeDeveloperRecovery(run Run, x protocol.RegularExecu
 		return protocol.DeveloperRecovery{}, err
 	}
 	if old.Source == nil || old.Source.Status == "RUNNING" {
-		path, err := findBoundTranscript(old.Identity, old.Claim.Context)
+		path, err := adapter.source(old.Identity, job, old.Claim.Context)
 		if err != nil {
 			return protocol.DeveloperRecovery{}, err
 		}

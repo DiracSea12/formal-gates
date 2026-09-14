@@ -29,7 +29,7 @@ func (f *Facade) operationResources(op protocol.TaskOperation) protocol.TaskReso
 
 func (f *Facade) createOperationResources(op protocol.TaskOperation) error {
 	r := f.operationResources(op)
-	for _, p := range []string{r.Temp, r.Output, filepath.Join(r.Cache, "go-build"), filepath.Join(r.Cache, "go-mod")} {
+	for _, p := range []string{r.Temp, r.Output, r.Cache} {
 		if err := os.MkdirAll(p, 0700); err != nil {
 			return err
 		}
@@ -51,16 +51,8 @@ func (f *Facade) operationEnvironment(op protocol.TaskOperation, shared string) 
 		"FORMAL_GATES_QA_SHARED":        shared,
 		"TMPDIR":                        r.Temp, "TMP": r.Temp, "TEMP": r.Temp,
 	}
-	// Tests of cache isolation retain their declared real operation and ambient
-	// cache configuration. Ordinary operations share the run-owned tool cache.
-	independent := false
-	for _, step := range op.Preparation {
-		independent = independent || step.Independent
-	}
-	if !independent {
-		values["GOCACHE"] = filepath.Join(r.Cache, "go-build")
-		values["GOMODCACHE"] = filepath.Join(r.Cache, "go-mod")
-	}
+	// Tool caches belong to the project environment. Only the generic QA
+	// resource variables and temporary directory are owned by this operation.
 	env := []string{}
 	for _, entry := range os.Environ() {
 		if _, owned := values[strings.SplitN(entry, "=", 2)[0]]; !owned {
@@ -290,6 +282,30 @@ func (f *Facade) stopPreparationProcesses(job string) error {
 		}
 		if codexProcessAlive(p.PID) {
 			return fmt.Errorf("HOST_ACTION_RUNNING: preparation process stopping")
+		}
+	}
+	return nil
+}
+
+// Native invocation requests may own short transport directories outside the
+// run tree. Read their recorded paths, never infer a platform or a temp layout.
+func cleanupNativeInvocationResources(job string) error {
+	data, err := os.ReadFile(filepath.Join(job, "session-request.json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var request struct {
+		Resources []string `json:"resources"`
+	}
+	if err := json.Unmarshal(data, &request); err != nil {
+		return err
+	}
+	for _, path := range request.Resources {
+		if err := os.RemoveAll(path); err != nil {
+			return err
 		}
 	}
 	return nil

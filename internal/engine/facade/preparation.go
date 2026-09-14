@@ -480,6 +480,19 @@ func (f *Facade) cleanupPreparationResources(run Run) error {
 	}
 	defer unlock()
 
+	for id, x := range run.Executions {
+		for n := 0; n <= x.ResumeCount; n++ {
+			job := f.codexJob(id)
+			if n > 0 {
+				job = codexResumeJob(job, n)
+			}
+			for _, invocation := range []string{job, filepath.Join(job, "coverage")} {
+				if err := cleanupNativeInvocationResources(invocation); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if err := f.cleanupQAResources(run); err != nil {
 		return err
 	}

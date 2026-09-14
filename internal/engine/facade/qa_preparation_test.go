@@ -232,3 +232,25 @@ func TestQAFixtureBuildConsumesPreparedSource(t *testing.T) {
 		t.Fatal("build created workflow state")
 	}
 }
+
+func TestSharedPreparationReusesCommonPrefixWithDifferentTails(t *testing.T) {
+	f, action := operationFixture(t)
+	run, _ := f.Show()
+	q := operationRequest(t, f, action, "qa.prepare", "prefix")
+	counter := filepath.Join(t.TempDir(), "build-count")
+	build := coverage.SharedStep{ID: "build", Artifacts: []string{"product"}, Command: &coverage.Command{Executable: "sh", Args: []string{"-c", `printf built >> "$1"; printf original > product; rm -f main.go`, "build", counter}}}
+	for i, independent := range []bool{false, true} {
+		op := protocol.TaskOperation{ID: protocol.TaskOperationID(q) + string(rune('a'+i)), Request: q, Preparation: []coverage.SharedStep{build, {ID: "tail", Independent: independent, Command: &coverage.Command{Executable: "sh", Args: []string{"-c", `test ! -e main.go && test "$(cat product)" = original && printf tail > product`}}}}}
+		if err := os.MkdirAll(f.taskOperationDir(op.ID), 0700); err != nil {
+			t.Fatal(err)
+		}
+		var receipt protocol.TaskOperationReceipt
+		if err := f.prepareShared(context.Background(), run, op, &receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(counter)
+	if err != nil || string(data) != "built" {
+		t.Fatalf("common build repeated: %q %v", data, err)
+	}
+}
