@@ -15,9 +15,9 @@ import (
 // 插件：插件在 tools/pre-execute 上调用原生 `formal-gates hook decide`，并把
 // subagent/start、subagent/end 转发给 `formal-gates lifecycle capture`。
 // 插件文件写在已安装的 skill 目录内，home 级 `cordis.patch.yml` 用相对 specifier
-// 引用它。DSH 的 home patch 会以所选 profile 目录（`$DSH_HOME/profiles/<name>`）
-// 为解析基准，所以写 `../../skills/...`：任何机器、任何 profile 都会解析回
-// `$DSH_HOME/skills/...`，不携带用户名或盘符。插件不从 skillRoot 派生执行器，而是
+// 引用它。DSH 将插入项的相对路径锚定在 patch 文件所在目录，所以 home patch
+// 写 `./skills/...`：任何机器、任何 profile 都会解析回 `$DSH_HOME/skills/...`，
+// 不携带用户名或盘符。插件不从 skillRoot 派生执行器，而是
 // 按宿主平台解析用户级固定 stable launcher；patch 文件不落任何绝对路径。
 //
 // DSH 的 cordis.patch.yml 是机器级（home 级）补丁层，项目目录下的
@@ -27,7 +27,7 @@ import (
 const (
 	dshPluginEntryID = "formal-gates-dsh"
 	dshPluginFileRel = "plugin/formal-gates.mjs"
-	dshPluginRelName = "../../skills/formal-gates/plugin/formal-gates.mjs"
+	dshPluginRelName = "./skills/formal-gates/plugin/formal-gates.mjs"
 	dshPatchFileName = "cordis.patch.yml"
 )
 

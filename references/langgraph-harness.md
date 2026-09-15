@@ -174,7 +174,14 @@ macOS 上使用解析符号链接后的 TMPDIR，避免临时路径别名影响�
 
 ```sh
 .harness/venv/bin/python runtime/langgraph/tests/native_multihost.py   --provider dsh --out /absolute/new-validation-directory
+.harness/venv/bin/python runtime/langgraph/tests/native_multihost.py   --provider dsh --tools --out /absolute/new-tools-directory
 ```
+
+`--tools` 使用独立临时业务目录和随机标记，实际尝试原生写入、子代理写入、回环 HTTP 访问、
+只读写入拒绝及开发会话恢复。只读哨兵按字节核对；仍须结合原生事件证明子代理和拒绝确实发生，
+不能把文件未变化或模型自述当成工具验收。回环 HTTP 不代表外网访问已通过。
+该入口不自动批准原生权限、不设置免审批模式；遇到无头端口无法处理的交互如实记录阻塞。
+测试 MCP 必须先通过宿主自己的配置接入，并以服务端调用记录和原生对照验证，入口不会伪造或代装 MCP。
 
 原生样例的终态、角色数量和证据通过，不等于子代理、MCP、网络能力实际调用通过。
 深验必须对照同一宿主、同一配置、同一原生接入方式的基线，核对真实工具成功事件、
