@@ -90,48 +90,7 @@ def make_patch(directory: Path, workspace: str, access: str) -> Path:
     path = directory / 'profile.json'; atomic(path, patch); return path
 
 
-def decode_result(text: str) -> dict:
-    """Accept one object, optionally fenced; never choose between competing results."""
-    def unique(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise RuntimeBlocked(f'DSH_RESULT: duplicate JSON field {key}')
-            result[key] = value
-        return result
-    def nonfinite(value):
-        raise RuntimeBlocked(f'DSH_RESULT: non-finite number {value}')
-    body = text.strip()
-    try:
-        result = json.loads(body, object_pairs_hook=unique, parse_constant=nonfinite)
-    except json.JSONDecodeError as original:
-        fences = list(re.finditer(r'^```(?:json)?[ \t]*\r?\n(.*?)^```[ \t]*(?:\r?\n|\Z)',
-                                  body, re.MULTILINE | re.DOTALL | re.IGNORECASE))
-        if not fences and '```' not in body:
-            start = re.search(r'(?m)^[ \t]*\{', body)
-            if not start:
-                raise RuntimeBlocked('DSH_RESULT: no unambiguous result object') from original
-            decoder = json.JSONDecoder(object_pairs_hook=unique, parse_constant=nonfinite)
-            offset = start.start() + len(start[0]) - 1
-            try:
-                result, length = decoder.raw_decode(body[offset:])
-            except json.JSONDecodeError as exc:
-                raise RuntimeBlocked('DSH_RESULT: invalid result object') from exc
-            outside = body[:offset] + body[offset + length:]
-        else:
-            if len(fences) != 1 or body.count('```') != 2:
-                raise RuntimeBlocked('DSH_RESULT: final message is not one unambiguous JSON object') from original
-            match = fences[0]
-            outside = body[:match.start()] + body[match.end():]
-            try:
-                result = json.loads(match[1], object_pairs_hook=unique, parse_constant=nonfinite)
-            except json.JSONDecodeError as exc:
-                raise RuntimeBlocked('DSH_RESULT: invalid JSON result fence') from exc
-        if any(c in outside for c in '{}[]'):
-            raise RuntimeBlocked('DSH_RESULT: competing structured content outside result')
-    if not isinstance(result, dict):
-        raise RuntimeBlocked('DSH_RESULT: final result must be an object')
-    return result
+from .native_result import decode_result
 
 def observe(directory: Path, identity: str) -> dict:
     source = read(directory / 'native-source.json')
@@ -181,7 +140,8 @@ def reconcile_completed_output(directory: Path, process: dict) -> dict:
     error_path = directory / 'native-error.json'
     if process.get('exit_code') != 1 or process.get('error') or not error_path.exists():
         raise RuntimeBlocked('DSH_RECONCILE: not a completed formatting-only failure')
-    if read(error_path).get('error') != legacy_error:
+    original_error=read(error_path).get('error','')
+    if original_error != legacy_error and not original_error.startswith('RuntimeBlocked: NATIVE_RESULT:'):
         raise RuntimeBlocked('DSH_RECONCILE: failure is not eligible for formatting recovery')
     identity = read(directory / 'identity.json')
     request = read(directory / 'native-request.json')
@@ -193,7 +153,7 @@ def reconcile_completed_output(directory: Path, process: dict) -> dict:
     source = observe(directory, identity['identity'])
     source['selection'] = identity.get('selection', {})
     source['reconciliation'] = {'kind': 'completed-output-format', 'original_exit_code': 1,
-                                'original_error': legacy_error, 'new_model_calls': 0}
+                                'original_error': original_error, 'new_model_calls': 0}
     atomic(directory / 'source.json', source)
     return source
 
@@ -252,3 +212,10 @@ def main():
         atomic(directory/'native-error.json', detail)
         print(f'{type(exc).__name__}: {exc}',file=sys.stderr); return 1
 if __name__=='__main__': raise SystemExit(main())
+
+
+def capture_binding():
+    executable = shutil.which('dsh')
+    if not executable: raise RuntimeBlocked('DSH_UNAVAILABLE: dsh is not on PATH')
+    path = Path(executable).resolve()
+    return {'provider':'dsh','launch':{'executable':str(path)},'files':{str(path):file_proof(path)}}

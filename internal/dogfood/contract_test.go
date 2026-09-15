@@ -24,7 +24,7 @@ func TestSpecValidation(t *testing.T) {
 		name   string
 		change func(*Spec)
 	}{
-		{"version", func(s *Spec) { s.Version = 9 }}, {"provider", func(s *Spec) { s.Provider = "codex" }},
+		{"version", func(s *Spec) { s.Version = 9 }}, {"provider", func(s *Spec) { s.Provider = "unknown-host" }},
 		{"duplicate check", func(s *Spec) { s.Checks = append(s.Checks, s.Checks[0]) }},
 		{"traversal", func(s *Spec) { s.Checks[0].Dependencies = []string{"../state"} }},
 		{"glob", func(s *Spec) { s.Checks[0].Dependencies = []string{"src/**"} }},
@@ -195,5 +195,44 @@ func TestBridgeRejectsUnknownOperation(t *testing.T) {
 	var r map[string]any
 	if e := json.Unmarshal(out.Bytes(), &r); e != nil || r["ok"] != false {
 		t.Fatal(out.String())
+	}
+}
+
+// Host identity validation is shared with existing installation integration;
+// execution availability is owned by the driver registry, not the domain.
+func TestKnownHostDescriptorsAndSpec(t *testing.T) {
+	for _, provider := range []string{"dsh", "zcode", "codex", "cursor", "claude"} {
+		s := validSpec()
+		s.Provider = provider
+		if err := ValidateSpec(s); err != nil {
+			t.Fatalf("%s: %v", provider, err)
+		}
+	}
+	for _, provider := range []string{"unknown-host", "deepseek-harness", "z-code"} {
+		s := validSpec()
+		s.Provider = provider
+		if err := ValidateSpec(s); err == nil {
+			t.Fatalf("noncanonical/unknown %q accepted", provider)
+		}
+	}
+	var out bytes.Buffer
+	if code := Bridge(strings.NewReader(`{"operation":"host-descriptors","payload":{}}`), &out); code != 0 {
+		t.Fatalf("host catalog: %s", out.String())
+	}
+	var catalog struct {
+		OK    bool                               `json:"ok"`
+		Value []struct{ ID, InstallName string } `json:"value"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range catalog.Value {
+		if item.ID == "deepseek-harness" && item.InstallName == "dsh" {
+			found = true
+		}
+	}
+	if !catalog.OK || !found {
+		t.Fatalf("existing descriptor not reused: %s", out.String())
 	}
 }

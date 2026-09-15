@@ -16,7 +16,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from .graph import Flow
 from .infra import Bridge, DogfoodError, RuntimeBlocked, Store, atomic, git, read, run_lock, runtime_identity
-from .native_dsh import execute as native_execute
+from .native_hosts import adapter_for, host_catalog, normalize_provider
 
 BASELINE='517de91f1b480ec969bd91385c29ce38d8bc2841'
 
@@ -28,10 +28,14 @@ def binary_path():
     value=os.environ.get('FORMAL_GATES_DOGFOOD_BINARY')
     if not value: raise DogfoodError('Go driver binary is not bound')
     return str(Path(value).resolve())
-def doctor(root: Path):
+def doctor(root: Path, provider="dsh", model="", effort=""):
     path=root/'.dogfood'/'probes'/uuid.uuid4().hex
     path.mkdir(parents=True)
-    result=native_execute({'workspace':str(path),'access':'read-only'},path,probe=True)
+    adapter = adapter_for(normalize_provider(Bridge(binary_path()), provider))
+    binding = adapter.capture()
+    result=adapter.execute({'workspace':str(path),'access':'read-only','provider':adapter.name,
+                            'binding':binding, **binding['launch'], 'model':model, 'reasoning_effort':effort},path,probe=True)
+    result['binding'] = binding
     versions={name:importlib.metadata.version(name) for name in ['langgraph','langgraph-checkpoint','langgraph-checkpoint-sqlite']}
     report={'ok':True,'provider':result,'dependencies':versions,'evidence':str(path),'model_calls':0}
     atomic(path/'report.json',report);return report
@@ -49,10 +53,15 @@ def make_run(root: Path,project: Path,requirement: Path,checks: list,gates: list
     if len(body)>2*1024*1024: raise DogfoodError('Requirement exceeds 2 MiB')
     bridge=Bridge(binary_path())
     base=bridge.call('resolve-snapshot',{'root':str(project)})['candidate']
-    if provider=='dsh':
-        selected=selected or doctor(root)['provider']['selection']
-        model=model or selected.get('model','');effort=effort or selected.get('reasoning_effort','')
-        if not model: raise DogfoodError('Native DSH did not advertise a selected model')
+    provider=normalize_provider(bridge, provider)
+    if provider=='fixture' and not fixture: raise DogfoodError('Fixture workers require the labelled test/demo path')
+    binding=None
+    if provider!='fixture':
+        adapter_for(provider)  # Fail before creating a run for installation-only hosts.
+        if selected is None:
+            probe=doctor(root,provider,model,effort)['provider']; selected=probe['selection']; binding=probe['binding']
+        model=selected.get('model',model);effort=selected.get('reasoning_effort',effort)
+        if not model: raise DogfoodError(f'Native {provider} did not advertise a selected model')
     spec={'version':1,'project':str(project),'base':base,'requirement_digest':hashlib.sha256(body).hexdigest(),
           'checks':checks,'gates':gates,'provider':provider,'model':model,'reasoning_effort':effort,'repair_limit':repair_limit}
     validated=bridge.call('validate-spec',spec)
@@ -63,6 +72,7 @@ def make_run(root: Path,project: Path,requirement: Path,checks: list,gates: list
     directory.mkdir(parents=True,exist_ok=False)
     manifest={'run_id':run_id,'profile':'dogfood-v1','baseline':BASELINE,'created_at':time.time(),
               **validated,'runtime_identity':runtime_identity(root,binary_path()),'fixture':fixture}
+    if binding is not None: manifest['host_binding'] = binding
     policy = (root / 'prompts/reviewer-base.md').read_bytes()
     manifest['reviewer_policy_digest'] = hashlib.sha256(policy).hexdigest()
     (directory / 'reviewer-base.md').write_bytes(policy)
@@ -240,7 +250,7 @@ def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
                 raise
             return status_projection(store,app,config)
 
-def make_demo(root: Path,native=False):
+def make_demo(root: Path,native=False,provider='dsh'):
     directory=root/'.dogfood'/'samples'/(('native-' if native else 'fixture-')+uuid.uuid4().hex[:12]);directory.mkdir(parents=True)
     project=directory/'project';project.mkdir()
     subprocess.run(['git','init','--quiet',str(project)],check=True)
@@ -259,12 +269,14 @@ def make_demo(root: Path,native=False):
     checks=[{'id':'addition','argv':[sys.executable,'check_add.py'],'dependencies':['calculator.py','check_add.py']},
             {'id':'unchanged','argv':[sys.executable,'check_untouched.py'],'dependencies':['untouched.py','check_untouched.py']}]
     return make_run(root,project,requirement,checks,['complexity-gate','implementation-quality-gate'],
-                    provider='dsh' if native else 'fixture',fixture=not native)
+                    provider=provider if native else 'fixture',fixture=not native)
 
 def main():
     parser=argparse.ArgumentParser(prog='formal-gates dogfood',description='Optional LangGraph development driver, not the legacy formal Seal route')
     commands=parser.add_subparsers(dest='command',required=True)
-    commands.add_parser('doctor',help='Probe DSH without sending a model prompt')
+    commands.add_parser('hosts',help='List native execution adapters and existing host integrations')
+    health=commands.add_parser('doctor',help='Probe a native host without sending a model prompt')
+    health.add_argument('--provider',default='dsh'); health.add_argument('--model',default=''); health.add_argument('--reasoning-effort',default='')
     archive = commands.add_parser('archive', help='Verified ZIP of a terminal run; never deletes source')
     archive.add_argument('--run', required=True); archive.add_argument('--output', required=True)
     prune = commands.add_parser('prune', help='Preview terminal cleanup; --confirm deletes only after archive verification')
@@ -277,7 +289,7 @@ def main():
     adoption.add_argument('--from-runtime', required=True); adoption.add_argument('--to-runtime', required=True)
     adoption.add_argument('--reason', required=True)
     start=commands.add_parser('start');start.add_argument('--project',required=True);start.add_argument('--requirement',required=True);start.add_argument('--checks',required=True)
-    start.add_argument('--provider',choices=['dsh'],default='dsh');start.add_argument('--model',default='');start.add_argument('--reasoning-effort',default='')
+    start.add_argument('--provider',default='dsh',help='Execution host; use hosts to inspect registered adapters');start.add_argument('--model',default='');start.add_argument('--reasoning-effort',default='')
     start.add_argument('--gates',nargs='+',default=['complexity-gate','implementation-quality-gate']);start.add_argument('--repair-limit',type=int,default=2);start.add_argument('--run-id',default='')
     for name in ('show','resume','respond','cancel'):
         sub=commands.add_parser(name);sub.add_argument('--run',required=True)
@@ -285,11 +297,12 @@ def main():
             sub.add_argument('--decision',required=True);sub.add_argument('--revision',required=True);sub.add_argument('--interrupt',required=True)
         if name=='cancel':sub.add_argument('--confirm',action='store_true',required=True)
     demo=commands.add_parser('demo',help='Create isolated sample; fixture by default, --native uses real DSH')
-    demo.add_argument('--native',action='store_true');demo.add_argument('--approve-sample',action='store_true',help='Approve this command-created sample only; never bypass runtime or review blockers')
+    demo.add_argument('--provider',default='dsh'); demo.add_argument('--native',action='store_true');demo.add_argument('--approve-sample',action='store_true',help='Approve this command-created sample only; never bypass runtime or review blockers')
     args=parser.parse_args()
     try:
         root=package_root()
-        if args.command=='doctor':result=doctor(root)
+        if args.command=='hosts':result=host_catalog(Bridge(binary_path()))
+        elif args.command=='doctor':result=doctor(root,args.provider,args.model,args.reasoning_effort)
         elif args.command=='archive':
             from .retention import archive_run
             result=archive_run(args.run,args.output)
@@ -305,7 +318,7 @@ def main():
             directory=make_run(root,Path(args.project),Path(args.requirement),read(Path(args.checks)),args.gates,args.provider,args.model,args.reasoning_effort,args.repair_limit,args.run_id)
             result=run_graph(directory)
         elif args.command=='demo':
-            directory=make_demo(root,args.native);print(json.dumps({'created_run':str(directory)}),flush=True)
+            directory=make_demo(root,args.native,args.provider);print(json.dumps({'created_run':str(directory)}),flush=True)
             result=run_graph(directory)
             while args.approve_sample and result['interrupts']:
                 if len(result['interrupts'])!=1 or result['interrupts'][0]['request']['kind'] not in ('requirement','plan'):break

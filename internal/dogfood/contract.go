@@ -11,6 +11,8 @@ import (
 	"io"
 	"path"
 	"strings"
+
+	"formal-gates/internal/host"
 )
 
 const Version = 1
@@ -92,8 +94,11 @@ func ValidateSpec(s Spec) error {
 	if _, e := hex.DecodeString(s.RequirementDigest); e != nil {
 		return fmt.Errorf("invalid requirement digest")
 	}
-	if s.Provider != "dsh" && s.Provider != "fixture" {
-		return fmt.Errorf("unsupported provider %q", s.Provider)
+	if s.Provider != "fixture" {
+		descriptor, err := host.Lookup(s.Provider)
+		if err != nil || !descriptor.Installable || s.Provider != descriptor.InstallName {
+			return fmt.Errorf("unsupported or noncanonical provider %q", s.Provider)
+		}
 	}
 	if s.RepairLimit < 1 || s.RepairLimit > 100 {
 		return fmt.Errorf("repair_limit must be 1..100; exhaustion asks the user, never grants PASS")

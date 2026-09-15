@@ -9,6 +9,7 @@ import time
 from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, read
 
 from .feedback import BOUNDARY, task_input
+from .native_hosts import adapter_for
 
 ROLES = {
     "product-review": "Check the requirement for coherent scope and concrete acceptance. Do not implement.",
@@ -41,6 +42,8 @@ class Workers:
             latest = read(identity_receipt)
             if latest.get('workspace') and Path(latest['workspace']).resolve() != workspace.resolve():
                 raise DogfoodError('SESSION_BINDING: latest identity belongs to a different workspace')
+            if latest.get('provider', self.spec['provider']) != self.spec['provider']:
+                raise DogfoodError('SESSION_BINDING: provider changed')
             session = latest['identity']
             if not isinstance(session, str) or not session:
                 raise DogfoodError('SESSION_BINDING: latest identity is empty')
@@ -51,9 +54,9 @@ class Workers:
             result=self.fixture(role,workspace)
             source={'provider':'fixture','model_calls':0,'identity':'fixture-'+role}
         else:
-            if self.spec['provider']!='dsh': raise RuntimeBlocked('Unsupported native provider')
-            executable=shutil.which('dsh')
-            if not executable: raise RuntimeBlocked('DSH_UNAVAILABLE: executable not found')
+            adapter = adapter_for(self.spec['provider'])
+            binding = self.store.manifest.get('host_binding') or adapter.capture()
+            adapter.validate_binding(binding)
             materials=workspace/'.formal-gates-input'/key; materials.mkdir(parents=True,exist_ok=True)
             requirement=materials/'requirement.md'
             requirement_body = (self.store.directory/'requirement.md').read_bytes()
@@ -99,7 +102,7 @@ class Workers:
                            'retain and independently verify still-valid findings. Do not restart the run, replay already completed '
                            'side effects, or treat missing evidence as PASS. No prior chat is assumed.')
             directory=self.store.directory/'jobs'/key;directory.mkdir(parents=True,exist_ok=True)
-            native={'executable':executable,'workspace':str(workspace),'access':'workspace-write' if role in ('development','repair') else 'read-only',
+            native={'provider':adapter.name, 'binding':binding, **binding['launch'], 'workspace':str(workspace),'access':'workspace-write' if role in ('development','repair') else 'read-only',
                 'identity':session,'model':self.spec['model'],'reasoning_effort':self.spec['reasoning_effort'],'prompt':prompt,'schema':self.schema}
             path=directory/'native-request.json'
             if path.exists():
@@ -109,7 +112,7 @@ class Workers:
                 if {k:v for k,v in original.items() if k!='identity'}!={k:v for k,v in native.items() if k!='identity'}:
                     raise DogfoodError('native input changed for the same operation')
             else: atomic(path,native)
-            process=self.store.job(key,{'kind':'dsh','argv':[sys.executable,'-m','formal_gates_dogfood.native_dsh',str(directory)],
+            process=self.store.job(key,{'kind':'native','argv':[sys.executable,'-m','formal_gates_dogfood.native_entry',str(directory)],
                 'cwd':str(workspace),'stdin':'','environment':{'LANGSMITH_TRACING':'false','LANGCHAIN_TRACING_V2':'false'}})
             identity=directory/'identity.json'
             if identity.exists(): atomic(identity_receipt,read(identity))
@@ -118,9 +121,8 @@ class Workers:
                 if error_record.get('error_kind') == 'SESSION_UNAVAILABLE':
                     raise SessionUnavailable(error_record['error'], identity=error_record.get('identity', session),
                                              method=error_record.get('method', 'session/resume'), code=error_record.get('native_code'))
-                from .native_dsh import reconcile_completed_output
                 try:
-                    source = reconcile_completed_output(directory, process)
+                    source = adapter.reconcile(directory, process)
                     self.store.event('native-output-reconciled', role=role, operation=key,
                                      identity=source['identity'], new_model_calls=0)
                 except (DogfoodError, OSError, ValueError, KeyError) as exc:
@@ -128,6 +130,8 @@ class Workers:
                     self.store.put({'process':process,'error':error,'reconciliation_error':str(exc)})
                     raise RuntimeBlocked(f'NATIVE_BLOCKED: {error}. Evidence: {directory}') from exc
             result=read(directory/'answer.json');source={**read(directory/'source.json'),'job':key,'process':process}
+            if source.get('provider') != adapter.name:
+                raise RuntimeBlocked('NATIVE_BINDING: result provider differs from task')
             if handover:
                 source['handover'] = {'mode': 'new-session', 'previous_job': handover['previous_job'],
                                       'previous_identity': handover['previous_identity']}

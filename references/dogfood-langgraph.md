@@ -6,7 +6,7 @@ Go 产品的普通命令、构建和安装不需要 Python。不要把本工具�
 
 ## 能力与边界
 
-当前支持本地 Git、一个非分片任务、DSH 原生代理、产品与技术审、需求及计划确认、
+当前支持本地 Git、一个非分片任务、可选择的 DSH / ZCode 原生执行适配、产品与技术审、需求及计划确认、
 开发与基线 QA 覆盖设计/审查并行、候选提交、批准命令与两门并行、返修循环、证据保存和恢复。
 原生会话独立；开发返修续用其实际会话。图决定下一步，模型只返回当前角色的结果。
 
@@ -19,23 +19,90 @@ QA 代理审查其覆盖而不是交付完整增量测试用例体系；尚无�
 
 ## 设置（本机 macOS 已作为验证目标）
 
-要求已有 Go、Python 3.11+、uv，以及已经配置模型的 DSH。仅在独立开发工作树中执行：
+要求已有 Go、Python 3.11+、uv，以及已配置模型的所选宿主（DSH 或 ZCode）。仅在独立开发工作树中执行：
 
 ```sh
 ./scripts/dogfood setup
-./scripts/dogfood doctor
+./scripts/dogfood hosts
+./scripts/dogfood doctor --provider dsh
+./scripts/dogfood doctor --provider zcode
 ```
 
 setup 把锁定的 Python 依赖装在本工作树 `.dogfood/venv`，把 Go 开发 binary 构建在
 `.dogfood/bin/formal-gates`。不修改全局包、宿主配置、稳定 formal-gates 安装或用户付款渠道。
 LangGraph 及 SQLite 包版本固定在 `runtime/langgraph/requirements.lock`；不是每次启动联网更新。
-`doctor` 只做 DSH 原生初始化、建立/关闭探测会话，不发送模型 prompt；显示实际选中的模型与能力。
+`doctor --provider HOST` 只做所选宿主的原生初始化、建立/关闭探测会话，不发送模型 prompt；显示实际选中的模型、推理设置及执行文件绑定。注册或探测成功不替代真实执行验收。
 
 DSH 使用现有 ACP profile、凭据和模型。每次子进程通过局部 patch 使用原生只读/工作区写入
 sandbox，并由 DSH 自身的工具 guard/restrict 限制角色工具；不会启用副代理、旧流程 hook、
 用户额外 MCP 工具或更换模型。用量缺失明确为 null，不填零。
 
 目前实机目标是 macOS；没有宣称 Windows/Linux 安装、权限和取消行为已验证。
+
+## 已落地的 LangGraph 多宿主接入
+
+这部分已经是现有开发驱动的实现，不是后续 Go 引擎计划中的“再接第二个平台”。Go 开发应冻结
+本轮交付基线，复用它的宿主合同与回归；不继续把执行器写死为 DSH。当前所有角色仍由同一张
+LangGraph 图驱动，不是每个平台复制一套图、审批、返修或状态库。
+
+```sh
+# 名称和入口集成信息来自原有 Go internal/host 注册表。
+./scripts/dogfood hosts
+./scripts/dogfood doctor --provider zcode
+# 相同公开入口、不同宿主；该参数在创建 run 时绑定，不能在 resume 时偷换。
+./scripts/dogfood start --provider zcode --project /absolute/project \
+  --requirement /absolute/requirement.md --checks /absolute/checks.json
+./scripts/dogfood demo --native --provider zcode --approve-sample
+./scripts/dogfood demo --native --provider dsh --approve-sample
+```
+
+`hosts` 区分已有安装/hooks入口集成与实际执行适配。DSH、ZCode有本开发profile的执行适配；
+Claude Code、Codex、Cursor保留已有入口信息，但未在本轮冒称已实现其LangGraph原生worker。
+原名 `deepseek-harness`、`dsh` 和 `z-code` 等别名按既有注册表归一化；未知宿主和只有入口
+支持的宿主在新run/worker启动前明确拒绝。一个run绑定一个执行宿主和原生模型，不做自动价格路由、
+跨宿主热切换或静默模型替换。`fixture`只用于显式标记的测试/演示。
+
+`native_hosts.py`注册执行适配；`native_entry.py`运行单次原生调用；Workers继续负责统一任务、
+尝试、交接和Go结果资格校验。平台只负责执行、原生事实与结果材料，不拿图对象或改检查点。
+`native_result.py`共用严格结果解码；公共Store校验适配器输出的统一文件证明，不按DSH日志结构分支。
+新增适配只需新增对应模块及一项注册、配套合同/原生验证；图和工作流语义不必改动。
+
+### ZCode 的具体传输与权限
+
+ZCode使用已安装的原生app-server协议。默认通过PATH的node启动macOS应用内的
+`/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`；其他安装位置可显式设置
+`FORMAL_GATES_ZCODE_SCRIPT`。不改宿主全局配置、默认模型或付款渠道。
+
+保留原生Read/Glob/Grep。通用执行/改文件经单个 `workspace_command` MCP工具，复用现有
+`codex sandbox` 原生OS隔离（不调用Codex模型），限制为当前角色的只读或工作区写入，网络关闭。
+命令仅额外允许本次调用专有的临时/缓存子目录写入，不开放共享/tmp、用户HOME或控制目录；
+macOS先解析实际Git执行文件，避免系统xcrun包装器在隔离区反复写共享缓存。
+不向模型授予原生无限制Bash/Write/Edit、副代理、全局工作流或自动答复用户问题的工具。
+DSH原生sandbox及工具策略保持原样。多宿主不代表多操作系统：本轮实机范围是macOS。
+
+新会话在create时挂载角色工具，不执行“空会话close后再resume配置工具”的错误路径。
+原生完成必须同时匹配session、input、turn，不能用send accepted或模型散文PASS代替完成事件。
+失效会话和模型不可用分开分类；后者不会触发自动创建新身份。
+
+ZCode冷恢复可能需要完整的原生runtimeModel。恢复使用原会话绑定的相同provider/model与推理设置，
+从原生目录及已有CLI配置恢复同一连接的协议、endpoint和凭据引用；不根据模型名另选供应商。
+若原生catalog省略凭据，则仅在原生子进程临时环境内提供已有凭据，以env引用传入协议；
+不写入prompt、native-request.json、任务材料或结果证据，工作区命令子进程会剔除该变量。
+无法取得同一模型的必要配置时明确受阻，不能用另一模型凑通过。
+
+旧run继续使用保存的旧源码和二进制；本轮增加适配文件和更新Go bridge后，不得用新运行时
+强行接管旧manifest或修改其绑定摘要。测试/报告分别记录实机通过项和未覆盖范围。
+
+可复跑实机入口（会实际调用所选宿主模型）：
+
+```sh
+.dogfood/venv/bin/python runtime/langgraph/tests/native_multihost.py \
+  --provider zcode --out /absolute/new-zcode-evidence
+.dogfood/venv/bin/python runtime/langgraph/tests/native_multihost.py \
+  --provider dsh --out /absolute/new-dsh-evidence
+```
+
+两路调用完全相同的公开demo和图；源码只列两个已实现的执行宿主，不把可安装名单当执行名单。
 
 ## 一条命令演示
 

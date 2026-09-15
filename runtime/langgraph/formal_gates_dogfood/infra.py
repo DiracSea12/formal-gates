@@ -130,16 +130,11 @@ class Store:
         if 'process' in value:
             self.verify_process(value['process'])
         source = value.get('source', {})
-        if source.get('provider') == 'dsh':
+        if source.get('provider') not in (None, 'fixture'):
+            from .native_hosts import adapter_for
             self.verify_process(source['process'])
             directory = self.directory / 'jobs' / source['job']
-            proofs = source.get('files', {})
-            required = {'native-source.json', 'native-events.jsonl', 'answer.raw.txt', 'answer.json'}
-            if set(proofs) != required:
-                raise RuntimeBlocked('EVIDENCE_MISSING: native source proofs absent')
-            for name, proof in proofs.items():
-                if file_proof(directory / name) != proof:
-                    raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+            adapter_for(source['provider']).verify_source(directory, source)
         return value
 
     def event(self, event: str, **fields: Any) -> None:

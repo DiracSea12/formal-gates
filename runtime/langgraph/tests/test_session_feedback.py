@@ -152,7 +152,7 @@ class SessionFeedbackTests(unittest.TestCase):
         series = digest({'role': 'development', 'input': data, 'feedback': None, 'revision': self.manifest['revision']})
         receipt = self.directory / 'native-identities' / (series + '.json')
         atomic(receipt, {'identity': 'newer-replacement', 'workspace': str(self.project)})
-        with patch('formal_gates_dogfood.workers.shutil.which', return_value='/test/native-dsh'), \
+        with patch('formal_gates_dogfood.workers.shutil.which', return_value=os.sys.executable), \
              patch.object(self.store, 'job', side_effect=RuntimeBlocked('stop before native launch')):
             with self.assertRaises(RuntimeBlocked):
                 worker.run('development', self.project, data, session='older-lost-session', attempt=2)

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"formal-gates/internal/host"
 	"formal-gates/internal/validate"
 	"io"
 	"os/exec"
@@ -233,6 +234,12 @@ func Bridge(in io.Reader, out io.Writer) int {
 }
 func dispatch(e envelope) (any, error) {
 	switch e.Operation {
+	case "host-descriptors":
+		var q struct{}
+		if err := StrictDecode(e.Payload, &q); err != nil {
+			return nil, err
+		}
+		return host.All(), nil
 	case "schema":
 		var q struct{}
 		if err := StrictDecode(e.Payload, &q); err != nil {
