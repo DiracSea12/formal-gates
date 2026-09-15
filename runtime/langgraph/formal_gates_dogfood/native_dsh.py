@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from .infra import DogfoodError, RuntimeBlocked, atomic, read
+from .infra import DogfoodError, RuntimeBlocked, atomic, read, file_proof
 
 class Client:
     def __init__(self, argv: list[str], workspace: str, directory: Path):
@@ -22,6 +22,7 @@ class Client:
         self.trace = (directory / 'protocol.jsonl').open('a', encoding='utf-8')
         self.proc = subprocess.Popen(argv, cwd=workspace, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=self.err, text=True, bufsize=1)
+        atomic(directory / 'native-process.json', {'pid': self.proc.pid, 'pgid': os.getpgid(self.proc.pid) if os.name != 'nt' else None})
         self.messages = queue.Queue(); self.counter = 0
         self.reader = threading.Thread(target=self._read, daemon=True); self.reader.start()
     def _read(self):
@@ -98,16 +99,28 @@ def decode_result(text: str) -> dict:
     except json.JSONDecodeError as original:
         fences = list(re.finditer(r'^```(?:json)?[ \t]*\r?\n(.*?)^```[ \t]*(?:\r?\n|\Z)',
                                   body, re.MULTILINE | re.DOTALL | re.IGNORECASE))
-        if len(fences) != 1 or body.count('```') != 2:
-            raise RuntimeBlocked('DSH_RESULT: final message is not one unambiguous JSON object') from original
-        match = fences[0]
-        outside = body[:match.start()] + body[match.end():]
+        if not fences and '```' not in body:
+            start = re.search(r'(?m)^[ \t]*\{', body)
+            if not start:
+                raise RuntimeBlocked('DSH_RESULT: no unambiguous result object') from original
+            decoder = json.JSONDecoder(object_pairs_hook=unique, parse_constant=nonfinite)
+            offset = start.start() + len(start[0]) - 1
+            try:
+                result, length = decoder.raw_decode(body[offset:])
+            except json.JSONDecodeError as exc:
+                raise RuntimeBlocked('DSH_RESULT: invalid result object') from exc
+            outside = body[:offset] + body[offset + length:]
+        else:
+            if len(fences) != 1 or body.count('```') != 2:
+                raise RuntimeBlocked('DSH_RESULT: final message is not one unambiguous JSON object') from original
+            match = fences[0]
+            outside = body[:match.start()] + body[match.end():]
+            try:
+                result = json.loads(match[1], object_pairs_hook=unique, parse_constant=nonfinite)
+            except json.JSONDecodeError as exc:
+                raise RuntimeBlocked('DSH_RESULT: invalid JSON result fence') from exc
         if any(c in outside for c in '{}[]'):
-            raise RuntimeBlocked('DSH_RESULT: competing structured content outside result fence')
-        try:
-            result = json.loads(match[1], object_pairs_hook=unique, parse_constant=nonfinite)
-        except json.JSONDecodeError as exc:
-            raise RuntimeBlocked('DSH_RESULT: invalid JSON result fence') from exc
+            raise RuntimeBlocked('DSH_RESULT: competing structured content outside result')
     if not isinstance(result, dict):
         raise RuntimeBlocked('DSH_RESULT: final result must be an object')
     return result
@@ -145,7 +158,9 @@ def observe(directory: Path, identity: str) -> dict:
     result = decode_result(answer)
     atomic(directory / 'answer.json', result)
     return {'provider':'dsh','identity':identity,'native_turn':source['turn'],
-            'transcript':source.get('transcriptPath',''),'usage_evidence':usage or None}
+            'transcript':source.get('transcriptPath',''),'usage_evidence':usage or None,
+            'files': {name: file_proof(directory / name) for name in
+                      ('native-source.json', 'native-events.jsonl', 'answer.raw.txt', 'answer.json')}}
 
 
 def reconcile_completed_output(directory: Path, process: dict) -> dict:

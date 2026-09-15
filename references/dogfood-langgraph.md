@@ -126,7 +126,7 @@ LangGraph SQLite 是唯一流程状态；图中只存工件引用和当前必要
 不冒充已完成，也不盲目重发。原生 DSH 的 ACP `end_turn` 不足以判定成功，必须有绑定的
 原生 `turn/end: completed` 及合法最终结果。
 
-运行期间不要更新 driver 源码、依赖或重建 binary。每个 run 记录运行时摘要；不匹配就拒绝恢复，
+运行期间不要更新 driver 源码、依赖或重建 binary。每个 run 记录运行时摘要（包含实际审查规则），并保存绑定规则副本；不匹配就拒绝恢复，
 不自动迁移。当前版本要求保留原工作树与二进制，不声称实现了自动多版本部署。重新执行 setup
 会重建 binary，可能改变摘要；旧 run 的重读/恢复仍需其已绑定运行时，不能把重新 setup 当成恢复步骤。
 
@@ -191,3 +191,57 @@ git -C /absolute/run/directory/workspaces/development \
 该 run 的 `jobs/`。原始失败日志保留；成功不等价于完整 3.5c 的 QA/Seal，也不表示 Windows/Linux
 已实测。`.dogfood` 为本地开发内容，不进入不可变发布包的摘要扫描；真实包路径中的 symlink
 仍然拒绝。
+
+
+## 非正常路径修复与中途换会话
+
+用户确认必须携带当前 `--interrupt`，即使只有一个待确认项也不能省略。同一需求 revision
+可能对应需求确认、计划确认等不同对象；旧批准命令不能用在新确认点。`show` 通过 SQLite
+只读快照查询，不获取推进锁；它显示已持久化的进度，并不把“已签发”冒称为正在执行。
+
+检查执行的 stdout/stderr 保存内容摘要和大小；复用、缓存回执读取及最终资格判断重新核对原始
+证据。缺失或变化时阻塞，不能只凭元数据继承 PASS。开发或返修返回未解决的 FAIL/P1/P2 时进入
+明确处置，不能被后续检查或门审 PASS 覆盖掉。
+
+若真正的开发或审查执行被中断，先 `show` 确认对应运行错误。`retry` 仍按原会话恢复。
+确实需要全新执行会话时，在该错误的精确确认对象上显式选择：
+
+```sh
+./scripts/dogfood respond --run /absolute/run/directory \
+  --revision <current-revision> --interrupt <current-interrupt-id> \
+  --decision restart-session
+```
+
+这不是重建 run、换工作区或清除原结果。程序先检查旧调用已有退出回执且原生执行进程不再存活，
+再为同一角色提供已绑定需求、现有工作树、未提交 diff、原角色事件与工具记录。新原生会话使用
+新身份；结果记录指向前一次执行。无退出记录或旧执行者仍活着时拒绝启动第二个写入者。
+未接受的原发现只是部分进度，新审查者需要复核，不能将未完成审查当成 PASS。
+
+没有保存的模型思考无法恢复；证据超过当前 4 MiB 交接上限时明确要求处置，不悄悄截断后宣称
+完整接手。本实现不承诺 PID 复用、机器断电或宿主服务端失联情况下自动确定外部副作用完成情况。
+已有历史 run 不自动迁移到这个版本；须使用它绑定的旧运行时。`restart-session` 不是在途升级入口。
+
+### 可复跑的原生中断验收
+
+下列测试会真实调用 DSH；每项在两个函数/文件的前半段取证后，终止实际 DSH 执行进程与其后代，
+再通过同一 `Flow/run_graph` 的 `restart-session` 路径使用新会话继续。其他角色明确用夹具构造，
+并在目标角色完成后以测试中断停止，因此不冒充完整独立 QA 或正式 Seal。
+
+```sh
+PYTHONPATH="$PWD/runtime/langgraph" .dogfood/venv/bin/python \
+  runtime/langgraph/tests/native_partial_takeover.py development \
+  --out "$PWD/.dogfood/native-partial-development-new"
+PYTHONPATH="$PWD/runtime/langgraph" .dogfood/venv/bin/python \
+  runtime/langgraph/tests/native_partial_takeover.py review \
+  --out "$PWD/.dogfood/native-partial-review-new"
+```
+
+输出目录必须不存在。测试会保存中断前的文件摘要、公开部分发现、旧进程退出、旧/新会话身份、
+真实调用日志和独立断言。开发测试要求已完成文件保持不变，另一函数被补完；审查测试要求保留并
+复核第一处缺陷，再发现第二处，源文件不变。普通单元测试不会触发这些付费模型调用。
+
+
+本轮回归包括此前 15 项故障场景（修复后均通过）、39 项 Python 整套回归及证据丢失后显式重试的
+定向补测。开发和审查均在真实 DSH 执行中断后使用新原生会话验证。审查的“未完成”以已有部分
+公开发现但尚未给出最终结论为准；它不等于保证旧代理从未读取其他文件，新审查者也可必要地复核
+已有材料。原始模型回复、夹具自身的格式校正和测试停止点如实保留在本次开发证据中。

@@ -6,7 +6,7 @@ import signal
 import subprocess
 import sys
 import time
-from .infra import atomic, digest, read
+from .infra import atomic, digest, read, file_proof
 
 def main(directory: Path) -> int:
     request = read(directory / "request.json")
@@ -37,7 +37,9 @@ def main(directory: Path) -> int:
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     atomic(directory / "exit.json", {"exit_code": code, "error": error, "started_at": started,
-                                     "finished_at": time.time(), "request_digest": digest(request)})
+                                     "finished_at": time.time(), "request_digest": digest(request),
+                                     "streams": {name: file_proof(directory / name)
+                                                 for name in ('stdout.log', 'stderr.log')}})
     return 0
 
 if __name__ == "__main__":

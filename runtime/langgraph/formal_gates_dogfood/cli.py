@@ -1,6 +1,8 @@
 """Development-only CLI; all writes to workflow progress go through LangGraph."""
 from __future__ import annotations
 import argparse
+import contextlib
+import sqlite3
 import hashlib
 import importlib.metadata
 import json
@@ -61,6 +63,9 @@ def make_run(root: Path,project: Path,requirement: Path,checks: list,gates: list
     directory.mkdir(parents=True,exist_ok=False)
     manifest={'run_id':run_id,'profile':'dogfood-v1','baseline':BASELINE,'created_at':time.time(),
               **validated,'runtime_identity':runtime_identity(root,binary_path()),'fixture':fixture}
+    policy = (root / 'prompts/reviewer-base.md').read_bytes()
+    manifest['reviewer_policy_digest'] = hashlib.sha256(policy).hexdigest()
+    (directory / 'reviewer-base.md').write_bytes(policy)
     (directory/'requirement.md').write_bytes(body);atomic(directory/'manifest.json',manifest)
     return directory
 
@@ -77,6 +82,8 @@ def open_run(path: str | Path):
             raise DogfoodError('RUNTIME_CHANGED: use the bound runtime; transport fixes require explicit adopt-transport')
     if hashlib.sha256((directory/'requirement.md').read_bytes()).hexdigest()!=manifest['spec']['requirement_digest']:
         raise DogfoodError('Requirement bytes changed after confirmation binding')
+    if manifest.get('reviewer_policy_digest') != hashlib.sha256((directory/'reviewer-base.md').read_bytes()).hexdigest():
+        raise DogfoodError('Bound reviewer policy changed or is missing')
     bridge=Bridge(binary_path());checked=bridge.call('validate-spec',manifest['spec'])
     if checked['revision']!=manifest['revision']:raise DogfoodError('Spec revision does not match manifest')
     return root,Store(directory,manifest,bridge)
@@ -102,7 +109,7 @@ def adopt_transport(directory: Path, snapshot: Path, before: str, after: str, re
         def inventory(base):
             paths = [p for p in (base / 'runtime/langgraph/formal_gates_dogfood').glob('*')
                      if p.is_file() and p.suffix in ('.py', '.mjs')]
-            paths += [base / 'runtime/langgraph/requirements.lock', base / '.dogfood/bin/formal-gates']
+            paths += [base / 'runtime/langgraph/requirements.lock', base / '.dogfood/bin/formal-gates', base / 'prompts/reviewer-base.md']
             return {str(p.relative_to(base)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
         old, new = inventory(snapshot), inventory(root)
         allowed = {'runtime/langgraph/formal_gates_dogfood/' + p for p in ('native_dsh.py', 'workers.py', 'cli.py')}
@@ -149,8 +156,32 @@ def status_projection(store,app,config):
             'terminal':terminal,'stop_reason':state.get('stop_reason',''),
             'last_runner_error':read(failure_path) if failure_path.exists() else None}
 
+@contextlib.contextmanager
+def read_checkpointer(path: Path):
+    # Uses the pinned SqliteSaver serializer, not a second state implementation.
+    # No schema creation or write lock for a progress query.
+    connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True,
+                                 check_same_thread=False, timeout=5)
+    try:
+        connection.execute('PRAGMA query_only=ON')
+        tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {'checkpoints', 'writes'} <= tables:
+            raise DogfoodError('Checkpoint schema is not initialized')
+        connection.execute('BEGIN')
+        saver = SqliteSaver(connection)
+        saver.is_setup = True  # pinned sqlite checkpointer 3.1.1; setup otherwise writes DDL
+        yield saver
+    finally:
+        connection.rollback()
+        connection.close()
+
 def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
     root,store=open_run(directory);config={'configurable':{'thread_id':store.manifest['run_id']},'recursion_limit':10000}
+    if answer is not None and not interrupt_id:
+        raise DogfoodError('An exact interrupt ID is required; a revision alone cannot identify a user decision')
+    if not advance:
+        with read_checkpointer(store.directory/'checkpoints.sqlite') as saver:
+            return status_projection(store, Flow(store,root).build(saver), config)
     with run_lock(store.directory):
         with SqliteSaver.from_conn_string(str(store.directory/'checkpoints.sqlite')) as saver:
             app=Flow(store,root).build(saver)
@@ -161,7 +192,7 @@ def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
                 if answer is None:return current
                 if not isinstance(answer,dict) or set(answer)!={'decision','revision'}:
                     raise DogfoodError('Answer accepts only decision and revision; state/goto patches are not allowed')
-                chosen=[p for p in pending if p['id']==interrupt_id] if interrupt_id else pending
+                chosen=[p for p in pending if p['id']==interrupt_id]
                 if len(chosen)!=1:raise DogfoodError('Select exactly one current interrupt id')
                 item=chosen[0]
                 if answer['revision']!=item['request']['revision'] or answer['decision'] not in item['request']['choices']:
@@ -217,7 +248,7 @@ def main():
     for name in ('show','resume','respond','cancel'):
         sub=commands.add_parser(name);sub.add_argument('--run',required=True)
         if name=='respond':
-            sub.add_argument('--decision',required=True);sub.add_argument('--revision',required=True);sub.add_argument('--interrupt',default='')
+            sub.add_argument('--decision',required=True);sub.add_argument('--revision',required=True);sub.add_argument('--interrupt',required=True)
         if name=='cancel':sub.add_argument('--confirm',action='store_true',required=True)
     demo=commands.add_parser('demo',help='Create isolated sample; fixture by default, --native uses real DSH')
     demo.add_argument('--native',action='store_true');demo.add_argument('--approve-sample',action='store_true',help='Approve this command-created sample only; never bypass runtime or review blockers')

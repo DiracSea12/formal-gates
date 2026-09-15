@@ -64,15 +64,19 @@ class Flow:
     def development_workspace(self) -> Path:
         return self.store.clone(self.spec["project"], "development", self.spec["base"])
     def invoke_worker(self, role: str, state: State, workspace: Path, feedback=None, session="") -> tuple[str, dict]:
-        attempt = 0; continuation = 0
+        attempt = 0; continuation = 0; restart_session = False
         while True:
             key = {"run_id": state["run_id"], "round": state.get("round", 0),
                    "candidate": state.get("candidate", self.spec["base"]), "continuation": continuation}
-            try: result = self.workers.run(role, workspace, key, feedback, session, attempt)
+            try:
+                options = {'restart_session': True} if restart_session else {}
+                result = self.workers.run(role, workspace, key, feedback, session, attempt, **options)
             except (RuntimeBlocked, DogfoodError) as exc:
-                self.ask("runtime", ["retry", "abort"], role=role, attempt=attempt, reason=str(exc))
+                decision = self.ask("runtime", ["retry", "restart-session", "abort"], role=role, attempt=attempt, reason=str(exc))
+                restart_session = decision == 'restart-session'
                 attempt += 1; continue
             session = result["source"].get("identity", session)
+            restart_session = False
             if result["result"]["status"] == "CONTINUE":
                 continuation += 1
                 feedback = {"continuation": result["result"]["summary"]}
@@ -81,6 +85,12 @@ class Flow:
                 self.ask("worker-blocked", ["retry", "abort"], role=role,
                          reason=result["result"]["summary"], evidence=self.store.put(result))
                 attempt += 1; continue
+            if role in ('development', 'repair') and result['needs_repair']:
+                self.ask('development-findings', ['retry', 'abort'], role=role,
+                         evidence=self.store.put(result), reason='Unresolved development findings cannot be discarded')
+                feedback = {'prior_result': result['result'], 'original_feedback': feedback}
+                attempt += 1
+                continue
             return self.store.put(result), result
     def approval(self, state: State):
         self.ask("requirement", ["approve", "abort"], requirement=str(self.store.directory / "requirement.md"),
@@ -120,6 +130,8 @@ class Flow:
             design_ref, _ = self.invoke_worker("qa-design", {**state, "round": revision}, self.baseline(),
                                                {"review": result["result"], "prior_design": design["result"]})
     def candidate(self, state: State):
+        if self.store.get(state['development'])['needs_repair']:
+            raise DogfoodError('Unresolved development result cannot create a verification candidate')
         if self.store.get(state["qa_review"])["needs_repair"]: raise DogfoodError("QA not approved")
         op = digest({"revision": self.revision, "round": state.get("round", 0), "development": state["development"]})
         result = self.store.bridge.call("snapshot", {"root": str(self.development_workspace()), "operation_id": op})
@@ -134,11 +146,19 @@ class Flow:
         if old_ref:
             old = self.store.get(old_ref)
             if old["binding"] == binding and old["status"] in ("PASS", "FAIL"):
-                self.store.get(old["evidence"])
-                retained = {**old, "candidate": state["candidate"]}
-                if old["candidate"] != state["candidate"]: retained["inherited_from"] = old["candidate"]
-                self.store.event("check-retained", check=check["id"], status=old["status"], binding=binding)
-                return retained
+                try:
+                    self.store.verify_evidence(old["evidence"])
+                except (DogfoodError, OSError) as exc:
+                    if attempt == 0:
+                        raise
+                    # Only an explicit check-runtime retry reaches a new attempt.
+                    self.store.event('check-evidence-invalid', check=check['id'],
+                                     previous=old_ref, reason=str(exc), retry_attempt=attempt)
+                else:
+                    retained = {**old, "candidate": state["candidate"]}
+                    if old["candidate"] != state["candidate"]: retained["inherited_from"] = old["candidate"]
+                    self.store.event("check-retained", check=check["id"], status=old["status"], binding=binding)
+                    return retained
         operation = digest({"kind": "check", "candidate": state["candidate"], "check": check, "binding": binding, "attempt": attempt})
         workspace = self.store.clone(root, "check-" + operation[:24], state["candidate"])
         cache = workspace / ".formal-gates-cache"; cache.mkdir(exist_ok=True)
@@ -213,8 +233,8 @@ class Flow:
     def seal(self, state: State):
         checks = [self.store.get(state["checks"][c["id"]]) for c in self.spec["checks"]]
         gates = [self.store.get(state["gates"][g]) for g in self.spec["gates"]]
-        for r in checks: self.store.get(r["evidence"])
-        for r in gates: self.store.get(r["evidence"])
+        for r in checks: self.store.verify_evidence(r["evidence"])
+        for r in gates: self.store.verify_evidence(r["evidence"])
         certificate = self.store.bridge.call("certify", {"spec": self.spec, "revision": self.revision,
                                                         "root": str(self.development_workspace()), "candidate": state["candidate"],
                                                         "checks": checks, "gates": gates})

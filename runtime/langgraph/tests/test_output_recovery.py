@@ -89,7 +89,7 @@ class TransportAdoption(unittest.TestCase):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
         root=Path(tmp.name)/'current';snap=Path(tmp.name)/'original';run=Path(tmp.name)/'run';run.mkdir()
         paths=['runtime/langgraph/formal_gates_dogfood/'+n for n in ('cli.py','workers.py','native_dsh.py','graph.py','infra.py')]
-        paths+=['runtime/langgraph/requirements.lock','.dogfood/bin/formal-gates']
+        paths+=['runtime/langgraph/requirements.lock','.dogfood/bin/formal-gates','prompts/reviewer-base.md']
         for base in (root,snap):
             for rel in paths:
                 p=base/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('original')
@@ -113,7 +113,7 @@ class TransportAdoption(unittest.TestCase):
         self.assertEqual(result['status'],'TRANSPORT_ADOPTED');self.assertFalse(result['state_migrated'])
         self.assertEqual((run/'manifest.json').read_bytes(),before)
     def test_graph_binary_and_dependency_change_not_allowed(self):
-        for rel in ('runtime/langgraph/formal_gates_dogfood/graph.py','.dogfood/bin/formal-gates','runtime/langgraph/requirements.lock'):
+        for rel in ('runtime/langgraph/formal_gates_dogfood/graph.py','.dogfood/bin/formal-gates','runtime/langgraph/requirements.lock','prompts/reviewer-base.md'):
             with self.subTest(path=rel):
                 root,snap,run=self.case();(root/rel).write_text('changed')
                 with self.assertRaises(DogfoodError):self.invoke(root,snap,run)

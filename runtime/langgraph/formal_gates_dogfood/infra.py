@@ -42,6 +42,13 @@ def read(path: Path) -> Any:
             result[key] = value
         return result
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
+def file_proof(path: Path) -> dict:
+    try:
+        body = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeBlocked(f'EVIDENCE_MISSING: {path}') from exc
+    return {'sha256': hashlib.sha256(body).hexdigest(), 'size': len(body)}
+
 def git(root: Path, *args: str) -> str:
     p = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
     if p.returncode: raise DogfoodError(f"git {' '.join(args[:3])}: {p.stderr.strip()}")
@@ -94,6 +101,42 @@ class Store:
         body = (self.directory / "artifacts" / f"{ref}.json").read_bytes()
         if hashlib.sha256(body).hexdigest() != ref: raise DogfoodError("artifact integrity mismatch")
         return json.loads(body)
+    def verify_process(self, process: dict) -> None:
+        key = process.get('operation', '')
+        directory = self.directory / 'jobs' / key
+        if not key or Path(process.get('directory', '')).resolve() != directory.resolve():
+            raise DogfoodError('EVIDENCE_BINDING: job is outside this run')
+        receipt = read(directory / 'exit.json')
+        request = read(directory / 'request.json')
+        if receipt.get('request_digest') != digest(request):
+            raise DogfoodError('EVIDENCE_BINDING: request digest differs')
+        for field in ('exit_code', 'error', 'request_digest', 'streams'):
+            if receipt.get(field) != process.get(field):
+                raise DogfoodError(f'EVIDENCE_BINDING: process {field} differs')
+        proofs = receipt.get('streams', {})
+        if set(proofs) != {'stdout.log', 'stderr.log'}:
+            raise RuntimeBlocked('EVIDENCE_MISSING: stdout/stderr proofs absent')
+        for name, proof in proofs.items():
+            if file_proof(directory / name) != proof:
+                raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+
+    def verify_evidence(self, ref: str) -> Any:
+        value = self.get(ref)
+        if 'process' in value:
+            self.verify_process(value['process'])
+        source = value.get('source', {})
+        if source.get('provider') == 'dsh':
+            self.verify_process(source['process'])
+            directory = self.directory / 'jobs' / source['job']
+            proofs = source.get('files', {})
+            required = {'native-source.json', 'native-events.jsonl', 'answer.raw.txt', 'answer.json'}
+            if set(proofs) != required:
+                raise RuntimeBlocked('EVIDENCE_MISSING: native source proofs absent')
+            for name, proof in proofs.items():
+                if file_proof(directory / name) != proof:
+                    raise RuntimeBlocked(f'EVIDENCE_CHANGED: {name}')
+        return value
+
     def event(self, event: str, **fields: Any) -> None:
         record = {"at": time.time(), "event": event, **fields}
         with self._event_lock:
@@ -155,7 +198,9 @@ class Store:
         if owner is not None: owner.wait()
         result = read(receipt)
         if result.get("request_digest") != digest(request): raise DogfoodError("job receipt/input mismatch")
-        return {**result, "directory": str(directory), "operation": key}
+        record = {**result, "directory": str(directory), "operation": key}
+        self.verify_process(record)
+        return record
     def cancel_jobs(self) -> None:
         for process in (self.directory / "jobs").glob("*/process.json"):
             if (process.parent / "exit.json").exists(): continue
@@ -171,6 +216,8 @@ def runtime_identity(root: Path, binary: str) -> str:
         if p.is_file() and p.suffix in (".py", ".mjs"):
             h.update(p.name.encode()); h.update(p.read_bytes())
     h.update((root / "runtime" / "langgraph" / "requirements.lock").read_bytes())
+    h.update(b'\x00reviewer-policy\x00')
+    h.update((root / 'prompts' / 'reviewer-base.md').read_bytes())
     with open(binary, "rb") as f:
         for block in iter(lambda: f.read(1024 * 1024), b""): h.update(block)
     return h.hexdigest()
