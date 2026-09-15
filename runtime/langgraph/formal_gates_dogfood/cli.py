@@ -199,7 +199,12 @@ def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
         with SqliteSaver.from_conn_string(str(store.directory/'checkpoints.sqlite')) as saver:
             app=Flow(store,root).build(saver)
             current=status_projection(store,app,config)
-            if not advance or current['status'] in ('DOGFOOD_COMPLETE','DEMO_COMPLETE','ABORTED'):return current
+            if current['status'] in ('DOGFOOD_COMPLETE','DEMO_COMPLETE','ABORTED'):
+                if answer is not None:
+                    raise DogfoodError(
+                        f"RUN_TERMINAL: {current['status']} does not accept a user decision; "
+                        'the answer was not applied. Use show to inspect this run.')
+                return current
             pending=current['interrupts']
             if pending:
                 if answer is None:return current
