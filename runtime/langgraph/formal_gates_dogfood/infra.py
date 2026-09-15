@@ -16,6 +16,11 @@ class DogfoodError(RuntimeError):
     pass
 class RuntimeBlocked(DogfoodError):
     pass
+class SessionUnavailable(RuntimeBlocked):
+    """The host explicitly rejected the persistent session identity, not a timeout."""
+    def __init__(self, message, *, identity='', method='session/resume', code=None):
+        super().__init__(message)
+        self.identity, self.method, self.code = identity, method, code
 
 def canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()

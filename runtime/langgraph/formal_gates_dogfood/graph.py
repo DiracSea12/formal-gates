@@ -6,8 +6,9 @@ import shutil
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
-from .infra import DogfoodError, RuntimeBlocked, Store, atomic, digest, git
+from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, git
 from .workers import Workers
+from .feedback import evidence_feedback
 
 def merge(left: dict | None, right: dict | None) -> dict:
     return {**(left or {}), **(right or {})}
@@ -65,12 +66,19 @@ class Flow:
         return self.store.clone(self.spec["project"], "development", self.spec["base"])
     def invoke_worker(self, role: str, state: State, workspace: Path, feedback=None, session="") -> tuple[str, dict]:
         attempt = 0; continuation = 0; restart_session = False
+        initial_feedback = feedback
         while True:
             key = {"run_id": state["run_id"], "round": state.get("round", 0),
                    "candidate": state.get("candidate", self.spec["base"]), "continuation": continuation}
             try:
                 options = {'restart_session': True} if restart_session else {}
                 result = self.workers.run(role, workspace, key, feedback, session, attempt, **options)
+            except SessionUnavailable as exc:
+                # The current identity cannot recover; don't offer a known-useless retry.
+                decision = self.ask('runtime', ['restart-session', 'abort'], role=role, attempt=attempt,
+                                    reason=str(exc), error_kind='SESSION_UNAVAILABLE', identity=exc.identity)
+                restart_session = decision == 'restart-session'
+                attempt += 1; continue
             except (RuntimeBlocked, DogfoodError) as exc:
                 decision = self.ask("runtime", ["retry", "restart-session", "abort"], role=role, attempt=attempt, reason=str(exc))
                 restart_session = decision == 'restart-session'
@@ -79,7 +87,8 @@ class Flow:
             restart_session = False
             if result["result"]["status"] == "CONTINUE":
                 continuation += 1
-                feedback = {"continuation": result["result"]["summary"]}
+                feedback = {'continuation': evidence_feedback(self.store, self.store.put(result), 'unfinished-work'),
+                            'initial_feedback': initial_feedback}
                 continue
             if result["result"]["status"] == "BLOCKED":
                 self.ask("worker-blocked", ["retry", "abort"], role=role,
@@ -88,7 +97,8 @@ class Flow:
             if role in ('development', 'repair') and result['needs_repair']:
                 self.ask('development-findings', ['retry', 'abort'], role=role,
                          evidence=self.store.put(result), reason='Unresolved development findings cannot be discarded')
-                feedback = {'prior_result': result['result'], 'original_feedback': feedback}
+                feedback = {'prior_result': evidence_feedback(self.store, self.store.put(result), 'unresolved-findings'),
+                            'initial_feedback': initial_feedback}
                 attempt += 1
                 continue
             return self.store.put(result), result
@@ -97,21 +107,21 @@ class Flow:
                  checks=self.spec["checks"], gates=self.spec["gates"], project=self.spec["project"], base=self.spec["base"])
         return {"approval": self.revision}
     def pre_review(self, role: str, field: str, state: State):
-        feedback = self.store.get(state["product"])["result"] if role == "technical-review" and state.get("product") else None
+        feedback = evidence_feedback(self.store, state["product"], "prior-product-review") if role == "technical-review" and state.get("product") else None
         index = 0
         while True:
             ref, result = self.invoke_worker(role, {**state, "round": index}, self.baseline(), feedback)
             if not result["needs_repair"]: return {field: ref}
             self.ask("pre-review", ["retry", "abort"], role=role, evidence=ref,
                      reason="Mandatory findings remain. This immutable request cannot change in place; revise it in a new explicitly started run when needed.")
-            feedback = result["result"]; index += 1
+            feedback = evidence_feedback(self.store, ref, "prior-review-findings"); index += 1
     def plan_approval(self, state: State):
         self.ask("plan", ["approve", "abort"], product=state["product"], technical=state["technical"],
                  artifacts=str(self.store.directory / "artifacts"), checks=self.spec["checks"],
                  reason="Approve the reviewed requirement/plan and exact check commands before development")
         return {"plan_approval": self.revision}
     def develop(self, state: State):
-        feedback = {"technical_review": self.store.get(state["technical"])["result"]}
+        feedback = {"technical_review": evidence_feedback(self.store, state["technical"], "reviewed-technical-plan")}
         ref, result = self.invoke_worker("development", state, self.development_workspace(), feedback)
         return {"development": ref, "sessions": {"development": result["source"].get("identity", "")}}
     def design(self, state: State):
@@ -121,14 +131,14 @@ class Flow:
         design_ref = state["qa_design"]; revision = 0
         while True:
             design = self.store.get(design_ref)
-            ref, result = self.invoke_worker("qa-review", {**state, "round": revision}, self.baseline(), {"design": design["result"]})
+            ref, result = self.invoke_worker("qa-review", {**state, "round": revision}, self.baseline(), {"design": evidence_feedback(self.store, design_ref, "qa-design")})
             if not result["needs_repair"] and not design["needs_repair"]:
                 return {"qa_design": design_ref, "qa_review": ref}
             self.ask("qa-design", ["retry", "abort"], role="qa-review", evidence=ref,
                      reason="Approved checks or coverage are insufficient. Final verification is not allowed.")
             revision += 1
             design_ref, _ = self.invoke_worker("qa-design", {**state, "round": revision}, self.baseline(),
-                                               {"review": result["result"], "prior_design": design["result"]})
+                                               {"review": evidence_feedback(self.store, ref, "qa-review-findings"), "prior_design": evidence_feedback(self.store, design_ref, "prior-qa-design")})
     def candidate(self, state: State):
         if self.store.get(state['development'])['needs_repair']:
             raise DogfoodError('Unresolved development result cannot create a verification candidate')
@@ -225,7 +235,7 @@ class Flow:
         if state.get("round", 0) >= allowance:
             self.ask("repair-limit", ["continue", "abort"], reason="Configured repair rounds reached; continue authorizes one more round", feedback=state["feedback"])
             allowance += 1
-        feedback = self.store.get(state["feedback"])
+        feedback = evidence_feedback(self.store, state["feedback"], "failed-verification")
         ref, result = self.invoke_worker("repair", state, self.development_workspace(), feedback,
                                          state.get("sessions", {}).get("development", ""))
         return {"development": ref, "round": state.get("round", 0) + 1, "round_allowance": allowance,

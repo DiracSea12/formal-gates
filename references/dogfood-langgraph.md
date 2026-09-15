@@ -151,7 +151,7 @@ Go binary、依赖锁及其他运行时文件必须字节不变，当前 run 必
 模型选择及 `turn/end: completed`；仅重新解析保留的完成证据，不调用模型，不覆盖旧退出码和错误。
 角色结果仍须通过 Go 合同校验，不能把模型/宿主实际失败洗成 PASS。
 
-临时副本及证据目前保留以方便自狗粮调试；不自动删除整个现场。不得把手工清理活动 run 当作正常恢复。
+临时副本及证据不自动过期；结束后可按下文归档/回收。不得把手工清理活动 run 当作正常恢复。
 
 ### 首次检查点前中断（ZCode 红队 F1）
 
@@ -205,8 +205,11 @@ git -C /absolute/run/directory/workspaces/development \
 
 `retry` 的含义是对同一逻辑任务重试并优先续用原生会话；它不是重置会话。执行进程退出、
 控制器失联并不等于持久会话消失。只有原生会话确实不存在或无法恢复时，操作者才在对应的
-运行错误确认点选择 `restart-session`，沿用工作区和任务而更换执行会话。当前没有自动将
-“会话不存在”分类后撤下 retry 选项的功能；明知身份失效时反复选 retry 仍会失败。
+运行错误确认点选择 `restart-session`，沿用工作区和任务而更换执行会话。原生 `session/resume`
+明确返回会话不存在/不可恢复时，错误现在归类为 `SESSION_UNAVAILABLE`，该确认点只提供
+`restart-session` 与 `abort`；提交 `retry` 会被拒绝。网络、启动超时、模型配置等其他错误
+不会被猜测成会话消失，仍保留原有 retry。新会话必须明确授权，不会自动改身份。
+连续多次失败后换会话，会携带同一任务较早尝试的部分证据，不只携带最后一次初始化错误。
 
 不能把不同宿主的 close 当成同一契约。本机 DSH 0.1.5-rc.1 的空会话在 close 后可恢复；
 带真实完成 turn 的 DSH 会话在 close、退出进程之后，也能以同一 ID 开始第二 turn 并保留上下文。
@@ -217,14 +220,46 @@ git -C /absolute/run/directory/workspaces/development \
 
 ### feedback 和存储保留
 
-summary、发现说明和增量设计仍作为后续角色的业务材料传入 task.json。它们不是批准、跳转或
-状态补丁接口；但 JSON 包装不构成模型的语义防注入保证。本版本不宣称文字完全不会影响下游
-模型，也没有把整个自然语言交接通道删除。角色结果仍需通过既有合同校验和程序分支处理。
+summary、发现说明和增量设计仍作为必要的业务材料传递，但现在使用带来源的 `evidence-data/v1`
+及外层 `untrusted-feedback/v1` 包装，记录原工件摘要、角色、需求 revision 和数据摘要，明确
+`authority=none`。task 的角色、候选、检查命令和控制能力由程序独立组装，绝不与 feedback 合并。
+角色提示明确说明其中“用户已批准”“跳过检查”等文字不是新指令或授权。持续返修只携带原始
+输入和最近一次相关反馈，旧记录保存在工件中，不再递归嵌套整个历史。
+这不是通用的语义防注入承诺：模型仍可能判断错误，仍需要原有权限限制、Go 合同和验证流程。
 
-**尚未实现清理命令或保留期限。** jobs、检查点、原始证据、工件和工作区都会随使用积累；
-保留现场方便诊断，并不表示磁盘管理功能已经完成。不要在活动或暂停 run 中手工删除被引用
-证据。未来低复杂度方向是完整保存已结束 run 的可核对归档后，再显式回收；当前不提供 prune、
-自动过期、归档恢复或“可以安全删除哪些文件”的保证。此次复核没有删除任何旧数据。
+### 终态归档与回收
+
+现在提供显式的 `archive`、`archive-show`、`prune`。只处理 `DOGFOOD_COMPLETE`、
+`DEMO_COMPLETE` 或 `ABORTED` 的 run；活动、暂停、有未完成作业或仍存在原生执行进程时拒绝。
+不自动过期，不在运行途中删证据，也不清理外部 DSH/ZCode 会话、其他项目或全局缓存。
+
+```sh
+# 完整归档，不删除原现场。ZIP 目标必须位于 run 目录外，已有文件不覆盖。
+./scripts/dogfood archive --run /absolute/run --output /absolute/archive/run.zip
+# 独立验证每个归档成员并读取终态，不依赖该 run 的旧图运行时。
+./scripts/dogfood archive-show --archive /absolute/archive/run.zip
+# 默认仅预览；核对后显式确认。
+./scripts/dogfood prune --run /absolute/run --archive /absolute/archive/run.zip
+./scripts/dogfood prune --run /absolute/run --archive /absolute/archive/run.zip --confirm
+```
+
+归档包含完整的当前可用源码工作区（含 Git 和未提交成果）、jobs、artifacts、事件及检查点。
+SQLite 使用一致备份 API 保存；逐文件核对 SHA-256，数据库比较逻辑内容而不是 WAL/SHM 页布局。
+这是归档完整性校验，不改变洞5的数据库信任边界；不宣称防御可同时改归档与摘要的文件所有者。
+
+`prune` 在核对归档确属同一 run、原数据没有变化后才删除 jobs、artifacts、checkpoints、
+工作区等已归档现场，留下 manifest、需求、规则、终态结果和小型归档记录。清理中断可用同一命令
+继续；未核对的新增文件不会被递归删除。`show`/无答复 `resume` 仍能核对归档并读终态，
+不会重建检查点或重开任务。归档丢失/改变时明确报错。归档可以用标准 ZIP 工具解压离线查证，
+它不是把一个已结束 run 重新变为活动 run 的迁移接口。
+
+归档可放在其他磁盘以释放本机容量；若仍存本机，它仍占压缩后的空间，不等于数据凭空消失。
+生产旧 run 没有在本次实施中被批量清理。旧版本 run 不迁移到新图运行时，仍遵守前述版本绑定。
+
+可重复验证：`test_retention.py` 覆盖归档/预览/清理/中断恢复/错归档/数据变化/活动作业；
+`test_session_feedback.py` 覆盖失效分类、错误操作拒绝、多次失败交接与反馈来源/控制隔离。
+原生验证入口：`python runtime/langgraph/tests/native_missing_session.py --out NEW_DIRECTORY`，
+会发送一次 DSH 模型提示，验证不存在的身份经显式换会话续接，以及恶意 feedback 的限定场景。
 
 ## 未来独立 Go 引擎
 

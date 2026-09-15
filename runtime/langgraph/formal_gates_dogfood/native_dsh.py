@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from .infra import DogfoodError, RuntimeBlocked, atomic, read, file_proof
+from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, atomic, read, file_proof
 
 class Client:
     def __init__(self, argv: list[str], workspace: str, directory: Path):
@@ -48,7 +48,15 @@ class Client:
                 else:
                     self.send({'jsonrpc':'2.0','id':value['id'],'error':{'code':-32601,'message':'Client capability not granted'}})
             elif value.get('id') == number:
-                if 'error' in value: raise RuntimeBlocked(f"DSH_NATIVE {method}: {value['error'].get('message', 'unknown error')}")
+                if 'error' in value:
+                    error = value['error']; message = error.get('message', 'unknown error')
+                    # Narrow host error classification: never treat timeouts/model errors
+                    # as proof that a session was destroyed.
+                    missing = message.startswith(('Invalid params: session is not resumable:', 'Session not found:'))
+                    if method == 'session/resume' and error.get('code') in (-32602, -32004) and missing:
+                        raise SessionUnavailable(f'DSH_SESSION_UNAVAILABLE: {message}',
+                                                 identity=params.get('sessionId', ''), code=error.get('code'))
+                    raise RuntimeBlocked(f'DSH_NATIVE {method}: {message}')
                 return value.get('result', {})
     def close(self):
         try: self.proc.stdin.close()
@@ -237,6 +245,10 @@ def main():
         source = execute(request,directory,probe=bool(request.get('probe')))
         print(json.dumps(source,ensure_ascii=False)); return 0
     except Exception as exc:
-        atomic(directory/'native-error.json',{'error':f'{type(exc).__name__}: {exc}'})
+        detail = {'error': f'{type(exc).__name__}: {exc}'}
+        if isinstance(exc, SessionUnavailable):
+            detail.update(error_kind='SESSION_UNAVAILABLE', identity=exc.identity,
+                          method=exc.method, native_code=exc.code)
+        atomic(directory/'native-error.json', detail)
         print(f'{type(exc).__name__}: {exc}',file=sys.stderr); return 1
 if __name__=='__main__': raise SystemExit(main())

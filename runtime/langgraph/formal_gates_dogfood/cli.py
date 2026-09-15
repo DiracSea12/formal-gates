@@ -192,10 +192,19 @@ def run_graph(directory: str | Path,answer=None,interrupt_id='',advance=True):
     root,store=open_run(directory);config={'configurable':{'thread_id':store.manifest['run_id']},'recursion_limit':10000}
     if answer is not None and not interrupt_id:
         raise DogfoodError('An exact interrupt ID is required; a revision alone cannot identify a user decision')
+    if (store.directory / 'archive.json').exists():
+        from .retention import archived_status
+        if answer is not None:
+            raise DogfoodError('RUN_TERMINAL: archived run does not accept an answer')
+        return archived_status(store.directory)
     if not advance:
         with read_checkpointer(store.directory/'checkpoints.sqlite') as saver:
             return status_projection(store, Flow(store,root).build(saver), config)
     with run_lock(store.directory):
+        if (store.directory / 'archive.json').exists():
+            from .retention import archived_status
+            if answer is not None: raise DogfoodError('RUN_TERMINAL: archived run')
+            return archived_status(store.directory)
         with SqliteSaver.from_conn_string(str(store.directory/'checkpoints.sqlite')) as saver:
             app=Flow(store,root).build(saver)
             current=status_projection(store,app,config)
@@ -256,6 +265,13 @@ def main():
     parser=argparse.ArgumentParser(prog='formal-gates dogfood',description='Optional LangGraph development driver, not the legacy formal Seal route')
     commands=parser.add_subparsers(dest='command',required=True)
     commands.add_parser('doctor',help='Probe DSH without sending a model prompt')
+    archive = commands.add_parser('archive', help='Verified ZIP of a terminal run; never deletes source')
+    archive.add_argument('--run', required=True); archive.add_argument('--output', required=True)
+    prune = commands.add_parser('prune', help='Preview terminal cleanup; --confirm deletes only after archive verification')
+    prune.add_argument('--run', required=True); prune.add_argument('--archive', required=True)
+    prune.add_argument('--confirm', action='store_true')
+    inspect_archive = commands.add_parser('archive-show', help='Verify/read archived status without the old graph runtime')
+    inspect_archive.add_argument('--archive', required=True)
     adoption = commands.add_parser('adopt-transport', help='Explicit dev-only transport fix; requires preserved runtime and exact identities')
     adoption.add_argument('--run', required=True); adoption.add_argument('--snapshot', required=True)
     adoption.add_argument('--from-runtime', required=True); adoption.add_argument('--to-runtime', required=True)
@@ -274,6 +290,15 @@ def main():
     try:
         root=package_root()
         if args.command=='doctor':result=doctor(root)
+        elif args.command=='archive':
+            from .retention import archive_run
+            result=archive_run(args.run,args.output)
+        elif args.command=='prune':
+            from .retention import prune_run
+            result=prune_run(args.run,args.archive,args.confirm)
+        elif args.command=='archive-show':
+            from .retention import archive_status
+            result=archive_status(args.archive)
         elif args.command=='adopt-transport':
             result=adopt_transport(Path(args.run),Path(args.snapshot),args.from_runtime,args.to_runtime,args.reason)
         elif args.command=='start':

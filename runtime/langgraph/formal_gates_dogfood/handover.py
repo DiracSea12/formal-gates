@@ -40,7 +40,7 @@ def prepare_session_restart(store, series: str, attempt: int, role: str,
         result = store.get(read(prior_result)['ref'])['result']['status']
         if result != 'BLOCKED':
             raise DogfoodError('SESSION_RESTART: prior role result was already accepted')
-    identity = read(job / 'identity.json') if (job / 'identity.json').exists() else {}
+    identity = read(job / 'identity.json') if (job / 'identity.json').exists() else {'identity': original.get('identity', '')}
     saved = materials / 'handover.json'
     if saved.exists():
         bundle = read(saved)
@@ -65,8 +65,22 @@ def prepare_session_restart(store, series: str, attempt: int, role: str,
     materials.mkdir(parents=True, exist_ok=True)
     # Preserve the original evidence. Copy into this role's input workspace so
     # it does not need write/access grants to the controller's job directory.
-    for name in ('native-events.jsonl', 'protocol.jsonl', 'answer.raw.txt'):
-        source = job / name
+    sources = {name: job / name for name in ('native-events.jsonl', 'protocol.jsonl', 'answer.raw.txt')}
+    # A failed resume may contain no partial work. Carry the earlier attempts
+    # as well, instead of replacing the original review/development evidence.
+    for index in range(attempt - 1):
+        older_key = digest({'series': series, 'attempt': index})
+        older = store.directory / 'jobs' / older_key
+        if not (older / 'request.json').exists(): continue
+        if not (older / 'exit.json').exists():
+            raise RuntimeBlocked('SESSION_RESTART: earlier invocation is unresolved')
+        older_request = read(older / 'native-request.json')
+        if Path(older_request['workspace']).resolve() != workspace.resolve():
+            raise DogfoodError('SESSION_RESTART: earlier attempt workspace differs')
+        store.verify_process({**read(older / 'exit.json'), 'directory': str(older), 'operation': older_key})
+        for name in ('native-events.jsonl', 'protocol.jsonl', 'answer.raw.txt', 'identity.json', 'native-error.json'):
+            sources[f'attempt-{index}-{name}'] = older / name
+    for name, source in sources.items():
         if not source.exists():
             bundle['files'][name] = {'available': False}
             continue

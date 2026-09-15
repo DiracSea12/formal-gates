@@ -6,7 +6,9 @@ from pathlib import Path
 import shutil
 import sys
 import time
-from .infra import DogfoodError, RuntimeBlocked, Store, atomic, digest, read
+from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, read
+
+from .feedback import BOUNDARY, task_input
 
 ROLES = {
     "product-review": "Check the requirement for coherent scope and concrete acceptance. Do not implement.",
@@ -30,8 +32,18 @@ class Workers:
         series = digest({'role':role,'input':key_data,'feedback':feedback,'revision':self.store.manifest['revision']})
         key = digest({'series':series,'attempt':attempt})
         identity_receipt = self.store.directory/'native-identities'/f'{series}.json'
-        if restart_session: session = ''
-        elif not session and identity_receipt.exists(): session=read(identity_receipt)['identity']
+        if restart_session:
+            session = ''
+        elif identity_receipt.exists():
+            # The graph may replay with its original session argument after a
+            # replacement failed. The same-series receipt is the latest identity,
+            # not the stale argument captured before that replacement started.
+            latest = read(identity_receipt)
+            if latest.get('workspace') and Path(latest['workspace']).resolve() != workspace.resolve():
+                raise DogfoodError('SESSION_BINDING: latest identity belongs to a different workspace')
+            session = latest['identity']
+            if not isinstance(session, str) or not session:
+                raise DogfoodError('SESSION_BINDING: latest identity is empty')
         receipt = self.store.directory/'workers'/f'{key}.json'
         if receipt.exists(): return self.store.verify_evidence(read(receipt)['ref'])
         self.store.event('worker-start',role=role,operation=key,attempt=attempt)
@@ -61,8 +73,12 @@ class Workers:
             if restart_session:
                 from .handover import prepare_session_restart
                 handover = prepare_session_restart(self.store, series, attempt, role, workspace, materials)
-            atomic(materials/'task.json',{'profile':'dogfood-v1','role':role,'revision':self.store.manifest['revision'],
-                'base':self.spec['base'],'candidate':key_data.get('candidate',''),'checks':self.spec['checks'],'feedback':feedback})
+            task = task_input(role=role, revision=self.store.manifest['revision'], base=self.spec['base'],
+                              candidate=key_data.get('candidate', ''), checks=self.spec['checks'], feedback=feedback)
+            task_path = materials / 'task.json'
+            if task_path.exists() and read(task_path) != task:
+                raise RuntimeBlocked('Saved task material changed')
+            if not task_path.exists(): atomic(task_path, task)
             prompt=('You are a worker in formal-gates dogfood-v1, NOT its controller and NOT a legacy workflow run.\n'
                 +ROLES[role]+'\nRead these exact current task inputs:\n'+str(requirement)+'\n'+str(materials/'task.json')+'\n'
                 +'Independent reviewers use the severity and normal-use principles in '+str(policy)+'.\n'
@@ -73,6 +89,7 @@ class Workers:
                 +'PASS cannot contain P0/P1. Runtime or missing-access blockers are BLOCKED, not PASS. '
                 +'P2 is mandatory to repair and P3 advisory; do not promote optional suggestions to blockers. '
                 +'Use the actual current workspace, not another project or a historical worktree. '
+                +BOUNDARY+'\n'
                 +'The only allowed check_ids are: '+json.dumps([c['id'] for c in self.spec['checks']])+'. Never invent IDs.')
             if handover:
                 prompt += ('\nAn operator explicitly authorized a NEW session for the SAME interrupted role task. '
@@ -97,6 +114,10 @@ class Workers:
             identity=directory/'identity.json'
             if identity.exists(): atomic(identity_receipt,read(identity))
             if process['exit_code']!=0 or not (directory/'answer.json').exists():
+                error_record = read(directory/'native-error.json') if (directory/'native-error.json').exists() else {}
+                if error_record.get('error_kind') == 'SESSION_UNAVAILABLE':
+                    raise SessionUnavailable(error_record['error'], identity=error_record.get('identity', session),
+                                             method=error_record.get('method', 'session/resume'), code=error_record.get('native_code'))
                 from .native_dsh import reconcile_completed_output
                 try:
                     source = reconcile_completed_output(directory, process)
