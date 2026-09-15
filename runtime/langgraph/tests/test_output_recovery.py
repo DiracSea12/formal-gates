@@ -8,13 +8,13 @@ from unittest.mock import patch, Mock
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
-from formal_gates_dogfood.native_dsh import decode_result, reconcile_completed_output
-from formal_gates_dogfood.infra import atomic, read, RuntimeBlocked, DogfoodError, Bridge, Store
-from formal_gates_dogfood.graph import Flow, State
-from formal_gates_dogfood.cli import adopt_transport
+from formal_gates_harness.native_dsh import decode_result, reconcile_completed_output
+from formal_gates_harness.infra import atomic, read, RuntimeBlocked, HarnessError, Bridge, Store
+from formal_gates_harness.graph import Flow, State
+from formal_gates_harness.cli import adopt_transport
 
 PACKAGE = Path(__file__).resolve().parents[3]
-BINARY = PACKAGE / '.dogfood/bin/formal-gates'
+BINARY = PACKAGE / '.harness/bin/formal-gates'
 ANSWER = {'status':'PASS','summary':'Implemented approved change.','findings':[],'check_ids':[]}
 
 class OutputRecovery(unittest.TestCase):
@@ -32,7 +32,7 @@ class OutputRecovery(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(RuntimeBlocked): decode_result(text)
     def test_control_fields_still_rejected_by_go(self):
         answer=decode_result('```json\n'+json.dumps({**ANSWER,'goto':'seal'})+'\n```')
-        with self.assertRaises(DogfoodError):
+        with self.assertRaises(HarnessError):
             Bridge(str(BINARY)).call('validate-worker',{'role':'development','result':answer,'checks':[]})
     def make_evidence(self, root, reason='completed'):
         atomic(root/'native-error.json',{'error':'RuntimeBlocked: DSH_RESULT: final message is not a JSON result object'})
@@ -48,7 +48,7 @@ class OutputRecovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);self.make_evidence(root)
             originals={p:p.read_bytes() for p in root.iterdir()}
-            with patch('formal_gates_dogfood.native_dsh.Client',side_effect=AssertionError('must not launch')):
+            with patch('formal_gates_harness.native_dsh.Client',side_effect=AssertionError('must not launch')):
                 source=reconcile_completed_output(root,{'exit_code':1,'error':''})
             self.assertEqual(source['identity'],'native');self.assertEqual(source['reconciliation']['new_model_calls'],0)
             self.assertEqual(read(root/'answer.json'),ANSWER)
@@ -88,23 +88,23 @@ class TransportAdoption(unittest.TestCase):
     def case(self):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
         root=Path(tmp.name)/'current';snap=Path(tmp.name)/'original';run=Path(tmp.name)/'run';run.mkdir()
-        paths=['runtime/langgraph/formal_gates_dogfood/'+n for n in ('cli.py','workers.py','native_dsh.py','graph.py','infra.py')]
-        paths+=['runtime/langgraph/requirements.lock','.dogfood/bin/formal-gates','prompts/reviewer-base.md']
+        paths=['runtime/langgraph/formal_gates_harness/'+n for n in ('cli.py','workers.py','native_dsh.py','native_dsh.mjs','graph.py','infra.py')]
+        paths+=['runtime/langgraph/requirements.lock','.harness/bin/formal-gates','prompts/reviewer-base.md']
         for base in (root,snap):
             for rel in paths:
                 p=base/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('original')
         (root/paths[0]).write_text('reviewed transport change')
         req=b'requirement';(run/'requirement.md').write_bytes(req)
-        atomic(run/'manifest.json',{'profile':'dogfood-v1','runtime_identity':'before','revision':'rev','run_id':'run',
-                                    'spec':{'requirement_digest':hashlib.sha256(req).hexdigest()}})
+        atomic(run/'manifest.json',{'profile':'harness-v1','runtime_identity':'before','revision':'rev','run_id':'run',
+                                    'spec':{'provider':'dsh','requirement_digest':hashlib.sha256(req).hexdigest()}})
         return root,snap,run
     def invoke(self,root,snap,run):
-        with patch('formal_gates_dogfood.cli.package_root',return_value=root), \
-             patch('formal_gates_dogfood.cli.binary_path',return_value=str(root/'.dogfood/bin/formal-gates')), \
-             patch('formal_gates_dogfood.cli.runtime_identity',side_effect=lambda p,b:'before' if p==snap else 'after'), \
-             patch('formal_gates_dogfood.cli.Bridge') as bridge, \
-             patch('formal_gates_dogfood.cli.Flow'), \
-             patch('formal_gates_dogfood.cli.status_projection',return_value={'status':'WAITING_USER','interrupts':[{'request':{'kind':'runtime'}}]}):
+        with patch('formal_gates_harness.cli.package_root',return_value=root), \
+             patch('formal_gates_harness.cli.binary_path',return_value=str(root/'.harness/bin/formal-gates')), \
+             patch('formal_gates_harness.cli.runtime_identity',side_effect=lambda p,b:'before' if p==snap else 'after'), \
+             patch('formal_gates_harness.cli.Bridge') as bridge, \
+             patch('formal_gates_harness.cli.Flow'), \
+             patch('formal_gates_harness.cli.status_projection',return_value={'status':'WAITING_USER','interrupts':[{'request':{'kind':'runtime'}}]}):
             bridge.return_value.call.return_value={'revision':'rev'}
             return adopt_transport(run,snap,'before','after','Reviewed parser correction')
     def test_explicit_adoption_keeps_manifest_and_checkpoint_bytes(self):
@@ -113,14 +113,14 @@ class TransportAdoption(unittest.TestCase):
         self.assertEqual(result['status'],'TRANSPORT_ADOPTED');self.assertFalse(result['state_migrated'])
         self.assertEqual((run/'manifest.json').read_bytes(),before)
     def test_graph_binary_and_dependency_change_not_allowed(self):
-        for rel in ('runtime/langgraph/formal_gates_dogfood/graph.py','.dogfood/bin/formal-gates','runtime/langgraph/requirements.lock','prompts/reviewer-base.md'):
+        for rel in ('runtime/langgraph/formal_gates_harness/graph.py','.harness/bin/formal-gates','runtime/langgraph/requirements.lock','prompts/reviewer-base.md'):
             with self.subTest(path=rel):
                 root,snap,run=self.case();(root/rel).write_text('changed')
-                with self.assertRaises(DogfoodError):self.invoke(root,snap,run)
+                with self.assertRaises(HarnessError):self.invoke(root,snap,run)
                 self.assertFalse((run/'transport-adoption.json').exists())
     def test_active_job_not_adopted(self):
         root,snap,run=self.case();atomic(run/'jobs'/'active'/'request.json',{})
-        with self.assertRaises(DogfoodError):self.invoke(root,snap,run)
+        with self.assertRaises(HarnessError):self.invoke(root,snap,run)
         self.assertFalse((run/'transport-adoption.json').exists())
 
 if __name__=='__main__': unittest.main()

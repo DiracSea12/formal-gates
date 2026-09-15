@@ -2,11 +2,10 @@
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-import shutil
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
-from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, git
+from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, Store, atomic, digest, git
 from .workers import Workers
 from .feedback import evidence_feedback
 
@@ -44,9 +43,9 @@ class Flow:
     def ask(self, kind: str, choices: list[str], **body) -> str:
         value = interrupt({"kind": kind, "revision": self.revision, "choices": choices, **body})
         if not isinstance(value, dict) or set(value) != {"decision", "revision"}:
-            raise DogfoodError("invalid user answer shape")
+            raise HarnessError("invalid user answer shape")
         if value["revision"] != self.revision or value["decision"] not in choices:
-            raise DogfoodError("stale revision or unsupported decision")
+            raise HarnessError("stale revision or unsupported decision")
         receipt = self.store.put({"kind": kind, "answer": value, "request": body})
         self.store.event("user-decision", kind=kind, decision=value["decision"], evidence=receipt)
         if value["decision"] == "abort": raise StopRun("User declined or aborted at a decision boundary")
@@ -79,7 +78,7 @@ class Flow:
                                     reason=str(exc), error_kind='SESSION_UNAVAILABLE', identity=exc.identity)
                 restart_session = decision == 'restart-session'
                 attempt += 1; continue
-            except (RuntimeBlocked, DogfoodError) as exc:
+            except (RuntimeBlocked, HarnessError) as exc:
                 decision = self.ask("runtime", ["retry", "restart-session", "abort"], role=role, attempt=attempt, reason=str(exc))
                 restart_session = decision == 'restart-session'
                 attempt += 1; continue
@@ -141,8 +140,8 @@ class Flow:
                                                {"review": evidence_feedback(self.store, ref, "qa-review-findings"), "prior_design": evidence_feedback(self.store, design_ref, "prior-qa-design")})
     def candidate(self, state: State):
         if self.store.get(state['development'])['needs_repair']:
-            raise DogfoodError('Unresolved development result cannot create a verification candidate')
-        if self.store.get(state["qa_review"])["needs_repair"]: raise DogfoodError("QA not approved")
+            raise HarnessError('Unresolved development result cannot create a verification candidate')
+        if self.store.get(state["qa_review"])["needs_repair"]: raise HarnessError("QA not approved")
         op = digest({"revision": self.revision, "round": state.get("round", 0), "development": state["development"]})
         result = self.store.bridge.call("snapshot", {"root": str(self.development_workspace()), "operation_id": op})
         if state.get("round", 0) and result["candidate"] == state.get("candidate"):
@@ -158,7 +157,7 @@ class Flow:
             if old["binding"] == binding and old["status"] in ("PASS", "FAIL"):
                 try:
                     self.store.verify_evidence(old["evidence"])
-                except (DogfoodError, OSError) as exc:
+                except (HarnessError, OSError) as exc:
                     if attempt == 0:
                         raise
                     # Only an explicit check-runtime retry reaches a new attempt.
@@ -176,15 +175,8 @@ class Flow:
                        "GOTMPDIR": str(cache / "tmp"), "TMPDIR": str(cache / "tmp")}
         (cache / "tmp").mkdir(exist_ok=True)
         argv = check["argv"]
-        # Approved commands still execute candidate code. Use the installed
-        # native command sandbox; this does not call a model.
-        if self.spec["provider"] != "fixture":
-            sandbox = shutil.which("codex")
-            if not sandbox:
-                raise RuntimeBlocked("COMMAND_SANDBOX_UNAVAILABLE: native Codex sandbox is required")
-            argv = [sandbox, "sandbox", "--permission-profile", "formal-gates-check", "-C", str(workspace),
-                    "-c", 'permissions.formal-gates-check={extends=":read-only",filesystem={":workspace_roots"="write"},network={enabled=false}}',
-                    "--", *argv]
+        # Execute the exact approved argv as the current user. The disposable
+        # clone isolates candidate changes, not OS permissions or network access.
         result = self.store.job(operation, {"kind": "check", "argv": argv, "cwd": str(workspace),
                                            "stdin": "", "environment": environment})
         if result["error"] or result["exit_code"] < 0 or result["exit_code"] in (126, 127, 130):
@@ -204,7 +196,7 @@ class Flow:
                 for future in as_completed(work):
                     try:
                         result = future.result(); results[result["id"]] = self.store.put(result)
-                    except (RuntimeBlocked, DogfoodError) as exc: errors.append(str(exc))
+                    except (RuntimeBlocked, HarnessError) as exc: errors.append(str(exc))
             if not errors: return {"checks": results}
             state = {**state, "checks": {**state.get("checks", {}), **results}}
             self.ask("check-runtime", ["retry", "abort"], reasons=errors)
@@ -249,7 +241,7 @@ class Flow:
                                                         "root": str(self.development_workspace()), "candidate": state["candidate"],
                                                         "checks": checks, "gates": gates})
         ref = self.store.put(certificate)
-        atomic(self.store.directory / "dogfood-result.json", certificate)
+        atomic(self.store.directory / "harness-result.json", certificate)
         self.store.event("terminal", status=certificate["status"], evidence=ref, candidate=state["candidate"])
         return {"terminal": ref}
     def build(self, checkpointer):

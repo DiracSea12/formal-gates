@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -468,6 +469,20 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 		return PackageReceiptReport{}, err
 	}
 	entries := make([]PackageEntry, 0)
+	// In a source checkout, Git already identifies local, untracked data.
+	// Tracked files remain package inputs even when an ignore rule matches them.
+	ignored := map[string]bool{}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err == nil {
+		out, err := exec.Command("git", "-C", root, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z").Output()
+		if err != nil {
+			return PackageReceiptReport{}, fmt.Errorf("resolve local package exclusions: %w", err)
+		}
+		for _, name := range strings.Split(string(out), "\x00") {
+			if name != "" {
+				ignored[strings.TrimSuffix(name, "/")] = true
+			}
+		}
+	}
 	err = filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -480,7 +495,7 @@ func PackageReceipt(root string, disjointFrom ...string) (PackageReceiptReport, 
 			return err
 		}
 		// Local development executors/evidence are not immutable package inputs.
-		if rel == ".git" || rel == ".gates" || rel == ".dogfood" {
+		if rel == ".git" || rel == ".gates" || rel == ".harness" || ignored[filepath.ToSlash(rel)] {
 			if dirEntry.IsDir() {
 				return filepath.SkipDir
 			}

@@ -1,4 +1,4 @@
-package dogfood
+package harness
 
 import (
 	"bytes"
@@ -66,7 +66,7 @@ func snapshot(q workspaceInput) (any, error) {
 	if _, err := hex.DecodeString(q.OperationID); err != nil {
 		return nil, fmt.Errorf("invalid operation id")
 	}
-	head, err := validate.DogfoodResolveSnapshot(q.Root)
+	head, err := validate.HarnessResolveSnapshot(q.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -92,10 +92,10 @@ func snapshot(q workspaceInput) (any, error) {
 	if _, err = git(q.Root, "add", "--all", "--", "."); err != nil {
 		return nil, err
 	}
-	if _, err = git(q.Root, "-c", "user.name=formal-gates", "-c", "user.email=formal-gates@localhost", "-c", "commit.gpgsign=false", "commit", "-m", "Prepare dogfood candidate\n\n"+trailer); err != nil {
+	if _, err = git(q.Root, "-c", "user.name=formal-gates", "-c", "user.email=formal-gates@localhost", "-c", "commit.gpgsign=false", "commit", "-m", "Prepare harness candidate\n\n"+trailer); err != nil {
 		return nil, err
 	}
-	head, err = validate.DogfoodResolveSnapshot(q.Root)
+	head, err = validate.HarnessResolveSnapshot(q.Root)
 	return map[string]any{"candidate": head, "replayed": false}, err
 }
 func scopeBinding(q bindingInput) (string, error) {
@@ -152,7 +152,7 @@ func certify(q sealInput) (any, error) {
 	if q.Revision != Digest(q.Spec) {
 		return nil, fmt.Errorf("requirement/spec revision mismatch")
 	}
-	head, err := validate.DogfoodResolveSnapshot(q.Root)
+	head, err := validate.HarnessResolveSnapshot(q.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func certify(q sealInput) (any, error) {
 			return nil, fmt.Errorf("gate %s has unresolved mandatory findings", id)
 		}
 	}
-	level, status := "native", "DOGFOOD_COMPLETE"
+	level, status := "native", "HARNESS_COMPLETE"
 	if q.Spec.Provider == "fixture" {
 		level, status = "fixture", "DEMO_COMPLETE"
 	}
@@ -224,7 +224,7 @@ func Bridge(in io.Reader, out io.Writer) int {
 		result, err = dispatch(e)
 	}
 	if err != nil {
-		_ = json.NewEncoder(out).Encode(map[string]any{"ok": false, "code": "INVALID_DOGFOOD_OPERATION", "message": err.Error()})
+		_ = json.NewEncoder(out).Encode(map[string]any{"ok": false, "code": "INVALID_HARNESS_OPERATION", "message": err.Error()})
 		return 2
 	}
 	if err = json.NewEncoder(out).Encode(map[string]any{"ok": true, "value": result}); err != nil {
@@ -284,7 +284,7 @@ func dispatch(e envelope) (any, error) {
 		if e.Operation == "clean" {
 			return map[string]bool{"clean": true}, clean(q.Root)
 		}
-		head, err := validate.DogfoodResolveSnapshot(q.Root)
+		head, err := validate.HarnessResolveSnapshot(q.Root)
 		return map[string]string{"candidate": head}, err
 	case "binding":
 		var q bindingInput
@@ -309,6 +309,6 @@ func dispatch(e envelope) (any, error) {
 		h := sha256.Sum256([]byte(q.Text))
 		return map[string]string{"digest": hex.EncodeToString(h[:])}, nil
 	default:
-		return nil, fmt.Errorf("unknown dogfood operation %q", e.Operation)
+		return nil, fmt.Errorf("unknown harness operation %q", e.Operation)
 	}
 }

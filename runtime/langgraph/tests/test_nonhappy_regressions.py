@@ -7,12 +7,12 @@ import test_driver as fixtures
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
-from formal_gates_dogfood.cli import run_graph, open_run
-from formal_gates_dogfood.graph import Flow, State
-from formal_gates_dogfood.workers import Workers
-from formal_gates_dogfood.native_dsh import decode_result
-from formal_gates_dogfood.handover import prepare_session_restart
-from formal_gates_dogfood.infra import atomic, read, run_lock, runtime_identity, DogfoodError, RuntimeBlocked, digest
+from formal_gates_harness.cli import run_graph, open_run
+from formal_gates_harness.graph import Flow, State
+from formal_gates_harness.workers import Workers
+from formal_gates_harness.native_dsh import decode_result
+from formal_gates_harness.handover import prepare_session_restart
+from formal_gates_harness.infra import atomic, read, run_lock, runtime_identity, HarnessError, RuntimeBlocked, digest
 
 class NonhappyRegressions(unittest.TestCase):
     def setUp(self):
@@ -21,7 +21,7 @@ class NonhappyRegressions(unittest.TestCase):
         (self.directory/'reviewer-base.md').write_bytes(policy)
         self.manifest.update(runtime_identity=runtime_identity(fixtures.PACKAGE,str(fixtures.BINARY)), reviewer_policy_digest=hashlib.sha256(policy).hexdigest())
         atomic(self.directory/'manifest.json',self.manifest)
-        env=patch.dict(os.environ,{'FORMAL_GATES_DOGFOOD_ROOT':str(fixtures.PACKAGE),'FORMAL_GATES_DOGFOOD_BINARY':str(fixtures.BINARY)})
+        env=patch.dict(os.environ,{'FORMAL_GATES_HARNESS_ROOT':str(fixtures.PACKAGE),'FORMAL_GATES_HARNESS_BINARY':str(fixtures.BINARY)})
         env.start();self.addCleanup(env.stop)
     def tearDown(self):fixtures.DriverTests.tearDown(self)
     def approve(self,state):
@@ -29,7 +29,7 @@ class NonhappyRegressions(unittest.TestCase):
     def test_old_approval_without_interrupt_cannot_approve_plan(self):
         first=run_graph(self.directory);plan=self.approve(first)
         before=(self.directory/'checkpoints.sqlite').read_bytes()
-        with self.assertRaises(DogfoodError):
+        with self.assertRaises(HarnessError):
             run_graph(self.directory,{'decision':'approve','revision':first['revision']})
         self.assertEqual((self.directory/'checkpoints.sqlite').read_bytes(),before)
         self.assertEqual(run_graph(self.directory,advance=False)['interrupts'],plan['interrupts'])
@@ -37,7 +37,7 @@ class NonhappyRegressions(unittest.TestCase):
         first=run_graph(self.directory);before=(self.directory/'checkpoints.sqlite').read_bytes()
         with run_lock(self.directory):
             shown=run_graph(self.directory,advance=False)
-            with self.assertRaises(DogfoodError):run_graph(self.directory)
+            with self.assertRaises(HarnessError):run_graph(self.directory)
         self.assertEqual(first['interrupts'],shown['interrupts'])
         self.assertEqual(before,(self.directory/'checkpoints.sqlite').read_bytes())
     def completed_check(self):
@@ -75,13 +75,13 @@ class NonhappyRegressions(unittest.TestCase):
             plan=self.approve(run_graph(self.directory));stopped=self.approve(plan)
         self.assertEqual(stopped['status'],'WAITING_USER')
         self.assertEqual(stopped['interrupts'][0]['request']['kind'],'development-findings')
-        self.assertIsNone(stopped['candidate']);self.assertFalse((self.directory/'dogfood-result.json').exists())
+        self.assertIsNone(stopped['candidate']);self.assertFalse((self.directory/'harness-result.json').exists())
     def test_run_policy_cannot_change(self):
         (self.directory/'reviewer-base.md').write_text('changed policy')
-        with self.assertRaises(DogfoodError):open_run(self.directory)
+        with self.assertRaises(HarnessError):open_run(self.directory)
     def test_package_policy_is_in_runtime_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'runtime/langgraph/formal_gates_dogfood').mkdir(parents=True);(root/'prompts').mkdir()
+            root=Path(tmp);(root/'runtime/langgraph/formal_gates_harness').mkdir(parents=True);(root/'prompts').mkdir()
             (root/'runtime/langgraph/requirements.lock').write_text('pinned')
             binary=root/'binary';binary.write_bytes(b'binary')
             policy=root/'prompts/reviewer-base.md';policy.write_text('original')

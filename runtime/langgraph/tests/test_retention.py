@@ -12,9 +12,9 @@ import uuid
 import zipfile
 from unittest.mock import patch
 import test_driver as fixtures
-from formal_gates_dogfood.cli import run_graph
-from formal_gates_dogfood.infra import atomic, read, run_lock, runtime_identity, Store, DogfoodError
-from formal_gates_dogfood.retention import archive_run, prune_run, archive_status, checked_archive, proof, db_proof
+from formal_gates_harness.cli import run_graph
+from formal_gates_harness.infra import atomic, read, run_lock, runtime_identity, Store, HarnessError
+from formal_gates_harness.retention import archive_run, prune_run, archive_status, checked_archive, proof, db_proof
 
 
 class RetentionTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class RetentionTests(unittest.TestCase):
         fixtures.DriverTests.setUp(self)
         self.run_id = 'retention-test-' + uuid.uuid4().hex
         old = self.directory
-        self.directory = fixtures.PACKAGE / '.dogfood/runs' / self.run_id
+        self.directory = fixtures.PACKAGE / '.harness/runs' / self.run_id
         shutil.copytree(old, self.directory)
         self.addCleanup(shutil.rmtree, self.directory, True)
         policy = (fixtures.PACKAGE / 'prompts/reviewer-base.md').read_bytes()
@@ -31,8 +31,8 @@ class RetentionTests(unittest.TestCase):
                              reviewer_policy_digest=hashlib.sha256(policy).hexdigest())
         atomic(self.directory / 'manifest.json', self.manifest)
         self.archive = self.root / 'archives' / 'run.zip'
-        env = patch.dict(os.environ, FORMAL_GATES_DOGFOOD_ROOT=str(fixtures.PACKAGE),
-                         FORMAL_GATES_DOGFOOD_BINARY=str(fixtures.BINARY),
+        env = patch.dict(os.environ, FORMAL_GATES_HARNESS_ROOT=str(fixtures.PACKAGE),
+                         FORMAL_GATES_HARNESS_BINARY=str(fixtures.BINARY),
                          PYTHONPATH=str(fixtures.PACKAGE / 'runtime/langgraph'))
         env.start(); self.addCleanup(env.stop)
 
@@ -77,7 +77,7 @@ class RetentionTests(unittest.TestCase):
             self.assertEqual(shown['status'], state['status']); self.assertTrue(shown['archived'])
             self.assertEqual(shown['candidate'], state['candidate'])
         self.assertFalse((self.directory / 'checkpoints.sqlite').exists())
-        with self.assertRaises(DogfoodError):
+        with self.assertRaises(HarnessError):
             run_graph(self.directory, {'decision': 'approve', 'revision': state['revision']}, 'old-interrupt')
         again = prune_run(self.directory, self.archive, True)
         self.assertEqual(again['removed_files'], 0)
@@ -85,26 +85,26 @@ class RetentionTests(unittest.TestCase):
 
     def test_pending_run_and_busy_run_cannot_archive(self):
         run_graph(self.directory)
-        with self.assertRaisesRegex(DogfoodError, 'RUN_NOT_TERMINAL'):
+        with self.assertRaisesRegex(HarnessError, 'RUN_NOT_TERMINAL'):
             archive_run(self.directory, self.archive)
         self.assertFalse(self.archive.exists())
         with run_lock(self.directory):
-            with self.assertRaisesRegex(DogfoodError, 'RUN_BUSY'): archive_run(self.directory, self.archive)
+            with self.assertRaisesRegex(HarnessError, 'RUN_BUSY'): archive_run(self.directory, self.archive)
 
     def test_archive_does_not_overwrite_output(self):
         self.stopped(); self.archive.parent.mkdir(); self.archive.write_bytes(b'owned existing file')
-        with self.assertRaisesRegex(DogfoodError, 'ARCHIVE_EXISTS'): archive_run(self.directory, self.archive)
+        with self.assertRaisesRegex(HarnessError, 'ARCHIVE_EXISTS'): archive_run(self.directory, self.archive)
         self.assertEqual(self.archive.read_bytes(), b'owned existing file')
 
     def test_archive_cannot_be_inside_source_run(self):
         self.stopped()
-        with self.assertRaisesRegex(DogfoodError, 'ARCHIVE_PATH'):
+        with self.assertRaisesRegex(HarnessError, 'ARCHIVE_PATH'):
             archive_run(self.directory, self.directory / 'archive.zip')
 
     def test_bad_archive_never_prunes(self):
         self.stopped(); archive_run(self.directory, self.archive)
         self.archive.write_bytes(b'broken archive')
-        with self.assertRaisesRegex(DogfoodError, 'ARCHIVE_INVALID'):
+        with self.assertRaisesRegex(HarnessError, 'ARCHIVE_INVALID'):
             prune_run(self.directory, self.archive, True)
         self.assertTrue((self.directory / 'checkpoints.sqlite').exists())
         self.assertFalse((self.directory / 'archive.json').exists())
@@ -112,7 +112,7 @@ class RetentionTests(unittest.TestCase):
     def test_changed_source_after_archive_refuses_prune(self):
         self.stopped(); archive_run(self.directory, self.archive)
         (self.directory / 'new-important-note.txt').write_text('must retain')
-        with self.assertRaisesRegex(DogfoodError, 'ARCHIVE_STALE'):
+        with self.assertRaisesRegex(HarnessError, 'ARCHIVE_STALE'):
             prune_run(self.directory, self.archive, True)
         self.assertTrue((self.directory / 'checkpoints.sqlite').exists())
         self.assertEqual((self.directory / 'new-important-note.txt').read_text(), 'must retain')
@@ -120,18 +120,18 @@ class RetentionTests(unittest.TestCase):
     def test_lost_or_live_job_prevents_archive(self):
         self.stopped(); job = self.directory / 'jobs' / 'unresolved'; job.mkdir(parents=True)
         atomic(job / 'request.json', {'kind': 'test'})
-        with self.assertRaisesRegex(DogfoodError, 'RUN_UNSETTLED'):
+        with self.assertRaisesRegex(HarnessError, 'RUN_UNSETTLED'):
             archive_run(self.directory, self.archive)
         atomic(job / 'exit.json', {'exit_code': 0})
         atomic(job / 'native-process.json', {'pid': os.getpid()})
-        with self.assertRaisesRegex(DogfoodError, 'RUN_UNSETTLED'):
+        with self.assertRaisesRegex(HarnessError, 'RUN_UNSETTLED'):
             archive_run(self.directory, self.archive)
         self.assertFalse(self.archive.exists())
 
     def test_symlink_is_not_followed_or_deleted(self):
         self.stopped(); external = self.root / 'must-keep'; external.write_text('sentinel')
         (self.directory / 'outside').symlink_to(external)
-        with self.assertRaisesRegex(DogfoodError, 'ARCHIVE_UNSUPPORTED'):
+        with self.assertRaisesRegex(HarnessError, 'ARCHIVE_UNSUPPORTED'):
             archive_run(self.directory, self.archive)
         self.assertEqual(external.read_text(), 'sentinel')
 
@@ -157,7 +157,7 @@ class RetentionTests(unittest.TestCase):
     def test_edited_archive_after_prune_fails_read(self):
         self.stopped(); archive_run(self.directory, self.archive); prune_run(self.directory, self.archive, True)
         self.archive.write_bytes(b'not the archived evidence')
-        with self.assertRaisesRegex(DogfoodError, 'ARCHIVE_CHANGED'):
+        with self.assertRaisesRegex(HarnessError, 'ARCHIVE_CHANGED'):
             run_graph(self.directory, advance=False)
         self.assertFalse((self.directory / 'checkpoints.sqlite').exists())
 

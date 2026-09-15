@@ -170,7 +170,7 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 		t.Fatalf("installed terminal replay = %+v", replay)
 	}
 
-	runInstalledLegacyRegression(t, candidate, home, root)
+	runInstalledLegacyRegression(t, candidate, home, isolatedInstallSource(t, root, candidate))
 
 	final, err := project.Snapshot()
 	if err != nil {
@@ -189,6 +189,36 @@ func TestAcceptanceInstalledProtocolHarness(t *testing.T) {
 			t.Fatalf("stable namespace %s was modified: %v", stablePath, entries)
 		}
 	}
+}
+
+// Use the candidate built by this test, not a stale checkout bin that an
+// earlier install can silently copy over the candidate executable.
+func isolatedInstallSource(t *testing.T, root, candidate string) string {
+	t.Helper()
+	receipt, err := validate.PackageReceipt(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	copyFile := func(from, to string, mode os.FileMode) {
+		t.Helper()
+		data, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to, data, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range receipt.Entries {
+		rel := filepath.FromSlash(entry.Path)
+		copyFile(filepath.Join(root, rel), filepath.Join(source, rel), os.FileMode(entry.Mode))
+	}
+	copyFile(candidate, filepath.Join(source, "bin", filepath.Base(candidate)), 0o700)
+	return source
 }
 
 func runInstalledLegacyRegression(t *testing.T, candidate, home, source string) {

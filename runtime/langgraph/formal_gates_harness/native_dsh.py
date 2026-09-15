@@ -8,12 +8,12 @@ import json
 import os
 from pathlib import Path
 import queue
-import re
 import shutil
 import subprocess
-import sys
 import threading
-from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, atomic, read, file_proof
+from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, atomic, read, file_proof
+
+TRANSPORT_FILES = ('native_dsh.py', 'native_dsh.mjs')
 
 class Client:
     def __init__(self, argv: list[str], workspace: str, directory: Path):
@@ -28,8 +28,10 @@ class Client:
     def _read(self):
         try:
             for line in self.proc.stdout:
-                self.trace.write(line); self.trace.flush()
-                try: self.messages.put(json.loads(line))
+                try:
+                    message = json.loads(line)
+                    self.trace.write(json.dumps({k:message[k] for k in ('id','method') if k in message})+'\n'); self.trace.flush()
+                    self.messages.put(message)
                 except ValueError: self.messages.put({'transport_error': 'non-JSON ACP output'})
         finally: self.messages.put({'transport_error': 'native ACP process closed its output'})
     def send(self, value):
@@ -42,11 +44,10 @@ class Client:
             except queue.Empty as exc: raise RuntimeBlocked(f'DSH_STARTUP: no response to {method}') from exc
             if 'transport_error' in value: raise RuntimeBlocked(value['transport_error'])
             if 'method' in value and 'id' in value:
-                # This client never grants an extra permission or filesystem capability.
                 if value['method'] == 'session/request_permission':
-                    self.send({'jsonrpc':'2.0','id':value['id'],'result':{'outcome':{'outcome':'cancelled'}}})
+                    raise RuntimeBlocked('DSH_INTERACTION_REQUIRED: native permission needs a user decision; none was sent')
                 else:
-                    self.send({'jsonrpc':'2.0','id':value['id'],'error':{'code':-32601,'message':'Client capability not granted'}})
+                    self.send({'jsonrpc':'2.0','id':value['id'],'error':{'code':-32601,'message':'Client method not supported'}})
             elif value.get('id') == number:
                 if 'error' in value:
                     error = value['error']; message = error.get('message', 'unknown error')
@@ -72,21 +73,15 @@ class Client:
 def selection(raw):
     return {o['id']:o.get('currentValue') for o in raw.get('configOptions', [])}
 
-def make_patch(directory: Path, workspace: str, access: str) -> Path:
+def make_patch(directory: Path, read_only: bool, probe=False) -> Path:
     patch = [
-        {'insert':[{'id':'dogfood-native','name':str(Path(__file__).with_suffix('.mjs')),
-                    'config':{'directory':str(directory), 'access':access}}]},
-        {'id':'agent-loop','config':{'agents':[]}},
-        {'id':'acp','inject':['acpAppStartup','dogfoodNativeReady']},
-        {'id':'formal-gates-dsh','disabled':True},
-        {'id':'session-title-llm','disabled':True},
-        {'id':'session-telemetry-otel','disabled':True},
-        {'id':'sandbox-policy','config':{'mode':access,'workspaceRoot':workspace}},
-        {'id':'approval','config':{'policy':'never'}},
-        {'id':'permission','config':{'defaultPreset':access,'presets':{
-            'read-only':{'sandbox':'read-only','approval':'never'},
-            'workspace-write':{'sandbox':'workspace-write','approval':'never'}}}},
+        {'insert':[{'id':'harness-native','name':str(Path(__file__).with_suffix('.mjs')),
+                    'inject':['tools', *(['sandboxPolicy'] if read_only else [])],
+                    'config':{'directory':str(directory), 'read_only':read_only}}]},
+        {'id':'acp','inject':['acpAppStartup','harnessNativeReady']},
     ]
+    if probe:
+        patch.append({'id':'session-title-llm','disabled':True})
     path = directory / 'profile.json'; atomic(path, patch); return path
 
 
@@ -159,10 +154,10 @@ def reconcile_completed_output(directory: Path, process: dict) -> dict:
 
 def execute(request: dict, directory: Path, probe=False) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
-    executable = request.get('executable') or shutil.which('dsh')
-    if not executable: raise RuntimeBlocked('DSH_UNAVAILABLE: dsh is not on PATH')
+    binding = request.get('binding') or capture_binding()
+    executable = binding['launch']['executable']
     workspace = str(Path(request['workspace']).resolve())
-    patch = make_patch(directory, workspace, request.get('access','read-only'))
+    patch = make_patch(directory, request['read_only'], probe)
     client = Client([executable,'--profile','acp','--patch',str(patch)],workspace,directory)
     identity = request.get('identity',''); attached = False; configured = {}
     try:
@@ -170,6 +165,8 @@ def execute(request: dict, directory: Path, probe=False) -> dict:
         capabilities = initialize.get('agentCapabilities',{}).get('sessionCapabilities',{})
         if initialize.get('protocolVersion') != 1 or 'resume' not in capabilities or 'close' not in capabilities:
             raise RuntimeBlocked('DSH_CAPABILITY: ACP v1 resume/close required')
+        # ACP requires the additional server list. DSH mounts it in the agent
+        # scope; an empty list does not remove servers from the native profile.
         params = {'cwd':workspace,'mcpServers':[]}
         if identity: params['sessionId'] = identity
         created = client.request('session/resume' if identity else 'session/new', params)
@@ -183,6 +180,7 @@ def execute(request: dict, directory: Path, probe=False) -> dict:
                 configured.update(selection(changed))
                 if configured.get(name) != requested: raise RuntimeBlocked(f'DSH_CONFIG: {name} selection was not applied')
         if probe:
+            client.request('session/close',{'sessionId':identity}); attached = False
             return {'provider':'dsh','executable':str(Path(executable).resolve()),'capabilities':capabilities,'selection':configured,'model_calls':0}
         prompt = request['prompt'] + '\nReturn ONLY one JSON object matching this result schema:\n' + json.dumps(request['schema'],ensure_ascii=False)
         response = client.request('session/prompt',{'sessionId':identity,'prompt':[{'type':'text','text':prompt}]},startup_timeout=None)
@@ -195,23 +193,9 @@ def execute(request: dict, directory: Path, probe=False) -> dict:
     finally:
         if attached:
             try: client.request('session/close',{'sessionId':identity},startup_timeout=10)
-            except (DogfoodError,OSError): pass
+            except (HarnessError,OSError): pass
         client.close()
 
-def main():
-    directory = Path(sys.argv[1]).resolve()
-    try:
-        request = read(directory/'native-request.json')
-        source = execute(request,directory,probe=bool(request.get('probe')))
-        print(json.dumps(source,ensure_ascii=False)); return 0
-    except Exception as exc:
-        detail = {'error': f'{type(exc).__name__}: {exc}'}
-        if isinstance(exc, SessionUnavailable):
-            detail.update(error_kind='SESSION_UNAVAILABLE', identity=exc.identity,
-                          method=exc.method, native_code=exc.code)
-        atomic(directory/'native-error.json', detail)
-        print(f'{type(exc).__name__}: {exc}',file=sys.stderr); return 1
-if __name__=='__main__': raise SystemExit(main())
 
 
 def capture_binding():

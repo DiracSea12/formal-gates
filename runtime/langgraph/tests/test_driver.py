@@ -13,12 +13,13 @@ import unittest
 from unittest.mock import patch
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
-from formal_gates_dogfood.graph import Flow
-from formal_gates_dogfood.infra import Bridge, DogfoodError, RuntimeBlocked, Store, atomic, digest, git, read, run_lock
-from formal_gates_dogfood.native_dsh import observe
+from formal_gates_harness.graph import Flow
+from formal_gates_harness.infra import Bridge, HarnessError, RuntimeBlocked, Store, atomic, digest, git, read, run_lock
+from formal_gates_harness.native_dsh import observe
+from formal_gates_harness.workers import Workers
 
 PACKAGE=Path(__file__).resolve().parents[3]
-BINARY=PACKAGE/'.dogfood/bin/formal-gates'
+BINARY=PACKAGE/'.harness/bin/formal-gates'
 
 class DriverTests(unittest.TestCase):
     def setUp(self):
@@ -38,7 +39,7 @@ class DriverTests(unittest.TestCase):
             'provider':'fixture','model':'','reasoning_effort':'','repair_limit':2}
         validated=self.bridge.call('validate-spec',spec)
         self.directory=self.root/'run';self.directory.mkdir();(self.directory/'requirement.md').write_bytes(body)
-        self.manifest={**validated,'run_id':'test','fixture':True,'profile':'dogfood-v1'}
+        self.manifest={**validated,'run_id':'test','fixture':True,'profile':'harness-v1'}
         self.store=Store(self.directory,self.manifest,self.bridge)
         self.config={'configurable':{'thread_id':'test'}}
     def tearDown(self):self.temp.cleanup()
@@ -69,7 +70,7 @@ class DriverTests(unittest.TestCase):
             self.assertIn('__interrupt__',out)
         with SqliteSaver.from_conn_string(path) as saver:
             app=Flow(self.store,PACKAGE).build(saver)
-            with self.assertRaises(DogfoodError):app.invoke(Command(resume={'decision':'approve','revision':'stale'}),self.config)
+            with self.assertRaises(HarnessError):app.invoke(Command(resume={'decision':'approve','revision':'stale'}),self.config)
             self.assertFalse((self.directory/'workspaces/development').exists())
     def test_abort_never_runs_workers(self):
         with SqliteSaver.from_conn_string(str(self.directory/'checkpoints.sqlite')) as saver:
@@ -80,20 +81,41 @@ class DriverTests(unittest.TestCase):
     def test_artifact_digest_and_duplicate_json(self):
         ref=self.store.put({'value':1});self.assertEqual(self.store.get(ref),{'value':1})
         (self.directory/'artifacts'/f'{ref}.json').write_text('{"value":2}')
-        with self.assertRaises(DogfoodError):self.store.get(ref)
+        with self.assertRaises(HarnessError):self.store.get(ref)
         path=self.root/'duplicate.json';path.write_text('{"role":"review","role":"write"}')
-        with self.assertRaises(DogfoodError):read(path)
+        with self.assertRaises(HarnessError):read(path)
     def test_one_runner_per_run(self):
         with run_lock(self.directory):
-            with self.assertRaises(DogfoodError):
+            with self.assertRaises(HarnessError):
                 with run_lock(self.directory):pass
     def test_unknown_job_is_not_relaunched(self):
         key='f'*64;directory=self.directory/'jobs'/key;directory.mkdir(parents=True)
         request={'kind':'check','argv':[sys.executable,'-c','raise Exception("must not launch")'],'cwd':str(self.root),'stdin':'','environment':{}}
         atomic(directory/'request.json',request)
-        with patch('formal_gates_dogfood.infra.time.monotonic',side_effect=[0,11]):
+        with patch('formal_gates_harness.infra.time.monotonic',side_effect=[0,11]):
             with self.assertRaises(RuntimeBlocked):self.store.job(key,request)
         self.assertFalse((directory/'process.json').exists())
+
+    def test_native_role_request_keeps_capabilities_with_the_host(self):
+        self.store.manifest['spec']['provider'] = 'test-runtime'
+        binding = {'provider': 'test-runtime', 'launch': {'native_setting': 'preserve'}, 'files': {}}
+        with patch('formal_gates_harness.workers.adapter_for') as select, \
+             patch.object(self.store, 'job', side_effect=RuntimeBlocked('request captured')):
+            adapter = select.return_value
+            adapter.name = 'test-runtime'
+            adapter.capture.return_value = binding
+            workers = Workers(self.store, PACKAGE)
+            for role in ('development', 'repair'):
+                with self.assertRaisesRegex(RuntimeBlocked, 'request captured'):
+                    workers.run(role, self.project, {'candidate': self.base})
+        requests = [read(p) for p in (self.directory/'jobs').glob('*/native-request.json')]
+        self.assertEqual(len(requests), 2)
+        for request in requests:
+            self.assertFalse(request['read_only'])
+            self.assertEqual(request['binding'], binding)
+            self.assertNotIn('native_setting', request)
+            self.assertNotIn('install software', request['prompt'])
+            self.assertIn('edit flow state', request['prompt'])
 
 class NativeEvidenceTests(unittest.TestCase):
     def case(self,reason='completed',answer='{}',ended=True):
@@ -133,7 +155,7 @@ class RecoveryTests(unittest.TestCase):
             root=Path(name);key='1'*64;effect=root/'effects.txt'
             payload="import time; from pathlib import Path; time.sleep(.8); p=Path(%r); p.write_text(p.read_text()+'effect\\n' if p.exists() else 'effect\\n')"%str(effect)
             request={'kind':'check','argv':[sys.executable,'-c',payload],'cwd':str(root),'stdin':'','environment':{}}
-            code='from pathlib import Path; from formal_gates_dogfood.infra import Store,Bridge; Store(Path(%r),{},Bridge(%r)).job(%r,%r)'%(str(root),str(BINARY),key,request)
+            code='from pathlib import Path; from formal_gates_harness.infra import Store,Bridge; Store(Path(%r),{},Bridge(%r)).job(%r,%r)'%(str(root),str(BINARY),key,request)
             with (root/'controller.stderr').open('w') as err:
                 child=subprocess.Popen([sys.executable,'-c',code],stdout=subprocess.DEVNULL,stderr=err)
                 process=root/'jobs'/key/'process.json'

@@ -14,12 +14,12 @@ import shutil
 import sqlite3
 import tempfile
 import zipfile
-from .infra import DogfoodError, Store, atomic, canonical, read, run_lock
+from .infra import HarnessError, Store, atomic, canonical, read, run_lock
 
-TERMINAL = {'DOGFOOD_COMPLETE', 'DEMO_COMPLETE', 'ABORTED'}
+TERMINAL = {'HARNESS_COMPLETE', 'DEMO_COMPLETE', 'ABORTED'}
 MARKER = 'archive.json'
 KEEP = {'manifest.json', 'requirement.md', 'reviewer-base.md', 'runner.lock',
-        'transport-adoption.json', 'dogfood-result.json', MARKER}
+        'transport-adoption.json', 'harness-result.json', MARKER}
 SKIP = {'runner.lock', 'checkpoints.sqlite-wal', 'checkpoints.sqlite-shm', MARKER}
 
 
@@ -48,9 +48,9 @@ def inventory(directory):
     for p in sorted(directory.rglob('*')):
         name = p.relative_to(directory).as_posix()
         if name in SKIP: continue
-        if p.is_symlink(): raise DogfoodError(f'ARCHIVE_UNSUPPORTED: symlink {name}; no files deleted')
+        if p.is_symlink(): raise HarnessError(f'ARCHIVE_UNSUPPORTED: symlink {name}; no files deleted')
         if p.is_dir(): continue
-        if not p.is_file(): raise DogfoodError(f'ARCHIVE_UNSUPPORTED: non-regular entry {name}')
+        if not p.is_file(): raise HarnessError(f'ARCHIVE_UNSUPPORTED: non-regular entry {name}')
         entries[name] = proof(p)
     return entries
 
@@ -59,16 +59,16 @@ def ensure_jobs_settled(directory):
     for job in (directory / 'jobs').iterdir() if (directory / 'jobs').exists() else ():
         if not job.is_dir(): continue
         if (job / 'request.json').exists() and not (job / 'exit.json').exists():
-            raise DogfoodError(f'RUN_UNSETTLED: {job.name} has no exit receipt; no cleanup')
+            raise HarnessError(f'RUN_UNSETTLED: {job.name} has no exit receipt; no cleanup')
         for name in ('process.json', 'native-process.json'):
             p = job / name
             if not p.exists(): continue
             pid = read(p).get('pid')
-            if not isinstance(pid, int) or pid <= 0: raise DogfoodError('RUN_UNSETTLED: invalid process identity')
+            if not isinstance(pid, int) or pid <= 0: raise HarnessError('RUN_UNSETTLED: invalid process identity')
             try: os.kill(pid, 0)
             except ProcessLookupError: pass
-            except PermissionError as exc: raise DogfoodError('RUN_UNSETTLED: process cannot be checked') from exc
-            else: raise DogfoodError(f'RUN_UNSETTLED: PID {pid} still exists; no cleanup')
+            except PermissionError as exc: raise HarnessError('RUN_UNSETTLED: process cannot be checked') from exc
+            else: raise HarnessError(f'RUN_UNSETTLED: PID {pid} still exists; no cleanup')
 
 
 def checked_archive(path):
@@ -77,21 +77,21 @@ def checked_archive(path):
     try:
         with zipfile.ZipFile(path) as z:
             names = z.namelist()
-            if len(names) != len(set(names)): raise DogfoodError('ARCHIVE_INVALID: duplicate members')
+            if len(names) != len(set(names)): raise HarnessError('ARCHIVE_INVALID: duplicate members')
             index = json.loads(z.read('archive-manifest.json'))
             if index.get('format') != 'formal-gates-archive-v1' or index['status']['status'] not in TERMINAL:
-                raise DogfoodError('ARCHIVE_INVALID: wrong format or nonterminal run')
+                raise HarnessError('ARCHIVE_INVALID: wrong format or nonterminal run')
             if set(names) != {'archive-manifest.json', *('run/' + n for n in index['files'])}:
-                raise DogfoodError('ARCHIVE_INVALID: missing or extra members')
+                raise HarnessError('ARCHIVE_INVALID: missing or extra members')
             for name, expected in index['files'].items():
                 p = PurePosixPath(name)
                 if p.is_absolute() or '..' in p.parts or '\\' in name:
-                    raise DogfoodError('ARCHIVE_INVALID: unsafe member path')
+                    raise HarnessError('ARCHIVE_INVALID: unsafe member path')
                 with z.open('run/' + name) as f:
-                    if stream_proof(f) != expected: raise DogfoodError(f'ARCHIVE_INVALID: content differs: {name}')
+                    if stream_proof(f) != expected: raise HarnessError(f'ARCHIVE_INVALID: content differs: {name}')
         return index
     except (zipfile.BadZipFile, KeyError, ValueError, OSError) as exc:
-        raise DogfoodError(f'ARCHIVE_INVALID: {exc}') from exc
+        raise HarnessError(f'ARCHIVE_INVALID: {exc}') from exc
 
 
 def archive_status(path):
@@ -104,11 +104,11 @@ def archive_status(path):
 def archived_status(directory):
     marker = read(directory / MARKER)
     if proof(marker['archive']) != marker['archive_proof']:
-        raise DogfoodError('ARCHIVE_CHANGED: retained archive missing or altered')
+        raise HarnessError('ARCHIVE_CHANGED: retained archive missing or altered')
     result = archive_status(marker['archive'])
     if (result['run_id'] != marker['run_id'] or result['revision'] != marker['revision'] or
         result['source_directory'] != str(directory)):
-        raise DogfoodError('ARCHIVE_BINDING: tombstone does not match archive')
+        raise HarnessError('ARCHIVE_BINDING: tombstone does not match archive')
     return {**result, 'cleanup_complete': marker.get('cleanup_complete', False)}
 
 
@@ -121,7 +121,7 @@ def _terminal(store, package):
         status = status_projection(store, Flow(store, package).build(saver),
                                    {'configurable': {'thread_id': store.manifest['run_id']}})
     if status['status'] not in TERMINAL:
-        raise DogfoodError('RUN_NOT_TERMINAL: active or paused run cannot be archived/pruned')
+        raise HarnessError('RUN_NOT_TERMINAL: active or paused run cannot be archived/pruned')
     ensure_jobs_settled(store.directory)
     # Verify all accepted evidence, not just its terminal status string.
     for receipt in (store.directory / 'workers').glob('*.json'):
@@ -136,11 +136,11 @@ def archive_run(directory, destination):
     from .cli import open_run
     package, store = open_run(directory); directory = store.directory
     destination = Path(destination).resolve()
-    if destination.is_relative_to(directory): raise DogfoodError('ARCHIVE_PATH: output must be outside the run')
+    if destination.is_relative_to(directory): raise HarnessError('ARCHIVE_PATH: output must be outside the run')
     with run_lock(directory):
-        if (directory / MARKER).exists(): raise DogfoodError('RUN_ARCHIVED: use the retained archive')
+        if (directory / MARKER).exists(): raise HarnessError('RUN_ARCHIVED: use the retained archive')
         status = _terminal(store, package)
-        if destination.exists(): raise DogfoodError('ARCHIVE_EXISTS: use a new destination; not overwritten')
+        if destination.exists(): raise HarnessError('ARCHIVE_EXISTS: use a new destination; not overwritten')
         original = inventory(directory)
         logical_db = db_proof(directory / 'checkpoints.sqlite')
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +148,7 @@ def archive_run(directory, destination):
             temp = Path(tmp); backup = temp / 'checkpoints.sqlite'
             with contextlib.closing(sqlite3.connect((directory / 'checkpoints.sqlite').as_uri() + '?mode=ro', uri=True)) as src:
                 with contextlib.closing(sqlite3.connect(backup)) as dst: src.backup(dst)
-            if db_proof(backup) != logical_db: raise DogfoodError('ARCHIVE_CHANGED: database changed while backing up')
+            if db_proof(backup) != logical_db: raise HarnessError('ARCHIVE_CHANGED: database changed while backing up')
             files = dict(original); files['checkpoints.sqlite'] = proof(backup)
             index = {'format': 'formal-gates-archive-v1', 'source_directory': str(directory),
                      'run_id': store.manifest['run_id'], 'revision': store.manifest['revision'],
@@ -174,13 +174,13 @@ def archive_run(directory, destination):
 
 def _compare_live(directory, index, allow_missing):
     current = inventory(directory); expected = index['files']
-    if set(current) - set(expected): raise DogfoodError('ARCHIVE_STALE: new files appeared; no deletion')
-    if not allow_missing and set(current) != set(expected): raise DogfoodError('ARCHIVE_STALE: source files missing')
+    if set(current) - set(expected): raise HarnessError('ARCHIVE_STALE: new files appeared; no deletion')
+    if not allow_missing and set(current) != set(expected): raise HarnessError('ARCHIVE_STALE: source files missing')
     for name, value in current.items():
         if name == 'checkpoints.sqlite':
             equal = db_proof(directory / name) == index['database_logical_sha256']
         else: equal = value == expected[name]
-        if not equal: raise DogfoodError(f'ARCHIVE_STALE: source differs: {name}')
+        if not equal: raise HarnessError(f'ARCHIVE_STALE: source differs: {name}')
     return current
 
 
@@ -188,20 +188,20 @@ def prune_run(directory, archive, confirm=False):
     from .cli import open_run
     package, store = open_run(directory); directory = store.directory
     # Only runs created by this installation, never an arbitrary project root.
-    if directory.parent != (package / '.dogfood/runs').resolve() or directory.name != store.manifest['run_id']:
-        raise DogfoodError('PRUNE_PATH: only this installation\'s run directories are eligible')
+    if directory.parent != (package / '.harness/runs').resolve() or directory.name != store.manifest['run_id']:
+        raise HarnessError('PRUNE_PATH: only this installation\'s run directories are eligible')
     archive = Path(archive).resolve()
-    if archive.is_relative_to(directory): raise DogfoodError('ARCHIVE_PATH: archive must be outside the run')
+    if archive.is_relative_to(directory): raise HarnessError('ARCHIVE_PATH: archive must be outside the run')
     with run_lock(directory):
         marker_path = directory / MARKER
         marker = read(marker_path) if marker_path.exists() else None
         index = checked_archive(archive)
         if (index['source_directory'] != str(directory) or index['run_id'] != store.manifest['run_id'] or
             index['revision'] != store.manifest['revision']):
-            raise DogfoodError('ARCHIVE_BINDING: wrong run/revision')
+            raise HarnessError('ARCHIVE_BINDING: wrong run/revision')
         status = _terminal(store, package)
         if marker and (marker['archive'] != str(archive) or marker['archive_proof'] != proof(archive)):
-            raise DogfoodError('ARCHIVE_BINDING: use the original cleanup archive')
+            raise HarnessError('ARCHIVE_BINDING: use the original cleanup archive')
         current = _compare_live(directory, index, allow_missing=marker is not None)
         remove = sorted((n for n in current if n not in KEEP), key=lambda n: (-n.count('/'), n))
         report = {'status': 'PRUNE_PREVIEW', 'run_id': store.manifest['run_id'], 'terminal_status': status['status'],

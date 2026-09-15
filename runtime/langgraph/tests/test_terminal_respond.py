@@ -8,7 +8,7 @@ import subprocess
 import unittest
 import test_driver as fixtures
 import test_checkpoint_startup as startup
-from formal_gates_dogfood.cli import run_graph
+from formal_gates_harness.cli import run_graph
 
 
 class TerminalRespondTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class TerminalRespondTests(unittest.TestCase):
 
     def public(self, command, *extra):
         return subprocess.run(
-            [str(fixtures.BINARY), 'dogfood', command, '--run', str(self.directory), *extra],
+            [str(fixtures.BINARY), 'harness', command, '--run', str(self.directory), *extra],
             env=os.environ.copy(), text=True, capture_output=True, timeout=60)
 
     def reply(self, state, decision):

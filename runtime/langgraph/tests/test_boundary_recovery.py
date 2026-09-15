@@ -9,16 +9,16 @@ import time
 import unittest
 from unittest.mock import patch
 
-from formal_gates_dogfood.cli import make_demo, package_root, run_graph
-from formal_gates_dogfood.infra import Bridge, DogfoodError, Store, read, run_lock
-from formal_gates_dogfood.native_dsh import observe
+from formal_gates_harness.cli import make_demo, package_root, run_graph
+from formal_gates_harness.infra import Bridge, HarnessError, Store, read, run_lock
+from formal_gates_harness.native_dsh import observe
 
 class Boundaries(unittest.TestCase):
     def setUp(self):
         root=Path(__file__).resolve().parents[3]
         self.environment=patch.dict(os.environ,{
-            "FORMAL_GATES_DOGFOOD_ROOT":str(root),
-            "FORMAL_GATES_DOGFOOD_BINARY":str(root/".dogfood/bin/formal-gates")})
+            "FORMAL_GATES_HARNESS_ROOT":str(root),
+            "FORMAL_GATES_HARNESS_BINARY":str(root/".harness/bin/formal-gates")})
         self.environment.start()
         self.addCleanup(self.environment.stop)
     def test_artifact_integrity(self):
@@ -26,25 +26,25 @@ class Boundaries(unittest.TestCase):
             store=Store(Path(directory),{},Bridge('unused'))
             ref=store.put({'result':'PASS'});self.assertEqual(store.get(ref),{'result':'PASS'})
             (Path(directory)/'artifacts'/f'{ref}.json').write_text('{}')
-            with self.assertRaises(DogfoodError):store.get(ref)
+            with self.assertRaises(HarnessError):store.get(ref)
     def test_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             with run_lock(Path(directory)):
-                with self.assertRaises(DogfoodError):
+                with self.assertRaises(HarnessError):
                     with run_lock(Path(directory)):pass
     def test_bad_native_completion_is_not_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             (root/'native-source.json').write_text(json.dumps({'sessionId':'test','turn':1}))
             (root/'native-events.jsonl').write_text(json.dumps({'sessionId':'test','event':{'type':'turn/end','data':{'turn':1,'reason':{'kind':'failed'}}}})+'\n')
-            with self.assertRaises(DogfoodError):observe(root,'test')
+            with self.assertRaises(HarnessError):observe(root,'test')
     def test_controller_death_reattaches_same_process(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             command="from pathlib import Path;import time; p=Path('count');p.write_text(str(int(p.read_text())+1) if p.exists() else '1');time.sleep(1.5)"
             request={'kind':'check','argv':[sys.executable,'-c',command],'cwd':str(root),'stdin':'','environment':{}}
             (root/'request-input.json').write_text(json.dumps(request))
-            code="from pathlib import Path;import json,sys;from formal_gates_dogfood.infra import Store,Bridge;root=Path(sys.argv[1]);s=Store(root,{},Bridge('unused'));print(json.dumps(s.job('operation',json.loads((root/'request-input.json').read_text()))))"
+            code="from pathlib import Path;import json,sys;from formal_gates_harness.infra import Store,Bridge;root=Path(sys.argv[1]);s=Store(root,{},Bridge('unused'));print(json.dumps(s.job('operation',json.loads((root/'request-input.json').read_text()))))"
             log=(root/'observer.log').open('wb')
             first=subprocess.Popen([sys.executable,'-c',code,str(root)],stdout=log,stderr=log)
             deadline=time.monotonic()+20
@@ -63,8 +63,8 @@ class Boundaries(unittest.TestCase):
         directory=make_demo(package_root(),native=False)
         first=run_graph(directory)
         self.assertEqual(first['status'],'WAITING_USER')
-        with self.assertRaises(DogfoodError):run_graph(directory,{'decision':'approve','revision':'wrong'})
-        with self.assertRaises(DogfoodError):run_graph(directory,{'decision':'approve','revision':first['revision'],'goto':'seal'})
+        with self.assertRaises(HarnessError):run_graph(directory,{'decision':'approve','revision':'wrong'})
+        with self.assertRaises(HarnessError):run_graph(directory,{'decision':'approve','revision':first['revision'],'goto':'seal'})
         # Test-only fixture authorization; no actual user decision is fabricated.
         for _ in range(2):
             first=run_graph(directory,{'decision':'approve','revision':first['revision']},first['interrupts'][0]['id'])

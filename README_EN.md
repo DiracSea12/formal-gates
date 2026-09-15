@@ -370,6 +370,10 @@ retains the rollout source and native model-task start/end and wall time, includ
 The stage comparison requires real metrics; see [metering](references/formal-flow.md#成本计量)
 and the [validation record](refactor-plan/stage-3-5c-validation.md).
 
-## Optional development-only dogfood driver
+## Optional development-only harness
 
-The experimental `scripts/dogfood` runner uses LangGraph and native DSH to help develop the future standalone Go engine. Ordinary Go product commands do not require Python. See `references/dogfood-langgraph.md` for setup, explicit approvals, durable recovery and limitations. `DOGFOOD_COMPLETE` is a small-profile development result, not a formal Seal or full 3.5c equivalence.
+The experimental `scripts/harness` runner uses LangGraph for orchestration and Go for task/result contracts. Run `./scripts/harness setup`, then `./scripts/harness demo --approve-sample` for a no-model fixture. Native `doctor`, `start`, and `demo --native` require `--provider` or `FORMAL_GATES_HARNESS_PROVIDER`; the explicit option wins. Existing runs retain their bound provider.
+
+Development and repair inherit native host tools and configuration, including native restrictions and approvals. Only review roles receive necessary read-only constraints. Approved check argv runs directly in a disposable clone with the current user's privileges: a clone is not a security sandbox. No unrelated model-host CLI is required for checks. Connection probes do not prove MCP authentication or successful native tool use.
+
+See `references/langgraph-harness.md` for configuration, confirmations, evidence-bound comparisons, recovery, transport adoption, retention, and testing. `HARNESS_COMPLETE` is a development result, not a formal Seal or full 3.5c equivalence. Historical runs and their runtimes remain in place; new environments live in `.harness/`.

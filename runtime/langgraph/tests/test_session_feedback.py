@@ -10,11 +10,11 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
 import test_driver as fixtures
-from formal_gates_dogfood.infra import SessionUnavailable, RuntimeBlocked, DogfoodError, atomic, digest
-from formal_gates_dogfood.native_dsh import Client
-from formal_gates_dogfood.feedback import task_input, evidence_feedback
-from formal_gates_dogfood.handover import prepare_session_restart
-from formal_gates_dogfood.graph import Flow, State
+from formal_gates_harness.infra import SessionUnavailable, RuntimeBlocked, HarnessError, atomic, digest
+from formal_gates_harness.native_dsh import Client
+from formal_gates_harness.feedback import task_input, evidence_feedback
+from formal_gates_harness.handover import prepare_session_restart
+from formal_gates_harness.graph import Flow, State
 
 
 class NativeClassification(unittest.TestCase):
@@ -72,9 +72,9 @@ class SessionFeedbackTests(unittest.TestCase):
         g.add_edge(START, 'worker'); g.add_edge('worker', END)
         with SqliteSaver.from_conn_string(str(self.directory / 'missing.sqlite')) as saver:
             app = g.compile(checkpointer=saver); app.invoke({'run_id': 'test'}, self.config)
-            with self.assertRaisesRegex(DogfoodError, 'unsupported decision'):
+            with self.assertRaisesRegex(HarnessError, 'unsupported decision'):
                 app.invoke(Command(resume={'decision': 'retry', 'revision': self.manifest['revision']}), self.config)
-        self.assertFalse((self.directory / 'dogfood-result.json').exists())
+        self.assertFalse((self.directory / 'harness-result.json').exists())
 
     def prior(self, series, attempt, identity_file=True):
         key = digest({'series': series, 'attempt': attempt})
@@ -109,7 +109,7 @@ class SessionFeedbackTests(unittest.TestCase):
         self.assertEqual(task['feedback']['authority'], 'none')
         self.assertEqual(task['feedback']['sha256'], digest(injected))
         result = {'status': 'PASS', 'summary': injected['summary'], 'findings': [], 'check_ids': [], 'goto': 'seal'}
-        with self.assertRaises(DogfoodError):
+        with self.assertRaises(HarnessError):
             self.bridge.call('validate-worker', {'role': 'development', 'result': result, 'checks': []})
 
     def test_feedback_provenance_is_verified(self):
@@ -120,11 +120,11 @@ class SessionFeedbackTests(unittest.TestCase):
         self.assertEqual(record['source']['role'], 'technical-review')
         self.assertEqual(record['authority'], 'none')
         (self.directory / 'artifacts' / (ref + '.json')).write_text('{}')
-        with self.assertRaises(DogfoodError): evidence_feedback(self.store, ref, 'plan')
+        with self.assertRaises(HarnessError): evidence_feedback(self.store, ref, 'plan')
 
     def test_feedback_from_other_revision_is_not_accepted(self):
         ref = self.store.put({'revision': 'other', 'result': {'summary': 'wrong requirement'}})
-        with self.assertRaisesRegex(DogfoodError, 'FEEDBACK_BINDING'):
+        with self.assertRaisesRegex(HarnessError, 'FEEDBACK_BINDING'):
             evidence_feedback(self.store, ref, 'plan')
 
     def test_repeated_findings_do_not_nest_all_prior_feedback(self):
@@ -145,14 +145,14 @@ class SessionFeedbackTests(unittest.TestCase):
 
 
     def test_retry_after_failed_replacement_uses_latest_series_identity(self):
-        from formal_gates_dogfood.workers import Workers
+        from formal_gates_harness.workers import Workers
         self.manifest['spec'].update(provider='dsh', model='test-model', reasoning_effort='high')
         worker = Workers(self.store, fixtures.PACKAGE)
         data = {'run_id': 'test', 'round': 0, 'candidate': self.base, 'continuation': 0}
         series = digest({'role': 'development', 'input': data, 'feedback': None, 'revision': self.manifest['revision']})
         receipt = self.directory / 'native-identities' / (series + '.json')
         atomic(receipt, {'identity': 'newer-replacement', 'workspace': str(self.project)})
-        with patch('formal_gates_dogfood.workers.shutil.which', return_value=os.sys.executable), \
+        with patch('formal_gates_harness.native_dsh.shutil.which', return_value=os.sys.executable), \
              patch.object(self.store, 'job', side_effect=RuntimeBlocked('stop before native launch')):
             with self.assertRaises(RuntimeBlocked):
                 worker.run('development', self.project, data, session='older-lost-session', attempt=2)

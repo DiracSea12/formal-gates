@@ -6,13 +6,13 @@ memory. A failed invocation must be settled before a second writer is started.
 from __future__ import annotations
 import os
 from pathlib import Path
-from .infra import DogfoodError, RuntimeBlocked, atomic, digest, git, read, file_proof
+from .infra import HarnessError, RuntimeBlocked, atomic, digest, git, read, file_proof
 
 
 def prepare_session_restart(store, series: str, attempt: int, role: str,
                             workspace: Path, materials: Path) -> dict:
     if attempt < 1:
-        raise DogfoodError('SESSION_RESTART: an interrupted prior attempt is required')
+        raise HarnessError('SESSION_RESTART: an interrupted prior attempt is required')
     previous = digest({'series': series, 'attempt': attempt - 1})
     job = store.directory / 'jobs' / previous
     if not (job / 'exit.json').exists():
@@ -21,9 +21,9 @@ def prepare_session_restart(store, series: str, attempt: int, role: str,
     store.verify_process(process)
     original = read(job / 'native-request.json')
     if Path(original['workspace']).resolve() != workspace.resolve():
-        raise DogfoodError('SESSION_RESTART: workspace changed')
-    # Native transport records the actual DSH PID. A receipt from a killed Python
-    # wrapper is not enough if that wrapper left an executing DSH child behind.
+        raise HarnessError('SESSION_RESTART: workspace changed')
+    # Native transport records the actual native executor PID. A receipt from a killed Python
+    # wrapper is not enough if that wrapper left an executing native child behind.
     live = job / 'native-process.json'
     if live.exists():
         pid = read(live)['pid']
@@ -39,7 +39,7 @@ def prepare_session_restart(store, series: str, attempt: int, role: str,
     if prior_result.exists():
         result = store.get(read(prior_result)['ref'])['result']['status']
         if result != 'BLOCKED':
-            raise DogfoodError('SESSION_RESTART: prior role result was already accepted')
+            raise HarnessError('SESSION_RESTART: prior role result was already accepted')
     identity = read(job / 'identity.json') if (job / 'identity.json').exists() else {'identity': original.get('identity', '')}
     saved = materials / 'handover.json'
     if saved.exists():
@@ -47,7 +47,7 @@ def prepare_session_restart(store, series: str, attempt: int, role: str,
         expected = {'role': role, 'revision': store.manifest['revision'],
                     'previous_job': previous, 'workspace': str(workspace)}
         if any(bundle.get(k) != v for k, v in expected.items()):
-            raise DogfoodError('SESSION_RESTART: saved handover binding changed')
+            raise HarnessError('SESSION_RESTART: saved handover binding changed')
         for entry in [*bundle['files'].values(), bundle['diff']]:
             if entry.get('available', True):
                 proof = {k: entry[k] for k in ('sha256', 'size')}
@@ -76,7 +76,7 @@ def prepare_session_restart(store, series: str, attempt: int, role: str,
             raise RuntimeBlocked('SESSION_RESTART: earlier invocation is unresolved')
         older_request = read(older / 'native-request.json')
         if Path(older_request['workspace']).resolve() != workspace.resolve():
-            raise DogfoodError('SESSION_RESTART: earlier attempt workspace differs')
+            raise HarnessError('SESSION_RESTART: earlier attempt workspace differs')
         store.verify_process({**read(older / 'exit.json'), 'directory': str(older), 'operation': older_key})
         for name in ('native-events.jsonl', 'protocol.jsonl', 'answer.raw.txt', 'identity.json', 'native-error.json'):
             sources[f'attempt-{index}-{name}'] = older / name

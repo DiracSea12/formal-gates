@@ -12,9 +12,9 @@ import threading
 import time
 from typing import Any
 
-class DogfoodError(RuntimeError):
+class HarnessError(RuntimeError):
     pass
-class RuntimeBlocked(DogfoodError):
+class RuntimeBlocked(HarnessError):
     pass
 class SessionUnavailable(RuntimeBlocked):
     """The host explicitly rejected the persistent session identity, not a timeout."""
@@ -43,7 +43,7 @@ def read(path: Path) -> Any:
     def unique(pairs):
         result = {}
         for key, value in pairs:
-            if key in result: raise DogfoodError(f"duplicate JSON field: {key}")
+            if key in result: raise HarnessError(f"duplicate JSON field: {key}")
             result[key] = value
         return result
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
@@ -56,20 +56,20 @@ def file_proof(path: Path) -> dict:
 
 def git(root: Path, *args: str) -> str:
     p = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
-    if p.returncode: raise DogfoodError(f"git {' '.join(args[:3])}: {p.stderr.strip()}")
+    if p.returncode: raise HarnessError(f"git {' '.join(args[:3])}: {p.stderr.strip()}")
     return p.stdout.strip()
 
 class Bridge:
     def __init__(self, binary: str):
         self.binary = str(Path(binary).resolve())
     def call(self, operation: str, payload: Any) -> Any:
-        p = subprocess.run([self.binary, "dogfood", "bridge"],
+        p = subprocess.run([self.binary, "harness", "bridge"],
                            input=canonical({"operation": operation, "payload": payload}), capture_output=True)
         try: answer = json.loads(p.stdout)
         except (ValueError, UnicodeError) as exc:
-            raise DogfoodError(f"Go bridge did not return JSON: {p.stderr.decode(errors='replace')[-1000:]}") from exc
+            raise HarnessError(f"Go bridge did not return JSON: {p.stderr.decode(errors='replace')[-1000:]}") from exc
         if p.returncode or not answer.get("ok"):
-            raise DogfoodError(answer.get("message", "Go bridge rejected the operation"))
+            raise HarnessError(answer.get("message", "Go bridge rejected the operation"))
         return answer["value"]
 
 @contextlib.contextmanager
@@ -81,11 +81,11 @@ def run_lock(directory: Path):
             import msvcrt
             f.seek(0); f.write(b"0"); f.flush(); f.seek(0)
             try: msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as exc: raise DogfoodError("RUN_BUSY: another runner owns this run") from exc
+            except OSError as exc: raise HarnessError("RUN_BUSY: another runner owns this run") from exc
         else:
             import fcntl
             try: fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc: raise DogfoodError("RUN_BUSY: another runner owns this run") from exc
+            except BlockingIOError as exc: raise HarnessError("RUN_BUSY: another runner owns this run") from exc
         yield
     finally:
         f.close()
@@ -102,22 +102,22 @@ class Store:
         return ref
     def get(self, ref: str) -> Any:
         if len(ref) != 64 or any(c not in "0123456789abcdef" for c in ref):
-            raise DogfoodError("invalid artifact reference")
+            raise HarnessError("invalid artifact reference")
         body = (self.directory / "artifacts" / f"{ref}.json").read_bytes()
-        if hashlib.sha256(body).hexdigest() != ref: raise DogfoodError("artifact integrity mismatch")
+        if hashlib.sha256(body).hexdigest() != ref: raise HarnessError("artifact integrity mismatch")
         return json.loads(body)
     def verify_process(self, process: dict) -> None:
         key = process.get('operation', '')
         directory = self.directory / 'jobs' / key
         if not key or Path(process.get('directory', '')).resolve() != directory.resolve():
-            raise DogfoodError('EVIDENCE_BINDING: job is outside this run')
+            raise HarnessError('EVIDENCE_BINDING: job is outside this run')
         receipt = read(directory / 'exit.json')
         request = read(directory / 'request.json')
         if receipt.get('request_digest') != digest(request):
-            raise DogfoodError('EVIDENCE_BINDING: request digest differs')
+            raise HarnessError('EVIDENCE_BINDING: request digest differs')
         for field in ('exit_code', 'error', 'request_digest', 'streams'):
             if receipt.get(field) != process.get(field):
-                raise DogfoodError(f'EVIDENCE_BINDING: process {field} differs')
+                raise HarnessError(f'EVIDENCE_BINDING: process {field} differs')
         proofs = receipt.get('streams', {})
         if set(proofs) != {'stdout.log', 'stderr.log'}:
             raise RuntimeBlocked('EVIDENCE_MISSING: stdout/stderr proofs absent')
@@ -127,6 +127,9 @@ class Store:
 
     def verify_evidence(self, ref: str) -> Any:
         value = self.get(ref)
+        for name, proof in value.get('input_files', {}).items():
+            if file_proof(Path(name)) != proof:
+                raise RuntimeBlocked(f'EVIDENCE_CHANGED: comparison input {name}')
         if 'process' in value:
             self.verify_process(value['process'])
         source = value.get('source', {})
@@ -145,12 +148,12 @@ class Store:
             print(json.dumps(record, ensure_ascii=False), file=sys.stderr, flush=True)
     def clone(self, source: str | Path, name: str, candidate: str) -> Path:
         if not name or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in name):
-            raise DogfoodError("invalid workspace name")
+            raise HarnessError("invalid workspace name")
         root = self.directory / "workspaces" / name
         receipt = root.with_suffix(".ready.json")
         expected = {"source": str(Path(source).resolve()), "base": candidate}
         if receipt.exists():
-            if read(receipt) != expected: raise DogfoodError("workspace binding changed")
+            if read(receipt) != expected: raise HarnessError("workspace binding changed")
             return root
         if root.exists():
             if not (root / ".git").is_dir() or git(root, "rev-parse", "HEAD") != candidate:
@@ -171,12 +174,12 @@ class Store:
         intent = directory / "request.json"
         owner = None
         if intent.exists():
-            if read(intent) != request: raise DogfoodError("job id reused with different input")
+            if read(intent) != request: raise HarnessError("job id reused with different input")
         else:
             atomic(intent, request)
             self.event("job-start", operation=key, kind=request["kind"])
             with (directory / "wrapper.stderr").open("ab") as err:
-                owner = subprocess.Popen([sys.executable, "-m", "formal_gates_dogfood.job", str(directory)],
+                owner = subprocess.Popen([sys.executable, "-m", "formal_gates_harness.job", str(directory)],
                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err,
                                          start_new_session=True, close_fds=True)
         receipt = directory / "exit.json"
@@ -197,7 +200,7 @@ class Store:
             time.sleep(0.1)
         if owner is not None: owner.wait()
         result = read(receipt)
-        if result.get("request_digest") != digest(request): raise DogfoodError("job receipt/input mismatch")
+        if result.get("request_digest") != digest(request): raise HarnessError("job receipt/input mismatch")
         record = {**result, "directory": str(directory), "operation": key}
         self.verify_process(record)
         return record
@@ -212,9 +215,10 @@ class Store:
 
 def runtime_identity(root: Path, binary: str) -> str:
     h = hashlib.sha256()
-    for p in sorted((root / "runtime" / "langgraph" / "formal_gates_dogfood").glob("*")):
+    package = root / "runtime" / "langgraph" / "formal_gates_harness"
+    for p in sorted(package.rglob("*")):
         if p.is_file() and p.suffix in (".py", ".mjs"):
-            h.update(p.name.encode()); h.update(p.read_bytes())
+            h.update(p.relative_to(package).as_posix().encode()); h.update(p.read_bytes())
     h.update((root / "runtime" / "langgraph" / "requirements.lock").read_bytes())
     h.update(b'\x00reviewer-policy\x00')
     h.update((root / 'prompts' / 'reviewer-base.md').read_bytes())

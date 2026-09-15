@@ -147,4 +147,4 @@ RQ-011（2026-08-09 提交 62057e6 引入，P1 QA 解耦与 Carry 继承修复 r
 - write-block hook：活动 run 下主线程只读命令（含 `.gates` 字样的 grep/ls/python3 读、
   只读 git 查询）放行；真写 `.gates`/代码（git add/commit、`> .gates/...`、`tee
   .gates/...` 等）仍被拦。
-- 既有测试套件全部通过；正式流程（本 run 自身即 dogfooding）走到 seal 完成。
+- 既有测试套件全部通过；正式流程（本 run 自身即 harness development）走到 seal 完成。

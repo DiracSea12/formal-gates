@@ -36,7 +36,7 @@
 ## 环境约束
 
 - 本 run 在 `codex/refactor-phase-1` worktree 开发，基线为 db1822b；主分支其他改动不属于本 run。
-- 固定 stable driver（2026-08-22 用户拍板重冻结）：`~/.formal-gates/releases/0.1.0-macos-arm64` 与 `~/.local/bin/formal-gates` 已重建为 main HEAD `7929891`（git archive + go build；SKILL 指纹 46941e99 一致；package validate 与 canary portable PASS）。阶段 1–6 固定使用该驱动，不再随开发更新；阶段 7 按计划切换。重冻结原因：阶段 0 名义冻结的 5373c13 缺少现行流程命令（`--split`、`slicing`、`settle-findings`、`qa-worktree`），从未实际驱动过任何 run；phase-0 run 实际由更新构建驱动，偏离自狗粮规则，如实留痕。旧树备份 `/tmp/stub-backup/`。
+- 固定 stable driver（2026-08-22 用户拍板重冻结）：`~/.formal-gates/releases/0.1.0-macos-arm64` 与 `~/.local/bin/formal-gates` 已重建为 main HEAD `7929891`（git archive + go build；SKILL 指纹 46941e99 一致；package validate 与 canary portable PASS）。阶段 1–6 固定使用该驱动，不再随开发更新；阶段 7 按计划切换。重冻结原因：阶段 0 名义冻结的 5373c13 缺少现行流程命令（`--split`、`slicing`、`settle-findings`、`qa-worktree`），从未实际驱动过任何 run；phase-0 run 实际由更新构建驱动，偏离自身开发验证规则，如实留痕。旧树备份 `/tmp/stub-backup/`。
 - phase-0 故障注入测试曾将旧 launcher 写成 25 字节空桩（与 `package_test.go:252` 桩逐字节一致）并污染真实 registry（142 条测试记录）；测试隔离缺陷在本阶段修复并回归。自本 run 起每次会话首次调用前 launcher smoke 留证。
 - 阶段候选从已提交快照构建隔离安装，在独立测试项目/host config/state namespace 验证；候选不得驱动本 run、写 stable registry 或签发权威 Seal。
 - 开发前先完成六种代表性 step 的 compiler spike（engine local、durable side effect、host action、agent task、human ask、parallel/join），确认 IR/registry/encoder 边界；spike 代码不进入 production。

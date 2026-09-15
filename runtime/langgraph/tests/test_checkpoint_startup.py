@@ -16,7 +16,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 import test_driver as fixtures
-from formal_gates_dogfood.infra import atomic, runtime_identity
+from formal_gates_harness.infra import atomic, runtime_identity
 
 
 class CheckpointStartupTests(unittest.TestCase):
@@ -29,8 +29,8 @@ class CheckpointStartupTests(unittest.TestCase):
             reviewer_policy_digest=hashlib.sha256(policy).hexdigest())
         atomic(self.directory / 'manifest.json', self.manifest)
         env = patch.dict(os.environ, {
-            'FORMAL_GATES_DOGFOOD_ROOT': str(fixtures.PACKAGE),
-            'FORMAL_GATES_DOGFOOD_BINARY': str(fixtures.BINARY),
+            'FORMAL_GATES_HARNESS_ROOT': str(fixtures.PACKAGE),
+            'FORMAL_GATES_HARNESS_BINARY': str(fixtures.BINARY),
             'PYTHONPATH': str(fixtures.PACKAGE / 'runtime/langgraph')})
         env.start()
         self.addCleanup(env.stop)
@@ -40,7 +40,7 @@ class CheckpointStartupTests(unittest.TestCase):
 
     def public(self, command, directory):
         return subprocess.run(
-            [str(fixtures.BINARY), 'dogfood', command, '--run', str(directory)],
+            [str(fixtures.BINARY), 'harness', command, '--run', str(directory)],
             env=os.environ.copy(), capture_output=True, text=True, timeout=60)
 
     def files(self, directory, allow_sqlite_coordination=False):
@@ -80,7 +80,7 @@ class CheckpointStartupTests(unittest.TestCase):
         self.assertEqual(state['interrupts'][0]['request']['kind'], 'requirement')
         self.assertFalse(list((directory / 'workers').glob('*.json')))
         self.assertFalse(list((directory / 'jobs').glob('*')))
-        self.assertFalse((directory / 'dogfood-result.json').exists())
+        self.assertFalse((directory / 'harness-result.json').exists())
         rows_before = self.checkpoint_rows(directory)
         before = self.files(directory, allow_sqlite_coordination=True)
         shown = self.public('show', directory)
@@ -105,7 +105,7 @@ class CheckpointStartupTests(unittest.TestCase):
 
     def test_process_exit_after_real_make_run_before_first_checkpoint(self):
         run_id = 'test-startup-gap-' + uuid.uuid4().hex
-        directory = fixtures.PACKAGE / '.dogfood/runs' / run_id
+        directory = fixtures.PACKAGE / '.harness/runs' / run_id
         self.assertFalse(directory.exists())
         self.addCleanup(shutil.rmtree, directory, True)
         parameters = {
@@ -116,7 +116,7 @@ class CheckpointStartupTests(unittest.TestCase):
             'run_id': run_id}
         code = '''import json, os, sys
 from pathlib import Path
-from formal_gates_dogfood.cli import make_run, package_root
+from formal_gates_harness.cli import make_run, package_root
 p = json.loads(sys.argv[1])
 run = make_run(package_root(), Path(p['project']), Path(p['requirement']),
                p['checks'], p['gates'], provider='fixture', fixture=True,

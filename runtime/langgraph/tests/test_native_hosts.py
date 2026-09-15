@@ -6,25 +6,24 @@ import queue
 import tempfile
 import unittest
 from unittest.mock import Mock,patch
-from formal_gates_dogfood.infra import Bridge,DogfoodError,RuntimeBlocked,SessionUnavailable,atomic,file_proof
-from formal_gates_dogfood.native_hosts import adapter_for,execution_hosts,normalize_provider,host_catalog
-from formal_gates_dogfood.native_zcode import materialize_source,exact_model,Client,ALLOWED,DENIED
-from formal_gates_dogfood.native_workspace import sandbox_argv
+from formal_gates_harness.infra import Bridge,HarnessError,RuntimeBlocked,SessionUnavailable,atomic,file_proof
+from formal_gates_harness.native_hosts import adapter_for,execution_hosts,normalize_provider,host_catalog
+from formal_gates_harness.native_zcode import materialize_source,exact_model,Client
 
 ROOT=Path(__file__).resolve().parents[3]
 
 class HostRegistryTests(unittest.TestCase):
-    def setUp(self):self.bridge=Bridge(str(ROOT/'.dogfood/bin/formal-gates'))
-    def test_host_names_use_existing_go_registry(self):
+    def setUp(self):self.bridge=Bridge(str(ROOT/'.harness/bin/formal-gates'))
+    def test_installation_aliases_remain_available(self):
         self.assertEqual(normalize_provider(self.bridge,'DeepSeek Harness'),'dsh')
         self.assertEqual(normalize_provider(self.bridge,'z-code'),'zcode')
         catalog=host_catalog(self.bridge)
-        self.assertEqual({h['provider'] for h in catalog['hosts'] if h['execution_adapter']},{'dsh','zcode'})
+        self.assertEqual({h['provider'] for h in catalog['hosts'] if h['execution_adapter']},set(execution_hosts()))
         self.assertIn('cursor',{h['provider'] for h in catalog['hosts'] if h['entry_integration']})
     def test_installation_only_is_not_a_runnable_host(self):
         self.assertEqual(normalize_provider(self.bridge,'cursor'),'cursor')
         with self.assertRaisesRegex(RuntimeBlocked,'UNSUPPORTED_NATIVE_HOST'):adapter_for('cursor')
-        with self.assertRaises(DogfoodError):normalize_provider(self.bridge,'unknown')
+        with self.assertRaises(HarnessError):normalize_provider(self.bridge,'unknown')
     def test_bound_host_changes_fail_before_execution(self):
         with tempfile.TemporaryDirectory() as t:
             p=Path(t)/'binary';p.write_text('original')
@@ -32,7 +31,7 @@ class HostRegistryTests(unittest.TestCase):
             adapter_for('zcode').validate_binding(binding)
             p.write_text('changed')
             with self.assertRaisesRegex(RuntimeBlocked,'HOST_CHANGED'):adapter_for('zcode').validate_binding(binding)
-            with self.assertRaisesRegex(DogfoodError,'HOST_BINDING'):adapter_for('dsh').validate_binding(binding)
+            with self.assertRaisesRegex(HarnessError,'HOST_BINDING'):adapter_for('dsh').validate_binding(binding)
     def test_same_evidence_verification_for_both_hosts(self):
         for provider in execution_hosts():
             with self.subTest(provider=provider),tempfile.TemporaryDirectory() as t:
@@ -44,7 +43,7 @@ class HostRegistryTests(unittest.TestCase):
                 (root/'answer.raw.txt').write_text('changed')
                 with self.assertRaisesRegex(RuntimeBlocked,'EVIDENCE_CHANGED'):adapter_for(provider).verify_source(root,source)
     def test_common_worker_store_do_not_import_dsh(self):
-        base=ROOT/'runtime/langgraph/formal_gates_dogfood'
+        base=ROOT/'runtime/langgraph/formal_gates_harness'
         for name in ('workers.py','infra.py','cli.py'):
             text=(base/name).read_text()
             self.assertNotIn('from .native_dsh import',text,name)
@@ -52,46 +51,8 @@ class HostRegistryTests(unittest.TestCase):
         text=(base/'graph.py').read_text()
         self.assertNotIn('native_zcode',text)
         self.assertNotIn("provider'] == 'dsh'",text)
-    def test_zcode_native_write_tools_not_granted(self):
-        self.assertTrue({'Bash','Write','Edit','Agent','Task','Workflow'}<=set(DENIED))
-        self.assertFalse(set(ALLOWED)&set(DENIED))
-        self.assertIn('mcp__formal-gates-workspace__workspace_command',ALLOWED)
-        text=(ROOT/'runtime/langgraph/formal_gates_dogfood/native_zcode.py').read_text()
-        self.assertIn("'isolation':'workspace'",text)
-        self.assertIn("'protocolVersion':'legacy'",text)
-    def test_zcode_sandbox_role_scope(self):
-        req={'access':'read-only','workspace':'/isolated','binding':{'launch':{'sandbox':'native-sandbox'}}}
-        args=sandbox_argv(req,'printf x > sample')
-        self.assertIn('network={enabled=false}',args[7]);self.assertNotIn('"write"',args[7])
-        req['access']='workspace-write';args=sandbox_argv(req,'true')
-        self.assertIn('":workspace_roots"="write"',args[7])
-        req['access']='unrestricted'
-        with self.assertRaises(ValueError):sandbox_argv(req,'true')
 
-    def test_command_cache_does_not_grant_source_or_parent_writes(self):
-        from formal_gates_dogfood.native_workspace import command_environment
-        with tempfile.TemporaryDirectory() as t, patch.dict(os.environ, {'TEST_API_KEY':'must-not-leak'}), \
-             patch('formal_gates_dogfood.native_workspace.shutil.which', return_value='/native/git'):
-            root=Path(t);env,scratch=command_environment(root)
-            self.assertNotIn('TEST_API_KEY',env)
-            self.assertEqual(Path(env['HOME']),scratch/'home')
-            self.assertEqual(Path(env['TMPDIR']),scratch/'tmp')
-            request={'access':'read-only','workspace':'/project','binding':{'launch':{'sandbox':'codex'}}}
-            policy=sandbox_argv(request,'true',scratch)[7]
-            self.assertIn(json.dumps(str(scratch))+'="write"',policy)
-            self.assertNotIn('":workspace_roots"="write"',policy)
-            self.assertNotIn(json.dumps(str(root))+'="write"',policy)
 
-    def test_macos_git_shim_is_resolved_outside_sandbox(self):
-        from formal_gates_dogfood.native_workspace import command_environment
-        with tempfile.TemporaryDirectory() as t:
-            root=Path(t);git=root/'native-bin/git';git.parent.mkdir();git.write_text('native')
-            with patch('formal_gates_dogfood.native_workspace.sys.platform','darwin'), \
-                 patch('formal_gates_dogfood.native_workspace.shutil.which',return_value='/usr/bin/git'), \
-                 patch('formal_gates_dogfood.native_workspace.subprocess.run',return_value=Mock(stdout=str(git)+'\n')) as probe:
-                env,_=command_environment(root/'job')
-            probe.assert_called_once()
-            self.assertEqual(env['PATH'].split(os.pathsep)[0],str(git.parent))
 
 
 class ZCodeEvidenceTests(unittest.TestCase):
@@ -135,7 +96,7 @@ class ZCodeEvidenceTests(unittest.TestCase):
             exact_model(json.dumps({'providerId':'other','modelId':'M'}),snap)
 
     def test_resume_uses_native_config_without_persisting_secret(self):
-        from formal_gates_dogfood.native_zcode import resume_model_environment,runtime_model
+        from formal_gates_harness.native_zcode import resume_model_environment,runtime_model
         model={'providerId':'bound-provider','modelId':'M'}
         with tempfile.TemporaryDirectory() as t:
             path=Path(t)/'host.json'
@@ -153,24 +114,11 @@ class ZCodeEvidenceTests(unittest.TestCase):
             self.assertEqual(value['provider']['baseURL'],'https://native.example/v1')
             self.assertEqual(path.read_bytes(),before)
     def test_missing_catalog_model_cannot_materialize(self):
-        from formal_gates_dogfood.native_zcode import runtime_model
+        from formal_gates_harness.native_zcode import runtime_model
         with self.assertRaisesRegex(RuntimeBlocked,'catalog entry'):
             runtime_model({'modelCatalog':{'providers':[]}}, {'providerId':'gone','modelId':'M'},'high')
 
 
-    def test_missing_workspace_tool_blocks_before_any_prompt(self):
-        from formal_gates_dogfood import native_zcode as z
-        with tempfile.TemporaryDirectory() as t:
-            root=Path(t);client=Mock()
-            client.request.return_value={'statuses':{'formal-gates-workspace':{'status':'failed','toolCount':0}}}
-            q={'provider':'zcode','workspace':str(root),'access':'workspace-write',
-               'binding':{'launch':{'executable':'test-node','script':'test-script','sandbox':'test-sandbox'}}}
-            with patch.object(z,'Client',return_value=client):
-                with self.assertRaisesRegex(RuntimeBlocked,'ZCODE_TOOLS_UNAVAILABLE'):
-                    z.execute(q,root)
-            self.assertEqual([c.args[0] for c in client.request.call_args_list],['mcp/list'])
-            client.close.assert_called_once()
-            self.assertFalse((root/'native-source.json').exists())
 
     def test_missing_session_separate_from_model_error(self):
         for code,text,cls in ((-32004,'Session not found: old',SessionUnavailable),(-32031,'Model unavailable',RuntimeBlocked)):

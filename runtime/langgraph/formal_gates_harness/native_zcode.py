@@ -1,8 +1,8 @@
 """ZCode app-server transport, reusing the original native event contract.
 
 No graph imports, workflow callbacks, global configuration writes or model
-substitution. Tools are mounted on create/resume itself (never close an empty
-session merely to configure it). Terminals require exact session/input/turn IDs.
+substitution. Only read-only roles narrow native tools. Terminals require exact
+session/input/turn IDs.
 """
 from __future__ import annotations
 import json
@@ -11,31 +11,28 @@ from pathlib import Path
 import queue
 import shutil
 import subprocess
-import sys
 import threading
 import time
-from .infra import DogfoodError, RuntimeBlocked, SessionUnavailable, atomic, read, file_proof, canonical
+from .infra import HarnessError, RuntimeBlocked, SessionUnavailable, atomic, read, file_proof, canonical
 from .native_result import decode_result
 
-TOOL='mcp__formal-gates-workspace__workspace_command'
-ALLOWED=['Read','Glob','Grep',TOOL]
-DENIED=['Bash','Write','Edit','NotebookEdit','Agent','Task','Workflow','ScheduleWakeup',
-        'EnterWorktree','ExitWorktree','EnterPlanMode','ExitPlanMode','WebSearch','WebFetch',
-        'AskUserQuestion','CronCreate','CronUpdate','CronDelete']
+# App-server has no read-only mode. Its native allowlist also governs MCP;
+# arbitrary command/plugin executors cannot enforce this role's write boundary.
+READ_ONLY_TOOLS=['Read','Glob','Grep','WebSearch','WebFetch']
 
 
 def capture_binding():
-    node=shutil.which('node');sandbox=shutil.which('codex')
+    node=shutil.which('node')
     script=Path(os.environ.get('FORMAL_GATES_ZCODE_SCRIPT','/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs')).expanduser().resolve()
     if not node or not script.is_file(): raise RuntimeBlocked('ZCODE_UNAVAILABLE: node or app-server script missing')
-    if not sandbox: raise RuntimeBlocked('COMMAND_SANDBOX_UNAVAILABLE: ZCode workspace tool needs the native command sandbox')
-    launch={'executable':str(Path(node).resolve()),'script':str(script),'sandbox':str(Path(sandbox).resolve())}
+    launch={'executable':str(Path(node).resolve()),'script':str(script)}
     return {'provider':'zcode','launch':launch,'files':{p:file_proof(Path(p)) for p in launch.values()}}
 
 
 class Client:
     def __init__(self, launch, workspace, directory, environment=None):
         self.identity='';self.counter=0;self.events=[];self.messages=queue.Queue();self.directory=directory
+        self.interactions=[]
         self.errors=(directory/'host.stderr').open('ab');self.trace=(directory/'protocol.jsonl').open('a')
         self.proc=subprocess.Popen([launch['executable'],launch['script'],'--cwd',workspace,'app-server'],
             cwd=workspace,env={**os.environ, **(environment or {})},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.errors,text=True,bufsize=1)
@@ -43,8 +40,11 @@ class Client:
         self.reader=threading.Thread(target=self.collect,daemon=True);self.reader.start()
     def collect(self):
         for line in self.proc.stdout:
-            self.trace.write(line);self.trace.flush()
-            try:self.messages.put(json.loads(line))
+            try:
+                message=json.loads(line)
+                # Record protocol routing, not configuration/auth payloads.
+                self.trace.write(json.dumps({k:message[k] for k in ('id','method') if k in message})+'\n');self.trace.flush()
+                self.messages.put(message)
             except ValueError:self.messages.put({'closed':'Invalid native protocol output'})
         self.messages.put({'closed':'Native output closed'})
     def send(self,value):
@@ -53,17 +53,29 @@ class Client:
         try:msg=self.messages.get(timeout=timeout)
         except queue.Empty as exc: raise RuntimeBlocked('ZCODE_TIMEOUT: no native message; session is not assumed lost') from exc
         if 'closed' in msg: raise RuntimeBlocked('ZCODE_TRANSPORT: '+msg['closed'])
-        if msg.get('method')=='session/requestRuntimePreferences':
-            params=msg['params']
-            if self.identity and params.get('sessionId')!=self.identity: raise RuntimeBlocked('ZCODE_BINDING: preferences for another session')
-            self.send({'id':msg['id'],'result':{'nativeSearchEnhancementsEnabled':False,'memoryEnabled':False,
-                'askUserQuestionAutoResolutionEnabled':False,'modelContextBudgetStrategy':'preflight-v1'}})
-        elif msg.get('method') and msg.get('id'):
-            self.send({'id':msg['id'],'error':{'code':-32601,'message':'No additional capability granted'}})
-            raise RuntimeBlocked('ZCODE_INTERACTION: '+msg['method'])
+        if msg.get('method') and 'id' in msg:
+            method=msg['method']
+            if method=='session/requestRuntimePreferences':
+                # ZCode defines this response as its native compatibility fallback.
+                self.send({'id':msg['id'],'error':{'code':-32601,'message':'Use native runtime preferences fallback'}})
+                status='native-default-fallback'
+            elif method=='interaction/requestOfficialMcpAuthHeaders':
+                # No desktop authentication port is available on this connection.
+                self.send({'id':msg['id'],'result':{'ok':False,'reason':'official_auth_unavailable'}})
+                status='official_auth_unavailable'
+            elif method in ('interaction/requestPermission', 'interaction/requestUserInput',
+                            'interaction/requestProviderRuntimeHeaders'):
+                raise RuntimeBlocked('ZCODE_INTERACTION_REQUIRED: '+method+' needs a native interactive client; no user decision was sent')
+            else:
+                self.send({'id':msg['id'],'error':{'code':-32601,'message':'Client method not supported'}})
+                status='unsupported-method'
+            self.interactions.append({'method':method,'status':status})
+            atomic(self.directory/'interaction-status.json',self.interactions)
         elif msg.get('method')=='session/event':
-            event=msg['params'];self.events.append(event)
-            with (self.directory/'native-events.jsonl').open('a') as f:f.write(json.dumps(event,ensure_ascii=False)+'\n');f.flush()
+            event=msg['params']
+            if self.identity and event.get('sessionId')==self.identity:
+                self.events.append(event)
+                with (self.directory/'native-events.jsonl').open('a') as f:f.write(json.dumps(event,ensure_ascii=False)+'\n');f.flush()
         return msg
     def request(self,method,params,timeout=60):
         self.counter+=1;ident='native-'+str(self.counter);self.send({'id':ident,'method':method,'params':params})
@@ -113,7 +125,7 @@ def resume_model_environment(value):
     ZCode's catalog omits built-in endpoint/auth details on cold restore. The
     adapter reads the host's documented CLI config, does not write it, and passes
     an env reference to the native runtime API. No secret enters a prompt,
-    request.json, evidence record or tool subprocess environment.
+    request.json or evidence record. The native host owns its tool environments.
     """
     try: model=json.loads(value)
     except ValueError as exc: raise RuntimeBlocked('ZCODE_CONFIG: resume needs a full provider/model reference') from exc
@@ -215,19 +227,15 @@ def reconcile_completed_output(directory,process):
 def execute(request,directory,probe=False):
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=True)
     workspace=str(Path(request['workspace']).resolve());binding=request.get('binding') or capture_binding()
-    launch=binding['launch'];access=request.get('access','read-only')
-    if access not in ('read-only','workspace-write'):raise RuntimeBlocked('ZCODE_ACCESS: unsupported role access')
-    # All writes/execution pass through an OS-sandboxed, role-scoped command.
-    # Native Read/Glob/Grep remain available; unrestricted mutation tools do not.
-    env=[{'name':'PYTHONPATH','value':str(Path(__file__).resolve().parent.parent)}]
-    server={'name':'formal-gates-workspace','command':sys.executable,
-            'args':['-m','formal_gates_dogfood.native_workspace',str(directory)],'env':env,
-            'isolation':'workspace','protocolVersion':'legacy','timeoutMs':185000}
+    launch=binding['launch']
     location={'workspacePath':workspace,'workspaceKey':workspace}
-    params={'workspace':location,'toolAllowlist':ALLOWED,'toolDenylist':DENIED,'mcpServers':[] if probe else [server]}
+    params={'workspace':location}
+    if request['read_only']:params['toolAllowlist']=READ_ONLY_TOOLS
     previous=request.get('identity','')
     if previous: params['sessionId']=previous
-    else:params.update(persistence='immediate',mode='yolo',titleGenerationEnabled=False)
+    else:
+        params['persistence']='immediate'
+        if probe:params['titleGenerationEnabled']=False
     environment={};local={}
     if previous:
         if not request.get('model'): raise RuntimeBlocked('ZCODE_CONFIG: resume requires the bound model selection')
@@ -236,14 +244,6 @@ def execute(request,directory,probe=False):
     try:
         # Load this workspace's native model catalog before restoring a historic
         # session. This is a read, not provider registration or credential copying.
-        if not probe:
-            # Warm and verify the exact scoped server before a model turn. A slow
-            # MCP launch must not leave a developer with only Read/Glob/Grep.
-            ready=client.request('mcp/list',{'workspace':location,'mcpServers':[server],'mode':'connect'},timeout=90)
-            state=ready.get('statuses',{}).get('formal-gates-workspace',{})
-            atomic(directory/'workspace-readiness.json',{'status':state.get('status'),'tool_count':state.get('toolCount')})
-            if state.get('status')!='connected' or state.get('toolCount')!=1:
-                raise RuntimeBlocked('ZCODE_TOOLS_UNAVAILABLE: role-scoped workspace tool did not connect; no prompt sent')
         catalog=client.request('workspace/readState', {'workspace':location})
         if previous:
             if not request.get('model'): raise RuntimeBlocked('ZCODE_CONFIG: resume requires the bound model selection')
@@ -267,18 +267,18 @@ def execute(request,directory,probe=False):
             if changed.get('settings'):configured=selection(changed)
             if configured['reasoning_effort']!=effort:raise RuntimeBlocked('ZCODE_CONFIG: reasoning setting was not applied')
         atomic(directory/'identity.json',{'identity':identity,'provider':'zcode','workspace':workspace,'selection':configured})
-        atomic(directory/'tool-policy.json',{'access':access,'allowed':ALLOWED,'denied':DENIED,
-               'execution':'native command sandbox','network':False})
-        if probe:return {'provider':'zcode','selection':configured,'binding':binding,'model_calls':0,
-            'capabilities':{'new_session':True,'resume':True,'read_only':True,'workspace_write':True,'native_completion':True}}
-        if previous: client.request('session/setMode',{'sessionId':identity,'mode':'yolo'})
+        if request['read_only']:
+            atomic(directory/'tool-policy.json',{'read_only':True,'allowed':READ_ONLY_TOOLS})
+        if probe:
+            client.request('session/close',{'sessionId':identity}); attached=False
+            return {'provider':'zcode','selection':configured,'binding':binding,'model_calls':0,
+                'interactions':client.interactions,'native_tools':'not_verified',
+                'mcp_auth':'unavailable' if any(i['status']=='official_auth_unavailable' for i in client.interactions) else 'not_verified'}
         subscribed=client.request('session/subscribe',{'sessionId':identity,'deliveryKind':'desktop-continuous','includeSnapshot':False})
         if subscribed.get('sessionId')!=identity:raise RuntimeBlocked('ZCODE_BINDING: subscription identity differs')
         input_id='formal-gates-'+directory.name
         atomic(directory/'native-source.json',{'sessionId':identity,'inputId':input_id,'selection':configured})
-        prompt=request['prompt']+'\nUse Read/Glob/Grep or the workspace_command tool for actual work. '
-        prompt+='Native Bash/Write/Edit are not granted. workspace_command executes shell in the role-scoped OS sandbox; use python -B for read-only checks. '
-        prompt+='Do not request plan mode, tools or settings changes. Return ONLY one JSON object matching this schema:\n'+json.dumps(request['schema'],ensure_ascii=False)
+        prompt=request['prompt']+'\nReturn ONLY one JSON object matching this schema:\n'+json.dumps(request['schema'],ensure_ascii=False)
         ack=client.request('session/send',{'sessionId':identity,'inputId':input_id,'content':prompt})
         if ack.get('sessionId')!=identity or not ack.get('accepted'):raise RuntimeBlocked('ZCODE_BINDING: input not accepted')
         position=0;terminal=False;deadline=time.monotonic()+900
@@ -295,5 +295,5 @@ def execute(request,directory,probe=False):
     finally:
         if attached:
             try:client.request('session/close',{'sessionId':client.identity},timeout=10)
-            except (DogfoodError,OSError):pass
+            except (HarnessError,OSError):pass
         client.close()

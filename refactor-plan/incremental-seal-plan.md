@@ -17,7 +17,7 @@
 4. 若下一阶段开发失败，可回到最近一个已 Seal 的源码和候选包，不需要修复半安装的全局插件。
 5. 最终阶段以前不替换全局稳定安装、不退役旧运行时，也不把早期阶段的 canary 证据拼接成最终交付证据。
 
-自狗粮硬规则：从阶段 0 启动到增量阶段 7 的最终 Seal 完成之前，所有阶段正式 run 的 `workflow start`、需求登记、开发/审查/QA 编排和 Seal 都由阶段 0 冻结的基线版本项目安装（固定 stable driver）执行。候选 binary 只能在候选隔离测试项目中作为被测对象运行，不能驱动自己的 formal-gates run、写稳定 registry 或签发权威 Seal；最终 Seal 的 receipt 也必须由基线 stable driver 写出。只有最终 Seal、主线集成/promotion receipt 和最终 canary 全部成立后，才允许把全局入口切换到候选。
+自身开发验证硬规则：从阶段 0 启动到增量阶段 7 的最终 Seal 完成之前，所有阶段正式 run 的 `workflow start`、需求登记、开发/审查/QA 编排和 Seal 都由阶段 0 冻结的基线版本项目安装（固定 stable driver）执行。候选 binary 只能在候选隔离测试项目中作为被测对象运行，不能驱动自己的 formal-gates run、写稳定 registry 或签发权威 Seal；最终 Seal 的 receipt 也必须由基线 stable driver 写出。只有最终 Seal、主线集成/promotion receipt 和最终 canary 全部成立后，才允许把全局入口切换到候选。
 
 ## 2. 环境模型
 

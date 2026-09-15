@@ -3,7 +3,7 @@
 contract_review/
 
 # Local gate/review artifacts
-# .gates/results/ is the tracked dogfooding ledger (see README "自狗粮证据")
+# .gates/results/ is the tracked harness development ledger (see README "自身开发验证证据")
 .gates/tmp/
 # Per-run isolation worktrees (full repo copies, session-local)
 .gates/qa-isolation/
@@ -31,6 +31,6 @@ P2-BACKLOG.md
 PROMPT-ENGINEERING-KNOWLEDGE.md
 
 # Optional development-only runtime and private evidence
-.dogfood/
+.harness/
 __pycache__/
 *.pyc

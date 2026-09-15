@@ -1,0 +1,17 @@
+#!/bin/sh
+# Optional development tool only. It never installs or upgrades the product.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ "${1:-}" = setup ]; then
+  command -v uv >/dev/null 2>&1 || { echo 'uv is required for this optional dev tool.' >&2; exit 2; }
+  command -v go >/dev/null 2>&1 || { echo 'Go is required to build the existing Go bridge.' >&2; exit 2; }
+  if [ ! -x "$root/.harness/venv/bin/python" ]; then uv venv --python python3 "$root/.harness/venv"; fi
+  uv pip sync --python "$root/.harness/venv/bin/python" "$root/runtime/langgraph/requirements.lock"
+  mkdir -p "$root/.harness/bin"
+  (cd "$root" && go build -o .harness/bin/formal-gates ./cmd/formal-gates)
+  echo "Ready: $root/scripts/harness doctor"
+  exit 0
+fi
+[ -x "$root/.harness/bin/formal-gates" ] || { echo 'Run scripts/harness setup first.' >&2; exit 2; }
+export FORMAL_GATES_HARNESS_ROOT="$root"
+exec "$root/.harness/bin/formal-gates" harness "$@"

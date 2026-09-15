@@ -9,13 +9,13 @@ import argparse, hashlib, json, os, signal, subprocess, sys, time
 from pathlib import Path
 from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[3]
-os.environ.update(FORMAL_GATES_DOGFOOD_ROOT=str(ROOT), FORMAL_GATES_DOGFOOD_BINARY=str(ROOT/'.dogfood/bin/formal-gates'), PYTHONPATH=str(ROOT/'runtime/langgraph'), LANGSMITH_TRACING='false', LANGCHAIN_TRACING_V2='false')
+os.environ.update(FORMAL_GATES_HARNESS_ROOT=str(ROOT), FORMAL_GATES_HARNESS_BINARY=str(ROOT/'.harness/bin/formal-gates'), PYTHONPATH=str(ROOT/'runtime/langgraph'), LANGSMITH_TRACING='false', LANGCHAIN_TRACING_V2='false')
 sys.path.insert(0, str(ROOT/'runtime/langgraph'))
 from langgraph.types import interrupt
-from formal_gates_dogfood.cli import make_run, run_graph
-from formal_gates_dogfood.graph import Flow
-from formal_gates_dogfood.workers import Workers, ROLES
-from formal_gates_dogfood.infra import atomic, read, git, file_proof
+from formal_gates_harness.cli import make_run, run_graph
+from formal_gates_harness.graph import Flow
+from formal_gates_harness.workers import Workers, ROLES
+from formal_gates_harness.infra import atomic, read, git, file_proof
 
 
 def fixture(root: Path, role: str):
@@ -31,7 +31,7 @@ def fixture(root: Path, role: str):
     (project/'alpha.py').write_text(a);(project/'beta.py').write_text(b);(project/'.gitignore').write_text('__pycache__/\n')
     git(project,'add','.');git(project,'-c','user.name=Interrupted Role Test','-c','user.email=test@localhost','-c','commit.gpgsign=false','commit','--quiet','-m','Isolated role test baseline')
     requirement=root/'requirement.md';requirement.write_text(req)
-    run=make_run(ROOT,project,requirement,checks,['implementation-quality-gate'])
+    run=make_run(ROOT,project,requirement,checks,['implementation-quality-gate'],provider='dsh')
     atomic(root/'test.json',{'role':role,'run':str(run),'source':str(project),'initial':{n:file_proof(project/n) for n in ('alpha.py','beta.py')},'base':git(project,'rev-parse','HEAD'),'other_roles':'fixture','fault':'kill actual DSH executor and descendants; supervisor stays to record actual failed exit'})
     return run
 

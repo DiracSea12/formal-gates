@@ -1,4 +1,4 @@
-package dogfood
+package harness
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ func TestSpecValidation(t *testing.T) {
 		name   string
 		change func(*Spec)
 	}{
-		{"version", func(s *Spec) { s.Version = 9 }}, {"provider", func(s *Spec) { s.Provider = "unknown-host" }},
+		{"version", func(s *Spec) { s.Version = 9 }}, {"provider", func(s *Spec) { s.Provider = "invalid provider" }},
 		{"duplicate check", func(s *Spec) { s.Checks = append(s.Checks, s.Checks[0]) }},
 		{"traversal", func(s *Spec) { s.Checks[0].Dependencies = []string{"../state"} }},
 		{"glob", func(s *Spec) { s.Checks[0].Dependencies = []string{"src/**"} }},
@@ -112,7 +112,7 @@ func repo(t *testing.T) string {
 	if _, e := git(root, "add", "."); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := git(root, "-c", "user.name=Dogfood Test", "-c", "user.email=dogfood@localhost", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Test baseline"); e != nil {
+	if _, e := git(root, "-c", "user.name=Harness Test", "-c", "user.email=harness@localhost", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Test baseline"); e != nil {
 		t.Fatal(e)
 	}
 	_, e := snapshot(workspaceInput{Root: root, OperationID: strings.Repeat("c", 64)})
@@ -174,7 +174,7 @@ func TestCertificateRejectsMissingAndStaleEvidence(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if v.(map[string]any)["status"] != "DOGFOOD_COMPLETE" || v.(map[string]any)["full_3_5c_equivalence"] != false {
+	if v.(map[string]any)["status"] != "HARNESS_COMPLETE" || v.(map[string]any)["full_3_5c_equivalence"] != false {
 		t.Fatal("misleading certificate")
 	}
 	q.Checks[0].Binding = "stale"
@@ -198,21 +198,20 @@ func TestBridgeRejectsUnknownOperation(t *testing.T) {
 	}
 }
 
-// Host identity validation is shared with existing installation integration;
-// execution availability is owned by the driver registry, not the domain.
-func TestKnownHostDescriptorsAndSpec(t *testing.T) {
-	for _, provider := range []string{"dsh", "zcode", "codex", "cursor", "claude"} {
+// Provider syntax is neutral. Installation descriptors remain available for display.
+func TestProviderIdentifiersAndInstallationCatalog(t *testing.T) {
+	for _, provider := range []string{"fixture", "dsh", "zcode", "new-runtime", "deepseek-harness", "z-code"} {
 		s := validSpec()
 		s.Provider = provider
 		if err := ValidateSpec(s); err != nil {
 			t.Fatalf("%s: %v", provider, err)
 		}
 	}
-	for _, provider := range []string{"unknown-host", "deepseek-harness", "z-code"} {
+	for _, provider := range []string{"", "invalid provider", "../host", "host/name", strings.Repeat("a", 97)} {
 		s := validSpec()
 		s.Provider = provider
 		if err := ValidateSpec(s); err == nil {
-			t.Fatalf("noncanonical/unknown %q accepted", provider)
+			t.Fatalf("invalid identifier %q accepted", provider)
 		}
 	}
 	var out bytes.Buffer

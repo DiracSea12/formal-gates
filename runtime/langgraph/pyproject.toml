@@ -1,6 +1,6 @@
 [project]
 name = "formal-gates-langgraph-runner"
 version = "0.1.0"
-description = "Replaceable local dogfood executor; Go owns formal-gates business contracts"
+description = "Replaceable local harness executor; Go owns formal-gates business contracts"
 requires-python = ">=3.11"
 dependencies = ["langgraph==1.2.11", "langgraph-checkpoint-sqlite==3.1.1"]

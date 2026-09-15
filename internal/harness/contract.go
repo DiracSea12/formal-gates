@@ -1,6 +1,6 @@
-// Package dogfood owns framework-independent dogfood-v1 business contracts.
+// Package harness owns framework-independent harness-v1 business contracts.
 // It never schedules work or writes a second run state.
-package dogfood
+package harness
 
 import (
 	"bytes"
@@ -11,12 +11,10 @@ import (
 	"io"
 	"path"
 	"strings"
-
-	"formal-gates/internal/host"
 )
 
 const Version = 1
-const Profile = "dogfood-v1"
+const Profile = "harness-v1"
 const Baseline = "517de91f1b480ec969bd91385c29ce38d8bc2841"
 
 type Check struct {
@@ -86,7 +84,7 @@ func safeDependency(s string) bool {
 }
 func ValidateSpec(s Spec) error {
 	if s.Version != Version {
-		return fmt.Errorf("unsupported dogfood contract version %d", s.Version)
+		return fmt.Errorf("unsupported harness contract version %d", s.Version)
 	}
 	if s.Project == "" || s.Base == "" || len(s.RequirementDigest) != 64 {
 		return fmt.Errorf("project, base and exact requirement digest are required")
@@ -94,11 +92,8 @@ func ValidateSpec(s Spec) error {
 	if _, e := hex.DecodeString(s.RequirementDigest); e != nil {
 		return fmt.Errorf("invalid requirement digest")
 	}
-	if s.Provider != "fixture" {
-		descriptor, err := host.Lookup(s.Provider)
-		if err != nil || !descriptor.Installable || s.Provider != descriptor.InstallName {
-			return fmt.Errorf("unsupported or noncanonical provider %q", s.Provider)
-		}
+	if !validID(s.Provider) {
+		return fmt.Errorf("invalid provider identifier %q", s.Provider)
 	}
 	if s.RepairLimit < 1 || s.RepairLimit > 100 {
 		return fmt.Errorf("repair_limit must be 1..100; exhaustion asks the user, never grants PASS")
@@ -136,7 +131,7 @@ func ValidateSpec(s Spec) error {
 		seen[g] = true
 	}
 	if len(s.Gates) == 0 {
-		return fmt.Errorf("dogfood-v1 requires an independent gate")
+		return fmt.Errorf("harness-v1 requires an independent gate")
 	}
 	return nil
 }

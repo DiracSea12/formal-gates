@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
-from .infra import DogfoodError, RuntimeBlocked, file_proof
+from .infra import HarnessError, RuntimeBlocked, file_proof
 
 SOURCE_FILES = ('native-source.json', 'native-events.jsonl', 'answer.raw.txt', 'answer.json')
 
@@ -24,7 +24,7 @@ class NativeAdapter:
 
     def validate_binding(self, binding):
         if binding.get('provider') != self.name:
-            raise DogfoodError('HOST_BINDING: provider differs')
+            raise HarnessError('HOST_BINDING: provider differs')
         for name, proof in binding.get('files', {}).items():
             if file_proof(Path(name)) != proof:
                 raise RuntimeBlocked(f'HOST_CHANGED: bound native executable/script changed: {name}')
@@ -35,6 +35,12 @@ class NativeAdapter:
 
     def reconcile(self, directory, process):
         return self.implementation().reconcile_completed_output(directory, process)
+
+    def transport_files(self):
+        module = self.implementation()
+        if hasattr(module, 'TRANSPORT_FILES'):
+            return module.TRANSPORT_FILES
+        return (Path(module.__file__).relative_to(Path(__file__).parent).as_posix(),)
 
     def verify_source(self, directory, source):
         if source.get('provider') != self.name or not source.get('identity'):
@@ -61,16 +67,20 @@ def execution_hosts():
     return tuple(_ADAPTERS)
 
 def normalize_provider(bridge, value):
-    if value == 'fixture': return value
     normalized = value.strip().lower()
+    if normalized == 'fixture' or normalized in _ADAPTERS:
+        return normalized
     for host in bridge.call('host-descriptors', {}):
         if normalized in [str(x).strip().lower() for x in (host['ID'], host['InstallName'], *(host.get('Aliases') or []))]:
             if host['Installable']: return host['InstallName']
-    raise DogfoodError(f'Unknown host: {value}')
+    raise HarnessError(f'Unknown host: {value}')
 
 def host_catalog(bridge):
-    return {'hosts': [{'id':h['ID'],'provider':h['InstallName'],'name':h['ManifestName'],
-                       'entry_integration':h['Installable'],
-                       'execution_adapter':h['InstallName'] in _ADAPTERS}
-                     for h in bridge.call('host-descriptors', {}) if h['Installable']],
+    hosts = [{'id':h['ID'],'provider':h['InstallName'],'name':h['ManifestName'],
+              'entry_integration':True,'execution_adapter':h['InstallName'] in _ADAPTERS}
+             for h in bridge.call('host-descriptors', {}) if h['Installable']]
+    listed = {h['provider'] for h in hosts}
+    hosts += [{'id':name,'provider':name,'name':name,'entry_integration':False,'execution_adapter':True}
+              for name in _ADAPTERS if name not in listed]
+    return {'hosts': hosts,
             'note':'Registration is not live readiness. Use doctor --provider HOST; unavailable capabilities fail before run creation.'}
